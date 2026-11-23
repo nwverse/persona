@@ -169,6 +169,7 @@ type Node struct {
 	agyFullCache  *lru[string, agyFullExport]
 	agyMetas      *lru[string, agyMetaEntry]
 	agyParentSubs *lru[string, agyParentSubagentInfo]
+	agyReports    map[string]agyHookReport  // pane -> what its agy hook last said (agyhooks.go)
 	agyBound      map[string]agyPaneBinding // herdr pane -> last accepted non-subagent agy conversation (agypane.go)
 	// pumping: the shared watch pump runs (session_watch.go watchPump); it stops when watches is empty.
 	pumping bool
@@ -528,6 +529,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	if err := n.writeClaudeConfig(); err != nil {
 		n.logger.Printf("write claude config: %v", err)
 	}
+	n.ensureAgyHooks() // agyhooks.go
 	n.peer = rpc.New("n", w)
 	n.peer.ReadLimit = nodeproto.RPCReadLimit
 	// What the node sends hides the values handed to Agent starts (secretenv.go): every line, as it goes out.
@@ -804,6 +806,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 }
 
 func (n *Node) handleMethod(ctx context.Context, method string, params json.RawMessage) (result any, resultErr error) {
+	if strings.HasPrefix(method, "agentbot.") {
+		return n.handleAgentBot(ctx, method, params)
+	}
 	if strings.HasPrefix(method, "assistant.segment.") {
 		switch method {
 		case "assistant.segment.check", "assistant.segment.prepare", "assistant.segment.receipt", "assistant.segment.input", "assistant.segment.retire", "assistant.segment.restore":
