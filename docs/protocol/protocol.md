@@ -1155,11 +1155,11 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
                 "output_file":"/private/tmp/…/b85polnoj.output","started_at":"...",
                 "expires_at":"...",          // Monitor: stops by itself at this time (the "expires in 30m" in the result); absent if not stated
                 "run_id":"wf_c1d9daf8-cd2"}], // workflow: which run in workflows it is; only running workflows are here (old clients still treat it as a background task)
- "background_ended":[{"id":"b85polnoj","kind":"shell|monitor","description":"…","command":"…", // recent ended shell / Monitor outcomes, oldest first, at most 8 and from the last day
+ "background_ended":[{"id":"b85polnoj","kind":"shell|agent|monitor|workflow","description":"…","command":"…", // recent ended outcomes, oldest first, at most 8 and from the last day
                       "output_file":"/private/tmp/…/b85polnoj.output","started_at":"...","ended_at":"...",
                       "status":"completed|failed|stopped|killed|ended","exit_code":0}], // exit_code only when the transcript states it; stopped work need not have one
  // Full session info only; bounded / summary list rows omit background_ended. Older nodes and hubs omit it: clients must not infer an outcome when a task only leaves background.
- // Agents and workflows keep their existing history fields. Ended entries never count as running background work.
+ // Claude Code subagents and workflows use their own history fields. Ended entries never count as running background work.
  // Claude Code workflows (multi-agent scripts the Workflow tool runs in the background, #2935, docs/protocol/agent-states.md "Background workflows"): the last day's, newest first.
  // Running ones (running=true) count as background work: the hub computes state as working, doesn't push "done", doesn't judge the to-do complete or auto-close this Agent. Old nodes don't have this field
  // phase_stats follows phases order, including phases with no agents yet, then appends undeclared phases; title="" means unknown. done counts journal results only; failed counts the journal's failed lines (#5511, omitted when 0; older nodes counted them as done); agents stopped when the run ended are in none of done / failed / running.

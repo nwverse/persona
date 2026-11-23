@@ -68,7 +68,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		if agent.Agent == agyAgent {
 			if conversation := n.agyConversation(id, agent.PaneID); conversation != "" {
 				agyConversations[id] = conversation
-				if agent.AgentStatus != proto.StatusOffline && agent.AgentStatus != proto.StatusInterrupted {
+				if !agyStopped(agent.AgentStatus) {
 					agyRuntimeIDs[id] = agyAgent + "-" + conversation
 				}
 			}
@@ -268,6 +268,12 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 					if s.OutputTokens == 0 && runtimeRow.OutputTokens > 0 {
 						s.OutputTokens = runtimeRow.OutputTokens
 					}
+					background := agyBackgroundTasks{running: runtimeRow.Background, ended: runtimeRow.BackgroundEnded()}
+					// The live pane is authoritative even when its ACP mirror is only a history row.
+					if meta, ok := n.agyTranscriptMeta(agyConversations[id]); ok {
+						background = meta.background
+					}
+					background.apply(&s)
 				}
 			}
 			if a.Agent == agyAgent {
@@ -338,6 +344,10 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			}
 		} else if s.Agent == agyAgent {
 			n.resolveAgyContextWindow(s)
+			if s.SourceInstanceID == agyRuntimeID {
+				agyBackgroundTasks{running: s.Background, ended: s.BackgroundEnded()}.apply(s)
+				n.agyRuntimeTaskLogs(s)
+			}
 		}
 		seen[s.SessionID] = true
 		if j != i {

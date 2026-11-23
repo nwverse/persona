@@ -243,7 +243,7 @@ const (
 // runtimeWork keeps a row's subagents and background tasks to what the apps can use: subagents with a valid id, each
 // readable as "<session>@<id>" (whatever the runtime wrote there), background tasks with an id; text clipped, the
 // lists bounded. A runtime's background task has no output file of this machine's to open.
-func runtimeWork(s *proto.Session) {
+func runtimeWork(s *proto.Session, agy bool) {
 	clip := func(t string) string {
 		if r := []rune(t); len(r) > maxRuntimeTaskText {
 			return string(r[:maxRuntimeTaskText]) + "…"
@@ -265,20 +265,29 @@ func runtimeWork(s *proto.Session) {
 	if len(s.Subagents) == 0 {
 		s.Subagents = nil
 	}
-	bg := s.Background[:0:0]
-	for _, t := range s.Background {
-		if len(bg) == maxRuntimeBackground || strings.TrimSpace(t.ID) == "" {
-			continue
+	tasks := func(source []proto.BackgroundTask, limit int) []proto.BackgroundTask {
+		bg := source[:0:0]
+		for _, t := range source {
+			if len(bg) == limit || strings.TrimSpace(t.ID) == "" {
+				continue
+			}
+			switch {
+			case t.Kind == "agent":
+			case agy && (t.Kind == "monitor" || t.Kind == "workflow"):
+			default:
+				t.Kind = "shell"
+			}
+			t.ID, t.Description, t.Command, t.OutputFile = clip(t.ID), clip(t.Description), clip(t.Command), ""
+			bg = append(bg, t)
 		}
-		if t.Kind != "agent" {
-			t.Kind = "shell"
+		if len(bg) == 0 {
+			return nil
 		}
-		t.ID, t.Description, t.Command, t.OutputFile = clip(t.ID), clip(t.Description), clip(t.Command), ""
-		bg = append(bg, t)
+		return bg
 	}
-	s.Background = bg
-	if len(s.Background) == 0 {
-		s.Background = nil
+	s.Background = tasks(s.Background, maxRuntimeBackground)
+	if agy {
+		s.SetBackgroundEnded(tasks(s.BackgroundEnded(), agyBackgroundEndedLimit))
 	}
 }
 

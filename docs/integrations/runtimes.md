@@ -555,6 +555,16 @@ input clears the previous reply preview, including input with no visible text. T
 until the assistant writes response text. This keeps user-authored questions out of awaiting-reply detection while
 preserving genuine assistant questions. User messages and tool records remain available in the conversation items.
 
+Antigravity CLI sessions show background work in Agents for both herdr panes and the ACP companion (#13594). Each
+running command, scheduled task, workflow or subagent counts once. Scheduled tasks use the Monitor row, including
+the cron description when available. Persona's `/loop` control applies to Claude Code's scheduler.
+
+The readers match a task's ID across the native start, finish, cancellation and kill records. A tool result that
+changes from running to done or error also ends its task. Up to eight outcomes from the last day stay in Completed.
+When a pane stops or the ACP session is no longer loaded, its running tasks disappear. Losing the session does
+not record an outcome. The node links a task log when the local export names the corresponding file in that
+conversation's task directory.
+
 A session is listed `unknown` when the evidence cannot say working, idle or done (`transcriptState` in
 `integrations/antigravity/lib/map.js`). It is never guessed as idle: an idle native summary closes a turn only when its
 step count covers the last exported step. The companion logs why, as reason counts, each time the tally across listed

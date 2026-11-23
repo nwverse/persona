@@ -25,9 +25,14 @@ var agyModelWindowCache = struct {
 }{byID: map[string]int{}}
 
 type agyMetaEntry struct {
-	file  os.FileInfo
-	path  string
-	usage agyTranscriptUsage
+	file os.FileInfo
+	path string
+	meta agySessionMeta
+}
+
+type agySessionMeta struct {
+	agyTranscriptUsage
+	background agyBackgroundTasks
 }
 
 func firstPositive64(vals ...int64) int64 {
@@ -368,15 +373,15 @@ func (n *Node) resolveAgyContextWindow(s *proto.Session) {
 	s.ContextWindow = proto.Tokens32(n.agyContextWindowFor(s, s.Model, 0, int(s.ContextTokens)))
 }
 
-// agyTranscriptMeta reads (with stat-based LRU caching) the token usage summary of an agy conversation on disk.
-func (n *Node) agyTranscriptMeta(conversation string) (agyTranscriptUsage, bool) {
+// agyTranscriptMeta reads the cached token usage and background work of an agy conversation on disk.
+func (n *Node) agyTranscriptMeta(conversation string) (agySessionMeta, bool) {
 	if n == nil || conversation == "" || !uuidRe.MatchString(conversation) {
-		return agyTranscriptUsage{}, false
+		return agySessionMeta{}, false
 	}
 	dir := n.agyDataRoot()
 	root, err := agyBrain(dir, conversation)
 	if err != nil {
-		return agyTranscriptUsage{}, false
+		return agySessionMeta{}, false
 	}
 	defer root.Close()
 	rel := agyTranscriptPath
@@ -385,7 +390,7 @@ func (n *Node) agyTranscriptMeta(conversation string) (agyTranscriptUsage, bool)
 		rel = agyFullTranscriptPath
 		info, err = root.Stat(rel)
 		if err != nil || !info.Mode().IsRegular() {
-			return agyTranscriptUsage{}, false
+			return agySessionMeta{}, false
 		}
 	}
 	key := filepath.Join(dir, conversation)
@@ -393,35 +398,35 @@ func (n *Node) agyTranscriptMeta(conversation string) (agyTranscriptUsage, bool)
 	if n.agyMetas != nil {
 		if cached, ok := n.agyMetas.get(key); ok && cached.path == rel && sameAgyFile(info, cached.file) && time.Since(info.ModTime()) > time.Second {
 			n.mu.Unlock()
-			return cached.usage, true
+			return cached.meta, true
 		}
 	}
 	n.mu.Unlock()
 
 	raw, err := root.ReadFile(rel)
 	if err != nil {
-		return agyTranscriptUsage{}, false
+		return agySessionMeta{}, false
 	}
 	raw = raw[:bytes.LastIndexByte(raw, '\n')+1]
 	steps, _ := parseAgySteps(raw, conversation)
-	usage := extractAgyUsage(steps)
+	meta := agySessionMeta{agyTranscriptUsage: extractAgyUsage(steps), background: agyBackground(steps, conversation, dir, root)}
 
 	n.mu.Lock()
 	if n.agyMetas == nil {
 		n.agyMetas = newLRU[string, agyMetaEntry](256)
 	}
-	n.agyMetas.put(key, agyMetaEntry{file: info, path: rel, usage: usage})
+	n.agyMetas.put(key, agyMetaEntry{file: info, path: rel, meta: meta})
 	n.mu.Unlock()
-	return usage, true
+	return meta, true
 }
 
-// mergeAgyTranscript populates Session.Model, ContextTokens, ContextWindow, and OutputTokens on a standalone
-// herdr-pane agy session row from its local transcript and resolves ContextWindow from launcher/catalog/model metadata.
+// mergeAgyTranscript populates background work and token usage for a standalone herdr-pane session.
 func (n *Node) mergeAgyTranscript(s *proto.Session, conversation string) {
 	if s == nil {
 		return
 	}
 	if u, ok := n.agyTranscriptMeta(conversation); ok {
+		u.background.apply(s)
 		if s.Model == "" && u.model != "" {
 			s.Model = u.model
 		}
