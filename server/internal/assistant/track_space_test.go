@@ -2,10 +2,12 @@ package assistant
 
 import (
 	"context"
+	"path"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 )
@@ -81,7 +83,8 @@ func TestSpaceTrackPrepare(t *testing.T) {
 	space, _ := p["space"].(map[string]any)
 	md, _ := p["claude_md"].(string)
 	initial, _ := space["initial_space_md"].(string)
-	if p["dir"] != ".persona/tracks/qa-plain" || space["slug"] != "qa-plain" || !strings.HasPrefix(initial, "# QA plain\n") ||
+	trackDir := path.Join(compat.StateDir, "tracks/qa-plain")
+	if p["dir"] != trackDir || space["slug"] != "qa-plain" || !strings.HasPrefix(initial, "# QA plain\n") ||
 		strings.Count(initial, spaceStateBegin) != 1 || strings.Index(initial, spaceStateEnd) < strings.Index(initial, spaceStateBegin) {
 		t.Errorf("prepare params: %v", p)
 	}
@@ -102,7 +105,7 @@ func TestSpaceTrackPrepare(t *testing.T) {
 		dirs = append(dirs, p["dir"].(string))
 	}
 	// The assistant's and health's are written once, the track's node asked both times.
-	if strings.Join(dirs, " ") != s.assistantRel()+" "+s.healthRel()+" .persona/tracks/qa-plain .persona/tracks/qa-plain" {
+	if strings.Join(dirs, " ") != s.assistantRel()+" "+s.healthRel()+" "+trackDir+" "+trackDir {
 		t.Errorf("refreshed: %v", dirs)
 	}
 	if _, ok := f.prepared[1]["space"]; ok {

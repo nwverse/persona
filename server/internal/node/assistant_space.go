@@ -66,20 +66,17 @@ func prepareSpaceDir(dir string, sp spacePrepare) (string, error) {
 	return readSpaceMD(md)
 }
 
-// readSpaceMD reads a track's SPACE.md: a plain file (never a link), cut at spaceMDLimit.
+// readSpaceMD reads a track's SPACE.md: a plain file (never a link, nor one put in its place meanwhile: openNoBlock),
+// cut at spaceMDLimit.
 func readSpaceMD(path string) (string, error) {
-	fi, err := os.Lstat(path)
-	if err != nil {
-		return "", err
-	}
-	if !fi.Mode().IsRegular() {
-		return "", fmt.Errorf("%s: not a plain file", path)
-	}
-	f, err := os.Open(path)
+	f, err := openNoBlock(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return "", fmt.Errorf("%s: not a plain file", path)
+	}
 	b, err := io.ReadAll(io.LimitReader(f, spaceMDLimit+1))
 	if err != nil {
 		return "", err
