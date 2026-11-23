@@ -857,6 +857,7 @@ The web Agent conversation header's **Session overview** list button toggles a p
 - A removable chip (web, a conversation's information categories, #13500, `web/src/views/spaces/ConversationCategories.tsx`): the neutral chip with a small remove button after its words, a 44 px finger target through `touch-hit`, and its name in the button's label ("Remove Money"); a chip that cannot be removed shows a lock in that place instead, and what was removed comes back from a + menu after the chips. Why: taking a category away is the user loosening a rule, so it is one deliberate press on the chip itself, never a hidden setting.
 - Status: `StatusDot` (fixed size 9, labelled), `AgentStateBadge`.
 - Row actions: swipe actions and a context menu with the same actions. Agents rows on iOS have no swipe (context menu only, #1244).
+  - The Agent menu (iOS `AgentActionMenu`, #13396; an Agents row's long press and its chat's ⋯ are one inventory, #9278): at most seven items on its top level. Interrupt, Mark as Seen, Rename Agent… and Pin stay there, with Back to Chat first while the chat shows another pane; then **More** (`Theme.Icon.more`); then one destructive item last, Close Agent…, else Delete Chat…. Every other item is in More, in the inventory's order and sections: the panes and pages, the session's own (Mute, the to-do, Move To…, Hand to Persona), copying and the terminal, the pane's actions, and Delete Chat… while Close Agent… is last. Why: a live Agent's menu had grown to about 21 items, and the few used most were lost among them. `AgentActionMenuTests` checks the limit and that every item is drawn once for every mix of what an Agent offers. Android and Web follow the same order (#13396).
   - The Inbox's rows (iOS `InboxView`, Android `InboxItemRow` and `InboxConversationItemRow`, #4210 T1): one trailing swipe, from the end, and nothing from the start. It is **Done** in the positive color, or **Move Back** with the undo arrow (`Theme.Icon.undo`) in the accent color on a done item, so the rows of the Done section move back with the same swipe; there is none while a write for the row is out or items are being picked. The hand-off to the assistant is not a swipe: it is in the row's long-press menu (on Android, where a long press on an open row starts a selection, in the picked row's More). Android's swipe component (`JSwipeActions`) takes a tone (`SwipeTone`, accent or positive), which Glass draws as a fill of that color under the row, as iOS tints the action; Brief and Board keep their neutral backing and the action's status color. Every action of a swipe is also a custom accessibility action on the row (`swipeActionSemantics`, which `MessageItem` applies), so TalkBack and switch access reach it without swiping.
   - The assistant's conversation history (iOS `AssistantSidebar`): a row swipes left to Archive (not the main conversation); its long press shows what the conversation last said and when above the menu, whose items are Pin, Move To… (while the hub files sessions, #11516: next to Pin, the other item about where the chat belongs), Rename…, Archive, Copy Session ID, Copy Diagnostics and End…; "Archived (N)" ends the list while there are any and opens them, where a tap opens one and Unarchive brings it back. Android shows the preview in the action sheet (`JActionSheet`'s `preview` and `previewCaption`, six lines at most), and the archived rows keep a visible Unarchive as its Agents archive does. An explicitly outside direction is not a conversation: it reuses this row's name, counts and running treatment but has no conversation swipe, menu or read-state label; only a complete Agent target is tappable, and a targetless row has no navigation chevron.
   - An outside reporting direction (#8236) has no Persona conversation, so it inherits none of those conversation actions. Its Pinned row keeps the same name, tree counts and running treatment; a complete Agent target opens that Agent, while a targetless row is not a button and has no chevron. Neither outside kind gets a conversation menu or swipe action, and neither fabricates a conversation route from its opaque direction id.
@@ -1860,7 +1861,17 @@ and **Hub**. With several installed assistants its first heading reuses `Assista
 and a one-line Switch label); with one it retains the chosen Persona face and name, without a roster switcher.
 A caption explains that only the current assistant's settings are shown. Device and Hub captions explain their shared scope.
 
-Common model choices open **Models**, with providers and keys under **Advanced**. Runtime configuration and session triage
+Settings home shows only its core rows, at most ten, from one registry (#13395; `SettingsCatalog` in
+`apple/Persona/Views/Settings/SettingsNavigation.swift`, its `core` and `advanced` lists): Models, Assistant Profile, Channels,
+Connectors, Inbox Sources, Extensions and Machines for the current assistant; Notifications and About for This Device; Hub
+Connection for Hub. One **Advanced** row after them opens Settings › Advanced, every other row under the same three scopes, in
+the order the home had them: Knowledge Selection, Meetings and Agent; Appearance & Display, Language & Dictation, Live Screen,
+Translation, Storage, Health, Alarms and Timers and This iPhone; Hub Version, Assistants, Avatar and Devices & Pairing. While a
+hub update is out or under way, the Advanced row's value says so, as the Hub Version row under it does. Each row has one home: a
+new row goes into one of the registry's two lists, never into the page, and `SettingsRegistryTests` fails on a home row outside
+the registry and on more than ten core rows. A row keeps its accessibility identifier wherever it moves.
+
+Common model choices open **Models**, with providers and keys under Models' own **Advanced**. Runtime configuration and session triage
 open through **Agent**. Appearance and display have a device-owned page; the shared avatar belongs to Hub. Diagnostics
 (build commit and the last new-chat check) are folded inside About. Watch sync and disconnection belong to Devices & Pairing.
 Existing settings route values remain valid; changing assistants returns the settings navigation to its list and retires old drafts.
@@ -1869,7 +1880,9 @@ Search reuses the system searchable field and SettingsRow navigation. It searche
 including developer terms, and opens the existing destination directly. Results have stable catalog identities; a query changes
 only navigation, never a setting. Pairing and storage use the `Theme.Icon.pairing` and `Theme.Icon.storage` vocabulary tokens.
 Why this arrangement: the earlier unscoped list mixed shared configuration with device preferences and exposed expert controls
-before common choices. It introduces no visual style, color palette, model default, or primary navigation destination.
+before common choices. It introduces no visual style, color palette, model default, or primary navigation destination. The home's
+core rows (#13395) are what an everyday user comes to Settings for; everything else is one tap further, under Advanced, and search
+still opens it directly (principle 2).
 
 ### 4.2 Gestures
 
@@ -3646,6 +3659,16 @@ default is the launcher's own and nothing is sent unless the user picks it (prin
 confirmed, reversible choice (principle 3). It reuses each client's mode field, picker, menu rows, warning text and
 confirmation; it adds no component, token or motion. `capabilities.modes` stays false on these rows, so clients
 older than the list show no Claude Code chips there.
+
+## Native permission defaults (#13286)
+
+Who it serves: people who use the Inbox's AI twin or start assistant conversations from iPhone or iPad and need to see what Persona may do without asking. These are secondary settings built from the existing `SettingsForm`, `Section`, menu `Picker`, `SheetClose` and permission-mode vocabulary.
+
+- **Settings › Models › AI twin** shows **Inbox Permissions** for the existing `inbox.agent.permission_mode`. An unset, Plan or unknown legacy value displays **Default Permissions**, never the parent Agents' Full access; Plan is not offered. An explicit supported choice saves with the model record, and Follow Agents writes `permission_mode: null`.
+- **Settings › Agent** shows **Default Permissions** for the existing `default_permission_mode`. A direction leader's title menu opens the same `DefaultPermissionsSettingsSection`; it is not a direction-specific override. The top bar owns the sheet so dismissing the menu does not remove its presenter. The setting applies only to new conversations without an explicit choice; existing conversations keep their current mode.
+- The new-conversation picker changes its local value immediately, sends one sparse write, keeps the hub-confirmed value and restores the previous value with an error toast if the write or confirmation fails.
+
+Reason: the native controls reuse the manager's existing settings and the Model Configuration record rather than creating a parallel store (principles 1, 3 and 4). The Inbox keeps its safe Ask First default independently of Agents, while every other launcher purpose keeps its ordinary inheritance and provider-specific list. No token, storage, motion or platform-specific visual pattern is added.
 
 ## Minutes cards (#5026)
 

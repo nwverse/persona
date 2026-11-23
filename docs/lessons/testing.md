@@ -758,6 +758,11 @@ first, and the old copy's state goes its own way.
 - **With the keyboard up, `app.collectionViews.firstMatch` is not the list** (2026-11-05, #2189). The 44pt candidate/input accessory strip is itself a collection view,
   ordered before the list, outside `app.keyboards` frame (SE keyboard starts at 451, strip is 407–451). `swipeUp` there leaves the list still,
   looking like pinned filters and once described as "keyboard blocks element swipes". Find the list by its elements (`collectionViews.containing(.button, identifier:)`).
+- **A swipe on a system menu that does not scroll chooses the item under the finger** (2026-11-23, #13396). `AgentMenuParityUITests`
+  read the Agent menu with `menu.swipeDown()` between reads, which only scrolled while the menu ran past the screen. Once its top level
+  fit, the swipe became a drag-to-select and chose the last item, Close Agent…, whose confirmation then covered the menu ("no More in
+  the Agent menu"). Read what a menu shows without a swipe; where a submenu runs past the screen, compare what both menus show, the
+  shorter list as a prefix of the longer.
   Element swipes start at whole-frame center and can fail next to the keyboard on small screens; coordinate-drag within the visible row segment (`AgentsListTests.dragListUp`).
 - Simulators and Mac share loopback: an app listening on simulator `127.0.0.1:<port>` conflicts with Mac processes on that port (port forwarding falls back to a random port, testing that path).
 - **Scripts executed by tests really run on the development machine** (2026-11-01). `TestDeployScriptInstallsTheBinary` runs hub deployment, whose final

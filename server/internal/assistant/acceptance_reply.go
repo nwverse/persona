@@ -227,13 +227,17 @@ func (s *Service) answeredInWords(ctx context.Context, id string, askedAt time.T
 		b.mu.Unlock()
 		return
 	}
-	if decideAsk(a) {
+	decision := decideAsk(a)
+	if decision {
 		a.AcceptedAt = time.Now().UTC()
 	} else {
 		delete(b.asks, id)
 	}
 	s.saveAcceptLocked(ctx)
 	b.mu.Unlock()
+	if decision {
+		s.todoPushOver(id) // answered: its next push may ring
+	}
 }
 
 // withMediaDropped is note with, when the reply carried pictures or files, the line saying they did not go to the agent.
@@ -417,6 +421,9 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 		}
 	case cp.Conclusion:
 		// Seen: the review already closed the task and told where it came from; "verified" is for deployed work.
+	}
+	if decideAsk(&cp) {
+		s.todoPushOver(id) // taken: its next push may ring
 	}
 	completeDismissal()
 	s.updateAskCards(ctx, id, cp)

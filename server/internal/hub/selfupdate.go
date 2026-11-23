@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/hubedge"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
@@ -74,10 +75,11 @@ type updateRecord struct {
 
 // updateSettings are kept in Postgres (settings hub_update).
 type updateSettings struct {
-	Source            string                    `json:"source,omitempty"`           // empty/release or web-dev
-	DevelopmentAuto   bool                      `json:"development_auto,omitempty"` // opt-in; never inherited from release
-	DevelopmentBad    []string                  `json:"development_bad,omitempty"`
-	DevelopmentBackup *update.DevelopmentBackup `json:"development_backup,omitempty"`
+	ConfirmedDevelopment *devicewire.DevelopmentTarget `json:"confirmed_development,omitempty"`
+	Source               string                        `json:"source,omitempty"`           // empty/release or web-dev
+	DevelopmentAuto      bool                          `json:"development_auto,omitempty"` // opt-in; never inherited from release
+	DevelopmentBad       []string                      `json:"development_bad,omitempty"`
+	DevelopmentBackup    *update.DevelopmentBackup     `json:"development_backup,omitempty"`
 	// The snapshot settings chosen in Settings › Hub › Update source › Web
 	// development. Directory is a tri-state: nil keeps hub.json's directory
 	// (else the recommended one), and a persisted path — including the
@@ -422,6 +424,13 @@ func (u *updater) record(ctx context.Context, r updateRecord) error {
 		return err
 	}
 	u.settings.History = append(u.settings.History, r)
+	if r.Result == "updated" {
+		u.settings.ConfirmedDevelopment = nil
+		target := devicewire.DevelopmentBuild(r.Commit, r.ToVersion, r.ToBuild)
+		if r.Source == "web-dev" && r.Reason == "" && target.Valid() {
+			u.settings.ConfirmedDevelopment = &target
+		}
+	}
 	if r.Result == "rolled_back" && !slices.Contains(u.settings.Bad, r.ToBuild) {
 		u.settings.Bad = append(u.settings.Bad, r.ToBuild)
 	}
@@ -494,10 +503,10 @@ func (u *updater) confirm(ctx context.Context, p update.Pending) {
 		case <-time.After(2 * time.Second):
 		}
 	}
-	if err := os.Remove(update.PendingPath(u.dir)); errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(update.PendingPath(u.dir)); err != nil {
 		// The watchdog claimed the marker at its deadline and is putting the old version back (update.Watch):
 		// recording this update as done would contradict the rollback the old version records.
-		u.h.logf("update: %s -> %s: the watchdog is already going back", p.FromVersion, p.ToVersion)
+		u.h.logf("update: %s -> %s: cannot claim confirmation: %v", p.FromVersion, p.ToVersion, err)
 		return
 	}
 	u.mu.Lock()
@@ -507,6 +516,9 @@ func (u *updater) confirm(ctx context.Context, p update.Pending) {
 		u.edgeConfirmed()
 	}
 	nodeErr := u.updateNodes(ctx, p.Nodes, p.FromVersion, p.Development)
+	if p.Development != nil {
+		nodeErr = errors.Join(nodeErr, u.publishDevelopmentPackages(p))
+	}
 	why := ""
 	if nodeErr != nil {
 		why = su(u.h.userLang(), "err_computer_packages")
@@ -521,6 +533,9 @@ func (u *updater) confirm(ctx context.Context, p update.Pending) {
 		u.notify(su(l, "push_updated_title", i18n.Args{"version": p.ToVersion}), su(l, "push_updated_body"))
 	}
 	update.ClearDevelopmentAdoption(u.dir, p)
+	if p.Development != nil {
+		u.h.queueDevicesConfig(nodeErr == nil)
+	}
 	if p.WebPrev != "" && filepath.Dir(p.WebPrev) == filepath.Join(u.dir, "development") && strings.HasPrefix(filepath.Base(p.WebPrev), "web-previous-") {
 		_ = os.RemoveAll(p.WebPrev)
 	}
@@ -656,7 +671,7 @@ func (u *updater) updateNodes(ctx context.Context, staged, from string, developm
 	if first != nil {
 		return first
 	}
-	if u.nodesEnabled() {
+	if !dev && u.nodesEnabled() {
 		u.h.updateNodes(ctx)
 	} // each computer retains the existing policy/guardian
 	return nil

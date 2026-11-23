@@ -41,6 +41,7 @@ func (s *Service) renderQueuedDigest(ctx context.Context, to string, list []prom
 	if len(list) > 0 && !slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind != sigParkedSummary }) {
 		level = supervisionInfo
 	}
+	list = joinTurnReports(list)
 	return prompts.RenderSupervise(prompts.Supervise{Level: level, Entries: sortEntries(list), Leader: leader, Background: background,
 		Fresh: fresh, Side: to != here.Main && !leader, Escalated: escalatedIn(list),
 		BackgroundEscalated: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigEscalated && e.Background }),
@@ -53,6 +54,78 @@ func (s *Service) renderQueuedDigest(ctx context.Context, to string, list []prom
 		}),
 		Inbox: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigInbox }),
 		Asked: askedIn(list), AskMinutes: int(askHoldFor.Minutes()), PushGrading: askedIn(list) && s.quietModeOn(ctx)})
+}
+
+// joinTurnReports makes a task's report and the end of the same Agent turn one entry (reportStopHold): the stop entry,
+// which carries how the hub judged the turn and the Agent's last answer, also says what the Agent reported, its words,
+// evidence and step. Only the rendered message changes: each signal keeps its own delivery and deduplication.
+func joinTurnReports(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
+	stops := map[string]int{}
+	for i, e := range list {
+		if e.Kind == sigReview || e.Kind == sigIdle || e.Kind == sigUnjudged || e.Kind == sigInterrupted {
+			if _, seen := stops[e.ID]; !seen {
+				stops[e.ID] = i
+			}
+		}
+	}
+	if len(stops) == 0 {
+		return list
+	}
+	out := make([]prompts.SuperviseEntry, 0, len(list))
+	joined := map[int]prompts.SuperviseEntry{}
+	taken := map[int]bool{}
+	for i, e := range list {
+		j, ok := stops[e.ID]
+		if e.Kind != sigReport || !ok || e.Session != "" && list[j].Session != "" && e.Session != list[j].Session {
+			continue
+		}
+		stop, had := joined[j]
+		if !had {
+			stop = list[j]
+			stop.Evidence = slices.Clone(stop.Evidence)
+		}
+		if stop.Reported == "" || reportRank(e.Report) < reportRank(stop.Reported) {
+			stop.Reported = e.Report
+		}
+		if stop.Said != "" && e.Said != "" && stop.Said != e.Said {
+			stop.Said += "\n—\n" + e.Said
+		} else if e.Said != "" {
+			stop.Said = e.Said
+		}
+		for _, x := range e.Evidence {
+			if !slices.Contains(stop.Evidence, x) {
+				stop.Evidence = append(stop.Evidence, x)
+			}
+		}
+		if e.Step > 0 {
+			stop.Step, stop.Steps = e.Step, e.Steps
+		}
+		joined[j] = stop
+		taken[i] = true // told in the stop entry; the caller's list is left as it is
+	}
+	for i, e := range list {
+		if taken[i] {
+			continue
+		}
+		if stop, ok := joined[i]; ok {
+			e = stop
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// reportRank orders a report's kinds by what waits on the supervisor most: a question, then blocked, then done.
+func reportRank(kind string) int {
+	switch kind {
+	case upReportQuestion:
+		return 0
+	case upReportBlocked:
+		return 1
+	case upReportDone:
+		return 2
+	}
+	return 3
 }
 
 // recheckDigestTo honors explicit moves through the same policy as immediate dispatch. Otherwise it preserves
