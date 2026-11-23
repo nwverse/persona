@@ -18,6 +18,9 @@
 #   scripts/check-fast.sh --compare-main  # after the run, rerun only what failed at the merge base and say, for each
 #                                         # failure, whether the base fails it too (scripts/ci/check_fast_compare.py)
 #   scripts/check-fast.sh --compare-tip   # --compare-main, and the failures the base has too also at the base ref's tip
+#   scripts/check-fast.sh --no-server-go  # plan as usual, but leave the server module's go test, go build, repo-wide guard
+#                                         # and go vet steps to the caller (scripts/ci/affected.sh tests the affected
+#                                         # packages against Postgres itself); gofmt, sdk/go and the rest still run
 #   scripts/check-fast.sh -h|--help
 #
 # Path mapping (diff mode): the table in scripts/ci/check_fast_map.py maps each changed path to its checks, and a new
@@ -63,12 +66,20 @@
 # and GO_GUARD_TESTS below), the guards and cross-package contract tests that fail on code outside the touched group:
 # the architecture and link guards, the i18n and prompts packages, and the hub's and the assistant's goldens, wire
 # samples, route scopes and size budgets (#12842).
+# It also runs go vet, in a job of its own (job_go_vet, #12894): go vet -ldflags= ./... over the whole server module,
+# then GOOS=windows GOARCH=amd64 go vet -ldflags= on each changed package group, or on ./... for a change outside every
+# group (go.mod, a file directly in server/plugins/, sdk/go), as CI's server lane vets for Linux and Windows. A group
+# with no package that builds for Windows (internal/fleetsoak, cmd/password-wasm) is left out of the Windows step, as
+# CI's ./... passes over it, and the PASS line names it. Being its own job, a vet that runs past its timeout on a cold
+# build cache is that job's TIMEOUT and cannot hide a FAIL of the guard job's contract tests. A changed .go file under server/ or sdk/go/ runs scripts/ci/gofmt.py on the changed .go
+# files (job_go_fmt; --all checks both trees whole, as CI's Go formatting step does), a job that takes no go slot: it
+# compiles nothing, so it reports in seconds even while every go slot is busy.
 # scripts/privacy_check.py runs on every invocation that has changes (it is a seconds-long local scan, no network).
 # The plan ends with an INFO line naming the CI lanes the change selects (python3 scripts/ci/paths.py --lanes-for, the
 # selection CI and the PR watcher read) that it runs no part of, such as android, core or desktop (#11026).
 #
 # Independent checks run in parallel; each command gets a GNU timeout (override with the CHECK_FAST_TIMEOUT_*
-# variables below). The go test / go build and vitest commands first take a machine-wide slot of their kind
+# variables below). The go test / go build / go vet and vitest commands first take a machine-wide slot of their kind
 # (scripts/heavy_slot.py; docs/operations/testing.md "Heavy build slots"), so parallel worktrees queue instead of
 # thrashing; the wait comes before the timeout, and a wait past PERSONA_HEAVY_SLOT_TIMEOUT is a TIMEOUT.
 # While a step waits for a slot, the helper's "waiting for a <kind> slot" line, and the one when it gets the slot,
@@ -127,6 +138,7 @@ COMPARE=0  # 1: --compare-main, 2: --compare-tip
 DRY_RUN=0
 CHANGED_FROM=""
 EACH=0
+NO_SERVER_GO=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --all) ALL=1 ;;
@@ -145,6 +157,7 @@ while [ $# -gt 0 ]; do
       CHANGED_FROM=${1#*=}
       [ -n "$CHANGED_FROM" ] || { echo "check-fast: --changed-from needs a file (- for stdin)" >&2; exit 2; } ;;
     --each) EACH=1 ;;
+    --no-server-go) NO_SERVER_GO=1 ;;
     --compare-main) [ "$COMPARE" -eq 2 ] || COMPARE=1 ;;
     --compare-tip) COMPARE=2 ;;
     -h|--help) usage; exit 0 ;;
@@ -300,7 +313,8 @@ arr_has() {
 }
 
 # step runs one command under a timeout; a timeout classifies the whole job and stops it.
-# JOB_HINT (set by the job body) is appended to the TIMEOUT detail; each job appends its steps to one log.
+# JOB_HINT (set by the job body) is appended to the TIMEOUT detail; each job appends its steps to one log. JOB_NOTE (set
+# by the job body, outside in_dir's subshell) is shown on the job's PASS line: what a passing job left out, and why.
 step() {
   local _seconds=$1 _desc=$2
   shift 2
@@ -445,7 +459,7 @@ launch_all() {
       _rc=$?
       if [ ! -s "$JOB_STATUS" ]; then
         if [ "$_rc" -eq 0 ]; then
-          printf 'PASS\t0\t%s\t\n' "$SECONDS" > "$JOB_STATUS"
+          printf 'PASS\t0\t%s\t%s\n' "$SECONDS" "${JOB_NOTE:-}" > "$JOB_STATUS"
         else
           printf 'FAIL\t%s\t%s\texit %s\n' "$_rc" "$SECONDS" "$_rc" > "$JOB_STATUS"
         fi
@@ -479,6 +493,7 @@ job_web() {  # $1 = ci when npm ci must run first; WEB_MODE (full or related) an
     local _files=() _f
     while IFS= read -r _f; do [ -n "$_f" ] && _files+=("$_f"); done < <(tail -n +2 "$WEB_PLAN")
     in_dir web step "$TIMEOUT_WEB_TEST" "web: vitest related ($WEB_REASON)" \
+      node scripts/process-group.mjs --timeout-ms "$((TIMEOUT_WEB_TEST * 1000))" -- \
       npx --no -- vitest related --run --passWithNoTests ${_files[@]+"${_files[@]}"}
   else
     in_dir web step "$TIMEOUT_WEB_TEST" "web: vitest run" npm test
@@ -567,6 +582,67 @@ job_go_guards() {
   in_dir server step "$TIMEOUT_GO_TEST" "go test -run <guard tests> ${GO_GUARD_TEST_PKGS[*]}" \
     go test -count=1 -timeout "${_inner}s" -run "$GO_GUARD_TESTS" "${GO_GUARD_TEST_PKGS[@]}" || _rc=$?
   return "$_rc"
+}
+
+# job_go_fmt runs scripts/ci/gofmt.py on the changed .go files under server/ and sdk/go/ (GO_FMT_FILES), the trees CI's
+# Go formatting step covers; --all checks both trees whole, as CI does (#12894). gofmt parses files and compiles nothing,
+# so the job takes no go slot. A deleted file is in the diff too; only the files there now are checked.
+job_go_fmt() {  # $1 = ALL for the whole of server/ and sdk/go/, else GO_FMT_FILES
+  [ "$HAVE_PY" -eq 1 ] || skip "python3 not found"
+  have gofmt || skip "gofmt not found (it comes with Go)"
+  local _files=() _f
+  if [ "$1" = ALL ]; then
+    for _f in server sdk/go; do [ -d "$_f" ] && _files+=("$_f"); done
+    [ "${#_files[@]}" -gt 0 ] || skip "no server/ or sdk/go/ here"
+  else
+    for _f in ${GO_FMT_FILES[@]+"${GO_FMT_FILES[@]}"}; do [ -f "$_f" ] && _files+=("$_f"); done
+    [ "${#_files[@]}" -gt 0 ] || skip "every changed .go file is deleted"
+  fi
+  step "$TIMEOUT_OTHER" "python3 scripts/ci/gofmt.py (${#_files[@]} path(s))" python3 -B scripts/ci/gofmt.py "${_files[@]}"
+}
+
+# job_go_vet vets the whole server module, then each changed package group for Windows (GO_VET_GROUPS: <top>/<name>, or
+# . for the whole module; --all: the whole module), the second step also when the first failed, so one run names every
+# finding (#12894). -ldflags= clears a link flag GOFLAGS may carry and keeps the rest, as scripts/ci/server.sh does. The
+# Windows step names its environment through env, so its rerun line and --compare-main's rerun at the base keep it.
+# A group with no package that builds for Windows (every file of internal/fleetsoak is //go:build unix, of
+# cmd/password-wasm js && wasm), or whose directory is gone, is left out of the Windows step: given only such groups,
+# go vet says "no packages to vet" (or that the directory does not exist) and exits 1, where CI's ./... passes over
+# them. With no group left, the step does not run. The PASS line names each group left out (JOB_NOTE).
+job_go_vet() {  # $1 = ALL for the whole module on both platforms, else GO_VET_GROUPS
+  [ "$HAVE_GO" -eq 1 ] || skip "go not found"
+  JOB_SLOT=go
+  local _rc=0 _g _windows=() _none=()
+  in_dir server step "$TIMEOUT_GO_TEST" "go vet ./..." go vet -ldflags= ./... || _rc=$?
+  if [ "$1" = ALL ] || arr_has . ${GO_VET_GROUPS[@]+"${GO_VET_GROUPS[@]}"}; then
+    _windows=(./...)
+  else
+    for _g in ${GO_VET_GROUPS[@]+"${GO_VET_GROUPS[@]}"}; do
+      if [ ! -d "server/$_g" ] || no_windows_package "./$_g/..."; then
+        _none+=("./$_g/...")
+      else
+        _windows+=("./$_g/...")
+      fi
+    done
+  fi
+  if [ "${#_none[@]}" -gt 0 ]; then
+    JOB_NOTE="windows vet left out ${_none[*]}: no package there builds for windows"
+    echo "$JOB_NOTE"
+  fi
+  if [ "${#_windows[@]}" -gt 0 ]; then
+    in_dir server step "$TIMEOUT_GO_TEST" "GOOS=windows go vet ${_windows[*]}" \
+      env GOOS=windows GOARCH=amd64 go vet -ldflags= "${_windows[@]}" || _rc=$?
+  fi
+  return "$_rc"
+}
+
+# no_windows_package <pattern> is true when go list, run in server/ for GOOS=windows, lists nothing for the pattern and
+# says it matched no packages. Any other answer, an error or a timeout included, is false: the group is vetted, and vet
+# reports what is wrong. go list compiles nothing, so it runs outside the go slot.
+no_windows_package() {
+  local _out
+  _out=$(cd server && "$TIMEOUT_BIN" -k 5s "$TIMEOUT_OTHER" env GOOS=windows GOARCH=amd64 go list "$1" 2>&1) || return 1
+  [ "$_out" = "go: warning: \"$1\" matched no packages" ]
 }
 
 job_go_build() {
@@ -756,7 +832,7 @@ plan_reset() {
   CORE_FAIL=0
   WEB=0; SDKTS=0; ANDROID=0; PRNEEDS=0; EXTSCHEMA=0; SERVER_BUILD=0; APPLE=0; UNMAPPED=0; GO_GUARDS=0
   SITE=0; SDKGO=0; EXTREFS=0; SDKBUNDLE=0; WEB_INSTALL=0; DENO_ADAPTER=0
-  INTEG=(); GO_GROUPS=(); UNMAPPED_FILES=(); SCRIPT_TESTS=(); TABLE_SUITES=()
+  INTEG=(); GO_GROUPS=(); UNMAPPED_FILES=(); SCRIPT_TESTS=(); TABLE_SUITES=(); GO_FMT_FILES=(); GO_VET_GROUPS=()
   CORE_MISSING=(); INFO=()
   JOB_NAME=(); JOB_FN=(); JOB_ARG=(); JOB_LOG=(); JOB_STATUS=()
 }
@@ -917,6 +993,8 @@ else
         go-package:*) _g=${_c#go-package:}; arr_has "$_g" "${GO_GROUPS[@]:-}" || GO_GROUPS+=("$_g") ;;
         server-build) SERVER_BUILD=1 ;;
         go-guards) GO_GUARDS=1 ;;
+        go-vet:*) _g=${_c#go-vet:}; arr_has "$_g" "${GO_VET_GROUPS[@]:-}" || GO_VET_GROUPS+=("$_g") ;;
+        go-fmt) GO_FMT_FILES+=("$f") ;;
         sdk-go) SDKGO=1 ;;
         android) ANDROID=1 ;;
         pr-needs-issue) PRNEEDS=1 ;;
@@ -1245,7 +1323,15 @@ fi
 if [ "$ALL" -eq 1 ]; then
   if [ "$HAVE_GO" -eq 1 ]; then
     schedule "server go test" job_go ALL
+    schedule "server go vet" job_go_vet ALL
   else core_missing "go not found; server and sdk/go checks skipped"; fi
+  # gofmt does not depend on go being found: without gofmt (or python3) the job is a SKIP line naming it.
+  schedule "gofmt (server, sdk/go)" job_go_fmt ALL
+elif [ "$NO_SERVER_GO" -eq 1 ]; then
+  if [ "${#GO_GROUPS[@]}" -gt 0 ] || [ "$SERVER_BUILD" -eq 1 ] || [ "$GO_GUARDS" -eq 1 ] || [ "${#GO_VET_GROUPS[@]}" -gt 0 ]; then
+    INFO+=("INFO  server go test, build, guards and vet: left to the caller (--no-server-go)")
+  fi
+  if [ "${#GO_FMT_FILES[@]}" -gt 0 ]; then schedule "gofmt (changed files)" job_go_fmt ""; fi
 else
   if [ "${#GO_GROUPS[@]}" -gt 0 ]; then
     if [ "$HAVE_GO" -eq 1 ]; then
@@ -1260,6 +1346,11 @@ else
   if [ "$GO_GUARDS" -eq 1 ]; then
     if [ "$HAVE_GO" -eq 1 ]; then schedule "server repo-wide guards" job_go_guards ""; else INFO+=("SKIP  server repo-wide guards: go not found"); fi
   fi
+  if [ "${#GO_VET_GROUPS[@]}" -gt 0 ]; then
+    if [ "$HAVE_GO" -eq 1 ]; then schedule "server go vet" job_go_vet ""; else INFO+=("SKIP  server go vet: go not found"); fi
+  fi
+  # As under --all, gofmt does not depend on go being found; the job itself skips without gofmt.
+  if [ "${#GO_FMT_FILES[@]}" -gt 0 ]; then schedule "gofmt (changed files)" job_go_fmt ""; fi
 fi
 
 if [ "$ANDROID" -eq 1 ]; then
@@ -1305,8 +1396,8 @@ if [ "$LANES_READ" -eq 1 ] || { [ -n "$LANES_PID" ] && wait "$LANES_PID"; }; the
       scripts) continue ;;  # CI's "**": the privacy scan and the scripts suites above are its fast part
       web) [ "$WEB" -eq 1 ] && continue ;;
       server)
-        { [ "${#GO_GROUPS[@]}" -gt 0 ] || [ "$SERVER_BUILD" -eq 1 ] || [ "$GO_GUARDS" -eq 1 ] || [ "$SDKGO" -eq 1 ]; } \
-          && continue ;;
+        { [ "${#GO_GROUPS[@]}" -gt 0 ] || [ "$SERVER_BUILD" -eq 1 ] || [ "$GO_GUARDS" -eq 1 ] || [ "$SDKGO" -eq 1 ] ||
+          [ "${#GO_VET_GROUPS[@]}" -gt 0 ] || [ "${#GO_FMT_FILES[@]}" -gt 0 ]; } && continue ;;
       runtimes) { [ "${#INTEG[@]}" -gt 0 ] || [ "$SDKTS" -eq 1 ]; } && continue ;;
       apple) [ "$APPLE" -eq 1 ] && continue ;;  # its own SKIP line names it
     esac
@@ -1426,7 +1517,7 @@ for _i in "${!JOB_NAME[@]}"; do
   # The log's tail is a command's output, which need not be UTF-8: macOS sed stops at the first byte that is not
   # ("illegal byte sequence") in a UTF-8 locale, so it runs with LC_ALL=C.
   case "$_kind" in
-    PASS) echo "PASS     ${JOB_NAME[$_i]} (${_seconds}s$_waited)"; N_PASS=$((N_PASS+1)) ;;
+    PASS) echo "PASS     ${JOB_NAME[$_i]} (${_seconds}s$_waited${_detail:+; $_detail})"; N_PASS=$((N_PASS+1)) ;;
     SKIP) echo "SKIP     ${JOB_NAME[$_i]}: $_detail"; N_SKIP=$((N_SKIP+1)) ;;
     FAIL)
       echo "FAIL     ${JOB_NAME[$_i]} (${_seconds}s$_waited, $_detail); log: ${JOB_LOG[$_i]}"

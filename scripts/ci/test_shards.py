@@ -32,21 +32,23 @@ class ServerShardCommandTests(unittest.TestCase):
                                                           ["-run", "^(TestB|TestE)$", "./internal/node"],
                                                           ["-run", "^(TestC|TestF)$", "./internal/node"]])
 
-    def test_the_managers_shard_runs_internal_assistant_in_its_partitions_beside_hub_and_voice(self):
+    def test_the_managers_shard_runs_internal_assistant_and_hub_in_their_partitions_beside_voice(self):
         managers = ["example/server/internal/assistant", "example/server/internal/assistant/fleet",
                     "example/server/internal/hub", "example/server/internal/voice"]
         self.assertEqual(server.select_packages(managers + self.node, "managers"), managers)
-        runs = server.commands(managers, "managers", "/tmp/db.json", {"./internal/assistant": ["^(TestX)$", "^(TestY)$"]})
-        self.assertEqual(len(runs), 3)
+        runs = server.commands(managers, "managers", "/tmp/db.json",
+                               {"./internal/assistant": ["^(TestX)$", "^(TestY)$"], "./internal/hub": ["^(TestH)$"]})
+        self.assertEqual(len(runs), 4)
         for run in runs:
             self.assertEqual(run[run.index("go"):run.index("go") + 7],
                              ["go", "test", "-json", "-p", "3", "-count=1", "-timeout=10m"])
-        self.assertEqual(runs[0][-3:], managers[1:])
+        self.assertEqual(runs[0][-2:], ["example/server/internal/assistant/fleet", "example/server/internal/voice"])
         self.assertEqual([run[-3:] for run in runs[1:]], [["-run", "^(TestX)$", "./internal/assistant"],
-                                                          ["-run", "^(TestY)$", "./internal/assistant"]])
+                                                          ["-run", "^(TestY)$", "./internal/assistant"],
+                                                          ["-run", "^(TestH)$", "./internal/hub"]])
 
     def test_shards_without_a_partitioned_package_stay_one_process(self):
-        self.assertEqual(len(server.commands(["example/server/internal/hub"], "managers", "/tmp/db.json")), 1)
+        self.assertEqual(len(server.commands(["example/server/internal/voice"], "managers", "/tmp/db.json")), 1)
         self.assertEqual(len(server.commands(["example/server/internal/node/sub"], "node", "/tmp/db.json")), 1)
         self.assertEqual(len(server.commands(["example/server/internal/assistantwire"], "other", "/tmp/db.json")), 1)
 
@@ -113,6 +115,25 @@ class ServerShardResultsTests(unittest.TestCase):
             "panic: test timed out after 3s", "\trunning tests:", "\t\tTestSleepy (3s)", "goroutine 1 [chan receive]:",
             "testing.(*T).Run(...)"])
         self.assertEqual(results.output, {})
+
+    def test_a_package_that_does_not_compile_prints_and_repeats_its_build_errors(self):
+        # Go 1.24+ reports compile and vet errors only as build-output events; a shard that dropped them exited in
+        # seconds with no error text (internal/node's redeclared test fake, #12890).
+        build = "example/server/internal/node [example/server/internal/node.test]"
+        events = [{"Action": "build-output", "ImportPath": build, "Output": "# " + build + "\n"},
+                  {"Action": "build-output", "ImportPath": build,
+                   "Output": "internal/node/a_test.go:24:6: fakeDirEntry redeclared in this block\n"},
+                  {"Action": "build-fail", "ImportPath": build},
+                  {"Action": "start", "Package": "example/server/internal/node"},
+                  *output(None, "FAIL\texample/server/internal/node [build failed]\n"),
+                  {"Action": "fail", "Package": "example/server/internal/node", "Elapsed": 0, "FailedBuild": build}]
+        results, printed = self.take(events)
+        self.assertIn("fakeDirEntry redeclared in this block", printed)
+        self.assertEqual(results.failures(), [
+            "--- FAIL: example/server/internal/node (0.00s), outside any test; its last output:",
+            "# " + build, "internal/node/a_test.go:24:6: fakeDirEntry redeclared in this block",
+            "FAIL\texample/server/internal/node [build failed]"])
+        self.assertEqual(results.build_output, {})
 
     def test_one_partition_ending_leaves_the_tests_another_is_running(self):
         # The node shard runs internal/node in several processes: the first to fail ends only its own tests.

@@ -295,7 +295,10 @@ func TestCompletionAcrossRestart(t *testing.T) {
 			s, f, todo := newSupervisedServiceOn(t, database)
 			ctx := context.Background()
 			nodeListed(s, f, turnRow(proto.StatusIdle, 1, ""))
-			s.superviseWatch(ctx, time.Now()) // the first manager's sweep has run: the turns' ledger is kept from here on
+			// The first manager's sweep has run, its looks too: the turns' ledger is kept from here on. A look of it still
+			// going when the turn below ends could take that end up as a start nobody heard, ahead of the list's start
+			// and end (#13701).
+			sweeps(t, s, todo.ID, 1)
 			done := turnRow(proto.StatusDone, 3, "修好了")
 			page := turnPage("turn-1", "修好了", true)
 			switch at {
@@ -687,7 +690,10 @@ func TestTaskReceiptReservationIsReleased(t *testing.T) {
 				s.taskTurnEnded(ctx, "box", "s1") // the node answers again, and the same turn end is told again
 			}
 			waitFor(t, "the receipt", func() bool { return len(recoveryReceipts(t, s, todo.ID)) == 1 })
-			waitFor(t, "the task to close", func() bool { return todoNow(s, todo.ID).DoneAt != nil })
+			waitFor(t, "judge-done delivery to stay open", func() bool {
+				current := todoNow(s, todo.ID)
+				return current.DoneAt == nil && current.Check != nil && current.Check.Verdict == verdictDone
+			})
 			quiet := time.NewTicker(100 * time.Millisecond)
 			defer quiet.Stop()
 			<-quiet.C // a second receipt or judgment would show by now

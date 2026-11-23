@@ -2,7 +2,7 @@ accepted closes work after the delivery gate (default delivery_gate=merged: park
 
 For accepted (outcome=done), include each done_when criterion once in checks (met=true, nonblank evidence), even with user_check. outcome=cannot, cancelled and no-criteria tasks are unchanged. Other verdicts can omit checks and keep progress. Report each criterion met/not_met/dropped, then also_done. Judge the scoped brief over handovers or Agent claims.
 
-Give accepted outcome/reason/link. The hub sends conclusion cards and passes verification unless user_check. needs_user can default to recommend at 24h/deadline. Irreversible or visible_to_others only remind. Recheck at 24h. can_wait needs low cost, nobody blocked today and no deadline within 12h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.
+Give accepted outcome/reason/link. The hub sends conclusion cards and passes verification unless user_check. needs_user can default to recommend at 24h/deadline. Irreversible or visible_to_others only remind. Recheck at 24h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.
 
 A non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and cards end.{{template "shared/mcp_language" .}}
 
@@ -35,7 +35,7 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
           "evidence": {"type": "string", "description": "what shows it is met (a link, a command's output), or what is missing"}
         }
       },
-      "description": "each criterion, met or not, with its evidence or gap; updates that done_when entry's persisted state, evidence, time and supervisor identity. Omitted entries keep their progress"
+      "description": "each criterion (met or not) with evidence/gap; updates persisted state, evidence, time, and supervisor. Omitted entries keep progress"
     },
     "note": {
       "type": "string",
@@ -44,11 +44,11 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
     "outcome": {
       "type": "string",
       "enum": ["done", "cannot"],
-      "description": "accepted: done (the work is done or the answer is yes), or cannot (the task found it cannot be done); default done"
+      "description": "accepted: done (work complete or answer yes) or cannot (proved impossible); default done"
     },
     "reason": {
       "type": "string",
-      "description": "accepted: the conclusion card's one sentence of why, in the user's language; default the note's first line. needs_user (required): one sentence saying what is to be decided, in the user's language. parked (required): one sentence saying what the task waits for, in the user's language; waiting on a PR: include its link"
+      "description": "one sentence in the user's language: accepted (why; default note's first line), needs_user (required: what to decide), or parked (required: what it waits for; include PR link if waiting on a PR)"
     },
     "waiting_on": {
       "type": "string",
@@ -84,7 +84,7 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
           "leads_to": {"type": "string", "description": "one sentence: what choosing it leads to"}
         }
       },
-      "description": "needs_user (required): 2 to 4 options the user chooses from, the recommended one first"
+      "description": "needs_user (required): 2–4 options, recommended first"
     },
     "cost_of_waiting": {
       "type": "string",
@@ -92,15 +92,15 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
     },
     "question_quote": {
       "type": "string",
-      "description": "needs_user: quote the Agent's original question verbatim if reason paraphrases it, so the hub can check for an existing reply"
+      "description": "needs_user: the Agent's question verbatim when reason paraphrases it (hub checks for an existing reply)"
     },
     "can_wait": {
       "type": "boolean",
-      "description": "needs_user, optional: defer to next daily briefing (no deadline <12h, low cost_of_waiting); no push/card, listed in Needs you. Ignored for irreversible/visible_to_others, deadline <12h, reversible=false, or no briefing with facts due within 24h and >=12h before deadline; default false"
+      "description": "needs_user, optional: defer to next daily briefing (low cost, nobody blocked today, no deadline <12h); no push/card, listed in Needs you. Ignored for irreversible/visible_to_others, deadline <12h, reversible=false, or no briefing with facts due within 24h and >=12h before deadline; default false"
     },
     "deadline": {
       "type": "string",
-      "description": "needs_user, optional: until when the decision waits, a duration (\"4h\", \"90m\") or an RFC 3339 time, 1 minute to 30 days ahead; needs reversible. Default: 24h and reversible, except for why_owner irreversible and visible_to_others, which have none"
+      "description": "needs_user, optional: how long the decision waits, duration (\"4h\") or RFC 3339 time, 1m–30d ahead; needs reversible. Default 24h reversible; none for why_owner irreversible/visible_to_others"
     },
     "also_done": {
       "type": "array",
@@ -108,13 +108,17 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
       "items": {"type": "string"},
       "description": "accepted, optional: what was done beyond the task's brief (one line each); the task's page lists it after the criteria"
     },
+    "withdraw_needs_user": {
+      "type": "boolean",
+      "description": "accepted only, task in needs_user: its supervisor or main takes it back and closes it silently (no card/push)"
+    },
     "user_check": {
       "type": "boolean",
-      "description": "accepted only: the user is still to look at the result themselves (a UI change someone has to see): a \"Please verify\" card waits for their \"Pass\" instead of your acceptance passing it; default false"
+      "description": "accepted only: user must inspect result (e.g. UI change); shows \"Please verify\" card awaiting \"Pass\" instead of auto-passing; default false"
     },
     "reversible": {
       "type": "boolean",
-      "description": "with deadline: whether taking recommend can be undone later. false for deleting, sending anything to other people, spending money or changing production: those are never taken by default (why_owner irreversible and visible_to_others must say false)"
+      "description": "with deadline: whether taking recommend can be undone; false for delete/external send/spend/prod change (never auto-taken; required false for irreversible/visible_to_others)"
     },
     "evidence": {
       "type": "object",

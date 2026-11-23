@@ -19,9 +19,11 @@ import (
 // The errors seen on broken machines (placeholders for the machines; the texts as the CLIs and gateways wrote them).
 func TestClassifyLauncherError(t *testing.T) {
 	for text, want := range map[string]string{
-		`API Error: 400 {"error":{"message":"Bare Claude model name cannot be routed"}}`:        errKindModelRoute,
-		`API Error: 400 no account match for model speech_o50`:                                  errKindModelRoute,
-		`session.start: context deadline exceeded`:                                              errKindTimeout,
+		`API Error: 400 {"error":{"message":"Bare Claude model name cannot be routed"}}`: errKindModelRoute,
+		`API Error: 400 no account match for model speech_o50`:                           errKindModelRoute,
+		`API Error: 503 no eligible upstream account is currently available`:             errKindUpstream,
+		`API Error: 503 no eligible upstream account for model claude-sonnet-4-5`:        errKindUpstream,
+		`session.start: context deadline exceeded`:                                       errKindTimeout,
 		`90 秒内没有回答`:                                                                             errKindTimeout,
 		`API Error: 401 {"error":"invalid or missing API key"}`:                                 errKindAuth,
 		`Not logged in · Please run /login`:                                                     errKindAuth,
@@ -48,6 +50,9 @@ func TestOnboardingFailureNeverRepairs(t *testing.T) {
 	}
 	if (LauncherHealth{Kind: errKindOnboarding}).repairNow() {
 		t.Fatal("an onboarding failure must not repair on its first failure either")
+	}
+	if (LauncherHealth{Kind: errKindUpstream, Fails: 5}).repairNow() {
+		t.Fatal("an upstream pool outage must not trigger local launcher repair")
 	}
 }
 

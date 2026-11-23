@@ -677,6 +677,18 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 			delete(n.idAlias, fallback) // its pane is gone: nothing is left to point at
 		}
 	}
+	for pane := range n.agyBound {
+		a, ok := m[otherSession(host.Agent{Agent: agyAgent, PaneID: pane})]
+		if !ok || a.Agent != agyAgent || a.PaneID != pane {
+			delete(n.agyBound, pane)
+		}
+	}
+	for pane, r := range n.agyReports { // a pane whose agent is gone, or that no engine lists any more
+		row, listed := agyRowOfPane(m, pane)
+		if listed && row.Agent != agyAgent || !listed && time.Since(r.at) > agyReportGrace {
+			delete(n.agyReports, pane)
+		}
+	}
 	// herdr's omp integration reports the session file: what resuming a stopped one needs (ompresume.go).
 	if n.ompFiles == nil {
 		n.ompFiles = map[string]string{}

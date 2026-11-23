@@ -33,6 +33,29 @@ const (
 	LayoutContainer Layout = "container"
 )
 
+// TaskWorkflow declares a repository's optional default task-collaboration cadence.
+// Unset ("") and TaskWorkflowIsolated preserve existing default behavior; TaskWorkflowSharedBranch
+// cooperates with serial workspace queueing (#13142) and multi-repository container workspaces (#13143).
+const (
+	TaskWorkflowIsolated     = "isolated"
+	TaskWorkflowSharedBranch = "shared_branch"
+)
+
+// NormalizeTaskWorkflow validates an optional per-repository task_workflow preference.
+// Empty means unset (default); "isolated" and "shared_branch" are accepted.
+func NormalizeTaskWorkflow(workflow string) (string, Problem) {
+	switch strings.TrimSpace(workflow) {
+	case "":
+		return "", ""
+	case TaskWorkflowIsolated:
+		return TaskWorkflowIsolated, ""
+	case TaskWorkflowSharedBranch:
+		return TaskWorkflowSharedBranch, ""
+	default:
+		return "", Problem("invalid")
+	}
+}
+
 // CatalogEntry shares the existing catalog wire shape, including its optional transport.
 type CatalogEntry struct {
 	Identity
@@ -40,6 +63,8 @@ type CatalogEntry struct {
 	CloneURL string `json:"clone_url,omitempty"`
 	// ProviderName is an extension provider's name when the entry was saved (absent for the built-ins).
 	ProviderName string `json:"provider_name,omitempty"`
+	// TaskWorkflow is an optional per-repository default task-collaboration preference ("" / "isolated" / "shared_branch").
+	TaskWorkflow string `json:"task_workflow,omitempty"`
 }
 type Catalog struct {
 	Revision     int64          `json:"revision"`

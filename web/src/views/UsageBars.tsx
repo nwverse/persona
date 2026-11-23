@@ -1,9 +1,10 @@
 // The sidebar's bottom (#2432, docs/server/usage-windows.md): the two fullest subscription accounts as thin bars; a click opens
 // a popover with every window of every account, its reset countdown, when it was sampled and whether use is ahead of or
 // behind an even pace. Hidden entirely while the hub has no data.
+import { useSidebarUsageShown } from "../lib/sidebar-usage";
 import { type ComponentType, useEffect, useRef, useState } from "react";
 import { t as tr } from "../i18n";
-import { fullest, isBalanceAccount, isWarn, liveAccounts, topAccounts, useUsageWindows, sourceNames, type UnconnectedProvider, type UsageAccount } from "../lib/usage-windows";
+import { fullest, isWarn, liveAccounts, selectSidebarUsageAccounts, sourceNames, usePinnedUsageAccounts, useUsageWindows, type UnconnectedProvider, type UsageAccount } from "../lib/usage-windows";
 import { cx } from "../ui/atoms";
 import { lazyOverlay } from "./LazyOverlay";
 
@@ -13,15 +14,25 @@ let LoadedUnconnected: ComponentType<{ accounts: UsageAccount[]; onChange: (next
 const percent = (p: number) => Math.min(100, Math.max(0, p));
 const shown = (p: number) => `${Math.round(p)}%`;
 const fill = (p: number) => (isWarn(p) ? "bg-orange" : "bg-accent");
-// The strip's row text: one place for the size, so a new kind of row does not add another hard-coded one.
-const ROW_NAME = "min-w-0 flex-1 truncate text-[11.5px] text-ink-3";
-const ROW_VALUE = "shrink-0 text-[11.5px] tabular-nums";
+// The strip's row text: one place for the named secondary-meta size.
+const ROW_NAME = "min-w-0 flex-1 truncate text-submeta text-ink-3";
+const ROW_VALUE = "shrink-0 text-submeta tabular-nums";
 
 /** A bar: the track, the used part (caution colour from 80%) and, with `expected`, a tick where an even pace would be. */
-export function Meter({ used, expected, label, tall }: { used: number; expected?: number; label: string; tall?: boolean }) {
+export function Meter({ used, expected, protect, label, tall }: { used: number; expected?: number; protect?: number; label: string; tall?: boolean }) {
+  const hasProtect = typeof protect === "number" && Number.isFinite(protect) && protect >= 0 && protect <= 100;
   return (
-    <div role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent(used))} className={cx("relative w-full rounded-full bg-inset", tall ? "h-1.5" : "h-1")}>
+    <div role="progressbar" aria-label={hasProtect ? `${label}, ${tr("usage.protect_label", { percent: Math.round(protect) })}` : label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent(used))} className={cx("relative w-full rounded-full bg-inset", tall ? "h-1.5" : "h-1", hasProtect && "mt-3.5")}>
       <div className={cx("h-full rounded-full transition-[width] duration-300", fill(used))} style={{ width: `${percent(used)}%` }} />
+      {hasProtect && (
+        <>
+          <span aria-hidden data-protect-zone className="absolute inset-y-0 right-0 rounded-r-full" style={{ left: `${percent(protect)}%`, backgroundImage: "repeating-linear-gradient(135deg, transparent 0 2px, color-mix(in srgb, var(--orange) 45%, transparent) 2px 3px)" }} />
+          <span aria-hidden data-protect-line className="absolute -top-1 -bottom-1 w-0.5 -translate-x-1/2 rounded-full bg-orange" style={{ left: `${percent(protect)}%` }} />
+          <span aria-hidden data-protect-flag className="absolute -top-4 -translate-x-1/2 whitespace-nowrap rounded-sm bg-surface px-0.5 text-submeta font-bold leading-none text-orange" style={{ left: `${Math.min(percent(protect), 92)}%` }}>
+            {tr("usage.protect_flag", { percent: Math.round(protect) })}
+          </span>
+        </>
+      )}
       {expected !== undefined && <span aria-hidden data-pace-tick className="absolute -top-0.5 -bottom-0.5 w-0.5 -translate-x-1/2 rounded-full bg-ink-2" style={{ left: `${percent(expected)}%` }} />}
     </div>
   );
@@ -33,9 +44,9 @@ const EMPTY_UNCONNECTED: readonly UnconnectedProvider[] = [];
 export function UsageBars({ accounts, unconnected = EMPTY_UNCONNECTED, now = Date.now() }: { accounts: UsageAccount[]; unconnected?: readonly UnconnectedProvider[]; now?: number }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const pinnedIds = usePinnedUsageAccounts();
   const live = liveAccounts(accounts, now);
-  const top = topAccounts(live);
-  const balances = live.filter(isBalanceAccount);
+  const { bars: top, balances } = selectSidebarUsageAccounts(live, pinnedIds);
 
   useEffect(() => {
     if (!open) return;
@@ -80,7 +91,7 @@ export function UsageBars({ accounts, unconnected = EMPTY_UNCONNECTED, now = Dat
         {balances.map((a) => (
           <BalanceRow key={a.id} a={a} />
         ))}
-        {unconnected.slice(0, 4 - top.length || 1).map((p) => (
+        {unconnected.slice(0, Math.max(1, 4 - top.length)).map((p) => (
           <span key={`_${p.id}`} data-usage-unconnected={p.id} className="flex items-baseline gap-2 text-xs text-ink-3">
             <span className="min-w-0 flex-1 truncate">{p.title}</span>
             <span className="shrink-0">{tr("usage.not_connected")}</span>
@@ -107,6 +118,11 @@ function BalanceRow({ a }: { a: UsageAccount }) {
 
 /** The sidebar mounts. */
 export function SidebarUsage() {
+  // Off in Settings (lib/sidebar-usage.ts): nothing mounts, so the usage windows are not even read.
+  return useSidebarUsageShown() ? <SidebarUsageShown /> : null;
+}
+
+function SidebarUsageShown() {
   return <SidebarUsageInner accounts={useUsageWindows()} />;
 }
 

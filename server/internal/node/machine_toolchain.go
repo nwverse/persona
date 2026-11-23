@@ -594,7 +594,15 @@ func probeGitHubCLI(
 
 	cctx, cancel := context.WithTimeout(ctx, toolchainCmdTimeout)
 	defer cancel()
+	// Pass GitHub CLI auth environment variables only to the local `gh auth status`
+	// child process so headless/CI token-authenticated machines are detected accurately.
+	// Output is parsed only for status and hostnames; tokens are never returned.
 	ghEnv := append(slices.Clone(probeEnv), "GH_PROMPT_DISABLED=1", "NO_COLOR=1")
+	for _, k := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_HOST"} {
+		if v := deps.getenv(k); v != "" {
+			ghEnv = append(ghEnv, k+"="+v)
+		}
+	}
 	out, err := deps.run(cctx, ghEnv, ghPath, "auth", "status")
 	text := string(out)
 	hosts := parseGHAuthHosts(text)
@@ -676,29 +684,37 @@ func probeDockerRuntime(
 		info.ClientVersion = entry.Version
 	}
 
-	sockCandidates := dockerSocketCandidates(deps)
+	dockerHost := strings.TrimSpace(deps.getenv("DOCKER_HOST"))
+	dockerContext := strings.TrimSpace(deps.getenv("DOCKER_CONTEXT"))
+	hasNonUnixDockerHost := dockerHost != "" && !strings.HasPrefix(dockerHost, "unix://")
+	hasCustomDockerContext := dockerContext != "" && dockerContext != "default"
+	skipUnixSockets := deps.goos == "windows" || hasNonUnixDockerHost || hasCustomDockerContext
+
 	var foundSock string
 	var permDenied bool
 
-	for _, sock := range sockCandidates {
-		if _, err := deps.stat(sock); err != nil {
-			if errors.Is(err, os.ErrPermission) {
-				foundSock = sock
+	if !skipUnixSockets {
+		sockCandidates := dockerSocketCandidates(deps)
+		for _, sock := range sockCandidates {
+			if _, err := deps.stat(sock); err != nil {
+				if errors.Is(err, os.ErrPermission) {
+					foundSock = sock
+					permDenied = true
+				}
+				continue
+			}
+			foundSock = sock
+			dctx, dcancel := context.WithTimeout(ctx, toolchainSocketTimeout)
+			err := deps.dialUnix(dctx, sock)
+			dcancel()
+			if err == nil {
+				info.SocketPath = sock
+				info.SocketAccessible = true
+				break
+			}
+			if errors.Is(err, os.ErrPermission) || strings.Contains(strings.ToLower(err.Error()), "permission denied") {
 				permDenied = true
 			}
-			continue
-		}
-		foundSock = sock
-		dctx, dcancel := context.WithTimeout(ctx, toolchainSocketTimeout)
-		err := deps.dialUnix(dctx, sock)
-		dcancel()
-		if err == nil {
-			info.SocketPath = sock
-			info.SocketAccessible = true
-			break
-		}
-		if errors.Is(err, os.ErrPermission) || strings.Contains(strings.ToLower(err.Error()), "permission denied") {
-			permDenied = true
 		}
 	}
 	if info.SocketPath == "" && foundSock != "" {
@@ -731,11 +747,43 @@ func probeDockerRuntime(
 		info.Note = "docker socket permission denied"
 		return info
 	}
+
+	// Fall back to a bounded CLI daemon check when no local Unix socket was accessible:
+	// this covers Windows (named pipe / Docker Desktop), non-unix DOCKER_HOST schemes
+	// (tcp://, ssh://, npipe://), and non-default Docker contexts.
+	if dockerPath != "" && ctx.Err() == nil {
+		cctx, cancel := context.WithTimeout(ctx, toolchainCmdTimeout)
+		out, err := deps.run(cctx, probeEnv, dockerPath, "version", "--format", "{{.Server.Version}}")
+		cancel()
+		if err == nil {
+			trimmed := strings.TrimSpace(string(out))
+			lower := strings.ToLower(trimmed)
+			if trimmed != "" && !strings.Contains(lower, "cannot connect") && !strings.Contains(lower, "error during connect") {
+				info.SocketAccessible = true
+				info.Status = "ready"
+				if v := extractDottedVersion(out); v != "" {
+					info.ServerVersion = v
+				}
+				return info
+			}
+		}
+		if err != nil && strings.Contains(strings.ToLower(string(out)), "permission denied") {
+			info.Status = "permission_denied"
+			info.Note = "docker socket permission denied"
+			return info
+		}
+		if errors.Is(cctx.Err(), context.DeadlineExceeded) {
+			info.Status = "daemon_unreachable"
+			info.Note = "docker daemon check timed out"
+			return info
+		}
+	}
+
 	info.Status = "daemon_unreachable"
-	if info.SocketPath == "" {
-		info.Note = "docker daemon socket not found"
-	} else {
+	if deps.goos == "windows" || hasNonUnixDockerHost || hasCustomDockerContext || info.SocketPath != "" {
 		info.Note = "docker daemon is not reachable"
+	} else {
+		info.Note = "docker daemon socket not found"
 	}
 	return info
 }
@@ -745,8 +793,9 @@ func dockerSocketCandidates(deps toolchainDeps) []string {
 	if dh := strings.TrimSpace(deps.getenv("DOCKER_HOST")); strings.HasPrefix(dh, "unix://") {
 		sock := strings.TrimPrefix(dh, "unix://")
 		if filepath.IsAbs(sock) {
-			out = appendUnique(out, filepath.Clean(sock))
+			return []string{filepath.Clean(sock)}
 		}
+		return nil
 	}
 	if deps.goos != "windows" {
 		out = appendUnique(out, "/var/run/docker.sock")
@@ -1205,7 +1254,7 @@ func buildProbeEnv(deps toolchainDeps, searchDirs []string) []string {
 	if deps.home != "" {
 		env = append(env, "HOME="+deps.home)
 	}
-	for _, k := range []string{"USER", "LOGNAME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "GH_CONFIG_DIR", "DOCKER_HOST", "DOCKER_CONFIG", "SYSTEMROOT", "USERPROFILE", "APPDATA", "LOCALAPPDATA"} {
+	for _, k := range []string{"USER", "LOGNAME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "GH_CONFIG_DIR", "DOCKER_HOST", "DOCKER_CONFIG", "DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "SYSTEMROOT", "USERPROFILE", "APPDATA", "LOCALAPPDATA"} {
 		if v := deps.getenv(k); v != "" {
 			env = append(env, k+"="+v)
 		}

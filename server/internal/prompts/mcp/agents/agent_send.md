@@ -1,8 +1,8 @@
-Send the user's request. Busy Agents may queue it. Use resume and resume_why to keep context after a recorded non-user stop, including quota/capacity errors. For user, exit or unknown stops, use the owner's Resume. Supervise via task unless the Agent has your open task. Almost full Agents compact first. Use agent_start for unrelated work, ask_user if unsure. An unused branch starts on first send. Only /exit or /quit stops an Agent and keeps its tab. Only the owner can close another chat's Agent.
+Send the user's request. Busy Agents may queue it. To keep context after a stop, use resume and resume_why, including for unknown stops. User or exit stops need the owner's Resume. Give task unless the Agent has your open task. Nearly full Agents compact first. Use agent_start for unrelated work, ask_user if unsure. An unused branch starts on first send. Only /exit or /quit stops a running Agent and keeps its tab. Only the owner can close another chat's Agent.
 
 For dialog_open, retry with dismiss_notice only when Enter alone closes the notice. For permissions and pickers, tell the user or use interaction_answer.
 
-From the main conversation, give task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. For a reply, nudge or decision, omit task or use null. Blank fields count as omitted.
+Give task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task or use null for a reply, nudge or decision. Blank fields count as omitted.
 
 Use `handoff` for your stopped to-do. On node acknowledgement it waits for the receiving Agent's result.
 
@@ -63,7 +63,7 @@ Use `handoff` for your stopped to-do. On node acknowledgement it waits for the r
     },
     "task": {
       "type": ["object", "null"],
-      "description": "new work: make it your supervised task first (main conversation only); null for a reply",
+      "description": "new work: make it your supervised task first (main or a lead); null for a reply",
       "additionalProperties": false,
       "properties": {
         "title": {

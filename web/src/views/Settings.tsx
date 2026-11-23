@@ -19,7 +19,8 @@ import { ExtensionThemePicker } from "../ui/ExtensionThemePicker";
 import { setTheme, useTheme, type Theme } from "./theme";
 import { Group, Row, Pill, RowConfirm, Switch } from "./settings/SettingsParts";
 import { LanguageRow } from "./settings/LanguageRow";
-import { FontRows, RecentChatsRow, SidebarIconsRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
+import { FontRows, RecentChatsRow, SidebarIconsRow, SidebarUsageRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
+import { setStarredEnabled, useStarredSetting } from "../lib/starred-summary";
 import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motion";
 import { setAgentDetails, useAgentDetails } from "../lib/context-usage";
 import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-terminals";
@@ -620,6 +621,7 @@ const host = hostOf;
 function General({ onModel }: { onModel: () => void }) {
   const theme = useTheme();
   const replyMotion = useReplyMotionSetting();
+  const starred = useStarredSetting();
 
   const themes: { k: Theme; label: string; icon: IconName }[] = [
     { k: "system", label: t("language.system"), icon: "monitor" },
@@ -656,7 +658,11 @@ function General({ onModel }: { onModel: () => void }) {
           <Switch on={replyMotion} onChange={setReplyMotionEnabled} label={t("settings.reply_motion")} />
         </Row>
         <RecentChatsRow />
+        <Row label={t("settings.starred_messages")} hint={t("settings.starred_messages_hint")} wrapHint anchor="starred-messages">
+          <Switch on={starred} onChange={setStarredEnabled} label={t("settings.starred_messages")} />
+        </Row>
         <SidebarIconsRow />
+        <SidebarUsageRow />
       </Group>
 
       <DesktopSettings />

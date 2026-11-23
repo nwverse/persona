@@ -186,7 +186,7 @@ const val UnsentBubbleAlpha = 0.6f
 @Composable
 fun UserBubble(text: String, modifier: Modifier = Modifier, time: String? = null) {
     UserBubbleFrame(modifier, footer = time?.let { { Text(it, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) } }) {
-        Text(text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
+        ReadingContent { Text(text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
     }
 }
 
@@ -243,7 +243,7 @@ fun WorkGroup(
                 .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.sm),
         ) {
-            if (running) JSpinner(Modifier.size(Tokens.Space.Standard.m), stroke = Tokens.Space.Standard.xxs)
+            if (running) JSpinner(Modifier.size(Tokens.Space.Standard.m), color = palette.working.dot, stroke = Tokens.Space.Standard.xxs)
             Text(summary, style = type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             trailing?.let { CompositionLocalProvider(LocalContentColor provides palette.ink2, LocalTextStyle provides type.micro) { it() } }
             JIcon(if (expanded) persona.core.designsystem.icons.PersonaIcons.expand else PhIcons.CaretRight, null, size = Tokens.Space.m, tint = palette.ink3)
@@ -602,16 +602,20 @@ fun ComposerTextField(
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
 ) {
     val palette = PersonaTheme.palette
-    BasicTextField(
-        value, onValueChange, modifier.fillMaxWidth().hardwareShortcutTextInput(), enabled = enabled, maxLines = maxLines, keyboardOptions = keyboardOptions,
-        textStyle = PersonaTheme.type.body.copy(color = palette.ink), cursorBrush = SolidColor(if (PersonaTheme.style == AppStyle.Brief) palette.ink else palette.accent),
-        decorationBox = { inner ->
-            Box {
-                if (value.isEmpty()) Text(placeholder, style = PersonaTheme.type.body, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                inner()
-            }
-        },
-    )
+    ReadingContent {
+        BasicTextField(
+            value, onValueChange, modifier.fillMaxWidth().hardwareShortcutTextInput(), enabled = enabled, maxLines = maxLines, keyboardOptions = keyboardOptions,
+            textStyle = PersonaTheme.type.body.copy(color = palette.ink), cursorBrush = SolidColor(if (PersonaTheme.style == AppStyle.Brief) palette.ink else palette.accent),
+            decorationBox = { inner ->
+                Box {
+                    if (value.isEmpty()) InterfaceContent {
+                        Text(placeholder, style = PersonaTheme.type.body, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    inner()
+                }
+            },
+        )
+    }
 }
 
 enum class SendKind { Send, Stop }
@@ -645,10 +649,19 @@ internal fun SendButtonBody(
     onClick: () -> Unit, modifier: Modifier, enabled: Boolean, kind: SendKind, loading: Boolean, pressScales: Boolean, inert: Boolean,
 ) {
     val palette = PersonaTheme.palette
+    val glass = PersonaTheme.style == AppStyle.Glass
     val board = PersonaTheme.style == AppStyle.Board
     val shape = if (board) RoundedCornerShape(8.dp.corner) else CircleShape
-    val fill = when { kind == SendKind.Stop -> palette.danger.dot; enabled -> palette.action; else -> palette.surfaceStrong }
-    val ink = when { kind == SendKind.Stop -> palette.danger.onDot; enabled -> palette.onAction; else -> palette.ink3 }
+    val fill = when {
+        kind == SendKind.Stop -> if (glass) palette.action else palette.danger.dot
+        enabled -> palette.action
+        else -> palette.surfaceStrong
+    }
+    val ink = when {
+        kind == SendKind.Stop -> if (glass) palette.onAction else palette.danger.onDot
+        enabled -> palette.onAction
+        else -> palette.ink3
+    }
     val spoken = stringResource(if (kind == SendKind.Stop) R.string.designsystem_send_stop else R.string.designsystem_send)
     // Send and Stop are felt, as on iOS (DESIGN_SYSTEM.md 4.3).
     val haptics = rememberHaptics()
@@ -735,15 +748,16 @@ fun PlanPill(step: Int, total: Int, done: Int, onClick: () -> Unit, modifier: Mo
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp.dense),
     ) {
-        if (allDone) JIcon(PhIcons.Check, null, size = 14.dp, tint = ink)
+        val progressInk = if (style == AppStyle.Glass) palette.positive else ink
+        if (allDone) JIcon(PhIcons.Check, null, size = 14.dp, tint = progressInk)
         else {
-            val fraction = if (total > 0) step.toFloat() / total else 0f
+            val fraction = if (total > 0) (if (style == AppStyle.Glass) done.toFloat() else step.toFloat()) / total else 0f
             Box(Modifier.size(16.dp).drawBehind {
                 val stroke = 2.dp.toPx()
                 val arc = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke)
                 val at = Offset(stroke / 2, stroke / 2)
-                drawArc(ink.copy(alpha = 0.3f), 0f, 360f, false, at, arc, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
-                drawArc(ink, -90f, 360f * fraction, false, at, arc,
+                drawArc(ink.copy(alpha = 0.2f), 0f, 360f, false, at, arc, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+                if (fraction > 0f) drawArc(progressInk, -90f, 360f * fraction, false, at, arc,
                     style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round))
             })
         }

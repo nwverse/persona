@@ -11,6 +11,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -20,11 +21,13 @@ import (
 // The desired deployment survives a hub restart. Only the node's local recovery
 // transaction lives beside its executable; hub state stays in Postgres settings.
 type nodeDeployRecord struct {
-	Target string    `json:"target"`
-	State  string    `json:"state"` // queued | succeeded | failed
-	Phase  string    `json:"phase,omitempty"`
-	Error  string    `json:"error,omitempty"`
-	At     time.Time `json:"at"`
+	Development *devicewire.DevelopmentTarget `json:"development,omitempty"`
+	Source      string                        `json:"source,omitempty"`
+	Target      string                        `json:"target"`
+	State       string                        `json:"state"` // queued | succeeded | failed
+	Phase       string                        `json:"phase,omitempty"`
+	Error       string                        `json:"error,omitempty"`
+	At          time.Time                     `json:"at"`
 	// Fallback: the target is a fallback build (another version than the hub's), which only an explicit Redeploy
 	// sends; a record queued for the hub's own version never resumes as one.
 	Fallback bool `json:"fallback,omitempty"`
@@ -124,7 +127,7 @@ func (m *Machine) startRPCDeploymentRun(pkg nodePackage, saved *nodeDeployRecord
 	}
 	run := m.beginDeployLocked("waiting_idle")
 	m.mu.Unlock()
-	record := nodeDeployRecord{Target: pkg.Version, State: "queued", Phase: "waiting_idle", At: time.Now().UTC(), Fallback: pkg.Fallback}
+	record := nodeDeployRecord{Development: pkg.development, Target: pkg.Version, State: "queued", Phase: "waiting_idle", At: time.Now().UTC(), Fallback: pkg.Fallback}
 	if saved != nil {
 		record = *saved
 	}
@@ -152,7 +155,10 @@ func (m *Machine) runRPCDeployment(ctx context.Context, pkg nodePackage, record 
 			err = m.deploymentPhase(ctx, &record, "transferring")
 		}
 		if err == nil {
-			bin, err = m.d.fetchPackage(ctx, pkg)
+			bin, err = m.fetchDeployment(ctx, pkg)
+			m.mu.Lock()
+			record.Source = m.deploySource
+			m.mu.Unlock()
 		}
 	}
 	if err == nil {
@@ -184,6 +190,35 @@ func (m *Machine) runRPCDeployment(ctx context.Context, pkg nodePackage, record 
 	m.d.changed()
 }
 
+func (d *Devices) updateHandoffGrace() time.Duration {
+	if d.opts.UpdateHandoffGrace == nil {
+		return time.Duration(proto.DefaultNodeUpdateHandoffGraceSeconds) * time.Second
+	}
+	grace := d.opts.UpdateHandoffGrace()
+	if grace < 0 {
+		return 0
+	}
+	if max := time.Duration(proto.MaxNodeUpdateHandoffGraceSeconds) * time.Second; grace > max {
+		return max
+	}
+	return grace
+}
+
+// endUpdateHandoff reopens admission after a failed or completed deployment. The flag is unknown to older nodes;
+// newer ones resume their own headless admission too. The old transport may already be gone, so this is best effort.
+func (m *Machine) endUpdateHandoff() {
+	m.mu.Lock()
+	was := m.updateHandoff
+	m.updateHandoff = false
+	m.mu.Unlock()
+	if !was {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = m.call(ctx, "sessions.list", map[string]any{"update_handoff": false}, nil)
+}
+
 func (m *Machine) performRPCDeployment(ctx context.Context, bin string, record *nodeDeployRecord) error {
 	m.mu.Lock()
 	already := m.online && m.info.Version == record.Target
@@ -191,17 +226,23 @@ func (m *Machine) performRPCDeployment(ctx context.Context, bin string, record *
 	if already {
 		return m.confirmNodeDeployment(ctx, record, nil)
 	}
+	grace := m.d.updateHandoffGrace()
+	var handoffDeadline time.Time
+	if grace > 0 {
+		handoffDeadline = time.Now().Add(grace)
+	}
+	defer m.endUpdateHandoff()
 	for {
 		if err := m.deploymentPhase(ctx, record, "waiting_idle"); err != nil {
 			return err
 		}
-		if err := m.waitNodeIdle(ctx); err != nil {
+		if err := m.waitNodeIdle(ctx, handoffDeadline); err != nil {
 			return err
 		}
-		// Waiting for idle has no deadline. Transfer/restart does, including a
-		// busy race at commit, which releases the staging transaction and waits again.
+		// Natural idle has no deadline. After the configured grace, new headless turns are refused while current work
+		// drains. Transfer/restart has its own timeout, including a busy race at commit, which waits again.
 		attempt, cancel := context.WithTimeout(ctx, 15*time.Minute)
-		err := m.sendNodeUpdate(attempt, bin, record)
+		err := m.sendNodeUpdate(attempt, bin, record, int(grace/time.Second))
 		cancel()
 		var remote *rpc.Error
 		if errors.As(err, &remote) && remote.Code == proto.CodeNodeUpdateBusy {
@@ -216,15 +257,23 @@ func (m *Machine) performRPCDeployment(ctx context.Context, bin string, record *
 	}
 }
 
-func (m *Machine) waitNodeIdle(ctx context.Context) error {
+func (m *Machine) waitNodeIdle(ctx context.Context, handoffDeadline time.Time) error {
 	for {
+		handoff := !handoffDeadline.IsZero() && !time.Now().Before(handoffDeadline)
+		params := map[string]any{}
+		m.mu.Lock()
+		if handoff {
+			m.updateHandoff = true
+			params["update_handoff"] = true
+		}
+		m.mu.Unlock()
 		var list struct {
 			Sessions   []proto.Session `json:"sessions"`
 			UpdateBusy *bool           `json:"update_busy"` // the node's own commit check (node_update_idle)
 		}
 		snapshot := new(sessionSnapshot)
 		check, cancel := context.WithTimeout(ctx, 15*time.Second)
-		err := m.callWithSnapshot(check, "sessions.list", map[string]any{}, &list, snapshot)
+		err := m.callWithSnapshot(check, "sessions.list", params, &list, snapshot)
 		cancel()
 		if err != nil {
 			return explain(i18n.Err("devices-deploy.idle_check_failed", i18n.Args{"err": err.Error()}), err)
@@ -262,7 +311,7 @@ func sessionAtWork(s proto.Session) bool {
 	return slices.ContainsFunc(s.Subagents, func(sub proto.Subagent) bool { return sub.Running })
 }
 
-func (m *Machine) sendNodeUpdate(ctx context.Context, bin string, record *nodeDeployRecord) error {
+func (m *Machine) sendNodeUpdate(ctx context.Context, bin string, record *nodeDeployRecord, handoffGraceSeconds int) error {
 	f, err := os.Open(bin)
 	if err != nil {
 		return explain(i18n.Err("devices-deploy.open_package_failed", i18n.Args{"err": err.Error()}), err)
@@ -328,6 +377,9 @@ func (m *Machine) sendNodeUpdate(ctx context.Context, bin string, record *nodeDe
 			return i18n.Err("devices-deploy.wrong_offset")
 		}
 	}
+	if err := m.d.CheckDevelopmentTarget(ctx, record.Development); err != nil {
+		return err
+	}
 	if err := m.deploymentPhase(ctx, record, "restarting"); err != nil {
 		return err
 	}
@@ -342,7 +394,7 @@ func (m *Machine) sendNodeUpdate(ctx context.Context, bin string, record *nodeDe
 		m.mu.Unlock()
 	}()
 	commit, cancelCommit := context.WithTimeout(ctx, 30*time.Second)
-	err = peer.Call(commit, "node.update.commit", map[string]any{"id": begin.ID}, nil)
+	err = peer.Call(commit, "node.update.commit", map[string]any{"id": begin.ID, "handoff_grace_seconds": handoffGraceSeconds}, nil)
 	cancelCommit()
 	if err != nil {
 		var remote *rpc.Error
@@ -373,6 +425,9 @@ func (m *Machine) confirmNodeDeployment(ctx context.Context, record *nodeDeployR
 		peer, online, version := m.peer, m.online, m.info.Version
 		m.mu.Unlock()
 		if online && peer != nil && version == record.Target {
+			if err := m.d.CheckDevelopmentTarget(ctx, record.Development); err != nil {
+				return err
+			}
 			confirm, ccancel := context.WithTimeout(deadline, 10*time.Second)
 			err := peer.Call(confirm, "node.update.confirm", map[string]any{"version": record.Target}, nil)
 			ccancel()
@@ -396,7 +451,9 @@ func (m *Machine) confirmNodeDeployment(ctx context.Context, record *nodeDeployR
 // Confirm a healthy replacement even if the hub restarted during transfer. An
 // unconfirmed target must never remain installed just because a worker vanished.
 func (m *Machine) nodeUpdateConnected(ctx context.Context, peer *rpc.Peer, info proto.NodeInfo) {
-	if info.NodeUpdate && (info.Version == m.d.hubVersion() || info.Version == m.d.nodeTarget(info)) {
+	cfg := m.d.config()
+	if info.NodeUpdate && !cfg.DevelopmentHold && (info.Version == cfg.HubVersion || info.Version == m.d.nodeTarget(info)) &&
+		m.d.CheckDevelopmentTarget(ctx, cfg.DevelopmentTarget) == nil {
 		confirm, cancel := context.WithTimeout(ctx, 10*time.Second)
 		err := peer.Call(confirm, "node.update.confirm", map[string]any{"version": info.Version}, nil)
 		cancel()
@@ -421,6 +478,14 @@ func (m *Machine) nodeUpdateConnected(ctx context.Context, peer *rpc.Peer, info 
 		if err != nil {
 			m.d.logf("[%s] load pending node update: %v", m.cfg.ID, err)
 		}
+		return
+	}
+	if record.Source != "" {
+		m.mu.Lock()
+		m.deploySource, m.deployVersion = record.Source, record.Target
+		m.mu.Unlock()
+	}
+	if record.Development != nil && m.d.CheckDevelopmentTarget(ctx, record.Development) != nil {
 		return
 	}
 	if record.State != "queued" {
@@ -494,6 +559,6 @@ func (m *Machine) queueOfflineNodeUpdate(ctx context.Context) error {
 		m.d.logf("update: [%s] build %s is a fallback (not the hub's version): not queued, sent only on Redeploy", m.cfg.ID, pkg.Version)
 		return nil
 	}
-	record := nodeDeployRecord{Target: pkg.Version, State: "queued", Phase: "waiting_idle", At: time.Now().UTC()}
+	record := nodeDeployRecord{Development: pkg.development, Target: pkg.Version, State: "queued", Phase: "waiting_idle", At: time.Now().UTC()}
 	return m.saveDeployRecord(ctx, record)
 }

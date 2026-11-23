@@ -116,10 +116,16 @@ type jobError struct{ code string }
 func (e *jobError) Error() string { return "transcription job: " + e.code }
 
 // problemOfJob is the socket's problem for a job's fatal error code (an open set: what is not the contribution's
-// say about its upstream reads as failed).
+// say about its upstream reads as failed). The kind goes to the phone, which says why and what to do (#13446,
+// spec/fixtures/meeting-transcription-problems): the service refused, is busy, can't be reached (or no job opens), or
+// anything else; never the error's message, which may carry a log id.
 func problemOfJob(code string) string {
 	switch code {
-	case extwire.TENoUpstream, extwire.TEUpstreamForbidden, extwire.TEUpstreamUnavailable:
+	case extwire.TEUpstreamForbidden:
+		return problemUpstreamForbidden
+	case extwire.TEUpstreamBusy:
+		return problemUpstreamBusy
+	case extwire.TENoUpstream, extwire.TEUpstreamUnavailable:
 		return problemUpstreamUnavailable
 	}
 	return problemUpstreamFailed

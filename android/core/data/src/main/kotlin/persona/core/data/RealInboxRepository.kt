@@ -208,9 +208,17 @@ class RealInboxRepository(
         scope.launch {
             combine(sessions.sessions, interactions.pending, sessions.listStatus) { agents, waiting, status ->
                 Triple(agents.map { AgentSession(it) }, waiting.map {
+                    val askLine = when (it.kind) {
+                        "plan" -> (it.plan ?: it.summary)?.lineSequence()?.map { line -> line.trim().trimStart('#').trim() }
+                            ?.firstOrNull { line -> line.isNotEmpty() }
+                        "question" -> it.questions?.firstOrNull()?.question?.takeIf { q -> q.isNotBlank() } ?: it.summary
+                        "permission" -> ((it.toolInput as? JsonObject)?.get("command") as? kotlinx.serialization.json.JsonPrimitive)
+                            ?.takeIf { c -> c.isString }?.content?.takeIf { c -> c.isNotBlank() } ?: it.summary
+                        else -> it.summary
+                    }?.trimStart('#')?.trim()?.takeIf { s -> s.isNotEmpty() }
                     InboxInteraction(it.id, it.machineId, it.sessionId, it.createdAt,
                         agents.firstOrNull { agent -> agent.key == it.sessionKey }?.displayTitle.orEmpty(), it.summary, it.headline.shown,
-                        manager = it.manager)
+                        manager = it.manager, kind = it.kind, askLine = askLine)
                 }, status.loaded)
             }.collect { (agents, waiting, targetsReady) ->
                 current.update { it.copy(sessions = agents, interactions = waiting, targetsReady = targetsReady) }

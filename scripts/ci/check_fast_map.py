@@ -57,6 +57,11 @@ CHECKS = {
                  "in check-fast.sh): they read other packages' source, go list output, the migrations or sdk/go "
                  "(#1936), scan the module for text and prompts (i18n, prompts), check what each program links, or pin "
                  "what other packages render, such as the prompt and MCP goldens and the wire samples (#12842)",
+    "go-fmt": "python3 scripts/ci/gofmt.py on each changed .go file under server/ and sdk/go/ (the trees CI's Go "
+              "formatting step covers), all in one job that takes no go slot (#12894)",
+    "go-vet": "go vet -ldflags= ./... in server/, and GOOS=windows GOARCH=amd64 go vet -ldflags= of the path's package "
+              "group, or of ./... for a server or sdk/go path outside every group, in one job of its own (#12894); a "
+              "group with no package that builds for Windows, or that is gone, is left out of the Windows step",
     "sdk-go": "go test ./... in the sdk/go module",
     "android": "scripts/app/android_i18n_check.py, the slot order, token and motion baselines, and four of their "
                "unittests (no Gradle)",
@@ -67,10 +72,24 @@ CHECKS = {
     "apple": "a SKIP line: the iOS and macOS builds and tests need a Mac",
     "unmapped": "an INFO line naming the path: no fast check maps to it",
 }
-# The checks that take an argument from the path: the integrations/<pkg> package, the server/<top>/<name> group.
+
+
+def _vet_group(parts):
+    """The server package group go vet checks a path's change in for Windows: <top>/<name> for a path under
+    server/internal/<name>, server/cmd/<name> or server/plugins/<name> (go-package's groups), and . (the whole module)
+    for any other server path, such as go.mod or a file directly in server/plugins/, and for sdk/go, which the server
+    module imports."""
+    if len(parts) > 3 and parts[0] == "server" and parts[1] in ("internal", "cmd", "plugins"):
+        return parts[1] + "/" + parts[2]
+    return "."
+
+
+# The checks that take an argument from the path: the integrations/<pkg> package, the server/<top>/<name> group, and
+# the group go vet checks for Windows.
 _FROM_PATH = {
     "integration": lambda parts: parts[1],
     "go-package": lambda parts: parts[1] + "/" + parts[2],
+    "go-vet": _vet_group,
 }
 
 # The table. Each group is a bash case statement: its rules are tried in order, the first one with a pattern that
@@ -115,9 +134,15 @@ TABLE = (
         (("native/app-core/scripts/build-apple.sh", "native/iphone-bridge/build.sh"), ()),
         (("*",), ("unmapped",)),
     ),
-    # On top of those: the repo-wide guards fail on code outside their own package.
+    # On top of those: the repo-wide guards fail on code outside their own package, and go vet checks the whole module
+    # and, for Windows, the changed group (#12894). Each is a job of its own: a vet that runs past its timeout on a cold
+    # build cache then cannot turn a contract test's FAIL into the guard job's TIMEOUT.
     (
-        (("server/*", "sdk/go/*"), ("go-guards",)),
+        (("server/*", "sdk/go/*"), ("go-guards", "go-vet")),
+    ),
+    # gofmt reads only the changed Go files of the trees CI's Go formatting step covers (#12894).
+    (
+        (("server/*.go", "sdk/go/*.go"), ("go-fmt",)),
     ),
     # The suites of CI's Scripts tests job that guard files outside scripts/, or that run or read a script by its path
     # rather than importing it. The docs: quoted paths and the CLAUDE.md index, Go paths, quoted section names, and the
@@ -141,6 +166,11 @@ TABLE = (
          ("scripts/test/test_name_freezes.py",)),
         (("scripts/test/name_freezes.py",), ("scripts/mock/test_mock_hub.py",)),
     ),
+    # The Android modules where a dropped result is still a warning (#13024): test_android_return_values.py reads their
+    # list in android/build-logic and the call sites it names in the modules' sources.
+    (
+        (("android/*",), ("scripts/test/test_android_return_values.py",)),
+    ),
     # Most section names test_doc_sections.py checks sit in code comments under its SOURCE_DIRS (about a second).
     (
         (("server/*", "web/src/*", "web/e2e/*", "scripts/*", "sdk/*", "apple/*", "android/*", "integrations/*",
@@ -163,6 +193,7 @@ TABLE = (
         (("apple/project.yml", "apple/app-entitlements.yml", "apple/watch-and-share.yml", "apple/lean-dev-build.yml",
           "apple/siri-calls.yml", "scripts/app/sim.sh", "scripts/app/ui-test.sh", "scripts/app/perf-test.sh",
           "scripts/app/share-from-apps.sh", "scripts/app/lean-build-note.sh", "scripts/app/island_peer.sh",
+          "scripts/app/stamp_debug_build_info.sh",
           "scripts/diag/stream-scroll/run-ios.sh", "scripts/release/release.sh", "scripts/ci/apple.sh",
           "native/iphone-bridge/build.sh"), ("scripts/test/test_apple_dev_build.py",)),
         (("native/app-core/scripts/build-apple.sh",), ("scripts/test/test_app_core_apple_build.py",)),
@@ -202,8 +233,10 @@ TABLE = (
          ("scripts/ci/test_changed_ratchets.py", "scripts/test/test_merge_pr_sh.py")),
         (("scripts/ci/ratchet_base.py",),
          ("scripts/ci/test_changed_ratchets.py", "scripts/test/test_merge_pr_sh.py", "scripts/ci/test_sleep_ratchet.py",
-          "scripts/ci/test_web_font_ratchet.py", "scripts/test/test_prompt_language_ratchet.py")),
+          "scripts/ci/test_web_font_ratchet.py", "scripts/test/test_prompt_language_ratchet.py",
+          "scripts/ci/test_web_module_boundary_ratchet.py")),
         (("scripts/ci/prompt_language_ratchet.py",), ("scripts/test/test_prompt_language_ratchet.py",)),
+        (("scripts/ci/web_module_boundary_ratchet.py",), ("scripts/ci/test_web_module_boundary_ratchet.py",)),
         (("scripts/test/go_trimpath.sh",), ("scripts/ci/test_ci.py", "scripts/test/test_check_fast_inputs.py")),
         (("scripts/heavy_slot.py",), ("scripts/test/test_check_fast_inputs.py", "scripts/test/test_android_sh.py")),
         (("scripts/check-fast.sh", "scripts/test/check-fast.sh", "scripts/test/test_check_fast.py"),
@@ -298,7 +331,8 @@ def suites():
 
 def checks(path):
     """The checks of one path, in the table's order: a CHECKS name, <check>:<argument> for a check that takes its
-    argument from the path (integration:<pkg>, go-package:<top>/<name>), or suite:<scripts/**/test_*.py>."""
+    argument from the path (integration:<pkg>, go-package:<top>/<name>, go-vet:<top>/<name> or go-vet:.), or
+    suite:<scripts/**/test_*.py>."""
     found = []
     parts = path.split("/")
     for group in _GROUPS:

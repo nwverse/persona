@@ -457,7 +457,9 @@ internal fun KnowledgeDetailScreen(
                     if (profileText.isNotBlank()) item("profile", contentType = "markdown") {
                         JSectionHeader(stringResource(if (recording) R.string.knowledge_recording_summary else R.string.knowledge_profile))
                         JGroupItem(GroupPosition.Single) {
-                            Box(Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.m)) { KnowledgeMarkdown(profileText) }
+                            Box(Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.m)) {
+                                ReadingContent { KnowledgeMarkdown(profileText) }
+                            }
                         }
                     }
                     facts?.let { recordingBookmarks(it) }
@@ -477,7 +479,7 @@ internal fun KnowledgeDetailScreen(
                             share = { markdown ->
                                 val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, markdown)
                                     .putExtra(Intent.EXTRA_SUBJECT, entry?.name.orEmpty())
-                                runCatching { context.startActivity(Intent.createChooser(send, null)) }
+                                val _ = runCatching { context.startActivity(Intent.createChooser(send, null)) }
                             },
                         )) { at -> minutesClock(recorded, at) }
                     } }
@@ -643,7 +645,9 @@ private fun LazyListScope.recordingTranscript(facts: RecordingFacts, segments: L
                     clockText(facts, segment.start)?.let {
                         Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, maxLines = 1)
                     }
-                    SelectionContainer { Text(segment.text.trim(), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
+                    SelectionContainer {
+                        ReadingContent { Text(segment.text.trim(), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
+                    }
                 }
             }
         }

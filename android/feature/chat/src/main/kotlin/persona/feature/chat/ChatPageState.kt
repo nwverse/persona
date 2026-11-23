@@ -105,21 +105,29 @@ internal fun rememberChatPageRequests(key: SessionKey, chrome: ChatChromeBinding
     val sideFold = persona.core.domain.sort.SideFold.FEATURE in features
     val sidePage = sideFold && (sessionList.firstOrNull { it.key == key } ?: chrome.lookupRows.firstOrNull { it.key == key })
         ?.isFoldedSide == true
-    val requests = chatPageCards(taps.shown(allRequests), key, taskKeys, sideFold, sidePage)
-        .sortedBy { if (it.id == chrome.requestId) 0 else 1 }
+    val requests = remember(allRequests, taps, key, taskKeys, sideFold, sidePage, chrome.requestId) {
+        chatPageCards(taps.shown(allRequests), key, taskKeys, sideFold, sidePage)
+            .sortedBy { if (it.id == chrome.requestId) 0 else 1 }
+    }
     // The cards above the composer, as iOS's footer has them. An Agent's chat: the stack holds every card it waits on.
     // Persona's conversation: the oldest question of its tasks is a card of its own above the Needs you / In progress
     // entries (iOS TaskQuestions), under its task's name with "N more"; the stack below them holds the conversation's own
     // cards alone (#4883), so its "N pending" counts only them (DESIGN_SYSTEM.md 4.8, #4339 C10).
     val assistantChat = renderStyle == ChatRenderStyle.Assistant
-    val taskAsk = if (!assistantChat) null else taskQuestion(requests, taskKeys) { card ->
-        val raw = GroupKeys.rawKey(card.sessionKey)
-        taskTodos.firstOrNull { todo -> todo.activeAgents.any { it.key == raw } }?.title?.takeIf(String::isNotBlank)
-            ?: card.taskTitle?.takeIf(String::isNotBlank) ?: card.sessionTitle?.takeIf(String::isNotBlank)
-            ?: sessionList.firstOrNull { it.key == card.sessionKey }?.displayTitle
+    val taskAsk = remember(assistantChat, requests, taskKeys, taskTodos, sessionList) {
+        if (!assistantChat) null else taskQuestion(requests, taskKeys) { card ->
+            val raw = GroupKeys.rawKey(card.sessionKey)
+            taskTodos.firstOrNull { todo -> todo.activeAgents.any { it.key == raw } }?.title?.takeIf(String::isNotBlank)
+                ?: card.taskTitle?.takeIf(String::isNotBlank) ?: card.sessionTitle?.takeIf(String::isNotBlank)
+                ?: sessionList.firstOrNull { it.key == card.sessionKey }?.displayTitle
+        }
     }
-    val stackCards = if (assistantChat) requests.filter { it.homeKey == key } else requests
-    val messages = chatBubbles(allMessages, key, snapshot.items)
+    val stackCards = remember(assistantChat, requests, key) {
+        if (assistantChat) requests.filter { it.homeKey == key } else requests
+    }
+    val messages = remember(allMessages, key, snapshot.items) {
+        chatBubbles(allMessages, key, snapshot.items)
+    }
     val composerDeliveriesState = (composerService?.deliveries ?: remember {
         kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, ComposerDelivery>())
     }).collectAsStateWithLifecycle()
@@ -682,7 +690,7 @@ internal fun rememberChatPageSession(key: SessionKey, chrome: ChatChromeBindings
     } ?: lastSession
     SideEffect { if (liveSession != null) lastSession = liveSession }
     val session = liveSession ?: readOnlySessionMetadata(key, historyReadOnly, historySession)
-    return ChatPageSession(child, workflowAgent, historyOnly, footer, readOnly, row, session, switch?.version ?: 0L, refreshDetail)
+    return ChatPageSession(child, workflowAgent, historyOnly, footer, readOnly, row, session, switch?.version ?: 0L, refreshDetail, ownerOffline != null)
 }
 
 /** What [rememberChatPageSession] hands back to ChatPage: plain values, and the detail reload action. */
@@ -696,6 +704,7 @@ internal class ChatPageSession(
     val session: Session?,
     val switchObservation: Long,
     val refreshDetail: suspend () -> Unit,
+    val managerOffline: Boolean = false,
 )
 
 /** ChatPage's launcher switch and closeout: the switch drawn here, the closeout card's detail (moved as is). */

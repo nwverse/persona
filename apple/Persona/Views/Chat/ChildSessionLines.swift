@@ -48,18 +48,14 @@ enum ChildSessionLines {
         lines.map { line in
             switch line.content {
             case .supervision(let id, let inner, let live, let source):
-                var next = ChatLine.supervision(id: id, lines: rewrite(inner, assigned: assigned, sessions: sessions),
+                let next = ChatLine.supervision(id: id, lines: rewrite(inner, assigned: assigned, sessions: sessions),
                                                 live: live, source: source)
-                next.showsSource = line.showsSource
-                next.hidesPrompt = line.hidesPrompt
-                return next
+                return next.preservingMetadata(from: line)
             case .work(let id, let items, let live, let start, let end):
                 guard let placed = assigned[id], !placed.isEmpty else { return line }
-                var next = ChatLine.work(id: id, items: withChildren(items, placed, sessions: sessions, exchangeStart: start),
+                let next = ChatLine.work(id: id, items: withChildren(items, placed, sessions: sessions, exchangeStart: start),
                                          live: live, start: start, end: end)
-                next.showsSource = line.showsSource
-                next.hidesPrompt = line.hidesPrompt
-                return next
+                return next.preservingMetadata(from: line)
             default:
                 return line
             }
@@ -97,6 +93,18 @@ enum ChildSessionLines {
         if let runtime = session.runtime ?? session.agent, !runtime.isEmpty { fields["runtime"] = .string(runtime) }
         return Item(id: ChildSessions.callPrefix + session.sessionID, seq: 0, ts: ts, role: "assistant", kind: .toolUse,
                     text: session.lastText, toolUseID: nil, toolName: "Child", toolInput: .object(fields), isError: nil, image: nil)
+    }
+}
+
+private extension ChatLine {
+    func preservingMetadata(from original: ChatLine) -> ChatLine {
+        var copy = self
+        copy.showsSource = original.showsSource
+        copy.hidesPrompt = original.hidesPrompt
+        copy.startsExchange = original.startsExchange
+        copy.inFoldedRound = original.inFoldedRound
+        copy.modelNames = original.modelNames
+        return copy
     }
 }
 
