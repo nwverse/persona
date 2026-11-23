@@ -44,6 +44,8 @@ func (s *Service) sendDigest(ctx context.Context) {
 		b.mu.Unlock()
 		return
 	}
+	b.routingMu.RLock()
+	defer b.routingMu.RUnlock()
 	s.restoreSupervisePending(ctx)
 	batch := s.supervisionBatchInterval(ctx)
 	cooldown := s.superviseTimings().routineCooldown()
@@ -208,6 +210,10 @@ func (s *Service) sendDigest(ctx context.Context) {
 	b.last = now
 	b.mu.Unlock()
 	for _, g := range list {
+		if next := s.currentSupervisorSignal(g); next.To != g.To {
+			s.replaceSupervisePending(g, next)
+			g = next
+		}
 		original := g
 		if lead, handled, reachable := s.leaderRoute(g); handled { // never digestTo: a session is no conversation
 			if reachable {
@@ -246,7 +252,11 @@ func (s *Service) sendDigest(ctx context.Context) {
 		if _, ok := groups[to]; !ok {
 			order = append(order, to)
 		}
-		groups[to] = append(groups[to], g)
+		if g.Kind == sigAsk {
+			groups[to] = mergeSignals(groups[to], []superviseSignal{g})
+		} else {
+			groups[to] = append(groups[to], g)
+		}
 	}
 	if gating {
 		order = s.gateDigestBatches(order, groups, now, batch, cooldown)
@@ -300,6 +310,10 @@ func (s *Service) sendDigest(ctx context.Context) {
 // conversation set it is never "", and nothing goes anywhere else than before.
 func (s *Service) routeTo(ctx context.Context, here Settings, g superviseSignal, there func(string) bool) string {
 	to := s.digestTarget(ctx, here, g)
+	if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil && t.Supervision.assigned() &&
+		(to == t.Supervision.Supervisor || to == "") {
+		return to // an unavailable explicit recipient keeps its queue; it never silently falls back to main
+	}
 	if to != here.Main && !there(to) {
 		to = here.Main
 	}
@@ -364,6 +378,9 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	for _, g := range list {
 		if e, ok, deferRetry := s.digestEntryChecked(ctx, g, web); ok {
 			entries = append(entries, e)
+			if g.Kind == sigAsk {
+				g.Cards = e.Asks // receipt names exactly the cards this rendered delivery contains
+			}
 			kept = append(kept, g)
 		} else if deferRetry {
 			retry = append(retry, g)
@@ -419,6 +436,11 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	}
 	background := to != here.Main && to == here.BackgroundSupervisor // old work only; also scopes its closeout grant
 	delivered := kept
+	ackKeys := map[[2]string]string{}
+	for i, g := range kept {
+		key, _ := digestFingerprint(entries[i], g)
+		ackKeys[[2]string{g.id(), g.Key}] = key
+	}
 	accepted := false
 	acceptedIDs := map[[2]string]bool{}
 	for _, g := range kept {
@@ -448,7 +470,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			s.rememberLegacyBackground(to, legacy)
 		}
 		s.ackSupervisePending(list)
-		s.ackSupervisionDedupLocked(ctx, delivered)
+		s.ackSupervisionDedupLocked(ctx, delivered, ackKeys)
 		s.parkedDueTold(ctx, kept) // told for good: not again after a restart (parked.go)
 		s.automaticParksTold(ctx, kept)
 		s.estimateDueTold(ctx, kept)
@@ -499,8 +521,13 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		// The last message may still wait in the queue: this one takes its place with both.
 		all := mergeSignals(queued, kept)
 		var allEntries []prompts.SuperviseEntry
-		for _, g := range all {
+		for i, g := range all {
 			if e, ok := s.digestEntry(ctx, g, web); ok {
+				if g.Kind == sigAsk {
+					all[i].Cards = e.Asks
+				}
+				key, _ := digestFingerprint(e, all[i])
+				ackKeys[[2]string{g.id(), g.Key}] = key
 				allEntries = append(allEntries, e)
 			}
 		}

@@ -117,14 +117,14 @@ func (s *Service) taskInputExecution(ctx context.Context, t Task, record *modelR
 		sourceCwd := "" // Ordinary continuations use the source conversation's directory.
 		if t.Space != "" {
 			// A space's conversation continues only in the space's canonical directory; a space without one
-			// (only the health space has one so far, spaceCwd) never continues.
+			// (spaceCwd) never continues.
 			var canonical struct {
 				Cwd string `json:"cwd"`
 			}
-			if t.Space != SpaceHealth && s.spaceCwd(d, t.Space) == "" {
+			if s.spaceCwd(ctx, d, t.Space) == "" {
 				return taskInputTarget{}, i18n.Err("assistant-schedule.input_context_unavailable")
 			}
-			if c.Space != t.Space || s.call(ctx, t.MachineID, assistantwire.DeviceAssistantDirectory, map[string]any{"path": s.spaceCwd(d, t.Space)}, &canonical) != nil || canonical.Cwd != c.Cwd {
+			if c.Space != t.Space || s.call(ctx, t.MachineID, assistantwire.DeviceAssistantDirectory, map[string]any{"path": s.spaceCwd(ctx, d, t.Space)}, &canonical) != nil || canonical.Cwd != c.Cwd {
 				return taskInputTarget{}, i18n.Err("assistant-schedule.input_context_unavailable")
 			}
 			sourceCwd = canonical.Cwd
@@ -179,9 +179,9 @@ func (s *Service) taskInputDefaultDirectory(ctx context.Context, machine, space 
 	if !ok || !d.Online {
 		return "", i18n.Err("assistant-schedule.execution_offline")
 	}
-	cwd := s.spaceCwd(d, space)
-	if space != "" && space != SpaceHealth && cwd == "" {
-		// A space without a directory (only the health space has one so far) never falls back to the assistant's.
+	cwd := s.spaceCwd(ctx, d, space)
+	if space != "" && cwd == "" {
+		// A space without a directory (spaceCwd) never falls back to the assistant's.
 		return "", i18n.Err("assistant-schedule.input_context_unavailable")
 	}
 	resolve := func(path string) (string, error) {

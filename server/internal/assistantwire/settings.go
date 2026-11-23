@@ -113,6 +113,7 @@ const ConfigDirClaudeOnly = "config_dir is only supported for Claude assistant c
 
 // StartParams is assistant.start's params.
 type StartParams struct {
+	RequireLauncher     bool          `json:"-"` // start on the requested preset or refuse before sending
 	TaskModel           *ModelBinding `json:"-"`
 	Cwd                 string        `json:"-"` // internal scheduled task directory; validated on the target computer
 	TaskExecution       bool          `json:"-"` // refuse execution substitutions
