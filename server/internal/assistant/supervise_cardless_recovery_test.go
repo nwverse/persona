@@ -508,6 +508,7 @@ func TestCardlessClaimOutboxFailureRetriesAfterRestart(t *testing.T) {
 	store.failOutbox = false
 	store.mu.Unlock()
 	again, againHub := restartedOn(t, store)
+	quietDigest(again)
 	t.Cleanup(func() { stopCardlessManager(again) })
 	againHub.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Status: proto.StatusIdle, State: "idle"})
 	holdDigest(again)
@@ -533,6 +534,7 @@ func TestCardlessClaimMarkerFailureKeepsRecoveryRecord(t *testing.T) {
 	store.failMarker = false
 	store.mu.Unlock()
 	again, _ := restartedOn(t, store)
+	quietDigest(again)
 	t.Cleanup(func() { stopCardlessManager(again) })
 	holdDigest(again)
 	if err := again.ensureTodosLoaded(context.Background()); err != nil {
