@@ -231,6 +231,7 @@ The hub forwards the manager's routes under `/api/v1/assistant/health/`:
 | `GET intake/changes` | Current row states after a change number, including undo markers, in sequence order |
 | `POST intake/ui` | Draw a detail page or handle its actions with the extension-page UI envelope |
 | `POST water/reminder` | Handle a water notification's buttons and return a localized toast |
+| `POST intake/import` | Import the legacy water extension and switch it off; full-access devices only |
 
 Omit the selected manager header and `manager` query so the hub uses the default manager.
 `space=health` may be sent for context, but the hub does not use it to select a manager.
@@ -276,6 +277,45 @@ Request and response fields, reserved page state, category action identifiers an
 are in [protocol.md](../protocol/protocol.md) ("Health intake"). No language model is involved
 in the pages, settings or scheduling, and none of these routes grants an extension access to
 Health chats or memory.
+
+### Moving from the water extension
+
+A full-access device can request `POST /api/v1/assistant/health/intake/import` (#13636).
+Nothing moves merely by opening Health. Before import, Today counts only Health's built-in
+records; the extension continues to record and remind independently. GET intake includes
+`water_extension:"pending"` while the extension is enabled, or installed without a receipt,
+including one manually disabled before import. After a successful import it is omitted;
+re-enabling the extension makes it pending again. An uninstalled extension never shows pending.
+
+Import validates the complete extension file first, including old records. A corrupt file
+returns its reason without changing records, settings, reminders or the source file. It then
+commits the records in one transaction, switches the extension off using its normal dependent
+checks, and reads the file again after shutdown to catch a drink recorded just before the
+switch. UUIDv5 identities include the extension's storage key, record ID and UTC timestamp,
+so a reset's repeated IDs remain distinct and retrying never duplicates or revives an undone
+entry. A failed switch leaves Health settings and reminder timing unchanged; already imported
+records remain and the same request can be retried.
+
+After stopping the extension, import copies its saved water settings over built-in defaults.
+The built-in reminder turns on only if both the extension and its reminder switch were on;
+an untouched extension reminder switch means on. Last-reminder and snooze timing carry over,
+with a later drink or existing Health reminder time retained to avoid an immediate reminder.
+Protein uses its built-in default. The resulting settings, timing and migration receipt commit
+together. The receipt is `settings` key `health.intake.water_import`, containing migration time,
+newly imported count and extension version. The response returns that request's new-record
+count, whether the extension is disabled, and the resulting settings. A completed import
+retried while the extension remains off retains current Health settings and timing.
+
+The extension remains installed with its data directory. **Migrate before uninstalling**:
+uninstall deletes that directory. Afterwards, replace extension water widgets and watch-face
+rings with the built-in ones; the old surfaces show their empty choose-an-extension state.
+Rebuild shortcuts that used Run Extension Action with the built-in Log Water action. The
+extension's Android water page disappears when it is off. The iPhone/iPad migration card
+warns about these changes before the user requests import; web and Android do not offer the card.
+
+For a screenshot fixture, run the mock hub with `MOCK_HEALTH_INTAKE=1`. GET intake starts with
+`water_extension:"pending"`; POST import adds two synthetic drinks once and removes the flag.
+`MOCK_WATER_EXTENSION=none` or `migrated` starts without it. This fixture contains no real records.
 
 ## Dietary intake and resting energy
 

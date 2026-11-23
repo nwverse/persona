@@ -49,12 +49,68 @@ LOST_RECEIPT = False
 CATALOG = os.environ.get("MOCK_SESSIONS_CATALOG") == "1" and os.environ.get("MOCK_SESSIONS_LIST") == "1"
 
 
+# MOCK_HEALTH_INTAKE=1 serves the Health migration card with synthetic records (#13636).
+# MOCK_WATER_EXTENSION=none|migrated starts without the card; pending is the default.
+HEALTH_INTAKE_LOCK = threading.Lock()
+HEALTH_WATER_PENDING = os.environ.get("MOCK_WATER_EXTENSION", "pending") == "pending"
+HEALTH_WATER_INSTALLED = os.environ.get("MOCK_WATER_EXTENSION", "pending") != "none"
+HEALTH_INTAKE_SETTINGS = {
+    "water": {"goal_ml": 2000, "cup_ml": 250, "remind": False, "start": "09:00", "end": "21:00",
+              "interval_minutes": 60, "weekends": True, "stop_when_done": True},
+    "protein": {"goal_g": 60},
+}
+HEALTH_INTAKE_RECORDS = []
+
+
+def health_intake_route(handler, method, path):
+    """A screenshot fixture: importing once adds the synthetic extension's records and clears pending."""
+    global HEALTH_WATER_PENDING
+    if os.environ.get("MOCK_HEALTH_INTAKE") != "1":
+        return False
+    if (method, path) not in (("GET", "/api/v1/assistant/health/intake"),
+                              ("POST", "/api/v1/assistant/health/intake/import")):
+        return False
+    with HEALTH_INTAKE_LOCK:
+        if method == "POST":
+            if not HEALTH_WATER_INSTALLED:
+                handler.send_json({"error": "water extension is not installed", "code": "water_import_failed"}, 404)
+                return True
+            imported = 0
+            if HEALTH_WATER_PENDING:
+                for n, amount in enumerate((200, 250), 1):
+                    HEALTH_INTAKE_RECORDS.append({"id": "00000000-0000-5000-8000-%012d" % n,
+                        "kind": "water", "amount": amount, "at": NOW.isoformat(), "note": "",
+                        "seq": n, "created_at": NOW.isoformat()})
+                imported = 2
+                HEALTH_WATER_PENDING = False
+                HEALTH_INTAKE_SETTINGS["water"].update(goal_ml=2400, interval_minutes=90, remind=True)
+            handler.send_json({"imported": imported, "extension_disabled": True, "settings": copy.deepcopy(HEALTH_INTAKE_SETTINGS)})
+            return True
+        try:
+            days = int(parse_qs(urlparse(handler.path).query).get("days", ["7"])[0])
+            if not 1 <= days <= 366:
+                raise ValueError()
+        except ValueError:
+            handler.send_json({"error": "invalid days", "code": "bad_request"}, 400)
+            return True
+        total = sum(r["amount"] for r in HEALTH_INTAKE_RECORDS)
+        history = [{"date": (NOW.date() - timedelta(days=i)).isoformat(), "water": total if i == 0 else 0, "protein": 0}
+                   for i in range(days - 1, -1, -1)]
+        view = {"water": {"today": total, "goal": HEALTH_INTAKE_SETTINGS["water"]["goal_ml"], "entries": copy.deepcopy(HEALTH_INTAKE_RECORDS)},
+                "protein": {"today": 0, "goal": 60, "entries": []},
+                "days": history, "zone": "UTC"}
+        if HEALTH_WATER_PENDING:
+            view["water_extension"] = "pending"
+        handler.send_json(view)
+        return True
+
+
 def features():
     # Match proto.Features, retaining the existing terminal fixture switches.
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload", "upload_attachment",
             "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push", "task_inbox",
-            "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") and os.environ.get("MOCK_GIT_WRITE_FEATURE") != "0" else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["session_review"] if os.environ.get("MOCK_AGENT_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
+            "machine_rename"] + (["health_intake"] if os.environ.get("MOCK_HEALTH_INTAKE") == "1" else []) + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") and os.environ.get("MOCK_GIT_WRITE_FEATURE") != "0" else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["session_review"] if os.environ.get("MOCK_AGENT_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
                 ["terminal_panes", "pane_new_space"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
@@ -26324,6 +26380,7 @@ class H(BaseHTTPRequestHandler):
             transcription_socket(self, audio[1].lower())
             return
         if self.token_refused(): return
+        if health_intake_route(self, "GET", p): return
         if DOMAINS.http(self, "GET", p): return  # the domains' routes first (scripts/mock/mock_domains.py)
         if CASE and case_route(self, "GET", p, q, b""): return
         if preview_route and preview_route(self, "GET", p, q): return
@@ -27532,6 +27589,7 @@ class H(BaseHTTPRequestHandler):
             return self.upload()
         self.last_body = self.body()
         p = urlparse(self.path).path
+        if health_intake_route(self, self.command, p): return
         if DOMAINS.http(self, self.command, p, self.last_body): return  # the domains' routes first
         if CASE and case_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if preview_route and preview_route(self, self.command, p, parse_qs(urlparse(self.path).query)): return
