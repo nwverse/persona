@@ -387,7 +387,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
 
 - **A table row is split at every unescaped `|`, inside a code span too** (#3852). GFM cuts a cell at a pipe the row did
   not escape, so `| `a || b` | 或 |` really is a row with four cells while its header has two; GFM draws only the
-  header-width cells and ignores the excess, and `answerTables` (`feishubot/answer.go`) built a row the same way, by
+  header-width cells and ignores the excess, and `answerTables` (`botcard/answer.go`) built a row the same way, by
   looping over the header's columns alone, so everything past the header's width — here "b`" and "或" — never reached
   the card, with nothing said. The rich-text fallback kept those words, so the same answer read differently as a card
   and as a refused card's text. Those words are still the row's: keep the surplus cells in the last column, joined with
@@ -431,7 +431,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   so a model writing an answer — indents a sub-item by its parent marker's width: two spaces under "- ", three under
   "1. ". The answer's Markdown was passed through unchanged, so every nested list arrived as a flat list of siblings and
   the hierarchy the answer was written with was gone. `CardMarkdown` now maps each item's observed indentation to a level
-  and writes four spaces per level (`listIndent` in `feishubot/card.go`) in one pass over the whole answer, so the levels
+  and writes four spaces per level (`listIndent` in `botcard/card.go`) in one pass over the whole answer, so the levels
   carry across a fenced code block and a list goes on around it; a list item's continuation lines, a list inside a
   blockquote, and four-or-more-space indented code at the left margin stay as written, and a paragraph at the left margin
   ends the list. Test the conversion through `CardMarkdown` and through the answer builder (`answerCards`).
