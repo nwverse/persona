@@ -143,6 +143,7 @@ import { FALLBACK_UNAVAILABLE, recoveryExhausted } from "../../lib/model-fallbac
 import { BASE } from "../../lib/base";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { displayLines, getFeedState, loadedFrom, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type DisplayLine, type FeedItem } from "../../lib/feed";
+import { splitBackgroundActivity } from "../../lib/quiet-activity";
 import { CardConversation } from "../../ui/AssistantCard";
 import { SessionMark, sessionMarkName } from "../../ui/AgentMark";
 import { sessionAgentName } from "../../lib/agent-kind";
@@ -183,6 +184,7 @@ const ModelFallbackCard = lazy(() => import("./ModelFallbackCard").then((m) => (
 // a conversation that holds one (#10357). Until they are in it shows as the owner's bubble alone, so it never blinks out.
 const SessionReviewMenuItem = lazyPage(() => import("./SessionReviewMenuItem").then((m) => m.SessionReviewMenuItem));
 const UndeliveredBubble = lazyPage(() => import("./UndeliveredBubbles").then((m) => m.UndeliveredBubble));
+const BackgroundActivity = lazyDialog(() => import("./BackgroundActivity").then((m) => m.default));
 
 const NO_FEED: FeedItem[] = [];
 const NO_DISPLAY_LINES: DisplayLine[] = [];
@@ -760,7 +762,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   }, [mid, sid, pending, outbox, state]);
 
   // seen: on open, when the page comes back to the front, and whenever a turn ends while it is on screen (lib/store.ts
-  // viewSession)
+  // viewSession). Background activity is a read-only audit view, not another look at the main timeline.
+  const [activityOpen, setActivityOpen] = useState(false);
+  // A narrow menu owns a Back entry. Let its close settle before the activity sheet takes that entry over; opening in
+  // the same menu-item call can close the new sheet again (back-close's one-tick hand-off).
+  const openActivity = useCallback(() => {
+    requestAnimationFrame(() => requestAnimationFrame(() => setActivityOpen(true)));
+  }, []);
   useEffect(() => viewSession(mid, sid), [mid, sid]);
 
   // what came in over the WebSocket after the chat subscribed: the agent's words among it fade in (contract §3); the
@@ -1521,11 +1529,15 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // AssistantInfo has not arrived but the cached main id has: keep the main chat folded (the absent switch means on).
   const foldBackground = useStore((s) =>
     foldsBackgroundRounds(sid, s.assistant ?? (mainCache ? { main: mainCache.scope } : undefined)));
-  const lines = useMemo(
+  const allLines = useMemo(
     () => stabilizeLines(lastLines.current, chatLines(earlier.liveItems, { live: lastLive && !outgoing, background: foldBackground, main: isMain })),
     [earlier.liveItems, lastLive, outgoing, foldBackground, isMain],
   );
-  lastLines.current = lines;
+  lastLines.current = allLines;
+  // A canonical, completed silent round leaves no empty row or feed card in the main timeline. Its full projection is
+  // retained for Background activity; running, legacy quiet and every promoted round keep their existing rendering.
+  const quiet = useMemo(() => splitBackgroundActivity(allLines, feed, tr.hasMore ? loadedFrom(tr.items) : undefined), [allLines, feed, tr.hasMore, tr.items]);
+  const lines = quiet.timeline;
   // a DayLine over the first line of each new calendar day (#8160); day-only keys keep them stable as pages and
   // midnight arrivals land. Days the earlier stretches already open with a divider are not repeated here.
   const dayTaken = useMemo(() => new Set(earlier.stretchDays), [earlier.stretchDays]);
@@ -1553,8 +1565,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   );
   const feedFrom = useMemo(() => (assistant && tr.hasMore ? loadedFrom(tr.items) : undefined), [assistant, tr.hasMore, tr.items]);
   const assistantLines = useMemo(
-    () => (assistant ? displayLines(lines, feed, feedFrom) : NO_DISPLAY_LINES),
-    [assistant, lines, feed, feedFrom],
+    () => (assistant ? displayLines(lines, quiet.timelineFeed, feedFrom) : NO_DISPLAY_LINES),
+    [assistant, lines, quiet.timelineFeed, feedFrom],
   );
   // the last exchange while the chat is at work, even while a message of yours on its way draws it finished (live needs
   // !outgoing above): its words get no reply bar until the work is over (#5314, SegmentView `busy`)
@@ -2342,6 +2354,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         onInterrupt={interrupt}
         last={faceLast}
         onSearch={openSearch}
+        onActivity={isMain ? openActivity : undefined}
         topCenter={topCenter}
         view={switchable ? view : undefined}
         onView={switchable ? setView : undefined}
@@ -2541,7 +2554,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                 of the sessions folded under it are in the chat under the bar (#4883, as iOS): Needs you counts them and
                 lists a row for each that closes the tray onto its card. */}
             <TurnCards asks={turnSplit.turn} />
-            {voiceState !== "live" && <AssistantActionBar key={sid} conversation={sid} ownAsks={trayAsks} />}
+            {voiceState !== "live" && <AssistantActionBar key={sid} conversation={sid} ownAsks={isMain ? docked : trayAsks} />}
             {voiceState !== "live" && <RouteChip conversation={sid} />}
             {/* items handed to this conversation that are still open: "Wrap up" asks it for the final write-back (#5932) */}
             {voiceState !== "live" && isMain && <Suspense fallback={null}><LazyWrapUpChips conversation={sid} /></Suspense>}
@@ -2682,6 +2695,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       )}
       </div>
 
+      <BackgroundActivity open={activityOpen} onClose={() => setActivityOpen(false)} mid={mid} sid={sid} updatedAt={session?.updated_at} rev={session?.rev} live={lastLive && !outgoing} />
       <ChatSearch
         open={search.open}
         query={search.query}
@@ -2864,6 +2878,7 @@ export const Header = memo(function Header({
   onInterrupt,
   last,
   onSearch,
+  onActivity,
   topCenter,
   view,
   onView,
@@ -2896,6 +2911,8 @@ export const Header = memo(function Header({
   last?: Pick<Item, "role" | "kind">;
   /** "Search in chat" (ChatSearch.tsx). */
   onSearch?: () => void;
+  /** Completed silent rounds, with their full transcript and feed records. */
+  onActivity?: () => void;
   topCenter?: React.ReactNode;
   /** On an agent's page with a terminal to show: the view in the middle, and how to change it (the terminal button). */
   view?: SessionView;
@@ -3092,6 +3109,7 @@ export const Header = memo(function Header({
         ...(showFiles && previews ? [{ key: "preview", label: t("chat-chatview.preview"), icon: "web" as const, checked: here(panel, "preview"), onSelect: openPreview }] : []),
         ...(allowed.includes("stop") ? [{ key: "stop", label: t("chat-chatview.interrupt"), icon: "stop" as const, hint: "Esc", onSelect: onInterrupt }] : []),
         ...(feishu ? [{ key: "feishu", label: t("chat-chatview.open_in_lark"), icon: "external" as const, onSelect: () => openLink(feishu) }] : []),
+        ...(onActivity ? [{ key: "background-activity", label: t("chat-chatview.background_activity"), icon: "list" as const, onSelect: () => { void BackgroundActivity.preload().then(onActivity, onActivity); } }] : []),
         ...(onSearch ? [{ key: "search", label: t("chat-chatview.search_menu"), icon: "search" as const, onSelect: onSearch }] : []),
         // the whole conversation as Markdown (#7375): its dialog is a chunk of its own
         { key: "export", label: t("chat-chatview.export"), icon: "download", onSelect: () => import("./ExportDialog").then((m) => m.openExportDialog({ session, title, machineName, assistant: Boolean(assistant) }), (e: unknown) => toast(errorText(e), "error")) },
