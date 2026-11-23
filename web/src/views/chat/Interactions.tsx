@@ -852,13 +852,13 @@ function SupervisorHeldCard({ ix }: { ix: Interaction }) {
       kicker={t("chat-delegate.supervisor_held")}
       title={title}
       footer={
-        <p data-supervisor-held className="flex min-w-0 items-start gap-1.5 text-[12px] leading-snug text-ink-2">
+        <p data-supervisor-held className="flex min-w-0 items-start gap-1.5 text-label leading-snug text-ink-2">
           <Icon name="eye" size={13} stroke={2.2} className="mt-px shrink-0 text-ink-3" />
           <span className="min-w-0">{t("chat-delegate.supervisor_held_hint")}</span>
         </p>
       }
     >
-      {detail && detail !== title && <p className="text-[12.5px] leading-snug break-words whitespace-pre-wrap text-ink-2">{detail}</p>}
+      {detail && detail !== title && <p className="text-label leading-snug break-words whitespace-pre-wrap text-ink-2">{detail}</p>}
     </Card>
   );
 }
