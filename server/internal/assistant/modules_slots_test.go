@@ -403,17 +403,39 @@ func TestClientOnlyModuleFlagsFollowTheSwitch(t *testing.T) {
 	}
 }
 
-// persona_settings accepts a client-only id in the modules switch.
+// persona_settings accepts a client-only id in the modules switch: the change reaches the approval card and, approved,
+// the stored row; the next start then leaves the flag out.
 func TestModuleSwitchSettingAcceptsClientOnlyIDs(t *testing.T) {
 	ids := modapi.ClientModules()
 	if len(ids) == 0 {
 		t.Skip("no client-only module is listed")
 	}
+	ctx := context.Background()
+	st := &memStore{}
 	f := newFakeHub().withMachine()
-	s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return &memStore{} }, Logf: testLogf(t), Modules: []modapi.Module{}}))
-	r := s.Tool(context.Background(), ToolCall{Name: "persona_settings", MachineID: "server", SessionID: "main",
-		Arguments: json.RawMessage(`{"action":"set","key":"modules","value":{"disabled":["` + ids[0] + `"]}}`)})
-	if r.IsError {
-		t.Fatalf("switching client-only module %s off was refused: %s", ids[0], r.Content[0].Text)
+	s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), Modules: []modapi.Module{}}))
+	done := make(chan string, 1)
+	go func() {
+		r := s.Tool(ctx, ToolCall{Name: "persona_settings", MachineID: "server", SessionID: "main",
+			Arguments: json.RawMessage(`{"action":"set","key":"modules","value":{"disabled":["` + ids[0] + `"]}}`)})
+		done <- r.Content[0].Text
+	}()
+	card, ok := awaitCard(s)
+	if !ok {
+		t.Fatalf("switching client-only module %s off made no approval card; tool returned %q", ids[0], <-done)
+	}
+	yes := true
+	if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: card.ID,
+		Answer: json.RawMessage(mustMarshal(proto.Resolution{Allow: &yes}))}); err != nil {
+		t.Fatal(err)
+	}
+	resultOf(t, done, 5*time.Second)
+	off := ReadModuleSwitch(ctx, st, t.Logf)
+	if !slices.Equal(off, []string{ids[0]}) {
+		t.Fatalf("approved disabled list = %v", off)
+	}
+	next := New(Options{Hub: newFakeHub().withMachine(), Store: func() Store { return st }, Logf: testLogf(t), Modules: []modapi.Module{}, ModulesOff: off})
+	if got := next.moduleFeatures(); slices.Contains(got, "module."+ids[0]) {
+		t.Errorf("after the next start %s is still announced: %v", ids[0], got)
 	}
 }
