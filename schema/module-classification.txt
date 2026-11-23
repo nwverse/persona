@@ -329,7 +329,6 @@ gradle :feature:assistant core
 gradle :feature:chat core
 gradle :feature:files core
 gradle :feature:inbox core
-gradle :feature:knowledge knowledge-ui
 gradle :feature:machines core
 gradle :feature:settings core
 gradle :feature:terminal core

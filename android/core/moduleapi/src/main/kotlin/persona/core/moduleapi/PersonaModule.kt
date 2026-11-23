@@ -6,6 +6,7 @@ import androidx.navigation3.runtime.EntryProviderScope
 import androidx.navigation3.runtime.NavKey
 import persona.core.designsystem.icons.PhIcon
 import persona.core.navigation.Navigator
+import kotlin.reflect.KClass
 
 /**
  * One module of the app (#13430 "Persona Core and modules", docs/android/android.md "Modules"): a feature the owner can
@@ -42,6 +43,12 @@ interface PersonaModule {
      * needs the hub shows [ModuleNavContext.unavailable] instead.
      */
     fun navEntries(entries: EntryProviderScope<NavKey>, context: ModuleNavContext) {}
+
+    /**
+     * `shell_places`, as a list: the routes [navEntries] registers. The shell reads it to show its own way into a module's
+     * place (a sidebar or menu item it keeps) only while some active module serves that place ([LocalModulePlaces]).
+     */
+    val places: Set<KClass<out NavKey>> get() = emptySet()
 
     /**
      * The module's actions in [slot], read while that surface is composed; none by default. [ModuleUiContext.target] says
@@ -99,6 +106,8 @@ class ModuleNavContext(
     val services: ModuleServices?,
     /** The shell's page for a place that cannot work here (demo mode): the [message] and a way back. */
     val unavailable: @Composable (message: String) -> Unit,
+    /** The core's repositories for the paired hub; null in demo mode. */
+    val shell: ModuleShell? = null,
 )
 
 /** What [PersonaModule.menuActions] gets from the shell. */
