@@ -144,6 +144,7 @@ assistant.ask        GET /api/v1/assistant
 -                    GET /api/v1/assistant/calls
 -                    GET /api/v1/assistant/calls/{id}
 assistant.ask        GET /api/v1/assistant/capabilities
+-                    GET /api/v1/assistant/captures
 -                    GET /api/v1/assistant/conversations/{id}/always
 -                    GET /api/v1/assistant/conversations/{id}/categories
 assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
@@ -448,6 +449,7 @@ agents.control       POST /api/v1/agents/sessions/{id}/read
 -                    POST /api/v1/agents/sessions/{id}/unhide
 -                    POST /api/v1/assistant/agents/{mid}/{sid}/supervisor
 -                    POST /api/v1/assistant/calls/{id}/state
+-                    POST /api/v1/assistant/captures
 assistant.ask        POST /api/v1/assistant/conversations
 -                    POST /api/v1/assistant/conversations/{id}/archive
 -                    POST /api/v1/assistant/conversations/{id}/compact

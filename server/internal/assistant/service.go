@@ -218,8 +218,10 @@ type Service struct {
 	deletedConversations conversationDeleteBook // conversation_delete.go
 	convSpaces           convSpaceBook          // conversation_space.go
 	trackReg             trackRegistry          // track_registry.go
+	spaceRecs            spaceRecordingBook     // space_recordings.go
 	infoTags             infoTagCache           // info_tag.go
 	infoTagWaiting       infoTagPending         // info_use.go
+	captures             captureWork            // capture_sort.go: wakes the loop that sorts quick captures
 	spaceFill            spaceBackfill          // conversation_space_backfill.go
 	outcomeLines         outcomeLines           // todo_outcome.go
 	conversationWrites   sync.RWMutex
@@ -384,6 +386,7 @@ func New(o Options) *Service {
 	s.alwaysRoutes()
 	s.infoAccessRoutes()
 	s.trackRoutes()
+	s.captureRoutes() // captures.go: quick capture
 	s.undeliveredRoutes()
 	s.standingAuthorizationRoutes()
 	s.ruleSuggestionRoutes()

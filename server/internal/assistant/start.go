@@ -270,6 +270,7 @@ func (s *Service) instructionsLoop(ctx context.Context) {
 	defer t.Stop()
 	for {
 		s.refreshInstructions(ctx)
+		s.spaceRecordingsSweep(ctx) // recording_days for the recordings saved into tracks (space_recordings.go)
 		select {
 		case <-ctx.Done():
 			return
