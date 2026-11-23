@@ -224,6 +224,10 @@ test('summary lag: CLI evidence decides working and done, never idle for new wor
     ['summary covers it', [reply], { ...idle, step_count: 4 }, { writing: true }, { status: 'done' }],
     ['an error ends it', [step(3, 'ERROR_MESSAGE')], idle, { writing: true }, { status: 'idle' }],
     ['native work wins', [reply], { status: 'CASCADE_RUN_STATUS_RUNNING' }, { quiet: true }, { status: 'working' }],
+    ['no run state recorded, the CLI writing', [tool], { status: '', step_count: 1 }, { writing: true }, { status: 'working' }],
+    ['no run state recorded, quiet reply', [reply], { status: '', step_count: 1 }, { quiet: true }, { status: 'done' }],
+    ['no run state recorded, covered', [reply], { status: '', step_count: 4 }, undefined, { status: 'done' }],
+    ['a set unknown run state stays unknown', [reply], { status: 'FUTURE_STATUS', step_count: 4 }, { quiet: true }, { status: 'unknown', reason: 'summary_not_idle' }],
   ]
   for (const [name, steps, summary, cli, expected] of cases) assert.deepEqual(transcriptState(steps, summary, cli), expected, name)
 })

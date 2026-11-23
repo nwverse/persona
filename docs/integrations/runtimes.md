@@ -569,6 +569,14 @@ wrote for a minute, and `unknown` otherwise (an open tool call or new input neve
 cut when the transcript changed while the native snapshot was taken, and a session the companion resumed only for a
 check is closed again unless a turn of its own took it meanwhile. Conversations no CLI has opened keep the rules above.
 
+agy's summary store records no run state (an empty status) for every conversation no agy process is running: each agy
+process empties the status when its summary-store reconciliation runs at startup, so after any agy start (a CLI, the
+companion's own ACP) the finished conversations all read that way, while one still running keeps
+`CASCADE_RUN_STATUS_RUNNING`. Such a conversation reads `done` only when its last step is a complete reply that the
+summary's step count covers and no other process is writing its transcript; otherwise it follows the transcript as above
+and stays `unknown` (`summary_not_idle`) when that says nothing, so a trailing user input or tool result never reads
+idle. A status agy sets that the companion does not know stays `unknown` (`summary_not_idle`) too (#13451).
+
 CLI companion sessions and herdr panes show images from exported tool results. Conversation pages carry only image
 references; Persona loads the bytes when an image is shown. It accepts PNG, JPEG, GIF and WebP up to 1,152 KiB from
 the result's inline data or local file. The Desktop companion still omits these images.

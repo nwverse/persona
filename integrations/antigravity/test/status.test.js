@@ -36,6 +36,12 @@ test('native transcript stages distinguish external work from completed replies'
     ['unfinished history without a time', [step('GENERIC', { created_at: undefined })], 'unknown'],
     ['stale unfinished history', [step('USER_INPUT', { created_at: '2025-12-01T00:00:00Z' })], 'unknown'],
     ['old completed reply', [step('PLANNER_RESPONSE', { content: 'Finished', created_at: '2025-12-01T00:00:00Z' })], 'done', idle],
+    // agy's summary-store reconciliation (any agy process starting) leaves status empty for conversations no agy process
+    // runs. Without a recorded run state only a complete reply the summary covers reads done (#13451); anything else, or
+    // a set unknown status, stays unknown.
+    ['final reply, no run state recorded', [step('PLANNER_RESPONSE', { content: 'Finished' })], 'done', { status: '', step_count: 1 }],
+    ['stopped after a tool result, no run state recorded', [step('GENERIC')], 'unknown', { status: '', step_count: 1 }],
+    ['no run state recorded, summary predates narration', [step('PLANNER_RESPONSE', { step_index: 1, content: 'Running the experiment' })], 'unknown', { status: '', step_count: 1 }],
   ]
   for (const [name, steps, expected, summary] of cases) {
     assert.equal(transcriptStatus(steps, summary), expected, name)
@@ -238,7 +244,7 @@ test('unknown transcript states name the missing evidence', () => {
 
 const unknownCases = [
   ['no_summary', [step('PLANNER_RESPONSE', { content: 'Private narration' })], undefined],
-  ['summary_not_idle', [step('PLANNER_RESPONSE', { content: 'Private narration' })], { status: '' }],
+  ['summary_not_idle', [step('PLANNER_RESPONSE', { content: 'Private narration' })], { status: 'FUTURE_STATUS' }],
   ['summary_behind', [step('USER_INPUT', { content: 'Private question' }), step('PLANNER_RESPONSE', { content: 'Private narration' })], { ...idle, step_count: 1 }],
   ['no_step_index', [step('PLANNER_RESPONSE', { step_index: undefined, content: 'Private narration' })], idle, { noIndex: true }],
   ['no_relevant_step', [step('CHECKPOINT', { content: 'Private summary' })], idle],
@@ -252,6 +258,17 @@ for (const [reason, steps, summary, options] of unknownCases) {
     assert.ok(!logs.some((line) => /Private|[0-9a-f]{8}-[0-9a-f]{4}/.test(line)), 'reasons and counts only')
   })
 }
+
+test('a settled conversation without a recorded run state lists as done', { timeout: 15_000 }, async (t) => {
+  // agy's summary-store reconciliation empties status for every conversation no agy process runs (#13451).
+  const created_at = new Date(Date.now() - 3600_000).toISOString()
+  const { node, state, refresh } = await fixture(t, [step('USER_INPUT', { created_at }), step('PLANNER_RESPONSE', { step_index: 1, created_at, content: 'Finished' })], { status: '', step_count: 2 })
+  assert.equal(node.last('runtime.sessions').sessions[0].status, 'done')
+  state({ status: '', step_count: 1 })
+  assert.equal(await refresh(), 'unknown', 'a summary behind the reply is not evidence')
+  state({ status: 'CASCADE_RUN_STATUS_RUNNING', step_count: 2 })
+  assert.equal(await refresh(), 'working')
+})
 
 test('a failed summary read is reported apart from missing summaries', { timeout: 15_000 }, async (t) => {
   const created_at = new Date().toISOString()
