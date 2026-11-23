@@ -49,7 +49,7 @@ func (s *Service) renderQueuedDigest(ctx context.Context, to string, list []prom
 		ParkedDue:           slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigParkedDue }),
 		ParkDecided:         slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigParkDecided }),
 		Decisions: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool {
-			return e.Kind == sigRecheck || e.Kind == sigUndecidable || e.Kind == sigOwnerCannot
+			return e.Kind == sigRecheck || e.Kind == sigUndecidable || e.Kind == sigOwnerCannot || e.Kind == sigCardlessWait
 		}),
 		Inbox: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigInbox }),
 		Asked: askedIn(list), AskMinutes: int(askHoldFor.Minutes()), PushGrading: askedIn(list) && s.quietModeOn(ctx)})

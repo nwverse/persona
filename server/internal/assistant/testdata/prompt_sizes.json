@@ -82,6 +82,7 @@
   "mcp_tools.assistant#repositories_list": 1089,
   "mcp_tools.assistant#repository_add": 1219,
   "mcp_tools.assistant#repository_get": 769,
+  "mcp_tools.assistant#resource_status": 239,
   "mcp_tools.assistant#save_place": 802,
   "mcp_tools.assistant#schedule_followup": 3996,
   "mcp_tools.assistant#schedule_routine": 4599,

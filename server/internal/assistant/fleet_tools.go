@@ -36,6 +36,9 @@ func (s *Service) mcpTools(ctx context.Context, assistant bool) []proto.Tool {
 	}
 	tools := append(s.phoneTools(ctx), agents...)
 	if !assistant {
+		tools = append(tools, toolsNamed(resourceToolNames)...)
+	}
+	if !assistant {
 		tools = append(tools, s.knowledgeFolderTools(ctx)...)
 		tools = append(tools, s.AgentTools()...)       // report_to_supervisor, todo_decisions, todo_decision_add, todo_bind_thread (agentToolNames)
 		tools = append(tools, s.dispatchTools(ctx)...) // dispatch_start, dispatch_read, when agents.dispatch is on (dispatch.go)
@@ -215,6 +218,9 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 	}
 	if res, refused := s.inboxModelRefusal(ctx, machine, session, origin, name); refused {
 		return res
+	}
+	if slices.Contains(resourceToolNames, name) {
+		return s.resourceTool(ctx, machine, session, name, args)
 	}
 	if name == "secret_store" {
 		return s.toolSecretStore(ctx, machine, session, args)

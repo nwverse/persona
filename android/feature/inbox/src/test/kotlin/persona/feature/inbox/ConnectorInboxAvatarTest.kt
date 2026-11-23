@@ -55,6 +55,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.lang.reflect.Proxy
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 
 /** A connector row uses the same immediate initial, fixed layout and loaded-picture cache as a Lark row. */
@@ -66,7 +67,7 @@ class ConnectorInboxAvatarTest {
     @get:Rule val rule = createComposeRule()
 
     private lateinit var pictures: ImageLoader
-    private val requestedSizes = mutableListOf<Size>()
+    private val requestedSizes = CopyOnWriteArrayList<Size>()
     private var loading: CompletableDeferred<ByteArray>? = null
     private val picture: ByteArray by lazy {
         val bitmap = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.MAGENTA) }
@@ -247,7 +248,7 @@ class ConnectorInboxAvatarTest {
     }
 
     @Test fun connectorRowsRequestAndDecodeAtTheirDrawnPixelSize() {
-        val refs = mutableListOf<String>()
+        val refs = CopyOnWriteArrayList<String>()
         fun avatar(name: String) = larkAvatar("/api/v1/avatars/telegram/$name", "hub/a") { sized ->
             refs += sized
             picture
