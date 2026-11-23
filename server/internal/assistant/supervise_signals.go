@@ -930,6 +930,39 @@ func (s *Service) queueSignal(g superviseSignal) {
 	s.queueSignalReplacing(nil, g)
 }
 
+// preserveIdleHandoff lets a newer turn idle replace the handoff's key without erasing the undelivered decision.
+func preserveIdleHandoff(cur, next superviseSignal) superviseSignal {
+	if cur.Kind == sigIdle && next.Kind == sigIdle && cur.Handoff && !next.Handoff {
+		next.Handoff = true
+		next.Detail = cur.Detail
+	}
+	return next
+}
+
+// reportStopHold is how long a report its Agent makes before it stops (report_to_supervisor: done, blocked, a
+// question) waits for that stop: the turn's end signal (idle, unjudged, review, interrupted) of the same task comes
+// seconds later, and the two then go out as one entry of one supervision message (joinTurnReports) instead of two
+// messages a couple of minutes apart. An Agent that goes on working past it has its report told on its own.
+var reportStopHold = 2 * time.Minute
+
+// releaseReportsLocked: g ends its task's turn, so the reports of that task held for it (reportStopHold) are due now
+// and go out with it. It returns their ids for the durable outbox; s.supervise.mu is held.
+func (s *Service) releaseReportsLocked(g superviseSignal) []string {
+	if !turnSignalKind(g) || g.Todo == "" {
+		return nil
+	}
+	b := &s.supervise
+	var ids []string
+	for id, cur := range b.pending {
+		if cur.Kind == sigReport && cur.Todo == g.Todo && !cur.NotBefore.IsZero() {
+			cur.NotBefore = time.Time{}
+			b.pending[id] = cur
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 // queueSignalReplacing also removes the older stretch it supersedes from the durable outbox.
 func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) {
 	if g.Kind != sigAsk {
@@ -972,6 +1005,7 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 		if g.Detail == "" && cur.Key == g.Key {
 			g.Detail = cur.Detail // the watch's sight of what an event told already
 		}
+		g = preserveIdleHandoff(cur, g)
 		if g.Kind == sigReport && cur.Key != g.Key {
 			g = joinReports(cur, g) // two questions before the message went: both are asked
 		}
@@ -982,9 +1016,19 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 				g.Inbox = cur.Inbox // the same message again: counted once
 			}
 		}
+		if g.Kind == sigReport && !cur.NotBefore.IsZero() && (g.NotBefore.IsZero() || cur.NotBefore.Before(g.NotBefore)) {
+			g.NotBefore = cur.NotBefore // a second report does not hold the first one longer (reportStopHold)
+		}
 		g.batchTo, g.batchUntil = cur.batchTo, cur.batchUntil
 	}
+	held := s.releaseReportsLocked(g)
 	s.updateSupervisePending(func(pending map[string]superviseSignal) {
+		for _, id := range held {
+			if cur, ok := pending[id]; ok {
+				cur.NotBefore = time.Time{}
+				pending[id] = cur
+			}
+		}
 		// sendDigest may already have taken the older stretch out of b.pending. Its durable outbox entry remains until
 		// real delivery or queue admission, so it is the reliable evidence that this different Key replaces an unACKed one.
 		if cur, ok := pending[g.id()]; ok {
