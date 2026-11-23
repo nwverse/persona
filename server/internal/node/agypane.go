@@ -58,24 +58,25 @@ var agyEmbeddedUUIDRe = lazyre.New(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 
 func reportedAgyConversation(a host.Agent) string {
 	s := a.AgentSession
-	if a.Agent == agyAgent && s != nil && s.Source == "herdr:antigravity_cli" &&
+	if a.Agent == agyAgent && s != nil && (s.Source == "herdr:antigravity_cli" || s.Source == agyPresenceSource) &&
 		s.Agent == agyAgent && s.Kind == "id" && uuidRe.MatchString(s.Value) {
 		return s.Value
 	}
 	return ""
 }
 
-// rawAgyConversationLocked checks the latest raw herdr snapshot as well as the pane row.
+// rawAgyConversationLocked checks the latest raw snapshot of the pane's engine (herdr, herdr-core) as well as the pane row.
 // The row ID is pane-derived. Cwd and previously bound session IDs cannot identify
 // a native conversation, and ambiguous reports do not authorize a read or resume.
 func (n *Node) rawAgyConversationLocked(id, pane string) string {
 	a := n.agents[id]
 	conversation := reportedAgyConversation(a)
-	if conversation == "" || a.PaneID != pane || id != otherSession(a) || host.ParsePane(pane).Kind != host.Herdr {
+	kind := host.ParsePane(pane).Kind
+	if conversation == "" || a.PaneID != pane || id != otherSession(a) || (kind != host.Herdr && kind != host.HerdrCore) {
 		return ""
 	}
 	matches := 0
-	for _, raw := range n.hostAgents[host.Herdr] {
+	for _, raw := range n.hostAgents[kind] {
 		reported := reportedAgyConversation(raw)
 		if raw.PaneID == pane {
 			if reported != conversation {
@@ -93,7 +94,7 @@ func (n *Node) rawAgyConversationLocked(id, pane string) string {
 }
 
 func (n *Node) agyConversationClaimedElsewhereLocked(pane, conversation string) bool {
-	for _, raw := range n.hostAgents[host.Herdr] {
+	for _, raw := range n.hostAgents[host.ParsePane(pane).Kind] {
 		if raw.PaneID != pane && reportedAgyConversation(raw) == conversation {
 			return true
 		}

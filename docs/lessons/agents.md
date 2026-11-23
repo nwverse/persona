@@ -1633,3 +1633,12 @@ labels and other URI schemes survive; keep embedded-resource transport intact an
 A read-only session skips card creation, but must not skip evidence validation. Normalize model `blocked / user`
 results with no grounded question or authorization link before storing them and when displaying old records.
 Otherwise a guess appears as "Awaiting your reply" with nothing in the chat to answer.
+
+## The companion's agy row can be a conversation a terminal agy has open (#13603)
+
+The Antigravity companion lists every recent agy conversation on disk, including ones an `agy` in a terminal is
+running. When the node had no pane row to merge it into (herdr-core terminals were not recognised as agy), a message to
+`agy-<conversation>`, card answers included, went to the companion, which ran a second agy on the same conversation: the
+terminal never saw it, and the companion's turn overwrote the stored steps from where it had last loaded them. The
+terminal agy holds an exclusive flock on `presence/<conversation>.lock`; the file stays after agy exits, so test the lock,
+never the file. Calls that drive the conversation go to the pane, or are refused (`agy_in_terminal`) while the lock is held.
