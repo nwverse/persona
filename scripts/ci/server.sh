@@ -21,7 +21,7 @@ if [ "$lane" = all ] || [ "$lane" = build ]; then
   # The node's modules (docs/architecture/core-and-modules.md "The node's modules"): their node halves reach the node
   # through internal/nodecmd/commandport from internal/modules/all/node. Left out, every binary builds, Windows' node too,
   # the device command is unknown, and the node's list, the seam and the guards pass.
-  ci_run 'Builds without the node modules' 900 bash -c 'cd server && for t in persona_core_only persona_without_office; do go build -tags "$t" ./... && GOOS=windows go build -tags "$t" ./cmd/persona-node ./cmd/personad && go test -tags "$t" -count=1 -timeout=6m ./internal/modules/all/... ./internal/nodecmd/commandport/... ./internal/archguard/... ./cmd/persona-node/... || exit 1; done'
+  ci_run 'Builds without the node modules' 900 bash -c 'cd server && for t in persona_core_only persona_without_office persona_without_screen_share; do go build -tags "$t" ./... && GOOS=windows go build -tags "$t" ./cmd/persona-node ./cmd/personad && go test -tags "$t" -count=1 -timeout=6m ./internal/modules/all/... ./internal/nodecmd/commandport/... ./internal/archguard/... ./cmd/persona-node/... || exit 1; done'
   # Persona Core without its feature modules (docs/architecture/core-and-modules.md "The switch"): the core builds, and
   # the module list, the kernel and the assistant's tests of the briefing's paths (they skip what needs the module and
   # check the core without it) pass, with every module left out and with the pilot left out. The assistant runs a -run
@@ -52,8 +52,8 @@ if [ "$lane" = all ] || [ "$lane" = build ]; then
   # loads no module, every module's program, extension and route is absent, and both stop cleanly.
   ci_run 'Core-only hub smoke' 900 python3 scripts/ci/core-only-smoke.py
   # Each module left out on its own (server/internal/modules/<id>/module.json, so a module that moves is covered with no
-  # edit here): the server builds, and the module list and the guards pass.
-  ci_run 'Builds without each module' 900 bash -c 'cd server && for m in internal/modules/*/module.json; do id="$(basename "$(dirname "$m")")" && go build -tags "persona_without_$id" ./... && go test -tags "persona_without_$id" -count=1 -timeout=4m ./internal/modules/all/... ./internal/archguard/... || exit 1; done'
+  # edit here; a "-" in the id is "_" in its tag): the server builds, and the module list and the guards pass.
+  ci_run 'Builds without each module' 900 bash -c 'cd server && for m in internal/modules/*/module.json; do id="$(basename "$(dirname "$m")")" && t="persona_without_${id//-/_}" && go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=4m ./internal/modules/all/... ./internal/archguard/... || exit 1; done'
   ci_run 'Extension schema and SDK bundle' 300 bash -c 'python3 scripts/test/test_extension_schema.py && python3 scripts/test/test_module_schema.py && python3 scripts/test/test_sdk_bundle.py'
   ci_run 'Go SDK tests' 300 bash -c 'cd sdk/go && go test -count=1 -timeout=4m ./...'
 fi
