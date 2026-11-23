@@ -17,8 +17,14 @@ final class TodoStore {
             byID = Self.index(todos)
             let q = QuietTasks(todos)
             if q != quiet { quiet = q } // read by the badges and the Mac's menu bar: told only when it changes
+            let f = Self.taskFollowers(todos)
+            if f != taskFollowers { taskFollowers = f } // read by Move To…: told only when it changes (P5)
         }
     }
+    /// The Agents that follow their task (#11391, rule 1 of the placement): the active Agents of the open to-dos a
+    /// conversation supervises (a direction's leader or the main conversation), as "machine/session". Move To… is not
+    /// offered for them or the sub-agent sessions under them; the hub's 409 `direction_supervised_task` covers a lag.
+    private(set) var taskFollowers: Set<String> = []
     private(set) var byID: [String: TodoItem] = [:]
     /// The quiet tasks and their agents (#1731), which stay off the island, notifications and badges.
     private(set) var quiet = QuietTasks()
@@ -217,6 +223,7 @@ final class TodoStore {
         todos = initial
         byID = initialIndex
         quiet = QuietTasks(initial)
+        taskFollowers = Self.taskFollowers(initial) // as `todos`' didSet would, which a stored initial value skips
         lastPushed = initialIndex
         self.cacheWriter = cacheWriter
         self.hubListChanged = hubListChanged
@@ -259,6 +266,15 @@ final class TodoStore {
         var result: [String: TodoItem] = [:]
         for todo in list { result[todo.id] = todo }
         return result
+    }
+
+    /// `taskFollowers` of `list`: the hub's `openSupervisedTask` (not done, a supervisor named) and its active Agents.
+    nonisolated static func taskFollowers(_ list: [TodoItem]) -> Set<String> {
+        var out: Set<String> = []
+        for todo in list where todo.doneAt == nil && !(todo.supervision?.supervisor ?? "").isEmpty {
+            for agent in todo.agents where agent.isActive { out.insert(agent.machineID + "/" + agent.sessionID) }
+        }
+        return out
     }
 
     /// The to-dos the pages list: the current assistant's, on a hub with several. `todos` stays whole: an agent's to-do

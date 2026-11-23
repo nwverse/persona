@@ -41,7 +41,7 @@ var managerMessageTypes = map[string]bool{
 	"saved_agent_searches": true, "assistant_feed": true, "assistant_saved_prompts": true, "assistant_starred": true, "assistant_schedule": true, "assistant_view": true, "assistant_view_action": true,
 	"assistant_view_block": true, "agents.triage": true, "direction_offer": true, "directions": true, "interaction_reanswered": true, "kb_selection": true, "launcher_health": true,
 	"model_profile": true, "navigation": true, "task_plan": true, "todos": true, "workspace_board": true, "workspace_board_settings": true,
-	"meeting_live": true, "urgent_call": true,
+	"resources": true, "meeting_live": true, "urgent_call": true,
 	// its extensions' manager
 	"agents": true, "agents.prefs": true, "inbox": true, "mail_accounts": true, "messaging": true,
 	"extension_auth": true, "extension_operation": true, "extension_ui": true, "plugin_ui": true,
@@ -54,7 +54,7 @@ var managerMessageTypes = map[string]bool{
 // items, errors, the Live Activity, looks, the roster, its update…): no manager's message is one, not even one its
 // extensions declare.
 var hubMessageTypes = map[string]bool{
-	"hello": true, "client_hello_ack": true, "pong": true, "notify": true, "lock_test": true, "error": true,
+	"hello": true, "client_hello_ack": true, "pong": true, "notify": true, "push_grading": true, "lock_test": true, "error": true,
 	"interaction": true, "interaction_resolved": true,
 	"machines": true, "sessions": true, "sessions_delta": true, "sessions_list": true, "items": true, "revs": true,
 	"conversation_deleted": true,

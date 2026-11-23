@@ -1,6 +1,10 @@
 package persona.feature.agents
 
 import persona.core.domain.tasks.acceptedAtRest
+import persona.core.domain.tasks.deliveredAwaitingReview
+import persona.core.domain.tasks.shownState
+import persona.core.domain.tasks.showsJustFinished
+import persona.core.domain.tasks.waitsForOwner
 
 import persona.core.domain.tasks.hold
 import persona.feature.chat.ReviewChecklist
@@ -34,7 +38,6 @@ import persona.core.contracts.SessionKey
 import persona.core.contracts.Todo
 import persona.core.contracts.TodoAgent
 import persona.core.contracts.TodoState
-import persona.core.contracts.state
 import persona.core.designsystem.*
 import persona.core.domain.answer.askingLine
 import persona.core.domain.answer.firstBySession
@@ -79,6 +82,8 @@ fun TodoDetailScreen(
     onBack: () -> Unit,
     onOpenSession: (SessionKey) -> Unit,
     onHandOff: (Todo) -> Unit,
+    /** Open another card in this task's takeover history (#5732). */
+    onOpenTodo: (String) -> Unit = {},
     onError: (String) -> Unit = {},
     now: Instant = Instant.now(),
     /** The cards waiting for an answer: a waiting agent's row says what its card asks (#3964). */
@@ -133,12 +138,12 @@ fun TodoDetailScreen(
         val store = tasks ?: return@LaunchedEffect
         if (!seenOn) return@LaunchedEffect
         val placed = todo.triage(sessionLookup, now.toEpochMilli(), superseded = todo.id in supersededFailedStarts(todos))
-        if (placed.section != TriageSection.JustDone) return@LaunchedEffect
+        if (!todo.showsJustFinished(placed, now.toEpochMilli())) return@LaunchedEffect
         try { store.setTodoSeen(todo.id, true, placed.last) }
         catch (e: CancellationException) { throw e }
         catch (_: Exception) { } // Opening is silently seen only if the hub accepts it.
     }
-    val state = todo.state(sessionLookup)
+    val state = todo.shownState(sessionLookup)
 
     if (confirmDelete) {
         JDialog(
@@ -302,7 +307,9 @@ fun TodoDetailScreen(
                             }
                             JStatusDot(status)
                             Spacer(Modifier.width(Tokens.Space.s))
-                            if (!open) {
+                            if (todo.isCancelled) {
+                                JTag(stringResource(R.string.agents_todo_cancelled))
+                            } else if (!open) {
                                 if (todo.doneBy == "auto") {
                                     JTag(stringResource(R.string.agents_todo_auto_done))
                                 } else {
@@ -313,6 +320,10 @@ fun TodoDetailScreen(
                             } else if (todo.acceptedAtRest(sessionLookup)) {
                                 // accepted, then reopened by the hub with more work: still Accepted until a new review (#3156)
                                 JTag(stringResource(R.string.agents_todo_state_accepted), Tone.Positive)
+                            } else if (todo.waitsForOwner()) {
+                                JTag(stringResource(R.string.agents_todos_section_waiting), status = Status.NeedsYou)
+                            } else if (todo.deliveredAwaitingReview(sessionLookup)) {
+                                JTag(stringResource(R.string.agents_todos_section_awaiting_review), status = Status.Unread)
                             } else {
                                 JTag(state.label)
                             }
@@ -416,6 +427,13 @@ fun TodoDetailScreen(
                             )
                         }
 
+                        todo.cancellationReason?.takeIf { it.isNotBlank() }?.let { reason ->
+                            Text(
+                                stringResource(R.string.agents_todo_cancelled_reason, reason),
+                                style = PersonaTheme.type.caption,
+                                color = PersonaTheme.palette.ink2
+                            )
+                        }
                         if (!open && todo.doneBy == "auto" && !todo.doneReason.isNullOrBlank()) {
                             Text(
                                 stringResource(R.string.agents_todo_auto_reason, todo.doneReason.orEmpty()),
@@ -452,6 +470,32 @@ fun TodoDetailScreen(
                             }
                         }
                         if (canRetry) tasks?.let { TaskShellQuestion(todo, failedTask, it) }
+                    }
+                }
+            }
+
+            // A takeover remains traceable in both directions: the old card links forward, the new one back (#5732).
+            val lineage = todo.lineage.orEmpty()
+            if (lineage.isNotEmpty()) {
+                item(key = "lineage-header") {
+                    JSectionHeader(stringResource(R.string.agents_todo_lineage), count = lineage.size)
+                }
+                itemsIndexed(lineage, key = { _, step -> "lineage:${step.todoId}" }) { index, step ->
+                    fun linkedTitle(id: String?): String? = id?.let { linked ->
+                        lineage.firstOrNull { it.todoId == linked }?.title?.ifBlank { null } ?: linked
+                    }
+                    val subtitle = listOfNotNull(
+                        if (step.current) stringResource(R.string.agents_todo_lineage_current) else null,
+                        linkedTitle(step.continues)?.let { stringResource(R.string.agents_todo_lineage_continues, it) },
+                        linkedTitle(step.supersededBy)?.let { stringResource(R.string.agents_todo_lineage_superseded, it) },
+                    ).joinToString(" · ").ifBlank { null }
+                    JGroupItem(GroupPosition.of(index, lineage.size)) {
+                        JRow(
+                            title = step.title.ifBlank { step.todoId },
+                            subtitle = subtitle,
+                            modifier = Modifier.testTag("todo-lineage-${step.todoId}"),
+                            onClick = if (step.current || step.todoId == todo.id) null else ({ onOpenTodo(step.todoId) }),
+                        )
                     }
                 }
             }

@@ -18,6 +18,35 @@ func TestTemporary(t *testing.T) {
 	}
 }
 
+func TestAccountExhausted(t *testing.T) {
+	for _, text := range []string{
+		"API Error: 503 no other eligible account",
+		"API Error: 503 no eligible upstream account is currently available",
+		"API Error: 503 NO ELIGIBLE UPSTREAM",
+		"unexpected status 503: upstream attempt budget is exhausted",
+		"503 upstream attempt budget exhausted",
+	} {
+		if !AccountExhausted(text) {
+			t.Errorf("account exhaustion not recognized: %s", text)
+		}
+		if !Temporary(text) {
+			t.Errorf("account exhaustion must retain its transient classification: %s", text)
+		}
+	}
+	for _, text := range []string{
+		"API Error: 503 Service Unavailable",
+		"API Error: 529 overloaded",
+		"API Error: 429 Too Many Requests",
+		"API Error: Connection lost mid-response",
+		"API Error: upstream request timeout",
+		"API Error: 503 account quota is exhausted",
+	} {
+		if AccountExhausted(text) {
+			t.Errorf("ordinary transient failure misclassified as account exhaustion: %s", text)
+		}
+	}
+}
+
 func TestDelay(t *testing.T) {
 	for _, base := range []time.Duration{0, 15 * time.Second, time.Duration(1<<63 - 1)} {
 		for _, attempt := range []int{-1, 0, 1, 8, 1000000} {

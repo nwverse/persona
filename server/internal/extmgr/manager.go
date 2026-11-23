@@ -117,6 +117,8 @@ type Manager struct {
 	inboxReads sourceReads
 	// errReports: the error reports' pipeline (error_reports.go).
 	errReports errorReports
+	// browserBackends: pluggable BrowserBackend registry for extension browser.machines / browser.run (#12866).
+	browserBackends browserRegistry
 	// iphoneTurns: one iphone_do at a time per iPhone, across conversations (iphone.go, iphoneTurn).
 	iphoneTurns sync.Map
 	// serving: the requests the hub relayed to the extensions being served now, a WebSocket (a voice call, an
@@ -135,6 +137,8 @@ type Manager struct {
 
 	mail               Mail
 	connectors         *connector.Registry
+	larkCLIRefreshMu   sync.Mutex
+	larkCLIRecovery    larkCLIRecovery
 	imessageSettingsMu imessageContextLock
 	imessageArchive    imessageArchiveFence
 	imessageAIPending  atomic.Bool

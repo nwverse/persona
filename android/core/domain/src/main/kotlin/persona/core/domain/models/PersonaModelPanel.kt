@@ -47,7 +47,7 @@ object PersonaModelPanel {
         if (s == null || chat.isMain) {
             val provider = def?.provider?.takeIf(String::isNotEmpty) ?: chat.config?.takeIf(String::isNotEmpty) ?: s?.launcher?.takeIf(String::isNotEmpty) ?: "claude"
             return Setup(provider, def?.model?.takeIf(String::isNotEmpty) ?: s?.model?.takeIf { s.launcher == provider },
-                s?.effort ?: def?.effort?.takeIf(String::isNotEmpty), Source.Default)
+                (if (chat.isMain) def?.effort?.takeIf(String::isNotEmpty) ?: s?.effort else s?.effort ?: def?.effort?.takeIf(String::isNotEmpty)), Source.Default)
         }
         // a launcher the list no longer offers is not what the next message runs on: the hub moves the chat to the assistant's
         val own = s.launcher?.takeIf { l -> l.isNotEmpty() && (info == null || info.launchers.any { it.name == l }) }

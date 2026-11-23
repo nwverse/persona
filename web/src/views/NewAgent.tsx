@@ -6,8 +6,9 @@
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { hubLabel } from "../lib/mesh";
 import { api, ApiError, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../lib/api";
-import { defaultManager, useKnownDefault } from "../lib/manager-choice";
-import { pickAttachment, releaseAttachments, type LocalAttachment } from "../lib/attachments";
+import { defaultManager, otherManager, useKnownDefault } from "../lib/manager-choice";
+import { base64File, pickAttachment, releaseAttachments, type LocalAttachment } from "../lib/attachments";
+import { MAX_PICTURE_SOURCE } from "../lib/image-limits";
 import { safeDraftRemove, safeDraftWrite, type DraftImage } from "../lib/drafts";
 import { withContexts } from "../lib/context-xml";
 import type { ContextRef } from "../lib/links";
@@ -22,12 +23,14 @@ import { useWorkspaceCatalog, workspaceTarget, type HostWorkspace } from "../lib
 import { startChoices, startGroups } from "../lib/workspace-start";
 import { WorkspaceChoices } from "./NewAgentWorkspaces";
 import { AttachmentTray } from "../ui/AttachmentTray";
+import { agentId, providerAgent } from "../lib/agent-kind";
 import { modelPurpose, modelSummary, type ModelBinding } from "../lib/model-config";
+import { formatFollowDetail, resolveFollowBinding, resolvedStartModel } from "../lib/new-agent-follow";
 import {
-  effortChoices, effortRule, fitEffort, followedBinding, inlineTextStart, launcherAgent, listedModes, machineLaunchers, nativeOmpStart, pickerLauncher, startCatalogHost, startPicks, takesEffort, tierLeftOut, type LauncherDefault, type PickerTier,
+  effortChoices, effortRule, fitEffort, followedBinding, inlineTextStart, launcherAgent, listedModes, machineLaunchers, nativeOmpStart, pickerLauncher, startCatalogHost, startPicks, takesEffort, tierLeftOut, type PickerTier,
   type UnavailableLauncher,
 } from "../lib/launcher-models";
-import { choiceCarries, modelTitle, type ModelChoice } from "../lib/new-agent-panel";
+import { choiceCarries, type ModelChoice } from "../lib/new-agent-panel";
 import { readModels } from "../lib/session-models";
 import { BYPASS_MODE, BYPASS_WARNING, effortTitle, listedModeOption, modeTitle, PERMISSION_MODES } from "../lib/session-actions";
 import {
@@ -59,7 +62,7 @@ import { WorkSessionForm } from "./WorkSessionForm";
 import { NewAgentModel, useModelList } from "./NewAgentModel";
 import { ProjectDocumentContext, ProjectDocumentSource, projectDocumentText, type ProjectDocumentSnapshot } from "./NewAgentProjectDocument";
 
-const PROJECT_DOCUMENT_HOSTS = new Set(["herdr", "herdr-core", "tern"]);
+const PROJECT_DOCUMENT_HOSTS = new Set(["herdr", "herdr-core", "tern", "rex"]);
 
 // several forwarded at once (#3838): their bar, from the group's chunk, which Forward to has loaded by then
 const ForwardGroupBar = lazyPage(() => import("./chat/ForwardGroup").then((m) => m.ForwardGroupBar));
@@ -70,12 +73,7 @@ const NewFolderButton = lazyPage(() => import("./NewAgentDesktop").then((m) => m
 const NewFolderNaming = lazyPage(() => import("./NewAgentDesktop").then((m) => m.NewFolderNaming));
 
 /** A forwarded picture (lib/drafts.ts DraftImage, base64) as a file for the first message's tray. */
-function draftImageFile(img: DraftImage): File {
-  const bin = atob(img.data);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new File([bytes], img.name, { type: img.mime });
-}
+const draftImageFile = (img: DraftImage) => base64File(img.name, img.mime, img.data);
 
 interface Dirs {
   path: string;
@@ -123,8 +121,6 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const [providerNames, setProviderNames] = useState<Named[]>([]);
   const [unified, setUnified] = useState(true);
   const [modelDefault, setModelDefault] = useState("");
-  // the hub's "Default: …" for "New agent" (#2455); undefined from an older hub
-  const [hubDefault, setHubDefault] = useState<LauncherDefault | null | undefined>(undefined);
   // "Models"' "New agent" as it applies now (provider, model, effort); null: the hub has no model configuration
   const [configured, setConfigured] = useState<ModelBinding | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -203,7 +199,9 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const promptRevision = useRef(0);
   const credential = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
   const knownDefault = useKnownDefault();
-  const manager = machines.find((m) => m.id === mid)?.manager || knownDefault || defaultManager();
+  const pickedMachine = machines.find((m) => m.id === mid);
+  const manager = pickedMachine?.manager || knownDefault || defaultManager();
+  const purposeManager = otherManager(pickedMachine?.manager);
   const targetOnline = online.some((m) => m.id === mid);
   const workspaceCurrent = !workspace || (workspace.owner === credential && workspace.manager === manager
     && workspace.machineId === mid && workspace.cwd === cwd && Boolean(workspace.host.trim() && workspace.workspaceId.trim()));
@@ -246,9 +244,16 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const touched = useRef(false);
   // that choice on its way to the computer picked next, until its launchers are read (another pick before then passes it on)
   const carrying = useRef<ModelChoice | null>(null);
+  const formTop = useRef<HTMLDivElement>(null);
   const firstMessage = useRef<HTMLTextAreaElement>(null);
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const body = formTop.current?.closest<HTMLElement>("[data-dialog-body]");
+    if (body) body.scrollTop = 0;
+  }, [open]);
 
   useEffect(() => {
     if (!open) {
@@ -378,7 +383,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const addFiles = (files: FileList | File[]) => {
     const picked: LocalAttachment[] = [];
     for (const file of Array.from(files)) {
-      try { picked.push(pickAttachment(file)); }
+      try { picked.push(pickAttachment(file, MAX_PICTURE_SOURCE)); }
       catch (e) { toast(errorText(e), "error"); }
     }
     setAttachments((current) => [...current, ...picked]);
@@ -398,8 +403,8 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     if (!card && carry && (carry.launcher || effective !== null) && choiceCarries(carry, ls)) {
       touched.current = true; // still the user's: it goes on to the computer after this one too
       setLauncher(carry.launcher);
-      setModel(carry.model);
-      setEffort(carry.effort);
+      setModel(carry.launcher ? carry.model : "");
+      setEffort(carry.launcher ? carry.effort : "");
       return;
     }
     if (!card && carry?.launcher) {
@@ -410,7 +415,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     const own = card && (card.launcher ? ls.some((l) => l.name === card.launcher) : effective !== null);
     const chosen = own ? card.launcher : effective !== null ? "" : initialLauncher(localStorage.getItem(`new.launcher.${machine}`), ls);
     const runs = pickerLauncher(chosen, followedBinding(chosen, effective));
-    const picked = !runs ? "" : own ? card.model : machineModel(loadRecentSetups(), machine, chosen);
+    const picked = !runs ? "" : own ? card.model : chosen ? machineModel(loadRecentSetups(), machine, chosen) : "";
     setLauncher(chosen);
     setModel(picked);
   };
@@ -437,7 +442,6 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     setTier(null);
     presetModeRestore.current = null;
     setModelDefault("");
-    setHubDefault(undefined);
     setConfigured(null);
     // A read that fails settles too (#10952): the pill leaves its spinner for its failed state, the line under the box
     // says why, and Start runs the computer's default. Retry reads again with the same card and carried choice.
@@ -447,7 +451,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       setLoadingModels(true);
       Promise.all([
         machineLaunchers(mid, { signal }),
-        modelPurpose("agent.new").catch((e) => {
+        modelPurpose("agent.new", purposeManager).catch((e) => {
           if (e instanceof ApiError && e.status === 404) return null;
           throw e;
         }),
@@ -455,21 +459,22 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
         .then(([r, config]) => {
           if (signal.aborted) return;
           const ls = r.launchers ?? [];
+          const hasUnified = config !== null || Boolean(r.default);
+          const effective = hasUnified ? resolveFollowBinding(r.default, config ? (config.purpose.effective ?? {}) : null) : null;
           setLaunchers(ls);
           setSkipped(r.unavailable ?? []);
-          setHubDefault(r.default);
           setTiers(r.tiers ?? []);
           setLaunchersOf(mid);
-          setUnified(config !== null);
+          setUnified(hasUnified);
+          setConfigured(effective);
           if (config) {
             setModelDefault(modelSummary(config.purpose, config.providers));
-            setConfigured(config.purpose.effective ?? {});
             setProviderNames(namesFromProviders(config.providers));
           }
           const card = pendingSetup.current?.machine === mid ? pendingSetup.current : null;
           if (card) pendingSetup.current = null;
           carrying.current = null;
-          restoreLauncher(mid, card, ls, config ? (config.purpose.effective ?? {}) : null, carry);
+          restoreLauncher(mid, card, ls, effective, carry);
         })
         // the computer read last only: another one picked meanwhile aborted this read
         .catch((e) => { if (!signal.aborted) setUnread({ mid, reason: errorText(e) }); })
@@ -497,12 +502,12 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       setLaunchersOf("");
       setUnread(null);
     };
-  }, [open, mid]);
+  }, [open, mid, purposeManager]);
   const launchersFailed = unread?.mid === mid ? unread.reason : "";
   // Retry, from the pill or the line under the box: the line goes while it reads, so the caret goes to the message box
   const retryLaunchers = () => {
     readLaunchersAgain.current();
-    firstMessage.current?.focus();
+    firstMessage.current?.focus({ preventScroll: true });
   };
 
   // The model list of the launcher that will run (the chosen one, or the model configuration's), read on each opening and
@@ -691,11 +696,9 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // what of the picked preset this launcher can't take, said once its list is in
   const startModelOptions = { agent, list: models.list, followed, launcher: listEntry, nativeOmp };
   const tierMissed = tier && listLauncher === tier.launcher && (models.list !== undefined || (agent === "omp" && models.error)) ? tierLeftOut(tier, startModelOptions) : [];
-  // the follow row's second line: what Model settings › New agent runs (the hub's default, by display names)
+  // the follow row's second line: what Model settings › New agent runs (the unified effective binding, by display names)
   const defaultList = useModelList(open ? mid : "", defaultRuns, startCatalogHost(defaultEntry, opensIn, startHost)).list;
-  const followDetail = hubDefault
-    ? [hubDefault.provider && launcherTitle(hubDefault.provider, names), hubDefault.model && modelTitle(defaultList, hubDefault.model), hubDefault.effort && effortTitle(hubDefault.effort), hubDefault.permission_mode && modeTitle(hubDefault.permission_mode)].filter(Boolean).join(" · ")
-    : modelDefault;
+  const followDetail = formatFollowDetail(unified ? configured : null, defaultRuns, defaultList, names) || modelDefault;
   const ultracodeBlocked = ultracodeShown ? startBlocked(picked?.claude_version) : "";
 
   // The recent setups' cards (#2134): not when another page opened the sheet on a folder of its own (a space's or a
@@ -729,7 +732,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     }
     setDropped(null);
     setHelpFor("");
-    firstMessage.current?.focus();
+    firstMessage.current?.focus({ preventScroll: true });
   };
 
   const start = () => {
@@ -783,12 +786,17 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       launcherDefaultEffort: launcherDefaultEffort || undefined, permissionMode: permissionMode || undefined,
       host: projectDocument ? documentHost : opensIn, ultracode: ultra,
       ...(codex ? { agentType: "codex", inlinePrompt: true } : inline) };
+    const launchDisplay = {
+      displayLauncher: listLauncher || undefined,
+      displayEngine: listLauncher ? agentId(providerAgent(agent, listLauncher)) : undefined,
+      displayModel: resolvedStartModel({ model: picks.model, followed, launcher: listEntry, list: models.list }),
+    };
     const launch = (dir: string, workspaceId: string | undefined) => {
       if (!current()) return;
       // The launch owns its previews; removing or unmounting the editable draft cannot revoke them.
       const sent = snapshot.attachments.map((a) => ({ ...a, url: a.url ? URL.createObjectURL(a.file) : undefined }));
       rememberSetup({ ...setup, at: setupTime() });
-      const id = launchAgent({ machineId: mid, cwd: dir, workspaceId, ...target, text: snapshot.text, attachments: sent });
+      const id = launchAgent({ machineId: mid, cwd: dir, workspaceId, ...target, ...launchDisplay, text: snapshot.text, attachments: sent });
       if (onStarted) whenStarted(id, onStarted);
       const ids = new Set(snapshot.attachments.map((a) => a.id));
       releaseAttachments(attachmentsRef.current.filter((a) => ids.has(a.id)));
@@ -885,12 +893,12 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       onAttach: (snapshot) => {
         if (!open || !documentScope || submitted.current || credential !== credentialOwner()) return;
         setProjectDocument((current) => current ?? { snapshot, owner: credential, manager });
-        firstMessage.current?.focus();
+        firstMessage.current?.focus({ preventScroll: true });
       },
       onRemove: () => {
         if (submitted.current) return;
         setProjectDocument(null);
-        firstMessage.current?.focus();
+        firstMessage.current?.focus({ preventScroll: true });
       },
     }}>
       <Dialog
@@ -910,7 +918,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
           </>
         }
       >
-        <div className="flex flex-col gap-4">
+        <div ref={formTop} className="flex flex-col gap-4">
           {cards.length > 0 && !presetFolder && (
             <RecentSetups
               names={names}

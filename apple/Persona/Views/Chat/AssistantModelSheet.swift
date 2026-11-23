@@ -68,13 +68,20 @@ nonisolated enum AssistantModelChoice {
         let defaultModel = def?.model?.emptyAsNil
             ?? (launcher == provider ? model : nil)
         return Effective(launcher: provider, model: defaultModel,
-                         effort: effort ?? def?.effort?.emptyAsNil,
+                         effort: def?.effort?.emptyAsNil ?? effort,
                          source: response == nil ? .running : .defaultValue)
     }
 
     /// Which way back the model-route remedy names: these conversations follow a default; a side conversation undoes its pick.
     static func followsDefault(isMain: Bool, supervisor: Bool, leader: Bool, origin: String?) -> Bool {
         isMain || supervisor || leader || origin == "task"
+    }
+
+    /// The shared catalog owns eligibility; only the main-purpose default is overlaid.
+    static func mainCatalog(shared: APIClient.LaunchersResponse, own: APIClient.LaunchersResponse) -> APIClient.LaunchersResponse {
+        var result = shared
+        result.default = own.default ?? shared.default
+        return result
     }
 
     /// The model id ticked for `launcher` in the sheet: nil when the setup runs on another launcher, "" on its Default
@@ -205,7 +212,7 @@ final class AssistantModelPanelModel {
         var drop: (_ key: SessionKey) async -> Bool
         static var live: Deps {
             Deps(
-                launchers: { try await AppModel.shared.assistantLaunchers($0, refresh: $1) },
+                launchers: { try await AppModel.shared.assistantLaunchers($0, refresh: $1, main: true) },
                 supervise: { machine, _ in
                     guard let client = AppModel.shared.api(machine.group)?.currentAssistantSettings() else {
                         return APIClient.LaunchersResponse(launchers: [], default: nil, unavailable: nil)
@@ -515,7 +522,7 @@ struct AssistantModelSheet: View {
                 }
             }
         } header: {
-            Text(launcher.displayName?.emptyAsNil ?? launcher.name)
+            Text(launcher.title)
         }
     }
 

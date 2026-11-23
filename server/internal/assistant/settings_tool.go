@@ -189,23 +189,24 @@ func (s *Service) ownSettings() []ownSetting {
 		{Setting: Setting{Key: "assistant.done_needs_delivery", Title: "上线并实测才算做完", Actions: getSet,
 			About: "legacy boolean alias for assistant.delivery_gate: true sets delivery_gate to live (close only once live and " +
 				"checked, and hand the delivery standard to the agent); false sets delivery_gate to off (no delivery gate). " +
-				"Prefer assistant.delivery_gate (off / merged / live). Applies from the next judgment / task",
+				"Prefer assistant.delivery_gate (off / merged / live). Either way the judge never closes a supervised task: delivery " +
+				"waits for the main conversation's task_review. Applies from the next judgment / task",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.doneNeedsDelivery(ctx)), nil },
 			set: s.setDoneNeedsDelivery},
 		{Setting: Setting{Key: "assistant.review_sample_percent", Title: "Share of finished tasks to spot-check", Actions: getSet,
-			About: "100 (the default): every finished supervised task waits for your task_review. Below 100 the done judge also checks each " +
-				"done_when criterion; a task whose criteria are all checkable and met and whose work is live is closed by the judge, and " +
-				"only this share of those still comes to you to spot-check (tasks that fail the check wait for task_review as before). " +
-				"Applies from the next judgment on",
+			About: "100 (the default): the done judge adds no per-criterion check. Below 100 it also checks each done_when criterion " +
+				"and the delivery as evidence for review. Passing, failing, sampled and unsampled work all stay open as delivered, " +
+				"awaiting the main conversation's task_review; the judge never accepts or closes a task. Applies from the next judgment on",
 			Value: "a whole number, 0–100"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.reviewSamplePercent(ctx)), nil },
 			set: s.setReviewSamplePercent},
 		{Setting: Setting{Key: "assistant.leaders", Title: "Leader conversations", Actions: getSet,
-			About: "empty (the default): only the main conversation supervises the tasks it hands out. A leader is a side conversation " +
-				"(one repository or long-running project each) that supervises the tasks it hands out with task_plan itself: their " +
-				"supervision messages go to it and it reviews them with task_review; its failed starts go to it too, while needs_user still comes to the " +
-				"main conversation. Applies to tasks handed out from now on",
+			About: "empty (the default): no manual Agent is assigned to a leader. New task_plan, agent_start and agent_send task work " +
+				"is always supervised by the main conversation, including task_plan(supervisor=leader). The one exception is a manually " +
+				"started Agent the owner explicitly puts under a leader: its ordinary supervision messages and failed starts go there and " +
+				"that leader reviews them with task_review; needs_user still comes to the main conversation, and every other new " +
+				"assistant-dispatched failed start goes there too",
 			Value: "the whole list of leader conversation ids (conversations_list), [] for none"},
 			get: s.getLeaders,
 			set: s.setLeaders},
@@ -250,16 +251,24 @@ func (s *Service) ownSettings() []ownSetting {
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.loadAllTools(ctx)), nil },
 			set: s.setLoadAllTools},
 		{Setting: Setting{Key: "assistant.agent_tasks", Title: "Every Agent Persona starts is a supervised task", Actions: getSet,
-			About: "off (the default): only tasks the main conversation or a leader hands out are supervised; an agent started from an " +
-				"app or by agent_start from another conversation is on no task. on: every agent Persona starts gets a quiet to-do (no " +
-				"pushes or badges for it) supervised by the conversation that started it when that is the main conversation or a leader, " +
-				"else by the main conversation: an app's agent once a turn of it did work (edits, commands), a to-do the user made when " +
-				"an agent is linked to it, and report_to_supervisor from an agent on any open to-do reaches its supervisor. Agents " +
-				"started by hand in a terminal are left alone. Costs model calls (the done judge, supervision turns). Applies from the " +
-				"next start, turn end and report",
+			About: "off (the default): assistant-dispatched task_plan, agent_start and agent_send task work is still supervised by main. " +
+				"on: manually linked user to-dos and reporting-Agent compatibility are supervised too; an Agent opened by hand on the Agents " +
+				"page is not adopted merely because it did work. Agents started by hand in a terminal are left alone. Costs model calls " +
+				"(the done judge, supervision turns). Applies from the next start, turn end and report",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agentTasks(ctx)), nil },
 			set: s.setAgentTasks},
+		{Setting: Setting{Key: "assistant.task_lessons", Title: "Learn from finished tasks", Actions: getSet,
+			About: "off (the default): nothing is learned from accepted tasks. on: when the supervisor accepts a task that needed " +
+				"corrections (a rework round, a criterion not met, the user's answer to one of its questions, a scope change, far " +
+				"more time than estimated), a background model (Information processing) writes up to three lessons for the task's " +
+				"project (a mistake that came back, background the user had to add, a step that wasted time, a better way to work), " +
+				"and every new Agent of that project gets the most repeated ones before its first prompt. A smooth task makes no " +
+				"model call. The user sees, edits and deletes the lessons on the project's page in Knowledge; a deleted one is not " +
+				"learned again. Applies from the next acceptance and the next new Agent",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.taskLessons(ctx)), nil },
+			set: s.setTaskLessons},
 		{Setting: Setting{Key: "assistant.close_ended_terminals", Title: "Close an Agent's terminal when it ends", Actions: getSet,
 			About: "off (the default): an Agent's terminal tab stays open after it stops, with the shell it ran in, until the user " +
 				"closes it. on: when an Agent Persona started ends, Persona closes the tab it opened for it, the way Archive and " +
@@ -281,13 +290,30 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.inboxSignalsOn(ctx)), nil },
 			set: s.setInboxSignals},
+		{Setting: Setting{Key: "inbox.todo_forward.enabled", Title: "Auto-forward PR/Issue Inbox events to the bound to-do's Agent", Actions: getSet,
+			About: "off (the default): Inbox ingestion performs zero automatic forwards to task Agents. on: incoming Inbox items " +
+				"with an exact canonical GitHub PR or Issue URL bound to an open to-do's pr_url or todo_repositories are " +
+				"deterministically forwarded (zero LLM calls) to that to-do's latest bound Agent (direct send if idle, queued if " +
+				"working, resumed on non-user stops), wrapped in an untrusted-content envelope with self-author suppression and " +
+				"idempotent deduplication; unavailable Agents fall back to the supervising conversation. Applies from the next " +
+				"Inbox round",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.inboxTodoForwardOn(ctx)), nil },
+			set: s.setInboxTodoForward},
+		{Setting: Setting{Key: "assistant.pr_events_route_to_agent", Title: "Route PR events directly to the bound to-do Agent", Actions: getSet,
+			About: "off (the default): pr_status keeps existing supervision behavior unchanged. on: new PR merge conflicts, current-head " +
+				"CI failures, and current-head changes_requested or actionable review events on an open to-do route deterministically " +
+				"to its bound Agent (direct send when idle, queued behind the current turn when working, or non-user resume when stopped), " +
+				"deduplicated per event, with fallback to the supervisor wake path when no usable Agent is available",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.prEventsRouteToAgentOn(ctx)), nil },
+			set: s.setPREventsRouteToAgent},
 		{Setting: Setting{Key: "assistant.main_supervises_own_tasks", Title: "The main chat supervises its own tasks", Actions: getSet,
-			About: "off (the default): the background supervisor, one built-in Persona conversation made on first use, follows up " +
-				"every supervised task no leader supervises: their supervision messages go to it and it reviews them with task_review, " +
-				"so the main conversation stays free to answer the user. The main conversation still hears of failed starts with no current leader and of " +
-				"what the background supervisor hands to the user, and may review any of these tasks itself. on: the main conversation " +
-				"gets these supervision messages itself, as before the background supervisor existed. Applies to signals raised from " +
-				"the change on (a supervision message already with the background supervisor is finished there); tasks keep running",
+			About: "compatibility only, whether off (the default) or on: the main conversation supervises every new task no leader " +
+				"supervises and receives its supervision messages. The main conversation still hears of failed starts with no current " +
+				"leader and of what an already configured background conversation hands to the user; that background only finishes its " +
+				"previously assigned supervision notices, and no background conversation is created or selected for new work. Changing " +
+				"the setting does not move existing notices or stop tasks",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.mainSupervisesOwnTasks(ctx)), nil },
 			set: s.setMainSupervisesOwnTasks},
@@ -358,7 +384,8 @@ func (s *Service) toolPersonaSettings(ctx context.Context, call ToolCall, args j
 	if _, ok := directionPromptSettingID(a.Key); ok && a.Action == "set" && (call.SessionID == "" || call.SessionID != s.settings(ctx).Main) {
 		return proto.TextResult("only the main conversation may change direction prompts", true)
 	}
-	own := append(s.ownSettings(), s.directionOwnSettings(ctx)...)
+	own := append(s.ownSettings(), s.modelGroupOwnSettings()...)
+	own = append(own, s.directionOwnSettings(ctx)...)
 	if a.Action == "" || a.Action == "list" {
 		text, err := s.listSettings(ctx, own)
 		if err != nil {
@@ -496,7 +523,7 @@ var settingTitles = map[string]string{standingAuthorizationsKey: "title_standing
 	"assistant.start_requested_tasks":     "title_start_requested_tasks", "assistant.launcher": "title_launcher",
 	"assistant.recording_days": "title_recording_days", "assistant.delivery_gate": "title_delivery_gate", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders", "assistant.briefing_waits": "title_briefing_waits", "assistant.background_supervisor_keeps_context": "title_background_supervisor_keeps_context",
-	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", "model_profiles.tiers": "title_model_tiers",
+	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.task_lessons": "title_task_lessons", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "inbox.todo_forward.enabled": "title_inbox_todo_forward", "assistant.pr_events_route_to_agent": "title_pr_events_route_to_agent", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", "model_profiles.tiers": "title_model_tiers",
 	"assistant.load_all_tools":                "title_load_all_tools",
 	"assistant.meeting_transcription_default": "title_meeting_transcription_default",
 	"assistant.meeting_attendance_default":    "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days",
@@ -923,6 +950,13 @@ func (s *Service) setAgentTasks(ctx context.Context, v json.RawMessage) (*ownCha
 		"assistant.agent_tasks is %v from the next start, turn end and report on (to-dos made before keep what they have).")
 }
 
+func (s *Service) setTaskLessons(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.taskLessons, "assistant.task_lessons is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_task_lessons", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.TaskLessons },
+		"assistant.task_lessons is %v from the next accepted task and the next new Agent on (lessons already learned stay on the project's page).")
+}
+
 func (s *Service) setCloseEndedTerminals(ctx context.Context, v json.RawMessage) (*ownChange, error) {
 	return s.setBoolSetting(ctx, v, s.closeEndedTerminals, "assistant.close_ended_terminals is unchanged", func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_close_ended_terminals", i18n.Args{"before": before, "after": after})
@@ -935,6 +969,20 @@ func (s *Service) setInboxSignals(ctx context.Context, v json.RawMessage) (*ownC
 		return i18n.T(l, "assistant-settings_tool.change_inbox_signals", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.InboxSignals },
 		"assistant.inbox_signals is %v from the next new Inbox message on (signals already waiting go out only while it is on).")
+}
+
+func (s *Service) setInboxTodoForward(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.inboxTodoForwardOn, "inbox.todo_forward.enabled is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_inbox_todo_forward", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.InboxTodoForward },
+		"inbox.todo_forward.enabled is %v from the next Inbox round on.")
+}
+
+func (s *Service) setPREventsRouteToAgent(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.prEventsRouteToAgentOn, "assistant.pr_events_route_to_agent is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_pr_events_route_to_agent", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.PREventsRouteToAgent },
+		"assistant.pr_events_route_to_agent is %v from the next PR status sweep on.")
 }
 
 func (s *Service) setMainSupervisesOwnTasks(ctx context.Context, v json.RawMessage) (*ownChange, error) {

@@ -168,12 +168,28 @@ func WithoutImageData(items []Item) []Item {
 
 // PositionalItemID identifies the fallback IDs assigned to JSONL records that lack a runtime ID.
 func PositionalItemID(id string) bool {
+	if _, source, ok := ParseSegmentItemID(id); ok {
+		id = source
+	}
 	suffix, ok := strings.CutPrefix(id, "line")
 	if !ok {
 		return false
 	}
 	line, block, ok := strings.Cut(suffix, "#")
 	return ok && decimalItemPart(line) && decimalItemPart(block)
+}
+
+// SegmentItemID namespaces only later segments. The first segment retains its
+// existing identifiers, including positional IDs used by client caches.
+func SegmentItemID(segment, source string) string { return "segment:" + segment + ":" + source }
+
+func ParseSegmentItemID(id string) (segment, source string, ok bool) {
+	rest, ok := strings.CutPrefix(id, "segment:")
+	if !ok {
+		return "", "", false
+	}
+	segment, source, ok = strings.Cut(rest, ":")
+	return segment, source, ok && segment != "" && source != ""
 }
 
 func decimalItemPart(s string) bool {
@@ -254,6 +270,9 @@ type Item struct {
 	// Visualization is set on KindVisualization items: a Codex visualize marker's reference to an HTML fragment on
 	// the node. The bytes are not carried here; the session visualization route serves them after path checks.
 	Visualization *Visualization `json:"visualization,omitempty"`
+	// TTFTMS is the observed time-to-first-token in milliseconds from turn send/request start to the first
+	// assistant token/chunk during live streaming execution. Nil when not observed (such as historical replays).
+	TTFTMS *int64 `json:"ttft_ms,omitempty"`
 }
 
 type StoredItem struct {
@@ -394,9 +413,12 @@ type MessageSource struct {
 	// Push is a scheduled input's delivery mode, persisted with the input so a queued user message cannot change it.
 	// "asked" suppresses that run's normal completion; absent keeps the existing every-answer behavior.
 	Push string `json:"push,omitempty"`
+	// ScheduleRunID correlates a reference-only prompt with the run that sent it.
+	ScheduleRunID string `json:"schedule_run_id,omitempty"`
 }
 
 const (
+	A2ADeliveryPrefix   = "persona-a2a-" // Manager-assigned client message IDs for A2A deliveries.
 	SourceConversation  = "conversation"
 	SourcePatrol        = "patrol"
 	SourceFollowup      = "followup"

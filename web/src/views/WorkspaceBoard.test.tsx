@@ -186,13 +186,14 @@ describe("the workflow board with many cards and Agents", () => {
     act(() => root.render(<WorkspaceBoard />));
     await flush();
 
-    expect(laneBadge("待验收")).toBe("6");
-    expect(laneOption("review")).toBe("待验收 · 6");
-    expect(lane("待验收")?.querySelectorAll("article").length).toBe(6);
+    expect(laneBadge("待验收")).toBe("5");
+    expect(laneOption("review")).toBe("待验收 · 5");
+    expect(lane("待验收")?.querySelectorAll("article").length).toBe(5);
     expect(inLane("待验收", "c1")).toBe(true);
     expect(workInLane("待验收", "session:m2/loose-unread")).toBe(true);
     expect(workInLane("待验收", "session:m0/loose-finished")).toBe(true);
-    expect(workInLane("待验收", "todo:accepted-decision")).toBe(true);
+    expect(workInLane("需要你", "todo:accepted-decision")).toBe(true);
+    expect(workInLane("待验收", "todo:accepted-decision")).toBe(false);
     expect(workInLane("待验收", "todo:pending-review")).toBe(true);
     expect(workInLane("待验收", "todo:unread-todo")).toBe(true);
     expect(inLane("空闲", "c0")).toBe(true);
@@ -202,7 +203,7 @@ describe("the workflow board with many cards and Agents", () => {
     expect(workInLane("空闲", "todo:closed")).toBe(true);
     expect(workInLane("待验收", "todo:accepted")).toBe(false);
     expect(workInLane("待验收", "todo:closed")).toBe(false);
-    expect(laneBadge("需要你")).toBe("2");
+    expect(laneBadge("需要你")).toBe("3");
     expect(laneBadge("工作中")).toBe("2");
     expect(laneBadge("待办")).toBe("1");
 
@@ -210,8 +211,8 @@ describe("the workflow board with many cards and Agents", () => {
     setAgents(rows);
     expect(inLane("待验收", "c0")).toBe(true);
     expect(inLane("空闲", "c0")).toBe(false);
-    expect(laneBadge("待验收")).toBe("7");
-    expect(laneOption("review")).toBe("待验收 · 7");
+    expect(laneBadge("待验收")).toBe("6");
+    expect(laneOption("review")).toBe("待验收 · 6");
   });
 
   it("keeps accepted to-dos and seen sessions accessible in Idle and opens the original session", async () => {

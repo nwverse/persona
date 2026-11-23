@@ -172,13 +172,13 @@ internal fun AssistantFullSearch(
         if (focusedOnce || !windowFocused) return@LaunchedEffect
         focusedOnce = true
         withFrameNanos { }
-        runCatching { focus.requestFocus() }
+        val _ = runCatching { focus.requestFocus() }
         keyboard?.show()
     }
     LaunchedEffect(Unit) {
         withFrameNanos { }
         if (!focusedOnce) {
-            runCatching { focus.requestFocus() }
+            val _ = runCatching { focus.requestFocus() }
             keyboard?.show()
         }
     }

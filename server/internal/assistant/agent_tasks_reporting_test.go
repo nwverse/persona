@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -79,6 +80,34 @@ func TestReportFromAReportingTodoReachesItsReportingConversation(t *testing.T) {
 			t.Fatalf("the main conversation's feed received the report: %q", kinds)
 		}
 	})
+}
+
+func TestReportingReportSourceUsesOwnerLanguage(t *testing.T) {
+	for _, tt := range []struct{ lang, title string }{
+		{"en", "Supervisor"}, {"zh-Hans", "督办"}, {"ja", "監督"},
+	} {
+		t.Run(tt.lang, func(t *testing.T) {
+			s, f := reportingWithTask(t)
+			f.mu.Lock()
+			f.hello.Locale = tt.lang
+			f.mu.Unlock()
+			agentTasksOn(t, s)
+			report := json.RawMessage(`{"kind":"done","text":"synthetic completed report"}`)
+			if res := s.agentTool(context.Background(), "box", "s1", "report_to_supervisor", report); res.IsError {
+				t.Fatalf("report: %+v", res)
+			}
+			queued := func() []relayMsg {
+				b := &s.relays
+				b.mu.Lock()
+				defer b.mu.Unlock()
+				return append([]relayMsg(nil), b.st.Queue["lark1"]...)
+			}
+			waitFor(t, "the localized queued report", func() bool { return len(queued()) == 1 })
+			if got := queued()[0].FromTitle; got != tt.title {
+				t.Fatalf("report source = %q, want %q", got, tt.title)
+			}
+		})
+	}
 }
 
 func TestReportFromAReportingTodoUsesItsReporterMachine(t *testing.T) {
@@ -281,5 +310,19 @@ func TestReportFromAReportingTodoRechecksReporterRegistration(t *testing.T) {
 	})
 	if got := strings.Join(f.noticesTo("lark1"), "\n"); strings.Contains(got, "after expiry") {
 		t.Fatalf("the expired reporter still received the report: %s", got)
+	}
+}
+
+// The reporting exception keeps main's ordinary auto-close, while other legacy unsupervised tasks attach to main (#12152, #5732).
+func TestReportingTaskCompletionKeepsLegacyAutoClose(t *testing.T) {
+	s, _ := reportingWithTask(t)
+	todo := onlyTodo(s)
+	if todo.Supervision != nil {
+		t.Fatalf("reporting fixture gained a ledger: %+v", todo.Supervision)
+	}
+	s.applyTaskDone(context.Background(), todo, time.Now(), true, taskDoneCheck{Verdict: verdictDone, Reason: "finished"}, nil)
+	got := todoNow(s, todo.ID)
+	if got.DoneAt == nil || got.DoneBy != db.DoneByAuto || got.Supervision != nil {
+		t.Fatalf("reporting completion did not keep its ordinary auto-close: %+v", got)
 	}
 }

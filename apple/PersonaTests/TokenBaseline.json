@@ -201,10 +201,6 @@
   "Persona\/Views\/Settings\/ExtensionOperationViews.swift" : {
     "rawSymbol" : 5
   },
-  "Persona\/Views\/Settings\/SettingsView.swift" : {
-    "animation" : 1,
-    "padding" : 1
-  },
   "Persona\/Views\/Settings\/StorageView.swift" : {
     "hstackSpacing" : 1
   },

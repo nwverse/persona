@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 )
 
 // When herdr's server restarts it restores its panes and, once a client attaches, resumes the agents in them with its
@@ -33,12 +34,15 @@ const resumeSource = "custom:persona"
 
 // agentLaunch is what an agent in a pane was started with, to start it again the same way.
 type agentLaunch struct {
+	Source modelhttp.Source `json:"model_source,omitzero"`
+
 	AdditionalDirs                   []string `json:"additional_dirs,omitempty"`
 	TaskInstructionFile              string
 	TaskInstructions                 string
 	Agent                            string // "claude" (empty means claude), "codex", "traex", "pi"
 	Launcher, Settings, Hooks, Model string
 	Effort                           string // a work agent's explicit effort, empty for its default
+	Mode                             string // an agy's permission mode (agyModeFlags), empty in a record from before it
 	Display                          string // the live replies plugin's directory, "" for none (liveRepliesPlugin)
 	Plugins                          bool   // claude loads plugins: Persona's plugin directory and office rule
 	ID                               string
@@ -173,7 +177,7 @@ func (n *Node) agentResumeArgv(spec agentLaunch, id string) (argv []string, ok b
 			launcher = n.launcherCommandQ(launcher, dquote)
 			resumeID = spec.AgyConversation
 		}
-		cmd = withHerdrAgent(resumeHerdrAgent(kind), workAgentResume(kind, workAgentCommand(launcher, program, spec.Model, spec.Effort), resumeID))
+		cmd = withHerdrAgent(resumeHerdrAgent(kind), workAgentResume(kind, workAgentCommand(launcher, program, spec.Model, spec.Effort, spec.Mode), resumeID))
 	}
 	cmd = n.agentCommand(cmd, dquote, herdrPaneShell())
 	if !resumeSayable(cmd) || (!validID(id) && !runtimeIDRe.MatchString(id)) {

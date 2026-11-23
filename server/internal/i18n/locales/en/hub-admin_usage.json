@@ -7,5 +7,6 @@
   "invalid_poll": "The polling interval is 1 to 1440 minutes",
   "too_many": "At most {n} sources",
   "not_found": "No such source",
-  "busy": "The previous test is still running, try again shortly"
+  "busy": "The previous test is still running, try again shortly",
+  "invalid_providers": "The providers to hide must be names such as codex or claude (at most 16)"
 }

@@ -129,8 +129,8 @@ func (s *Service) askChanged(context.Context) {
 // pushDecision pushes task id's decision that waits for the owner and recommends an option (a "decide" push): what is to
 // be decided and the option, in the words of its card, what the notification's OK needs to take it (the to-do, the
 // round), and how its push may answer it (the view's ask and lock-screen rule). True when the hub took it. None for a
-// decision without a recommendation (nothing for OK to take), for a task from a health conversation (the lock screen
-// says nothing of those) or a muted one.
+// decision without a recommendation (nothing for OK to take), for a task from a conversation of a space that redacts
+// (the lock screen says nothing of those) or a muted one.
 func (s *Service) pushDecision(ctx context.Context, id string) bool {
 	sent, _ := s.pushDecisionErr(ctx, id)
 	return sent
@@ -150,7 +150,7 @@ func (s *Service) pushDecisionErr(ctx context.Context, id string) (bool, error) 
 	if a.OutsideID != "" && sessionID == "" {
 		sessionID = s.settings(ctx).Main // a standalone decision opens the main chat's Needs you
 	}
-	if s.muted(here, sessionID) || s.inHealth(ctx, sessionID) {
+	if s.muted(here, sessionID) || s.selfPolicy(ctx, sessionID).Redact {
 		return false, nil
 	}
 	l := s.lang(ctx)
@@ -173,6 +173,14 @@ func (s *Service) pushDecisionErr(ctx context.Context, id string) (bool, error) 
 	// Self-contained (#3804): where it came from and stands, what each option leads to, what waiting costs.
 	if lines := decisionLines(l, s.location(ctx), &a); len(lines) > 0 {
 		n.Body += "\n" + strings.Join(lines, "\n")
+	}
+	// A decision whose words say something sensitive is still pushed (it is due), but the lock screen hears only that
+	// there is news, and a tap opens it, with no answer to give from there (exitPolicy; a track that redacts is not
+	// pushed, above). The recommended label stays in the payload for the app, which the lock screen does not show.
+	space, _ := s.selfSpace(ctx, sessionID)
+	if s.exitPolicy(ctx, n.Title+"\n"+n.Body+"\n"+strings.Join(n.Todo.Options, "\n"), sessionID, space).Redact {
+		n.Title, n.Body = s.redactedNotice(ctx, l, space)
+		n.Todo.Options, n.Todo.Lockscreen = nil, assistantwire.OwnerAskLockscreenOpenOnly
 	}
 	if _, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
 		s.logf("task %s: decision push: %v", id, err)

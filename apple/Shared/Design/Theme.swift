@@ -478,6 +478,8 @@ nonisolated enum Theme {
     /// inbox's Select, #2059; the web uses the same 45%).
     enum Fade {
         static let unavailable: Double = 0.45
+        /// The page-colored chip on a transcript divider, as the web's bg-page/50.
+        static let dividerBackground: Double = 0.5
         /// An offline assistant's row in the switcher's list: the whole row, still pickable (the web and Android use 55%).
         static let offline: Double = 0.55
     }
@@ -537,6 +539,14 @@ nonisolated enum Theme {
         /// How much of a long quote in a reply shows while it is folded (about four lines of body text, #2984).
         static let quoteFold: CGFloat = 104
         static let barWide: CGFloat = 4
+        /// The usage cards' reset timeline (#13173): a row of the chart, the account-name column, the 5h and 7d bars, the
+        /// hollow dot at a bar's end, and the room a window's bar leaves above itself for its protection flag.
+        static let timelineRow: CGFloat = 30
+        static let timelineName: CGFloat = 64
+        static let timelineCap: CGFloat = 6
+        static let timelineCapWide: CGFloat = 9
+        static let timelineEnd: CGFloat = 11
+        static let protectFlag: CGFloat = 14
         /// A share bar's thickness (the assistant's stacked-bar card).
         static let meter: CGFloat = 12
         /// An Agent chat's header folded into its slim bar (Android `Tokens.Size.slimBar`).
@@ -546,6 +556,9 @@ nonisolated enum Theme {
         /// Agents header has folded to its slim bar). The card the user has to answer gets the rest. A call keeps less for
         /// its captions (`voiceThreadRoom`).
         static let cardThreadRoom: CGFloat = 72
+        /// The shortest a question card over the composer can be made with its grabber (#12306): its title row and the
+        /// first lines of what it asks. The tallest leaves the conversation `Theme.Space.xl` (`FooterRoom.tallestRoom`).
+        static let cardLeast: CGFloat = 150
         /// How far a sideways strip fades out at an end with more to scroll to (`.edgeFade()`): a cut-off chip reads as
         /// "more", not as a broken row.
         static let fadeEdge: CGFloat = 24
@@ -690,6 +703,81 @@ nonisolated enum Theme {
         static let graphPreviewMinScale: CGFloat = 0.01
         static let graphZoomStep: CGFloat = 1.25
         static let graphWheelZoomSensitivity: Double = 0.0025
+        // An extension's 3D scene (UI version 11, #12544): page share, compact preview and pin collision box.
+        static let scenePageShare: CGFloat = 0.62
+        static let scenePageMinHeight: CGFloat = 280
+        static let scenePageMaxHeight: CGFloat = 640
+        static let scenePreviewHeight: CGFloat = 200
+        /// What a page's scene adds to the model's own height: room for pins above it and the control bar below.
+        static let scenePageChrome: CGFloat = 120
+        static let sceneZoomStep: Double = 1.25
+        static let sceneWheelZoomSensitivity: Double = 0.0025
+        static let sceneOrbitSensitivity: Double = 0.45
+        static let scenePinCompactWidth: CGFloat = 44
+        static let scenePinCharWidth: CGFloat = 9
+        static let scenePinBaseWidth: CGFloat = 40
+        static let scenePinHeight: CGFloat = 32
+        // A pin pill's estimated width, for keeping pins apart: its icon, the gap before its state, the widest its
+        // text may grow, and the width of one wide (CJK) character.
+        static let scenePinIconWidth: CGFloat = 18
+        static let scenePinStateGap: CGFloat = 6
+        static let scenePinTextMaxWidth: CGFloat = 180
+        static let scenePinWideCharWidth: CGFloat = 13.5
+        static let sceneLabelHeight: CGFloat = 22
+    }
+
+    /// UI version 11's 3D `scene` component (#12544): calm architectural material defaults when a shape omits `color`,
+    /// warm and cool lamp tints, and light/dark illumination levels (dark mode dims the room lighting, never the
+    /// extension's `#RRGGBB` shape colors).
+    enum Scene {
+        static let defaultYaw: Double = 225
+        static let defaultPitch: Double = 35
+        static let defaultZoom: Double = 1
+        static let minPitch: Double = 10
+        static let maxPitch: Double = 90
+        static let minZoom: Double = 0.5
+        static let maxZoom: Double = 4.0
+        /// The cutaway (#13036): the outer walls between the camera and the rooms are drawn this high (metres above
+        /// their bottom); a wall counts as facing the camera from this cosine on, and as an outer wall when the ground
+        /// this far past its camera-side face is not a floor (a prism no higher than the floor top); a shape within
+        /// this of a lowered wall's faces stands in it and is cut too; one rising this much over the cut within reach
+        /// of one, on the room's side, is drawn see-through at this opacity.
+        static let cutawayHeight: Double = 0.6
+        static let cutawayFacing: Double = 0.35
+        static let cutawayProbe: Double = 0.3
+        static let cutawayFloorTop: Double = 0.1
+        static let cutawayBand: Double = 0.16
+        static let cutawaySeeThroughAbove: Double = 0.6
+        static let cutawayReach: Double = 0.9
+        static let cutawaySeeThroughOpacity: CGFloat = 0.3
+        /// Pins draw above the model, nearer ones over farther ones: a pin's layer is this less its depth.
+        static let pinLayerBase: Double = 10_000
+        static let fitMargin: Double = 1.1
+        static let accessibilityYawStep: Double = 30
+        static let accessibilityPitchStep: Double = 15
+        static let matteHex: UInt32 = 0xECE7DE
+        static let woodHex: UInt32 = 0xC9A97E
+        static let tileHex: UInt32 = 0xE5E0D6
+        static let metalHex: UInt32 = 0xB8BCC2
+        static let screenHex: UInt32 = 0x1E2024
+        static let glassHex: UInt32 = 0xB8D4E3
+        static let warmLightHex: UInt32 = 0xFFDCAA
+        static let coolLightHex: UInt32 = 0xE6F2FF
+        static let sunLightHex: UInt32 = 0xFFF9EE
+        static let skyLightHex: UInt32 = 0xDDE8F8
+        static let lightAmbientIntensity: CGFloat = 380
+        static let darkAmbientIntensity: CGFloat = 230
+        static let lightKeyIntensity: CGFloat = 640
+        static let darkKeyIntensity: CGFloat = 380
+        static let lightFillIntensity: CGFloat = 90
+        static let darkFillIntensity: CGFloat = 110
+        // A lit lamp warms its corner of the room without washing light walls out to white.
+        static let lampIntensity: CGFloat = 90
+        static let lampAttenuationStart: CGFloat = 0.1
+        static let lampAttenuationEnd: CGFloat = 2.4
+        static let maxOmniLights: Int = 8
+        static let glassOpacity: CGFloat = 0.42
+        static var ground: Color { StyleSpec.current.usesGlass ? Theme.groupedCard : Theme.card }
     }
 
     /// The system's sidebar column on iPad (iOS 26, the glass styles), measured from its pixels: the split fills the

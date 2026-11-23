@@ -1546,8 +1546,9 @@ nonisolated enum ChatCache {
     /// v20: Codex sleeps, subagent activity and subagent waits are tool calls, not notices (#10436); v19's copies would
     /// keep the notice under the call's id.
     /// v21: pages retain silent finish receipts, and narration stays distinguishable from a final reply.
+    /// v22: replies retain the model that wrote each assistant item; older copies could not mark model changes.
     /// Bump it whenever the item structure or the text the hub gives an item changes.
-    static let folder = "chats-v21"
+    static let folder = "chats-v22"
 
     /// Once per launch, before the first copy is read or written (a static let runs once, on whichever thread asks first).
     private static let dropOlder: Void = {

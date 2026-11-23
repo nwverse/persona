@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/apierr"
@@ -105,8 +106,9 @@ func (s *Service) fleetHandler(next http.Handler) http.Handler {
 // again) it is the same outcome as the first time: 200 with already and the answer as the history keeps it, so the
 // app shows the card as answered rather than an error — the first answer's event may not have reached it. Otherwise
 // (expired, withdrawn, handed back, or unknown) 410, with how it ended when the history knows. An extension's token
-// (ext) is not given the answer: it may be a health card's or hold what was typed into a card's fields, which the
-// history does not show it either (docs/extensions/extensions.md "Never shown to extensions").
+// (ext) is not given the answer: it may be a card of a space hidden from extensions or hold what was typed into a
+// card's fields, which the history does not show it either (docs/extensions/extensions.md "Never shown to
+// extensions").
 func (s *Service) writeEnded(ctx context.Context, w http.ResponseWriter, id string, r proto.Resolution, err error, ext bool) {
 	var status string
 	var kept *proto.Resolution
@@ -164,8 +166,19 @@ func (s *Service) localFleetDeviceCall(ctx context.Context, p DeviceCall) (json.
 		return nil, false, nil
 	}
 	switch {
-	case p.Device == DeviceAll && p.Method == DeviceInteractionsList:
-		out, err := json.Marshal(map[string]any{"interactions": s.visiblePendingInteractions()})
+	case p.Method == DeviceInteractionsList:
+		if p.Device == DeviceAll {
+			out, err := json.Marshal(map[string]any{"interactions": s.visiblePendingInteractions()})
+			return out, true, err
+		}
+		m, ok := s.fleetMachine(p.Device)
+		if !ok {
+			return nil, true, ErrNoDevice
+		}
+		list := slices.DeleteFunc(s.visiblePendingInteractions(), func(ix proto.Interaction) bool {
+			return ix.MachineID != "" && ix.MachineID != m.ID
+		})
+		out, err := json.Marshal(map[string]any{"interactions": list})
 		return out, true, err
 	case p.Device == DeviceAll:
 		return nil, false, nil

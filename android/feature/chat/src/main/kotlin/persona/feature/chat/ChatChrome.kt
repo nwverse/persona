@@ -28,6 +28,7 @@ import persona.core.domain.sort.canRename
 import persona.core.domain.sort.canTerminal
 import persona.core.domain.sort.closeConfirmation
 import persona.core.domain.sort.deleteConfirmation
+import persona.core.domain.sort.isRex
 import persona.core.domain.sort.isTern
 import persona.core.domain.sort.resumeCommand
 import persona.core.domain.sort.slotLabel
@@ -69,6 +70,9 @@ internal fun ChatHeader(
     sides: List<Session> = emptyList(),
     sideRollup: SideRollup = SideRollup(),
     onOpenSide: ((SessionKey) -> Unit)? = null,
+    /** Branches the whole conversation up to its latest completed turn into a new session and opens it (#12996). */
+    onForkSession: (() -> Unit)? = null,
+    forking: Boolean = false,
     menuOpen: MutableState<Boolean> = remember { mutableStateOf(false) },
     actions: @Composable RowScope.() -> Unit = {},
 ) {
@@ -206,6 +210,16 @@ internal fun ChatHeader(
             PersonaIcons.sideSessions, subtitle = if (sideRollup.needsYou) stringResource(R.string.chat_side_sessions_needs_you) else null) {
             dialog = "sides"
         })
+        if (onForkSession != null && session != null) {
+            val turnRunning = session.agentState == AgentState.Working || session.agentState == AgentState.NeedsYou
+            add(JAction(
+                stringResource(R.string.chat_menu_fork),
+                PersonaIcons.forkChat,
+                enabled = online && machine?.online != false && !forking && !turnRunning,
+                subtitle = if (turnRunning) stringResource(R.string.chat_menu_fork_wait_turn) else null,
+                onClick = onForkSession,
+            ))
+        }
         add(JAction(stringResource(R.string.chat_chrome_switch_session), enabled = session != null) { dialog = "peers" })
         children.forEach { child -> add(JAction(stringResource(R.string.chat_chrome_subagent, child.description?.takeIf(String::isNotBlank) ?: child.type),
             enabled = onOpenSession != null) { onOpenSession?.invoke(SessionKey(session!!.machineId, child.sessionId)) }) }
@@ -252,7 +266,11 @@ internal fun ChatHeader(
             content = {
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                     if (!session?.paneId.isNullOrBlank()) JTextField(tabName, { tabName = it }, singleLine = true,
-                        label = stringResource(if (session?.isTern == true) R.string.chat_chrome_tab_name_tern else R.string.chat_chrome_tab_name))
+                        label = stringResource(when {
+                            session?.isTern == true -> R.string.chat_chrome_tab_name_tern
+                            session?.isRex == true -> R.string.chat_chrome_tab_name_rex
+                            else -> R.string.chat_chrome_tab_name
+                        }))
                     JTextField(title, { title = it }, label = stringResource(R.string.chat_chrome_session_name), singleLine = true)
                 }
             })
@@ -310,6 +328,7 @@ internal fun ChatHeader(
 internal fun chatRenameNote(session: Session?): Int? = when {
     session?.canTerminal == false -> null
     session?.isTern == true -> R.string.chat_chrome_rename_text_tern
+    session?.isRex == true -> R.string.chat_chrome_rename_text_rex
     else -> R.string.chat_chrome_rename_text
 }
 

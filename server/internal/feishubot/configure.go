@@ -49,7 +49,7 @@ func AppConsoleURL(domain, appID string) string {
 // deliberately not opened here: im:message.group_msg is sensitive and usually needs the enterprise admin's
 // review, and the group gate works without it.
 var configureScopes = []string{"im:message:send_as_bot", "contact:user.base:readonly", "cardkit:card:write"}
-var configureEvents = []string{"im.message.receive_v1", "card.action.trigger", "p2p_chat_create", "im.message.recalled_v1"}
+var configureEvents = []string{"im.message.receive_v1", "card.action.trigger", "p2p_chat_create", "im.message.recalled_v1", EventP2PEntered}
 
 // ConfigureIssue is why AutoConfigure stopped, in one word: the app shows a sentence and a console link.
 type ConfigureIssue string

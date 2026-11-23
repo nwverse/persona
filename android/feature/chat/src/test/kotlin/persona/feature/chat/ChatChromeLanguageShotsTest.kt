@@ -97,10 +97,13 @@ class ChatChromeLanguageShotsTest {
         }
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             rule.runOnIdle { style = s; dark = d; roster = null }
+            // Finish the style/theme recomposition before establishing this appearance's baseline.
+            rule.waitForIdle()
             val before = rule.onNodeWithTag("identity-chat").captureToImage().asAndroidBitmap()
             for ((case, installed) in listOf("single" to listOf(only),
                 "multiple" to listOf(only, persona.core.contracts.api.HubManager("work", "Other assistant", online = false)))) {
                 rule.runOnIdle { roster = persona.core.contracts.api.ManagerRoster(installed, "assistant") }
+                rule.waitForIdle()
                 rule.onNodeWithText("Plan a sample trip").assertExists()
                 rule.onNodeWithText("The sample itinerary is ready.").assertExists()
                 rule.onNodeWithText("Personal assistant name").assertDoesNotExist()
