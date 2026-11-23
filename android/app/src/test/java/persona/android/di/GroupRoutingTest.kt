@@ -306,12 +306,25 @@ class GroupRoutingTest {
                     override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?) = error("unused")
                 }
                 val hub = HubScope("synthetic-hub", "synthetic-generation")
+                var route: String? = server.url("/").toString()
+                val worktrees = cachedAgentCreation({ route }) { url ->
+                    HttpAgentCreationService(hub.path, url, "test-token", OkHttpClient())
+                }
                 val bindings = ChatAppBindings(hub, scope, unused(), connection, unused(), composer, unused(), unused(),
-                    sender, worktrees = { HttpAgentCreationService(hub.path, server.url("/").toString(), "test-token", OkHttpClient()) })
+                    sender, worktrees = worktrees)
 
                 assertSame(bindings, bindings.inGroup(primary))
                 for (group in listOf(primary, other)) {
-                    val service = requireNotNull(bindings.inGroup(group).worktrees?.invoke())
+                    val provider = requireNotNull(bindings.inGroup(group).worktrees)
+                    val service = requireNotNull(provider())
+                    assertSame(service, provider())
+                    val originalRoute = route
+                    route = null
+                    assertNull(provider())
+                    route = originalRoute
+                    val reconnected = requireNotNull(provider())
+                    assertNotSame(service, reconnected)
+                    assertSame(reconnected, provider())
                     val machineId = group.session(Session("machine", "session")).machineId
                     server.enqueue(MockResponse().setBody("""{"agent":"claude","models":[{"id":"test-model"}]}"""))
                     server.enqueue(MockResponse().setBody("""{"launchers":[{"name":"claude"}]}"""))
