@@ -331,8 +331,7 @@ extension AlarmsTool {
     /// `-showAlarmSample`: on a device, asks for AlarmKit, cancels the alarms Persona set before, starts a 25-minute
     /// "Focus" timer as the tool does and, for `paused`, pauses it 3 s later. On the simulator (which cannot ring a
     /// timer and whose AlarmKit prompt varies by runtime), draws the same activity directly through ActivityKit with
-    /// the tool's own `attributes(label:timer:only:)` for the state it shows, so screenshots never depend on a system
-    /// prompt.
+    /// `sampleAttributes`, so screenshots never depend on a system prompt.
     static func showSample(paused: Bool) {
         Task {
             #if targetEnvironment(simulator)
@@ -352,18 +351,53 @@ extension AlarmsTool {
         for activity in Activity<AlarmAttributes<PersonaAlarmData>>.activities {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
-        let now = Date()
-        let mode: AlarmPresentationState.Mode = paused
-            ? .paused(.init(totalCountdownDuration: 1500, previouslyElapsedDuration: 301))
-            : .countdown(.init(totalCountdownDuration: 1500, previouslyElapsedDuration: 0, startDate: now, fireDate: now.addingTimeInterval(1500)))
-        let state = AlarmPresentationState(alarmID: UUID(), mode: mode)
-        // The tool's own attributes, cut to the state drawn: both states are over ActivityKit's 4 KB for an app (#11058).
-        let sample = attributes(label: "Focus", timer: true, only: paused ? .paused : .countdown)
-        if let activity = try? Activity.request(attributes: sample, content: .init(state: state, staleDate: nil)) {
+        let content = sampleContent(paused: paused, now: Date())
+        // Both presentation states are encoded, so the sample carries only the state it draws (#12248).
+        // The custom widget supplies the button's words and colours; only the presentation's action marker is required.
+        let sample = sampleAttributes(label: "Focus", paused: paused)
+        if let activity = try? Activity.request(attributes: sample, content: content) {
             sampleActivityID = activity.id
         }
     }
+
+    /// The exact content delivered to the simulator's ActivityKit sample. AlarmKit owns the real timer's ContentState
+    /// and its countdown/pause/resume updates; this never replaces or approximates that path.
+    static func sampleContent(paused: Bool, now: Date = Date()) -> ActivityContent<AlarmPresentationState> {
+        let mode: AlarmPresentationState.Mode = paused
+            ? .paused(.init(totalCountdownDuration: 1500, previouslyElapsedDuration: 301))
+            : .countdown(.init(totalCountdownDuration: 1500, previouslyElapsedDuration: 0, startDate: now, fireDate: now.addingTimeInterval(1500)))
+        return .init(state: .init(alarmID: UUID(), mode: mode), staleDate: nil)
+    }
     #endif
+
+    /// A sample needs only what `AlarmLiveActivity` reads: the alert's title as the metadata fallback, the label, the
+    /// resolved accent, and the current state's action marker. Both timer presentations are encoded, so the sample
+    /// retains just the Pause or Resume it draws; the extension supplies all three buttons' own words and colours.
+    /// Real timers use the unchanged `attributes(label:timer:)` below, with both states for AlarmKit to choose.
+    static func sampleAttributes(label: String, paused: Bool) -> AlarmAttributes<PersonaAlarmData> {
+        let real = attributes(label: label, timer: true)
+        // These resources are display-only for the sample and need no app localization lookup. Avoid repeating its
+        // bundle path and sandbox token in every title; the label is unchanged (#12248).
+        let title = sampleTitle(defaultValue: label)
+        let symbol = paused ? Theme.Icon.run : Theme.Icon.pause
+        let button = AlarmButton(text: title, textColor: real.tintColor, systemImageName: symbol)
+        let stop = sampleStopButton(title: title, tintColor: real.tintColor)
+        let alert = AlarmPresentation.Alert(title: title, stopButton: stop)
+        let presentation = paused
+            ? AlarmPresentation(alert: alert, paused: .init(title: title, resumeButton: button))
+            : AlarmPresentation(alert: alert, countdown: .init(title: title, pauseButton: button))
+        return AlarmAttributes(presentation: presentation, metadata: real.metadata, tintColor: real.tintColor)
+    }
+
+    /// The label as the resource's fallback, not a localization key, for the custom sample (#12248).
+    static func sampleTitle(key: StaticString = "sample.title", defaultValue: String) -> LocalizedStringResource {
+        .init(key, defaultValue: .init(defaultValue), bundle: .atURL(URL(fileURLWithPath: "")))
+    }
+
+    /// The required Alert Stop configuration's actual input, before AlarmKit normalizes its unused getter.
+    static func sampleStopButton(title: LocalizedStringResource, tintColor: Color) -> AlarmButton {
+        alarmButton(text: title, textColor: tintColor, systemImageName: Theme.Icon.interrupt)
+    }
 
     /// An id Persona's own alarms have; anything else is refused (the Clock app's alarms are out of reach).
     private static func alarmID(_ args: JSONValue) throws -> UUID {
@@ -376,34 +410,31 @@ extension AlarmsTool {
         return id
     }
 
-    /// One of a timer's two states, for the DEBUG sample (`attributes(label:timer:only:)`).
-    enum TimerState { case countdown, paused }
-
     /// AlarmKit attributes with `Theme.accent` resolved once: a dynamic `Theme.accent` encodes to ~5.7 KB each (~23 KB
-    /// across the buttons and tint). A timer's still come to ~5.7 KB: each string carries its bundle and a sandbox
-    /// token (~0.5 KB), and each colour is an archived UIColor (~0.5 KB). AlarmKit's daemon starts the real ones and may
-    /// exceed 4 KB (docs/apple/live-activity.md "Alarms and timers (AlarmKit)"). An activity the app requests itself takes
-    /// at most 4 KB of attributes, so the DEBUG sample passes `only`, the one timer state it draws, and leaves out the
-    /// other (#11058); what it keeps is what a real timer gets in that state.
-    static func attributes(label: String, timer: Bool, only: TimerState? = nil) -> AlarmAttributes<PersonaAlarmData> {
+    /// across the buttons and tint). Each string also carries its bundle and a sandbox token, and each colour an archived
+    /// UIColor. AlarmKit's daemon starts real timers and may exceed 4 KB (docs/apple/live-activity.md "Alarms and timers
+    /// (AlarmKit)"). Real timers keep both in memory; `AlarmPresentation` encodes both optional states when present.
+    static func attributes(label: String, timer: Bool) -> AlarmAttributes<PersonaAlarmData> {
         let accent = Color(Theme.accent.resolve(in: EnvironmentValues()))
         let title = LocalizedStringResource(stringLiteral: label)
         func button(_ text: String, _ symbol: String) -> AlarmButton {
-            AlarmButton(text: LocalizedStringResource(stringLiteral: text), textColor: accent, systemImageName: symbol)
+            alarmButton(text: LocalizedStringResource(stringLiteral: text), textColor: accent, systemImageName: symbol)
         }
         let alert = AlarmPresentation.Alert(title: title, stopButton: button(String(localized: "Stop [Persona Alarm]"), Theme.Icon.interrupt))
         let presentation: AlarmPresentation
         if timer {
             presentation = AlarmPresentation(
                 alert: alert,
-                countdown: only == .paused ? nil
-                    : AlarmPresentation.Countdown(title: title, pauseButton: button(String(localized: "Pause [Persona Alarm]"), Theme.Icon.pause)),
-                paused: only == .countdown ? nil
-                    : AlarmPresentation.Paused(title: title, resumeButton: button(String(localized: "Resume [Persona Alarm]"), Theme.Icon.run)))
+                countdown: AlarmPresentation.Countdown(title: title, pauseButton: button(String(localized: "Pause [Persona Alarm]"), Theme.Icon.pause)),
+                paused: AlarmPresentation.Paused(title: title, resumeButton: button(String(localized: "Resume [Persona Alarm]"), Theme.Icon.run)))
         } else {
             presentation = AlarmPresentation(alert: alert)
         }
         return AlarmAttributes(presentation: presentation, metadata: PersonaAlarmData(label: label), tintColor: accent)
+    }
+
+    static func alarmButton(text: LocalizedStringResource, textColor: Color, systemImageName: String) -> AlarmButton {
+        .init(text: text, textColor: textColor, systemImageName: systemImageName)
     }
 
     /// `mon`…`sun` as AlarmKit names the day (the Alarms and Timers page reads its schedules back with it).
