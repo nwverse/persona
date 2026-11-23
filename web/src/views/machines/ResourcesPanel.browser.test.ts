@@ -27,7 +27,7 @@ it.skipIf(process.platform !== "linux")("shows the versioned queue in three lang
     await server.listen();
     const address = server.httpServer?.address();
     if (!address || typeof address === "string") throw new Error("missing isolated browser fixture port");
-    const candidates = [process.env.CHROME_BIN, "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium"].filter((path): path is string => !!path);
+    const candidates = [process.env.CHROME_BIN, "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", chromium.executablePath()].filter((path): path is string => !!path);
     let executablePath: string | undefined;
     for (const path of candidates) { try { await access(path); executablePath = path; break; } catch { /* try the next installed browser */ } }
     if (!executablePath) throw new Error("remote runner requires its installed Chrome for resource UI verification");
