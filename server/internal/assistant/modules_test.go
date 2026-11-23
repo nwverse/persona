@@ -1,0 +1,130 @@
+package assistant
+
+import (
+	"context"
+	"encoding/json"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/assistant/kernel"
+	"github.com/nwverse/persona/server/internal/modapi"
+)
+
+// The built-in feature modules as the assistant loads them (modules.go). The briefing module is the pilot: loaded by
+// default, and absent (no setting, no routine facts, no briefing) when switched off or not compiled in.
+
+func ownSettingKeys(s *Service) []string {
+	var keys []string
+	for _, o := range s.ownSettings() {
+		keys = append(keys, o.Key)
+	}
+	return keys
+}
+
+func TestBriefingModuleIsLoadedByDefault(t *testing.T) {
+	s := newTestService(t, newFakeHub().withMachine())
+	if !s.modules.Loaded("briefing") || !s.briefingOn() {
+		t.Fatalf("the briefing module is not loaded: %+v (skipped: %q)", s.modules.Modules(), s.modules.Skipped("briefing"))
+	}
+	if !slices.Contains(ownSettingKeys(s), "assistant.briefing_waits") {
+		t.Fatal("persona_settings does not list assistant.briefing_waits with the module on")
+	}
+}
+
+// The modules row switches a module off at the next start: it is not loaded, its setting is hidden from persona_settings
+// but stays stored (a change to another setting keeps it), and the routines degrade: a routine with facts on opens with
+// none and keeps no briefing run, a daily report has the north star's lines alone, and the acceptance reminders wait for
+// no briefing.
+func TestSwitchedOffBriefingModuleIsAbsent(t *testing.T) {
+	ctx := context.Background()
+	st := &memStore{}
+	if err := st.PutSetting(ctx, modulesKey, ModuleSwitch{Disabled: []string{"briefing"}}); err != nil {
+		t.Fatal(err)
+	}
+	stored := json.RawMessage(`{"stalled_minutes":25,"silent_minutes":150,"orphan_minutes":12,"card_minutes":4,"max_rows":7}`)
+	if err := st.PutSetting(ctx, settingsKey, Settings{BriefingWaits: stored}); err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeHub().withMachine()
+	s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t)}))
+	if s.modules.Loaded("briefing") || s.briefingOn() || s.modules.Skipped("briefing") != "switched off" {
+		t.Fatalf("loaded %+v, skipped %q", s.modules.Modules(), s.modules.Skipped("briefing"))
+	}
+	assertBriefingAbsent(t, s)
+	if _, err := s.updateSettings(ctx, func(v *Settings) error { note := "kept apart"; v.Notes = &note; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.settings(ctx).BriefingWaits; string(got) != string(stored) {
+		t.Fatalf("the switched-off module's setting was not kept: %s", got)
+	}
+}
+
+// A binary without the module (persona_without_briefing, persona_core_only) behaves the same.
+func TestCoreWithoutModulesHasNoBriefing(t *testing.T) {
+	f := newFakeHub().withMachine()
+	st := &memStore{}
+	s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), Modules: []modapi.Module{}}))
+	if len(s.modules.Modules()) != 0 {
+		t.Fatalf("modules loaded from an empty list: %+v", s.modules.Modules())
+	}
+	assertBriefingAbsent(t, s)
+}
+
+func assertBriefingAbsent(t *testing.T, s *Service) {
+	t.Helper()
+	ctx := context.Background()
+	if slices.Contains(ownSettingKeys(s), "assistant.briefing_waits") {
+		t.Error("persona_settings lists assistant.briefing_waits without its module")
+	}
+	if _, err := s.moduleSettingGet("assistant.briefing_waits")(ctx); err == nil {
+		t.Error("the hidden setting answered a get")
+	}
+	now := time.Now()
+	if got := s.runFacts(ctx, Task{ID: "morning", Facts: true}, now); got != "" {
+		t.Errorf("a routine with facts on opened with facts: %q", got)
+	}
+	if got, want := s.runFacts(ctx, Task{ID: "dot", Report: true}, now), s.northStarRunFacts(ctx, now); got != want {
+		t.Errorf("a daily report's facts = %q, want the north star's lines %q", got, want)
+	}
+	s.brief.mu.Lock()
+	runs := len(s.brief.byTask)
+	s.brief.mu.Unlock()
+	if runs != 0 {
+		t.Errorf("%d briefing runs kept without the module", runs)
+	}
+	if dirs, off := s.briefDirections(ctx, now, s.botLang(ctx), testWeb); dirs != nil || off != nil {
+		t.Errorf("wait rows without the module: %+v %+v", dirs, off)
+	}
+	if g := s.briefingGrace(ctx, now, 9*60); g != 0 {
+		t.Errorf("acceptance reminders wait %d minutes for a briefing that does not come", g)
+	}
+	// The hooks of a scheduled run find no briefing run and do nothing.
+	s.briefSent("morning", "sess", false)
+	s.briefReached("sess")
+	if push := s.briefPush("sess", s.botLang(ctx), true); push != "" {
+		t.Errorf("a push for a briefing without the module: %q", push)
+	}
+}
+
+// End to end: the morning routine with facts on runs with the module absent as a routine with facts off does: its answer
+// goes out, with no briefing rows and no brief item.
+func TestMorningRoutineRunsWithoutTheBriefingModule(t *testing.T) {
+	off := newBriefRunEnvWith(t, true, func(e *briefRunEnv) { e.s.modules = kernel.New(nil, nil, nil) })
+	off.mirror()
+	plain := newBriefRunEnv(t, false)
+	plain.mirror()
+	if items := off.briefItems(); len(items) != 0 {
+		t.Fatalf("brief items without the module: %+v", items)
+	}
+	got, want := off.cards(), plain.cards()
+	if len(got) != len(want) || len(got) == 0 || !strings.Contains(got[0], briefSummary) {
+		t.Fatalf("%d posts without the module, %d with facts off; want the model's answer: %v", len(got), len(want), got)
+	}
+	for _, c := range got {
+		if strings.Contains(c, "等你处理") || strings.Contains(c, "待验收") { // i18n-ignore: the zh-Hans card's section titles
+			t.Fatalf("a briefing section without the module:\n%s", c)
+		}
+	}
+}

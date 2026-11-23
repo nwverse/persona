@@ -54,6 +54,17 @@ func (c *ownChange) card(l i18n.Lang) string {
 }
 
 func (s *Service) ownSettings() []ownSetting {
+	// A module's setting is listed only while its module is loaded (modules.go): its value stays stored, hidden.
+	return slices.DeleteFunc(s.allOwnSettings(), func(o ownSetting) bool {
+		_, loaded := s.modules.Setting(o.Key)
+		return moduleSettingKeys[o.Key] && !loaded
+	})
+}
+
+// moduleSettingKeys are the keys below that a feature module serves (modules.go moduleStored).
+var moduleSettingKeys = map[string]bool{"assistant.briefing_waits": true}
+
+func (s *Service) allOwnSettings() []ownSetting {
 	getSet := []string{"get", "set"}
 	return []ownSetting{
 		s.hiddenDirSetting(),
@@ -215,8 +226,9 @@ func (s *Service) ownSettings() []ownSetting {
 				"orphan_minutes=10 (orphanOfflineAfter), card_minutes=3 (superviseNeedsAfter); max_rows=15 bounds only non-owner " +
 				"rows per direction, and every owner-wait row is kept. These values do not change supervision notifications",
 			Value: "the whole object {stalled_minutes, silent_minutes, orphan_minutes, card_minutes, max_rows}; minutes 1–10080, max_rows 1–100; null restores the defaults"},
-			get: s.getBriefingWaits,
-			set: s.setBriefingWaits},
+			get: s.moduleSettingGet("assistant.briefing_waits"),
+			set: s.moduleSettingSet("assistant.briefing_waits", "change_briefing_waits",
+				"assistant.briefing_waits updated; the next briefing's deterministic wait lists use it.")},
 		{Setting: Setting{Key: "assistant.interject_background", Title: "Move running work to the background when I interject", Actions: getSet,
 			About: "off (the default): a message the user sends while a Claude conversation is still answering waits until the command " +
 				"or subagent running in the foreground ends; on: that work moves to the background (it goes on and reports when done) " +
