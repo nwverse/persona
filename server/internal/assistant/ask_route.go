@@ -179,7 +179,7 @@ func (s *Service) askLadder(ctx context.Context, ix proto.Interaction) (ladder [
 	case reviewAccepted, reviewCancelled:
 		return nil, "", "", false
 	}
-	if t.Supervision.state(t) == reviewNeedsUser && t.Supervision.SupervisorSource != "explicit" {
+	if t.Supervision.state(t) == reviewNeedsUser && !t.Supervision.assigned() {
 		return nil, "", "", false
 	}
 	lead := s.effectiveSupervisor(ctx, cfg, t)
@@ -202,6 +202,9 @@ func (s *Service) askLadder(ctx context.Context, ix proto.Interaction) (ladder [
 		return []string{to}, t.ID, home, to != ""
 	}
 	if lead != cfg.Main && slices.Contains(cfg.Leaders, lead) {
+		if t.Supervision.assigned() {
+			return []string{lead}, t.ID, home, true // only owner-decision escalations go to main
+		}
 		return []string{lead, cfg.Main}, t.ID, home, true
 	}
 	return []string{s.ownSupervisor(cfg)}, t.ID, home, true

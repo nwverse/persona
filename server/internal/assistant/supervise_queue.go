@@ -58,7 +58,7 @@ func (s *Service) renderQueuedDigest(ctx context.Context, to string, list []prom
 // recheckDigestTo honors explicit moves through the same policy as immediate dispatch. Otherwise it preserves
 // a queued legacy supervisor: a default-policy change alone is not permission to rehome an existing relay.
 func (s *Service) recheckDigestTo(ctx context.Context, cfg Settings, g superviseSignal) string {
-	if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil && t.Supervision.SupervisorSource == "explicit" {
+	if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil && t.Supervision.assigned() {
 		return s.digestTo(ctx, cfg, g)
 	}
 	if g.To != "" {

@@ -128,8 +128,8 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	s.reviewDismissals.actions.acquire(t.ID)
 	defer s.reviewDismissals.actions.release(t.ID)
 	t, _ = s.todoNow(t.ID)
-	// Main supervises ordinary conversation-dispatched tasks (#5732). Origin alone never lets a side conversation
-	// accept one. Delegated reviewers are an explicitly assigned manual leader, a task leader for its worker, the legacy
+	// A planning lead owns its assigned task. Origin alone never lets an ordinary side conversation accept one.
+	// Other authorized reviewers are main, a task leader for its worker, the legacy
 	// background with durable evidence, or the explicit capable-runtime side topology introduced with policy support.
 	isMain := s.isMain(ctx, self)
 	background := s.backgroundSupervises(ctx, self, t)

@@ -20,18 +20,19 @@ func transferPlannedTask(t *testing.T, s *Service, f *fakeHub, task Todo, destin
 	}
 }
 
-// Exercise the issue's actual topology: a lead's plan defaults to main, then main explicitly transfers it back
-// to that same lead. The saved plan must no longer be evidence of a legacy assignment after this move.
+// A lead owns its new plan. Moving it through main and back must not make its saved plan look like a legacy
+// assignment or undo the explicit move on reload.
 func TestAgentTransferPlanSignalsAndReload(t *testing.T) {
 	database := todoTestDB(t)
 	s, f, task := newLeaderServiceFromAgentNumberOn(t, database, 999999)
-	if task.Origin != "lead1" || task.PlanID == "" || task.Supervision.Supervisor != "conv1" || task.Supervision.SupervisorSource != "" {
+	if task.Origin != "lead1" || task.PlanID == "" || task.Supervision.Supervisor != "lead1" || task.Supervision.SupervisorSource != "plan" {
 		t.Fatalf("new lead plan changed its default: %+v", task)
 	}
 	settleService(t, s)
+	transferPlannedTask(t, s, f, task, "conv1")
 	transferPlannedTask(t, s, f, task, "lead1")
 	transferPlannedTask(t, s, f, task, "lead1") // same assignment also persists its provenance
-	kinds := append(slices.Clone(backgroundSignals), sigEstimateDue, sigStarted, sigFailed, sigTodoReady, sigParentCloseout, sigHandoffResult)
+	kinds := append(slices.Clone(backgroundSignals), sigEstimateDue, sigStarted, sigFailed, sigTodoReady, sigParentCloseout, sigHandoffResult, sigLeaderStuck)
 	kinds = slices.DeleteFunc(kinds, func(kind string) bool { return kind == sigAsk })
 	check := func(s *Service) {
 		t.Helper()
@@ -55,7 +56,7 @@ func TestAgentTransferPlanSignalsAndReload(t *testing.T) {
 				}
 			}
 		}
-		for _, kind := range []string{sigEscalated, sigLeaderStuck} {
+		for _, kind := range []string{sigEscalated} {
 			if got := s.digestTo(t.Context(), s.settings(t.Context()), superviseSignal{Todo: task.ID, Kind: kind}); got != "conv1" {
 				t.Errorf("explicit escalation %s went to %s", kind, got)
 			}
@@ -79,7 +80,7 @@ func TestAgentTransferPendingCardsBeforeAfterAndRestart(t *testing.T) {
 			database := todoTestDB(t)
 			e := newRouteEnv(t, database, true)
 			s := e.s
-			// Start on main, as a new plan does; hold the digest there while its turn is busy.
+			// Start with a main-owned task; hold its digest while main is busy.
 			if _, _, err := s.updateSupervision(t.Context(), e.todo.ID, func(v *Supervision) bool { v.Supervisor = "conv1"; return true }); err != nil {
 				t.Fatal(err)
 			}
@@ -153,30 +154,60 @@ func TestAgentTransferPendingCardsBeforeAfterAndRestart(t *testing.T) {
 	}
 }
 
-func TestAgentTransferKeepsDeliveredAndEscalatedCards(t *testing.T) {
-	e := newRouteEnv(t, nil, true)
-	e.raise(askQuestion("delivered", "worker-1"))
-	e.noticeWith("lead1", "interaction_id=delivered")
-	e.settle()
-	e.s.fleet.mu.Lock()
-	r := e.s.fleet.interactions["delivered"].route
-	since, deadline := r.since, r.routedAt
-	e.s.fleet.mu.Unlock()
-	transferPlannedTask(t, e.s, e.f, todoNow(e.s, e.todo.ID), "conv1")
-	if _, ok := e.s.routedTo("delivered", "lead1", false); !ok {
-		t.Fatal("already delivered card was replayed to a new supervisor")
+func TestAgentTransferMovesDeliveredPendingCardsOnceAndKeepsOwnerEscalation(t *testing.T) {
+	for _, kind := range []string{proto.IxQuestion, proto.IxPermission, proto.IxPlan} {
+		t.Run(kind, func(t *testing.T) {
+			e := newRouteEnv(t, nil, true)
+			ix := askQuestion("delivered", "worker-1")
+			if kind != proto.IxQuestion {
+				ix = askPermission("delivered", "worker-1")
+				ix.Kind = kind
+			}
+			e.raise(ix)
+			e.noticeWith("lead1", "interaction_id=delivered")
+			e.settle()
+			e.s.fleet.mu.Lock()
+			deadline := e.s.fleet.interactions[ix.ID].route.routedAt
+			e.s.fleet.mu.Unlock()
+			transferPlannedTask(t, e.s, e.f, todoNow(e.s, e.todo.ID), "conv1")
+			e.noticeWith("conv1", "interaction_id=delivered")
+			transferPlannedTask(t, e.s, e.f, todoNow(e.s, e.todo.ID), "conv1")
+			e.settle()
+			if _, ok := e.s.routedTo(ix.ID, "conv1", false); !ok {
+				t.Fatal("pending delivered card kept its former supervisor")
+			}
+			if n := strings.Count(strings.Join(e.f.noticesTo("conv1"), "\n"), "interaction_id=delivered"); n != 1 {
+				t.Fatalf("transferred card delivered %d times", n)
+			}
+			e.s.fleet.mu.Lock()
+			if !e.s.fleet.interactions[ix.ID].route.routedAt.Equal(deadline) {
+				t.Error("transfer extended absolute approval deadline")
+			}
+			e.s.fleet.mu.Unlock()
+			e.s.ringAsks(e.todo.ID, []string{ix.ID}, nil, escalation{})
+			transferPlannedTask(t, e.s, e.f, todoNow(e.s, e.todo.ID), "lead1")
+			if _, ok := e.s.routedTo(ix.ID, "lead1", false); ok {
+				t.Fatal("owner-held card was taken back")
+			}
+			e.settle()
+		})
 	}
-	e.s.fleet.mu.Lock()
-	if !r.since.Equal(since) || !r.routedAt.Equal(deadline) {
-		t.Error("transfer extended the card deadline")
+}
+
+func TestAgentTransferDoesNotWaitForBusyFormerSupervisor(t *testing.T) {
+	e := newRouteEnv(t, todoTestDB(t), true)
+	if _, _, err := e.s.updateSupervision(t.Context(), e.todo.ID, func(v *Supervision) bool { v.Supervisor = "conv1"; return true }); err != nil {
+		t.Fatal(err)
 	}
-	e.s.fleet.mu.Unlock()
-	e.s.ringAsks(e.todo.ID, []string{"delivered"}, nil, escalation{})
+	e.supervisorState(proto.StatusWorking, proto.StatusIdle)
+	e.raise(askQuestion("queued", "worker-1"))
+	waitFor(t, "old supervisor queue", func() bool { return e.s.queuedFor("conv1") == 1 })
 	transferPlannedTask(t, e.s, e.f, todoNow(e.s, e.todo.ID), "lead1")
-	if _, ok := e.s.routedTo("delivered", "lead1", false); ok {
-		t.Fatal("owner-escalated card was taken back")
-	}
+	e.noticeWith("lead1", "interaction_id=queued")
 	e.settle()
+	if e.s.queuedFor("conv1") != 0 || len(e.f.noticesTo("conv1")) != 0 {
+		t.Fatal("old supervisor retained transferred queue")
+	}
 }
 
 func TestAgentTransferQueuedOrdinarySignalOnlyReachesNewSupervisor(t *testing.T) {
@@ -219,50 +250,58 @@ func TestAgentTransferAssignmentRowRoundTrip(t *testing.T) {
 }
 
 func TestAgentTransferDeliversIssueSignalsOnlyOnceAcrossRestart(t *testing.T) {
-	for _, kind := range []string{sigEstimateDue, sigReport, sigIdle, sigReview, sigUndecidable} {
-		t.Run(kind, func(t *testing.T) {
-			database := todoTestDB(t)
-			s, f, task := newLeaderServiceFromAgentNumberOn(t, database, 999999)
-			settleService(t, s)
-			transferPlannedTask(t, s, f, task, "lead1")
-			g := superviseSignal{Todo: task.ID, Kind: kind, Key: "transferred-" + kind, Detail: "Evidence for the transferred supervisor"}
-			state := reviewNeedsUser
-			switch kind {
-			case sigEstimateDue:
-				state = ""
-				brief, ok := s.briefOfTodo(task.ID)
-				if !ok {
-					t.Fatal("plan has no estimate brief")
+	for _, mode := range []string{"planned_by_lead", "transferred_from_main"} {
+		for _, kind := range []string{sigEstimateDue, sigReport, sigIdle, sigReview, sigUndecidable} {
+			t.Run(mode+"/"+kind, func(t *testing.T) {
+				database := todoTestDB(t)
+				caller := "lead1"
+				if mode == "transferred_from_main" {
+					caller = "conv1"
 				}
-				g.Key, g.Minutes = estimateDueKey(brief), brief.ExpectNow
-			case sigReport:
-				g.Report = upReportQuestion
-			case sigReview:
-				state = reviewPending
-			}
-			if _, _, err := s.updateSupervision(t.Context(), task.ID, func(v *Supervision) bool { v.State = state; return true }); err != nil {
-				t.Fatal(err)
-			}
-			f.mu.Lock()
-			f.sends = nil
-			f.mu.Unlock()
-			s.signal(g)
-			waitFor(t, "transferred "+kind, func() bool { return len(f.noticesTo("lead1")) == 1 })
-			settleService(t, s)
-			if got := f.noticesTo("conv1"); len(got) != 0 {
-				t.Fatalf("main received %s after transfer: %q", kind, got)
-			}
-			again := newRestartedService(t, Options{Hub: f, Store: func() Store { return database }, Logf: t.Logf})
-			shortSupervise(t, again)
-			noDirectionsTimers(again)
-			if err := again.ensureTodosLoaded(t.Context()); err != nil {
-				t.Fatal(err)
-			}
-			again.signal(g)
-			settleService(t, again)
-			if len(f.noticesTo("lead1")) != 1 || len(f.noticesTo("conv1")) != 0 {
-				t.Fatalf("%s repeated or changed recipients after restart: main=%q lead=%q", kind, f.noticesTo("conv1"), f.noticesTo("lead1"))
-			}
-		})
+				s, f, task := newConversationPlanServiceOn(t, database, caller, 999999)
+				settleService(t, s)
+				if mode == "transferred_from_main" {
+					transferPlannedTask(t, s, f, task, "lead1")
+				}
+				g := superviseSignal{Todo: task.ID, Kind: kind, Key: "transferred-" + kind, Detail: "Evidence for the transferred supervisor"}
+				state := reviewNeedsUser
+				switch kind {
+				case sigEstimateDue:
+					state = ""
+					brief, ok := s.briefOfTodo(task.ID)
+					if !ok {
+						t.Fatal("plan has no estimate brief")
+					}
+					g.Key, g.Minutes = estimateDueKey(brief), brief.ExpectNow
+				case sigReport:
+					g.Report = upReportQuestion
+				case sigReview:
+					state = reviewPending
+				}
+				if _, _, err := s.updateSupervision(t.Context(), task.ID, func(v *Supervision) bool { v.State = state; return true }); err != nil {
+					t.Fatal(err)
+				}
+				f.mu.Lock()
+				f.sends = nil
+				f.mu.Unlock()
+				s.signal(g)
+				waitFor(t, "transferred "+kind, func() bool { return len(f.noticesTo("lead1")) == 1 })
+				settleService(t, s)
+				if got := f.noticesTo("conv1"); len(got) != 0 {
+					t.Fatalf("main received %s after transfer: %q", kind, got)
+				}
+				again := newRestartedService(t, Options{Hub: f, Store: func() Store { return database }, Logf: t.Logf})
+				shortSupervise(t, again)
+				noDirectionsTimers(again)
+				if err := again.ensureTodosLoaded(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				again.signal(g)
+				settleService(t, again)
+				if len(f.noticesTo("lead1")) != 1 || len(f.noticesTo("conv1")) != 0 {
+					t.Fatalf("%s repeated or changed recipients after restart: main=%q lead=%q", kind, f.noticesTo("conv1"), f.noticesTo("lead1"))
+				}
+			})
+		}
 	}
 }

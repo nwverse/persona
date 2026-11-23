@@ -118,6 +118,9 @@ func (s *Service) assignAgentUnder(ctx context.Context, mid, sid, lead, title st
 	if lead != cfg.Main && !s.isLeader(ctx, lead) {
 		return Todo{}, false, fmt.Errorf("%s is not a leader conversation (GET /api/v1/assistant/leaders lists them)", lead)
 	}
+	if lead != cfg.Main && s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, lead) {
+		return Todo{}, false, errors.New("the target lead's runtime cannot receive supervision policy")
+	}
 	am, ok := s.device(ctx, mid)
 	if !ok {
 		return Todo{}, false, fmt.Errorf("%w: no machine %q", errAgentNotFound, mid)

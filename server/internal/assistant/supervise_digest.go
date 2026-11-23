@@ -310,7 +310,7 @@ func (s *Service) sendDigest(ctx context.Context) {
 // conversation set it is never "", and nothing goes anywhere else than before.
 func (s *Service) routeTo(ctx context.Context, here Settings, g superviseSignal, there func(string) bool) string {
 	to := s.digestTarget(ctx, here, g)
-	if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil && t.Supervision.SupervisorSource == "explicit" &&
+	if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil && t.Supervision.assigned() &&
 		to == t.Supervision.Supervisor {
 		return to // an unavailable explicit recipient keeps its queue; it never silently falls back to main
 	}

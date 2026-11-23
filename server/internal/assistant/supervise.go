@@ -72,7 +72,7 @@ func isStalledReworkKind(kind string) bool {
 // Supervision is a supervised task's ledger, as the apps get it on the todo (supervision).
 type Supervision struct {
 	Supervisor       string             `json:"supervisor"`                  // the conversation currently supervising it
-	SupervisorSource string             `json:"supervisor_source,omitempty"` // "explicit" after an owner or supervisor move
+	SupervisorSource string             `json:"supervisor_source,omitempty"` // "plan" for a planned leader assignment; "explicit" after a move
 	DoneWhen         []string           `json:"done_when"`
 	Criteria         []db.TodoCriterion `json:"criteria"`
 	ExpectMinutes    int                `json:"expect_minutes,omitempty"`
@@ -103,6 +103,11 @@ type Supervision struct {
 	// reading kept in memory only (the next report brings it back after a restart), and apart from UpdatedAt, which
 	// names the review a task waits for.
 	Progress *TaskProgress `json:"progress,omitempty"`
+}
+
+// assigned records a current ownership decision, rather than a pre-policy legacy ledger.
+func (v *Supervision) assigned() bool {
+	return v != nil && v.Supervisor != "" && v.SupervisorSource != ""
 }
 
 // TaskProgress is a supervised task's agent's latest report: its kind, the step it is on of how many (0: not said),
@@ -422,8 +427,11 @@ func cleanDoneWhen(list []string) []string {
 
 // superviseTodo makes todo id a supervised task of conversation supervisor. A persistence failure leaves its in-memory
 // ledger untouched; callers that must not start untracked work check the returned error.
-func (s *Service) superviseTodo(ctx context.Context, id, supervisor string, doneWhen []string, expect int) error {
+func (s *Service) superviseTodo(ctx context.Context, id, supervisor string, doneWhen []string, expect int, source ...string) error {
 	_, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+		if len(source) > 0 && !v.assigned() {
+			v.SupervisorSource = source[0]
+		}
 		v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, cleanDoneWhen(doneWhen), max(0, min(expect, 24*60))
 		return true
 	})

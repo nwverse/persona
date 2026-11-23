@@ -273,14 +273,14 @@ func (s *Service) ackSupervisionDedupLocked(ctx context.Context, signals []super
 
 // forgetSupervision takes the signals' fingerprints out of the deduplication history: their message was queued for a
 // conversation that is gone and was never read, so they are told again. dedupMu is held.
-func (s *Service) forgetSupervision(ctx context.Context, signals []superviseSignal, web string) {
+func (s *Service) forgetSupervision(ctx context.Context, signals []superviseSignal, web string) error {
 	b := &s.supervise
 	history := b.dedup
 	st := s.store()
 	if st != nil {
 		if _, err := st.Setting(ctx, superviseDedupKey, &history); err != nil {
 			s.logf("supervise: could not read the deduplication history: %v", err)
-			return
+			return err
 		}
 	}
 	next := maps.Clone(history)
@@ -296,15 +296,16 @@ func (s *Service) forgetSupervision(ctx context.Context, signals []superviseSign
 		}
 	}
 	if len(next) == len(history) {
-		return
+		return nil
 	}
 	if st != nil {
 		if err := st.PutSetting(ctx, superviseDedupKey, next); err != nil {
 			s.logf("supervise: could not release deduplication entries: %v", err)
-			return
+			return err
 		}
 	}
 	b.dedup = next
+	return nil
 }
 
 // Task-bound fingerprints are bounded by open tasks, not elapsed time. Load once
