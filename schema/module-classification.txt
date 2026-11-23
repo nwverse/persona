@@ -217,6 +217,7 @@ go server/internal/textfmt core
 go server/internal/tmux core
 go server/internal/tokenuse core
 go server/internal/toolcli core
+go server/internal/toolschema core
 go server/internal/transcript core
 go server/internal/tunnel core
 go server/internal/tzguard core

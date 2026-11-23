@@ -1408,7 +1408,10 @@ no timeline row and adds no unread count or badge. Its inline tools and its `tas
 inside the same half-open round interval stay out too; plans, message cards, notices and other decisions always remain
 visible. **Background activity**, from both the conversation menu and Inbox, reuses `SupervisionLine` and the same
 paged transcript to retain the complete round and those feed cards without creating an InboxItem or marking anything
-seen. Full-history APIs are unchanged. `e2e/quiet-supervision.mjs` checks silent and promoted boundaries and captures
+seen. A successful `task_review accepted` receipt with hub-issued `background=true` follows the same split: the whole
+review round and its original tool trace stay in Background activity. The hub derives that marker only from the current
+plan's `user_requested`, `parent` and the supervision ledger's current `auto_review` / `round`; unmarked, `user_check`
+and `needs_user` reviews remain visible. Full-history APIs are unchanged. `e2e/quiet-supervision.mjs` checks silent and promoted boundaries and captures
 synthetic before/after evidence; promoted tools are inspected after opening their work summary.
 
 The cache retains the source metadata. Unknown nonempty source kinds still use the source presentation. Old hubs fall back
