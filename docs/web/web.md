@@ -419,6 +419,11 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
 
 ## Pages
 
+- **Health** (#13273): the sidebar opens the home at `/health` immediately, with past health chats listed newest first.
+  Selecting a row opens `/health/<id>`; a health chat's **New** returns to `/health`. The home's first message starts a
+  new health chat. `/health/new` remains an alias for the home. See `docs/assistant/health.md` ("Entering Health (#4329)")
+  for the previous entry rule and why it changed.
+
 - **Workflow board** (`/workspace-board`, #1646): off by default, turned on in Settings › hub › Agents (the switch is stored on the hub, the same for every browser, #2475). When off, the sidebar has no entry; opening the URL directly shows **Workflow board is off** with a button to Settings, and it neither reads the board nor polls the discovery API. When on, enter from the sidebar, bind an existing workspace or a real directory on an online machine, and manage columns, card order, pinning and archiving by hand; the detail view links Agents in the same directory and opens files, Git, or explicitly creates a new Agent. Cards and column state are stored in Postgres; Agent state does not move cards between columns, and cards stay when offline. Operations, permissions, upgrades and sources: see [Workspace board](workspace-board.md).
 
 - **History** (#10240, `/terminal`, `src/views/agents/HistoryBrowser.tsx`): under Agents in the sidebar and on the phone's Agents page. A fresh visit lists non-running sessions by the reader's local calendar day of last activity, newest first. It uses the complete sidebar snapshot and the same folded state and health visibility rules: children and supported side sessions fold into their parent before filtering, and running or pending parents stay with live work. Each day count is the number of filtered history rows under it. Computer and Agent filters sit beside search; search uses the existing conversation index (`sessions_search`), with Load more for its frozen window. Counts describe the loaded matching rows, not a server-wide search total. An older hub explicitly says it searches titles and previews only.
