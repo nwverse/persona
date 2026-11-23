@@ -9,7 +9,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // Where the token comes from (docs/extensions/connectors.md "Login supports"): one computer's gh login, which the user picks in the app
@@ -169,8 +169,8 @@ func (c *Connector) Probe(ctx context.Context, fetch TokenSource) MachineLogin {
 	return m
 }
 
-func statusWaiting(why string) connector.Status {
-	return connector.Status{State: connector.StateNotSignedIn, Error: why}
+func statusWaiting(why string) connectorwire.Status {
+	return connectorwire.Status{State: connectorwire.StateNotSignedIn, Error: why}
 }
 
 func decodeJSON(resp *http.Response, out any) error {

@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 const tailIssue = "/repos/example-org/example-repo/issues/7"
@@ -49,7 +49,7 @@ func newTailAPI(t *testing.T, count int, links304 bool) (*Connector, *tailAPI) {
 	c := New(Config{}, "", nil)
 	c.api = srv.URL
 	signedInAs(c, "synthetic-token")
-	c.status = connector.Status{State: connector.StateOK, Account: "example-user"}
+	c.status = connectorwire.Status{State: connectorwire.StateOK, Account: "example-user"}
 	return c, a
 }
 
@@ -134,7 +134,7 @@ func expireThreadCache(c *Connector) {
 	}
 }
 
-func tailIDs(messages []connector.ThreadMessage) []string {
+func tailIDs(messages []connectorwire.ThreadMessage) []string {
 	ids := make([]string, 0, len(messages))
 	for _, m := range messages {
 		ids = append(ids, m.ID)
@@ -563,7 +563,7 @@ func TestThreadLateTailResponse(t *testing.T) {
 				c := New(Config{}, "", nil)
 				c.api = srv.URL
 				signedInAs(c, "synthetic-token")
-				c.status = connector.Status{State: connector.StateOK, Account: "example-user"}
+				c.status = connectorwire.Status{State: connectorwire.StateOK, Account: "example-user"}
 				ctx := context.Background()
 				if conditional {
 					if _, err := cachedList[threadComment](c, ctx, tailPaths[0]); err != nil {
