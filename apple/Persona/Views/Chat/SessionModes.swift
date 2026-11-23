@@ -1035,12 +1035,8 @@ struct PermissionModeSheet: View {
                 SheetClose(id: "permissions.close") { dismiss() }
             }
         }
-        #if os(macOS)
-        .macSheet()
-        #else
         // Tall enough for Allow Everything and its note at every language's line breaks (medium cut them off in English).
         .presentationDetents([.large])
-        #endif
         .accessibilityIdentifier("permissions.sheet")
     }
 }

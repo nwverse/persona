@@ -928,7 +928,11 @@ the run that went wrong without reading any tool output, then opens only that ru
 
 ### Never shown to extensions
 
-Whatever scopes it was granted, an extension's token never sees:
+Whatever scopes it was granted, an extension's token never sees what follows, with one exception (#13246): an extension the
+user marked as their own (`PUT /api/v1/assistant/extension-trust/{id}` with `trust: owner`, such as their memory extension) reads
+the tracks' conversations and cards on the read routes below, and the manager's reads by the user's grants
+(docs/assistant/health.md "Using information by scene"). It still never controls a track's session or sees a private card,
+and the extensions' `agent.needs_you` / `agent.finished` events still leave the tracks out.
 
 - **The health space's conversations** (`docs/assistant/health.md`): not in `GET /api/v1/sessions` (the full list, the paged list, its
   totals and counts) or `/sessions/archived`, and their items, images, info and screen answer 404 as for a chat that does not exist.
@@ -937,7 +941,7 @@ Whatever scopes it was granted, an extension's token never sees:
   read grant. Session controls (a message, interrupt, queue changes, rename, modes, seen) require a listed session outside
   the health space; a resume is decided as "Resuming a chat" says. Extension tokens cannot start sessions in the health
   space. `assistant.conversations` and `assistant.messages` leave health sessions out, and `assistant.memory` reads only
-  the assistant's own memory. The assistant's `agents_list`, `agent_read` and `agent_send` use the calling
+  the memory of tracks the extension may read. The assistant's `agents_list`, `agent_read` and `agent_send` use the calling
   conversation's space to filter their targets. `GET /api/v1/assistant` lists none of them (`?space=health` lists
   nothing), and a chat's feed (`GET …/conversations/{id}/feed`) answers 404 for one of them, or for one whose space
   cannot be told. `agent.finished` is not sent of such a chat either.

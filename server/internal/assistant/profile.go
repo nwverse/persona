@@ -594,7 +594,8 @@ func (s *Service) profile(ctx context.Context, tasks []TaskView, todos *TodoRepo
 		return nil
 	}
 	v := s.effective(ctx, saved)
-	p := &Profile{MachineID: v.MachineID, Main: v.Main, MainMachineID: v.MainMachineID, Launcher: v.Launcher, Timezone: v.Timezone}
+	p := &Profile{MachineID: v.MachineID, Main: v.Main, MainMachineID: v.MainMachineID, Launcher: v.Launcher, Timezone: v.Timezone,
+		ExtensionOwners: s.extensionOwners(ctx)}
 	if tasks != nil && todos != nil {
 		if placed, err := s.directionKeep(ctx, v); err != nil {
 			s.logf("assistant: keep: %v", err)

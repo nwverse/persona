@@ -32,11 +32,6 @@ final class ScrollTrace: NSObject {
     private let url = URL(fileURLWithPath: UserDefaults.standard.string(forKey: "scrollTracePath")
         ?? NSTemporaryDirectory() + "persona-scroll-trace.txt")
     #endif
-    #if os(macOS)
-    /// The trackpad's phases, as the scroll view last received them (`MacScrollLab` and real gestures alike).
-    var gesture = false
-    var momentum = false
-    #endif
 
     /// The chat's list being traced (`MacScrollLab` scrolls this one).
     var currentList: TracedScroll? { list() }

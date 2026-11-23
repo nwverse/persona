@@ -572,9 +572,7 @@ struct AssistantActionBar: View {
                 .padding(.horizontal, Theme.Space.xs)
             }
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-            #if !os(macOS)
             .padding(.top, Theme.Space.s)
-            #endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         // No fade of its own: the chat runs on behind the bar and fades out there (`FooterFog`, #3696).
