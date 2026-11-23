@@ -29,7 +29,7 @@ vi.mock("../../lib/store", async (orig) => {
     onHubEvent: () => () => {},
   };
 });
-vi.mock("../chat/ChatView", () => ({ ChatView: () => null }));
+vi.mock("../../views/chat/ChatView", () => ({ ChatView: () => null }));
 
 import { Health } from "./Health";
 import { t } from "../../i18n";

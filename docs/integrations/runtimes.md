@@ -534,6 +534,11 @@ with `--desktop-dir` or the Persona runtime socket with `--socket`. The desktop 
 
 ### Antigravity CLI
 
+Panes (agy in a terminal) are not read by the companion: the node learns a pane's conversation from Persona's own hooks
+in agy's global `hooks.json` (group `persona`, `PreInvocation` and `Stop`, #13729) or from herdr's integration, under any
+engine, and reads its transcript itself; see `docs/integrations/engines.md`. The ACP companion is for sessions without a
+terminal.
+
 Assistant context remains an ACP embedded text resource followed by the user's separate text block (#12435).
 Antigravity exports that resource as a leading `Content of persona-context:///snapshot.txt:` line and context XML
 inside `USER_INPUT.content`. Both the companion and pane history readers remove the complete leading Persona resource
