@@ -146,6 +146,9 @@ type updater struct {
 	now         bool   // the user confirmed "Update now": stop waiting for idle
 	confirmed   bool   // no update to confirm, or this process confirmed it
 
+	developmentProgress *update.DevelopmentProgress // protected by mu, like the phase
+	developmentStarted  time.Time
+
 	// refreshing is held by the one request reading latest.json for an install script (freshRelease); refreshTried
 	// is when one last did. releaseRead is when release was read: a read that worked (lastCheck is when the hub last
 	// tried, which the app shows).
@@ -155,7 +158,7 @@ type updater struct {
 
 	// androidNote is what syncAndroid last logged: the same failure is not logged again every hour.
 	androidNote string
-	devRun      func(context.Context, *update.DevelopmentConfig, string, string, map[string]any, any) error
+	devRun      func(context.Context, *update.DevelopmentConfig, string, string, map[string]any, any, func(update.DevelopmentProgress)) error
 	// behindNote is the update source and release noteBehind last logged as behind: once per pair, not every hour.
 	behindNote string
 	// testAfterBackupRecoveryCheck runs in tests right after UnrecoveredSnapshot
@@ -725,12 +728,17 @@ func (u *updater) isConfirmed() bool {
 // set changes the state the apps see and tells them.
 func (u *updater) set(state, progress, errText string) {
 	u.mu.Lock()
+	u.setLocked(state, progress, errText)
+	u.mu.Unlock()
+	u.h.broadcast(map[string]any{"type": "hub_update", "update": u.view()})
+}
+
+func (u *updater) setLocked(state, progress, errText string) {
 	u.state, u.progress = state, progress
+	u.developmentProgress, u.developmentStarted = nil, time.Time{}
 	if errText != "" || state != "rolled_back" {
 		u.errText = errText
 	}
-	u.mu.Unlock()
-	u.h.broadcast(map[string]any{"type": "hub_update", "update": u.view()})
 }
 
 // updateView is GET /api/v1/hub/update.
@@ -754,6 +762,9 @@ type updateView struct {
 	LastCheck       *time.Time                `json:"last_check,omitempty"`
 	Confirmed       bool                      `json:"confirmed"`
 	Image           *imageView                `json:"image,omitempty"` // a Docker hub's image
+
+	DevelopmentProgress *update.DevelopmentProgress `json:"development_progress,omitempty"`
+
 	// UpdateURL is where the hub looks for releases now (selfupdate_source.go), UpdateFrom whether hub.json's
 	// update.url or the build said so; UpdateProxy the proxy its checks and downloads go through (update.proxy), with
 	// no user or password. All three are left out when there is none.
@@ -793,6 +804,11 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 		State: u.state, Progress: u.progress, Busy: u.busy, Error: u.errText, Auto: u.settings.auto() && selfUpdates,
 		AutoNotice: selfUpdates && !u.settings.AutoNoticeSeen, Confirmed: u.confirmed,
 		AutoUpdateNodes: u.nodesEnabledLocked(), UpdateURL: source.url, UpdateFrom: source.from, UpdateProxy: proxyShown(source.proxy)}
+	if p := u.developmentProgress; p != nil && p.Phase == u.state {
+		progress := *p
+		progress.ElapsedSeconds = max(progress.ElapsedSeconds, int64(time.Since(u.developmentStarted)/time.Second))
+		v.DevelopmentProgress = &progress
+	}
 	v.Source = "release"
 	v.Backup = u.settings.DevelopmentBackup
 	dv := &developmentView{Configured: u.developmentAvailable(), Branch: "main", CurrentCommit: u.h.build.Commit,

@@ -230,7 +230,13 @@ func TestDevelopmentBuildUsesDetachedCommitAndCache(t *testing.T) {
 		}
 		return strings.TrimSpace(string(out))
 	}
-	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
+	// The test's own global config: GIT_CONFIG_GLOBAL needs Git 2.32, and older Git (Debian 11: 2.30) writes the
+	// insteadOf below to $HOME/.gitconfig instead, where it outlives the test and sends every later fetch of the
+	// repository to a deleted directory. A HOME of its own holding the same file covers both.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, ".gitconfig"))
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	git(repo, "init", "-q")
 	git(repo, "config", "user.name", "Fixture")
