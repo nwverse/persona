@@ -108,7 +108,9 @@ func TestPRFollowupTerminalNoticeRequiresPostClosureTransition(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
 			s, f := newQuietServiceOn(t, repositorystore.New(todoTestDB(t)))
+			f.mu.Lock()
 			f.known[fupSup] = true
+			f.mu.Unlock()
 			f.setSessions("server", proto.Session{SessionID: fupSup, MachineID: "server", Assistant: true, Status: proto.StatusIdle})
 			closedAt := time.Now().UTC().Truncate(time.Second)
 			seedFollowup(t, s, closedAt)
