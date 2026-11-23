@@ -372,11 +372,6 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
             // Return Key Sends (#8178): what send does, never from under the full-page editor (it keeps Return a new line).
             .returnSends(text: $text, canSend: canSend, gate: gate?.action, paused: enlarged || barOn) { endDictation(then: sendTyped) }
             #endif
-            #if os(macOS)
-            .textFieldStyle(.plain) // the card is the field's box; the Mac's own bezel drew a second one inside
-            .macComposerKeys(focused: focused.wrappedValue, canSend: canSend, // ⏎ sends, ⇧⏎ a new line
-                             history: history.map { MacComposerHistory(key: $0, text: $text, focus: { focused.wrappedValue = true }) }, send: send)
-            #endif
             .padding(.leading, expanded ? Theme.Space.l : Theme.Space.xs)
             .padding(.trailing, fieldRightInset)
             .padding(.top, expanded ? Theme.Space.l : 0)
@@ -669,9 +664,6 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     private func sendTyped() {
         #if os(iOS) || os(visionOS)
         if focused.wrappedValue { TypedText.commitFocused(into: $text) }
-        #endif
-        #if os(macOS)
-        if let history { MacSendHistory.shared.record(history, text) }
         #endif
         send()
     }

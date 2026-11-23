@@ -17,7 +17,7 @@ whether there's a pending interaction, and whether the user has looked at it in 
 | `interrupted` Interrupted by restart | Was running before a restart, and the restart took herdr's panes with it (#1917) | — | The record has a pane, the start time is earlier than this node's start, and there's no live agent now | Light gray, with "Continue" |
 | `unknown` Unknown | The host recognized the agent but can't tell its state | `unknown` | — | Gray |
 
-A dispatched session with an unknown host status reads as `state unknown` in `dispatch_read`. Its last reply may be partial. A session marked `offline` on a connected computer is interrupted. When the computer itself is offline, the manager reports `computer offline` and leaves the transcript unread.
+A dispatched session with an unknown host status reads as `state unknown` in `dispatch_read`. Its last reply may be partial. A session marked `offline` on a connected computer is interrupted. When the computer itself is offline, the manager reports `computer offline` and leaves the transcript unread. A stopped session with `turn_error_code: "upstream_unavailable"` (#13372) keeps its wire `state` (`unread` or `idle`) and client badge counts unchanged, while server-side `agents_list` and the Assistant live snapshot group it under `Needs you` so stalled external `/loop` and coding Agent sessions remain visible.
 
 List order (each client's rank: web `lib/format.ts`, iOS / Mac `AgentListOrder.rank`, Android `agentRank`): Needs you → Unread → Awaiting reply → Working → Just finished → Seen → Unknown → Not running.
 

@@ -31,6 +31,8 @@
   "model_route_detail": "モデル名が間違っているか、このモデルは今使えません。別のモデルを試してください。",
   "rate_limited_title": "モデルの利用が速すぎます",
   "rate_limited_detail": "今はモデルの利用が速すぎます。しばらくすると自動で回復します。",
+  "upstream_unavailable_title": "モデルサービスは今利用できません",
+  "upstream_unavailable_detail": "モデルサービスに空きがないため応答できません。お使いのコンピューターの設定に問題はありません。しばらくしてからもう一度お試しください。",
   "model_unverified_title": "モデルはまだ確認されていません",
   "model_unverified_detail": "メッセージを送って、モデルが答えるか確認してください。",
   "model_key_unverified_detail": "{machine} の Claude Code は設定済みのアカウントまたはキーを使っていますが、まだ試していません。メッセージを送って使えるか確認してください。",

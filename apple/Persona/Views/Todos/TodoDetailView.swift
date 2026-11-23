@@ -102,13 +102,9 @@ struct TodoDetailView: View {
             #endif
             await decisions.load()
         }
-        #if os(macOS)
-        .macLinkPanel($link)
-        #else
         .sheet(item: $link) { target in
             LinkSheet(target: target, key: model.assistantMain ?? model.assistantCurrent)
         }
-        #endif
         .alert("Delete To-Do", isPresented: $showDeleteConfirm) {
             Button("Delete", role: .destructive) {
                 Task { await deleteTodo() }
@@ -130,11 +126,9 @@ struct TodoDetailView: View {
             if !focused { commitTitle() }
         }
         .onDisappear { commitTitle() }
-        #if !os(macOS)
         // Opening a Just finished to-do is seeing it (#5707): it is filed under Done, where the list has it on the way
-        // back. Nothing is said: the user did not ask for it. Not on the Mac, whose list stays beside the page.
+        // back. Nothing is said: the user did not ask for it.
         .task(id: currentTodo != nil) { await seeIfJustFinished() }
-        #endif
         // A tab switch hides the page without onDisappear: the mic must not go on listening behind it.
         .onTabVisibility(appear: {}, disappear: stopDictation)
         .onAppear {
@@ -511,22 +505,6 @@ struct TodoDetailView: View {
                 Label(isFailed ? String(localized: "Remove [Task Sheets 6135d4]") : String(localized: "Unlink"), systemImage: isFailed ? Theme.Icon.delete : Theme.Icon.link)
             }
         }
-        #if os(macOS)
-        // A Mac list only swipes with a two-finger trackpad gesture: the row's menu unlinks too (#3891).
-        .contextMenu {
-            Button(role: .destructive) {
-                Task {
-                    do {
-                        try await store.unlinkAgent(todoID: todo.id, machineID: a.machineID, sessionID: a.sessionID)
-                    } catch {
-                        model.show(error)
-                    }
-                }
-            } label: {
-                Label(isFailed ? String(localized: "Remove [Task Sheets 6135d4]") : String(localized: "Unlink"), systemImage: isFailed ? Theme.Icon.delete : Theme.Icon.link)
-            }
-        }
-        #endif
     }
 
     private func bottomBar(_ todo: TodoItem) -> some View {
@@ -670,8 +648,5 @@ extension TodoDetailView {
 /// chat (`MacShellState.willOpen`); the hand-off sheet and the todo's Agent rows share this. `push`: the stack of the page
 /// it is opened from, which it goes on top of (`AppModel.openInPage`); nil from the sidebar.
 @MainActor func openTodoAgentChat(_ key: SessionKey, in model: AppModel, push: ((SessionKey) -> Void)? = nil) {
-    #if os(macOS)
-    MacShellState.shared.willOpen()
-    #endif
     model.openInPage(key, push: push)
 }
