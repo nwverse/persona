@@ -148,7 +148,7 @@ func (h *Manager) githubAuthNow(ctx context.Context, c githubwire.Connector, ext
 		v.Source, v.Machine, v.Scopes, v.ScopesKnown = av.Source, av.Machine, av.Scopes, av.ScopesKnown
 	}
 	if v.ScopesKnown {
-		v.Missing = githubwire.MissingScopes(v.Scopes)
+		v.Missing = c.MissingScopes(v.Scopes)
 	}
 	ms := h.machinesNow()
 	out := make([]githubMachine, len(ms))

@@ -29,6 +29,8 @@ type Connector interface {
 	UseDevice()
 	// Scopes are what the token in use may do; known is false until GitHub said.
 	Scopes() (scopes []string, known bool)
+	// MissingScopes are the scopes a token with granted lacks and what goes wrong for it.
+	MissingScopes(granted []string) []RequiredScope
 	// Probe asks a computer for its gh login (fetch) and GitHub who it is and what it may do; the token goes nowhere.
 	Probe(ctx context.Context, fetch TokenSource) MachineLogin
 	// Get reads a REST path into out.

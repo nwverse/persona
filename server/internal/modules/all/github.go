@@ -10,5 +10,6 @@ import (
 // The GitHub connector module: the built-in GitHub connector reaches the extension manager through its port
 // (docs/architecture/core-and-modules.md "Provider seams"); it registers nothing with the kernel yet.
 func init() {
+	modules = append(modules, github.Module{})
 	githubport.Provide(github.Provider)
 }

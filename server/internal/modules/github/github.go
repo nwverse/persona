@@ -55,8 +55,6 @@ var (
 // Scrub blanks anything that looks like a GitHub token in s (an error, a message): tokens never leave the hub.
 func Scrub(s string) string { return githubwire.Scrub(s) }
 
-// MissingScopes are the scopes a token lacks and what goes wrong for it (githubwire.MissingScopes).
-func MissingScopes(granted []string) []RequiredScope { return githubwire.MissingScopes(granted) }
 
 // refuse is the transport of a connector whose proxy is malformed.
 type refuse struct{ err error }

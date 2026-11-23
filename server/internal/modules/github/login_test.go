@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
-	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
@@ -92,9 +91,6 @@ func TestDeviceLogin(t *testing.T) {
 	c.check(ctx)
 	if st := c.Status(ctx); st.State != connectorwire.StateNotSignedIn || st.Error != notSignedIn || st.Via != "" {
 		t.Fatalf("before: %+v", st)
-	}
-	if err := connector.Check(c); err != nil {
-		t.Fatal(err)
 	}
 
 	p, err := c.LoginStep(ctx, "", nil)

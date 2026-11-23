@@ -36,6 +36,7 @@ module screen-share
 module phone-extra
 module computer-use
 module engines-extra
+module github
 module connectors-extra
 module appearance-styles
 module glasses
@@ -250,7 +251,6 @@ go server/internal/orcart/... engines-extra
 go server/internal/terncli engines-extra
 go server/cmd/vncbench screen-share
 go server/internal/rexcli engines-extra
-go server/internal/connector/github connectors-extra
 go server/internal/connector/imessage connectors-extra
 go server/internal/assistant/kbhistory knowledge-ui
 go server/internal/assistant/kbsent knowledge-ui

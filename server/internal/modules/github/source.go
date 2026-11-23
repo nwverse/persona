@@ -69,6 +69,28 @@ func (c *Connector) kickCheck() {
 	}
 }
 
+// MissingScopes are the scopes a token lacks (granted: X-OAuth-Scopes) and what goes wrong for it. repo covers
+// everything the connector does — reading private repositories' PRs, issues, comments, checks and CI logs, searching,
+// commenting and reviewing — and notifications; without it, notifications alone keeps the inbox.
+func MissingScopes(granted []string) []RequiredScope {
+	has := func(s string) bool { return slices.Contains(granted, s) }
+	if has("repo") {
+		return nil
+	}
+	write := "评论和 review 发不了"
+	if has("public_repo") {
+		write = "评论和 review 只能发到公开仓库"
+	}
+	out := []RequiredScope{{Scope: "repo", Affects: []string{"私有仓库的 PR、issue、评论、代码搜索读不到", "私有仓库的 CI 失败和日志读不到", write}}}
+	if !has("notifications") {
+		out = append(out, RequiredScope{Scope: "notifications", Affects: []string{"收件箱收不到 GitHub 的通知"}})
+	}
+	return out
+}
+
+// MissingScopes is MissingScopes(granted), for the extension manager (githubwire.Connector).
+func (c *Connector) MissingScopes(granted []string) []RequiredScope { return MissingScopes(granted) }
+
 // Scopes are what the token in use may do; known is false until GitHub said (or for tokens it says nothing for, such
 // as fine-grained ones).
 func (c *Connector) Scopes() (scopes []string, known bool) {
