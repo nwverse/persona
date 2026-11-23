@@ -5,8 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-
-	"github.com/nwverse/persona/server/internal/update"
+	"time"
 )
 
 const (
@@ -40,7 +39,17 @@ func ValidDevelopmentCommit(commit string) bool {
 }
 
 func (t DevelopmentTarget) Valid() bool {
-	_, err := update.ParseNumber(strconv.FormatInt(t.Build, 10))
-	return err == nil && ValidDevelopmentCommit(t.Commit) && t.Version == fmt.Sprintf("web-dev-%s-%d", t.Commit[:12], t.Build) &&
+	return validBuildNumber(t.Build) && ValidDevelopmentCommit(t.Commit) && t.Version == fmt.Sprintf("web-dev-%s-%d", t.Commit[:12], t.Build) &&
 		t == DevelopmentBuild(t.Commit, t.Version, t.Build)
+}
+
+// validBuildNumber is update.ParseNumber's rule (YYYYMMDDHHMM, a real time), kept here: a contract package imports no
+// business package (docs/server/architecture.md "Contract packages"); TestValidBuildNumberMatchesUpdate holds them equal.
+func validBuildNumber(n int64) bool {
+	s := strconv.FormatInt(n, 10)
+	if len(s) != 12 {
+		return false
+	}
+	_, err := time.Parse("200601021504", s)
+	return err == nil
 }
