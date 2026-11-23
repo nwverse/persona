@@ -164,6 +164,9 @@ type fakeHub struct {
 	infoTag      string
 	infoTagFails bool
 	infoTagAsked []modelCall
+	// captureSort answers sorting a quick capture (capture_sort.go): it fails when empty.
+	captureSort      string
+	captureSortAsked []modelCall
 	// The Progress row's paraphrase of a report (report_line.go): its answer (none: an error), and what was asked.
 	reportLine      string
 	reportLineAsked []modelCall
@@ -868,7 +871,7 @@ func (f *fakeHub) NotifyRequest(_ context.Context, p NotifyRequest) (NotifyResul
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	switch p.Notification.Kind {
-	case NotifyPush, assistantwire.NotifyDone, assistantwire.NotifyInput, assistantwire.NotifyReply, assistantwire.NotifyDecide:
+	case NotifyPush, assistantwire.NotifyDone, assistantwire.NotifyInput, assistantwire.NotifyReply, assistantwire.NotifyDecide, assistantwire.NotifyHealthWater:
 	default:
 		return NotifyResult{}, fmt.Errorf("kind %q", p.Notification.Kind)
 	}
@@ -1070,9 +1073,10 @@ func (f *fakeHub) eventTypes() string {
 // in memory, as Service does with no store).
 type memStore struct {
 	noPlans
-	mu   sync.Mutex
-	vals map[string][]byte
-	puts int
+	mu      sync.Mutex
+	vals    map[string][]byte
+	outside map[string]db.OutsideDirection
+	puts    int
 	// failSetting: what reading a setting fails with (nil: it reads; set through setFailSetting).
 	failSetting error
 	// failPut: what writing settings fails with (nil: it writes); nothing is written then.
@@ -1227,6 +1231,53 @@ func (m *memStore) PutSettings(ctx context.Context, values map[string]any) error
 		m.vals[key] = b
 	}
 	m.puts += len(encoded)
+	return nil
+}
+
+func (m *memStore) OutsideDirections(_ context.Context) (map[string]db.OutsideDirection, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failSetting != nil {
+		return nil, m.failSetting
+	}
+	out := make(map[string]db.OutsideDirection, len(m.outside))
+	for id, ref := range m.outside {
+		out[id] = ref
+	}
+	return out, nil
+}
+
+func (m *memStore) CreateOutsideDirection(ctx context.Context, id string, ref db.OutsideDirection, values map[string]any) error {
+	encoded := make(map[string][]byte, len(values))
+	for key, value := range values {
+		b, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		encoded[key] = b
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if m.failPut != nil {
+		return m.failPut
+	}
+	if _, exists := m.outside[id]; exists {
+		return errors.New("outside direction already exists")
+	}
+	if m.vals == nil {
+		m.vals = map[string][]byte{}
+	}
+	if m.outside == nil {
+		m.outside = map[string]db.OutsideDirection{}
+	}
+	for key, b := range encoded {
+		m.vals[key] = b
+	}
+	m.outside[id] = ref
+	m.puts += len(encoded) + 1
 	return nil
 }
 
@@ -1561,6 +1612,9 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 		case strings.HasPrefix(in.System, "You tag a piece of text"): // information tagging (info_tag.go)
 			f.infoTagAsked = append(f.infoTagAsked, modelCall{in.System, user})
 			reply, fail = cmp.Or(f.infoTag, `{"categories":[]}`), f.infoTagFails
+		case strings.HasPrefix(in.System, "You sort a note the owner jotted down"): // quick capture (capture_sort.go)
+			f.captureSortAsked = append(f.captureSortAsked, modelCall{in.System, user})
+			reply, fail = f.captureSort, f.captureSort == ""
 		case strings.Contains(in.System, "起一个待办标题"): // a task's todo (todo_titles.go): none unless the test gives one
 			f.todoTitleAsked = append(f.todoTitleAsked, modelCall{in.System, user})
 			reply, fail = f.todoTitleReply, f.todoTitleErr != nil

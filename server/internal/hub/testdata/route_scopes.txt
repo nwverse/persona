@@ -54,9 +54,11 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/assistant/conversations/{id}/undelivered/{msg}
 -                    DELETE /api/v1/assistant/directions/offers/{id}
 -                    DELETE /api/v1/assistant/followups/{id}
+-                    DELETE /api/v1/assistant/health/intake/{id}
 -                    DELETE /api/v1/assistant/memory/{name}
 -                    DELETE /api/v1/assistant/places/{id}
 -                    DELETE /api/v1/assistant/repositories/{id}
+-                    DELETE /api/v1/assistant/repositories/{id}/mirrors/{machine_id}
 -                    DELETE /api/v1/assistant/saved-prompts/{id}
 -                    DELETE /api/v1/assistant/standing-authorizations/{id}
 -                    DELETE /api/v1/assistant/starred/{id}
@@ -140,10 +142,12 @@ agents.read          GET /api/v1/agents/sessions/{id}/messages
 -                    GET /api/v1/app/android/apk
 -                    GET /api/v1/app/android/latest
 assistant.ask        GET /api/v1/assistant
+-                    GET /api/v1/assistant/attention
 -                    GET /api/v1/assistant/availability
 -                    GET /api/v1/assistant/calls
 -                    GET /api/v1/assistant/calls/{id}
 assistant.ask        GET /api/v1/assistant/capabilities
+-                    GET /api/v1/assistant/captures
 -                    GET /api/v1/assistant/conversations/{id}/always
 -                    GET /api/v1/assistant/conversations/{id}/categories
 assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
@@ -158,6 +162,8 @@ assistant.entries.read GET /api/v1/assistant/entries
 -                    GET /api/v1/assistant/extension-trust
 -                    GET /api/v1/assistant/feishu/notices
 -                    GET /api/v1/assistant/followups
+-                    GET /api/v1/assistant/health/intake
+-                    GET /api/v1/assistant/health/intake/changes
 -                    GET /api/v1/assistant/history
 leaders.read         GET /api/v1/assistant/leaders
 -                    GET /api/v1/assistant/memory
@@ -166,8 +172,10 @@ leaders.read         GET /api/v1/assistant/leaders
 -                    GET /api/v1/assistant/readiness
 assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/assistant/repositories
+-                    GET /api/v1/assistant/repositories/mirrors
 -                    GET /api/v1/assistant/repositories/providers
 -                    GET /api/v1/assistant/repositories/{id}
+-                    GET /api/v1/assistant/repositories/{id}/mirrors/{machine_id}
 -                    GET /api/v1/assistant/routines
 -                    GET /api/v1/assistant/runs
 -                    GET /api/v1/assistant/saved-prompts
@@ -182,6 +190,7 @@ assistant.start_defaults GET /api/v1/assistant/start-defaults
 -                    GET /api/v1/assistant/tasks/cron
 -                    GET /api/v1/assistant/track-kinds
 -                    GET /api/v1/assistant/tracks
+-                    GET /api/v1/assistant/tracks/{slug}/space-md
 -                    GET /api/v1/assistant/urgent-call
 assistant.start_defaults GET /api/v1/assistant/worker-presets
 -                    GET /api/v1/auth/password/state
@@ -447,6 +456,7 @@ agents.control       POST /api/v1/agents/sessions/{id}/read
 -                    POST /api/v1/agents/sessions/{id}/unhide
 -                    POST /api/v1/assistant/agents/{mid}/{sid}/supervisor
 -                    POST /api/v1/assistant/calls/{id}/state
+-                    POST /api/v1/assistant/captures
 assistant.ask        POST /api/v1/assistant/conversations
 -                    POST /api/v1/assistant/conversations/{id}/archive
 -                    POST /api/v1/assistant/conversations/{id}/compact
@@ -458,8 +468,10 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/conversations/{id}/undelivered/{msg}/retry
 -                    POST /api/v1/assistant/conversations/{id}/views/{key}/actions
 -                    POST /api/v1/assistant/conversations/{id}/views/{key}/html-actions
+leaders.write        POST /api/v1/assistant/directions
 -                    POST /api/v1/assistant/directions/{id}/end
 -                    POST /api/v1/assistant/directions/{id}/make
+leaders.write        POST /api/v1/assistant/directions/{id}/progress
 -                    POST /api/v1/assistant/directions/{id}/start
 -                    POST /api/v1/assistant/entries/{id}/wrong
 -                    POST /api/v1/assistant/feed/{id}/dismiss
@@ -467,6 +479,9 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/feishu/notices/action
 -                    POST /api/v1/assistant/feishu/workbench
 -                    POST /api/v1/assistant/followups/{id}/run
+-                    POST /api/v1/assistant/health/intake
+-                    POST /api/v1/assistant/health/intake/ui
+-                    POST /api/v1/assistant/health/water/reminder
 -                    POST /api/v1/assistant/health/workouts
 -                    POST /api/v1/assistant/main/clear
 -                    POST /api/v1/assistant/main/new
@@ -475,6 +490,7 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/readiness/dismiss
 -                    POST /api/v1/assistant/repositories
 -                    POST /api/v1/assistant/repositories/preview
+-                    POST /api/v1/assistant/repositories/{id}/mirrors/{machine_id}/sync
 -                    POST /api/v1/assistant/repositories/{id}/restore
 -                    POST /api/v1/assistant/route/agent
 -                    POST /api/v1/assistant/routines/{id}/run
@@ -730,6 +746,7 @@ todos.write          POST /api/v1/todos/{id}/workspace-naming/preview
 -                    PUT /api/v1/agents/prefs
 -                    PUT /api/v1/agents/triage
 -                    PUT /api/v1/assistant
+-                    PUT /api/v1/assistant/attention
 -                    PUT /api/v1/assistant/conversations/{id}/categories
 -                    PUT /api/v1/assistant/conversations/{id}/model
 -                    PUT /api/v1/assistant/conversations/{id}/tags
@@ -743,6 +760,7 @@ assistant.dispatch_policy PUT /api/v1/assistant/dispatch-policy
 -                    PUT /api/v1/assistant/memory/{name}
 -                    PUT /api/v1/assistant/places/{id}
 -                    PUT /api/v1/assistant/repositories/{id}
+-                    PUT /api/v1/assistant/repositories/{id}/mirrors/{machine_id}
 -                    PUT /api/v1/assistant/routines
 -                    PUT /api/v1/assistant/saved-prompts/order
 -                    PUT /api/v1/assistant/saved-prompts/{id}
@@ -752,6 +770,7 @@ assistant.start_defaults PUT /api/v1/assistant/start-defaults
 -                    PUT /api/v1/assistant/tasks/{id}
 -                    PUT /api/v1/assistant/track-kinds/{slug}
 -                    PUT /api/v1/assistant/tracks/{slug}
+-                    PUT /api/v1/assistant/tracks/{slug}/space-md
 -                    PUT /api/v1/assistant/urgent-call
 -                    PUT /api/v1/bots/feishu
 -                    PUT /api/v1/channels/{id}

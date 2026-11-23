@@ -1,6 +1,10 @@
 package assistant
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/nwverse/persona/server/internal/assistantwire"
+)
 
 // Using information by its categories and the scene it goes to (#13246, docs/assistant/health.md "Using information
 // by scene"). Collecting is not limited; what a piece of information may do is decided where it is used, by one
@@ -62,6 +66,9 @@ type infoUse struct {
 	Known bool
 	// SourceTrack is the track it came from ("" the main track).
 	SourceTrack string
+	// Rules are its source track's usage rules (TrackKindConfig.Usage, #13472): each makes one scene stricter for
+	// information of one category ("*" all of it), never looser (tightensUsage checked them when they were saved).
+	Rules []assistantwire.TrackUsageRule
 }
 
 // sensitive: info carries a category other than general, or its categories are not known.
@@ -95,8 +102,33 @@ func (g extensionGrant) covers(info infoUse) bool {
 // track; sensitive information (or information whose categories are not known) is used freely in its own track only:
 // elsewhere only when on topic, handed out or sent to others only once the phone confirmed it, on the lock screen
 // only as news, read by an extension only with a grant for each of its categories, and never written to the shared
-// knowledge base. What a track's kind tightens comes on top, later; it can only make a rule stricter.
+// knowledge base. What the source track's kind and the track itself tighten (info.Rules) comes on top; it can only
+// make a rule stricter.
 func usage(info infoUse, sc scene, grant extensionGrant) usageRule {
+	return tightened(info, sc, baseUsage(info, sc, grant))
+}
+
+// tightened is rule, made stricter by every one of info's track rules for scene sc that covers it: a rule for "*"
+// covers all of its information, one for a category covers it when it carries that category or its categories are
+// not known (it may carry any). A rule never loosens: the stricter of the two wins.
+func tightened(info infoUse, sc scene, rule usageRule) usageRule {
+	for _, r := range info.Rules {
+		rsc, ok := trackUsageScenes[r.Scene]
+		if !ok || rsc != sc {
+			continue
+		}
+		if r.Category != trackKindAll && info.Known && !slices.Contains(info.Categories, r.Category) {
+			continue
+		}
+		if more, ok := trackUsageRules[r.Rule]; ok && more > rule {
+			rule = more
+		}
+	}
+	return rule
+}
+
+// baseUsage is usage before the track's rules: the assistant's own rule for info in scene sc.
+func baseUsage(info infoUse, sc scene, grant extensionGrant) usageRule {
 	sensitive := info.sensitive()
 	switch sc {
 	case sceneSourceTrack:
@@ -138,13 +170,14 @@ func usage(info infoUse, sc scene, grant extensionGrant) usageRule {
 // policyOf sums up usage for information info as the switches the call sites read (TrackPolicy), each the rule of one
 // scene: the lock screen redacts, a third-party extension without grants is denied, the knowledge base is denied, a
 // hand-off is confirmed, and outside its track it is used only when on topic (which keeps the main chat's file tools
-// out of its track's directory).
+// out of its track's directory). A switch is on for its rule or any stricter one, so a track rule that tightens a scene
+// past it (deny on the lock screen, say) never turns it off.
 func policyOf(info infoUse) TrackPolicy {
 	return TrackPolicy{
-		Redact:             usage(info, sceneLockScreen, extensionGrant{}) == usageRedact,
+		Redact:             usage(info, sceneLockScreen, extensionGrant{}) >= usageRedact,
 		HideFromExtensions: usage(info, sceneExtension, extensionGrant{}) == usageDeny,
 		NoKBWrite:          usage(info, sceneKBWrite, extensionGrant{}) == usageDeny,
-		ConfirmOutbound:    usage(info, sceneHandOff, extensionGrant{}) == usageConfirm,
-		DenyMainRead:       usage(info, sceneElsewhere, extensionGrant{}) == usageMinimal,
+		ConfirmOutbound:    usage(info, sceneHandOff, extensionGrant{}) >= usageConfirm,
+		DenyMainRead:       usage(info, sceneElsewhere, extensionGrant{}) >= usageMinimal,
 	}
 }
