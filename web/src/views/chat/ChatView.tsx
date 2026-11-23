@@ -482,8 +482,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   }, [mid, sid]);
   const optimisticQueue = useMemo(() => pending.filter((p) =>
     p.queueing && !p.waits && (p.posting || state === "working")), [pending, state]);
-  const inQueue = useMemo(() => new Set(optimisticQueue.map((p) => p.id)), [optimisticQueue]);
-  const shownPending = pending.filter((p) => !inQueue.has(p.id));
+  const inQueue = useMemo(() => optimisticQueue.length ? new Set(optimisticQueue.map((p) => p.id)) : undefined, [optimisticQueue]);
+  const shownPending = inQueue ? pending.filter((p) => !inQueue.has(p.id)) : pending;
   const sendFeedback = useMessageFeedback(mid, sid, undefined, inQueue);
   const queueMemory = useRef<QueueSnapshot>(undefined);
   const hasQueue = Boolean(session?.queued?.length || optimisticQueue.length);
@@ -1298,7 +1298,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           cancelBeforePost.current.delete(id);
           if (!flight.current()) return Promise.resolve(undefined);
           const latest = getSession(mid, sid);
-          const before = latest?.queued?.slice(0, Math.max(0, latest.queued.length - (latest.queued_relayed ?? 0))) ?? [];
+          const queued = latest?.queued ?? [];
+          const before = latest?.queued_relayed ? queued.slice(0, -latest.queued_relayed) : queued;
           setPending((ps) => ps.map((x) => x.id === id ? { ...x, before } : x));
           // the id is the op id too, including while a hub restart is waited out
           return apiOp<({ session?: Session; waits_on_computer?: boolean } & DeliveryReply & KeptReply) | undefined>(`${sessionPath(mid, sid)}/messages`, {
