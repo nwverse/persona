@@ -62,9 +62,9 @@ func TestTurnJudgedOnceWhenTheListCatchesUpWithASweep(t *testing.T) {
 	}
 }
 
-// A look that finds the same turn's judgment out waits for it. That judgment does not land here (it fails, and its
-// stretch moved on: a start with no rev to compare is a new stretch); the look then judges, and the turn has its
-// judgment.
+// A look that finds the same turn's judgment out leaves a follow-up rather than judge alongside it. That judgment does
+// not land here (it fails, and its stretch moved on: a start with no rev to compare is a new stretch); the follow-up
+// then judges, and the turn has its judgment.
 func TestTurnJudgedAgainWhenTheJudgmentOutFails(t *testing.T) {
 	fastJudgeRetry(t)
 	s, f, todo := newSupervisedServiceOn(t, taskRecoveryDatabase(t))
@@ -85,6 +85,33 @@ func TestTurnJudgedAgainWhenTheJudgmentOutFails(t *testing.T) {
 	if now := todoNow(s, todo.ID); now.Supervision.State != reviewPending {
 		t.Fatalf("not waiting for review: %+v", now.Supervision)
 	}
+}
+
+// The look that finds the turn's judgment out does not wait for it: it returns at once, with no second judgment
+// alongside, and the turn is judged after that one (dropped here: the stretch moved on) has ended.
+func TestTurnLookDoesNotWaitForAJudgmentOut(t *testing.T) {
+	s, f, todo := newSupervisedServiceOn(t, taskRecoveryDatabase(t))
+	const judging = time.Second
+	f.mu.Lock()
+	f.judgeDelay = judging
+	f.mu.Unlock()
+	release := sweepTakesUpBeforeListedTurn(t, s, f, todo.ID, 0)
+	ctx := context.Background()
+	s.taskWorking(ctx, "box", "s1", startRow{}) // a start with nothing to compare: a new stretch, as before #13711
+	began := time.Now()
+	got := s.settleTurn(ctx, "box", "s1", "")
+	if took := time.Since(began); took >= judging/2 {
+		t.Fatalf("the look waited %s for the judgment out", took)
+	}
+	if got != settleTaken || judgedCalls(f) != 1 {
+		t.Fatalf("settle = %v with %d judge calls, want taken with only the one out", got, judgedCalls(f))
+	}
+	waitFor(t, "the turn's judgment", func() bool {
+		e, ok := s.turnOf(ctx, todo.ID)
+		return ok && e.Judged != nil
+	})
+	release()
+	turnsQuiet(t, s, todo.ID)
 }
 
 // Rev is the transcript's size. A rewrite can make it smaller, and a real new start then has a smaller rev than the

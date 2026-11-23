@@ -289,21 +289,24 @@ type turnsState struct {
 	jmu     sync.Mutex
 	judging map[string]int
 	// out: a done judgment of the task is being made (autoFinishTask), under jmu. A look that takes the same turn up
-	// again waits for it rather than ask the model alongside it (turnAgain, #13711); it is gone once the judgment
-	// lands, fails or times out, so a turn is never left marked as being judged.
+	// again does not ask the model alongside it: it leaves a follow-up that judges the turn when that judgment ends
+	// without landing (turnAgain, #13711). The mark is gone once the judgment lands, fails or times out, so a turn is
+	// never left marked as being judged, and no look waits on it.
 	out map[string]*judgmentOut
 	// closed: the sessions whose transcript showed their turn closed, at the row it was read at: an unknown status
 	// there is a stopped agent (rowsProven).
 	closed map[SessionRef]turnLook
 }
 
-// judgmentOut counts the done judgments of a task being made; done closes when the last one ends.
+// judgmentOut counts the done judgments of a task being made, and what runs once the last one has ended.
 type judgmentOut struct {
-	n    int
-	done chan struct{}
+	n     int
+	after []func()
 }
 
-// judgingTurn marks a done judgment of todo as being made and answers what ends the mark (autoFinishTask).
+// judgingTurn marks a done judgment of todo as being made and answers what ends the mark (autoFinishTask). The
+// follow-ups left meanwhile (afterJudgment) run once the last judgment of todo being made has ended, in a goroutine of
+// their own.
 func (s *Service) judgingTurn(todo string) (end func()) {
 	b := &s.tasks.turns
 	b.jmu.Lock()
@@ -313,30 +316,43 @@ func (s *Service) judgingTurn(todo string) (end func()) {
 	}
 	o := b.out[todo]
 	if o == nil {
-		o = &judgmentOut{done: make(chan struct{})}
+		o = &judgmentOut{}
 		b.out[todo] = o
 	}
 	o.n++
 	return func() {
 		b.jmu.Lock()
-		defer b.jmu.Unlock()
-		if o.n--; o.n == 0 {
-			close(o.done)
+		o.n--
+		var after []func()
+		if o.n == 0 {
+			after, o.after = o.after, nil
 			if b.out[todo] == o {
 				delete(b.out, todo)
 			}
 		}
+		b.jmu.Unlock()
+		if len(after) > 0 {
+			go func() {
+				for _, f := range after {
+					f()
+				}
+			}()
+		}
 	}
 }
 
-// judgmentOutDone is what closes when the done judgments of todo being made now have ended; nil when none is.
-func (b *turnsState) judgmentOutDone(todo string) <-chan struct{} {
+// afterJudgment leaves f to run once the done judgments of todo being made now have ended, and says whether one was;
+// false: none is, f is not kept.
+func (s *Service) afterJudgment(todo string, f func()) bool {
+	b := &s.tasks.turns
 	b.jmu.Lock()
 	defer b.jmu.Unlock()
-	if o := b.out[todo]; o != nil {
-		return o.done
+	o := b.out[todo]
+	if o == nil {
+		return false
 	}
-	return nil
+	o.after = append(o.after, f)
+	return true
 }
 
 // startRow is the row of a session that showed its turn starting: its transcript's size and its time (Rev and
@@ -779,31 +795,31 @@ func (s *Service) turnAgain(ctx context.Context, t Todo, e taskTurn, last proto.
 	}
 	j := e.Judged
 	if j == nil {
-		failures := e.JudgeFailures
-		if done := s.tasks.turns.judgmentOutDone(t.ID); done != nil {
-			// A judgment of this task is being made already: one at a time. It may land for this turn; or not (its stretch
-			// moved on, the judge failed or ran out of time), and then this look judges, so the turn is never left
-			// unjudged (#13711).
-			s.logf("task %s: its agent's turn %s is being judged: waiting for that judgment", t.ID, clip(e.Key, 40))
-			wait := time.NewTimer(2 * taskDoneTimeout)
-			select {
-			case <-done:
-			case <-wait.C:
+		judge := func(failures int) {
+			if failures > 0 {
+				s.autoFinishTaskRetry(t, since, worked)
+			} else {
+				s.autoFinishTask(t, since, worked)
 			}
-			wait.Stop()
-			cur, ok := s.turnOf(context.WithoutCancel(ctx), t.ID)
+		}
+		// A judgment of this task is being made already: not a second one alongside it, and no wait on it here. It may
+		// land for this turn; or not (its stretch moved on, the judge failed or ran out of time), and then the turn is
+		// judged once it has ended, so it is never left unjudged (#13711).
+		if s.afterJudgment(t.ID, func() {
+			cur, ok := s.turnOf(context.Background(), t.ID)
 			if ok && cur.Machine == e.Machine && cur.Session == e.Session && cur.Key == e.Key && cur.Judged != nil {
 				return // it landed: the turn has its one judgment
 			}
-			if ok {
-				failures = cur.JudgeFailures
+			if ok && (cur.Machine != e.Machine || cur.Session != e.Session || cur.Key != e.Key) {
+				return // another turn since: its own end judges it
 			}
+			s.logf("task %s: the judgment being made did not land for turn %s: judged now", t.ID, clip(e.Key, 40))
+			judge(cur.JudgeFailures)
+		}) {
+			s.logf("task %s: its agent's turn %s is being judged: judged after that if it does not land", t.ID, clip(e.Key, 40))
+			return
 		}
-		if failures > 0 {
-			s.autoFinishTaskRetry(t, since, worked)
-		} else {
-			s.autoFinishTask(t, since, worked)
-		}
+		judge(e.JudgeFailures)
 		return
 	}
 	if !worked || !since.After(j.At) || j.Skip != "" {
