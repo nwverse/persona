@@ -1,5 +1,11 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## Visibility-only `TurnErrorCode` values must not trip `readinessBlocks` or `CutOff` on node `TurnError` (#13372)
+
+- `readinessBlocks` (`server/internal/assistant/readiness.go`) defaults every `StepProblem` code to `mode: "setup"` unless explicitly excluded. Any non-user-fix `TurnErrorCode` (such as `upstream_unavailable`, alongside `rate_limited`, `model_fallback_unavailable`, and `tool_search_unsupported`) must be excluded in `readinessBlocks` and paired with `test_assistant` and plain-language readiness strings, or an upstream outage locks every client's composer with "Connect a model first".
+- Apply `assistantwire.CutOff` (`"API Error:"` prefix check) only when falling back to `Session.LastText`, never to a node-populated `Session.TurnError` (`latestTurnError`): Codex rollouts and runtime bridges report `5xx` errors as plain messages (`unexpected status 503 Service Unavailable`) that do not start with `"API Error:"`.
+- When tracking multi-turn streaks in `transcript.Meta`, copy the streak fields in `Tail.Settle` (`server/internal/transcript/branch.go`) and preserve/merge them in `mergeModelFallback` (`server/internal/node/model_refusal.go`), which otherwise resets `m.turnErr.code` on every `bgScan` merge.
+
 ## An App update can leave a socket without its server (#13190)
 
 - A Unix socket file proves only that a process bound that path at some point. After the Codex App removed its IPC router, the old `<CODEX_HOME>/ipc/ipc.sock` remained and a file-type check still advertised writable chats. Check that a listener accepts connections, with a short timeout and one probe per home per list, and handle a later connection failure as a normal control refusal.
@@ -566,6 +572,10 @@ Measured with `claude plugin … --json` in throwaway `CLAUDE_CONFIG_DIR`s while
   messages in a row taken during one long turn, the thirteenth never written anywhere). Never treat an inbox write as a
   delivery, and prefer the plugin's `$.prompt.submit({ asUser: true })` for the owner's words whenever the session's
   plugin can take them, busy or not (`docs/integrations/claude-integration.md` "Owner input through the Persona plugin").
+- Run `claude plugin validate` and `claude plugin test` on the exact conflict-resolved head, not only the pre-merge
+  branch: one lost `}` kept every hook from loading. A timer that releases a busy poll is only a scheduling boundary,
+  never `submitted: true`; let the real submission continuation ack and cover delayed rejection and `drop`, idle and
+  busy (#11980).
 
 ## Claude Code writes into its transcript as it exits: delete it after the process (2026-11-11, #4665)
 

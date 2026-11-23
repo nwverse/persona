@@ -5780,13 +5780,13 @@ export interface TodoDecisionEvent {
 }
 
 /**
- * event.leader.changed: a leader conversation was made (a side conversation added to assistant.leaders), its title
- * changed, it was filed under another knowledge-base project, it ended (it left assistant.leaders; nothing is
- * deleted) or it was made a leader again. id is the leader conversation's session id, the key a work-log record
- * keeps; title its title as the apps show it; name what the direction is called, to show it by (the name the owner or
- * the secretary gave it, else its knowledge-base project's name, else the title without its "MMDD | kind | " prefix;
- * always sent by a hub that has it, #3679); project the knowledge-base project's slug, left out while it has none;
- * ended true once it is no longer a leader, left out while it is.
+ * event.leader.changed: a direction was made (an id added to assistant.leaders), its title changed, it was filed
+ * under another knowledge-base project, it ended (it left assistant.leaders; nothing is deleted) or it was made
+ * current again. id is the stable direction id, the key a work-log record keeps; it is a conversation session id only
+ * for a conversation-backed direction. title is its conversation title, or its explicit name when no Persona
+ * conversation exists; name is what the direction is called (an explicit name, else its knowledge-base project's
+ * name, else the title without its "MMDD | kind | " prefix); project is the knowledge-base project's slug, left out
+ * while it has none; ended is true once it is no longer current, left out while it is.
  */
 export interface LeaderChangedEvent {
   id: string;
@@ -5797,16 +5797,17 @@ export interface LeaderChangedEvent {
 }
 
 /**
- * event.leader.report: one of a leader's tasks reached its goal (reached: its review accepted it), needs the owner's
- * decision (decision: its review says needs_user, or a plan of the leader's waits for the owner's Start), or is stuck
- * (stuck: in Waiting on you or stopped unfinished for 24 hours, told at most once per 24 hours); those are written by
- * the hub from the task's ledger, never by a model. progress (#3679) is the leader's own summary of its direction at
- * the goal level, sent with its leader_progress tool: reached, doing (and where it is stuck), needs_you (what the
- * owner has to do) and links (evidence; link is the first), text the three put together, todo "". id names the report
- * (never sent twice; key on it to be safe), leader the leader conversation's id, todo the task's to-do id (GET
- * /api/v1/todos with todos.read reads it; "" for a plan, which has no to-do until it starts), plan the waiting plan's
- * id (only on a decision about a plan), text at most 300 characters in the owner's language, link the task's PR or
- * delivery link when it has one, at when what it reports happened.
+ * event.leader.report: one of a direction's tasks reached its goal (reached: its review accepted it), needs the
+ * owner's decision (decision: its review says needs_user, or a plan of the direction's waits for the owner's Start),
+ * or is stuck (stuck: in Waiting on you or stopped unfinished for 24 hours, told at most once per 24 hours); those
+ * are written by the hub from the task's ledger, never by a model. progress (#3679, #8236) is the direction's own
+ * summary at the goal level, sent with leader_progress or an authorized leaders.write HTTP / node CLI report:
+ * reached, doing (and where it is stuck), needs_you (what the owner has to do) and links (evidence; link is the
+ * first), text the three put together, todo "". id names the report (never sent twice; key on it to be safe), leader
+ * the stable direction id, todo the task's to-do id (GET /api/v1/todos with todos.read reads it; "" for a plan, which
+ * has no to-do until it starts), plan the waiting plan's id (only on a decision about a plan), text at most 300
+ * characters in the owner's language, link the task's PR or delivery link when it has one, at when what it reports
+ * happened.
  */
 export interface LeaderReportEvent {
   id: string;
@@ -6253,6 +6254,66 @@ export interface AssistantDataItem {
 
 export interface AssistantDataStatusResult {
   items: AssistantDataItem[];
+}
+
+/**
+ * machines.pair_link (machines.pair): request a one-time persona://link?... pairing link for a pending link computer.
+ */
+export interface MachinesPairLinkParams {
+  /**
+   * Optional computer id: re-issues a pairing link when an existing pending link machine matches (with name/os/icon
+   * omitted), or creates a new pending link machine with this id (defaulting name to machine_id when name is
+   * omitted).
+   */
+  machine_id?: string;
+  /**
+   * Display name for a newly added computer (defaults to machine_id when machine_id is given; required when
+   * machine_id is omitted).
+   */
+  name?: string;
+  /** Target OS hint for install commands. */
+  os?: string;
+  /** Optional icon for the computer. */
+  icon?: string;
+}
+
+export interface MachinesPairLinkResult {
+  /** The hub machine id assigned to the computer. */
+  machine_id: string;
+  /** The display name of the computer. */
+  name: string;
+  /** The one-time persona://link?... pairing URL. */
+  link: string;
+  /** When the pairing link expires. */
+  expires_at: string;
+  /** Whether the computer is waiting for the owner's confirmation. */
+  pending: boolean;
+  /** Optional one-line Linux install-and-pair command when the hub knows its publication site. */
+  install_linux?: string;
+}
+
+/**
+ * machines.status (machines.read or machines.pair): read one computer's current connection and confirmation state.
+ */
+export interface MachinesStatusParams {
+  /** The computer's hub machine id. */
+  machine_id: string;
+}
+
+export interface MachinesStatusResult {
+  machine_id: string;
+  name?: string;
+  exists: boolean;
+  /** Whether the computer's link/connection is currently up. */
+  online: boolean;
+  /** Whether the resident node is connected and responding. */
+  node_online: boolean;
+  /** Whether the computer is waiting for the owner's confirmation. */
+  pending: boolean;
+  /** When the computer was last seen online, if ever. */
+  last_seen?: string;
+  /** Last connection error, if any. */
+  error?: string;
 }
 
 /**
@@ -7116,6 +7177,8 @@ export const CALLS: Record<string, Call> = {
   "assistant.entries.list": { from: "program", params: "AssistantEntriesParams", result: "AssistantEntriesResult" },
   "event.assistant.entries.changed": { from: "hub", params: "AssistantEntriesChangedEvent", event: true },
   "assistant.data_status": { from: "program", params: "AssistantDataStatusParams", result: "AssistantDataStatusResult" },
+  "machines.pair_link": { from: "program", params: "MachinesPairLinkParams", result: "MachinesPairLinkResult" },
+  "machines.status": { from: "program", params: "MachinesStatusParams", result: "MachinesStatusResult" },
   "browser.machines": { from: "program", params: "BrowserMachinesParams", result: "BrowserMachinesResult" },
   "browser.run": { from: "program", params: "BrowserRunParams", result: "BrowserRunResult" },
   "storage.request": { from: "program", params: "StorageEmptyParams", result: "StorageRequestResult" },

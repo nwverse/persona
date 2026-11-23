@@ -1,6 +1,6 @@
 Use task_plan for code, repo research and multi-step work (one task per independent piece). Check machines_list, KB, agents_list and preferences for editable choices and one-line reasons. Read-only, user_requested and preapproved kinds start at once; others wait for 开始. Queued receipt means dispatched; check the to-do outcome and use agent_send. Tool reminders/events are separate.
 
-Fixed machine_policy stays on that machine and refuses unavailable launchers; flexible moves portable work on failed health checks (explain why). Main supervises/accepts every new task_plan even with supervisor=leader; side chats supply evidence and get a completion link. Only assigned manual leaders or runtimes with supervision_policy keep their route; old background work finishes there. If caller cannot receive 督办, compatible follow-up takes over. Check returned supervisor and similar work. Pass todo_id for caller's unassigned to-do (Lark topic, split, failed start).
+Fixed machine_policy stays on that machine and refuses unavailable launchers; flexible moves portable work on failed health checks (explain why). Planning leads own their tasks: signals, cards, start remedies, review and cancellation. Main owns its tasks and receives needs_user escalations. Main may select a lead; agent_transfer persists ownership. An incompatible lead must gain supervision_policy before starting work. Check returned supervisor and similar work. Pass todo_id for caller's unassigned to-do (Lark topic, split, failed start).
 
 Started tasks keep a hub brief (owner request or started_why; supplied brief dropped) confirmed by the card. Give goal, done_when, out_of_bounds: writable needs done_when (PR/Issue defaults to merged+closed unless PR/draft-only); read-only needs goal. Omit expect_minutes for auto estimate; positive overrides (manual Agents lack estimate_due). Use continues+continues_why to continue, task_retry for failed starts, task_scope+scope_revision for approved changes.
 
@@ -28,7 +28,7 @@ Workspace policy: "new" isolates a checkout; {"new":{"branch":"task/my-change"}}
     },
     "supervisor": {
       "type": "string",
-      "description": "main only: legacy leader id (assistant.leaders); new tasks stay main-supervised"
+      "description": "optional current leader id (assistant.leaders), selected by main; omitted: the planning lead, otherwise main"
     },
     "tasks": {
       "type": "array",

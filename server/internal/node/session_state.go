@@ -76,6 +76,10 @@ type sessionState struct {
 	PlanThen  string `json:"plan_then,omitempty"`
 	AppMode   string `json:"app_mode,omitempty"`
 	AppEffort string `json:"app_effort,omitempty"`
+	// DesktopPendingModel / DesktopPendingEffort: requested initial Codex App settings still awaiting the owning
+	// window's readback. They survive partial creation/restarts and must be confirmed before its first message.
+	DesktopPendingModel  string `json:"desktop_pending_model,omitempty"`
+	DesktopPendingEffort string `json:"desktop_pending_effort,omitempty"`
 	// Tasks: the assistant conversation's background tasks and monitors running right now (node/assistant.go).
 	Tasks []string `json:"tasks,omitempty"`
 	// Compaction: the last compaction the user asked for (assistant_compact.go).

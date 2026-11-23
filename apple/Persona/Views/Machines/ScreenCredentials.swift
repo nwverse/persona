@@ -26,10 +26,6 @@ nonisolated enum ScreenCredentials {
     }
 
     static func load(_ ref: MachineRef) -> Saved? {
-        #if os(macOS) && DEBUG
-        // As Keychain.load: the app hosting the Mac's unit tests never touches the keychain.
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return nil }
-        #endif
         var q = query(ref)
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne

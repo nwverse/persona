@@ -154,6 +154,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 	switch name {
 	case "decision_record", "decisions_query":
 		return s.toolEntries(ctx, machine, self, name, args)
+	case spaceStateTool: // a space track's conversations only (track_space_md.go)
+		return s.toolSpaceStateUpdate(ctx, machine, self, args)
 	case "repository_add":
 		return s.toolRepositoryAdd(ctx, machine, self, args)
 	case "repositories_list", "repository_get":
@@ -1706,6 +1708,12 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		} else if c.TurnErrorKind == proto.TurnErrorUsageLimit && c.TurnError != "" {
 			b.WriteString(" · usage_limit")
 		}
+		if upstreamRow(c) { // stalled on an exhausted upstream pool or consecutive 5xx turns (fleet_upstream.go, #13372)
+			b.WriteString(" · upstream_unavailable")
+			if n := s.upstreamAttempts(r.m.ID, c); n >= upstreamStallAfter {
+				fmt.Fprintf(&b, " attempts=%d", n)
+			}
+		}
 		if !c.UpdatedAt.IsZero() {
 			fmt.Fprintf(&b, " · %s", ago(c.UpdatedAt))
 		}
@@ -1738,6 +1746,9 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		}
 		if c.AwaitsReply && c.Asks != "" {
 			fmt.Fprintf(&b, "    在问你、还没回：%s\n", c.Asks) // i18n-ignore: agents_list output for the model, as the lines around it
+		}
+		if upstreamRow(c) {
+			fmt.Fprintf(&b, "    上游异常：%s\n", clip(oneLine(c.TurnError), 300)) // i18n-ignore: agents_list output for the model, as the lines around it
 		}
 		// Why it waits, while it does (a dialog's first line, a host's reason), as the apps' rows show it; else its last words.
 		if last := c.LastText; c.State == proto.StateNeedsYou && strings.TrimSpace(c.AttentionReason) != "" {
@@ -1805,18 +1816,27 @@ func silentRow(c proto.Session) bool {
 	return c.TurnError != "" && proto.SilentTurnKind(c.TurnErrorKind) && (c.State == proto.StateUnread || c.State == proto.StateIdle)
 }
 
-// agentsListState is c's state as agents_list filters and sorts it: a silentRow is needs_you, as the snapshot groups it
-// (snapshotAgentGroup), never "done, not seen".
+// upstreamRow: c stopped on an exhausted upstream account pool or >= 2 consecutive no-work upstream 5xx turns (#13372):
+// surfaced in agents_list and the live snapshot while keeping wire State and TurnErrorKind unchanged.
+func upstreamRow(c proto.Session) bool {
+	return c.TurnError != "" && c.TurnErrorCode == proto.TurnErrorUpstreamUnavailable &&
+		(c.State == proto.StateUnread || c.State == proto.StateIdle)
+}
+
+// agentsListState is c's state as agents_list filters and sorts it: a silentRow or upstreamRow is needs_you, as the
+// snapshot groups it (snapshotAgentGroup), never "done, not seen" or hidden under idle.
 func agentsListState(c proto.Session) string {
-	if silentRow(c) {
+	if silentRow(c) || upstreamRow(c) {
 		return proto.StateNeedsYou
 	}
 	return c.State
 }
 
-// agentsListLabel is how agents_list names c's state: as the apps' rows do, a silentRow as what it is.
+// agentsListLabel is how agents_list names c's state: as the apps' rows do, a silentRow or upstreamRow as what it is.
 func agentsListLabel(c proto.Session) string {
 	switch {
+	case upstreamRow(c):
+		return "上游不可用" // i18n-ignore: agents_list output for the model, as the lines around it
 	case !silentRow(c):
 		return stateNames[c.State]
 	case c.TurnErrorKind == proto.TurnErrorStopped:

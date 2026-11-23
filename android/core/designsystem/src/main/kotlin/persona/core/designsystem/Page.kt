@@ -379,21 +379,24 @@ internal fun ScrollEdge(
  */
 @Composable
 fun JFullScreen(onDismiss: () -> Unit, content: @Composable () -> Unit) {
+    val densities = currentTextDensities()
     Dialog(onDismiss, DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        val view = LocalView.current
-        val dark = PersonaTheme.darkTheme
-        SideEffect {
-            (view.parent as? DialogWindowProvider)?.window?.let { window ->
-                window.setDimAmount(0f)
-                window.isNavigationBarContrastEnforced = false
-                WindowCompat.getInsetsController(window, view).run {
-                    isAppearanceLightStatusBars = !dark
-                    isAppearanceLightNavigationBars = !dark
+        RetainedTextDensity(densities) {
+            val view = LocalView.current
+            val dark = PersonaTheme.darkTheme
+            SideEffect {
+                (view.parent as? DialogWindowProvider)?.window?.let { window ->
+                    window.setDimAmount(0f)
+                    window.isNavigationBarContrastEnforced = false
+                    WindowCompat.getInsetsController(window, view).run {
+                        isAppearanceLightStatusBars = !dark
+                        isAppearanceLightNavigationBars = !dark
+                    }
                 }
             }
-        }
-        CompositionLocalProvider(LocalSplitDetail provides null) {
-            Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) { content() }
+            CompositionLocalProvider(LocalSplitDetail provides null) {
+                Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) { content() }
+            }
         }
     }
 }

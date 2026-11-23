@@ -33,6 +33,11 @@ data class PlanTask(
     val why: String? = null,
     @SerialName("todo_id") val todoId: String? = null,
     val error: String? = null,
+    /** Why the start failed; its arguments carry a launcher name or a terminal question. */
+    @SerialName("error_code") val errorCode: String? = null,
+    @SerialName("error_args") val errorArgs: Map<String, String>? = null,
+    /** Other launchers the hub can try, in its suggested order (feature `task_retry_launcher`). */
+    @SerialName("retry_with") val retryWith: List<String>? = null,
     /** The Agent preset to resolve when this planned task starts; null on an older hub. */
     val tier: String? = null,
     /** The hub-owned brief Start confirms; decoded for the card, never sent back by PlanTaskSerializer. */

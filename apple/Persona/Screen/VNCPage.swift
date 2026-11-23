@@ -1009,9 +1009,6 @@ struct VNCPage: View {
 
     private func toPictureInPicture() {
         VNCPiP.shared.start(ref, from: from)
-        #if os(macOS)
-        onClose()
-        #endif
         // iOS: the page goes once the small window has started (VNCPiP), or stays, saying why it could not.
     }
 
@@ -1122,13 +1119,9 @@ private struct VNCSignIn: View {
     }
 }
 
-/// 「在这台手机上记住」 on the phone, 「在这台 Mac 上记住」 on the Mac.
+/// The Remember switch's label.
 enum ScreenKeep {
-    #if os(macOS)
-    static let label = String(localized: "Remember on This Mac")
-    #else
     static let label = String(localized: "Remember on This iPhone")
-    #endif
 }
 
 /// Help: how the touches, the keyboard and the clipboard work, and handing the Mac back.
@@ -1139,7 +1132,6 @@ struct VNCHelp: View {
         NavigationStack {
             List {
                 Section("Moving Around") {
-                    #if !os(macOS)
                     row(Theme.Icon.pointer, String(localized: "Mouse mode (default)"), String(localized: "Tap to click there. Drag with one finger to drag. Drag with two fingers to scroll. Two-finger tap or touch and hold to right-click."))
                     row(Theme.Icon.search, String(localized: "Zoom"), String(localized: "In Mouse Mode, pinch to zoom in and out; when zoomed in, dragging with two fingers moves the view instead of scrolling. In either mode, “…” › Zoom In zooms in around the pointer and Zoom to Fit shows the whole screen again. In Trackpad Mode two fingers only scroll, and a zoomed view follows the pointer."))
                     #if os(iOS)
@@ -1149,25 +1141,14 @@ struct VNCHelp: View {
                     #endif
                     row(Theme.Icon.displays, String(localized: "Displays"), String(localized: "When the Mac has more than one display, choose one in “…” › Displays to show only that display. Zooming, taps and the pointer then stay on it."))
                     row(Theme.Icon.phoneScreen, String(localized: "Phone Screen"), String(localized: "Where the Mac offers it, “…” › Phone Screen shows one of its windows on a display shaped like this iPhone, so text is readable without zooming. Pick the window from Windows at the bottom. Tap to click, drag with one finger to scroll, touch and hold then drag to select, and touch and hold to right-click. Switching back to another mode, or closing the screen, puts the Mac's windows back where they were."))
-                    #else
-                    row(Theme.Icon.pointer, String(localized: "Mouse"), String(localized: "Click for the left mouse button; right-click (or Control-click) for the right button; press and hold the mouse button and move to drag."))
-                    row(Theme.Icon.trackpad, String(localized: "Scroll"), String(localized: "Turn the mouse wheel, or swipe with two fingers on a Magic Mouse or trackpad to scroll the view."))
-                    row(Theme.Icon.search, String(localized: "Zoom"), String(localized: "There is no zoom gesture on the Mac; the view always shows the whole screen."))
-                    #endif
                 }
                 Section("Typing and Clipboard") {
-                    #if !os(macOS)
                     row(Theme.Icon.keyboard, String(localized: "Typing"), String(localized: "Tap the keyboard in the bottom bar. The row above the keyboard has Mac shortcuts: tap ⌘ ⌥ ⌃ ⇧ to hold, tap again to release, plus Esc, Tab, arrow keys, and ⌘C ⌘V ⌘Z ⌘Tab ⌘Space. Input methods such as Chinese work as usual; the committed text is pasted over through the clipboard."))
-                    #else
-                    row(Theme.Icon.keyboard, String(localized: "Typing"), String(localized: "Type directly on this Mac's keyboard; text, ⌘ ⌥ ⌃ ⇧ and shortcuts are all sent as-is to the Mac shown in the view."))
-                    #endif
                     row(Theme.Icon.clipboard, String(localized: "Copy and Paste"), String(localized: "Tap the clipboard in the bottom bar: “\(VNCPage.fromPhone)” puts your text on the Mac’s clipboard and pastes it; “\(VNCPage.toPhone)” brings over the text on the Mac’s clipboard."))
                 }
-                #if !os(macOS)
                 Section("When to Use Trackpad Mode") {
                     row(Theme.Icon.trackpad, String(localized: "Trackpad Mode"), String(localized: "Turn it on from “…” in the top-right corner. Move your finger to move the pointer, tap to click at the pointer, and tap then drag right away to drag. If the pointer drifts off, use “Center Pointer”."))
                 }
-                #endif
                 Section("Picture in Picture") {
                     #if os(iOS)
                     row(Theme.Icon.pictureInPicture, String(localized: "Picture in Picture"), String(localized: "The Picture in Picture button next to Close floats the screen over other apps and the Home Screen; tap it to come back here. Picture in Picture is view-only, and closing it disconnects."))

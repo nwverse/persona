@@ -263,22 +263,10 @@ final class DemoHub {
             case "claude-settings", "codex-settings", "agy-settings": return ["settings": .array([])]
             case "claude-dirs": return claudeDirsState(id)
             case "claude-live-replies": return ["on": .bool(liveReplies[id] ?? true)]
-            #if os(macOS)
-            case "file": // the Mac's file viewer (and its ⌘F find): one made-up source file, whatever is asked for
-                let path = q["path"] ?? "Sources/Forecast.swift"
-                let text = Self.demoFile
-                return ["path": .string(path), "name": .string((path as NSString).lastPathComponent), "size": .number(Double(text.utf8.count)),
-                        "mime": "text/plain; charset=utf-8", "text": .string(text), "truncated": false, "is_dir": false, "offset": 0, "next": 0]
-            #endif
             default: throw notFound()
             }
         case ("machines", 4) where p[2] == "agent-dirs" && p[3] == "hidden":
             return ["rules": .array(hiddenAgentDirs[p[1]] ?? [])]
-        #if os(macOS)
-        case ("machines", 4) where p[2] == "fs" && p[3] == "find": // ⌘K's Files: a made-up checkout
-            return ["cwd": .string(q["cwd"] ?? ""), "truncated": false, "source": "git",
-                    "files": .array(Self.demoFiles.map { .string($0) })]
-        #endif
         case ("machines", 4) where p[2] == "git" && p[3] == "status": // no repositories in the demo: the chat shows no git card
             return ["is_repo": false, "ahead": 0, "behind": 0, "files": .array([]), "stashes": 0, "commits": .array([])]
         case ("devices", 3) where p[2] == "prefs": return prefs
@@ -770,57 +758,6 @@ final class DemoHub {
         }
         return out
     }
-
-    #if os(macOS)
-    /// ⌘K's Files in the demo (Mac): the files of a small app, whatever directory is asked for.
-    static let demoFiles = [
-        "README.md", "Package.swift", "Sources/Forecast.swift", "Sources/App/WeatherApp.swift",
-        "Sources/App/Views/ForecastView.swift", "Sources/App/Views/SettingsView.swift", "Sources/App/Models/Forecast.swift",
-        "Sources/App/Models/Location.swift", "Tests/ForecastTests.swift", "docs/design.md",
-    ]
-    /// The one file the Mac's demo file viewer shows (made up, like the rest of the demo).
-    private static let demoFile = """
-        import Foundation
-
-        /// Tomorrow's forecast for a city, from the weather service.
-        struct Forecast: Codable, Equatable {
-            var city: String
-            var high: Double
-            var low: Double
-            var summary: String
-        }
-
-        enum ForecastError: Error {
-            case badCity(String)
-            case offline
-        }
-
-        final class ForecastClient {
-            private let session: URLSession
-            private var cache: [String: Forecast] = [:]
-
-            init(session: URLSession = .shared) {
-                self.session = session
-            }
-
-            /// The forecast for `city`, from the cache when it is there.
-            func forecast(for city: String) async throws -> Forecast {
-                if let cached = cache[city] { return cached }
-                guard !city.isEmpty else { throw ForecastError.badCity(city) }
-                let url = URL(string: "https://weather.example.com/v1/forecast?city=\\(city)")!
-                let (data, _) = try await session.data(from: url)
-                let forecast = try JSONDecoder().decode(Forecast.self, from: data)
-                cache[city] = forecast
-                return forecast
-            }
-
-            func clearCache() {
-                cache = [:]
-            }
-        }
-
-        """
-    #endif
 
     // MARK: Metrics (mock_hub.metric_at: made-up but smooth curves)
 
