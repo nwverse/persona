@@ -350,7 +350,7 @@ struct TodoListView: View {
         } else if model.searching {
             // Nothing matches, open or closed: the line under it widens the search to the chats.
             EmptyStateView(symbol: Theme.Icon.search, title: String(localized: "No Results for “\(model.searchedWords)”"),
-                           message: String(localized: "Search looks through the titles and notes of your to-dos. [To-dos Search]"))
+                           message: String(localized: "Search looks through the titles and notes of all your to-dos, including done ones. [To-dos Search]"))
         } else if model.placeIsEmpty {
             TodoPlaceEmptyState(place: model.place, title: title, comingUp: model.comingUp) { places.show($0) }
         } else {
@@ -901,6 +901,8 @@ private struct TodosOfflineLine: View {
 
 /// "⌕ Search Chats for “kyoto” ›": the search's last row, which takes the words in the field to the app's search over
 /// Persona's chats; drawn under the results, once the list searches. A view of its own, so only it follows the words (P5).
+/// Its identifier says whether the results drawn are the field's words' yet (a look lands a moment after the key), so a
+/// UI test waits for them; nothing a person sees or hears changes.
 private struct TodosSearchChatsRow: View {
     var model: TodosListModel
     var open: (String) -> Void
@@ -929,7 +931,7 @@ private struct TodosSearchChatsRow: View {
                 // Plain, so its glyph and chevron are the grays they say, not the accent a list's button tints them.
                 .buttonStyle(.plain)
                 .listRowInsets(TodoListCell.insets)
-                .accessibilityIdentifier("todos.searchChats")
+                .accessibilityIdentifier(model.searchedWords == words ? "todos.searchChats" : "todos.searchChats.looking")
             }
         }
     }

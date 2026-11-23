@@ -2252,21 +2252,26 @@ built in stages behind the hub's `todo_view`; this section grows with it.
     `@concurrent`: the title with `localizedStandardContains`, else the sentence of the notes around
     `localizedStandardRange`; a newer key cancels a look under way, which stops early), and the layout takes what it
     found (`TodosListLayout.Input.hits`); until then the page keeps what it drew (`searchedWords`), and a cleared field
-    is the list again at once. A push while it searches looks through only the to-dos it changed, on the main actor up
-    to 64, more off it again (`refreshHits`). The results open every fold, set the place and the choice aside, list what
-    closed last under the Filter's Done's days with headings that name Done, and offer no Mark Done
-    (`TodoRowContentLogic.content(search:)`); a notes match's sentence is line 2 (`TodoRowContent.found`,
-    `TodoFoundText`: cut as the chat search cuts, `AssistantSearchMerge.led`, the words in the primary on
-    `Theme.accentTint`). A scroll that rests on the results leaves the place's kept position alone
-    (`TodoWorkspace.rested`). Its last row presents `AssistantFullSearch` (Persona's chats only) with the words, and a
-    chat picked there opens through `AppModel.openAssistantConversation` once the cover is gone; while it searches the
-    folds are drawn open and do nothing, and the Needs you heading counts its matches in a plain number, so the blue
-    badge only says N. A choice
-    scrolls the list to its top: its first line or row is put at the foot of what is in sight (`anchor: .bottom`), which
-    the list cannot reach, so it stops at its top; a heading's own id put its rows at the top, the heading under the
-    bar. Each view reads
-    only what it draws (the toolbar, the subtitle, the top lines, the headers), so a count or a choice redraws those
-    alone (P5).
+    is the list again at once. A push while it searches compares the cached to-dos with the ones it looked through and
+    looks through those that changed, on the main actor up to 64, more off it again (`refreshHits`); a look the store
+    started lands as a push does, held while the list is held (`landed`). What was found is each row's own
+    (`TodosListModel.Row.search`), apart from its inputs and `content`, so a key or a cleared field works no row's words
+    out again (P4); while the list is held, the drawn rows keep the hits they were laid out with (`drawnHits`). The
+    results open every fold, set the place and the choice aside, list what closed last under the Filter's Done's days
+    with headings that name Done, and offer no Mark Done (`TodoRowContent.offersMarkDone`); a notes match's sentence is
+    line 2 (`TodoRowContent.found(by:)`, spoken in the line's place, `spoken(found:)`; `TodoFoundText`, two lines, cut
+    about a line's worth before the words, `TodoFoundText.lead(for:)`, and marked by `AssistantSearchMerge.marked`, the
+    chat search's cut and clip, the words in the primary on `Theme.accentTint`). A scroll that rests on the results
+    leaves the place's kept position alone (`TodoWorkspace.rested`); clearing the field brings the place and the choice
+    back, not where the place's list had rested. Its last row presents `AssistantFullSearch` (Persona's chats only) with
+    the words, and a chat picked there opens through `AppModel.openAssistantConversation` once the cover is gone; its
+    identifier is `todos.searchChats` once the results drawn are the field's words' (`todos.searchChats.looking` until
+    the look lands), which the UI tests wait for. While it searches the folds are drawn open and do nothing, and the
+    Needs you heading counts its matches in a plain number, so the blue badge only says N. A choice scrolls the list to
+    its top: its first line or row is put at the foot of what is in sight (`anchor: .bottom`), which the list cannot
+    reach, so it stops at its top; a heading's own id put its rows at the top, the heading under the bar. Each view
+    reads only what it draws (the toolbar, the subtitle, the top lines, the headers), so a count or a choice redraws
+    those alone (P5).
   - **The container and the row.** `.sectionCards()` (the design system's, `listStyle(.insetGrouped)` today) on
     `themedPage()`; rows and Can wait keep the system's cells (`TodoListCell.insets`: `Space.l` at the sides, none
     above or below, set on the row's outermost view in `TodoListView.row`, after its `.id`: set inside the cell, under
@@ -2281,10 +2286,12 @@ built in stages behind the hub's `todo_view`; this section grows with it.
     `TodoListContainerTests` (no row background of the list's own), `TodoLineTextTests`, `TodosListModelTests`
     (`theFilterAndItsGuardLine`, `theSortOrdersInsideEachSection`, `aChoiceGoesWithTheFilter`,
     `aFoldTappedWhileSearchingStaysAsItWas`, `aRowKeepsItsProjectWhereNoHeadingSaysIt`), `TodoSearchTests` and
-    `TodoSearchModelTests` (closed matches by day, notes sentences and their marks, no inline action, keys in a burst, a
-    push while searching, a space typed while a large push is looked through, 2,000 to-dos with notes timed) and the UI
-    suite's `testTheFilterSearchAndNewToDo`, `testTheSearchFindsClosedToDosAndBackKeepsTheWords` and
-    `testTheRowsAreCompact` against `MOCK_TODO_VIEW=1`.
+    `TodoSearchModelTests` (closed matches by day, notes sentences and their marks, no inline action, keys in a burst
+    landing once, a push while searching, a space typed while a large push is looked through, 2,000 to-dos with notes
+    timed in the look, the layout and the model's main-actor landing, push and clear, `TodosListModel.searchCosts`,
+    DEBUG) and the UI suites' `testTheFilterSearchAndNewToDo`, `testTheSearchFindsClosedToDosAndBackKeepsTheWords` (the
+    mock's `done_hours` closes a to-do two days back) and `testTheRowsAreCompact`, and the places suite's
+    `testOpeningASearchResultKeepsThePlace`, against `MOCK_TODO_VIEW=1`.
     `-openTodosChoice <choice>` (DEBUG, `todo`, `in_progress`, …) opens the list on a Filter choice once it draws the
     Filter, to measure a glide with the guard line in the list.
   `TodoWorkspace` (one for the app, `TodoWorkspace.shared`, outside the pages' trees) keeps the place and where each

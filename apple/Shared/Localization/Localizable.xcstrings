@@ -2451,13 +2451,13 @@
         }
       }
     },
-    "Search looks through the titles and notes of your to-dos. [To-dos Search]" : {
+    "Search looks through the titles and notes of all your to-dos, including done ones. [To-dos Search]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Search looks through the titles and notes of your to-dos."
+            "value" : "Search looks through the titles and notes of all your to-dos, including done ones."
           }
         },
         "ja" : {

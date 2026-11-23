@@ -23,9 +23,6 @@ nonisolated struct TodoRowContent: Equatable, Sendable {
     var mark: TodoMark?
     /// Line 2 in words; two asks or more end it with how many ("· 2 asks").
     var said: TodoLineText.Said?
-    /// Found by a sentence of its notes while the list searches: line 2 says that sentence, the words marked, in place of
-    /// `said` (`TodoFoundText`; DESIGN_SYSTEM 3.4 "List controls").
-    var found: TodoFoundLine?
     /// How many asks hold it in Needs you.
     var asks = 0
     /// Line 3, in caption: what line 2 and the grouping do not say (its steps, the Inactive mark, with its project), or
@@ -52,8 +49,38 @@ nonisolated struct TodoRowContent: Equatable, Sendable {
     /// The row in words, for VoiceOver: the title, the state its mark draws, its line (with how many asks), line 3, then
     /// its time said in full ("Due Saturday", "16 minutes ago").
     var spoken = ""
+    /// What `spoken` says before and after its line, so a search's result says the sentence it was found by in the line's
+    /// place without the row's words worked out again (`spoken(found:)`).
+    var spokenAround = TodoSpokenAround()
     /// The tick's value: Done or Not done (its label is the title).
     var tickValue = ""
+
+    /// Line 2 of a search's result (`TodosListModel.Row.search`): the sentence of the notes it was found by, unless line 2
+    /// says this device's own word on a write; nil for one found by its title, which keeps its own line.
+    func found(by search: TodoSearchHit?) -> TodoFoundLine? {
+        unsaved ? nil : search?.found
+    }
+
+    /// Whether line 2 ends in Mark Done: never on a search's result, which is found to be opened, its words half read
+    /// beside it; its tick, the row's one deliberate control, stays.
+    func offersMarkDone(_ search: TodoSearchHit?) -> Bool {
+        markDone && search == nil
+    }
+
+    /// The row in words with `found` in place of its line: the title, the state its mark draws, the sentence, line 3,
+    /// the time.
+    func spoken(found: TodoFoundLine?) -> String {
+        guard let found else { return spoken }
+        return [spokenAround.head, found.text, spokenAround.tail].filter { !$0.isEmpty }.joined(separator: spokenAround.separator)
+    }
+}
+
+/// The words `TodoRowContent.spoken` says around its line: the title, High priority and the state before it; line 3 and
+/// the time after it.
+nonisolated struct TodoSpokenAround: Equatable, Sendable {
+    var head = ""
+    var tail = ""
+    var separator = ""
 }
 
 /// What a To-dos row offers besides opening it (#10465): its swipe, its long press and VoiceOver's actions.
@@ -164,11 +191,12 @@ nonisolated enum TodosListLayout {
         var sort: TodosListSort = .suggested
         /// The folds the owner opened.
         var unfolded: Set<String> = []
-        /// The search field's words: while there are any, the list is All's rows, open and closed, whose title or notes
-        /// hold them, every fold open, and the choice waits until the field is cleared.
+        /// The search field's words: while there are any, the list is All's rows, open and closed, that `hits` holds,
+        /// every fold open, and the choice waits until the field is cleared.
         var query = ""
-        /// What the search found, by to-do id, worked out off the main actor (`TodoSearch.find`); nil: found here.
-        var hits: [String: TodoSearchHit]?
+        /// What the search found for `query`, by to-do id: the model's look, off the main actor (`TodoSearch.find`), so
+        /// the layout never looks through the to-dos itself (P4).
+        var hits: [String: TodoSearchHit] = [:]
         var now = Date()
         var calendar = Calendar.current
         var projectName: (String) -> String = { $0 }
@@ -212,10 +240,7 @@ nonisolated enum TodosListLayout {
         // to-do (`GET /api/v1/todos` returns them all), so it is the whole answer: there is nothing for the hub to add.
         let words = TodoSearch.words(input.query)
         out.searching = !words.isEmpty
-        if out.searching {
-            let hits = input.hits ?? TodoSearch.hits(rows.reduce(into: [:]) { $0[$1.id] = input.items[$1.id] }, words: words)
-            rows = rows.filter { hits[$0.id] != nil }
-        }
+        if out.searching { rows = rows.filter { input.hits[$0.id] != nil } }
         let choice: TodosChoice = out.calm || out.searching ? .all : input.choice
         let opened = { (section: String) in out.searching || input.unfolded.contains(section) }
         let shown = Set(choice.sections)
@@ -391,11 +416,9 @@ nonisolated enum TodoRowContentLogic {
     /// `inProject`: the place shown is the row's project, whose title names it, so line 3 leaves it out.
     /// `underItsDay`: the row is under a heading that names its due day (Upcoming), so it says only its time, if any;
     /// an overdue one, under Overdue, keeps its day. VoiceOver still says the day, the row being heard on its own.
-    /// `search`: the row is a search's result, and what the search found in it (nil while the list does not search).
     static func content(_ filed: TodoFiled, item: TodoItem, view: TodoSummary?, byProject: Bool = false, inProject: Bool = false,
                         underItsDay: Bool = false, now: Date, words: TodoWords = TodoWords(), calendar: Calendar = .current,
-                        projectName: (String) -> String = { $0 }, pending: TodoRowWrite? = nil,
-                        search: TodoSearchHit? = nil) -> TodoRowContent {
+                        projectName: (String) -> String = { $0 }, pending: TodoRowWrite? = nil) -> TodoRowContent {
         var c = TodoRowContent(id: filed.id, title: item.title, closed: filed.closed, inactive: filed.inactive)
         c.highPriority = item.priority == "high"
         let since = view?.since.flatMap(JSON.parseDate)
@@ -481,24 +504,18 @@ nonisolated enum TodoRowContentLogic {
             (c.said, c.mark, c.markDone, c.unsaved) = (TodoLineText.Said(rest: words("Not on your hub yet [To-dos List]")), nil, false, true)
         }
         if c.closed { c.highPriority = false } // closed, or ticked a moment ago: nothing to put first
-        // A search's result carries no inline action (Mark Done, the answers): it is found to be opened, and a tap beside
-        // the words must not close or answer something half read. Found by its notes, line 2 says the sentence that
-        // matched, unless it says this device's own word on a write.
-        if let search {
-            c.markDone = false
-            if !c.unsaved { c.found = search.found }
-        }
-        c.spoken = spoken(c, heard: heard, words: words)
+        (c.spoken, c.spokenAround) = spoken(c, heard: heard, words: words)
         c.tickValue = c.closed ? StateName.done.text : words("Not done [To-dos Actions]")
         return c
     }
 
     /// The row in words: the title; High priority, where it is; the state its mark draws (its line may already say it);
-    /// the line, with how many asks; line 3; the time.
-    private static func spoken(_ c: TodoRowContent, heard: [String], words: TodoWords) -> String {
+    /// the line, with how many asks; line 3; the time. And what it says around the line, the state always (a search's
+    /// sentence does not say it).
+    private static func spoken(_ c: TodoRowContent, heard: [String], words: TodoWords) -> (String, TodoSpokenAround) {
         let separator = words.listSeparator
-        var parts = [c.title]
-        if c.highPriority { parts.append(words("High priority [To-dos Spoken]")) }
+        var head = [c.title]
+        if c.highPriority { head.append(words("High priority [To-dos Spoken]")) }
         let state: String? = switch c.mark {
         case .needs: StateName.todoNeedsYou
         case .working: StateName.taskWorking
@@ -506,15 +523,13 @@ nonisolated enum TodoRowContentLogic {
         case .waiting: StateName.taskWaiting.text
         case nil: c.struck || (c.closed && heard.isEmpty) ? StateName.done.text : nil
         }
-        if let found = c.found {
-            if let state { parts.append(state) }
-            parts.append(found.text)
-        } else {
-            if let state, c.said?.lead != state { parts.append(state) }
-            if let said = c.said { parts.append(said.spoken(separator: separator)) }
-        }
-        if let caption = c.caption { parts.append(caption) }
-        return (parts + heard).joined(separator: separator)
+        let tail = [c.caption].compactMap { $0 } + heard
+        var parts = head
+        if let state, c.said?.lead != state { parts.append(state) }
+        if let said = c.said { parts.append(said.spoken(separator: separator)) }
+        return ((parts + tail).joined(separator: separator),
+                TodoSpokenAround(head: (head + [state].compactMap { $0 }).joined(separator: separator),
+                                 tail: tail.joined(separator: separator), separator: separator))
     }
 
     /// Where it is, when no line can be said (no view, or a key this build does not know).

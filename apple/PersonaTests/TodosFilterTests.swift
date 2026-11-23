@@ -248,6 +248,14 @@ struct TodosListLayoutTests {
 }
 
 extension TodosListLayoutTests {
+    /// `i` searching `query`, with what the model's look finds for it (`TodoSearch.hits`, off the main actor there).
+    private func searching(_ i: TodosListLayout.Input, _ query: String) -> TodosListLayout.Input {
+        var i = i
+        i.query = query
+        i.hits = TodoSearch.hits(i.items, words: TodoSearch.words(query))
+        return i
+    }
+
     /// The search looks through every row's title and notes, open and closed, case and accents aside, whatever the choice:
     /// the sections stay, every fold opens, the counts are what matches, and what closed comes last.
     @Test func theSearchKeepsTheSectionsAndOpensTheFolds() {
@@ -259,7 +267,7 @@ extension TodosListLayoutTests {
                                     TodoItem(id: "s", title: "Kyoto temples, someday"),
                                     TodoItem(id: "d", title: "Kyoto hotel booked", doneAt: now)])
         i.choice = .inProgress
-        i.query = "  kyoto "
+        i = searching(i, "  kyoto ")
         let out = TodosListLayout.layout(i)
         #expect(out.searching)
         #expect(out.groups.map(\.id) == [TodoListSection.needsYou, TodoListSection.todo, "tail:someday", "done:today"],
@@ -269,14 +277,15 @@ extension TodosListLayoutTests {
         #expect(out.groups[2].tail?.open == true)
         #expect(out.groups[3].keys == ["/d"] && out.groups[3].count == 1
                 && out.groups[3].title == String(localized: "Done today [To-dos List]"), "a closed match, under Done today")
-        i.query = "nothing like it"
-        #expect(TodosListLayout.layout(i).groups.isEmpty)
+        #expect(TodosListLayout.layout(searching(i, "nothing like it")).groups.isEmpty)
     }
 
     /// While searching, every closed match comes last, from any day, by the day it closed as the Filter's Done lists them
     /// (its headings saying Done), the newest first under every sort; the hits worked out elsewhere are taken as given.
+    /// In UTC, so `now` (08:00) is not just after midnight in any machine's zone, where 5 minutes ago is yesterday.
     @Test func closedMatchesComeLastByTheDayTheyClosed() throws {
-        let cal = Calendar(identifier: .gregorian)
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = try #require(TimeZone(identifier: "UTC"))
         let ago = { (days: Int, minutes: Int) in cal.date(byAdding: .day, value: -days, to: self.now)!.addingTimeInterval(Double(-minutes * 60)) }
         let rows = [filed("open", TodoListSection.todo), filed("w", TodoListSection.working),
                     filed("d0", TodoListSection.done), filed("d1", TodoListSection.done), filed("d3a", TodoListSection.done),
@@ -289,7 +298,8 @@ extension TodosListLayoutTests {
             TodoItem(id: "d3b", title: "Email the ryokan", doneAt: ago(3, 10), dueAt: now, priority: "low"),
             TodoItem(id: "d30", title: "Old ryokan notes", doneAt: ago(30, 0)),
             TodoItem(id: "other", title: "Taxes", doneAt: ago(2, 0))])
-        i.query = "ryokan"
+        i.calendar = cal
+        i = searching(i, "ryokan")
         for sort in TodosListSort.allCases {
             i.sort = sort
             let out = TodosListLayout.layout(i)
@@ -305,8 +315,8 @@ extension TodosListLayoutTests {
         let calm = input([filed("open", TodoListSection.todo), filed("d1", TodoListSection.done)],
                          items: [TodoItem(id: "open", title: "Book the ryokan"), TodoItem(id: "d1", title: "Ryokan budget", doneAt: ago(1, 0))])
         var c = calm
-        c.query = "ryokan"
-        let out = TodosListLayout.layout(c)
+        c.calendar = cal
+        let out = TodosListLayout.layout(searching(c, "ryokan"))
         #expect(out.calm && out.groups.map(\.id) == ["plain", "done:yesterday"])
         // Hits from elsewhere (the model's, found off the main actor) are what the list shows.
         i.hits = ["d30": TodoSearchHit()]

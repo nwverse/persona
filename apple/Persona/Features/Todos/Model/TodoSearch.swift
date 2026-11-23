@@ -16,9 +16,10 @@ nonisolated struct TodoSearchHit: Equatable, Sendable {
     var found: TodoFoundLine?
 }
 
-/// The To-dos list's search (#10465; DESIGN_SYSTEM 3.4 "To-dos list"): the titles and notes of every to-do the device
-/// holds, open and closed, matched as the system's search matches (case, accents and width aside). The phone holds every
-/// to-do (`GET /api/v1/todos` returns them all), so nothing is asked of the hub. Pure; `find` runs off the main actor.
+/// The To-dos list's search (#10465; DESIGN_SYSTEM 3.4 "To-dos list"): the titles and notes of the current assistant's
+/// to-dos the device holds, open and closed, matched as the system's search matches (case, accents and width aside).
+/// The phone holds every to-do (`GET /api/v1/todos` returns them all), so nothing is asked of the hub. Pure; `find`
+/// runs off the main actor.
 nonisolated enum TodoSearch {
     /// The words as searched: "" is no search.
     static func words(_ query: String) -> String {

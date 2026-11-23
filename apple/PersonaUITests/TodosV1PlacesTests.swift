@@ -49,27 +49,22 @@ final class TodosV1PlacesTests: XCTestCase {
         XCTAssertTrue(target.exists, "no \(row) in the drawer:\n\(app.debugDescription)")
     }
 
-    /// `method` `path` on the mock hub, waited for.
+    /// `method` `path` on the mock hub, waited for (`todosMock`).
     @MainActor private func call(_ hub: String, _ method: String, _ path: String) throws {
-        var request = URLRequest(url: try XCTUnwrap(URL(string: hub + "/" + path)))
-        request.httpMethod = method
-        request.setValue("Bearer mock", forHTTPHeaderField: "Authorization")
-        let done = expectation(description: path)
-        URLSession.shared.dataTask(with: request) { _, _, _ in done.fulfill() }.resume()
-        wait(for: [done], timeout: 20)
+        _ = try todosMock(try XCTUnwrap(URL(string: hub)), method, path)
     }
 
-    /// The list's search field, opened: the system's, at the foot or folded to ⌕ (found by its words: it carries no
-    /// identifier of ours).
-    @MainActor private func searchField() -> XCUIElement {
-        let field = app.searchFields.firstMatch
-        if !(field.exists && field.isHittable) {
-            let button = app.buttons.matching(NSPredicate(format: "identifier == 'Search' OR label ==[c] 'search'")).allElementsBoundByIndex
-                .first(where: \.isHittable)
-            if let button { button.tap() } else { app.collectionViews.firstMatch.swipeDown(velocity: .slow) }
-        }
-        XCTAssertTrue(field.waitForExistence(timeout: 10), "no search field:\n\(app.debugDescription)")
-        return field
+    /// The list's search field, opened (`todosSearchField`).
+    @MainActor private func searchField() -> XCUIElement { todosSearchField(app) }
+
+    /// Back from a pushed page: the system's back button, else the edge swipe.
+    @MainActor private func back() {
+        let system = app.navigationBars.buttons.matching(identifier: "BackButton").allElementsBoundByIndex.first(where: \.isHittable)
+        if let system { system.tap(); return }
+        let window = app.windows.firstMatch
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.0, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)),
+                   withVelocity: .slow, thenHoldForDuration: 0.1)
     }
 
     /// The list's title as a menu: the navigation bar's title button (the system's title menu has no identifier of its
@@ -257,6 +252,35 @@ final class TodosV1PlacesTests: XCTestCase {
         XCTAssertTrue(element("todos.guard").exists, "still Today, with what needs the owner elsewhere")
     }
 
+    /// A search sets the place aside, and opening a result never changes it (#10465): on Today, "crash" finds Fix login
+    /// crash, which Today does not hold; its page opens, Back is the results with the words, and once the field is
+    /// cleared the list is Today again (its guard line back, no Needs you of its own, its title). Launched in English
+    /// only because the system's search controls (its Cancel) carry no identifier and are found by their words.
+    @MainActor func testOpeningASearchResultKeepsThePlace() throws {
+        try launch(try hub, ["-openTodoPlace", "today", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"])
+        let line = element("todos.guard")
+        XCTAssertTrue(line.waitForExistence(timeout: 60), "Today's guard line:\n\(app.debugDescription)")
+        let title = titleMenu().label
+        let result = element("todos.row.t04")
+        XCTAssertFalse(result.exists, "not one of Today's")
+        let field = searchField()
+        field.tap()
+        field.typeText("crash")
+        XCTAssertTrue(element("todos.searchChats").waitForExistence(timeout: 10), "no results for the words:\n\(app.debugDescription)")
+        XCTAssertTrue(result.exists && !line.exists, "found whatever the place, which is set aside:\n\(app.debugDescription)")
+        result.tap()
+        XCTAssertTrue(element("todo.toggleDone").waitForExistence(timeout: 20), "no to-do page:\n\(app.debugDescription)")
+        back()
+        XCTAssertTrue(result.waitForExistence(timeout: 10), "Back is the results again:\n\(app.debugDescription)")
+        XCTAssertEqual(app.searchFields.firstMatch.value as? String, "crash", "the words are kept")
+        let cancel = app.buttons.matching(NSPredicate(format: "label ==[c] 'cancel' OR label ==[c] 'close'")).allElementsBoundByIndex
+            .first(where: \.isHittable)
+        try XCTUnwrap(cancel, "no way out of the search:\n\(app.debugDescription)").tap()
+        XCTAssertTrue(line.waitForExistence(timeout: 10), "Today again, its guard line back:\n\(app.debugDescription)")
+        XCTAssertTrue(result.waitForNonExistence(timeout: 5) && !element("todos.section.needs_you").exists, "Today's own list")
+        XCTAssertEqual(titleMenu().label, title, "the place never changed")
+    }
+
     /// An hour tapped on Upcoming's calendar opens the list's New To-Do (saved on the device first, as the foot's +),
     /// due that day at that time, All Day off; never the calendar's own sheet, which waits for the hub.
     @MainActor func testAnHourOnUpcomingsCalendarStartsANewToDoThen() throws {
@@ -310,17 +334,18 @@ final class TodosV1PlacesTests: XCTestCase {
             _ = element("sidebar-todos-place-today").waitForExistence(timeout: 20)
             shot(frame)
         }
-        // The list searching (#10465): an open and a closed match (Fix widget refresh crash seen, so it is in Done; the
-        // mock put back after), whatever the place shown, Today.
+        // The list searching (#10465): an open and a closed match (Fix widget refresh crash seen and closed two days
+        // ago, so it is under Done this week at any hour; the mock put back after), whatever the place shown, Today.
         if wants("~search") {
             try call(hub, "PUT", "api/v1/todos/t08/seen")
+            try call(hub, "GET", "mock/todo-view?done_hours=t08:50")
             defer { try? call(hub, "GET", "mock/reset") }
             try relaunch(["-openTodoPlace", "today", "-todos.v1.upcomingCalendar", "NO"])
             _ = element("sidebar-todos-place-today").waitForExistence(timeout: 20)
             let field = searchField()
             field.tap()
             field.typeText("crash")
-            _ = element("todos.row.t08").waitForExistence(timeout: 10)
+            _ = element("todos.searchChats").waitForExistence(timeout: 10) // the results for the words
             shot("~search")
         }
         if wants("~swap") {

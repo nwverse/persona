@@ -943,21 +943,24 @@ The web Agent conversation header's **Session overview** list button toggles a p
     is spoken with its action ("3 more need you, Show All"). In a place it also counts what needs the owner outside
     the place, one line for both, naming the place when that is all it counts ("2 more need you, not in Today"), and
     its Show All opens All To-dos (3.5 "To-dos places").
-  - **Search**: the system's field, scoped to the list. It looks through the titles and notes of every to-do on the
-    device, open and closed (case and accents aside), as the words are typed (off the main thread, a newer key taking
-    over; a cleared field is the list again at once), and sets the place and the Filter's choice aside until the field
-    is cleared. The results keep the list's sections with every fold open (and unfoldable until the field is cleared),
-    Needs you first; what closed comes last, from any day, under the days the Filter's Done lists (their headings naming
-    Done: "Done today", "Done yesterday", "Done this week", "Done earlier"), the newest first. The headings count what
-    matches in plain numbers, Needs you's too, so the blue badge only ever says N (the drawer's number stays N). A to-do
-    found by its notes says the sentence that matched as its line 2, the words marked as search in chat marks them
-    ("List controls"); one found by its title keeps its line. A result carries no inline action (no "· Mark Done", no
-    answers): it is found to be opened, which pushes the to-do, and Back is the results again with the words in the
-    field. With nothing found, the search's empty state says what it looked through ("Search looks through the titles
-    and notes of your to-dos."). Its last row, "⌕ Search Chats for “kyoto” ›", takes the words to the app's search over
-    Persona's chats (no Agents scope on an everyday page). It is on the device only: the phone holds every to-do
-    (`GET /api/v1/todos` returns them all), so the hub has nothing to add; a merge of the hub's matches ("List
-    controls") waits for content the phone does not hold (a to-do's rounds, results and recap).
+  - **Search**: the system's field, scoped to the list. It looks through the titles and notes of every to-do of the
+    current assistant on the device, open and closed (case and accents aside), as the words are typed (off the main
+    thread, a newer key taking over; a cleared field is the list again at once), and sets the place and the Filter's
+    choice aside until the field is cleared, when they come back. The results keep the list's sections with every fold
+    open (and unfoldable until the field is cleared), Needs you first; what closed comes last, from any day, under the
+    days the Filter's Done lists (their headings naming Done: "Done today", "Done yesterday", "Done this week", "Done
+    earlier"), the newest first. The headings count what matches in plain numbers, Needs you's too, so the blue badge
+    only ever says N (the drawer's number stays N). A to-do found by its notes says the sentence that matched as its
+    line 2, the words on the accent tint ("List controls"), on up to two lines as a hub's line 2 may take, cut only
+    when the words sit further in than about a line's worth; one found by its title keeps its line. A result keeps its
+    tick, the row's one deliberate control, but offers nothing beside its half-read words (no "· Mark Done", no
+    answers): it is found to be opened, which pushes the to-do as usual (a notes match lights nothing on its page yet),
+    and Back is the results again with the words in the field. Steps a to-do carries are no rows, and are not searched
+    here yet. With nothing found, the search's empty state says what it looked through ("Search looks through the
+    titles and notes of all your to-dos, including done ones."). Its last row, "⌕ Search Chats for “kyoto” ›", takes
+    the words to the app's search over Persona's chats (no Agents scope on an everyday page). It is on the device only:
+    the phone holds every to-do (`GET /api/v1/todos` returns them all), so the hub has nothing to add; a merge of the
+    hub's matches ("List controls") waits for content the phone does not hold (a to-do's rounds, results and recap).
   - **⋯** (on All To-dos, Today and a project; Upcoming's holds Show as Calendar alone) arranges the list, kept on the
     device; what the list shows starts fresh each visit. **Sort By**, a section with the current order checked:
     Suggested (推荐顺序, the hub's order inside each section, the default), Recently Changed (最近更新, the old page's default
@@ -1142,7 +1145,7 @@ On the web a list keeps no standing search field of its own beside the app's one
 
 - **HarmonyOS Agents groups** (#8966): the existing native grouping Select offers By Status (default), By Machine and By Project. It reuses the native list, Select and 48 vp control tokens, not a new style or a second flat/repository/worktree taxonomy. The shared Rust projection owns pinned, quiet, folded and filtered rows and their counts. Group headers expose the current localized state/machine/space title, state counts and a 48 vp Expand/Collapse control; quiet projects have an explicit idle-projects heading. Default idle sections stay folded; the header expands them and their rows with the core's `folded`, `expanded_idle` and `expanded_quiet` settings. A folded header still exposes Needs You. All labels ship in en, zh-Hans and ja. The previous native sorter and debug shadow are deleted; no release-only platform-specific sorter remains. These rules serve people monitoring Agents and follow iOS, rather than adding an independent HarmonyOS presentation.
 
-A list row found by what is inside it, not by its own name (a Persona chat found by a message, #6283), keeps its title and puts the sentence that matched in place of its second line, the match marked as search in chat marks it (the accent tint), the line starting a few characters before the match so a narrow row still shows it (each client cuts for its own width, #7045); opening it goes to that message, ringed as a search hit. A row found by its name keeps its usual second line and opens as usual. Local matches show at once; what the server finds merges in, and a short line under the field says when the server's results may be incomplete. A search over what the device already holds whole has no server pass and no such line: the To-dos list's (3.4), since the phone holds every to-do.
+A list row found by what is inside it, not by its own name (a Persona chat found by a message, #6283), keeps its title and puts the sentence that matched in place of its second line, the match marked as search in chat marks it (the accent tint), the line starting a few characters before the match so a narrow row still shows it (each client cuts for its own width, #7045); opening it goes to that message, ringed as a search hit. A row found by its name keeps its usual second line and opens as usual. Local matches show at once; what the server finds merges in, and a short line under the field says when the server's results may be incomplete. A search over what the device already holds whole has no server pass and no such line: the iOS To-dos list's (3.4; iOS, hubs with `todo_view`, from #10465's switch-on), since the phone holds every to-do; it opens a to-do found by its notes as usual, its page lighting nothing yet. On iOS the To-dos list is the first search drawn to this marking: the chat search's found rows (`SearchSaidLine`, #6284) and Knowledge's still bold their match, a gap left to their own change, since an existing screen keeps its look.
 
 - Section headers (`JSectionHeader`) measure the complete title, count and ordinary actions in one layout pass. Only when they do not fit, the actions move into a `JMenu` and the title wraps as needed so the title and count stay fully visible; fitting layouts stay pixel-identical. The overflow decision is made during measurement, never by switching after a truncated frame. Button labels still never wrap.
 - Command rows in the composer's "/" list (`ComposerSuggestions`) measure the complete command and detail. Only when they do not fit, the detail moves below the command and wraps without a line limit; fitting rows stay pixel-identical. Quick-message and @ rows keep their single-line layout (#7322).

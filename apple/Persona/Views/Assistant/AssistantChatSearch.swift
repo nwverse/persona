@@ -76,15 +76,26 @@ nonisolated enum AssistantSearchMerge {
     /// The snippet with its matches strongly emphasized (the ranges clipped to it, in order), starting `lead`
     /// characters before the first match.
     static func snippet(_ hit: AssistantSearchAnswer.Hit, lead: Int = lead) -> AttributedString {
-        let (shown, ranges) = led(hit.snippet, hit.ranges, lead: lead)
+        var bold = AttributeContainer()
+        bold.inlinePresentationIntent = .stronglyEmphasized
+        return marked(hit.snippet, hit.ranges, lead: lead, mark: bold)
+    }
+
+    /// `s` from `lead` characters before its first match (`led`), in `base`, each match (UTF-16 `[start, end)`, clipped
+    /// to it) in `mark` as well: the one way a search's found line is cut and marked (the chat search's snippet, the
+    /// To-dos list's `TodoFoundText`).
+    static func marked(_ s: String, _ ranges: [[Int]], lead: Int = lead, base: AttributeContainer = AttributeContainer(),
+                       mark: AttributeContainer) -> AttributedString {
+        let (shown, ranges) = led(s, ranges, lead: lead)
         var text = AttributedString(shown)
+        text.mergeAttributes(base)
         let utf16 = shown.utf16
         for r in ranges where r.count == 2 {
             let lo = min(max(0, r[0]), utf16.count), hi = min(max(lo, r[1]), utf16.count)
             guard lo < hi, let a = String.Index(utf16.index(utf16.startIndex, offsetBy: lo), within: shown),
                   let b = String.Index(utf16.index(utf16.startIndex, offsetBy: hi), within: shown),
                   let range = Range(a..<b, in: text) else { continue }
-            text[range].inlinePresentationIntent = .stronglyEmphasized
+            text[range].mergeAttributes(mark)
         }
         return text
     }
