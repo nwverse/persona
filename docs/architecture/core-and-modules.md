@@ -231,6 +231,9 @@ measuring tool that also reads the knowledge base, stays where it is.
 Each client documents its side in its own platform doc; these are pointers only.
 
 - **Apple** (#13432): `PersonaHostApp` with `PersonaModuleAPI` and `PersonaModule<Name>` packages. See `docs/apple/` (written with #13432).
+  A module the hub may turn off declares `feature` = `module.<id>`; the app follows the rule agreed on #13844 (off only
+  when the hello has the marker `modules` and lacks the flag; remembered per hub before the hello). See
+  `docs/apple/ios.md`, "Modules" (#13849).
 - **Android** (#13433): `:core:moduleapi` and `:module:<id>`. See `docs/android/` (written with #13433).
 - **Web** (#13434, #13846): the module host `web/src/core/module-host.ts` and `web/src/modules/<id>/`, serving routes,
   sidebar entries, chat slots, Settings categories and card renderers. See `docs/web/web.md` ("Modules").

@@ -1,4 +1,4 @@
-package persona.feature.inbox
+package persona.core.inbox
 
 import persona.core.contracts.api.InboxAssistantTransport
 import persona.core.contracts.api.LarkThreadTransport

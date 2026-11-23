@@ -1,4 +1,4 @@
-package persona.feature.inbox
+package persona.core.inbox
 
 import persona.core.contracts.api.InboxParentRef
 
@@ -13,7 +13,7 @@ data class InboxLineage(
 data class InboxLineAncestor(val parent: InboxParentRef, val item: InboxRecord? = null)
 
 /** One displayed row. [unlink] is the lower item of this row's pair, never the ancestor shown by an up row. */
-internal data class InboxLineRow(
+data class InboxLineRow(
     val key: String,
     val parent: InboxParentRef,
     val item: InboxRecord?,
@@ -25,7 +25,7 @@ internal data class InboxLineRow(
 private const val MAX_LINE_ANCESTORS = 9
 
 /** Ancestors farthest first, then children in the hub's order (oldest first), matching iOS and the web. */
-internal fun inboxLineRows(tree: InboxLineage): List<InboxLineRow> {
+fun inboxLineRows(tree: InboxLineage): List<InboxLineRow> {
     val ancestors = tree.ancestors.take(MAX_LINE_ANCESTORS)
     val ups = ancestors.mapIndexed { index, ancestor ->
         val lower = if (index == 0) tree.item else ancestors[index - 1].item

@@ -1,4 +1,4 @@
-package persona.feature.inbox
+package persona.core.inbox
 
 import persona.core.contracts.api.AssistantManagerChoice
 import persona.core.contracts.api.InboxAssistantTransport
@@ -12,7 +12,7 @@ import org.jsoup.Jsoup
  * or inbox item a link was opened from (docs/assistant/managers.md "Clients"), named on each request where it is made,
  * so a read that goes out after the page moved on keeps it. The default's names none; null leaves the requests as they are.
  */
-class LarkContentSource(internal val transport: InboxAssistantTransport, val manager: String? = null) {
+class LarkContentSource(val transport: InboxAssistantTransport, val manager: String? = null) {
     /** The pairing, and the manager when it is not the default: what reads through this source are cached under. */
     val scope: String get() = named()?.let { "${transport.scope}#$it" } ?: transport.scope
     suspend fun document(url: String): LarkDocument = parseLarkDocument(read { readDocument(url) })
@@ -27,7 +27,7 @@ class LarkContentSource(internal val transport: InboxAssistantTransport, val man
     fun forManager(manager: String?): LarkContentSource =
         if (manager == null || manager == this.manager) this else LarkContentSource(transport, manager)
 
-    internal suspend fun <T> read(block: suspend InboxAssistantTransport.() -> T): T =
+    suspend fun <T> read(block: suspend InboxAssistantTransport.() -> T): T =
         if (manager == null) transport.block() else withContext(RequestManager(named().orEmpty())) { transport.block() }
 
     private fun named(): String? = manager?.takeIf { it.isNotBlank() && it != AssistantManagerChoice.current.value.defaultId }
@@ -51,7 +51,7 @@ sealed interface LarkCardBlock {
     data object Divider : LarkCardBlock
 }
 
-internal fun readableLarkText(value: String): String = Jsoup.parse(
+fun readableLarkText(value: String): String = Jsoup.parse(
     value.replace(Regex("(?i)<br\\s*/?>"), "\n").replace("\n", "<br>"),
 ).body().wholeText().replace('\u00a0', ' ')
 
