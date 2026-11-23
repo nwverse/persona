@@ -704,20 +704,27 @@ func (h *Hub) extensionMachines(r *http.Request) (own []string, limited bool) {
 	return own, limited
 }
 
-func (h *Hub) heldNeedsIDs() []string {
+// supervisorHeldCard: a card its task's supervisor holds (assistant/ask_route.go routeAsk): marked delegating and no
+// question (only a question is ever delegated to the assistant's own decision, which stays counted).
+func supervisorHeldCard(ix proto.Interaction) bool {
+	return ix.Delegating && ix.Kind != proto.IxQuestion
+}
+
+// heldNeedsIDs are the list ids of the sessions whose pending cards are all held: held, only P1/P2 cards for push
+// grading (no supervisor's among them counted either way); supervised, only cards their supervisor holds.
+func (h *Hub) heldNeedsIDs() (held, supervised []string) {
 	interactions := h.pendingInteractions()
 	if len(interactions) == 0 {
-		return nil
+		return nil, nil
 	}
 	type flags struct {
-		hasP0   bool
-		hasHeld bool
+		hasP0      bool
+		hasHeld    bool
+		supervisor bool // a card its supervisor holds
+		other      bool // any card that is not
 	}
 	byHome := map[[2]string]flags{}
 	for _, ix := range interactions {
-		if ix.Delegating {
-			continue
-		}
 		home := ix.FoldedUnder
 		if home == "" {
 			home = ix.SessionID
@@ -727,20 +734,27 @@ func (h *Hub) heldNeedsIDs() []string {
 		}
 		k := [2]string{ix.MachineID, home}
 		st := byHome[k]
-		if ix.PushLevel == assistantwire.LevelP1 || ix.PushLevel == assistantwire.LevelP2 {
-			st.hasHeld = true
-		} else {
-			st.hasP0 = true
+		switch {
+		case supervisorHeldCard(ix):
+			st.supervisor = true
+		case ix.Delegating:
+			st.other = true
+		case ix.PushLevel == assistantwire.LevelP1 || ix.PushLevel == assistantwire.LevelP2:
+			st.hasHeld, st.other = true, true
+		default:
+			st.hasP0, st.other = true, true
 		}
 		byHome[k] = st
 	}
-	var ids []string
 	for k, st := range byHome {
-		if st.hasHeld && !st.hasP0 {
-			ids = append(ids, runtimeListID(k[0], k[1]))
+		switch {
+		case st.supervisor && !st.other:
+			supervised = append(supervised, runtimeListID(k[0], k[1]))
+		case st.hasHeld && !st.hasP0:
+			held = append(held, runtimeListID(k[0], k[1]))
 		}
 	}
-	return ids
+	return held, supervised
 }
 
 func (h *Hub) countsWithHeld(index *sessionlist.Index, opts sessionlist.Options, own []string, limited bool) (sessionlist.Counts, error) {
@@ -756,26 +770,34 @@ func (h *Hub) countsWithHeld(index *sessionlist.Index, opts sessionlist.Options,
 	if err != nil {
 		return sessionlist.Counts{}, err
 	}
-	ids := h.heldNeedsIDs()
-	if len(ids) == 0 || counts.State[proto.StateNeedsYou] == 0 {
+	held, supervised := h.heldNeedsIDs()
+	if counts.State[proto.StateNeedsYou] == 0 {
 		return counts, nil
 	}
-	if limited {
+	count := func(ids []string) (int, error) {
+		if len(ids) == 0 {
+			return 0, nil
+		}
+		if !limited {
+			return index.CountMatchingState(opts, proto.StateNeedsYou, ids)
+		}
+		n := 0
 		for _, mid := range own {
 			o := opts
 			o.Machine, o.Cursor = mid, ""
-			n, herr := index.CountMatchingState(o, proto.StateNeedsYou, ids)
-			if herr != nil {
-				return sessionlist.Counts{}, herr
+			c, err := index.CountMatchingState(o, proto.StateNeedsYou, ids)
+			if err != nil {
+				return 0, err
 			}
-			counts.HeldNeeds += n
+			n += c
 		}
-	} else {
-		n, herr := index.CountMatchingState(opts, proto.StateNeedsYou, ids)
-		if herr != nil {
-			return sessionlist.Counts{}, herr
-		}
-		counts.HeldNeeds = n
+		return n, nil
+	}
+	if counts.HeldNeeds, err = count(held); err != nil {
+		return sessionlist.Counts{}, err
+	}
+	if counts.SupervisorHeld, err = count(supervised); err != nil {
+		return sessionlist.Counts{}, err
 	}
 	return counts, nil
 }

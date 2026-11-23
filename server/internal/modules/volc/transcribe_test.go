@@ -18,7 +18,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/volc/volctest"
+	"github.com/nwverse/persona/server/internal/modules/volc/volctest"
 )
 
 // fake is a stand-in service the package's clients reach for the test.
