@@ -409,7 +409,7 @@ func TestResumeStartsSettle(t *testing.T) {
 
 	n, _, _ := keptAgent(t)
 	provenanceHerdr(n)
-	n.resumes.begin(sidA, time.Now())(errors.New("no answer"))
+	n.uncertainResumes.begin(sidA, time.Now())(errors.New("no answer"))
 	n.state.stopped(sidA, proto.StopUnknown)
 	if err := n.supervisorResumeAllowed(sidA, "", ""); err == nil {
 		t.Fatal("the assistant's resume went while an uncertain one was settling")

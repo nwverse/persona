@@ -33,7 +33,7 @@ func (n *Node) observedRunning(id string) {
 
 func (n *Node) recordRunning(id string) {
 	now := time.Now()
-	n.resumes.seen(id)
+	n.uncertainResumes.seen(id)
 	n.state.update(id, func(v *sessionState) bool {
 		changed := false
 		if v.StopCause != proto.StopUnknown {
@@ -156,7 +156,7 @@ func (n *Node) supervisorResumeAllowed(id, mode, launcher string) error {
 	if _, live := n.agent(id); live {
 		return refusal("resume_not_allowed", "The session is running again; refresh it before sending.", nil)
 	}
-	if cause == proto.StopUnknown && n.resumes.settling(id, time.Now()) {
+	if cause == proto.StopUnknown && n.uncertainResumes.settling(id, time.Now()) {
 		// An earlier start of it ended uncertain (a line typed into a shell, a stalled Agent, an unanswered call): it may
 		// still come up, and a second resume must not start it twice (#8214).
 		return refusal("resume_not_allowed", fmt.Sprintf("An earlier resume of the session may still be starting; "+
