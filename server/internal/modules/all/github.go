@@ -3,7 +3,7 @@
 package all
 
 import (
-	"github.com/nwverse/persona/server/internal/connector/github"
+	"github.com/nwverse/persona/server/internal/modules/github"
 	"github.com/nwverse/persona/server/internal/extmgr/githubport"
 )
 
