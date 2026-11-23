@@ -1,0 +1,7 @@
+{
+  "$schema": "../../../../schema/module.schema.json",
+  "id": "mail",
+  "api": 1,
+  "origin": "builtin",
+  "title": "Mail"
+}

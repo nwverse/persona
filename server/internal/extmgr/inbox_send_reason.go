@@ -10,7 +10,7 @@ import (
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/i18n"
 	adapter "github.com/nwverse/persona/server/internal/larkcli"
-	"github.com/nwverse/persona/server/internal/mail"
+	"github.com/nwverse/persona/server/internal/mailwire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -93,8 +93,8 @@ func inboxSendLogKind(err error) string {
 		return "lark-cli " + string(cli.Kind) + ": " + cli.Error()
 	case errors.Is(err, errCannotReply), errors.Is(err, connector.ErrCannotReply):
 		return err.Error() // fixed words, no identifiers
-	case errors.Is(err, mail.ErrMaybeSent):
-		return "mail: " + mail.ErrMaybeSent.Error() // its own fixed words, not what wraps them (the server's address)
+	case errors.Is(err, mailwire.ErrMaybeSent):
+		return "mail: " + mailwire.ErrMaybeSent.Error() // its own fixed words, not what wraps them (the server's address)
 	case errors.As(err, &re):
 		return fmt.Sprintf("rpc code %q", re.Code)
 	}
