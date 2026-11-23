@@ -89,7 +89,7 @@ func isCodexAppLauncher(name string) bool {
 }
 
 // withCodexAppLauncher is list with the Codex App's launcher after it, on a computer whose App runs for this node's
-// Codex home (its bus socket is there) and where a Codex CLI to start chats with is found; added reports whether it was.
+// Codex home (its bus accepts connections) and where a Codex CLI to start chats with is found; added reports whether it was.
 // A launcher of the login shell's with its name is left as it is: that one runs.
 func (n *Node) withCodexAppLauncher(list []proto.Launcher) (out []proto.Launcher, added bool) {
 	if !codexDesktopAvailable(n.codexHome()) || slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == codexAppLauncher }) {
@@ -114,7 +114,7 @@ func (n *Node) startInCodexApp(ctx context.Context, p runtimeStartParams, nameHi
 func (n *Node) newCodexAppChat(ctx context.Context, p runtimeStartParams, nameHint string) (*proto.Session, error) {
 	home := n.codexHome()
 	if !codexDesktopAvailable(home) {
-		return nil, refusal("codex_read_only", "电脑上的 Codex App 没在运行，不能在 App 里新开对话，这次没有发送。", nil)
+		return nil, codexDesktopUnavailable(ctx)
 	}
 	if p.PermissionMode == "plan" {
 		// The App runs the chat in its own mode, and a plan waiting for approval there could not be answered here.

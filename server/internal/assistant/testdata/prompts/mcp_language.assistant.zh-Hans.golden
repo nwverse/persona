@@ -3875,5 +3875,73 @@
       }
     },
     "defer_loading": true
+  },
+  {
+    "name": "decision_record",
+    "description": "Record {text,scope?,decision:{options[],selected[],rejected[],reason,reversible:bool|null}}. user_quotes[]:{quote,source:{machine,session,msg_uuid|card_id|file,line}} stay inferred.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "entry"
+      ],
+      "properties": {
+        "entry": {
+          "type": "object",
+          "required": [
+            "text",
+            "decision"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "decision": {
+              "type": "object"
+            }
+          }
+        },
+        "user_quotes": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "defer_loading": true
+  },
+  {
+    "name": "decisions_query",
+    "description": "Decisions; scope:{executor,machine[],project[],personal}.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "after": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "by": {
+          "type": "string"
+        },
+        "trust": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "defer_loading": true
   }
 ]

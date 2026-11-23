@@ -85,6 +85,9 @@ var (
 // the same signal with the same key is told once.
 type superviseSignal struct {
 	Todo, Kind, Key string
+	// Handoff is an idle-shaped report that an owner's decision or review rework did not reach the agent.
+	// It is not a turn-end stop, so a native wakeup must not defer it.
+	Handoff bool
 	// PendingPredecessors: keys of earlier stretches of this id replaced before their delivery or queue acknowledgment.
 	// An ACK removes exactly its own Key; a still-present predecessor's dedup reservation is not delivery proof.
 	PendingPredecessors []string

@@ -161,6 +161,9 @@ func (s *Service) toolTodoGet(ctx context.Context, machine, self string, args js
 	var b strings.Builder
 	b.WriteString(todoLine(t, now, loc) + "\n")
 	fmt.Fprintf(&b, "created %s, updated %s\n", t.CreatedAt.In(loc).Format(toolTimeLayout), t.UpdatedAt.In(loc).Format(toolTimeLayout))
+	if brief, ok := s.briefOfTodo(t.ID); ok {
+		fmt.Fprintf(&b, "scope_revision: %s\n", brief.scopeRevision().Format(time.RFC3339Nano))
+	}
 	if t.failedStart() {
 		// Stored done (#1077), but nothing was done: it is open and waits on the owner, as the app shows it (#10365).
 		fmt.Fprintf(&b, "did not start %s: not done, it still waits on the owner; task_retry starts it again (optionally with "+
