@@ -224,6 +224,11 @@ func (c *codexRemote) run() {
 	}()
 	target, client, err := validateCodexEndpoint(c.spec.Endpoint)
 	if err != nil {
+		diag := codexDiagEndpointInvalid
+		if codexDaemonSocketGone(c.spec.Home) != nil {
+			diag = codexDiagSocketGone
+		}
+		c.n.codices.setRemoteDiag(c.spec.Endpoint, diag)
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
@@ -233,6 +238,11 @@ func (c *codexRemote) run() {
 		resp.Body.Close()
 	}
 	if err != nil {
+		diag := codexDiagUnreachable
+		if codexDaemonSocketGone(c.spec.Home) != nil {
+			diag = codexDiagSocketGone
+		}
+		c.n.codices.setRemoteDiag(c.spec.Endpoint, diag)
 		return
 	}
 	socket.SetReadLimit(64 << 20)
@@ -269,20 +279,25 @@ func (c *codexRemote) run() {
 	err = wire.call(ctx, "initialize", map[string]any{"clientInfo": map[string]any{"name": "persona", "title": "Persona", "version": c.n.Version}, "capabilities": map[string]any{"experimentalApi": true}}, &init)
 	cancel()
 	if err != nil {
+		c.n.codices.setRemoteDiag(c.spec.Endpoint, codexDiagHandshakeFailed)
 		return
 	}
 	if init.CodexHome != "" && canonicalCodexHome(init.CodexHome, c.n.home) != c.spec.Home {
+		c.n.codices.setRemoteDiag(c.spec.Endpoint, codexDiagHomeMismatch)
 		return
 	}
 	if err = wire.send(map[string]any{"jsonrpc": "2.0", "method": "initialized", "params": map[string]any{}}); err != nil {
+		c.n.codices.setRemoteDiag(c.spec.Endpoint, codexDiagHandshakeFailed)
 		return
 	}
 	if err = c.refresh(); err != nil {
+		c.n.codices.setRemoteDiag(c.spec.Endpoint, codexDiagHandshakeFailed)
 		return
 	}
 	c.mu.Lock()
 	c.ready = true
 	c.mu.Unlock()
+	c.n.codices.setRemoteDiag(c.spec.Endpoint, codexDiagNone)
 	reached = true
 	c.n.notifyCodex()
 	go c.loadModels()
@@ -667,6 +682,127 @@ func (n *Node) codexOwner(id string) (*codexRemote, remoteThread, error) {
 		return nil, remoteThread{}, errCodexNoOwner
 	}
 	return owner, thread, nil
+}
+
+// codexSharedRemote returns an unambiguous ready shared app-server connection for home, preferring the official
+// control socket when multiple instances exist. Returns nil when none is connected or selection is ambiguous.
+func (n *Node) codexSharedRemote(home string) *codexRemote {
+	if n == nil || n.codices == nil || home == "" {
+		return nil
+	}
+	home = canonicalCodexHome(home, n.home)
+	if home == "" {
+		return nil
+	}
+	controlEndpoint := "unix://" + filepath.Join(home, "app-server-control", "app-server-control.sock")
+	n.codices.mu.Lock()
+	var candidates []*codexRemote
+	for _, c := range n.codices.remotes {
+		if c.spec.Home == home {
+			candidates = append(candidates, c)
+		}
+	}
+	n.codices.mu.Unlock()
+	var ready []*codexRemote
+	for _, c := range candidates {
+		c.mu.Lock()
+		ok := c.ready && c.wire != nil
+		c.mu.Unlock()
+		if !ok {
+			continue
+		}
+		if c.spec.Endpoint == controlEndpoint {
+			return c
+		}
+		ready = append(ready, c)
+	}
+	if len(ready) == 1 {
+		return ready[0]
+	}
+	return nil
+}
+
+// coldResume explicitly loads and subscribes an idle history thread on this shared app-server after the caller
+// verified no live writer or active writer lock holds it. Never called during session listing.
+func (c *codexRemote) coldResume(ctx context.Context, id string, src codexSource) error {
+	defer c.joins.lock(id)()
+	c.mu.Lock()
+	ready, wire := c.ready, c.wire
+	existing, loaded := c.threads[src.thread]
+	c.mu.Unlock()
+	if !ready || wire == nil {
+		return takeoverRefusal("shared_unavailable")
+	}
+	if owner, _, err := c.n.codexOwner(id); err == nil && owner != c {
+		return takeoverRefusal("writer_busy")
+	} else if err != nil && !errors.Is(err, errCodexNoOwner) {
+		return err
+	}
+	if loaded && existing.joined {
+		return nil
+	}
+	var reply struct {
+		Thread      remoteThreadData `json:"thread"`
+		Model       string           `json:"model"`
+		Effort      string           `json:"reasoningEffort"`
+		ServiceTier json.RawMessage  `json:"serviceTier"`
+	}
+	if err := wire.call(ctx, "thread/resume", map[string]any{"threadId": src.thread, "excludeTurns": true}, &reply); err != nil {
+		if codexWriterConflict(err) != nil {
+			return takeoverRefusal("writer_busy")
+		}
+		return err
+	}
+	if reply.Thread.ID != src.thread {
+		return errors.New("app-server 接入返回了不同的会话")
+	}
+	d := reply.Thread
+	c.mu.Lock()
+	t := c.threads[src.thread]
+	t.id = src.thread
+	t.publicID = id
+	t.joined = true
+	if title := firstNonEmpty(d.Name, d.Preview); title != "" {
+		t.title = title
+	}
+	if d.Cwd != "" {
+		t.cwd = d.Cwd
+	}
+	t.path = firstNonEmpty(d.Path, t.path, src.path)
+	if m := firstNonEmpty(reply.Model, d.Model); m != "" {
+		t.model, t.effort = m, firstNonEmpty(reply.Effort, d.Effort)
+	}
+	if tier := codexServiceTier(reply.ServiceTier); tier != "" && t.serviceTier == "" {
+		t.serviceTier = tier
+		t.serviceTierRevision++
+	}
+	if t.files == nil {
+		t.files = map[string][]string{}
+	}
+	t.status = proto.StatusDone
+	if d.Status.Type == "active" {
+		t.status = proto.StatusWorking
+	}
+	if slices.Contains(d.Status.ActiveFlags, "waitingOnApproval") || slices.Contains(d.Status.ActiveFlags, "waitingOnUserInput") {
+		t.status = proto.StatusBlocked
+	}
+	for _, turn := range d.Turns {
+		if turn.Status == "inProgress" && turn.ID != t.ended {
+			t.turn = turn.ID
+		}
+	}
+	t.revision++
+	c.threads[src.thread] = t
+	c.mu.Unlock()
+	c.n.codices.mu.Lock()
+	if c.n.codices.config.Joined == nil {
+		c.n.codices.config.Joined = map[string]string{}
+	}
+	c.n.codices.config.Joined[id] = c.spec.ID
+	c.n.codices.mu.Unlock()
+	c.n.rememberCodex()
+	c.n.notifyCodex()
+	return nil
 }
 
 func (c *codexRemote) join(ctx context.Context, id string, remember bool) error {
