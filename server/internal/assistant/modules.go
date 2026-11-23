@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/kernel"
@@ -50,6 +51,20 @@ func (s *Service) loadModules(mods []modapi.Module, off []string) {
 		mods = kernel.Builtin()
 	}
 	s.modules = kernel.New(mods, func(id string) bool { return slices.Contains(off, id) }, s.logf)
+	s.logf("modules: loaded %s", loadedModules(s.modules))
+}
+
+// loadedModules names the loaded modules for the manager's log, in load order ("none" with none): a core-only build's
+// manager says "none" (scripts/ci/core-only-smoke.py reads the line).
+func loadedModules(k *kernel.Kernel) string {
+	var ids []string
+	for _, info := range k.Modules() {
+		ids = append(ids, info.ID)
+	}
+	if len(ids) == 0 {
+		return "none"
+	}
+	return strings.Join(ids, ", ")
 }
 
 // moduleValue is a module setting's value as the assistant's settings keep it: the JSON as stored, nil when never set.
