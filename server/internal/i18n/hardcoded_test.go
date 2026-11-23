@@ -40,6 +40,7 @@ var hardcodedDirs = []string{
 	"internal/feishubot",
 	"internal/hub",
 	"internal/mail",
+	"internal/mailwire",
 	"internal/quota",
 	"internal/update",
 	"internal/voice",

@@ -12,19 +12,6 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Tool names exposed to Claude through MCP. The hub intercepts anything with a
-// "mail_" prefix and routes it to Call.
-const (
-	ToolAccounts = "mail_accounts"
-	ToolSearch   = "mail_search"
-	ToolRead     = "mail_read"
-	ToolSend     = "mail_send"
-	// ToolSaveAttachment writes a file on the machine the agent runs on, so that machine's node answers it
-	// (node/mailattachment.go) with the bytes FetchAttachment hands over its mail.attachment request; it is listed
-	// here with the others so that it comes and goes with mail.
-	ToolSaveAttachment = "mail_save_attachment"
-)
-
 // Tools returns the MCP tool definitions for mail (descriptions and schemas in prompts/mcp/mail).
 func (s *Service) Tools() []proto.Tool {
 	var out []proto.Tool

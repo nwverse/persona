@@ -68,7 +68,7 @@ func (s *Service) noteLogin(id string, err error) bool {
 
 // withHealthLocked is a's public copy with the last login's outcome as its status. The caller holds s.mu.
 func (s *Service) withHealthLocked(a *MailAccount) *MailAccount {
-	cp := a.public()
+	cp := publicAccount(a)
 	if msg, ok := s.loginErr[a.ID]; ok {
 		cp.Status, cp.Error = "error", msg
 	}

@@ -11,9 +11,6 @@ import (
 // secret.key, so the account goes as a whole with its secrets in plaintext (over the bus only) and is sealed again on
 // arrival.
 
-// ErrNoAccount: there is no account with that ID.
-var ErrNoAccount = errors.New("no such mail account")
-
 // exportedAccount is an account with its secrets, as ExportAccount gives it and ImportAccount takes it. The outer
 // Password and OAuth win over MailAccount's (which never marshal).
 type exportedAccount struct {
@@ -29,7 +26,7 @@ func (s *Service) ExportAccount(id string) ([]byte, error) {
 	a, ok := s.accts[id]
 	var cp MailAccount
 	if ok {
-		cp = *a.clone()
+		cp = *cloneAccount(a)
 	}
 	s.mu.Unlock()
 	if !ok {
@@ -79,5 +76,5 @@ func (s *Service) ImportAccount(data []byte) (*MailAccount, error) {
 	if err := s.commitAccount(a.ID, &a, false, nil); err != nil {
 		return nil, err
 	}
-	return a.public(), nil
+	return publicAccount(&a), nil
 }

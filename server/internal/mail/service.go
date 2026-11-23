@@ -2,7 +2,6 @@ package mail
 
 import (
 	"context"
-	"errors"
 	"log"
 	"net/http"
 	"net/url"
@@ -25,10 +24,6 @@ const (
 	// sweepInterval is how often idle connections are checked.
 	sweepInterval = 30 * time.Second
 )
-
-// ErrTimedOut is an operation on an account that ran past networkTimeout (the inbox counts it as a timeout, not a
-// failure).
-var ErrTimedOut = errors.New("imap: operation timed out")
 
 // Service is the mail module. One Service per hub process.
 type Service struct {

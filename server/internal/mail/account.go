@@ -36,10 +36,10 @@ func (s *Service) account(id string) (*MailAccount, error) {
 	if !ok {
 		return nil, &UnknownAccountError{Account: id}
 	}
-	return a.clone(), nil
+	return cloneAccount(a), nil
 }
 
-func (a *MailAccount) clone() *MailAccount {
+func cloneAccount(a *MailAccount) *MailAccount {
 	cp := *a
 	if a.OAuth != nil {
 		creds := *a.OAuth
@@ -48,16 +48,12 @@ func (a *MailAccount) clone() *MailAccount {
 	return &cp
 }
 
-// public returns a copy without secrets.
-func (a *MailAccount) public() *MailAccount {
+// publicAccount returns a copy without secrets.
+func publicAccount(a *MailAccount) *MailAccount {
 	cp := *a
 	cp.Password, cp.OAuth = "", nil
 	return &cp
 }
-
-// ErrAccountExists: the address already has an account (HTTP 409). Changing its servers or password means deleting
-// it and adding it again, and the message says so.
-var ErrAccountExists = errors.New("已经添加过了")
 
 func accountExists(email string) error {
 	return fmt.Errorf("%s %w；要换服务器或授权码，先删掉原来的账号再添加", email, ErrAccountExists)
@@ -112,7 +108,7 @@ func (s *Service) AddAccount(req AddAccountRequest) (*MailAccount, error) {
 	if err := s.commitAccount(a.ID, a, false, nil); err != nil {
 		return nil, err
 	}
-	return a.public(), nil
+	return publicAccount(a), nil
 }
 
 // upsertAccount saves a verified account; an existing account with the same address keeps its ID
@@ -120,7 +116,7 @@ func (s *Service) AddAccount(req AddAccountRequest) (*MailAccount, error) {
 func (s *Service) upsertAccount(a *MailAccount) (*MailAccount, error) {
 	s.accountMu.Lock()
 	defer s.accountMu.Unlock()
-	a = a.clone()
+	a = cloneAccount(a)
 	s.mu.Lock()
 	var prev *MailAccount
 	for _, existing := range s.accts {
@@ -137,7 +133,7 @@ func (s *Service) upsertAccount(a *MailAccount) (*MailAccount, error) {
 	if err := s.commitAccount(a.ID, a, true, nil); err != nil {
 		return nil, err
 	}
-	return a.public(), nil
+	return publicAccount(a), nil
 }
 
 // DeleteAccount removes an account and closes its connection.
@@ -168,7 +164,7 @@ func (s *Service) commitAccount(id string, a *MailAccount, retire bool, publish 
 		}
 	}
 	if a != nil {
-		a = a.clone()
+		a = cloneAccount(a)
 		candidate = append(candidate, a)
 	}
 	if err := s.store.save(candidate); err != nil {
@@ -200,7 +196,7 @@ func (s *Service) commitAccount(id string, a *MailAccount, retire bool, publish 
 func (s *Service) snapshotLocked() []*MailAccount {
 	out := make([]*MailAccount, 0, len(s.accts))
 	for _, a := range s.accts {
-		out = append(out, a.clone())
+		out = append(out, cloneAccount(a))
 	}
 	return out
 }

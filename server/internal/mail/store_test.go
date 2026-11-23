@@ -74,7 +74,7 @@ func TestEncryptedStoreRoundTrip(t *testing.T) {
 	}
 
 	// Public views never expose secrets.
-	pub := got.public()
+	pub := publicAccount(got)
 	if pub.Password != "" {
 		t.Fatalf("public() leaked secrets: %+v", pub)
 	}

@@ -10,16 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/secretkey"
 )
-
-// Records is where accounts are persisted: Postgres (internal/db) in production, memory in tests.
-// The mail package encrypts secrets before they reach it, with a key that never leaves dataDir.
-type Records interface {
-	MailAccounts(ctx context.Context) ([]db.MailAccountRow, error)
-	ReplaceMailAccounts(ctx context.Context, rows []db.MailAccountRow) error
-}
 
 // store keeps accounts in Records with their secrets encrypted: with the manager's secret.key, and while a rotation
 // keeps them, its old keys for reading (secretkey.NewWithFallback).
@@ -93,7 +85,7 @@ func (s *store) importLegacy(path string) error {
 		if err := json.Unmarshal(b, &f); err != nil {
 			return fmt.Errorf("mail: parse legacy accounts: %w", err)
 		}
-		rows := make([]db.MailAccountRow, 0, len(f.Accounts))
+		rows := make([]AccountRow, 0, len(f.Accounts))
 		for _, r := range f.Accounts {
 			row, err := r.row()
 			if err != nil {
@@ -109,14 +101,14 @@ func (s *store) importLegacy(path string) error {
 }
 
 // row converts a record (secrets already encrypted) to its database shape.
-func (r accountRecord) row() (db.MailAccountRow, error) {
+func (r accountRecord) row() (AccountRow, error) {
 	pw, oauth := r.PasswordEnc, r.OAuthEnc
 	r.PasswordEnc, r.OAuthEnc = "", ""
 	data, err := json.Marshal(r)
 	if err != nil {
-		return db.MailAccountRow{}, err
+		return AccountRow{}, err
 	}
-	return db.MailAccountRow{ID: r.ID, Email: r.Email, Data: data, PasswordEnc: pw, OAuthEnc: oauth}, nil
+	return AccountRow{ID: r.ID, Email: r.Email, Data: data, PasswordEnc: pw, OAuthEnc: oauth}, nil
 }
 
 func (s *store) encrypt(plain []byte) (string, error) { return s.box.Seal(string(plain)) }
@@ -244,7 +236,7 @@ func (s *store) save(accounts []*MailAccount) error {
 		f.Accounts = append(f.Accounts, r)
 	}
 
-	rows := make([]db.MailAccountRow, 0, len(f.Accounts))
+	rows := make([]AccountRow, 0, len(f.Accounts))
 	for _, r := range f.Accounts {
 		row, err := r.row()
 		if err != nil {
