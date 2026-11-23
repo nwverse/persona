@@ -2809,6 +2809,50 @@
       "value": "刷新"
     },
     {
+      "name": "computer_screen_show_keys",
+      "value": "打开 Mac 键盘"
+    },
+    {
+      "name": "computer_screen_hide_keys",
+      "value": "收起 Mac 键盘"
+    },
+    {
+      "name": "computer_screen_landscape",
+      "value": "横屏查看"
+    },
+    {
+      "name": "computer_screen_portrait",
+      "value": "竖屏查看"
+    },
+    {
+      "name": "computer_screen_fullscreen",
+      "value": "全屏查看"
+    },
+    {
+      "name": "computer_screen_exit_fullscreen",
+      "value": "退出全屏"
+    },
+    {
+      "name": "computer_screen_fit",
+      "value": "还原至适应屏幕"
+    },
+    {
+      "name": "computer_screen_control_short",
+      "value": "操控"
+    },
+    {
+      "name": "computer_screen_stop_short",
+      "value": "停止"
+    },
+    {
+      "name": "computer_screen_main_display",
+      "value": "主显示器"
+    },
+    {
+      "name": "computer_screen_display",
+      "value": "显示器"
+    },
+    {
       "name": "computer_screen_control",
       "value": "控制屏幕"
     },
@@ -2837,6 +2881,50 @@
       "value": "输入账号和密码"
     },
     {
+      "name": "computer_screen_mac_sign_in",
+      "value": "使用这台 Mac 的账号登录"
+    },
+    {
+      "name": "computer_screen_controlling",
+      "value": "正在操控"
+    },
+    {
+      "name": "computer_screen_account_hint",
+      "value": "这台 Mac 上的账户名"
+    },
+    {
+      "name": "computer_screen_password_hint",
+      "value": "该账户的登录密码"
+    },
+    {
+      "name": "computer_screen_remember",
+      "value": "在这台手机上记住"
+    },
+    {
+      "name": "computer_screen_remember_hint",
+      "value": "下次查看这台 Mac 时自动连接。"
+    },
+    {
+      "name": "computer_screen_forget_login",
+      "value": "忘记登录信息"
+    },
+    {
+      "name": "computer_screen_saved_rejected",
+      "value": "这台 Mac 未接受已保存的登录信息，请重新输入。"
+    },
+    {
+      "name": "computer_screen_store_unavailable",
+      "value": "暂时无法读取已保存的登录信息，仍可手动登录。"
+    },
+    {
+      "name": "computer_screen_save_failed",
+      "value": "已连接，本次登录信息未能保存到手机。"
+    },
+    {
+      "name": "computer_screen_forget_failed",
+      "value": "未能清除登录信息，请重试。"
+    },
+    {
       "name": "computer_screen_account",
       "value": "账号"
     },
@@ -2855,6 +2943,26 @@
     {
       "name": "computer_screen_waiting",
       "value": "正在等待电脑…"
+    },
+    {
+      "name": "computer_screen_authenticating",
+      "value": "正在验证 Mac 账号…"
+    },
+    {
+      "name": "computer_screen_waiting_frame",
+      "value": "正在等待电脑传来画面…"
+    },
+    {
+      "name": "computer_screen_auth_timeout",
+      "value": "Mac 登录验证超时，请重新连接。"
+    },
+    {
+      "name": "computer_screen_frame_failed",
+      "value": "无法显示电脑画面，请重新连接。"
+    },
+    {
+      "name": "computer_screen_frame_timeout",
+      "value": "Mac 未及时传来画面，请重新连接。"
     },
     {
       "name": "computer_screen_sharing_off",
@@ -2879,6 +2987,46 @@
     {
       "name": "computer_screen_screen_unavailable",
       "value": "电脑屏幕不可用"
+    },
+    {
+      "name": "computer_screen_shortcut_keys",
+      "value": "Mac 快捷键"
+    },
+    {
+      "name": "computer_screen_key_escape",
+      "value": "Esc，取消操作或关闭弹窗"
+    },
+    {
+      "name": "computer_screen_key_tab",
+      "value": "Tab，移到下一个输入项"
+    },
+    {
+      "name": "computer_screen_key_left",
+      "value": "左方向键，向左移动"
+    },
+    {
+      "name": "computer_screen_key_up",
+      "value": "上方向键，向上移动"
+    },
+    {
+      "name": "computer_screen_key_down",
+      "value": "下方向键，向下移动"
+    },
+    {
+      "name": "computer_screen_key_right",
+      "value": "右方向键，向右移动"
+    },
+    {
+      "name": "computer_screen_key_return",
+      "value": "回车，确认或换行"
+    },
+    {
+      "name": "computer_screen_keyboard_unavailable",
+      "value": "键盘未能打开，请再点一次键盘按钮。"
+    },
+    {
+      "name": "computer_screen_input_failed",
+      "value": "部分输入未送达 Mac，请核对电脑上的内容再补输。"
     },
     {
       "name": "computer_screen_type_text",

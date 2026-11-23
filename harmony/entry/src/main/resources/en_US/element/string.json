@@ -2809,6 +2809,50 @@
       "value": "Refresh"
     },
     {
+      "name": "computer_screen_show_keys",
+      "value": "Open Mac keyboard"
+    },
+    {
+      "name": "computer_screen_hide_keys",
+      "value": "Hide Mac keyboard"
+    },
+    {
+      "name": "computer_screen_landscape",
+      "value": "View in landscape"
+    },
+    {
+      "name": "computer_screen_portrait",
+      "value": "View in portrait"
+    },
+    {
+      "name": "computer_screen_fullscreen",
+      "value": "Full screen"
+    },
+    {
+      "name": "computer_screen_exit_fullscreen",
+      "value": "Exit full screen"
+    },
+    {
+      "name": "computer_screen_fit",
+      "value": "Fit to screen"
+    },
+    {
+      "name": "computer_screen_control_short",
+      "value": "Control"
+    },
+    {
+      "name": "computer_screen_stop_short",
+      "value": "Stop"
+    },
+    {
+      "name": "computer_screen_main_display",
+      "value": "Main display"
+    },
+    {
+      "name": "computer_screen_display",
+      "value": "Display"
+    },
+    {
       "name": "computer_screen_control",
       "value": "Take control"
     },
@@ -2837,6 +2881,50 @@
       "value": "Enter account and password"
     },
     {
+      "name": "computer_screen_mac_sign_in",
+      "value": "Sign in with your macOS account"
+    },
+    {
+      "name": "computer_screen_controlling",
+      "value": "Controlling"
+    },
+    {
+      "name": "computer_screen_account_hint",
+      "value": "Account name on this Mac"
+    },
+    {
+      "name": "computer_screen_password_hint",
+      "value": "Password for this account"
+    },
+    {
+      "name": "computer_screen_remember",
+      "value": "Remember on this phone"
+    },
+    {
+      "name": "computer_screen_remember_hint",
+      "value": "Connect automatically next time you view this Mac."
+    },
+    {
+      "name": "computer_screen_forget_login",
+      "value": "Forget login"
+    },
+    {
+      "name": "computer_screen_saved_rejected",
+      "value": "The Mac declined the saved login. Enter your current account and password."
+    },
+    {
+      "name": "computer_screen_store_unavailable",
+      "value": "Saved login is unavailable. You can still sign in."
+    },
+    {
+      "name": "computer_screen_save_failed",
+      "value": "Connected. The login could not be saved on this phone."
+    },
+    {
+      "name": "computer_screen_forget_failed",
+      "value": "Couldn’t remove the saved login. Try again."
+    },
+    {
       "name": "computer_screen_account",
       "value": "Account"
     },
@@ -2855,6 +2943,26 @@
     {
       "name": "computer_screen_waiting",
       "value": "Waiting for the computer…"
+    },
+    {
+      "name": "computer_screen_authenticating",
+      "value": "Verifying your Mac account…"
+    },
+    {
+      "name": "computer_screen_waiting_frame",
+      "value": "Waiting for the first screen image…"
+    },
+    {
+      "name": "computer_screen_auth_timeout",
+      "value": "The Mac didn’t finish signing you in. Connect again to retry."
+    },
+    {
+      "name": "computer_screen_frame_failed",
+      "value": "The screen image could not be displayed. Connect again to retry."
+    },
+    {
+      "name": "computer_screen_frame_timeout",
+      "value": "The Mac didn’t send a screen image. Connect again to retry."
     },
     {
       "name": "computer_screen_sharing_off",
@@ -2879,6 +2987,46 @@
     {
       "name": "computer_screen_screen_unavailable",
       "value": "Computer screen is unavailable"
+    },
+    {
+      "name": "computer_screen_shortcut_keys",
+      "value": "Mac shortcut keys"
+    },
+    {
+      "name": "computer_screen_key_escape",
+      "value": "Esc, cancel or dismiss"
+    },
+    {
+      "name": "computer_screen_key_tab",
+      "value": "Tab, move to the next field"
+    },
+    {
+      "name": "computer_screen_key_left",
+      "value": "Left arrow, move left"
+    },
+    {
+      "name": "computer_screen_key_up",
+      "value": "Up arrow, move up"
+    },
+    {
+      "name": "computer_screen_key_down",
+      "value": "Down arrow, move down"
+    },
+    {
+      "name": "computer_screen_key_right",
+      "value": "Right arrow, move right"
+    },
+    {
+      "name": "computer_screen_key_return",
+      "value": "Return, confirm or start a new line"
+    },
+    {
+      "name": "computer_screen_keyboard_unavailable",
+      "value": "Couldn’t open the keyboard. Tap the keyboard button to try again."
+    },
+    {
+      "name": "computer_screen_input_failed",
+      "value": "Some input didn’t reach the Mac. Check the remote field before typing it again."
     },
     {
       "name": "computer_screen_type_text",

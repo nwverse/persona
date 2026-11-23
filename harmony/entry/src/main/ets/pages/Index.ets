@@ -24,7 +24,7 @@ import { deviceFeatures } from '../models/DeviceFeatures';
 import { SessionTools } from '../components/SessionTools';
 import { SessionWorkspace } from '../models/SessionWorkspace';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { ComposeListItemV2, ContentItemV2, KeyboardAvoidMode, TextModifier, SymbolGlyphModifier, CapsuleSegmentButtonV2, SegmentButtonV2Items, ColorMetrics, LengthMetrics, uiMaterial } from '@kit.ArkUI';
+import { ComposeListItemV2, ContentItemV2, KeyboardAvoidMode, TextModifier, SymbolGlyphModifier, CapsuleSegmentButtonV2, SegmentButtonV2Items, ColorMetrics, LengthMetrics, uiMaterial, window } from '@kit.ArkUI';
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { ClientModel, client } from '../models/ClientModel';
 import { ResourceRow, HubProfile, Wire } from '../models/Wire';
@@ -107,6 +107,10 @@ struct Index {
   @Local directory: string = '';
   @Local settingsPage: string = '';
   @Local activeChild: string = '';
+  @Local fullscreenComputer: string = '';
+  @Local computerOrientation: window.Orientation = window.Orientation.AUTO_ROTATION_RESTRICTED;
+  @Local computerReturnOrientation: window.Orientation | undefined = undefined;
+  private computerExitTimer: number = -1;
   @Local tool: number = 0;
   private titleMaterial: uiMaterial.Material = uiMaterial.isImmersiveMaterialSupported() ? new uiMaterial.ImmersiveMaterial({ style: uiMaterial.ImmersiveStyle.THIN }) : uiMaterial.Material.empty;
   @Local agentWorkspace: AgentWorkspace = new AgentWorkspace();
@@ -246,7 +250,7 @@ struct Index {
     this.bindDeviceOwner(this.model);
     this.applications.bind(this.model); this.applications.refresh();
   }
-  aboutToDisappear(): void { this.agentWorkspace.hide(); this.applications.dispose(); this.dismissChatActions(); }
+  aboutToDisappear(): void { this.finishComputerFullscreen(); this.agentWorkspace.hide(); this.applications.dispose(); this.dismissChatActions(); }
   @Monitor('model.profile', 'model.connected', 'model.features') applicationOwnerChanged(): void {
     this.applications.bind(this.model); this.applications.connectionChanged();
   }
@@ -875,11 +879,41 @@ struct Index {
     const page = this.settingsKind(param);
     return page === 'devices' || page === 'machines' ? Tokens.inset : 0;
   }
+  private immersiveComputer(name: string, param: Object): boolean {
+    return name === 'computer' && this.fullscreenComputer === this.childKey(name, param);
+  }
+
+  private screenOrientation(name: string, param: Object): window.Orientation | undefined {
+    if (name !== 'computer') return undefined;
+    return this.immersiveComputer(name, param) ? this.computerOrientation : this.computerReturnOrientation;
+  }
+
+  private finishComputerFullscreen(): void {
+    if (this.computerExitTimer !== -1) clearTimeout(this.computerExitTimer);
+    this.computerExitTimer = -1;
+    this.fullscreenComputer = '';
+    this.environment.setComputerImmersive(false);
+  }
+
+  @Monitor('environment.windowWidthPx')
+  computerWindowChanged(): void {
+    if (this.computerExitTimer !== -1 && this.environment.viewingOrientation() === this.computerReturnOrientation) this.finishComputerFullscreen();
+  }
+
+  private exitComputerFullscreen(): void {
+    if (this.computerExitTimer !== -1 || this.computerReturnOrientation === undefined ||
+      this.environment.viewingOrientation() === this.computerReturnOrientation) { this.finishComputerFullscreen(); return; }
+    // Rotate back while Navigation still owns the whole window. A split destination cannot request orientation.
+    this.computerOrientation = this.computerReturnOrientation;
+    this.computerExitTimer = setTimeout((): void => this.finishComputerFullscreen(), 1000);
+  }
+
   private destinationBackHidden(name: string, param: Object): boolean {
     if (this.mainDestination(name, param) || name === 'session' && Wire.bool(this.routeRow(param).data(), 'navigation_root') && this.wide() && this.model.section === 1) return true;
     return this.wide() && this.stack.size() === 1 && this.stack.getAllPathName()[0] === name && this.stack.getParamByIndex(0) === param;
   }
   private destinationTitleText(name: string, param: Object): string {
+    if (name === 'computer') return tr('computer_screen_open');
     if (name === 'settings_root') return tr('settings');
     if (name === 'assistant') return tr(Wire.text(this.routeRow(param).data(), 'assistant_item_kind') === 'plan' ? 'assistant_feed_plan' : 'assistant_feed_receipt');
     return name === 'session' || name === 'conversation' ? this.chatTitle(param) : name === 'resources' ? tr(param === 'todo' ? 'todos' : param === 'inbox' ? 'inbox' : param === 'health' ? 'health_home_title' : 'knowledge') : name === 'applications' ? tr('applications') : name === 'extension' ? this.extensionTitle : name === 'todo' ? this.todoTitle || this.routeRow(param).title || this.routeRow(param).id : name === 'settings' ? this.settingsTitle(param) : name === 'tools' ? tr('workspace') : name === 'history' ? tr('interaction_history') : this.routeRow(param).title || this.routeRow(param).id;
@@ -909,7 +943,19 @@ struct Index {
           }.width('100%').layoutWeight(1).visibility(this.applicationAllowed(param) ? Visibility.Visible : Visibility.None)
         }.width('100%').height('100%')
       } else if (name === 'computer') {
-        if (this.targetReady(name, param)) ComputerScreenPage({ model: this.detailModel, row: this.routeRow(param), active: this.activeChild === this.childKey(name, param), onClose: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } } })
+        if (this.targetReady(name, param)) ComputerScreenPage({ model: this.detailModel, row: this.routeRow(param), active: this.activeChild === this.childKey(name, param),
+          fullscreen: this.immersiveComputer(name, param), onFullscreen: (shown: boolean) => {
+            if (this.activeChild === this.childKey(name, param)) {
+              if (shown) {
+                this.computerReturnOrientation = this.environment.viewingOrientation();
+                this.environment.setComputerImmersive(true);
+                this.computerOrientation = window.Orientation.AUTO_ROTATION_RESTRICTED;
+                this.fullscreenComputer = this.childKey(name, param);
+              } else this.exitComputerFullscreen();
+            }
+          }, onRotate: (landscape: boolean) => {
+            if (this.immersiveComputer(name, param)) this.computerOrientation = landscape ? window.Orientation.LANDSCAPE : window.Orientation.PORTRAIT;
+          }, onClose: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } } })
         else this.targetLoading(name, param)
       } else if (name === 'file') {
         if (this.targetReady(name, param)) RemoteDocumentPage({ model: this.detailModel, row: this.routeRow(param), active: this.activeChild === this.childKey(name, param), onLink: (address: string) => this.openReader(address) })
@@ -954,12 +1000,16 @@ struct Index {
         else this.targetLoading(name, param)
       }
     }.title({ builder: () => this.destinationTitle(name, param), height: this.headerHeight() }, { systemMaterial: this.titleMaterial })
-      .hideTitleBar(this.hideChatTitle(name, param)).hideBackButton(this.destinationBackHidden(name, param))
+      .hideTitleBar(this.immersiveComputer(name, param) || this.hideChatTitle(name, param))
+      .preferredOrientation(this.screenOrientation(name, param))
+      .hideBackButton(this.destinationBackHidden(name, param))
       .backgroundColor(name === 'resources' && param === 'inbox' ? Colors.grouped : Colors.canvas)
       .menus(this.destinationMenus(name, param))
       .onShown(() => this.routeShown(name, param))
-      .onHidden(() => { if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; if (this.activeChild === this.childKey(name, param)) { this.activeChild = ''; this.dismissChatActions(); } if ((name === 'session' || name === 'conversation') && this.routeRow(param).key() === this.detailModel.selected.key()) this.detailModel.hideConversation(false); if (name === 'assistant') this.detailModel.watchDecisions(false); if (name === 'tools') this.detailModel.releaseTerminal(); })
-      .onBackPressed((): boolean => { if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; this.detailModel.releaseTerminal(); this.stack.pop(); this.savePath(); return true; })
+      .onHidden(() => { if (name === 'computer' && (this.activeChild === this.childKey(name, param) || this.immersiveComputer(name, param))) {
+        this.finishComputerFullscreen(); this.computerReturnOrientation = undefined;
+      } if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; if (this.activeChild === this.childKey(name, param)) { this.activeChild = ''; this.dismissChatActions(); } if ((name === 'session' || name === 'conversation') && this.routeRow(param).key() === this.detailModel.selected.key()) this.detailModel.hideConversation(false); if (name === 'assistant') this.detailModel.watchDecisions(false); if (name === 'tools') this.detailModel.releaseTerminal(); })
+      .onBackPressed((): boolean => { if (this.immersiveComputer(name, param)) { this.exitComputerFullscreen(); return true; } if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; this.detailModel.releaseTerminal(); this.stack.pop(); this.savePath(); return true; })
   }
   build() {
     Stack() {
@@ -980,7 +1030,7 @@ struct Index {
           .hideBackButton(true).hideTitleBar(this.rail()).menus([])
           .backgroundColor(Colors.canvas)
           .toolbarConfiguration(this.rail() ? [{ value: tr('expand'), icon: $r('sys.media.ohos_ic_public_arrow_right'), action: () => this.collapsed = false }] : [])
-          .mode(this.wide() ? NavigationMode.Split : NavigationMode.Stack)
+          .hideNavBar(!!this.fullscreenComputer).mode(this.wide() && !this.fullscreenComputer ? NavigationMode.Split : NavigationMode.Stack)
           .navBarWidth(this.rail() ? Tokens.collapsed : Tokens.master).navBarWidthRange(this.rail() ? [Tokens.collapsed, Tokens.collapsed] : [Tokens.masterMin, Tokens.masterMax])
           .minContentWidth(Tokens.detailMin).enableDragBar(!this.rail()).navDestination(this.destination)
           .onAreaChange(() => this.updateBreakpoint()).width('100%').height('100%')
