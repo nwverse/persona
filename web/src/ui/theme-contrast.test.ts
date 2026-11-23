@@ -156,7 +156,8 @@ describe("default palette contrast", () => {
       for (const name of Object.values(BUILTIN_PAGE_COLORS)) expect(COLORS, name).toContain(name);
       // a feature module's sidebar entry names its own color (core/module-host.ts ModuleNavItem.color): the same rules
       const moduleColors = MODULES.flatMap((m) => (m.navItems ?? []).flatMap((n) => (n.color ? [[`${m.id}/${n.key}`, n.color] as const] : [])));
-      expect(moduleColors.length).toBeGreaterThan(0);
+      // (the core-only lane, #13932, has no module and so none to check)
+      if (MODULES.length) expect(moduleColors.length).toBeGreaterThan(0);
       for (const [entry, name] of moduleColors) {
         expect(COLORS, entry).toContain(name);
         for (const bg of ["canvas", "hover"]) expect(contrast(hueOf(name), t[bg]), `${entry} --hue-${name} on --${bg}`).toBeGreaterThanOrEqual(MIN_ROLE_CONTRAST);

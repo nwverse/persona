@@ -9,6 +9,7 @@ internal/connectorwire
 internal/devicewire
 internal/dialogwire
 internal/extwire
+internal/githubwire
 internal/kbwire
 internal/mailwire
 internal/modapi

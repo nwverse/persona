@@ -32,7 +32,7 @@ Out of scope: source-specific browsing pages (`docs/extensions/feishu.md` ("Pers
 
 ## I. `Connector` interface
 
-Code lives in `server/internal/connector` (interfaces, `Registry`, generic `gate` and status), with one subpackage per built-in `connector` (`connector/github`, `connector/imessage`).
+Code lives in `server/internal/connector` (interfaces, `Registry`, generic `gate` and status), with one subpackage per built-in `connector` (`modules/github`, `connector/imessage`).
 During migration, Lark, Moments and `mail` initially stay in `hub` behind adapters to avoid moving too much at once. `connector` depends on `kb` data types (`SourceChat`, `SourceMessage`, `Item`),
 not `hub`; hub owns the `Registry`.
 
@@ -362,7 +362,7 @@ It shares the `connector` `threads` capability with Telegram (`docs/extensions/c
   - `Reply`: bottom composer; long-press "Quote reply" turns a `comment` into a Markdown quote (no @, to avoid notifying its `author`).
     Sending uses `github_comment` (accepts both `{chat, text}` and the assistant's `{repo, number, body}`). User sends `comment` directly, without gate/card (#1190); assistant calls remain gated.
   - "AI draft reply" and "Hand to AI" stay in the `Inbox` top bar. CI-failure notifications that are not PRs/issues still show hub-collected text.
-- **Data** (`server/internal/connector/github/thread.go`):
+- **Data** (`server/internal/modules/github/thread.go`):
   - Each read fetches `issue`, comments, events; PRs additionally fetch PR, reviews, inline comments; `open` PRs additionally fetch head-commit check runs. Each list capped at 5 pages × 100 entries.
   - Merge chronologically, paginate in memory; cursor is the oldest entry's id from the previous page.
 - **Cache**:
