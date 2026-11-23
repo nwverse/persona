@@ -74,6 +74,8 @@
   "scope_notify": "Send notifications to your devices",
   "scope_assistant_ask": "Start Persona chats and read chat activity",
   "scope_assistant_read": "Read your Persona chats (your messages and its replies)",
+  "scope_assistant_entries_read": "Read your saved facts, preferences, rules and decisions, including personal information",
+  "event_assistant_entries_changed": "An entry was marked wrong (requires entries read access)",
   "scope_assistant_memory_read": "Read what Persona remembers about you (read-only, never the health space)",
   "scope_todos_read": "View to-dos",
   "scope_todos_write": "Create and edit to-dos and link chats to them (no deletion)",

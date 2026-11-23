@@ -123,8 +123,9 @@ type Service struct {
 	humanSent      humanSends
 	storeApprovals storeApprovals
 
-	hub   Hub
-	store func() Store
+	hub         Hub
+	store       func() Store
+	entriesDial func(context.Context, any) ([]byte, error)
 	// trustSrc is Options.Trust.
 	trustSrc MachineTrust
 	logf     func(format string, args ...any)
@@ -215,6 +216,7 @@ type Service struct {
 	convSpaces           convSpaceBook          // conversation_space.go
 	trackReg             trackRegistry          // track_registry.go
 	infoTags             infoTagCache           // info_tag.go
+	infoTagWaiting       infoTagPending         // info_use.go
 	spaceFill            spaceBackfill          // conversation_space_backfill.go
 	outcomeLines         outcomeLines           // todo_outcome.go
 	conversationWrites   sync.RWMutex
@@ -226,6 +228,10 @@ type Service struct {
 	// briefsOptional: task_plan takes a task without done_when / expect_minutes (briefRequired). Only the tests of
 	// what a plan does once it exists set it; the hub never does.
 	briefsOptional bool
+	// noInfoTag: nothing is tagged with information categories whatever model info.tag has (infoTagConfigured), as
+	// with none set up. Tests turn tagging off unless they are about it: a model's socket inside a synctest bubble
+	// never counts as blocked.
+	noInfoTag      bool
 	background     backgroundBook    // supervise_background.go
 	autoRuns       autoReviewBook    // supervise_autoreview.go
 	sessionReviews sessionReviewBook // agents_session_review.go
@@ -392,6 +398,7 @@ func New(o Options) *Service {
 	s.directionNotesRoutes()
 	s.originRoutes()
 	s.profileRoutes()
+	s.entriesRoutes()
 	s.skillImportRoutes()
 	s.readinessRoutes()
 	s.availabilityRoutes()
@@ -1037,6 +1044,7 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 	go s.registerInlineTurn(context.WithoutCancel(ctx), r)
 	s.afterSettle(context.WithoutCancel(ctx), s.registerInlineTurnSettled, r.MachineID, r.SessionID)
 	if !meeting {
+		s.infoTagTurnEnded(ctx, r.SessionID) // its categories are not known until it is tagged (info_use.go)
 		s.backgroundRoundTurnEnded(ctx, r.SessionID, time.Now())
 		s.availTurnEnded(ctx, r.MachineID, r.SessionID, time.Now()) // an assistant conversation's round (availability.go)
 		s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, r.MachineID, r.SessionID)
