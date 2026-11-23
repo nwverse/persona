@@ -24,7 +24,7 @@ import (
 	"github.com/nwverse/persona/server/internal/nodecmd"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/update"
-	"github.com/nwverse/persona/server/internal/voice"
+	"github.com/nwverse/persona/server/internal/modules/voice"
 )
 
 // What the build wrote in (-X), as personad's (the hub's update checks a program by `version -v`).

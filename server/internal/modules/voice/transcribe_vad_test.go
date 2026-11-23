@@ -5,7 +5,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/nwverse/persona/server/internal/voice/voicetest"
+	"github.com/nwverse/persona/server/internal/modules/voice/voicetest"
 )
 
 // The speech the adapter hears is where the script's sentences are, to a frame or two, in recording samples, wherever

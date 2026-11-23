@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/host"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/voice"
+	"github.com/nwverse/persona/server/internal/modules/voice"
 )
 
 // voiceTestStore is what the built-in voice extension's tests run on: the hub's store with the extensions' tables.

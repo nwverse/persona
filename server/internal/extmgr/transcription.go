@@ -18,7 +18,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extwire"
-	"github.com/nwverse/persona/server/internal/voice"
+	"github.com/nwverse/persona/server/internal/modules/voice"
 )
 
 // Meeting transcription (#3862 phase 5, docs/assistant/meeting-minutes.md "The `transcription` extension point"): the

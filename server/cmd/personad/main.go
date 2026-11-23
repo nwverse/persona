@@ -32,7 +32,7 @@ import (
 	"github.com/nwverse/persona/server/internal/shareproxy"
 	"github.com/nwverse/persona/server/internal/supervise"
 	"github.com/nwverse/persona/server/internal/update"
-	"github.com/nwverse/persona/server/internal/voice"
+	"github.com/nwverse/persona/server/internal/modules/voice"
 )
 
 // What the build wrote in (-X): the version for people, and for updates (docs/operations/hub-update.md) the channel

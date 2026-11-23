@@ -20,8 +20,8 @@ import (
 
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/kb"
-	"github.com/nwverse/persona/server/internal/voice"
-	"github.com/nwverse/persona/server/internal/voice/voicetest"
+	"github.com/nwverse/persona/server/internal/modules/voice"
+	"github.com/nwverse/persona/server/internal/modules/voice/voicetest"
 )
 
 // Hub transcription end to end (docs/assistant/meeting-minutes.md "Phase 5: hub transcription"): the phone's audio
