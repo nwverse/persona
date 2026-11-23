@@ -40,6 +40,16 @@ the mock's log has no `GET /api/v1/ws` from the app. Answer the prompts (or gran
 launch) and check `appState` is `active` before taking a screenshot of hello-gated UI, such as a module the hub turns
 off (`MOCK_HUB_MODULES`).
 
+## CI's temporary distribution keychain must be in Xcode's search domain (#14263)
+
+`security find-identity <temporary-keychain>` proves only that the protected identity imported into that file. It does
+not make it visible to `xcodebuild -exportArchive`, which searches the default keychain domain. A candidate reached
+`** ARCHIVE SUCCEEDED **` and then failed export with `No signing certificate "iOS Distribution" found` even though the
+export options correctly selected `Apple Distribution`. Add the temporary keychain with `security list-keychains -s`
+while retaining every existing path; pass each printed path as one argument, not a whitespace-split list, so paths with
+spaces cannot select another identity. Never fall back to an ad-hoc, Debug or alternate certificate. Verify the formal
+archive **and** export, then entitlements, and keep TestFlight processing as a separate result.
+
 ## What a development build redid with nothing changed (2026-11-19, #10713)
 
 `scripts/app/sim.sh` rebuilt more than the change it was run for (`docs/operations/testing.md`, "Development builds"):
