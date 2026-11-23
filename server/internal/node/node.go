@@ -1082,7 +1082,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 				}
 				return n.sendFirstCodexCall(ctx, w, params, p.Text, p.Images)
 			}
-			if r, err, handled := n.codexWaitCalls(method, p.SessionID); handled {
+			if r, err, handled := n.codexWaitCalls(method, p.SessionID, p.UserInputs); handled {
 				return r, err
 			}
 		}
