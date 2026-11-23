@@ -1537,7 +1537,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   lastLines.current = allLines;
   // A canonical, completed silent round leaves no empty row or feed card in the main timeline. Its full projection is
   // retained for Background activity; running, legacy quiet and every promoted round keep their existing rendering.
-  const quiet = useMemo(() => splitBackgroundActivity(allLines, feed, tr.hasMore ? loadedFrom(tr.items) : undefined), [allLines, feed, tr.hasMore, tr.items]);
+  // The oldest loaded transcript time while older pages remain: read once for both the split and the feed's gate.
+  const historyFrom = useMemo(() => (tr.hasMore ? loadedFrom(tr.items) : undefined), [tr.hasMore, tr.items]);
+  const quiet = useMemo(() => splitBackgroundActivity(allLines, feed, historyFrom), [allLines, feed, historyFrom]);
   const lines = quiet.timeline;
   // a DayLine over the first line of each new calendar day (#8160); day-only keys keep them stable as pages and
   // midnight arrivals land. Days the earlier stretches already open with a divider are not repeated here.
@@ -1564,7 +1566,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     () => (modes?.scope === `${mid}/${sid}` ? modes.kit.withModeChanges(dayRows, modes.changes, tr.hasMore || earlier.stretches.length > 0 ? earlier.liveItems : undefined) : dayRows),
     [modes, mid, sid, dayRows, tr.hasMore, earlier.stretches.length, earlier.liveItems],
   );
-  const feedFrom = useMemo(() => (assistant && tr.hasMore ? loadedFrom(tr.items) : undefined), [assistant, tr.hasMore, tr.items]);
+  const feedFrom = assistant ? historyFrom : undefined;
   const assistantLines = useMemo(
     () => (assistant ? displayLines(lines, quiet.timelineFeed, feedFrom) : NO_DISPLAY_LINES),
     [assistant, lines, quiet.timelineFeed, feedFrom],
