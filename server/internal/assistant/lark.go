@@ -258,8 +258,14 @@ func (h larkHost) PersistRunExt(id string, state any, still func() bool, ext map
 		for k, v := range ext {
 			r.Ext[k] = v
 		}
-		h.s.saveChannelStateLocked()
 		return true, true
 	}
 	return true, false
+}
+
+func (h larkHost) SaveRuns() {
+	c := &h.s.chans
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	h.s.saveChannelStateLocked()
 }

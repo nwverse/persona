@@ -69,9 +69,10 @@ type Host interface {
 	RunState(id string, kept bool, make func() any) (state any, done <-chan struct{}, ok bool)
 	RunItems(id string) ([]proto.Item, bool)
 	RunSteps(id string) []string
-	// PersistRunExt keeps ext on run id when it is still live with state and still() holds (asked under the lock):
-	// live says it was, kept that the run is still kept (and ext saved with it).
+	// PersistRunExt sets ext on run id when it is still live with state and still() holds (asked under the lock):
+	// live says it was, kept that the run is still among the channels' runs (and has ext now). SaveRuns saves them.
 	PersistRunExt(id string, state any, still func() bool, ext map[string]string) (live, kept bool)
+	SaveRuns()
 }
 
 // Layer is the module's assistant layer, what the core asks of it (internal/larkhost.Layer): the outbound channel port
@@ -136,6 +137,9 @@ func (l *Layer) TurnRecalled(ctx context.Context, m channel.Folded) { l.turns.si
 func (l *Layer) TurnAnswer(ctx context.Context, r *channel.Run, answer, note string, took time.Duration, final, quiet bool, end channel.End) error {
 	return l.turns.sink().answer(ctx, r, answer, note, took, final, quiet, end)
 }
+
+// Wait waits until the turns' background work (the agent messages' workers) has ended, or ctx ends.
+func (l *Layer) Wait(ctx context.Context) error { return l.turns.wait(ctx) }
 
 // TurnProgressAfter and TurnProgressIdle are when the first progress card goes out and how long it may stay unchanged.
 func (l *Layer) TurnProgressAfter(r *channel.Run) time.Duration {

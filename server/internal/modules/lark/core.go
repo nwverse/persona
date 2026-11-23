@@ -24,6 +24,20 @@ type turns struct {
 	mu sync.Mutex
 	// kitDown: CardKit would not make a progress card (stream.go); until then they are sent as messages.
 	kitDown time.Time
+	// workers are the agent messages' workers still running (Layer.Wait).
+	workers sync.WaitGroup
+}
+
+// wait waits for the workers, or ctx.
+func (t *turns) wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() { t.workers.Wait(); close(done) }()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func newTurns(h Host) *turns { return &turns{h: h} }

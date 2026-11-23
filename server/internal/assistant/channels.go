@@ -96,7 +96,7 @@ type channelsBook struct {
 	// list is the hub's list of the channels, kept a moment (the runs look at it every second).
 	list   []channel.View
 	listAt time.Time
-	now     func() time.Time // tests
+	now    func() time.Time // tests
 }
 
 func (c *channelsBook) clock() time.Time {

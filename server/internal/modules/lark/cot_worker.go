@@ -74,9 +74,14 @@ func (f feishuSink) topicCotQueue(r *channel.Run, finish bool) (bool, *cotWorker
 					w.cancel()
 				}
 			}
+			// The channels' checkpoint is saved without holding the worker's lock over its I/O.
 			w.mu.Unlock()
+			if kept {
+				s.h.SaveRuns()
+			}
 		}
-		go w.work(f)
+		s.t.workers.Add(1)
+		go func() { defer s.t.workers.Done(); w.work(f) }()
 		go func() {
 			select {
 			case <-ownerDone:

@@ -90,6 +90,8 @@ type Turns interface {
 	TurnAnswer(ctx context.Context, r *channel.Run, answer, note string, took time.Duration, final, quiet bool, end channel.End) error
 	TurnProgressAfter(r *channel.Run) time.Duration
 	TurnProgressIdle() time.Duration
+	// Wait waits until the turns' background work has ended, or ctx ends (the service stops; tests drain).
+	Wait(ctx context.Context) error
 }
 
 // Layer is what the core asks of the lark module: the outbound port and the Feishu turns. It grows as the
@@ -141,6 +143,7 @@ type Host interface {
 	RunItems(id string) ([]proto.Item, bool)
 	RunSteps(id string) []string
 	PersistRunExt(id string, state any, still func() bool, ext map[string]string) (live, kept bool)
+	SaveRuns()
 }
 
 // The Feishu turns without a channel: nothing is shown and an answer has nowhere to go (a run of the bot kept from a
@@ -153,6 +156,7 @@ func (None) TurnAnswer(context.Context, *channel.Run, string, string, time.Durat
 }
 func (None) TurnProgressAfter(*channel.Run) time.Duration { return channel.ProgressAfter }
 func (None) TurnProgressIdle() time.Duration              { return channel.ProgressIdle }
+func (None) Wait(context.Context) error                   { return nil }
 
 var provided func(Host) Layer
 
