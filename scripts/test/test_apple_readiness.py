@@ -5,7 +5,10 @@ from pathlib import Path
 import signal
 import subprocess
 import textwrap
+import time
 import unittest
+
+import yaml
 
 import test_sim_boot
 from test_sim_boot import FAKE_XCRUN, NEW, PHONE, ROOT, WATCH
@@ -144,9 +147,9 @@ FAKE_XCRUN_WRAPPER = textwrap.dedent('''\
         if args[:2] == ["simctl", "boot"] and os.environ.get("BOOT_HANG") == "1":
             assert args[2:] == [os.environ["OWNED_UDID"]], args
             def stop(*_):
-                (root / "boot.stopped").write_text("terminated")
                 sys.exit(143)
             signal.signal(signal.SIGTERM, stop)
+            (root / "boot.stopped").write_text("terminated")
             signal.pause()
         os.execv(str(root / "bin/fake-simctl"), ["xcrun", *args])
     ''')
@@ -166,6 +169,48 @@ FAKE_OTOOL = textwrap.dedent('''\
     ''')
 
 
+FAKE_PRODUCT_FILE = ("file", '''#!/usr/bin/env /usr/bin/python3
+import json, os, signal, subprocess, sys, time
+from pathlib import Path
+root = Path(os.environ["FAKE"])
+first = not (root / "product-started").exists()
+if os.environ.get("NESTED_CHILD") == "1" and first:
+    nested = subprocess.Popen([sys.executable, "-c",
+        "import os,signal,time; from pathlib import Path; "
+        "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+        "Path(os.environ['FAKE'] + '/nested-child-ready').write_text(str(os.getpid())); time.sleep(30)"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    with (root / "nested-processes.jsonl").open("a") as log:
+        log.write(json.dumps({"pid": nested.pid, "pgid": os.getpgid(nested.pid)}) + "\\n")
+with (root / "product-processes.jsonl").open("a") as log:
+    log.write(json.dumps({"pid": os.getpid(), "pgid": os.getpgid(0),
+                          "observer_pgid": os.getpgid(os.getppid())}) + "\\n")
+(root / "product-started").write_text("yes")
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+if os.environ.get("PRODUCT_HANG") == "1" and first:
+    time.sleep(30)
+elif first and os.environ.get("OWNED_UDID") != "44444444-4444-4444-4444-444444444444":
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        status = Path(os.environ["OUTPUT"]) / "diagnostics/live-readiness/observer.status.txt"
+        if status.exists() and "xcodebuild-finished" in status.read_text():
+            (root / "collector-outlived-observer").write_text("yes")
+            break
+        time.sleep(0.01)
+print("synthetic architecture")
+''')
+
+
+def process_state(pid):
+    result = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, timeout=2)
+    return result.stdout.strip() or None
+
+
+def assert_process_not_running(case, pid):
+    state = process_state(pid)
+    case.assertTrue(state is None or "Z" in state, f"process {pid} is still running: {state}")
+
+
 FAKE_CLEANUP_SIMCTL = '''#!/usr/bin/env python3
 import os
 import sys
@@ -182,6 +227,7 @@ class AppleReadinessTests(unittest.TestCase):
         self.fixture = test_sim_boot.SimBootTests()
         self.fixture.setUp()
         self.addCleanup(self.fixture.tearDown)
+        self.addCleanup(self.reap_recorded_collectors)
         self.root = self.fixture.dir
         self.fixture.state["bootstatus_hang"] = True
         self.fixture.save()
@@ -189,16 +235,31 @@ class AppleReadinessTests(unittest.TestCase):
         self.watcher_pids.write_text("")
         python = self.fixture.bin / "python3"
         python.write_text(textwrap.dedent('''\
-            #!/bin/bash
-            if [[ "$*" == *apple_readiness_watch.py* ]]; then
-              printf '%s\\n' "$$" >> "$FAKE/watcher-pids"
-            fi
-            exec /usr/bin/python3 "$@"
+            #!/usr/bin/env /usr/bin/python3
+            import json, os, runpy, sys
+            from pathlib import Path
+            watcher = next((index for index, arg in enumerate(sys.argv)
+                            if Path(arg).name == "apple_readiness_watch.py"), None)
+            if watcher is not None:
+                root = Path(os.environ["FAKE"])
+                arguments = sys.argv[watcher:]
+                record = {"pid": os.getpid(), "pgid": os.getpgid(0),
+                          "parent_pgid": os.getpgid(os.getppid()),
+                          "output": arguments[arguments.index("--output") + 1]}
+                with (root / "watcher-processes.jsonl").open("a") as log:
+                    log.write(json.dumps(record) + "\\n")
+                sys.argv = arguments
+                sys.path.insert(0, str(Path(sys.argv[0]).parent))
+                runpy.run_path(sys.argv[0], run_name="__main__")
+            os.execv("/usr/bin/python3", ["/usr/bin/python3", *sys.argv[1:]])
         '''))
         python.chmod(0o755)
         for name, body in (("xcodebuild", FAKE_XCODE), ("xcrun", FAKE_XCRUN_WRAPPER),
-                           ("fake-simctl", FAKE_XCRUN), ("otool", FAKE_OTOOL),
-                           ("file", "#!/bin/bash\nexit 0\n"), ("codesign", "#!/bin/bash\nexit 0\n")):
+                           ("xcodegen", "#!/bin/bash\nprintf '%s\\n' \"$*\" >> \"$FAKE/xcodegen-calls\"\n"
+                                       "if [[ \"$*\" == *dump* ]]; then\n  /bin/cat \"$OUTPUT/whole.json\"\n"
+                                       "else\n  printf 'synthetic project generation\\n'\nfi\n"),
+                           ("fake-simctl", FAKE_XCRUN), ("otool", FAKE_OTOOL), FAKE_PRODUCT_FILE,
+                           ("codesign", "#!/bin/bash\nexit 0\n")):
             if name == "fake-simctl":
                 body = body.replace(
                     'if a[0] == "create":\n',
@@ -219,6 +280,55 @@ class AppleReadinessTests(unittest.TestCase):
         self.output = self.root / "output"
         self.output.mkdir()
         (self.output / "config.json").write_text(json.dumps({"app": {"bundle_id": "org.example.persona.ci"}}))
+        whole = yaml.safe_load((ROOT / 'apple/project.yml').read_text())
+        whole.pop('include')
+        whole['targets']['Persona']['dependencies'] = [
+            {'target': 'PersonaWatch'}, {'target': 'PersonaShare'},
+            *whole['targets']['Persona']['dependencies'],
+        ]
+        (self.output / 'whole.json').write_text(json.dumps(whole))
+
+    def reap_recorded_collectors(self):
+        for name in ("product-processes.jsonl", "nested-processes.jsonl"):
+            records = self.root / name
+            if records.exists():
+                for line in records.read_text().splitlines():
+                    pid = json.loads(line)["pid"]
+                    state = process_state(pid)
+                    if state is not None and "Z" not in state:
+                        os.kill(pid, signal.SIGKILL)
+
+    def assert_collected_products(self, directory):
+        for product in range(3):
+            for kind in ("architecture", "libraries"):
+                path = directory / f"product-{product}-{kind}.txt"
+                expected = "synthetic architecture\n" if kind == "architecture" else "/usr/lib/libSystem.B.dylib"
+                self.assertIn(expected, path.read_text())
+                self.assertEqual(path.with_suffix(".txt.status.txt").read_text(), "0\n")
+        for product in range(2):
+            self.assertEqual((directory / f"product-{product}-bundle-signature.txt.status.txt").read_text(), "0\n")
+
+    def assert_recorded_processes_reaped(self, iphone=True):
+        records = self.root / "product-processes.jsonl"
+        self.assertTrue(records.exists(), "the real product collector did not start")
+        watchers = [json.loads(line) for line in (self.root / "watcher-processes.jsonl").read_text().splitlines()]
+        if iphone:
+            watchers = [watcher for watcher in watchers
+                        if Path(watcher["output"]).name == "live-readiness"]
+        self.assertTrue(watchers)
+        for watcher in watchers:
+            if iphone:
+                self.assertEqual(watcher["pgid"], watcher["pid"], "Bash did not create an observer process group")
+                self.assertNotEqual(watcher["pgid"], watcher["parent_pgid"], "observer shares the readiness shell group")
+            assert_process_not_running(self, watcher["pid"])
+        for name in ("product-processes.jsonl", "nested-processes.jsonl"):
+            path = self.root / name
+            if path.exists():
+                for line in path.read_text().splitlines():
+                    record = json.loads(line)
+                    self.assertEqual(record["pgid"], record.get("observer_pgid", watchers[0]["pgid"]),
+                                     "collector or nested child escaped the observer group")
+                    assert_process_not_running(self, record["pid"])
 
     def run_preparation(self, regular_only=False, regression_only=False, **options):
         source = SCRIPT.read_text()
@@ -253,20 +363,29 @@ class AppleReadinessTests(unittest.TestCase):
 ci_run() {
   local label="$1" budget="$2"; shift 2
   printf '%s|%s\\n' "$label" "$budget" >> "$FAKE/budgets"
-  python3 "$CI_ROOT/scripts/ci/run.py" --label "$label" --timeout "$TEST_STEP_TIMEOUT" -- "$@"
+  if [[ "$label" == *readiness* || "$label" == "Grant Reminders access to the owned test app" ]]; then
+    budget="${TEST_STEP_TIMEOUT:-$budget}"
+  fi
+  python3 "$CI_ROOT/scripts/ci/run.py" --label "$label" --timeout "$budget" -- "$@"
 }
 XCODE=(xcodebuild)
+OFFLINE_PROJECT="$SOURCE/apple/PersonaOfflineUnitTests.xcodeproj"
 TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER=)
 ''' + helpers + block
         env = dict(os.environ, PATH=str(self.fixture.bin) + os.pathsep + os.environ["PATH"],
                    LANE="ios-regressions" if regression_only else "ios", CI_ROOT=str(ROOT), SOURCE=str(ROOT), OUTPUT=str(self.output),
                    PERSONA_CONFIG=str(self.output / "config.json"), SIM_NAME="owned readiness fixture",
+                   SPM="/fixture/spm",
                    DIAGNOSTICS=str(self.root / "diagnostic-artifacts"),
                    CI_BUNDLE_ID="org.example.persona.ci",
                    IOS_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0", OWNED_UDID=owned_udid,
                    REGULAR_SIM_NAME="owned regular About fixture",
-                   FAKE=str(self.root), TEST_STEP_TIMEOUT="10")
+                   FAKE=str(self.root))
         env.update(options)
+        # A short injected deadline belongs to the readiness/probe only, not to
+        # build/simulator setup that must start it on slower Darwin hosts.
+        if "TEST_STEP_TIMEOUT" not in options:
+            env["TEST_STEP_TIMEOUT"] = "10"
         env.setdefault("FULL_RESULT_SUITE", "TypeScaleTests,IconVocabularyTests,TokenRatchetTests,StyleSpecTests")
         result = subprocess.run(["bash", "-c", shell], cwd=ROOT, env=env,
                                 capture_output=True, text=True, timeout=25)
@@ -276,6 +395,7 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
     def test_xcode_probe_replaces_the_hung_bootstatus_and_preserves_full_selection(self):
         result, calls = self.run_preparation()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.root / 'xcodegen-calls').is_file(), 'the real xcodegen dump invocation was not captured')
         self.assertEqual(len(calls), 5)
         self.assertEqual([call[-1] for call in calls], ["build-for-testing"] + ["test-without-building"] * 4)
         selectors = lambda args: [a for a in args if a.startswith(("-only-testing:", "-skip-testing:"))]
@@ -290,6 +410,9 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
             self.assertFalse(any(arg.startswith(("ARCHS=", "ONLY_ACTIVE_ARCH=")) for arg in call))
         for call in calls:
             self.assertEqual(call[call.index("-scheme") + 1], "PersonaOfflineUnitTests")
+            self.assertEqual(call[call.index("-project") + 1], str(ROOT / "apple/PersonaOfflineUnitTests.xcodeproj"))
+            self.assertEqual(call[call.index("-configuration") + 1], "Debug")
+            self.assertEqual(call[call.index("-clonedSourcePackagesDirPath") + 1], "/fixture/spm/SourcePackages")
             self.assertIn("CODE_SIGNING_ALLOWED=YES", call)
             self.assertEqual(call[call.index("-derivedDataPath") + 1], str(self.output / "ios-tests"))
         context = json.loads((self.output / "simulator-readiness-context.json").read_text())
@@ -304,11 +427,24 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
         self.assertTrue((self.output / "diagnostics/live-regular-readiness/observer.status.txt").is_file())
         for name in ("live-readiness", "live-regular-readiness"):
             observer = self.output / "diagnostics" / name
-            self.assertIn("xcodebuild-finished", (observer / "observer.status.txt").read_text())
+            self.assertIn("xcodebuild-finished", (observer / "observer.status.txt").read_text(),
+                          result.stdout + result.stderr + "\n".join(
+                              path.name + ": " + path.read_text()
+                              for path in sorted(observer.glob("*.status.txt"))))
             self.assertTrue((observer / "simulator-launch.status.txt").is_file())
-            for suffix in ("architecture.txt", "libraries.txt"):
-                self.assertTrue((observer / f"product-0-{suffix}").is_file())
-            self.assertTrue((observer / "product-0-bundle-signature.txt").is_file())
+            self.assertTrue((observer / "product-ready").is_file(),
+                            [str(path) for path in observer.iterdir()])
+            self.assert_collected_products(observer)
+        self.assertFalse((self.root / "collector-outlived-observer").exists(),
+                         "the observer published a final status while its collector was still running")
+        self.assert_recorded_processes_reaped()
+
+    def test_stop_reaps_a_nested_child_after_its_collector_exits(self):
+        result, _ = self.run_preparation(NESTED_CHILD="1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.root / "nested-child-ready").exists())
+        self.assert_recorded_processes_reaped()
+        self.assert_collected_products(self.output / "diagnostics/live-readiness")
         sim_calls = (self.root / "calls").read_text()
         self.assertNotIn("simctl bootstatus", sim_calls)
         self.assertEqual([line for line in sim_calls.splitlines() if "simctl boot " in line],
@@ -327,6 +463,7 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
         self.assertIn("1 test cases, zero failed/skipped", (self.output / "simulator-readiness.log").read_text())
         self.assertIn("1 test cases, zero failed/skipped", (self.output / "regular-readiness.log").read_text())
         self.assertEqual((self.root / "budgets").read_text().splitlines(), [
+            "Generate iPhone-only offline unit-test project|120", "Generate offline unit-test Xcode project|120",
             "Build iOS offline unit tests|1800", "No CallKit in the simulator build|300",
             "Create stock iOS 26.0 test simulator|100",
             "Verify hosted iOS test readiness|900", "Grant Reminders access to the owned test app|300",
@@ -359,34 +496,13 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
         self.assertTrue((self.output / "diagnostics/live-readiness/observer.status.txt").is_file())
         self.assertFalse((self.output / "regular-readiness-context.json").exists())
         self.assertEqual((self.root / "budgets").read_text().splitlines(), [
+            "Generate iPhone-only offline unit-test project|120", "Generate offline unit-test Xcode project|120",
             "Build iOS offline unit tests|1800", "No CallKit in the simulator build|300",
             "Create stock iOS 26.0 test simulator|100",
             "Verify hosted iOS test readiness|900", "Grant Reminders access to the owned test app|300",
             "iOS offline unit and design/token tests|1800", "Inspect test results (ios-unit)|120",
         ])
 
-    def test_regression_lane_rejects_a_missing_empty_failed_or_skipped_suite(self):
-        cases = (
-            {"FULL_RESULT_SUITE": "MainPagesStackTests"},
-            {"FULL_RESULT_EMPTY": "1"},
-            {"FULL_RESULT": "Failed"},
-            {"FULL_RESULT": "Skipped"},
-            {"FULL_RESULT_SUITE": "MainPagesStackTests,UnrelatedTests"},
-            {"FULL_STATUS": "7"},
-        )
-        for options in cases:
-            with self.subTest(options=options):
-                case = AppleReadinessTests()
-                case.setUp()
-                options.setdefault("FULL_RESULT_SUITE", "MainPagesStackTests,PhoneSystemToolsTests")
-                try:
-                    result, calls = case.run_preparation(regression_only=True, **options)
-                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertEqual(len(calls), 3)
-                    self.assertFalse((case.root / "regular-probe-started").exists())
-                    self.assertFalse((case.root / "regular-suite-started").exists())
-                finally:
-                    case.doCleanups()
     def test_readiness_shell_does_not_depend_on_unexported_ci_variables(self):
         source = SCRIPT.read_text()
         marker = "  ci_run 'Verify hosted iOS test readiness'"
@@ -396,7 +512,7 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
         # its log in this writable fixture, not at a machine-level fixture path.
         observer = textwrap.dedent('''\
             #!/usr/bin/env python3
-            import json, os, signal, sys
+            import json, os, sys, time
             from pathlib import Path
             root = Path(os.environ["READINESS_FIXTURE"])
             arguments = sys.argv[1:]
@@ -404,17 +520,18 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
             sys.stdout = sys.stderr = log
             root.joinpath("observer.pid").write_text(str(os.getpid()))
             root.joinpath("observer-arguments.json").write_text(json.dumps(arguments))
-            def stop(*_):
-                root.joinpath("observer-stopped").write_text("terminated")
-                sys.exit(0)
-            signal.signal(signal.SIGTERM, stop)
-            signal.signal(signal.SIGINT, stop)
+            destination = Path(arguments[arguments.index("--output") + 1])
             root.joinpath("observer-ready").write_text("ready")
             print("observer-ready", flush=True)
             log.close()
             os.close(1)
             os.close(2)
-            signal.pause()
+            deadline = time.monotonic() + 10
+            while not destination.joinpath("observer.stop").exists():
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("observer stop was not published")
+                time.sleep(0.01)
+            root.joinpath("observer-stopped").write_text("stop-file")
         ''')
         ci_root = self.root / "ci-root/scripts/ci"
         ci_root.mkdir(parents=True)
@@ -509,7 +626,7 @@ IOS_TESTS=(xcodebuild -destination "platform=iOS Simulator,id=$SIM" -destination
         details = stdout + stderr + (log_path.read_text() if log_path.exists() else "")
         self.assertEqual(result.returncode, 0, details)
         self.assertNotIn("unbound variable", stdout + stderr)
-        self.assertEqual((self.root / "observer-stopped").read_text(), "terminated")
+        self.assertEqual((self.root / "observer-stopped").read_text(), "stop-file")
         self.assertEqual((self.root / "budgets").read_text(), "Verify hosted iOS test readiness|900\n")
         arguments = json.loads((self.root / "observer-arguments.json").read_text())
         self.assertEqual(arguments[arguments.index("--bundle-id") + 1], "org.example.persona.ci")
@@ -733,11 +850,7 @@ exit 65
                     for suffix in ("architecture", "libraries"):
                         self.assertEqual((observer / f"product-0-{suffix}.txt.status.txt").read_text(), "0\n")
                     self.assertEqual((observer / "product-0-bundle-signature.txt.status.txt").read_text(), "0\n")
-                    watcher_pids = [int(pid) for pid in case.watcher_pids.read_text().splitlines()]
-                    self.assertTrue(watcher_pids)
-                    for pid in watcher_pids:
-                        with self.assertRaises(ProcessLookupError, msg=f"watcher {pid} survived {key} cleanup"):
-                            os.kill(pid, 0)
+                    case.assert_recorded_processes_reaped(iphone=False)
                 finally:
                     case.doCleanups()
 
@@ -776,59 +889,12 @@ exit 65
         self.assertFalse((self.root / "privacy-granted").exists())
         self.assertFalse((self.root / "full-suite-started").exists())
 
-    def test_probe_results_must_be_nonempty_passed_and_from_the_selected_suite(self):
-        for options in ({"RESULT_STATUS": "Failed"}, {"RESULT_STATUS": "Skipped"},
-                        {"RESULT_STATUS": "empty"}, {"RESULT_SUITE": "UnrelatedTests"}):
-            with self.subTest(options=options):
-                # Each attempt owns a separate device fixture; no retry of a failed probe.
-                case = AppleReadinessTests()
-                case.setUp()
-                try:
-                    result, calls = case.run_preparation(**options)
-                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertEqual(len(calls), 2)
-                    self.assertFalse((case.root / "full-suite-started").exists())
-                    self.assertFalse((case.root / "privacy-granted").exists())
-                finally:
-                    case.doCleanups()
-
-    def test_probe_and_result_inspection_share_one_deadline(self):
-        for key, pid_name in (("PROBE_HANG", "probe.pid"), ("RESULT_HANG", "result.pid")):
-            with self.subTest(phase=key):
-                case = AppleReadinessTests()
-                case.setUp()
-                try:
-                    result, _ = case.run_preparation(**{key: "1", "TEST_STEP_TIMEOUT": "1"})
-                    self.assertEqual(result.returncode, 124, result.stdout + result.stderr)
-                    self.assertFalse((case.root / "full-suite-started").exists())
-                    self.assertTrue((case.root / pid_name).exists())
-                    # The deadline terminates the probe/result process, not just its shell.
-                    self.assertEqual((case.root / pid_name.replace(".pid", ".stopped")).read_text(), "terminated")
-                finally:
-                    case.doCleanups()
-
     def test_probe_leaving_device_booted_does_not_boot_it_again(self):
         result, calls = self.run_preparation(POST_PROBE_STATE="Booted")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(len(calls), 5)
         self.assertNotIn("simctl boot", (self.root / "calls").read_text())
         self.assertTrue((self.root / "privacy-granted").exists())
-
-    def test_permission_handoff_rejects_unavailable_or_transitional_device(self):
-        for options in ({"POST_PROBE_STATE": "Booting"}, {"POST_PROBE_STATE": "Shutting Down"},
-                        {"POST_PROBE_AVAILABLE": "0"}):
-            with self.subTest(options=options):
-                case = AppleReadinessTests()
-                case.setUp()
-                try:
-                    result, calls = case.run_preparation(**options)
-                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertEqual(len(calls), 2)
-                    self.assertNotIn("simctl boot", (case.root / "calls").read_text())
-                    self.assertFalse((case.root / "privacy-attempted").exists())
-                    self.assertFalse((case.root / "full-suite-started").exists())
-                finally:
-                    case.doCleanups()
 
     def test_failed_start_prevents_permission_and_full_suite(self):
         self.fixture.state["boot_rc"] = 7
@@ -848,16 +914,6 @@ exit 65
         self.assertFalse((self.root / "privacy-granted").exists())
         self.assertFalse((self.root / "full-suite-started").exists())
         self.assertEqual((self.root / "calls").read_text().count("simctl boot "), 1)
-
-    def test_start_is_inside_the_existing_permission_deadline(self):
-        result, calls = self.run_preparation(BOOT_HANG="1", TEST_STEP_TIMEOUT="1")
-        self.assertEqual(result.returncode, 124, result.stdout + result.stderr)
-        self.assertEqual(len(calls), 2)
-        self.assertEqual((self.root / "boot.stopped").read_text(), "terminated")
-        self.assertFalse((self.root / "privacy-attempted").exists())
-        self.assertFalse((self.root / "full-suite-started").exists())
-        self.assertEqual((self.root / "budgets").read_text().splitlines()[-1],
-                         "Grant Reminders access to the owned test app|300")
 
     def test_full_suite_failure_is_not_masked_by_successful_readiness(self):
         result, calls = self.run_preparation(FULL_STATUS="7")

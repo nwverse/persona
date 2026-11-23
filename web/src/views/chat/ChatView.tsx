@@ -23,7 +23,6 @@ import { isPinned } from "../../lib/pins";
 import { acknowledgeLaunch } from "../../lib/new-agent";
 import { useRuntimeSession } from "../../lib/runtime-session";
 import { ArchivedNotice, SessionDetailNotice } from "../../ui/SessionDetailNotice";
-import { REVIEW_FEATURE } from "../../lib/session-review";
 import { isBackgroundSupervisor } from "../../lib/background-supervisor";
 import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, upsertSession, useStore, viewSession } from "../../lib/store";
 import { codexThreadOf, waitsForFirstMessage } from "../../lib/codex-waiting";
@@ -49,6 +48,7 @@ import { sendDraft } from "../../lib/drafts";
 import { chatLines, freshWords, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
 import { foldsBackgroundRounds } from "../../lib/background-fold";
 import type { Interaction, Item, Session, Subagent } from "../../lib/types";
+import { REVIEW_FEATURE } from "../../lib/types";
 import { anchoredScroll, followsAgain, isScrollbarPress, jumpLabel, leavesOnKey, leavesOnScrollbarDrag, leavesOnTouch, leavesOnWheel, followsAfterUnfold, UNFOLD_PAUSE, type ScrollAnchor } from "../../lib/disclosure";
 import { Button, copyText, cx, Dialog, IconButton, Loading, Menu, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
@@ -59,7 +59,10 @@ import { scrollBehavior } from "../../ui/stream/motion";
 import { segmentChanges, shiftAbove } from "./offscreen";
 import { glide } from "./glide";
 import { AGENT_COMMANDS, Composer, type Outgoing } from "./Composer";
-import { agentCommands } from "../../lib/composer-commands";
+import { agentCommands, openPickerCommand } from "../../lib/composer-commands";
+import { IMAGE_LIMIT_CODE } from "../../lib/api-errors";
+import { COMPACT_FEATURE, compactBody, compactPath } from "../../lib/compaction";
+import { canResendFailedTurn, compactResendSupport, failedTurnToResend, isImageLimitError, resolveFailedTurnPayload, snapshotTerminalCompaction, waitForAssistantCompaction, watchTerminalCompaction, type OutgoingPayload } from "../../lib/compact-resend";
 import { CLEAR_MAIN_FEATURE, clearMainContext, isClearCommand, mainCommands } from "../../lib/main-clear";
 import { PendingCards, TurnCards } from "./Interactions";
 import { splitTurnAsks } from "../../lib/turn-asks";
@@ -139,7 +142,8 @@ import { codedFailure, knownAction, refreshReadiness, type CodedFailure } from "
 import { FALLBACK_UNAVAILABLE, recoveryExhausted } from "../../lib/model-fallback";
 import { BASE } from "../../lib/base";
 import { usageLimitLabel } from "../../lib/usage-limit";
-import { displayLines, getFeedState, loadedFrom, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type FeedItem } from "../../lib/feed";
+import { displayLines, getFeedState, loadedFrom, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type DisplayLine, type FeedItem } from "../../lib/feed";
+import { splitBackgroundActivity } from "../../lib/quiet-activity";
 import { CardConversation } from "../../ui/AssistantCard";
 import { SessionMark, sessionMarkName } from "../../ui/AgentMark";
 import { sessionAgentName } from "../../lib/agent-kind";
@@ -180,8 +184,10 @@ const ModelFallbackCard = lazy(() => import("./ModelFallbackCard").then((m) => (
 // a conversation that holds one (#10357). Until they are in it shows as the owner's bubble alone, so it never blinks out.
 const SessionReviewMenuItem = lazyPage(() => import("./SessionReviewMenuItem").then((m) => m.SessionReviewMenuItem));
 const UndeliveredBubble = lazyPage(() => import("./UndeliveredBubbles").then((m) => m.UndeliveredBubble));
+const BackgroundActivity = lazyDialog(() => import("./BackgroundActivity").then((m) => m.default));
 
 const NO_FEED: FeedItem[] = [];
+const NO_DISPLAY_LINES: DisplayLine[] = [];
 // A worker's card as its own conversation shows it (#5180): without the fold that makes it "From worker" on its lead's page.
 // One copy per card object, so a push that leaves the card alone leaves its copy alone too.
 const ownCopies = new WeakMap<Interaction, Interaction>();
@@ -756,7 +762,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   }, [mid, sid, pending, outbox, state]);
 
   // seen: on open, when the page comes back to the front, and whenever a turn ends while it is on screen (lib/store.ts
-  // viewSession)
+  // viewSession). Background activity is a read-only audit view, not another look at the main timeline.
+  const [activityOpen, setActivityOpen] = useState(false);
+  // A narrow menu owns a Back entry. Let its close settle before the activity sheet takes that entry over; opening in
+  // the same menu-item call can close the new sheet again (back-close's one-tick hand-off).
+  const openActivity = useCallback(() => {
+    requestAnimationFrame(() => requestAnimationFrame(() => setActivityOpen(true)));
+  }, []);
   useEffect(() => viewSession(mid, sid), [mid, sid]);
 
   // what came in over the WebSocket after the chat subscribed: the agent's words among it fade in (contract §3); the
@@ -1204,6 +1216,10 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   };
 
   // ── sending ──
+  // Recent delivered payloads (keyed by client_msg_id) let compact-and-resend replay the exact text + image bytes;
+  // internalCompactIds tracks only `/compact` messages sent by that recovery flow (not user slash commands).
+  const deliveredPayloads = useRef(new Map<string, OutgoingPayload>());
+  const internalCompactIds = useRef(new Set<string>());
   // true: it went, or it stays in the chat as a failed bubble (`failed`); false: it never went and nothing shows it
   const deliver = useCallback(
     async (out: Outgoing, id: string, clearDraft?: string, attempt = 0, keepInBox = false): Promise<boolean> => {
@@ -1216,6 +1232,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       if (row && !unknownGate.current.gone ? !sessionCan(row, "send") : !unknownGate.current.isMain) {
         toast(isStoppedAgent(row) ? t("chat-chatview.stopped_line") : sourceSubtitle(session) || t("chat-chatview.session_unavailable"), "error");
         return false;
+      }
+      if (!internalCompactIds.current.has(id)) {
+        const recent = deliveredPayloads.current;
+        if (recent.size >= 20) recent.delete(recent.keys().next().value!);
+        recent.set(id, { text: out.text, images: out.images.map((img) => ({ mime: img.mime, data: img.data })) });
       }
       const flight = beginMessageSend(mid, sid, id, out.text);
       // a sending bubble shows picked contexts as quote cards, like the transcript will (not the raw tags)
@@ -1321,7 +1342,25 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     }
   }
 
-  const onSend = async (out: Outgoing): Promise<boolean> => {
+  const compactResendCtl = useRef<AbortController | null>(null);
+  const [compactingToResend, setCompactingToResend] = useState(false);
+  const itemsListeners = useRef(new Set<() => void>());
+  useEffect(() => {
+    itemsListeners.current.forEach((fn) => fn());
+  }, [tr.items]);
+  const cancelCompactResend = useCallback(() => {
+    if (!compactResendCtl.current) return;
+    compactResendCtl.current.abort();
+    compactResendCtl.current = null;
+    setCompactingToResend(false);
+  }, []);
+  useEffect(() => () => {
+    cancelCompactResend();
+    deliveredPayloads.current.clear();
+    internalCompactIds.current.clear();
+  }, [mid, sid, cancelCompactResend]);
+
+  const sendMessage = async (out: Outgoing): Promise<boolean> => {
     // /clear in the main conversation clears its context in place, it is not words for Persona (#5095); an edit of the
     // last message stays an edit (its rewind already ran)
     if (clears && !out.edit && isClearCommand(out.text, out.images.length)) return clearMainContext(sid);
@@ -1350,6 +1389,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       }
     }
     return deliver(out, uuid(), out.edit?.clearDraft, 0, Boolean(out.edit));
+  };
+  const sendMessageNow = useRef(sendMessage);
+  sendMessageNow.current = sendMessage;
+
+  const onSend = async (out: Outgoing): Promise<boolean> => {
+    cancelCompactResend();
+    return sendMessage(out);
   };
   // the composer is memoized: one function, running the latest onSend
   const sendNow = useRef(onSend);
@@ -1483,11 +1529,15 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // AssistantInfo has not arrived but the cached main id has: keep the main chat folded (the absent switch means on).
   const foldBackground = useStore((s) =>
     foldsBackgroundRounds(sid, s.assistant ?? (mainCache ? { main: mainCache.scope } : undefined)));
-  const lines = useMemo(
+  const allLines = useMemo(
     () => stabilizeLines(lastLines.current, chatLines(earlier.liveItems, { live: lastLive && !outgoing, background: foldBackground, main: isMain })),
     [earlier.liveItems, lastLive, outgoing, foldBackground, isMain],
   );
-  lastLines.current = lines;
+  lastLines.current = allLines;
+  // A canonical, completed silent round leaves no empty row or feed card in the main timeline. Its full projection is
+  // retained for Background activity; running, legacy quiet and every promoted round keep their existing rendering.
+  const quiet = useMemo(() => splitBackgroundActivity(allLines, feed, tr.hasMore ? loadedFrom(tr.items) : undefined), [allLines, feed, tr.hasMore, tr.items]);
+  const lines = quiet.timeline;
   // a DayLine over the first line of each new calendar day (#8160); day-only keys keep them stable as pages and
   // midnight arrivals land. Days the earlier stretches already open with a divider are not repeated here.
   const dayTaken = useMemo(() => new Set(earlier.stretchDays), [earlier.stretchDays]);
@@ -1512,6 +1562,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const chatRows: ChatRowWithModes[] = useMemo(
     () => (modes?.scope === `${mid}/${sid}` ? modes.kit.withModeChanges(dayRows, modes.changes, tr.hasMore || earlier.stretches.length > 0 ? earlier.liveItems : undefined) : dayRows),
     [modes, mid, sid, dayRows, tr.hasMore, earlier.stretches.length, earlier.liveItems],
+  );
+  const feedFrom = useMemo(() => (assistant && tr.hasMore ? loadedFrom(tr.items) : undefined), [assistant, tr.hasMore, tr.items]);
+  const assistantLines = useMemo(
+    () => (assistant ? displayLines(lines, quiet.timelineFeed, feedFrom) : NO_DISPLAY_LINES),
+    [assistant, lines, quiet.timelineFeed, feedFrom],
   );
   // the last exchange while the chat is at work, even while a message of yours on its way draws it finished (live needs
   // !outgoing above): its words get no reply bar until the work is over (#5314, SegmentView `busy`)
@@ -1938,6 +1993,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const canRetry =
     lastLine?.kind === "apiError" && state !== "working" && !outgoing && sessionCan(session, "send") &&
     session?.turn_error_code !== FALLBACK_UNAVAILABLE && session?.turn_error_code !== "compaction_sealed" &&
+    session?.turn_error_code !== IMAGE_LIMIT_CODE &&
     session?.turn_error_kind !== "unrecoverable" && !gate.blocked;
   // An exhausted recovery chain (#7824): the last error card names the cause and reset time, and Retry stays offered
   // even for a safeguards-class error the parser calls non-transient. The marker is session-level, so only the last
@@ -2183,6 +2239,103 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const agentCompactBlocked = Boolean(composerDisabled || composerBlocked || hasTaskRoute);
   // Assistant compaction calls the hub HTTP endpoint directly, so composer send disables (e.g. offlineLine) do not gate it.
   const compactBlocked = isAssistant ? Boolean(gate.blocked) : agentCompactBlocked;
+  const hubSupportsAssistantCompact = useStore((s) => hubHas(s.features, COMPACT_FEATURE));
+  const compactResend = compactResendSupport(session, {
+    assistant,
+    hubSupportsAssistantCompact,
+    blocked: Boolean(gate.blocked),
+    offline: Boolean(offlineLine),
+    composerDisabled,
+    routed: hasTaskRoute,
+    working,
+    outgoing: outgoing > 0,
+    stopped: Boolean(stoppedLine),
+  });
+  const isBannerImageLimit = Boolean(bannerError && isImageLimitError(bannerError.info.code, session?.turn_error_code));
+  const failedTurnCandidate = useMemo(
+    () =>
+      isBannerImageLimit && bannerError
+        ? failedTurnToResend(lines, bannerError.id, {
+            internalCompactIds: internalCompactIds.current,
+            captured: deliveredPayloads.current,
+          })
+        : null,
+    [isBannerImageLimit, bannerError, lines],
+  );
+  const canOfferCompactResend = Boolean(
+    isBannerImageLimit && compactResend.supported && canResendFailedTurn(failedTurnCandidate),
+  );
+  const compactAndResend = useCallback(async () => {
+    if (!bannerError || !session || !compactResend.supported || !compactResend.mode || compactResendCtl.current) return;
+    const candidate = failedTurnToResend(linesNow.current, bannerError.id, {
+      internalCompactIds: internalCompactIds.current,
+      captured: deliveredPayloads.current,
+    });
+    if (!canResendFailedTurn(candidate)) return;
+    const key = tailKey;
+    const ctl = new AbortController();
+    compactResendCtl.current = ctl;
+    setCompactingToResend(true);
+    try {
+      // Capture/recover full original payload (raw text + contexts/files + image bytes) BEFORE compaction starts.
+      const resolved = await resolveFailedTurnPayload(candidate, mid, sid, undefined, ctl.signal);
+      if (ctl.signal.aborted) return;
+      if (!resolved.ok) {
+        toast(t("chat-lines.compact_resend_unrecoverable"), "error");
+        return;
+      }
+      if (compactResend.mode === "assistant") {
+        const before = getSession(mid, sid)?.compaction;
+        try {
+          await api(compactPath(sid), { method: "POST", json: compactBody(mid) });
+          window.dispatchEvent(new CustomEvent("persona:compact-requested", { detail: { mid, sid } }));
+        } catch (e) {
+          toast(t("assistant-assistantchat.compact_start_failed", { error: errorText(e) }), "error");
+          return;
+        }
+        const outcome = await waitForAssistantCompaction(mid, sid, before, ctl.signal);
+        if (ctl.signal.aborted || outcome !== "done") return;
+      } else {
+        const compactId = uuid();
+        internalCompactIds.current.add(compactId);
+        const snapshot = snapshotTerminalCompaction(items.current, compactId);
+        const watcher = watchTerminalCompaction(
+          mid,
+          sid,
+          snapshot,
+          () => items.current,
+          (fn) => {
+            itemsListeners.current.add(fn);
+            return () => itemsListeners.current.delete(fn);
+          },
+          ctl.signal,
+        );
+        const sent = await deliver({ text: "/compact", images: [] }, compactId);
+        if (!sent || ctl.signal.aborted) {
+          watcher.cancel();
+          return;
+        }
+        watcher.markDelivered();
+        const outcome = await watcher.promise;
+        if (ctl.signal.aborted || outcome !== "done") return;
+      }
+      // Local composer picker commands (/model, /permissions) open their picker without marking errorRetried or posting.
+      if (openPickerCommand(draftKey, resolved.payload.text, resolved.payload.images.length)) {
+        backToComposer();
+        return;
+      }
+      if (key) setErrorRetried(key);
+      backToComposer();
+      const went = await sendMessageNow.current(resolved.payload);
+      if (!went && key) setErrorRetried((k) => (k === key ? undefined : k));
+    } finally {
+      if (compactResendCtl.current === ctl) {
+        compactResendCtl.current = null;
+        setCompactingToResend(false);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- backToComposer reads stable refs and fine media state
+  }, [bannerError, session, compactResend.supported, compactResend.mode, tailKey, mid, sid, draftKey, deliver]);
 
   const page = (
     <div className="@container/session flex h-full min-w-0 flex-col">
@@ -2201,6 +2354,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         onInterrupt={interrupt}
         last={faceLast}
         onSearch={openSearch}
+        onActivity={isMain ? openActivity : undefined}
         topCenter={topCenter}
         view={switchable ? view : undefined}
         onView={switchable ? setView : undefined}
@@ -2278,7 +2432,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
               <CardConversation.Provider value={assistant ? sid : ""}>
               {earlier.host && <Suspense fallback={null}><EarlierStretches {...earlier.host} offscreen={offscreen} /></Suspense>}
               {assistant
-                ? displayLines(lines, feed, tr.hasMore ? loadedFrom(tr.items) : undefined).flatMap((d) => [
+                ? assistantLines.flatMap((d) => [
                     ...failedBefore(d.kind === "chat" ? d.id : ""),
                     d.kind === "feed" ? (
                       <FeedLineView key={d.id} item={d.item} simplified />
@@ -2296,6 +2450,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                         expandFold={tr.expandFold}
                         launcher={session?.launcher}
                         fix={d.line.id === lastLine?.id ? turnFix : undefined}
+                        turnErrorCode={d.line.id === lastLine?.id ? session?.turn_error_code : undefined}
                         limit={d.line.kind === "apiError" && d.line.id === limitOn ? limitLine : undefined}
                         exhausted={d.line.kind === "apiError" && d.line.id === lastLine?.id ? exhausted : undefined}
                         assistant={assistant}
@@ -2320,6 +2475,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                   sid={sid}
                   streaming={wordsFor(row.line)}
                   expandFold={tr.expandFold}
+                  turnErrorCode={row.line.id === lastLine?.id ? session?.turn_error_code : undefined}
                   limit={row.line.kind === "apiError" && row.line.id === limitOn ? limitLine : undefined}
                   exhausted={row.line.kind === "apiError" && row.line.id === lastLine?.id ? exhausted : undefined}
                   assistant={assistant}
@@ -2398,7 +2554,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                 of the sessions folded under it are in the chat under the bar (#4883, as iOS): Needs you counts them and
                 lists a row for each that closes the tray onto its card. */}
             <TurnCards asks={turnSplit.turn} />
-            {voiceState !== "live" && <AssistantActionBar key={sid} conversation={sid} ownAsks={trayAsks} />}
+            {voiceState !== "live" && <AssistantActionBar key={sid} conversation={sid} ownAsks={isMain ? docked : trayAsks} />}
             {voiceState !== "live" && <RouteChip conversation={sid} />}
             {/* items handed to this conversation that are still open: "Wrap up" asks it for the final write-back (#5932) */}
             {voiceState !== "live" && isMain && <Suspense fallback={null}><LazyWrapUpChips conversation={sid} /></Suspense>}
@@ -2446,8 +2602,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             launcher={session?.launcher}
             exhausted={exhausted}
             fix={turnFix}
+            turnErrorCode={session?.turn_error_code}
             onRetry={canRetry ? () => void retryError() : undefined}
             onEditLastMessage={onEditLastMessage}
+            onCompactAndResend={canOfferCompactResend ? () => void compactAndResend() : undefined}
+            compactingToResend={compactingToResend || Boolean(isAssistant && session?.compaction?.state === "running")}
             onDismiss={dismissBanner}
           />
         )}
@@ -2536,6 +2695,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       )}
       </div>
 
+      <BackgroundActivity open={activityOpen} onClose={() => setActivityOpen(false)} mid={mid} sid={sid} updatedAt={session?.updated_at} rev={session?.rev} live={lastLive && !outgoing} />
       <ChatSearch
         open={search.open}
         query={search.query}
@@ -2718,6 +2878,7 @@ export const Header = memo(function Header({
   onInterrupt,
   last,
   onSearch,
+  onActivity,
   topCenter,
   view,
   onView,
@@ -2750,6 +2911,8 @@ export const Header = memo(function Header({
   last?: Pick<Item, "role" | "kind">;
   /** "Search in chat" (ChatSearch.tsx). */
   onSearch?: () => void;
+  /** Completed silent rounds, with their full transcript and feed records. */
+  onActivity?: () => void;
   topCenter?: React.ReactNode;
   /** On an agent's page with a terminal to show: the view in the middle, and how to change it (the terminal button). */
   view?: SessionView;
@@ -2946,6 +3109,7 @@ export const Header = memo(function Header({
         ...(showFiles && previews ? [{ key: "preview", label: t("chat-chatview.preview"), icon: "web" as const, checked: here(panel, "preview"), onSelect: openPreview }] : []),
         ...(allowed.includes("stop") ? [{ key: "stop", label: t("chat-chatview.interrupt"), icon: "stop" as const, hint: "Esc", onSelect: onInterrupt }] : []),
         ...(feishu ? [{ key: "feishu", label: t("chat-chatview.open_in_lark"), icon: "external" as const, onSelect: () => openLink(feishu) }] : []),
+        ...(onActivity ? [{ key: "background-activity", label: t("chat-chatview.background_activity"), icon: "list" as const, onSelect: () => { void BackgroundActivity.preload().then(onActivity, onActivity); } }] : []),
         ...(onSearch ? [{ key: "search", label: t("chat-chatview.search_menu"), icon: "search" as const, onSelect: onSearch }] : []),
         // the whole conversation as Markdown (#7375): its dialog is a chunk of its own
         { key: "export", label: t("chat-chatview.export"), icon: "download", onSelect: () => import("./ExportDialog").then((m) => m.openExportDialog({ session, title, machineName, assistant: Boolean(assistant) }), (e: unknown) => toast(errorText(e), "error")) },

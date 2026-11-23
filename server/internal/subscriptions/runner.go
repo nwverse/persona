@@ -355,7 +355,9 @@ func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, sta
 		if pl.snapHash != sub.SnapshotHash {
 			it := *pl.snapshot
 			it.SubscriptionID = sub.ID
-			items, seen = append(items, it), append(seen, Seen{UID: it.UID, ContentHash: pl.snapHash})
+			// SnapshotHash is a snapshot's dedup, and the lease already serializes pulls: a seen key would make the
+			// commit's claim drop a snapshot that returns to an earlier value (#13122).
+			items = append(items, it)
 			next.SnapshotHash = pl.snapHash
 		}
 	} else {
@@ -428,8 +430,13 @@ func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, sta
 		n := s.nextRun(next, start, false)
 		next.NextRunAt = &n
 	}
-	if !s.commit(ctx, sub, next, &commitData{seen: seen, items: items, read: read, baseline: baselineCommit}, &run, start, true) {
+	committed, ok := s.commit(ctx, sub, next, &commitData{seen: seen, items: items, read: read, baseline: baselineCommit}, &run, start, true)
+	if !ok {
 		return
+	}
+	next, items = committed.Sub, committed.Items
+	if len(next.Runs) > 0 {
+		run = next.Runs[len(next.Runs)-1]
 	}
 	if pl.continuation != nil {
 		s.poke()
@@ -537,9 +544,9 @@ type commitData struct {
 	baseline *time.Time // the baseline mark this run took
 }
 
-// commit writes a run's outcome (a run with a Run, a skipped round without) and tells the apps; false when it could
-// not be kept.
-func (s *Service) commit(ctx context.Context, sub, next Subscription, d *commitData, run *Run, now time.Time, ran bool) bool {
+// commit writes a run's outcome (a run with a Run, a skipped round without), returns what its transaction actually
+// claimed, and tells the apps; false when it could not be kept.
+func (s *Service) commit(ctx context.Context, sub, next Subscription, d *commitData, run *Run, now time.Time, ran bool) (RunCommit, bool) {
 	if ran {
 		next.LastRunAt = &now
 	}
@@ -556,15 +563,16 @@ func (s *Service) commit(ctx context.Context, sub, next Subscription, d *commitD
 	if d != nil {
 		c.Seen, c.Items, c.Read, c.Baseline = d.seen, d.items, d.read, d.baseline
 	}
-	if err := s.o.Store.CommitRun(ctx, c); err != nil {
+	committed, err := s.o.Store.CommitRun(ctx, c)
+	if err != nil {
 		// Nothing of the run is kept; its lease runs out and the run is made again, deduplicated.
 		s.o.Logf("subscription %s: keep run: %v", sub.ID, err)
-		return false
+		return RunCommit{}, false
 	}
 	if cur, err := s.o.Store.GetSubscription(ctx, sub.ID); err == nil && cur != nil {
 		s.o.Changed(shown(*cur), false)
 	}
-	return true
+	return committed, true
 }
 
 // nextRun is when sub runs next after a run at now: at its daily time, or after its interval with up to a tenth

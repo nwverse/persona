@@ -311,8 +311,16 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	}
 	// Persona's hooks: a plugin, or in --settings for a claude that loads none (hooksplugin.go).
 	settings, hooks := n.claudeStartSettings(ctx, launcher, "claude", cwd)
+	if execution.Source.Role == "" {
+		execution.Source.Role = "task_agent"
+	}
+	execution.Source = sourceSession(execution.Source, id)
+	settings, err = n.sourceClaudeSettings(ctx, launcher, cwd, settings, "", execution.Source)
+	if err != nil {
+		return nil, err
+	}
 	// No tier alias on the command line for a gateway provider (#10365): its model for that tier, else its default.
-	spec := claudeLaunch{Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: n.claudeModelArg(launcher, execution.Model),
+	spec := claudeLaunch{Source: execution.Source, Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: n.claudeModelArg(launcher, execution.Model),
 		Plugins: n.claudeLoadsPlugins(ctx), TaskInstructionFile: instructionFile}
 	if backend := backendLaunchFrom(ctx); backend != nil && mode != "plan" {
 		for _, repo := range backend.executor.journal.Repositories {
@@ -359,7 +367,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		cmd = cdThen(cwd, cmd, shells...)
 	}
 	n.notePaneStart(launcher) // not in the agent sandbox unless a managed launcher (agentsandbox.go)
-	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: time.Now().UTC(), Model: execution.Model, ModelFingerprint: execution.Fingerprint,
+	st := sessionState{ModelSource: execution.Source, Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: time.Now().UTC(), Model: execution.Model, ModelFingerprint: execution.Fingerprint,
 		PlanThen: planThen, TaskInstructions: execution.TaskInstructions, TaskInstructionFile: instructionFile, TaskInstructionChannel: instructionChannel}
 	if prev, ok := n.state.get(id); ok && resume != "" {
 		if !prev.StartedAt.IsZero() { // a branch (fork.go) has none: it starts now
@@ -478,7 +486,7 @@ func (n *Node) resumeKnown(ctx context.Context, id string) bool {
 }
 
 // resumeOutsideHealth: this computer knows where conversation id started, and every directory it knows it by is
-// outside the health space and the Agent folders kept out of Persona. The hub asks it (session.start's
+// outside every space (identity.InSpace) and the Agent folders kept out of Persona. The hub asks it (session.start's
 // resume_outside_health) for a resume an extension's token names that its computer does not list (#10941): a quiet chat
 // leaves the list after a week, or sooner on a busy computer, and a stopped Agent takes no message, so a resume is the
 // only way back to one the extension started.
@@ -527,7 +535,7 @@ func (n *Node) resumeOutsideHealth(ctx context.Context, id string) bool {
 		}
 	}
 	for _, d := range dirs {
-		if d != "" && (identity.InHealthSpace(d) || n.cwdBlocked(d)) {
+		if d != "" && (identity.InSpace(d) || n.cwdBlocked(d)) {
 			return false
 		}
 	}

@@ -195,6 +195,9 @@ func (s *Service) finalCancel(id string) {
 // finalPass is one try of recording id's final pass.
 func (s *Service) finalPass(ctx context.Context, e *kb.Engine, id string, st *finalPassState) error {
 	now := time.Now()
+	s.hubTr.mu.Lock()
+	doneTo := st.doneTo
+	s.hubTr.mu.Unlock()
 	t, err := e.TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 		if t.State == kb.TranscriptionFinal || t.State == kb.TranscriptionFailed {
 			return errFinalDone
@@ -204,6 +207,7 @@ func (s *Service) finalPass(ctx context.Context, e *kb.Engine, id string, st *fi
 			t.FinalFrom = now.UTC() // transcription_final from here
 		}
 		t.FinalTries++
+		t.FinalDone = doneTo // the apps' progress: what this process has done (none after a restart, which starts over)
 		return nil
 	})
 	switch {
@@ -248,7 +252,8 @@ func (s *Service) finalPass(ctx context.Context, e *kb.Engine, id string, st *fi
 	billed := st.billed
 	s.hubTr.mu.Unlock()
 	var je *jobError
-	unreachable := errors.As(err, &je) && je.code == extwire.TEUpstreamUnavailable && !billed
+	// A busy service (#13446) that billed nothing was never reached either, as when busy was upstream_unavailable.
+	unreachable := errors.As(err, &je) && (je.code == extwire.TEUpstreamUnavailable || je.code == extwire.TEUpstreamBusy) && !billed
 	if unreachable {
 		u, uerr := e.TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 			t.FinalUnreachable++
@@ -470,7 +475,9 @@ func (s *Service) replay(ctx context.Context, e *kb.Engine, id string, held [][2
 					s.hubTr.mu.Lock()
 					st.windows = append(st.windows, w)
 					st.doneTo = max(st.doneTo, w.to)
+					doneTo := st.doneTo
 					s.hubTr.mu.Unlock()
+					s.finalProgress(e, id, doneTo)
 				}
 			case extwire.TFAck:
 				if f.At != nil {
@@ -579,6 +586,19 @@ func (s *Service) replay(ctx context.Context, e *kb.Engine, id string, held [][2
 		return errNoDone
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+// finalProgress tells the apps how far recording id's final pass is (#13461): the end of the last window it finished,
+// once per window. A failure to write it costs only the progress shown.
+func (s *Service) finalProgress(e *kb.Engine, id string, doneTo float64) {
+	if _, err := e.TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
+		if t.State == kb.TranscriptionFinishing {
+			t.FinalDone = max(t.FinalDone, doneTo)
+		}
+		return nil
+	}); err != nil && !errors.Is(err, kb.ErrNotFound) && !errors.Is(err, kb.ErrRecordingDeleted) {
+		s.logf("recording %s: final pass progress: %v", id, err)
 	}
 }
 

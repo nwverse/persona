@@ -533,7 +533,7 @@ func fullIndexItems(mid string, list []proto.Session, encoded []sentSession) []s
 		items = append(items, sessionlist.Item{
 			ID: string(id), Machine: mid, Project: cmp.Or(row.RepoRoot, row.WorkspaceCwd, row.Cwd), Group: cmp.Or(row.SpaceID, row.WorkspaceID),
 			PaneSource: sessionorigin.Of(row), State: row.State, BackgroundWaiting: row.BackgroundWaiting, Source: row.SourceKind,
-			Provider: row.Agent, UpdatedAt: row.UpdatedAt, Fold: fold, Private: healthSession(&row), Assistant: row.Assistant,
+			Provider: row.Agent, UpdatedAt: row.UpdatedAt, Fold: fold, Private: spaceSession(&row), Assistant: row.Assistant,
 			SearchText: strings.Join([]string{row.Title, row.Cwd, row.RepoRoot, row.Branch, row.SpaceName, row.SlotName, row.AgentName, row.LastText}, "\n"),
 			Summary:    json.RawMessage(summary),
 			Full: runtimeListFields(full[row.SessionID], struct {

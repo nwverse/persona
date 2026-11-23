@@ -183,6 +183,7 @@ type runtimeStartParams struct {
 	ClientMsgID                   string
 	Images                        []proto.Image
 	WorkspaceID                   string // a space of the runtime's to start in (one of its sessions' space_id)
+	DesktopProjectID              string // the exact native desktop project selected in the project board
 	Resume                        string // the Claude session to take over and continue (caps.resume)
 	// SessionID: the id the hub named for a new session (session.start's session_id, #8130): the manager finds a
 	// start whose answer it lost by it. A runtime that can give its session that id does (Paseo); one that cannot

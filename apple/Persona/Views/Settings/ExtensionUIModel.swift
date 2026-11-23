@@ -27,12 +27,7 @@ nonisolated extension ExtensionUIPlace: Identifiable {
 }
 
 nonisolated extension ExtensionUIContext {
-    #if os(macOS)
-    /// The frozen Mac app (docs/apple/mac.md) keeps the versions it reported before #827: new features skip it, so the
-    /// hub goes on turning newer components into ones it has always drawn.
-    static let pageVersion = 4
-    static let cardVersion = version
-    #elseif os(iOS)
+    #if os(iOS)
     /// The UI version a whole page of the app draws (`ExtensionPageView`): 8's columns (#9158), 9's gauge rings
     /// (`ExtensionTiles.swift`), 10's native graph canvas (`ExtensionGraph.swift`, #9727) and 11's 3D scene
     /// (`ExtensionScene.swift`, #12544).
@@ -354,7 +349,7 @@ extension APIClient {
         self.depth = depth
         self.deps = deps
         ExtensionUIRegistry.shared.add(self)
-        #if os(iOS) || os(macOS)
+        #if os(iOS)
         // Reserved pages belong to the manager and are drawn over HTTP only.
         if isPage, ReservedExtensionUI.paths[plugin] == nil, let connection = deps.connection() {
             let stream = ExtensionPageStream(connection: connection, owner: plugin, contribution: ui,
