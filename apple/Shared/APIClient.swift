@@ -1652,6 +1652,8 @@ nonisolated struct APIClient: Sendable {
         /// The manager that answered (its identity, the default's included): what a write that must name its manager
         /// names (the session-name settings, #7005). nil from an older hub.
         var manager: String?
+        /// The permission for new non-guest conversations without an explicit mode; existing conversations keep theirs.
+        var defaultPermissionMode: String?
         // Settings › Assistant Profile › Agent Follow-Up (#7005; the web's Settings › Assistant, "Starting tasks" and
         // "Agent follow-up"): each the value in effect, nil from a hub without it, which hides its row.
         /// Start what the owner asked for in a chat right away (#2559). On by default.
@@ -1679,6 +1681,7 @@ nonisolated struct APIClient: Sendable {
         var ownerReplyApprovalPhrases: [String]?
         enum CodingKeys: String, CodingKey {
             case launcher, cwd, conversations, timezone, main, leaders, manager
+            case defaultPermissionMode = "default_permission_mode"
             case machineID = "machine_id", mainMachineID = "main_machine_id", notes = "notes_effective", mainTasksQuiet = "main_tasks_quiet"
             case mainBackgroundFolded = "main_background_folded", recentTaskChats = "recent_task_chats"
             case meetingAttendanceDefault = "meeting_attendance_default", timezonePicked = "timezone_picked"
@@ -1832,6 +1835,7 @@ nonisolated struct APIClient: Sendable {
         var meetingTranscriptionDefault: String?
         var meetingGlossary: [String]?
         var meetingTranscriptionExtension: String?
+        var defaultPermissionMode: String?
         var nextSuggestions: Bool?
         var startRequestedTasks: Bool?
         var taskWorkspacePreference: String?
@@ -1853,6 +1857,7 @@ nonisolated struct APIClient: Sendable {
             case recentTaskChats = "recent_task_chats"
             case meetingTranscriptionDefault = "meeting_transcription_default", meetingGlossary = "meeting_glossary"
             case meetingTranscriptionExtension = "meeting_transcription_extension"
+            case defaultPermissionMode = "default_permission_mode"
             case nextSuggestions = "next_suggestions", kbTopics = "kb_topics"
             case startRequestedTasks = "start_requested_tasks", taskWorkspacePreference = "task_workspace_preference"
             case agentTasks = "agent_tasks", idleCloseHours = "idle_close_hours", archiveClosedDays = "archive_closed_days"

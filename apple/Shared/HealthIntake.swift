@@ -49,6 +49,15 @@ nonisolated struct HealthIntake: Decodable, Sendable, Equatable {
         var today: Totals
         var zone: String
     }
+    nonisolated struct Changes: Decodable, Sendable {
+        var changes: [Entry]
+        var next: Int64
+        var hasMore: Bool
+        private enum CodingKeys: String, CodingKey {
+            case changes, next
+            case hasMore = "has_more"
+        }
+    }
     /// Made once per user action. Repeating this exact request keeps the UUID and timestamp.
     nonisolated struct Draft: Encodable, Sendable {
         var id = UUID().uuidString.lowercased()
@@ -69,6 +78,11 @@ nonisolated struct HealthIntake: Decodable, Sendable, Equatable {
 }
 
 extension APIClient {
+    func healthIntakeChanges(after: Int64, limit: Int = 100) async throws -> HealthIntake.Changes {
+        try await manager(nil).get("/api/v1/assistant/health/intake/changes",
+                                   query: ["space": Session.healthSpace, "after": String(after), "limit": String(limit)])
+    }
+
     func healthIntake() async throws -> HealthIntake {
         try await manager(nil).get("/api/v1/assistant/health/intake", query: ["space": Session.healthSpace])
     }

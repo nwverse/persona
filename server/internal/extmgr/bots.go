@@ -15,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/agents"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
@@ -752,7 +753,7 @@ func (h *Manager) testFeishuBot(ctx context.Context) error {
 	}
 	l := h.botLang(ctx)
 	body := i18n.T(l, "hub-bots.test_body")
-	card := feishubot.NewCard("", "", i18n.T(l, "hub-bots.test_title")).Markdown(body)
+	card := botcard.NewCard("", "", i18n.T(l, "hub-bots.test_title")).Markdown(body)
 	_, err := h.botPost(ctx, api, set.Owner.ChatID, "", card, body)
 	return err
 }

@@ -1228,11 +1228,11 @@ this product layer; every Gradle project is listed in "Modules and code" below.
 | `PersonaModule` | Contract field | What the Android shell does with it |
 | --- | --- | --- |
 | `id` | `id` | Lower case and hyphenated (`voice`, `knowledge-ui`), the same on every platform; `ModuleRegistry` rejects others and duplicates |
-| `feature` | `feature` | The hub hello feature the module needs. On a hub without it the module is inactive, as if not built in; null: always on |
+| `feature` | `feature` | The hub hello flag that switches the module, `module.<id>` (`ModuleRegistry.moduleFeature`). Off only on a hub that publishes module flags (announces `modules`) and lacks it; see "The switch". Null: always on |
 | `services(hub)` | `hub_routes` (client half) | Built once per pairing from a `ModuleHub` (identity, hello features, token, pinned client, current address, `isCurrent`); never in demo mode; closed when the pairing ends |
 | `navEntries(entries, context)` | `shell_places` | Registers the module's pages in Root's `entryProvider`. In demo mode `services` is null and a page that needs the hub shows `context.unavailable(message)` |
-| `menuActions(slot, context)` | `composer_actions` and the other action slots | Composable, so an action can follow live state and the language. `MenuSlot.AssistantTitle` (the assistant's title menu, after Details) is served; `ComposerActions`, `SessionActions` and `MessageActions` are declared, not yet served |
-| `settingsPages()` | `settings` | Declared, not yet served: Settings does not list module pages yet, and `ModuleRegistry` logs a warning for a module that declares some |
+| `menuActions(slot, context)` | `composer_actions` and the other action slots | Composable, so an action can follow live state and the language. Served: `MenuSlot.AssistantTitle` (the assistant's title menu, after Details), `ComposerActions` (the composer's ⊕ menu, last), `SessionActions` (a conversation's ⋯ menu, before Close and Delete) and `MessageActions` (a message's menu, last). The last three reach `:feature:chat` through `LocalModuleActions`, which Root provides; `context.target` (`ModuleActionTarget`) names the conversation and, for a message, its id and words. A module's actions come after a rule, under the surface's own |
+| `settingsPages()` | `settings` | Served: each page is a row at the end of Settings' assistant group (title, icon, the route it opens, which the module registers in `navEntries`), only while the module is active (`ModuleRegistry.settingsPages`, through `LocalModuleSettingsPages`) |
 | `audioUses` and `AudioFocus` | (module-only) | Declared, not yet served: the broker ranks a call over a voice conversation over a meeting recording over playback (`AudioUse`); the voice module still takes Android's audio focus itself, and `ModuleRegistry` logs a warning for a module that declares audio uses |
 | `debugPages()`, `debugArguments(arguments)` | (debug builds) | `debug.openPage <name>` and the module's own `debug.*` arguments, read by `DebugLaunchAdapter` |
 
@@ -1241,7 +1241,7 @@ The other fields of #13430 section 4 (`api`, `needs`, `wants`, `chat_card_kinds`
 
 **`Modules.kt`** (`app/src/main/java/persona/android/Modules.kt`) is the only list of modules, in the order their entries
 show. `Root.kt`, `AppServices.kt`, the assistant's title menu and `DebugLaunchAdapter` read `Modules.carried` and name no
-module. Root asks the active modules for their pages and title-menu actions; AppServices builds each module's services
+module. Root asks the active modules for their pages, title-menu actions and Settings pages, and provides their composer, session and message actions; AppServices builds each module's services
 for a pairing and keeps them in `ShellSession.modules` (by id), with the hub's hello features in `ShellSession.features`.
 
 **The switch.** A module is on when both hold:
@@ -1253,12 +1253,15 @@ for a pairing and keeps them in `ShellSession.modules` (by id), with the hub's h
    `Modules` never loads a left-out module's class. R8 needs no rule for it: AGP hands R8 the compile classpath,
    `compileOnly` jars included, as library classes (`-Ppersona.modules= :app:assembleRelease` builds and its APK defines
    no `persona.module.*` class). An unknown id fails the build.
-2. **The paired hub offers its `feature`**, when it declares one. The switch follows the hub's hello, so the owner has
-   nothing to turn on (principles 1 and 2); there is no per-device module toggle.
+2. **The paired hub does not switch it off.** A module's `feature` is `module.<id>`; a hub that publishes module flags
+   also announces the marker `modules` (the rule all clients follow, agreed on #13844). A module with a feature is off
+   only when the hello features contain `modules` and lack its flag. No hello yet, demo mode (both an empty set) and an
+   older hub without the marker leave it on, so defaults do not change. Both names live in `ModuleRegistry`
+   (`MODULES_MARKER`, `moduleFeature`), and `ModuleRegistryTest` pins the rule. The switch follows the hub's hello, so
+   the owner has nothing to turn on (principles 1 and 2); there is no per-device module toggle.
 
-A module that is off is absent: no page registered, no menu action, nothing left over. The voice module declares no
-`feature` (the hub has no hello feature for voice yet, #13431), so it is on wherever it is carried, and its "Voice chat"
-item still appears only while the hub runs a voice extension, as before.
+A module that is off is absent: no page registered, no menu action, no Settings row, nothing left over. The voice module
+declares `module.voice`; its "Voice chat" item still appears only while the hub runs a voice extension, as before.
 
 ```sh
 cd android
@@ -1271,8 +1274,8 @@ cd android
 graph: only `:app` may depend on a `:module:*` project, and in `:app` only `Modules.kt` may name a module's code
 (`persona.module.*`); a `:core:*` project depends on no `:feature:*`, `:platform:*` or `:app` project. Today's violations
 are in `android/module-guard-baseline.txt`, which only shrinks: a new violation fails, and so does a line that no longer
-happens. Its one line is the known inversion `:core:data -> :feature:inbox` (#13433 item 2 moves the shared Inbox types
-into core). `scripts/ci/android.sh` runs the guard with the lint lane's tasks and its tests on their own, and the lint lane also runs
+happens. It is empty: the Inbox's shared types moved into `:core:inbox` (#13847), so `:core:data` no longer depends
+on `:feature:inbox`. `scripts/ci/android.sh` runs the guard with the lint lane's tasks and its tests on their own, and the lint lane also runs
 the app's unit tests and lint with an empty module list (`-Ppersona.modules=`);
 `scripts/ci/android-shards.py` puts the `:module:*` tests in the lint lane.
 
@@ -1304,22 +1307,23 @@ Modules are defined by `android/settings.gradle.kts`, and direct in-repository d
 | `:app` | App entry, two primary destinations and shared sidebar, Hilt assembly, pairing lifecycle, scope bridging, system sharing and lock-screen test | `:core:contracts`, `:core:domain`, `:core:terminal`, `:core:navigation`, `:core:hub`, `:core:data`, `:core:chatlist`, `:core:designsystem`, `:core:demo`, `:core:moduleapi`, `:feature:chat`, `:feature:agents`, `:feature:assistant`, `:feature:inbox`, `:feature:settings`, `:feature:terminal`, `:feature:machines`, `:feature:files`, `:feature:knowledge`, the `:module:*` projects through `Modules.kt` (see "Modules"), `:platform:notify`, `:platform:phonetools`, `:platform:shortcuts`, `:platform:capsule` |
 | `:core:chatlist` | Inverted chat list, freezing, return to latest, reading anchors and paging effects; currently mainly used by Agent / assistant chats | No in-repository module dependencies |
 | `:core:contracts` | Pure JVM: wire models, event decoding, HubScope, repository and transport interfaces | No in-repository module dependencies |
-| `:core:data` | Room items / outbox / drafts, DataStore / Tink credentials, scopes, caches and real repositories | `:core:contracts`, `:core:domain`, `:feature:inbox` |
+| `:core:data` | Room items / outbox / drafts, DataStore / Tink credentials, scopes, caches and real repositories | `:core:contracts`, `:core:domain`, `:core:inbox`, `:core:rustcore` |
+| `:core:inbox` | The Inbox's shared types (#13847): the repository contract `:core:data` implements, records, replies, hand-offs, mutes and rules, and the Lark message model with its parsing; no Compose | `:core:contracts`, `:core:domain`, `:core:hub` |
 | `:core:demo` | Local demo data and DemoHub, using sample fixtures in assets | `:core:contracts`, `:core:hub` |
 | `:core:designsystem` | Tokens for three styles (palettes, typography, shapes, motion), component skins (page scaffolds, lists, buttons, decisions, chats, Inbox), shell navigation components, glass (Haze); bundled fonts (OFL) and Phosphor icons | `:core:domain`, `:core:hub` |
 | `:core:domain` | Pure JVM: continuity reducer, chatLines (and `ChatLinesMemo`, the same lines keeping the turns before the first change between calls), sorting, Inbox sections, answering policies and pairing parsing | `:core:contracts` |
 | `:core:hub` | Pure JVM: OkHttp HTTP / WS, TLS pinning, routing, heartbeat, pairing and business transports; error reports (see "Error reports") | `:core:contracts` |
-| `:core:moduleapi` | The module contract (`PersonaModule`, `ModuleRegistry`, `ModuleHub`, `MenuSlot`, `AudioFocus`); see "Modules" | `:core:navigation`, `:core:designsystem` |
+| `:core:moduleapi` | The module contract (`PersonaModule`, `ModuleRegistry`, `ModuleHub`, `MenuSlot`, `ModuleActions`, `AudioFocus`); see "Modules" | `:core:navigation`, `:core:designsystem` |
 | `:core:navigation` | Navigation 3 route types, Navigator, notification and machine page routes | No in-repository module dependencies |
 | `:core:terminal` | Pure JVM: VT grid, Unicode width, wrapping and terminal input encoding | No in-repository module dependencies |
 | `:feature:agents` | Computer → space → session list, request cards, create and close confirmation, space page, a computer's projects page (`MachineSpacesRoute`, opened from the space page's computer), session and space renaming (immediate local effect) | `:core:contracts`, `:feature:chat`, `:core:domain`, `:core:designsystem`, `:core:navigation` |
 | `:feature:assistant` | Home, history drawer, main chat sending, profile and scheduled task pages; management services assembled by the App's `ChatWiringModule`; dedicated chat styling still awaits wiring | `:core:contracts`, `:core:data`, `:core:domain`, `:core:designsystem`, `:core:navigation`, `:core:moduleapi`, `:feature:chat` |
-| `:feature:chat` | Shared chat, Markdown, tools / diffs / to-dos, photo and file tags, long-press menu, error cards, image viewing and markup, interaction panel, attachment components and in-app link reader | `:core:contracts`, `:core:domain`, `:core:designsystem`, `:core:chatlist`, `:core:navigation`, `:feature:inbox` |
+| `:feature:chat` | Shared chat, Markdown, tools / diffs / to-dos, photo and file tags, long-press menu, error cards, image viewing and markup, interaction panel, attachment components and in-app link reader | `:core:contracts`, `:core:domain`, `:core:designsystem`, `:core:chatlist`, `:core:navigation`, `:core:moduleapi`, `:feature:inbox` |
 | `:feature:files` | File tree, text / image / Markdown / PDF preview, Git and commit details, path insertion; entered from the Agent chat ⋯ menu and file tags in messages | `:core:contracts`, `:core:hub`, `:core:designsystem`, `:core:navigation` |
-| `:feature:inbox` | Unified Inbox, Lark chats, mail details, AI actions and reply components | `:core:chatlist`, `:core:contracts`, `:core:hub`, `:core:domain`, `:core:designsystem`, `:core:navigation` |
+| `:feature:inbox` | Unified Inbox, Lark chats, mail details, AI actions and reply components; its `InboxRepository` extends `:core:inbox`'s with what only the pages read | `:core:inbox`, `:core:chatlist`, `:core:contracts`, `:core:hub`, `:core:domain`, `:core:designsystem`, `:core:navigation` |
 | `:feature:knowledge` | Knowledge base list, reading and navigation; entered from the Persona drawer | `:core:contracts`, `:core:designsystem`, `:core:navigation` |
 | `:feature:machines` | Machine dashboard, details and metric charts; entered from the Agents machine menu | `:core:contracts`, `:core:designsystem`, `:core:domain`, `:core:navigation` |
-| `:feature:settings` | Pairing, checklist, diagnostics, devices and notification preferences, About and APK installation, Knowledge Selection | `:core:contracts`, `:core:domain`, `:core:hub`, `:core:designsystem`, `:core:navigation` |
+| `:feature:settings` | Pairing, checklist, diagnostics, devices and notification preferences, About and APK installation, Knowledge Selection | `:core:contracts`, `:core:domain`, `:core:hub`, `:core:designsystem`, `:core:navigation`, `:core:moduleapi` |
 | `:feature:terminal` | Terminal Canvas, streaming frame consumption, takeover and input; entered from the chat page and the notification terminal fallback | `:core:contracts`, `:core:terminal`, `:core:designsystem`, `:core:navigation` |
 | `:module:voice` | Module (see "Modules"): full-duplex voice chat with the hub's voice extension, its route, transport and types; see "Voice chat" | `:core:moduleapi`, `:core:contracts`, `:core:designsystem`, `:core:navigation`, `:core:hub` |
 | `:platform:notify` | Foreground service, ongoing summary notification (`FleetFeed`), notification policy and buttons, action log, boot receiver and connection keep-alive | `:core:contracts`, `:core:domain`, `:core:designsystem`, `:core:navigation` |
@@ -1327,7 +1331,7 @@ Modules are defined by `android/settings.gradle.kts`, and direct in-repository d
 | `:platform:shortcuts` | Home-screen widgets (Glance), Quick Settings tiles, icon long-press shortcuts and "Approve pending" dialog; see "Ongoing notification and home-screen entries" | `:core:contracts`, `:core:domain`, `:core:designsystem`, `:core:navigation`, `:core:hub`, `:platform:notify` |
 | `:platform:capsule` | Cross-app floating capsule (`TYPE_APPLICATION_OVERLAY` overlay); see "Cross-app floating capsule" | `:core:contracts`, `:core:designsystem` |
 
-The main dependency direction is `:app → feature / platform / core`. Features consume interfaces from `:core:contracts`, and the App's Hilt modules assemble real implementations. Cross-layer dependencies still exist: `:core:data → :feature:inbox`, `:feature:assistant → :core:data`, and between features `:feature:agents → :feature:chat`, `:feature:assistant → :feature:chat`, `:feature:chat → :feature:inbox`; `:feature:files`, `:feature:inbox` and `:feature:settings` also use `:core:hub` directly. This is the current build graph, not yet fully aligned with the designed one-way layering. `:core:domain → :core:contracts`, `:core:hub → :core:contracts`; `:core:terminal` depends on no other project module.
+The main dependency direction is `:app → feature / platform / core`. Features consume interfaces from `:core:contracts`, and the App's Hilt modules assemble real implementations. Cross-layer dependencies still exist: `:feature:assistant → :core:data`, and between features `:feature:agents → :feature:chat`, `:feature:assistant → :feature:chat`, `:feature:chat → :feature:inbox`; `:feature:files`, `:feature:inbox` and `:feature:settings` also use `:core:hub` directly. This is the current build graph, not yet fully aligned with the designed one-way layering. `:core:domain → :core:contracts`, `:core:hub → :core:contracts`; `:core:terminal` depends on no other project module.
 
 `build-logic/convention` is included via `includeBuild("build-logic")` and is not an app module. It provides application, library, JVM, Compose and Hilt convention plugins; Hilt is integrated, while Room / KSP, DataStore and Tink live in the data module. Versions are in `gradle/libs.versions.toml`.
 

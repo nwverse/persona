@@ -60,6 +60,14 @@ def health_intake_route(h, method, path, query, body=b""):
         return True
     try:
         with HEALTH_INTAKE_LOCK:
+            if method == "GET" and path == base + "/changes":
+                after = int(query.get("after", ["0"])[0])
+                limit = int(query.get("limit", ["100"])[0])
+                if after < 0 or not 1 <= limit <= 1000: raise ValueError("Invalid changes cursor or limit")
+                changes = sorted((dict(e) for e in HEALTH_INTAKE_ENTRIES.values() if e["seq"] > after), key=lambda e: e["seq"])
+                page = changes[:limit]
+                h.send_json({"changes": page, "next": page[-1]["seq"] if page else after, "has_more": len(changes) > limit})
+                return True
             if method == "GET" and path == base:
                 days = int(query.get("days", ["7"])[0])
                 if not 1 <= days <= 366: raise ValueError("days must be 1–366")

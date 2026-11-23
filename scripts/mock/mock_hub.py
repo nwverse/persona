@@ -1087,15 +1087,6 @@ if os.environ.get("MOCK_BG_WAITING") == "1":
                       background=[{"id": "bb1d5te2k", "kind": "shell", "description": "打包发布产物", "command": "make release",
                                    "started_at": ago(minutes=4)}])
 
-if os.environ.get("MOCK_BG_STALLED") == "1":  # #13744: the blog's test run used no CPU and wrote nothing for hours, still Working
-    for _s in SESSIONS:
-        if _s["session_id"] == BLOG:
-            _s.update(status="done", state="working", state_since=ago(hours=4), seen_at=None, background_working=True,
-                      background_waiting=False, background_stalled_since=ago(hours=3, minutes=5),
-                      last_text="迁移完成，测试在后台跑着。",
-                      background=[{"id": "bq7ci42wa", "kind": "shell", "description": "跑全部测试", "command": "pnpm test",
-                                   "started_at": ago(hours=4)}])
-
 # MOCK_HEADER_MODES=1 (#3719): one agent per permission mode, for the mode at the end of the Agents header's second row
 # and its menu. The widget agent: Auto-Edit, and it can take Allow Everything while it runs; tests: Ask First, with a long
 # title; photos: Plan Only; release: Auto; review: no mode reported yet; blog: Allow Everything with no way back from the
@@ -2661,6 +2652,8 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # prefers (#3659); fixing unhelpful session names (#4965): on, at most once, no regular updates.
                     # Left out with MOCK_LEGACY_HUB (Agent Follow-Up, #7005).
                     "start_requested_tasks": True, "task_workspace_preference": "prefer-existing",
+                    # New conversations without an explicit choice start in Ask First until the owner changes this.
+                    "default_permission_mode": "default",
                     "agent_auto_naming": True, "agent_auto_naming_max": 1, "agent_auto_naming_interval_hours": 0,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off"),
@@ -2697,6 +2690,7 @@ def assistant_state(space="", archived=False):
                    main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"],
                    claude_interactive=cfg["claude_interactive"],
                    start_requested_tasks=cfg["start_requested_tasks"], task_workspace_preference=cfg["task_workspace_preference"],
+                   default_permission_mode=cfg["default_permission_mode"],
                    agent_auto_naming=cfg["agent_auto_naming"], agent_auto_naming_max=cfg["agent_auto_naming_max"],
                    agent_auto_naming_interval_hours=cfg["agent_auto_naming_interval_hours"],
                    **({} if os.environ.get("MOCK_RECENT_TASK_CHATS") == "absent" else {"recent_task_chats": cfg["recent_task_chats"]}))
@@ -28944,6 +28938,11 @@ class H(BaseHTTPRequestHandler):
                     return self.send_json({"error": "%s must be %d–%d" % (key, low, high)}, 400)
             if "task_workspace_preference" in body and body["task_workspace_preference"] not in ("prefer-existing", "prefer-new"):
                 return self.send_json({"error": "task_workspace_preference must be prefer-existing or prefer-new"}, 400)
+            if "default_permission_mode" in body:
+                mode = body["default_permission_mode"]
+                if mode not in ("default", "acceptEdits", "plan", "auto", "bypassPermissions"):
+                    return self.send_json({"error": "bad default_permission_mode"}, 400)
+                ASSISTANT_CONFIG["default_permission_mode"] = mode
             for key in ("start_requested_tasks", "agent_auto_naming"):
                 if isinstance(body.get(key), bool):
                     ASSISTANT_CONFIG[key] = body[key]

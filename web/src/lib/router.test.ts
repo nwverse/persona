@@ -60,4 +60,16 @@ describe("the core's addresses (core/module-host.ts CORE_PATHS)", () => {
     expect(segments.filter((x) => !CORE_PATHS.has(x))).toEqual([]);
     for (const x of ["persona", "j"]) expect(CORE_PATHS.has(x)).toBe(true); // assistantPath
   });
+
+  it("lists nothing parse does not route, but what the hub serves beside the app", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { CORE_PATHS } = await import("../core/module-host");
+    const source = readFileSync(new URL("./router.ts", import.meta.url), "utf8");
+    const parse = source.slice(source.indexOf("export function parse("), source.indexOf("export function routeAt("));
+    const segments = new Set([...parse.matchAll(/p\[0\] === "([^"]+)"/g)].map((m) => m[1]!));
+    // assistantPath's segments, and the hub's own addresses next to the app's (its API, sign-in, screen sharing, shared
+    // pages, the admin UI, static files)
+    const beside = new Set(["persona", "j", "api", "login", "screen", "share", "admin", "assets"]);
+    expect([...CORE_PATHS].filter((x) => !segments.has(x) && !beside.has(x))).toEqual([]);
+  });
 });

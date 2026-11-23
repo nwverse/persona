@@ -77,14 +77,14 @@ import persona.feature.assistant.proactive.AssistantProactiveScreen
 import persona.feature.chat.*
 import persona.feature.inbox.InboxItemPages
 import persona.feature.inbox.InboxItemExtensionScreen
-import persona.feature.inbox.InboxItemKey
+import persona.core.inbox.InboxItemKey
 import persona.feature.inbox.InboxRepository
 import persona.feature.inbox.LocalInboxItemPages
 import persona.feature.inbox.InboxLanding
 import persona.feature.inbox.LocalInboxLanding
 import persona.feature.inbox.LocalInboxListActive
 import persona.feature.inbox.ManagerLinks
-import persona.feature.inbox.InboxTriage
+import persona.core.inbox.InboxTriage
 import persona.feature.inbox.InboxTriageSetup
 import persona.feature.inbox.LocalInboxTriageSetup
 import persona.feature.inbox.inboxEntries
@@ -718,6 +718,22 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         key(module.id) { module.menuActions(persona.core.moduleapi.MenuSlot.AssistantTitle, moduleUi(module.id)) }
     }
     // Links over the whole shell, persona:// links from conversations, "Hand to Persona" from pages (ShellLinks.kt).
+    // The modules' actions in the composer's, a conversation's and a message's menus, and their Settings pages (#13847).
+    val moduleActions = remember(modules, navigator, session.modules, connection) {
+        object : persona.core.moduleapi.ModuleActions {
+            @Composable
+            override fun actions(slot: persona.core.moduleapi.MenuSlot, target: persona.core.moduleapi.ModuleActionTarget) =
+                modules.flatMap { module ->
+                    key(module.id) {
+                        module.menuActions(slot, persona.core.moduleapi.ModuleUiContext(navigator, session.modules[module.id],
+                            active = connection == ConnectionState.Online, target = target))
+                    }
+                }
+        }
+    }
+    val moduleSettingsPages = remember(hubFeatures) { persona.android.Modules.carried.settingsPages(hubFeatures) }
+    CompositionLocalProvider(persona.core.moduleapi.LocalModuleActions provides moduleActions,
+        persona.core.moduleapi.LocalModuleSettingsPages provides moduleSettingsPages) {
     ShellLinkHost(session, navigator, shell.feedback) {
         val uriHandler = LocalUriHandler.current
         // Each page shows the connection state in its own title, so the shell adds no banner above it.
@@ -1481,6 +1497,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
               }
           }
         }
+    }
     }
 }
 

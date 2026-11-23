@@ -409,6 +409,7 @@ agents.read          GET /api/v1/workspaces
 -                    GET {base}/market-settings
 -                    GET {base}/markets
 -                    GET {bus.Path}
+-                    GET {devicewire.DevelopmentPackagesPath}/{commit}/{version}/{file}
 -                    GET {devicewire.RelayPath}
 -                    GET {link.Path}
 -                    GET {link.StreamPath}

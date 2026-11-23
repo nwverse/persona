@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/kernel"
@@ -50,6 +51,20 @@ func (s *Service) loadModules(mods []modapi.Module, off []string) {
 		mods = kernel.Builtin()
 	}
 	s.modules = kernel.New(mods, func(id string) bool { return slices.Contains(off, id) }, s.logf)
+	s.logf("modules: loaded %s", loadedModules(s.modules))
+}
+
+// loadedModules names the loaded modules for the manager's log, in load order ("none" with none): a core-only build's
+// manager says "none" (scripts/ci/core-only-smoke.py reads the line).
+func loadedModules(k *kernel.Kernel) string {
+	var ids []string
+	for _, info := range k.Modules() {
+		ids = append(ids, info.ID)
+	}
+	if len(ids) == 0 {
+		return "none"
+	}
+	return strings.Join(ids, ", ")
 }
 
 // moduleValue is a module setting's value as the assistant's settings keep it: the JSON as stored, nil when never set.
@@ -108,7 +123,8 @@ func (s *Service) moduleSettingGet(key string) func(ctx context.Context) (string
 
 // moduleSettingSet is an ordinary persona_settings change of a module setting: the tool only prepares a before/after
 // card (cardKey, in the settings tool's namespace, with before and after), and the existing approval path calls apply.
-// null restores the module's defaults.
+// null restores the module's defaults. The allowlisted briefing setting also carries its raw state for the audited
+// automatic path; switch-off keeps the module's effective-value no-op behavior.
 func (s *Service) moduleSettingSet(key, cardKey, applied string) func(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
 	return func(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
 		m, ok := s.modules.Setting(key)
@@ -119,14 +135,21 @@ func (s *Service) moduleSettingSet(key, cardKey, applied string) func(ctx contex
 		if err != nil {
 			return nil, err
 		}
-		before, after := m.Value(moduleStored(s.settings(ctx), key)), m.Value(next)
-		if bytes.Equal(before, after) {
+		saved := s.settings(ctx)
+		beforeRaw := reversibleSettingJSON(moduleStored(saved, key))
+		afterRaw := reversibleSettingJSON(next)
+		before, after := m.Value(moduleStored(saved, key)), m.Value(next)
+		if s.hello(ctx).Assistant.AutoApproveReversibleSettings && reversibleSettingAutoApproved(key) {
+			if bytes.Equal(beforeRaw, afterRaw) {
+				return &ownChange{summary: key + " is unchanged"}, nil
+			}
+		} else if bytes.Equal(before, after) {
 			return &ownChange{summary: key + " is unchanged"}, nil
 		}
 		if s.store() == nil {
 			return nil, errors.New("no database on this hub")
 		}
-		return &ownChange{cardText: func(l i18n.Lang) string {
+		change := &ownChange{cardText: func(l i18n.Lang) string {
 			return i18n.T(l, "assistant-settings_tool."+cardKey, i18n.Args{"before": m.Describe(before), "after": m.Describe(after)})
 		}, apply: func(ctx context.Context) (string, error) {
 			if _, err := s.updateSettings(ctx, func(v *Settings) error { return moduleStore(v, key, next) }); err != nil {
@@ -134,7 +157,20 @@ func (s *Service) moduleSettingSet(key, cardKey, applied string) func(ctx contex
 			}
 			s.settingsChanged(ctx)
 			return applied, nil
-		}}, nil
+		}}
+		if reversibleSettingAutoApproved(key) {
+			change.reversible = &reversibleSetting{
+				before: beforeRaw,
+				after:  afterRaw,
+				current: func(v Settings) json.RawMessage {
+					return reversibleSettingJSON(moduleStored(v, key))
+				},
+				// Check returns nil for null and canonical JSON otherwise, so this is moduleStore's validated assignment.
+				assign:  func(v *Settings) { v.BriefingWaits = moduleValue(next) },
+				applied: applied,
+			}
+		}
+		return change, nil
 	}
 }
 
