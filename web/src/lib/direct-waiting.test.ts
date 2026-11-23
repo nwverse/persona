@@ -74,4 +74,11 @@ describe("main conversation direct-user waiting", () => {
     expect(rows[0].kind === "agent" && rows[0].asks.map((ix) => ix.id)).toEqual(["question"]);
     expect(directWaitingCount(rows, own)).toBe(3);
   });
+
+  it("follows the hub's view of a to-do when there is one, as the To-dos badge does", () => {
+    const view = (section: string) => ({ phase: section, section, reason: section === "needs_you" ? "failed_start" : "persona_working", rank: 0 });
+    // a failed start the hub files under Needs you is the owner's; one its supervisor handles (working) is not
+    expect(directUserWaiting([task("failed", "failed", [], { view: view("needs_you") })]).map((i) => i.key)).toEqual(["task:failed"]);
+    expect(directUserWaiting([task("held", "needs_you", [card("q", "question", { delegating: true })], { view: view("working") })])).toEqual([]);
+  });
 });

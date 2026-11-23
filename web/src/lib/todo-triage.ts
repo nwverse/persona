@@ -309,6 +309,29 @@ export function viewWaitsOnOwner(todo: Todo): OwnerWait | null | undefined {
 }
 
 /**
+ * Whether the hub counts this to-do in its `needs_you` (projection Counts, `GET todos` counts.needs_you): its view's
+ * section is Needs you, it is not quiet, and it is not a step an open parent carries (a step is counted with its
+ * parent; a to-do the owner answers on its own, `todo_od_…`, never is). undefined: no view this web can read.
+ * `open` says whether a to-do of this list is still open by its view, for the parent test.
+ */
+export function hubNeedsYou(todo: Todo, open: (id: string) => boolean): boolean | undefined {
+  const v = todo.view;
+  if (!v || !VIEW_SECTIONS.has(v.section) || !VIEW_REASONS.has(v.reason)) return undefined;
+  if (v.section !== "needs_you" || todo.quiet) return false;
+  return !(todo.part_of && todo.part_of !== todo.id && !todo.id.startsWith("todo_od_") && open(todo.part_of));
+}
+
+/** The open test hubNeedsYou takes, over a list: a to-do's view is not Done (one with no view: not done_at). */
+export function openByView(todos: readonly Todo[]): (id: string) => boolean {
+  const byId = new Map(todos.map((td) => [td.id, td]));
+  return (id) => {
+    const td = byId.get(id);
+    if (!td) return false;
+    return td.view ? td.view.phase !== "done" : !td.done_at;
+  };
+}
+
+/**
  * The to-dos the sidebar's To-dos badge counts (#11085), by id, each with why (OwnerNeed): the open ones (countsAsOpen)
  * that need the owner, not those Agents are on. Quiet tasks (#1731) are left out, as before. Among the rest, the first
  * rule that holds wins:
@@ -321,6 +344,10 @@ export function viewWaitsOnOwner(todo: Todo): OwnerWait | null | undefined {
  *     was ever on it, its Agents stopped, finished work nobody has looked at)        → counts, `unattended`
  *  5. anything else: a conversation's task with nothing running is its supervising conversation's to pick up or close,
  *     not the owner's, until that conversation asks them                             → does not count
+ *
+ * A to-do the hub sent a view of is counted by the hub's own rule instead (hubNeedsYou), so the badge, the main
+ * conversation's tray and the hub's needs_you are one number; the rules above decide only for to-dos without one (an
+ * older hub).
  *
  * The page's "Not done" stays countsAsOpen, so the badge is never more than it. A `part_of` loop is walked once. Its
  * size is the badge's number, and the To-dos page marks exactly these rows (lib/todo-owner-needs.ts reads it for both).
@@ -354,7 +381,13 @@ export function ownerNeeds(todos: Todo[], lookup: SessionLookup | undefined, now
     return false;
   };
   const counted = new Map<string, OwnerNeed>();
+  const open = openByView(todos);
   for (const td of todos) {
+    const hub = hubNeedsYou(td, open);
+    if (hub !== undefined) {
+      if (hub) counted.set(td.id, viewWaitsOnOwner(td) || "owner_decides");
+      continue;
+    }
     const t = placed.get(td.id)!;
     if (td.quiet || !countsAsOpen(td, t)) continue;
     const wait = waits(td, t);

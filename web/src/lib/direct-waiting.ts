@@ -1,6 +1,7 @@
 import { decisionDismissed, reviewState } from "./supervision";
 import { decisionLaterKey, type NeedsYouItem } from "./assistant-entries";
 import { heldDelivery, openAsk } from "./todos";
+import { hubNeedsYou } from "./todo-triage";
 import type { Interaction } from "./types";
 
 /** Current cards only its user can answer. Agent plan/permission approvals and terminal dialogs are not owner questions. */
@@ -30,6 +31,13 @@ export function directUserWaiting(items: NeedsYouItem[], deferred: Record<string
     // A plan is unstarted work. A message draft still needs its owner's explicit Send authorization.
     if (item.kind === "plan") continue;
     if (item.kind === "message") { out.push(item); continue; }
+    // a to-do the hub sent a view of is the owner's exactly when the hub counts it in needs_you (assistant-entries
+    // already left out a step its parent carries): the tray, the To-dos badge and the hub say one number
+    const hub = item.kind === "task" ? hubNeedsYou(item.todo, () => false) : undefined;
+    if (item.kind === "task" && hub !== undefined) {
+      if (hub) out.push({ ...item, asks: item.asks.filter(directUserInteraction) });
+      continue;
+    }
     if (item.kind === "task" && (item.status === "failed" || (item.status === "not_started" && heldDelivery(item.todo)?.unblock !== "user"))) continue;
     const asks = item.asks.filter(directUserInteraction);
     if (asks.length) out.push({ ...item, asks });

@@ -2,7 +2,7 @@ import { backgroundWork, taskBackgroundWork, type BackgroundWork } from "./backg
 import { cardDismissed, cardFiled, cardSent, startFailure, type FeedItem, type TaskPlan } from "./feed";
 import { cardBucket, taskCardSlots, type TaskCardMetadata } from "./task-cards";
 import { decisionDismissed, linkedParkInteraction, parkInteractionID, reviewState, withoutParkInteraction } from "./supervision";
-import { finishedAt, JUST_DONE_MS, supersededFailedStarts, triage } from "./todo-triage";
+import { finishedAt, hubNeedsYou, JUST_DONE_MS, openByView, supersededFailedStarts, triage } from "./todo-triage";
 import { awaitsReview, dockAgents, heldDelivery, heldForSupervisor, makeSessionLookup, openAsk, todoRank, todoStatus, withInteractionLookup, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
 import { homeKey } from "./folded-rows";
@@ -156,6 +156,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   const finished: FinishedItem[] = [];
   const folded = new Set<string>();
   const slots = taskCardSlots(conversation, input.cards ?? [], feed, plans, todos, isMain);
+  const openOf = openByView(todos);
   const activeAgents = (todo: Todo) => (todo.done_at ? [] : (todo.agents ?? []).filter((a) => !a.released_at));
   const homeAgents = (todo: Todo) => (todo.done_at ? [] : (todo.agents ?? []).filter((a) => !a.released_at || parkInteractionID(todo)));
   // One home per request (docs/design/DESIGN_SYSTEM.md 4.8): an Agent several of these tasks list asks under one of them,
@@ -204,8 +205,10 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     const waits = status === "failed" ? bucket === "open" && !supervised : !todo.done_at && WAITS_ON_YOU.has(status) && !held;
     const decision = taskAwaitsDecision(todo);
     const deliveryApproval = heldDelivery(todo)?.unblock === "user";
+    // the hub's view decides when there is one, so this tray, the To-dos badge and the hub's needs_you agree
+    const hub = hubNeedsYou(todo, openOf);
     if (asks.length) asking.push({ kind: "task", key, todo, status, asks, countsOpen });
-    else if (waits || decision || deliveryApproval) {
+    else if (hub ?? (waits || decision || deliveryApproval)) {
       // Only the review decision is hidden; a live Agent question above still has its home.
       if (deliveryApproval || !(status !== "needs_you" && decision && (decisionDismissed(todo) || input.deferred?.[decisionLaterKey(todo)]))) {
         deciding.push({ item: { kind: "task", key, todo, status, asks, countsOpen }, rank: todoRank(todo, status), at: card.at });
