@@ -148,6 +148,7 @@ go server/internal/imageorient core
 go server/internal/jsonsubset core
 go server/internal/kb core
 go server/internal/kbwire core
+go server/internal/larkhost core
 go server/internal/lazyre core
 go server/internal/lcuconfirm core
 go server/internal/link core
