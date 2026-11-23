@@ -468,6 +468,13 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
 - `agents.a2a` defaults to the manager's confirmed personal computers. `machines` limits participation in A2A and new dispatches. An empty list disables both.
   Set `public_url` to expose Agent Cards and A2A JSON-RPC endpoints with Persona credentials. [Agent-to-Agent communication](../integrations/a2a.md)
 
+- `agents.sort_by_activity` and `agents.show_filter` (#13727): the initial values of the web Agents list's two display switches (Settings › Agents: **Sort Agents by recent activity**, **Show the Filter on the Agents list**), used until someone saves their own choice in Settings (the saved choice, on or off, always wins; both are off when absent). They sit directly in `agents`, next to its sub-sections:
+
+  ```json
+  "agents": { "sort_by_activity": true, "show_filter": true }
+  ```
+
+  The manager reads them (see **Edits** above for when a hand edit takes effect); `GET /api/v1/agents/display-settings` reports the effective values ([protocol.md](../protocol/protocol.md) "Agents display settings").
 - `agents.review` (#2173): the independent review of a supervised task's finished change ([unified-entry.md](../assistant/unified-entry.md) ("Independent review")). **Off by default**, on once `launcher` names a launcher on the working agent's computer (pick one on another model than your agents'; there is no default reviewer).
   `model` and `effort` (optional) override the launcher's own; `permission` is the reviewer's permission mode (default `plan`); `timeout_minutes` bounds one review (default 30). The reviewer works in a disposable copy of the change, so its permission mode is a second guard, not the only one. Example:
 
