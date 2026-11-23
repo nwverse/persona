@@ -271,6 +271,33 @@ setting answers that it is not part of this build), `lark.cli` is not read (a wa
 host's tests of them skip (`needsLarkModule`, `needsLarkCLI`). `scripts/ci/server.sh build` builds and tests with `persona_core_only` and with
 `persona_without_lark`.
 
+### The node's modules
+
+Some modules run only on the computers: their code is part of the node (`persona-node`, and `personad` or
+`persona-manager` running a node or its device commands). The manager's list (`internal/modules/all`) cannot hold
+that code, since `persona-node` must not link the manager's modules (its `TestPersonaNodeDoesNotLinkTheHubOrTheManager`
+refuses `internal/modules/all`), so it goes into the node's composition root, `server/internal/modules/all/node`, which
+`server/internal/nodecmd` links (see the iMessage connector above). Each module adds a file there under its build
+constraint (`!persona_without_<id> && !persona_core_only`) that fills the node's ports, each declaring what the node
+needs in its own terms:
+
+- a device command: `server/internal/nodecmd/commandport` (`AddCommand`, `LookupCommand`). `nodecmd` runs a command
+  it does not know itself if a module provides it, and its usage lists the provided commands (`CommandUsage`).
+
+Such a module keeps its manager side small: the module's root package (`internal/modules/<id>`) holds only its
+manifest and a `modapi.Module` that registers nothing, and `internal/modules/all` lists it, so a hub announces its flag
+(`module.<id>`) when the manager has it. The node half lives in a sub-package (`internal/modules/<id>/<pkg>`) that only
+the node's root imports, so the manager does not link it. With the module left out nothing is provided: the command is
+unknown and missing from the usage (`TestOfficeFollowsTheBuildTags` in the node's root), and
+`scripts/ci/core-only-smoke.py` builds `persona-node` as well and checks that a core-only `personad` and `persona-node`
+lack every command the node's root provides. `scripts/ci/server.sh build` runs "Builds without the node modules" with
+each such module's tag and `persona_core_only`, Windows' node included.
+
+The modules of this kind:
+
+- `office` (`server/internal/modules/office`, #14258): `personad office …`, the Office files generator
+  (`docs/assistant/office.md`), in `internal/modules/office/office`.
+
 ### Guards
 
 `server/internal/archguard` keeps the boundary. Both module guards read the import lines of every `.go` file under
@@ -278,7 +305,8 @@ host's tests of them skip (`needsLarkModule`, `needsLarkCLI`). `scripts/ci/serve
 platform compiles cannot hide a violation (`TestModuleGuardsSeeEveryBuild` proves it on a fixture).
 
 - **`TestCoreImportsNoModule`**: no package outside `internal/modules` imports `internal/modules/…`, except the composition
-  roots listed in `testdata/module_roots.txt`, which import only `internal/modules/all`. A core package's tests may
+  roots listed in `testdata/module_roots.txt`, which import only a list: `internal/modules/all` (the manager's) or
+  `internal/modules/all/node` (the node's, imported by `internal/nodecmd`). A core package's tests may
   import `internal/modules/all` to run as the manager does (`internal/assistant/modules_link_test.go`), and a module's
   stand-in, `internal/modules/<id>/<id>test`, a fake of the outside service the module's program talks to (the
   extension host's tests run `personad volc` against `volctest`); nothing else of `internal/modules`. Known violations would go into `testdata/module_imports_baseline.txt`, which only shrinks
@@ -301,7 +329,8 @@ platform compiles cannot hide a violation (`TestModuleGuardsSeeEveryBuild` prove
 - **`TestStandInsHoldNoModuleCode`**: a stand-in imports only what a library may, never its module, so the core tests
   that use it reach none of the module's code.
 - **`TestContractsArePure`** covers `modapi` like every contract package, and the hub's
-  `TestHubDoesNotImportTheManager` (`server/internal/hub/architecture_guard_test.go`) forbids `internal/modules`.
+  `TestHubDoesNotImportTheManager` (`server/internal/hub/architecture_guard_test.go`) forbids `internal/modules`, and
+  `persona-node`'s `TestPersonaNodeDoesNotLinkTheHubOrTheManager` forbids the manager's list, `internal/modules/all`.
 - `scripts/test/test_module_schema.py` checks every `module.json` against `schema/module.schema.json`, refuses invalid
   manifests, and keeps `modapi.Info`'s fields and the schema's in step.
 

@@ -164,6 +164,20 @@ describe("default palette contrast", () => {
       }
       expect(contrast(t.ink, t["hover-2"])).toBeGreaterThanOrEqual(4.5);
     });
+    it(`${scheme}: usage timeline hues (--hue-teal, --hue-blue) keep >= 3:1 contrast on surface and inset`, () => {
+      for (const name of ["teal", "blue"]) {
+        for (const bg of ["surface", "inset"]) {
+          expect(contrast(hueOf(name), t[bg]), `--hue-${name} on --${bg}`).toBeGreaterThanOrEqual(MIN_ROLE_CONTRAST);
+        }
+      }
+    });
+    it(`${scheme}: fresh tiered and stale neutral usage percentage tokens keep >= 4.5:1 contrast on surface and inset`, () => {
+      for (const role of ["green", "orange", "red", "ink-2"]) {
+        for (const bg of ["surface", "inset"]) {
+          expect(contrast(t[role], t[bg]), `--${role} on --${bg}`).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    });
     it(`${scheme}: no theme color or extension theme moves the named colors or the sidebar's backgrounds`, () => {
       const theme = { extension: "example-theme", extension_name: "Example Theme", id: "sea", name: "Sea", light: { accent: "#1d4ed8" }, dark: { accent: "#8ab4ff" } };
       const sets = [...ACCENT_PRESETS.map((p) => accentTokens(PRESET_COLORS[p].accent)[scheme]), extensionThemeTokens(theme, scheme)];
