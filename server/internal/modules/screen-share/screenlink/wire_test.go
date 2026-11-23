@@ -13,7 +13,7 @@ import (
 // The node frames every session message as the shared cases say (spec/fixtures/screen-link), which the iPhone's
 // client checks too.
 func TestTheWireMatchesTheSharedCases(t *testing.T) {
-	raw, err := os.ReadFile("../../../spec/fixtures/screen-link/messages.json")
+	raw, err := os.ReadFile("../../../../../spec/fixtures/screen-link/messages.json")
 	if err != nil {
 		t.Fatal(err)
 	}

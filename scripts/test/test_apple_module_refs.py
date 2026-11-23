@@ -34,7 +34,7 @@ BASELINE = Path(__file__).resolve().with_name("apple_module_refs_baseline.json")
 # (#13843), the one list of what is core and what is a module. A module joins here once its references from the core
 # are worth counting; the other classified modules (about 700 references today) would only make every move churn the
 # baseline.
-GUARDED = ("glasses", "screen-share")
+GUARDED = ("glasses", "screen-share", "health")
 _DIRS = module_classification.apple_module_dirs()
 MODULES = {module: _DIRS.get(module, []) for module in GUARDED}
 # The one core file allowed to name module types: the module list (the seed of PersonaHostApp).

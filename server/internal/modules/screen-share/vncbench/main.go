@@ -3,9 +3,9 @@
 // scene, the bytes on the wire, the frame rate, the time from an input to the pixels it changes, and the picture's
 // quality against a lossless copy of the same moment.
 //
-//	go run ./cmd/vncbench probe                       # macOS Screen Sharing on this Mac
-//	go run ./cmd/vncbench run -scenes all -config app # the app's encodings, every scene
-//	go run ./cmd/vncbench wheel -apps page,finder,terminal -browser <path> # how far wheel notches scroll (#7775)
+//	go run ./internal/modules/screen-share/vncbench probe                       # macOS Screen Sharing on this Mac
+//	go run ./internal/modules/screen-share/vncbench run -scenes all -config app # the app's encodings, every scene
+//	go run ./internal/modules/screen-share/vncbench wheel -apps page,finder,terminal -browser <path> # how far wheel notches scroll (#7775)
 //
 // It signs in with VNCBENCH_ACCOUNT / VNCBENCH_PASSWORD, or the login keychain's "persona-vnc-bench" password
 // (never printed). -hub and -machine go through a hub's port relay as the app does, with a device token in

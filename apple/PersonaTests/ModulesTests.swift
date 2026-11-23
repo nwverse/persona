@@ -15,7 +15,7 @@ struct ModulesTests {
     @Test func theListRegistersWithoutProblems() {
         let all = ModuleRegistry<PersonaHostApp>(modules: Modules.builtIn, isEnabled: { _ in true })
         #expect(all.problems.isEmpty)
-        #expect(all.active.map(\.id) == ["glasses", "screen-share"])
+        #expect(all.active.map(\.id) == ["glasses", "screen-share", "health"])
         #expect(Modules.registry.problems.isEmpty)
     }
 
@@ -104,6 +104,35 @@ struct ModulesTests {
             #expect(!s.registry.isActive("screen-share"))
             #expect(s.registry.offByHub == ["screen-share"])
             #expect(s.registry.views(at: .chatMenu).isEmpty && s.registry.capability((any LiveScreen).self) == nil)
+        }
+    }
+
+    // Health (#14278): the core reaches its home only through the shell page `health`, so with it off the sidebar has
+    // no row and no route opens a page.
+    @Test func healthOffLeavesNoPage() {
+        let off = registry(glasses: false)
+        #expect(!off.isActive("health"))
+        #expect(off.shellPage(id: SidebarRoute.healthPage) == nil)
+    }
+
+    @Test func healthOnServesItsPage() {
+        let on = ModuleRegistry<PersonaHostApp>(modules: Modules.builtIn, isEnabled: { $0.descriptor.id == "health" })
+        #expect(on.problems.isEmpty)
+        #expect(on.shellPages.map(\.id) == [SidebarRoute.healthPage])
+        #expect(on.shellPage(id: SidebarRoute.healthPage)?.module == "health")
+    }
+
+    @Test func healthFollowsItsHubFlag() {
+        #expect(HealthModule().descriptor.feature == "module.health")
+        withDefaults { d in
+            let s = ModuleState(group: "home", defaults: d, isEnabled: { $0.descriptor.id == "health" })
+            s.heard(["file_upload"], from: "home", isHub: true, defaults: d)
+            #expect(s.registry.isActive("health"), "an older hub leaves it on")
+            s.heard(["modules", "module.health"], from: "home", isHub: true, defaults: d)
+            #expect(s.registry.shellPage(id: SidebarRoute.healthPage) != nil)
+            s.heard(["modules", "module.screen-share"], from: "home", isHub: true, defaults: d)
+            #expect(s.registry.offByHub == ["health"])
+            #expect(s.registry.shellPage(id: SidebarRoute.healthPage) == nil)
         }
     }
 
