@@ -61,8 +61,9 @@ type MemorySource struct {
 }
 
 // DeclaresMemorySources says whether p, as installed, declares a memory_sources contribution, on or off: once it does,
-// its text outlets (its assistant instructions, project context, Inbox context and its connectors' read tools in the
-// assistant's conversations) are no longer delivered directly, whether or not its entries can be read now, so no entry
+// its text outlets (its assistant instructions, project context, Inbox context, its connectors' read tools in the
+// assistant's conversations, its own MCP servers in the assistant and its data-directory skills) are no longer
+// delivered directly, whether or not its entries can be read now, so no entry
 // reaches a scene around the hub's filter.
 func DeclaresMemorySources(p *Extension) bool {
 	if p == nil {

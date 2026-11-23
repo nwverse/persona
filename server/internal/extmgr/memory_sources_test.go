@@ -8,13 +8,16 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extension"
 	pserve "github.com/nwverse/persona/server/internal/extension/serve"
+	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -248,5 +251,96 @@ func TestMemoryConnector(t *testing.T) {
 	}
 	if !memoryConnectorIn([]*extension.Extension{other, memory}, "qamem") || memoryConnectorIn([]*extension.Extension{other, memory}, "qaother") {
 		t.Error("memoryConnectorIn")
+	}
+}
+
+// memReadConnector is a fake connector with two read tools: <id>_read only the assistant gets, <id>_agentread the
+// coding agents get too.
+type memReadConnector struct{ id string }
+
+func (c *memReadConnector) ID() string   { return c.id }
+func (c *memReadConnector) Name() string { return "QA" }
+func (c *memReadConnector) Manifest() connector.Manifest {
+	return connector.Manifest{Capabilities: []connector.Capability{connector.CapTools}, AgentTools: []string{c.id + "_agentread"}}
+}
+func (c *memReadConnector) Tools() []proto.Tool {
+	return []proto.Tool{{Name: c.id + "_read", Description: "qa: read"}, {Name: c.id + "_agentread", Description: "qa: read for agents"}}
+}
+func (c *memReadConnector) Call(context.Context, string, json.RawMessage) (string, error) {
+	return "qa: entries", nil
+}
+
+// memorySourceRegistry is an extension registry holding manifests, each a fake extension's contributes.
+func memorySourceRegistry(t *testing.T, contributes map[string]string) *extension.Registry {
+	t.Helper()
+	reg := extension.NewRegistry(t.TempDir(), nil, nil, 0)
+	for id, c := range contributes {
+		m := &extension.Manifest{ManifestVersion: extension.ManifestVersion, ID: id, Name: id, Version: "1.0.0",
+			Engines: extension.Engines{ExtensionProtocol: extension.Protocol}, Runtime: &extension.Runtime{Command: extension.Command{Path: id}}}
+		if err := json.Unmarshal([]byte(c), &m.Contributes); err != nil {
+			t.Fatal(err)
+		}
+		if err := reg.AddBuiltin(m, "/opt/"+id, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := reg.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return reg
+}
+
+// The read tools of a declaring extension's connector are neither listed for the assistant's conversations nor callable
+// there, while the coding agents' list keeps its agent tool; another extension's connector keeps both. Its own MCP
+// servers do not reach the assistant either; another extension's do.
+func TestMemoryWithheldTools(t *testing.T) {
+	ctx := context.Background()
+	h := newTestManager(t)
+	h.connectors = connector.NewRegistry(nil)
+	h.extensions = newExtensions(t.TempDir(), nil, h.logf)
+	h.extensions.reg = memorySourceRegistry(t, map[string]string{
+		"qa-memory": `{"memory_sources": [{"id": "memory", "name": "QA memory"}], "connectors": [{"id": "qamem", "name": "QA", "capabilities": ["tools"]}],
+			"mcp_servers": [{"id": "qamemrecall", "command": "qa-memory", "args": ["mcp"]}]}`,
+		"qa-other": `{"connectors": [{"id": "qaother", "name": "QA", "capabilities": ["tools"]}],
+			"mcp_servers": [{"id": "qaotherrecall", "command": "qa-other", "args": ["mcp"]}]}`,
+	})
+	for _, id := range []string{"qamem", "qaother"} {
+		if err := h.addConnector(&memReadConnector{id: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	names := func(tools []proto.Tool) string {
+		var out []string
+		for _, tl := range tools {
+			out = append(out, tl.Name)
+		}
+		return strings.Join(out, ",")
+	}
+	agents, assistantOnly := h.AgentTools(ctx, true)
+	offered := append(slices.Clone(agents), assistantOnly...)
+	for _, name := range []string{"qamem_read", "qamem_agentread"} {
+		if slices.ContainsFunc(offered, func(tl proto.Tool) bool { return tl.Name == name }) {
+			t.Errorf("%s offered in the assistant's conversations: %s", name, names(offered))
+		}
+	}
+	for _, name := range []string{"qaother_read", "qaother_agentread"} {
+		if !slices.ContainsFunc(offered, func(tl proto.Tool) bool { return tl.Name == name }) {
+			t.Errorf("%s not offered in the assistant's conversations: %s", name, names(offered))
+		}
+	}
+	if agents, _ := h.AgentTools(ctx, false); names(agents) != "qamem_agentread,qaother_agentread" {
+		t.Errorf("coding agents' tools = %s", names(agents))
+	}
+	for _, name := range []string{"qamem_read", "qamem_agentread"} {
+		if res, handled := h.CallTool(ctx, "qa-machine", "qa-main", name, json.RawMessage(`{}`), true); !handled || !res.IsError {
+			t.Errorf("%s called in an assistant conversation: %+v %v", name, res, handled)
+		}
+	}
+	var servers []string
+	for _, s := range h.extensions.assistantMCPServers() {
+		servers = append(servers, s.ID)
+	}
+	if got := strings.Join(servers, ","); got != "qaotherrecall" {
+		t.Errorf("assistant MCP servers = %s", got)
 	}
 }

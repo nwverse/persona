@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -22,7 +23,8 @@ import (
 // fields are checked before any of it is used, and an extension whose read fails gives no entries this time: never its
 // text instead. Once an extension declares the contribution (extension.DeclaresMemorySources), its text outlets are
 // no longer delivered directly: its assistant instructions (extensionInstructions), its project and Inbox context
-// (projectContext, inboxContext) and its connectors' read tools in the assistant's conversations (memoryWithheld).
+// (projectContext, inboxContext), its connectors' read tools in the assistant's conversations (memoryWithheld), its
+// own MCP servers in the assistant (assistantMCPServers) and the skills in its data directory (extensionSkills).
 
 // MemoryReadBounds are the bounds of reading one memory_sources contribution for an assembly; the assistant gives
 // them (memory_extension_wire.go), so they are written once.
@@ -185,12 +187,17 @@ func memoryPageOf(raw json.RawMessage, most int) (wire.MemoryEntriesResult, erro
 	return page, nil
 }
 
-// memoryConnector says whether connector id is contributed by an extension that declares memory_sources.
-func (ps *extensions) memoryConnector(id string) bool {
-	if ps == nil || ps.reg == nil {
+// memoryConnector says whether connector c is an extension's that declares memory_sources: the extension that runs it
+// when one does (ownerOf), so a connector id another extension also names decides nothing; else (none runs it now)
+// any extension that declares it and contributes c's id, the stricter reading.
+func (ps *extensions) memoryConnector(c connector.Connector) bool {
+	if ps == nil || ps.reg == nil || c == nil {
 		return false
 	}
-	return memoryConnectorIn(ps.reg.List(), id)
+	if hp := ps.ownerOf(c); hp != nil {
+		return extension.DeclaresMemorySources(ps.reg.Get(hp.id))
+	}
+	return memoryConnectorIn(ps.reg.List(), c.ID())
 }
 
 // memoryConnectorIn says whether one of list that declares memory_sources contributes connector id (as installed, on
@@ -219,8 +226,7 @@ func (h *Manager) memoryWithheld(name string) bool {
 	if h.connectors == nil || h.extensions == nil || !h.connectors.ReadOnly(name) {
 		return false
 	}
-	c := h.connectors.Owner(name)
-	return c != nil && h.extensions.memoryConnector(c.ID())
+	return h.extensions.memoryConnector(h.connectors.Owner(name))
 }
 
 // withoutMemoryReads is tools without the ones memoryWithheld withholds.

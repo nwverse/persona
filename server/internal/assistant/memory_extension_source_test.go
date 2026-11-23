@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -10,25 +11,32 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/extmgr"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // fakeMemoryReader is the extensions' manager as the memory source reads it: out for every read, counted.
+// onRead, when set, is told the number of each read while it runs (outside f's lock).
 type fakeMemoryReader struct {
-	mu    sync.Mutex
-	gen   uint64
-	reads int
-	out   []extmgr.MemorySourceRead
+	mu     sync.Mutex
+	gen    uint64
+	reads  int
+	out    []extmgr.MemorySourceRead
+	onRead func(n int)
 }
 
 func (f *fakeMemoryReader) MemorySourceReads(_ context.Context, b extmgr.MemoryReadBounds) []extmgr.MemorySourceRead {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.reads++
+	n, out, onRead := f.reads, f.out, f.onRead
+	f.mu.Unlock()
+	if onRead != nil {
+		onRead(n)
+	}
 	if b.PageLimit != memoryExtensionPageLimit || b.Pages != memoryExtensionPages || b.Entries != memoryExtensionMost ||
 		b.CallTimeout != memoryExtensionCallTimeout || b.AnswerMost != memoryExtensionAnswerMost {
 		return []extmgr.MemorySourceRead{{Err: errors.New("unexpected bounds")}}
 	}
-	return f.out
+	return out
 }
 
 func (f *fakeMemoryReader) MemorySourcesGeneration() uint64 {
@@ -143,6 +151,102 @@ func TestMemoryExtensionCache(t *testing.T) {
 	s.setMemorySources(r)
 	if _, ok := s.memoryExtension.(*memoryExtensionCache); !ok {
 		t.Fatalf("source %T", s.memoryExtension)
+	}
+}
+
+// The standing context never waits: without a batch of the current generation it takes none and starts the read,
+// whose batch the next message takes. A read that ends on an older generation (an extension changed while it ran) is
+// followed by one of the current generation within the same wait, not answered with nothing.
+func TestMemoryExtensionCacheNoWaitAndGeneration(t *testing.T) {
+	ctx := context.Background()
+	r := &fakeMemoryReader{out: []extmgr.MemorySourceRead{{Extension: "qa-memory", Name: "QA Memory",
+		Pages: qaMemoryPage(wire.MemoryEntry{ID: "qa-a", Text: "qa: a", Status: "active", Standing: true})}}}
+	c := &memoryExtensionCache{r: r}
+	if b := c.CachedMemoryExtensionEntries(ctx); len(b.Entries) != 0 {
+		t.Fatalf("no batch yet: %+v", b)
+	}
+	if n := r.readsNow(t, c); n != 1 {
+		t.Fatalf("the standing context started %d reads, want 1", n)
+	}
+	if b := c.CachedMemoryExtensionEntries(ctx); len(b.Entries) != 1 {
+		t.Fatalf("the next message: %+v", b)
+	}
+	// An extension changes while the next read runs: that read is of the older generation, so a second is made.
+	r.mu.Lock()
+	r.gen++
+	r.onRead = func(n int) {
+		if n == 2 {
+			r.mu.Lock()
+			r.gen++
+			r.mu.Unlock()
+		}
+	}
+	r.mu.Unlock()
+	if b, err := c.MemoryExtensionEntries(ctx, true); err != nil || len(b.Entries) != 1 {
+		t.Fatalf("after a change during the read: %+v %v", b, err)
+	}
+	if n := r.readsNow(t, c); n != 3 {
+		t.Fatalf("read %d times, want 3 (the one of the older generation, then the current)", n)
+	}
+}
+
+// decisions_query carries the memory extension's entries in its memory field: the main space's and general ones, on
+// the first page only, and none when a filter the extension's entries have no field for is asked.
+func TestDecisionsQueryMemoryField(t *testing.T) {
+	ctx := context.Background()
+	s, _, st, _ := memoryAssembleService(t)
+	s.memoryEntries = &memEntrySource{}
+	s.memoryExtension = &memExtensionSource{batch: memoryExtensionBatch{Entries: extQAEntries(), Tagged: true}}
+	main := entryQAMain
+	main.Type = "decision"
+	ledger := &entriesMemStore{infoCategoryMemStore: st, entries: []proto.AssistantEntry{main}}
+	s.store = func() Store { return ledger }
+	memory := func(args string) string {
+		t.Helper()
+		raw, err := s.toolEntries(ctx, "qa-machine", "qa-main", "decisions_query", json.RawMessage(args))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out struct {
+			Entries []proto.AssistantEntry `json:"entries"`
+			Memory  []recalledMemory       `json:"memory"`
+		}
+		if err := json.Unmarshal([]byte(raw), &out); err != nil || out.Entries == nil {
+			t.Fatalf("decisions_query = %s (%v)", raw, err)
+		}
+		var ids []string
+		for _, m := range out.Memory {
+			if m.Text == "" {
+				t.Errorf("an entry without its text: %+v", m)
+			}
+			ids = append(ids, m.ID)
+		}
+		return strings.Join(ids, ",")
+	}
+	want := extID(extQAPlain) + "," + extID(extQAMain)
+	for _, args := range []string{`{}`, `{"status":"active"}`} {
+		if got := memory(args); got != want {
+			t.Errorf("%s: memory = %s, want %s", args, got, want)
+		}
+	}
+	for _, args := range []string{`{"by":"user"}`, `{"trust":"user_verbatim"}`, `{"status":"superseded"}`} {
+		if got := memory(args); got != "" {
+			t.Errorf("%s: memory = %s, want none", args, got)
+		}
+	}
+}
+
+// A main-space conversation's context carries the standing section on the owner's computer, never the finance entry
+// from qa-finance, and nothing on another computer.
+func TestContextStandingMemory(t *testing.T) {
+	ctx := context.Background()
+	s, _ := memoryExtensionService(t, true)
+	got := s.Context(ctx, ContextParams{MachineID: "qa-machine", SessionID: "qa-main"}).Text
+	if !strings.Contains(got, extQAMain.Text) || strings.Contains(got, extQAFinance.Text) {
+		t.Errorf("context = %q", got)
+	}
+	if got := s.Context(ctx, ContextParams{MachineID: "qa-other", SessionID: "qa-main"}).Text; strings.Contains(got, extQAMain.Text) {
+		t.Errorf("another computer = %q", got)
 	}
 }
 

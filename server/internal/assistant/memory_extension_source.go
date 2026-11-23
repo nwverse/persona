@@ -45,8 +45,9 @@ const (
 // memoryExtensionCache is the memoryExtensionSource of the extensions' manager: the merged batch of every memory
 // source, read at most once per memoryExtensionFresh (memoryExtensionRetry after a failure) and generation, one read
 // at a time, in the background. An assembly never waits for a read while a batch of the same generation is there: it
-// takes that one, and the read is for the next. Without one (the first read, or an extension changed) it waits at most
-// memoryExtensionWait, so a message's context is never held up by a source that does not answer.
+// takes that one, and the read is for the next. Without one (the first read, or an extension changed) a recall, a
+// hand-off or the Inbox waits at most memoryExtensionWait, so its context is never held up by a source that does not
+// answer; the standing context of an owner's message never waits (CachedMemoryExtensionEntries).
 type memoryExtensionCache struct {
 	r memorySourceReader
 
@@ -73,47 +74,58 @@ func (s *Service) setMemorySources(e any) {
 }
 
 // MemoryExtensionEntries is the merged batch: the one kept when it is fresh, the one kept while a newer is read when
-// it is of the current generation, else the one read now. personal is checked by the caller (memoryExtensionEntries).
+// it is of the current generation, else the one read now (within memoryExtensionWait). A read that ends on an older
+// generation (an extension changed while it ran) is followed by one of the current generation within the same wait.
+// personal is checked by the caller (memoryExtensionEntries).
 func (c *memoryExtensionCache) MemoryExtensionEntries(ctx context.Context, _ bool) (memoryExtensionBatch, error) {
+	timer := time.NewTimer(memoryExtensionWait)
+	defer timer.Stop()
+	for {
+		b, have, reading := c.current(ctx)
+		if have {
+			return b, nil
+		}
+		select {
+		case <-reading: // the next round takes its batch, or starts a read of the current generation
+		case <-timer.C:
+			return memoryExtensionBatch{}, errMemorySourcesSlow
+		case <-ctx.Done():
+			return memoryExtensionBatch{}, ctx.Err()
+		}
+	}
+}
+
+// CachedMemoryExtensionEntries is the batch kept for the current generation, never waiting: none while there is none
+// (the first read, or an extension changed), and the read it starts fills it for the next message. The standing
+// context of each owner's message takes it, so a message's feedback never waits on a memory source (principle 7).
+func (c *memoryExtensionCache) CachedMemoryExtensionEntries(ctx context.Context) memoryExtensionBatch {
+	b, _, _ := c.current(ctx)
+	return b
+}
+
+// current is the batch of the current generation when one is kept (have), starting a read in the background when it
+// is not fresh; without one, the read to wait for (started here when none runs).
+func (c *memoryExtensionCache) current(ctx context.Context) (b memoryExtensionBatch, have bool, reading chan struct{}) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	gen := c.r.MemorySourcesGeneration()
 	fresh := memoryExtensionFresh
 	if c.failed {
 		fresh = memoryExtensionRetry
 	}
-	have := !c.at.IsZero() && c.gen == gen
+	have = !c.at.IsZero() && c.gen == gen
 	if have && time.Since(c.at) < fresh {
-		b := c.batch
-		c.mu.Unlock()
-		return b, nil
+		return c.batch, true, nil
 	}
-	wait := c.reading
-	if wait == nil {
-		wait = make(chan struct{})
-		c.reading = wait
+	if c.reading == nil {
+		c.reading = make(chan struct{})
 		// The read is shared and outlives its caller (each call has its own bound).
-		go c.read(context.WithoutCancel(ctx), gen, wait)
+		go c.read(context.WithoutCancel(ctx), gen, c.reading)
 	}
-	kept := c.batch
-	c.mu.Unlock()
 	if have {
-		return kept, nil
+		return c.batch, true, c.reading
 	}
-	timer := time.NewTimer(memoryExtensionWait)
-	defer timer.Stop()
-	select {
-	case <-wait:
-	case <-timer.C:
-		return memoryExtensionBatch{}, errMemorySourcesSlow
-	case <-ctx.Done():
-		return memoryExtensionBatch{}, ctx.Err()
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.gen != gen { // the read was of an older generation: none of it is used
-		return memoryExtensionBatch{}, nil
-	}
-	return c.batch, nil
+	return memoryExtensionBatch{}, false, c.reading
 }
 
 // read reads the memory sources for generation gen, keeps what they answered and closes done.
@@ -223,6 +235,21 @@ func (s *Service) extensionMemoryBatch(ctx context.Context) memoryExtensionBatch
 	return s.memoryExtensionEntries(ctx, true)
 }
 
+// memoryExtensionCached is a source that can hand over what it has without waiting (memoryExtensionCache).
+type memoryExtensionCached interface {
+	CachedMemoryExtensionEntries(ctx context.Context) memoryExtensionBatch
+}
+
+// cachedExtensionMemoryBatch is extensionMemoryBatch without waiting for a read, for the standing context of an
+// owner's message: what the source keeps for the current generation, or none until its read is done. A source that
+// keeps nothing (a test's) answers at once anyway.
+func (s *Service) cachedExtensionMemoryBatch(ctx context.Context) memoryExtensionBatch {
+	if c, ok := s.memoryExtension.(memoryExtensionCached); ok {
+		return c.CachedMemoryExtensionEntries(ctx)
+	}
+	return s.extensionMemoryBatch(ctx)
+}
+
 // mostImportantWithin are the last of entries (the assembler's order: the most important last) whose texts fit in
 // most bytes together, in their order.
 func mostImportantWithin(entries []proto.AssistantEntry, most int) []proto.AssistantEntry {
@@ -250,8 +277,12 @@ func (s *Service) ownersPersonal(ctx context.Context, machine, session string) b
 // conversation session on machine may use (its standing channel): "" when there are none, or it may not see the
 // owner's personal entries.
 func (s *Service) standingMemorySection(ctx context.Context, machine, session string) string {
-	b := s.extensionMemoryBatch(ctx).standingOnly()
-	if len(b.Entries) == 0 || !s.ownersPersonal(ctx, machine, session) {
+	// The cheap checks first: a guest's conversation or a work computer never takes the batch.
+	if !s.ownersPersonal(ctx, machine, session) {
+		return ""
+	}
+	b := s.cachedExtensionMemoryBatch(ctx).standingOnly()
+	if len(b.Entries) == 0 {
 		return ""
 	}
 	a := s.assembleExtension(ctx, s.assembleForConversation(ctx, session, assembleStanding), b)
@@ -281,8 +312,11 @@ func (s *Service) withStandingMemory(ctx context.Context, machine, session, snap
 // on machine (an agent the assistant starts, a to-do handed to a new Agent): general entries query (what it is asked)
 // bears on, only on the owner's own computer; never a sensitive one, as no confirmed plan named their categories.
 func (s *Service) agentStartMemory(ctx context.Context, machine, query string) string {
+	if machine == "" || machine != s.settings(ctx).MachineID || s.isWorkMachine(machine) {
+		return ""
+	}
 	b := s.extensionMemoryBatch(ctx)
-	if len(b.Entries) == 0 || machine == "" || machine != s.settings(ctx).MachineID || s.isWorkMachine(machine) {
+	if len(b.Entries) == 0 {
 		return ""
 	}
 	a := s.assembleExtension(ctx, assembleFor{Role: assembleHandOff, Query: query}, b)

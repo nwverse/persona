@@ -857,7 +857,11 @@ Each entry (`MemoryEntry`):
   so `not_ready` is asked again soon without each message of a burst waiting out a source that does not answer. One
   read runs at a time, in the background: once the result is older than that, an assembly still uses it and the read
   for the next one starts; only an assembly with no result of the current extensions (the first read, or right after
-  a change) waits, for at most 3 seconds (`memoryExtensionWait`), and goes without the extension's entries after that. Several memory extensions are merged: an untagged
+  a change) waits, for at most 3 seconds (`memoryExtensionWait`), and goes without the extension's entries after that;
+  a read that ends after yet another change is followed by one of the current extensions within the same 3 seconds.
+  The standing context of an owner's message never waits (`CachedMemoryExtensionEntries`): it takes the result it has
+  for the current extensions, or none, and the read that starts serves the next message, so a message's context is
+  never held up by a memory source. Several memory extensions are merged: an untagged
   one's entries are in no track (the strictest rule), a tagged one's keep theirs, and an id another one gave first is
   dropped.
 
@@ -865,14 +869,14 @@ Where the entries go (`docs/assistant/health.md` "Memory by scene" has the rules
 
 | Path | What it takes of the extension's entries |
 | --- | --- |
-| A main-space conversation's standing context | Only its `standing` entries that the standing rule lets through (its own track's, general ones from elsewhere; never a sensitive entry from elsewhere), as one section of the per-message snapshot (`- 记忆…：` / `- Memory …：`), sent again only when it changes. Only for the owner's own assistant computer, never a guest's conversation or a work computer. Track conversations (spaces, health) take none, as they took none of the extension's instructions. |
+| A main-space conversation's standing context | Only its `standing` entries that the standing rule lets through (its own track's, general ones from elsewhere; never a sensitive entry from elsewhere), as one section of the per-message snapshot (`- 记忆…：` / `- Memory …:`), sent again only when it changes. Only for the owner's own assistant computer, never a guest's conversation or a work computer. Track conversations (spaces, health) take none, as they took none of the extension's instructions. |
 | A dispatched Agent's first message | A planned task: the hand-off rule (`handOffMemory`: general entries its words bear on, sensitive ones only after the owner's Start on a plan confirmed for their categories), noted in the to-do's brief. An Agent the assistant starts or a to-do handed to a new Agent: general entries its words bear on, never a sensitive one. Only on the owner's own computer. |
 | The Inbox's helper (triage and drafts) | General entries the item bears on, never a sensitive one, at most 1 KB, as a background block under the extension's name. |
 | A recall | `decisions_query`'s first page adds `memory: [{id, text}]` beside the ledger's `entries` (the cursor stays the ledger's): its own track's entries, general ones from elsewhere, sensitive ones only when the conversation carries every one of their categories; with `tag`, only entries whose subjects or text name it; at most 3 KB, the most important first. A filter the entries have no field for (`by`, `trust`, a `status` other than `active`) leaves them out. |
 
 **Text outlets.** An extension that does not declare `memory_sources` keeps its text outlets unchanged. Once an
 installed extension declares it (on or switched off, whether or not its entries can be read now), the hub stops
-delivering four of them directly, so no entry reaches a scene around the filter:
+delivering six of them directly, so no entry reaches a scene around the filter:
 
 - its assistant instructions (package and data-directory `instructions`, and `assistant[].instructions`) are left out
   of the assistant's CLAUDE.md (`extensionInstructions`);
@@ -880,11 +884,24 @@ delivering four of them directly, so no entry reaches a scene around the filter:
 - its `inbox_context` text is left out of Inbox triage and drafts (`inboxContext`); its `never_quote` sentences still
   stop a draft that repeats one;
 - its connectors' read tools (its recall tool among them) are not listed in the assistant's conversations, and a call
-  to one there is refused with a pointer to `decisions_query` (`memoryWithheld`). Its connectors' writes, and the read
-  tools coding Agents get through `agent_tools`, are unchanged.
+  to one there is refused with a pointer to `decisions_query` (`memoryWithheld`). A connector is judged by the
+  extension that runs it, so a connector id another extension also names decides nothing;
+- its own `mcp_servers` are not given to the assistant (`assistantMCPServers`), as they could recall its entries
+  around the filter;
+- the skills in its data directory are not sent (`extensionSkills`); the skills in its package are.
+
+Its connectors' writes are unchanged, and so are the read tools coding Agents get through `agent_tools`: a known
+exception. A coding Agent is not in an assistant conversation, and what such a tool answers is the extension's own
+output, under its own rules, as before it declared the point; an extension that must keep sensitive entries from
+Agents leaves its recall tool out of `agent_tools`.
 
 What it writes to its data directory stays adopted and shown in its details as before; only the delivery stops. Its
-skills, quick prompts and every other contribution are unchanged.
+package skills, quick prompts and every other contribution are unchanged.
+
+A standing entry goes only to a standing channel among the standing contexts, but it is still an entry: a recall, a
+hand-off or the Inbox may carry it when it bears on what they are about, under their own rules, as they carry any
+other. A track conversation (a space, health) has no standing channel yet, so a recall is how it reaches its own
+track's standing entries.
 
 ### Unified entries ledger
 
