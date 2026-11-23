@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Session } from "../types";
+import type { Session } from "../../lib/types";
 import { announced, barLine, barStatus, sinceText, type BarLineInput } from "./bar-line";
 import type { VoicePhase } from "./conversation";
 import type { VoiceRun } from "./wire";

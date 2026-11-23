@@ -1,8 +1,8 @@
 // The browser's side of the voice extension's socket (docs/assistant/voice.md 3: protocol 2). Pure data, as iOS's
 // VoiceWire.swift: the frames' types, and what the first screen reads from a conversation's lines and runs. The frames
 // themselves are read and written in frames.ts, which only a call loads (#3461).
-import { CONTEXT_RE } from "../compatibility";
-import type { Item } from "../types";
+import { CONTEXT_RE } from "../../lib/compatibility";
+import type { Item } from "../../lib/types";
 
 /** The conversation a call is bound to, as `start.target` sends it. */
 export interface VoiceTarget {

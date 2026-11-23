@@ -7,9 +7,9 @@
 import { useState } from "react";
 import { t } from "../../../i18n";
 import { navigate } from "../../../lib/router";
-import { CAPTIONS_SHOWN } from "../../../lib/voice/captions";
-import { useVoiceCall, useVoiceSnapshot, voiceCalls, type VoiceOwner } from "../../../lib/voice/calls";
-import { endNote, unavailableNote } from "../../../lib/voice/notes";
+import { CAPTIONS_SHOWN } from "../captions";
+import { useVoiceCall, useVoiceSnapshot, voiceCalls, type VoiceOwner } from "../calls";
+import { endNote, unavailableNote } from "../notes";
 import { Button, Dialog } from "../../../ui/atoms";
 import { Icon } from "../../../ui/icons";
 import { CaptionRow } from "./VoiceBar";

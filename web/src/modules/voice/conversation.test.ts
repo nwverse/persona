@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Session } from "../types";
+import type { Session } from "../../lib/types";
 import { VoiceAudioError, VoiceConversation, type ModelPick, type VoiceAudio, type VoiceAudioEvent, type VoiceDeps, type VoiceSocket } from "./conversation";
 import { pickModel } from "./support";
 import { HELD_FRAMES, Uplink } from "./uplink";

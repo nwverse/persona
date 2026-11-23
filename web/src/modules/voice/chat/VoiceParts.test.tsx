@@ -7,14 +7,14 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Session } from "../../../lib/types";
-import type { VoiceProbe } from "../../../lib/voice/support";
+import type { VoiceProbe } from "../support";
 import { useVoiceEntry, type VoiceOffer } from "./VoiceParts";
 
 const probe: VoiceProbe = {
   extensions: [{ id: "voice", name: "Voice", kind: "voice", status: "running" }],
   info: { kind: "info", info: { protocol: 2, features: ["target", "runs", "meeting"], setup: [] } },
 };
-vi.mock("../../../lib/voice/support", async (orig) => ({ ...(await orig<typeof import("../../../lib/voice/support")>()), useVoiceProbe: () => probe }));
+vi.mock("../support", async (orig) => ({ ...(await orig<typeof import("../support")>()), useVoiceProbe: () => probe }));
 const loaded = vi.hoisted(() => vi.fn());
 vi.mock("./VoiceCall", async (original) => {
   loaded();
