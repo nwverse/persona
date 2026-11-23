@@ -21,6 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/remoteimage"
@@ -537,6 +538,13 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || sessionSend ||
 		method == assistantwire.DeviceAssistantAnswerAgain) {
 		id, _ := p["session_id"].(string)
+		if id != "" {
+			if _, trusted := p["model_source"].(modelhttp.Source); !trusted {
+				p["model_source"] = s.conversationModelSource(ctx, device, id)
+			}
+		} else if method == DeviceAssistantWarm {
+			p["model_source"] = modelhttp.Source{Role: "main"}
+		}
 		pctx, carry := withNotesCarry(ctx)
 		// Settled however this returns: a send refused before it left was not taken (direction_notes.go).
 		defer func() { s.notesSendOutcome(ctx, carry, taken) }()
@@ -800,6 +808,7 @@ func (s *Service) device(ctx context.Context, id string) (Device, bool) {
 
 // startParams are what a new conversation starts with.
 type startParams struct {
+	modelSource         modelhttp.Source
 	TaskModel           *ModelBinding
 	MachineID           string
 	Cwd                 string

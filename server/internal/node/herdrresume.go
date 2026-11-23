@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 )
 
 // When herdr's server restarts it restores its panes and, once a client attaches, resumes the agents in them with its
@@ -33,6 +34,8 @@ const resumeSource = "custom:persona"
 
 // agentLaunch is what an agent in a pane was started with, to start it again the same way.
 type agentLaunch struct {
+	Source modelhttp.Source `json:"model_source,omitzero"`
+
 	AdditionalDirs                   []string `json:"additional_dirs,omitempty"`
 	TaskInstructionFile              string
 	TaskInstructions                 string
