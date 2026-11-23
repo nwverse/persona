@@ -49,11 +49,11 @@ func open(t testing.TB) *DB {
 
 // openTables are what open clears (with what refers to them): the union of the integration branch's list and master's
 // TruncateForTest. TruncateForTest alone does not clear lock_tests, client_ops, pair_tokens or device_sessions.
-var openTables = []string{"push_device_retirements", "lock_tests", "client_ops", "devices", "device_tokens", "pair_tokens",
+var openTables = []string{"health_intake", "push_device_retirements", "lock_tests", "client_ops", "devices", "device_tokens", "pair_tokens",
 	"device_sessions", "live_activities", "phone_tools", "node_sessions", "mail_accounts", "interactions", "settings",
 	"inbox_items", "kb_entities", "connector_secrets", "machine_systems", "machine_metrics", "machine_usage",
 	"sent_messages", "todos", "todo_agents", "assistant_always", "sent_as_user", "hub_push_sent", "urgent_calls", "model_usage",
-	"conversation_histories", "assistant_conversation_spaces", "logical_conversations", "conversation_segment_closures", "conversation_prepared_candidates", "assistant_entries"}
+	"conversation_histories", "assistant_conversation_spaces", "logical_conversations", "conversation_segment_closures", "conversation_prepared_candidates", "assistant_entries", "assistant_captures"}
 
 // open empties what TRUNCATE openTables CASCADE did, a table only the cascade reaches included, and leaves a table
 // that had no row in that cascade its files: it truncates only what has a row.

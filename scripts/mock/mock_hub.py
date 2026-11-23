@@ -2285,6 +2285,8 @@ ASSISTANT += [] if os.environ.get("MOCK_HEALTH_EMPTY") else [
 # The health space's reports/ (docs/assistant/health.md"Health reports"): originals with their records, an original not summarized yet,
 # a record alone (a photo sent in a conversation).
 HEALTH_REPORT_RECORD = "报告日期：2026-10-28\n机构：示例体检中心\n类型：年度体检\n\n| 项目 | 结果 | 单位 | 参考范围 | 异常 |\n| --- | --- | --- | --- | --- |\n| 总胆固醇 | 5.8 | mmol/L | < 5.2 | 偏高 |\n| 低密度脂蛋白 | 3.6 | mmol/L | < 3.4 | 偏高 |\n| 空腹血糖 | 5.1 | mmol/L | 3.9–6.1 | |\n\n结论：血脂略高，建议三个月后复查。\n"
+
+
 HEALTH_REPORTS_DIR = "/home/me/.persona/health/reports/"
 HEALTH_REPORTS = [
     {"name": "2026 年度体检-20261106-093000.pdf", "title": "2026 年度体检", "path": HEALTH_REPORTS_DIR + "2026 年度体检-20261106-093000.pdf",
@@ -9280,6 +9282,14 @@ if MOCK_TASKS:
             it("user", "text", 4.8, text=_quiet, injected={"kind": "system", "state": "supervise", "level": "triage", "line": "督办：检查示例任务"}),
             it("assistant", "tool_use", 4.7, tool_use_id="mock-supervision-read", tool_name="Bash", tool_input={"command": "printf 'synthetic checks passed'", "description": "Inspect synthetic task checks"}),
             it("user", "tool_result", 4.6, tool_use_id="mock-supervision-read", text="synthetic checks passed"),
+        ]
+        ITEMS[ASK1] += tool("mcp__persona__agent_send", {"machine": "server", "session_id": TESTS, "text": "Continue the synthetic checks.", "task": {"title": "整理发布说明"}},
+                            "It is now your task todo_task_release.", 4.65)
+        ITEMS[ASK1] += tool("mcp__persona__conversation_send", {"id": "example-conversation", "text": "Synthetic checks are complete."},
+                            "Sent to the example conversation.", 4.62)
+        ITEMS[ASK1] += tool("mcp__persona__interaction_answer", {"interaction_id": "mock-supervision-question", "approve": True},
+                            "Answered on behalf of the user.", 4.58)
+        ITEMS[ASK1] += [
             it("assistant", "text", 4.5, text="示例任务的测试通过，无需你处理。"),
             it("assistant", "tool_use", 4.4, tool_use_id="mock-supervision-finish", tool_name="mcp__persona__supervision_finish", tool_input={"visibility": "silent", "summary": "Synthetic checks passed"}),
             it("user", "tool_result", 4.3, tool_use_id="mock-supervision-finish", text='{"visibility":"silent"}'),
@@ -9293,6 +9303,13 @@ if MOCK_TASKS:
         ITEMS[ASK1].sort(key=lambda x: x["ts"])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _i + 1
+        TASK_FEED[ASK1] += [
+            _feed("feed_supervision_task", 4.64, "task", "todo_task_release", {"wake": "active"}),
+            _feed("feed_supervision_routed", 4.63, "routed", "todo_task_release", {"text": "Continue the synthetic checks.", "from": "assistant"}),
+            _feed("feed_supervision_answered", 4.57, "answered", "todo_task_release", {
+                "question": "Run the synthetic checks?", "answer": "Approved by the assistant.", "by": "assistant", "reason": "Routine review"}),
+        ]
+        TASK_FEED[ASK1].sort(key=lambda x: x["at"])
     # MOCK_RELAYED=1: a message another Persona conversation sent with conversation_send (prompts/assistant/relay.md),
     # then one you typed: only yours is the pale blue bubble (#2643).
     if os.environ.get("MOCK_RELAYED") == "1":
@@ -17782,6 +17799,11 @@ ITEMS["hlth0001-0000-4000-8000-000000000001"] = (
                 "points": [{"label": d, "value": v} for d, v in zip(_hdays, [6.9, 6.4, 7.1, 6.2, 6.8, 6.5, 7.0])]}),
         "差得不多，但连着几天少于 7 小时白天容易犯困。可以先试两件事：每天同一时间起床（周末也是），睡前一小时把手机放远一点。"]))]
 )
+# Keep the report conversation listed above readable when the bundled demo is regenerated.
+ITEMS["hlth0002-0000-4000-8000-000000000002"] = [
+    it("user", "text", 60 * 26 + 1, text="帮我逐项看看这份体检报告。"),
+    it("assistant", "text", 60 * 26, text=HEALTH_REPORT_RECORD),
+]
 ITEMS["hlth0003-0000-4000-8000-000000000003"] = (
     [it("user", "text", 71, text="最近 7 天步数和上周比怎么样")]
     + tool("mcp__persona__phone_health_summary", {"metrics": ["steps"], "days": 14}, "14 天的步数（按天）", 71)
@@ -17850,7 +17872,7 @@ if os.environ.get("MOCK_TAB_PANES"):
              "summary": "go test ./auth/...", "tool_input": {"command": "go test ./auth/..."}})
 if MOCK_SIDE_SESSIONS:
     # #7944: the /btw question's card (with side folding the hub sends it folded_under the review, folded_as "side"), and
-    # what each side session said
+    # what each side session said (MOCK_SIDE_UNREAD, side_unread_mock.py, answers the card)
     INTERACTIONS.append(
         {"id": "ix_side_btw", "machine_id": "macbook", "session_id": SIDE_BTW, "session_title": "btw: 这个 PR 现在能合吗",
          "cwd": "/Users/me/code/weather", "kind": "question", "created_at": ago(minutes=4), "expires_at": later(minutes=26),
