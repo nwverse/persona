@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/feishubot"
 )
 
@@ -202,7 +203,7 @@ func TestTokenWaitLeaderRecovery(t *testing.T) {
 				if mode == "success" && err != nil {
 					t.Fatal(err)
 				}
-				var apiErr *feishubot.APIError
+				var apiErr *botcard.APIError
 				if mode == "failure" && (!errors.As(err, &apiErr) || apiErr.Code != 10001) {
 					t.Fatalf("leader error = %v", err)
 				}

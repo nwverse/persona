@@ -39,6 +39,16 @@ Today row uses the existing `NavigationLink` to this same page and disappears wh
 No new visual token, component style, polling loop or background task is introduced. All text ships in English,
 Simplified Chinese and Japanese; use Apple Health / Apple 健康 consistently.
 
+## Module actions and Settings pages (Android, #13847)
+
+Audience: everyone, though no default screen changes: a module's actions and pages appear only when a module adds some.
+A feature module (`docs/architecture/core-and-modules.md`) adds to a surface it does not own in one way only: its
+actions go **after** the surface's own, under a rule, as a group of their own (the composer's ⊕ menu, a message's menu;
+in a conversation's ⋯ menu before Close and Delete, so the destructive actions stay last), and its Settings pages are
+rows at the end of the assistant's group, with the module's own title and icon token. A module that is off adds
+nothing, and nothing is left greyed out (principle 2). No new component or token: rows and actions reuse `JRow` and
+`JAction`.
+
 ## Product design principles
 
 The seven product design principles, with their rules, how to check each one and recent cases, live in `docs/design/PRINCIPLES.md`: 1 defaults first, 2 progressive disclosure, 3 user control, 4 consistency first, 5 model and product are separate, 6 rules are checkable, 7 fast, local-first and stateful. They decide product questions before any rule in this document applies. "Principle N" below refers to that numbering. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.
@@ -1961,9 +1971,10 @@ Message feedback (#5258, principle 7, super rule 5) reuses the chat's status lin
 style. Show Sending immediately from local state, then Processing on the hub's `message_send_state` receipt; do not wait
 for a model token or overwrite `Session.status`. The pending-send overlay is scoped to the conversation and message,
 survives stale snapshots, and hands off to actual execution or queued state on delivery. Failure removes only its own
-overlay and keeps the existing draft, failed-bubble and uncertain-delivery recovery. On the web the state is said once,
-by the status line under the last message (Sending, Processing, delivery unknown); the pending bubble only dims, with no
-second line under it (a queued message's bubble keeps its Queued). The full wire and reconnect rules
+overlay and keeps the existing draft, failed-bubble and uncertain-delivery recovery. On the web, a direct send's state
+appears on the status line under the last message, and its pending bubble dims. A follow-up headed for the queue while
+the turn works shows its state and local photo previews in its queue row as soon as it is sent (#13958). The hub's queue
+update confirms that row in place. The full wire and reconnect rules
 are in `docs/protocol/protocol.md` ("Message feedback (#5258)"). Apply the same definition in Assistant and Agent chats.
 
 | Message state | en | zh-Hans | ja |
@@ -2122,6 +2133,10 @@ A computer's dev server opened from a chat (a forwarded port, `docs/web/preview.
 ### 4.7 Tool execution collapsed (super rule 2)
 
 Tool execution is one summary line, never opens by itself, shows the latest text segment while running and the result when done, and expands by hand. Opened by hand, a step (and the summary itself) changes in place: the tapped row stays under the finger, what opens fades in, what closes goes at once, and the list holds still while the turn goes on (new steps, the answer, the next turn, the footer under the list changing) until the user scrolls, taps ↓ or sends (`toggleInPlace`, `ChatFollow.toggledRow`, #3005). iOS complies: `isOpen` ignores `live` (`apple/Persona/Views/Chat/ChatLines.swift:293`) and tool rows use `autoExpand: false`. The "latest segment only" half was not confirmed from code reading and needs a screenshot test.
+
+**Blank replies** (web, #13957). An interrupted turn shows the localized interruption notice below its work summary. A
+settled user turn without visible output shows “No response returned” there. Retry sends that turn's message again, with
+its attachments, when the conversation can send. Silent supervision keeps its existing visibility.
 
 **The opened summary** (web, #10247) is a flat sequence of narration and action groups, sharing one rail and indentation. The outer summary keeps the whole-exchange clock and collapsed default. Action headers name at most three kinds in first-seen order, with the first kind's icon; read/edit/search/command kinds have localized counts, and other kinds retain their existing labels. Earlier live groups start collapsed, the current one opens within the trace the reader manually opened, and a superseded run closes; all groups can be opened and closed by hand. Newly loaded completed groups start open; remembered disclosure choices remain available. Latest narration stays only in its text slot until superseded, and the final reply appears once. Rows lead with the file, query and target, or command; command descriptions remain in tooltips and expanded detail. Reliable per-call durations appear only from 30 seconds; the total exchange clock stays on the outer summary and run bar. The current run previews edit diffs using the existing diff renderer. The flatter layout replaces repeated time headings and nested rails so the inspected work is scannable, while preserving the top-level progressive disclosure required by super rule 2.
 
