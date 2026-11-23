@@ -311,7 +311,7 @@ func (s *Service) sendDigest(ctx context.Context) {
 func (s *Service) routeTo(ctx context.Context, here Settings, g superviseSignal, there func(string) bool) string {
 	to := s.digestTarget(ctx, here, g)
 	if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil && t.Supervision.assigned() &&
-		to == t.Supervision.Supervisor {
+		(to == t.Supervision.Supervisor || to == "") {
 		return to // an unavailable explicit recipient keeps its queue; it never silently falls back to main
 	}
 	if to != here.Main && !there(to) {

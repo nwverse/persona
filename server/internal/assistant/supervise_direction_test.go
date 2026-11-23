@@ -198,3 +198,32 @@ func TestIncompatibleDirectionLeadCannotSilentlyHandWorkToMain(t *testing.T) {
 	}
 	settleService(t, s)
 }
+
+func TestAssignedLeadLosingRuntimePolicyKeepsSignalsAwayFromMain(t *testing.T) {
+	s, f := newQuietService(t)
+	cfg := s.settings(t.Context())
+	cfg.Leaders = []string{"lead1"}
+	setSettings(t, s, func(v *Settings) { v.Leaders = cfg.Leaders })
+	f.setSessions("server", proto.Session{SessionID: cfg.Main, MachineID: "server", Assistant: true}, proto.Session{SessionID: "lead1", MachineID: "server", Assistant: true, SourceKind: proto.SourceRuntime, Agent: "dsh"})
+	task, err := s.createTodo(t.Context(), "Assigned work", "", "lead1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Represents a lead whose runtime capabilities changed after an accepted assignment.
+	if err := s.superviseTodo(t.Context(), task.ID, "lead1", nil, 0, "plan"); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{sigEstimateDue, sigReport, sigIdle, sigReview, sigUndecidable, sigAllStopped, sigOrphaned, sigFailed, sigStarted, sigAsk} {
+		g := superviseSignal{Todo: task.ID, Kind: kind, To: "lead1"}
+		if got := s.digestTarget(t.Context(), cfg, g); got != "" {
+			t.Errorf("%s incompatible runtime target: %s", kind, got)
+		}
+		if got := s.routeTo(t.Context(), cfg, g, func(string) bool { return false }); got != "" {
+			t.Errorf("%s fell back to %s", kind, got)
+		}
+		if got := s.recheckDigestTarget(t.Context(), cfg, g); got != "" {
+			t.Errorf("%s queued fallback: %s", kind, got)
+		}
+	}
+	settleService(t, s)
+}
