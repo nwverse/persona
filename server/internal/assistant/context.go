@@ -380,8 +380,8 @@ func snapshotAgentGroup(c proto.Session, now time.Time) snapshotAgentGroupKind {
 	recent := now.Sub(c.UpdatedAt) < 24*time.Hour
 	w := c.Work
 	switch {
-	case c.State == proto.StateNeedsYou, silentRow(c):
-		return snapshotAgentNeedsYou // a turn with no output is the owner's to continue, not finished (#10187)
+	case c.State == proto.StateNeedsYou, silentRow(c), upstreamRow(c):
+		return snapshotAgentNeedsYou // a turn with no output or a persistent upstream stall needs visibility (#10187, #13372)
 	case c.State == proto.StateWorking:
 		return snapshotAgentWorking
 	case c.AwaitsReply && c.State == proto.StateIdle && recent:
@@ -406,6 +406,7 @@ func snapshotAgentGroup(c proto.Session, now time.Time) snapshotAgentGroupKind {
 func (s *Service) snapshotAgents(ctx context.Context, devices []Device, web string) (needs, unread, awaiting, waiting, done, muted []prompts.SnapshotAgent,
 	working []prompts.SnapshotAgent) {
 	now := time.Now()
+	lang := s.lang(ctx)
 	for _, m := range devices {
 		list, off, _ := s.sessionsMuted(ctx, m.ID)
 		for _, c := range list {
@@ -424,6 +425,8 @@ func (s *Service) snapshotAgents(ctx context.Context, devices []Device, web stri
 			}
 			if silentRow(c) {
 				a.Line = c.TurnError // why it is the owner's: no output, or Persona's Stop (#10187)
+			} else if upstreamRow(c) {
+				a.Line = s.upstreamSnapshotLine(lang, m.ID, c) // persistent upstream 5xx / pool outage (#13372)
 			}
 			a.Line = clip(oneLine(a.Line), 160)
 			group := snapshotAgentGroup(c, now)

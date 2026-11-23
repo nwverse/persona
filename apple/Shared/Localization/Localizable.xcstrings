@@ -151,6 +151,29 @@
         }
       }
     },
+    "Showing this iPhone's transcript." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Showing this iPhone's transcript."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先显示这台 iPhone 的转写。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この iPhone の文字起こしを表示しています。"
+          }
+        }
+      }
+    },
     "The assistant needed your location just now, but iOS lets Persona read it only while Persona is open." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -216,6 +239,98 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ハブは今、文字起こしできていません。"
+          }
+        }
+      }
+    },
+    "The hub isn't transcribing right now: %@ had an error. The hub tries again by itself." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub isn't transcribing right now: %1$@ had an error. The hub tries again by itself."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 暂时没有在转写：「%1$@」出错了，hub 会自己重试。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブは今、文字起こしできていません：「%1$@」でエラーが起きました。ハブが自動で再試行します。"
+          }
+        }
+      }
+    },
+    "The hub isn't transcribing right now: %@ is busy, maybe because too many sessions are running at once or its quota is used up. The hub tries again by itself; if this goes on, check what's left in its console." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub isn't transcribing right now: %1$@ is busy, maybe because too many sessions are running at once or its quota is used up. The hub tries again by itself; if this goes on, check what's left in its console."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 暂时没有在转写：「%1$@」正忙，可能是同时进行的会话太多或额度用完。hub 会自己重试；一直这样的话，请到它的控制台查看剩余额度。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブは今、文字起こしできていません：「%1$@」が混み合っています。同時に実行中のセッションが多すぎるか、利用枠を使い切った可能性があります。ハブが自動で再試行します。続く場合は、サービスのコンソールで残りの利用枠を確認してください。"
+          }
+        }
+      }
+    },
+    "The hub isn't transcribing right now: %@ refused the requests, maybe because speech recognition isn't turned on for the account, or its quota ran out or expired. The hub tries again by itself; if this goes on, check in its console." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub isn't transcribing right now: %1$@ refused the requests, maybe because speech recognition isn't turned on for the account, or its quota ran out or expired. The hub tries again by itself; if this goes on, check in its console."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 暂时没有在转写：「%1$@」拒绝了请求，可能是语音识别资源未开通，或额度用完、已到期。hub 会自己重试；一直这样的话，请到它的控制台查看。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブは今、文字起こしできていません：「%1$@」がリクエストを拒否しました。音声認識が有効になっていないか、利用枠を使い切ったか期限が切れた可能性があります。ハブが自動で再試行します。続く場合は、サービスのコンソールで確認してください。"
+          }
+        }
+      }
+    },
+    "The hub isn't transcribing right now: it can't reach %@. It tries again by itself; if this goes on, check the hub machine's network." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub isn't transcribing right now: it can't reach %1$@. It tries again by itself; if this goes on, check the hub machine's network."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 暂时没有在转写：hub 连不上「%1$@」。hub 会自己重试；一直这样的话，请检查 hub 所在机器的网络。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブは今、文字起こしできていません：ハブから「%1$@」に接続できません。ハブが自動で再試行します。続く場合は、ハブのマシンのネットワークを確認してください。"
           }
         }
       }
@@ -168150,6 +168265,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "the speech service [Meeting Transcription]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the speech service"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "语音服务"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音声サービス"
+          }
+        }
+      }
     },
     "usage.duration.minutes" : {
       "localizations" : {
