@@ -169,8 +169,15 @@ func (s *Service) a2aToolCall(ctx context.Context, st a2aStore, cfg assistantwir
 	return t.view(), nil
 }
 
-// errA2ADeclined: the user declined a hand-off on the phone.
+// errA2ADeclined: the user themselves declined a hand-off on the phone. A card nobody answered is not that
+// (a2aUnanswered).
 var errA2ADeclined = errors.New("the user declined on the phone: nothing was sent")
+
+// a2aUnanswered is a2aConfirm's error for a hand-off whose card ended without the user's own answer (outcome: it
+// expired, was withdrawn or cleared, someone else answered it): nothing was sent, and the user did not decline it.
+func a2aUnanswered(outcome string) error {
+	return errors.New(outboundNotDone(outcome, errA2ADeclined.Error(), "nothing was sent"))
+}
 
 // a2aConfirm asks the phone before an assistant conversation hands text to another session, or to a new one in
 // folder where, through A2A (health.go confirmOutbound: at once when the text needs no confirming). Other senders are
@@ -186,12 +193,15 @@ func (s *Service) a2aConfirm(ctx context.Context, from, to a2aRef, where, text s
 	if where != "" {
 		label += " · " + where
 	}
-	ok, err := s.confirmOutbound(ctx, from.Machine, from.Session, "a2a_send", text, label+"\n\n"+text, args)
+	ok, outcome, err := s.confirmOutbound(ctx, from.Machine, from.Session, "a2a_send", text, label+"\n\n"+text, args)
 	if err != nil {
 		return err
 	}
-	if !ok {
+	if !ok && outcome == proto.OutcomeDeclined {
 		return errA2ADeclined
+	}
+	if !ok {
+		return a2aUnanswered(outcome)
 	}
 	return nil
 }

@@ -87,10 +87,10 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	if then != "" {
 		summary += "\n\n" + then
 	}
-	if ok, err := s.confirmOutbound(ctx, machine, self, "agent_interrupt", then, summary, args); err != nil {
+	if ok, outcome, err := s.confirmOutbound(ctx, machine, self, "agent_interrupt", then, summary, args); err != nil {
 		return "", err
 	} else if !ok {
-		return "The user declined on the phone: the agent goes on as it was.", nil
+		return outboundNotDone(outcome, "The user declined on the phone: the agent goes on as it was.", "the agent goes on as it was"), nil
 	}
 	// Again after the phone: the agent may have become another conversation's task while the user was asked.
 	if err := s.exitAllowed(ctx, self, am, c, then, 0); err != nil {

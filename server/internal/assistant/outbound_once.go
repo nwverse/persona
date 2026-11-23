@@ -23,10 +23,11 @@ type outboundOnce struct {
 }
 
 type outboundFlight struct {
-	done   chan struct{}
-	joined int // calls waiting on this card besides the one asking (under outboundOnce.mu)
-	ok     bool
-	err    error
+	done    chan struct{}
+	joined  int // calls waiting on this card besides the one asking (under outboundOnce.mu)
+	ok      bool
+	outcome string // how the card ended (proto.Resolution.Outcome)
+	err     error
 }
 
 // outboundKey is a hand-off by who sends it, with which tool, what and where to (summary names the target).
@@ -39,9 +40,9 @@ func outboundKey(self, tool, text, summary string) string {
 	return hex.EncodeToString(h.Sum(nil)[:16])
 }
 
-// confirm answers hand-off key: at once when it was allowed within outboundAllowedFor, else with the answer of the card
-// already asking about it, else with ask's (and remembers an allow).
-func (o *outboundOnce) confirm(ctx context.Context, key string, ask func() (bool, error)) (bool, error) {
+// confirm answers hand-off key, with how its card ended: at once when it was allowed within outboundAllowedFor (no
+// card, outcome ""), else with the answer of the card already asking about it, else with ask's (and remembers an allow).
+func (o *outboundOnce) confirm(ctx context.Context, key string, ask func() (bool, string, error)) (bool, string, error) {
 	now := time.Now()
 	o.mu.Lock()
 	if o.allowed == nil {
@@ -54,22 +55,22 @@ func (o *outboundOnce) confirm(ctx context.Context, key string, ask func() (bool
 	}
 	if _, ok := o.allowed[key]; ok {
 		o.mu.Unlock()
-		return true, nil
+		return true, "", nil
 	}
 	if f, ok := o.flight[key]; ok {
 		f.joined++
 		o.mu.Unlock()
 		select {
 		case <-f.done:
-			return f.ok, f.err
+			return f.ok, f.outcome, f.err
 		case <-ctx.Done():
-			return false, ctx.Err()
+			return false, "", ctx.Err()
 		}
 	}
 	f := &outboundFlight{done: make(chan struct{})}
 	o.flight[key] = f
 	o.mu.Unlock()
-	f.ok, f.err = ask()
+	f.ok, f.outcome, f.err = ask()
 	o.mu.Lock()
 	delete(o.flight, key)
 	if f.err == nil && f.ok {
@@ -77,5 +78,5 @@ func (o *outboundOnce) confirm(ctx context.Context, key string, ask func() (bool
 	}
 	o.mu.Unlock()
 	close(f.done)
-	return f.ok, f.err
+	return f.ok, f.outcome, f.err
 }
