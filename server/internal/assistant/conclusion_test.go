@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -337,7 +337,7 @@ func TestBriefingSaysTheSameVerdictAsTheCard(t *testing.T) {
 	waitsForReview(t, s, f, todo.ID, "查了，做不了")
 	judgeConcluded(t, s, todo.ID)
 	const verdict = "⛔ 做不了：对方接口不对外开放"
-	if len(cardsWith(posts(), feishubot.EscapeMarkdown(verdict))) != 1 {
+	if len(cardsWith(posts(), botcard.EscapeMarkdown(verdict))) != 1 {
 		t.Fatalf("the card does not say %q", verdict)
 	}
 	facts := s.briefFactsAt(ctx, time.Now(), "")
@@ -352,7 +352,7 @@ func TestBriefingSaysTheSameVerdictAsTheCard(t *testing.T) {
 		t.Fatalf("the brief's row %+v", row)
 	}
 	card, _, _ := s.briefCard(facts, "早报", "")
-	if js := card.JSON(); !strings.Contains(js, feishubot.EscapeMarkdown(verdict)) || !strings.Contains(js, "知道了") {
+	if js := card.JSON(); !strings.Contains(js, botcard.EscapeMarkdown(verdict)) || !strings.Contains(js, "知道了") {
 		t.Fatalf("the briefing card does not say it:\n%s", js)
 	}
 	var onBoard bool
@@ -387,7 +387,7 @@ func TestRecommendationThatCannotReachTheAgentIsNotTaken(t *testing.T) {
 	}
 	// The Lark button: an error toast with the reason, saying nothing was taken (not "kept in the todo").
 	notTaken := i18n.T(s.botLang(ctx), "assistant-reports.accept_not_taken", i18n.Args{"error": "node down"})
-	press := &feishubot.CardAction{}
+	press := &botcard.CardAction{}
 	press.Action.Value = map[string]any{"a": "accept", "id": todo.ID}
 	if r := s.botCardAction(ctx, press, ""); r == nil || r.Toast == nil ||
 		r.Toast.Type != "error" || r.Toast.Content != notTaken {
@@ -686,7 +686,7 @@ func TestFeishuConclusionQuestionGoesToSupervisorWithoutAnswering(t *testing.T) 
 		t.Fatal(err)
 	}
 	before := len(sentToAgent(f))
-	var ev feishubot.MessageEvent
+	var ev botcard.MessageEvent
 	ev.Message.ChatType, ev.Message.ParentID, ev.Message.MessageType = "p2p", a.MessageID, "text"
 	ev.Message.MessageID, ev.Message.Content = "om_background", `{"text":"能补充一下这个决定的背景吗"}`
 	s.feishuMessage(ev, status, "")

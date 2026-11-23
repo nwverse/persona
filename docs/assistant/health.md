@@ -341,6 +341,26 @@ For today's intake, call `phone_health_summary` with `{"metrics":["dietary_energ
 
 On iOS, `HealthTool` reads the corresponding HealthKit quantity types and requests their read permissions alongside the existing metrics. An existing installation may need authorization for these newly added categories. Open Persona, grant access, and reconnect it to the hub so the registered tool description and schema refresh (`docs/apple/phone-tools.md`, "Daily health summaries").
 
+## Every health type and sample (#13740)
+
+Data a band, ring, scale, glucose meter, ECG or hearing test saves to Apple Health or Health Connect is reachable sample by sample, with
+the app and device that saved it, through `phone_health_types`, `phone_health_samples`, `phone_health_sources` and
+`phone_health_request_access` (iPhone and Android), plus `phone_health_watch` on the iPhone. The audience is everyday users who ask
+about the data they already keep, and Agents that analyse it for them; nothing in the Health page changes, and Apple Health stays named
+where the app uses it (App Review 2.5.1, #13118).
+
+- Start with `phone_health_types` to find the type name and whether Persona was asked for it; ask once with
+  `phone_health_request_access` while Persona is open. A type without access answers its status, not an error, and empty results on an
+  iPhone can still mean the user refused (HealthKit never tells).
+- Read with `phone_health_samples`, keep its `anchor`, and pass it back later to get only what changed. Match samples by `id`.
+- On an iPhone that may be locked when the question comes (an evening review, a scheduled task), watch the types first with
+  `phone_health_watch`; locked answers then come from the phone's snapshot (`source: snapshot`, `as_of`), the last 7 days at most.
+  A build without HealthKit background delivery refreshes those snapshots only when Persona opens or is woken while unlocked.
+- Health data goes back only to the hub that asked and is not written to logs on the phone or the hub; it reaches the model that
+  called the tool like every other tool result.
+
+Details, anchors and platform differences: `docs/apple/phone-tools.md`, "Every health type, sample by sample".
+
 ## Web entry point
 
 - A separate **Health** item in the sidebar opens `/health`, which resumes the latest health chat ("Entering Health" above).
