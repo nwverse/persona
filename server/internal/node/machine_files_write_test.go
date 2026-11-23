@@ -55,6 +55,10 @@ func TestMachineFilesWriteCASAtomicModeAndGuards(t *testing.T) {
 	if err := os.WriteFile(notes, []byte("line1\nline2\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
+	// WriteFile's mode passes through the umask (077 on some CI machines leaves 0600): set the mode the save must keep.
+	if err := os.Chmod(notes, 0o640); err != nil {
+		t.Fatal(err)
+	}
 	envFile := filepath.Join(root, ".env")
 	if err := os.WriteFile(envFile, []byte("TOKEN=old\n"), 0o600); err != nil {
 		t.Fatal(err)
