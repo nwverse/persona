@@ -427,8 +427,13 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
         self.assertTrue((self.output / "diagnostics/live-regular-readiness/observer.status.txt").is_file())
         for name in ("live-readiness", "live-regular-readiness"):
             observer = self.output / "diagnostics" / name
-            self.assertIn("xcodebuild-finished", (observer / "observer.status.txt").read_text())
+            self.assertIn("xcodebuild-finished", (observer / "observer.status.txt").read_text(),
+                          result.stdout + result.stderr + "\n".join(
+                              path.name + ": " + path.read_text()
+                              for path in sorted(observer.glob("*.status.txt"))))
             self.assertTrue((observer / "simulator-launch.status.txt").is_file())
+            self.assertTrue((observer / "product-ready").is_file(),
+                            [str(path) for path in observer.iterdir()])
             self.assert_collected_products(observer)
         self.assertFalse((self.root / "collector-outlived-observer").exists(),
                          "the observer published a final status while its collector was still running")
