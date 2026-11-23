@@ -185,12 +185,14 @@ final class TodosListModel {
     @ObservationIgnored private var storeMoves = 0
     #if DEBUG
     /// The search's main-actor costs (P4, P12; `TodoSearchModelTests` reports them): how many looks landed, and the
-    /// last look's landing, the last cleared field and the last store change while searching.
+    /// last look's landing, the last cleared field, the last store change and the last relayout (a choice, the sort, a
+    /// fold, a landing), the list's own costs the search's are compared with.
     struct SearchCosts {
         var landings = 0
         var landing = Duration.zero
         var cleared = Duration.zero
         var push = Duration.zero
+        var relayout = Duration.zero
         static let none = SearchCosts()
     }
     @ObservationIgnored private(set) var searchCosts = SearchCosts.none
@@ -696,8 +698,8 @@ final class TodosListModel {
         let next = current()
         guard next != snapshot || clock else { return }
         #if DEBUG
-        let costs = ContinuousClock(), start = costs.now, searched = !searchedWords.isEmpty
-        defer { if searched { searchCosts.push = costs.now - start } }
+        let costs = ContinuousClock(), start = costs.now
+        defer { searchCosts.push = costs.now - start }
         #endif
         if next != snapshot {
             storeMoves &+= 1
@@ -765,6 +767,10 @@ final class TodosListModel {
 
     /// A choice, the search, the sort, the grouping or a fold changed: the owner's own doing, never held, never faded.
     private func relayout() {
+        #if DEBUG
+        let clock = ContinuousClock(), start = clock.now
+        defer { searchCosts.relayout = clock.now - start }
+        #endif
         landAll(animated: false)
     }
 

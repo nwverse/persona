@@ -70,8 +70,8 @@ struct TodoSearchTests {
         #expect(lit == ["card"])
         #expect(marked.runs.filter { $0.backgroundColor == nil }.allSatisfy { $0.foregroundColor == .secondary })
         // A sentence whose words sit within about a line is shown whole; further in, it is cut a line's worth before them.
-        let line = "A long sentence before the words, then Gion."
-        #expect(String(TodoFoundText.marked(TodoFoundLine(text: line, marks: [[39, 43]]), lead: 32).characters) == line)
+        let line = "Photo booth at the post office."
+        #expect(String(TodoFoundText.marked(TodoFoundLine(text: line, marks: [[24, 30]]), lead: 32).characters) == line)
         let further = "Two of us, flying in on the Tuesday, staying four nights, a ryokan near Gion."
         let cut = String(TodoFoundText.marked(TodoFoundLine(text: further, marks: [[72, 76]]), lead: 32).characters)
         #expect(cut.hasPrefix("…") && cut.count == 1 + 32 + 5 && cut.hasSuffix(" a ryokan near Gion."), "\(cut)")
@@ -250,21 +250,22 @@ struct TodoSearchModelTests {
         #expect(Set(list.groups.flatMap(\.drawnKeys)) == ["/t", "/x79"])
     }
 
-    /// What the search costs the main actor over 2,000 to-dos with notes, as the owner meets it (P4, P12): a look's
-    /// landing when every to-do matches by its notes, another as the words grow (every sentence's marks move), a push
-    /// of one changed to-do while searching, and the cleared field. What was found is each row's own, so none of them
-    /// works a row's words out again. Timed for the record (a Debug build on the simulator, so an upper bound) and
-    /// bounded far above so a busy machine never fails it.
+    /// What the search costs the main actor over 2,000 to-dos with notes, as the owner meets it (P4, P12), beside what
+    /// the list costs without it (a sort chosen, a push of one changed to-do): a look's landing when every to-do matches
+    /// by its notes, another as the words grow (every sentence's marks move), a push of one changed to-do while
+    /// searching, and the cleared field. What was found is each row's own, so none of them works a row's words out
+    /// again. Timed for the record (a Debug build on the simulator, so an upper bound) and bounded far above so a busy
+    /// machine never fails it.
     @Test func theSearchsMainActorCostOverTwoThousandToDos() async throws {
         let topics = ["ryokan", "passport", "dentist", "newsletter", "garden gate", "insurance", "photos", "widget"]
         let sections = [TodoListSection.todo, TodoListSection.working, TodoListSection.waiting]
-        let rows = { (renamed: Bool) in
+        let rows = { (renamed: Set<Int>) in
             (0..<2_000).map { n in
                 let topic = topics[n % topics.count], closed = n % 5 == 0
                 let notes = "Notes for \(topic) number \(n). Call them before Friday and keep the receipt. "
                     + "Ask about the price, the dates and what is included; write it down here."
                 let done = closed ? #","done_at":"2027-01-1\#(n % 5)T09:00:00Z""# : ""
-                return TodoViewJSON.row("t\(n)", title: renamed && n == 1 ? "To-do 1, renamed" : "To-do \(n) about \(topic)",
+                return TodoViewJSON.row("t\(n)", title: renamed.contains(n) ? "To-do \(n), renamed" : "To-do \(n) about \(topic)",
                                         extra: #""notes":"\#(notes)""# + done,
                                         view: TodoViewJSON.view(closed ? TodoListSection.done : sections[n % 3], rank: n,
                                                                 phase: closed ? "done" : nil, line: closed ? "done" : "rest"))
@@ -272,13 +273,21 @@ struct TodoSearchModelTests {
         }
         let hub = FakeHub()
         hub.on("GET", "/api/v1/todos/places", json: Self.places)
-        hub.on("GET", "/api/v1/todos", json: TodoViewJSON.list(rows(false), counts: TodoViewJSON.counts(needsYou: 0, open: 1_600)))
+        hub.on("GET", "/api/v1/todos", json: TodoViewJSON.list(rows([]), counts: TodoViewJSON.counts(needsYou: 0, open: 1_600)))
         let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: .on())
         defer { store.forget() }
         let list = model(store, hub: hub)
         list.start()
         await store.refresh(api: hub.client)
         try await waitForSearchTest(seconds: 60) { list.ready && list.hasRows }
+        // The list's own costs, the field empty: a sort chosen, and a push of one changed to-do.
+        list.sort = .activity
+        let sorted = list.searchCosts.relayout
+        list.sort = .suggested
+        hub.on("GET", "/api/v1/todos", json: TodoViewJSON.list(rows([2]), counts: TodoViewJSON.counts(needsYou: 0, open: 1_600)))
+        await store.refresh(api: hub.client)
+        try await waitForSearchTest(seconds: 60) { list.row("/t2")?.content.title == "To-do 2, renamed" }
+        let plainPush = list.searchCosts.push
         list.query = "receipt"
         try await waitForSearchTest(seconds: 60) { list.searchedWords == "receipt" }
         let first = list.searchCosts.landing
@@ -286,7 +295,7 @@ struct TodoSearchModelTests {
         list.query = "the receipt"
         try await waitForSearchTest(seconds: 60) { list.searchedWords == "the receipt" }
         let grown = list.searchCosts.landing
-        hub.on("GET", "/api/v1/todos", json: TodoViewJSON.list(rows(true), counts: TodoViewJSON.counts(needsYou: 0, open: 1_600)))
+        hub.on("GET", "/api/v1/todos", json: TodoViewJSON.list(rows([1, 2]), counts: TodoViewJSON.counts(needsYou: 0, open: 1_600)))
         await store.refresh(api: hub.client)
         try await waitForSearchTest(seconds: 60) { list.row("/t1")?.content.title == "To-do 1, renamed" }
         let push = list.searchCosts.push
@@ -294,10 +303,10 @@ struct TodoSearchModelTests {
         let cleared = list.searchCosts.cleared
         #expect(!list.searching && list.row("/t3")?.search == nil)
         let ms = { (d: Duration) in String(format: "%.1f", Double(d.components.attoseconds) / 1e15 + Double(d.components.seconds) * 1000) }
-        print("TODO-SEARCH-COST: model, 2000 to-dos with notes, main actor: landing (all match) \(ms(first)) ms, "
-              + "landing (the marks move) \(ms(grown)) ms, a push of one change while searching \(ms(push)) ms, "
-              + "cleared \(ms(cleared)) ms")
-        #expect([first, grown, push, cleared].allSatisfy { $0 < .seconds(5) })
+        print("TODO-SEARCH-COST: model, 2000 to-dos with notes, main actor: without a search, a sort chosen \(ms(sorted)) ms, "
+              + "a push of one change \(ms(plainPush)) ms; searching, landing (all match) \(ms(first)) ms, "
+              + "landing (the marks move) \(ms(grown)) ms, a push of one change \(ms(push)) ms, cleared \(ms(cleared)) ms")
+        #expect([sorted, plainPush, first, grown, push, cleared].allSatisfy { $0 < .seconds(5) })
     }
 }
 
