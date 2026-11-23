@@ -432,12 +432,15 @@ func (s *Service) giveUpStart(ctx context.Context, id, by string, told bool) {
 	}
 }
 
-// failedStartNotice tells the user in conversation that task t did not start, and why, and pushes it: what the hub
-// says itself when the supervision turn that saw the failure did not (#2570).
+// failedStartNotice tells the user in conversation that task t did not start, and why, and pushes it when no
+// conversation supervises t: what the hub says itself when the supervision turn that saw the failure did not (#2570).
 func (s *Service) failedStartNotice(ctx context.Context, conversation string, t Todo, machine, reason string) {
 	text := i18n.T(s.lang(ctx), "assistant-tasks.start_remedy_notice", i18n.Args{"title": t.Title, "reason": reason})
 	if _, err := s.appendFeed(ctx, conversation, feedNotice, "", noticeBody{Text: text}); err != nil {
 		s.logf("task %s: notice: %v", t.ID, err)
+	}
+	if t.Supervision != nil && t.Supervision.Supervisor != "" {
+		return // its supervisor gave up on the start (or had no remedy left): the owner hears only what it passes up
 	}
 	s.notifyTaskFailed(ctx, t, machine, reason)
 }

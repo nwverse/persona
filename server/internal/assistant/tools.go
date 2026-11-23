@@ -461,10 +461,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if a.Task != nil {
 			words = strings.Join(append([]string{a.Task.Title, a.Text}, a.Task.DoneWhen...), "\n\n")
 		}
-		if ok, err := s.confirmOutbound(ctx, machine, self, name, words, summary, args); err != nil {
+		if ok, outcome, err := s.confirmOutbound(ctx, machine, self, name, words, summary, args); err != nil {
 			return "", err
 		} else if !ok {
-			return "The user declined on the phone: nothing was sent to that agent.", nil
+			return outboundNotDone(outcome, "The user declined on the phone: nothing was sent to that agent.", "nothing was sent to that agent"), nil
 		}
 		var task *handedTask
 		if a.Task != nil {
@@ -616,16 +616,17 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", waitErr
 		}
 		var a struct {
-			Machine        string `json:"machine"`
-			Cwd            string `json:"cwd"`
-			Prompt         string `json:"prompt"`
-			Launcher       string `json:"launcher"`
-			Model          string `json:"model"`
-			Effort         string `json:"effort"`
-			Speed          string `json:"speed"`
-			PermissionMode string `json:"permission_mode"`
-			Tier           string `json:"tier"`
-			Worktree       struct {
+			Machine           string `json:"machine"`
+			Cwd               string `json:"cwd"`
+			Prompt            string `json:"prompt"`
+			SkipProjectMemory bool   `json:"skip_project_memory"`
+			Launcher          string `json:"launcher"`
+			Model             string `json:"model"`
+			Effort            string `json:"effort"`
+			Speed             string `json:"speed"`
+			PermissionMode    string `json:"permission_mode"`
+			Tier              string `json:"tier"`
+			Worktree          struct {
 				Branch string `json:"branch"`
 			} `json:"worktree"`
 			Ultracode bool `json:"ultracode"`
@@ -754,10 +755,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if a.Ultracode {
 			where += " · ultracode"
 		}
-		if ok, err := s.confirmOutbound(ctx, machine, self, name, a.Prompt, where+"\n\n"+a.Prompt, withoutSecretEnv(args)); err != nil {
+		if ok, outcome, err := s.confirmOutbound(ctx, machine, self, name, a.Prompt, where+"\n\n"+a.Prompt, withoutSecretEnv(args)); err != nil {
 			return "", err
 		} else if !ok {
-			return "The user declined on the phone: no agent was started.", nil
+			return outboundNotDone(outcome, "The user declined on the phone: no agent was started.", "no agent was started"), nil
 		}
 		var res struct {
 			Session proto.Session `json:"session"`
@@ -769,10 +770,13 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// conversation's turn and given agentStartTimeout instead of the old 100s.
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartTimeout)
 		defer cancel()
-		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820).
+		// The tab is named from the prompt as written; unless this start opts out, its project's background goes before it (#2820).
 		title := s.tabName(sctx, a.Prompt)
 		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed, "permission_mode": a.PermissionMode, "tab_name": title, "title": title}
-		prompt := s.withProjectContext(sctx, am.ID, a.Cwd, self, a.Prompt)
+		prompt := a.Prompt
+		if !a.SkipProjectMemory {
+			prompt = s.withProjectContext(sctx, am.ID, a.Cwd, self, a.Prompt)
+		}
 		if a.Ultracode {
 			params["ultracode"] = true
 		}
@@ -877,6 +881,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("the task could not be recorded; no agent was started")
 		}
 		params["creation_id"], params["incarnation"] = task.ID, "start_"+randomHex(8)
+		// The to-do is there before the start, so the Agent's model requests name it from their first one: the headers are
+		// fixed when the Agent starts, and linking it to the to-do afterwards does not reach them.
+		params["model_source"] = planModelSource(PlanTask{TodoID: task.ID})
 		failBeforeStart := func(reason string) {
 			// The card already exists: every definite no-start exit must close it as a failed start, not leave an
 			// open task with no Agent and no explanation (#5732). Unknown start results are handled below instead.

@@ -130,7 +130,7 @@ func TestBackgroundWaitsOnTheSession(t *testing.T) {
 		{SessionID: "s1", Status: proto.StatusIdle, Background: []proto.BackgroundTask{{Kind: "agent"}}}, // a subagent is work
 		{SessionID: "s1", Status: proto.StatusIdle},
 	} {
-		if n.backgroundWaits(&other) {
+		if n.setBackgroundWait(&other); other.BackgroundWaiting {
 			t.Errorf("%+v waits", other)
 		}
 	}
@@ -140,8 +140,9 @@ func TestBackgroundWaitsOnTheSession(t *testing.T) {
 }
 
 // A worker that hung (#13744): tests whose esbuild service nobody talks to any more, no CPU and no output for hours.
-// It is Working until it has used no CPU for bgStallAfter, then waits; CPU or output puts it back to Working at once.
-func TestBackgroundStalledWorkerWaits(t *testing.T) {
+// The Agent stays Working, but once the worker used no CPU and wrote no output for bgStallAfter the session reports
+// since when; CPU or output clears it at once.
+func TestBackgroundStalledWorkerIsReported(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "task.output")
 	if err := os.WriteFile(out, nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -156,31 +157,45 @@ func TestBackgroundStalledWorkerWaits(t *testing.T) {
 	}
 	live := []claudeProc{{pid: 100, SessionID: "s1"}}
 	tasks := []proto.BackgroundTask{{ID: "b1", Kind: "shell", OutputFile: out}}
-	look := func() bool {
+	look := func() (bool, time.Time) {
 		n.bgWait.at = n.bgWait.at.Add(-bgWaitEvery) // the next look is due
-		return n.bgWait.waits("s1", tasks, func() []claudeProc { return live })
+		return n.bgWait.judge("s1", tasks, func() []claudeProc { return live })
 	}
 	look() // the first look has nothing to compare with
-	if look() {
-		t.Fatal("a worker just seen idle is still Working")
+	if waits, since := look(); waits || !since.IsZero() {
+		t.Fatalf("a worker just seen idle is plain Working: %v %v", waits, since)
 	}
-	n.bgWait.busyAt["s1"] = n.bgWait.at.Add(-bgStallAfter) // no CPU at any look since then
-	if !look() {
-		t.Fatal("a worker with no CPU and no output for bgStallAfter should wait")
+	n.bgWait.busyAt["s1"] = n.bgWait.at.Add(-bgStallAfter - time.Minute) // no CPU at any look since then
+	waits, since := look()
+	if waits {
+		t.Fatal("a stalled worker is still Working, not waiting")
+	}
+	if since.IsZero() || n.bgWait.at.Sub(since) < bgStallAfter {
+		t.Fatalf("stalled since %v", since)
 	}
 	cpu = 3 * time.Second // it moves again
-	if look() {
-		t.Fatal("a stalled worker that uses CPU again is Working")
+	if _, since := look(); !since.IsZero() {
+		t.Fatal("a worker that uses CPU again is not stalled")
 	}
 	cpu = 3 * time.Second
-	n.bgWait.busyAt["s1"] = n.bgWait.at.Add(-bgStallAfter)
+	n.bgWait.busyAt["s1"] = n.bgWait.at.Add(-bgStallAfter - time.Minute)
 	_ = os.Chtimes(out, time.Now(), time.Now()) // output again
-	if look() {
-		t.Fatal("a worker writing output is Working")
+	if _, since := look(); !since.IsZero() {
+		t.Fatal("a worker writing output is not stalled")
 	}
 	live = nil
 	look()
 	if _, ok := n.bgWait.busyAt["s1"]; ok {
 		t.Fatal("a claude that is gone keeps no history")
+	}
+}
+
+// setBackgroundWait puts the stall on the session and takes it off again when the turn is working.
+func TestSetBackgroundWaitStalledField(t *testing.T) {
+	n := &Node{}
+	s := proto.Session{SessionID: "s1", Status: proto.StatusWorking, BackgroundStalledSince: 5, BackgroundWaiting: true}
+	n.setBackgroundWait(&s)
+	if s.BackgroundStalledSince != 0 || s.BackgroundWaiting {
+		t.Fatal("a turn that goes on has no background verdict")
 	}
 }

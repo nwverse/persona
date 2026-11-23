@@ -1179,6 +1179,7 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "folded_side":"<sid>",                 // beside folded_under on a row folded through a side session that is not that side (a side's own Codex child): the side whose chat its cards belong to (#7944). Set by the manager
  "children":{"total":3,"working":1,"needs_you":1,"workers":2,"sides":1,"sides_working":1,"sides_needs_you":1,"sides_unread":1},   // on that ancestor: every session folded under it, by their own states (working / needs_you omitted when 0); workers: how many of them are its tab's workers (folded_as "worker"); sides: how many are side sessions (folded_as "side"), and sides_working / sides_needs_you / sides_unread those sides by their own states (each omitted when 0). Set by the manager
  "background_waiting":true,   // background_working, and all that background work only waits (#6045): its background commands sleep, loop on a check or watch something, using next to no CPU, and no subagent or workflow runs. Clients write "Waiting in the background", lighter than Working and not in its count; state stays working, so older apps show Working. Omitted when false
+ "background_stalled_since":"2026-11-23T01:02:03Z", // background_working, not waiting (#13744): a known worker (a build, tests, a download) under its background commands has used no CPU at any look and written no output since then, and that has lasted ten minutes, with the turn over. A hint, not a state: state stays working and the Agent counts as Working; clients say how long the commands have been quiet. Cleared as soon as they use CPU or write output; omitted otherwise (whole seconds)
  "background_working":true,   // state is working only because of background work (this turn is over, workflows / background commands / Monitors / subagents are running, #2935): clients write "Working (Background)". Computed by the hub; omitted when false, so its absence means an old hub (before #3127) only when no run carries tool_use_id and no agent status: there, look for state=working with a running workflow
  // The user's latest manual compaction (assistant chats only, present only after POST …/compact): running → done | failed (error is a human-readable reason); the node keeps it until the next one
  "compaction":{"state":"running|done|failed","error":"…","started_at":"...","finished_at":"..."}}
@@ -1543,6 +1544,8 @@ Cards from before this change, and every other card (Agents' questions, permissi
 ### Who answered a card
 
 `resolution.answered_by` says who answered, and where when it was not a direct answer on a card: absent for the user (in an app, a channel, or the to-do the question became), `assistant` for the assistant on the user's behalf (`reason` says why), `terminal` for a decision the terminal made on the computer (the card stays `dismissed`, with no fabricated approval), `default` when nobody answered and the recommended options were taken at a reversible deadline (`reason` says so).
+
+A card ends in one of three ways as far as the user is concerned: they allowed it, they declined it, or nobody answered it (`proto.Resolution.Outcome`: `allowed` / `declined` only for the user's own allow or deny on a device; `expired`, `withdrawn`, `cleared`, `dismissed`, `cancelled` and `answered_by_<who>` otherwise). The manager hands whoever waits on a card that ended unanswered a dismiss with its `reason`: `expired` (its time ran out), `withdrawn` (the one waiting went away first: its call ended, its hook disconnected) or `cleared` (a newer card replaced it). A tool must never report such an end as the user declining (`server/internal/prompts/agents/outbound_unanswered.md`: agent_send, agent_start, a2a_send, the to-do tools, browser_run, computer_run, iphone_do; a connector write answers error kind `unanswered`, not `declined`), and nothing keeps it, or an answer someone else gave, as the user's decision (`cardDecisions`, `escalatedResolved`). The history keeps who or what ended each card in `interactions.ended_by`: `device` (an answer through `POST /api/v1/interactions/{id}/resolve`), `extension`, `expired`, `withdrawn`, `cleared`, `assistant`, `default`, `terminal`, `remembered`, `authorization`, or empty when not known.
 
 An `ask_user` card that expires unanswered becomes a to-do (`docs/assistant/todos.md`). Its history stays `expired`; what was answered after that is recorded on it with `resolution.late: true` (`assistant/late_answer.go`, `db.LateAnswer`): the user's own answers on the to-do (`answered_by` absent; one per question as each is given) or the default taken at the deadline (`answered_by: "default"`, with the deadline's `reason`), and `resolved_at` becomes when that happened. A question that cannot be undone is never taken by default, so its history keeps no answer until the user gives one. An expired card from before this change has no `late` answer. Only the manager writes `late` and `answered_by`: an app's answer has them dropped.
 
@@ -3240,7 +3243,7 @@ Runtime summaries keep the existing snake_case names and decode as a `Session` w
 
 - Identity/ownership: `machine_id`, `session_id`, `manager`; pane/host origin `pane_source` and `host`; source/runtime and hierarchy fields (`source_kind`, `source_thread_id`, `source_instance_id`, `parent_thread_id`, `parent_session_id`, `root_session_id`, `is_subagent`).
 - Display/grouping: `title`, `cwd`, `workspace_cwd`, `repo_root`, `worktree`, `branch`, `agent`, `agent_label`, `agent_surface`, `agent_name`; space, parent-space, slot, pane, tab and workspace identifiers/names/indices; `todo {id,title}`.
-- State/freshness: `state`, `status`, `updated_at`, `state_since`, `seen_at`, `pending_interactions`, `rev`, `quiet`, `awaits_reply`, `background_working`, `background_waiting`, `starting`, `awaiting_first_message`, `start_error`, turn-error fields; `bypass_pending` when Allow Everything waits for a restart after the current turn (#10309).
+- State/freshness: `state`, `status`, `updated_at`, `state_since`, `seen_at`, `pending_interactions`, `rev`, `quiet`, `awaits_reply`, `background_working`, `background_waiting`, `background_stalled_since`, `starting`, `awaiting_first_message`, `start_error`, turn-error fields; `bypass_pending` when Allow Everything waits for a restart after the current turn (#10309).
 - Session hierarchy (see "Session hierarchy" below): `parent_agent_id`, `folded_under`, `folded_as`, `folded_side`, `children`, `started_at`, `asking_parent_session_id`, and the node's `aliases`.
 - Row content/progress: `last_text`, `activity`, `activity_at`, `model`, `effort`, context-token/window counts; bounded `work` (phase/on/line/wait/then/wake/attempts/agent/deferred/just_finished), `plan`, `goal`, and `loop` timing with its prompt omitted.
 - Model identity: `model` is the runtime/transcript-reported display name. A node may also send `requested_model` on a Persona-managed session: the last model ID passed to its process, persisted with node state. An empty string explicitly means launcher default; omission means no recorded identity (observed session or older node). Assistant carry-over uses this identity before the reported name; explicit picks and configured model purposes still win. Missing-model fallback is returned through the existing localized `launcher_note` response, as with launcher replacement.
@@ -6368,16 +6371,16 @@ in-flight command remains unknown until its execution can be established; it is 
 
 ## Agents display settings
 
-The default manager keeps the paired hub's `agents.show_botmux` and
-`agents.use_herdr_tab_name` booleans in its
+The default manager keeps the paired hub's `agents.show_botmux`,
+`agents.use_herdr_tab_name`, `agents.sort_by_activity` and `agents.show_filter` booleans in its
 existing settings store, following the Agents triage route's ownership and role
 checks. These are authenticated routes relayed by the hub; clients do not select
 another manager for this shared preference.
 
 | Method | Path | Response / request |
 | --- | --- | --- |
-| GET | `/api/v1/agents/display-settings` | Defaults to `{show_botmux: true, configured: false, use_herdr_tab_name: false}`. `configured` reports whether `show_botmux` was saved. Authenticated answer-only devices may read. |
-| PUT | `/api/v1/agents/display-settings` | Full access only (403 otherwise). Send one of `{show_botmux: boolean}` or `{use_herdr_tab_name: boolean}`. For `show_botmux`, optional `only_if_unset: true` uses an atomic insert without updating an existing key. Returns the current settings, including when another writer won. |
+| GET | `/api/v1/agents/display-settings` | Defaults to `{show_botmux: true, configured: false, use_herdr_tab_name: false, sort_by_activity: false, show_filter: false}`. `configured` reports whether `show_botmux` was saved. `sort_by_activity` and `show_filter` are the effective values: the saved choice (either way), else `agents.sort_by_activity` / `agents.show_filter` in the manager's `manager.json` (see [config.md](../operations/config.md)), else `false`; an older hub omits them and a client then hides the switches. Authenticated answer-only devices may read. |
+| PUT | `/api/v1/agents/display-settings` | Full access only (403 otherwise). Send exactly one of `{show_botmux: boolean}`, `{use_herdr_tab_name: boolean}`, `{sort_by_activity: boolean}` or `{show_filter: boolean}`. For `show_botmux`, optional `only_if_unset: true` uses an atomic insert without updating an existing key. Returns the current settings, including when another writer won. |
 
 Invalid or missing booleans return 400; unavailable storage or failed reads/writes
 return 503, never a default presented as a successful save. The conditional
@@ -6388,6 +6391,8 @@ Web paged lists use `exclude_pane_source=feishu`, complete
 lists exclude botmux hosts before grouping/counting. Inventory and `seeBotmux`
 to-do attribution are unchanged. The per-computer inventory switch is independent
 ([engines.md](../integrations/engines.md), “Botmux display preference”).
+
+`sort_by_activity` turns on the web Agents list's opt-in activity order (rows by time, sections by their latest agent, held still while the pointer or focus is in the sidebar; off keeps the stable order of #11801) and `show_filter` shows the Agents list's Filter button and chips on the complete and the paged list; a paged list can send only the words (`q`) and one computer (`machine_id`) to the hub and falls back to the complete list for any other filter choice ([web.md](../web/web.md)). The iOS, Mac and Android clients do not read them yet.
 
 For an Agent with a named herdr or Herdr App tab, Web and Feishu use `slot_name`
 as the primary name when `use_herdr_tab_name` is true. They also use it when
