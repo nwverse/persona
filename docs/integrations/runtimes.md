@@ -567,7 +567,7 @@ open, and, while agy's summary lags the CLI's transcript, takes the status from 
 process wrote it in the last minute, `done` once its last step is a complete reply and the CLI has closed it or nobody
 wrote for a minute, and `unknown` otherwise (an open tool call or new input never reads idle). A check never installs a
 cut when the transcript changed while the native snapshot was taken, and a session the companion resumed only for a
-check is closed again unless a turn of its own took it meanwhile. Conversations no CLI has opened keep the rules above.
+check is closed again unless a turn of its own took it meanwhile. A conversation no CLI has open keeps the rules above while its transcript is fresh, and once nobody wrote it for a minute reads the same way: `done` when its last step is a complete reply, `unknown` otherwise. agy's idle summary can keep the step count of an earlier turn long after the conversation finished (with agy 1.5.14, one stopped where the second of eight turns began), which alone would leave it `summary_behind` for good.
 
 agy's summary store records no run state (an empty status) for every conversation no agy process is running: each agy
 process empties the status when its summary-store reconciliation runs at startup, so after any agy start (a CLI, the

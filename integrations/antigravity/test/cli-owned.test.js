@@ -195,6 +195,19 @@ test('a conversation never opened in the CLI keeps the summary rules', async (t)
   await until('the cut check ran', () => methods().includes('GetCascadeTrajectory'))
 })
 
+// agy's idle summary can keep the step count of an earlier turn long after the conversation finished (seen with agy
+// 1.5.14: the count stopped where the second of eight turns began), so a conversation nobody has open would read
+// unknown for good. Nothing can be writing it once its transcript has been quiet for the minute an open CLI gets.
+test('a conversation no CLI has open reads done once its transcript is quiet on a complete reply', async (t) => {
+  const { write, status, methods } = await fixture(t, { lock: 'none', stepCount: 1, mtime: minutesAgo(5) })
+  assert.equal(await status(), 'done')
+  write(running, minutesAgo(5))
+  assert.equal(await status(), 'unknown')
+  write(finished)
+  assert.equal(await status(), 'unknown')
+  assert.ok(!methods().includes('session/prompt'))
+})
+
 test('a real flock on the presence file reads as held', { skip: process.platform !== 'linux' || spawnSync('python3', ['-c', '']).status !== 0 }, async (t) => {
   const { refused, presence } = await fixture(t, { lock: 'kernel', mtime: minutesAgo(5) })
   const holder = spawn('python3', ['-c', 'import fcntl,sys,time\nf=open(sys.argv[1],"a")\nfcntl.flock(f,fcntl.LOCK_EX)\nprint("locked",flush=True)\ntime.sleep(60)', presence])
