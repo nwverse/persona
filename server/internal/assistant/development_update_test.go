@@ -23,13 +23,14 @@ import (
 )
 
 func TestDevelopmentManagerChecksPolicyActivityAndConfirmedTarget(t *testing.T) {
-	target := devicewire.DevelopmentBuild(strings.Repeat("a", 40), "web-dev-aaaaaaaaaaaa-13", 13)
+	target := devicewire.DevelopmentBuild(strings.Repeat("a", 40), "web-dev-aaaaaaaaaaaa-202611230913", 202611230913)
 	platform := runtime.GOOS + "-" + runtime.GOARCH
 	for _, program := range []string{"persona-manager", "personad"} {
 		t.Run(program, func(t *testing.T) {
 			t.Setenv("PERSONA_HOME", t.TempDir())
+			versionOutput := fmt.Sprintf("%s\nchannel release, build %d\n", target.Version, target.Build)
 			bin := updatetest.ProgramSource(t, program, runtime.GOOS, runtime.GOARCH,
-				fmt.Sprintf("package main\nimport \"fmt\"\nfunc main(){fmt.Print(%q)}\n", target.Version+"\nchannel release, build 13\n"))
+				fmt.Sprintf("package main\nimport \"fmt\"\nfunc main(){fmt.Print(%q)}\n", versionOutput))
 			raw, err := os.ReadFile(bin)
 			if err != nil {
 				t.Fatal(err)

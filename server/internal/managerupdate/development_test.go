@@ -20,7 +20,7 @@ import (
 
 func stageFixtureManager(t *testing.T, dir, letter, script string) *DevelopmentImage {
 	t.Helper()
-	target := devicewire.DevelopmentBuild(strings.Repeat(letter, 40), "web-dev-"+strings.Repeat(letter, 12)+"-7", 7)
+	target := devicewire.DevelopmentBuild(strings.Repeat(letter, 40), "web-dev-"+strings.Repeat(letter, 12)+"-202611230907", 202611230907)
 	path := filepath.Join(t.TempDir(), "persona-manager")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nset -eu\n"+script), 0700); err != nil {
 		t.Fatal(err)

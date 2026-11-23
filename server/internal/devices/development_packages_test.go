@@ -28,7 +28,7 @@ import (
 )
 
 func fixtureDevelopment(commit string) devicewire.DevelopmentTarget {
-	return devicewire.DevelopmentBuild(commit, "web-dev-"+commit[:12]+"-50", 50)
+	return devicewire.DevelopmentBuild(commit, "web-dev-"+commit[:12]+"-202611230950", 202611230950)
 }
 
 // A manager behind a reverse proxy, bound to this test's TLS key. The test site

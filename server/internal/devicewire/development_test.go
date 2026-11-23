@@ -7,9 +7,17 @@ import (
 )
 
 func TestDevelopmentTargetPinsRepositoryCommitBuildAndRelativePackages(t *testing.T) {
-	target := DevelopmentBuild(strings.Repeat("b", 40), "web-dev-bbbbbbbbbbbb-42", 42)
+	target := DevelopmentBuild(strings.Repeat("b", 40), "web-dev-bbbbbbbbbbbb-202611230942", 202611230942)
 	if !target.Valid() {
 		t.Fatal("valid development target rejected")
+	}
+	for _, invalid := range []DevelopmentTarget{
+		DevelopmentBuild(target.Commit, "web-dev-bbbbbbbbbbbb-42", 42),
+		DevelopmentBuild(target.Commit, "web-dev-bbbbbbbbbbbb-202611239942", 202611239942),
+	} {
+		if invalid.Valid() {
+			t.Fatalf("accepted a build the installed program would report as zero: %d", invalid.Build)
+		}
 	}
 	for _, alter := range []func(*DevelopmentTarget){
 		func(t *DevelopmentTarget) { t.Commit = "main" },

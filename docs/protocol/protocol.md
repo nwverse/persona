@@ -4702,7 +4702,7 @@ The roster records only `host`, `os`, `arch`, `deploy` (an assistant started by 
 
 An independent manager advertises `devices.development_packages` to receive the Hub's confirmed
 `devices.development_target` in this handshake and later `devices.config` events. The target carries
-the full 40-hex `commit`, `version`, numeric `build`, canonical `repository` and a relative `packages` path.
+the full 40-hex `commit`, `version`, UTC `YYYYMMDDHHMM` build number, canonical `repository` and a relative `packages` path.
 The manager requests `manifest.json` and its named archives under that path through its existing Hub
 binding with its bearer token. HTTP 410 withdraws the target. A 404 carrying the expected
 `X-Persona-Development-Commit` permits a source build for a missing package. During adoption the

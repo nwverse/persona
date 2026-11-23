@@ -3,7 +3,10 @@ package devicewire
 import (
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/update"
 )
 
 const (
@@ -37,6 +40,7 @@ func ValidDevelopmentCommit(commit string) bool {
 }
 
 func (t DevelopmentTarget) Valid() bool {
-	return ValidDevelopmentCommit(t.Commit) && t.Build > 0 && t.Version == fmt.Sprintf("web-dev-%s-%d", t.Commit[:12], t.Build) &&
+	_, err := update.ParseNumber(strconv.FormatInt(t.Build, 10))
+	return err == nil && ValidDevelopmentCommit(t.Commit) && t.Version == fmt.Sprintf("web-dev-%s-%d", t.Commit[:12], t.Build) &&
 		t == DevelopmentBuild(t.Commit, t.Version, t.Build)
 }

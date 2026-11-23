@@ -19,7 +19,7 @@ func TestDevelopmentPackagesRequireConfirmedAdoptionAndManagerAuth(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := devicewire.DevelopmentBuild(strings.Repeat("a", 40), "web-dev-aaaaaaaaaaaa-10", 10)
+	target := devicewire.DevelopmentBuild(strings.Repeat("a", 40), "web-dev-aaaaaaaaaaaa-202611230910", 202611230910)
 	h.version, h.build.Number, h.build.Commit = target.Version, target.Build, target.Commit
 	h.upd.settings.ConfirmedDevelopment = &target
 	h.upd.loaded = true
@@ -105,8 +105,8 @@ func TestDevelopmentPackagesRequireConfirmedAdoptionAndManagerAuth(t *testing.T)
 func TestDevelopmentRollbackCanOfferTheRestoredGoodVersion(t *testing.T) {
 	h := newTestHub(t)
 	u := h.upd
-	good := devicewire.DevelopmentBuild(strings.Repeat("a", 40), "web-dev-aaaaaaaaaaaa-10", 10)
-	failed := devicewire.DevelopmentBuild(strings.Repeat("b", 40), "web-dev-bbbbbbbbbbbb-11", 11)
+	good := devicewire.DevelopmentBuild(strings.Repeat("a", 40), "web-dev-aaaaaaaaaaaa-202611230910", 202611230910)
+	failed := devicewire.DevelopmentBuild(strings.Repeat("b", 40), "web-dev-bbbbbbbbbbbb-202611230911", 202611230911)
 	h.version, h.build.Number, h.build.Commit = good.Version, good.Build, good.Commit
 	u.loaded = true
 	for _, target := range []devicewire.DevelopmentTarget{good, failed} {
