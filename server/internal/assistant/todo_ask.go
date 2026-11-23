@@ -94,10 +94,10 @@ func (s *Service) todoAsks(ctx context.Context) map[string]todoAsk {
 							break
 						}
 					}
-					// A new card keeps the manual control out of its choices. The
-					// reason can still direct the owner to the one bound Agent.
-					if a.Terminal == nil && terminalResumeMention(w.ask.Reason) {
-						a.Terminal = soleDecisionAgent(task, w.ask.AskedAt)
+					// A new card keeps the manual control out of its choices: it links the terminal of the Agent whose
+					// resume the hub refused before the decision was raised, whatever its reason says.
+					if a.Terminal == nil {
+						a.Terminal = boundTerminal(task, w.ask.ResumeTerminal)
 					}
 				}
 			}

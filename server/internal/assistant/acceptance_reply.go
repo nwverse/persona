@@ -324,6 +324,12 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 		b.mu.Unlock()
 		return s.answerOutside(ctx, id, asked, outsideAnswer{Option: recommend}, byDefault)
 	}
+	if decideAsk(a) && terminalResumeLabel(a.Recommend) {
+		// An older decision recommending the owner's own terminal Resume: refused before any answer is prepared or
+		// saved, so the decision stays open exactly as it was (the deadline sweep reminds it once instead).
+		b.mu.Unlock()
+		return acceptResult{}, i18n.Err("assistant-reports.manual_terminal_resume")
+	}
 	if todoOK && !byDefault {
 		var err error
 		completeDismissal, err = s.prepareDismissalForAnswer(ctx, t)
@@ -331,10 +337,6 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 			b.mu.Unlock()
 			return acceptResult{}, err
 		}
-	}
-	if decideAsk(a) && terminalResumeLabel(a.Recommend) {
-		b.mu.Unlock()
-		return acceptResult{}, i18n.Err("assistant-reports.manual_terminal_resume")
 	}
 	previousDueAt, previousAcceptedAt := a.DueAt, a.AcceptedAt
 	if a.AcceptedAt.IsZero() {

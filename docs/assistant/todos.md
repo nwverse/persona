@@ -828,7 +828,7 @@ An accepted review without `user_check` still completes the task immediately as 
 
 ## Decisions the owner can answer
 
-When recovery needs the owner’s terminal Resume, give that instruction in the decision reason. Offer choices the supervisor can carry out. The web card opens the linked Agent terminal, where the owner explicitly resumes the session.
+When recovery needs the owner’s terminal Resume, give that instruction in the decision reason. Offer choices the supervisor can carry out. The web card opens the linked Agent terminal, where the owner explicitly resumes the session. The link comes from the hub, not from the reason’s wording: a decision raised after the hub refused to resume one of the task’s Agents (its stop was the user’s or has no known cause) links that Agent’s terminal, once per refusal (`assistant/decision_terminal.go`). An older decision that still offers the terminal Resume as an option opens the terminal from that option. The hub never takes that option as an answer, so a deadline does not make it a default. Past its deadline, the owner is reminded once.
 
 (#3804, `assistant/decision.go`.) A supervised task reviewed `needs_user` used to reach the owner as a title and "waiting for your decision", often for a task they had not started themselves. Now only a decision reaches them, it stands on its own, and it never rots.
 

@@ -143,7 +143,9 @@ func (s *Service) sweepTaskDeadlines(now time.Time) {
 		if !ok || !taskDeadlineDue(&a, now) {
 			continue
 		}
-		if a.Reversible && a.Recommend != "" {
+		// An older decision recommending the owner's own terminal Resume has no default the hub can take
+		// (acceptTryAsDismissalLocked refuses it): it is marked handled and reminded once, like one that cannot be undone.
+		if a.Reversible && a.Recommend != "" && !terminalResumeLabel(a.Recommend) {
 			result, err := s.acceptTryAs(ctx, id, "", true)
 			switch {
 			case err != nil:
@@ -172,7 +174,7 @@ func (s *Service) sweepTaskDeadlines(now time.Time) {
 		}
 		cp := *cur
 		b.mu.Unlock()
-		s.logf("task %s: deadline passed on a decision that cannot be undone: reminded, not taken", id)
+		s.logf("task %s: deadline passed on a decision the hub does not take by default: reminded, not taken", id)
 		s.remindOverdue(ctx, id, cp)
 	}
 }

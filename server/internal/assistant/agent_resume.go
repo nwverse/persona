@@ -73,6 +73,7 @@ func (s *Service) resumeAllowed(ctx context.Context, self string, am Device, c p
 		cause = info.StopCause
 	}
 	if !cause.AllowsSupervisorResume() {
+		s.noteManualResume(am.ID, c.SessionID) // the next decision on its task links its terminal (decision_terminal.go)
 		return fmt.Errorf("%s cannot be resumed by the assistant: stop cause is %s. User stops and unknown causes require "+
 			"the user's Resume on its terminal page. Give that instruction separately from the choices on a decision card. Nothing was started or sent", agentLabel(c), cause)
 	}

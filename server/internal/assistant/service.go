@@ -266,6 +266,7 @@ type Service struct {
 	questions                questions     // tools.go (ask_user)
 	// deadlineSweeping: a sweep of the decisions past their deadline is running (decision_deadline.go).
 	deadlineSweeping atomic.Bool
+	manualResumes    manualResumeBook  // decision_terminal.go: Agents only the owner can resume, for a decision's terminal link
 	askTodos         askTodoBook       // ask_todo.go: the questions nobody answered, now to-dos
 	askLaters        askLaterBook      // ask_later.go: the questions asked without waiting, still out
 	approvals        approvalBook      // approval_clarify.go: clarified prepared approvals and their result delivery

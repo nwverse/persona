@@ -277,6 +277,7 @@ func (s *Service) askConclusion(ctx context.Context, t Todo, in conclusionInput)
 	if in.Outcome == outcomeDecide {
 		a.WhyOwner, a.Options, a.CostOfWaiting = in.Decision.WhyOwner, in.Decision.Options, in.Decision.CostOfWaiting
 		a.From, a.Stands = s.decisionBackground(ctx, t) // the hub's, not the model's: where it came from, where it stands
+		a.ResumeTerminal = s.manualResumeTarget(t)
 		a.ForBriefing, a.Check = in.ForBriefing, in.Check
 		if a.ForBriefing {
 			a.RaisedBy = in.RaisedBy

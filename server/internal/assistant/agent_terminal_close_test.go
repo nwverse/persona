@@ -310,9 +310,13 @@ func TestTerminalResumeOptionTargetsOnlyItsBoundAgent(t *testing.T) {
 	if terminalResumeLabel("Start a replacement") {
 		t.Fatal("ordinary decision classified as a terminal action")
 	}
+	bound := &SessionRef{MachineID: "box", SessionID: "00000001-example"}
+	if boundTerminal(task, bound) == nil || boundTerminal(task, &SessionRef{MachineID: "box", SessionID: "00000002-example"}) != nil {
+		t.Fatal("terminal link follows the task's bindings")
+	}
 	now := time.Now()
 	task.Agents[0].ReleasedAt = &now
-	if decisionTerminal(task, label) != nil || soleDecisionAgent(task, now) != nil {
+	if decisionTerminal(task, label) != nil || boundTerminal(task, bound) != nil {
 		t.Fatal("released Agent")
 	}
 }

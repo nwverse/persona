@@ -84,6 +84,9 @@ type acceptAsk struct {
 	RecheckAt     time.Time        `json:"recheck_at,omitzero"`
 	RaisedAt      time.Time        `json:"raised_at,omitzero"`
 	Response      string           `json:"response,omitempty"`
+	// ResumeTerminal: the Agent whose resume the hub refused before this decision was raised, because only the owner's
+	// Resume on its terminal page may restart it (manualResumeTarget, #13087). The decision's row links its terminal.
+	ResumeTerminal *SessionRef `json:"resume_terminal,omitempty"`
 	// Chosen: the option the owner chose when it was not the recommended one, or their own words (answerDecisionText).
 	// A recurring check's decision answered where its Agent works keeps even the recommended one (decisionTold): its
 	// card then does not say the Agent was not told.
