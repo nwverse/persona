@@ -1,9 +1,6 @@
 package persona.android.ui
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.onNodeWithText
 import androidx.navigation3.runtime.EntryProviderScope
 import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavKey
@@ -17,7 +14,6 @@ import kotlinx.serialization.Serializable
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
-import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
@@ -39,8 +35,6 @@ import persona.core.navigation.RestorableBackStackSerializer
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], qualifiers = "en", application = android.app.Application::class)
 class ModuleNavigationSafetyTest {
-    @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
-
     @Serializable data object GatedRoute : NavKey
     @Serializable data class KeptRoute(val id: String) : NavKey
 
@@ -68,11 +62,10 @@ class ModuleNavigationSafetyTest {
         val _ = provider(registry, setOf("gated_feature"))(GatedRoute)
         assertTrue("registered while the hub offers the feature", logged.isEmpty())
         // The hub's hello drops the feature while the page is on the stack: no crash, the shell's page, a loud log.
-        val entry = provider(registry, emptySet())(GatedRoute)
+        val _ = provider(registry, emptySet())(GatedRoute)
         assertEquals(1, logged.size)
         assertTrue(logged.single(), "GatedRoute" in logged.single())
-        rule.setContent { entry.Content() }
-        rule.onNodeWithText("This page isn't available right now").assertExists()
+        // What that page draws: ModuleFallbackPageTest (debug unit tests, which have a test activity).
     }
 
     @Test fun twoModulesRegisteringOneRouteAreRejected() {
