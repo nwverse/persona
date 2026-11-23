@@ -318,7 +318,8 @@ func TestHubExtensionMachinesPairLinkThroughProxyE2E(t *testing.T) {
 	}
 }
 
-func TestHubExtensionMachinesManagerBoundaryAndConcurrency(t *testing.T) {
+func setupExtensionMachinesHub(t *testing.T) (*Hub, *memPairTrustStore) {
+	t.Helper()
 	store := newMemPairTrustStore()
 	h := newTestHub(t)
 	h.store = store
@@ -327,11 +328,14 @@ func TestHubExtensionMachinesManagerBoundaryAndConcurrency(t *testing.T) {
 	h.devices.entries = append([]MachineConfig(nil), h.cfg.Machines...)
 	h.devices.started = true
 	h.trust.pending = map[string]time.Time{}
-	rawCfg, err := json.Marshal(h.cfg)
+	rawCfg, err := json.Marshal(map[string]any{
+		"token":    h.cfg.Token,
+		"machines": []map[string]any{},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(h.cfg.dir, "hub.json"), rawCfg, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(h.cfg.dir, "hub.json"), rawCfg, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -344,6 +348,45 @@ func TestHubExtensionMachinesManagerBoundaryAndConcurrency(t *testing.T) {
 	h.public.mu.Unlock()
 	h.cfg.Public.TLSListen = u.Host
 	h.cfg.PublicURL = tlsSrv.URL
+	return h, store
+}
+
+func TestHubExtensionMachinesPairLinkMachineIDOnly(t *testing.T) {
+	h, _ := setupExtensionMachinesHub(t)
+
+	res, err := h.hubMachinesPairLink(context.Background(), "m-alpha", "personal-agent-club",
+		json.RawMessage(`{"machine_id":"pac-id-only"}`))
+	if err != nil {
+		t.Fatalf("machine_id-only pair_link: %v", err)
+	}
+	if res.MachineID != "pac-id-only" || res.Name != "pac-id-only" || !res.Pending {
+		t.Fatalf("unexpected machine_id-only result: %+v", res)
+	}
+	if !strings.HasPrefix(res.Link, "persona://link?") {
+		t.Fatalf("unexpected link: %q", res.Link)
+	}
+	mc := h.knownEntry("pac-id-only")
+	if mc == nil || mc.Name != "pac-id-only" || mc.Kind != kindLink {
+		t.Fatalf("unexpected stored entry: %+v", mc)
+	}
+
+	for _, tc := range []struct {
+		body     string
+		wantCode string
+	}{
+		{`{}`, "invalid_name"},
+		{`{"machine_id":"bad id!"}`, "invalid_id"},
+	} {
+		_, err := h.hubMachinesPairLink(context.Background(), "m-alpha", "personal-agent-club", json.RawMessage(tc.body))
+		var re *rpc.Error
+		if !errors.As(err, &re) || re.Code != tc.wantCode {
+			t.Fatalf("pair_link(%s): got %v, want rpc.Error(%s)", tc.body, err, tc.wantCode)
+		}
+	}
+}
+
+func TestHubExtensionMachinesManagerBoundaryAndConcurrency(t *testing.T) {
+	h, store := setupExtensionMachinesHub(t)
 
 	// Manager A creates two pending machines: one with explicit ID, one named for slug collision checks.
 	pairA, err := h.hubMachinesPairLink(context.Background(), "m-alpha", "personal-agent-club",
@@ -362,18 +405,48 @@ func TestHubExtensionMachinesManagerBoundaryAndConcurrency(t *testing.T) {
 	if namedA.MachineID != "alpha-named" || h.entryOwner("alpha-named") != "m-alpha" {
 		t.Fatalf("unexpected named pair_link: %+v owner=%q", namedA, h.entryOwner("alpha-named"))
 	}
+	namedAURL, err := url.Parse(namedA.Link)
+	if err != nil || namedAURL.Query().Get("token") == "" {
+		t.Fatalf("invalid namedA link %q: %v", namedA.Link, err)
+	}
+	namedAToken := namedAURL.Query().Get("token")
 
-	// Manager B must be refused on re-pairing, overwrite-with-add, and same-name slug reuse paths.
-	for _, req := range []string{
-		`{"machine_id":"pac-alpha-1"}`,
-		`{"machine_id":"pac-alpha-1","name":"Hijacked","os":"linux"}`,
-		`{"name":"Alpha Named","os":"linux"}`,
+	// Manager B and the carrier must be refused on explicit-ID operations targeting m-alpha's pending entries.
+	for _, tc := range []struct {
+		from string
+		req  string
+	}{
+		{"m-beta", `{"machine_id":"pac-alpha-1"}`},
+		{"m-beta", `{"machine_id":"pac-alpha-1","name":"Hijacked","os":"linux"}`},
+		{"m-beta", `{"machine_id":"alpha-named"}`},
+		{"", `{"machine_id":"pac-alpha-1"}`},
 	} {
-		_, err := h.hubMachinesPairLink(context.Background(), "m-beta", "other-ext", json.RawMessage(req))
+		_, err := h.hubMachinesPairLink(context.Background(), tc.from, "other-ext", json.RawMessage(tc.req))
 		var re *rpc.Error
 		if !errors.As(err, &re) || re.Code != codeOtherManager {
-			t.Fatalf("pair_link(%s) by m-beta: got %v, want %s", req, err, codeOtherManager)
+			t.Fatalf("pair_link(from=%q, %s): got %v, want %s", tc.from, tc.req, err, codeOtherManager)
 		}
+	}
+
+	// Name-based pair_link by m-beta skips m-alpha's pending "alpha-named" and allocates "alpha-named-2" without revoking m-alpha's token.
+	namedB, err := h.hubMachinesPairLink(context.Background(), "m-beta", "other-ext",
+		json.RawMessage(`{"name":"Alpha Named","os":"linux"}`))
+	if err != nil {
+		t.Fatalf("manager B named pair_link: %v", err)
+	}
+	if namedB.MachineID != "alpha-named-2" || h.entryOwner("alpha-named-2") != "m-beta" || h.entryOwner("alpha-named") != "m-alpha" {
+		t.Fatalf("unexpected suffixed allocation: %+v ownerB=%q ownerA=%q", namedB, h.entryOwner("alpha-named-2"), h.entryOwner("alpha-named"))
+	}
+	if pt, err := store.PairTokenByHash(context.Background(), hashToken(namedAToken)); err != nil || pt == nil {
+		t.Fatalf("m-alpha token was unexpectedly revoked when m-beta added same name: pt=%+v err=%v", pt, err)
+	}
+	namedBRepeat, err := h.hubMachinesPairLink(context.Background(), "m-beta", "other-ext",
+		json.RawMessage(`{"name":"Alpha Named","os":"linux"}`))
+	if err != nil {
+		t.Fatalf("manager B repeat named pair_link: %v", err)
+	}
+	if namedBRepeat.MachineID != "alpha-named-2" {
+		t.Fatalf("manager B repeat reused %q, want alpha-named-2", namedBRepeat.MachineID)
 	}
 
 	// Manager B must be refused on machines.status for m-alpha's machine, while m-alpha succeeds.
@@ -391,7 +464,7 @@ func TestHubExtensionMachinesManagerBoundaryAndConcurrency(t *testing.T) {
 	}
 
 	// Clear pending quota from the boundary checks so the concurrency burst can exercise up to maxPendingComputers.
-	for _, id := range []string{"pac-alpha-1", "alpha-named"} {
+	for _, id := range []string{"pac-alpha-1", "alpha-named", "alpha-named-2"} {
 		_, _ = store.ConfirmMachine(context.Background(), id)
 		h.setPendingLocal(id, time.Time{}, false)
 	}

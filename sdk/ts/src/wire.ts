@@ -6260,11 +6260,15 @@ export interface AssistantDataStatusResult {
  */
 export interface MachinesPairLinkParams {
   /**
-   * Optional existing pending link machine id to re-issue a pairing link for (mutually exclusive with name/os/icon
-   * when omitted, or used as the requested id when adding).
+   * Optional computer id: re-issues a pairing link when an existing pending link machine matches (with name/os/icon
+   * omitted), or creates a new pending link machine with this id (defaulting name to machine_id when name is
+   * omitted).
    */
   machine_id?: string;
-  /** Display name for a newly added computer (required when machine_id does not exist yet). */
+  /**
+   * Display name for a newly added computer (defaults to machine_id when machine_id is given; required when
+   * machine_id is omitted).
+   */
   name?: string;
   /** Target OS hint for install commands. */
   os?: string;

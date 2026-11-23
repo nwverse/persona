@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strconv"
 	"strings"
 
 	"github.com/nwverse/persona/sdk/go/wire"
@@ -39,45 +38,29 @@ func (h *Hub) hubMachinesPairLink(ctx context.Context, from, extID string, raw j
 	if caller == "" {
 		caller = devicesOwner
 	}
+	if err := h.addTarget(ctx, from); err != nil {
+		return wire.MachinesPairLinkResult{}, mapAddMachineRPCError(err)
+	}
+	actor := "extension:" + extID
+	h.machineAdd.Lock()
 	var add *machineAddRequest
 	var existingMachine string
 	if machineID != "" && h.knownEntry(machineID) != nil && name == "" && p.OS == "" && p.Icon == "" {
 		existingMachine = machineID
 	} else {
+		addName := name
+		if addName == "" && machineID != "" && adminMachineID.MatchString(machineID) {
+			addName = machineID
+		}
 		add = &machineAddRequest{
 			ID:      machineID,
-			Name:    name,
+			Name:    addName,
 			OS:      p.OS,
 			Icon:    p.Icon,
 			Manager: from,
 		}
-		if err := h.addTarget(ctx, add.Manager); err != nil {
-			return wire.MachinesPairLinkResult{}, mapAddMachineRPCError(err)
-		}
 	}
-	actor := "extension:" + extID
-	h.machineAdd.Lock()
-	if machineID != "" && h.knownEntry(machineID) != nil && h.entryOwner(machineID) != caller {
-		h.machineAdd.Unlock()
-		return wire.MachinesPairLinkResult{}, &rpc.Error{Code: codeOtherManager, Message: errOtherManager.Error()}
-	}
-	if machineID == "" && add != nil && name != "" {
-		base := machineSlug(name, p.OS)
-		for n := 1; ; n++ {
-			cand := base
-			if n > 1 {
-				cand = base + "-" + strconv.Itoa(n)
-			}
-			if mc := h.knownEntry(cand); mc != nil && mc.Name == name && mc.Kind == kindLink && h.machinePending(cand) && h.neverConnected(cand) && h.entryOwner(cand) != caller {
-				h.machineAdd.Unlock()
-				return wire.MachinesPairLinkResult{}, &rpc.Error{Code: codeOtherManager, Message: errOtherManager.Error()}
-			}
-			if !h.machineIDTaken(cand) {
-				break
-			}
-		}
-	}
-	id, _, err := h.computerFor(ctx, existingMachine, add, true, actor)
+	id, _, err := h.computerForScoped(ctx, existingMachine, add, true, actor, caller)
 	h.machineAdd.Unlock()
 	if err != nil {
 		return wire.MachinesPairLinkResult{}, mapAddMachineRPCError(err)
