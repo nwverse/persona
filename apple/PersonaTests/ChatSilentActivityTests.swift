@@ -120,7 +120,6 @@ import Testing
 
         var retained = item(2)
         retained.supervisionUser = true
-        let finish = call(4, "supervision_finish", id: "finish")
         let marked = [input(), retained, finish, result(5, finish, text: #"{"visibility":"silent"}"#), item(6)]
         #expect(projection(marked).activity.isEmpty)
         #expect(quiet(projection(marked).timeline) == nil)

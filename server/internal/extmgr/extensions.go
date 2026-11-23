@@ -783,6 +783,7 @@ func (ps *extensions) apply(ctx context.Context, id string) {
 	default:
 		spec, err := ps.spec(ctx, p, hp)
 		if err != nil {
+			ps.logf("plugin %s: %v", id, err)
 			hp.status, hp.err = host.StateError, err.Error()
 			break
 		}

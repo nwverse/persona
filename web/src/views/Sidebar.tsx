@@ -32,6 +32,7 @@ import { setRecentMore, useRecentCount, useRecentMore } from "../lib/sidebar-rec
 import { countsLabel, directionExternal, directionLabel, totalCounts, useDirectionNames, useLeaderCounts } from "../lib/direction-names";
 import type { ExternalDirection } from "../lib/direction-tree";
 import { SidebarDirectionRow } from "./SidebarDirections";
+import { SidebarSpaces } from "./SidebarSpaces";
 import { conversationPage } from "../lib/conversation-page";
 import { href, navigate, onLinkClick, showsSession, type Route } from "../lib/router";
 import { useScrollMemory } from "../lib/scroll-memory";
@@ -75,6 +76,7 @@ import { RUNTIME_AGENTS_PATH, supportsPagedAgents, runtimeActiveAt, runtimeAgent
 import { SESSIONS_CATALOG_FEATURE, SESSIONS_JUST_FINISHED_FEATURE, SESSIONS_QUICK_FILTERS_FEATURE, SESSIONS_TODO_FEATURE, type GroupDimension, type TodoNames } from "../lib/session-groups";
 import { SESSIONS_LIST_FEATURE, type ListCounts, type ListFilters } from "../lib/session-list";
 import { heldCounts } from "../lib/seen-outbox";
+import { heldSidesOf, useHeldVersion } from "../lib/use-child-sessions";
 import { NoComputers, useAddComputer } from "./machines/AddComputerEntry";
 import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, pageIconStyle, pageLabel, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup, GroupFoldButton, useActiveKey, useGo, useNavPages } from "./SidebarParts";
 import { NavRow, PersonalAgents, PersonaRow, SessionRow, SubHeading } from "./SidebarRows";
@@ -412,6 +414,8 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
         {sections
           .filter((g) => (g.id ? g.pages.length > 0 : !narrow))
           .map((g, i) => <PageGroup key={g.id || "pages"} group={g} more={g.id ? [] : more} first={i === 0 && !narrow} reg={reg} hover={hover} activeKey={activeKey} go={go} />)}
+        {/* the user's domain spaces (#13500), under the pages and their Health */}
+        {chats && <SidebarSpaces reg={reg} hover={hover} activeKey={activeKey} go={go} />}
 
         {chats && (
           <Section
@@ -790,7 +794,10 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
   // an agent opened here is seen at once in the chips' numbers and By state's sections too, not only on its row, while
   // the list's last read still counts it Unread (lib/seen-outbox.ts heldCounts)
   const seenMarks = useStore((s) => s.seen);
-  const holdCounts = useCallback((counts: ListCounts, rows: readonly Session[]) => heldCounts(counts, rows, seenMarks, Date.now()), [seenMarks]);
+  // and a parent whose unread side sessions were all seen here (the side rows held for its row, lib/use-child-sessions.ts)
+  const heldAt = useHeldVersion();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- heldAt: heldSidesOf reads the held rows, which it versions
+  const holdCounts = useCallback((counts: ListCounts, rows: readonly Session[]) => heldCounts(counts, rows, seenMarks, Date.now(), heldSidesOf), [seenMarks, heldAt]);
   const [savedFilter, setFilter] = useState(() => agentFilter(storedValue("persona.agentFilter")));
   const [larkCount, setLarkCount] = useState<number>();
   const reportCounts = useCallback((counts: FilterCounts | undefined) => setLarkCount(counts?.feishu), []);
