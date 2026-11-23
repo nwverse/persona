@@ -165,7 +165,7 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 		b.chainAdd(it, confirmedEntry(l, text, edited, now))
 	}
 	if !enabled && !execute {
-		b.releaseInboxAgent(it, HandlingFailed, i18n.T(b.userLang(), "assistant-inbox_agent.disabled"), now)
+		b.releaseInboxAgent(it, HandlingFailed, i18n.T(b.userLang(), "assistant-inbox_agent.disabled"), now, false)
 		b.settle(w)
 	}
 	last := it.Last
@@ -291,7 +291,7 @@ func (s *Service) confirmAgent(ctx context.Context, it *InboxItem, g *InboxSugge
 		_ = res
 	}
 	if !enabled {
-		b.releaseInboxAgent(it, HandlingFailed, i18n.T(b.userLang(), "assistant-inbox_agent.disabled"), now)
+		b.releaseInboxAgent(it, HandlingFailed, i18n.T(b.userLang(), "assistant-inbox_agent.disabled"), now, false)
 	}
 	out := it.listed()
 	b.mu.Unlock()

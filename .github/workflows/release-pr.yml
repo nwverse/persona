@@ -437,6 +437,14 @@ jobs:
           mkdir -p "$RUNNER_TEMP/persona-public-config/persona"
           printf '# The public account identifier is not private; all other privacy checks remain active.\n!chyroc\n' > "$RUNNER_TEMP/persona-public-config/persona/private-words.txt"
           printf 'XDG_CONFIG_HOME=%s\n' "$RUNNER_TEMP/persona-public-config" >> "$GITHUB_ENV"
+      - name: Stage the exact source and its Meta-specific package-resolution input
+        env:
+          PERSONA_META_WEARABLES: ${{ vars.PERSONA_META_WEARABLES }}
+        run: |
+          set -euo pipefail
+          meta="${PERSONA_META_WEARABLES:-NO}"
+          python3 scripts/ci/apple_release_source.py --source "$GITHUB_WORKSPACE" --destination "$RUNNER_TEMP/apple-release-source" --meta "$meta"
+          printf 'PERSONA_RELEASE_SOURCE=%s\n' "$RUNNER_TEMP/apple-release-source" >> "$GITHUB_ENV"
       - name: Archive, export and upload the formal iPhone/Watch build
         env:
           RUSTUP_TOOLCHAIN: '1.98.0'
