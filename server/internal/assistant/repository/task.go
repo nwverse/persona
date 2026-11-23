@@ -11,6 +11,8 @@ const LinkRoleDelivery = repositorywire.LinkRoleDelivery
 const LinkRoleReference = repositorywire.LinkRoleReference
 const LayoutRoot = repositorywire.LayoutRoot
 const LayoutContainer = repositorywire.LayoutContainer
+const TaskWorkflowIsolated = repositorywire.TaskWorkflowIsolated
+const TaskWorkflowSharedBranch = repositorywire.TaskWorkflowSharedBranch
 
 type Problem = repositorywire.Problem
 type RequestedRef = repositorywire.RequestedRef
@@ -55,6 +57,9 @@ func Snapshot(manager, todo string, revision int64, rows []TaskRepository, selec
 }
 func ValidRevision(revision *int64) bool              { return repositorywire.ValidRevision(revision) }
 func NormalizeLinkRole(role string) (string, Problem) { return repositorywire.NormalizeLinkRole(role) }
+func NormalizeTaskWorkflow(workflow string) (string, Problem) {
+	return repositorywire.NormalizeTaskWorkflow(workflow)
+}
 func LinkKey(identity Identity, link TaskLink) string { return repositorywire.LinkKey(identity, link) }
 func DefaultAlias(identity Identity) string           { return repositorywire.DefaultAlias(identity) }
 

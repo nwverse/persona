@@ -50,13 +50,16 @@ func (e *workspaceBusyQueueError) Error() string {
 }
 
 // shouldQueueExistingWorkspace reports whether task t should enter the serial workspace queue rather than failing
-// immediately when its explicit existing workspace is occupied by owner.
+// immediately when its existing workspace is occupied by owner.
 func (s *Service) shouldQueueExistingWorkspace(ctx context.Context, t PlanTask, owner *Todo) bool {
-	if owner == nil || t.RequestGate != "" || t.Workspace == nil || t.Workspace.Mode != workspaceExisting || t.WorkspaceInferred {
+	if owner == nil || t.RequestGate != "" || t.Workspace == nil || t.Workspace.Mode != workspaceExisting {
 		return false
 	}
 	if t.Workspace.Queue {
 		return true
+	}
+	if t.WorkspaceInferred {
+		return false
 	}
 	return s.taskWaitsAfter(t, owner.ID)
 }
