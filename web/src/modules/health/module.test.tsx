@@ -136,7 +136,7 @@ describe("the health module", () => {
   describe("warming its page before it is opened: on link intent only, as on main", () => {
     /** The idle tier run, then a link to /health reached by the pointer, through lib/lazy-page.ts preloadPages: what
      *  each of them requested. */
-    async function warm() {
+    async function warm(loads = false) {
       let idle: (() => void) | undefined;
       const stop = preloadPages({ document, requestIdleCallback: (run) => ((idle = run), 1), cancelIdleCallback: () => {} });
       idle?.();
@@ -146,8 +146,17 @@ describe("the health module", () => {
       link.href = "/health";
       document.body.append(link);
       link.dispatchEvent(new Event("pointerover", { bubbles: true }));
-      // the strings, then the code: let both arrive (nothing comes for a module that is not on)
-      for (let i = 0; i < 40 && chunk.mock.calls.length === 0; i++) await flush();
+      // the strings, then the code: let both arrive. They come through real imports, so wait for them by time, not
+      // by a count of flushes a busy machine outlasts (the late chunk then lands in the next test). Nothing comes for
+      // a module that is not on: a bounded wait is all that case can do.
+      if (loads) {
+        await vi.waitFor(() => {
+          if (chunk.mock.calls.length === 0) throw new Error("the chunk has not been requested yet");
+        }, { timeout: 5000, interval: 5 });
+        await flush();
+      } else {
+        for (let i = 0; i < 40 && chunk.mock.calls.length === 0; i++) await flush();
+      }
       const hovered = { chunk: chunk.mock.calls.length, catalog: catalog.mock.calls.length };
       stop();
       link.remove();
@@ -156,7 +165,7 @@ describe("the health module", () => {
 
     it("on: nothing at idle; a link's hover loads its strings and chunk, once", async () => {
       registerModule(counted());
-      expect(await warm()).toEqual({ idled: { chunk: 0, catalog: 0 }, hovered: { chunk: 1, catalog: 1 } });
+      expect(await warm(true)).toEqual({ idled: { chunk: 0, catalog: 0 }, hovered: { chunk: 1, catalog: 1 } });
     });
 
     it("off, or behind a flag the hub lacks: nothing ever, idle or hover", async () => {
