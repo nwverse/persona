@@ -259,7 +259,7 @@ Outside the scale: composer 32 (`Shell.composerRadius`, `apple/Shared/Design/The
 - A To-dos row's "OK: ‹option›" (iOS, hubs with `todo_view`, from #10465's switch-on): `todoAnswerMax` 260, the widest
   it is drawn; past it, at the text size in use, it says "OK" alone, decided from the label's length and the text size,
   never measured (3.4, "To-dos list"). Not scaled, since the words it measures already are. The estimate counts in
-  `todoAnswerEm` 15, `Font.secondary`'s size at the default text size: a CJK or full-width character an em, a capital
+  ems of `Font.secondary`'s size at the default text size (`Theme.Level.secondary`, 15): a CJK or full-width character an em, a capital
   or a wide lowercase letter 0.8 (W and M 0.95), any other 0.6, plus `Space.l` a side for the style's button.
 - The working arc (◐, a to-do being worked on in the To-dos list, `WorkingArc` in `apple/Persona/DesignSystem/`; iOS,
   hubs with `todo_view`, from #10465's switch-on): `workingArcSweep` 0.72 of its circle, drawn with `workingArcLine` 2,

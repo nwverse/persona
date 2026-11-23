@@ -2253,8 +2253,8 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   for one with options, Retry and Options for a failed start's retry, nothing for a run's ask (a safe question with its
   card included: answering the run's own form inside a list cell waits for the to-do's page), an open ask or one
   without a `risk` (an older manager's). `TodoRowAnswersLine` draws them in a packed `StackingButtonRow`; "OK:
-  ‹option›" or "OK" comes from `TodoRowAnswers.okWidth` (an estimate from the label's characters in
-  `Theme.Size.todoAnswerEm`, a wide one an em, a capital 0.8) times `Theme.textScale` against
+  ‹option›" or "OK" comes from `TodoRowAnswers.okWidth` (an estimate from the label's characters in ems of
+  `Theme.Level.secondary`'s size, a wide one an em, a capital 0.8) times `Theme.textScale` against
   `Theme.Size.todoAnswerMax`, never measured. Options ⌄ sets the row's own `Row.optionsOpen` (one row at a time; it
   folds when the row's ask goes) and `TodosListModel.cardUnfolded`, which `TodoListView` reads to bring the card's foot
   above the foot toolbar when it fell under it (`TodoListSight.bottoms` against `TodoListEdges.floor`), and the row
@@ -2281,10 +2281,12 @@ built in stages behind the hub's `todo_view`; this section grows with it.
     receipt answers a repeat the same; `delivered: "yes"` is taken; `delivered: "unknown"` (502 `send_in_doubt`), or
     `TodoOutbox.tries` sends that ended unanswered, is `.inDoubt`: never sent again, never said as not sent, "Not sure
     your answer went through" in place, the ask kept out of the numbers until the view moves. An answer kept past
-    `keepFor` or on a forgotten hub gives its buttons back. `DecisionAnswers.settled` (the outbox's `Deps.settled`)
-    turns that into the round's state. The Needs You tray's `DecisionRow` holds the same way while V1 is on, finding the
-    view's ask id by the round (`TodoStore.askID`), and sends its fixed answers at once through the asks route
-    (`TodoStore.respond`); before it, it answers at once through `/accept` as always.
+    `keepFor` that never left says "Couldn't send your answer" and gives its buttons back; one whose send began is
+    `.inDoubt` then, never said as not sent; one on a forgotten hub gives its buttons back quietly.
+    `DecisionAnswers.settled` (the outbox's `Deps.settled`) turns that into the round's state. The Needs You tray's
+    `DecisionRow` holds the same way while V1 is on, finding the view's ask id by the round (`TodoStore.askID`), and
+    sends its fixed answers at once through the asks route (`TodoStore.respond`); before it, it answers at once through
+    `/accept` as always.
   - **Counting.** Every answer still in the outbox counts as given (`TodoOutbox.answering`, read by
     `TodoCountsSource` through `TodoStore.V1.answering`, followed as `pending` is), from the tap on and after a
     relaunch; one the hub took or found answered elsewhere joins `TodoCountsSource.answered`'s overlay until the view

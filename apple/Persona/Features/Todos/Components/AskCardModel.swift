@@ -51,13 +51,14 @@ nonisolated struct TodoRowAnswers: Equatable, Sendable {
 
     static func okLong(_ option: String) -> String { String(localized: "OK: \(option) [To-dos Answers]") }
 
-    /// About how wide `text` is in the answers' font (`Theme.Size.todoAnswerEm` an em at the default text size), with
-    /// the style's button around it (`Theme.Space.l` a side, more than any style pads): a wide character (Chinese,
-    /// Japanese, a full-width form) an em, a capital or a lowercase m or w 0.8 of one (W and M nearer a whole one), any
-    /// other 0.6, generous for a semibold Latin face. Never measured: it is worked out once per row content.
+    /// About how wide `text` is in the answers' font at the default text size (an em is `Font.secondary`'s size there,
+    /// `Theme.Level.secondary`; the text size multiplies the whole estimate), with the style's button around it
+    /// (`Theme.Space.l` a side, more than any style pads): a wide character (Chinese, Japanese, a full-width form) an em,
+    /// a capital or a lowercase m or w 0.8 of one (W and M nearer a whole one), any other 0.6, generous for a semibold
+    /// Latin face. Never measured: it is worked out once per row content.
     static func width(_ text: String) -> CGFloat {
         let units = text.unicodeScalars.reduce(CGFloat.zero) { sum, scalar in sum + ems(scalar) }
-        return units * Theme.Size.todoAnswerEm + 2 * Theme.Space.l
+        return units * Theme.Level.secondary.size + 2 * Theme.Space.l
     }
 
     private static func ems(_ s: Unicode.Scalar) -> CGFloat {

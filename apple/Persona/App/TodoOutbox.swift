@@ -704,8 +704,9 @@ final class TodoOutbox {
         return changed
     }
 
-    /// Writes whose hub never came back in time are let go (`keepFor`, `keepNewFor`); an answer's buttons come back.
-    /// true: some were.
+    /// Writes whose hub never came back in time are let go (`keepFor`, `keepNewFor`). An answer that never left says it
+    /// was not sent and its buttons come back; one whose send began may be with the Agent, so it says it is not sure,
+    /// never that it was not sent. true: some were.
     private func expire() -> Bool {
         let now = deps.now()
         let gone = entries.filter { entry in
@@ -715,7 +716,16 @@ final class TodoOutbox {
         guard !gone.isEmpty else { return false }
         let ids = Set(gone.map(\.id))
         entries.removeAll { ids.contains($0.id) }
-        for entry in gone { if case .answer = entry.write { deps.settled(entry, .refused("")) } }
+        for entry in gone {
+            guard case .answer = entry.write else { continue }
+            if entry.sent {
+                deps.settled(entry, .inDoubt)
+            } else {
+                let why = String(localized: "Not connected to a hub [Todo Store 04f822]")
+                deps.refused(entry, String(localized: "Couldn't send your answer. \(why)"))
+                deps.settled(entry, .refused(""))
+            }
+        }
         return true
     }
 

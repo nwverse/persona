@@ -118,6 +118,35 @@ struct DecisionAnswersHoldTests {
         #expect(h.store.countsSource.needsYou == 0, "it counts as answered all along")
     }
 
+    /// An answer kept past `TodoOutbox.keepFor` without its hub: one that never left says it was not sent and its
+    /// buttons come back; one whose send began may be with the Agent, so it says it is not sure and keeps the ask out of
+    /// N, never saying it was not sent.
+    @Test(arguments: [false, true])
+    func anAnswerKeptTooLongSaysWhatBecameOfIt(sendBegan: Bool) async throws {
+        let first = try await TodoAnswersHarness.make(hub(), window: .seconds(30))
+        await first.answers.choose(0, of: try legacy(first), todo: "t01", group: "g")
+        var kept = try #require(first.saved.first)
+        first.store.forget()
+        kept.made = Date().addingTimeInterval(-TodoOutbox.keepFor - 60)
+        kept.sent = sendBegan
+
+        let hub = hub()
+        let h = try await TodoAnswersHarness.make(hub, loading: [kept])
+        defer { h.store.forget() }
+        try await waitForAnswers { h.outbox.entries.isEmpty }
+        #expect(hub.sent("POST", TodoAnswersHarness.route("t01", TodoAnswersHarness.decision)).isEmpty, "never sent again")
+        let state = h.answers.state(todo: "t01", round: TodoAnswersHarness.asked, group: "g")
+        if sendBegan {
+            #expect(state == .unsure)
+            #expect(h.refusals.isEmpty, "never said as not sent")
+            try await waitForAnswers { h.store.countsSource.needsYou == 0 } // the ask out of N until the view moves
+        } else {
+            #expect(state == nil, "its buttons come back")
+            #expect(h.refusals.count == 1, "said once: \(h.refusals)")
+            try await waitForAnswers { h.store.countsSource.needsYou == 1 } // the ask counts again
+        }
+    }
+
     /// An answer whose send began before the app was ended may have reached the hub: once a read shows its ask gone, it
     /// still goes again with its op id, and the receipt's answer settles it as chosen, never as answered elsewhere.
     @Test func aLaunchAfterASendThatMayHaveLandedAsksTheReceipt() async throws {
