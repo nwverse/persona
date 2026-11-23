@@ -1,8 +1,5 @@
 import Foundation
 import PersonaWire
-#if os(macOS)
-import AppKit
-#endif
 
 /// UserDefaults writes that can wait (the section or tab to come back to): every write to UserDefaults draws each
 /// `AppStorage` view in the app again (CLAUDE.md「Most common pitfalls」), and a switch between the Mac's
@@ -18,19 +15,7 @@ import AppKit
 
     /// `value` nil removes the key.
     static func set(_ value: Any?, forKey key: String, in defaults: UserDefaults = .standard) {
-        #if os(macOS)
-        guard defaults === UserDefaults.standard else { return write(value, key, defaults) }
-        pending[key] = .some(value)
-        watchTheApp()
-        task?.cancel()
-        task = Task {
-            try? await Task.sleep(for: rest)
-            guard !Task.isCancelled else { return }
-            flush()
-        }
-        #else
         write(value, key, defaults)
-        #endif
     }
 
     /// Writes what waits.
@@ -46,14 +31,4 @@ import AppKit
         if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
     }
 
-    #if os(macOS)
-    private static func watchTheApp() {
-        guard observers.isEmpty else { return }
-        for name in [NSApplication.willResignActiveNotification, NSApplication.willTerminateNotification] {
-            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
-                MainActor.assumeIsolated { flush() }
-            })
-        }
-    }
-    #endif
 }

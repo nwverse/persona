@@ -37,6 +37,7 @@ import persona.core.designsystem.JIconButton
 import persona.core.designsystem.JSheet
 import persona.core.designsystem.JTextButton
 import persona.core.designsystem.PersonaTheme
+import persona.core.designsystem.ReadingContent
 import persona.core.designsystem.rememberCopy
 import persona.core.designsystem.LocalizedFormats
 import persona.core.designsystem.Tokens
@@ -158,7 +159,7 @@ internal fun RecapLine(items: List<Item>) {
                 Text(stringResource(R.string.chat_recap_written, relativeTime(it, now, resources)), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
                 Spacer(Modifier.height(Tokens.Space.s))
             }
-            ChatMarkdown(item.text.orEmpty(), "recap/${item.id}")
+            ReadingContent { ChatMarkdown(item.text.orEmpty(), "recap/${item.id}") }
         }
     }
 }

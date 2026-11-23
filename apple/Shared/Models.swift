@@ -2249,10 +2249,7 @@ extension Session {
         if state == .needsYou, let r = attentionReason, !r.isEmpty { return r } // a stale reason (offline, seen) stays out
         if state != .working, let r = failureReason, !r.isEmpty { return Session.failureText(r) }
         if let r = replyLine(muted: muted) { return r }
-        // The native Mac app is frozen (docs/apple/mac.md): its rows keep the line they had.
-        #if !os(macOS)
         if let c = closeoutPreview() { return c }
-        #endif
         if let w = workLine() { return w }
         return lastText.flatMap { $0.isEmpty ? nil : Fmt.plain($0) }
     }

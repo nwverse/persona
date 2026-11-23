@@ -6,14 +6,7 @@ extension View {
     /// window has no title in its bar (#830: it ran over the sections column), so a pushed page draws its title in the
     /// title bar's row over its own leading edge instead, the shell's section name giving way to it (#855).
     @ViewBuilder func pageTitle(_ title: String, subtitle: String? = nil) -> some View {
-        #if os(macOS)
         navigationTitle(title)
-            .navigationSubtitle(subtitle ?? "") // still the window's, for the Window menu
-            // The title in the title row, after a ‹ in a section's own stack (#2318).
-            .modifier(MacPushedPage(title: title, subtitle: subtitle))
-        #else
-        navigationTitle(title)
-        #endif
     }
 }
 
@@ -23,12 +16,7 @@ extension View {
     /// title row (`MacDetailBack` draws it after the ‹, where there is one), without taking the shell's section name
     /// away as `pageTitle` does: the list beside still shows its section's name.
     @ViewBuilder func detailTitle(_ title: String) -> some View {
-        #if os(macOS)
-        navigationTitle(title).preference(key: MacDetailTitle.self, value: title)
-            .modifier(MacPushedPage()) // in a section's own stack: the ‹ and this title in the title row (#2318)
-        #else
         navigationTitle(title)
-        #endif
     }
 }
 
@@ -36,10 +24,6 @@ extension View {
     /// A page pushed in a section's own stack: on the Mac its ‹ and title are in the title bar's row (`MacPushedPage`);
     /// on the phone nothing changes.
     @ViewBuilder func sectionPushedPage() -> some View {
-        #if os(macOS)
-        modifier(MacPushedPage())
-        #else
         self
-        #endif
     }
 }

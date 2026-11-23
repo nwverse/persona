@@ -649,12 +649,8 @@ extension Theme {
         static let pairing = "link.badge.plus"
         /// Settings › Connectors: the data sources Persona reads and acts in (this device, mail, Lark).
         static let connectors = "point.3.connected.trianglepath.dotted"
-        /// This device as a connector (its contacts, calendar, photos…): iPhone, iPad or Mac.
-        #if os(macOS)
-        static let thisDevice = laptop
-        #else
+        /// This device as a connector (its contacts, calendar, photos…): iPhone or iPad.
         static let thisDevice = "iphone.gen3"
-        #endif
         /// AI Draft Reply: a reply drafted in the user's voice.
         static let draftReply = "pencil.and.scribble"
         /// A drafted reply that will not go out: its message was handled elsewhere first (a message card, #4797).
