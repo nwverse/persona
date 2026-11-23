@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -378,5 +379,47 @@ func TestAgyBridgeRestartsWhenTheProviderChanges(t *testing.T) {
 	host.setAgyProviderEnv([]string{"GEMINI_API_KEY=k", "PERSONA_AGY_MODEL_PROVIDER=gemini"})
 	if got := next(); len(got) != 2 {
 		t.Fatalf("restart did not carry the provider env: %v", got)
+	}
+}
+
+// A Persona-managed agy launcher with a key reaches a herdr pane the way a managed Claude launcher does: the pane
+// types `personad launch <name>` (the name, never the key), and launch gets the launcher's environment from the node
+// and starts agy with the Gemini provider setting (#13762).
+func TestManagedAgyLauncherPaneStartAndResumeCarryNoSecret(t *testing.T) {
+	const key = "pane-secret-key"
+	l := proto.ManagedLauncher{Name: "agy-gw", Agent: "agy", BaseURL: "https://gateway.example.com", APIKey: key}
+	n := &Node{bin: "/usr/local/bin/personad"}
+	n.setCatalog([]proto.ManagedLauncher{l})
+
+	env := managedEnv(l)
+	if !slices.Equal(env, []string{"GOOGLE_GEMINI_BASE_URL=https://gateway.example.com", "GEMINI_API_KEY=" + key}) {
+		t.Fatalf("launcher env = %v", env)
+	}
+
+	start := workAgentCommand(n.launcherCommand("agy-gw"), "agy", "gemini-4-neon-high", "high", proto.ModeBypass)
+	if want := "/usr/local/bin/personad launch agy-gw --model gemini-4-neon-high --effort high --dangerously-skip-permissions"; start != want {
+		t.Fatalf("start command = %q, want %q", start, want)
+	}
+	spec := agentLaunch{Agent: agyAgent, Launcher: "agy-gw", Model: "gemini-4-neon-high", Effort: "high", Mode: proto.ModeBypass, AgyConversation: "11111111-2222-3333-4444-555555555555"}
+	argv, ok := n.agentResumeArgv(spec, "11111111-2222-3333-4444-555555555555")
+	if !ok || !strings.Contains(argv[1], "launch agy-gw --model") || !strings.Contains(argv[1], "--conversation 11111111-2222-3333-4444-555555555555") {
+		t.Fatalf("resume argv = %q, %v", argv, ok)
+	}
+	for _, typed := range []string{start, strings.Join(argv, " ")} {
+		if strings.Contains(typed, key) || strings.Contains(typed, "gateway.example.com") {
+			t.Fatalf("the pane's typed command carries the provider's secret or address: %q", typed)
+		}
+	}
+
+	// What personad launch then execs: agy with the provider setting before the pane's own flags, the key in the env.
+	got := launchArgv(agyAgent, []string{"--model", "gemini-4-neon-high", "--dangerously-skip-permissions"}, nil, "", "", env, "")
+	want := []string{"agy", "--settings", `{"modelProvider":"gemini"}`, "--model", "gemini-4-neon-high", "--dangerously-skip-permissions"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("launch argv = %q, want %q", got, want)
+	}
+	for _, a := range got {
+		if strings.Contains(a, key) {
+			t.Fatalf("argv carries the key: %q", got)
+		}
 	}
 }
