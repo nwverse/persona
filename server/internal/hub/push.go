@@ -81,7 +81,9 @@ type Pusher struct {
 	acceptedDirty map[string]bool
 	// withdrawals: where each card's push went, to take it back when the card is over (push_withdraw.go).
 	withdrawals withdrawals
-	saveMu      sync.Mutex // one device row write at a time, always the latest state (register, setPrefsBy, renewal, forget, maintenance)
+	// todoPushes: when each to-do's push to the owner about one reason last rang (push_todo_dedup.go).
+	todoPushes todoPushBook
+	saveMu     sync.Mutex // one device row write at a time, always the latest state (register, setPrefsBy, renewal, forget, maintenance)
 	// storeTimeout bounds each device row write, which never runs under mu; tests shorten it.
 	storeTimeout time.Duration
 	// prefsEdit holds one change of a device's settings from its read to its write (editPrefs); taken before saveMu

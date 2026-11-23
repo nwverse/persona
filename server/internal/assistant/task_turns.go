@@ -146,6 +146,8 @@ type turnSignal struct {
 	Detail  string     `json:"detail,omitempty"`
 	Handoff bool       `json:"handoff,omitempty"`
 	Told    *time.Time `json:"told,omitempty"`
+	// JudgeDown: superviseSignal.JudgeDown, so a replay after a restart is batched as the first telling was.
+	JudgeDown bool `json:"judge_down,omitempty"`
 }
 
 // replayTurnSignal queues only the still-current, untold ledger signal. Recovery can wait on Inbox I/O while
@@ -165,7 +167,8 @@ func (s *Service) replayTurnSignal(todo string, expected taskTurn) {
 	}
 	// Keep the ledger lock until queued, so an obsolete replay cannot replace a newer pending signal.
 	// The digest releases its mutex before consulting or marking the turn ledger.
-	s.queueSignal(superviseSignal{Todo: todo, Kind: sig.Kind, Key: sig.Key, Machine: sig.Machine, Detail: sig.Detail, Handoff: sig.Handoff})
+	s.queueSignal(superviseSignal{Todo: todo, Kind: sig.Kind, Key: sig.Key, Machine: sig.Machine, Detail: sig.Detail, Handoff: sig.Handoff,
+		JudgeDown: sig.JudgeDown})
 }
 
 // settled: nothing is left to do for the turn: it is judged (or has nothing to judge) and what it raised was told.
@@ -689,7 +692,7 @@ func (s *Service) turnSignalled(g superviseSignal) (told bool) {
 		return true
 	}
 	if sig := e.Signal; sig == nil || sig.Kind != g.Kind || sig.Key != g.Key || sig.Handoff != g.Handoff {
-		e.Signal = &turnSignal{Kind: g.Kind, Key: g.Key, Machine: g.Machine, Detail: g.Detail, Handoff: g.Handoff}
+		e.Signal = &turnSignal{Kind: g.Kind, Key: g.Key, Machine: g.Machine, Detail: g.Detail, Handoff: g.Handoff, JudgeDown: g.JudgeDown}
 		b.doc.Turns[g.Todo] = e
 		s.saveTurnsLocked(ctx)
 	}
