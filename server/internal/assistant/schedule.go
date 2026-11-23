@@ -3142,6 +3142,10 @@ func (s *Service) scheduleRoutes() {
 			writeTaskStateError(w, err)
 			return
 		}
+		if err := s.applyTaskSpace(r, &t, raw); err != nil { // a track of its own (schedule_space.go)
+			writeTaskSpaceError(w, err)
+			return
+		}
 		applyUntil(&t, end, hasUntil, clearUntil)
 		dropStaleUntil(&t, hasUntil, now)
 		if err := checkTask(&t, now); err != nil {
@@ -3227,6 +3231,10 @@ func (s *Service) scheduleRoutes() {
 		}
 		if err := editTaskState(&t, in, raw, now); err != nil {
 			writeTaskStateError(w, err)
+			return
+		}
+		if err := s.applyTaskSpace(r, &t, raw); err != nil { // moved to another track (schedule_space.go)
+			writeTaskSpaceError(w, err)
 			return
 		}
 		push, has, err := pushIn(raw)

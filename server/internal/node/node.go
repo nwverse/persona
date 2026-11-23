@@ -2763,6 +2763,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			// Space names a track's own directory (nodeproto.TrackSpaces, assistant_space.go); nil for the
 			// assistant's and the health space's.
 			Space *spacePrepare `json:"space"`
+			// TrackKind is the kind of the directory's track (orchestration for the assistant's own), which its
+			// processes get as PERSONA_TRACK_KIND (track_kind_env.go); "" from a manager that does not say it.
+			TrackKind string `json:"track_kind"`
 		}
 		if err := json.Unmarshal(params, &a); err != nil || a.Dir == "" || strings.Contains(a.Dir, "..") {
 			return nil, fmt.Errorf("bad assistant dir")
@@ -2785,7 +2788,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if n.assistantPrepared == nil {
 			n.assistantPrepared = map[string]assistantPrepareState{}
 		}
-		n.assistantPrepared[key] = assistantPrepareState{connectors: a.Connectors, clis: a.CLIs, workGuide: a.WorkGuideMD != ""}
+		n.assistantPrepared[key] = assistantPrepareState{connectors: a.Connectors, clis: a.CLIs, workGuide: a.WorkGuideMD != "",
+			trackKind: trackKindValue(a.TrackKind)}
 		n.mu.Unlock()
 		var need []string
 		if a.PluginSkills != nil {
