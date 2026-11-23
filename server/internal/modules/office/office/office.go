@@ -29,6 +29,11 @@ const usage = `usage:
   personad office check <file.docx|.xlsx|.pptx>              what is in it, to look over what was made
 Writing prints {"file": <absolute path>, …what check says}. Exit 0 ok, 1 failed, 2 usage.`
 
+// Usage is the command's lines in personad's usage text.
+const Usage = `  personad office docx|pptx|xlsx|check …
+                           write a Word document or a deck from Markdown, a workbook from JSON / CSV, or say what is in
+                           one (the office skill): personad office --help`
+
 // Main runs `personad office args…`: it writes or checks a file and prints JSON on stdout; a failure is one line on
 // stderr.
 func Main(args []string, stdout, stderr io.Writer) int {

@@ -131,7 +131,7 @@ class KnowledgeMinutesTest {
             repository.version = 5
             model.addMinutesTodos(listOf("a2")); runCurrent()
             assertEquals("todos r1 4 [a2]", repository.writes.last())
-            assertEquals(UiText.Res(R.string.knowledge_minutes_stale), model.minutesWork.value.message)
+            assertEquals(UiText.Res(R.string.knowledge_ui_minutes_stale), model.minutesWork.value.message)
             assertFalse(model.minutesWork.value.busy)
             assertEquals(5, model.page.value.detail?.minutes?.version)
             model.dismissMinutesMessage()

@@ -42,6 +42,10 @@ export interface UsageAccount {
   /** Why a gateway's numbers are old: "error" (it could not read this account just now) or, when its own last read
    *  failed, "rejected" (the key was turned away), "unreachable" or "failed" (docs/server/usage-windows.md). */
   problem?: string;
+  /** Optional summary line from a usage extension (plain text in the user's language). */
+  headline?: string;
+  /** Optional status or explanation from a usage extension (e.g. cooldown or why no windows are drawn). */
+  notice?: string;
 }
 
 /** Samples older than this are dropped (a source that went quiet for days says nothing about now). */
@@ -112,7 +116,7 @@ export function liveAccounts(accounts: UsageAccount[], now = Date.now()): UsageA
     const windows = a.windows.filter((w) => !w.resets_at || Date.parse(w.resets_at) > now);
     const staleAt = a.stale_at ? Date.parse(a.stale_at) : NaN;
     const stale = Boolean(a.stale) || (Number.isFinite(staleAt) && now >= staleAt);
-    if (windows.length || isBalanceAccount(a)) out.push({ ...a, windows, ...(stale ? { stale } : {}) });
+    if (windows.length || isBalanceAccount(a) || Boolean(a.notice?.trim() || a.headline?.trim())) out.push({ ...a, windows, ...(stale ? { stale } : {}) });
   }
   return out;
 }
@@ -155,7 +159,7 @@ export function canonicalUsageProvider(provider: string): string {
  *  so changes below the displayed precision keep the same order. Balance accounts have their own rows. */
 export function topAccounts(accounts: UsageAccount[], n = 2): UsageAccount[] {
   return accounts
-    .filter((a) => !isBalanceAccount(a))
+    .filter((a) => !isBalanceAccount(a) && a.windows.length > 0)
     .sort((a, b) => Number(!!a.stale) - Number(!!b.stale)
       || Math.round(fullest(b)) - Math.round(fullest(a))
       || canonicalUsageProvider(a.provider).localeCompare(canonicalUsageProvider(b.provider))
@@ -270,8 +274,13 @@ export function usePinnedUsageAccounts(): readonly string[] {
   return useSyncExternalStore(subscribePinned, getPinnedSnapshot, getPinnedSnapshot);
 }
 
+/** Whether an account can be pinned to the collapsed sidebar strip (has usage windows or a prepaid balance). */
+export function isPinnableUsageAccount(a: UsageAccount): boolean {
+  return isBalanceAccount(a) || a.windows.length > 0;
+}
+
 /** Choose which live accounts appear in the collapsed sidebar strip:
- *  when pinned IDs match at least one live account, show those matched accounts in pinned order;
+ *  when pinned IDs match at least one live pinnable account, show those matched accounts in pinned order;
  *  otherwise fall back to the default automatic ranking (`topAccounts(live)` and live balance accounts). */
 export function selectSidebarUsageAccounts(
   live: UsageAccount[],
@@ -282,7 +291,7 @@ export function selectSidebarUsageAccounts(
     const matched: UsageAccount[] = [];
     for (const id of pinnedIds) {
       const a = byId.get(id);
-      if (a) matched.push(a);
+      if (a && isPinnableUsageAccount(a)) matched.push(a);
     }
     if (matched.length > 0) {
       return {
@@ -319,13 +328,13 @@ export function weeklyResetMs(a: Pick<UsageAccount, "windows">): number {
   return Number.isFinite(at) ? at : Infinity;
 }
 
-/** A card's accounts: the soonest 7d reset first; accounts without one last, then by name. */
+/** A card's accounts: the soonest 7d reset first; accounts without one last, then by name (case-insensitive) and id. */
 export function sortForCard(accounts: UsageAccount[]): UsageAccount[] {
   return [...accounts].sort((a, b) => {
     const x = weeklyResetMs(a);
     const y = weeklyResetMs(b);
     if (x !== y) return x < y ? -1 : 1;
-    return a.name.localeCompare(b.name);
+    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
   });
 }
 

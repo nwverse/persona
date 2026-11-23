@@ -177,6 +177,7 @@ go server/internal/node/nodekit core
 go server/internal/node/transcripttail core
 go server/internal/nodeclient core
 go server/internal/nodecmd core
+go server/internal/nodecmd/commandport core
 go server/internal/nodeproto core
 go server/internal/nodesign core
 go server/internal/nodeupdate core
@@ -247,7 +248,6 @@ go server/plugins core
 # Module code still in core paths.
 go server/internal/transcribelive voice
 go server/internal/lark lark
-go server/internal/office office
 go server/internal/screen screen-share
 go server/internal/screenlink screen-share
 go server/internal/iphone phone-extra
@@ -266,6 +266,8 @@ apple apple/AboutVersionAccessibilityHost core
 apple apple/AboutVersionAccessibilityUITests core
 apple apple/IslandPeer core
 apple apple/LiveActivity core
+apple apple/Modules core
+apple apple/Modules/ScreenShare screen-share
 apple apple/PersonaCallIntents voice
 apple apple/PersonaLink screen-share
 apple apple/PersonaNotify core
@@ -295,7 +297,6 @@ apple apple/Persona/Persona core
 apple apple/Persona/PhoneTools core
 apple apple/Persona/Recording recording
 apple apple/Persona/Resources core
-apple apple/Persona/Screen screen-share
 apple apple/Persona/Views core
 apple apple/Persona/Voice voice
 apple apple/Persona/Views/Feishu lark
