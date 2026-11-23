@@ -1865,19 +1865,19 @@ extension AssistantSidebar {
                 drawer?.close()
                 openTodoAgentChat(model.inHub(target), in: model)
             } label: {
-                outsideLabel(entry, named: named, selected: selected, drawsShade: drawsShade, interactive: true)
+                outsideLabel(entry, named: named, selected: selected, drawsShade: drawsShade)
             }
             .buttonStyle(.plain)
             .contentShape(.rect)
             .accessibilityAddTraits(selected ? .isSelected : [])
             .accessibilityIdentifier("sidebar-outside-direction")
         } else {
-            outsideLabel(entry, named: named, selected: false, drawsShade: false, interactive: false)
+            outsideLabel(entry, named: named, selected: false, drawsShade: false)
         }
     }
 
     private func outsideLabel(
-        _ entry: AssistantSidebarGroups.DirectionEntry, named: String, selected: Bool, drawsShade: Bool, interactive: Bool
+        _ entry: AssistantSidebarGroups.DirectionEntry, named: String, selected: Bool, drawsShade: Bool
     ) -> some View {
         let counts = entry.outside?.counts.label
         let running = entry.outside?.running ?? false
@@ -1893,8 +1893,6 @@ extension AssistantSidebar {
         .background {
             if selected && drawsShade { SidebarSelectedShade() }
         }
-        .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous),
-                       isEnabled: interactive && drawsShade)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel([named, counts, running ? AgentState.working.label : nil]
             .compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
