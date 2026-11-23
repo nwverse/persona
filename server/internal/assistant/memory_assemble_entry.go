@@ -136,11 +136,11 @@ func (s *Service) memoryEntryUses(ctx context.Context, entries []proto.Assistant
 }
 
 // The memory extension's entries are the assembler's second source, after the ledger's (#13532). The extension keeps
-// them in its own state; from its version 0.2.0-beta.41 each carries the space it was first said in (origin_space,
-// the slug, "" for the main space) and its categories (categories). Nothing on main hands them to the manager as
-// entries yet: the extension delivers rendered text (its instructions, project_context and inbox_context files, and
-// its own enkeep_recall tool), filtered by its own rules. memoryExtensionEntries is where a source plugs in, and
-// memoryExtensionUses the rules it is held to.
+// them in its own state and answers them through memory.entries once it declares memory_sources (#13586): each
+// carries the space it was first said in (origin_space, the slug, "" for the main space) and its categories
+// (categories). The extensions' manager reads them (memory_extension_source.go, the source Service.memoryExtension is
+// set to) and stops delivering that extension's text outlets directly; memoryExtensionUses is the rules they are held
+// to.
 
 // memoryExtensionIDPrefix starts the id of every entry of the memory extension as the assembler carries it, so a
 // to-do's brief tells them from the ledger's.
@@ -156,8 +156,8 @@ type memoryExtensionEntry struct {
 	Categories []string
 	Tags       []string
 	// Standing is the extension's standing flag: it kept the entry in every conversation (always in context). Only
-	// a standing entry is meant for a standing channel; the others come in by relevance (their subjects or text) in
-	// a recall, a hand-off or the Inbox. The gate itself comes with the change that wires a source in.
+	// a standing entry goes to a standing channel (memoryExtensionBatch.standingOnly); the others come in by relevance
+	// (their subjects or text) in a recall, a hand-off or the Inbox.
 	Standing bool
 }
 
@@ -168,6 +168,8 @@ type memoryExtensionEntry struct {
 type memoryExtensionBatch struct {
 	Entries []memoryExtensionEntry
 	Tagged  bool
+	// Names are the names of the extensions whose entries these are, for the Inbox's background block.
+	Names []string
 }
 
 // memoryExtensionSource hands the assembler the memory extension's entries: personal says the receiver may see what
