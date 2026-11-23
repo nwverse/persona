@@ -19,7 +19,7 @@ func TestPlanPushIsTakenBackOnceDecided(t *testing.T) {
 		t.Fatal(err)
 	}
 	pushed := f.pushed()
-	if len(pushed) != 1 || pushed[0].CardID == "" || pushed[0].ID != "plan:"+pushed[0].CardID {
+	if len(pushed) != 1 || pushed[0].CardID == "" || pushed[0].ID != "card:"+pushed[0].CardID {
 		t.Fatalf("the plan's push does not stand for its card: %+v", pushed)
 	}
 	id := pushed[0].CardID
