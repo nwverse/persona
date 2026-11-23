@@ -19,8 +19,8 @@ import (
 // Leader conversations (#3133, docs/assistant/unified-entry.md "Leader conversations"). Since #5732 the main
 // conversation supervises every new assistant-dispatched task. The two specialized topologies remain: a manually
 // started Agent the owner explicitly put under a leader keeps that leader for ordinary signals and failed starts, and
-// a task leader's workers keep their leader Agent until it closes. Needs_user and anything about a task waiting for
-// the user still go to main. Every other new assistant-dispatched failed start goes to main; a successful retry's
+// a task leader's workers keep their leader Agent until it closes. Explicit transfers take precedence over the
+// default, including ordinary signals in needs_user; explicit escalations still go to main. Every other new assistant-dispatched failed start goes to main; a successful retry's
 // started signal always goes there too.
 //
 // Depth is bounded: an agent handed out as a task's agent (a worker) hands out no Persona tasks itself (task_plan,
@@ -330,8 +330,8 @@ func (s *Service) digestTo(ctx context.Context, cfg Settings, g superviseSignal)
 		return cfg.Main
 	}
 	if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil {
-		sup := t.Supervision.Supervisor
-		if sup != cfg.Main && slices.Contains(cfg.Leaders, sup) && !s.legacyLeaderPlanSupervision(ctx, t) {
+		sup := s.effectiveSupervisor(ctx, cfg, t)
+		if sup != cfg.Main && slices.Contains(cfg.Leaders, sup) {
 			if t.Supervision.state(t) == reviewNeedsUser {
 				return cfg.Main
 			}

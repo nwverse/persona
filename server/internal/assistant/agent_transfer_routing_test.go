@@ -178,6 +178,7 @@ func TestAgentTransferKeepsDeliveredAndEscalatedCards(t *testing.T) {
 
 func TestAgentTransferQueuedOrdinarySignalOnlyReachesNewSupervisor(t *testing.T) {
 	s, f, tasks := queuedDigestFixture(t, "Transferred task", "Unchanged task")
+	f.known["lead1"] = true
 	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
 	if _, _, err := s.updateSupervision(t.Context(), tasks[0].ID, func(v *Supervision) bool {
 		v.Supervisor, v.SupervisorSource, v.State = "lead1", "explicit", reviewNeedsUser

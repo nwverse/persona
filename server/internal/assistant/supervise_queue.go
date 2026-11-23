@@ -55,8 +55,8 @@ func (s *Service) renderQueuedDigest(ctx context.Context, to string, list []prom
 		Asked: askedIn(list), AskMinutes: int(askHoldFor.Minutes()), PushGrading: askedIn(list) && s.quietModeOn(ctx)})
 }
 
-// recheckDigestTo preserves the supervisor already persisted for a queued signal. New dispatch uses digestTo's
-// main-supervision policy; revalidating an existing relay must not rehome it merely because that policy changed.
+// recheckDigestTo honors explicit moves through the same policy as immediate dispatch. Otherwise it preserves
+// a queued legacy supervisor: a default-policy change alone is not permission to rehome an existing relay.
 func (s *Service) recheckDigestTo(ctx context.Context, cfg Settings, g superviseSignal) string {
 	if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil && t.Supervision.SupervisorSource == "explicit" {
 		return s.digestTo(ctx, cfg, g)
