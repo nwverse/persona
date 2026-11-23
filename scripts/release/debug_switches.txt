@@ -357,6 +357,7 @@ showMinutesSearch
 showMinutesTab
 showModelConfigSheet
 showModelSearch
+showModules
 showNewAgentPrompt
 showNewChat
 showNewMain
