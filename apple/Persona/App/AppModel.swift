@@ -3102,6 +3102,8 @@ final class AppModel {
         case .hello(let hello):
             let previousSurfaceCapabilities = extensionSurfaceCapabilities
             link(group)?.received(hello)
+            // The hub may turn modules off, or on again (#13849, docs/apple/ios.md "Modules"); kept per hub.
+            ModuleState.shared.heard(Set(hello.features), from: group, isHub: isHub)
             #if os(iOS)
             if isHub { Task { await HealthIntakeSync.shared.refresh(model: self) } }
             #endif
@@ -3120,6 +3122,7 @@ final class AppModel {
             DirectionFilings.shared.hello(group)
             if isHub { hubHellos += 1 }
             #if os(iOS)
+            if isHub { HomeWidgetData.shared.intakeChanged() }
             // `meeting_live` events sent while the socket was down are gone: the meetings on screen are read again (#3862).
             if isHub { MeetingConversation.shared.reconnected() }
             // The meeting flags a start without the app in front reads follow every hello, not only the Recordings page.
@@ -3249,6 +3252,7 @@ final class AppModel {
         case .healthIntake:
             if isHub { healthIntakeRevision += 1 }
             #if os(iOS)
+            if isHub { HomeWidgetData.shared.intakeChanged() }
             if isHub { Task { await HealthIntakeSync.shared.refresh(model: self) } }
             #endif
             ExtensionUIRegistry.shared.invalidate(extension: HealthIntakeUI.id, ui: nil, group: group)
@@ -4806,6 +4810,7 @@ final class AppModel {
 
     /// Another group was picked for the hub-level pages: their data starts over from that group's.
     func hubChanged() {
+        ModuleState.shared.follow(hub?.group ?? "", features: hub?.features ?? []) // the modules this hub allows (#13849)
         if let g = hub?.group {
             assistantConfig = heldAssistant(g)
         }

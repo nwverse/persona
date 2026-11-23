@@ -480,7 +480,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
             </span>
           )}
           {stall && (
-            <span data-bg-stalled title={stall.title} className="flex h-4 min-w-0 items-center gap-1 text-[11px] leading-4 text-ink-3">
+            <span data-bg-stalled title={stall.title} className="flex h-4 min-w-0 items-center gap-1 text-submeta leading-4 text-ink-3">
               <Icon name="clock" size={10} stroke={2.2} className="shrink-0" />
               <span className="truncate">{stall.text}</span>
             </span>
