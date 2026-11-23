@@ -310,7 +310,13 @@ nonisolated enum AssistantEntries {
             mine.agents = own
             let status = own.count < active.count ? withNeeds(all, own: todoStatus(mine, lookup: lookup)) : all
             if status == .notStarted && Self.startInFlight(todo, plans: plans) { starting.insert(todo.id) }
-            let asks = own.flatMap { asksOf[pair($0.machineID, $0.sessionID)] ?? [] }
+            // a card the task's supervising conversation holds (delegating) is that conversation's until it passes it up
+            let routed = own.flatMap { asksOf[pair($0.machineID, $0.sessionID)] ?? [] }
+            let asks = routed.filter { $0.delegating != true }
+            // a supervised task's failed start is its supervisor's to retry or remedy, and an Agent whose every card its
+            // supervisor holds waits on that conversation, not on the user (the web's `assistantEntries`)
+            let supervised = !(todo.supervision?.supervisor ?? "").isEmpty
+            let held = supervised && !routed.isEmpty && asks.isEmpty
             let row = Row.task(id: todo.id, status: status, agents: active.count)
             let listed = { folded.formUnion(active.map { pair($0.machineID, $0.sessionID) }) }
             let triage = TodoTriageLogic.triage(todo, lookup: lookup, now: now, restoredAt: restored[todo.id],
@@ -318,7 +324,8 @@ nonisolated enum AssistantEntries {
             let bucket = TodoTriageLogic.bucket(todo, triage)
             // First keep the legacy slot. Direct-user filtering removes rows from Needs You only; it never moves an
             // excluded permission, retry, failed start or supervisor review into In Progress.
-            let legacyWaits = status == .failed ? bucket == .open : todo.doneAt == nil && (status == .needsYou || status == .interrupted)
+            let legacyWaits = status == .failed ? bucket == .open && !supervised
+                : todo.doneAt == nil && (status == .needsYou || status == .interrupted) && !held
             let legacyDecision = awaitsDecision(todo, now: now)
             let legacyDelivery = todo.doneAt == nil && todo.delivery?.waitsForOwner == true
             let waits = !directAttention && legacyWaits
@@ -368,7 +375,9 @@ nonisolated enum AssistantEntries {
             }
         }
 
-        let waitingPlans = directAttention ? [] : plans.values.filter { $0.conversation == conversation && $0.state == .open }
+        // a plan waiting for Start is the owner's own decision: Main lists every open one but Health's (as the web's
+        // assistant-entries), another conversation its own
+        let waitingPlans = plans.values.filter { ($0.conversation == conversation || isMain && $0.space != "health") && $0.state == .open }
             .sorted { ($0.createdAt ?? .distantPast, $0.id) < ($1.createdAt ?? .distantPast, $1.id) }
             .map { Row.plan(id: $0.id) }
         let messages = feed.filter(messageWaits).compactMap { item in item.ref.map { Row.message(feedID: item.id, itemID: $0) } }

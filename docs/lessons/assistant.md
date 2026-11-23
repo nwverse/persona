@@ -981,6 +981,15 @@ to-do's no-progress decision quoted another task. Find the run's own prompt by i
 reply after it, up to the next message that opened a turn. Refuse turns that a queued message mixed. Test with real
 transcript pages (`runChat`), not bare item lists.
 
+## A node's own session rows never carry the assistant mark (#13879)
+
+`Session.Assistant` is set only when the hub decorates a list for the apps (`hub/assistant_link.go`). The manager's
+`Devices.Session` returns the node's raw row, so a check like `!c.Assistant` there is true for every main and lead.
+Cache keepalive revoked every role this way and never mounted a proxy, while its tests passed because they built the
+inventory with `Assistant: true`. Judge a raw row with `fleetMachine.isAssistant` (its directory), and build test
+inventories the way a node sends them. The same feature also needed Claude Code's `ENABLE_PROMPT_CACHING_1H`: without
+it the CLI declares only five-minute markers on an API key or a gateway, whatever TTL the gateway applies later.
+
 ## Tool discovery can invalidate an entire warm conversation (#13719)
 
 Adding an always-loaded tool to the top-level list can invalidate a warm Claude conversation prefix. Test
