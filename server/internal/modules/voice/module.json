@@ -1,0 +1,7 @@
+{
+  "$schema": "../../../../schema/module.schema.json",
+  "id": "voice",
+  "api": 1,
+  "origin": "builtin",
+  "title": "Full-duplex voice"
+}
