@@ -231,6 +231,7 @@ type Node struct {
 	echoes        echoLog           // sends tied to their transcript lines (echo.go)
 	typing        typingLocks       // one send at a time per session (sendsafe_turns.go)
 	recovery      typingLocks       // guarded resumes and user closures; first-message delivery takes typing independently
+	resumes       resumeStarts      // resumes whose outcome was uncertain, which the assistant's next resume waits out (stop_provenance.go)
 	sendOrder     sendQueue         // sends waiting for a start, in the order they came (sendsafe_turns.go)
 	cx            codexCards        // Codex questions and approvals listed to the hub (codexask.go)
 	kept          map[string]bool   // sessions always listed (node.configure keep_sessions)
@@ -1641,12 +1642,19 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			if err := n.saveStopCause(ctx, p.ResumeSessionID, proto.StopUnknown); err != nil {
 				return nil, err
 			}
-			if p.ResumeAutomatic {
-				// The assistant's own resume that does not bring the Agent up leaves it stopped by that step, not by the
-				// user: resume_failed, which the assistant may try again, never unknown (#11441).
-				id := p.ResumeSessionID
-				defer func() { n.noteResumeFailed(id, resultErr) }()
-			}
+		}
+		if p.ResumeSessionID != "" {
+			// The owner's resume too: an uncertain start of either holds off the assistant's next one (resumeSettle).
+			id, done := p.ResumeSessionID, n.resumes.begin(p.ResumeSessionID, time.Now())
+			automatic := p.ResumeAutomatic
+			defer func() {
+				done(resultErr)
+				if automatic {
+					// The assistant's own resume that does not bring the Agent up leaves it stopped by that step, not by
+					// the user: resume_failed, which the assistant may try again, never unknown (#11441).
+					n.noteResumeFailed(id, resultErr)
+				}
+			}()
 		}
 		if p.ResumeSessionID != "" && p.Host == "" {
 			p.Host = n.startKind(n.withResumeHost(ctx, p.ResumeSessionID))
