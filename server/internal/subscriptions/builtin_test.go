@@ -53,7 +53,9 @@ func TestBuiltinReadToolsFollowItemByItem(t *testing.T) {
 	im := func(f string) string {
 		return filepath.Join("..", "connector", "imessage", "testdata", "readjson", f+".json")
 	}
-	ml := func(f string) string { return filepath.Join("..", "mail", "testdata", "readjson", f+".json") }
+	ml := func(f string) string {
+		return filepath.Join("..", "modules", "mail", "testdata", "readjson", f+".json")
+	}
 	fields := func(id, thread, title, sender, at, body, link string) *connector.SubscriptionFields {
 		return &connector.SubscriptionFields{ID: id, Thread: thread, Title: title, Sender: sender, Time: at, Body: body, Link: link}
 	}

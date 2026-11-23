@@ -11,13 +11,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // Signing in from the app with GitHub's device flow (docs/extensions/connectors.md "Login supports"): the hub asks GitHub for a code
 // with the GitHub CLI's OAuth App (ghCLIClientID), the user enters it at github.com/login/device, and the token GitHub
-// then grants is kept sealed in the hub (connector.Secrets) and used before a computer's gh login. Nobody registers an
+// then grants is kept sealed in the hub (connectorwire.Secrets) and used before a computer's gh login. Nobody registers an
 // OAuth App; GitHub's authorization page says "GitHub CLI".
 
 // ghCLIClientID is the GitHub CLI's OAuth App: oauthClientID in cli/cli's internal/authflow/flow.go, which its source
@@ -47,7 +47,7 @@ type devicePending struct {
 }
 
 // UseSecrets gives the connector the hub's store for its sign-in (the device flow's token).
-func (c *Connector) UseSecrets(s connector.Secrets) {
+func (c *Connector) UseSecrets(s connectorwire.Secrets) {
 	c.mu.Lock()
 	c.secrets = s
 	c.mu.Unlock()
@@ -92,7 +92,7 @@ func (c *Connector) deviceState(ctx context.Context) deviceLogin {
 func (c *Connector) saveDevice(ctx context.Context, change func(*deviceLogin)) error {
 	c.saving.Lock()
 	defer c.saving.Unlock()
-	var s connector.Secrets
+	var s connectorwire.Secrets
 	for try := 0; ; try++ {
 		c.deviceState(ctx) // what is kept already, so that the save does not drop it
 		c.mu.Lock()
@@ -116,27 +116,27 @@ func (c *Connector) saveDevice(ctx context.Context, change func(*deviceLogin)) e
 	return s.Save(ctx, raw)
 }
 
-func (p devicePending) prompt(err string) connector.Prompt {
-	return connector.Prompt{Step: "device", Kind: connector.PromptDeviceCode, URL: p.uri, UserCode: p.userCode, Interval: p.interval, Error: err,
+func (p devicePending) prompt(err string) connectorwire.Prompt {
+	return connectorwire.Prompt{Step: "device", Kind: connectorwire.PromptDeviceCode, URL: p.uri, UserCode: p.userCode, Interval: p.interval, Error: err,
 		Hint: "在 GitHub 的验证页输入这个验证码并授权（授权页上显示的是「GitHub CLI」）；授权后这里会自动继续。"}
 }
 
 // LoginStep signs in with the device flow: the code, then waiting for the user.
-func (c *Connector) LoginStep(ctx context.Context, step string, _ map[string]string) (connector.Prompt, error) {
+func (c *Connector) LoginStep(ctx context.Context, step string, _ map[string]string) (connectorwire.Prompt, error) {
 	switch step {
 	case "":
 		return c.startDevice(ctx)
 	case "device":
 		if c.Source() != SourceDevice {
-			return connector.Prompt{Step: "device", Error: "先选「设备码登录」"}, nil
+			return connectorwire.Prompt{Step: "device", Error: "先选「设备码登录」"}, nil
 		}
 		return c.pollDevice(ctx)
 	}
-	return connector.Prompt{}, fmt.Errorf("unknown step %q", step)
+	return connectorwire.Prompt{}, fmt.Errorf("unknown step %q", step)
 }
 
 // startDevice asks GitHub for a code for the user to enter.
-func (c *Connector) startDevice(ctx context.Context) (connector.Prompt, error) {
+func (c *Connector) startDevice(ctx context.Context) (connectorwire.Prompt, error) {
 	var r struct {
 		DeviceCode      string `json:"device_code"`
 		UserCode        string `json:"user_code"`
@@ -146,14 +146,14 @@ func (c *Connector) startDevice(ctx context.Context) (connector.Prompt, error) {
 		Error           string `json:"error"`
 	}
 	if err := c.postForm(ctx, "/login/device/code", url.Values{"client_id": {ghCLIClientID}, "scope": {deviceScopes}}, &r); err != nil {
-		return connector.Prompt{}, err
+		return connectorwire.Prompt{}, err
 	}
 	if r.DeviceCode == "" {
 		why := r.Error
 		if why == "" {
 			why = "no device code"
 		}
-		return connector.Prompt{}, fmt.Errorf("GitHub 没给验证码（%s）", why)
+		return connectorwire.Prompt{}, fmt.Errorf("GitHub 没给验证码（%s）", why)
 	}
 	p := devicePending{code: r.DeviceCode, userCode: r.UserCode, uri: r.VerificationURI, interval: max(r.Interval, 5),
 		expires: time.Now().Add(time.Duration(r.ExpiresIn) * time.Second)}
@@ -164,7 +164,7 @@ func (c *Connector) startDevice(ctx context.Context) (connector.Prompt, error) {
 }
 
 // pollDevice asks GitHub once whether the user has entered the code; the same step while not yet.
-func (c *Connector) pollDevice(ctx context.Context) (connector.Prompt, error) {
+func (c *Connector) pollDevice(ctx context.Context) (connectorwire.Prompt, error) {
 	c.mu.Lock()
 	p := c.pending
 	c.mu.Unlock()
@@ -182,7 +182,7 @@ func (c *Connector) pollDevice(ctx context.Context) (connector.Prompt, error) {
 	err := c.postForm(ctx, "/login/oauth/access_token", url.Values{"client_id": {ghCLIClientID}, "device_code": {p.code},
 		"grant_type": {"urn:ietf:params:oauth:grant-type:device_code"}}, &r)
 	if err != nil {
-		return connector.Prompt{}, err
+		return connectorwire.Prompt{}, err
 	}
 	switch {
 	case r.AccessToken != "":
@@ -201,7 +201,7 @@ func (c *Connector) pollDevice(ctx context.Context) (connector.Prompt, error) {
 		return c.restartDevice(ctx, "GitHub 没有授权（"+r.Error+"）")
 	}
 	if err := c.saveDevice(ctx, func(d *deviceLogin) { d.Token = r.AccessToken }); err != nil {
-		return connector.Prompt{}, err
+		return connectorwire.Prompt{}, err
 	}
 	c.mu.Lock()
 	c.newCredential(r.AccessToken)
@@ -209,13 +209,13 @@ func (c *Connector) pollDevice(ctx context.Context) (connector.Prompt, error) {
 	c.mu.Unlock()
 	c.check(ctx)
 	st := c.Status(ctx)
-	if st.State != connector.StateOK {
-		return connector.Prompt{Step: "device", Error: st.Error}, nil
+	if st.State != connectorwire.StateOK {
+		return connectorwire.Prompt{Step: "device", Error: st.Error}, nil
 	}
-	return connector.Prompt{Done: true, Account: st.Account}, nil
+	return connectorwire.Prompt{Done: true, Account: st.Account}, nil
 }
 
-func (c *Connector) restartDevice(ctx context.Context, why string) (connector.Prompt, error) {
+func (c *Connector) restartDevice(ctx context.Context, why string) (connectorwire.Prompt, error) {
 	p, err := c.startDevice(ctx)
 	if err == nil && p.Error == "" {
 		p.Error = why

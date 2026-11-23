@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // The connector moving from one GitHub account to another (#7832): what was read as the first is retired, never
@@ -181,7 +181,7 @@ func (f *twoAccounts) connectorWith(t *testing.T, kept *memSecrets, tokens ...st
 		c.UseSecrets(kept)
 	}
 	c.check(context.Background())
-	if st := c.Status(context.Background()); st.State != connector.StateOK || st.Account != f.logins[tokens[0]] {
+	if st := c.Status(context.Background()); st.State != connectorwire.StateOK || st.Account != f.logins[tokens[0]] {
 		t.Fatalf("not signed in as %s: %+v", f.logins[tokens[0]], st)
 	}
 	return c
@@ -207,7 +207,7 @@ func await[T any](t *testing.T, ch <-chan T, what string) T {
 }
 
 // collected is A's review request as the hub holds it: in the inbox and replyable.
-func collected(t *testing.T, c *Connector) connector.InboxThing {
+func collected(t *testing.T, c *Connector) connectorwire.InboxThing {
 	t.Helper()
 	th, ok := things(t, c)[thread12]
 	if !ok || !th.CanReply || th.Done != "" {
@@ -217,9 +217,9 @@ func collected(t *testing.T, c *Connector) connector.InboxThing {
 }
 
 // refused checks that a reply to th's item was turned away without anything sent to GitHub.
-func refused(t *testing.T, f *twoAccounts, c *Connector, th connector.InboxThing) {
+func refused(t *testing.T, f *twoAccounts, c *Connector, th connectorwire.InboxThing) {
 	t.Helper()
-	err := c.Reply(context.Background(), connector.InboxReply{Thread: th.Thread, Last: th.Last, Text: "看过了"})
+	err := c.Reply(context.Background(), connectorwire.InboxReply{Thread: th.Thread, Last: th.Last, Text: "看过了"})
 	if err == nil {
 		t.Errorf("a reply to the other account's item was accepted")
 	}
@@ -230,7 +230,7 @@ func refused(t *testing.T, f *twoAccounts, c *Connector, th connector.InboxThing
 
 // retired checks that th left the inbox and that the hub is told to close its item (it asks once the account in
 // use has read its inbox: the tests poll first).
-func retired(t *testing.T, c *Connector, th connector.InboxThing) {
+func retired(t *testing.T, c *Connector, th connectorwire.InboxThing) {
 	t.Helper()
 	if still, ok := things(t, c)[th.Thread]; ok {
 		t.Errorf("the other account's thing is still in the inbox: %+v", still)
@@ -323,7 +323,7 @@ func TestDelayedReplyToAnotherAccountsItemIsRefused(t *testing.T) {
 	}
 	refused(t, f, c, a)
 
-	if err := c.Reply(context.Background(), connector.InboxReply{Thread: thread12, Last: b.Last, Text: "看过了"}); err != nil {
+	if err := c.Reply(context.Background(), connectorwire.InboxReply{Thread: thread12, Last: b.Last, Text: "看过了"}); err != nil {
 		t.Fatalf("%s's reply to its own thing: %v", loginB, err)
 	}
 	if posted := f.posts(); len(posted) != 1 || !strings.HasPrefix(posted[0], tokenB+" "+issue12+"/comments ") {
@@ -404,7 +404,7 @@ func TestLateUserAnswerDoesNotRestoreTheAccount(t *testing.T) {
 	h.let()
 	await(t, checked, "A's check to return")
 
-	if st := c.Status(ctx); st.State != connector.StateOK || st.Account != loginB {
+	if st := c.Status(ctx); st.State != connectorwire.StateOK || st.Account != loginB {
 		t.Errorf("A's late /user answer changed the status: %+v", st)
 	}
 	pollOnce(t, c)
@@ -419,9 +419,9 @@ func TestWatchTellsTheHubWhenAnAccountsThingsLeave(t *testing.T) {
 	f.reviewRequest(loginA, "1", "review_requested", t1)
 	c := f.connector(t, tokenA)
 	ctx, cancel := context.WithCancel(context.Background())
-	changes, stopped := make(chan connector.Scope, 64), make(chan error, 1)
+	changes, stopped := make(chan connectorwire.Scope, 64), make(chan error, 1)
 	go func() {
-		stopped <- c.Watch(ctx, func(s connector.Scope) {
+		stopped <- c.Watch(ctx, func(s connectorwire.Scope) {
 			select {
 			case changes <- s:
 			default:
@@ -502,7 +502,7 @@ func TestSameAccountRefreshKeepsTheInbox(t *testing.T) {
 	c.check(ctx)
 	pollOnce(t, c)
 	collected(t, c)
-	if err := c.Reply(ctx, connector.InboxReply{Thread: thread12, Last: a.Last, Text: "看过了"}); err != nil {
+	if err := c.Reply(ctx, connectorwire.InboxReply{Thread: thread12, Last: a.Last, Text: "看过了"}); err != nil {
 		t.Fatalf("reply after a same-account refresh: %v", err)
 	}
 	if posted := f.posts(); len(posted) != 1 || !strings.HasPrefix(posted[0], tokenA2+" "+issue12+"/comments ") {
@@ -538,7 +538,7 @@ func TestRepliesNeverCrossAccounts(t *testing.T) {
 			default:
 			}
 			if th, ok := things(t, c)[thread12]; ok {
-				_ = c.Reply(ctx, connector.InboxReply{Thread: thread12, Last: th.Last, Text: owner[th.Kind]})
+				_ = c.Reply(ctx, connectorwire.InboxReply{Thread: thread12, Last: th.Last, Text: owner[th.Kind]})
 			}
 		}
 	}()

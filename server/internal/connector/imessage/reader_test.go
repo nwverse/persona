@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // sqlite3WithJSON is the sqlite3 on PATH when it can print JSON rows: the reader asks it for "-json", which SQLite
@@ -215,7 +215,7 @@ func TestMessagesOfAConversation(t *testing.T) {
 
 func TestStatus(t *testing.T) {
 	ctx := context.Background()
-	if st := (&Reader{Home: t.TempDir()}).Status(ctx); st.State != connector.StateNotConfigured {
+	if st := (&Reader{Home: t.TempDir()}).Status(ctx); st.State != connectorwire.StateNotConfigured {
 		t.Errorf("no Messages: %+v", st)
 	}
 
@@ -224,18 +224,18 @@ func TestStatus(t *testing.T) {
 	denied := filepath.Join(dir, "sqlite3")
 	_ = os.WriteFile(denied, []byte("#!/bin/sh\necho 'Error: unable to open database \"chat.db\": unable to open database file' >&2\nexit 1\n"), 0o755)
 	ssh := (&Reader{Home: "testdata/home", SQLite: denied, Via: "ssh"}).Status(ctx)
-	if ssh.State != connector.StateNoPermission || len(ssh.Guide) != 3 || !strings.Contains(ssh.Guide[1], "允许远程用户完全访问磁盘") {
+	if ssh.State != connectorwire.StateNoPermission || len(ssh.Guide) != 3 || !strings.Contains(ssh.Guide[1], "允许远程用户完全访问磁盘") {
 		t.Errorf("ssh: %+v", ssh)
 	}
 	launchd := (&Reader{Home: "testdata/home", SQLite: denied, Via: "launchd", Executable: "/opt/persona/personad"}).Status(ctx)
-	if launchd.State != connector.StateNoPermission || !strings.Contains(launchd.Guide[1], "/opt/persona/personad") {
+	if launchd.State != connectorwire.StateNoPermission || !strings.Contains(launchd.Guide[1], "/opt/persona/personad") {
 		t.Errorf("launchd: %+v", launchd)
 	}
 	if _, err := (&Reader{Home: "testdata/home", SQLite: denied}).Chats(ctx, 10, "", ""); !errors.Is(err, ErrNoPermission) {
 		t.Errorf("chats without permission: %v", err)
 	}
 
-	if st := fixture(t).Status(ctx); st.State != connector.StateOK || st.Error != "" {
+	if st := fixture(t).Status(ctx); st.State != connectorwire.StateOK || st.Error != "" {
 		t.Errorf("fixture: %+v", st)
 	}
 }
