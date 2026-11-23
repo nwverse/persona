@@ -32,13 +32,13 @@ func TestProvide(t *testing.T) {
 	Provide(func(Host) Layer { return nil })
 }
 
-// None, the port without a channel, is never ready, supports nothing, refuses every send with ErrNoChannel and drops
-// notes and thread lines.
+// None, the port without a channel, is a bot switched off: its status reads (no error) as neither on nor ready, it
+// supports nothing, refuses every send with ErrNoChannel and drops notes and thread lines.
 func TestNone(t *testing.T) {
 	ctx := context.Background()
 	var o Outbound = None{}
-	if _, err := o.Status(ctx); !errors.Is(err, ErrNoChannel) {
-		t.Fatalf("status %v", err)
+	if st, err := o.Status(ctx); err != nil || st.Ready || st.Enabled {
+		t.Fatalf("status %+v %v", st, err)
 	}
 	if f, ready := o.Features(ctx); ready || f != (assistantwire.FeishuFeatures{}) {
 		t.Fatalf("features %+v %v", f, ready)

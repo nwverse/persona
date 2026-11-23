@@ -385,9 +385,10 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
   core file that posts to the chat calls the port. The implementation still lives in `feishu*.go` and is served to the
   module through the host under the port's names; each move takes code into the module and drops the host methods
   it no longer needs, so the host only shrinks.
-- **With the module absent** (`persona_without_lark`, `persona_core_only`) the port is `larkhost.None`: the channel is
-  never ready and supports nothing, a post or a reply answers `larkhost.ErrNoChannel`, and notes and thread lines are
-  dropped: the core behaves as with the bot switched off or unpaired.
+- **With the module absent** (`persona_without_lark`, `persona_core_only`) the port is `larkhost.None`, a bot switched
+  off: its status reads without an error as neither on nor ready (so an acceptance ask is card-less and a briefing
+  goes out by push, as with the bot off), it supports nothing, a post or a reply answers `larkhost.ErrNoChannel`, and
+  notes and thread lines are dropped.
   The run-time `modules` switch does not cover it yet, as for mail.
 
 ### How to add a module

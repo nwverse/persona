@@ -4,8 +4,9 @@
 // standard library, internal/botcard and the contracts).
 //
 // The composition root (internal/modules/all) provides the module in the init of its file, under the module's build
-// constraint; without it nothing is provided and the core reaches the owner's chat through None: every post answers
-// ErrNoChannel, the channel is never ready and supports nothing, and notes and thread lines are dropped.
+// constraint; without it nothing is provided and the core reaches the owner's chat through None, a channel switched
+// off: its status says neither on nor ready (no error: nothing to try again), it supports nothing, every post answers
+// ErrNoChannel, and notes and thread lines are dropped.
 //
 // The module is provided while the program initializes, before main runs, and only read afterwards.
 package larkhost
@@ -57,11 +58,11 @@ type Outbound interface {
 // ErrNoChannel: this build has no chat channel (the lark module is left out).
 var ErrNoChannel = errors.New("no chat channel in this build")
 
-// None is Outbound without a channel.
+// None is Outbound without a channel: as a bot that is switched off.
 type None struct{}
 
 func (None) Status(context.Context) (assistantwire.FeishuStatus, error) {
-	return assistantwire.FeishuStatus{}, ErrNoChannel
+	return assistantwire.FeishuStatus{}, nil
 }
 func (None) Features(context.Context) (assistantwire.FeishuFeatures, bool) {
 	return assistantwire.FeishuFeatures{}, false
