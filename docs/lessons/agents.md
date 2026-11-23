@@ -1,5 +1,12 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## Persona's own agy hooks: report only, own one key, prove the pane (#13729)
+
+- agy's global `hooks.json` is shared: herdr, Moshi and Orca each own a top-level group. Write only the `persona` key through the ordered-object editor (`editSettings`), never rewrite the others, and treat a changed command (moved binary) as stale, not as foreign.
+- agy runs the hook with the terminal's environment, which has no `PERSONA_HOME`: a node with a non-default directory must put `--persona-home <dir>` in the command, or the hook dials the default node's socket.
+- The hook must print `{}` and exit fast on every path (no node, unknown pane, bad input), or agy waits on it. Subagent conversations inherit the pane's environment and report too, so the node still has to prove the conversation is not a subagent's (#13336) before it reads or resumes.
+- herdr's own report and Persona's can disagree for a moment after a new conversation; the node treats a disagreement as unknown instead of picking one.
+
 ## Visibility-only `TurnErrorCode` values must not trip `readinessBlocks` or `CutOff` on node `TurnError` (#13372)
 
 - `readinessBlocks` (`server/internal/assistant/readiness.go`) defaults every `StepProblem` code to `mode: "setup"` unless explicitly excluded. Any non-user-fix `TurnErrorCode` (such as `upstream_unavailable`, alongside `rate_limited`, `model_fallback_unavailable`, and `tool_search_unsupported`) must be excluded in `readinessBlocks` and paired with `test_assistant` and plain-language readiness strings, or an upstream outage locks every client's composer with "Connect a model first".
