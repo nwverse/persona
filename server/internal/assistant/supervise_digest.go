@@ -252,7 +252,11 @@ func (s *Service) sendDigest(ctx context.Context) {
 		if _, ok := groups[to]; !ok {
 			order = append(order, to)
 		}
-		groups[to] = append(groups[to], g)
+		if g.Kind == sigAsk {
+			groups[to] = mergeSignals(groups[to], []superviseSignal{g})
+		} else {
+			groups[to] = append(groups[to], g)
+		}
 	}
 	if gating {
 		order = s.gateDigestBatches(order, groups, now, batch, cooldown)

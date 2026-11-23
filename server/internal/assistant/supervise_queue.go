@@ -111,8 +111,11 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 	here, web := s.settings(ctx), s.webBase(ctx)
 	groups := map[string][]superviseSignal{}
 	entries := map[string][]prompts.SuperviseEntry{}
+	for i, g := range signals {
+		signals[i] = s.currentAskSignal(g)
+	}
+	signals = mergeSignals(nil, signals)
 	for _, g := range signals {
-		g = s.currentAskSignal(g)
 		if t, ok := s.todoNow(g.Todo); ok && t.DoneAt == nil && g.Kind == sigNeedsYou {
 			if _, known := s.taskNeedsRecheck(ctx, t); !known {
 				return msg, false, true
