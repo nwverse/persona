@@ -406,17 +406,21 @@ fi
     stop_watcher() {
       local code=$?
       trap - EXIT TERM INT
-      : > "$watch_log/observer.stop"
+      # A fast probe may finish while the product checks are still running.
+      # Give those bounded commands the existing short drain before asking the
+      # observer to stop its polling, then let final evidence finish naturally.
       for _ in $(seq 1 50); do
+        [ -e "$watch_log/product-ready" ] && break
         kill -0 "$watcher" 2>/dev/null || break
         sleep 0.1
       done
-      # A collector child can outlive both its parent and the watcher.
-      # Close the owned group even after the watcher leader has exited.
+      : > "$watch_log/observer.stop"
+      # The observer stops polling after its bounded product phase, then
+      # completes final evidence. The outer 900-second deadline still owns a
+      # stuck watcher; never kill it before that final collection.
+      wait "$watcher" || true
+      # Close any remaining descendant after the watcher has finished.
       kill -KILL "-$watcher" 2>/dev/null || true
-      if kill -0 "$watcher" 2>/dev/null; then
-        kill -KILL "$watcher" 2>/dev/null || true
-      fi
       wait "$watcher" || true
       exit "$code"
     }
@@ -528,11 +532,15 @@ fi
       stop_watcher() {
         local code=$?
         trap - EXIT TERM INT
-        : > "$watch_log/observer.stop"
         for _ in $(seq 1 50); do
+          [ -e "$watch_log/product-ready" ] && break
           kill -0 "$watcher" 2>/dev/null || break
           sleep 0.1
         done
+        : > "$watch_log/observer.stop"
+        # Let the stop-aware observer finish bounded final evidence. The
+        # existing readiness deadline remains the hard outer bound.
+        wait "$watcher" || true
         if kill -0 "$watcher" 2>/dev/null; then
           kill -KILL "-$watcher" 2>/dev/null || kill -KILL "$watcher" 2>/dev/null || true
         fi

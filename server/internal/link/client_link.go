@@ -195,7 +195,7 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter, m
 			defer directT.Stop()
 			directC = directT.C
 		}
-		var seen time.Time
+		var seen fileStamp
 		var looked bool
 		// A ping waits for its pong on its own, so a reconnect or a network change is not held up behind one that is
 		// out (with a slow link's heartbeat, for up to the hub's timeout). One of each kind at a time; the first that

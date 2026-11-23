@@ -1,5 +1,5 @@
-"""go_test_partitioned: test-server.sh's and check-fast's go test runs internal/node and internal/assistant in
-go_partitions' partitions (#5594, #7644, #12765)."""
+"""go_test_partitioned: test-server.sh's and check-fast's go test runs internal/node, internal/assistant and the other
+partitioned packages in go_partitions' partitions (#5594, #7644, #12765)."""
 import io
 import os
 from pathlib import Path
@@ -16,7 +16,9 @@ import go_test_partitioned as gtp
 MODULE = ["example/server/cmd/personad", "example/server/internal/assistant", "example/server/internal/assistantwire",
           "example/server/internal/node", "example/server/internal/node/sub"]
 NODE, ASSISTANT = "./internal/node", "./internal/assistant"
-PATTERNS = {NODE: ["^(TestA|TestC)$", "^(TestB)$"], ASSISTANT: ["^(TestX|TestZ)$", "^(TestY)$"]}
+# The fixture module has no internal/hub, internal/devices or internal/extmgr: they split the way internal/assistant does.
+PATTERNS = {NODE: ["^(TestA|TestC)$", "^(TestB)$"], ASSISTANT: ["^(TestX|TestZ)$", "^(TestY)$"],
+            "./internal/hub": ["^(TestH)$"], "./internal/devices": ["^(TestD)$"], "./internal/extmgr": ["^(TestM)$"]}
 PREFIX = "example/server/"
 # MODULE with subpackages of internal/assistant, for the ./<dir>/... arguments check-fast passes (#12765).
 TREE = MODULE + [PREFIX + "internal/assistant/inbox", PREFIX + "internal/assistant/inbox/item"]
@@ -63,13 +65,13 @@ class PlanTests(unittest.TestCase):
             self.assertEqual(plan(["go", "test", "-count=1", named]), partitions(["-count=1"], package))
 
     def test_partitioned_packages_beside_other_packages(self):
-        self.assertEqual(plan(["go", "test", "./internal/hub/", "./internal/node/", "./internal/assistant"]),
-                         [["go", "test", "./internal/hub/"], *partitions([], NODE), *partitions([], ASSISTANT)])
+        self.assertEqual(plan(["go", "test", "./internal/kb/", "./internal/node/", "./internal/assistant"]),
+                         [["go", "test", "./internal/kb/"], *partitions([], NODE), *partitions([], ASSISTANT)])
 
     def test_run_or_other_packages_or_another_command_run_as_given(self):
         for argv in (["go", "test", "-run", "TestX", "./..."], ["go", "test", "-run=TestX", "./internal/node/"],
                      ["go", "test", "-run", "TestX", "./internal/assistant"], ["go", "test", "-run", "TestX", ASSISTANT_TREE],
-                     ["go", "test", "-count=1", "./internal/hub/"],
+                     ["go", "test", "-count=1", "./internal/kb/"],
                      ["go", "test", "./internal/node/sub"], ["go", "test", "./internal/assistantwire"],
                      ["go", "vet", "./..."]):
             self.assertEqual(plan(argv), [argv], argv)
@@ -262,9 +264,9 @@ class SubtreePlanTests(unittest.TestCase):
         ])
 
     def test_subtrees_beside_named_packages(self):
-        self.assertEqual(plan(["go", "test", "./internal/hub/", ASSISTANT_TREE, "./internal/node"], TREE), [
+        self.assertEqual(plan(["go", "test", "./internal/kb/", ASSISTANT_TREE, "./internal/node"], TREE), [
             ["go", "test", PREFIX + "internal/assistant/inbox", PREFIX + "internal/assistant/inbox/item",
-             "./internal/hub/"],
+             "./internal/kb/"],
             *partitions([], ASSISTANT), *partitions([], NODE),
         ])
         # internal/node named on its own is partitioned as before, and does not run a second time from the subtree.
@@ -274,9 +276,9 @@ class SubtreePlanTests(unittest.TestCase):
             *partitions([], ASSISTANT), *partitions([], NODE),
         ])
         # Another subtree stays a pattern in the other packages' command; go test expands it.
-        self.assertEqual(plan(["go", "test", "./internal/hub/...", ASSISTANT_TREE], TREE), [
+        self.assertEqual(plan(["go", "test", "./internal/kb/...", ASSISTANT_TREE], TREE), [
             ["go", "test", PREFIX + "internal/assistant/inbox", PREFIX + "internal/assistant/inbox/item",
-             "./internal/hub/..."],
+             "./internal/kb/..."],
             *partitions([], ASSISTANT),
         ])
 
@@ -284,7 +286,7 @@ class SubtreePlanTests(unittest.TestCase):
         self.assertEqual(plan(["go", "test", "./...", ASSISTANT_TREE], TREE), plan(["go", "test", "./..."], TREE))
 
     def test_subtrees_that_cover_no_package_the_runner_splits_run_as_given_without_go_list(self):
-        for package in ("./internal/hub/...", "./cmd/...", "./internal/assistantwire/...",
+        for package in ("./internal/kb/...", "./cmd/...", "./internal/assistantwire/...",
                         "./internal/assistant/inbox/...", "./internal/node/...", "./internal/node/sub/...",
                         "internal/assistant/...", "github.com/example/server/internal/assistant/...",
                         "./internal/.../assistant/...", "../server/internal/assistant/..."):
@@ -296,11 +298,11 @@ class SubtreePlanTests(unittest.TestCase):
 
     def test_a_subtree_where_go_list_finds_no_partitioned_package_runs_as_given(self):
         argv = ["go", "test", "./internal/..."]
-        self.assertEqual(plan(argv, [PREFIX + "internal/hub", PREFIX + "internal/node"]), [argv])
+        self.assertEqual(plan(argv, [PREFIX + "internal/kb", PREFIX + "internal/node"]), [argv])
 
     def test_explicit_packages_and_the_whole_module_list_what_they_did(self):
         # The plans above them are pinned by PlanTests; the go list each one makes is pinned here.
-        for argv, listed in ((["go", "test", "./internal/hub/", "./internal/node/", "./internal/assistant"], None),
+        for argv, listed in ((["go", "test", "./internal/kb/", "./internal/node/", "./internal/assistant"], None),
                              (["go", "test", "-count=1", "-p", "1", "./..."], ["./..."]),
                              (["go", "test", "./...", ASSISTANT_TREE], ["./..."]),
                              (["go", "test", ASSISTANT_TREE, "./internal/..."], [ASSISTANT_TREE, "./internal/..."])):
@@ -543,8 +545,11 @@ class SubtreeIntegrationTests(unittest.TestCase):
     def test_the_subtree_runs_each_test_once_with_the_partitioned_package_in_partitions(self):
         result = self.run_wrapper("./internal/...")
         self.assertEqual(result.returncode, 0, result.stdout)
-        # go_partitions.PACKAGES' three partitions, round-robin: TestA1 and TestA4, TestA2, TestA3.
-        self.assertEqual(result.stdout.count("== go test: ./internal/assistant partition ("), 2 * 3, result.stdout)
+        # go_partitions.PACKAGES' partitions, round-robin, one line as each starts and one as it ends: at most one per
+        # test of the fixture's four.
+        partitions = len(go_partitions.patterns(["TestA1", "TestA2", "TestA3", "TestA4"],
+                                                go_partitions.PACKAGES["./internal/assistant"]))
+        self.assertEqual(result.stdout.count("== go test: ./internal/assistant partition ("), 2 * partitions, result.stdout)
         for name in ("TestA1", "TestA2", "TestA3", "TestA4", "TestInbox", "TestNode"):
             self.assertEqual(result.stdout.count("=== RUN   %s\n" % name), 1, result.stdout)
         # internal/node splits itself (go_partitions.SPLITS_ITSELF): it runs with the other packages, not in partitions.
