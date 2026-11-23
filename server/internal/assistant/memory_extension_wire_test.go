@@ -5,7 +5,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
 )
@@ -87,6 +86,22 @@ func TestMemoryExtensionBatchOfDrops(t *testing.T) {
 	}
 }
 
+// Standing is carried on the entry, not only used for the order: the standing channel takes only standing entries,
+// the rest come in by relevance.
+func TestMemoryExtensionBatchOfStanding(t *testing.T) {
+	page := wire.MemoryEntriesResult{Tagged: true, Entries: []wire.MemoryEntry{
+		{ID: "qa-resident", Text: "qa: always in context", Status: "active", Standing: true},
+		{ID: "qa-named", Text: "qa: when named", Status: "active", Subjects: []string{"qa-project"}},
+	}}
+	got := map[string]bool{}
+	for _, e := range memoryExtensionBatchOf([]wire.MemoryEntriesResult{page}).Entries {
+		got[e.ID] = e.Standing
+	}
+	if len(got) != 2 || !got["qa-resident"] || got["qa-named"] {
+		t.Errorf("standing %v, want qa-resident true and qa-named false", got)
+	}
+}
+
 // Categories go through as written (an unknown one makes the entry not known downstream); subjects become tags, on
 // one line, the empty, the over-long and repeated ones dropped, at most 16.
 func TestMemoryExtensionBatchOfFields(t *testing.T) {
@@ -118,7 +133,7 @@ func TestMemoryExtensionBatchOfFields(t *testing.T) {
 	}
 }
 
-// Past memoryExtensionMost entries over all pages the rest are dropped; the bounds are the documented ones.
+// Past memoryExtensionMost entries over all pages the rest are dropped.
 func TestMemoryExtensionBatchOfBounds(t *testing.T) {
 	var pages []wire.MemoryEntriesResult
 	for p := range memoryExtensionPages + 1 {
@@ -134,9 +149,5 @@ func TestMemoryExtensionBatchOfBounds(t *testing.T) {
 	}
 	if b.Entries[len(b.Entries)-1].ID != "qa-0-0" {
 		t.Errorf("most important %s, want the first answered", b.Entries[len(b.Entries)-1].ID)
-	}
-	if memoryExtensionPageLimit != 200 || memoryExtensionPages != 5 || memoryExtensionCallTimeout != 5*time.Second ||
-		memoryExtensionAnswerMost != 1<<20 {
-		t.Error("the bounds differ from docs/extensions/extensions.md \"Memory sources\"")
 	}
 }

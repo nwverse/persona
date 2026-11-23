@@ -155,6 +155,10 @@ type memoryExtensionEntry struct {
 	// Categories are the names in categories (health, finance, relationships, emotion, legal_id); none: general.
 	Categories []string
 	Tags       []string
+	// Standing is the extension's standing flag: it kept the entry in every conversation (always in context). Only
+	// a standing entry is meant for a standing channel; the others come in by relevance (their subjects or text) in
+	// a recall, a hand-off or the Inbox. The gate itself comes with the change that wires a source in.
+	Standing bool
 }
 
 // memoryExtensionBatch is what a source hands over at once. Tagged says the extension that wrote the entries sets

@@ -6627,7 +6627,8 @@ var MemoryErrorCodes = []string{"not_ready", "failed"}
 type MemoryEntriesParams struct {
 	// The memory_sources item's id.
 	Contribution string `json:"contribution"`
-	// At most this many entries on the page (the manager asks 200).
+	// At most this many entries on the page (the manager asks 200). Only a cap: the program ends a page early, with
+	// has_more and after, so the answer stays within 1 MB.
 	Limit int `json:"limit"`
 	// The previous page's after, to read on; empty for the first page.
 	After string `json:"after,omitempty"`
@@ -6641,14 +6642,16 @@ type MemoryEntriesParams struct {
 type MemoryEntriesResult struct {
 	Entries []MemoryEntry `json:"entries"`
 	Tagged  bool          `json:"tagged"`
-	// Another page follows; ask again with after.
+	// Another page follows; ask again with after. When true, after must be set: true with an empty after counts as the
+	// end of the entries.
 	HasMore bool `json:"has_more"`
-	// Opaque: what to send as after for the next page, when has_more.
+	// Opaque: what to send as after for the next page; required in practice whenever has_more is true.
 	After string `json:"after,omitempty"`
 }
 
 // MemoryEntry: one entry as the program keeps it. Only an active entry is carried; the others may be answered (so a
-// page's order stays the program's) and are skipped.
+// page's order stays the program's) and are skipped. An entry that breaks a rule here is dropped alone, never the
+// page.
 type MemoryEntry struct {
 	// Stable across pages and answers: a to-do's brief names the entries it carried by it (prefixed memory-extension:).
 	ID string `json:"id"`
@@ -6657,16 +6660,18 @@ type MemoryEntry struct {
 	// The program's own grouping (preferences, workflow, people…). Informational: the hub neither filters nor orders by
 	// it.
 	Facet string `json:"facet,omitempty"`
-	// active: the program would use it today; candidate: not borne out yet; dormant: not seen lately; retired: no longer
-	// true. Only active entries are carried.
+	// active: the program would use it today, whatever it calls that state itself (a program with its own stable or
+	// shifting states answers active for both); candidate: not borne out yet; dormant: not seen lately; retired: no
+	// longer true. Only active entries are carried; an entry with any other value is dropped.
 	Status string `json:"status"`
 	// The slug of the space the entry was first said in; left out for the main space.
 	OriginSpace string `json:"origin_space,omitempty"`
 	// Its information categories (health, finance, relationships, emotion, legal_id); left out for a general entry. A
 	// category the hub does not know makes the entry not known.
 	Categories []string `json:"categories,omitempty"`
-	// The program kept it in every conversation (always in context). The hub offers it to a standing channel before the
-	// others; usage still decides.
+	// The program kept it in every conversation (always in context). Only a standing entry goes to a standing channel
+	// (usage still decides); the others come in only by relevance (their subjects or text) in a recall, a hand-off or
+	// the Inbox.
 	Standing bool `json:"standing,omitempty"`
 	// The program's order among entries alike in standing: higher first. Left out: 0.
 	Rank int `json:"rank,omitempty"`

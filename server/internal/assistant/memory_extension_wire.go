@@ -25,7 +25,8 @@ const (
 	memoryExtensionPages = 5
 	// memoryExtensionCallTimeout bounds one memory.entries call; a call that runs past it counts as failed.
 	memoryExtensionCallTimeout = 5 * time.Second
-	// memoryExtensionAnswerMost is the most bytes one answer may hold; a longer one counts as failed.
+	// memoryExtensionAnswerMost is the most bytes one answer may hold; a longer one counts as failed. limit only caps
+	// the entries on a page: the extension ends a page early (has_more, after) to stay within it.
 	memoryExtensionAnswerMost = 1 << 20
 	// memoryExtensionMost is the most entries an assembly takes from one contribution, over all its pages.
 	memoryExtensionMost = memoryExtensionPageLimit * memoryExtensionPages
@@ -57,6 +58,8 @@ var (
 //     (memoryExtensionUses), which is stricter than dropping it.
 //   - Subjects become the entry's tags, so a task's or a message's words that name them bring it in (entryRelevant);
 //     each on one line, empty ones and those over 80 characters dropped, at most 16.
+//   - Standing goes through on the entry (memoryExtensionEntry.Standing): only a standing entry is meant for a
+//     standing channel, the others come in by relevance; the order alone does not keep them apart.
 //   - Order: the assembler takes entries oldest first and spends a budget newest first, so the most important go
 //     last: the extension's own order (most important first) is kept among entries alike, standing ones and then
 //     higher ranks put first, and the whole reversed.
@@ -122,5 +125,5 @@ func memoryExtensionEntryOf(w wire.MemoryEntry) (memoryExtensionEntry, bool) {
 		}
 	}
 	return memoryExtensionEntry{ID: w.ID, Text: text, OriginSpace: w.OriginSpace, Categories: slices.Clone(w.Categories),
-		Tags: tags}, true
+		Tags: tags, Standing: w.Standing}, true
 }

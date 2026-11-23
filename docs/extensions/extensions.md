@@ -815,7 +815,7 @@ The contribution (extension point `memory_sources`, version 1, namespace `memory
 
 | Method | Parameters → answer | Notes |
 | --- | --- | --- |
-| `memory.entries` | `{contribution, limit, after?}` → `{entries, tagged, has_more, after?}` | One page, most important first: standing entries, then by `rank`, then newest. `limit` is 1 to 500 (the manager asks 200); `after` is the previous page's opaque cursor. Read-only: answering changes nothing in the program's state. |
+| `memory.entries` | `{contribution, limit, after?}` → `{entries, tagged, has_more, after?}` | One page, most important first: standing entries, then by `rank`, then newest. `limit` is 1 to 500 (the manager asks 200) and only caps the page: end it early, with `has_more` and `after`, so the answer stays within 1 MB (200 entries of 4096 CJK characters would not). `after` is the previous page's opaque cursor; `has_more` true needs an `after`, and true with an empty one is read as the end of the entries. Read-only: answering changes nothing in the program's state. |
 
 Each entry (`MemoryEntry`):
 
@@ -823,11 +823,11 @@ Each entry (`MemoryEntry`):
 | --- | --- |
 | `id` | Required, `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`, stable across pages and answers. The manager carries it as `memory-extension:<id>`, which a to-do's brief names. |
 | `text` | Required, 1 to 4096 characters: what the entry says, as the extension would render it. |
-| `status` | Required: `active` (the extension would use it today), `candidate` (not borne out yet), `dormant` (not seen lately), `retired` (no longer true). Only `active` is carried. |
+| `status` | Required: `active` (the extension would use it today, whatever it calls that state itself: an extension with its own stable and shifting states answers `active` for both), `candidate` (not borne out yet), `dormant` (not seen lately), `retired` (no longer true). Only `active` is carried; any other value drops the entry. |
 | `facet` | The extension's own grouping (`^[a-z][a-z0-9_]{0,31}$`). Informational: the hub neither filters nor orders by it. |
 | `origin_space` | The slug of the space the entry was first said in; left out for the main space. |
 | `categories` | Up to 8 information categories (`health`, `finance`, `relationships`, `emotion`, `legal_id`); left out for a general entry. One the hub does not know makes the entry not known. |
-| `standing` | The extension kept it in every conversation (its own always-in-context entries). The hub offers it to a standing channel before the others; usage still decides. |
+| `standing` | The extension kept it in every conversation (its own always-in-context entries). Only a standing entry goes to a standing channel (usage still decides); an entry without it comes in only by relevance, its `subjects` or text matched in a recall, a hand-off or the Inbox, as the extension's own "included when named" entries did. Until the source is wired in, the flag only orders entries among the extension's own. |
 | `rank` | 0 to 1000, higher first, among entries alike in `standing`; left out means 0. |
 | `subjects` | Up to 16 names (1 to 80 characters each) whose mention brings the entry in (its own "included when named" entries): a task's or a message's words are matched with them as well as with the text. |
 
@@ -837,10 +837,11 @@ Each entry (`MemoryEntry`):
 - **Not filtered by scene**: answer every entry the extension would otherwise put in its text outlets. Grading by scene
   is the hub's; an extension that pre-filters only hides entries the user's rules would have let through.
 - **Bounds**: 5 seconds per call, at most 1 MB per answer, at most 5 pages and 1000 entries per assembly (past them the
-  rest are left, less important by the extension's own order). An entry that breaks a rule above is dropped, never
-  repaired, and an id seen before is dropped too.
+  rest are left, less important by the extension's own order). An entry that breaks a rule above (an unknown `status`
+  included) is dropped alone, never repaired, and an id seen before is dropped too; the rest of the page is kept.
 - **Errors**: the base error codes, or `not_ready` (the entries are not loaded yet) and `failed` with a one-line
-  message. A timeout, an answer that is too large or does not hold to the schema, and every error mean the assembly uses
+  message. A timeout, an answer that is too large, a page whose own fields (`entries` as an array, `tagged`, `has_more`,
+  `after`) do not hold to the schema, and every error mean the assembly uses
   none of the extension's entries this time and logs why. It never falls back to the extension's text.
 - **Who calls**: the manager only, for the owner's personal assemblies; no other extension, device or token can.
 
