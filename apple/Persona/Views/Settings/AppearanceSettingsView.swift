@@ -126,7 +126,6 @@ struct PersonaSettingsPage: View {
                         // The hub makes avatars from images (#2405): how to make one, and how to delete one made that way.
                         Text("New from Photo makes an avatar from an image of your own. To delete one you made, use the delete button in its corner.")
                     }
-                    #if !os(macOS)
                     if let failure = model.appIcon.failure {
                         Text(failure).foregroundStyle(Theme.danger)
                     }
@@ -134,7 +133,6 @@ struct PersonaSettingsPage: View {
                         // The icon on now, or that the system cannot switch it here (AppIconTests).
                         .accessibilityValue(model.appIcon.available ? model.appIcon.current.rawValue : "unavailable")
                         .accessibilityIdentifier("persona-icon-note")
-                    #endif
                 }
             }
         }
@@ -189,9 +187,6 @@ struct StyleSettingsPage: View {
                                 ForEach(TextSize.allCases) { Text($0.title).tag($0) }
                             }
                             .pickerStyle(.segmented)
-                            #if os(macOS)
-                            .labelsHidden() // the row says Text Size; a Mac form drew it again after the control (#1221)
-                            #endif
                             .fixedSize()
                         }
                     }

@@ -273,11 +273,7 @@ struct AssistantSwitcherHeader: View {
 
     /// The name's color: the Mac's title rows have their own label color.
     private var ink: Color {
-        #if os(macOS)
-        Theme.macLabel
-        #else
         Color.primary
-        #endif
     }
 
     /// Closes the list and keeps what presents something else (an alert, a sheet, Settings) for when it is gone.

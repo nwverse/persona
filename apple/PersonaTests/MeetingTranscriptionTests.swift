@@ -1720,6 +1720,34 @@ private actor SlowPut {
         #expect(Set([wifi, stopped, problem]).count == 3)
     }
 
+    /// #13385: a phone that can't transcribe the meeting never says its transcript shows; the notice says what the hub
+    /// is at, and a line of its own says why this iPhone has no lines, naming the meeting's language.
+    @Test func aPhoneThatCantTranscribeSaysWhy() {
+        var m = MeetingTranscription.Meeting()
+        m.decided = .init(mode: .hub)
+        m.problem = "upstream_failed"
+        let promise = String(localized: "The hub isn't transcribing right now. Showing this iPhone's transcript.")
+        #expect(Words.fallback(m) == promise)
+        #expect(Words.fallback(m, phoneCannot: true) == String(localized: "The hub isn't transcribing right now."))
+        m.stopped = "upstream_failed"
+        #expect(Words.fallback(m, phoneCannot: true) == String(localized: "The hub stopped transcribing this meeting."))
+        m.socket = .waitingForWiFi
+        #expect(Words.fallback(m, phoneCannot: true) == String(localized: "Waiting for Wi-Fi to send the audio to the hub."))
+
+        let english = Locale(identifier: "en")
+        #expect(Words.languageName("zh-CN", in: english) == "Chinese")
+        #expect(Words.languageName("ja-JP", in: english) == "Japanese")
+        let fellBack = Words.phoneCannot(.unsupportedLanguage, locale: "zh-CN", fellBack: true, interface: english)
+        let own = Words.phoneCannot(.unsupportedLanguage, locale: "zh-CN", fellBack: false, interface: english)
+        #expect(fellBack == String(localized: "This iPhone can't transcribe \("Chinese") on the device either, so no lines show until the hub transcribes again."))
+        #expect(own == String(localized: "This iPhone can't transcribe \("Chinese") on the device, so it shows no lines for this meeting."))
+        #expect(Words.phoneCannot(.needsNewerSystem, locale: "zh-CN", fellBack: true, interface: english)
+            == String(localized: "This iPhone needs iOS 26 or later to transcribe on the device, so no lines show until the hub transcribes again."))
+        // Without a hub to come back to, and for a model that didn't download: the error's own words, with what to do.
+        #expect(Words.phoneCannot(.needsNewerSystem, locale: "zh-CN", fellBack: false) == RecordingSpeechError.needsNewerSystem.errorDescription)
+        #expect(Words.phoneCannot(.modelUnavailable, locale: "zh-CN", fellBack: true) == RecordingSpeechError.modelUnavailable.errorDescription)
+    }
+
     /// With the Highlights card on top (phase 2b), the hub's lines are the Full Transcript's rows in place of the phone's:
     /// in the live log's order, a placeholder skipped, each row's id its position, so a line the hub sends again keeps its
     /// row; bookmarks and questions keep their places; and a highlight's minute lights the hub's lines in it.
