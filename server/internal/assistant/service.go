@@ -129,6 +129,12 @@ type Service struct {
 	hub         Hub
 	store       func() Store
 	entriesDial func(context.Context, any) ([]byte, error)
+	// memoryEntries is where the memory assembler reads the ledger in tests; nil reads the manager database
+	// (memory_assemble_entry.go).
+	memoryEntries memoryEntrySource
+	// memoryExtension hands the assembler the memory extension's entries, its second source; nil hands none
+	// (memory_assemble_entry.go).
+	memoryExtension memoryExtensionSource
 	// trustSrc is Options.Trust.
 	trustSrc MachineTrust
 	logf     func(format string, args ...any)
@@ -249,6 +255,7 @@ type Service struct {
 	placeBook      placeBook         // places.go
 	accept         acceptBook        // acceptance.go
 	pushQuiet      quietSwitch       // push_quiet.go: the hub's low-distraction switch as last read
+	attention      attentionClock    // attention.go: the attention mode as last read, and its end
 	deploy         deployProbe       // deploy_check.go: is the work in the running hub
 	prEventRoute   prEventRouteBook  // pr_status_route.go: opt-in direct PR-event routing dedupe
 	parkReplies    parkReplyBook     // park_reply.go: bounded source reads for explicitly bound person replies
@@ -393,6 +400,7 @@ func New(o Options) *Service {
 	s.ruleSuggestionRoutes()
 	s.northStarRoutes()
 	s.urgentCallRoutes() // urgent_call.go
+	s.attentionRoutes()  // attention.go
 	s.reporterRoutes()
 	s.directionRoutes()
 	s.directionOutsideRoutes()
