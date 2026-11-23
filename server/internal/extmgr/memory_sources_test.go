@@ -81,11 +81,14 @@ func TestMemorySourceOutlets(t *testing.T) {
 	installForTest(t, h, plain)
 
 	mem := memorySourcePackage(t)
-	_, pv := call(t, mux, "POST", "/api/v1/plugins/-/preview", master, `{"source": "dir:`+mem+`"}`)
+	code, pv := call(t, mux, "POST", "/api/v1/extensions/-/preview", master, `{"source": "dir:`+mem+`"}`)
+	if code != 200 {
+		t.Fatalf("preview: %d %v", code, pv)
+	}
 	if !strings.Contains(fmt.Sprint(pv["permissions"]), "memory_source") {
 		t.Fatalf("the install page says the hub reads its memory: %v", pv["permissions"])
 	}
-	if c, body := call(t, mux, "POST", "/api/v1/plugins/-/install", master, fmt.Sprintf(`{"preview_id": %q, "permissions_digest": %q}`, pv["preview_id"], pv["permissions_digest"])); c != 200 {
+	if c, body := call(t, mux, "POST", "/api/v1/extensions/-/install", master, fmt.Sprintf(`{"preview_id": %q, "permissions_digest": %q}`, pv["preview_id"], pv["permissions_digest"])); c != 200 {
 		t.Fatalf("install: %d %v", c, body)
 	}
 	for _, id := range []string{"qa-notes", "qa-memory"} {
