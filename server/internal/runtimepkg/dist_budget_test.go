@@ -15,7 +15,7 @@ import (
 // measured 248,704 B on 2026-11-21. Session-bound A2A tool bridges bring the generated total to about 251.3 kB.
 // Minifying the remaining non-compat Antigravity lib sources (acp.js, file-links.js, models.js; #12781, #13123)
 // brings the generated total from 254,085 B back to 251,311 B under the unchanged 252,000 B ceiling. Main measured
-// 251,491 B on 2026-11-23, and leaving conversations the agy CLI has open to it (#13451) adds 1,022 B (253,000 B ceiling).
+// 251,491 B on 2026-11-23, and leaving conversations the agy CLI has open to it (#13451) adds 1,060 B (253,000 B ceiling).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
 	const budget = 253_000

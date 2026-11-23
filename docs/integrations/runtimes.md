@@ -563,7 +563,7 @@ its transcript in the last minute. Taking the lock, even for an instant, would m
 warn that it is already open and run without the lock. For such a conversation the companion does not resume it for a
 native cut check or read its native tail (where the lock cannot be read, not while its summary lags at all), refuses a
 send, fork, rewind or mode change with `open_elsewhere` (`where: agy_cli`, `delivered: none`) while the CLI has it
-open, and, while agy's summary lags the CLI's transcript, takes the status from the transcript: `working` while another
+open, ahead of the busy refusal its running summary would give, and, while agy's summary lags the CLI's transcript, takes the status from the transcript: `working` while another
 process wrote it in the last minute, `done` once its last step is a complete reply and the CLI has closed it or nobody
 wrote for a minute, and `unknown` otherwise (an open tool call or new input never reads idle). A check never installs a
 cut when the transcript changed while the native snapshot was taken, and a session the companion resumed only for a

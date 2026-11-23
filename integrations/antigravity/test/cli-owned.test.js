@@ -132,6 +132,21 @@ test('send, rewind, fork and mode changes to a conversation open in the CLI are 
   for (const m of ['session/prompt', 'session/resume', 'session/load', 'session/set_mode']) assert.ok(!native.includes(m), `${m}: ${native.join(' ')}`)
 })
 
+// A conversation the CLI is running usually has a running summary too: the CLI's ownership is still the answer for
+// rewind, fork and a model change, not the busy refusal agy's summary alone would give.
+test('rewind, fork and a model change to a conversation running in the CLI are refused as open there, not as busy', async (t) => {
+  const { db, refused, methods } = await fixture(t, { mtime: minutesAgo(5) })
+  const summary = db.prepare('UPDATE conversation_summaries SET status = ?, not_fully_idle = ? WHERE conversation_id = ?')
+  for (const [status, notFullyIdle] of [['CASCADE_RUN_STATUS_RUNNING', 0], ['CASCADE_RUN_STATUS_IDLE', 1]]) {
+    summary.run(status, notFullyIdle, RAW)
+    await refused('session.rewind', { prompt: 'Check the build', occurrence: 1, prompts_after: 0, restore: 'conversation' })
+    await refused('session.fork', { at_item_id: '' })
+    await refused('session.modes', { model: 'gemini-test' })
+  }
+  const native = methods()
+  for (const m of ['session/prompt', 'session/resume', 'session/load', 'session/set_mode', 'session/set_model']) assert.ok(!native.includes(m), `${m}: ${native.join(' ')}`)
+})
+
 test('after the CLI closes it, a finished reply reads done and a check resumes it only for the check', async (t) => {
   const { node, status, methods } = await fixture(t, { lock: 'free', mtime: minutesAgo(5) })
   assert.equal(await status(), 'done')
