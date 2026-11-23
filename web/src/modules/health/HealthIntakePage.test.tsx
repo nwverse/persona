@@ -55,7 +55,7 @@ const drawn = () => hub.calls.filter((c) => c.path === "/assistant/health/intake
 
 // the page's renderer is a big chunk: load it once, outside any test's time limit (a busy machine takes a while)
 beforeAll(async () => {
-  await import("../settings/ExtensionView");
+  await import("../../views/settings/ExtensionView");
 }, 120_000);
 
 beforeEach(() => {
@@ -115,7 +115,7 @@ describe("the page", () => {
     act(() => root.unmount());
     root = createRoot(host);
     hub.listeners.clear();
-    const { LegacyExtensionUI } = await import("../settings/ExtensionView");
+    const { LegacyExtensionUI } = await import("../../views/settings/ExtensionView");
     act(() => root.render(<LegacyExtensionUI extension="demo" ui="home" />));
     await settle();
     expect(hub.listeners.get("health_intake")?.size ?? 0).toBe(0);

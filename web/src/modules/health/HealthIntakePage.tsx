@@ -12,7 +12,7 @@ import { lazyPage } from "../../lib/lazy-page";
 import { navigate } from "../../lib/router";
 import { IconButton, Loading } from "../../ui/atoms";
 
-const ExtensionUI = lazyPage(() => import("../settings/ExtensionView").then((m) => m.ExtensionUI), { routes: ["extension"] });
+const ExtensionUI = lazyPage(() => import("../../views/settings/ExtensionView").then((m) => m.ExtensionUI), { routes: ["extension"] });
 
 /** Which page a state asks for: the hub's default (water) for none or one it can't read. */
 export function kindOf(state: string | undefined): HealthIntakeKind {
@@ -34,7 +34,7 @@ export function HealthIntakePage({ onToggleSidebar }: { onToggleSidebar: () => v
     <div className="flex h-full flex-col">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
         <IconButton icon="sidebar" label={t("health.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
-        <IconButton icon="arrowLeft" label={t("health.title")} onClick={() => navigate({ name: "health", fresh: true })} />
+        <IconButton icon="arrowLeft" label={t("health.title")} onClick={() => navigate("/health/new")} />
         <h1 className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">{title}</h1>
         <IconButton icon="retry" label={t("health.refresh")} onClick={() => setN((x) => x + 1)} />
       </header>
@@ -49,4 +49,9 @@ export function HealthIntakePage({ onToggleSidebar }: { onToggleSidebar: () => v
       </div>
     </div>
   );
+}
+
+/** The page as the module host draws it (core/ModulePage.tsx ModuleExtensionPage). */
+export function HealthIntakeModulePage({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
+  return <HealthIntakePage onToggleSidebar={onToggleSidebar ?? (() => {})} />;
 }
