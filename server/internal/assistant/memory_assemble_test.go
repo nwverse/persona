@@ -79,7 +79,16 @@ func memoryAssembleService(t *testing.T) (*Service, *fakeHub, *infoCategoryMemSt
 	t.Helper()
 	ctx := context.Background()
 	s, f, st := infoUseService(t)
+	// The hello lists qa-machine as the assistant's: the effective settings keep a MachineID only when it is one of
+	// hello.Assistant.Machines, so without it the owner's computer reads as "" and no start sees personal entries.
+	f.mu.Lock()
+	f.hello.Assistant.MachineID = "qa-machine"
+	f.hello.Assistant.Machines = []string{"qa-machine"}
+	f.mu.Unlock()
 	setSettings(t, s, func(v *Settings) { v.MachineID = "qa-machine" })
+	if got := s.settings(ctx).MachineID; got != "qa-machine" {
+		t.Fatalf("the owner's computer = %q, want qa-machine", got)
+	}
 	for _, sid := range []string{"qa-main", "qa-plain-1"} {
 		if err := st.AddInfoCategories(ctx, db.InfoCategoryConversation, sid, []string{infoNoneTagged}, infoTaggedByModel, ""); err != nil {
 			t.Fatal(err)
