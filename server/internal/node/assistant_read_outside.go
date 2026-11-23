@@ -41,12 +41,6 @@ func credentialName(name string) bool {
 	return false
 }
 
-// within: p is dir or inside it (both cleaned and resolved by the caller).
-func within(p, dir string) bool {
-	rel, err := filepath.Rel(dir, p)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
-}
-
 // readGuarded: path (resolved) is one a read outside the workspace never takes without a card: a space other than
 // own's (own: the conversation's directory's space, "" for the main one), Persona's state directory, a credential
 // directory or file, a launcher's settings, or a file named like a credential.
