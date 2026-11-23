@@ -1062,6 +1062,14 @@ nonisolated struct APIClient: Sendable {
 
     private func sp(_ k: SessionKey) -> String { "/api/v1/sessions/\(k.machineID)/\(k.sessionID)" }
 
+    /// Answers the shell question a session's start stopped on. The hub keeps the same session and starts it in that tab.
+    func continueStart(_ k: SessionKey, choice: String) async throws -> Session? {
+        struct Body: Encodable { var choice: String }
+        struct Response: Decodable { var session: Session? }
+        let session = try await post(sp(k) + "/start/continue", body: Body(choice: choice), as: Response.self).session
+        return session.map { stamp($0) }
+    }
+
     /// Genuine user-input identities and full-history ordinals, without loading transcript bodies.
     func userInputIndex(_ k: SessionKey) async throws -> ChatUserInputIndex {
         let index = try await getDecodedOffMain(sp(k) + "/items", query: ["user_inputs": "1", "lazy_images": "1"], as: ChatUserInputIndex.self)
@@ -1707,12 +1715,41 @@ nonisolated struct APIClient: Sendable {
     /// Decoded off the main actor: it holds every conversation, and the app reads it again each time it comes back to
     /// the front (#8324).
     func assistant() async throws -> AssistantState { owned(try await getDecodedOffMain("/api/v1/assistant")) }
-    /// A direction as `GET /api/v1/assistant/leaders` lists it (#3519, #3695): its leader conversation's id and the name
-    /// the hub gives the direction (the name set, else its project's, else the title without its "MMDD | kind | " prefix).
+    /// A direction as `GET /api/v1/assistant/leaders` lists it (#3519, #3695, #8236): its opaque direction id and
+    /// display name. Conversation-backed directions use their leader conversation's id; outside ones have no Persona
+    /// conversation and may carry a complete coding-Agent target used only for navigation.
     struct LeaderInfo: Codable, Sendable, Equatable {
         var id: String
         var name: String?
         var ended: Bool?
+        var external: Bool?
+        var machineID: String?
+        var sessionID: String?
+
+        init(id: String, name: String? = nil, ended: Bool? = nil, external: Bool? = nil,
+             machineID: String? = nil, sessionID: String? = nil) {
+            self.id = id
+            self.name = name
+            self.ended = ended
+            self.external = external
+            self.machineID = machineID
+            self.sessionID = sessionID
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decode(String.self, forKey: .id)
+            name = try c.decodeIfPresent(String.self, forKey: .name)
+            ended = try c.decodeIfPresent(Bool.self, forKey: .ended)
+            external = (try? c.decodeIfPresent(Bool.self, forKey: .external)) ?? nil
+            machineID = (try? c.decodeIfPresent(String.self, forKey: .machineID)) ?? nil
+            sessionID = (try? c.decodeIfPresent(String.self, forKey: .sessionID)) ?? nil
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case id, name, ended, external
+            case machineID = "machine_id", sessionID = "session_id"
+        }
     }
     /// Makes a conversation a direction (#4331, `POST /api/v1/assistant/directions/{id}/make`): its work is led from
     /// there from now on.
@@ -1733,6 +1770,17 @@ nonisolated struct APIClient: Sendable {
         var out: [String: String] = [:]
         for l in list where !(l.ended ?? false) && !l.id.isEmpty {
             if let name = l.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty { out[l.id] = name }
+        }
+        return out
+    }
+
+    /// The flat endpoint's outside-direction fallback, keyed by direction id and current rows only. Tree counts and
+    /// running state deliberately do not exist here; the row gets those only from the direction tree.
+    static func outsideDirections(_ list: [LeaderInfo]) -> [String: DirectionTree.Direction] {
+        var out: [String: DirectionTree.Direction] = [:]
+        for l in list where !(l.ended ?? false) && l.external == true && !l.id.isEmpty {
+            out[l.id] = DirectionTree.Direction(
+                id: l.id, name: l.name ?? "", external: true, machineID: l.machineID, sessionID: l.sessionID)
         }
         return out
     }
@@ -1844,11 +1892,11 @@ nonisolated struct APIClient: Sendable {
     }
 
     /// What the main conversation still needs (docs/protocol/protocol.md「Main chat readiness」). `probe`: also try one word on it
-    /// (costs a little; only for Try a Message and 「我已经在用 Claude Code」). The hub may spend 100 s on the check
-    /// and another 12 s on the node's self-check, so a probe waits 130 s rather than the ordinary 30 s read budget.
+    /// (costs a little; only for Try a Message and 「我已经在用 Claude Code」). The hub may spend 20 s resolving the turn,
+    /// 170 s on the check and another 12 s on the node's self-check, so a probe waits 202 s rather than the ordinary 30 s read budget.
     func assistantReadiness(probe: Bool = false) async throws -> AssistantReadiness {
         try JSON.decoder.decode(AssistantReadiness.self, from: try await request("GET", "/api/v1/assistant/readiness",
-                                                                                 query: probe ? ["probe": "1"] : [:], timeout: probe ? 130 : 30))
+                                                                                 query: probe ? ["probe": "1"] : [:], timeout: probe ? 202 : 30))
     }
 
     /// Later: the checklist stops coming up by itself (the card still shows when the readiness gets worse).
