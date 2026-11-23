@@ -5,6 +5,7 @@ from pathlib import Path
 import signal
 import subprocess
 import textwrap
+import time
 import unittest
 
 import yaml
@@ -146,9 +147,9 @@ FAKE_XCRUN_WRAPPER = textwrap.dedent('''\
         if args[:2] == ["simctl", "boot"] and os.environ.get("BOOT_HANG") == "1":
             assert args[2:] == [os.environ["OWNED_UDID"]], args
             def stop(*_):
-                (root / "boot.stopped").write_text("terminated")
                 sys.exit(143)
             signal.signal(signal.SIGTERM, stop)
+            (root / "boot.stopped").write_text("terminated")
             signal.pause()
         os.execv(str(root / "bin/fake-simctl"), ["xcrun", *args])
     ''')
@@ -168,6 +169,48 @@ FAKE_OTOOL = textwrap.dedent('''\
     ''')
 
 
+FAKE_PRODUCT_FILE = ("file", '''#!/usr/bin/env /usr/bin/python3
+import json, os, signal, subprocess, sys, time
+from pathlib import Path
+root = Path(os.environ["FAKE"])
+first = not (root / "product-started").exists()
+if os.environ.get("NESTED_CHILD") == "1" and first:
+    nested = subprocess.Popen([sys.executable, "-c",
+        "import os,signal,time; from pathlib import Path; "
+        "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+        "Path(os.environ['FAKE'] + '/nested-child-ready').write_text(str(os.getpid())); time.sleep(30)"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    with (root / "nested-processes.jsonl").open("a") as log:
+        log.write(json.dumps({"pid": nested.pid, "pgid": os.getpgid(nested.pid)}) + "\\n")
+with (root / "product-processes.jsonl").open("a") as log:
+    log.write(json.dumps({"pid": os.getpid(), "pgid": os.getpgid(0),
+                          "observer_pgid": os.getpgid(os.getppid())}) + "\\n")
+(root / "product-started").write_text("yes")
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+if os.environ.get("PRODUCT_HANG") == "1" and first:
+    time.sleep(30)
+elif first and os.environ.get("OWNED_UDID") != "44444444-4444-4444-4444-444444444444":
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        status = Path(os.environ["OUTPUT"]) / "diagnostics/live-readiness/observer.status.txt"
+        if status.exists() and "xcodebuild-finished" in status.read_text():
+            (root / "collector-outlived-observer").write_text("yes")
+            break
+        time.sleep(0.01)
+print("synthetic architecture")
+''')
+
+
+def process_state(pid):
+    result = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, timeout=2)
+    return result.stdout.strip() or None
+
+
+def assert_process_not_running(case, pid):
+    state = process_state(pid)
+    case.assertTrue(state is None or "Z" in state, f"process {pid} is still running: {state}")
+
+
 FAKE_CLEANUP_SIMCTL = '''#!/usr/bin/env python3
 import os
 import sys
@@ -184,6 +227,7 @@ class AppleReadinessTests(unittest.TestCase):
         self.fixture = test_sim_boot.SimBootTests()
         self.fixture.setUp()
         self.addCleanup(self.fixture.tearDown)
+        self.addCleanup(self.reap_recorded_collectors)
         self.root = self.fixture.dir
         self.fixture.state["bootstatus_hang"] = True
         self.fixture.save()
@@ -191,19 +235,31 @@ class AppleReadinessTests(unittest.TestCase):
         self.watcher_pids.write_text("")
         python = self.fixture.bin / "python3"
         python.write_text(textwrap.dedent('''\
-            #!/bin/bash
-            if [[ "$*" == *apple_readiness_watch.py* ]]; then
-              printf '%s\\n' "$$" >> "$FAKE/watcher-pids"
-            fi
-            exec /usr/bin/python3 "$@"
+            #!/usr/bin/env /usr/bin/python3
+            import json, os, runpy, sys
+            from pathlib import Path
+            watcher = next((index for index, arg in enumerate(sys.argv)
+                            if Path(arg).name == "apple_readiness_watch.py"), None)
+            if watcher is not None:
+                root = Path(os.environ["FAKE"])
+                arguments = sys.argv[watcher:]
+                record = {"pid": os.getpid(), "pgid": os.getpgid(0),
+                          "parent_pgid": os.getpgid(os.getppid()),
+                          "output": arguments[arguments.index("--output") + 1]}
+                with (root / "watcher-processes.jsonl").open("a") as log:
+                    log.write(json.dumps(record) + "\\n")
+                sys.argv = arguments
+                sys.path.insert(0, str(Path(sys.argv[0]).parent))
+                runpy.run_path(sys.argv[0], run_name="__main__")
+            os.execv("/usr/bin/python3", ["/usr/bin/python3", *sys.argv[1:]])
         '''))
         python.chmod(0o755)
         for name, body in (("xcodebuild", FAKE_XCODE), ("xcrun", FAKE_XCRUN_WRAPPER),
                            ("xcodegen", "#!/bin/bash\nprintf '%s\\n' \"$*\" >> \"$FAKE/xcodegen-calls\"\n"
                                        "if [[ \"$*\" == *dump* ]]; then\n  /bin/cat \"$OUTPUT/whole.json\"\n"
                                        "else\n  printf 'synthetic project generation\\n'\nfi\n"),
-                           ("fake-simctl", FAKE_XCRUN), ("otool", FAKE_OTOOL),
-                           ("file", "#!/bin/bash\nexit 0\n"), ("codesign", "#!/bin/bash\nexit 0\n")):
+                           ("fake-simctl", FAKE_XCRUN), ("otool", FAKE_OTOOL), FAKE_PRODUCT_FILE,
+                           ("codesign", "#!/bin/bash\nexit 0\n")):
             if name == "fake-simctl":
                 body = body.replace(
                     'if a[0] == "create":\n',
@@ -231,6 +287,48 @@ class AppleReadinessTests(unittest.TestCase):
             *whole['targets']['Persona']['dependencies'],
         ]
         (self.output / 'whole.json').write_text(json.dumps(whole))
+
+    def reap_recorded_collectors(self):
+        for name in ("product-processes.jsonl", "nested-processes.jsonl"):
+            records = self.root / name
+            if records.exists():
+                for line in records.read_text().splitlines():
+                    pid = json.loads(line)["pid"]
+                    state = process_state(pid)
+                    if state is not None and "Z" not in state:
+                        os.kill(pid, signal.SIGKILL)
+
+    def assert_collected_products(self, directory):
+        for product in range(3):
+            for kind in ("architecture", "libraries"):
+                path = directory / f"product-{product}-{kind}.txt"
+                expected = "synthetic architecture\n" if kind == "architecture" else "/usr/lib/libSystem.B.dylib"
+                self.assertIn(expected, path.read_text())
+                self.assertEqual(path.with_suffix(".txt.status.txt").read_text(), "0\n")
+        for product in range(2):
+            self.assertEqual((directory / f"product-{product}-bundle-signature.txt.status.txt").read_text(), "0\n")
+
+    def assert_recorded_processes_reaped(self, iphone=True):
+        records = self.root / "product-processes.jsonl"
+        self.assertTrue(records.exists(), "the real product collector did not start")
+        watchers = [json.loads(line) for line in (self.root / "watcher-processes.jsonl").read_text().splitlines()]
+        if iphone:
+            watchers = [watcher for watcher in watchers
+                        if Path(watcher["output"]).name == "live-readiness"]
+        self.assertTrue(watchers)
+        for watcher in watchers:
+            if iphone:
+                self.assertEqual(watcher["pgid"], watcher["pid"], "Bash did not create an observer process group")
+                self.assertNotEqual(watcher["pgid"], watcher["parent_pgid"], "observer shares the readiness shell group")
+            assert_process_not_running(self, watcher["pid"])
+        for name in ("product-processes.jsonl", "nested-processes.jsonl"):
+            path = self.root / name
+            if path.exists():
+                for line in path.read_text().splitlines():
+                    record = json.loads(line)
+                    self.assertEqual(record["pgid"], record.get("observer_pgid", watchers[0]["pgid"]),
+                                     "collector or nested child escaped the observer group")
+                    assert_process_not_running(self, record["pid"])
 
     def run_preparation(self, regular_only=False, regression_only=False, **options):
         source = SCRIPT.read_text()
@@ -265,7 +363,10 @@ class AppleReadinessTests(unittest.TestCase):
 ci_run() {
   local label="$1" budget="$2"; shift 2
   printf '%s|%s\\n' "$label" "$budget" >> "$FAKE/budgets"
-  python3 "$CI_ROOT/scripts/ci/run.py" --label "$label" --timeout "$TEST_STEP_TIMEOUT" -- "$@"
+  if [[ "$label" == *readiness* || "$label" == "Grant Reminders access to the owned test app" ]]; then
+    budget="${TEST_STEP_TIMEOUT:-$budget}"
+  fi
+  python3 "$CI_ROOT/scripts/ci/run.py" --label "$label" --timeout "$budget" -- "$@"
 }
 XCODE=(xcodebuild)
 OFFLINE_PROJECT="$SOURCE/apple/PersonaOfflineUnitTests.xcodeproj"
@@ -279,8 +380,12 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
                    CI_BUNDLE_ID="org.example.persona.ci",
                    IOS_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0", OWNED_UDID=owned_udid,
                    REGULAR_SIM_NAME="owned regular About fixture",
-                   FAKE=str(self.root), TEST_STEP_TIMEOUT="10")
+                   FAKE=str(self.root))
         env.update(options)
+        # A short injected deadline belongs to the readiness/probe only, not to
+        # build/simulator setup that must start it on slower Darwin hosts.
+        if "TEST_STEP_TIMEOUT" not in options:
+            env["TEST_STEP_TIMEOUT"] = "10"
         env.setdefault("FULL_RESULT_SUITE", "TypeScaleTests,IconVocabularyTests,TokenRatchetTests,StyleSpecTests")
         result = subprocess.run(["bash", "-c", shell], cwd=ROOT, env=env,
                                 capture_output=True, text=True, timeout=25)
@@ -324,9 +429,17 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
             observer = self.output / "diagnostics" / name
             self.assertIn("xcodebuild-finished", (observer / "observer.status.txt").read_text())
             self.assertTrue((observer / "simulator-launch.status.txt").is_file())
-            for suffix in ("architecture.txt", "libraries.txt"):
-                self.assertTrue((observer / f"product-0-{suffix}").is_file())
-            self.assertTrue((observer / "product-0-bundle-signature.txt").is_file())
+            self.assert_collected_products(observer)
+        self.assertFalse((self.root / "collector-outlived-observer").exists(),
+                         "the observer published a final status while its collector was still running")
+        self.assert_recorded_processes_reaped()
+
+    def test_stop_reaps_a_nested_child_after_its_collector_exits(self):
+        result, _ = self.run_preparation(NESTED_CHILD="1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.root / "nested-child-ready").exists())
+        self.assert_recorded_processes_reaped()
+        self.assert_collected_products(self.output / "diagnostics/live-readiness")
         sim_calls = (self.root / "calls").read_text()
         self.assertNotIn("simctl bootstatus", sim_calls)
         self.assertEqual([line for line in sim_calls.splitlines() if "simctl boot " in line],
@@ -416,7 +529,7 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
         # its log in this writable fixture, not at a machine-level fixture path.
         observer = textwrap.dedent('''\
             #!/usr/bin/env python3
-            import json, os, signal, sys
+            import json, os, sys, time
             from pathlib import Path
             root = Path(os.environ["READINESS_FIXTURE"])
             arguments = sys.argv[1:]
@@ -424,17 +537,18 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
             sys.stdout = sys.stderr = log
             root.joinpath("observer.pid").write_text(str(os.getpid()))
             root.joinpath("observer-arguments.json").write_text(json.dumps(arguments))
-            def stop(*_):
-                root.joinpath("observer-stopped").write_text("terminated")
-                sys.exit(0)
-            signal.signal(signal.SIGTERM, stop)
-            signal.signal(signal.SIGINT, stop)
+            destination = Path(arguments[arguments.index("--output") + 1])
             root.joinpath("observer-ready").write_text("ready")
             print("observer-ready", flush=True)
             log.close()
             os.close(1)
             os.close(2)
-            signal.pause()
+            deadline = time.monotonic() + 10
+            while not destination.joinpath("observer.stop").exists():
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("observer stop was not published")
+                time.sleep(0.01)
+            root.joinpath("observer-stopped").write_text("stop-file")
         ''')
         ci_root = self.root / "ci-root/scripts/ci"
         ci_root.mkdir(parents=True)
@@ -529,7 +643,7 @@ IOS_TESTS=(xcodebuild -destination "platform=iOS Simulator,id=$SIM" -destination
         details = stdout + stderr + (log_path.read_text() if log_path.exists() else "")
         self.assertEqual(result.returncode, 0, details)
         self.assertNotIn("unbound variable", stdout + stderr)
-        self.assertEqual((self.root / "observer-stopped").read_text(), "terminated")
+        self.assertEqual((self.root / "observer-stopped").read_text(), "stop-file")
         self.assertEqual((self.root / "budgets").read_text(), "Verify hosted iOS test readiness|900\n")
         arguments = json.loads((self.root / "observer-arguments.json").read_text())
         self.assertEqual(arguments[arguments.index("--bundle-id") + 1], "org.example.persona.ci")
@@ -753,11 +867,7 @@ exit 65
                     for suffix in ("architecture", "libraries"):
                         self.assertEqual((observer / f"product-0-{suffix}.txt.status.txt").read_text(), "0\n")
                     self.assertEqual((observer / "product-0-bundle-signature.txt.status.txt").read_text(), "0\n")
-                    watcher_pids = [int(pid) for pid in case.watcher_pids.read_text().splitlines()]
-                    self.assertTrue(watcher_pids)
-                    for pid in watcher_pids:
-                        with self.assertRaises(ProcessLookupError, msg=f"watcher {pid} survived {key} cleanup"):
-                            os.kill(pid, 0)
+                    case.assert_recorded_processes_reaped(iphone=False)
                 finally:
                     case.doCleanups()
 
@@ -813,17 +923,31 @@ exit 65
                     case.doCleanups()
 
     def test_probe_and_result_inspection_share_one_deadline(self):
-        for key, pid_name in (("PROBE_HANG", "probe.pid"), ("RESULT_HANG", "result.pid")):
-            with self.subTest(phase=key):
+        for key, pid_name, product_hang in (("PROBE_HANG", "probe.pid", False),
+                                            ("RESULT_HANG", "result.pid", False),
+                                            ("PROBE_HANG", "probe.pid", True)):
+            with self.subTest(phase=key, product_hang=product_hang):
                 case = AppleReadinessTests()
                 case.setUp()
                 try:
-                    result, _ = case.run_preparation(**{key: "1", "TEST_STEP_TIMEOUT": "1"})
+                    result, _ = case.run_preparation(**{key: "1", "TEST_STEP_TIMEOUT": "1",
+                                                        "PRODUCT_HANG": "1" if product_hang else "0"})
                     self.assertEqual(result.returncode, 124, result.stdout + result.stderr)
                     self.assertFalse((case.root / "full-suite-started").exists())
                     self.assertTrue((case.root / pid_name).exists())
                     # The deadline terminates the probe/result process, not just its shell.
                     self.assertEqual((case.root / pid_name.replace(".pid", ".stopped")).read_text(), "terminated")
+                    observer = case.output / "diagnostics/live-readiness"
+                    if product_hang:
+                        self.assertIn("xcodebuild-finished", (observer / "observer.status.txt").read_text())
+                        product = observer / "product-0-architecture.txt"
+                        self.assertEqual(product.read_text(), "unavailable: command timed out\n")
+                        self.assertEqual(product.with_suffix(".txt.status.txt").read_text(), "124\n")
+                    else:
+                        self.assertIn("xcodebuild-finished", (observer / "observer.status.txt").read_text())
+                        case.assert_collected_products(observer)
+                    self.assertTrue((observer / "host-final.json").is_file())
+                    case.assert_recorded_processes_reaped()
                 finally:
                     case.doCleanups()
 
@@ -870,7 +994,7 @@ exit 65
         self.assertEqual((self.root / "calls").read_text().count("simctl boot "), 1)
 
     def test_start_is_inside_the_existing_permission_deadline(self):
-        result, calls = self.run_preparation(BOOT_HANG="1", TEST_STEP_TIMEOUT="1")
+        result, calls = self.run_preparation(BOOT_HANG="1")
         self.assertEqual(result.returncode, 124, result.stdout + result.stderr)
         self.assertEqual(len(calls), 2)
         self.assertEqual((self.root / "boot.stopped").read_text(), "terminated")
