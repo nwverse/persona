@@ -450,8 +450,16 @@ func TestTaskPlanSuggestsIdleAgentAfterPreviousTodoClosed(t *testing.T) {
 		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
 		proto.Session{SessionID: "lead0001", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
 		proto.Session{SessionID: "other-machine", MachineID: "server", Cwd: agent.Cwd, Status: proto.StatusIdle})
-	for _, readonly := range []bool{false, true} {
-		res, err := s.toolTaskPlan(ctx, "lead0001", planArgs(readonly))
+	// Direction leads can start writable plans directly. Main exercises the approval receipt.
+	for _, tc := range []struct {
+		caller   string
+		readonly bool
+		receipt  string
+	}{
+		{"conv1", false, "nothing has started"},
+		{"lead0001", true, "Queued 1 task"},
+	} {
+		res, err := s.toolTaskPlan(ctx, tc.caller, planArgs(tc.readonly))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -465,12 +473,8 @@ func TestTaskPlanSuggestsIdleAgentAfterPreviousTodoClosed(t *testing.T) {
 				t.Errorf("unexpected %q in receipt %q", id, res)
 			}
 		}
-		if want := "nothing has started"; readonly {
-			if !strings.Contains(res, "Queued 1 task") {
-				t.Errorf("read-only dispatch changed: %s", res)
-			}
-		} else if !strings.Contains(res, want) {
-			t.Errorf("writable approval changed: %s", res)
+		if !strings.Contains(res, tc.receipt) {
+			t.Errorf("expected receipt %q, got %q", tc.receipt, res)
 		}
 	}
 }
