@@ -436,6 +436,11 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	}
 	background := to != here.Main && to == here.BackgroundSupervisor // old work only; also scopes its closeout grant
 	delivered := kept
+	ackKeys := map[[2]string]string{}
+	for i, g := range kept {
+		key, _ := digestFingerprint(entries[i], g)
+		ackKeys[[2]string{g.id(), g.Key}] = key
+	}
 	accepted := false
 	acceptedIDs := map[[2]string]bool{}
 	for _, g := range kept {
@@ -465,7 +470,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			s.rememberLegacyBackground(to, legacy)
 		}
 		s.ackSupervisePending(list)
-		s.ackSupervisionDedupLocked(ctx, delivered)
+		s.ackSupervisionDedupLocked(ctx, delivered, ackKeys)
 		s.parkedDueTold(ctx, kept) // told for good: not again after a restart (parked.go)
 		s.automaticParksTold(ctx, kept)
 		s.estimateDueTold(ctx, kept)
@@ -521,6 +526,8 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 				if g.Kind == sigAsk {
 					all[i].Cards = e.Asks
 				}
+				key, _ := digestFingerprint(e, all[i])
+				ackKeys[[2]string{g.id(), g.Key}] = key
 				allEntries = append(allEntries, e)
 			}
 		}

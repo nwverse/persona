@@ -232,8 +232,9 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 
 // ackSupervisionDedupLocked marks reservations as delivered. An empty Key distinguishes a confirmed delivery or
 // durable queue admission from a crash after reservation. Re-emitting the same event after restart must not turn a
-// delivered fingerprint into a reservation retry. dedupMu is held by sendDigest.
-func (s *Service) ackSupervisionDedupLocked(ctx context.Context, signals []superviseSignal) {
+// delivered fingerprint into a reservation retry. Use the fingerprints actually rendered: digestEntry mutates
+// start-remedy observation times and must never be called again after delivery. dedupMu is held by sendDigest.
+func (s *Service) ackSupervisionDedupLocked(ctx context.Context, signals []superviseSignal, rendered ...map[[2]string]string) {
 	b := &s.supervise
 	history := b.dedup
 	st := s.store()
@@ -248,15 +249,16 @@ func (s *Service) ackSupervisionDedupLocked(ctx context.Context, signals []super
 	for _, g := range signals {
 		stable := g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPRMerged || g.Kind == sigNeedsUserExternalInfo ||
 			g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
-		entry := prompts.SuperviseEntry{}
-		if !stable {
-			var ok bool
-			entry, ok = s.digestEntry(ctx, g, s.webBase(ctx))
-			if !ok {
+		key := ""
+		if len(rendered) > 0 {
+			key = rendered[0][[2]string{g.id(), g.Key}]
+		}
+		if key == "" {
+			if !stable {
 				continue
 			}
+			key, _ = digestFingerprint(prompts.SuperviseEntry{}, g)
 		}
-		key, _ := digestFingerprint(entry, g)
 		if seen, ok := next[key]; ok && seen.Key != "" && seen.Key == g.Key {
 			seen.Key = ""
 			next[key] = seen
