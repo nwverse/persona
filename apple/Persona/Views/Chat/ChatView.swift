@@ -2798,27 +2798,23 @@ struct ChatView: View {
                     TerminalOnlyBar(openTerminal: openTerminal)
                 } else if let s = session, !s.canSend, let reason = s.sourceSubtitle {
                     #if os(iOS)
-                    if UIDevice.current.userInterfaceIdiom == .phone {
-                        ViewThatFits(in: .horizontal) {
-                            HStack(alignment: .center, spacing: Theme.Space.s) {
-                                Text(reason).foregroundStyle(.secondary).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-                                CodexTakeoverControl(session: s, coordinator: takeoverCoordinator) { adopted in
-                                    model.adopt(adopted)
-                                    switchTo(adopted.key)
-                                }
-                            }
-                            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                                Text(reason).foregroundStyle(.secondary)
-                                CodexTakeoverControl(session: s, coordinator: takeoverCoordinator) { adopted in
-                                    model.adopt(adopted)
-                                    switchTo(adopted.key)
-                                }
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .center, spacing: Theme.Space.s) {
+                            Text(reason).foregroundStyle(.secondary).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                            CodexTakeoverControl(session: s, coordinator: takeoverCoordinator) { adopted in
+                                model.adopt(adopted)
+                                switchTo(adopted.key)
                             }
                         }
-                        .font(Theme.Font.caption).frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                            Text(reason).foregroundStyle(.secondary)
+                            CodexTakeoverControl(session: s, coordinator: takeoverCoordinator) { adopted in
+                                model.adopt(adopted)
+                                switchTo(adopted.key)
+                            }
+                        }
                     }
+                    .font(Theme.Font.caption).frame(maxWidth: .infinity, alignment: .leading)
                     #else
                     Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                     #endif
