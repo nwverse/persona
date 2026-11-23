@@ -3660,6 +3660,16 @@ confirmed, reversible choice (principle 3). It reuses each client's mode field, 
 confirmation; it adds no component, token or motion. `capabilities.modes` stays false on these rows, so clients
 older than the list show no Claude Code chips there.
 
+## Native permission defaults (#13286)
+
+Who it serves: people who use the Inbox's AI twin or start assistant conversations from iPhone or iPad and need to see what Persona may do without asking. These are secondary settings built from the existing `SettingsForm`, `Section`, menu `Picker`, `SheetClose` and permission-mode vocabulary.
+
+- **Settings › Models › AI twin** shows **Inbox Permissions** for the existing `inbox.agent.permission_mode`. An unset, Plan or unknown legacy value displays **Default Permissions**, never the parent Agents' Full access; Plan is not offered. An explicit supported choice saves with the model record, and Follow Agents writes `permission_mode: null`.
+- **Settings › Agent** shows **Default Permissions** for the existing `default_permission_mode`. A direction leader's title menu opens the same `DefaultPermissionsSettingsSection`; it is not a direction-specific override. The top bar owns the sheet so dismissing the menu does not remove its presenter. The setting applies only to new conversations without an explicit choice; existing conversations keep their current mode.
+- The new-conversation picker changes its local value immediately, sends one sparse write, keeps the hub-confirmed value and restores the previous value with an error toast if the write or confirmation fails.
+
+Reason: the native controls reuse the manager's existing settings and the Model Configuration record rather than creating a parallel store (principles 1, 3 and 4). The Inbox keeps its safe Ask First default independently of Agents, while every other launcher purpose keeps its ordinary inheritance and provider-specific list. No token, storage, motion or platform-specific visual pattern is added.
+
 ## Minutes cards (#5026)
 
 A recording's page on iPhone, once its minutes are ready (`docs/apple/recording.md`, "Minutes"): a segmented
