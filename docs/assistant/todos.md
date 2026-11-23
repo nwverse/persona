@@ -206,6 +206,10 @@ Ledger for tasks supervised by the main chat (#3124, `docs/assistant/unified-ent
 
 ### 6. task_briefs and task_brief_todos tables
 A task's brief (#3822, `docs/assistant/unified-entry.md`, "Briefs"): what was asked when the work was handed out.
+A supervision message quotes at most 200 characters of the owner's message (and of the reason a task was started by
+someone else); a longer one is marked as only its start, pointing to `todo_get` and the task's link (already on the entry's first
+line, not repeated) for the rest (#13791, #13821):
+a recurring check's prompt used to be repeated, up to 300 characters, in every message about its task.
 - `task_briefs`: `id` (text, PK), `brief` (jsonb, written once: the owner's message, who started it, goal, `done_when`,
   `expect_minutes`, `estimate_source`, `estimate_evidence`, `out_of_bounds`), `state` (jsonb: the log of dispatches, scope changes,
   completions, estimate_due and overdue marks, the result), `created_at`, `updated_at`. Nothing rewrites `brief`;
@@ -518,7 +522,7 @@ The completion judge no longer completes anything. Its `done` verdict records th
 
 - **Idempotency key**: (to-do id, machine id, session id, turn key). The receipt's feed id is a hash of it, so the receipt is written once whichever path writes it and whichever manager process (the `assistant_feed` primary key). The receipt's body names the run too (`machine_id`, `session_id`, #10465; the hash is unchanged), so a reader of the to-do's history can give each receipt to its run; `machine` is that run's computer's name, a label only. Receipts written before carry only the name, which on a turn ended by one of two Agents on two computers could be the other's; failed starts, which have no run, carry neither. A turn taken up again gets no second judgment: the one on the row is put back without a model call when a start was heard since (a stale `working` row after the end takes the check and the review wait off), or made now when a manager stopped between the receipt and the judgment. Its signal is told once: the row keeps the signal's kind and key and when a supervision message carried it, and a manager started again tells what was not told and does not repeat what was.
 - **No working needed**: for a supervised task the supervision sweep (every 30 seconds, below) reads the last turn of the task's last Agent when all its Agents look stopped (`done`, `idle`, or `unknown`) and that row moved since it last looked. A closed turn the row does not have is taken up through the end's own checks: only when none of them refuses or puts off the end, and the transcript, read once more, still shows the turn closed, is the start nobody heard taken (what a `working` list would have done), then the receipt, the judgment and the signal as usual. An end that is not taken therefore leaves the task's stage, check and review wait as they were. An `unknown` status counts as stopped only for the row whose transcript showed the turn closed; a row is the same row while its status and its transcript's size (`rev`) are (its time counts only where it has no `rev`: a node's later list can carry a later time for a transcript that did not change). So a node that never lists a runtime as working, a manager that was down or disconnected when the turn ended, and lists that arrive out of order all end in the same one receipt, one judgment and one message.
-- **Bound**: a turn that ended unheard gets its receipt within one sweep tick (30 seconds) plus two transcript reads (the sweep's and the end's own, 20 seconds at most each) of the node listing the end; with more than four such tasks at once, four looks go at a time and the rest follow on the next ticks. The judgment follows within its own limit (90 seconds, with one retry 3 seconds after a failure); one that does not land (the task's work changed while it was judged) is asked again on the next tick, then one and two minutes later, and when the third does not land either the supervisor is told `unjudged` at once. A judgment call or reply that fails is not told yet after that inline retry: the sweep makes at most four more passes on the next tick, the following tick, then one and two minutes later (about four minutes altogether). Each pass reads the latest reply; new work resets the retry budget. If all four fail, one `unjudged` says `判定服务出错（自动重判 4 次仍失败）`; a valid `unsure` verdict keeps its immediate `看不出做没做完` signal. No model set up for the judge is not retried and still says `判定模型未配置` (Settings › Model configuration; #10435). The supervision message then goes out on the usual schedule (15 seconds to gather, at most one message per 2 minutes for a stop, per 10 minutes for a review; queued behind a running main chat turn).
+- **Bound**: a turn that ended unheard gets its receipt within one sweep tick (30 seconds) plus two transcript reads (the sweep's and the end's own, 20 seconds at most each) of the node listing the end; with more than four such tasks at once, four looks go at a time and the rest follow on the next ticks. The judgment follows within its own limit (90 seconds, with one retry 3 seconds after a failure); one that does not land (the task's work changed while it was judged) is asked again on the next tick, then one and two minutes later, and when the third does not land either the supervisor is told `unjudged` at once. A judgment call or reply that fails is not told yet after that inline retry: the sweep makes at most four more passes on the next tick, the following tick, then one and two minutes later (about four minutes altogether). Each pass reads the latest reply; new work resets the retry budget. If all four fail, one `unjudged` says `判定服务出错（自动重判 4 次仍失败）`; a valid `unsure` verdict keeps its immediate `看不出做没做完` signal. No model set up for the judge is not retried and still says `判定模型未配置` (Settings › Model configuration; #10435). Both of these stops (the judge not set up, or its retries used up) are marked as a judge outage and are not urgent: they wait for the 10-minute spacing, so the stops during an outage reach the supervisor together instead of one wake each (#13821; the mark is kept on the turn's ledger for a replay after a restart). The judge's model is resolved on every call, so a model bound again judges the next stop without a restart; stops already told unjudged are not judged again. The supervision message then goes out on the usual schedule (15 seconds to gather, at most one message per 2 minutes for a stop, per 10 minutes for a review; queued behind a running main chat turn). A report the Agent made with `report_to_supervisor` while still in that turn (done, blocked, a question; progress never wakes anyone) waits up to 2 minutes for the stop, which releases it, and the two are one entry of one message (`signal=<stop>+report`, the stop entry carrying the report's words, evidence and step; #13791). Before, the report and the stop seconds later were two messages about two minutes apart. A report from an Agent that is not working, or with no stop within the 2 minutes, goes out on its own as before.
 - **A look that cannot finish** (the node does not answer the read, an Agent works or waits again, another look is at the same end, the judgment does not land) is tried again on the next tick, then 1, 2, 4 and 8 minutes later and every 10 minutes after that, while the row stays as it is and its node's connection is the same one. A row that moved, or a node that connected again, is looked at on the next tick whatever came before. Some states are not looked at at all, because looking cannot help:
   - **A usage limit that is waited out** (the CLI or the manager goes on after the reset): nothing is read and no start is taken until the wait is over; the turn that did not go on after all is taken up then.
   - **A computer that is not connected**: its rows are the manager's copy of its last list; nothing is asked until it is back.
@@ -703,7 +707,7 @@ workspaces are never closed, and repeated close passes do nothing.
 node rejects these (`not_retirable`), assistant records them and does not ask again for 10 minutes if Agent unchanged (`taskCloseRetry`, then retries because node may have upgraded). Old nodes not recognizing `session.stop` are likewise treated as refusals, so nothing is closed while the hub is updated first; after the node upgrade, stopping resumes within at most 10 minutes. A node since #4754 answers an older hub's `session.retire` the same way: it stops the Agent and keeps its terminal.
 Agents linked to no task (user-created, `agent_start`, inspection sessions such as herdr-leader) are not managed by the finished-task rule; the idle rule below covers the ones Persona started.
 
-**Idle Agents stop too** (`assistant/tasks_idle.go`, #2784): in the same minute loop, an Agent Persona started (including a stopped one a message resumed, `agent_send` or the chat) that has been still for `idle_close_hours` (assistant setting, default 12, `0` turns it off, `GET`/`PUT /api/v1/assistant`) is stopped like a finished task's, by the same checks and the same `session.stop`, and keeps its terminal. The idle time counts from the later of its last activity and when the hub first saw it running, so a freshly resumed Agent is not stopped at once (and after a hub restart the clock restarts). Besides the "Do not stop" list above, it is left running when its work state is blocked (on the user, another Agent, CI or a deploy) or has a wake due, and when it belongs to an open task, unless that task itself has had no update for three times the idle time (stalled or never accepted). Transcripts, launch state and the terminal stay; it is read-only from then on, and the user's Resume, or the assistant's explicit resume, brings it back.
+**Idle Agents stop too** (`assistant/tasks_idle.go`, #2784): in the same minute loop, an Agent Persona started (including a stopped one a message resumed, `agent_send` or the chat) that has been still for `idle_close_hours` (assistant setting, default 12, `0` turns it off, `GET`/`PUT /api/v1/assistant`) is stopped like a finished task's, by the same checks and the same `session.stop`; with `close_ended_terminals` on, its terminal tab is closed too, the way a done task's is (`session.retire` with `close_terminal`), and off it keeps its terminal. The idle time counts from the later of its last activity and when the hub first saw it running, so a freshly resumed Agent is not stopped at once. The hub keeps that clock in memory: its first list of a computer after it starts counts from each running Agent's own last activity, so a hub restart does not start the clock again; only an Agent that starts running after that counts from when it is seen. Besides the "Do not stop" list above, it is left running when its work state is blocked (on the user, another Agent, CI or a deploy) or has a wake due, and when it belongs to an open task, unless that task itself has had no update for three times the idle time (stalled or never accepted). Transcripts and launch state stay (the terminal too unless `close_ended_terminals` closed it); it is read-only from then on, and the user's Resume, or the assistant's explicit resume, brings it back.
 
 **`/exit` from the assistant**: `agent_send` with only `/exit` or `/quit` stops a running Agent as `session.stop` does (its tab stays, holding the shell) instead of typing it in; to an Agent that is not running it does nothing, so a stopped Agent is not resumed in a new tab only to quit there.
 
@@ -1115,7 +1119,7 @@ Step 3 of the three-loop process (#2820): Agent conclusions automatically settle
 - **Project context at dispatch**: for a new Agent, ownership is the to-do's live explicit `Project`, then the live project of its unique current direction through `Supervision.Supervisor` (unwrapping a task leader with `leaderAbove`), and only then the target directory's projects as above. `task_spawn` carries the same `TodoID`, explicit `Project` and raw supervisor source into its child, so a child working in another project's directory still reads and writes its assigned direction. Work-trust machines receive none of this personal context.
   With usable `memory.jsonl`, the first prompt has three fixed sections (`server/internal/prompts/todo/project_memory.md`): bounded `summary.md` (1500 runes for a short project, 2500 for a long direction; `OneLine` only when the summary is absent or empty), the latest 5 outcome records, then the latest 5 effective decisions with reasons and at most 3 pitfalls. Newest-first selection is per kind, not one shared JSONL tail limit. Only explicit `supersedes_id` removes an old decision; different IDs with contradictory choices all remain with their timestamps. `agent_reported` records are visibly marked as not supervisor-accepted; legacy M1 outcome rows with an inline decision remain readable without inventing a timestamp. Extension `project_context` blocks follow the pitfalls.
   Without a usable `memory.jsonl`, the old project keeps the existing `OneLine` plus latest 5 `待办 ·` conclusions from `log.md` and the original `server/internal/prompts/todo/project.md` rendering; dispatch does not create or migrate the file. At most two project blocks appear. Extension contributions are enough to render a block, as before. Send unchanged without project, nothing to say, or knowledge base closed.
-  - Assistant `task_plan` (`startTaskAgent`, retry includes decisions too), `agent_start`: prepend directly; tab names still use original title/prompt.
+  - Assistant `task_plan` (`startTaskAgent`, retry includes decisions too), `agent_start`: prepend directly; tab names still use original title/prompt. Their optional `skip_project_memory` is false by default; true omits the direction notes, project block, lessons and extension project context for that start only. `task_plan` saves it on the task so queueing, retries and reloads retain it. The assignment, criteria, to-do decisions and framework rules are unchanged.
   - App **Hand to Agent → New** through hub: `POST /api/v1/sessions` with `todo_id`/`prompt` asks assistant (`assistant.todo_handoff` with `new: true`, `machine_id`, `cwd`; expand `~/` and empty cwd using that computer's home), project context before decisions.
     Clients' Claude starts in background then sends first message (`async`, empty prompt): hub remembers "session newly created for this to-do" (memory, 15 minutes), treats its first message as new Agent's first input with context/decisions; recognizes iOS / Android first messages even without `todo_id`. Forget only after successful send; failed sends (rejected/nothing entered) retain context on retry; answer-only devices do not count. If hub restarted between, send unchanged.
   - Handoff to an existing Agent (message) includes decisions only, not project context.
@@ -1414,8 +1418,10 @@ work** group. The detail is read-only by default: it draws the saved
 repositories as rows with their issues and pull requests as links, so the
 associations the agent maintains are visible without opening an editor. Each
 repository row carries its provider's own mark and its project address on one
-line; a link shows its retained full title as the hyperlink, falling back to the
-localized type and number when no title is known. A provider extension's
+line. A link shows its saved title, then the title from a matching PR observation,
+then its localized type and number. The Web matches the current and earlier PR
+observations by URL and shows Open, Draft, Merged or Closed beside the link.
+An open PR with merge conflicts also shows a Conflict warning. A provider extension's
 repository has the extension mark and its source's name after the address (the
 `provider_name` saved with it, else "Another source", never the `ext:` id); its
 links open at their stored addresses, numbered `#N`, with the extension's own
@@ -1475,7 +1481,9 @@ their `maxLength` is only a character ceiling, not a UTF-8 byte validator.
 A nonempty title updates a retained link and increments
 the association revision. Omitted or empty titles in URL-only reports or older
 editors preserve known titles; removing a link removes its title. Agents obtain
-titles from the related work and maintain them through the same tool. The app
+titles from the related work and maintain them through the same tool. The existing
+GitHub status poll also reads the PR title and refreshes a matching saved link.
+Only a changed, nonempty title advances the association revision. The app
 shows a localized type and number until a title is available; it never guesses
 titles or performs a remote metadata request when opening a to-do.
 It preserves source snapshots, aliases and requested refs. Assistant conversations
@@ -1785,3 +1793,56 @@ The engine's workspace ID still identifies its native container. Use the
 backend cleanup endpoint for the prepared repositories and the engine’s
 close action for its terminal. Adding a repository, issue or pull request
 association leaves the task’s launch choice and delivery progress in place.
+
+### Managed bare repository mirrors
+
+Developers who work repeatedly across large or multi-repository codebases on a
+connected computer can opt into per-`(machine, repo_id)` managed bare mirrors
+stored under the Node's protected `~/.persona/repos/<repo_id>.git` directory.
+Mirrors are strictly isolated from user-managed checkouts (`~/workspace/*`);
+Persona never runs `git pull` on user-created working directories and never
+stores Git credentials in the Hub database, reusing only the target machine's
+local Git/SSH/`gh` authentication.
+
+Defaults remain conservative: `enabled` is `false` and `auto_sync` is `false`
+for every `(machine, repo_id)` pair, producing zero background network or disk
+activity until explicitly enabled.
+
+- **Node RPCs (`server/internal/node/repo_mirror.go`, registered via `nodeRPC`)**:
+  - `repo.mirror.ensure`: initializes `~/.persona/repos/<repo_id>.git` as a bare
+    mirror if missing, or refreshes it with `git fetch --prune --tags` when
+    older than the requested TTL (default 5 minutes, overridable with
+    `ttl_seconds` or `force: true`). Per-repository single-flight locking
+    coalesces concurrent calls cleanly, with bounded timeouts, empty hooks
+    (`core.hooksPath`), and symlink/path guards (`~/.persona/repos` is also
+    protected from remote file-browsing APIs in `server/internal/node/pathguard.go`).
+  - `repo.mirror.status`: reports one mirror or lists all mirrors with
+    `default_ref`, `head_commit`, `last_synced_at` and recursive `disk_bytes`.
+  - `repo.mirror.remove`: waits for any in-flight sync on that repository,
+    safely deletes `<repo_id>.git` and its metadata/lock under
+    `~/.persona/repos/`, and reports `freed_bytes`.
+- **Manager persistence & opt-in periodic sync (`server/internal/assistant/repositorystore/repo_mirrors.go`, `server/internal/assistant/repo_mirrors.go`)**:
+  - Per-`(machine, repo_id)` mirror settings and sync status live in
+    Manager-owned table `repo_mirrors` (migration
+    `20261122172523_repo_mirrors.sql`, keeping Hub thin).
+  - When both `enabled` and `auto_sync` are `true`, the Manager runs a
+    low-frequency periodic sync loop (`sync_interval_minutes` in `[15, 1440]`,
+    default `30`) with jitter and exponential failure backoff.
+  - Full-credential HTTP routes (no extension scopes):
+    `GET /api/v1/assistant/repositories/mirrors`,
+    `GET /api/v1/assistant/repositories/{id}/mirrors/{machine_id}`,
+    `PUT /api/v1/assistant/repositories/{id}/mirrors/{machine_id}`,
+    `POST /api/v1/assistant/repositories/{id}/mirrors/{machine_id}/sync`, and
+    `DELETE /api/v1/assistant/repositories/{id}/mirrors/{machine_id}`.
+- **Backend workspace preparation integration**:
+  - During `PrepareBackendWorkspace` (including `task_plan` `workspace.backend`
+    and `workspace.container`), the Manager refreshes any enabled mirrors for
+    the target machine within TTL and passes `mirror_repos` in
+    `task.workspace.prepare`.
+  - The Node populates each task workspace's private bare repository locally
+    from `~/.persona/repos/<repo_id>.git` (with zero `objects/info/alternates`
+    dependencies and keeping `remote.origin.url` pointing at the real upstream
+    URL), force-refreshing once if a requested ref was pushed within the TTL
+    window, and falling back cleanly to the direct remote path whenever no
+    mirror is enabled, an older Node lacks `repo.mirror.ensure`, or a ref is
+    unavailable in the mirror.

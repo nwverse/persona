@@ -290,6 +290,8 @@ showFromSeq
 showFullOutput
 showGitReload
 showHandOffNewAgent
+showHealthActivityExample
+showHealthHomeTrendsExample
 showHealthTrends
 showHerdrStart
 showHomeState
@@ -356,6 +358,7 @@ showMinutesSearch
 showMinutesTab
 showModelConfigSheet
 showModelSearch
+showModules
 showNewAgentPrompt
 showNewChat
 showNewMain

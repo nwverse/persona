@@ -54,9 +54,11 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/assistant/conversations/{id}/undelivered/{msg}
 -                    DELETE /api/v1/assistant/directions/offers/{id}
 -                    DELETE /api/v1/assistant/followups/{id}
+-                    DELETE /api/v1/assistant/health/intake/{id}
 -                    DELETE /api/v1/assistant/memory/{name}
 -                    DELETE /api/v1/assistant/places/{id}
 -                    DELETE /api/v1/assistant/repositories/{id}
+-                    DELETE /api/v1/assistant/repositories/{id}/mirrors/{machine_id}
 -                    DELETE /api/v1/assistant/saved-prompts/{id}
 -                    DELETE /api/v1/assistant/standing-authorizations/{id}
 -                    DELETE /api/v1/assistant/starred/{id}
@@ -160,6 +162,8 @@ assistant.entries.read GET /api/v1/assistant/entries
 -                    GET /api/v1/assistant/extension-trust
 -                    GET /api/v1/assistant/feishu/notices
 -                    GET /api/v1/assistant/followups
+-                    GET /api/v1/assistant/health/intake
+-                    GET /api/v1/assistant/health/intake/changes
 -                    GET /api/v1/assistant/history
 leaders.read         GET /api/v1/assistant/leaders
 -                    GET /api/v1/assistant/memory
@@ -168,8 +172,10 @@ leaders.read         GET /api/v1/assistant/leaders
 -                    GET /api/v1/assistant/readiness
 assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/assistant/repositories
+-                    GET /api/v1/assistant/repositories/mirrors
 -                    GET /api/v1/assistant/repositories/providers
 -                    GET /api/v1/assistant/repositories/{id}
+-                    GET /api/v1/assistant/repositories/{id}/mirrors/{machine_id}
 -                    GET /api/v1/assistant/routines
 -                    GET /api/v1/assistant/runs
 -                    GET /api/v1/assistant/saved-prompts
@@ -473,6 +479,9 @@ leaders.write        POST /api/v1/assistant/directions/{id}/progress
 -                    POST /api/v1/assistant/feishu/notices/action
 -                    POST /api/v1/assistant/feishu/workbench
 -                    POST /api/v1/assistant/followups/{id}/run
+-                    POST /api/v1/assistant/health/intake
+-                    POST /api/v1/assistant/health/intake/ui
+-                    POST /api/v1/assistant/health/water/reminder
 -                    POST /api/v1/assistant/health/workouts
 -                    POST /api/v1/assistant/main/clear
 -                    POST /api/v1/assistant/main/new
@@ -481,6 +490,7 @@ leaders.write        POST /api/v1/assistant/directions/{id}/progress
 -                    POST /api/v1/assistant/readiness/dismiss
 -                    POST /api/v1/assistant/repositories
 -                    POST /api/v1/assistant/repositories/preview
+-                    POST /api/v1/assistant/repositories/{id}/mirrors/{machine_id}/sync
 -                    POST /api/v1/assistant/repositories/{id}/restore
 -                    POST /api/v1/assistant/route/agent
 -                    POST /api/v1/assistant/routines/{id}/run
@@ -750,6 +760,7 @@ assistant.dispatch_policy PUT /api/v1/assistant/dispatch-policy
 -                    PUT /api/v1/assistant/memory/{name}
 -                    PUT /api/v1/assistant/places/{id}
 -                    PUT /api/v1/assistant/repositories/{id}
+-                    PUT /api/v1/assistant/repositories/{id}/mirrors/{machine_id}
 -                    PUT /api/v1/assistant/routines
 -                    PUT /api/v1/assistant/saved-prompts/order
 -                    PUT /api/v1/assistant/saved-prompts/{id}
