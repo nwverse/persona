@@ -148,7 +148,7 @@ func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, text
 	if sp, known := s.conversationSpace(ctx, self); known {
 		leadSpace = sp
 	}
-	if leadOwnAgentTools[tool] && s.isLeader(ctx, self) && !s.trackPolicy(ctx, leadSpace).ConfirmOutbound {
+	if leadOwnAgentTools[tool] && s.isLeader(ctx, self) && !s.exitPolicy(ctx, "", self, leadSpace).ConfirmOutbound {
 		// A direction lead driving its own Agents on the owner's computers: the owner confirmed the work once, when it
 		// reached the lead (a2a_send, the main conversation's hand-off). A track whose rules confirm every hand-off
 		// (health) still asks.
