@@ -11,7 +11,12 @@ public struct ModuleID: RawRepresentable, Hashable, Comparable, Sendable, Expres
 
     /// Lower-case letters, digits and single hyphens, starting with a letter: `glasses`, `screen-share`.
     public var isWellFormed: Bool {
-        rawValue.range(of: #"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"#, options: .regularExpression) != nil
+        // Every character is checked: a regex `$` would also accept a trailing newline.
+        let words = rawValue.split(separator: "-", omittingEmptySubsequences: false)
+        guard let first = rawValue.unicodeScalars.first, ("a"..."z").contains(first) else { return false }
+        return words.allSatisfy { word in
+            !word.isEmpty && word.unicodeScalars.allSatisfy { ("a"..."z").contains($0) || ("0"..."9").contains($0) }
+        }
     }
 }
 

@@ -122,6 +122,17 @@ struct ModuleRegistryTests {
                                       "Bad_ID: not a module id (lower-case words joined by hyphens)"])
     }
 
+    @Test func aComposerActionCannotTakeACoreID() {
+        let log = Log()
+        let modules = ["photo", "camera", "file", "voice"].enumerated().map { i, id in
+            Sample(ModuleID(rawValue: "m\(i)"), log: log, action: id)
+        } + [Sample("glasses", log: log)]
+        let registry = ModuleRegistry<TestHost>(modules: modules)
+        #expect(registry.composerActions.map(\.id) == ["glasses"])
+        #expect(registry.problems == ["m0: composer action photo is one of the core's own", "m1: composer action camera is one of the core's own",
+                                      "m2: composer action file is one of the core's own", "m3: composer action voice is one of the core's own"])
+    }
+
     @Test func theSheetDeliversToTheComposer() {
         let registry = ModuleRegistry<TestHost>(modules: [Sample("glasses", log: Log())])
         var got: [String] = []
@@ -137,6 +148,11 @@ struct ModuleRegistryTests {
         #expect(!ModuleID("screen_share").isWellFormed)
         #expect(!ModuleID("-x").isWellFormed)
         #expect(!ModuleID("").isWellFormed)
+        #expect(!ModuleID("glasses\n").isWellFormed)
+        #expect(!ModuleID("glasses-").isWellFormed)
+        #expect(!ModuleID("a--b").isWellFormed)
+        #expect(!ModuleID("1x").isWellFormed)
+        #expect(!ModuleID("glässes").isWellFormed)
     }
 
     @Test func servedSlots() {

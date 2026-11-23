@@ -54,8 +54,8 @@ public struct ModuleRegistry<Host: ModuleHost> {
     public let active: [ModuleDescriptor]
     /// Every composer action of the active modules, in list order, then registration order.
     public let composerActions: [ComposerAction<Host>]
-    /// Registrations that were refused: an undeclared slot, a duplicate module id or composer action id, a malformed
-    /// id. Empty in a correct build; the app asserts it in DEBUG and the tests check it.
+    /// Registrations that were refused: an undeclared slot, a duplicate module id or composer action id, a composer
+    /// action id the core uses itself, a malformed id. Empty in a correct build; the app asserts it in DEBUG and the tests check it.
     public let problems: [String]
     private let launchHooks: [() -> Void]
     private let urlHandlers: [(URL) -> Bool]
@@ -63,6 +63,9 @@ public struct ModuleRegistry<Host: ModuleHost> {
     /// - Parameters:
     ///   - modules: the module list, in the order entries should appear.
     ///   - isEnabled: whether a listed module is switched on. The default takes every module built into this binary.
+    /// The composer's own attach source ids (photos, the camera, files, voice): a module's composer action may not take one.
+    public static var coreComposerIDs: Set<String> { ["photo", "camera", "file", "voice"] }
+
     public init(modules: [any PersonaModule<Host>], isEnabled: @MainActor (any PersonaModule<Host>) -> Bool = { $0.isAvailable }) {
         var active: [ModuleDescriptor] = []
         var actions: [ComposerAction<Host>] = []
@@ -86,7 +89,9 @@ public struct ModuleRegistry<Host: ModuleHost> {
             module.register(into: &registrar)
             problems += registrar.problems
             for action in registrar.composerActions {
-                if actionIDs.insert(action.id).inserted {
+                if Self.coreComposerIDs.contains(action.id) {
+                    problems.append("\(descriptor.id): composer action \(action.id) is one of the core's own")
+                } else if actionIDs.insert(action.id).inserted {
                     actions.append(action)
                 } else {
                     problems.append("\(descriptor.id): composer action \(action.id) is already taken")
