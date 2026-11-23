@@ -22,15 +22,15 @@ func (m *memExtensionSource) MemoryExtensionEntries(_ context.Context, personal 
 
 // Fake entries of the memory extension, oldest first: a finance entry said in qa-finance, one from qa-finance the
 // extension did not tag, a general one from qa-plain, a general one from the main space, and one from a space the
-// registry does not know.
+// registry does not know. All are standing, so a standing channel may take them (memoryExtensionBatch.standingOnly).
 var (
 	extQAFinance = memoryExtensionEntry{ID: "ext-qa-finance", Text: "qa: quarterly budget envelope totals",
-		OriginSpace: "qa-finance", Categories: []string{categoryFinance}}
+		OriginSpace: "qa-finance", Categories: []string{categoryFinance}, Standing: true}
 	extQAFinanceUntagged = memoryExtensionEntry{ID: "ext-qa-finance-untagged", Text: "qa: invoices are filed by quarter",
-		OriginSpace: "qa-finance"}
-	extQAPlain   = memoryExtensionEntry{ID: "ext-qa-plain", Text: "qa: notes are written in short lines", OriginSpace: "qa-plain"}
-	extQAMain    = memoryExtensionEntry{ID: "ext-qa-main", Text: "qa: the weekly report uses bullet points"}
-	extQAUnknown = memoryExtensionEntry{ID: "ext-qa-unknown", Text: "qa: a placeholder from nowhere", OriginSpace: "qa-unknown"}
+		OriginSpace: "qa-finance", Standing: true}
+	extQAPlain   = memoryExtensionEntry{ID: "ext-qa-plain", Text: "qa: notes are written in short lines", OriginSpace: "qa-plain", Standing: true}
+	extQAMain    = memoryExtensionEntry{ID: "ext-qa-main", Text: "qa: the weekly report uses bullet points", Standing: true}
+	extQAUnknown = memoryExtensionEntry{ID: "ext-qa-unknown", Text: "qa: a placeholder from nowhere", OriginSpace: "qa-unknown", Standing: true}
 )
 
 func extQAEntries() []memoryExtensionEntry {
