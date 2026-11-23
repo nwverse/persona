@@ -785,7 +785,7 @@
         },
         "skip_project_memory": {
           "type": "boolean",
-          "description": "default false; true omits automatic project/direction memory for this start, including project summary, outcomes, decisions, pitfalls, lessons and direction notes; the supplied prompt is unchanged"
+          "description": "default false; true skips project/direction memory; prompt unchanged"
         },
         "attachments": {
           "type": "array",
@@ -809,7 +809,7 @@
         },
         "ultracode": {
           "type": "boolean",
-          "description": "Claude Code multi-agent workflows for substantial steps; default false"
+          "description": "multi-agent workflows; default false"
         },
         "worktree": {
           "type": "object",
@@ -2339,15 +2339,15 @@
               },
               "context": {
                 "type": "string",
-                "description": "facts the manager cannot resolve; omit project background"
+                "description": "extra facts; no project background"
               },
               "prompt": {
                 "type": "string",
-                "description": "goal, authorization bounds and new facts; the manager adds project context unless skip_project_memory is true, plus criteria and framework rules once"
+                "description": "goal, bounds and facts; manager adds context, criteria and rules"
               },
               "skip_project_memory": {
                 "type": "boolean",
-                "description": "default false; true omits automatic project/direction memory for this task, including project summary, outcomes, decisions, pitfalls, lessons and direction notes; the supplied prompt and criteria are unchanged"
+                "description": "default false; true skips project/direction memory; prompt unchanged"
               },
               "machine": {
                 "type": "string",

@@ -36,7 +36,7 @@ Give `ultracode: true` for a large task: one that spans many files or needs chec
     },
     "skip_project_memory": {
       "type": "boolean",
-      "description": "default false; true omits automatic project/direction memory for this start, including project summary, outcomes, decisions, pitfalls, lessons and direction notes; the supplied prompt is unchanged"
+      "description": "default false; true skips project/direction memory; prompt unchanged"
     },
     "attachments": {
       "type": "array",
@@ -56,7 +56,7 @@ Give `ultracode: true` for a large task: one that spans many files or needs chec
     },
     "ultracode": {
       "type": "boolean",
-      "description": "Claude Code multi-agent workflows for substantial steps; default false"
+      "description": "multi-agent workflows; default false"
     },
     "worktree": {
       "type": "object",
