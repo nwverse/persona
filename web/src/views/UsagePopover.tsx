@@ -6,8 +6,9 @@ import { sendDraft } from "../lib/drafts";
 import { navigate } from "../lib/router";
 import { getState } from "../lib/store";
 import { balanceEmpty, balanceText } from "../lib/usage-balance";
-import { accountPace, groupByProvider, isBalanceAccount, isWarn, planNote, providerTitle, resetLabel, sampleAge, providerTimeline, remainingText, sortedWindows, sourceNames, TIMELINE_TICKS_HOURS, timelinePosition, windowKey, type PaceState, type UnconnectedProvider, type UsageAccount, type UsageWindow } from "../lib/usage-windows";
+import { accountPace, groupByProvider, isBalanceAccount, isWarn, planNote, providerTimeline, providerTitle, remainingText, resetLabel, resetPinnedUsageAccounts, sampleAge, sortedWindows, sourceNames, TIMELINE_TICKS_HOURS, timelinePosition, togglePinnedUsageAccount, usePinnedUsageAccounts, windowKey, type PaceState, type UnconnectedProvider, type UsageAccount, type UsageWindow } from "../lib/usage-windows";
 import { cx, EASE } from "../ui/atoms";
+import { Icon } from "../ui/icons";
 import { Meter } from "./UsageBars";
 
 const PACE_TEXT: Record<PaceState, string> = { over: "text-orange", under: "text-green", on: "text-ink-3" };
@@ -72,6 +73,9 @@ export function UsagePopover({
   now?: number;
   onClose?: () => void;
 }) {
+  const pinnedIds = usePinnedUsageAccounts();
+  const pinnedSet = new Set(pinnedIds);
+  const livePinnedCount = accounts.reduce((n, a) => n + (pinnedSet.has(a.id) ? 1 : 0), 0);
   const [tick, setTick] = useState(() => Date.now());
   useEffect(() => {
     if (fixed !== undefined) return;
@@ -88,6 +92,21 @@ export function UsagePopover({
   return (
     <div role="dialog" aria-label={tr("usage.title")} className="absolute bottom-full left-2.5 right-2.5 z-20 mb-1.5 max-h-[60vh] overflow-y-auto rounded-card bg-surface p-3 shadow-overlay" style={{ animation: `pop-in 160ms ${EASE} both`, transformOrigin: "bottom left" }}>
       <div className="flex flex-col gap-3">
+        {pinnedIds.length > 0 && accounts.length > 0 && (
+          <div data-usage-pinned-bar className="flex items-center justify-between gap-2 border-b border-line pb-2 text-submeta">
+            <span className="min-w-0 truncate text-ink-3">
+              {livePinnedCount > 0 ? tr("usage.pinned_summary", { count: livePinnedCount }) : tr("usage.pinned_fallback")}
+            </span>
+            <button
+              type="button"
+              data-usage-reset-pins
+              onClick={() => resetPinnedUsageAccounts()}
+              className="shrink-0 font-medium whitespace-nowrap text-accent-ink hover:underline"
+            >
+              {tr("usage.reset_pinned")}
+            </button>
+          </div>
+        )}
         {groupByProvider(accounts).map((g) => (
           <section key={g.provider} data-usage-provider={g.provider} aria-label={providerTitle(g.provider)} className="flex flex-col gap-3 rounded-control border border-line p-2.5">
             <header className="flex items-baseline gap-2">
@@ -97,7 +116,7 @@ export function UsagePopover({
             </header>
             {g.accounts.map((a, i) => (
               <div key={a.id} className={cx("flex flex-col", i > 0 && "border-t border-line pt-2.5")}>
-                <AccountSection a={a} now={now} />
+                <AccountSection a={a} now={now} pinned={pinnedSet.has(a.id)} />
               </div>
             ))}
             <ProviderTimeline accounts={g.accounts} now={now} />
@@ -124,7 +143,7 @@ export function UsagePopover({
   );
 }
 
-function AccountSection({ a, now }: { a: UsageAccount; now: number }) {
+function AccountSection({ a, now, pinned }: { a: UsageAccount; now: number; pinned: boolean }) {
   const from = sourceNames(a);
   const plan = planNote(a);
   // A balance's failure is about the provider's balance route, not a usage gateway's stored windows (#11825).
@@ -132,9 +151,23 @@ function AccountSection({ a, now }: { a: UsageAccount; now: number }) {
   return (
     <section aria-label={a.name} className={cx("flex flex-col gap-2", a.stale && "opacity-70")}>
       <header className="flex flex-col gap-0.5">
-        <div className="flex items-baseline gap-2">
+        <div className="flex items-center gap-1.5">
           <h3 className="min-w-0 flex-1 truncate text-label font-medium text-ink">{a.name}</h3>
           <span className="shrink-0 whitespace-nowrap text-submeta text-ink-3">{a.stale ? tr("usage.stale_age", { age: sampleAge(a.sampled_at, now) }) : sampleAge(a.sampled_at, now)}</span>
+          <button
+            type="button"
+            data-usage-pin={a.id}
+            aria-pressed={pinned}
+            aria-label={pinned ? tr("usage.unpin_account", { name: a.name }) : tr("usage.pin_account", { name: a.name })}
+            title={pinned ? tr("usage.unpin_title") : tr("usage.pin_title")}
+            onClick={() => togglePinnedUsageAccount(a.id)}
+            className={cx(
+              "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-control transition-colors",
+              pinned ? "bg-hover-2 text-accent-ink" : "text-ink-3 hover:bg-hover hover:text-ink",
+            )}
+          >
+            <Icon name="pin" size={12} />
+          </button>
         </div>
         {(from.length > 0 || plan) && (
           <div data-usage-source className="flex min-w-0 items-baseline gap-1.5 text-submeta text-ink-3">
