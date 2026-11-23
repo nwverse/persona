@@ -1961,9 +1961,10 @@ Message feedback (#5258, principle 7, super rule 5) reuses the chat's status lin
 style. Show Sending immediately from local state, then Processing on the hub's `message_send_state` receipt; do not wait
 for a model token or overwrite `Session.status`. The pending-send overlay is scoped to the conversation and message,
 survives stale snapshots, and hands off to actual execution or queued state on delivery. Failure removes only its own
-overlay and keeps the existing draft, failed-bubble and uncertain-delivery recovery. On the web the state is said once,
-by the status line under the last message (Sending, Processing, delivery unknown); the pending bubble only dims, with no
-second line under it (a queued message's bubble keeps its Queued). The full wire and reconnect rules
+overlay and keeps the existing draft, failed-bubble and uncertain-delivery recovery. On the web, a direct send's state
+appears on the status line under the last message, and its pending bubble dims. A follow-up headed for the queue while
+the turn works shows its state and local photo previews in its queue row as soon as it is sent (#13958). The hub's queue
+update confirms that row in place. The full wire and reconnect rules
 are in `docs/protocol/protocol.md` ("Message feedback (#5258)"). Apply the same definition in Assistant and Agent chats.
 
 | Message state | en | zh-Hans | ja |
