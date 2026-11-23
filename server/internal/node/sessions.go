@@ -276,6 +276,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				} else {
 					n.mergeAgyTranscript(&s, agyConversations[id])
 				}
+				n.agyPaneTitle(&s, agyConversations[id]) // its conversation's title, not the terminal's (agytitle.go)
 			}
 		case otherAgent(a):
 			s.ReadOnlyReason = otherNoReader(a.Agent)

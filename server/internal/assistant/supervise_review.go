@@ -596,10 +596,15 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			if over {
 				was = overLabel()
 			}
+			where := "the next daily briefing lists it with your recommendation, where they answer it; if no briefing reaches them " +
+				"with it within 24 hours, or by 11 hours before its deadline, the hub pushes it after all"
+			if s.briefingDue(ctx, time.Now()).IsZero() { // no briefing on: Needs you only (decision_wait.go)
+				where = "no daily briefing is on, so it is never pushed: they answer it there when they look, and a reversible default " +
+					"is taken at its deadline"
+			}
 			return fmt.Sprintf("Task %s%s waits for the user (needs_user), and its decision can wait (can_wait): no push and no card went out. "+
-				"It is in their Needs you now, and the next daily briefing lists it with your recommendation, where they answer it; if no "+
-				"briefing reaches them with it within 24 hours, or by 11 hours before its deadline, the hub pushes it after all. Don't ask "+
-				"them or push it yourself; review it once the agent stops.%s", t.ID, was, pushed), nil
+				"It is in their Needs you now, and %s. Don't ask them or push it yourself; review it once the agent stops.%s",
+				t.ID, was, where, pushed), nil
 		}
 		if notHeld != "" {
 			pushed += " can_wait was ignored (" + notHeld + "): it is pushed as usual."
