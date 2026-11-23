@@ -31962,6 +31962,29 @@
         }
       }
     },
+    "Appearance, language, storage, devices and more." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Appearance, language, storage, devices and more."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "外観、言語、ストレージ、デバイスなどの設定。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "外观、语言、存储空间、设备等更多设置。"
+          }
+        }
+      }
+    },
     "Apple's push service gave this device no token (%@)." : {
       "comment" : "%@: the system's error",
       "extractionState" : "manual",

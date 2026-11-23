@@ -4702,6 +4702,19 @@ Editing the roster, creating codes and deleting require a full-permission device
 `manager.hello {id,host?,os?,arch?,deploy?,version?,capabilities?,apps?,…}`. `id` must match the token, otherwise it returns `wrong_identity` and disconnects (4003).
 The roster records only `host`, `os`, `arch`, `deploy` (an assistant started by the hub reports `child`, one elsewhere reports `external`), `version`, and keeps `capabilities` while it is connected; `apps` and the machine summary aren't processed yet.
 `capabilities` (at most 32 names) are stable names of what the manager supports, never renamed or reused. `config.own`: it reads its own sections of the configuration from its `manager.json` (`docs/operations/config.md` ("manager.json")). For a manager without it, the hub logs once that it runs on its built-in defaults (the answer no longer carries them), and `GET /api/v1/managers` marks it `needs_update` while it is online. `http_body_stream`: it takes `http.request_streamed` (a large request body on a relay stream of its own, "Forwarding App requests" below); a manager without it gets every body inside `http.request`. `assistant_start_service_tier`: the manager forwards a new conversation's optional native `service_tier` to the node for acknowledgment before its first turn (#6240); the hub advertises the same feature only while the default manager names it and rejects an explicit tier sent to a manager that does not. `mcp_wait_v1`: it accepts and emits `mcp.wait` through `devices.notify` for explicitly opted-in MCP calls; the hub sends hub-mediated approval updates only to a manager whose current connection names it.
+
+An independent manager advertises `devices.development_packages` to receive the Hub's confirmed
+`devices.development_target` in this handshake and later `devices.config` events. The target carries
+the full 40-hex `commit`, `version`, UTC `YYYYMMDDHHMM` build number, canonical `repository` and a relative `packages` path.
+The manager requests `manifest.json` and its named archives under that path through its existing Hub
+binding with its bearer token. HTTP 410 withdraws the target. A 404 carrying the expected
+`X-Persona-Development-Commit` permits a source build for a missing package. During adoption the
+Hub sends `development_hold` and disables fleet deployment. The manager rechecks the target before activation.
+
+Native Linux and macOS independent managers follow the confirmed build when `auto_update_nodes` is on.
+A machine's optional `deploy_source` records `hub_package` or `local_build` once the manager has verified
+the binary used for that deployment. See [Node packages](../operations/node-update.md#node-packages).
+
 The answer is `{name,role,managers:[{id,name,role,online}],owner,owner_notes,assistant:{machine_id,machines,standby?},done_delay_ms,persona_view?,html_views?,models?,notify?,locale?,mutes?,legacy_config?,secret_handoff_gate?,archived_apart?}`:
 
 - `name`, `role`: the name and role the hub records for this identity (the hub's record wins; the role reported in hello doesn't count);

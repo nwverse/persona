@@ -148,12 +148,19 @@ def resolve(request):
     return {"branch": "main", "commit": match[1], "updated_at": updated_at}
 
 
+def binary_name(program, platform):
+    suffix = ".exe" if platform.startswith("windows-") else ""
+    return program + "-" + platform + suffix
+
+
 def build(request):
+    selected = request["candidate"]
+    if not re.fullmatch(r"[a-f0-9]{40}", selected["commit"]):
+        raise ValueError("development build requires a full commit")
     root = Path(request["work"])
     source, artifacts = root / "source", root / "artifacts"
     source.mkdir()
     artifacts.mkdir()
-    selected = request["candidate"]
     run(["git", "init", "--quiet", str(source)])
     run(["git", "-C", str(source), "remote", "add", "origin", REPOSITORY])
     # Fetch the captured object, never a moving branch head; detached checkout only.
@@ -172,20 +179,41 @@ def build(request):
     if request.get("release_url"):
         flags += " -X " + shlex.quote("main.updateURL=" + request["release_url"])
     tags = (server / "build-tags.txt").read_text().strip()
-    platforms = request["platforms"]
-    if not set(platforms) <= PLATFORMS:
-        raise ValueError("unsupported node platform")
-    for platform in platforms:
+    manifest = {"commit": selected["commit"], "version": request["version"], "build": request["build"],
+                "files": {}, "programs": {}, "nodes": {"persona-node": {}}}
+    # Go validates reported pairs before any part is used as a path or environment value.
+    if request["platform"] not in PLATFORMS:
+        raise ValueError("unsupported Hub platform")
+    available = {p.replace("/", "-") for p in run(["go", "tool", "dist", "list"], server, env, output=True).splitlines()}
+    for platform in sorted((set(request["platforms"]) | {request["platform"]}) & available):
         goos, arch = platform.split("-")
-        programs = ["personad"]
+        programs = ["personad", "persona-node", "persona-manager"]
         if platform == request["platform"]:
-            programs += ["persona-hub", "persona-manager"]
+            programs.append("persona-hub")
         for program in programs:
-            binary = root / (program + "-" + platform)
-            run(["go", "build", "-tags", tags, "-trimpath", "-ldflags", flags,
-                 "-o", str(binary), "./cmd/" + program], server, dict(env, GOOS=goos, GOARCH=arch))
-            with binary.open("rb") as src, gzip.open(artifacts / (binary.name + ".gz"), "wb") as dst:
+            binary = root / binary_name(program, platform)
+            try:
+                run(["go", "build", "-tags", tags, "-trimpath", "-ldflags", flags,
+                     "-o", str(binary), "./cmd/" + program], server, dict(env, GOOS=goos, GOARCH=arch))
+            except subprocess.CalledProcessError:
+                if platform in PLATFORMS:
+                    raise
+                # Some third-party dependencies support fewer ports than Go. An
+                # unbuilt optional program stays absent from the published manifest.
+                print(f"development build: {program} unavailable for {platform}", flush=True)
+                continue
+            archive = artifacts / (binary.name + ".gz")
+            with binary.open("rb") as src, gzip.open(archive, "wb") as dst:
                 shutil.copyfileobj(src, dst)
+            entry = {"name": archive.name, "size": archive.stat().st_size,
+                     "sha256": digest(archive), "binary_sha256": digest(binary)}
+            if program == "personad":
+                manifest["files"][platform] = entry
+            elif program == "persona-node":
+                manifest["nodes"][program][platform] = entry
+            else:
+                manifest["programs"].setdefault(program, {})[platform] = entry
+    write_json(artifacts / "manifest.json", manifest)
     ancestors = run(["git", "rev-list", f"--max-count={HISTORY_LIMIT}", selected["commit"]], source, output=True).splitlines()
     return {"ancestors": ancestors, "artifacts": str(artifacts)}
 
@@ -249,12 +277,15 @@ def read_manifest(path):
     if m["databases"] > len(files):
         raise ValueError("snapshot database count exceeds its inventory")
     expected = {"files.tar.gz", "effective-databases.json"} | {f"database-{i}.dump" for i in range(m["databases"])}
-    for field, allowed, prefix in (("programs", {"personad", "persona-hub", "persona-manager"}, "program-"),
-                                   ("nodes", PLATFORMS, "node-")):
+    for field, prefix in (("programs", "program-"), ("nodes", "node-")):
         entries = m[field]
-        if not isinstance(entries, dict) or not set(entries) <= allowed or (field == "programs" and "personad" not in entries):
+        if not isinstance(entries, dict):
+            raise ValueError("invalid recovery program inventory")
+        if field == "programs" and ("personad" not in entries or not set(entries) <= {"personad", "persona-hub", "persona-manager"}):
             raise ValueError("invalid recovery program inventory")
         for name, info in entries.items():
+            if field == "nodes" and not re.fullmatch(r"[a-z0-9]+-[a-z0-9]+", name):
+                raise ValueError("invalid recovery node platform")
             artifact = prefix + name + ".gz"
             fields = {"file", "sha256", "target"} if field == "programs" else {"file", "sha256"}
             if (not isinstance(info, dict) or set(info) != fields or info["file"] != artifact or
@@ -433,7 +464,7 @@ def prepare_backup(request):
         if request.get("candidate") and (version["commit"] != request["candidate"]["commit"] or
                 version["version"] != request["version"] or version["build"] != request["build"]):
             raise ValueError("snapshot version changed")
-        packages = {"personad-" + p: v for p, v in m.get("nodes", {}).items() if p in PLATFORMS}
+        packages = {"personad-" + p: v for p, v in m.get("nodes", {}).items()}
         packages.update({name + "-" + m["platform"]: v for name, v in m["programs"].items()
                          if name in ("personad", "persona-hub", "persona-manager")})
         if any("personad-" + p not in packages for p in request.get("platforms", [])):
@@ -443,7 +474,7 @@ def prepare_backup(request):
         # Copy only programs, never database dumps, configuration or history.
         # These private copies also survive rotation of the selected snapshot.
         for name, info in packages.items():
-            target = artifacts / (name + ".gz")
+            target = artifacts / (name + (".exe.gz" if "-windows-" in name else ".gz"))
             shutil.copyfile(path / info["file"], target)
             if digest(target) != m["files"][info["file"]]:
                 raise ValueError("staged program checksum mismatch")
@@ -666,8 +697,12 @@ def snapshot(request):
                 node_dir = Path(request["node_directory"]) if request.get("node_directory") else None
                 if node_dir is not None and node_dir.is_symlink():
                     raise ValueError("linked Node package directory")
-                for platform in sorted(PLATFORMS) if node_dir is not None else []:
-                    path = node_dir / ("personad-" + platform)
+                platforms = {p.name.removeprefix("personad-").removesuffix(".exe")
+                             for p in node_dir.glob("personad-*")} if node_dir is not None else set()
+                for platform in sorted(p for p in platforms if re.fullmatch(r"[a-z0-9]+-[a-z0-9]+", p)):
+                    path = node_dir / binary_name("personad", platform)
+                    if platform.startswith("windows-") and not path.exists():
+                        path = node_dir / ("personad-" + platform)  # earlier development builds
                     if path.is_symlink() or not path.is_file():
                         continue
                     version = path.with_name(path.name + ".version")

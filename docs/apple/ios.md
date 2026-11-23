@@ -3338,13 +3338,21 @@ Key points:
 
 ## Settings by scope (#5236)
 
-The shared iPhone, iPad and Mac settings page has three groups:
+The shared iPhone and iPad settings page has three groups, then one Advanced row. Settings home shows each group's core rows
+only (#13395, at most ten; `SettingsCatalog.core`); Settings › Advanced shows the rest under the same groups
+(`SettingsCatalog.advanced`), and search finds every entry on either:
 
-| Scope | Entries |
-| --- | --- |
-| Current Assistant's Settings | Models, Assistant Profile, Channels, Connectors, Extensions, Knowledge Selection, Meetings, Agent, Machines (platform and hub capabilities decide availability) |
-| This Device | Appearance & Display, Language & Dictation, Notifications, Translation, Storage, Health, This iPhone, About |
-| Hub | Hub Connection, Hub Version, Assistants, Avatar, Devices & Pairing |
+| Scope | Settings home | Settings › Advanced |
+| --- | --- | --- |
+| Current Assistant's Settings | Models, Assistant Profile, Channels, Connectors, Inbox Sources, Extensions, Machines | Knowledge Selection, Meetings, Agent |
+| This Device | Notifications, About | Appearance & Display, Language & Dictation, Live Screen, Translation, Storage, Health, Alarms and Timers, This iPhone |
+| Hub | Hub Connection | Hub Version, Assistants, Avatar, Devices & Pairing |
+
+Platform and hub capabilities decide availability, as before: Inbox Sources with the hub's `inbox_sources`, Extensions with
+its extension manager, Live Screen while a computer offers it, Alarms and Timers with AlarmKit, and the hub's own rows only with
+a hub paired (not in demo mode). The Advanced row's value is the hub update's state while one is out or under way. A row keeps
+its accessibility identifier wherever its tier puts it (`SettingsEntry.rowID`); `-openAdvancedSettings YES` (DEBUG) opens
+Settings › Advanced for screenshots.
 
 Whenever the hub answers a roster, with one or many installed assistants, the first heading is **<name>'s Settings**,
 with the current assistant's first-letter avatar and state dot plus **Switch**. Switch opens the same assistant

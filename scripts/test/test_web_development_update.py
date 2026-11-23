@@ -2,6 +2,7 @@
 import contextlib
 import fcntl
 import gzip
+import hashlib
 import importlib.util
 import io
 import json
@@ -79,21 +80,36 @@ if pathlib.Path(sys.argv[0]).name == 'npm' and args == ['run', 'build:developmen
     pathlib.Path('dist').mkdir(); pathlib.Path('dist/index.html').write_text('fixture web')
 if pathlib.Path(sys.argv[0]).name == 'go' and args[0] == 'build':
     pathlib.Path(args[args.index('-o')+1]).write_text(subprocess.check_output(['git','rev-parse','HEAD'], text=True))
+if args == ['tool', 'dist', 'list']:
+    print('linux/amd64', 'linux/riscv64', 'darwin/arm64', 'windows/amd64', sep=chr(10))
 '''
         self.tool("go", fixture)
         self.tool("npm", fixture)
         work = self.root / "build"
         work.mkdir()
         with patch.object(webdev, "HISTORY_LIMIT", 1):
-            built = webdev.build({"platforms":["linux-amd64", "darwin-arm64"], "work":str(work), "candidate":selected,
+            built = webdev.build({"platforms":["linux-amd64", "linux-riscv64", "darwin-arm64", "windows-amd64"], "work":str(work), "candidate":selected,
                                   "version":"web-dev-fixture", "build":202611130001, "platform":"linux-amd64"})
         self.assertEqual(built["ancestors"], [selected["commit"]])
         self.assertEqual(subprocess.check_output(["git", "-C", str(work/"source"), "rev-list", "--count", "HEAD"], text=True).strip(), "1")
         self.assertEqual((work / "personad-linux-amd64").read_text().strip(), selected["commit"])
         self.assertNotEqual(selected["commit"], self.git("rev-parse", "HEAD"))
         self.assertEqual({p.name for p in Path(built["artifacts"]).glob("*.gz")}, {
-            "personad-linux-amd64.gz", "personad-darwin-arm64.gz",
-            "persona-hub-linux-amd64.gz", "persona-manager-linux-amd64.gz"})
+            "personad-linux-amd64.gz", "personad-darwin-arm64.gz", "personad-windows-amd64.exe.gz",
+            "persona-node-linux-amd64.gz", "persona-node-darwin-arm64.gz", "persona-node-windows-amd64.exe.gz",
+            "persona-manager-linux-amd64.gz", "persona-manager-darwin-arm64.gz", "persona-manager-windows-amd64.exe.gz",
+            "personad-linux-riscv64.gz", "persona-node-linux-riscv64.gz", "persona-manager-linux-riscv64.gz",
+            "persona-hub-linux-amd64.gz"})
+        artifacts = Path(built["artifacts"])
+        manifest = json.loads((artifacts / "manifest.json").read_text())
+        self.assertEqual((manifest["commit"], manifest["version"], manifest["build"]),
+                         (selected["commit"], "web-dev-fixture", 202611130001))
+        for files in (manifest["files"], *manifest["nodes"].values(), *manifest["programs"].values()):
+            for entry in files.values():
+                archive = (artifacts / entry["name"]).read_bytes()
+                self.assertEqual(entry["size"], len(archive))
+                self.assertEqual(entry["sha256"], hashlib.sha256(archive).hexdigest())
+                self.assertEqual(entry["binary_sha256"], hashlib.sha256(gzip.decompress(archive)).hexdigest())
         commands = [json.loads(line) for line in trace.read_text().splitlines()]
         self.assertFalse(any("test" in args or "vet" in args for _, args in commands))
         self.git("branch", "-m", "other")
