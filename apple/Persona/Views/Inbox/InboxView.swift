@@ -1435,8 +1435,6 @@ struct InboxRow: View {
                     if let summary = item.lineSummary, !summary.isEmpty {
                         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                             (Text(Image(systemName: Theme.Icon.ai)).foregroundStyle(Theme.ai) + Text(" " + summary))
-                                // The hierarchical styles, not `Color.primary`: a Mac list's selected row turns that
-                                // white, where the row sets the words' color for these (MacHoverRow).
                                 .font(Theme.Font.secondary)
                                 .foregroundStyle(item.isDone ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary.opacity(0.9))).lineLimit(2)
                             if !item.repeatsSummary { Text(from).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1) }
