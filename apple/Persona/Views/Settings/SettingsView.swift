@@ -111,10 +111,8 @@ struct SettingsView: View {
                 Button("Disconnect", role: .destructive) { Task { await model.disconnectAll() } }
             }
             .sheet(isPresented: $showPair) { PairView() }
-            #if os(iOS) || os(visionOS)
             .pluginLinks($pluginLink)
             .extensionPushes(ExtensionSlots.shared.cardPages)
-            #endif
         } empty: {
             SplitPlaceholder(symbol: Theme.Icon.settings, title: String(localized: "Settings"), message: String(localized: "Choose an item on the left."))
         }
@@ -163,9 +161,7 @@ struct SettingsView: View {
             if model.showsPage(of: api) {
                 plugins = loaded.map { ManagerRoster.settingsItems($0, roster: model.managerRoster, manager: context.managerID, stamped: { $0.manager }) }
             }
-            #if os(iOS) || os(visionOS)
             await ExtensionSlots.shared.reload()
-            #endif
         }
     }
 
@@ -547,11 +543,7 @@ private struct SettingsDestinations: ViewModifier {
         case .navigation: EmptyView()
         case .knowledgeSelection: EmptyView()
         #endif
-        #if os(iOS) || os(visionOS)
         case .colorScheme: ColorSchemeSettingsPage()
-        #else
-        case .colorScheme: EmptyView()
-        #endif
         case .assistant: AssistantProfileView()
         case .claude: ClaudeSettingsView()
         case .codex: ClaudeSettingsView(agent: .codex)
@@ -897,11 +889,7 @@ struct AppGlyph: View {
 
     /// Under Match System the page's look (read here so the glyph redraws when the system's changes); else the screen's.
     private var systemLook: ColorScheme {
-        #if os(iOS) || os(visionOS)
         model.colorScheme == .system ? pageLook : AppIconChoice.systemLook
-        #else
-        pageLook
-        #endif
     }
 
     private struct GlyphFrame: ViewModifier {
@@ -1065,14 +1053,12 @@ struct PairView: View {
                     Section {
                         Label("This code has expired or was already used; get a new one", systemImage: Theme.Icon.error)
                             .font(Theme.Font.secondaryStrong).foregroundStyle(Theme.danger)
-                        #if os(iOS) || os(visionOS)
                         Button {
                             expired = false
                             error = nil
                             scanning = DataScannerViewController.isSupported && DataScannerViewController.isAvailable
                         } label: { Label("Scan again", systemImage: Theme.Icon.scanCode).lineLimit(1) }
                         .accessibilityIdentifier("pair.rescan")
-                        #endif
                     } footer: {
                         Text("Get a new code on the screen from setting up the hub, or on a connected device in Settings › Devices › Connect a new device.")
                     }
@@ -1080,17 +1066,11 @@ struct PairView: View {
                 if !passwordMode && scanning && !other {
                     Section {
                         QRScanner { code in accept(code) }
-                        #if os(iOS) || os(visionOS)
                         .scaledFrame(height: Theme.Size.box280)
                         .clipShape(.rect(cornerRadius: Theme.Radius.card, style: .continuous))
                         .listRowInsets(EdgeInsets())
-                        #endif
                     } footer: {
-                        #if os(iOS) || os(visionOS)
                         Text("Scan the QR code shown when the hub was set up, or the one from Settings › Devices › Connect a new device on a connected device.")
-                        #else
-                        Text("Copy the pairing link (given when the hub was set up, or from Settings › Devices › Connect a new device on a connected device), then click Paste pairing link.")
-                        #endif
                     }
                 }
                 #if os(iOS)
@@ -1371,7 +1351,6 @@ nonisolated enum PairingPhoto {
 }
 #endif
 
-#if os(iOS) || os(visionOS)
 struct QRScanner: UIViewControllerRepresentable {
     var onCode: (String) -> Void
 
@@ -1402,7 +1381,6 @@ struct QRScanner: UIViewControllerRepresentable {
         }
     }
 }
-#endif
 
 /// Settings' Machines row: N / M online. Its own view: the page read `model.machines` for it, and a machine's heartbeat (on every
 /// push of a busy hub) drew the whole page and its list again (#1495); now only this row.
