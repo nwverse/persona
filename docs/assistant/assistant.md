@@ -2822,7 +2822,9 @@ switches without adding another engine protocol. The settings-backed batch store
 target, expected epoch and operation ID before starting anything. Busy items wait for their current turn and pending
 work; no interrupt or synthetic message completes a batch. When an activated batch item has no durable input pending,
 the coordinator accepts the completed switch immediately. If real input is pending, the first-turn acceptance/refusal
-rules above remain unchanged. The existing history loop and session-list changes wake queued items after a restart.
+rules above remain unchanged. A late preparation failure cannot return an activated operation to `in_doubt`;
+reconciliation continues from the activated state. The existing history loop and session-list changes wake queued items
+after a restart.
 
 The batch response distinguishes queued, switching, switched and refused items; one refusal does not cancel independent
 items. `restore_batch_id` creates a new, itself-restorable batch toward the original per-conversation settings rather

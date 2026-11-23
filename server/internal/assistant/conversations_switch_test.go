@@ -206,6 +206,19 @@ func conversationSwitchTestStatus(t *testing.T, s *Service, id string) conversat
 func conversationSwitchTestDrive(t *testing.T, s *Service, id string, outcomes map[string]string) conversationSwitchTestReport {
 	t.Helper()
 	var report conversationSwitchTestReport
+	defer func() {
+		if t.Failed() {
+			t.Logf("last conversation batch report: %+v", report)
+			if st, ok := s.store().(logicalSwitchStore); ok {
+				for _, item := range report.Items {
+					op, opErr := st.ConversationSwitch(context.Background(), item.Machine, item.ConversationID, item.OperationID)
+					logical, logicalErr := st.LogicalConversation(context.Background(), item.Machine, item.ConversationID)
+					pending, pendingErr := st.ConversationInputPending(context.Background(), item.Machine, item.ConversationID)
+					t.Logf("completion state for %s: op=%+v opErr=%v logical=%+v logicalErr=%v pending=%v pendingErr=%v", item.ConversationID, op, opErr, logical, logicalErr, pending, pendingErr)
+				}
+			}
+		}
+	}()
 	waitFor(t, "conversation batch "+id+" to reach "+fmt.Sprint(outcomes), func() bool {
 		s.logicalSweep(context.Background())
 		report = conversationSwitchTestStatus(t, s, id)

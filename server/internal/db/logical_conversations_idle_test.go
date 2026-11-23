@@ -61,4 +61,21 @@ func TestAcceptIdleConversationSwitchFencesRealInput(t *testing.T) {
 			t.Fatalf("stale epoch: %v %v", accepted, err)
 		}
 	})
+
+	t.Run("activated operation cannot return to in doubt", func(t *testing.T) {
+		d, _ := historyDB(t)
+		op := prepareLogicalSwitch(t, d)
+		ctx := t.Context()
+		if err := d.ActivateConversationSegment(ctx, "root-machine", "root-chat", op.OperationID, 1); err != nil {
+			t.Fatal(err)
+		}
+		err := d.ResolveConversationSwitch(ctx, "root-machine", "root-chat", op.OperationID, "in_doubt", "late preparation failure")
+		if !errors.Is(err, ErrConversationEpoch) {
+			t.Fatalf("late in-doubt resolution was not fenced: %v", err)
+		}
+		got, err := d.ConversationSwitch(ctx, "root-machine", "root-chat", op.OperationID)
+		if err != nil || got == nil || got.Phase != "active" {
+			t.Fatalf("activated operation regressed: %+v %v", got, err)
+		}
+	})
 }

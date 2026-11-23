@@ -454,6 +454,11 @@ func resolveConversationSwitchTx(ctx context.Context, tx pgx.Tx, machine, sessio
 		return ErrConversationEpoch
 	}
 	activated := phase == "active" || epoch == expected+1
+	if activated && outcome == "in_doubt" {
+		// A late preparation failure cannot undo activation. The reconciler
+		// will observe the activated operation and finish or drain its input.
+		return ErrConversationEpoch
+	}
 	if outcome == "accepted" {
 		if !activated || epoch != expected+1 {
 			return ErrConversationEpoch
