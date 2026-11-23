@@ -174,7 +174,7 @@ final class HealthSampleWatcher {
     func catchUp(_ name: String, now: Date = Date()) async {
         guard HealthDataLock.isProtectedDataAvailable(), !running.contains(name),
               let entry = HealthCatalog.entry(named: name),
-              let type = HealthCatalog.objectType(entry) as? HKSampleType else { return }
+              HealthCatalog.objectType(entry) is HKSampleType else { return }
         running.insert(name)
         defer { running.remove(name) }
         let previous = await store.load(name)
@@ -185,7 +185,7 @@ final class HealthSampleWatcher {
         for _ in 0..<10 {
             let page: HealthRecords.Page
             do {
-                page = try await HealthRecords.readPage(entry: entry, type: type, start: keepAfter, end: nil, anchor: anchor,
+                page = try await HealthRecords.readPage(entry: entry, start: keepAfter, end: nil, anchor: anchor,
                                                         limit: pageSize, store: health)
             } catch {
                 return // locked meanwhile or not allowed: keep the previous snapshot and anchor

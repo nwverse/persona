@@ -153,7 +153,8 @@ struct HealthRecordsTests {
         let mmHg = HKUnit.millimeterOfMercury()
         let systolic = HKQuantitySample(type: HKQuantityType(.bloodPressureSystolic), quantity: HKQuantity(unit: mmHg, doubleValue: 120), start: now, end: now)
         let diastolic = HKQuantitySample(type: HKQuantityType(.bloodPressureDiastolic), quantity: HKQuantity(unit: mmHg, doubleValue: 80), start: now, end: now)
-        let correlation = HKCorrelation(type: HKCorrelationType(.bloodPressure), start: now, end: now, objects: [systolic, diastolic])
+        let correlation = HKCorrelation(type: try #require(HKObjectType.correlationType(forIdentifier: .bloodPressure)), start: now, end: now,
+                                        objects: [systolic, diastolic])
         let objects = try #require(Output.object(HealthSampleJSON.fields(correlation, entry: entry, unit: nil))["objects"]?.array)
         #expect(Set(objects.compactMap { $0["type"]?.string }) == ["blood_pressure_systolic", "blood_pressure_diastolic"])
         #expect(Set(objects.compactMap { $0["value"]?.double }) == [120, 80])

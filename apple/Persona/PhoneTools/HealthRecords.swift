@@ -271,7 +271,6 @@ enum HealthRecords {
     /// short, or what was added and deleted since.
     @concurrent nonisolated static func readPage(
         entry: HealthCatalog.Entry,
-        type: HKSampleType,
         start: Date,
         end: Date?,
         anchor: Data?,
@@ -279,6 +278,10 @@ enum HealthRecords {
         store: HKHealthStore
     ) async throws -> Page {
         try Task.checkCancellation()
+        // Resolved here, so no HealthKit type crosses from the caller's actor.
+        guard let type = HealthCatalog.objectType(entry) as? HKSampleType else {
+            throw ToolFailure(.unavailable, "\(entry.name) has no samples to read")
+        }
         return try await HealthQueryExecution<Page>(store: store).result { gate in
             let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: [])
             let previous = anchor.flatMap { try? NSKeyedUnarchiver.unarchivedObject(ofClass: HKQueryAnchor.self, from: $0) }
@@ -349,7 +352,7 @@ enum HealthRecords {
         }
         let page: Page
         do {
-            page = try await readPage(entry: entry, type: sampleType, start: start, end: end, anchor: anchor, limit: limit, store: store)
+            page = try await readPage(entry: entry, start: start, end: end, anchor: anchor, limit: limit, store: store)
         } catch {
             if HealthTool.isDatabaseInaccessible(error) {
                 return try await snapshotAnswer(entry: entry, base: base, start: start, end: end, limit: limit, anchor: anchorArg,
@@ -449,8 +452,9 @@ enum HealthRecords {
 
     // MARK: - Sources
 
-    @concurrent nonisolated static func sourceList(type: HKSampleType, start: Date, store: HKHealthStore) async throws -> [JSONValue] {
-        try await HealthQueryExecution<[JSONValue]>(store: store).result { gate in
+    @concurrent nonisolated static func sourceList(entry: HealthCatalog.Entry, start: Date, store: HKHealthStore) async throws -> [JSONValue] {
+        guard let type = HealthCatalog.objectType(entry) as? HKSampleType else { return [] }
+        return try await HealthQueryExecution<[JSONValue]>(store: store).result { gate in
             HKSourceQuery(sampleType: type, samplePredicate: HKQuery.predicateForSamples(withStart: start, end: nil, options: [])) { @Sendable _, sources, error in
                 if let error {
                     gate.fail(error)
@@ -464,8 +468,9 @@ enum HealthRecords {
     }
 
     /// The distinct devices (and app revisions) the newest samples of `type` name.
-    @concurrent nonisolated static func deviceList(type: HKSampleType, start: Date, store: HKHealthStore) async throws -> [JSONValue] {
-        try await HealthQueryExecution<[JSONValue]>(store: store).result { gate in
+    @concurrent nonisolated static func deviceList(entry: HealthCatalog.Entry, start: Date, store: HKHealthStore) async throws -> [JSONValue] {
+        guard let type = HealthCatalog.objectType(entry) as? HKSampleType else { return [] }
+        return try await HealthQueryExecution<[JSONValue]>(store: store).result { gate in
             HKSampleQuery(sampleType: type, predicate: HKQuery.predicateForSamples(withStart: start, end: nil, options: []), limit: 1000,
                           sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)]) { @Sendable _, samples, error in
                 if let error {
@@ -505,16 +510,16 @@ enum HealthRecords {
         var devices: [JSONValue]?
         let candidates = only.map { [$0] } ?? HealthCatalog.readable()
         for entry in candidates {
-            guard let type = HealthCatalog.objectType(entry) as? HKSampleType else { continue }
+            guard HealthCatalog.objectType(entry) is HKSampleType else { continue }
             guard await accessStatus(entry, store: store) != "not_requested" else { continue }
-            guard let found = try? await sourceList(type: type, start: start, store: store) else { continue }
+            guard let found = try? await sourceList(entry: entry, start: start, store: store) else { continue }
             for source in found {
                 guard let bundle = source["bundle_id"]?.string else { continue }
                 var row = byBundle[bundle] ?? (name: source["name"]?.string ?? bundle, types: [])
                 row.types.append(entry.name)
                 byBundle[bundle] = row
             }
-            if only != nil { devices = try? await deviceList(type: type, start: start, store: store) }
+            if only != nil { devices = try? await deviceList(entry: entry, start: start, store: store) }
         }
         let rows: [JSONValue] = byBundle.keys.sorted().map { bundle in
             let row = byBundle[bundle]!
