@@ -547,6 +547,29 @@ func TestExternalAdapterFixtureRootMayUseHostAliases(t *testing.T) {
 	}
 }
 
+func TestExternalAdapterFixtureRejectsExecutableEscape(t *testing.T) {
+	f := newExternalAdapterFixture(t)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(f.dir, "outside-helper")
+	if err := os.Symlink(self, link); err != nil {
+		t.Fatal(err)
+	}
+	f.config.Command[0], f.config.NativeProgram = link, link
+	f.saveConfig(t)
+	r, err := loadExternalAdapterRegistry()
+	if r != nil {
+		r.Close()
+		t.Fatal("an executable link escaped the fixture root")
+	}
+	externalAdapterTestCode(t, err, "adapter_config_conflict")
+	if len(f.calls(t)) != 0 {
+		t.Fatal("an escaped executable ran")
+	}
+}
+
 type externalAdapterFakeFileInfo struct {
 	os.FileInfo
 	stat syscall.Stat_t
