@@ -1288,7 +1288,11 @@ func (s *Service) assistantConversation(ctx context.Context, id string) (proto.S
 // spaceConversation is assistantConversation among the conversations of one space only (in == nil: any): a
 // conversation's tools reach only the conversations of its own space (docs/assistant/health.md "How directories and memory are isolated").
 func (s *Service) spaceConversation(ctx context.Context, id string, in *string) (proto.Session, error) {
-	list, err := s.sessions(ctx, s.settings(ctx).MachineID)
+	return s.spaceConversationOnMachine(ctx, s.settings(ctx).MachineID, id, in)
+}
+
+func (s *Service) spaceConversationOnMachine(ctx context.Context, machine, id string, in *string) (proto.Session, error) {
+	list, err := s.sessions(ctx, machine)
 	if errors.Is(err, ErrNoDevice) {
 		return proto.Session{}, errors.New("the assistant's machine is not configured")
 	}
@@ -1847,14 +1851,18 @@ func (s *Service) knownSpace(ctx context.Context, self string) (string, error) {
 // ownSpaceConversation finds conversation id among those of self's space: the conversations of different spaces (the
 // assistant's own included) don't read, rename, archive or message each other.
 func (s *Service) ownSpaceConversation(ctx context.Context, self, id string) (proto.Session, error) {
+	return s.ownSpaceConversationOnMachine(ctx, s.settings(ctx).MachineID, self, id)
+}
+
+func (s *Service) ownSpaceConversationOnMachine(ctx context.Context, machine, self, id string) (proto.Session, error) {
 	space, err := s.knownSpace(ctx, self)
 	if err != nil {
 		return proto.Session{}, err
 	}
-	if row, ok, err := s.deletedConversation(ctx, s.settings(ctx).MachineID, id); err != nil {
+	if row, ok, err := s.deletedConversation(ctx, machine, id); err != nil {
 		return proto.Session{}, err
 	} else if ok && row.Space == space {
 		return proto.Session{}, s.conversationAvailable(ctx, row.Machine, id)
 	}
-	return s.spaceConversation(ctx, id, &space)
+	return s.spaceConversationOnMachine(ctx, machine, id, &space)
 }

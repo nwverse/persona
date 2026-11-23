@@ -538,6 +538,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
     Catalog-backed rows retain empty workspaces, empty ancestors and folder containers. Project ownership and parent placement are independent: a same-machine, same-host child may appear beneath a parent from another project while keeping its own project metadata. Missing parents and cycles remain visible at the top level. Exact runtime workspace IDs and host bindings determine Agent placement; only unbound Agents may use an unambiguous deepest directory match, and only inside the Agent's Git working tree when the node reports one (`worktree`, else `repo_root`): a workspace above it, such as the home folder or a folder of repositories, never collects it. "Above" is counted in folders from the node-verified physical cwd (`workspace_cwd`), so it holds when a symlinked folder leads to the cwd. A workspace whose host names no project (herdr) belongs to the repository its Agents agree on, else to the one its own folder is, and shares that repository's section with other hosts' places and the session-only rows there, each place keeping its own row. Compatibility `session-directory` rows never authorize host actions. Worktree and project totals count real Agents once; pinned Agents remain direct title-navigation candidates without duplicate rows or counts. Active filters hide unrelated empty workspaces but retain matching descendants' ancestors.
     A worktree disclosure folds its contents; its title opens the first direct Agent, including a pinned one, or selects an empty workspace. Selecting a workspace from another navigation surface reveals its ancestors without opening its own contents. Selection and fold identity survive rename and never carry into another credential or manager. The **N children** chip separately folds descendants; its status counts summarize direct child subtrees with Agents. Main checkouts keep their home marker and sort first.
     When discovery is unsupported, the existing session-only projection remains available. Host-reported `worktree`, `repo_root` and `branch` determine Git placement. A tree is labelled with its branch, else its folder (the main checkout: the repository's). A linked tree whose folder carries the repository's name goes by the folder holding it instead, as in the Codex app's `~/.codex/worktrees/<name>/<repository>` (#12800). When the host place names its sessions carry (`slot_name` without a `slot_id`: a Paseo workspace's title) agree on one, a linked tree takes that name instead, with the branch kept in its tooltip and its key still its path (#4497). The main checkout and Orca's trees keep their names. Trees are ordered by the name they show, then by their key (two workspaces can have one title). Older Orca sessions teach exact `<project id>::<worktree path>` identities and same-project parent edges; other sources may join known paths on complete directory segments, except below `.worktrees/`, `.claude/worktrees/` and `.herdr/worktrees/`. Without verified placement, the existing path inference supplies repo/worktree grouping. This fallback cannot recover empty catalog entries or cross-project parent relationships.
+    A repository's name is said once, on its heading (#13454). Agent rows under it carry no `<repository> › <tree>` hint: the headings above them say both (DESIGN_SYSTEM 3.4). A host's lone workspace named after its folder, which is the repository's (herdr names workspaces so), adds no row of its own: its Agents are listed under the heading, which carries the workspace's pin and unavailable marks, its ⋯ and its right-click menu, as **By project**'s space headings do. The workspace keeps its row while it has children, a branch, a name of its own or no Agents to list, the rule the session-only projection applies to a lone main checkout (`showsWorktreeLevel`). A host that does not say which workspace is a repository's main checkout (herdr reports no `is_main`) has it found by its folder: the workspace at the repository's own folder wears the home marker and sorts first. That mark is the tree's only; workspace actions keep reading what the host said.
   - **By project** keeps the original herdr order (machine → workspace → tab); quiet spaces go into **Idle Spaces**. Spaces with a loop, background work or running subagents are never folded away.
   - **By status** matches iOS `AgentListOrder`: needs you → done, not seen → awaiting your reply → working → waiting in the background → just finished → waiting to wake → muted → seen; only non-empty groups are shown, and seen is folded by default.
     **Just finished** (#9751, `justFinished` in `lib/agent-groups.ts`): a turn the hub's triage found done before anybody looked, for three hours (`work.just_finished`, `../protocol/agent-states.md` "Just finished"); it is not quiet, so its space stays out of **Idle Spaces** and the idle folds; its row draws a plain unread-green dot, says "Just finished" and keeps the ✓ conclusion line; opening it or Mark all as seen takes it out at once (`lib/seen-outbox.ts`). The paged list by status draws the same section on a hub with `sessions_just_finished` (`state=idle&just_finished=1`, open by default, Seen's number without it, `lib/session-groups.ts`); in the other paged groupings its row keeps its stable herdr place, with the same mark.
@@ -1408,7 +1409,10 @@ no timeline row and adds no unread count or badge. Its inline tools and its `tas
 inside the same half-open round interval stay out too; plans, message cards, notices and other decisions always remain
 visible. **Background activity**, from both the conversation menu and Inbox, reuses `SupervisionLine` and the same
 paged transcript to retain the complete round and those feed cards without creating an InboxItem or marking anything
-seen. Full-history APIs are unchanged. `e2e/quiet-supervision.mjs` checks silent and promoted boundaries and captures
+seen. A successful `task_review accepted` receipt with hub-issued `background=true` follows the same split: the whole
+review round and its original tool trace stay in Background activity. The hub derives that marker only from the current
+plan's `user_requested`, `parent` and the supervision ledger's current `auto_review` / `round`; unmarked, `user_check`
+and `needs_user` reviews remain visible. Full-history APIs are unchanged. `e2e/quiet-supervision.mjs` checks silent and promoted boundaries and captures
 synthetic before/after evidence; promoted tools are inspected after opening their work summary.
 
 The cache retains the source metadata. Unknown nonempty source kinds still use the source presentation. Old hubs fall back
@@ -2414,6 +2418,14 @@ those rules are counted by `scripts/ci/web_module_boundary_ratchet.py` (`scripts
 fails when a module's id, route base or sidebar key appears in the `Route` union, the sidebar's built-in pages, their
 colors or the Settings tabs, and when a module namespace is on the first screen.
 
+**The core-only lane** (#13932). Persona Core is a product of its own, so CI builds and tests it with zero modules:
+`npm run build:core-only` and `npm run test:core-only` (both in `scripts/ci/web.sh`) set `PERSONA_WEB_MODULES=none`, and
+`web/core-only.ts` then resolves the module list to an empty one and fails the build, or the test file, when any file
+outside `src/modules` reaches a module's file once its path is resolved (what the ESLint pass cannot read). The modules' own tests are left
+out of that run. A core test that is about a module being there (the Health sidebar entry, its route) says which module
+it needs (`MODULES.some((m) => m.id === "health")`) and skips that part without it; a test of a module's own code lives
+in the module's directory.
+
 **The pilot: health.** The Health page (`web/src/modules/health/`, docs/assistant/health.md) is the first module. Its
 route (`/health`, `/health/new`, `/health/<id>`, and `/tracks/health…`), its water and protein pages (the reserved
 extension-page id `-health-intake`, which routes as unknown while the module is off), its sidebar entry (right after Inbox, pink with
@@ -2434,7 +2446,8 @@ unknown while the module is off.
 4. Add the descriptor to `MODULES` in `web/src/modules/index.ts`, and remove the feature's hand-wired entries (its
    `Route` variant, its `lazyPage` line, its sidebar entry, its color in `lib/sidebar-icons.ts`).
 5. Tests: the module's own `module.test.tsx` (on and off: entry, route, chunk and catalog requests), and
-   `npm run lint`, which now covers it.
+   `npm run lint`, which now covers it. `npm run build:core-only` and `npm run test:core-only` must still pass: the
+   core may not need the module.
 
 ## Developing Persona (#9617)
 
