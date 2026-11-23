@@ -13,9 +13,9 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
-	"github.com/nwverse/persona/server/internal/connector/imessage"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/imessagewire"
 )
 
 type archiveFenceStore struct {
@@ -234,7 +234,7 @@ func TestIMessageSettingReadFailureFailsClosedAndRecovers(t *testing.T) {
 			h := newTestManager(t)
 			h.store = store
 			h.connectors = connector.NewRegistry(nil)
-			if err := h.addIMessage(imessage.Config{Machine: "example"}); err != nil {
+			if err := h.addIMessage(imessagewire.Config{Machine: "example"}); err != nil {
 				t.Fatal(err)
 			}
 			if h.imessage().AI() || !h.imessageAIPending.Load() {
@@ -271,7 +271,7 @@ func TestIMessageSettingRefreshRecoversSavedChoice(t *testing.T) {
 	h := newTestManager(t)
 	h.store = store
 	h.connectors = connector.NewRegistry(nil)
-	if err := h.addIMessage(imessage.Config{Machine: "example"}); err != nil {
+	if err := h.addIMessage(imessagewire.Config{Machine: "example"}); err != nil {
 		t.Fatal(err)
 	}
 	store.fail.Store(false)
@@ -453,7 +453,7 @@ func TestIMessageArchivePendingResponseIsLocalized(t *testing.T) {
 	store.settings[imessageArchiveReservationsKey] = json.RawMessage(`{"version":1,"tokens":["bad"]}`)
 	h.store = store
 	h.connectors = connector.NewRegistry(nil)
-	if err := h.addIMessage(imessage.Config{Machine: "example"}); err != nil {
+	if err := h.addIMessage(imessagewire.Config{Machine: "example"}); err != nil {
 		t.Fatal(err)
 	}
 	mux := h.routes()
@@ -469,7 +469,7 @@ func TestIMessageLegacyArchiveCallerFailsClosed(t *testing.T) {
 	h := newTestManager(t)
 	h.store = newMemStore()
 	h.connectors = connector.NewRegistry(nil)
-	if err := h.addIMessage(imessage.Config{Machine: "example"}); err != nil {
+	if err := h.addIMessage(imessagewire.Config{Machine: "example"}); err != nil {
 		t.Fatal(err)
 	}
 	_, handled, err := h.kbSourcesCall(context.Background(), assistantwire.AppCall{AppID: assistantwire.AppConnectors,

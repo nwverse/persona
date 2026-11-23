@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nwverse/persona/server/internal/connector/imessage"
+	"github.com/nwverse/persona/server/internal/imessagewire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -23,7 +23,7 @@ func imessageHub(t *testing.T, store *extensionStore, fromHubJSON string) *Manag
 		h.machines, h.byID[m.ID] = append(h.machines, mm), mm
 	}
 	if fromHubJSON != "" {
-		h.cfg.IMessage = &imessage.Config{Machine: fromHubJSON}
+		h.cfg.IMessage = &imessagewire.Config{Machine: fromHubJSON}
 	}
 	startTestExtensions(t, h)
 	return h
@@ -120,7 +120,7 @@ func TestIMessageExtensionPicksTheMac(t *testing.T) {
 	if v := viewOf(h, imessageExtensionID); v.Status != extensionNeedsSetup || len(v.NeedsSetup) != 1 || !strings.Contains(v.NeedsSetup[0], "选一台 Mac") {
 		t.Fatalf("enabled without a Mac: %+v", v)
 	}
-	if got := h.extensions.reg.Get(imessageExtensionID).Full.Contributions()["connectors"]; len(got) != 1 || got[0] != imessage.ID {
+	if got := h.extensions.reg.Get(imessageExtensionID).Full.Contributions()["connectors"]; len(got) != 1 || got[0] != imessagewire.ID {
 		t.Fatalf("the settings page must link its connector: %v", got)
 	}
 	if code, _ := put(`{"machines":["mac"]}`); code != 200 || imessageMacOf(h) != "mac" {
