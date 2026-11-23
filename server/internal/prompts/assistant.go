@@ -463,7 +463,7 @@ func RenderSnapshotWorkflow(w SnapshotWorkflow) string {
 type AssistantContext struct {
 	ScheduledWorkPlan bool // Inline instructions for a granted scheduled round when the manager uses persona-work.
 	Main              bool
-	Leader            bool // a leader conversation: explicit manual-Agent tasks only; new task_plan work is main-supervised
+	Leader            bool // a direction lead supervises its planned tasks and explicitly assigned Agents
 	Owner             string
 	Snapshot          string
 	// Directions: for the main conversation, the current leaders used as direction labels;

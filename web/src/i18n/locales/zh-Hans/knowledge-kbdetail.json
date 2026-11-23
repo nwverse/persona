@@ -44,6 +44,8 @@
   "minutes_regenerate": "重新生成",
   "minutes_make": "生成纪要",
   "minutes_writing": "正在整理纪要…",
+  "minutes_checking": "正在复核整场录音…",
+  "minutes_checking_progress": "正在复核整场录音（{done}/{total} 分钟）…",
   "minutes_updating": "正在更新…",
   "minutes_failed": "纪要没整理成功，可以重新生成。",
   "minutes_waiting": "转写完成后会生成纪要。",

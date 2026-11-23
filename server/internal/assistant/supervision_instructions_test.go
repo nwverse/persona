@@ -152,7 +152,7 @@ func TestSupervisionInstructionsFirstStartAndWarm(t *testing.T) {
 			}
 		})
 	}
-	// The legacy preference no longer demotes main: every new assistant-dispatched task is main-supervised (#5732).
+	// The legacy preference no longer demotes main: it retains authority for its own tasks and lead escalations.
 	setSettings(t, s, func(v *Settings) { v.MainSupervisesOwnTasks = nil })
 	if got := mustSupervisionInstructions(t, s, ctx, "server", s.settings(ctx).Main); got != policy {
 		t.Fatal("main lost its policy with the legacy preference unset")
