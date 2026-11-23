@@ -89,7 +89,7 @@ final class TodoAnswersHarness {
             save: { [weak h] entries, _ in h?.saved = entries; return Task {} },
             hub: { "g" },
             send: { entry, answered in await store.send(entry, answered: answered, api: hub.client) },
-            refused: { [weak h] _, message in h?.refusals.append(message) },
+            refused: { [weak h] _, message, _ in h?.refusals.append(message) },
             settled: { [weak h] entry, sent in h?.answers.settled(entry, sent) },
             standing: { id in
                 store.byID[id].map { item in
