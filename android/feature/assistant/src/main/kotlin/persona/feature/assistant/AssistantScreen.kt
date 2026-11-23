@@ -169,8 +169,8 @@ fun AssistantScreen(
     onOpenNeed: ((NeedsYouLine) -> Unit)? = null,
     /** "N more in the inbox": opens the inbox as a secondary page. */
     onOpenInbox: (() -> Unit)? = null,
-    /** "Voice chat" in the title menu, when the hub runs a voice extension. */
-    onVoice: (() -> Unit)? = null,
+    /** The modules' actions in the title menu ([persona.core.moduleapi.MenuSlot.AssistantTitle]), after Details. */
+    moduleActions: List<persona.core.moduleapi.ModuleMenuAction> = emptyList(),
     onTodos: (() -> Unit)? = null,
     todoCount: Int = 0,
     showTodos: Boolean = true,
@@ -1205,7 +1205,7 @@ fun AssistantScreen(
         val copyText = AssistantCopyText(shown, active, onMain, menuConfig, assistantMachine, machines)
         val interrupt = composerService.takeIf { !demo }
         val sections = assistantMenu(offline = connection != null && connection != persona.core.contracts.api.ConnectionState.Online,
-            voice = onVoice != null, main = snapshot.mainSession, active = active, compact = active != null && mainActions.compact,
+            modules = moduleActions, main = snapshot.mainSession, active = active, compact = active != null && mainActions.compact,
             newMain = onMain && mainActions.newMain, working = interrupt != null && persona.core.domain.lines.isLiveStatus(shown?.status),
             clear = onMain && mainActions.clear)
         fun rawAction(item: AssistantMenuItem, separator: Boolean): JAction = when (item) {
@@ -1218,8 +1218,6 @@ fun AssistantScreen(
             AssistantMenuItem.Details -> JAction(resources.getString(item.label), separatorBefore = separator, onClick = {
                 if (pageManagement != null) settingsOpen = true else info = AssistantInfo.Settings
             })
-            AssistantMenuItem.Voice -> JAction(resources.getString(item.label), separatorBefore = separator,
-                onClick = { onVoice?.invoke() })
             // In place of the home page's Home (#4339 C11), as iOS's menu has it: off the main conversation only.
             AssistantMenuItem.BackToMain -> JAction(resources.getString(item.label), PhIcons.House,
                 separatorBefore = separator, onClick = { snapshot.mainSession?.let(::openConversation) })
@@ -1250,7 +1248,12 @@ fun AssistantScreen(
         }
         // iOS's icon on every item: Glass draws them; Brief and Board keep their words (Back to main chat has had its house all along).
         val glassIcons = PersonaTheme.style == AppStyle.Glass
-        fun action(item: AssistantMenuItem, separator: Boolean): JAction = rawAction(item, separator)
+        // A module's action (Modules.kt) carries its own words, icon and click.
+        fun entryAction(item: AssistantMenuEntry, separator: Boolean): JAction = when (item) {
+            is ModuleItem -> JAction(item.action.label, separatorBefore = separator, onClick = item.action.onClick)
+            is AssistantMenuItem -> rawAction(item, separator)
+        }
+        fun action(item: AssistantMenuEntry, separator: Boolean): JAction = entryAction(item, separator)
             .copy(icon = item.icon.takeIf { glassIcons || item == AssistantMenuItem.BackToMain })
         // iOS's heading: which conversation and what it runs on ("Main chat · claude · Opus 4.5").
         JActionSheet(title = copyText.menuTitle(resources, assistantName, hubGroup), onDismiss = { menu = false },

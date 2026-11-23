@@ -466,9 +466,9 @@ fun HttpUrl.hubResolve(reference: String): HttpUrl? {
 /**
  * Callers parse the response wherever they run, often on the main thread (Android forbids network reads there:
  * NetworkOnMainThreadException), so by default the body is read here on OkHttp's thread. Streaming downloads pass
- * buffered = false and read inside Dispatchers.IO themselves.
+ * buffered = false and read inside Dispatchers.IO themselves. Public for modules' own hub calls (`:module:*`, #13433).
  */
-internal suspend fun Call.awaitResponse(buffered: Boolean = true): Response = suspendCancellableCoroutine { continuation ->
+suspend fun Call.awaitResponse(buffered: Boolean = true): Response = suspendCancellableCoroutine { continuation ->
     continuation.invokeOnCancellation { cancel() }
     enqueue(object : Callback {
         override fun onFailure(call: Call, e: IOException) {
