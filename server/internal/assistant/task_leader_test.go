@@ -1184,9 +1184,10 @@ func TestWorkerAutomaticSignalsGoToLeader(t *testing.T) {
 				if !strings.Contains(due, "not an overdue judgment") {
 					t.Fatalf("leader's estimate_due lacks its fact: %s", due)
 				}
-				if b, ok := s.briefOfTodo(w.ID); !ok || b.EstimateDueToldAt == nil {
-					t.Fatalf("leader delivery did not persist estimate_due: %+v", b)
-				}
+				waitFor(t, "leader delivery to persist estimate_due", func() bool {
+					b, ok := s.briefOfTodo(w.ID)
+					return ok && b.EstimateDueToldAt != nil
+				})
 			case sigOrphaned:
 				// A session its computer no longer lists: the orphan pass marks it closed, and the worker's signal goes to the leader.
 				f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Agent: "claude", Status: proto.StatusIdle})

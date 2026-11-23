@@ -930,6 +930,15 @@ func (s *Service) queueSignal(g superviseSignal) {
 	s.queueSignalReplacing(nil, g)
 }
 
+// preserveIdleHandoff lets a newer turn idle replace the handoff's key without erasing the undelivered decision.
+func preserveIdleHandoff(cur, next superviseSignal) superviseSignal {
+	if cur.Kind == sigIdle && next.Kind == sigIdle && cur.Handoff && !next.Handoff {
+		next.Handoff = true
+		next.Detail = cur.Detail
+	}
+	return next
+}
+
 // queueSignalReplacing also removes the older stretch it supersedes from the durable outbox.
 func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) {
 	if g.Kind != sigAsk {
@@ -972,6 +981,7 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 		if g.Detail == "" && cur.Key == g.Key {
 			g.Detail = cur.Detail // the watch's sight of what an event told already
 		}
+		g = preserveIdleHandoff(cur, g)
 		if g.Kind == sigReport && cur.Key != g.Key {
 			g = joinReports(cur, g) // two questions before the message went: both are asked
 		}
