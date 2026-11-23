@@ -1,11 +1,12 @@
 // Browser acceptance for large to-do images (#13797): a synthetic 2880 × 1800 screenshot over 1 MiB is prepared in the
 // page and attached, Create waiting while it is; a file over the 64 MiB source cap and a decompression-bomb header fail
 // by name while the small picture beside them stays; the created to-do's pictures are PNG or JPEG of at most 1 MiB and
-// 4096 px, as sent and again after a reload. Desktop and phone width. Synthetic pictures only.
+// 4096 px, as sent and again after a reload. Desktop and phone width, in the theme and text size given (light and the
+// standard size unless --theme dark / --text-size large). Synthetic pictures only.
 //
 //   PORT=18984 python3 scripts/mock/mock_hub.py &
 //   (cd web && PERSONA_HUB_URL=http://127.0.0.1:18984 npx vite --host 127.0.0.1 --port 5984 --strictPort &)
-//   node web/e2e/todo-image-prepare.mjs http://127.0.0.1:5984 [--shots <dir>] [--executable <chromium>]
+//   node web/e2e/todo-image-prepare.mjs http://127.0.0.1:5984 [--shots <dir>] [--executable <chromium>] [--theme dark] [--text-size large]
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,8 +20,11 @@ const flag = (name) => {
 const base = (args[0] ?? "").replace(/\/$/, "");
 const shots = flag("--shots");
 const executable = flag("--executable");
+const theme = flag("--theme") ?? "light";
+const textSize = flag("--text-size") ?? "standard";
+const suffix = `${theme === "light" ? "" : `-${theme}`}${textSize === "standard" ? "" : `-${textSize}`}`;
 if (!base) {
-  console.error("usage: node web/e2e/todo-image-prepare.mjs <web URL> [--shots <dir>] [--executable <chromium>]");
+  console.error("usage: node web/e2e/todo-image-prepare.mjs <web URL> [--shots <dir>] [--executable <chromium>] [--theme dark] [--text-size large]");
   process.exit(2);
 }
 if (shots) mkdirSync(shots, { recursive: true });
@@ -117,19 +121,20 @@ const withinLimits = (tag, what, d, mime) => {
 
 try {
   for (const width of [1280, 390]) {
-    const tag = `${width}px`;
+    const tag = `${width}px ${theme} ${textSize}`;
     const phone = width <= 600;
     const context = await browser.newContext({
       viewport: { width, height: phone ? 844 : 900 },
       deviceScaleFactor: phone ? 2 : 1,
-      colorScheme: "light",
+      colorScheme: theme,
       locale: "en-US",
       hasTouch: phone,
     });
-    await context.addInitScript(() => {
-      localStorage.setItem("persona.theme", "light");
+    await context.addInitScript(({ theme, textSize }) => {
+      localStorage.setItem("persona.theme", theme);
       localStorage.setItem("persona.language", "en");
-    });
+      localStorage.setItem("persona.text-size", textSize);
+    }, { theme, textSize });
     const page = await context.newPage();
     page.setDefaultTimeout(30_000);
     await page.goto(`${base}/?token=mock`);
@@ -151,14 +156,14 @@ try {
     await input.setInputFiles([{ name: "screenshot.png", mimeType: "image/png", buffer: shot }]);
     if (await status.isVisible()) {
       if (!(await create.isDisabled())) fail(`${tag}: Create is enabled while a picture is prepared`);
-      if (shots) await page.screenshot({ path: join(shots, `todo-image-prepare-${width}-preparing.png`) });
+      if (shots) await page.screenshot({ path: join(shots, `todo-image-prepare-${width}-preparing${suffix}.png`) });
       ok(`${tag}: "${await status.textContent()}" shown, Create disabled`);
     }
     await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
     await status.waitFor({ state: "detached" });
     await dialog.locator('img[alt="screenshot.jpg"]').waitFor();
     if (await dialog.getByRole("alert").count()) fail(`${tag}: ${await dialog.getByRole("alert").textContent()}`);
-    if (shots) await page.screenshot({ path: join(shots, `todo-image-prepare-${width}-attached.png`) });
+    if (shots) await page.screenshot({ path: join(shots, `todo-image-prepare-${width}-attached${suffix}.png`) });
     ok(`${tag}: a ${(shot.length / MiB).toFixed(2)} MiB screenshot was prepared and attached`);
 
     await input.setInputFiles(picks);
@@ -169,7 +174,7 @@ try {
     const kept = await dialog.locator("img").evaluateAll((imgs) => imgs.map((img) => img.alt));
     if (JSON.stringify(kept) !== JSON.stringify(["screenshot.jpg", "note.png"])) fail(`${tag}: attached ${JSON.stringify(kept)}`);
     if ((await dialog.locator('input[type="text"]').first().inputValue()) !== "Check the large screenshot") fail(`${tag}: the title was lost`);
-    if (shots) await page.screenshot({ path: join(shots, `todo-image-prepare-${width}-refused.png`) });
+    if (shots) await page.screenshot({ path: join(shots, `todo-image-prepare-${width}-refused${suffix}.png`) });
     ok(`${tag}: the over-cap file and the bomb were refused by name; the draft and both pictures stayed`);
 
     const posted = page.waitForRequest((r) => r.method() === "POST" && new URL(r.url()).pathname === "/api/v1/todos");
@@ -198,7 +203,7 @@ try {
       await viewer.getByRole("button", { name: "Download", exact: true }).waitFor();
       await viewer.locator("img").first().waitFor({ state: "visible" });
       await page.waitForTimeout(800); // the viewer's opening animation
-      await page.screenshot({ path: join(shots, `todo-image-prepare-${width}-viewer.png`) });
+      await page.screenshot({ path: join(shots, `todo-image-prepare-${width}-viewer${suffix}.png`) });
     }
     await context.close();
   }
