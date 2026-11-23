@@ -11,8 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botport"
+
 	"github.com/nwverse/persona/server/internal/botcard"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -39,9 +40,9 @@ type botAnswerFiles struct {
 
 // A delivery retry must replay the same UUID and reply body, including the file_key.
 // The upload is saved before attempting the reply, whose result may be lost.
-func (h *Manager) feishuAnswerContent(ctx context.Context, api *feishubot.Client, parent, uuid, text string) (string, string, error) {
+func (h *Manager) feishuAnswerContent(ctx context.Context, api botport.Client, parent, uuid, text string) (string, string, error) {
 	if content, inline := botcard.InlineAnswer(text); inline {
-		return feishubot.TypePost, content, nil
+		return botcard.TypePost, content, nil
 	}
 	digest := sha256.Sum256([]byte(text))
 	keyParts := []string{api.Domain(), api.AppID(), parent, uuid, hex.EncodeToString(digest[:])}
@@ -61,7 +62,7 @@ func (h *Manager) feishuAnswerContent(ctx context.Context, api *feishubot.Client
 	if err != nil {
 		return "", "", err
 	}
-	return feishubot.TypeFile, content.(string), nil
+	return botcard.TypeFile, content.(string), nil
 }
 
 func (h *Manager) cachedBotAnswerFile(ctx context.Context, key string) (string, error) {
