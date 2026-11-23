@@ -35,7 +35,8 @@ type ModuleSwitch struct {
 	Disabled []string `json:"disabled"`
 }
 
-// ReadModuleSwitch reads the modules settings row: the ids of the built-in modules switched off. The manager reads it
+// ReadModuleSwitch reads the modules settings row: the ids of the modules switched off, built-in ones and client-only
+// ones (modapi.ClientModules). The manager reads it
 // once, when it starts (main.go), and hands it to New, so the switch takes effect at the next start; New itself reads
 // no database. A row that cannot be read switches nothing off.
 func ReadModuleSwitch(ctx context.Context, st Store, logf func(format string, args ...any)) []string {
@@ -94,8 +95,8 @@ func (s *Service) setModuleSwitch(ctx context.Context, raw json.RawMessage) (*ow
 	}
 	seen := map[string]bool{}
 	for _, id := range next.Disabled {
-		if !s.modules.Loaded(id) && s.modules.Skipped(id) == "" {
-			return nil, errors.New("unknown module " + strconv.Quote(id))
+		if !s.modules.Loaded(id) && s.modules.Skipped(id) == "" && !slices.Contains(modapi.ClientModules(), id) {
+			return nil, errors.New("unknown module " + strconv.Quote(id) + "; client-only modules: " + strings.Join(modapi.ClientModules(), ", "))
 		}
 		if seen[id] {
 			return nil, errors.New("duplicate module " + strconv.Quote(id))
@@ -148,6 +149,7 @@ func (s *Service) loadModules(mods []modapi.Module, off []string) {
 		acceptedRoutes = append(acceptedRoutes, routes...)
 		return nil
 	}
+	s.modulesOff = slices.Clone(off)
 	s.modules = kernel.NewWithOptions(mods, kernel.LoadOptions{Off: func(id string) bool { return slices.Contains(off, id) }, Logf: s.logf, Check: check})
 	for _, pattern := range s.modules.HubRoutes() {
 		handler, _ := s.modules.HubRoute(pattern)
@@ -207,13 +209,24 @@ func loadedModules(k *kernel.Kernel) string {
 	return strings.Join(ids, ", ")
 }
 
-// moduleFeatures are the module protocol marker and the loaded modules' wire feature flags, in load order. An off or
-// excluded module announces no flag of its own; the marker remains so clients know the absence means off.
+// moduleFeatures are the module protocol marker, the loaded modules' wire feature flags in load order, then the flags
+// of the client-only modules (modapi.ClientModules) that the modules setting leaves on. An off or excluded module
+// announces no flag of its own; the marker remains so clients know the absence means off. An id that is also compiled
+// in as a built-in module is that module's to announce; the list never holds one (internal/modules/all tests it), since
+// a module built out is unknown to the kernel and the list would announce it.
 func (s *Service) moduleFeatures() []string {
 	out := []string{modulesFeature}
 	for _, m := range s.modules.Modules() {
 		if m.Feature != "" && !slices.Contains(out, m.Feature) {
 			out = append(out, m.Feature)
+		}
+	}
+	for _, id := range modapi.ClientModules() {
+		if slices.Contains(s.modulesOff, id) || s.modules.Loaded(id) || s.modules.Skipped(id) != "" {
+			continue
+		}
+		if f := "module." + id; !slices.Contains(out, f) {
+			out = append(out, f)
 		}
 	}
 	return out

@@ -372,3 +372,70 @@ func TestModuleBackgroundJobFollowsModulePresence(t *testing.T) {
 	}
 	offCancel()
 }
+
+// The client-only modules (modapi.ClientModules) have no manifest on the server, so the manager announces their flags
+// itself: on by default beside the marker, off when the modules setting names them, and never from the list when this
+// build has a module of that id (its load state decides).
+func TestClientOnlyModuleFlagsFollowTheSwitch(t *testing.T) {
+	ids := modapi.ClientModules()
+	if len(ids) == 0 {
+		t.Skip("no client-only module is listed")
+	}
+	newService := func(mods []modapi.Module, off ...string) *Service {
+		f := newFakeHub().withMachine()
+		return New(Options{Hub: f, Store: func() Store { return &memStore{} }, Logf: testLogf(t), Modules: mods, ModulesOff: off})
+	}
+	got := newService([]modapi.Module{}).moduleFeatures()
+	for _, id := range ids {
+		if !slices.Contains(got, "module."+id) {
+			t.Errorf("a core-only manager does not announce client-only module %s: %v", id, got)
+		}
+	}
+	off := ids[0]
+	got = newService([]modapi.Module{}, off).moduleFeatures()
+	if slices.Contains(got, "module."+off) || !slices.Contains(got, "modules") {
+		t.Errorf("switched off, %s is still announced or the marker is gone: %v", off, got)
+	}
+	// A built-in module of the same id, switched off or without a feature, is not announced from the list.
+	same := testSlotModule{info: moduleTestInfo(off)}
+	if got = newService([]modapi.Module{same}).moduleFeatures(); slices.Contains(got, "module."+off) {
+		t.Errorf("a built-in module %s without a feature was announced from the client-only list: %v", off, got)
+	}
+}
+
+// persona_settings accepts a client-only id in the modules switch: the change reaches the approval card and, approved,
+// the stored row; the next start then leaves the flag out.
+func TestModuleSwitchSettingAcceptsClientOnlyIDs(t *testing.T) {
+	ids := modapi.ClientModules()
+	if len(ids) == 0 {
+		t.Skip("no client-only module is listed")
+	}
+	ctx := context.Background()
+	st := &memStore{}
+	f := newFakeHub().withMachine()
+	s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), Modules: []modapi.Module{}}))
+	done := make(chan string, 1)
+	go func() {
+		r := s.Tool(ctx, ToolCall{Name: "persona_settings", MachineID: "server", SessionID: "main",
+			Arguments: json.RawMessage(`{"action":"set","key":"modules","value":{"disabled":["` + ids[0] + `"]}}`)})
+		done <- r.Content[0].Text
+	}()
+	card, ok := awaitCard(s)
+	if !ok {
+		t.Fatalf("switching client-only module %s off made no approval card; tool returned %q", ids[0], <-done)
+	}
+	yes := true
+	if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: card.ID,
+		Answer: json.RawMessage(mustMarshal(proto.Resolution{Allow: &yes}))}); err != nil {
+		t.Fatal(err)
+	}
+	resultOf(t, done, 5*time.Second)
+	off := ReadModuleSwitch(ctx, st, t.Logf)
+	if !slices.Equal(off, []string{ids[0]}) {
+		t.Fatalf("approved disabled list = %v", off)
+	}
+	next := New(Options{Hub: newFakeHub().withMachine(), Store: func() Store { return st }, Logf: testLogf(t), Modules: []modapi.Module{}, ModulesOff: off})
+	if got := next.moduleFeatures(); slices.Contains(got, "module."+ids[0]) {
+		t.Errorf("after the next start %s is still announced: %v", ids[0], got)
+	}
+}

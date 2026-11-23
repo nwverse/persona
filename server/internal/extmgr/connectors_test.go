@@ -14,12 +14,12 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
-	"github.com/nwverse/persona/server/internal/connector/imessage"
 	"github.com/nwverse/persona/server/internal/connector/proc"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/host"
 	"github.com/nwverse/persona/server/internal/extmgr/githubport"
 	"github.com/nwverse/persona/server/internal/githubwire"
+	"github.com/nwverse/persona/server/internal/imessagewire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -204,7 +204,7 @@ func TestConnectorsListTheSameCapabilities(t *testing.T) {
 	h.mail = testMail(t)
 	h.connectors = connector.NewRegistry(nil)
 	h.registerConnectors()
-	if err := h.addConnector(imessage.NewRemote(imessage.Config{Machine: "mac"}, "Mac", nil)); err != nil {
+	if err := h.addConnector(newTestIMessage(t, imessagewire.Config{Machine: "mac"}, "Mac", nil)); err != nil {
 		t.Fatal(err)
 	}
 	connectFakeManager(t, h) // GitHub's options come with the inbox's muted repositories, the manager's

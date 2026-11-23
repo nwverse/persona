@@ -66,14 +66,14 @@ internal fun KnowledgeMapScreen(model: KnowledgeMapViewModel, navigator: Navigat
         else { projectOpened = nowOpened; projectClosed = nowClosed }
     }
     val fresh = page.loading && root != null
-    JListPage(stringResource(R.string.knowledge_map_title), onBack = navigator::back, largeTitle = false,
+    JListPage(stringResource(R.string.knowledge_ui_map_title), onBack = navigator::back, largeTitle = false,
         refreshing = fresh, onRefresh = model::refresh,
-        actions = { JIconButton(PersonaIcons.retry, stringResource(R.string.knowledge_refresh), model::refresh, enabled = !page.loading) }) {
+        actions = { JIconButton(PersonaIcons.retry, stringResource(R.string.knowledge_ui_refresh), model::refresh, enabled = !page.loading) }) {
         item("sides") {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = Tokens.Space.xs),
                 horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                JChip(stringResource(R.string.knowledge_kind_topics), selected = side == MapSide.Topics, onClick = { model.side(MapSide.Topics) })
-                JChip(stringResource(R.string.knowledge_kind_projects), selected = side == MapSide.Projects, onClick = { model.side(MapSide.Projects) })
+                JChip(stringResource(R.string.knowledge_ui_kind_topics), selected = side == MapSide.Topics, onClick = { model.side(MapSide.Topics) })
+                JChip(stringResource(R.string.knowledge_ui_kind_projects), selected = side == MapSide.Projects, onClick = { model.side(MapSide.Projects) })
             }
         }
         // A refresh that failed keeps the outline; this says it could not be read again (as the list and the entry's page do).
@@ -82,16 +82,16 @@ internal fun KnowledgeMapScreen(model: KnowledgeMapViewModel, navigator: Navigat
         }
         when {
             !page.paired -> item("unpaired") {
-                JEmptyState(stringResource(R.string.knowledge_unpaired_title), stringResource(R.string.knowledge_unpaired_text))
+                JEmptyState(stringResource(R.string.knowledge_ui_unpaired_title), stringResource(R.string.knowledge_ui_unpaired_text))
             }
             page.message != null && root == null -> item("error") {
-                RetryState(stringResource(R.string.knowledge_map_error), stringResource(requireNotNull(page.message)), model::refresh)
+                RetryState(stringResource(R.string.knowledge_ui_map_error), stringResource(requireNotNull(page.message)), model::refresh)
             }
             root == null -> item("loading") { JLoading() }
             rows.isEmpty() -> item("empty") {
                 JEmptyState(
-                    stringResource(if (side == MapSide.Topics) R.string.knowledge_map_no_topics else R.string.knowledge_map_no_projects),
-                    stringResource(if (side == MapSide.Topics) R.string.knowledge_map_no_topics_text else R.string.knowledge_map_no_projects_text),
+                    stringResource(if (side == MapSide.Topics) R.string.knowledge_ui_map_no_topics else R.string.knowledge_ui_map_no_projects),
+                    stringResource(if (side == MapSide.Topics) R.string.knowledge_ui_map_no_topics_text else R.string.knowledge_ui_map_no_projects_text),
                     icon = if (side == MapSide.Topics) PersonaIcons.topic else PersonaIcons.knowledgeMap)
             }
             else -> {
@@ -108,7 +108,7 @@ internal fun KnowledgeMapScreen(model: KnowledgeMapViewModel, navigator: Navigat
                     }
                 }
                 if (side == MapSide.Topics && page.failed > 0) item("failed", contentType = "note") {
-                    Note(pluralStringResource(R.plurals.knowledge_map_failed, page.failed, page.failed))
+                    Note(pluralStringResource(R.plurals.knowledge_ui_map_failed, page.failed, page.failed))
                 }
             }
         }
@@ -131,24 +131,24 @@ private fun rememberMapWords(): MapWords {
     val locale = currentLocale
     return remember(resources, locale) {
         MapWords(
-            knowledge = resources.getString(R.string.knowledge_map_knowledge),
-            byTopic = resources.getString(R.string.knowledge_map_by_topic),
-            other = resources.getString(R.string.knowledge_map_other),
-            otherBody = { resources.getString(R.string.knowledge_map_other_body, it) },
-            notRated = resources.getString(R.string.knowledge_map_not_rated),
-            projects = resources.getString(R.string.knowledge_kind_projects),
-            byStatus = resources.getString(R.string.knowledge_map_by_status),
-            active = resources.getString(R.string.knowledge_status_active),
-            done = resources.getString(R.string.knowledge_status_done),
-            paused = resources.getString(R.string.knowledge_status_paused),
-            summary = resources.getString(R.string.knowledge_map_summary),
-            goal = resources.getString(R.string.knowledge_map_goal),
-            role = resources.getString(R.string.knowledge_map_role),
-            latest = resources.getString(R.string.knowledge_map_latest),
-            notes = resources.getString(R.string.knowledge_map_notes),
-            folders = resources.getString(R.string.knowledge_code_dirs),
-            chats = resources.getString(R.string.knowledge_kind_chats),
-            people = resources.getString(R.string.knowledge_kind_people),
+            knowledge = resources.getString(R.string.knowledge_ui_map_knowledge),
+            byTopic = resources.getString(R.string.knowledge_ui_map_by_topic),
+            other = resources.getString(R.string.knowledge_ui_map_other),
+            otherBody = { resources.getString(R.string.knowledge_ui_map_other_body, it) },
+            notRated = resources.getString(R.string.knowledge_ui_map_not_rated),
+            projects = resources.getString(R.string.knowledge_ui_kind_projects),
+            byStatus = resources.getString(R.string.knowledge_ui_map_by_status),
+            active = resources.getString(R.string.knowledge_ui_status_active),
+            done = resources.getString(R.string.knowledge_ui_status_done),
+            paused = resources.getString(R.string.knowledge_ui_status_paused),
+            summary = resources.getString(R.string.knowledge_ui_map_summary),
+            goal = resources.getString(R.string.knowledge_ui_map_goal),
+            role = resources.getString(R.string.knowledge_ui_map_role),
+            latest = resources.getString(R.string.knowledge_ui_map_latest),
+            notes = resources.getString(R.string.knowledge_ui_map_notes),
+            folders = resources.getString(R.string.knowledge_ui_code_dirs),
+            chats = resources.getString(R.string.knowledge_ui_kind_chats),
+            people = resources.getString(R.string.knowledge_ui_kind_people),
         )
     }
 }
@@ -159,8 +159,8 @@ private fun MapStats(side: MapSide, root: MapNode) {
         if (side == MapSide.Topics) KnowledgeMap.topicStats(root).let { listOf(it.topics, it.points, it.sources) }
         else KnowledgeMap.projectStats(root).let { listOf(it.active, it.withSummary, it.notes) }
     }
-    val labels = if (side == MapSide.Topics) listOf(R.string.knowledge_map_stat_topics, R.string.knowledge_map_stat_points, R.string.knowledge_map_stat_sources)
-    else listOf(R.string.knowledge_map_stat_active, R.string.knowledge_map_stat_summary, R.string.knowledge_map_stat_notes)
+    val labels = if (side == MapSide.Topics) listOf(R.string.knowledge_ui_map_stat_topics, R.string.knowledge_ui_map_stat_points, R.string.knowledge_ui_map_stat_sources)
+    else listOf(R.string.knowledge_ui_map_stat_active, R.string.knowledge_ui_map_stat_summary, R.string.knowledge_ui_map_stat_notes)
     val locale = currentLocale
     JStatGrid(labels.mapIndexed { i, label -> JStat(stringResource(label), java.text.NumberFormat.getIntegerInstance(locale).format(stats[i])) },
         Modifier.padding(vertical = Tokens.Space.s))
@@ -187,7 +187,7 @@ private fun OutlineRowView(row: OutlineRow, open: Boolean, onToggle: () -> Unit,
     val railWidth = Tokens.Size.line
     val point = node.point
     val kind = point?.let { PointKind.of(it.kind) }
-    val state = if (row.folds) stringResource(if (open) R.string.knowledge_map_expanded else R.string.knowledge_map_collapsed) else null
+    val state = if (row.folds) stringResource(if (open) R.string.knowledge_ui_map_expanded else R.string.knowledge_ui_map_collapsed) else null
     Row(
         Modifier.fillMaxWidth().heightIn(min = Tokens.MinTouch.android)
             .drawBehind {
@@ -216,7 +216,7 @@ private fun OutlineRowView(row: OutlineRow, open: Boolean, onToggle: () -> Unit,
         }
         if (row.folds) Box(
             Modifier.size(Tokens.MinTouch.android)
-                .clickable(onClickLabel = stringResource(R.string.knowledge_map_fold), role = Role.Button, onClick = onToggle)
+                .clickable(onClickLabel = stringResource(R.string.knowledge_ui_map_fold), role = Role.Button, onClick = onToggle)
                 .semantics { stateDescription = state.orEmpty() },
             contentAlignment = Alignment.Center,
         ) { JIcon(if (open) PersonaIcons.expand else PersonaIcons.disclosure, null, tint = palette.ink3) }

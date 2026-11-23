@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/cliport"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extmgr/githubport"
 	"github.com/nwverse/persona/server/internal/githubwire"
@@ -710,7 +711,7 @@ func (h *Manager) registerConnectors() {
 	}
 	// lark-cli is a separate source from the optional Lark gateway extension. It
 	// is deliberately absent when lark.cli is unset, preserving existing hubs.
-	if h.cfg.Lark.CLI != nil {
+	if h.cfg.Lark.CLI != nil && cliport.Available() {
 		if err := h.syncLarkCLIProfile(context.Background()); err != nil {
 			if !errors.Is(err, errBotSettingsUnread) {
 				h.deferLarkCLIRecovery()

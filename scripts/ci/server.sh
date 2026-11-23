@@ -18,6 +18,10 @@ if [ "$lane" = all ] || [ "$lane" = build ]; then
   # macOS, and the tunnel works with the tailscale.com subset they leave.
   ci_run 'Server programs with build-tags.txt' 600 bash -c 'cd server && t="$(cat build-tags.txt)" && go build -tags "$t" ./cmd/... && GOOS=darwin GOARCH=arm64 go build -tags "$t" ./cmd/...'
   ci_run 'Tunnel tests with build-tags.txt' 300 bash -c 'cd server && go test -tags "$(cat build-tags.txt)" -count=1 -timeout=4m ./internal/buildtags/... ./internal/tunnel/...'
+  # The node's modules (docs/architecture/core-and-modules.md "The node's modules"): their node halves reach the node
+  # through internal/nodecmd/commandport from internal/modules/all/node. Left out, every binary builds, Windows' node too,
+  # the device command is unknown, and the node's list, the seam and the guards pass.
+  ci_run 'Builds without the node modules' 900 bash -c 'cd server && for t in persona_core_only persona_without_office; do go build -tags "$t" ./... && GOOS=windows go build -tags "$t" ./cmd/persona-node ./cmd/personad && go test -tags "$t" -count=1 -timeout=6m ./internal/modules/all/... ./internal/nodecmd/commandport/... ./internal/archguard/... ./cmd/persona-node/... || exit 1; done'
   # Persona Core without its feature modules (docs/architecture/core-and-modules.md "The switch"): the core builds, and
   # the module list, the kernel and the assistant's tests of the briefing's paths (they skip what needs the module and
   # check the core without it) pass, with every module left out and with the pilot left out. The assistant runs a -run
@@ -28,18 +32,22 @@ if [ "$lane" = all ] || [ "$lane" = build ]; then
   # own tests do not depend on the tags: they run in the shards.
   ci_run 'Builds without the speech modules' 900 bash -c 'cd server && for t in persona_core_only persona_without_volc persona_without_voice; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/builtinext/... ./internal/modules/all/... ./internal/archguard/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=6m -run "Volc|Voice|Transcription" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "TranscriptionEndToEnd" ./internal/assistant/ || exit 1; done'
   # The Feishu / Lark module (#13404, docs/architecture/core-and-modules.md "Provider seams"): left out, the binaries
-  # build, the extension host has no bot client (internal/botport) and the bot's tests skip; the rest of the extension
-  # host and the assistant's Feishu paths still pass.
-  ci_run 'Builds without the Lark module' 900 bash -c 'cd server && for t in persona_core_only persona_without_lark; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/botport/... ./internal/botcard/... ./internal/modules/all/... ./internal/archguard/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=8m ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "Feishu|Bot|Card|Golden" ./internal/assistant/ || exit 1; done'
+  # build, the extension host has no bot client (internal/botport) and no lark-cli adapter or connector
+  # (internal/cliport), and their tests skip; the rest of the extension host and the assistant's Feishu paths still pass.
+  ci_run 'Builds without the Lark module' 900 bash -c 'cd server && for t in persona_core_only persona_without_lark; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/botport/... ./internal/botcard/... ./internal/cliport/... ./internal/cliwire/... ./internal/modules/all/... ./internal/archguard/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=8m ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "Feishu|Bot|Card|Golden" ./internal/assistant/ || exit 1; done'
   # Mail (docs/architecture/core-and-modules.md "Provider seams"): the extension manager reaches it through its port, so
   # the core without it builds and the manager's mail, inbox, connector and settings tests pass (those of mail itself
   # skip; TestManagerWithoutMail checks it is absent).
   ci_run 'Builds without the mail module' 900 bash -c 'cd server && for t in persona_core_only persona_without_mail; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/modules/all/... ./internal/archguard/... ./internal/mailwire/... && go test -tags "$t" -count=1 -timeout=6m -run "Mail|Inbox|Connector|SelfSettings|Sent|Recall|Golden|SourceMove" ./internal/extmgr/ || exit 1; done'
-  # The connector modules (docs/architecture/core-and-modules.md "Provider seams"): GitHub reaches the extension manager
-  # through its port, so the core without it builds, the manager registers no built-in GitHub connector (the GitHub,
-  # connector, inbox, sent and golden tests pass; those that need the module skip) and the assistant's CI checks still
-  # run on githubwire.
-  ci_run 'Builds without the connector modules' 900 bash -c 'cd server && for t in persona_core_only persona_without_github; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/modules/all/... ./internal/archguard/... ./internal/githubwire/... ./internal/connector/... && go test -tags "$t" -count=1 -timeout=6m -run "GitHub|Connector|Inbox|Sent|Recall|Golden|Subscription|Market|Audit" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "TestCI" ./internal/assistant/ || exit 1; done'
+  # Meeting recording (docs/architecture/core-and-modules.md "Recording"): left out, the server builds and the core's
+  # tests of where it meets the module pass (the routes, capabilities and room tools are absent, the module's paths
+  # skip); its own tests do not depend on the tags and run in the shards.
+  ci_run 'Builds without the recording module' 900 bash -c 'cd server && for t in persona_core_only persona_without_recording; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/modules/all/... ./internal/archguard/... ./internal/recordinghost/... && go test -tags "$t" -count=1 -timeout=8m -run "Recording|Meeting|DayRecap|Evening|Minutes|Transcription|JustMe|Attendee|Bus|StartPath" ./internal/assistant/ || exit 1; done'
+  # The connector modules (docs/architecture/core-and-modules.md "Provider seams"): GitHub and iMessage reach the
+  # extension manager through their ports (iMessage's node side through the node's), so the core without either builds,
+  # the manager registers no such connector (the connector, inbox, sent and golden tests pass; those that need the
+  # module skip), the assistant's CI checks still run on githubwire and the node answers as one without Messages.
+  ci_run 'Builds without the connector modules' 900 bash -c 'cd server && for t in persona_core_only persona_without_github persona_without_imessage; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/modules/all/... ./internal/archguard/... ./internal/githubwire/... ./internal/imessagewire/... ./internal/connector/... ./cmd/persona-node/... && go test -tags "$t" -count=1 -timeout=6m -run "GitHub|IMessage|Connector|Inbox|Sent|Recall|Golden|Subscription|Market|Audit" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "TestCI|TestIMessage|Builtin|LocalConnector" ./internal/assistant/ ./internal/node/ || exit 1; done'
   # The core alone runs (#13978): a persona_core_only hub and manager start against a disposable Postgres, the manager
   # loads no module, every module's program, extension and route is absent, and both stop cleanly.
   ci_run 'Core-only hub smoke' 900 python3 scripts/ci/core-only-smoke.py
