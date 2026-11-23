@@ -3120,6 +3120,7 @@ final class AppModel {
             DirectionFilings.shared.hello(group)
             if isHub { hubHellos += 1 }
             #if os(iOS)
+            if isHub { HomeWidgetData.shared.intakeChanged() }
             // `meeting_live` events sent while the socket was down are gone: the meetings on screen are read again (#3862).
             if isHub { MeetingConversation.shared.reconnected() }
             // The meeting flags a start without the app in front reads follow every hello, not only the Recordings page.
@@ -3249,6 +3250,7 @@ final class AppModel {
         case .healthIntake:
             if isHub { healthIntakeRevision += 1 }
             #if os(iOS)
+            if isHub { HomeWidgetData.shared.intakeChanged() }
             if isHub { Task { await HealthIntakeSync.shared.refresh(model: self) } }
             #endif
             ExtensionUIRegistry.shared.invalidate(extension: HealthIntakeUI.id, ui: nil, group: group)

@@ -1747,7 +1747,15 @@ VoiceOver reads the label and percentage; finite ratios are clamped to 0–1 and
 The circular gauge is independent of `progress.style`. `accessory_rectangular` uses a bar and `accessory_inline`
 omits progress.
 
-The watch widget extension doesn't build `Theme`, so complications take their fonts, marks and colors from `WatchFaceTokens` (`apple/Shared/Design/WatchFaceTokens.swift`, the documented fixed-size exception in 2.2), whose symbols mirror `Theme.Icon` with an `// icon:` note. A complication only draws what its app last wrote (a snapshot file in the watch App Group); all-day recording reloads only its own kind's timeline (`AllDaySnapshot.widgetKind`), not the other faces'.
+The watch widget extension doesn't build `Theme`, so complications take their fonts, marks and colors from `WatchFaceTokens` (`apple/Shared/Design/WatchFaceTokens.swift`, the documented fixed-size exception in 2.2), whose symbols mirror `Theme.Icon` with an `// icon:` note. Recording and pet complications draw snapshots the app writes in the watch App Group; all-day recording reloads only its own kind's timeline (`AllDaySnapshot.widgetKind`), not the other faces'. Extension and intake complications can read directly with the watch's own shared credential.
+
+- **Water and Protein** (#13275): circular, rectangular and inline only. The circle uses the system circular capacity
+  gauge with today's amount in its center; the rectangle shows the name, total, goal and unit above a straight capacity
+  bar; inline keeps the name, amount and unit. They share the phone's blue/amber `HealthIntakePalette`, system accent
+  grouping, and the `.xxxLarge` text cap with shrinking. VoiceOver reads name, total, goal and unit. On a failed read,
+  cached values remain, identified in the rectangle and VoiceOver; an old hub's 403 says Update the hub instead.
+  No watch app page or Health permission is added. Hub choice lives on the complication; the default is the default
+  paired group, or the only available group. Data and 15-minute refresh rules are in `docs/apple/home-widgets.md`.
 
 - **All-Day Recording** (#4741, `AllDayRecordingComplication`; circular, corner, rectangular, inline, the Smart Stack): five faces, each in words and a mark, never by color alone. Off: "All-Day Recording" (the corner says "All-Day"), "Tap to start". Recording: "Recording all day" with the running time (`Text(_:style: .timer)`, so it needs no reload), in red as the system shows a microphone in use. Paused (by the user or a call): "Paused", "Tap to continue", `allDayPausedSymbol`, orange. Stopped by itself: "Stopped", "Tap to continue", the triangle, orange.
 - **The stale face**: a recording snapshot is trusted only while the app keeps rewriting it (every 10 minutes while recording); the timeline carries a second entry at `AllDaySnapshot.staleAfter` (25 minutes after the last write), which shows "Check recording", how long since it was last heard, the triangle, orange. Why: if the app dies without a word, a face still saying "Recording all day" would be a lie.
@@ -1786,6 +1794,16 @@ The widget extension doesn't build `Theme`: Persona's widgets take their colors,
 - **Choices live on the widget** (Edit Widget), never in the app's Settings: each starts at a default that works on a fresh install (every agent, every computer, the fullest account), and its list is the snapshot's, named as the widget names them.
 - **A widget's own switch and buttons** (the Calendar widget's Today · Week · Month and its days, #6946): a segmented control drawn in `HomeWidgetTokens` (`segment…`: a track, the chosen part filled, fixed sizes like a hero), and days as buttons. Each is a widget button (an App Intent) that changes only that widget and redraws it at once, without the app or the network; Edit Widget keeps where it starts. Why a new pattern: a view people flip between often does not belong behind Edit Widget's sheet, and a widget has no other control.
 - **The Lock Screen** shows the same hero in one color: the circle holds the hero alone, the rectangle the widget's line and one or two under it, the inline one line beside the clock.
+
+Water and Protein (#13275) share `HealthIntakePalette` with `Theme.Health`, keeping the app's blue and amber exactly.
+Today's Health has four separate rings (Water, Protein, Steps, Sleep), chosen independently in Edit Widget; repeated
+items retain their positions. Its steps token is purple, apart from Move's red; the existing Health widget keeps pink.
+Sleep remains indigo. Activity uses only short neutral straight bars and values, never rings or UIKit: Move, Exercise,
+Stand, with absent goals removing rows. Small has values, medium adds names, goals and units. The compact Activity
+numbers and cell captions use fixed widget tokens to fit the system canvas, with shrinking and a `.xxxLarge` cap.
+VoiceOver reads each cell's label, value and goal or average, including the compact rows' omitted names and units.
+Today's Health is privacy sensitive; standalone Water and Protein remain readable while locked. See
+`docs/apple/home-widgets.md` for day boundaries, data ownership, sizes and refresh rules.
 
 ### 3.15 Charts (iOS)
 
@@ -1943,9 +1961,10 @@ Message feedback (#5258, principle 7, super rule 5) reuses the chat's status lin
 style. Show Sending immediately from local state, then Processing on the hub's `message_send_state` receipt; do not wait
 for a model token or overwrite `Session.status`. The pending-send overlay is scoped to the conversation and message,
 survives stale snapshots, and hands off to actual execution or queued state on delivery. Failure removes only its own
-overlay and keeps the existing draft, failed-bubble and uncertain-delivery recovery. On the web the state is said once,
-by the status line under the last message (Sending, Processing, delivery unknown); the pending bubble only dims, with no
-second line under it (a queued message's bubble keeps its Queued). The full wire and reconnect rules
+overlay and keeps the existing draft, failed-bubble and uncertain-delivery recovery. On the web, a direct send's state
+appears on the status line under the last message, and its pending bubble dims. A follow-up headed for the queue while
+the turn works shows its state and local photo previews in its queue row as soon as it is sent (#13958). The hub's queue
+update confirms that row in place. The full wire and reconnect rules
 are in `docs/protocol/protocol.md` ("Message feedback (#5258)"). Apply the same definition in Assistant and Agent chats.
 
 | Message state | en | zh-Hans | ja |
@@ -2104,6 +2123,10 @@ A computer's dev server opened from a chat (a forwarded port, `docs/web/preview.
 ### 4.7 Tool execution collapsed (super rule 2)
 
 Tool execution is one summary line, never opens by itself, shows the latest text segment while running and the result when done, and expands by hand. Opened by hand, a step (and the summary itself) changes in place: the tapped row stays under the finger, what opens fades in, what closes goes at once, and the list holds still while the turn goes on (new steps, the answer, the next turn, the footer under the list changing) until the user scrolls, taps ↓ or sends (`toggleInPlace`, `ChatFollow.toggledRow`, #3005). iOS complies: `isOpen` ignores `live` (`apple/Persona/Views/Chat/ChatLines.swift:293`) and tool rows use `autoExpand: false`. The "latest segment only" half was not confirmed from code reading and needs a screenshot test.
+
+**Blank replies** (web, #13957). An interrupted turn shows the localized interruption notice below its work summary. A
+settled user turn without visible output shows “No response returned” there. Retry sends that turn's message again, with
+its attachments, when the conversation can send. Silent supervision keeps its existing visibility.
 
 **The opened summary** (web, #10247) is a flat sequence of narration and action groups, sharing one rail and indentation. The outer summary keeps the whole-exchange clock and collapsed default. Action headers name at most three kinds in first-seen order, with the first kind's icon; read/edit/search/command kinds have localized counts, and other kinds retain their existing labels. Earlier live groups start collapsed, the current one opens within the trace the reader manually opened, and a superseded run closes; all groups can be opened and closed by hand. Newly loaded completed groups start open; remembered disclosure choices remain available. Latest narration stays only in its text slot until superseded, and the final reply appears once. Rows lead with the file, query and target, or command; command descriptions remain in tooltips and expanded detail. Reliable per-call durations appear only from 30 seconds; the total exchange clock stays on the outer summary and run bar. The current run previews edit diffs using the existing diff renderer. The flatter layout replaces repeated time headings and nested rails so the inspected work is scannable, while preserving the top-level progressive disclosure required by super rule 2.
 

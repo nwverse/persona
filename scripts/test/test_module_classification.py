@@ -61,6 +61,23 @@ class Fixture(unittest.TestCase):
         self.assertEqual({"apple/Persona/App", "apple/Persona/Views"}, units["apple"])
         self.assertEqual({"web/src/views", "web/src/views/chat"}, units["web"])
 
+    def test_gradle_inventory_ignores_mentions_outside_literal_includes(self):
+        settings = '''
+        // include(":feature:comment")
+        /* Outer /* include(":feature:nested") */ comment */
+        val example = """include(":feature:example")"""
+        include(":app", /* include(":feature:inline") */ ":core:hub")
+        include(
+            ":module:voice",
+        )
+        includeBuild("build-logic")
+        '''
+        self.assertEqual([], check(settings=settings))
+
+    def test_gradle_inventory_refuses_computed_includes(self):
+        with self.assertRaisesRegex(ValueError, "Computed include"):
+            check(settings=SETTINGS + 'include(extraProjects)\n')
+
     def test_an_unclassified_new_unit_fails(self):
         for kind, extra, settings in [
             ("go", "server/internal/newthing/x.go", SETTINGS),

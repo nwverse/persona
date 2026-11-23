@@ -20,12 +20,6 @@ const codeUUIDUsed = 200770
 // codeStreamClosed: the card is not streaming (CardKit turns streaming off ten minutes after it was turned on).
 const codeStreamClosed = 300309
 
-// CardEntityContent is an interactive message's content that sends card entity id.
-func CardEntityContent(id string) string {
-	b, _ := json.Marshal(map[string]any{"type": "card", "data": map[string]any{"card_id": id}})
-	return string(b)
-}
-
 // CardCreate makes a card entity of card (its JSON 2.0) and returns its id. An entity never sent costs nothing, so a
 // create that is retried is harmless.
 func (c *Client) CardCreate(ctx context.Context, card string) (string, error) {
