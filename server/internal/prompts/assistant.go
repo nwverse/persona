@@ -463,7 +463,7 @@ func RenderSnapshotWorkflow(w SnapshotWorkflow) string {
 type AssistantContext struct {
 	ScheduledWorkPlan bool // Inline instructions for a granted scheduled round when the manager uses persona-work.
 	Main              bool
-	Leader            bool // a leader conversation: explicit manual-Agent tasks only; new task_plan work is main-supervised
+	Leader            bool // a direction lead supervises its planned tasks and explicitly assigned Agents
 	Owner             string
 	Snapshot          string
 	// Directions: for the main conversation, the current leaders used as direction labels;
@@ -550,6 +550,9 @@ type BriefFacts struct {
 	Day *BriefDay
 	// Setup: the lines of the weekly recommended-setup block (#5085), ready to read; none leaves the section out.
 	Setup []string
+	// Captures: the quick-capture lines (#13502), ready to read; a sensitive capture is only counted. None leaves the
+	// section out.
+	Captures []string
 }
 
 // BriefDay is today's all-day recording in the evening routine's facts (#4741), the day's parts merged by time; the
@@ -949,7 +952,8 @@ type SuperviseEntry struct {
 	// #10511). The manager copied them here when the agent's turn ended; they are kept out of Last's clip.
 	Files []TaskFile
 	// failed with its tab kept (#2570): until when (local "15:04"), the question its shell waits on, the tab's last
-	// lines, and how many retries are left; KeptUntil "" when the start failed for good.
+	// lines, and how many retries are left; KeptUntil "" when the start failed for good. Screen is also set for an
+	// agent_start_stalled start that failed for good (its screen when it stopped, start_remedy.go remedyEntry).
 	KeptUntil, Question, Screen string
 	RetriesLeft                 int
 	// RetryWith: failed because of its launcher on that computer, the other launchers there task_retry may start it

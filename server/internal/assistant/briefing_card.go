@@ -166,6 +166,15 @@ func (s *Service) briefCardWithHeader(f *briefFacts, label, answer, header strin
 		room.section(c, &plain, l, i18n.T(l, "assistant-briefing.head_progress", i18n.Args{"n": f.ProgressTotal}), working, f.ProgressTotal)
 	}
 
+	// Quick capture (capture_brief.go): how many wait to be sorted and what was filed; a sensitive capture only counted.
+	if len(f.Captures) > 0 {
+		var captures []briefBlock
+		for _, line := range f.Captures {
+			captures = append(captures, briefBlock{md: feishubot.EscapeMarkdown(line), plain: line})
+		}
+		room.section(c, &plain, l, i18n.T(l, "assistant-captures.heading"), captures, len(captures))
+	}
+
 	// The recommended setup, on the week's first briefing when the numbers name something (setup_suggest.go): what each
 	// mechanism would have removed, its cost and where it is turned on. Nothing is turned on from here.
 	if f.Setup != nil && len(f.Setup.Suggestions) > 0 {

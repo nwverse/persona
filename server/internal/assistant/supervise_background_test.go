@@ -607,7 +607,7 @@ func TestRehomeKeepsLegacyBackgroundCloseout(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	s.rehomeSupervisedTodos(context.Background())
+	s.backfillPlanSupervisors(context.Background())
 	if got := todoNow(s, todo.ID).Supervision.Supervisor; got != "bg1" {
 		t.Fatalf("rehome took the legacy background task to %q", got)
 	}
@@ -1255,8 +1255,8 @@ func TestGoldenBackgroundSupervisor(t *testing.T) {
 	on := s.claudeMD(context.Background(), "server", false)
 	golden(t, "assistant_claude_md.background", on)
 	for _, common := range []string{off, on} {
-		if !strings.Contains(common, "新任务统一由主对话督办") {
-			t.Fatal("shared CLAUDE.md lost the main-supervision rule")
+		if !strings.Contains(common, "主管派的任务归该主管") {
+			t.Fatal("shared CLAUDE.md lost the direction ownership rule")
 		}
 		if strings.Contains(common, "cost_of_waiting") || strings.Contains(common, "visibility: \"silent\"") {
 			t.Fatal("shared CLAUDE.md still contains detailed supervision handling")

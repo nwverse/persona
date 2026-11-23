@@ -3,6 +3,7 @@ import { t } from "../../i18n";
 import { api, ApiError, enc, errorText } from "../../lib/api";
 import { citedPhoto, formatSpan, minutesKeptUntil, recordingClock, transcriptTarget, type KBDetail, type MinutesAction, type MinutesPoint, type RecordingView } from "../../lib/kb";
 import { minutesOverview, type OverviewCite } from "../../lib/minutes-overview";
+import { minutesWait } from "../../lib/minutes-wait";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
 import { Button, copyText, cx, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -37,6 +38,11 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
   const keptUntil = rec.trimmedAt ? minutesKeptUntil(rec.startedAt, minutesDays) : undefined;
   // The summary card (#6563) when the minutes carry an overview with a bullet left after cleaning; else as before.
   const overview = useMemo(() => minutesOverview(minutes?.overview), [minutes?.overview]);
+  // While the hub checks the whole recording before writing them, the line says so, with how far it is (#13461).
+  const wait = minutesWait(detail.meta?.transcription, state, !!minutes);
+  const waitText = wait?.line === "checking"
+    ? wait.total === undefined ? t("knowledge-kbdetail.minutes_checking") : t("knowledge-kbdetail.minutes_checking_progress", { done: wait.done ?? 0, total: wait.total })
+    : t("knowledge-kbdetail.minutes_writing");
 
   if (detail.meta?.kind !== "meeting" && rec.partial) return null;
   const disabled = busy || needsRefresh;
@@ -71,7 +77,7 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
         {minutesDays === 0 ? t("knowledge-kbdetail.minutes_kept_forever") : keptUntil ? t("knowledge-kbdetail.minutes_kept_until", { date: keptUntil }) : t("knowledge-kbdetail.minutes_transcript_expired")}
       </p>}
       {!rec.trimmedAt && (state === "pending" || state === "failed") && <p role="status" className="mb-2 px-1 text-[12.5px] leading-relaxed text-ink-3">
-        {t(state === "failed" ? "knowledge-kbdetail.minutes_failed" : minutes ? "knowledge-kbdetail.minutes_updating" : "knowledge-kbdetail.minutes_writing")}
+        {state === "failed" ? t("knowledge-kbdetail.minutes_failed") : minutes ? t("knowledge-kbdetail.minutes_updating") : waitText}
       </p>}
       {!minutes && !state && rec.partial && <p className="px-1 text-[12.5px] text-ink-3">{t("knowledge-kbdetail.minutes_waiting")}</p>}
       {needsRefresh && !busy && <div className="mb-2 px-1">

@@ -51,6 +51,7 @@ type a2aStore interface {
 	A2ACount(context.Context, string, string, string, string, string, *time.Time) (int, error)
 	A2AUpdate(context.Context, db.A2ARow, time.Time, *time.Time) (bool, error)
 	A2AClaim(context.Context, int) ([]db.A2ARow, error)
+	A2AReady(context.Context, string, string) error
 	A2ADispatches(context.Context, string, string, string, time.Time) ([]db.A2ARow, error)
 }
 
@@ -66,14 +67,16 @@ type a2aCaller struct {
 
 type a2aEvent struct {
 	// Seq is the position in the task's append-only conversation.
-	Seq       int       `json:"seq"`
-	ID        string    `json:"message_id"`
-	Kind      string    `json:"kind"`
-	Text      string    `json:"text,omitempty"`
-	State     string    `json:"state,omitempty"`
-	At        time.Time `json:"at"`
-	Delivery  string    `json:"delivery,omitempty"`
-	Attempted time.Time `json:"attempted,omitzero"`
+	Seq            int       `json:"seq"`
+	ID             string    `json:"message_id"`
+	Kind           string    `json:"kind"`
+	Text           string    `json:"text,omitempty"`
+	State          string    `json:"state,omitempty"`
+	At             time.Time `json:"at"`
+	Delivery       string    `json:"delivery,omitempty"`
+	Attempted      time.Time `json:"attempted,omitzero"`
+	WaitingSince   time.Time `json:"waiting_since,omitzero"`
+	DeliveryReason string    `json:"delivery_reason,omitempty"`
 }
 
 type a2aBody struct {
@@ -182,12 +185,12 @@ func (s *Service) a2aAllowed(ctx context.Context, cfg assistantwire.A2AConfig, r
 		return false
 	}
 	_, guest, err := s.guestOf(ctx, ref.Machine, ref.Session)
-	return err == nil && !guest && !s.inHealth(ctx, ref.Session)
+	return err == nil && !guest && !s.selfPolicy(ctx, ref.Session).HideFromExtensions
 }
 
 func a2aVisible(session proto.Session) bool {
 	return !session.Archived && !session.IsDeleted() && !session.HiddenByDirectory() && !session.IsSubagent &&
-		session.Space != identity.SpaceHealth && !identity.InHealthSpace(session.Cwd)
+		runSpace(session) == "" // any space: a2aVisible has no registry, so it fails closed
 }
 
 func a2aSendable(session proto.Session) bool {
@@ -279,7 +282,7 @@ func (s *Service) a2aStart(ctx context.Context, st a2aStore, cfg assistantwire.A
 			return nil, fmt.Errorf("%w: starting a remote session requires Agent dispatch to be enabled", errA2AUnavailable)
 		}
 		dev, ok := s.machineByName(ctx, to.Machine)
-		if !ok || dev.ID != to.Machine || !a2aValidText(launch.CWD) || identity.InHealthSpace(launch.CWD) {
+		if !ok || dev.ID != to.Machine || !a2aValidText(launch.CWD) || s.trackPolicy(ctx, identity.SpaceAt(launch.CWD)).HideFromExtensions {
 			return nil, errA2AUnavailable
 		}
 		launch.CWD = proto.ExpandHome(launch.CWD, dev.Home)

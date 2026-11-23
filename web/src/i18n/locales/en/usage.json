@@ -41,5 +41,12 @@
   "timeline_now": "Now",
   "timeline_title": "Reset timeline",
   "protect_flag": "protect {percent}%",
-  "protect_label": "protection line at {percent}%"
+  "protect_label": "protection line at {percent}%",
+  "pin_account": "Pin {name} to sidebar",
+  "unpin_account": "Unpin {name} from sidebar",
+  "pin_title": "Pin to sidebar",
+  "unpin_title": "Unpin from sidebar",
+  "pinned_summary": "Pinned in sidebar: {count}",
+  "pinned_fallback": "Pinned accounts unavailable · showing automatic",
+  "reset_pinned": "Reset to automatic"
 }

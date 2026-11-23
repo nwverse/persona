@@ -270,6 +270,20 @@ class OutboxMessageSender(
         return change(clientMessageId, setOf(OutboxState.Refused, OutboxState.NeedsConfirmation), OutboxState.Queued)
     }
 
+    override suspend fun retryRefused(session: SessionKey, code: String): Int = lifecycle.withLock {
+        check(job.isActive) { "Pairing scope is closed" }
+        val candidates = store.entries.first().filter { it.session == session && it.state == OutboxState.Refused && it.error == code }
+        var changed = 0
+        for (candidate in candidates) {
+            // The conditional transition rechecks after the snapshot: a newly uncertain or delivered message never goes again.
+            val current = store.entries.first().firstOrNull { it.clientMessageId == candidate.clientMessageId }
+            if (current?.session == session && current.state == OutboxState.Refused && current.error == code &&
+                store.transition(candidate.clientMessageId, setOf(OutboxState.Refused), OutboxState.Queued)) changed++
+        }
+        if (changed > 0) wake.trySend(Unit)
+        changed
+    }
+
     override suspend fun confirm(clientMessageId: String, delivered: Boolean): Boolean = change(
         clientMessageId, undecided,
         if (delivered) OutboxState.Sent else OutboxState.Refused)

@@ -80,6 +80,7 @@
   "permission_mode": "Permission mode",
   "permission_mode_inherit": "Use default · {mode}",
   "permission_mode_hint": "Leave on default to inherit from the category above or use the launcher's own default. Applies to new starts only.",
+  "permission_mode_hint_inbox": "Without a choice here, Inbox chats use Default permissions and never inherit Agents' Full access. Plan is unavailable because it blocks required Persona tools. Applies to new chats and stopped chats when they resume; running chats keep their mode.",
   "api_models": "Available models",
   "api_model_id": "Model ID",
   "api_model_hint": "Choose a discovered model or enter any model ID. Your edits are not saved until you choose Save.",

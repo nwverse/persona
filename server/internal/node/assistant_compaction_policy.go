@@ -228,6 +228,26 @@ func (n *Node) assistantCompactionPolicy(launcher, cwd, settings string, executi
 // (Anthropic's own API). A value the shell has only because the node has it is not the launcher's own; a managed one
 // counts as the launcher's (nothing Persona writes would win over it).
 func claudeEndpoint(p Probe, own, configDir, cwd, home string) (endpoint string, ownToolSearch bool) {
+	layers, shell := claudeEnvLayers(p, own, configDir, cwd, home)
+	base, set := "", false
+	for _, layer := range layers {
+		if v, ok := layer["ANTHROPIC_BASE_URL"]; ok && !set {
+			base, set = v, true
+		}
+		if _, ok := layer[toolSearchEnv]; ok {
+			ownToolSearch = true
+		}
+	}
+	if !set {
+		base = shell["ANTHROPIC_BASE_URL"]
+	}
+	if v, ok := shell[toolSearchEnv]; ok && p.Shell != nil && os.Getenv(toolSearchEnv) != v {
+		ownToolSearch = true
+	}
+	return base, ownToolSearch
+}
+
+func claudeEnvLayers(p Probe, own, configDir, cwd, home string) ([]map[string]string, map[string]string) {
 	read := func(arg string) map[string]string {
 		if arg == "" {
 			return nil
@@ -263,22 +283,7 @@ func claudeEndpoint(p Probe, own, configDir, cwd, home string) (endpoint string,
 			}
 		}
 	}
-	base, set := "", false
-	for _, layer := range layers {
-		if v, ok := layer["ANTHROPIC_BASE_URL"]; ok && !set {
-			base, set = v, true
-		}
-		if _, ok := layer[toolSearchEnv]; ok {
-			ownToolSearch = true
-		}
-	}
-	if !set {
-		base = shell["ANTHROPIC_BASE_URL"]
-	}
-	if v, ok := shell[toolSearchEnv]; ok && p.Shell != nil && os.Getenv(toolSearchEnv) != v {
-		ownToolSearch = true // the user's startup files export it
-	}
-	return base, ownToolSearch
+	return layers, shell
 }
 
 // capMain holds the main conversation on a managed launcher (pin: Persona writes its values) to the window the manager

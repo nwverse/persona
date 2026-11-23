@@ -54,6 +54,17 @@ func (c *ownChange) card(l i18n.Lang) string {
 }
 
 func (s *Service) ownSettings() []ownSetting {
+	// A module's setting is listed only while its module is loaded (modules.go): its value stays stored, hidden.
+	return slices.DeleteFunc(s.allOwnSettings(), func(o ownSetting) bool {
+		_, loaded := s.modules.Setting(o.Key)
+		return moduleSettingKeys[o.Key] && !loaded
+	})
+}
+
+// moduleSettingKeys are the keys below that a feature module serves (modules.go moduleStored).
+var moduleSettingKeys = map[string]bool{"assistant.briefing_waits": true}
+
+func (s *Service) allOwnSettings() []ownSetting {
 	getSet := []string{"get", "set"}
 	return []ownSetting{
 		s.hiddenDirSetting(),
@@ -190,23 +201,22 @@ func (s *Service) ownSettings() []ownSetting {
 			About: "legacy boolean alias for assistant.delivery_gate: true sets delivery_gate to live (close only once live and " +
 				"checked, and hand the delivery standard to the agent); false sets delivery_gate to off (no delivery gate). " +
 				"Prefer assistant.delivery_gate (off / merged / live). Either way the judge never closes a supervised task: delivery " +
-				"waits for the main conversation's task_review. Applies from the next judgment / task",
+				"waits for its supervisor's task_review. Applies from the next judgment / task",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.doneNeedsDelivery(ctx)), nil },
 			set: s.setDoneNeedsDelivery},
 		{Setting: Setting{Key: "assistant.review_sample_percent", Title: "Share of finished tasks to spot-check", Actions: getSet,
 			About: "100 (the default): the done judge adds no per-criterion check. Below 100 it also checks each done_when criterion " +
 				"and the delivery as evidence for review. Passing, failing, sampled and unsampled work all stay open as delivered, " +
-				"awaiting the main conversation's task_review; the judge never accepts or closes a task. Applies from the next judgment on",
+				"awaiting their supervisor's task_review; the judge never accepts or closes a task. Applies from the next judgment on",
 			Value: "a whole number, 0–100"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.reviewSamplePercent(ctx)), nil },
 			set: s.setReviewSamplePercent},
 		{Setting: Setting{Key: "assistant.leaders", Title: "Leader conversations", Actions: getSet,
-			About: "empty (the default): no manual Agent is assigned to a leader. New task_plan, agent_start and agent_send task work " +
-				"is always supervised by the main conversation, including task_plan(supervisor=leader). The one exception is a manually " +
-				"started Agent the owner explicitly puts under a leader: its ordinary supervision messages and failed starts go there and " +
-				"that leader reviews them with task_review; needs_user still comes to the main conversation, and every other new " +
-				"assistant-dispatched failed start goes there too",
+			About: "empty (the default): ordinary conversations use main for supervision. A direction lead supervises the tasks it " +
+				"plans or starts, and Agents explicitly assigned to it: ordinary signals, question cards, failed starts, retries, " +
+				"task_review and cancellation stay with that lead. Only needs_user escalations go to the main conversation. " +
+				"Main supervises its own tasks; explicit agent_transfer assignments persist across manager restarts",
 			Value: "the whole list of leader conversation ids (conversations_list), [] for none"},
 			get: s.getLeaders,
 			set: s.setLeaders},
@@ -216,8 +226,9 @@ func (s *Service) ownSettings() []ownSetting {
 				"orphan_minutes=10 (orphanOfflineAfter), card_minutes=3 (superviseNeedsAfter); max_rows=15 bounds only non-owner " +
 				"rows per direction, and every owner-wait row is kept. These values do not change supervision notifications",
 			Value: "the whole object {stalled_minutes, silent_minutes, orphan_minutes, card_minutes, max_rows}; minutes 1–10080, max_rows 1–100; null restores the defaults"},
-			get: s.getBriefingWaits,
-			set: s.setBriefingWaits},
+			get: s.moduleSettingGet("assistant.briefing_waits"),
+			set: s.moduleSettingSet("assistant.briefing_waits", "change_briefing_waits",
+				"assistant.briefing_waits updated; the next briefing's deterministic wait lists use it.")},
 		{Setting: Setting{Key: "assistant.interject_background", Title: "Move running work to the background when I interject", Actions: getSet,
 			About: "off (the default): a message the user sends while a Claude conversation is still answering waits until the command " +
 				"or subagent running in the foreground ends; on: that work moves to the background (it goes on and reports when done) " +
@@ -251,7 +262,7 @@ func (s *Service) ownSettings() []ownSetting {
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.loadAllTools(ctx)), nil },
 			set: s.setLoadAllTools},
 		{Setting: Setting{Key: "assistant.agent_tasks", Title: "Every Agent Persona starts is a supervised task", Actions: getSet,
-			About: "off (the default): assistant-dispatched task_plan, agent_start and agent_send task work is still supervised by main. " +
+			About: "off (the default): assistant-dispatched task_plan, agent_start and agent_send task work is still supervised by its planning lead or main. " +
 				"on: manually linked user to-dos and reporting-Agent compatibility are supervised too; an Agent opened by hand on the Agents " +
 				"page is not adopted merely because it did work. Agents started by hand in a terminal are left alone. Costs model calls " +
 				"(the done judge, supervision turns). Applies from the next start, turn end and report",
@@ -272,9 +283,10 @@ func (s *Service) ownSettings() []ownSetting {
 		{Setting: Setting{Key: "assistant.close_ended_terminals", Title: "Close an Agent's terminal when it ends", Actions: getSet,
 			About: "off (the default): an Agent's terminal tab stays open after it stops, with the shell it ran in, until the user " +
 				"closes it. on: when an Agent Persona started ends, Persona closes the tab it opened for it, the way Archive and " +
-				"close does: when its task is done or cancelled (an idle Agent), and when it quits by itself or is told to (/exit). " +
+				"close does: when its task is done or cancelled (an idle Agent), when it is stopped for being idle (idle_close_hours), " +
+				"and when it quits by itself or is told to (/exit). " +
 				"Never closed: a busy Agent (working, waiting for an answer, background work, subagents or workflows running, a " +
-				"/loop, queued messages, a server it runs), one the user stopped with Stop or that was stopped for being idle, and " +
+				"/loop, queued messages, a server it runs), one the user stopped with Stop, and " +
 				"terminals Persona did not open. The conversation is kept and can be resumed in a new tab. Applies from the next " +
 				"Agent that ends",
 			Value: "true or false"},

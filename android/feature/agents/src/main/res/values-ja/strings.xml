@@ -474,6 +474,7 @@
     <string name="agents_todo_hold_user">あなたの承認待ち</string>
     <string name="agents_todo_hold_agent">エージェントが続行できます</string>
     <string name="agents_todo_hold_other">他の人 / CI / 環境待ち</string>
+    <string name="agents_todo_hold_supervisor">まず監督が確認します</string>
     <string name="agents_todo_active_agents">対応中のエージェント</string>
     <string name="agents_todo_no_agents">割り当てられたエージェントはありません</string>
     <string name="agents_todo_no_agents_hint">下の「エージェントに任せる」をタップして割り当てます。</string>

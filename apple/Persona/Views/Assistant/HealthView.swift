@@ -14,12 +14,25 @@ import SwiftUI
     private(set) var loaded = false
     /// Why the list could not be read; shown only while there is nothing to show.
     private(set) var error: String?
+    private(set) var intake: HealthIntake?
+    private(set) var supportsIntake = false
+    private(set) var intakeError: String?
+    private(set) var intakeBusy = false
+    /// A broadcast arriving during a write is read once the write has settled, by the foreground task.
+    private(set) var intakeRefresh = 0
+    @ObservationIgnored private var intakeReadPending = false
+    @ObservationIgnored private var intakeRead = 0
+    @ObservationIgnored private var intakeScope: APIClient?
+    @ObservationIgnored private var intakeOperation: Task<Void, Never>?
+    @ObservationIgnored private var intakeOperationID = 0
+    @ObservationIgnored private var cupAmount: Double = 250
     @ObservationIgnored private let deps: AssistantDeps
 
     init(deps: AssistantDeps = .live) { self.deps = deps }
 
-    func load(machine: String) async {
+    func load(machine: String, features: Set<String> = []) async {
         guard let api = deps.api() else { return }
+        async let today: Void = loadIntake(api: api, supported: features.contains(HealthIntake.feature))
         async let memory = try? api.assistantMemory(space: Session.healthSpace)
         async let reports = try? api.healthReports(machine: machine)
         do {
@@ -30,7 +43,135 @@ import SwiftUI
         }
         if let files = await memory { memoryCount = files.filter { $0.name != AssistantMemoryEntry.index }.count }
         if let list = await reports { reportCount = list.count }
+        await today
         loaded = true
+    }
+
+    private func loadIntake(api: APIClient, supported: Bool) async {
+        let api = api.manager(nil)
+        if !api.sameSettingsScope(as: intakeScope) {
+            intake = nil
+            intakeError = nil
+            intakeBusy = false
+            intakeOperationID += 1
+            intakeReadPending = false
+            cupAmount = 250
+            intakeScope = api
+        }
+        supportsIntake = supported
+        guard supported else { intake = nil; intakeRead += 1; return }
+        // Keep optimistic feedback until the write answers, then honor every invalidation seen meanwhile.
+        guard !intakeBusy else { intakeReadPending = true; return }
+        intakeRead += 1
+        let read = intakeRead
+        do {
+            let value = try await api.healthIntake()
+            guard !Task.isCancelled, read == intakeRead, isCurrent(api) else { return }
+            intake = value
+            intakeError = nil
+        } catch {
+            guard !Task.isCancelled, read == intakeRead, isCurrent(api) else { return }
+            intakeError = error.shown
+        }
+    }
+
+    private func isCurrent(_ api: APIClient) -> Bool {
+        api.sameSettingsScope(as: deps.api()?.manager(nil)) && api.sameSettingsScope(as: intakeScope)
+    }
+
+    private func finishIntake(_ api: APIClient) {
+        guard isCurrent(api) else { return }
+        intakeBusy = false
+        if intakeReadPending {
+            intakeReadPending = false
+            intakeRefresh += 1
+        }
+    }
+
+    /// Keep every accepted intent, including a toast action tapped during another write. Each operation reads its
+    /// rollback baseline only when it reaches the front; refreshes wait until the entire queue has settled.
+    private func enqueueIntake(on api: APIClient, run: @escaping @MainActor () async -> Void) -> Task<Void, Never>? {
+        guard isCurrent(api) else { return nil }
+        intakeBusy = true
+        intakeOperationID += 1
+        let id = intakeOperationID
+        let previous = intakeOperation
+        let operation = Task { @MainActor in
+            await previous?.value
+            defer {
+                if id == self.intakeOperationID {
+                    self.intakeOperation = nil
+                    self.finishIntake(api)
+                }
+            }
+            guard self.isCurrent(api) else { return }
+            await run()
+        }
+        intakeOperation = operation
+        return operation
+    }
+
+    /// One request at a time, with optimistic feedback and authoritative totals afterwards.
+    func record(_ kind: HealthIntake.Kind, amount: Double? = nil) async {
+        await record(HealthIntake.Draft(kind: kind, amount: amount))?.value
+    }
+
+    private func record(_ draft: HealthIntake.Draft, on captured: APIClient? = nil) -> Task<Void, Never>? {
+        guard supportsIntake, let api = captured ?? deps.api()?.manager(nil) else { return nil }
+        return enqueueIntake(on: api) { await self.performRecord(draft, on: api) }
+    }
+
+    private func performRecord(_ draft: HealthIntake.Draft, on api: APIClient) async {
+        guard supportsIntake, isCurrent(api),
+              let previous = intake else { return }
+        intakeRead += 1
+        if draft.kind == .water { intake?.water.today += draft.amount ?? cupAmount }
+        else { intake?.protein.today += draft.amount ?? 0 }
+        do {
+            let result = try await api.recordHealthIntake(draft)
+            guard isCurrent(api) else { return }
+            intake?.align(result)
+            intakeError = nil
+            if result.entry?.deletedAt != nil {
+                deps.toast(Toast(String(localized: "Intake undone"), style: .success))
+                return
+            }
+            if draft.kind == .water, draft.amount == nil, let entry = result.entry { cupAmount = entry.amount }
+            deps.toast(Toast(String(localized: "Intake logged"), style: .success,
+                             action: .init(title: String(localized: "Undo"), run: { [weak self] in
+                                 _ = self?.enqueueUndo(draft.id, on: api)
+                             })))
+        } catch {
+            guard isCurrent(api) else { return }
+            intake = previous
+            deps.toast(Toast(error.shown ?? String(localized: "Couldn't log intake"), style: .error,
+                             action: .init(title: String(localized: "Try Again"), run: { [weak self] in
+                                 _ = self?.record(draft, on: api)
+                             })))
+        }
+    }
+
+    func undo(_ id: String) async { await enqueueUndo(id, on: deps.api()?.manager(nil))?.value }
+
+    private func enqueueUndo(_ id: String, on captured: APIClient?) -> Task<Void, Never>? {
+        guard let api = captured else { return nil }
+        return enqueueIntake(on: api) { await self.performUndo(id, on: api) }
+    }
+
+    private func performUndo(_ id: String, on api: APIClient) async {
+        intakeRead += 1
+        do {
+            let result = try await api.undoHealthIntake(id)
+            guard isCurrent(api) else { return }
+            intake?.align(result)
+            deps.toast(Toast(String(localized: "Intake undone"), style: .success))
+        } catch {
+            guard isCurrent(api) else { return }
+            deps.toast(Toast(error.shown ?? String(localized: "Couldn't undo intake"), style: .error,
+                             action: .init(title: String(localized: "Try Again"), run: { [weak self] in
+                                 _ = self?.enqueueUndo(id, on: api)
+                             })))
+        }
     }
 
     /// The space's open conversations, newest first: the hub's list, with what the pushes say since (a title, its
@@ -52,6 +193,13 @@ import SwiftUI
 }
 
 struct HealthView: View {
+    private nonisolated struct IntakeRefresh: Hashable, Sendable {
+        var group: String
+        var hellos: Int
+        var revision: Int
+        var retry: Int
+        var supported: Bool
+    }
     @Environment(AppModel.self) private var model
     /// A conversation is being started (the Persona page shows it coming).
     var disabled: Bool
@@ -65,6 +213,14 @@ struct HealthView: View {
     /// Starts a health conversation with the message (`AssistantView.start(…, space:)`).
     var send: (String, [ImagePayload]) -> Void
     @State private var page = HealthModel()
+    @State private var intakeDetail: HealthIntakeSheet.Route?
+    #if os(iOS)
+    #if DEBUG
+    @State private var trends = HealthHomeSamples.trendsModel()
+    #else
+    @State private var trends = HealthTrendsModel()
+    #endif
+    #endif
     // Upload a Checkup Report (docs/assistant/health.md「Checkup reports」): the picked files go to reports/; once they are up the conversation starts.
     @State private var showReports = false
     /// Kept by the app, not the page (#2836): built again with the whole tree when iPhone Duo folds or opens, the page
@@ -114,6 +270,7 @@ struct HealthView: View {
         .keepsHeightUnderUndockedKeyboard() // the composer stays at the bottom under a floating keyboard (#2565)
         .pageTitle(String(localized: "Health"))
         .fileUploadPicker(isPresented: $showReports) { uploadReports($0) }
+        .sheet(item: $intakeDetail) { HealthIntakeSheet(kind: $0.kind) }
         #if DEBUG
         // `-showReportUpload <name>[,<name>…]`: made-up reports uploaded as if picked, to check the whole way without the
         // picker; `-showReportUploadMB <n>`: each that big, on its way a while (the mock hub reads it slowly). Once a launch:
@@ -131,16 +288,46 @@ struct HealthView: View {
             }
         }
         #endif
-        .task { await page.load(machine: machine.id) }
-        .refreshable { await page.load(machine: machine.id) }
+        .tabActiveTask(id: IntakeRefresh(group: model.hubGroup, hellos: model.hubHellos,
+                                        revision: model.healthIntakeRevision, retry: page.intakeRefresh,
+                                        supported: model.hubFeatures.contains(HealthIntake.feature))) {
+            await page.load(machine: machine.id, features: model.hubFeatures)
+        }
+        .refreshable { await page.load(machine: machine.id, features: model.hubFeatures) }
+        #if os(iOS)
+        // Load outside the conditional List row: a hidden empty section has no row to run its task.
+        .tabActiveTask(id: trends.range) { await trends.load() }
+        #endif
     }
 
     private func sections(_ list: [Session]) -> some View {
         ScrollViewReader { proxy in
             List {
-                Section { hero }
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets())
+                Section { HealthTodaySection(page: page) { intakeDetail = .init(kind: $0) } } header: { Text("Today") }
+                #if os(iOS)
+                if UIDevice.current.userInterfaceIdiom == .phone {
+                    #if DEBUG
+                    HealthActivitySection(model: HealthHomeSamples.activityModel())
+                    #else
+                    HealthActivitySection()
+                    #endif
+                }
+                if trends.hasData {
+                    HealthTrendsSection(model: trends, automaticallyLoads: false)
+                }
+                #endif
+                // Where the data comes from, named first (App Review 2.5.1, #13118): HealthKit is Apple Health, with its
+                // icon; on an iPhone or iPad it opens This iPhone, where the access is turned on.
+                Section {
+                    #if os(iOS)
+                    NavigationLink { PhoneDataView() } label: { appleHealth }
+                        .accessibilityIdentifier("health-apple-health")
+                    #else
+                    appleHealth
+                    #endif
+                } footer: {
+                    Text("Persona reads Apple Health only after you allow it, and saves an entry only after you confirm it. You can change this anytime.")
+                }
                 Section {
                     Button { showReports = true } label: {
                         Label { Text("Upload a Checkup Report").foregroundStyle(Theme.Hue.pink).lineLimit(1) } icon: {
@@ -207,8 +394,8 @@ struct HealthView: View {
                     Text("Goals, allergies, medications and other things noted in health chats are kept separately and never flow into other chats. You can view and delete them anytime.")
                 }
                 Section {
-                    source(Theme.Icon.health, "Apple Health", String(localized: "Reads summaries of steps, sleep, heart rate, weight and more through your iPhone. Persona needs to be open on the phone with access granted."))
-                    source(Theme.Icon.edit, String(localized: "Log Data"), String(localized: "Say “log my weight” or “I drank 300 ml of water”; after you confirm on the phone it's saved to Health."))
+                    source(Theme.Brand.iosHealth, String(localized: "Apple Health"), String(localized: "Reads summaries of steps, sleep, heart rate, weight and more through your iPhone. Persona needs to be open on the phone with access granted."))
+                    source(Theme.Icon.edit, String(localized: "Log Data"), String(localized: "Say “I drank 300 ml of water”, or take a photo of a meal in the field below, to log it in Health."))
                     source(Theme.Icon.document, String(localized: "Checkup Reports and Lab Results"), String(localized: "Choose Upload a checkup report and pick a PDF or a photo: each item is read out and the ones outside the reference range are marked. The original and its record stay in Health, so years can be compared."))
                 } header: {
                     Text("Data Sources")
@@ -222,6 +409,8 @@ struct HealthView: View {
                     }
                     .padding(.vertical, Theme.Space.xs)
                     .id("health-privacy")
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("health-privacy")
                 }
             }
             #if DEBUG
@@ -241,22 +430,19 @@ struct HealthView: View {
         String(localized: "This offers explanations and suggestions, not a substitute for a doctor's diagnosis or treatment."),
     ]
 
-    private var hero: some View {
-        VStack(spacing: Theme.Space.s) {
-            ThemedIcon(Theme.Icon.healthFilled)
-                .font(Theme.Font.title)
-                .foregroundStyle(Theme.Hue.pink)
-                .scaledFrame(width: Theme.Size.box56, height: Theme.Size.box56)
-                .background(Theme.Hue.pink.opacity(0.14), in: .circle)
-                .accessibilityHidden(true)
-            Text("Ask About Your Health").font(Theme.Font.title).lineLimit(1)
-            Text("Sleep, steps, heart rate, weight and diet, answered from the health data on your phone. Chats and memory here are kept apart from Persona's other chats.")
-                .font(Theme.Font.secondary)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+    /// Apple Health, by its name and the Health app's icon (`PhoneDataSource.health`'s): what Health reads and saves.
+    private var appleHealth: some View {
+        HStack(spacing: Theme.Space.m) {
+            BrandMark(Theme.Brand.iosHealth, side: Theme.Size.wellS)
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                Text("Works with Apple Health").font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
+                Text("Reads steps, sleep, heart rate, weight and more from Apple Health, and saves the entries you confirm to it.")
+                    .font(Theme.Font.secondary)
+                    .foregroundStyle(.secondary)
+            }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, Theme.Space.l)
+        .padding(.vertical, Theme.Space.xxs)
+        .accessibilityElement(children: .combine)
     }
 
     private func row(_ s: Session) -> some View {
@@ -303,7 +489,11 @@ struct HealthView: View {
                 Text(body).font(Theme.Font.secondary).foregroundStyle(.secondary)
             }
         } icon: {
-            ThemedIcon(symbol).foregroundStyle(symbol == Theme.Icon.health ? Theme.Hue.pink : .secondary)
+            if Theme.Brand.isAppIcon(symbol) {
+                BrandMark(symbol, side: Theme.Size.iconL)
+            } else {
+                ThemedIcon(symbol).foregroundStyle(.secondary)
+            }
         }
     }
 }
