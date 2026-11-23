@@ -313,6 +313,47 @@ func TestCCPluginPollsAreTheSessionsOwn(t *testing.T) {
 	}
 }
 
+func TestCCPluginObservedDesktopEffort(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	p := bgTranscript(t, home, home, sidA, "plan")
+	writeOutsideClaude(t, home, sidA, "claude-desktop", "idle", newFakeInbox(t, p), nil)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	c := pluginSocket(t, n)
+
+	poll := func(effort string) {
+		t.Helper()
+		status, body := pluginPost(t, c, "poll", map[string]any{"session_id": sidA, "wait_ms": 1, "observed_effort": effort})
+		if status != http.StatusOK {
+			t.Fatalf("poll status %d, response %v", status, body)
+		}
+	}
+	check := func(want string) {
+		t.Helper()
+		for _, s := range listSessions(t, n) {
+			if s.SessionID == sidA {
+				if s.Effort != want {
+					t.Fatalf("session effort %q, want %q", s.Effort, want)
+				}
+				return
+			}
+		}
+		t.Fatal("desktop session is missing")
+	}
+	check("")
+	poll("xhigh")
+	check("xhigh")
+	poll("low")
+	check("low")
+	poll("")
+	check("")
+	poll("high")
+	n.ccPlugins.mu.Lock()
+	n.ccPlugins.sessions[sidA].seen = time.Now().Add(-ccPluginStale - time.Second)
+	n.ccPlugins.mu.Unlock()
+	check("")
+}
+
 // claude-plugin.status lists the sessions whose plugin polls, for installers and the doctor.
 func TestCCPluginStatus(t *testing.T) {
 	n, f, home := herdrNode(t)

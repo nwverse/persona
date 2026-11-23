@@ -155,6 +155,7 @@ type ccPluginSession struct {
 	pid             int
 	version, engine string
 	caps            ccPluginCaps
+	observedEffort  string
 	seen            time.Time
 	// poll is the waiting poll's hand-off, nil while none waits; done ends it early (a newer poll).
 	poll chan ccPluginDelivery
@@ -171,8 +172,8 @@ type ccPluginRegistry struct {
 
 // polled records a poll from session id's claude pid and makes it the session's waiting poll; the poll it replaces
 // (the same session's, still waiting) is ended. When settings were pre-queued for id and the plugin supports settings,
-// polled returns them immediately without leaving a waiting channel. It also returns whether capabilities changed.
-func (r *ccPluginRegistry) polled(id string, pid int, version, engine string, caps ccPluginCaps) (poll chan ccPluginDelivery, done chan struct{}, immediate *ccPluginSettings, capabilitiesChanged bool) {
+// polled returns them immediately without leaving a waiting channel. It also returns whether session metadata changed.
+func (r *ccPluginRegistry) polled(id string, pid int, version, engine string, caps ccPluginCaps, effort string) (poll chan ccPluginDelivery, done chan struct{}, immediate *ccPluginSettings, changed bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sessions == nil {
@@ -200,8 +201,9 @@ func (r *ccPluginRegistry) polled(id string, pid int, version, engine string, ca
 		close(s.done)
 		s.poll, s.done = nil, nil
 	}
-	changed := isNew || s.caps != caps
+	changed = isNew || s.caps != caps || s.observedEffort != effort
 	s.version, s.engine, s.caps, s.seen = version, engine, caps, now
+	s.observedEffort = effort
 	if caps.settings {
 		if q, ok := r.queued[id]; ok {
 			delete(r.queued, id)
@@ -211,6 +213,15 @@ func (r *ccPluginRegistry) polled(id string, pid int, version, engine string, ca
 	}
 	s.poll, s.done = make(chan ccPluginDelivery, 1), make(chan struct{})
 	return s.poll, s.done, nil, changed
+}
+
+func (r *ccPluginRegistry) observedEffort(id string, pid int) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s := r.sessions[id]; s != nil && s.pid == pid && (s.poll != nil || time.Since(s.seen) < ccPluginStale) {
+		return s.observedEffort
+	}
+	return ""
 }
 
 // pollEnded takes poll off session id when it is still the waiting one; ok false when a delivery was handed to it (or
@@ -582,14 +593,15 @@ func (n *Node) ccPluginRequest(ctx context.Context, c net.Conn, method, path str
 		return http.StatusNotFound, map[string]any{"error": "unknown"}
 	}
 	var in struct {
-		SessionID     string   `json:"session_id"`
-		PluginVersion string   `json:"plugin_version"`
-		EngineVersion string   `json:"engine_version"`
-		Capabilities  []string `json:"capabilities"`
-		WaitMS        int64    `json:"wait_ms"`
-		ID            string   `json:"id"`
-		Submitted     bool     `json:"submitted"`
-		Reason        string   `json:"reason"`
+		SessionID      string   `json:"session_id"`
+		PluginVersion  string   `json:"plugin_version"`
+		EngineVersion  string   `json:"engine_version"`
+		Capabilities   []string `json:"capabilities"`
+		ObservedEffort string   `json:"observed_effort"`
+		WaitMS         int64    `json:"wait_ms"`
+		ID             string   `json:"id"`
+		Submitted      bool     `json:"submitted"`
+		Reason         string   `json:"reason"`
 	}
 	if json.Unmarshal(body, &in) != nil || !validID(in.SessionID) {
 		return http.StatusBadRequest, map[string]any{"error": "invalid"}
@@ -621,7 +633,11 @@ func (n *Node) ccPluginRequest(ctx context.Context, c net.Conn, method, path str
 		interrupt: slices.Contains(in.Capabilities, "interrupt"),
 		settings:  slices.Contains(in.Capabilities, "settings"),
 	}
-	poll, done, immediate, changed := n.ccPlugins.polled(in.SessionID, pid, clipReason(in.PluginVersion), clipReason(in.EngineVersion), caps)
+	effort := in.ObservedEffort
+	if !slices.Contains(proto.EffortLevels, effort) {
+		effort = ""
+	}
+	poll, done, immediate, changed := n.ccPlugins.polled(in.SessionID, pid, clipReason(in.PluginVersion), clipReason(in.EngineVersion), caps, effort)
 	if changed {
 		n.notifySessions()
 	}

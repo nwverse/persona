@@ -190,6 +190,27 @@ describe('persona plugin', () => {
     expect(w.steps.at(-1)).toEqual({ model: 'claude-opus-5-5', effort: 'high' })
   })
 
+  test('reports named main-loop effort in the next poll', async ($, on) => {
+    const reply = { status: 200, body: { messages: [], retry_ms: 1_000 } }
+    const w = world(on, [reply, reply, reply, reply])
+    await $.session.start(start)
+    await w.clock.settle()
+    expect(w.requests.at(-1)?.body.observed_effort).toBe(undefined)
+
+    const step = { turnId: 't1', index: 0, model: 'claude-sonnet-5-5', messageCount: 1 }
+    await $.turn.step({ ...step, effort: 'xhigh' }).next()
+    await w.clock.advance(1_000)
+    expect(w.requests.at(-1)?.body.observed_effort).toBe('xhigh')
+
+    await $.turn.step({ ...step, effort: 'low', agentId: 'sub-1' }).next()
+    await w.clock.advance(1_000)
+    expect(w.requests.at(-1)?.body.observed_effort).toBe('xhigh')
+
+    await $.turn.step({ ...step, effort: 1_024 }).next()
+    await w.clock.advance(1_000)
+    expect(w.requests.at(-1)?.body.observed_effort).toBe('')
+  })
+
   test('submits nothing late, empty or a slash command, and tells the node why', async ($, on) => {
     const w = world(on, [{
       status: 200,

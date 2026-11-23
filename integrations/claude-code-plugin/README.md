@@ -58,6 +58,9 @@ another session, gets `403`.
   session works or rests; when `busy_input` is advertised, owner prompts are also handed over while a turn runs so
   Claude Code queues them natively without holding them at the computer in `bypassPermissions` or `auto` mode.
   `settings` overrides can be delivered to any active poll.
+- Plugin 0.2.1 can include `observed_effort` from the latest main-loop step for the same session. A named effort applies
+  to that step. An empty value clears the observation when the step supplies no named effort. For Claude Desktop the
+  node uses a recent observation when the session has no recorded effort from its transcript or Persona controls.
 - `200`: `{"messages": [{"id": "<id>", "text": "...", "deadline_ms": <epoch ms>}], "interrupt": {"id": "<id>", "deadline_ms": <epoch ms>}, "settings": {"id": "<id>", "model": "...", "effort": "..."}, "retry_ms": <ms>}`.
   `messages` is empty when nothing came; `interrupt` and `settings` are omitted when none are pending. `retry_ms`, when
   present, is how long to wait before the next poll: a session the node does not deliver to this way (one in a Persona

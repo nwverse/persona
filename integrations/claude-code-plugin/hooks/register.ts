@@ -6,12 +6,14 @@ import {
   SUBMIT_QUEUE_SETTLE_MS,
   applyStepOverride,
   homeDir,
+  isEffortChoice,
   mergeOverride,
   nextBackoff,
   readPoll,
   socketPath,
   verdict,
   type ActiveTurn,
+  type EffortChoice,
   type InterruptRequest,
   type Message,
   type PollAnswer,
@@ -34,6 +36,7 @@ export const register: Register = on => {
   let loop = 0
   let activeTurn: ActiveTurn | undefined
   let override: SessionOverride | undefined
+  let observed: { session: string; effort: EffortChoice | '' } | undefined
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
@@ -51,25 +54,32 @@ export const register: Register = on => {
   })
 
   on('turn.step', async function* ($, e, next) {
-    if (e.agentId === undefined && activeTurn?.turnId !== e.turnId) {
+    if (e.agentId !== undefined) return yield* next(e)
+    if (activeTurn?.turnId !== e.turnId) {
       const session = await $.session.id().catch(() => '')
       activeTurn = { session, turnId: e.turnId }
     }
-    if (e.agentId !== undefined || override === undefined) return yield* next(e)
-    const session = await $.session.id().catch(() => '')
-    const sessionModel = override.model !== undefined ? await $.session.model().catch(() => undefined) : undefined
-    const applied = applyStepOverride(e, override, session, sessionModel)
-    override = applied.nextOverride
-    return yield* next(applied.step)
+    const session = activeTurn.session
+    let step = e
+    if (override !== undefined) {
+      const sessionModel = override.model !== undefined ? await $.session.model().catch(() => undefined) : undefined
+      const applied = applyStepOverride(e, override, session, sessionModel)
+      step = applied.step
+      override = applied.nextOverride
+    }
+    observed = { session, effort: isEffortChoice(step.effort) && step.effort !== 'auto' ? step.effort : '' }
+    return yield* next(step)
   })
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     const mine = ++loop
+    observed = undefined
     void run(
       $,
       () => mine === loop,
       () => activeTurn,
+      session => observed?.session === session ? observed.effort : undefined,
       turnId => {
         if (activeTurn?.turnId === turnId) activeTurn = undefined
       },
@@ -86,6 +96,7 @@ async function run(
   $: Engine,
   current: () => boolean,
   getActiveTurn: () => ActiveTurn | undefined,
+  getObservedEffort: (session: string) => EffortChoice | '' | undefined,
   clearActiveTurn: (turnId: string) => void,
   onSettings: (session: string, update: SettingsUpdate) => Promise<void>,
 ): Promise<void> {
@@ -108,6 +119,7 @@ async function run(
         plugin_version: pluginVersion,
         engine_version: engineVersion,
         capabilities: CAPABILITIES,
+        observed_effort: getObservedEffort(session),
         wait_ms: POLL_WAIT_MS,
       }))
       answer = readPoll(res.status, res.text)
