@@ -337,7 +337,11 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if inRound {
 		granted = func() func(PlanTask) bool { return s.scheduleGrantCover(ctx, round, machine, sessionID) }
 	}
-	if policy.ConfirmOutbound || slices.ContainsFunc(p.Tasks, func(task PlanTask) bool { return task.RequestGate != "" }) || !s.planStartsAtOnceUnder(ctx, p.Tasks, granted) {
+	var autoStartReasons []string
+	if !policy.ConfirmOutbound && !slices.ContainsFunc(p.Tasks, func(task PlanTask) bool { return task.RequestGate != "" }) {
+		autoStartReasons = s.planAutoStartReasons(ctx, p.Tasks, granted)
+	}
+	if autoStartReasons == nil {
 		s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, s.planWithSuggestion(ctx, p, s.lang(ctx)))})
 		// A card below the answer is easy to miss: push it as well.
 		titles := make([]string, 0, len(p.Tasks))
@@ -363,8 +367,15 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			s.lreports.plansDue.Store(true)
 			s.directionsSoon() // a leader's plan waiting for Start is a decision for the owner (leader_reports.go)
 		}
-		return fmt.Sprintf("Plan %s is on the user's screen as a card and pushed to their phone; nothing has started. "+
-			"Don't wait for it: carry on. When they start it, the tasks show up in the context snapshot.", p.ID) + dups + taskPlanEstimateNotes(p.Tasks), nil
+		var b strings.Builder
+		fmt.Fprintf(&b, "Plan %s needs the user's Start on its card; nothing has started through this call.\n", p.ID)
+		for _, t := range p.Tasks {
+			fmt.Fprintf(&b, "- %s: waiting for the user to tap Start\n", t.Title)
+		}
+		b.WriteString("After the user taps Start, check the task cards or context snapshot for the outcome.")
+		b.WriteString(dups)
+		b.WriteString(taskPlanEstimateNotes(p.Tasks))
+		return b.String(), nil
 	}
 	started, err := s.startPlan(ctx, p.ID, nil, false)
 	if err != nil {
@@ -372,16 +383,16 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	}
 	var b strings.Builder
 	supervisor := ""
-	fmt.Fprintf(&b, "Queued %d task(s) for dispatch without asking (read-only, asked for by the user, a kind the user trusts, or one "+
-		"the user lets this scheduled task start):\n", len(started.Tasks))
-	for _, t := range started.Tasks {
+	fmt.Fprintf(&b, "Queued %d task(s) for dispatch without asking (plan %s):\n", len(started.Tasks), started.ID)
+	for i, t := range started.Tasks {
+		reason := autoStartReasons[i]
 		if t.Error != "" {
-			fmt.Fprintf(&b, "- %s on %s: dispatch failed: %s\n", t.Title, t.Machine, t.Error)
+			fmt.Fprintf(&b, "- %s: automatic dispatch failed (%s) on %s: %s\n", t.Title, reason, t.Machine, t.Error)
 		} else {
 			if t.Queue != nil && t.Queue.Key == workspaceQueueKey {
-				fmt.Fprintf(&b, "- %s → todo %s on %s (queued: %s)\n", t.Title, t.TodoID, t.Machine, t.Queue.Reason)
+				fmt.Fprintf(&b, "- %s: automatic start queued (%s) → todo %s on %s (queued: %s)\n", t.Title, reason, t.TodoID, t.Machine, t.Queue.Reason)
 			} else {
-				fmt.Fprintf(&b, "- %s → todo %s on %s (dispatching)\n", t.Title, t.TodoID, t.Machine)
+				fmt.Fprintf(&b, "- %s: automatic start initiated (%s) → todo %s on %s (dispatching)\n", t.Title, reason, t.TodoID, t.Machine)
 			}
 			if todo, ok := s.todoNow(t.TodoID); ok && todo.Supervision != nil {
 				supervisor = todo.Supervision.Supervisor
