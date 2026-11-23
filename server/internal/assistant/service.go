@@ -314,6 +314,7 @@ type Service struct {
 	tpush      todosPush         // todos.go: the {"type":"todos"} waiting for the rest of its write
 	directions directionBook     // directions.go: the leaders' records and what the extensions were told of them
 	lreports   leaderReportBook  // leader_reports.go: what the leaders' tasks were reported as
+	outbound   outboundOnce      // outbound_once.go: one card per hand-off the owner is asked about, none again once allowed
 	dtree      directionTreeBook // direction_tree.go: the direction tree the apps were last told of
 	tview      todoViewBook      // todo_view_push.go: what the apps were told each to-do is filed under
 	offers     routeBook         // route.go: the directions offered for New chats

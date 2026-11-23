@@ -163,19 +163,21 @@ func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, text
 	if !s.exitPolicy(ctx, text, self, space).ConfirmOutbound {
 		return true, nil
 	}
-	l := s.lang(ctx)
-	now := time.Now().UTC()
-	ix := proto.Interaction{ID: "ix_" + randomHex(6), MachineID: machine, SessionID: self, Kind: proto.IxPermission, ToolName: tool,
-		Summary: s.outboundSummary(ctx, l, space, summary), ToolInput: input, SessionTitle: "Persona",
-		CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute)}
-	if c, ok := s.session(ctx, machine, self); ok {
-		ix.Cwd = c.Cwd
-	}
-	r, err := s.ask(withCard(ctx, cardConfirmOutbound), ix)
-	if err != nil {
-		return false, err
-	}
-	return r.Allow != nil && *r.Allow, nil
+	return s.outbound.confirm(ctx, outboundKey(self, tool, text, summary), func() (bool, error) {
+		l := s.lang(ctx)
+		now := time.Now().UTC()
+		ix := proto.Interaction{ID: "ix_" + randomHex(6), MachineID: machine, SessionID: self, Kind: proto.IxPermission, ToolName: tool,
+			Summary: s.outboundSummary(ctx, l, space, summary), ToolInput: input, SessionTitle: "Persona",
+			CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute)}
+		if c, ok := s.session(ctx, machine, self); ok {
+			ix.Cwd = c.Cwd
+		}
+		r, err := s.ask(withCard(ctx, cardConfirmOutbound), ix)
+		if err != nil {
+			return false, err
+		}
+		return r.Allow != nil && *r.Allow, nil
+	})
 }
 
 // leadOwnAgentTools are the tools a direction lead drives its own Agents with: no phone card for them (confirmOutbound).
