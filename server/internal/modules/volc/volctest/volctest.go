@@ -29,6 +29,10 @@ import (
 	"github.com/coder/websocket"
 )
 
+// EnvService names the stand-in's address for the program (volc.EnvService, which a test of the module keeps equal):
+// a core test sets it without importing the module (docs/architecture/core-and-modules.md "Guards").
+const EnvService = "PERSONA_VOLC_SERVICE"
+
 // Script is how the stand-in misbehaves; Set changes it while it runs.
 type Script struct {
 	RefuseASR      int    // an HTTP status refusing every recognition handshake (0: none), with RefuseBody

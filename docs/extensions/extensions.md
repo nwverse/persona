@@ -4476,7 +4476,7 @@ in place of the voice extension's realtime voice or the phone's own. The built-i
 
 ## Built-in voice extension (`personad voice`)
 
-personad includes a kind = `voice` extension, using a real-time service speaking the **GPT-Live protocol** (code `server/internal/voice`, prompts
+personad includes a kind = `voice` extension, using a real-time service speaking the **GPT-Live protocol** (code `server/internal/modules/voice`, prompts
 `server/internal/prompts/voice/`, tool descriptions `prompts/mcp/voice/`). No separate Node or SDK installation.
 
 Voice-mode design (turn-scoped delegation, binding the current chat, upstream setup in-app with keys encrypted on the hub, taking over manager.json entries) is in `docs/assistant/voice.md`; manager.json configuration below remains supported.

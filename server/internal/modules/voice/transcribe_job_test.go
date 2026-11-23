@@ -17,8 +17,8 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/nwverse/persona/server/internal/extwire"
+	"github.com/nwverse/persona/server/internal/modules/voice/voicetest"
 	"github.com/nwverse/persona/server/internal/prompts"
-	"github.com/nwverse/persona/server/internal/voice/voicetest"
 )
 
 // trScript is a meeting of six sentences in Chinese, English and both in one sentence, with names and terms.
