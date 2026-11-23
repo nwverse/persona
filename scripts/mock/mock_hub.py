@@ -2296,7 +2296,6 @@ ASSISTANT += [] if os.environ.get("MOCK_HEALTH_EMPTY") else [
 HEALTH_REPORT_RECORD = "报告日期：2026-10-28\n机构：示例体检中心\n类型：年度体检\n\n| 项目 | 结果 | 单位 | 参考范围 | 异常 |\n| --- | --- | --- | --- | --- |\n| 总胆固醇 | 5.8 | mmol/L | < 5.2 | 偏高 |\n| 低密度脂蛋白 | 3.6 | mmol/L | < 3.4 | 偏高 |\n| 空腹血糖 | 5.1 | mmol/L | 3.9–6.1 | |\n\n结论：血脂略高，建议三个月后复查。\n"
 
 
-
 HEALTH_REPORTS_DIR = "/home/me/.persona/health/reports/"
 HEALTH_REPORTS = [
     {"name": "2026 年度体检-20261106-093000.pdf", "title": "2026 年度体检", "path": HEALTH_REPORTS_DIR + "2026 年度体检-20261106-093000.pdf",

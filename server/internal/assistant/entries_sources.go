@@ -76,7 +76,8 @@ func (s *Service) toolEntries(ctx context.Context, machine, session, name string
 			return "", err
 		}
 		p.Type = "decision"
-		out, err := s.listEntries(ctx, p, machine != "" && machine == s.settings(ctx).MachineID)
+		personal := machine != "" && machine == s.settings(ctx).MachineID
+		out, err := s.listEntries(ctx, p, personal)
 		if err != nil {
 			return "", err
 		}
@@ -87,7 +88,17 @@ func (s *Service) toolEntries(ctx context.Context, machine, session, name string
 		if out.Entries == nil {
 			out.Entries = []proto.AssistantEntry{}
 		}
-		b, err := json.Marshal(out)
+		// The memory extension's entries a recall returns, on the first page and beside the ledger's, so the cursor
+		// stays the ledger's (memory_extension_source.go). Filters the extension's entries have no field for (who wrote
+		// one, how far it is trusted, a status other than active) leave them out.
+		var memory []recalledMemory
+		if personal && p.After == "" && p.By == "" && p.Trust == "" && (p.Status == "" || p.Status == "active") {
+			memory = s.recallExtensionMemory(ctx, session, p.Tag)
+		}
+		b, err := json.Marshal(struct {
+			proto.AssistantEntriesResult
+			Memory []recalledMemory `json:"memory,omitempty"`
+		}{out, memory})
 		return string(b), err
 	}
 	var in struct {
