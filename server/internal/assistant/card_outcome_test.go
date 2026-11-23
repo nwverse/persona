@@ -24,7 +24,9 @@ import (
 func endOutbound(t *testing.T, s *Service, self, tool string, r proto.Resolution) {
 	t.Helper()
 	go func() {
-		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		tick := time.NewTicker(5 * time.Millisecond)
+		defer tick.Stop()
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); <-tick.C {
 			if qs := s.pendingQuestions(); len(qs) == 1 {
 				ix := qs[0]
 				if ix.Kind != proto.IxPermission || ix.ToolName != tool || ix.SessionID != self {
