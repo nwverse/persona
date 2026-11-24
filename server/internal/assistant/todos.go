@@ -16,6 +16,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistant/todo/projection"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
@@ -1030,16 +1031,21 @@ func (s *Service) todoRoutes() {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
 			return
 		}
-		if r.Header.Get(RoleHeader) == roleExtension {
+		isExtension := r.Header.Get(RoleHeader) == roleExtension
+		if isExtension {
 			list = s.extensionRows(r.Context(), list, p)
 		} else if !paged {
 			s.tagTodoRevision(w, writes, p)
 		}
+		var sharedBlockers []projection.SharedBlocker
+		if !isExtension {
+			sharedBlockers = p.sharedBlockers()
+		}
 		if paged {
-			writeTodoPage(w, list, p, limit, after)
+			writeTodoPage(w, list, p, sharedBlockers, limit, after)
 			return
 		}
-		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts()})
+		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts(), SharedBlockers: sharedBlockers})
 	})
 	s.handle("GET /api/v1/todos/revision", s.todoRevisionRead)
 

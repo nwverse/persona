@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/todo/projection"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 )
@@ -446,5 +447,159 @@ func TestTodosV2CriticalPathRankingAndRollback(t *testing.T) {
 	rollbackViews := getViews()
 	if !reflect.DeepEqual(rollbackViews, legacyViews) {
 		t.Fatalf("rollback views mismatch:\ngot:  %+v\nwant: %+v", rollbackViews, legacyViews)
+	}
+}
+
+func TestTodosV2SharedBlockersAndRollback(t *testing.T) {
+	s, _, _ := briefService(t, "Shared blockers aggregation and rollback")
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	prA, err := s.createPieceTodo(ctx, "conv1", "Waiting on PR 88 A", "", db.TodoEdit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prB, err := s.createPieceTodo(ctx, "conv1", "Waiting on PR 88 B", "", db.TodoEdit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prClosed, err := s.createPieceTodo(ctx, "conv1", "Closed PR 88 task", "", db.TodoEdit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetA, err := s.createPieceTodo(ctx, "conv1", "Waiting on vendor A", "", db.TodoEdit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetB, err := s.createPieceTodo(ctx, "conv1", "Waiting on vendor B", "", db.TodoEdit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	singleton, err := s.createPieceTodo(ctx, "conv1", "Singleton blocker task", "", db.TodoEdit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.todos.mu.Lock()
+	doneAt := now.Add(-time.Hour)
+	parkedAt := now.Add(-2 * time.Hour)
+	until := now.Add(4 * time.Hour)
+	makeParked := func(reason, waitingOn string, ev *ParkEvidence) *Supervision {
+		return &Supervision{
+			State:     reviewParked,
+			UpdatedAt: parkedAt,
+			Reviews: []TaskReview{{
+				At:        parkedAt,
+				Verdict:   reviewParked,
+				Reason:    reason,
+				Until:     until,
+				WaitingOn: waitingOn,
+				Evidence:  ev,
+			}},
+		}
+	}
+	s.todos.todos[prA.ID].Supervision = makeParked("Waiting on upstream PR", parkExternalEvent, &ParkEvidence{
+		Kind:   parkExternalEvent,
+		Target: "PR 88",
+		URL:    "https://GitHub.com/Acme/Core/pull/88/?w=1#discussion",
+	})
+	s.todos.todos[prB.ID].PRURL = "https://github.com/acme/core/pull/88/"
+	s.todos.todos[prB.ID].PRStatus = &TodoPRStatus{
+		URL:       "https://github.com/acme/core/pull/88/",
+		State:     "open",
+		CheckedAt: now,
+	}
+	s.todos.todos[prClosed.ID].PRURL = "https://github.com/acme/core/pull/88"
+	s.todos.todos[prClosed.ID].DoneAt = &doneAt
+
+	s.todos.todos[targetA.ID].Supervision = makeParked("Waiting on vendor response", parkSomeoneElse, &ParkEvidence{
+		Kind:   "person_reply",
+		Target: "  Vendor   Ops  ",
+	})
+	s.todos.todos[targetB.ID].Supervision = makeParked("Waiting on vendor response", parkSomeoneElse, &ParkEvidence{
+		Kind:   "person_reply",
+		Target: "vendor ops",
+	})
+	s.todos.todos[singleton.ID].Supervision = makeParked("Waiting on solo issue", parkExternalEvent, &ParkEvidence{
+		Kind: parkExternalEvent,
+		URL:  "https://github.com/acme/core/issues/501",
+	})
+	s.todos.mu.Unlock()
+
+	setTodosV2 := func(want, expected bool) {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{"todos_v2": want, "expected_todos_v2": expected})
+		w, _ := permissionSettingsRequest(t, s, "PUT", "/api/v1/assistant", s.managerIdentity(), "full", string(body))
+		if w.Code != http.StatusOK {
+			t.Fatalf("PUT todos_v2=%t: code=%d body=%s", want, w.Code, w.Body.String())
+		}
+	}
+	getRawList := func() map[string]json.RawMessage {
+		t.Helper()
+		r := httptest.NewRequest("GET", "/api/v1/todos", nil)
+		r.Header.Set(RoleHeader, "full")
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /api/v1/todos: code=%d body=%s", w.Code, w.Body.String())
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+
+	// 1. Default (todos_v2=false): shared_blockers key is completely omitted.
+	legacyRaw := getRawList()
+	if _, has := legacyRaw["shared_blockers"]; has {
+		t.Fatalf("todos_v2=false must omit shared_blockers key, got: %s", legacyRaw["shared_blockers"])
+	}
+
+	// 2. Enable todos_v2: shared_blockers returns exact deterministic groups (count >= 2 only).
+	setTodosV2(true, false)
+	v2Raw := getRawList()
+	rawBlockers, has := v2Raw["shared_blockers"]
+	if !has {
+		t.Fatalf("todos_v2=true expected shared_blockers key in response")
+	}
+	var got []projection.SharedBlocker
+	if err := json.Unmarshal(rawBlockers, &got); err != nil {
+		t.Fatalf("decode shared_blockers: %v", err)
+	}
+	prIDs := []string{prA.ID, prB.ID}
+	if prIDs[0] > prIDs[1] {
+		prIDs[0], prIDs[1] = prIDs[1], prIDs[0]
+	}
+	tgtIDs := []string{targetA.ID, targetB.ID}
+	if tgtIDs[0] > tgtIDs[1] {
+		tgtIDs[0], tgtIDs[1] = tgtIDs[1], tgtIDs[0]
+	}
+	want := []projection.SharedBlocker{
+		{
+			Key:     "pull_request:https://github.com/acme/core/pull/88",
+			Kind:    projection.SharedBlockerKindPullRequest,
+			Label:   "acme/core#88",
+			URL:     "https://github.com/acme/core/pull/88",
+			TodoIDs: prIDs,
+			Count:   2,
+		},
+		{
+			Key:     "target:vendor ops",
+			Kind:    projection.SharedBlockerKindExternalTarget,
+			Label:   "Vendor Ops",
+			TodoIDs: tgtIDs,
+			Count:   2,
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("shared_blockers mismatch:\ngot:  %+v\nwant: %+v", got, want)
+	}
+
+	// 3. Disable todos_v2 (rollback): shared_blockers key is immediately omitted again.
+	setTodosV2(false, true)
+	rollbackRaw := getRawList()
+	if _, has := rollbackRaw["shared_blockers"]; has {
+		t.Fatalf("rollback to todos_v2=false must omit shared_blockers key, got: %s", rollbackRaw["shared_blockers"])
 	}
 }
