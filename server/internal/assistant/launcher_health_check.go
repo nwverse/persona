@@ -146,8 +146,8 @@ func (s *Service) healthRound(ctx context.Context, wait bool) {
 				case <-time.After(left):
 				}
 			}
-			s.checkMachine(ctx, d, cfg, cameOnline, "")
-			s.repairMachine(ctx, d, cfg)
+			_, eligible := s.checkMachine(ctx, d, cfg, cameOnline, "")
+			s.repairMachine(ctx, d, cfg, eligible)
 		}()
 	}
 	if wait {
@@ -157,12 +157,12 @@ func (s *Service) healthRound(ctx context.Context, wait bool) {
 }
 
 // checkMachine checks machine d's launchers that are due (only: one by that name, at once); the records of launchers
-// it no longer has go.
-func (s *Service) checkMachine(ctx context.Context, d Device, cfg healthConfig, cameOnline bool, only string) []LauncherHealth {
+// it no longer has go. It returns the results and the launchers in scope for this check.
+func (s *Service) checkMachine(ctx context.Context, d Device, cfg healthConfig, cameOnline bool, only string) ([]LauncherHealth, []string) {
 	list, err := s.machineLaunchers(ctx, d.ID)
 	if err != nil {
 		s.logf("launcher health: %s: launchers: %v", d.ID, err)
-		return nil
+		return nil, nil
 	}
 	names, whileFailing, runtimes := s.healthLaunchersOf(ctx, list)
 	// "Test again" of one runtime launcher the machine lists (#14534): a person asked for this check, so it runs
@@ -218,7 +218,7 @@ func (s *Service) checkMachine(ctx context.Context, d Device, cfg healthConfig, 
 			out = append(out, s.recordHealth(ctx, d.ID, name, res))
 		}
 	}
-	return out
+	return out, names
 }
 
 // probeLauncherWithRetry is probeLauncherHealth, asked once more right away when the first check timed out: only a

@@ -48,14 +48,16 @@ func TestClassifyLauncherError(t *testing.T) {
 // First-run setup is a person's job: an onboarding failure never starts an automatic repair, however many probes
 // failed in a row; periodic and on-demand checks clear it once the setup is finished.
 func TestOnboardingFailureNeverRepairs(t *testing.T) {
-	r := LauncherHealth{Kind: errKindOnboarding, Fails: 5}
+	r := LauncherHealth{State: healthFailing, CheckedAt: time.Now(), Kind: errKindOnboarding, Fails: 1}
+	if r.repairNow() {
+		t.Fatal("an onboarding failure must not repair on its first failure")
+	}
+	r.Fails = 5
 	if r.repairNow() {
 		t.Fatal("an onboarding failure must never enter auto repair")
 	}
-	if (LauncherHealth{Kind: errKindOnboarding}).repairNow() {
-		t.Fatal("an onboarding failure must not repair on its first failure either")
-	}
-	if (LauncherHealth{Kind: errKindUpstream, Fails: 5}).repairNow() {
+	r.Kind = errKindUpstream
+	if r.repairNow() {
 		t.Fatal("an upstream pool outage must not trigger local launcher repair")
 	}
 }
