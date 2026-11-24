@@ -62,7 +62,7 @@ var agyEmbeddedUUIDRe = lazyre.New(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 // hooks report too (agyhooks.go): agyReportedLocked is the two together.
 func reportedAgyConversation(a host.Agent) string {
 	s := a.AgentSession
-	if a.Agent == agyAgent && s != nil && s.Source == "herdr:antigravity_cli" &&
+	if a.Agent == agyAgent && s != nil && (s.Source == "herdr:antigravity_cli" || s.Source == agyPresenceSource) &&
 		s.Agent == agyAgent && s.Kind == "id" && uuidRe.MatchString(s.Value) {
 		return s.Value
 	}
@@ -798,6 +798,7 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 		}
 	}
 	if conversation := n.agyConversation(id, pane); conversation != "" {
+		var breakdown *proto.ContextBreakdown
 		if runtimeRow, _, ok := n.runtimes.rowOf(agyAgent + "-" + conversation); ok {
 			if runtimeRow.Model != "" {
 				info["model"] = runtimeRow.Model
@@ -813,6 +814,8 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 				info["output_tokens"] = runtimeRow.OutputTokens
 				delete(info, "usage_unknown")
 			}
+			n.resolveAgyContext(&runtimeRow, conversation)
+			breakdown = runtimeRow.ContextBreakdown()
 		} else if u, ok := n.agyTranscriptMeta(conversation); ok {
 			if u.model != "" {
 				info["model"] = u.model
@@ -824,6 +827,12 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 				info["output_tokens"] = u.outputTokens
 				delete(info, "usage_unknown")
 			}
+			row := proto.Session{SessionID: id, Model: u.model}
+			n.setAgyTranscriptContext(&row, u)
+			breakdown = row.ContextBreakdown()
+		}
+		if breakdown != nil {
+			info["context_breakdown"] = breakdown
 		}
 	}
 	return info
