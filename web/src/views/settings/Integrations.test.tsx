@@ -89,13 +89,28 @@ vi.mock("./IntegrationDetail", () => ({
 }));
 
 vi.mock("./ExtensionMarket", () => ({
-  MarketCatalog: ({ onBack, onOpen, onMarkets }: { onBack?: () => void; onOpen: (it: { market: string; id: string }) => void; onMarkets: () => void }) => (
-    <div data-mock-market-catalog>
-      {onBack && <button type="button" data-mock-market-back onClick={onBack}>Back</button>}
-      <button type="button" data-mock-market-open onClick={() => onOpen({ market: "official", id: "demo-ext" })}>Open item</button>
-      <button type="button" data-mock-markets-open onClick={onMarkets}>Manage markets</button>
-    </div>
-  ),
+  MarketCatalog: ({
+    onBack,
+    backLabel,
+    onOpen,
+    onMarkets,
+    onManageMarkets,
+  }: {
+    onBack?: () => void;
+    backLabel?: string;
+    onOpen: (it: { market: string; id: string }) => void;
+    onMarkets?: () => void;
+    onManageMarkets?: () => void;
+  }) => {
+    const manage = onManageMarkets ?? onMarkets;
+    return (
+      <div data-mock-market-catalog data-back-label={backLabel ?? ""}>
+        {onBack && <button type="button" data-mock-market-back onClick={onBack}>Back</button>}
+        <button type="button" data-mock-market-open onClick={() => onOpen({ market: "official", id: "demo-ext" })}>Open item</button>
+        {manage && <button type="button" data-mock-markets-open onClick={manage}>Manage markets</button>}
+      </div>
+    );
+  },
   MarketItem: ({ market, id, onBack, onInstalled }: { market: string; id: string; onBack?: () => void; onInstalled: (id: string) => void }) => (
     <div data-mock-market-item data-market={market} data-id={id}>
       {onBack && <button type="button" data-mock-item-back onClick={onBack}>Back</button>}
@@ -307,19 +322,26 @@ const flush = async () => {
   }
 };
 
-function stubFullHubFetch(overrides?: { markets?: boolean; failMail?: boolean; failBot?: boolean }) {
+function stubFullHubFetch(overrides?: {
+  markets?: boolean;
+  failMail?: boolean;
+  failBot?: boolean;
+  extensions?: HubExtension[];
+  channels?: Channel[];
+  connectors?: HubConnector[];
+}) {
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL) => {
       const path = new URL(String(input), "http://hub.example.com").pathname;
       if (path === "/api/v1/extensions" || path === "/api/v1/plugins") {
-        return Promise.resolve(json({ extensions: SAMPLE_EXTENSIONS, markets: overrides?.markets ?? true }));
+        return Promise.resolve(json({ extensions: overrides?.extensions ?? SAMPLE_EXTENSIONS, markets: overrides?.markets ?? true }));
       }
       if (path === "/api/v1/channels") {
-        return Promise.resolve(json({ channels: SAMPLE_CHANNELS }));
+        return Promise.resolve(json({ channels: overrides?.channels ?? SAMPLE_CHANNELS }));
       }
       if (path === "/api/v1/connectors") {
-        return Promise.resolve(json({ connectors: SAMPLE_CONNECTORS }));
+        return Promise.resolve(json({ connectors: overrides?.connectors ?? SAMPLE_CONNECTORS }));
       }
       if (path === "/api/v1/mail/accounts") {
         return overrides?.failMail
@@ -399,23 +421,25 @@ describe("Integrations unified list view", () => {
     stubFullHubFetch();
     let currentSub: string | null = null;
     const render = async (sub: string | null, twoCol = true) => {
-      currentSub = sub;
+      const mount = (next: string | null) => {
+        currentSub = next;
+        root.render(<Integrations open={next} twoCol={twoCol} onOpen={mount} />);
+      };
       await act(async () => {
-        root.render(
-          <Integrations
-            open={sub}
-            twoCol={twoCol}
-            onOpen={(next) => {
-              currentSub = next;
-              root.render(<Integrations open={next} twoCol={twoCol} onOpen={(n) => (currentSub = n)} />);
-            }}
-          />,
-        );
+        mount(sub);
       });
       await flush();
     };
 
     await render(null, true);
+
+    // Single persistent header Market button in single-column list view; no duplicate bottom Extension Market group (#14958).
+    const singleHeaderMarket = host.querySelector<HTMLButtonElement>('[data-testid="integrations-market-entry"]')!;
+    expect(singleHeaderMarket).not.toBeNull();
+    expect(singleHeaderMarket.textContent).toContain(t("settings-integrations.browse_market_action"));
+    expect(host.querySelector('[data-settings-group="market"]')).toBeNull();
+    expect(host.textContent).not.toContain(t("settings-extensions.browse_market"));
+    expect(host.textContent).not.toContain(t("settings-extensions.manage_markets"));
 
     // Deduplicated rows: larkx appears once, feishu-bot once, mail/lark/github/apps/wechat/nord-theme once each.
     const rows = () => [...host.querySelectorAll<HTMLButtonElement>("[data-integration-row]")];
@@ -453,6 +477,14 @@ describe("Integrations unified list view", () => {
     const listHeader = host.querySelector<HTMLElement>("[data-integrations-list-header]")!;
     expect(listHeader).not.toBeNull();
     expect(listHeader.classList.contains("shrink-0")).toBe(true);
+    // Split-pane narrow header keeps the single persistent compact Market button and no bottom market group (#14958).
+    const compactHeaderMarket = listHeader.querySelector<HTMLButtonElement>('[data-testid="integrations-market-entry"]')!;
+    expect(compactHeaderMarket).not.toBeNull();
+    expect(compactHeaderMarket.textContent).toContain(t("settings-integrations.browse_market_compact"));
+    expect(compactHeaderMarket.getAttribute("title")).toBe(t("settings-integrations.browse_market_action"));
+    expect(compactHeaderMarket.classList.contains("whitespace-nowrap")).toBe(true);
+    expect(compactHeaderMarket.classList.contains("shrink-0")).toBe(true);
+    expect(host.querySelector('[data-settings-group="market"]')).toBeNull();
     const listScroll = host.querySelector<HTMLElement>("[data-integrations-list-scroll]")!;
     expect(listScroll.classList.contains("overflow-y-auto")).toBe(true);
     expect(listScroll.classList.contains("overscroll-contain")).toBe(true);
@@ -504,12 +536,67 @@ describe("Integrations unified list view", () => {
     expect(host.querySelector("[data-integrations-split]")).toBeNull();
     expect(host.querySelector("[data-mock-detail-back]")).toBeNull();
 
-    // Extension Market entry opens MarketCatalog and Manage Markets cleanly.
-    await render(null, true);
-    const marketRow = [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
-      b.textContent?.includes(t("settings-extensions.browse_market")),
+    // Clicking the compact header Market button in split-pane opens MarketCatalog and exposes Manage Markets inside it.
+    await render("ext:larkx", true);
+    const splitMarketBtn = host.querySelector<HTMLButtonElement>('[data-testid="integrations-market-entry"]')!;
+    await act(async () => splitMarketBtn.click());
+    await flush();
+    expect(currentSub).toBe("-market");
+    const catalog = host.querySelector<HTMLElement>("[data-mock-market-catalog]")!;
+    expect(catalog).not.toBeNull();
+    expect(catalog.dataset.backLabel).toBe(t("settings-integrations.back"));
+
+    const manageMarketsBtn = host.querySelector<HTMLButtonElement>("[data-mock-markets-open]")!;
+    expect(manageMarketsBtn).not.toBeNull();
+    await act(async () => manageMarketsBtn.click());
+    await flush();
+    expect(currentSub).toBe("-markets");
+    expect(host.querySelector("[data-mock-markets]")).not.toBeNull();
+
+    // Clicking the header Market button in single-column mode also opens MarketCatalog.
+    await render(null, false);
+    const singleMarketBtn = host.querySelector<HTMLButtonElement>('[data-testid="integrations-market-entry"]')!;
+    expect(singleMarketBtn.textContent).toContain(t("settings-integrations.browse_market_action"));
+    await act(async () => singleMarketBtn.click());
+    await flush();
+    expect(currentSub).toBe("-market");
+    expect(host.querySelector("[data-mock-market-catalog]")).not.toBeNull();
+  });
+
+  it("keeps empty-state CTA to browse Extension Market while omitting the duplicate bottom market group", async () => {
+    state.features = ["extension_manager"];
+    stubFullHubFetch({ markets: true, extensions: [], channels: [], connectors: [], failMail: true, failBot: true });
+    let currentSub: string | null = null;
+    const render = async (sub: string | null) => {
+      currentSub = sub;
+      await act(async () => {
+        root.render(
+          <Integrations
+            open={sub}
+            twoCol={false}
+            onOpen={(next) => {
+              currentSub = next;
+              root.render(<Integrations open={next} twoCol={false} onOpen={(n) => (currentSub = n)} />);
+            }}
+          />,
+        );
+      });
+      await flush();
+    };
+
+    await render(null);
+    // Filter to tools (empty) and verify empty state CTA navigates to MarketCatalog without any bottom market group.
+    const toolsChip = host.querySelector<HTMLButtonElement>('[data-integration-filter="tools"]')!;
+    await act(async () => toolsChip.click());
+    await flush();
+    const empty = host.querySelector<HTMLElement>("[data-integrations-empty]")!;
+    expect(empty).not.toBeNull();
+    expect(host.querySelector('[data-settings-group="market"]')).toBeNull();
+    const emptyCta = [...empty.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
+      b.textContent?.includes(t("settings-integrations.browse_market_action")),
     )!;
-    await act(async () => marketRow.click());
+    expect(emptyCta).not.toBeNull();
+    await act(async () => emptyCta.click());
     await flush();
     expect(currentSub).toBe("-market");
     expect(host.querySelector("[data-mock-market-catalog]")).not.toBeNull();
@@ -522,13 +609,14 @@ describe("Integrations unified list view", () => {
       root.render(<Integrations open={null} onOpen={() => {}} />);
     });
     await flush();
-    // Still renders Mail built-in without crashing, hides Extension Market, and shows filter chips.
+    // Still renders Mail built-in without crashing, hides Extension Market header button, and shows filter chips.
     expect(host.querySelector("[data-integrations-filters]")).not.toBeNull();
+    expect(host.querySelector('[data-testid="integrations-market-entry"]')).toBeNull();
     expect(host.querySelector('[data-settings-group="market"]')).toBeNull();
     expect(host.querySelector('[data-integration-id="mail"]')).not.toBeNull();
   });
 
-  it.each(["en", "zh-Hans", "ja"])("renders localized labels and single-row narrow capability chips in %s", async (lang) => {
+  it.each(["en", "zh-Hans", "ja"])("renders localized labels, compact Market entry, and single-row narrow capability chips in %s", async (lang) => {
     stubFullHubFetch();
     try {
       await initI18n(lang);
@@ -541,9 +629,19 @@ describe("Integrations unified list view", () => {
       expect(host.textContent).toContain(t("settings-integrations.filter_channels"));
       expect(host.textContent).toContain(t("settings-integrations.filter_data"));
       expect(host.textContent).toContain(t("settings-integrations.filter_tools"));
+      const compactMarket = host.querySelector<HTMLButtonElement>('[data-testid="integrations-market-entry"]')!;
+      expect(compactMarket.textContent).toContain(t("settings-integrations.browse_market_compact"));
+      expect(host.querySelector('[data-settings-group="market"]')).toBeNull();
       const filters = host.querySelector<HTMLElement>("[data-integrations-filters]")!;
       expect(filters.classList.contains("flex-nowrap")).toBe(true);
       expect(filters.classList.contains("overflow-x-auto")).toBe(true);
+
+      await act(async () => {
+        root.render(<Integrations open={null} twoCol={true} onOpen={() => {}} />);
+      });
+      await flush();
+      const singleMarket = host.querySelector<HTMLButtonElement>('[data-testid="integrations-market-entry"]')!;
+      expect(singleMarket.textContent).toContain(t("settings-integrations.browse_market_action"));
     } finally {
       await initI18n("zh-Hans");
     }
