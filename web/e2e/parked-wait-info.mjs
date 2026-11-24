@@ -133,18 +133,21 @@ try {
       const readyMs = await page.evaluate(start => performance.now() - start, feedback.start);
       assert(feedback.ms < 1000 && readyMs < 1000, "local feedback and information-ready are measured separately, both under 1s");
       assert.equal(await person.getAttribute("data-wait-kind"), "person_reply");
-      assert((await person.locator("[data-wait-contact]").innerText()).includes("Riley"));
+      assert.equal(await person.getAttribute("data-wait-collapsed"), "true", "list row defaults to collapsed two-line card");
       assert.equal(await person.locator("[data-wait-age]").getAttribute("title"), firstContact.sent_at, "a later request does not reset the first wait");
       assert.equal(await person.getAttribute("data-wait-overdue"), "true");
-      assert.equal(await person.locator("[data-wait-contact]").getAttribute("href"), contact.url);
-      assert((await person.locator("[data-wait-wake]").innerText()).includes("They confirm a date"));
+      assert.equal(await person.locator("[data-wait-contact]").count(), 0, "contact receipt is hidden until expanded");
       assert.equal(reads.length, preReadCount, `opening wait metadata reads: ${JSON.stringify(reads.slice(preReadCount))}`);
       const extraMetadataGets = reads.length - preReadCount;
-      await person.locator("summary").click();
+      await person.locator("[data-wait-toggle]").click();
+      assert.equal(await person.getAttribute("data-wait-collapsed"), "false");
       await person.locator("[data-wait-request]").waitFor({ state: "visible" });
+      assert((await person.locator("[data-wait-contact]").innerText()).includes("Riley"));
+      assert.equal(await person.locator("[data-wait-contact]").getAttribute("href"), contact.url);
+      assert((await person.locator("[data-wait-wake]").innerText()).includes("They confirm a date"));
       assert((await person.locator("[data-wait-reason]").innerText()).includes("design team"));
       if (mode.view === "phone") {
-        for (const control of ["[data-wait-contact]", "summary", '[data-testid="wait-reminder"]']) {
+        for (const control of ["[data-wait-contact]", "[data-wait-toggle]", '[data-testid="wait-reminder"]']) {
           const box = await person.locator(control).boundingBox();
           assert(box && box.width >= 44 && box.height >= 44, `touch control ${control} has a 44px target`);
         }
@@ -173,10 +176,13 @@ try {
       if (!grouped) await page.locator('[data-tray-entry="pr"]').click();
       const review = page.locator('[data-task-wait-info="wait-review"]'); await review.waitFor();
       assert.equal(await review.getAttribute("data-wait-kind"), "merge_review");
+      assert.equal(await review.getAttribute("data-wait-collapsed"), "true");
+      await review.locator("[data-wait-toggle]").click();
       assert.equal(await review.locator('[data-pr-waiting-url="https://github.com/example/demo/pull/73"]').count(), 1);
       assert.equal(await review.locator('[data-wait-source][href="https://github.com/example/demo/pull/73"]').count(), 1);
       assert.equal(await review.locator("[data-wait-contact]").count(), 1);
       const unknown = page.locator('[data-task-wait-info="wait-unrecorded-review"]');
+      await unknown.locator("[data-wait-toggle]").click();
       assert.equal(await unknown.locator("[data-wait-contact-missing]").count(), 1);
       assert.equal(await unknown.locator("[data-wait-age]").getAttribute("title"), null, "poll time is not a wait start");
       await review.scrollIntoViewIfNeeded();
@@ -185,6 +191,7 @@ try {
       const board = page.locator('[data-testid="task-board"]');
       await board.locator('[data-task-wait-info="wait-person"]').waitFor();
       assert.equal(await board.locator("[data-task-wait-info]").count(), 4);
+      assert.equal(await board.locator('[data-wait-collapsed="true"]').count(), 4);
       assert.deepEqual(await board.locator("[data-task-wait-info]").evaluateAll(rows => rows.map(row => row.dataset.taskWaitInfo)), waitingOrder);
       assert.equal(await board.locator('[data-task-wait-info="wait-active"]').count(), 0);
       await shot("all");
@@ -192,7 +199,9 @@ try {
       const rows = page.locator("[data-todo]");
       await rows.locator('[data-task-wait-info="wait-person"]').waitFor();
       assert.equal(await rows.locator("[data-task-wait-info]").count(), 4);
+      assert.equal(await rows.locator('[data-wait-collapsed="true"]').count(), 4);
       assert.deepEqual(await rows.locator("[data-task-wait-info]").evaluateAll(rows => rows.map(row => row.dataset.taskWaitInfo)), waitingOrder);
+      await rows.locator('[data-task-wait-info="wait-legacy"] [data-wait-toggle]').click();
       assert.equal(await rows.locator('[data-task-wait-info="wait-legacy"] [data-wait-contact-missing]').count(), 1);
       assert.equal(await rows.locator('[data-task-wait-info="wait-active"]').count(), 0);
       await shot("todos");
