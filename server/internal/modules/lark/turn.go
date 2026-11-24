@@ -35,7 +35,7 @@ func (f feishuSink) progress(ctx context.Context, r *channel.Run, took time.Dura
 	s := f.s
 	ctx = s.sendAs(ctx, "progress", r.MachineID, r.SessionID)
 	if s.runExt(r, readChatKey) != "" {
-		return // a /read shows no progress in its group: the reaction says it is being worked on (the core's feishu_read.go)
+		return // a /read shows no progress in its group: the reaction says it is being worked on (read.go)
 	}
 	if s.runExt(r, "chat") != "" {
 		// The topic's card keeps its own immediate lifecycle; the native API must not hold it back.
@@ -175,7 +175,7 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 		steps = append([]string{}, all...)
 	}
 	// A /read's answer is read by the whole group: the process (commands, paths on the computer) and the web link to
-	// the conversation stay out of it (the core's feishu_read.go).
+	// the conversation stay out of it (read.go).
 	read := readRun(r.Ext)
 	if read {
 		steps = nil

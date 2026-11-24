@@ -21,6 +21,7 @@
   "empty_all_detail": "Browse the Extension Market to connect chat channels, data sources, tools, or themes.",
   "show_all": "Show all",
   "browse_market_action": "Extension Market",
+  "browse_market_compact": "Market",
   "list_partial_error": "Some integrations couldn't be loaded: {error}",
   "status_not_configured": "Not set up",
   "status_connected": "Connected",

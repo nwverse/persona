@@ -262,6 +262,7 @@ func TestAnswerEndsTheStream(t *testing.T) {
 
 // The progress card says its state with a coloured tag, not an hourglass.
 func TestProgressCardLooks(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	c := progressCard("zh-Hans", "Persona", 12*time.Second, []string{"运行 `ls`"}, "", "", liveView{}, botTarget{Kind: targetPersona})
 	js := c.JSON()
 	if strings.Contains(js, "⏳") || !strings.Contains(js, "<text_tag color='blue'>") {

@@ -24,10 +24,13 @@ type turns struct {
 	mu sync.Mutex
 	// kitDown: CardKit would not make a progress card (stream.go); until then they are sent as messages.
 	kitDown time.Time
-	// workers are the agent messages' workers still running (Layer.Wait).
+	// workers are the agent messages' workers, the chat's messages being handled (message.go) and the agents and
+	// start forms a card's press starts (card_actions.go), still running (Layer.Wait).
 	workers sync.WaitGroup
 	// posts are the to-do topic lines waiting to be said (thread_posts.go).
 	posts threadPoster
+	// book is the chat's state (chat_state.go).
+	book feishuBook
 }
 
 // wait waits for the workers, or ctx.
@@ -42,7 +45,11 @@ func (t *turns) wait(ctx context.Context) error {
 	}
 }
 
-func newTurns(h Host) *turns { return &turns{h: h} }
+func newTurns(h Host) *turns {
+	t := &turns{h: h}
+	t.book.now = h.ChatNow
+	return t
+}
 
 // sink is the Feishu bot as the channels' sink.
 func (t *turns) sink() feishuSink { return feishuSink{s: core{h: t.h, t: t}} }
@@ -64,10 +71,6 @@ func (s core) sendAs(ctx context.Context, kind, machine, session string) context
 
 func (s core) appCall(ctx context.Context, method string, params, out any) error {
 	return s.h.Call(ctx, method, params, out)
-}
-
-func (s core) feishuFeatures(ctx context.Context) (assistantwire.FeishuFeatures, bool) {
-	return s.h.Features(ctx)
 }
 
 func (s core) botPostTo(ctx context.Context, to feishuTarget, replyTo string, card *botcard.Card, fallback, key string) (string, error) {
@@ -124,7 +127,10 @@ func (s core) openButton(ctx context.Context, machine, session string) botcard.B
 	return s.h.OpenButton(ctx, machine, session)
 }
 
-func (s core) rememberRun(messageID string, r *channel.Run) { s.h.RememberRun(messageID, r) }
+// rememberRun binds a message the bot posted in the private chat to run r's conversation: replying to it talks there.
+func (s core) rememberRun(messageID string, r *channel.Run) {
+	s.rememberBotThread(messageID, botTargetOf(r), r.Label)
+}
 
 func (s core) processPanel(l i18n.Lang, c *botcard.Card, steps []string) {
 	s.h.ProcessPanel(l, c, steps)
@@ -149,7 +155,7 @@ type botAnswerCard struct {
 // feishuTarget is where a post goes (the outbound port's target).
 type feishuTarget = assistantwire.ChannelTarget
 
-// readChatKey is the run's channel value a "/read" in a group is answered by (the core's feishu_read.go).
+// readChatKey is the run's channel value a "/read" in a group is answered by (the core's feishu_route.go).
 const readChatKey = "read_chat"
 
 // readRun: the run answers a "/read" in a group.

@@ -13,7 +13,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -51,14 +50,33 @@ func newWorkbenchEnv(t *testing.T, f FeishuFeatures) *workbenchEnv {
 		return map[string]any{}, e.recallErr
 	})
 	e.setFeatures(f)
-	_, _ = e.s.feishuFeatures(context.Background())
+	_, _ = e.s.chat().Features(context.Background())
 	return e
 }
 
+// command is the owner sending cmd to the bot: whether it was taken as a command (nothing went on into a
+// conversation), else the words that went on.
 func (e *workbenchEnv) command(cmd string) (bool, string) {
 	e.t.Helper()
-	f, _ := e.s.feishuFeatures(context.Background())
-	return e.s.botCommand(context.Background(), f, "om_cmd", cmd, "", "")
+	before, started := len(sendOnces(e.f)), e.f.sent()
+	feishuSay(e.t, e.s, e.f, nil, p2pText(nextMessageID("om_cmd"), cmd, "", ""), "") // the env's status
+	var text string
+	switch sent := sendOnces(e.f); {
+	case len(sent) > before: // into the conversation it goes to
+		text, _ = sent[len(sent)-1]["text"].(string)
+	case e.f.sent() > started: // the first message of a new one
+		text, _ = e.f.lastSend(e.t)["text"].(string)
+	default:
+		return true, ""
+	}
+	return false, stripContext(text)
+}
+
+// startCard is the /start form the bot posts.
+func (e *workbenchEnv) startCard() string {
+	e.t.Helper()
+	js, _ := botCommandCard(e.t, e.s, e.f, nil, nextMessageID("om_cmd"), "/start")
+	return js
 }
 
 func (e *workbenchEnv) postJSON(i int) string {
@@ -84,13 +102,14 @@ func (e *workbenchEnv) counts() (posts, pins, recalls, updates int) {
 // Off (the default), nothing of it exists: the commands go on as text, /start has no permission field, no card gets a
 // workbench button and /help does not mention it.
 func TestWorkbenchOffChangesNothing(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newWorkbenchEnv(t, FeishuFeatures{Main: true, Agents: true})
 	for _, cmd := range []string{"/home", "/today", "/inbox", "/工作台"} {
 		if h, rest := e.command(cmd); h || rest != cmd {
 			t.Fatalf("%s with the workbench off: handled %v, %q", cmd, h, rest)
 		}
 	}
-	if js := e.s.startAgentCard(context.Background(), "").JSON(); strings.Contains(js, `"name":"mode"`) {
+	if js := e.startCard(); strings.Contains(js, `"name":"mode"`) {
 		t.Fatalf("/start has a permission field with the workbench off: %s", js)
 	}
 	if _, err := e.s.botPost(context.Background(), "", botcard.NewCard("t", botcard.Blue, "t").Markdown("hello"), ""); err != nil {
@@ -99,8 +118,7 @@ func TestWorkbenchOffChangesNothing(t *testing.T) {
 	if js := e.postJSON(-1); strings.Contains(js, `"to":"home"`) {
 		t.Fatalf("a card got the workbench button with the workbench off: %s", js)
 	}
-	l := e.s.botLang(context.Background())
-	if strings.Contains(botHelp(l, FeishuFeatures{Main: true, Agents: true}), "/home") {
+	if help, _ := botCommandCard(t, e.s, e.f, nil, "om_help", "/help"); strings.Contains(help, "/home") {
 		t.Fatal("/help mentions /home with the workbench off")
 	}
 	if _, pins, recalls, _ := e.counts(); pins+recalls != 0 {
@@ -175,7 +193,7 @@ func TestWorkbenchButtonOnEveryCard(t *testing.T) {
 		t.Fatalf("the workbench button on a card: %s", js)
 	}
 	e.setFeatures(FeishuFeatures{Main: true, Agents: true})
-	_, _ = e.s.feishuFeatures(context.Background())
+	_, _ = e.s.chat().Features(context.Background())
 	if _, err := e.s.botPost(context.Background(), "", botcard.NewCard("t", botcard.Blue, "t").Markdown("later"), ""); err != nil {
 		t.Fatal(err)
 	}
@@ -237,6 +255,7 @@ func behaviorPayload(t *testing.T, button map[string]any, kind string) map[strin
 // Navigation added at different times still forms one footer. Approval and form callbacks keep their own row, and the
 // card-size guard still leaves Workbench off an oversized card (#5317).
 func TestWorkbenchFooterKeepsNavigationTogether(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newWorkbenchEnv(t, workbenchOnFeatures)
 	t.Run("navigation", func(t *testing.T) {
 		card := botcard.NewCard("", "", "answer").Note("Main chat").Buttons(botcard.LinkBtn("Open on web", "https://example.com"))
@@ -318,8 +337,9 @@ func TestWorkbenchFooterKeepsNavigationTogether(t *testing.T) {
 // /start asks for a permission mode before what to do, offering every mode the agents take; the mode picked goes to
 // the agent's start, one that is not a mode does not.
 func TestWorkbenchStartAsksForAPermissionMode(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newWorkbenchEnv(t, workbenchOnFeatures)
-	js := e.s.startAgentCard(context.Background(), "").JSON()
+	js := e.startCard()
 	if !strings.Contains(js, `"name":"mode"`) || !strings.Contains(js, `"bypassPermissions"`) || !strings.Contains(js, `"acceptEdits"`) {
 		t.Fatalf("the /start form: %s", js)
 	}
@@ -337,7 +357,12 @@ func TestWorkbenchStartAsksForAPermissionMode(t *testing.T) {
 	f.answerApp(AppFeishu, FeishuText, func(json.RawMessage) (any, error) { return map[string]any{}, nil })
 	f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) { return map[string]any{"message_id": "om_started"}, nil })
 	for i, c := range []struct{ mode, want string }{{"bypassPermissions", "bypassPermissions"}, {"everything", ""}, {"", ""}} {
-		if err := s.botStartAgent("box", "/code", "", c.mode); err != nil {
+		// The /start form pressed with the mode picked (no card message: each press is a press of its own).
+		var a botcard.CardAction
+		a.Action.Value = map[string]any{"a": "start"}
+		a.Action.FormValue = map[string]any{"machine": "box", "cwd": "/code", "mode": c.mode}
+		s.larkModule().Action(context.Background(), &a, "")
+		if err := s.larkModule().Wait(context.Background()); err != nil {
 			t.Fatalf("mode %q: %v", c.mode, err)
 		}
 		f.mu.Lock()
@@ -350,14 +375,6 @@ func TestWorkbenchStartAsksForAPermissionMode(t *testing.T) {
 		if got != c.want {
 			t.Fatalf("mode %q: permission_mode %q, want %q", c.mode, got, c.want)
 		}
-	}
-}
-
-// /help with the workbench on names its commands.
-func TestWorkbenchHelpNamesItsCommands(t *testing.T) {
-	l := i18n.Lang("en")
-	if h := botHelp(l, workbenchOnFeatures); !strings.Contains(h, "/home") || !strings.Contains(h, "/inbox") {
-		t.Fatalf("help: %s", h)
 	}
 }
 
@@ -404,6 +421,7 @@ func TestWorkbenchCompanionsAreLinkedFromTheHomeCard(t *testing.T) {
 // A push goes to the notifications companion only while it polls and the workbench is on; otherwise to the chat.
 // A press it relays is taken only when it needs no owner's action.
 func TestWorkbenchNoticesGoToAPollingCompanion(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newWorkbenchEnv(t, workbenchOnFeatures)
 	e.companionsCall("PUT", "/api/v1/assistant/feishu/companions", companionsBody)
 
@@ -457,7 +475,7 @@ func TestWorkbenchNoticesGoToAPollingCompanion(t *testing.T) {
 
 	// Switched off, pushes go to the chat again.
 	e.setFeatures(FeishuFeatures{Main: true, Pushes: true})
-	_, _ = e.s.feishuFeatures(context.Background())
+	_, _ = e.s.chat().Features(context.Background())
 	before, _, _, _ = e.counts()
 	e.s.feishuPush("", "", "Off again", "to the chat")
 	if after, _, _, _ := e.counts(); after != before+1 {
@@ -494,7 +512,7 @@ func TestWorkbenchInboxCardFilesAnItem(t *testing.T) {
 	var a botcard.CardAction
 	a.Action.Value = map[string]any{"a": "ib", "op": "done", "id": "lark:f1:1"}
 	a.Context.MessageID = "om_inbox"
-	resp := e.s.botCardAction(context.Background(), &a, "")
+	resp := e.s.larkModule().Action(context.Background(), &a, "")
 	if resp == nil || resp.Card == nil {
 		t.Fatalf("Done: %+v", resp)
 	}
@@ -527,14 +545,5 @@ func TestWorkbenchHomeRowsArePressedWhole(t *testing.T) {
 		!strings.Contains(js, `"content":"等你 1"`) {
 		t.Fatalf("the home card: %s", js)
 	}
-	sess := proto.Session{State: proto.StateWorking, LastText: "在跑**测试**"}
-	row := agentRowMarkdown(i18n.ZhHans, "修登录", "", "box", sess, 70)
-	if row != "<text_tag color='blue'>工作中</text_tag> **修登录** · box\n<font color='grey'>在跑测试</font>" {
-		t.Fatalf("agent row %q", row)
-	}
-	// An agent named by its herdr tab shows its other name under the label.
-	row = agentRowMarkdown(i18n.ZhHans, "登录", "修登录的测试", "box", sess, 70)
-	if row != "<text_tag color='blue'>工作中</text_tag> **登录** · box\n修登录的测试\n<font color='grey'>在跑测试</font>" {
-		t.Fatalf("agent row with a secondary name %q", row)
-	}
+	// An agent's row: the module's TestAgentRowMarkdown.
 }

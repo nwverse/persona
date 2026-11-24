@@ -155,7 +155,7 @@ type PlanTask struct {
 	// work and ordinary conversations use main. The durable task ledger takes precedence after a transfer.
 	Supervisor string `json:"supervisor,omitempty"`
 	// ReuseTodo: the todo this task runs on instead of a new one (task_plan's todo_id, #5279): one this conversation
-	// opened that has no agent yet, such as the todo a Lark topic opened (feishu_thread_open.go). Checked when the
+	// opened that has no agent yet, such as the todo a Lark topic opened (the lark module's thread_open.go). Checked when the
 	// plan is made and again when it starts; it is not what the apps send back with an edit.
 	ReuseTodo string `json:"reuse_todo,omitempty"`
 	// Role: every new task declares "worker" or "leader". A leader may hand out workers beneath its task
