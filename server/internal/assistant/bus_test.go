@@ -30,7 +30,8 @@ func TestRoutesAreTheWireOnes(t *testing.T) {
 	}
 	if !s.healthOn() { // the Health module's routes likewise (health_layer.go); workouts stay in the core
 		want = slices.DeleteFunc(want, func(r string) bool {
-			return strings.Contains(r, " /api/v1/assistant/health/intake") || strings.Contains(r, " /api/v1/assistant/health/water/")
+			return strings.Contains(r, " /api/v1/assistant/health/intake") ||
+				strings.Contains(r, " /api/v1/assistant/health/items") || strings.Contains(r, " /api/v1/assistant/health/water/")
 		})
 	}
 	slices.Sort(got)
