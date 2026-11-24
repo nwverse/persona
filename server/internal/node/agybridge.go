@@ -258,10 +258,30 @@ var agyBridgeCommand = func(ctx context.Context, rh *RuntimeHost, agyBin, instan
 		args = append(args, "--instance", instance)
 	}
 	cmd := exec.Command(js.Path, args...)
-	env := append(os.Environ(), "PERSONA_RUNTIME_SOCKET="+rh.path)
-	cmd.Env = js.env(append(env, rh.agyProviderEnv()...))
+	cmd.Env = js.env(agyBridgeEnv(ctx, rh, os.Environ()))
 	cmd.Dir = dir
 	return cmd, nil
+}
+
+// agyBridgeEnv constructs the companion environment from base, applying the runtime socket and any managed agy
+// provider environment, and falling back to OS system proxy settings (macOS `scutil --proxy`) when neither base nor
+// the provider sets proxy variables explicitly.
+func agyBridgeEnv(ctx context.Context, rh *RuntimeHost, base []string) []string {
+	env := slices.Clone(base)
+	var providerEnv []string
+	if rh != nil {
+		env = setEnvVar(env, "PERSONA_RUNTIME_SOCKET", rh.path)
+		providerEnv = rh.agyProviderEnv()
+		for _, kv := range providerEnv {
+			if k, v, ok := strings.Cut(kv, "="); ok {
+				env = setEnvVar(env, k, v)
+			}
+		}
+	}
+	if !hasExplicitProxyEnv(providerEnv) {
+		env = withSystemProxyEnv(ctx, env)
+	}
+	return env
 }
 
 func (rh *RuntimeHost) agyConnected() bool {
