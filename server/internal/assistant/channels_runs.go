@@ -180,7 +180,7 @@ func (m chanMutex) TryLock() bool {
 
 // claimChannelMessage claims a message without a thread reservation; unreadable or unwritable state stays retryable.
 func (s *Service) claimChannelMessage(id, msg string) (bool, error) {
-	admission, err := s.admitChannelMessage(id, channel.Message{ID: msg})
+	admission, err := s.admitChannelMessage(context.Background(), id, channel.Message{ID: msg})
 	return admission != nil, err
 }
 

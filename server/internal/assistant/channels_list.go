@@ -118,12 +118,16 @@ func (s *Service) filledChannel(ctx context.Context, v channel.View) channel.Vie
 		if pref.Target != nil {
 			t = *pref.Target
 		}
+		threadMode := pref.ThreadMode.Normalized()
+		threadIdleHours := pref.ThreadIdleHours
 		features := channel.PluginFeatures(s.botLang(ctx), v.Capabilities, pref.Features)
 		c.mu.Unlock()
 		if t.Kind == channel.TargetConversation && t.Title == "" {
 			t.Title = s.conversationTitle(ctx, t.MachineID, t.SessionID)
 		}
 		v.Target = &t
+		v.ThreadMode = threadMode
+		v.ThreadIdleHours = threadIdleHours
 		if v.Kind == channel.KindIM {
 			v.Features = features
 		}
