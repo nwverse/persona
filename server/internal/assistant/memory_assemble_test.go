@@ -20,6 +20,14 @@ type memEntrySource struct {
 	listed  int
 }
 
+func entryIDList(entries []proto.AssistantEntry) []string {
+	ids := make([]string, len(entries))
+	for i, entry := range entries {
+		ids[i] = entry.ID
+	}
+	return ids
+}
+
 func (m *memEntrySource) NewestAssistantEntries(_ context.Context, p proto.AssistantEntriesParams, personal bool) (proto.AssistantEntriesResult, error) {
 	m.listed++
 	var match []proto.AssistantEntry

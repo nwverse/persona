@@ -32,6 +32,7 @@ type inboxBook struct {
 	handing               sync.Mutex     // one judge / agent pass at a time (inbox_agent.go)
 	handAgain             atomic.Bool    // a pass is asked for: the goroutine holding handing runs it (handInbox)
 	passHook              func()         // tests: runs as each pass starts
+	waitHook              func()         // tests: replaces the poll sleep while suggestFrom waits for startup
 	workbenchDraftHook    func()         // tests: runs after Workbench generation and before its card item is reloaded
 	onDemandDraftSaveHook func()         // tests: runs at the on-demand draft publication boundary
 	translating           sync.Mutex     // one translation pass at a time (inbox_translate.go)

@@ -352,12 +352,15 @@
   "reorganize_success_transferred": "已更新 {count} 项（已移交 {transferred} 项督办权）",
   "detail_template_work_goal": "工作目标",
   "detail_ownership_region": "工作目标归属",
+  "detail_status_summary_region": "工作目标状态摘要",
   "detail_parent_label": "主任务：{title}",
-  "detail_schedule_reminder": "日程与提醒",
-  "detail_notes_expand": "展开备注",
-  "detail_notes_collapse": "收起备注",
   "detail_subtasks_section": "子任务 · {done}/{total}",
   "detail_open_active_agent": "打开活跃 Agent",
   "detail_open_pr": "打开 PR",
-  "detail_add_agent": "追加 Agent"
+  "detail_add_agent": "追加 Agent",
+  "v2_header_needs_you": "{count} 项需要你",
+  "v2_labs_badge": "实验室 · 新版",
+  "v2_labs_badge_hint": "正在使用实验性新版待办，点击前往「设置 › 实验室」随时切回",
+  "parked_folded_hint": "外部等待中",
+  "slim_repo_count": "{count} 仓"
 }

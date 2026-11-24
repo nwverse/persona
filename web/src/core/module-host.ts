@@ -14,11 +14,12 @@
 // `settings`, `chat_card_kinds`, `composer_actions`, `chat_accessories`, `i18n_namespaces`), in this codebase's camelCase:
 //   id → id · api → api · needs → needs · wants → wants · feature → feature
 //   shell_places → routes + extensionPages + navItems + kbKinds + standalonePages
-//   settings → settingsTabs · chat_card_kinds → cardRenderers · composer_actions + chat_accessories → chatSlots
+//   settings → settingsTabs + settingsRows · chat_card_kinds → cardRenderers · composer_actions + chat_accessories → chatSlots
 //   i18n_namespaces → i18nNamespaces (+ locales)
 // Served: id, api (checked against MODULE_API), needs (the ESLint boundary), feature, routes, navItems, extensionPages
 // (reserved `/extension/<id>/…` pages, also shell_places), kbKinds (the knowledge detail's `kb.detail` slot, also
 // shell_places), standalonePages (a page drawn without the app shell, served by main.tsx; also shell_places),
+// settingsRows (rows in a core Settings page's section, SETTINGS_ROW_PLACES; also `settings`), navItems' `shown`,
 // i18nNamespaces / locales, chatSlots (#13846: ChatView,
 // Composer and Interactions draw what a module's code fills, ChatSlotOutlet), settingsTabs (Settings draws the module's
 // page under its own category) and cardRenderers (a pending card of a kind the core has no card for). Declared but not
@@ -135,7 +136,15 @@ export interface ModuleNavItem {
   color?: UIColor;
   /** The core page it comes right after, in the default order. */
   after: string;
+  /** When the entry shows at all while the module is on (a browser's own choice, what the hub reads): read with each
+   *  look at the sidebar, `subscribe` calls back when it may have changed. None: always. Its address still opens. */
+  shown?: { get: () => boolean; subscribe: (listener: () => void) => () => void };
 }
+
+/** The places in core Settings pages where a module adds rows (#13404: the Lark connector's section of Settings ›
+ *  Connectors). Each is drawn by the page where its comment says, with the rows of the enabled modules naming it. */
+export type SettingsRowPlace = "connectors.lark";
+export const SETTINGS_ROW_PLACES: readonly SettingsRowPlace[] = ["connectors.lark"];
 
 /** A Settings category of the module (#13430 `settings`), in one of Settings' groups. Its words are read before the
  *  module's strings are in (the Settings sidebar, its search), so its keys live in the shell's namespaces. */
@@ -228,6 +237,8 @@ export interface ModuleCode {
   settings?: Readonly<Record<string, ComponentType<ModuleSettingsProps>>>;
   /** Its pending cards, by `cardRenderers` kind. */
   cards?: Readonly<Record<string, ComponentType<ModuleCardProps>>>;
+  /** Its rows in core Settings pages, by `settingsRows` place. */
+  settingsRows?: Partial<Readonly<Record<SettingsRowPlace, ComponentType>>>;
   /** The page its `standalonePages` open (main.tsx draws what it returns as the whole page, with no app shell), given
    *  the page's address. It takes from the address what must not stay there (a token in the fragment) before App
    *  could read it; null when the address is not one of its pages after all, and the app opens instead. */
@@ -268,6 +279,8 @@ export interface ModuleDescriptor {
   kbKinds?: readonly string[];
   /** Its Settings categories; its code's `settings` draws each. */
   settingsTabs?: readonly ModuleSettingsTab[];
+  /** Places in core Settings pages it adds rows to (SETTINGS_ROW_PLACES); its code's `settingsRows` draws each. */
+  settingsRows?: readonly SettingsRowPlace[];
   /** The chat slots it fills; its code's `chat` draws each. */
   chatSlots?: readonly ChatSlot[];
   /** The pending-card kinds it renders, none the core has a card for; its code's `cards` draws each. */
@@ -315,7 +328,7 @@ export const CORE_CARD_KINDS: ReadonlySet<string> = new Set(["question", "plan",
 /** The first segments of the core's own addresses (lib/router.ts parse, and what the hub serves beside the app): a
  *  module's base or standalone page may not be one. lib/router.test.ts keeps it in step with parse. */
 export const CORE_PATHS: ReadonlySet<string> = new Set([
-  "s", "t", "persona", "j", "workspace-board", "requests", "overview", "history", "tracks", "assistant", "inbox", "messages",
+  "s", "t", "persona", "j", "workspace-board", "requests", "overview", "history", "tracks", "assistant", "inbox",
   "starred", "routines", "kb", "space", "machines", "terminal", "a", "agents", "compare", "settings", "subscriptions",
   "extension", "plugin", "todos", "api", "login", "share", "admin", "assets",
 ]);
@@ -343,6 +356,9 @@ export function registerModule(d: ModuleDescriptor): void {
   if (unserved.length) throw new Error(`module "${d.id}" contributes ${unserved.join(", ")}, which the web shell does not serve yet`);
   for (const slot of d.chatSlots ?? []) {
     if (!CHAT_SLOTS.includes(slot)) throw new Error(`module "${d.id}" fills the chat slot "${slot}", which the web shell does not have`);
+  }
+  for (const place of d.settingsRows ?? []) {
+    if (!SETTINGS_ROW_PLACES.includes(place)) throw new Error(`module "${d.id}" adds rows to the Settings place "${place}", which the web shell does not have`);
   }
   for (const tab of d.settingsTabs ?? []) {
     if (tab.key !== d.id && !tab.key.startsWith(`${d.id}-`)) throw new Error(`module "${d.id}" claims the Settings category "${tab.key}", which is not its id or its id and a suffix`);
@@ -491,9 +507,9 @@ export function moduleNavKey(r: { module: string; base: string }): string {
   return moduleNavItem(r)?.key ?? `module:${r.module}`;
 }
 
-/** The enabled modules' sidebar entries. */
+/** The enabled modules' sidebar entries, those with a `shown` condition only while it holds. */
 export function enabledNavItems(s?: Pick<State, "features" | "loaded">): ModuleNavItem[] {
-  return enabledModules(s).flatMap((d) => d.navItems ?? []);
+  return enabledModules(s).flatMap((d) => d.navItems ?? []).filter((n) => !n.shown || n.shown.get());
 }
 
 /** Calls `l` when what is enabled may have changed: a registration, the switch, the hub's features. */
@@ -501,21 +517,26 @@ export function subscribeModules(l: () => void): () => void {
   listeners.add(l);
   const offSwitch = subscribeModuleSwitches(l);
   let last = enabledKey();
-  const offStore = subscribeHub(() => {
+  const onChange = () => {
     const now = enabledKey();
     if (now !== last) {
       last = now;
       l();
     }
-  });
+  };
+  const offStore = subscribeHub(onChange);
+  // the sidebar entries' own conditions (`shown`)
+  const offShown = [...registry.values()].flatMap((d) => d.navItems ?? []).flatMap((n) => (n.shown ? [n.shown.subscribe(onChange)] : []));
   return () => {
     listeners.delete(l);
     offSwitch();
     offStore();
+    offShown.forEach((off) => off());
   };
 }
 
-const enabledKey = () => [...registry.values()].map((d) => `${d.id}:${moduleState(d)}`).join(",");
+const shownKey = (d: ModuleDescriptor) => (d.navItems ?? []).map((n) => (n.shown && !n.shown.get() ? "-" : "+")).join("");
+const enabledKey = () => [...registry.values()].map((d) => `${d.id}:${moduleState(d)}${shownKey(d)}`).join(",");
 const snapshot = () => `${revision}|${enabledKey()}`;
 
 /** Re-renders the caller when the enabled modules change; returns a key of their states. */
@@ -532,6 +553,7 @@ function checkCode(d: ModuleDescriptor, code: ModuleCode): ModuleCode {
   const missing = [
     ...(d.chatSlots ?? []).filter((x) => !code.chat?.[x]).map((x) => `the chat slot "${x}"`),
     ...(d.settingsTabs ?? []).filter((x) => !code.settings?.[x.key]).map((x) => `the Settings category "${x.key}"`),
+    ...(d.settingsRows ?? []).filter((x) => !code.settingsRows?.[x]).map((x) => `the Settings rows "${x}"`),
     ...(d.cardRenderers ?? []).filter((x) => !code.cards?.[x]).map((x) => `the card kind "${x}"`),
     ...(d.kbKinds?.length && !code.KBDetail ? [`the knowledge kind "${d.kbKinds[0]}"`] : []),
     ...(d.standalonePages?.length && !code.Standalone ? [`the page of its own /${d.standalonePages[0]}`] : []),
@@ -579,6 +601,13 @@ export function chatSlotFillers<S extends ChatSlot>(slot: S, s?: Pick<State, "fe
 /** The enabled modules' Settings categories. */
 export function enabledSettingsTabs(s?: Pick<State, "features" | "loaded">): (ModuleSettingsTab & { module: string })[] {
   return enabledModules(s).flatMap((d) => (d.settingsTabs ?? []).map((tab) => ({ ...tab, module: d.id })));
+}
+
+/** The enabled modules that add rows to a Settings place, each with what its code draws there once it is in. */
+export function settingsRowFillers(place: SettingsRowPlace, s?: Pick<State, "features" | "loaded">): { id: string; Component: ComponentType | undefined }[] {
+  return enabledModules(s)
+    .filter((d) => d.settingsRows?.includes(place))
+    .map((d) => ({ id: d.id, Component: loaded.get(d.id)?.settingsRows?.[place] }));
 }
 
 /** The enabled module that renders a card kind. */

@@ -197,6 +197,8 @@ async function fixture(t, options = {}) {
     ] },
     promptError: options.rpcError,
     promptPlan: options.promptPlan,
+    stepsRequireLoad: options.stepsRequireLoad,
+    stepsUnavailable: options.stepsUnavailable,
   }
   writeFileSync(nativeFile, JSON.stringify(snapshot))
   const db = new DatabaseSync(join(config, 'conversation_summaries.db'))
@@ -209,7 +211,7 @@ async function fixture(t, options = {}) {
   chmodSync(binary, 0o700)
   const node = await startFakeNode(t)
   const runtimeOptions = { home, agyDir: config, agyBin: binary, personadBin: binary, socketPath: node.path, log: () => {},
-    transient401RetryDelayMs: options.retryDelay ?? 10, exportPollMs: 20 }
+    transient401RetryDelayMs: options.retryDelay ?? 10, exportPollMs: 20, nativeErrorRetryMs: options.nativeErrorRetryMs }
   let runtime = createAgyRuntime(runtimeOptions)
   t.after(async () => { await runtime.stop(); db.close(); rmSync(home, { recursive: true, force: true }) })
   runtime.start()
@@ -460,6 +462,56 @@ test('native recovery reads only the final eight steps of a large export gap', a
   assert.equal(page.items.at(-1).text, `API Error: ${MESSAGE}`)
   assert.equal(calls().find((call) => call.method === 'GetCascadeTrajectorySteps').params.stepOffset, 14)
 })
+
+test('omitted errors of a conversation this process never loaded return at their own positions', async (t) => {
+  const { row, calls, items, write, state, nativeFile } = await fixture(t, { stepsRequireLoad: true })
+  const again = { ...input, step_index: 2, created_at: '2026-01-02T12:01:00Z', content: 'Try again.' }
+  write([input, again])
+  const snapshot = JSON.parse(readFileSync(nativeFile, 'utf8'))
+  const [nativeInput] = snapshot.trajectory.steps
+  snapshot.trajectory.steps = [nativeInput, error, nativeInput, error]
+  writeFileSync(nativeFile, JSON.stringify(snapshot))
+  state(4)
+  const page = await items()
+  assert.deepEqual(page.items.map((item) => [item.seq, item.text]),
+    [[1, input.content], [2, `API Error: ${MESSAGE}`], [3, again.content], [4, `API Error: ${MESSAGE}`]])
+  assert.match(page.history, /:native-errors:1$/)
+  await until('last error published', () => row()?.turn_error === MESSAGE)
+  const reads = calls().filter((call) => call.method === 'GetCascadeTrajectorySteps')
+  assert.deepEqual(reads.map((call) => call.params.stepOffset), [1, 1])
+  assert.equal(calls().filter((call) => call.method === 'session/resume').length, 1)
+  await items()
+  assert.equal(calls().filter((call) => call.method === 'GetCascadeTrajectorySteps').length, 2)
+})
+
+test('a failed native read shows a turn error and is retried at most twice', async (t) => {
+  const { row, calls, items } = await fixture(t, { stepsUnavailable: true, nativeErrorRetryMs: 0 })
+  const failure = 'Persona could not read this turn\'s result from Antigravity.'
+  const page = await items()
+  assert.deepEqual(page.items.map((item) => [item.seq, item.text]), [[1, input.content], [2, `API Error: ${failure}`]])
+  await until('failure published', () => row()?.turn_error === failure)
+  for (let i = 0; i < 4; i++) await items()
+  assert.equal(calls().filter((call) => call.method === 'GetCascadeTrajectorySteps').length, 3)
+})
+
+for (const recovered of [true, false]) {
+  test(`a native read that fails and then ${recovered ? 'finds the error replaces' : 'finds no error drops'} the failure under a new history`, async (t) => {
+    const { row, items, nativeFile } = await fixture(t, { stepsUnavailable: true, nativeErrorRetryMs: 0,
+      nativeError: recovered ? error : { type: 'CORTEX_STEP_TYPE_SYSTEM_MESSAGE' } })
+    const failure = 'Persona could not read this turn\'s result from Antigravity.'
+    const failed = await items()
+    assert.equal(failed.items.at(-1).text, `API Error: ${failure}`)
+    await until('failure published', () => row()?.turn_error === failure)
+    const snapshot = JSON.parse(readFileSync(nativeFile, 'utf8'))
+    delete snapshot.stepsUnavailable
+    writeFileSync(nativeFile, JSON.stringify(snapshot))
+    const page = await items()
+    assert.notEqual(page.history, failed.history)
+    assert.deepEqual(page.items.map((item) => [item.seq, item.text]),
+      recovered ? [[1, input.content], [2, `API Error: ${MESSAGE}`]] : [[1, input.content]])
+    await until('row updated', () => row()?.turn_error === (recovered ? MESSAGE : undefined))
+  })
+}
 
 test('rewinding a failed turn removes its recovered error', async (t) => {
   const { node, row, items } = await fixture(t)
