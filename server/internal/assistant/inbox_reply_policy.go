@@ -144,7 +144,6 @@ type replyPolicySpec struct {
 	revision                 string
 	categories               map[string]string // normalized category -> raw route ("" marks conflicting duplicate keys invalid)
 	names                    []string          // sorted category names offered to the classifier
-	invalid                  bool              // one malformed setting invalidates the whole enabled policy
 	sources                  map[string]bool
 	requireIndependentReview bool
 	rules                    string
@@ -163,38 +162,15 @@ func validReplyPolicyRoute(route string) bool {
 	}
 }
 
-var legacyReplyPolicyCategories = map[string]bool{
-	"personal_transaction": true, "security_compliance": true, "approval_permission": true,
-	"decision_delegation": true, "technical_qa": true, "research": true, "alert_triage": true,
-	"ppe_deploy": true, "mr_precheck": true, "no_reply": true, "ordinary_coordination": true,
-	"logistical_followup": true, "acknowledgement": true, "other_owner_reply": true, "unknown": true,
-}
-
-var legacyForcedReplyRoutes = map[string]string{
-	"personal_transaction": assistantwire.ReplyRouteOwnerOnly, "security_compliance": assistantwire.ReplyRouteOwnerOnly,
-	"approval_permission": assistantwire.ReplyRouteOwnerOnly, "decision_delegation": assistantwire.ReplyRouteOwnerOnly,
-	"technical_qa": assistantwire.ReplyRouteBot, "research": assistantwire.ReplyRouteBot,
-	"alert_triage": assistantwire.ReplyRouteBot, "ppe_deploy": assistantwire.ReplyRouteBot, "mr_precheck": assistantwire.ReplyRouteBot,
-	"no_reply": assistantwire.ReplyRouteNoReply, "unknown": assistantwire.ReplyRouteOwnerOnly,
-}
-
 // compileReplyPolicy normalizes inbox.reply_policy and derives a deterministic effective policy revision.
 // Disabled or zero-value configuration returns an inactive spec so existing behavior stays byte-for-byte identical.
 func compileReplyPolicy(cfg assistantwire.InboxReplyPolicyConfig) replyPolicySpec {
 	if !cfg.Enabled {
 		return replyPolicySpec{}
 	}
-	legacyRoutes := cfg.Routes != nil
 	rawCats := cfg.Categories
-	if legacyRoutes {
-		rawCats = cfg.Routes
-	} else if len(rawCats) == 0 {
+	if len(rawCats) == 0 {
 		rawCats = DefaultReplyPolicyCategories()
-	}
-	invalid := legacyRoutes && strings.TrimSpace(cfg.Revision) == "" || cfg.Routes != nil && cfg.Categories != nil
-	unknownMode := strings.ToLower(strings.TrimSpace(cfg.UnknownMode))
-	if unknownMode != "" && !validReplyPolicyRoute(unknownMode) {
-		invalid = true
 	}
 	cats := make(map[string]string, len(rawCats))
 	// Sort raw keys so duplicate case/whitespace collisions resolve deterministically to invalid (fail closed).
@@ -205,22 +181,11 @@ func compileReplyPolicy(cfg assistantwire.InboxReplyPolicyConfig) replyPolicySpe
 			continue
 		}
 		normVal := strings.ToLower(strings.TrimSpace(rawCats[k]))
-		if legacyRoutes && (!legacyReplyPolicyCategories[normKey] || !validReplyPolicyRoute(normVal)) {
-			invalid = true
-		}
 		if prev, exists := cats[normKey]; exists && prev != normVal {
 			cats[normKey] = "" // ambiguous config fails closed
-			invalid = invalid || legacyRoutes
 			continue
 		}
 		cats[normKey] = normVal
-	}
-	if legacyRoutes {
-		// These routes are safety boundaries, not model- or config-selectable permissions. Keep their fixed meanings even
-		// when an old configuration tries to widen one to owner_draft; ordinary legacy categories remain configurable.
-		for name, route := range legacyForcedReplyRoutes {
-			cats[name] = route
-		}
 	}
 	names := slices.Sorted(maps.Keys(cats))
 	sources := map[string]bool{}
@@ -238,7 +203,7 @@ func compileReplyPolicy(cfg assistantwire.InboxReplyPolicyConfig) replyPolicySpe
 
 	h := sha256.New()
 	explicitRev := strings.TrimSpace(cfg.Revision)
-	fmt.Fprintf(h, "schema_legacy=%t\nrev=%s\nrules=%s\ntimeout=%d\nindependent_review=%t\nunknown_mode=%s\n", legacyRoutes, explicitRev, rules, int(timeout/time.Second), cfg.RequireIndependentReview, unknownMode)
+	fmt.Fprintf(h, "rev=%s\nrules=%s\ntimeout=%d\nindependent_review=%t\n", explicitRev, rules, int(timeout/time.Second), cfg.RequireIndependentReview)
 	for _, source := range sourceNames {
 		fmt.Fprintf(h, "source=%s\n", source)
 	}
@@ -252,7 +217,6 @@ func compileReplyPolicy(cfg assistantwire.InboxReplyPolicyConfig) replyPolicySpe
 	}
 	return replyPolicySpec{
 		enabled:                  true,
-		invalid:                  invalid,
 		revision:                 rev,
 		categories:               cats,
 		names:                    names,
@@ -266,9 +230,6 @@ func compileReplyPolicy(cfg assistantwire.InboxReplyPolicyConfig) replyPolicySpe
 // resolve maps a classifier-produced category name to a validated server route.
 // Unknown categories and invalid routes always fail closed.
 func (p replyPolicySpec) resolve(category string) (normCat, route string, err error) {
-	if p.invalid {
-		return "", "", errReplyPolicyInvalidRoute
-	}
 	normCat = strings.ToLower(strings.TrimSpace(category))
 	if normCat == "" {
 		return "", "", errReplyPolicyUnknownCategory

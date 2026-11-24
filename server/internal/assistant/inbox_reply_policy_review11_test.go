@@ -200,7 +200,7 @@ func review11AgentStartPolicyChangeDuringSettings(t *testing.T, handed bool) {
 	}
 	h.setConfig(func(c *assistantwire.InboxConfig) {
 		cfg := replyPolicyTestConfig()
-		cfg.Routes["ordinary_coordination"] = ReplyRouteOwnerOnly
+		cfg.Categories["ordinary_coordination"] = ReplyRouteOwnerOnly
 		cfg.Revision = "test-v2"
 		c.ReplyPolicy = cfg
 	})

@@ -25,7 +25,6 @@ func legacyUnionSetClassification(it *InboxItem, category, route string) {
 func TestInboxReplyPolicyRoutes(t *testing.T) {
 	cfg := replyPolicyTestConfig()
 	cfg.Sources = []string{"lark"}
-	cfg.UnknownMode = ReplyRouteOwnerOnly
 	tests := []struct{ category, want string }{
 		{"personal_transaction", ReplyRouteOwnerOnly}, {"security_compliance", ReplyRouteOwnerOnly},
 		{"approval_permission", ReplyRouteOwnerOnly}, {"decision_delegation", ReplyRouteOwnerOnly},
@@ -45,43 +44,44 @@ func TestInboxReplyPolicyRoutes(t *testing.T) {
 	if got := replyRoute("ordinary_coordination", cfg); got != "" {
 		t.Fatalf("disabled policy route = %q, want legacy behavior", got)
 	}
-	cfg = replyPolicyTestConfig()
-	cfg.Routes["approval_permission"] = ReplyRouteOwnerDraft
-	cfg.Routes["technical_qa"] = ReplyRouteOwnerDraft
-	cfg.Routes["unknown"] = ReplyRouteOwnerDraft
-	cfg.Routes["no_reply"] = ReplyRouteOwnerDraft
-	cfg.UnknownMode = ReplyRouteOwnerDraft
-	for _, tc := range []struct{ category, want string }{
-		{"approval_permission", ReplyRouteOwnerOnly}, {"technical_qa", ReplyRouteBot},
-		{"unknown", ReplyRouteOwnerOnly}, {"no_reply", ReplyRouteNoReply}, {"ordinary_coordination", ReplyRouteOwnerDraft},
-	} {
-		if got := replyRoute(tc.category, cfg); got != tc.want {
-			t.Errorf("unsafe override %s = %q, want %q", tc.category, got, tc.want)
-		}
-	}
+
+	// Upstream categories are owner-configured rather than a second legacy safety enum. Custom names and route changes
+	// are valid, and an empty explicit revision still gets a content digest; the legacy unknown_mode is categories["unknown"].
 	cfg = replyPolicyTestConfig()
 	cfg.Revision = ""
-	for _, category := range []string{"approval_permission", "technical_qa", "ordinary_coordination", "unknown"} {
-		if got := replyRoute(category, cfg); got != ReplyRouteOwnerOnly {
-			t.Errorf("empty revision %s = %q, want owner_only", category, got)
+	cfg.Categories["approval_permission"] = ReplyRouteOwnerDraft
+	cfg.Categories["technical_qa"] = ReplyRouteOwnerDraft
+	cfg.Categories["unknown"] = ReplyRouteOwnerDraft
+	cfg.Categories["no_reply"] = ReplyRouteOwnerDraft
+	cfg.Categories["custom_owner_action"] = ReplyRouteOwnerOnly
+	if revision := compileReplyPolicy(cfg).revision; revision == "" {
+		t.Fatal("digest-only policy revision is empty")
+	}
+	for _, tc := range []struct{ category, want string }{
+		{"approval_permission", ReplyRouteOwnerDraft}, {"technical_qa", ReplyRouteOwnerDraft},
+		{"unknown", ReplyRouteOwnerDraft}, {"no_reply", ReplyRouteOwnerDraft},
+		{"custom_owner_action", ReplyRouteOwnerOnly}, {"ordinary_coordination", ReplyRouteOwnerDraft},
+	} {
+		if got := replyRoute(tc.category, cfg); got != tc.want {
+			t.Errorf("custom mapping %s = %q, want %q", tc.category, got, tc.want)
 		}
 	}
-	for _, tc := range []struct{ name, key, value string }{
-		{"invalid category route", "research", "send"},
-		{"unknown category key", "misspelled_category", ReplyRouteOwnerDraft},
-		{"invalid unknown mode", "", "send"},
-	} {
-		cfg = replyPolicyTestConfig()
-		if tc.key == "" {
-			cfg.UnknownMode = tc.value
-		} else {
-			cfg.Routes[tc.key] = tc.value
-		}
-		for _, category := range []string{"technical_qa", "ordinary_coordination", "unknown"} {
-			if got := replyRoute(category, cfg); got != ReplyRouteOwnerOnly {
-				t.Errorf("%s: %s = %q, want owner_only", tc.name, category, got)
-			}
-		}
+	unknownRevision := compileReplyPolicy(cfg).revision
+	cfg.Categories["unknown"] = ReplyRouteOwnerOnly
+	if compileReplyPolicy(cfg).revision == unknownRevision {
+		t.Fatal("changing categories[unknown] did not change the effective revision")
+	}
+
+	cfg = replyPolicyTestConfig()
+	cfg.Categories["research"] = "send"
+	if got := replyRoute("research", cfg); got != ReplyRouteOwnerOnly {
+		t.Fatalf("invalid configured route = %q, want fail-closed owner_only", got)
+	}
+	if got := replyRoute("ordinary_coordination", cfg); got != ReplyRouteOwnerDraft {
+		t.Fatalf("one invalid custom route invalidated an unrelated valid category: %q", got)
+	}
+	if got := replyRoute("not-configured-anywhere", cfg); got != ReplyRouteOwnerOnly {
+		t.Fatalf("unknown classifier output = %q, want fail-closed owner_only", got)
 	}
 }
 
