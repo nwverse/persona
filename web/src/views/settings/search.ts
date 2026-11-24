@@ -1,7 +1,7 @@
 import { t } from "../../i18n";
 import { LOCAL_SHORTCUTS, SHORTCUTS } from "../../lib/shortcuts";
 import { enabledSettingsTabs, registeredModules } from "../../core/module-host";
-import { MODULES_LABS_ID } from "../../core/module-labs";
+import { MODULE_FEATURES_ID } from "../../core/module-features";
 import { tabInfo, TABS, type Tab } from "./nav";
 
 // ── search ──────────────────────────────────────────────
@@ -70,6 +70,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "persona", group: t("settings-assistantsettings.routines"), hint: t("settings-assistantsettings.proactive_title"), anchor: "routines" },
   { tab: "persona", group: t("settings-assistantsettings.quiet_tasks"), anchor: "quiet-tasks" },
   { tab: "persona", group: t("settings-assistantsettings.background_folded"), anchor: "background-folded" },
+  { tab: "persona", group: t("settings-assistantsettings.relay_replies"), anchor: "relay-replies" },
   { tab: "persona", group: t("settings-assistantsettings.recent_task_chats"), anchor: "recent-task-chats" },
   { tab: "persona", group: t("settings-assistantsettings.next_suggestions"), anchor: "next-suggestions" },
   { tab: "persona", group: t("settings-assistantsettings.claude_interactive"), anchor: "claude-interactive" },
@@ -81,7 +82,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
     group: t("settings-assistantsettings.agents_title"),
     hint: words(
       t("settings-assistantsettings.auto_naming"), t("settings-assistantsettings.auto_naming_max"), t("settings-assistantsettings.auto_naming_periodic"),
-      t("settings-assistantsettings.auto_naming_interval"), t("settings-assistantsettings.main_supervises"), t("settings-assistantsettings.delivery_gate"), t("settings-assistantsettings.agent_tasks"), t("settings-assistantsettings.close_ended_terminals"),
+      t("settings-assistantsettings.auto_naming_interval"), t("settings-assistantsettings.main_supervises"), t("settings-assistantsettings.auto_supervision_messages"), t("settings-assistantsettings.delivery_gate"), t("settings-assistantsettings.agent_tasks"), t("settings-assistantsettings.close_ended_terminals"),
       t("settings-assistantsettings.inbox_signals"), t("settings-assistantsettings.inbox_todo_forward"), t("settings-assistantsettings.idle_close"), t("settings-assistantsettings.archive_closed"),
     ),
     anchor: "agents",
@@ -170,6 +171,8 @@ export const SEARCH_INDEX: SearchGroup[] = [
   // configuration-<document>-<field>)
   { tab: "labs", group: t("settings-nav.tab_labs"), hint: t("settings-labs.trial"), anchor: "labs" },
   { tab: "labs", group: path(t("settings-labs.work_area"), t("settings-labs.work_title")), anchor: "configuration-assistant-work-work_guide" },
+  { tab: "labs", group: path(t("settings-labs.work_area"), t("settings-labs.todos_v2_title")), anchor: "configuration-assistant-todos-v2-todos_v2" },
+  { tab: "labs", group: path(t("settings-labs.work_area"), t("settings-labs.integrations_v2_title")), anchor: "configuration-assistant-integrations-v2-integrations_v2" },
   { tab: "labs", group: path(t("settings-labs.area_agents"), t("settings-labs.terminal_renderer")), hint: words(t("settings-labs.terminal_renderer_standard"), t("settings-labs.terminal_renderer_webgl")), anchor: "configuration-terminal-renderer" },
   // This hub
   { tab: "hub", group: t("settings-hubsettings.version"), hint: words(t("settings-hubsettings.last_check"), t("settings-hubsettings.branch"), t("settings-hubsettings.current_commit"), t("settings-hubsettings.latest_commit")), anchor: "hub-version" },
@@ -189,10 +192,14 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "devices", group: t("settings-connectdevice.add"), anchor: "devices" },
 ];
 
-/** Labs › Features: one entry per module's switch, from the module list (core/module-labs.ts draws each as a row of
- *  the configuration form, `configuration-<document>-<field>`). */
+/** General › Optional features follows the registry, including modules switched off on this browser. */
 function moduleSwitchEntries(): SearchGroup[] {
-  return registeredModules().map((d) => ({ tab: "labs", group: path(t("settings-labs.area_features"), d.title()), hint: d.description(), anchor: `configuration-${MODULES_LABS_ID}-${d.id}` }));
+  const modules = registeredModules();
+  if (!modules.length) return [];
+  return [
+    { tab: "general", group: t("settings-features.features_group"), hint: t("settings-features.area_features"), anchor: `configuration-${MODULE_FEATURES_ID}-modules` },
+    ...modules.map((d): SearchGroup => ({ tab: "general", group: d.title(), hint: d.description(), anchor: `configuration-${MODULE_FEATURES_ID}-${d.id}` })),
+  ];
 }
 
 // What is typed and what is matched, compared without case or spaces: "timezone" finds "Time zone", "apikey" "API Key".
@@ -202,9 +209,15 @@ const fold = (s: string) => s.toLocaleLowerCase().replace(/\s+/g, "");
 export function searchSettings(query: string): { tabs: Tab[]; groups: SearchGroup[] } {
   const q = fold(query);
   if (!q) return { tabs: [], groups: [] };
+  const featureEntries = moduleSwitchEntries();
+  const [features] = featureEntries;
+  // The exact group name and its short alias both open General. The broader category hints can also contain "features".
+  if (features && [features.group, features.hint].some((label) => label && fold(label) === q)) {
+    return { tabs: [], groups: [features] };
+  }
   const has = (...texts: (string | undefined)[]) => texts.some((s) => s && fold(s).includes(q));
   return {
     tabs: [...TABS, ...enabledSettingsTabs().map((m) => m.key)].filter((k) => has(tabInfo(k).label, tabInfo(k).hint)),
-    groups: [...SEARCH_INDEX, ...moduleSwitchEntries()].filter((g) => has(g.group, g.hint)),
+    groups: [...SEARCH_INDEX, ...featureEntries].filter((g) => has(g.group, g.hint)),
   };
 }

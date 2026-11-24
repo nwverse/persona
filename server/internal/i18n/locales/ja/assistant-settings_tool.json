@@ -49,6 +49,8 @@
   "change_close_ended_terminals": "「エージェントが終了したらターミナルを閉じる」：{before} → {after}",
   "title_inbox_signals": "監督付きタスクについての受信トレイの新着メッセージを監督者に知らせる",
   "change_inbox_signals": "「監督付きタスクについての受信トレイの新着メッセージを監督者に知らせる」：{before} → {after}",
+  "title_auto_supervision_messages": "自動の監督メッセージ",
+  "change_auto_supervision_messages": "「自動の監督メッセージ」：{before} → {after}",
   "title_inbox_todo_forward": "受信トレイの PR/Issue イベントを紐づく To-Do の Agent に自動転送する",
   "change_inbox_todo_forward": "「受信トレイの PR/Issue イベントを紐づく To-Do の Agent に自動転送する」：{before} → {after}",
   "title_pr_events_route_to_agent": "PR イベントを紐づく ToDo の Agent に直接ルーティングする",
@@ -80,6 +82,8 @@
   "minutes_applied": "議事録の保存期間を{saved}に設定しました。現在の有効値は{after}です。文字起こしは引き続き録音の保存期間に従います。",
   "title_main_background_folded": "バックグラウンドのラウンドを折りたたむ",
   "change_main_background_folded": "「バックグラウンドのラウンドを折りたたむ」：{before} → {after}",
+  "title_fold_routine_relay_replies": "通常の転送メッセージへの返信を折りたたむ",
+  "change_fold_routine_relay_replies": "「通常の転送メッセージへの返信を折りたたむ」：{before} → {after}",
   "title_main_compact_window": "メインチャットの圧縮ウィンドウ",
   "change_main_compact_window": "「メインチャットの圧縮ウィンドウ」：{before} → {after}",
   "main_compact_window_launcher": "ランチャーに従う",
@@ -122,5 +126,10 @@
   "change_supervision_batch_minutes": "通常の監督通知を受信者ごとにまとめる間隔：{before} → {after} 分（0 は既存の間隔を維持）",
   "bad_supervision_batch_minutes": "0〜1440の整数分で指定してください。",
   "supervision_batch_minutes_unchanged": "通常の監督通知をまとめる間隔は変更されていません。",
-  "supervision_batch_minutes_saved": "通常の監督通知をまとめる間隔を{value}分に保存しました。"
+  "supervision_batch_minutes_saved": "通常の監督通知をまとめる間隔を{value}分に保存しました。",
+  "title_limit_fallbacks": "利用上限に達したときの予備ランチャー",
+  "change_limit_fallbacks": "利用上限で会話が止まったときに使う予備ランチャー：{before} → {after}",
+  "bad_limit_fallbacks": "ランチャー名を第一候補から順に最大 8 個までリストで指定してください。空のリストでオフになります。",
+  "limit_fallbacks_unchanged": "予備ランチャーは変更されていません。",
+  "limit_fallbacks_saved": "予備ランチャーを保存しました：{value}。次に利用上限に達したときから適用されます。"
 }

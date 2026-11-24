@@ -15,14 +15,18 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/moduleswitch"
+
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/kernel"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistant/saved"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/healthhost"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/knowledgeuihost"
 	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -84,7 +88,9 @@ type Options struct {
 // Service is the assistant. It implements Handler.
 type Service struct {
 	// modules are the feature modules loaded (modules.go); nil, none.
-	modules         *kernel.Kernel
+	modules *kernel.Kernel
+	// moduleSwitch is the same list as the provider seams read it (moduleswitch): recording's and Lark's layers.
+	moduleSwitch    moduleswitch.Set
 	modulesOff      []string // the ids the modules setting switched off at start (loadModules): built-in and client-only
 	compactRecovery compactRecoveryCache
 	// sendFanout: whom each conversation woke with conversation_send lately (conversation_fanout.go).
@@ -131,6 +137,8 @@ type Service struct {
 	mcpChanges mcpToolChanges
 	// ext is the extensions' tools in this process (extensions.go SetExtensions); nil: none (tests).
 	ext ExtensionTools
+	// trackKindsExt supplies declarative domain-space kinds from enabled extensions.
+	trackKindsExt domainTrackKinds
 	// extOwners keeps the extensions the user marked as their own for the profile (extension_trust.go).
 	extOwners extensionOwnerCache
 	// startDefaultsFor answers a task start's defaults from the extension layer (start_defaults.go); nil: no defaults.
@@ -200,8 +208,6 @@ type Service struct {
 	rules ruleSuggestState
 	// setupMu serializes the reads and the one write of the weekly setup block's book (setup_suggest.go).
 	setupMu sync.Mutex
-	// intakeMu serializes intake settings, reminder state and local intake mutations.
-	intakeMu sync.Mutex
 
 	// prepared is what this hub last gave a machine's node for a directory (key: machine id NUL directory), the
 	// CLAUDE.md and the plugin skills, by prepareSpaceIf; refreshInstructions gives again what differs.
@@ -260,6 +266,7 @@ type Service struct {
 	captures             captureWork            // capture_sort.go: wakes the loop that sorts quick captures
 	spaceFill            spaceBackfill          // conversation_space_backfill.go
 	outcomeLines         outcomeLines           // todo_outcome.go
+	workerOutcomes       workerOutcomes         // worker_memory.go
 	conversationWrites   sync.RWMutex
 
 	modelPicks modelPickBook // model_pick.go
@@ -324,7 +331,7 @@ type Service struct {
 	reply            replyBook         // agents_reply.go: the reminders of questions left unanswered
 	chans            channelsBook      // channels.go
 	fbot             feishuBook        // feishu.go
-	tposts           threadPoster      // feishu_thread_posts.go: what a todo tells its chat thread
+	tposts           threadPoster      // the lark module's thread_posts.go: what a todo tells its chat thread
 	lark             larkLayer         // lark.go: the lark module's layer, the outbound channel port (s.chat())
 	tevents          todoEvents        // todo_events.go: what the extensions are told of the todos
 	tpush            todosPush         // todos.go: the {"type":"todos"} waiting for the rest of its write
@@ -387,7 +394,9 @@ type Service struct {
 	// rec is the recording module (recording.go, internal/recordinghost); nil without it. meetingModel stands in for
 	// the meeting.answer model in tests (nil: the configured one).
 	rec          recordingLayer
-	recOpts      recordingOptions // Options' recording knobs, for the module's Host
+	ui           knowledgeuihost.Layer // the knowledge pages' module (knowledge_ui.go); nil without it
+	healthMod    healthhost.Layer      // the Health module, nil without it (health_layer.go)
+	recOpts      recordingOptions      // Options' recording knobs, for the module's Host
 	meetingModel kb.Model
 	// sockets makes socketMux, ServeSocket's (sockets.go).
 	sockets   sync.Once
@@ -400,7 +409,7 @@ var _ Handler = (*Service)(nil)
 
 // New makes the assistant; nothing runs until the hub calls it.
 func New(o Options) *Service {
-	s := &Service{hub: o.Hub, store: o.Store, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
+	s := &Service{moduleSwitch: moduleswitch.Off(o.ModulesOff...), hub: o.Hub, store: o.Store, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
 		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1),
 		a2aWake: make(chan struct{}, 1), a2aLogicalWrites: make(chan struct{}, 4)}
 	s.inbox.lang = func() i18n.Lang { return s.lang(context.Background()) }
@@ -457,7 +466,7 @@ func New(o Options) *Service {
 	s.startRoutes()
 	s.skillRoutes()
 	s.workoutRoutes()
-	s.intakeRoutes()
+	s.healthRoutes() // the Health module (health_layer.go)
 	s.scheduleRoutes()
 	s.scheduleGrantRoutes()
 	s.placeRoutes()
@@ -481,7 +490,8 @@ func New(o Options) *Service {
 	s.recOpts.timings, s.recOpts.lists = maps.Clone(o.RecordingTimings), maps.Clone(o.RecordingTimingLists)
 	s.recOpts.now, s.recOpts.after = o.RecordingFeedNow, o.RecordingFeedAfter
 	s.lark.timings, s.lark.lists = maps.Clone(o.LarkTimings), maps.Clone(o.LarkTimingLists)
-	s.loadRecording(o.ModulesOff)
+	s.loadRecording()
+	s.loadKnowledgeUI() // the knowledge pages' module (knowledge_ui.go)
 	s.kbRoutes()
 	s.searchRoutes()
 	s.historyRoutes()
@@ -1142,6 +1152,8 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 		s.afterSettle(context.WithoutCancel(ctx), s.inboxAgentTurnSettled, r.MachineID, r.SessionID)
 		// What the turn said is tagged with its information categories (info_tag.go).
 		s.afterSettle(context.WithoutCancel(ctx), s.infoTagTurnSettled, r.MachineID, r.SessionID)
+		// A usage limit moves a conversation the owner relies on to a backup launcher (limit_fallback.go).
+		s.afterSettle(context.WithoutCancel(ctx), s.limitFallbackTurnSettled, r.MachineID, r.SessionID)
 	}
 	if !meeting {
 		s.spawnPinAfterTurn(ctx, r.MachineID, r.SessionID)

@@ -124,6 +124,8 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(rows.every((row) => row.dataset.countsOpen === "true")).toBe(true);
     expect(rows.some((row) => row.querySelector(".text-green"))).toBe(false);
     expect(host.querySelectorAll("[data-pr-waiting-row]")).toHaveLength(1);
+    expect(host.querySelectorAll('[data-parked-task-row] [data-wait-collapsed="true"]')).toHaveLength(2);
+    act(() => host.querySelector<HTMLButtonElement>("[data-pr-waiting-row] [data-wait-toggle]")!.click());
     expect([...host.querySelectorAll<HTMLAnchorElement>("[data-pr-waiting-row] a")].map((a) => a.href)).toEqual([pr, "https://github.com/example/demo/pull/51"]);
     act(() => entry("running").click());
     expect(host.querySelectorAll("[data-task-slot]")).toHaveLength(1);
@@ -136,7 +138,9 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(section).toBeDefined();
     expect(section!.textContent).toContain(held.title);
     expect(section!.textContent).toContain(merging.title);
-    expect(section!.querySelectorAll("button")).toHaveLength(4); // Each task's open and existing remove actions.
+    expect(section!.querySelectorAll('[data-wait-collapsed="true"]')).toHaveLength(2);
+    expect(section!.querySelectorAll("button:not([data-wait-toggle])")).toHaveLength(4); // Each task's open and existing remove actions.
+    expect(section!.querySelectorAll("[data-wait-toggle]")).toHaveLength(2);
     expect(section!.querySelector(".text-green")).toBeNull();
   });
 
@@ -170,6 +174,8 @@ describe("Assistant Needs you / In progress trays", () => {
     act(() => entry("parked").click());
     const row = host.querySelector<HTMLElement>("[data-pr-waiting-row='tray-task']")!;
     expect(row.textContent).toContain("Demo task");
+    expect(row.querySelector('[data-wait-collapsed="true"]')).not.toBeNull();
+    act(() => row.querySelector<HTMLButtonElement>("[data-wait-toggle]")!.click());
     expect(row.querySelector("a")?.getAttribute("href")).toBe(pr);
     expect(row.textContent).toContain(t("assistant-tasks.pr_blocker_changes_requested"));
     expect(row.textContent).toContain(t("assistant-tasks.pr_blocker_checks_pending"));
@@ -188,6 +194,7 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(entry("parked").textContent).toContain("1");
     act(() => entry("parked").click());
     const row = host.querySelector<HTMLElement>("[data-pr-waiting-row='tray-task']")!;
+    act(() => row.querySelector<HTMLButtonElement>("[data-wait-toggle]")!.click());
     expect([...row.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([open]);
     expect(row.textContent).toContain(t("assistant-tasks.pr_blocker_review_required"));
   });
@@ -446,6 +453,8 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(host.textContent).not.toContain("Waiting on another team");
     act(() => entry("parked").click());
     // Its parked line and the shared open count survive the inactivity window.
+    expect(host.querySelector('[data-parked-task-row="tray-parked"] [data-wait-collapsed="true"]')).not.toBeNull();
+    act(() => host.querySelector<HTMLButtonElement>('[data-parked-task-row="tray-parked"] [data-wait-toggle]')!.click());
     expect(host.textContent).toContain("Waiting on another team");
     expect(host.querySelector('[data-parked-task-row="tray-parked"] .text-green')).toBeNull();
   });
@@ -471,10 +480,14 @@ describe("Assistant Needs you / In progress trays", () => {
     expect([...host.querySelectorAll("[data-parked-task-row]")].map((row) => row.getAttribute("data-parked-task-row")))
       .toEqual(["tray-wait-evidence", "tray-wait-newer"]);
     const info = host.querySelector('[data-task-wait-info="tray-wait-evidence"]');
+    expect(info?.getAttribute("data-wait-collapsed")).toBe("true");
     expect(info?.querySelector("[data-wait-target]")?.textContent).toContain("Schedule owner");
+    expect(info?.querySelector("[data-wait-age]")?.textContent).not.toContain(t("task-wait.age_unknown"));
+    expect(info?.querySelector("[data-wait-contact]")).toBeNull();
+    await act(async () => info?.querySelector<HTMLButtonElement>("[data-wait-toggle]")!.click());
+    expect(info?.getAttribute("data-wait-collapsed")).toBe("false");
     expect(info?.querySelector("[data-wait-contact]")?.textContent).toContain("Example sender");
     expect(info?.querySelector("[data-wait-contact]")?.getAttribute("href")).toBe(evidence.contact.url);
-    expect(info?.querySelector("[data-wait-age]")?.textContent).not.toContain(t("task-wait.age_unknown"));
     expect(info?.textContent).not.toContain("recording-conversation");
   });
 
@@ -727,6 +740,7 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(host.querySelector('[data-testid="message-card"]')).toBeNull(); // folded until opened
     await openRows();
     await expect.poll(() => host.querySelector('[data-testid="message-card"]')).not.toBeNull();
+    await expect.poll(() => host.textContent).toContain(t("assistant-tasks.review_needs_user"));
     expect(host.textContent).toContain(t("assistant-tasks.review_needs_user"));
     const draftCard = host.querySelector('[data-testid="message-card"]')!;
     const actions = [...draftCard.querySelectorAll("button")];

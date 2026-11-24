@@ -266,6 +266,9 @@ func (s *Service) saveModelProfileLocked(ctx context.Context, revision *int64, i
 		return p, "", err
 	}
 	ctx = withManagedSnapshot(ctx, stored)
+	if p.Purposes, err = s.normalizeProfilePurposes(ctx, p.Purposes, map[string]modelRecord{}, stored); err != nil {
+		return p, "", err
+	}
 	if err := checkModelProfile(&p, stored); err != nil {
 		return p, "", err
 	}
