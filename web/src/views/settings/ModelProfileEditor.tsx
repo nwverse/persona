@@ -1103,6 +1103,7 @@ function TierEditorCard({
               status={candidateStatus ? matchCandidateStatus(tierStatuses, candidate, index) : undefined}
               showStatus={candidateStatus !== null}
               manager={manager}
+              hubSupportsPermissionMode={hubSupportsPermissionMode}
               busy={busy}
               onChange={(patch) => updateCandidate(candidate.key, patch)}
               onMoveUp={() => moveCandidate(index, -1)}
@@ -1143,6 +1144,7 @@ function TierCandidateCard({
   status,
   showStatus,
   manager,
+  hubSupportsPermissionMode,
   busy,
   onChange,
   onMoveUp,
@@ -1160,6 +1162,7 @@ function TierCandidateCard({
   status?: ModelProfileCandidateStatus;
   showStatus: boolean;
   manager: string;
+  hubSupportsPermissionMode: boolean;
   busy: boolean;
   onChange: (patch: Partial<CandidateDraftEntry>) => void;
   onMoveUp: () => void;
@@ -1330,7 +1333,7 @@ function TierCandidateCard({
         </label>
       </div>
 
-      {permissionModes.length > 0 && (hubSupportsPermissionMode || !!tier.permission_mode) && (
+      {permissionModes.length > 0 && (hubSupportsPermissionMode || !!candidate.permission_mode) && (
         <label className="block">
           <span className="mb-1 block text-label font-medium text-ink-2">
             {t("settings-modelconfiguration.permission_mode")}
