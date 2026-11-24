@@ -1223,6 +1223,15 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	// mode go with each message: assistant_runtime.go); the rest (pages, watch, images) is the runtime's.
 	if assistantCall[method] && n.runtimeAssistant(p.SessionID) {
 		// falls through to the assistant's branches below
+	} else if pane, a, held := n.agyOpenCall(method, p.SessionID); held {
+		// The companion's agy-<conversation> while an agy in a terminal has it open (agypresence.go, #13603): a message
+		// or an interrupt goes to the pane running it; nothing else may drive it from the companion.
+		if pane != "" && (method == "session.send" || method == "session.interrupt") {
+			if res, err, handled := n.workAgentCalls(ctx, method, pane, a, params); handled {
+				return res, err
+			}
+		}
+		return nil, refusal(codeAgyInTerminal, i18n.T(i18n.Default, "rpc-errors.agy_in_terminal"), nil)
 	} else if h, err := n.runtimeFor(ctx, method, p.SessionID); err != nil {
 		return nil, err
 	} else if h != nil {
