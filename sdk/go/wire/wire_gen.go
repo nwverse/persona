@@ -279,6 +279,7 @@ type Contributes struct {
 	Assistant           []AssistantItem          `json:"assistant,omitempty"`
 	McpServers          []MCPServerItem          `json:"mcp_servers,omitempty"`
 	UI                  []UIItem                 `json:"ui,omitempty"`
+	TrackKinds          []TrackKindItem          `json:"track_kinds,omitempty"`
 	AgentSources        []AgentSourceItem        `json:"agent_sources,omitempty"`
 	Channel             []ChannelItem            `json:"channel,omitempty"`
 	Events              []EventsItem             `json:"events,omitempty"`
@@ -306,7 +307,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -338,7 +339,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "messaging":
+		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -687,6 +688,41 @@ type ConnectorItem struct {
 	// replies, say). Its program may then record each one in the sent-as-user ledger with sent.record, and the install
 	// preview says so.
 	SendsAsUser bool `json:"sends_as_user,omitempty"`
+}
+
+type TrackAttention struct {
+	PushCap     string `json:"push_cap,omitempty"`
+	DeepDefault string `json:"deep_default,omitempty"`
+	EnterMode   string `json:"enter_mode,omitempty"`
+}
+
+type TrackSidebar struct {
+	Group string `json:"group,omitempty"`
+	Order int    `json:"order,omitempty"`
+	Icon  string `json:"icon,omitempty"`
+}
+
+type TrackKindConfig struct {
+	Schema            int                          `json:"schema"`
+	Template          string                       `json:"template"`
+	UserInstructions  string                       `json:"user_instructions,omitempty"`
+	Context           string                       `json:"context"`
+	DefaultCategories []string                     `json:"default_categories"`
+	TagFocus          []string                     `json:"tag_focus"`
+	Rhythms           []map[string]json.RawMessage `json:"rhythms"`
+	Attention         TrackAttention               `json:"attention"`
+	Supervision       string                       `json:"supervision"`
+	Usage             []map[string]json.RawMessage `json:"usage"`
+	Assembly          string                       `json:"assembly"`
+	CaptureTarget     bool                         `json:"capture_target,omitempty"`
+	Channels          []string                     `json:"channels"`
+	Sidebar           TrackSidebar                 `json:"sidebar"`
+}
+
+type TrackKindItem struct {
+	ID     string          `json:"id"`
+	Title  string          `json:"title"`
+	Config TrackKindConfig `json:"config"`
 }
 
 // NamedItem: A contribution with only an id and a name: voice, transcription, speech, computer, browser.
@@ -4724,6 +4760,17 @@ const (
 // ChannelSendKinds are the values of ChannelSendKind, in order.
 var ChannelSendKinds = []string{"answer", "note", "ask", "push"}
 
+// ChannelChatKind: what kind of chat a channel message came from: direct (private chat), group (regular group chat),
+// or topic (a topic or thread inside a group).
+const (
+	ChannelChatKindDirect = "direct"
+	ChannelChatKindGroup  = "group"
+	ChannelChatKindTopic  = "topic"
+)
+
+// ChannelChatKinds are the values of ChannelChatKind, in order.
+var ChannelChatKinds = []string{"direct", "group", "topic"}
+
 // ChannelReceiveParams: channel.receive: one of the owner's messages (only the owner's). Answered once the hub has
 // it, deduplicated by id and queued, not after the turn.
 type ChannelReceiveParams struct {
@@ -4743,6 +4790,12 @@ type ChannelMessage struct {
 	Chat string `json:"chat,omitempty"`
 	// The topic or thread within chat, when the request came from one.
 	Topic string `json:"topic,omitempty"`
+	// Opaque chat or group identifier for conversation routing when integrations_v2 is enabled.
+	ChatID string `json:"chat_id,omitempty"`
+	// Kind of chat the message came from (direct, group, or topic), when known.
+	ChatKind string `json:"chat_kind,omitempty"`
+	// Opaque topic or thread identifier within chat_id for conversation routing when integrations_v2 is enabled.
+	TopicID string `json:"topic_id,omitempty"`
 	// Context the extension gathered for this request, such as nearby chat history. It is data, not owner-authored
 	// instructions.
 	Context string `json:"context,omitempty"`
@@ -7352,6 +7405,10 @@ var newDef = map[string]func() any{
 	"TunnelItem":                    func() any { return new(TunnelItem) },
 	"AgentFilterItem":               func() any { return new(AgentFilterItem) },
 	"ConnectorItem":                 func() any { return new(ConnectorItem) },
+	"TrackAttention":                func() any { return new(TrackAttention) },
+	"TrackSidebar":                  func() any { return new(TrackSidebar) },
+	"TrackKindConfig":               func() any { return new(TrackKindConfig) },
+	"TrackKindItem":                 func() any { return new(TrackKindItem) },
 	"NamedItem":                     func() any { return new(NamedItem) },
 	"QuotaItem":                     func() any { return new(QuotaItem) },
 	"UsageItem":                     func() any { return new(UsageItem) },

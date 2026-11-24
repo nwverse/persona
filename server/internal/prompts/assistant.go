@@ -324,10 +324,13 @@ type SnapshotProfile struct {
 	Unreadable, Gone bool
 }
 
-// SnapshotTier is one tier of the profile in use: what an Agent started on it runs on ("" model or effort: the
-// launcher's), and when to use it.
+// SnapshotTier is one tier of the profile in use: what an Agent started on it runs on first ("" model or effort: the
+// launcher's), how many other candidates follow it (the hub picks among them at dispatch), the older names it answers
+// to, and when to use it.
 type SnapshotTier struct {
 	Name, Launcher, Model, Effort, Speed, PermissionMode, Description string
+	More                                                              int
+	Aliases                                                           []string
 }
 
 // Snapshot is the live context a starting assistant gets in its system prompt.

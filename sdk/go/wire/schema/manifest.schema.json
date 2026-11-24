@@ -671,31 +671,40 @@
       },
       "required": ["id", "name", "capabilities"]
     },
+    "TrackAttention": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"push_cap": {"type": "string", "enum": ["P0", "P1", "P2"]}, "deep_default": {"type": "string", "enum": ["quick", "deep"]}, "enter_mode": {"type": "string", "enum": ["none", "immersive"]}}
+    },
+    "TrackSidebar": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"group": {"type": "string", "maxLength": 40}, "order": {"type": "integer"}, "icon": {"type": "string", "pattern": "^[a-z][a-zA-Z0-9_]{0,63}$"}}
+    },
+    "TrackKindConfig": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "schema": {"type": "integer", "const": 1},
+        "template": {"type": "string", "enum": ["assistant", "space", "health"]},
+        "user_instructions": {"type": "string", "enum": ["", "space_md"]},
+        "context": {"type": "string", "enum": ["engineering", "track", "none"]},
+        "default_categories": {"type": "array", "items": {"type": "string", "enum": ["health", "finance", "relationships", "emotion", "legal_id"]}},
+        "tag_focus": {"type": "array", "items": {"type": "string", "enum": ["health", "finance", "relationships", "emotion", "legal_id"]}},
+        "rhythms": {"type": "array", "items": {"type": "object"}},
+        "attention": {"$ref": "#/$defs/TrackAttention"},
+        "supervision": {"type": "string", "enum": ["leaders", "routine", "none"]},
+        "usage": {"type": "array", "items": {"type": "object"}},
+        "assembly": {"type": "string", "enum": ["assistant", "track"]},
+        "capture_target": {"type": "boolean"},
+        "channels": {"type": "array", "items": {"type": "string", "enum": ["topics", "single"]}},
+        "sidebar": {"$ref": "#/$defs/TrackSidebar"}
+      },
+      "required": ["schema", "template", "context", "default_categories", "tag_focus", "rhythms", "attention", "supervision", "usage", "assembly", "channels", "sidebar"]
+    },
     "TrackKindItem": {
       "type": "object", "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
         "title": {"type": "string", "minLength": 1, "maxLength": 80},
-        "config": {
-          "type": "object", "additionalProperties": false,
-          "properties": {
-            "schema": {"type": "integer", "const": 1},
-            "template": {"type": "string", "enum": ["assistant", "space", "health"]},
-            "user_instructions": {"type": "string", "enum": ["", "space_md"]},
-            "context": {"type": "string", "enum": ["engineering", "track", "none"]},
-            "default_categories": {"type": "array", "items": {"type": "string", "enum": ["health", "finance", "relationships", "emotion", "legal_id"]}},
-            "tag_focus": {"type": "array", "items": {"type": "string", "enum": ["health", "finance", "relationships", "emotion", "legal_id"]}},
-            "rhythms": {"type": "array", "items": {"type": "object"}},
-            "attention": {"type": "object", "additionalProperties": false, "properties": {"push_cap": {"type": "string", "enum": ["P0", "P1", "P2"]}, "deep_default": {"type": "string", "enum": ["quick", "deep"]}, "enter_mode": {"type": "string", "enum": ["none", "immersive"]}}},
-            "supervision": {"type": "string", "enum": ["leaders", "routine", "none"]},
-            "usage": {"type": "array", "items": {"type": "object"}},
-            "assembly": {"type": "string", "enum": ["assistant", "track"]},
-            "capture_target": {"type": "boolean"},
-            "channels": {"type": "array", "items": {"type": "string", "enum": ["topics", "single"]}},
-            "sidebar": {"type": "object", "additionalProperties": false, "properties": {"group": {"type": "string", "maxLength": 40}, "order": {"type": "integer"}, "icon": {"type": "string", "pattern": "^[a-z][a-zA-Z0-9_]{0,63}$"}}}
-          },
-          "required": ["schema", "template", "context", "default_categories", "tag_focus", "rhythms", "attention", "supervision", "usage", "assembly", "channels", "sidebar"]
-        }
+        "config": {"$ref": "#/$defs/TrackKindConfig"}
       },
       "required": ["id", "title", "config"]
     },

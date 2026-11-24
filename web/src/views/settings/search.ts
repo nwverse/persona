@@ -2,6 +2,7 @@ import { t } from "../../i18n";
 import { LOCAL_SHORTCUTS, SHORTCUTS } from "../../lib/shortcuts";
 import { enabledSettingsTabs, registeredModules } from "../../core/module-host";
 import { MODULE_FEATURES_ID } from "../../core/module-features";
+import { isLegacyIntegrationTab } from "./integrations-route";
 import { tabInfo, TABS, type Tab } from "./nav";
 
 // ── search ──────────────────────────────────────────────
@@ -16,6 +17,8 @@ export interface SearchGroup {
   anchor: string;
   /** More words it is found by (the choices a row offers, the rows only shown once it is on), never shown. */
   hint?: string;
+  /** Optional item sub-route to open when selecting this search result. */
+  sub?: string;
 }
 
 const path = (...parts: string[]) => parts.join(" › ");
@@ -172,6 +175,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "labs", group: t("settings-nav.tab_labs"), hint: t("settings-labs.trial"), anchor: "labs" },
   { tab: "labs", group: path(t("settings-labs.work_area"), t("settings-labs.work_title")), anchor: "configuration-assistant-work-work_guide" },
   { tab: "labs", group: path(t("settings-labs.work_area"), t("settings-labs.todos_v2_title")), anchor: "configuration-assistant-todos-v2-todos_v2" },
+  { tab: "labs", group: path(t("settings-labs.work_area"), t("settings-labs.integrations_v2_title")), anchor: "configuration-assistant-integrations-v2-integrations_v2" },
   { tab: "labs", group: path(t("settings-labs.area_agents"), t("settings-labs.terminal_renderer")), hint: words(t("settings-labs.terminal_renderer_standard"), t("settings-labs.terminal_renderer_webgl")), anchor: "configuration-terminal-renderer" },
   // This hub
   { tab: "hub", group: t("settings-hubsettings.version"), hint: words(t("settings-hubsettings.last_check"), t("settings-hubsettings.branch"), t("settings-hubsettings.current_commit"), t("settings-hubsettings.latest_commit")), anchor: "hub-version" },
@@ -204,8 +208,17 @@ function moduleSwitchEntries(): SearchGroup[] {
 // What is typed and what is matched, compared without case or spaces: "timezone" finds "Time zone", "apikey" "API Key".
 const fold = (s: string) => s.toLocaleLowerCase().replace(/\s+/g, "");
 
-/** The search box's matches: categories by label / hint, and page groups and settings by their heading or label. */
-export function searchSettings(query: string): { tabs: Tab[]; groups: SearchGroup[] } {
+const INTEGRATIONS_ANCHOR_SUB: Record<string, string | undefined> = {
+  mail: "builtin:mail",
+  lark: "builtin:lark",
+  sent: "-sent",
+  market: "-market",
+};
+
+/** The search box's matches: categories by label / hint, and page groups and settings by their heading or label.
+ *  When `integrationsV2` is true, collapses `channels`/`connectors`/`extensions` into `integrations` and remaps
+ *  their indexed groups so quick search jumps directly to the unified Integrations & Extensions view. */
+export function searchSettings(query: string, integrationsV2 = false): { tabs: Tab[]; groups: SearchGroup[] } {
   const q = fold(query);
   if (!q) return { tabs: [], groups: [] };
   const featureEntries = moduleSwitchEntries();
@@ -215,8 +228,23 @@ export function searchSettings(query: string): { tabs: Tab[]; groups: SearchGrou
     return { tabs: [], groups: [features] };
   }
   const has = (...texts: (string | undefined)[]) => texts.some((s) => s && fold(s).includes(q));
+  const searchableTabs = [...TABS, ...enabledSettingsTabs().map((m) => m.key)].filter((k) =>
+    integrationsV2 ? !isLegacyIntegrationTab(k) : k !== "integrations",
+  );
+  const tabMatches = (k: Tab) => {
+    const info = tabInfo(k);
+    if (has(info.label, info.hint)) return true;
+    // When integrations_v2 is enabled, searching legacy tab names ("Channels", "Connectors", "Extensions") still finds Integrations.
+    if (integrationsV2 && k === "integrations") {
+      return (["channels", "connectors", "extensions"] as const).some((old) => has(tabInfo(old).label, tabInfo(old).hint));
+    }
+    return false;
+  };
+  const indexed = integrationsV2
+    ? SEARCH_INDEX.map((g) => (isLegacyIntegrationTab(g.tab) ? { ...g, tab: "integrations" as Tab, sub: INTEGRATIONS_ANCHOR_SUB[g.anchor] } : g))
+    : SEARCH_INDEX;
   return {
-    tabs: [...TABS, ...enabledSettingsTabs().map((m) => m.key)].filter((k) => has(tabInfo(k).label, tabInfo(k).hint)),
-    groups: [...SEARCH_INDEX, ...featureEntries].filter((g) => has(g.group, g.hint)),
+    tabs: searchableTabs.filter(tabMatches),
+    groups: [...indexed, ...featureEntries].filter((g) => has(g.group, g.hint)),
   };
 }

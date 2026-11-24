@@ -325,6 +325,10 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	if err := execution.check("claude"); err != nil {
 		return nil, err
 	}
+	resolvedModel, err := n.resolveClaudeModelArg(startCtx, launcher, execution.Model)
+	if err != nil {
+		return nil, err
+	}
 	if err := n.checkExternalAssistant(startCtx, id, launcher, execution, spare); err != nil {
 		return nil, err
 	}
@@ -332,7 +336,6 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		return nil, err
 	}
 	guest := n.guestOf(id) != nil // a guest, a meeting's room too (assistant_guest.go)
-	var err error
 	execution.ConfigDir, err = n.assistantProfileSelection(context.Background(), id, launcher, execution.ConfigDir, resume)
 	if err != nil {
 		return nil, err
@@ -411,14 +414,11 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	// an old hub that still addresses the legacy namespace keeps the alias.
 	legacyMCP := !n.hubSupportsPersonaContracts()
 	args = append(args, n.claudeAssistantMCPAndToolsFor(id, cwd, legacyMCP, round.toolSet)...)
-	model := execution.Model
-	if model == "" && resume && execution.Fingerprint != "" && !guest {
+	model := resolvedModel
+	if execution.Model == "" && resume && execution.Fingerprint != "" && !guest {
 		// The model configuration names none: the launcher's default, not the model the session ran on last
 		// (assistant_resume_model.go). A guest keeps what it started on.
-		model = n.resumeModel(launcher, cwd, settings, configPath)
-	}
-	if model != "" {
-		model = n.claudeModelArg(launcher, model) // no tier alias for a gateway (#10365); "" its default
+		model = n.claudeModelArg(launcher, n.resumeModel(launcher, cwd, settings, configPath))
 	}
 	if model != "" {
 		args = append(args, "--model", model)
