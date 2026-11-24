@@ -67,11 +67,11 @@ func postUserMessage(h *Hub, m *Machine, sid, body string) *httptest.ResponseRec
 }
 
 // End-to-end POST /api/v1/sessions/{mid}/{sid}/messages flow:
-// - User message to a managed assistant conversation carries queued wake:false relays, drains them on node acceptance,
-//   and clears queuedRelays (Queued / QueuedRelayed -> 0) on the session view.
-// - A failed user send preserves the quiet relay; a retry under the same client_msg_id reuses the original reservation
-//   without swallowing a quiet relay that arrived in between.
-// - A user message to an ordinary Agent session is completely unaffected.
+//   - User message to a managed assistant conversation carries queued wake:false relays, drains them on node acceptance,
+//     and clears queuedRelays (Queued / QueuedRelayed -> 0) on the session view.
+//   - A failed user send preserves the quiet relay; a retry under the same client_msg_id reuses the original reservation
+//     without swallowing a quiet relay that arrived in between.
+//   - A user message to an ordinary Agent session is completely unaffected.
 func TestUserSendDrainsQuietRelayEndToEnd(t *testing.T) {
 	h, n := quietRelayHub(t)
 

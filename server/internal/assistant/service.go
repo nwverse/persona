@@ -419,7 +419,8 @@ func New(o Options) *Service {
 	s.conversationSwitchRoutes()
 	s.modelPickRoutes()
 	s.agentArchiveRoutes()
-	s.agentNamingRoutes() // agent_naming_request.go
+	s.agentNamingRoutes()  // agent_naming_request.go
+	s.questionReadRoutes() // question_reads.go
 	s.alwaysRoutes()
 	s.infoAccessRoutes()
 	s.trackRoutes()

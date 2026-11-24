@@ -546,6 +546,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // Interactions.tsx). 799 B in ja, measured in one environment against main 7be9a71cc (ja 484,445 B to 485,244 B; en
 // 481,786 B to 482,585 B, zh-Hans 482,421 B to 483,220 B). Main had 46 B of room, so the budget is main's 484,491 B
 // ceiling plus those 799 B. The web half of #13431 takes voice's first-screen parts off with the move into a module.
+// #13021: main ec2563b7d7 itself measures ja 484,587 B (en 481,938 B, zh-Hans 482,579 B), 96 B over the 484,491 B
+// above. The question rail's marks add 141 B in ja (en 141 B, zh-Hans 141 B): the rail now drawn on a touch screen for
+// Persona's chats, the marks' state in ChatView and the lazy import of views/chat/QuestionMarksHost.tsx (the rules and
+// read marks moved out of the first screen into that chunk, which took 808 B off the first version). ja 484,728 B;
+// 10 B of room on top. Merged with #13846, the voice module's first-screen reduction leaves room for these 141 B,
+// so the budget stays at #13846's 485,290 B ceiling.
 // #13803: mount-once long-chat windowing adds 200 B to the ja first screen, measured in one environment against main at
 // 464c1b17b3 (ja 484,433 B to 484,633 B; en 481,792 B to 481,992 B, zh-Hans 482,418 B to 482,618 B). The near-viewport
 // observer, searchable estimated placeholders and synchronous scroll compensation start with the chat; rich bodies stay

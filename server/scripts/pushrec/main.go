@@ -1,7 +1,7 @@
 // Command pushrec records what an app gets from a hub over its WebSocket, for replaying it through the hub's push
 // logic (internal/hub/pushreplay_test.go, docs/operations/testing.md "Push replay"). Run it on the hub's machine:
 //
-//	go run ./cmd/pushrec 20m ~/push.jsonl
+//	go run ./scripts/pushrec 20m ~/push.jsonl
 //
 // It connects like an app with the hub token from ~/.persona/hub.json (never printed), at the address the hub listens
 // on (hub.json's listen, PERSONA_LISTEN over it), registers as nothing and opens

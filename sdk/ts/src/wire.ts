@@ -6352,8 +6352,7 @@ export interface BrowserMachinesResult {
 }
 
 /**
- * browser.run (browser.run): run a script inside an extension-isolated browser task space (ext-<extensionID>-<slot>)
- * on machine_id.
+ * browser.run (browser.run): run a script inside an extension-isolated browser task space on machine_id.
  */
 export interface BrowserRunParams {
   machine_id: string;
