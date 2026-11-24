@@ -15,6 +15,9 @@ import (
 func TestHealthIntakeToolLogListDelete(t *testing.T) {
 	ctx := context.Background()
 	st := &intakeTestStore{}
+	if err := st.PutSetting(ctx, healthIntakeKey, defaultHealthIntakeSettings()); err != nil {
+		t.Fatal(err)
+	}
 	s := newServiceOn(t, newFakeHub(), st)
 	call := func(args string) string {
 		t.Helper()

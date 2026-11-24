@@ -624,6 +624,11 @@ generic `Agent execution terminated due to error.`, the text is the native short
 as it is (a picture in the history it cannot decode, an invalid argument): a Continue sends it again, so it is published
 as `turn_error_kind: "user"` (#11742). New input clears the session's `turn_error` while the error stays in the
 history; a rewind drops recovered errors past its cut. Rejected ACP prompts also publish their failure through the session's error state.
+agy can also stream a failed model request as the turn's only message text, `⚠ FAILED_PRECONDITION (code 400): …`, end
+the prompt normally, leave the error out of the export and leave its summary behind (#14628). When a turn with no thinking
+or tool activity streams exactly that one-line shape (`streamedErrorInfo` in `integrations/antigravity/lib/errors.js`), it
+is the turn's error, classified by its code like a native error, not a reply. It is kept as an `API Error:` notice on the
+turn's input, so it stays in history after later steps export, and that input settles the session `idle`.
 The history token includes the error format so connected clients refresh items cached before this representation.
 
 **Gemini API key provider** (#13762). agy can run on a Gemini API key (`"modelProvider": "gemini"` in agy's `settings.json`, with
