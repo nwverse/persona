@@ -153,8 +153,50 @@ Because a missing flag means off, every flag a client gates on has to be announc
   or duplicate ids (compiled-in modules and the client-only ones of `modapi.ClientModules`) before showing the existing owner approval card; `null` or an empty disabled list
   restores the default. The manager reads the row once where it starts (`server/internal/assistant/main.go`,
   `ReadModuleSwitch`) and hands it to `assistant.New` as `Options.ModulesOff`, so the saved change takes effect at the
-  next manager start, never as a hot switch in the running process. A built-in module switched off is absent exactly as one left
-  out of the build; a client-only one loses its hub flag, so the clients hide it. There is no settings screen yet; the settings registry of #13395 remains its intended UI home.
+  next manager start, never as a hot switch in the running process. The manager reads it before it makes the extension
+  manager, and the kernel and every provider seam get the same list (below). A built-in module switched off is absent
+  exactly as one left out of the build; a client-only one loses its hub flag, so the clients hide it. There is no settings screen yet; the settings registry of #13395 remains its intended UI home.
+- **One predicate for the seams** (#14405): `server/internal/moduleswitch`. A module that reaches the core through a
+  provider seam (a port its file in a composition root fills in `init`, "Provider seams" below) is switched off by that
+  port: the port is a `moduleswitch.Port`, which keeps the provider under the module's id and hands it out (`Get`)
+  only to a caller whose `moduleswitch.Set` has the module on (`Set.On`). The `Set` is a value each manager carries
+  (`extmgr.Options.Modules`), never process state: one process can run several managers (`internal/manager`). A node
+  has no settings row; it reads the switch from the hub's features it gets in `node.configure` (`hub_features`), by
+  the clients' rule (`moduleswitch.FromFeatures`: with the `modules` marker, a module whose `module.<id>` flag is
+  missing is off), and keeps it for the process (a node serves one hub). Before its first `node.configure`, or from a
+  hub without the marker, every module is on.
+- **Tested for every module**: `TestEverySeamFollowsTheSwitch` in `server/internal/modules/all` and in
+  `server/internal/modules/all/node` runs `server/internal/moduleswitch/switchtest` over the root: every seam each
+  module of the build recorded must hand out its provider with the module on and nothing with it switched off, and every
+  call the root's `init` makes must be such a seam. The only calls allowed otherwise are the root's own
+  (`kernel.Provide`) and the binary-only ones below; an entry no longer called fails.
+- **Checked on a running hub**: `python3 scripts/ci/core-only-smoke.py --switched-off <ids>` builds by default, starts
+  a hub on a disposable Postgres, writes the row, restarts and checks the ids are gone (the manager's loaded modules,
+  their flags, programs' extensions, connectors, routes) while every other module stays, then clears the row,
+  restarts and checks they return.
+
+What switched off means, by seam (each port follows `Set.On`; a build without the module provides nothing at all):
+
+| Seam | Module | Switched off at the next manager start |
+| --- | --- | --- |
+| Kernel slots (`settings`, `feature`, `hub_routes`, `mcp_tools`, `background_jobs`, schedule facts) | every module | Not loaded: no setting, route, tool or job, and its `module.<id>` flag is gone from the hello |
+| `server/internal/extmgr/githubport` | `github` | No built-in GitHub connector: not registered, listed or polled; `/api/v1/connectors/github/auth` answers 404 |
+| `server/internal/extmgr/imessageport` | `imessage` | No Messages connector or built-in `imessage` extension; `/api/v1/imessage` answers that it is not configured |
+| `server/internal/extmgr/mailport` | `mail` | Mail is not opened: the mail routes answer 404, no `mail_*` tool or mail connector, no `mail.accounts` setting |
+| `server/internal/builtinext` (`ProvideVolc`, `ProvideVoice`) | `volc`, `voice` | The built-in extension is not registered or started; no meeting transcribes with it |
+| `server/internal/builtinext` (`AddProgram`) | `volc`, `voice` | The extension host starts no `personad volc` / `personad voice`, a `hub.json` entry's included (`ProgramOff`: it fails as the unknown subcommand would). The subcommand stays in the binary |
+| `server/internal/botport` | `lark` | No bot client is made: the bot cannot be bound, registered or started |
+| `server/internal/cliport` | `lark` | `lark.cli` is not read (logged at start) and the extension host's lark-cli integration is off |
+| `server/internal/larkhost` | `lark` | The outbound channel port is `larkhost.None`, as without the module |
+| `server/internal/recordinghost` | `recording` | No layer: the recording routes answer 404, no audio socket, room tools, final passes or meeting capabilities |
+| `server/internal/node/imessageport` | `imessage` | The node answers as a computer without Messages; the manager sends it no `connector.*` call and drops `imessage` from the node's built-in programs |
+| `server/internal/node/iphoneport` | `phone-extra` | The node lists no `iphone` program and has none of its methods; the manager drops `iphone` from the node's built-in programs, so it offers and calls no phone control |
+| `server/internal/node/screenport` | `screen-share` | The node offers no screen session: a live screen is the plain relayed stream; the clients hide screen sharing (flag gone) |
+| `server/internal/nodecmd/commandport` (`AddCommand`) | `office`, `phone-extra` | **Binary-only**: `personad office` / `personad iphone` run as their own process with no hub, so they stay until a build without the module. The `persona-office` skill still ships to agents, as it does in a build without `office` |
+
+A node learns the switch at its next `node.configure` (on every connection): its first `node.info` is answered before
+that, which is why the manager filters the node's built-in programs itself. Client-only modules (`modapi.ClientModules`)
+have no seam; their flag goes and the clients hide them.
 
 ### How to build and run the core alone
 
@@ -233,8 +275,8 @@ The port is a package of its own so the composition root need not import `extmgr
 (`persona_without_mail`, `persona_core_only`) nothing is provided and the manager runs as with a mail service that
 failed to open: the mail routes answer 404, no `mail_*` tool or mail connector is offered, `persona_settings` has no
 `mail.accounts`, and everything else runs (`TestManagerWithoutMail`). The module registers nothing with the kernel and
-its `module.json` declares no slot; the run-time switch (the `modules` row) does not cover it until the kernel serves
-`hub_routes` and `mcp_tools` (#13844). Its prompts (`server/internal/prompts/mcp/mail`) and locales (`mail-*`) stay in
+its `module.json` declares no slot; the run-time switch (the `modules` row) covers it through `mailport` ("The
+switch"). Its prompts (`server/internal/prompts/mcp/mail`) and locales (`mail-*`) stay in
 the core's trees until `prompt_sections` and `i18n_namespaces` are served. `scripts/ci/server.sh build` builds and
 tests the core, the modules, the guards and the manager's mail, inbox, connector and settings tests with
 `persona_core_only` and with `persona_without_mail`.
@@ -252,9 +294,9 @@ an extension's GitHub connector can still take the id (`TestManagerWithoutGitHub
 (`server/internal/prompts/mcp/github`, `prompts/inbox/kinds/github.md`) stay in the core's trees as mail's do.
 `scripts/ci/server.sh build` runs "Builds without the connector modules" with both tags, and
 `scripts/ci/core-only-smoke.py` checks that a core-only hub lists no GitHub connector.
-Its `module.json` declares `feature` = `module.github`, so a hub whose manager loaded the module announces it. The
-run-time `modules` switch drops the flag, but the extension manager still registers the connector until it reads the
-switch too (only a build without the module leaves the connector out today).
+Its `module.json` declares `feature` = `module.github`, so a hub whose manager loaded the module announces it.
+Switched off in the `modules` row, `githubport` hands the manager no factory, so the connector is absent as in a build
+without it (`TestManagerWithoutGitHub` runs both ways).
 
 The iMessage connector (`server/internal/modules/imessage`, #13936) is the same kind of connector, with a second side:
 the reader of a Mac's Messages runs in that Mac's node. The manager reaches the connector through the contract
@@ -267,7 +309,9 @@ list), so `personad node`, persona-node and the manager's local node all have it
 of the manager. With the module left out (`persona_without_imessage`, `persona_core_only`) the manager has no Messages
 connector or built-in Messages extension, `/api/v1/imessage` answers that it is not configured
 (`TestManagerWithoutIMessage`), and the node answers as a computer without Messages does. Its `module.json` declares
-`feature` = `module.imessage`, with the same caveat on the run-time switch as GitHub's. "Builds without the connector
+`feature` = `module.imessage`. Switched off in the `modules` row, both ports hand out nothing: the manager registers no
+Messages connector or extension (`TestManagerWithoutIMessage` runs both ways), so it sends the node no `connector.*`
+call, and a node whose hub announces no `module.imessage` answers as a computer without Messages. "Builds without the connector
 modules" in `scripts/ci/server.sh` runs with `persona_without_imessage` too, and `scripts/ci/core-only-smoke.py`
 checks that a core-only hub has no `imessage` extension.
 
@@ -309,7 +353,9 @@ the node's root imports, so the manager does not link it. With the module left o
 unknown and missing from the usage (`TestOfficeFollowsTheBuildTags` in the node's root), and
 `scripts/ci/core-only-smoke.py` builds `persona-node` as well and checks that a core-only `personad` and `persona-node`
 lack every command the node's root provides. `scripts/ci/server.sh build` runs "Builds without the node modules" with
-each such module's tag and `persona_core_only`, Windows' node included.
+each such module's tag and `persona_core_only`, Windows' node included. Switched off in the `modules` row, the node's
+ports hand out nothing once the node has the hub's features, and the manager drops the module's built-in programs
+from the node's info; a device command stays in the binary ("The switch").
 
 The modules of this kind:
 
@@ -474,7 +520,8 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
   off: its status reads without an error as neither on nor ready (so an acceptance ask is card-less and a briefing
   goes out by push, as with the bot off), it supports nothing, a post or a reply answers `larkhost.ErrNoChannel`, and
   notes and thread lines are dropped.
-  The run-time `modules` switch does not cover it yet, as for mail.
+  Switched off in the `modules` row it is the same: `larkhost`, `botport` and `cliport` all follow the switch ("The
+  switch").
 
 ### How to add a module
 

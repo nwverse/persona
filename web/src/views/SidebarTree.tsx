@@ -4,7 +4,7 @@ import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef } from "reac
 import { t } from "../i18n";
 import { isSpaceMuted } from "../lib/agent-filter";
 import { isQuiet, sessionHost, type AgentMutes, type Space } from "../lib/agent-groups";
-import { showsWorktreeLevel, type RepoMachine, type RepoTree, type RepoWorktree } from "../lib/agent-repos";
+import { showsWorktreeLevel, type RepoMachine, type RepoTree, type RepoWorktree } from "../lib/agent-repos-core";
 import { paneRoute, tabRowKeys, type ChildStates, type HerdrMachine, type HerdrSpace, type HerdrTab } from "../lib/herdr-tree";
 import { machineWithHub } from "../lib/mesh";
 import { agentLabel } from "../lib/mentions";
@@ -365,7 +365,7 @@ function RepoSection({ tree, reg, hover, activeKey, go, onRowMenu, selected, ...
 /** One working tree's agents under its own folding row: the main checkout wears a home mark, and a tree with nothing
  *  running says so. Orca child worktrees have their own remembered, initially expanded chip after the parent's agents. */
 function RepoWorktreeRows({ w, repo, row, activeKey, go, selected, ...actions }: { w: RepoWorktree; repo: string; row: (s: Session) => React.ReactElement; activeKey: string; go: GoFn; selected?: string } & WorkspaceTreeActions) {
-  const [folded, toggle] = useFolded(w.key, !w.workspace && w.sessions.length === 0, { holds: holdsRow(w.navigationTree ?? w.tree, activeKey) || w.children.some((child) => holdsWorkspace(child, selected)) });
+  const [folded, toggle] = useFolded(w.key, w.sessions.length === 0 && w.children.length === 0, { follow: true, holds: holdsRow(w.navigationTree ?? w.tree, activeKey) || w.children.some((child) => holdsWorkspace(child, selected)) });
   const descendants = w.navigationTree ? w.children.flatMap((c) => c.navigationTree ?? c.tree) : w.tree.slice(w.sessions.length);
   const [childrenFolded, toggleChildren] = useFolded(`${w.key}/children`, false, { holds: holdsRow(descendants, activeKey) || w.children.some((child) => holdsWorkspace(child, selected)) });
   const selectedRow = useRef<HTMLDivElement>(null);
