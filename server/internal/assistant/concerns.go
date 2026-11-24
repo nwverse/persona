@@ -143,14 +143,7 @@ func (s *Service) toolConcernReport(ctx context.Context, machine, self string, a
 			return "", fmt.Errorf("reported and closed, but it could not be marked as seen: %w", err)
 		}
 		out = c
-	} else if !closed && out.ConfirmedAt != nil {
-		// a newer report on a matter the owner had put away: it waits for them again (done_at stays the first close)
-		c, err := s.confirmFinished(ctx, t.ID, false)
-		if err != nil {
-			return "", fmt.Errorf("the report is noted, but it could not be put back before the owner: %w", err)
-		}
-		out = c
-	}
+	} // a report on a closed concern clears its confirm in the store (db.ReportConcern), for every caller
 	now, loc := time.Now(), s.location(ctx)
 	if !closed {
 		if a.OwnerSaw {

@@ -25,6 +25,7 @@ type listedMatter struct {
 	HeaderCard  string       `json:"header_card"`
 	Concern     *ConcernView `json:"concern"`
 	Matter      string       `json:"matter"`
+	PartOf      string       `json:"part_of"`
 }
 
 func (e *todoEnv) matters() map[string]listedMatter {
@@ -406,6 +407,11 @@ func TestKnowingAMatterPutsItAwayWithItsTasks(t *testing.T) {
 	if got := e.matters()[now.ID]; got.ConfirmedAt == nil || got.HeaderCard != "" {
 		t.Fatalf("a newer report the owner saw waits: %+v", got)
 	}
+	// A device's report (POST …/decisions, source reported) on the put-away matter makes it wait again too.
+	e.must("POST", "/api/v1/todos/"+now.ID+"/decisions", `{"source":"reported","choice":"five to ten."}`)
+	if got := e.matters()[now.ID]; got.ConfirmedAt != nil || got.HeaderCard != headerFinished {
+		t.Fatalf("a device's newer report does not wait: %+v", got)
+	}
 
 	// The owner files a message under the done matter: it is being worked on again, as concern_file would make it.
 	e.must("PUT", "/api/v1/todos/"+now.ID+"/words", `{"conversation":"conv1","message_id":"m3","text":"and in Toronto?"}`)
@@ -549,5 +555,30 @@ func TestConcernDirectionsFromItsTasksSupervisors(t *testing.T) {
 	}
 	if d := m[logs.ID].Concern.Directions; len(d) != 0 {
 		t.Fatalf("a matter only the main conversation follows has directions: %+v", d)
+	}
+}
+
+// POST /todos/reorganize never makes a concern part of anything, and a to-do it moves deeper under a matter's request
+// still belongs to that matter.
+func TestReorganizeUnderAMatter(t *testing.T) {
+	e := newConcernEnv(t)
+	e.f.setItems(ownerSaid("m1", "plan the move", time.Now().UTC()))
+	if _, err := e.tool("concern_file", map[string]any{"title": "the move"}); err != nil {
+		t.Fatal(err)
+	}
+	c := concernNamed(t, e.matters(), "the move")
+	req, piece, other := e.create("book the van"), e.create("compare quotes"), e.create("pack the books")
+	e.must("PATCH", "/api/v1/todos/"+req.ID, `{"part_of":"`+c.ID+`"}`)
+	e.must("PATCH", "/api/v1/todos/"+piece.ID, `{"part_of":"`+req.ID+`"}`)
+
+	if w := e.do("POST", "/api/v1/todos/reorganize", `{"ids":["`+c.ID+`"],"part_of":"`+other.ID+`"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("a concern moved under a task: %d %s", w.Code, w.Body)
+	}
+	if got := e.matters()[c.ID]; got.PartOf != "" {
+		t.Fatalf("a refused reorganize wrote: %q", got.PartOf)
+	}
+	e.must("POST", "/api/v1/todos/reorganize", `{"ids":["`+other.ID+`"],"part_of":"`+piece.ID+`"}`)
+	if got := e.matters()[other.ID]; got.Matter != c.ID {
+		t.Fatalf("three levels under the matter: matter %q, want %q", got.Matter, c.ID)
 	}
 }

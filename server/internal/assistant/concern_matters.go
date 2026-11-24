@@ -582,21 +582,24 @@ func (s *Service) clearConcernAsk(ctx context.Context, id string) {
 	}
 }
 
-// matterOf is the concern to-do t belongs to ("" for none): the concern its part_of names, or the concern the request
-// it is a piece of belongs to, else the concern the owner's message its brief started from is filed under.
+// matterOf is the concern to-do t belongs to ("" for none): the first concern up its part_of chain, else the concern
+// the owner's message its brief started from is filed under.
 func matterOf(t Todo, byID map[string]Todo, filed map[wordKey]string) string {
 	if t.isConcern() {
 		return ""
 	}
-	if t.PartOf != "" {
-		if root, ok := byID[t.PartOf]; ok {
-			if root.isConcern() {
-				return root.ID
-			}
-			if up, ok := byID[root.PartOf]; ok && up.isConcern() {
-				return up.ID
-			}
+	// up the part_of chain: a piece of a request is two hops away, and a reorganized goal tree can be deeper
+	seen := map[string]bool{t.ID: true}
+	for id := t.PartOf; id != "" && !seen[id]; {
+		seen[id] = true
+		up, ok := byID[id]
+		if !ok {
+			break
 		}
+		if up.isConcern() {
+			return up.ID
+		}
+		id = up.PartOf
 	}
 	if t.Brief != nil && t.Brief.Request != nil {
 		if c := filed[wordKey{t.Brief.Request.Conversation, t.Brief.Request.MessageID}]; c != "" {
