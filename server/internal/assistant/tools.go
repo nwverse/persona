@@ -17,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/healthhost"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/kbwire"
@@ -49,7 +50,10 @@ var toolNames = []string{"resource_status", "ask_user", "notify_user", "supervis
 
 // Tools are the assistant's tools (assistant.tools).
 func (s *Service) Tools(ctx context.Context) []proto.Tool {
-	tools := toolsNamed(toolNames)
+	tools := toolsNamed(withKnowledgeUI(toolNames, s))
+	if !s.healthOn() { // the Health module's tool (health_layer.go)
+		tools = slices.DeleteFunc(tools, func(t proto.Tool) bool { return t.Name == healthhost.Tool })
+	}
 	// A bare Service has no settings store and is used by registry tests. With no
 	// store the opt-in is false; do not call the nil store function just to hide it.
 	if s.store != nil && ownerReplyApprovalOn(s.settings(ctx)) {
@@ -161,7 +165,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 	case spaceStateTool: // a space track's conversations only (track_space_md.go)
 		return s.toolSpaceStateUpdate(ctx, machine, self, args)
 	case "health_intake":
-		return s.toolHealthIntake(ctx, args)
+		return s.healthTool(ctx, args)
 	case "repository_add":
 		return s.toolRepositoryAdd(ctx, machine, self, args)
 	case "repositories_list", "repository_get":
@@ -242,7 +246,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		})
 		return s.toolKB(ctx, name, args)
 	case "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume":
-		return s.historyTools().Call(ctx, name, args) // kbhistory/tools.go
+		return s.historyTool(ctx, name, args) // the knowledge-ui module (knowledge_ui.go)
 	case "interaction_answer":
 		return s.toolInteractionAnswer(ctx, self, args)
 	case "ask_escalate":

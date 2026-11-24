@@ -156,6 +156,10 @@ tracked in #1214; cache-based test substitution is not allowed.
 
 To check the iOS deployment floor (#10261), dispatch **Apple CI** with lane **ios18**
 (`gh workflow run apple-test.yml -f lane=ios18`). The regular CI workflow continues to select `ios`.
+Selecting `lane=ios` runs both the main `apple` job (`scripts/ci/apple.sh ios`, 120-minute limit) and the parallel
+`ios-core-only` job (`scripts/ci/apple.sh ios-core-only`, 60-minute limit, building `PERSONA_CORE_ONLY=YES` without
+feature modules) under the same `apple` workflow call, so a failure in either blocks **CI required** (#14496);
+`gh workflow run apple-test.yml -f lane=ios-core-only` runs the core-only build on its own.
 The compatibility job uses the runner's installed iOS 18.6 image, or requests that exact version from Xcode.
 Each dispatch resolves packages, builds the ad-hoc test host, and runs the offline suites with the regular iOS fixture exclusions.
 The About version comparisons use their English visual configuration and disposable screenshot directories. The compact suite
@@ -476,9 +480,16 @@ example configs and services) and both watcher skills under `.claude/skills/`. T
   with `xcodegen dump`, and `scripts/ci/apple_offline_project.py` creates a separate `PersonaOfflineUnitTests.xcodeproj`
   in the disposable snapshot. Only this project omits targets the unit-test host cannot reach: Watch/Share, Vision,
   UI tests and the separate About accessibility host. It retains the real `Persona` host, Widgets, Notify, all package
-  dependencies, `PersonaTests`, and the exact `TEST_HOST` / `BUNDLE_LOADER`. It does not set `PERSONA_LEAN_DEV_BUILD`,
-  change a test selector or alter the default, UI-test or About schemes. `scripts/test/test_apple_offline_project.py`
-  generates and inspects this project when `xcodegen` is installed; the ordinary project still embeds all four targets.
+  dependencies, and the exact `TEST_HOST` / `BUNDLE_LOADER`. The ordinary `ios`, `ios18` and regression lanes compile
+  every `PersonaTests` source. The explicitly focused `ios-focused` and `ios-ipad-diagnostic` lanes instead pass a
+  named source profile: `-only-testing` restricts execution, not Swift target membership, so the generator validates
+  and includes their executed suites, the TypeScale/regular-About probes, About shared source and `FakeHub` helper.
+  The iPad diagnostic profile also retains its two later HTML batches. Missing files or moved suite declarations fail
+  generation; a reduced project is never produced silently. No profile sets `PERSONA_LEAN_DEV_BUILD`, changes a test
+  selector or alters the default, UI-test or About schemes. Device and simulator DerivedData remain separate because
+  their SDK, signing, graph and testability settings differ. `scripts/test/test_apple_offline_project.py` checks both
+  profiles and generates and inspects the full project when `xcodegen` is installed; the ordinary project still
+  embeds all four targets.
 - **A lean build says when it skipped what the branch changed.** The watch app compiles all of `apple/Shared/` and the
   `PersonaWire` package (`apple/Packages/PersonaWire/`) for watchOS 10, the share extension compiles them as an app
   extension, and no hosted CI runs on a PR, so with lean builds alone a change that breaks either would first fail on

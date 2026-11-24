@@ -57,6 +57,7 @@ interface AssistantState extends AgentAutoNamingState, CacheKeepaliveState {
   task_workspace_preference?: "prefer-existing" | "prefer-new";
   /** "Fold background rounds" (#4314, docs/assistant/assistant.md "Background rounds"): on by default; unset from a hub before it (on). */
   main_background_folded?: boolean;
+  fold_routine_relay_replies?: boolean;
   /** "Show scheduled task chats" in the sidebar's Recent (#8324): off by default, one value for all of the user's
    *  devices; unset from a hub before it (no switch). All chats' ⋯ menu has the same switch (lib/recent-task-chats.ts). */
   recent_task_chats?: boolean;
@@ -143,6 +144,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
   const [open, setOpen] = useState<{ file: MemoryFile; index?: boolean } | null>(null);
   const [quietBusy, setQuietBusy] = useState(false);
   const [foldBusy, setFoldBusy] = useState(false);
+  const [relayBusy, setRelayBusy] = useState(false);
   const [recentBusy, setRecentBusy] = useState(false);
   const [startBusy, setStartBusy] = useState(false);
   const [permissionBusy, setPermissionBusy] = useState(false);
@@ -289,6 +291,18 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
     } finally {
       setFoldBusy(false);
     }
+  };
+
+  const setRelayReplies = async (on: boolean) => {
+    setRelayBusy(true);
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { fold_routine_relay_replies: on } });
+      if (r.manager !== manager || r.fold_routine_relay_replies !== on) throw new Error(t("settings-assistantsettings.relay_unconfirmed"));
+      setInfo((i) => i ? { ...i, fold_routine_relay_replies: on } : i);
+      void refreshAssistant().catch(() => {});
+    } catch (e) {
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally { setRelayBusy(false); }
   };
 
   const setRecentTaskChats = async (on: boolean) => {
@@ -445,6 +459,14 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
           <Switch on={info?.main_background_folded ?? true} onChange={(on) => void setFolded(on)} disabled={!info || foldBusy} label={t("settings-assistantsettings.background_folded")} />
         </Row>
       </Group>
+
+      {typeof info?.fold_routine_relay_replies === "boolean" && (
+        <Group footer={t("settings-assistantsettings.relay_replies_footer")} anchor="relay-replies">
+          <Row label={t("settings-assistantsettings.relay_replies")}>
+            <Switch on={info.fold_routine_relay_replies} onChange={(on) => void setRelayReplies(on)} disabled={relayBusy} label={t("settings-assistantsettings.relay_replies")} />
+          </Row>
+        </Group>
+      )}
 
       {/* Show scheduled task chats in the sidebar's Recent (#8324): only from a hub that has the setting */}
       {typeof info?.recent_task_chats === "boolean" && (

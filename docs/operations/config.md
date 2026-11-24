@@ -389,7 +389,7 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
 - `assistant.task_execution_legacy_fallback`: advanced, default `true`. It lets only an attested inherited ordinary task omit `task_execution` on an old node, and records actual use as `compatibility_fallback: "legacy_task_execution"` in run history. Set it to `false` to make every such task wait for the capability instead. Explicit execution choices and Health tasks never use this omission.
 - `assistant.node_update_handoff_grace_seconds`: advanced, default `60`, from 0 to 86400. After this much continuous headless activity, an update stops admitting new headless turns while admitted RPCs and current turns finish. `0` preserves the indefinite natural-idle wait. Removing the setting restores 60 seconds. The value is also carried by `node.update.commit` for the resident drain.
   `assistant.external` stays in hub.json ("hub runtime config" above).
-- The everyday entry for model settings is **Settings › Model Providers / Model Configuration** (`docs/assistant/model-config.md`): the former manages connections and credentials; the latter manages uses such as chat, classification, translation, knowledge processing, `/agent`, and scheduled tasks. Old `ai`, `inbox.*_ai`, `kb.ai` (here) and launcher defaults (`assistant.launcher` here, `machines[].launchers` in hub.json) remain as a compatibility baseline; unified-use overrides live in Postgres, not written back to either file. Without an override the original model is kept; opening settings does not migrate it to another provider.
+- The everyday entry for model settings is **Settings › Model Providers / Model Configuration** (`docs/assistant/model-config.md`): the former manages connections and credentials; the latter manages uses such as chat, classification, translation, knowledge processing, `/agent`, and scheduled tasks. Old `ai`, `inbox.*_ai`, `kb.ai` (here) and launcher defaults (`assistant.launcher` here, `machines[].launchers` in hub.json) remain as a compatibility baseline; unified-use overrides live in Postgres, not written back to either file. Without an override the original model is kept; opening settings does not migrate it to another provider. Editable [model profiles](../assistant/model-profiles.md) live alongside them in Postgres (`model_profiles` and `model_profiles.state`), keeping up to 10 bounded rollback points (with `previous` synced to the latest point for older builds) and normalizing legacy model-only profile bindings against the resolved provider baseline.
 - `ai` (no default since 2026-10-31): model for small App features calling model APIs directly (not through Claude Code): Inbox triage, drafting replies, recognizing email config from pasted text.
   When omitted, these uses automatically select a directly callable connection on the hub (with a Key in **Settings › Model Providers**, see `docs/assistant/model-config.md` ("Editing and inheritance")); only if none exist do they report "No directly callable model yet".
   `api` is `messages` (Anthropic Messages, default) or `responses` (OpenAI Responses, always streamed, compatible with relays accepting only `stream: true`);
@@ -469,6 +469,14 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
   ```json
   "agents": {
     "dispatch": { "enabled": true }
+  }
+  ```
+
+- `agents.file_transfer` (#14683): the Agents' and the assistant's `file_transfer` tool, which copies a file or a folder between the caller's computer and another of your confirmed personal computers ([file-transfer.md](../protocol/file-transfer.md) "Agents and the assistant"). **On by default**; `enabled: false` stops listing it and refuses its calls. Work computers and guest conversations never get it. Hand edits take effect as described in **Edits** above. Example turning it off:
+
+  ```json
+  "agents": {
+    "file_transfer": { "enabled": false }
   }
   ```
 

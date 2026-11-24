@@ -5,6 +5,7 @@
 import { t } from "../../i18n";
 import type { ConfigurationSource } from "../../lib/configuration/contract";
 import type { ConfigurationGuidance } from "../../lib/configuration/guidance";
+import { integrationsV2LabsSource } from "../../lib/labs-integrations-v2";
 import { todosV2LabsSource } from "../../lib/labs-todos-v2";
 import { workGuideLabsSource } from "../../lib/labs-work-guide";
 import { useChosenManager, useKnownDefault } from "../../lib/manager-choice";
@@ -31,6 +32,7 @@ function AssistantLabsSettings() {
     <>
       <div className="mb-6"><ConfigurationForm key={`work-guide:${manager}`} source={workGuideLabsSource(manager)} /></div>
       <div className="mb-6"><ConfigurationForm key={`todos-v2:${manager}`} source={todosV2LabsSource(manager)} /></div>
+      <div className="mb-6"><ConfigurationForm key={`integrations-v2:${manager}`} source={integrationsV2LabsSource(manager)} /></div>
     </>
   );
 }

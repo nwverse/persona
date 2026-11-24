@@ -2627,7 +2627,7 @@
                 "items": {
                   "type": "string"
                 },
-                "description": "abs paths of pictures/files user gave in this chat (Claude Code path or app attachment); copied to agent with updated mentions; others refused"
+                "description": "Abs paths of chat pictures/files (Claude/app); copied with updated mentions; others refused."
               },
               "expect_minutes": {
                 "type": "integer",
@@ -2646,9 +2646,13 @@
                 ],
                 "description": "Optional: human or autonomous."
               },
+              "direction_id": {
+                "type": "string",
+                "description": "Direction id."
+              },
               "part_of": {
                 "type": "string",
-                "description": "Optional request todo this is a piece of."
+                "description": "Request todo this is a piece of."
               },
               "after": {
                 "type": "array",
@@ -2712,7 +2716,7 @@
   },
   {
     "name": "task_review",
-    "description": "accepted closes work after the delivery gate (default delivery_gate=merged: park verified open PRs; linked issues must close). user_check keeps the task and Agent open until owner Pass and routes feedback to that Agent. If opted in at Start, accepted done cleans up the idle tab unless user_check. Report closed/skipped/pending; never close the tab yourself. rework caps stalled/low-ROI churn at 2 rounds (external_input/substantive_new cap at 10 total); accept with a brief note instead of bouncing for low-ROI edge cases or style nitpicks. Replace stopped Agents via agent_start. Use parked with evidence for external waits and needs_user if only the owner can contact, approve, or trigger work.\n\nFor accepted (outcome=done), include each done_when criterion once in checks (met=true, nonblank evidence), even with user_check. outcome=cannot, cancelled and no-criteria tasks are unchanged. Other verdicts can omit checks and keep progress. Report each criterion met/not_met/dropped, then also_done. Judge the scoped brief over handovers or Agent claims.\n\nGive accepted outcome/reason/link. The hub sends conclusion cards and passes verification unless user_check. needs_user can default to recommend at 24h/deadline. Irreversible or visible_to_others only remind. Recheck at 24h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.\n\nA non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and cards end.",
+    "description": "accepted closes work after the delivery gate (default delivery_gate=merged: park verified open PRs; linked issues must close). user_check keeps the task and Agent open until owner Pass and routes feedback to that Agent. If opted in at Start, accepted done cleans up the idle tab unless user_check. Report closed/skipped/pending; never close the tab yourself. rework caps stalled/low-ROI churn at 2 rounds (external_input/substantive_new cap at 10 total); accept with a brief note instead of bouncing for low-ROI edge cases or style nitpicks. Replace stopped Agents via agent_start. Use parked with evidence for external waits and needs_user if only the owner can contact, approve, or trigger work.\n\nFor accepted (outcome=done), include each done_when criterion once in checks (met=true, nonblank evidence), even with user_check. outcome=cannot, cancelled and no-criteria tasks are unchanged. Other verdicts can omit checks and keep progress. Report each criterion met/not_met/dropped, then also_done. Judge the scoped brief over handovers or Agent claims.\n\nGive accepted outcome/reason/link; pass direct PR/MR/doc URL in link for needs_user when available. The hub sends conclusion cards and passes verification unless user_check. needs_user defaults to recommend at 24h/deadline; irreversible/visible_to_others only remind. Recheck at 24h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.\n\nA non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and cards end.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2762,11 +2766,11 @@
               },
               "evidence": {
                 "type": "string",
-                "description": "what shows it is met (a link, a command's output), or what is missing"
+                "description": "proof it is met (link, command output), or what is missing"
               }
             }
           },
-          "description": "each criterion (met or not) with evidence/gap; updates persisted state, evidence, time, and supervisor. Omitted entries keep progress"
+          "description": "each criterion with evidence/gap; updates state, evidence, time, and supervisor. Omitted entries keep progress"
         },
         "note": {
           "type": "string",
@@ -2799,7 +2803,7 @@
         },
         "link": {
           "type": "string",
-          "description": "accepted/needs_user: one evidence link (PR/page/doc); defaults to task PR, note/checks link, or agent chat"
+          "description": "accepted/needs_user: direct PR/MR/doc URL when available (shown on decision card); defaults to task PR/MR, note/checks URL, or chat"
         },
         "recommend": {
           "type": "string",
@@ -2829,7 +2833,7 @@
             "properties": {
               "label": {
                 "type": "string",
-                "description": "the option in a few words, as a button says it"
+                "description": "short button label"
               },
               "leads_to": {
                 "type": "string",
@@ -2841,7 +2845,7 @@
         },
         "cost_of_waiting": {
           "type": "string",
-          "description": "needs_user (required): one sentence saying what it costs if the user does not answer soon"
+          "description": "needs_user (required): one sentence on the cost of waiting"
         },
         "question_quote": {
           "type": "string",
@@ -3671,9 +3675,13 @@
           ],
           "description": "Optional: human or autonomous."
         },
+        "direction_id": {
+          "type": "string",
+          "description": "Optional direction id."
+        },
         "project": {
           "type": "string",
-          "description": "Existing kb_list project slug/name; prefer long-term work. Only when clear; no near-duplicates."
+          "description": "Existing kb_list project slug/name; only when clear, no near-duplicates."
         },
         "part_of": {
           "type": "string",
@@ -3826,7 +3834,7 @@
   },
   {
     "name": "todo_update",
-    "description": "Update supplied fields immediately, including task to-dos; no confirmation. Omitted fields stay; \"\" clears notes/due/remind/project/part_of/audience, [] clears after. New remind notifies again. Close/reopen via todo_complete/todo_reopen.",
+    "description": "Update supplied fields immediately, including task to-dos; no confirmation. Omitted fields stay; \"\" clears notes/due/remind/project/part_of/audience/direction_id, [] clears after. New remind notifies again. Close/reopen via todo_complete/todo_reopen.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3868,6 +3876,10 @@
         "audience": {
           "type": "string",
           "description": "human, autonomous, or \"\" clears."
+        },
+        "direction_id": {
+          "type": "string",
+          "description": "Direction id, or \"\" clears."
         },
         "part_of": {
           "type": "string",
@@ -4122,6 +4134,44 @@
         }
       },
       "additionalProperties": false
+    },
+    "defer_loading": true
+  },
+  {
+    "name": "file_transfer",
+    "description": "Copy a file or a folder between this computer and another of the user's computers through Persona, in one call. Use it whenever a file you need is on another of the user's computers, or a file you made is needed on one: do not use ssh, scp, rsync or a chat upload for that, since the computers often cannot reach each other directly. Not for this computer itself: use your own file tools there. `send` copies `path` on this computer to `machine`; `fetch` copies `path` on `machine` to this computer; `list` shows the computers you can use and whether they are online, and copies nothing. Paths are absolute or start with `~/` (the home of the computer they are on). Without `dest` the copy lands in the receiving computer's receive folder under its own name, numbered when the name is taken. With `dest`, an existing folder takes it under its own name and any other path becomes its new name, with missing folders made on the way. Only the receiving computer's home is writable, and an existing name is refused unless `overwrite` is true (a folder is then merged, its files of the same name replaced). A folder is packed, sent and unpacked; links inside it are not carried. Credentials are never sent: SSH and other private keys, Persona's own credential files, sign-in files, `.env` files and the like are refused by name, and left out of a folder (the answer counts them). At most 2 GB, a folder at most 20,000 files. Both computers must be online. The call returns once the copy is complete and its SHA-256 is checked on the receiving computer, with where it is.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "direction"
+      ],
+      "properties": {
+        "direction": {
+          "type": "string",
+          "enum": [
+            "send",
+            "fetch",
+            "list"
+          ],
+          "description": "send: from this computer to machine; fetch: from machine to this computer; list: the computers you can use (copies nothing)"
+        },
+        "machine": {
+          "type": "string",
+          "description": "the other computer's id or name, as list shows it"
+        },
+        "path": {
+          "type": "string",
+          "description": "the file or folder to copy, on this computer for send or on machine for fetch: absolute or ~/…"
+        },
+        "dest": {
+          "type": "string",
+          "description": "where it goes on the receiving computer: absolute or ~/…; an existing folder takes it under its own name. Leave it out for the receive folder"
+        },
+        "overwrite": {
+          "type": "boolean",
+          "description": "replace what is already at dest (a folder is merged into); off by default, when a taken name is refused"
+        }
+      }
     },
     "defer_loading": true
   }

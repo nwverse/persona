@@ -826,6 +826,7 @@ func TestAgyPaneResumeAndTerminalControls(t *testing.T) {
 	const model = "test-model"
 	n.noteWorkAgent(context.Background(), n.hosts.Get(host.Herdr).(*herdrHost), agyTestPane, agyTestRow, home, agyAgent, agyAgent, model, "", "")
 	assertAgyResumeReport(t, f, 0, model, "", "")
+	stubAgyNativePrompt(t, n, f, agyTestPane, agyTestID)
 	agyTestCall(t, n, "session.send", agyTestRow, map[string]any{"text": "first\nsecond"})
 	agyTestCall(t, n, "session.interrupt", agyTestRow, nil)
 	assertTrace(t, f.trace("agent.prompt", "pane.send_keys", "pane.send_input"), []string{
