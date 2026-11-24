@@ -140,7 +140,7 @@ func TestAutoSupervisionOffGathersAndSchedulesNothing(t *testing.T) {
 	if mem, durable, timer := gatheredSignals(s); mem != 0 || durable != 0 || timer {
 		t.Fatalf("gathered while off: memory=%d durable=%d timer=%v", mem, durable, timer)
 	}
-	time.Sleep(4 * shortSuperviseTimings.every)
+	time.Sleep(4 * shortSuperviseTimings.every) // sleep-ok: a negative check, nothing must go out over a window several digest ticks long; there is no event to wait for
 	if got := len(f.notices()) - before; got != 0 {
 		t.Fatalf("%d supervision message(s) went out while off", got)
 	}
@@ -166,7 +166,7 @@ func TestAutoSupervisionOnAgainTakesOnlyNewEvents(t *testing.T) {
 	}
 	s.superviseTimes = shortSuperviseTimings
 	putAutoSupervision(t, s, true)
-	time.Sleep(4 * shortSuperviseTimings.every)
+	time.Sleep(4 * shortSuperviseTimings.every) // sleep-ok: a negative check over several digest ticks; no event to wait for
 	if n := f.notices(); len(n) != 0 {
 		t.Fatalf("a withdrawn signal was replayed after the switch was turned on: %q", n)
 	}
@@ -223,8 +223,8 @@ func TestAutoSupervisionOffStopsARunningDigestTimer(t *testing.T) {
 	if mem, _, timer := gatheredSignals(s); mem != 1 || !timer {
 		t.Fatalf("fixture: memory=%d timer=%v", mem, timer)
 	}
-	setAutoSupervisionQuietly(t, s, false) // no hook: the timer fires into the off switch
-	time.Sleep(4 * shortSuperviseTimings.every)
+	setAutoSupervisionQuietly(t, s, false)      // no hook: the timer fires into the off switch
+	time.Sleep(4 * shortSuperviseTimings.every) // sleep-ok: a negative check over several digest ticks; no event to wait for
 	if n := f.notices(); len(n) != 0 {
 		t.Fatalf("the timer sent %q", n)
 	}
@@ -252,7 +252,7 @@ func TestAutoSupervisionOffRechecksBeforeTakingTheGather(t *testing.T) {
 		defer close(done)
 		s.sendDigest(context.Background())
 	}()
-	time.Sleep(100 * time.Millisecond) // it is waiting for the line, past its first look
+	time.Sleep(100 * time.Millisecond) // sleep-ok: let the goroutine reach the held line; the lock exposes no signal
 	setAutoSupervisionQuietly(t, s, false)
 	s.supervise.dedupMu.Unlock()
 	select {
@@ -498,7 +498,7 @@ func TestAutoSupervisionOffCancelsNodeQueuedInput(t *testing.T) {
 	agent := proto.Session{SessionID: "s1", MachineID: "server", Status: proto.StatusWorking, Queued: []string{"typed ahead"}}
 	f.setSessions("server", queued, idle, agent)
 	s.drainRelays("server", []proto.Session{queued, idle, agent}) // on: nothing asked
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)                             // sleep-ok: a negative check, no cancel may be asked; there is no event to wait for
 	if got := cancels(); len(got) != 0 {
 		t.Fatalf("asked to cancel while on: %v", got)
 	}
@@ -524,7 +524,7 @@ func TestAutoSupervisionOffCancelsNodeQueuedInput(t *testing.T) {
 	putAutoSupervision(t, s, true)
 	n := len(cancels())
 	s.drainRelays("server", []proto.Session{late})
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond) // sleep-ok: a negative check, no cancel may be asked; there is no event to wait for
 	if len(cancels()) != n {
 		t.Fatal("asked to cancel while on again")
 	}
@@ -543,7 +543,7 @@ func TestAutoSupervisionOffKeepsLedgerReviewAndApprovals(t *testing.T) {
 		v := todoNow(s, todo.ID).Supervision
 		return v != nil && v.State == reviewPending
 	})
-	time.Sleep(3 * shortSuperviseTimings.every)
+	time.Sleep(3 * shortSuperviseTimings.every) // sleep-ok: a negative check over several digest ticks; no event to wait for
 	if n := f.notices(); len(n) != 0 {
 		t.Fatalf("a supervision message went out while off: %q", n)
 	}
