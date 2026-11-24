@@ -3,7 +3,7 @@ import { cardDismissed, cardFiled, cardSent, startFailure, type FeedItem, type T
 import { cardBucket, taskCardSlots, type TaskCardMetadata } from "./task-cards";
 import { decisionDismissed, linkedParkInteraction, parkInteractionID, reviewState, withoutParkInteraction } from "./supervision";
 import { finishedAt, hubNeedsYou, JUST_DONE_MS, openByView, supersededFailedStarts, triage } from "./todo-triage";
-import { awaitsReview, dockAgents, heldDelivery, heldForSupervisor, makeSessionLookup, openAsk, todoRank, todoStatus, withInteractionLookup, type SessionLookup, type Todo, type TodoStatus } from "./todos";
+import { awaitsReview, dockAgents, heldDelivery, heldForSupervisor, makeSessionLookup, openAsk, taskReviewDecisionAsk, todoRank, todoStatus, withInteractionLookup, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
 import { homeKey } from "./folded-rows";
 import type { Interaction, Session } from "./types";
@@ -205,8 +205,10 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     const waits = status === "failed" ? bucket === "open" && !supervised : !todo.done_at && WAITS_ON_YOU.has(status) && !held;
     const decision = taskAwaitsDecision(todo);
     const deliveryApproval = heldDelivery(todo)?.unblock === "user";
-    // the hub's view decides when there is one, so this tray, the To-dos badge and the hub's needs_you agree
-    const hub = hubNeedsYou(todo, openOf);
+    // Quiet tasks stay out of the global badge. An explicit decision can still ask the owner in chat.
+    const quietDecisionHere = todo.quiet && (isMain || todo.supervision?.supervisor === conversation) &&
+      taskReviewDecisionAsk(todo) && !input.deferred?.[decisionLaterKey(todo)];
+    const hub = hubNeedsYou(quietDecisionHere ? { ...todo, quiet: false } : todo, openOf);
     if (asks.length) asking.push({ kind: "task", key, todo, status, asks, countsOpen });
     else if (hub ?? (waits || decision || deliveryApproval)) {
       // Only the review decision is hidden; a live Agent question above still has its home.

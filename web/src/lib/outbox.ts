@@ -12,6 +12,7 @@ import { showLauncherNote, startConversation } from "./assistant-start";
 import { removeStoredValue, storedValue, storeValue } from "./compatibility";
 import { uuid } from "./format";
 import { conversationPage } from "./conversation-page";
+import { mainConversationMachine } from "./feed-cache";
 import { navigate } from "./router";
 import { getState, refreshAssistant, setOutbox } from "./store";
 import { chosenManager, noteConversation, otherManager, ownerHeaders } from "./manager-choice";
@@ -624,9 +625,10 @@ export async function askPersona(text: string): Promise<void> {
 export async function askPersonaOf(owner: string | undefined, text: string): Promise<{ sent: Promise<boolean> }> {
   const headers = ownerHeaders(owner);
   const a = await api<AssistantInfo>("/assistant", { headers });
-  if (a.machine_id && a.main) {
-    adoptConversation(owner, a.main, a.machine_id);
-    return { sent: sendToMain(a.machine_id, a.main, text, owner) };
+  const mid = mainConversationMachine(a);
+  if (mid && a.main) {
+    adoptConversation(owner, a.main, mid);
+    return { sent: sendToMain(mid, a.main, text, owner) };
   }
   const r = await startConversation({ prompt: text, main: true }, headers);
   adoptConversation(owner, r.session.session_id, r.session.machine_id);

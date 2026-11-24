@@ -274,6 +274,13 @@ export function openAsk(todo: Pick<Todo, "ask">): TodoAsk | undefined {
   return a && a.verdict && a.asked_at ? a : undefined;
 }
 
+/** The open decision a supervisor raised for the owner through task_review. */
+export function taskReviewDecisionAsk(todo: Todo): TodoAsk | undefined {
+  const ask = openAsk(todo);
+  return !todo.done_at && reviewState(todo) === "needs_user" && !decisionDismissed(todo) &&
+    ask?.outcome === "decide" && !ask.questions?.length ? ask : undefined;
+}
+
 /** What the ask's button does; none for a decision that recommends nothing: nothing for one tap to take, so it is
  *  answered in its conversation (or on its Lark card). */
 export function askTake(ask: TodoAsk): AskTake | undefined {

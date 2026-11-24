@@ -11,7 +11,8 @@ import { clock } from "../../lib/format";
 import { setAgentOpenMode } from "../../lib/agent-open";
 import { closePanel, getPanel } from "../../lib/panel";
 import { decisionLaterKey } from "../../lib/assistant-entries";
-import { putTodo, refresh, refreshTodos, reset } from "../../lib/store";
+import { parseQuote, splitQuote } from "../../lib/drafts";
+import { getState, putTodo, refresh, refreshTodos, reset } from "../../lib/store";
 import type { Todo, TodoAsk } from "../../lib/todos";
 import { AssistantActionBar } from "./Tasks";
 import * as atoms from "../../ui/atoms";
@@ -57,6 +58,7 @@ let turnError: boolean;
 let needsInput: boolean;
 let postGate: Promise<void> | undefined;
 let listStatus: number;
+let assistantStatus: number;
 let refusal: Record<string, unknown> | undefined; // a POST's error body other than the offline one
 
 async function mount() {
@@ -79,8 +81,10 @@ async function mount() {
       return new Response(JSON.stringify(refusal ?? { ok: true }), { headers: { "Content-Type": "application/json" } });
     }
     if (path.includes("/todos") && listStatus !== 200) return new Response("{}", { status: listStatus });
+    if (path.endsWith("/assistant") && assistantStatus !== 200) return new Response("{}", { status: assistantStatus });
     const body = path.includes("/feed") ? { items: feed, plans: { [plan.id]: plan }, task_cards: [{ id: `plan:${plan.id}:0`, plan_id: plan.id, index: 0, todo_id: todo.id, at, updated_at: at, state: "accepted" }] }
       : path.includes("/todos") ? { todos: [todo] }
+      : path.endsWith("/assistant") ? { machine_id: "new-chat-node", main_machine_id: "main-node", main: "main-chat", conversations: [] }
       : path.includes("/sessions") ? { sessions: [{ machine_id: "demo", session_id: "worker", title: "Demo agent", state: needsInput ? "needs_you" : "idle", status: "idle", updated_at: at, ...(turnError ? { turn_error: "Synthetic transient error", turn_error_kind: "transient" } : {}) }] } : {};
     return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
   }));
@@ -116,10 +120,12 @@ beforeEach(() => {
   needsInput = false;
   postGate = undefined;
   listStatus = 200;
+  assistantStatus = 200;
   refusal = undefined;
 });
 afterEach(() => {
   act(() => root.unmount());
+  setRoute("main-chat", null);
   host.remove();
   history.replaceState(null, "", "/");
   setAgentOpenMode("panel");
@@ -139,6 +145,53 @@ const openMenu = () => act(() => row().querySelector<HTMLButtonElement>(`button[
 const flush = () => act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
 describe("a decision in the Needs you tray", () => {
+  it("sends a quoted question to main even with a pending Other route and leaves the round answerable", async () => {
+    await mount();
+    setRoute("main-chat", todo.id, at);
+    const open = [...row().querySelectorAll("button")].find((button) => button.textContent === t("assistant-decisionrow.ask_in_main_chat"));
+    expect(open).toBeDefined();
+    act(() => open!.click());
+    const dialog = document.querySelector('[role="dialog"]')!;
+    const send = [...dialog.querySelectorAll("button")].find((button) => button.textContent === t("chat-composer.send"))!;
+    expect(send.disabled).toBe(true);
+    const input = dialog.querySelector("textarea")!;
+    const question = decision.recommend!; // even text equal to an option is only a question on this path
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, question);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    assistantStatus = 503;
+    await act(async () => send.click());
+    expect(dialog.querySelector('[role="alert"]')).not.toBeNull();
+    expect(input.value).toBe(question);
+    expect(posts).toHaveLength(0);
+    assistantStatus = 200;
+    await act(async () => { send.click(); send.click(); });
+    expect(posts).toHaveLength(1);
+    expect(posts[0].path).toBe("/api/v1/sessions/main-node/main-chat/messages");
+    expect(opened()).toBe("/persona/main-chat");
+    const message = posts[0].body as { text: string };
+    const split = splitQuote(message.text)!;
+    const quoted = parseQuote(split.quote);
+    expect(split.rest).toBe(question);
+    expect(quoted.task).toEqual({ title: todo.title, id: todo.id });
+    expect(quoted.text).toContain(decision.question);
+    for (const option of decision.options!) {
+      expect(quoted.text).toContain(`${option.label}: ${option.leads_to}`);
+    }
+    expect(quoted.text).toContain(t("assistant-brief.recommend", { option: question }));
+    expect(quoted.text).toContain(t("assistant-decisionrow.ask_discussion_context"));
+    expect(getState().todos.find((value) => value.id === todo.id)?.ask).toEqual(decision);
+    expect(row()).toBeNull(); // the discussion has the full chat viewport
+    act(() => host.querySelector<HTMLButtonElement>('[data-tray-entry="needs"]')!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('button[data-needs-row="task:decision-task"]')?.click());
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(row()?.querySelector("[data-decision-row]")).toBeTruthy();
+    });
+    expect(optionButtons().every((button) => !button.disabled)).toBe(true);
+  });
+
   it("opens a legacy manual-resume option on its terminal without answering the decision", async () => {
     ask = { ...decision, terminal_option: decision.options![0].label, resume_terminal: { machine_id: "demo", session_id: "worker" } };
     await mount();
@@ -329,7 +382,9 @@ describe("a decision in the Needs you tray", () => {
   it("defers only this decision round without writing or completing the task", async () => {
     await mount();
     const actions = row().querySelector("[data-decision-actions]")!;
-    expect([...actions.querySelectorAll("button")].map((b) => b.textContent)).toEqual([t("assistant-task-actions.later"), t("assistant-task-actions.dismiss_draft")]);
+    expect([...actions.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
+      t("assistant-task-actions.later"), t("assistant-task-actions.dismiss_draft"), t("assistant-decisionrow.ask_in_main_chat"),
+    ]);
     act(() => actions.querySelector<HTMLButtonElement>("button")!.click());
     expect(row()).toBeNull();
     expect(posts).toEqual([]);
