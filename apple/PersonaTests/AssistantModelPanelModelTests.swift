@@ -17,6 +17,7 @@ struct AssistantModelPanelModelTests {
         var switchError: APIError?
         var segmentReads = 0
         var switchRequests: [APIClient.ConversationSwitchRequest] = []
+        var pillRefreshes = 0
     }
 
     private let key = SessionKey(machineID: "box", sessionID: "main")
@@ -24,7 +25,10 @@ struct AssistantModelPanelModelTests {
     private let response = APIClient.LaunchersResponse(
         launchers: [
             Launcher(name: "claude", model: "claude-opus-5-5"),
-            Launcher(name: "team-api", model: "claude-sonnet-5-5", agent: "codex")
+            Launcher(name: "team-api", model: "claude-sonnet-5-5", agent: "codex"),
+            Launcher(name: "agy", model: "gemini", agent: "antigravity", assistant: true, source: "agy"),
+            Launcher(name: "agy-capable", model: "gemini", agent: "antigravity", assistant: true,
+                     supervisionPolicy: true, source: "agy")
         ],
         default: nil,
         unavailable: nil
@@ -59,7 +63,8 @@ struct AssistantModelPanelModelTests {
             switchConversation: { _, request in
                 recorder.switchRequests.append(request)
                 if let error = recorder.switchError { throw error }
-            }
+            },
+            refreshAssistant: { recorder.pillRefreshes += 1 }
         )
     }
 
@@ -157,9 +162,78 @@ struct AssistantModelPanelModelTests {
         #expect(recorder.kept == nil && recorder.segmentReads == 0 && recorder.switchRequests.isEmpty)
     }
 
+    @Test func claudeToAgyConfirmSwitchesAndRefreshesTheFinalPill() async throws {
+        let recorder = Recorder()
+        recorder.canSwitch = true
+        let panel = AssistantModelPanelModel(key: key, machine: machine, deps: deps(recorder))
+        await panel.load()
+
+        let staged = await panel.choose(launcher: "agy", model: "gemini", session: try session())
+        #expect(!staged && recorder.kept == nil && recorder.segmentReads == 0 && recorder.switchRequests.isEmpty)
+
+        let changed = await panel.confirmSwitch(session: try session())
+        #expect(changed && panel.switchPick == nil && panel.switchError == nil)
+        #expect(recorder.segmentReads == 1 && recorder.switchRequests.count == 1)
+        #expect(recorder.switchRequests.first?.launcher == "agy" && recorder.switchRequests.first?.model == "gemini")
+        #expect(recorder.pillRefreshes == 1 && recorder.kept == nil)
+    }
+
+    @Test func supervisedAgyToNativeClaudeKeepsTheExistingSwitchBehavior() async throws {
+        let recorder = Recorder()
+        recorder.canSwitch = true
+        recorder.switchState.supervisionRequired = true
+        let panel = AssistantModelPanelModel(key: key, machine: machine, deps: deps(recorder))
+        await panel.load()
+        let agySession = try session(launcher: "agy", agent: "antigravity")
+
+        let staged = await panel.choose(launcher: "claude", model: "claude-opus-5-5", session: agySession)
+        #expect(!staged && recorder.switchRequests.isEmpty)
+        let changed = await panel.confirmSwitch(session: agySession)
+
+        #expect(changed && panel.switchError == nil)
+        #expect(recorder.switchRequests.first?.launcher == "claude")
+        #expect(recorder.segmentReads == 1 && recorder.pillRefreshes == 1 && recorder.kept == nil)
+    }
+
+    @Test func supervisionPrecheckBlocksAnIncapableAgyTargetBeforeTheSwitchWrite() async throws {
+        let recorder = Recorder()
+        recorder.canSwitch = true
+        recorder.switchState.supervisionRequired = true
+        let panel = AssistantModelPanelModel(key: key, machine: machine, deps: deps(recorder))
+        await panel.load()
+        _ = await panel.choose(launcher: "agy", model: "gemini", session: try session())
+
+        let changed = await panel.confirmSwitch(session: try session())
+
+        #expect(!changed && !panel.switchUncertain && panel.switchPick != nil)
+        #expect(panel.switchError == String(localized: "This connection cannot receive separate task follow-up instructions."))
+        #expect(recorder.segmentReads == 1 && recorder.switchRequests.isEmpty)
+        #expect(recorder.pillRefreshes == 0 && recorder.kept == nil)
+
+        panel.cancelSwitch()
+        #expect(panel.switchPick == nil && panel.switchError == nil)
+        #expect(recorder.segmentReads == 1 && recorder.switchRequests.isEmpty && recorder.pillRefreshes == 0)
+    }
+
+    @Test func supervisionPrecheckAllowsAnAgyTargetWithTheExplicitCapability() async throws {
+        let recorder = Recorder()
+        recorder.canSwitch = true
+        recorder.switchState.supervisionRequired = true
+        let panel = AssistantModelPanelModel(key: key, machine: machine, deps: deps(recorder))
+        await panel.load()
+        _ = await panel.choose(launcher: "agy-capable", model: "gemini", session: try session())
+
+        let changed = await panel.confirmSwitch(session: try session())
+
+        #expect(changed && panel.switchError == nil)
+        #expect(recorder.switchRequests.first?.launcher == "agy-capable")
+        #expect(recorder.segmentReads == 1 && recorder.pillRefreshes == 1 && recorder.kept == nil)
+    }
+
     @Test func uncertainSwitchRetryKeepsTheExactOperation() async throws {
         let recorder = Recorder()
         recorder.canSwitch = true
+        recorder.switchState.supervisionRequired = true // Native Codex remains eligible without a runtime policy capability.
         recorder.switchError = APIError(status: 502, message: "response unconfirmed", fields: ["delivered": "unknown"])
         let panel = AssistantModelPanelModel(key: key, machine: machine, deps: deps(recorder))
         await panel.load()
@@ -170,6 +244,7 @@ struct AssistantModelPanelModelTests {
         #expect(panel.switchError?.contains("response unconfirmed") == true)
         #expect(panel.switchError?.contains("Optional(") == false)
         #expect(recorder.kept == nil && recorder.segmentReads == 1 && recorder.switchRequests.count == 1)
+        #expect(recorder.pillRefreshes == 0)
         let request = try #require(recorder.switchRequests.first)
         #expect(request.expectedEpoch == 8 && request.sourceMachineID == "box" && request.machineID == "box")
         #expect(request.launcher == "team-api" && request.model == "gpt-standard" && request.effort == "high")
@@ -179,7 +254,7 @@ struct AssistantModelPanelModelTests {
         let second = await panel.confirmSwitch(session: try session())
         #expect(second && panel.switchPick == nil && !panel.switchUncertain)
         #expect(recorder.switchRequests == [request, request])
-        #expect(recorder.segmentReads == 1 && recorder.kept == nil)
+        #expect(recorder.segmentReads == 1 && recorder.kept == nil && recorder.pillRefreshes == 1)
     }
 
     @Test func aDefinitelyUndeliveredSwitchReportsTheRefusalWithoutUncertainty() async throws {
@@ -218,8 +293,8 @@ struct AssistantModelPanelModelTests {
         #expect(body["permission_mode"] as? String == "acceptEdits")
     }
 
-    private func session() throws -> Session {
-        let json = #"{"machine_id":"box","session_id":"main","launcher":"claude","model":"opus","effort":"high","permission_mode":"acceptEdits"}"#
+    private func session(launcher: String = "claude", agent: String = "claude") throws -> Session {
+        let json = #"{"machine_id":"box","session_id":"main","launcher":"\#(launcher)","agent":"\#(agent)","model":"opus","effort":"high","permission_mode":"acceptEdits"}"#
         return try JSON.decoder.decode(Session.self, from: Data(json.utf8))
     }
 }
