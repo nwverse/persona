@@ -169,14 +169,6 @@ func TestWithdrawOnlyWhereTheCardWent(t *testing.T) {
 	if !planKept {
 		t.Fatal("an assistant card's push was forgotten after half an hour")
 	}
-	now = now.Add(ownerCardKept)
-	p.cardPushedTo("ix_c", "ipad")
-	p.withdrawals.mu.Lock()
-	_, planKept = p.withdrawals.pushed["plan_old"]
-	p.withdrawals.mu.Unlock()
-	if planKept {
-		t.Fatal("an assistant card's push is remembered past ownerCardKept")
-	}
 	p.withdrawals.gather = time.Hour // queued, not sent: what is waiting is what is checked
 	p.withdraw("ix_b")
 	p.withdrawals.mu.Lock()
@@ -189,6 +181,30 @@ func TestWithdrawOnlyWhereTheCardWent(t *testing.T) {
 	}
 	for _, q := range p.withdrawals.queue {
 		q.timer.Stop()
+	}
+}
+
+// An assistant card's push is remembered for ownerCardKept, then forgotten like any other.
+func TestAnAssistantCardsPushIsRememberedForDays(t *testing.T) {
+	p := newPusher(t.TempDir(), nil, t.Logf)
+	now := time.Now()
+	p.now = func() time.Time { return now }
+	p.ownerCardPushedTo("plan_old", "phone")
+	remembered := func() bool {
+		p.withdrawals.mu.Lock()
+		defer p.withdrawals.mu.Unlock()
+		_, ok := p.withdrawals.pushed["plan_old"]
+		return ok
+	}
+	now = now.Add(ownerCardKept - time.Minute)
+	p.cardPushedTo("ix_a", "ipad") // a push prunes what is forgotten
+	if !remembered() {
+		t.Fatal("an assistant card's push was forgotten before ownerCardKept")
+	}
+	now = now.Add(2 * time.Minute)
+	p.cardPushedTo("ix_b", "ipad")
+	if remembered() {
+		t.Fatal("an assistant card's push is remembered past ownerCardKept")
 	}
 }
 
