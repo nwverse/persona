@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { TODO_LIST_SECTIONS, type TodoSummary } from "../../../lib/todo-view-wire";
+import { TODO_LIST_SECTIONS, TODO_PHASES, type TodoSummary } from "../../../lib/todo-view-wire";
 import { TRIAGE_SECTIONS, type Triage, type TriageRule, type TriageSection } from "../../../lib/todo-triage";
 import { makeSessionLookup, type Todo } from "../../../lib/todos";
 import type { Session } from "../../../lib/types";
-import { BY_DESIGN, BOUNDARY_MS, classify, knownView, legacyOf, PAGE_ORDER, restoredAt, rowFacts, type ByDesign, type RowFacts } from "./view-legacy";
+import { BY_DESIGN, BOUNDARY_MS, classify, KNOWN_PHASES, knownView, legacyOf, PAGE_ORDER, restoredAt, rowFacts, type ByDesign, type RowFacts } from "./view-legacy";
 
 const NOW = Date.parse("2026-11-10T12:00:00Z");
 const HOUR = 3_600_000;
@@ -50,6 +50,7 @@ describe("legacyOf", () => {
   });
 
   it("reads only phases, sections and reasons this web knows", () => {
+    expect(KNOWN_PHASES).toEqual(TODO_PHASES);
     expect(knownView(view("todo", "rest"))).toBe(true);
     expect(knownView(view("todo", "rest", { phase: "a_newer_phase" }))).toBe(false);
     expect(knownView(view("later", "rest"))).toBe(false);

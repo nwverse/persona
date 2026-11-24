@@ -3,13 +3,16 @@
 // (docs/design/proposals/todos-redesign.md 6.3; docs/assistant/todo-status-sop.md "The hub's view"), so the shadow
 // (view-shadow.ts) reports only the ones nothing explains. Pure: no state, no clock of its own.
 
-import { TODO_LIST_SECTIONS, TODO_PHASES, TODO_REASONS, type TodoSummary } from "../../../lib/todo-view-wire";
+import { TODO_LIST_SECTIONS, TODO_REASONS, type TodoSummary } from "../../../lib/todo-view-wire";
 import type { Triage, TriageRule, TriageSection } from "../../../lib/todo-triage";
 import type { SessionLookup, Todo } from "../../../lib/todos";
 import { stateOf } from "../../../lib/format";
 import { usageLimitAgent } from "../../../lib/usage-limit";
 
-const PHASES: ReadonlySet<string> = new Set(TODO_PHASES);
+/** lib/todo-view-wire.ts TODO_PHASES, kept local so the shared first-screen todo-view-wire chunk stays unchanged
+ *  (view-legacy.test.ts keeps the two equal). */
+export const KNOWN_PHASES: readonly string[] = ["needs_you", "working", "waiting", "ready", "todo", "someday", "done"];
+const PHASES: ReadonlySet<string> = new Set(KNOWN_PHASES);
 const SECTIONS: ReadonlySet<string> = new Set(TODO_LIST_SECTIONS);
 const REASONS: ReadonlySet<string> = new Set(TODO_REASONS);
 
