@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // The daily recap (docs/assistant/day-recap.md "What the hub stores and returns"): a day recording's recap.json
@@ -27,19 +28,19 @@ const (
 	recapNotesFile = "recap_notes.json"
 )
 
-// Why a recap became due (RecapTarget.Reason).
+// Re-exported from recordingwire.
 const (
-	RecapDueEvening  = "evening"  // the recap time of its day
-	RecapDueComplete = "complete" // the recording became complete: the final recap
-	RecapDueCutoff   = "cutoff"   // 6 hours after its day ended, not complete: the final recap of what arrived
-	RecapDueAsked    = "asked"    // POST …/minutes
-	RecapDueRepair   = "repair"   // a PUT set a new base while a recap existed
+	RecapDueEvening  = recordingwire.RecapDueEvening
+	RecapDueComplete = recordingwire.RecapDueComplete
+	RecapDueCutoff   = recordingwire.RecapDueCutoff
+	RecapDueAsked    = recordingwire.RecapDueAsked
+	RecapDueRepair   = recordingwire.RecapDueRepair
 )
 
-// Why a final recap is final (DayRecap.FinalReason).
+// Re-exported from recordingwire.
 const (
-	FinalComplete = "complete"
-	FinalCutoff   = "cutoff"
+	FinalComplete = recordingwire.FinalComplete
+	FinalCutoff   = recordingwire.FinalCutoff
 )
 
 // RecapTarget is a due recap as it became due: its number (Recording.RecapTargets then), why, the recording's base,
@@ -93,22 +94,14 @@ type RecapSpan struct {
 	To   float64 `json:"to"`
 }
 
-// Kinds of a recap's timeline entry.
+// Re-exported from recordingwire.
 const (
-	RecapMeeting = "meeting"
-	RecapOutside = "outside"
+	RecapMeeting = recordingwire.RecapMeeting
+	RecapOutside = recordingwire.RecapOutside
 )
 
-// DayRecapEntry is one thing of the day's timeline: a meeting (one the hub knows of when Meeting is set) or what was
-// said outside them, with its points.
-type DayRecapEntry struct {
-	From    float64        `json:"from"`
-	To      float64        `json:"to"`
-	Kind    string         `json:"kind"`
-	Title   string         `json:"title"`
-	Meeting *MeetingRef    `json:"meeting,omitempty"`
-	Points  []MinutesPoint `json:"points"`
-}
+// DayRecapEntry is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type DayRecapEntry = recordingwire.DayRecapEntry
 
 // planRecap sets a day recording's RecapState from the rest: pending while a recap is due, failed once the model could
 // not write it, ready once one was written and none is due, absent before any. A trimmed one is due no more: its
@@ -399,13 +392,8 @@ func gapsWithin(gaps []CoverageGap, from, to float64) []CoverageGap {
 	return out
 }
 
-// RecapTodo is a to-do made of a recap's action, remembered whatever the version: the action's who and what
-// (recapTaskKey) and when it was said.
-type RecapTodo struct {
-	Task string  `json:"task"`
-	At   float64 `json:"at"`
-	Todo string  `json:"todo"`
-}
+// RecapTodo is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type RecapTodo = recordingwire.RecapTodo
 
 // recapTodoNear is how far apart in time two actions with the same who and what may be and still be one task: one
 // said again later in the day is another.
