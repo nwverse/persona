@@ -206,9 +206,15 @@ const fold = (s: string) => s.toLocaleLowerCase().replace(/\s+/g, "");
 export function searchSettings(query: string): { tabs: Tab[]; groups: SearchGroup[] } {
   const q = fold(query);
   if (!q) return { tabs: [], groups: [] };
+  const featureEntries = moduleSwitchEntries();
+  const [features] = featureEntries;
+  // The exact group name and its short alias both open General. The broader category hints can also contain "features".
+  if (features && [features.group, features.hint].some((label) => label && fold(label) === q)) {
+    return { tabs: [], groups: [features] };
+  }
   const has = (...texts: (string | undefined)[]) => texts.some((s) => s && fold(s).includes(q));
   return {
     tabs: [...TABS, ...enabledSettingsTabs().map((m) => m.key)].filter((k) => has(tabInfo(k).label, tabInfo(k).hint)),
-    groups: [...SEARCH_INDEX, ...moduleSwitchEntries()].filter((g) => has(g.group, g.hint)),
+    groups: [...SEARCH_INDEX, ...featureEntries].filter((g) => has(g.group, g.hint)),
   };
 }

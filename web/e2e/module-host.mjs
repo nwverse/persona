@@ -105,24 +105,29 @@ try {
 
         const search = page.getByRole("textbox", { name: settings.search_settings });
         const navigation = page.getByRole("navigation", { name: settings.categories });
-        const jump = async (query, label, anchor) => {
-          await search.fill(query);
-          await navigation.getByRole("button")
-            .filter({ has: page.getByText(nav.tab_general, { exact: true }) })
-            .filter({ has: page.getByText(label, { exact: true }) })
-            .click();
+        const landed = async (anchor) => {
           await page.getByRole("region", { name: nav.tab_general }).waitFor();
           await page.waitForFunction((anchor) => {
             const target = document.querySelector(`[data-settings-group="${anchor}"], [data-settings-row="${anchor}"]`);
             return (target?.matches("[data-settings-row]") ? target : target?.firstElementChild)?.style.boxShadow;
           }, anchor);
         };
+        const jump = async (label, anchor) => {
+          await search.fill(label);
+          await navigation.getByRole("button")
+            .filter({ has: page.getByText(nav.tab_general, { exact: true }) })
+            .filter({ has: page.getByText(label, { exact: true }) })
+            .click();
+          await landed(anchor);
+        };
         for (const [id, label] of Object.entries(labels)) {
-          await jump(label, label, `configuration-features-${id}`);
+          await jump(label, `configuration-features-${id}`);
           assert.equal(await featureSwitch(page, id).getAttribute("aria-label"), label);
           assert.equal(await featureSwitch(page, id).getAttribute("aria-checked"), "true");
         }
-        await jump(features.area_features, features.features_group, "configuration-features-modules");
+        await search.fill(features.area_features);
+        await search.press("Enter");
+        await landed("configuration-features-modules");
         await page.waitForFunction(() => {
           const group = document.querySelector('[data-settings-group="configuration-features-modules"]');
           return group && !group.firstElementChild.style.boxShadow;
@@ -141,7 +146,7 @@ try {
             await featureSwitch(other, id).and(other.locator('[aria-checked="false"]')).waitFor();
             assert.equal(await page.evaluate((key) => localStorage.getItem(key), moduleKey), JSON.stringify([id]));
             // A switched-off module still has its own search result so the user can turn it back on.
-            await jump(labels[id], labels[id], `configuration-features-${id}`);
+            await jump(labels[id], `configuration-features-${id}`);
             await toggle.click();
             await featureSwitch(other, id).and(other.locator('[aria-checked="true"]')).waitFor();
             assert.equal(await page.evaluate((key) => localStorage.getItem(key), moduleKey), null);

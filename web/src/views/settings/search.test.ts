@@ -140,7 +140,7 @@ describe("the settings search's index", () => {
     try {
       const destination = { tab: "general", anchor: "configuration-features-modules" };
       expect(matches(group)).toEqual([expect.objectContaining(destination)]);
-      expect(matches(features)).toEqual([expect.objectContaining(destination)]);
+      expect(searchSettings(features)).toEqual({ tabs: [], groups: [expect.objectContaining(destination)] });
       expect(matches(title)).toEqual([expect.objectContaining({ tab: "general", anchor: "configuration-features-sample" })]);
     } finally {
       resetModulesForTest();
