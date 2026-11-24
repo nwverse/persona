@@ -20,16 +20,19 @@ type Count struct {
 var counted = []string{"app-exported-record", "app-named-primitive", "app-lifecycle-write", "app-bridge-call"}
 
 // Ratchets is the app-* counts of every undeclared, application or library package (contracts, db and prompts left
-// out for records): it parses their production files in full. A library is counted as application code is, so
-// declaring library is no way around them: technical code holds no domain concept, and a new library starts at zero.
+// out for records), and app-named-primitive of every adapter: it parses their production files in full. A library is
+// counted as application code is, so declaring library is no way around them: technical code holds no domain
+// concept, and a new library starts at zero. An adapter owns its Record and writes it, so only its named primitives
+// are counted: declaring adapter is no way around that count either, and a new adapter starts at zero.
 func Ratchets(pkgs []*Pkg, idx Index) ([]Count, error) {
 	var out []Count
 	for _, p := range pkgs {
 		l := idx.layer(p.Path)
-		if l != undeclared && l != layerApp && l != layerSeam && l != layerLibrary {
+		adapter := l == layerAdapter
+		if !adapter && l != undeclared && l != layerApp && l != layerSeam && l != layerLibrary {
 			continue
 		}
-		records := !under(p.Rel, "internal/db") && !under(p.Rel, "internal/prompts") && !idx.contracts[p.Path]
+		records := !adapter && !under(p.Rel, "internal/db") && !under(p.Rel, "internal/prompts") && !idx.contracts[p.Path]
 		cs := map[string]*Count{}
 		for _, rule := range counted {
 			cs[rule] = &Count{Key: p.Rel, Rule: rule, Pos: first(p)}
@@ -46,7 +49,7 @@ func Ratchets(pkgs []*Pkg, idx Index) ([]Count, error) {
 				switch x := n.(type) {
 				case *ast.SelectorExpr:
 					// An adapter's Wire, called or passed on, hands application code the raw shape of a domain value.
-					if id, ok := x.X.(*ast.Ident); ok && x.Sel.Name == "Wire" {
+					if id, ok := x.X.(*ast.Ident); ok && x.Sel.Name == "Wire" && !adapter {
 						if imp, ok := imports[id.Name]; ok && idx.layer(imp.Path) == layerAdapter {
 							c := cs["app-bridge-call"]
 							c.N++
@@ -73,7 +76,7 @@ func Ratchets(pkgs []*Pkg, idx Index) ([]Count, error) {
 						}
 					}
 				case *ast.AssignStmt:
-					if x.Tok == token.DEFINE {
+					if x.Tok == token.DEFINE || adapter {
 						return true
 					}
 					for _, l := range x.Lhs {

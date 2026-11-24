@@ -301,7 +301,8 @@ func (c *coreChecks) structRules(t *typeDecl) {
 			if exported(n.Name) {
 				c.at(f, n, "core-exported-field", t.name+"."+n.Name+" is exported")
 			}
-			if many && n.Name != "_" && primitive(fl.Type) && !c.exempt(t.name+"."+n.Name, "core-primitive-field") {
+			primitive := many && n.Name != "_" && c.p.decls.primitive(fl.Type)
+			if primitive && !c.exempt(t.name+"."+n.Name, "core-primitive-field") {
 				c.at(f, n, "core-primitive-field", t.name+"."+n.Name+" is "+exprString(fl.Type))
 			}
 		}
@@ -386,18 +387,19 @@ func (c *coreChecks) signature(f *File, n ast.Node, name, recv string, ft *ast.F
 	build := top && (wordPrefix(decl.Name.Name, "New") || wordPrefix(decl.Name.Name, "Restore"))
 	wire := recv != "" && strings.HasSuffix(name, ".Wire")
 	for _, p := range ps {
-		if primitive(p) && !parse && !c.exempt(name, "core-primitive-signature") && !c.funcParam(p, decl) {
+		if c.p.decls.primitive(p) && !parse && !c.exempt(name, "core-primitive-signature") && !c.funcParam(p, decl) {
 			c.at(f, n, "core-primitive-signature", name+" takes "+exprString(p))
 		}
-		if collection(p) && !build {
+		if c.p.decls.collection(p) && !build {
 			c.at(f, n, "core-collection", name+" takes "+exprString(p))
 		}
 	}
 	for _, r := range rs {
-		if primitive(r) && exprString(r) != "bool" && !wire && !c.exempt(name, "core-primitive-signature") {
+		if c.p.decls.primitive(r) && exprString(r) != "bool" && !wire &&
+			!c.exempt(name, "core-primitive-signature") {
 			c.at(f, n, "core-primitive-signature", name+" returns "+exprString(r))
 		}
-		if collection(r) {
+		if c.p.decls.collection(r) {
 			c.at(f, n, "core-collection", name+" returns "+exprString(r))
 		}
 	}
@@ -405,7 +407,7 @@ func (c *coreChecks) signature(f *File, n ast.Node, name, recv string, ft *ast.F
 
 // funcParam says whether p is a func-typed parameter, which core-interface-param reports instead.
 func (c *coreChecks) funcParam(p ast.Expr, decl *ast.FuncDecl) bool {
-	_, ok := unwrapParam(p).(*ast.FuncType)
+	_, ok := c.p.decls.named(p).(*ast.FuncType)
 	return ok && decl != nil
 }
 
@@ -446,7 +448,7 @@ func (c *coreChecks) interfaceParams(fd *funcDecl) {
 	tps := typeParams(decl)
 	imports := c.idx.imports(f)
 	for _, p := range params(decl.Type.Params) {
-		t := unwrapParam(p)
+		t := c.p.decls.named(p) // type fetch[T any] func(...) is a func parameter as func(...) is
 		bad := false
 		switch x := t.(type) {
 		case *ast.FuncType, *ast.InterfaceType:

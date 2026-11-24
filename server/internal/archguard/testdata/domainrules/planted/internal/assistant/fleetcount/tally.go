@@ -7,14 +7,13 @@ import (
 	"github.com/nwverse/persona/server/internal/domainkit/slot"
 )
 
-// rowKind is which of TallyVisitor's calls a row is.
-type rowKind uint8
+// rowKind is which of TallyVisitor's calls a row is: a closed set over its own field, as a primitive under the
+// package's own name would not be.
+type rowKind struct{ rowKind uint8 }
 
-const (
-	agentRow rowKind = iota + 1
-	cardRow
-	agentByCardRow
-)
+func agentRow() rowKind       { return rowKind{rowKind: 1} }
+func cardRow() rowKind        { return rowKind{rowKind: 2} }
+func agentByCardRow() rowKind { return rowKind{rowKind: 3} }
 
 // row is one entry of a tally.
 type row struct {
@@ -41,11 +40,11 @@ func (t Tally) Accept(v TallyVisitor) {
 	for i := range t.tally {
 		r := &t.tally[i]
 		switch r.kind {
-		case agentRow:
+		case agentRow():
 			v.VisitAgent(r.agent, r.why, r.since)
-		case cardRow:
+		case cardRow():
 			v.VisitCard(r.card, r.why)
-		case agentByCardRow:
+		case agentByCardRow():
 			v.VisitAgentByCard(r.agent, r.card, r.why)
 		}
 	}
@@ -71,10 +70,10 @@ func AgentsNeedsYou(on Surface, agents Agents, cards Cards) Tally {
 		c.asker.Match(func(ref agentref.Ref) {
 			if at, ok := counted[ref]; ok && !asked[ref] {
 				asked[ref] = true
-				rows = append(rows, row{kind: agentByCardRow, agent: at, card: c.at, why: WhyNeedsYou()})
+				rows = append(rows, row{kind: agentByCardRow(), agent: at, card: c.at, why: WhyNeedsYou()})
 			}
 		}, func() {
-			rows = append(rows, row{kind: cardRow, card: c.at, why: WhyNeedsYou()})
+			rows = append(rows, row{kind: cardRow(), card: c.at, why: WhyNeedsYou()})
 		})
 	}
 	for i := range agents.agents {
@@ -82,7 +81,7 @@ func AgentsNeedsYou(on Surface, agents Agents, cards Cards) Tally {
 		if a.Counts(on) && a.waitsAlone() && !asked[a.ref] {
 			since := a.updated
 			a.since.Match(func(t instant.Instant) { since = t }, func() {})
-			rows = append(rows, row{kind: agentRow, agent: a.at, why: WhyNeedsYou(), since: since})
+			rows = append(rows, row{kind: agentRow(), agent: a.at, why: WhyNeedsYou(), since: since})
 		}
 	}
 	return Tally{tally: rows}

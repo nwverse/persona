@@ -631,7 +631,8 @@ func TestDomainHookScope(t *testing.T) {
 		{"internal/assistant/nofamily", []string{"core-fail-family"}},
 		// fleetcount's own code passes; what its importers do to it is its hook's business too.
 		{"internal/assistant/fleetcount", []string{"core-importers", "out-alias", "out-conversion", "out-dot-import",
-			"out-literal", "out-unsafe", "out-unsafe", "out-visitor-impl", "path-no-core"}},
+			"out-literal", "out-unsafe", "out-unsafe", "out-visitor-impl", "out-visitor-impl", "out-visitor-impl",
+			"out-visitor-impl", "out-visitor-impl", "path-no-core"}},
 	} {
 		findings, _, err := domainrules.Run(pkgs, idx, c.scope)
 		if err != nil {

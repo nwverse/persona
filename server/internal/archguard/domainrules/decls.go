@@ -304,28 +304,38 @@ var basic = map[string]bool{
 // primitive says whether a type expression is a primitive: a predeclared basic type, error or any, an empty
 // interface, a func or chan type, or a slice, array or pointer of one, a map with one as key or value, or a generic
 // type with one among its type arguments. A kit type is no wrapper that makes raw input domain input:
-// opt.Option[string] and outcome.Of[[]int, Fail] are primitives as string and []int are.
-func primitive(e ast.Expr) bool {
+// opt.Option[string] and outcome.Of[[]int, Fail] are primitives as string and []int are. A type the package declares
+// counts as what it is declared as, exported or not: an alias as its target, a named basic, func or chan type
+// (type label string) as that type, and a struct as no primitive, so a name of its own hides no primitive.
+func (d *decls) primitive(e ast.Expr) bool { return d.primitiveIn(e, map[string]bool{}) }
+
+func (d *decls) primitiveIn(e ast.Expr, seen map[string]bool) bool {
 	switch x := e.(type) {
 	case *ast.Ident:
+		if t := d.declared(x, seen); t != nil {
+			return d.primitiveIn(t, seen)
+		}
 		return basic[x.Name]
 	case *ast.ParenExpr:
-		return primitive(x.X)
+		return d.primitiveIn(x.X, seen)
 	case *ast.IndexExpr, *ast.IndexListExpr:
 		for _, a := range typeArgs(x) {
-			if primitive(a) {
+			if d.primitiveIn(a, seen) {
 				return true
 			}
 		}
+		if id, ok := genericBase(x).(*ast.Ident); ok {
+			return d.primitiveIn(id, seen) // a generic type the package declares: what it is declared as
+		}
 		return false
 	case *ast.StarExpr:
-		return primitive(x.X)
+		return d.primitiveIn(x.X, seen)
 	case *ast.ArrayType:
-		return primitive(x.Elt)
+		return d.primitiveIn(x.Elt, seen)
 	case *ast.Ellipsis:
-		return primitive(x.Elt)
+		return d.primitiveIn(x.Elt, seen)
 	case *ast.MapType:
-		return primitive(x.Key) || primitive(x.Value)
+		return d.primitiveIn(x.Key, seen) || d.primitiveIn(x.Value, seen)
 	case *ast.FuncType, *ast.ChanType:
 		return true
 	case *ast.InterfaceType:
@@ -335,21 +345,77 @@ func primitive(e ast.Expr) bool {
 }
 
 // collection says whether a type expression is a slice, array or map (or a variadic parameter), or a generic type
-// with one among its type arguments, all the way down (opt.Option[[]Agent], outcome.Of[map[Key]Agent, Fail]).
-func collection(e ast.Expr) bool {
+// with one among its type arguments, all the way down (opt.Option[[]Agent], outcome.Of[map[Key]Agent, Fail]). A type
+// the package declares counts as what it is declared as, exported or not (type rows []row is a slice).
+func (d *decls) collection(e ast.Expr) bool { return d.collectionIn(e, map[string]bool{}) }
+
+func (d *decls) collectionIn(e ast.Expr, seen map[string]bool) bool {
 	switch x := e.(type) {
+	case *ast.Ident:
+		if t := d.declared(x, seen); t != nil {
+			return d.collectionIn(t, seen)
+		}
 	case *ast.ParenExpr:
-		return collection(x.X)
+		return d.collectionIn(x.X, seen)
 	case *ast.ArrayType, *ast.MapType, *ast.Ellipsis:
 		return true
 	case *ast.IndexExpr, *ast.IndexListExpr:
 		for _, a := range typeArgs(x) {
-			if collection(a) {
+			if d.collectionIn(a, seen) {
 				return true
 			}
 		}
+		if id, ok := genericBase(x).(*ast.Ident); ok {
+			return d.collectionIn(id, seen)
+		}
 	}
 	return false
+}
+
+// declared is what a type name the package declares is declared as (an alias's target included), once per walk
+// (seen), so a type that names itself ends; nil for a name the package does not declare.
+func (d *decls) declared(id *ast.Ident, seen map[string]bool) ast.Expr {
+	t := d.types[id.Name]
+	if t == nil || seen[id.Name] {
+		return nil
+	}
+	seen[id.Name] = true
+	return t.spec.Type
+}
+
+// named is what a parameter's type is once the package's own aliases and named non-struct, non-interface types are
+// read as what they are declared as, pointers, slices, arrays, variadics and map values removed (unwrapParam) at
+// every step: func(...) for type fetch func(...) and for fetch[T] of a generic one, the type itself otherwise.
+func (d *decls) named(e ast.Expr) ast.Expr {
+	t := unwrapParam(e)
+	seen := map[string]bool{}
+	for {
+		base := t
+		if g := genericBase(t); g != nil {
+			base = g
+		}
+		id, ok := base.(*ast.Ident)
+		if !ok {
+			return t
+		}
+		td := d.types[id.Name]
+		if td == nil || td.strct != nil || td.iface != nil || seen[id.Name] {
+			return t
+		}
+		seen[id.Name] = true
+		t = unwrapParam(td.spec.Type)
+	}
+}
+
+// genericBase is the generic type an instantiation names (list for list[T]).
+func genericBase(e ast.Expr) ast.Expr {
+	switch x := e.(type) {
+	case *ast.IndexExpr:
+		return x.X
+	case *ast.IndexListExpr:
+		return x.X
+	}
+	return nil
 }
 
 // baseType is the type a type expression names, generics and pointers removed: Of for outcome.Of[T, F] with its

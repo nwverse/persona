@@ -37,3 +37,19 @@ func Lazy(w fleetcount.Why) assistantwire.Lookup { // adapter-exported-result
 func PutRow(row assistantwire.NeedsYouRow, rows assistantwire.RowSink) error {
 	return rows.Put(row)
 }
+
+// AskTitle calls what a contract's interface returns with the reason: the caller's lookup reads it.
+func AskTitle(w fleetcount.Why, d assistantwire.Documents) { // adapter-exported-result
+	d.Titles().DocTitle(WhyWord(w))
+}
+
+// OpenTitle calls what a contract's func returns with the reason: the caller's lookup reads it.
+func OpenTitle(w fleetcount.Why, open assistantwire.Opener) { // adapter-exported-result
+	open().DocTitle(WhyWord(w))
+}
+
+// PutRowVia writes a row to the sink a contract's interface returns, whose method takes only a contract, as an
+// adapter may.
+func PutRowVia(row assistantwire.NeedsYouRow, src assistantwire.RowSource) error {
+	return src.Rows().Put(row)
+}

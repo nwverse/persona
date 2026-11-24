@@ -200,7 +200,10 @@ func (c *outsideChecks) declares(p *Pkg, name string) bool {
 
 // visitorImpl is out-visitor-impl on one method: a Visit* method whose parameters name a type of an imported core
 // or the kit implements a visitor, which only adapters, testkit and a core's own tests do. The finding counts against
-// the first core the parameters name (the kit when they name no core).
+// the first core the parameters name (the kit when they name no core). A Visit* method of a generic type names only
+// its type parameters, and an instance of the type (peek[fleetcount.Why]) implements any core's visitor, so in a
+// file that imports a core or the kit it counts against the first core the file imports, by path (the kit when it
+// imports none); in a core's own test, against another core it imports.
 func (c *outsideChecks) visitorImpl(f *File, fd *ast.FuncDecl, refs map[string]ref, allowed bool) {
 	if allowed || fd.Recv == nil || !strings.HasPrefix(fd.Name.Name, "Visit") {
 		return
@@ -210,6 +213,21 @@ func (c *outsideChecks) visitorImpl(f *File, fd *ast.FuncDecl, refs map[string]r
 		pkg, _ := baseType(unwrapParam(p))
 		if r, ok := refs[pkg]; ok {
 			named = append(named, r)
+		}
+	}
+	if len(named) == 0 && genericReceiver(fd) {
+		var first *ref
+		for _, r := range refs {
+			if f.Test && core(c.p.Layer) && (r.pkg == c.p || !core(r.pkg.Layer)) {
+				continue // a core's own tests visit it, with the kit's types
+			}
+			if first == nil || core(r.pkg.Layer) && !core(first.pkg.Layer) ||
+				core(r.pkg.Layer) == core(first.pkg.Layer) && r.pkg.Rel < first.pkg.Rel {
+				first = &r
+			}
+		}
+		if first != nil {
+			named = append(named, *first)
 		}
 	}
 	if len(named) == 0 {
@@ -226,6 +244,23 @@ func (c *outsideChecks) visitorImpl(f *File, fd *ast.FuncDecl, refs map[string]r
 	}
 	recv, _ := receiverName(fd.Recv.List[0].Type)
 	c.at(f, fd.Name, "out-visitor-impl", pick.pkg.Rel, recv+"."+fd.Name.Name+" implements "+pick.name+"'s visitor")
+}
+
+// genericReceiver says whether a method's receiver is a generic type's (peek[T], *pair[K, V]).
+func genericReceiver(fd *ast.FuncDecl) bool {
+	e := fd.Recv.List[0].Type
+	for {
+		switch x := e.(type) {
+		case *ast.StarExpr:
+			e = x.X
+		case *ast.ParenExpr:
+			e = x.X
+		case *ast.IndexExpr, *ast.IndexListExpr:
+			return true
+		default:
+			return false
+		}
+	}
 }
 
 // domainType is the domain package and type a type expression names (core.T, core.T[X], (core.T)), when it names a
@@ -377,10 +412,15 @@ func (c *outsideChecks) adapterDecls() {
 			c.at(t.file, t.spec.Name, "adapter-name", c.p.Rel, c.p.Name+"."+t.name+" shadows "+core+"."+t.name)
 		}
 		c.exportedFields(t)
+		c.exportedType(t)
 	}
 	for _, v := range d.values {
-		if v.tok == token.VAR && exported(v.name.Name) {
+		switch {
+		case !exported(v.name.Name):
+		case v.tok == token.VAR:
 			c.at(v.file, v.name, "adapter-exported-result", c.p.Rel, c.p.Name+"."+v.name.Name+" is an exported variable")
+		case v.tok == token.CONST:
+			c.at(v.file, v.name, "adapter-exported-result", c.p.Rel, c.p.Name+"."+v.name.Name+" is an exported constant")
 		}
 	}
 	check := func(fd *funcDecl) {
@@ -398,7 +438,10 @@ func (c *outsideChecks) adapterDecls() {
 			// One finding per parameter, the first way out it gives: an interface's methods may give many.
 			for _, out := range c.handedBack(fd.file, p, tps) {
 				through := exprString(p)
-				if out.via != "" {
+				switch {
+				case strings.HasPrefix(out.via, "()"):
+					through += out.via // what a func type returns: "assistantwire.Opener().DocTitle"
+				case out.via != "":
 					through += " (" + out.via + ")"
 				}
 				ok, why := false, ""
@@ -446,6 +489,26 @@ func (c *outsideChecks) exportedFields(t *typeDecl) {
 				c.at(t.file, n, "adapter-exported-result", c.p.Rel, c.p.Name+"."+t.name+"."+n.Name+" is an exported field")
 			}
 		}
+	}
+}
+
+// exportedType is adapter-exported-result on an adapter's exported type that is neither a struct nor an interface: an
+// alias, or a named slice, map, array, func or chan type, hands application code a raw shape under the adapter's
+// name. Its named basic types are app-named-primitive's (Ratchets).
+func (c *outsideChecks) exportedType(t *typeDecl) {
+	if !exported(t.name) {
+		return
+	}
+	what := ""
+	switch t.spec.Type.(type) {
+	case *ast.ArrayType, *ast.MapType, *ast.FuncType, *ast.ChanType:
+		what = " is a named " + exprString(t.spec.Type)
+	}
+	if t.spec.Assign != token.NoPos {
+		what = " is an exported alias"
+	}
+	if what != "" {
+		c.at(t.file, t.spec.Name, "adapter-exported-result", c.p.Rel, c.p.Name+"."+t.name+what)
 	}
 }
 
@@ -592,12 +655,25 @@ func (c *outsideChecks) handedBack(f *File, p ast.Expr, tps map[string]bool) []t
 
 // calls is what an adapter can hand its caller's code by calling what a value of a contract's, db's or prompts' type
 // t holds, read from the type's declaration: the parameters of an interface's exported methods (an embedded
-// interface's included) and of a func type, through the type's exported and embedded fields, the elements of its pointers,
-// slices, maps and channels, and the types of the same packages it holds. Its data, written into, is plain data like
-// any the adapter returns. An interface the rule cannot read, embedded or one of knownInterfaces, is itself what goes
-// back. Another module's contract, which the rule does not read, gives nothing.
+// interface's included) and of a func type, and what can be called on what they return, through the type's exported
+// and embedded fields, the elements of its pointers, slices, maps and channels, and the types of the same packages it
+// holds. Its data, written into, is plain data like any the adapter returns. An interface the rule cannot read,
+// embedded or one of knownInterfaces, is itself what goes back. Another module's contract, which the rule does not
+// read, gives nothing.
 func (c *outsideChecks) calls(t typeIn, seen map[string]bool) []typeIn {
 	in := func(e ast.Expr) typeIn { return typeIn{e: e, f: t.f, via: t.via} }
+	// called is what a method or func of the type takes, and what the adapter can call on what it returns: the
+	// caller's code wrote both (connectorwire.Items' ItemSource returns a kbwire.ItemSource, whose DocTitle takes text).
+	called := func(ft *ast.FuncType, via string) []typeIn {
+		var out []typeIn
+		for _, a := range params(ft.Params) {
+			out = append(out, typeIn{e: a, f: t.f, via: via})
+		}
+		for _, r := range params(ft.Results) {
+			out = append(out, c.calls(typeIn{e: r, f: t.f, via: via + "()"}, seen)...)
+		}
+		return out
+	}
 	switch x := t.e.(type) {
 	case *ast.ParenExpr:
 		return c.calls(in(x.X), seen)
@@ -612,11 +688,7 @@ func (c *outsideChecks) calls(t typeIn, seen map[string]bool) []typeIn {
 	case *ast.ChanType:
 		return c.calls(in(x.Value), seen)
 	case *ast.FuncType:
-		var out []typeIn
-		for _, a := range params(x.Params) {
-			out = append(out, in(a))
-		}
-		return out
+		return called(x, t.via)
 	case *ast.InterfaceType:
 		var out []typeIn
 		for _, m := range x.Methods.List {
@@ -624,9 +696,11 @@ func (c *outsideChecks) calls(t typeIn, seen map[string]bool) []typeIn {
 				if !exported(m.Names[0].Name) {
 					continue // only the type's own package can call it
 				}
-				for _, a := range params(ft.Params) {
-					out = append(out, typeIn{e: a, f: t.f, via: m.Names[0].Name})
+				via := m.Names[0].Name
+				if t.via != "" {
+					via = t.via + "." + via // a field's or a result's method
 				}
+				out = append(out, called(ft, via)...)
 			} else {
 				out = append(out, c.callsOf(in(m.Type), seen, true)...)
 			}

@@ -264,7 +264,7 @@ internal/sessionhistory core-collection 10
 internal/sessionhistory core-constructor 8
 internal/sessionhistory core-exported-const 11
 internal/sessionhistory core-exported-field 38
-internal/sessionhistory core-interface-param 1
+internal/sessionhistory core-interface-param 2
 internal/sessionhistory core-outcome-return 2
 internal/sessionhistory core-package-var 1
 internal/sessionhistory core-params 2
