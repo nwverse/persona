@@ -6560,8 +6560,10 @@ existing outbound confirmation for the whole actionable batch; `batch_id` reads 
 
 A busy item remains in the persisted queue until its turn, background work, queued input and pending interactions have
 settled. The coordinator neither interrupts work nor sends a synthetic message. If activation completed with no durable
-input pending, it resolves that batch operation accepted; with pending input, the ordinary first-input acceptance or
-rollback protocol remains authoritative. Stored operation IDs make a manager restart replay-safe.
+input pending, it resolves that batch operation accepted and keeps its handoff for the conversation's next input, which
+is queued and carries the handoff once (#14488; a node's own send without `client_msg_id` goes on without it); with
+pending input, the ordinary first-input acceptance or rollback protocol remains authoritative. Stored operation IDs make
+a manager restart replay-safe.
 
 `POST /api/v1/assistant/conversation-switches` with `{restore_batch_id, preview?}` plans a new batch back to each
 completed item's exact saved machine, launcher, requested model, effort and permission mode. Empty model/effort retain
@@ -6577,9 +6579,12 @@ closed only after first-turn acceptance. Full/image requests and scoped subscrip
 Logical seq values remain signed-int32-safe integers. Each later segment starts at the previous segment's offset plus
 its frozen physical end. First-segment item IDs and history remain unchanged; later item IDs have a segment namespace.
 Frozen-range backfill and retired-tail appends do not rewrite logical history. A real source-generation rewrite does.
-Live spans, empty boundary bridges, history pages and reconnect backlog follow the same projection. The manager may
-report `devices.state` machine `transport_for` to retain a bus identity after a source computer is removed; the hub
-validates manager ownership and forwards only, without resolving segments.
+Live spans, empty boundary bridges, history pages and reconnect backlog follow the same projection. A source batch
+with `from_seq` past `to_seq` (a cursor from an earlier numbering of a source that renumbered under a new history, as
+agy does when a turn's export replaces its live steps) is an empty span at the source's end: the page, live event or
+backlog still reaches the reader with the logical history the rewrite changed, and the reader starts over (#14354).
+The manager may report `devices.state` machine `transport_for` to retain a bus identity after a source computer is
+removed; the hub validates manager ownership and forwards only, without resolving segments.
 
 The logical-segment client first reads
 `GET /api/v1/assistant/conversations/{id}/segments?machine_id=...` to obtain the
