@@ -36,7 +36,7 @@ func withNote(s, note string) string {
 	switch {
 	case note == "":
 		return s
-	case strings.HasPrefix(note, "（"):
+	case strings.HasPrefix(note, string(rune(0xFF08))):
 		return s + note
 	}
 	return s + " " + note

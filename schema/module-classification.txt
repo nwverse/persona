@@ -277,6 +277,8 @@ apple apple/Modules/ScreenShare screen-share
 apple apple/Modules/Voice voice
 apple apple/PersonaCallIntents voice
 apple apple/PersonaLink screen-share
+# The independent pairing/menu-bar UI belongs to the core, not the optional screen-sharing feature.
+apple apple/PersonaLink/App core
 apple apple/PersonaNotify core
 apple apple/PersonaShare core
 apple apple/PersonaTests core

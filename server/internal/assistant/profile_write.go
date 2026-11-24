@@ -320,6 +320,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.KBTopics != nil {
 			v.KBTopics = in.KBTopics
 		}
+		if in.Dashboards != nil {
+			v.Dashboards = in.Dashboards
+		}
 		if in.MainBackgroundFolded != nil {
 			v.MainBackgroundFolded = in.MainBackgroundFolded
 		}
@@ -482,6 +485,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.MeetingTranscriptionExtension != nil {
 		s.transcriptionReadinessChanged() // named again: probed again (the answer stands meanwhile)
+	}
+	if after := s.settings(ctx).Dashboards; in.Dashboards != nil && (before.Dashboards != nil && *before.Dashboards) != (after != nil && *after) {
+		s.pagesListChanged(ctx) // the sidebar's Dashboards come or go (pages_events.go)
 	}
 	if in.Main != "" && in.Main != "-" && in.Main != before.Main {
 		s.handOverMainTasks(context.WithoutCancel(ctx), before.Main, in.Main) // its open tasks follow the main conversation (main_handover.go)
