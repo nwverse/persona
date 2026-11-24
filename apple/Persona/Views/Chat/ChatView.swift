@@ -3152,7 +3152,7 @@ struct ChatView: View {
                                    message: String(localized: "This Agent stopped before it left any messages."))
                         .flippedBack().accessibilityIdentifier("chat-empty-placeholder")
                 } else if model.session(key)?.awaitingFirstMessage == true {
-                    // A Codex opened with no first message (docs/integrations/codex.md「Starting without a first message」):
+                    // A Codex opened with no first message (docs/integrations/codex.md「Standalone TUI takeover」):
                     // it waits for one, sent from here or typed in its terminal. Said once, here, as the web's note.
                     let computer = model.machine(key.machineRef)?.title ?? key.machineID
                     EmptyStateView(symbol: Theme.Icon.conversation, title: String(localized: "No messages yet"),
