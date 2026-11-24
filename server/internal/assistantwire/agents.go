@@ -26,6 +26,9 @@ type AgentsConfig struct {
 	// (docs/plans/plan-agent-dispatch.md).
 	Dispatch DispatchConfig `json:"dispatch,omitzero"`
 	A2A      A2AConfig      `json:"a2a,omitzero"`
+	// FileTransfer is manager.json agents.file_transfer: the Agents' and the assistant's file_transfer tool, moving
+	// files between the user's computers (docs/protocol/file-transfer.md "Agents and the assistant").
+	FileTransfer FileTransferConfig `json:"file_transfer,omitzero"`
 	// LauncherHealth is manager.json agents.launcher_health: checking each machine's launchers (docs/server/launcher-health.md).
 	LauncherHealth LauncherHealthConfig `json:"launcher_health,omitzero"`
 	// Review is manager.json agents.review: the independent reviewer of a supervised task's finished change (#2173,
@@ -40,10 +43,16 @@ type AgentsConfig struct {
 
 // A2AConfig defaults to the manager's confirmed personal computers. A supplied
 // list narrows that scope. PublicURL enables the authenticated HTTP interface.
+// Launch defaults to enabled (nil or true) within the allowed machine scope;
+// set Launch to false to keep A2A messaging while disabling new session launches.
 type A2AConfig struct {
 	Machines  []string `json:"machines,omitzero"`
 	PublicURL string   `json:"public_url,omitempty"`
+	Launch    *bool    `json:"launch,omitempty"`
 }
+
+// LaunchAllowed reports whether A2A may start new subagent sessions in scope (default true).
+func (c A2AConfig) LaunchAllowed() bool { return c.Launch == nil || *c.Launch }
 
 const ScopeA2A = "agents.a2a"
 
@@ -72,6 +81,16 @@ func (c DispatchConfig) Limit() int {
 	}
 	return c.MaxActive
 }
+
+// FileTransferConfig is manager.json agents.file_transfer: the file_transfer tool. On unless Enabled is false: it
+// moves files only between the user's own confirmed personal computers, at an Agent's or the assistant's call, under
+// the guards the tool's own (no overwrite unless asked, credentials refused, an audit row each).
+type FileTransferConfig struct {
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// On: the switch, on unless set false.
+func (c FileTransferConfig) On() bool { return c.Enabled == nil || *c.Enabled }
 
 // ReviewConfig is manager.json agents.review: when a supervised task's agent is judged done, a reviewer agent started
 // with Launcher (a launcher on the agent's computer), Model and Effort (its defaults when empty) and Permission (a

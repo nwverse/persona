@@ -3,7 +3,8 @@
 // its values now, CPU / memory / network / load over 1, 6 or 24 hours (hover a chart to read a moment, all follow) and
 // each core now (Linux), the system, the launchers. Its engine (which one the agents come from) follows the agents. A Mac the hub's extension cua is on for gets "Computer control" after that, and "Browser" (ego lite) while ego is on; then "iPhone control" while the extension iphone is on (a Mac or a Linux computer).
 // A Mac whose live screen can be shown (showsScreen) gets "View screen" in the top bar, the page's one way to it: it stays in view
-// while the page scrolls, and does not wait for Cua Driver, which the screen does not use.
+// while the page scrolls, and does not wait for Cua Driver, which the screen does not use. The screen is the screen-share
+// module's page of its own (core/module-host.ts `standalonePages`): while that module is off there is no button.
 import { MoveToManager } from "../ManagerParts";
 import { offlineManagerOf, useRoster } from "../../lib/managers";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -38,7 +39,8 @@ import {
 import { hubLabel, routeText } from "../../lib/mesh";
 import { machineDeployment } from "../../lib/machine-deploy";
 import { classifyConnection } from "../../lib/node-health";
-import { screenPath, showsScreen } from "../../lib/computer";
+import { SCREEN_PAGE, screenPath, showsScreen } from "../../lib/computer";
+import { standaloneOn, useModuleStates } from "../../core/module-host";
 import { osFamily } from "../../lib/machine-capabilities";
 import { openPanel } from "../../lib/panel";
 import { href, onLinkClick } from "../../lib/router";
@@ -118,6 +120,7 @@ function initialRange(): MetricRange {
 export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleSidebar: () => void }) {
   const machines = useStore((s) => s.machines) as DetailMachine[];
   const loaded = useStore((s) => s.loaded);
+  useModuleStates(); // "View screen" follows the screen page's module
   // Its agents, read as the Agents list reads them: a hub that pages that list pushes no sessions, so the store has none
   // of this computer's. A child session folds into its parent (#5120): never an agent of the computer of its own.
   const full = useFullAgentSessions();
@@ -259,7 +262,7 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
               {t("machines-machinedetail.files")}
             </Button>
           )}
-          {showsScreen(m) && (
+          {showsScreen(m) && standaloneOn(SCREEN_PAGE) && (
             <Button icon="monitor" href={screenPath(mid)} title={t("machines-machinedetail.screen_hint")}>
               {t("machines-machinedetail.screen")}
             </Button>

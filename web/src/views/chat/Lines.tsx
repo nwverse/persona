@@ -1,5 +1,5 @@
 // Transcript notices, recaps and model errors. Background continuation belongs to the normal execution summary.
-import { memo, Suspense, useMemo, useState } from "react";
+import { lazy, memo, Suspense, useMemo, useState } from "react";
 import { lineItemIds } from "../../lib/chat-search";
 import { useChatContext } from "./chat-context";
 import { useExpanded } from "./expanded";
@@ -10,10 +10,10 @@ import { isImageLimitError } from "../../lib/compact-resend";
 import type { RecoveryExhaustedView } from "../../lib/model-fallback";
 import { runAction, turnErrorFix, type TurnFix } from "../../lib/readiness";
 import { wakeSummary } from "../../lib/tasks";
-import { type ChatLine, type OpenRecap } from "../../lib/turns";
+import { isInterruptNotice, type ChatLine, type OpenRecap, type UserMessage } from "../../lib/turns";
 import { sourceLabel } from "../../lib/message-source";
 import type { Item } from "../../lib/types";
-import { Button, copyText, cx, Dialog } from "../../ui/atoms";
+import { Button, cx, Dialog } from "../../ui/atoms";
 import { ErrorDetailsText, ErrorNotice } from "../../ui/ErrorNotice";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
@@ -23,7 +23,11 @@ import { t } from "../../i18n";
 import { ScrollFold } from "./fold-scroll";
 import { lazyPage } from "../../lib/lazy-page";
 
+import { OverlayBoundary } from "../LazyOverlay";
+
+export const APIErrorDetails = lazyPage(() => import("./APIErrorDetails").then((m) => m.APIErrorDetails));
 export const RefusalNotice = lazyPage(() => import("./RefusalNotice").then((m) => m.RefusalNotice));
+const EmptyResponse = lazy(() => import("./EmptyResponse"));
 
 export interface LineProps {
   line: ChatLine;
@@ -51,6 +55,7 @@ export interface LineProps {
   offscreen?: (section: HTMLElement) => () => void;
   /** The chat's last exchange while the chat is still at work (SegmentView `busy`). */
   busy?: boolean;
+  retryEmpty?: (user: UserMessage, signal: AbortSignal) => Promise<boolean>;
   /** Only the live line: the dock owns its foreground elapsed clock (#12380). Kept out of ChatContext so a turn
    *  starting or ending does not invalidate finished exchanges (#12446). */
   dockTurnClock?: boolean;
@@ -65,7 +70,7 @@ export const ChatLineView = memo(function ChatLineView(props: LineProps) {
   );
 });
 
-function LineBody({ line, mid, sid, streaming, expandFold, assistant, launcher, fix, turnErrorCode, limit, exhausted, trace, offscreen, busy, dockTurnClock }: LineProps) {
+function LineBody({ line, mid, sid, streaming, expandFold, assistant, launcher, fix, turnErrorCode, limit, exhausted, trace, offscreen, busy, retryEmpty, dockTurnClock }: LineProps) {
   switch (line.kind) {
     case "supervision":
       return <SupervisionLine line={line} mid={mid} sid={sid} streaming={streaming} expandFold={expandFold} assistant={assistant} dockTurnClock={dockTurnClock} />;
@@ -82,6 +87,9 @@ function LineBody({ line, mid, sid, streaming, expandFold, assistant, launcher, 
           expandFold={expandFold}
           offscreen={offscreen}
           busy={busy}
+          beforeWords={line.seg.emptyResponse && !busy && !streaming?.trim() && line.seg.user && (
+            <Suspense fallback={null}><EmptyResponse user={line.seg.user} onRetry={retryEmpty} /></Suspense>
+          )}
           dockTurnClock={dockTurnClock}
         />
       );
@@ -148,7 +156,7 @@ function LineNotice({ item, assistant }: { item: Item; assistant?: boolean }) {
       </div>
     );
   }
-  const text = item.text ?? "";
+  const text = isInterruptNotice(item) ? t("chat-chatview.interrupted") : item.text ?? "";
   if (!text.includes("\n") && text.length <= 60) {
     return (
       <div className="flex justify-center">
@@ -401,38 +409,12 @@ function APIErrorCard({ info, count, at, onRetry, onEditLastMessage, onCompactAn
         </>
       }
       details={
-        <div className="flex flex-col gap-1.5">
-          {info.requestId && <Field label={t("chat-lines.request_id")} value={info.requestId} />}
-          {info.session && <Field label="Session" value={info.session} />}
-          {at && <Field label={t("chat-lines.time")} value={clock(at)} copy={false} />}
-          {info.status !== undefined && <Field label={t("chat-lines.status")} value={String(info.status)} copy={false} />}
-          {count > 1 && <Field label={t("chat-lines.repeated")} value={t("chat-lines.api_repeated", { count })} copy={false} mono={false} />}
-          {exhausted?.tried && (
-            <div className="min-w-0 text-label leading-5 [overflow-wrap:anywhere] text-ink-2" data-testid="recovery-exhausted-tried">
-              {t("chat-modelfallback.exhausted_tried", { models: exhausted.tried })}
-            </div>
-          )}
-          <ErrorDetailsText text={info.raw} />
-          <button type="button" onClick={() => copyText(info.raw)} className="touch-hit flex w-fit items-center gap-1 text-[12px] font-medium whitespace-nowrap text-accent-ink hover:underline">
-            <Icon name="copy" size={12} />
-            {t("chat-lines.copy_raw")}
-          </button>
-        </div>
+        <OverlayBoundary open onClose={() => {}} fallback={<ErrorDetailsText text={info.raw} />}>
+          <Suspense fallback={<ErrorDetailsText text={info.raw} />}>
+            <APIErrorDetails info={info} count={count} at={at} exhausted={exhausted} />
+          </Suspense>
+        </OverlayBoundary>
       }
     />
-  );
-}
-
-function Field({ label, value, copy = true, mono = true }: { label: string; value: string; copy?: boolean; mono?: boolean }) {
-  return (
-    <div className="flex min-w-0 items-center gap-2 text-[12px] leading-5">
-      <span className="w-20 shrink-0 truncate text-ink-3">{label}</span>
-      <span className={cx("min-w-0 truncate text-ink-2", mono && "font-mono")}>{value}</span>
-      {copy && (
-        <button type="button" onClick={() => copyText(value)} aria-label={t("chat-lines.copy_field", { label })} className="flex size-5 shrink-0 items-center justify-center rounded-[5px] text-ink-3 hover:bg-hover-2 hover:text-ink">
-          <Icon name="copy" size={11} />
-        </button>
-      )}
-    </div>
   );
 }

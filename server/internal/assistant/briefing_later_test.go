@@ -11,8 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
+
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -150,8 +151,8 @@ func TestBriefHandledButtonOfTheCard(t *testing.T) {
 	if first.LaterTotal != 2 {
 		t.Fatalf("later: %d", first.LaterTotal)
 	}
-	press := func(id string) *feishubot.CardResponse {
-		var a feishubot.CardAction
+	press := func(id string) *botcard.CardResponse {
+		var a botcard.CardAction
 		a.Action.Value = map[string]any{"a": "later_done", "id": id}
 		a.Context.MessageID = "om_brief_1"
 		return e.s.botCardAction(ctx, &a, "")
@@ -280,8 +281,8 @@ func TestBriefLaterRouteOnAStoreFailure(t *testing.T) {
 		s.ServeHTTP(rec, httptest.NewRequest("POST", "/api/v1/later/"+id+"/handled", nil))
 		return rec.Code
 	}
-	press := func(s *Service, id string) *feishubot.CardResponse {
-		var c feishubot.CardAction
+	press := func(s *Service, id string) *botcard.CardResponse {
+		var c botcard.CardAction
 		c.Action.Value = map[string]any{"a": "later_done", "id": id}
 		return s.botCardAction(ctx, &c, "")
 	}
@@ -296,9 +297,9 @@ func TestBriefLaterRouteOnAStoreFailure(t *testing.T) {
 		}
 	}
 
-	e.st.failPut = errors.New("database unavailable")
+	e.st.setFailPut(errors.New("database unavailable"))
 	failed(e.s, "not written")
-	e.st.failPut = nil
+	e.st.setFailPut(nil)
 
 	restarted := newBoardEnvOn(t, e.st) // its to-dos are in memory: the question's one is still open
 	restarted.s.todos.todos["todo_a"] = &Todo{ID: "todo_a", Title: "todo_a", Origin: "conv1"}

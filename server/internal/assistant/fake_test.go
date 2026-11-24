@@ -87,6 +87,8 @@ type fakeHub struct {
 	itemsFail      int                          // session.items fails this many more times (then recovers)
 	itemsFailPlain int                          // one-turn completion reads without lazy_images fail this many times
 	items          []proto.Item                 // session.items answers this
+	sentItems      map[string][]proto.Item      // user transcript items written by successful assistant.send calls, by session_id
+	omitSentItems  bool                         // suppress sentItems writes to simulate RPC success without a transcript item
 	page           func(turns int) []proto.Item // when set, session.items answers with this instead (a real transcript's PageTurns)
 	pageTurns      bool                         // and only the last n turns of it to "turns": n, as the node does (else all of it)
 	itemsPage      int                          // > 0: session.items with after_seq pages them by seq, this many a page
@@ -127,6 +129,7 @@ type fakeHub struct {
 	failStart    error
 	refuseUltra  error            // session.start's answer to a start that asks for ultracode (a node refusing it, #3596)
 	refuseGoal   error            // session.start's answer to a start that carries a goal (a node too old for it)
+	refuseHost   map[string]error // session.start's answer to a start naming that host (a node whose Antigravity companion went away)
 	startFailed  string           // the StartError of the sessions session.start answers (the launcher failed in its new tab)
 	worktrees    []map[string]any // worktree.prepare / worktree.create params, {"method": …} added
 	failWorktree error            // worktree.create's answer when set
@@ -262,6 +265,19 @@ func (f *fakeHub) Hello(context.Context) (Hello, error) {
 		h.Models = in.hubModels()
 	}
 	return h, nil
+}
+
+// setHello updates the hub's hello under f.mu so tests can mutate it after a
+// Service has started background work without racing against Hello.
+func (f *fakeHub) setHello(fn func(*Hello)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn(&f.hello)
+}
+
+// setLocale sets the hub hello's locale under f.mu.
+func (f *fakeHub) setLocale(locale string) {
+	f.setHello(func(h *Hello) { h.Locale = locale })
 }
 
 // deviceCallsForTest records calls made with the test's context under fakeHub.mu.
@@ -502,6 +518,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			return json.Marshal(map[string]any{"items": page, "more_after": more})
 		}
 		items := f.items
+		if sid, _ := a["session_id"].(string); sid != "" && len(f.sentItems[sid]) > 0 {
+			items = append(slices.Clone(items), f.sentItems[sid]...)
+		}
 		if n, _ := a["turns"].(float64); f.pageTurns && n > 0 {
 			items = lastTurns(items, int(n))
 		}
@@ -694,6 +713,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if g, _ := a["goal"].(string); f.refuseGoal != nil && g != "" {
 			return nil, f.refuseGoal
 		}
+		if h, _ := a["host"].(string); f.refuseHost[h] != nil {
+			return nil, f.refuseHost[h]
+		}
 		if f.onStart != nil {
 			f.onStart(f, a) // the node changes state (for example its session list) while handling this start
 		}
@@ -784,6 +806,22 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if f.assistantAnswer != nil {
 			maps.Copy(out, f.assistantAnswer(a))
 		}
+		if !f.omitSentItems && a[holdPushesParam] == true {
+			if text, _ := a["text"].(string); text != "" {
+				target, _ := out["session_id"].(string)
+				if target == "" {
+					target = id
+				}
+				if f.sentItems == nil {
+					f.sentItems = map[string][]proto.Item{}
+				}
+				item := proto.Item{Seq: len(f.sentItems[target]) + 1, Role: "user", Kind: proto.KindText, Text: text, TS: time.Now()}
+				if cid, _ := a["client_msg_id"].(string); cid != "" {
+					item.ClientMsgID = cid
+				}
+				f.sentItems[target] = append(f.sentItems[target], item)
+			}
+		}
 		return json.Marshal(out)
 	}
 	return json.RawMessage(`{}`), nil
@@ -846,7 +884,9 @@ func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, erro
 		return json.Marshal(map[string]any{"settings": []Setting{{Key: "inbox.rules", Title: "收件箱分拣规则", About: "the rules",
 			Value: "a string", Actions: []string{"get", "set"}}}})
 	case AppSettings + " " + AppTool:
-		return json.Marshal(proto.TextResult("the hub's: "+string(p.Params), false))
+		if f.apps[p.AppID+" "+p.Method] == nil { // else the test's answer (answerApp), below
+			return json.Marshal(proto.TextResult("the hub's: "+string(p.Params), false))
+		}
 	case AppPlugins + " " + assistantwire.PluginsPresets:
 		return json.Marshal(map[string]any{"presets": f.presets})
 	case AppPlugins + " " + assistantwire.PluginsVoice:
@@ -1079,10 +1119,45 @@ type memStore struct {
 	puts    int
 	// failSetting: what reading a setting fails with (nil: it reads; set through setFailSetting).
 	failSetting error
-	// failPut: what writing settings fails with (nil: it writes); nothing is written then.
+	// failPut: what writing settings fails with (nil: it writes; set through setFailPut); nothing is written then.
 	failPut error
 	// failKeys: what reading one key fails with, the other keys still reading (set through failKey).
 	failKeys map[string]error
+}
+
+// rawSetting returns a cloned copy of the raw JSON bytes stored for key under m.mu.
+func (m *memStore) rawSetting(key string) ([]byte, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	raw, ok := m.vals[key]
+	if !ok {
+		return nil, false
+	}
+	return slices.Clone(raw), true
+}
+
+// setRawSetting stores raw JSON bytes directly for key under m.mu without incrementing puts (for seeding raw or corrupt JSON).
+func (m *memStore) setRawSetting(key string, raw []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.vals == nil {
+		m.vals = map[string][]byte{}
+	}
+	m.vals[key] = slices.Clone(raw)
+}
+
+// putCount returns the number of settings writes recorded under m.mu.
+func (m *memStore) putCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.puts
+}
+
+// snapshotRaw captures putCount and a cloned copy of key's stored JSON bytes atomically under m.mu.
+func (m *memStore) snapshotRaw(key string) (int, []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.puts, slices.Clone(m.vals[key])
 }
 
 // setFailSetting makes reading every setting fail with err from now on; nil reads them again. It takes the lock, as the
@@ -1110,6 +1185,12 @@ func (m *memStore) failKey(key string, err error) {
 
 // noPlans is a store without the task_plans and assistant_feed tables.
 type noPlans struct{}
+
+func (m *memStore) PutPlacement(ctx context.Context, p db.PlacementRow) error {
+	return m.PutSetting(ctx, "placement."+p.ID, p.Decision)
+}
+
+func (noPlans) PutPlacement(context.Context, db.PlacementRow) error { return nil }
 
 func (noPlans) CreateTaskPlan(context.Context, db.TaskPlanRow) error {
 	return errors.New("no task_plans here")
@@ -1369,10 +1450,14 @@ func newServiceOn(t testing.TB, f *fakeHub, st Store) *Service {
 // withSettings saves f.settings as s's own (none: s keeps what it has), and gives the hub's hello the fake model.
 func withSettings(t testing.TB, f *fakeHub, s *Service) *Service {
 	t.Helper()
+	installTestTrackKinds(s)
 	f.fakeModel(t)
 	// These tests are about what a plan does once it exists; what task_plan requires of a brief is task_brief_test.go's,
 	// which turns this off.
 	s.briefsOptional = true
+	// And they start the main conversation's plans from their cards: that a supervisor's plan starts at once is
+	// plan_owner_step_test.go's, which turns this off.
+	s.mainPlansWait = true
 	// And about what a supervisor does with its tasks, told to the main conversation: the background supervisor that
 	// takes them by default is supervise_background_test.go's, which turns this off.
 	s.noBackground = true

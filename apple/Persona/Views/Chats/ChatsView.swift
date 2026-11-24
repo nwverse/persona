@@ -230,6 +230,8 @@ struct ChatsView: View {
     @State private var spaceAt: [Int: String] = [:]
     /// Opens a space's page from a chat on this page (`\.openSpace`): the same object for the page's life (#10303).
     @State private var spaceOpener = SpaceOpener()
+    /// Opens a parent session focused on Session Overview's Subagents section from a row's rollup subtitle (P5).
+    @State private var subagentsOpener = SubagentsOverviewOpener()
     @State private var query = ""
     @State private var searching = false
     /// What was searched for when a result was opened: closing the search empties the system field (our text stays,
@@ -415,6 +417,13 @@ struct ChatsView: View {
         .animation(Theme.Motion.state, value: path.isEmpty)
         .environment(\.openSpace, spaceOpener.set { space in
             if spaceAt[path.count - 2] == space { path.removeLast() } else { pushSpace(space) }
+        })
+        .environment(\.openSubagentsOverview, subagentsOpener.set { key in
+            #if os(iOS)
+            AgentMenuRouting.shared.open(.subagents, at: key)
+            #endif
+            if searching { searching = false }
+            openFromList(key)
         })
     }
 
@@ -924,6 +933,8 @@ private struct AgentsList: View {
     /// The grouping in use (`DevGrouping.resolved`).
     private var grouping: DevGrouping { DevGrouping.resolvedNow(storedGrouping) }
     @StoredValue("dev.sort") private var sort: AgentSort = .state
+    /// Opt-in By Repository toggle (#14607): off by default, aligned with Android and Web.
+    @StoredValue("dev.showEmptyWorkspaces") private var showEmptyWorkspaces = false
     /// Compact List: one line per agent.
     @StoredValue("dev.compact") private var compact = false
     /// How a row with the agent's latest words is drawn otherwise (#2530, Settings › Appearance › Layout).
@@ -1046,7 +1057,7 @@ private struct AgentsList: View {
         return .init(grouping: grouping.rawValue, sort: sort.rawValue, filter: quick, query: query,
                      searchScope: searchScope, searchAsCode: searchAsCode,
                      machine: machineFilter, harness: harnessFilter, project: projectFilter, model: modelFilter,
-                     pinnedOnly: pinnedOnly, hub: hubFilter, multiHub: model.isMultiHub, kept: kept,
+                     pinnedOnly: pinnedOnly, showEmptyWorkspaces: showEmptyWorkspaces, hub: hubFilter, multiHub: model.isMultiHub, kept: kept,
                      held: model.heldInList, heldJustFinished: model.heldJustFinished, preferences: preferences,
                      pagedGroups: Set(model.sessionLists.lists.filter { $0.value.paged }.keys),
                      listQuery: listQuery, sideFold: model.sideFoldGroups)

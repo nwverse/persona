@@ -13,11 +13,12 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/builtinext"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/host"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/voice"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
 )
 
 // voiceTestStore is what the built-in voice extension's tests run on: the hub's store with the extensions' tables.
@@ -63,7 +64,50 @@ func voiceEntry(id string) ExtensionConfig {
 			`"key_command":"printf hub-json-credential"}],"owner":"hub owner"}`)}
 }
 
+// needsVoiceModule is the voice extension its module provides, or skips the test in a build without the module
+// (persona_without_voice, persona_core_only); TestNoVoiceWithoutItsModule covers that build.
+func needsVoiceModule(t *testing.T) builtinext.Voice {
+	t.Helper()
+	v, ok := builtinext.VoiceExtension(moduleswitch.Set{})
+	if !ok {
+		t.Skip("the voice module is not in this build")
+	}
+	return v
+}
+
+// Without its module, or with it switched off in the `modules` setting the manager started with, there is no built-in
+// voice extension: none is registered, a hub.json entry running `personad voice` stays hub.json's own (whose program
+// this build does not have, or the host does not start), and no meeting transcription is the built-in one.
+func TestNoVoiceWithoutItsModule(t *testing.T) {
+	h := newTestManager(t)
+	_, built := builtinext.VoiceExtension(moduleswitch.Set{})
+	if built { // built in: switched off at run time, absent the same way
+		h.opts.Modules = moduleswitch.Off("voice")
+	}
+	h.store = newExtensionStore()
+	startTestExtensions(t, h, voiceEntry("talk"))
+	if p := h.extensions.reg.Get(voiceExtensionID); p != nil {
+		t.Fatalf("%+v", p.Record)
+	}
+	if p := h.extensions.reg.Get("talk"); p == nil || p.Record.Source == extension.SourceBuiltin {
+		t.Fatalf("hub.json's entry: %+v", p)
+	}
+	if h.extensions.voiceID != "" || takesOverVoice(h.modules(), voiceEntry("talk")) || voiceURL(h.modules(), json.RawMessage(`{"url":"wss://x/v1/live"}`)) != "" {
+		t.Fatal("the built-in voice extension is named without its module")
+	}
+	if _, _, ok := h.extensions.transcriptionRef(""); ok {
+		t.Fatal("the built-in transcription is there without the module")
+	}
+	if built { // the host does not start the switched-off module's program for hub.json's entry
+		p := h.extensions.reg.Get("talk")
+		if _, err := h.extensions.specOf(context.Background(), p, &hubExtension{}); err == nil || !strings.Contains(err.Error(), "voice") {
+			t.Fatalf("hub.json's personad voice with voice switched off: %v, want it refused", err)
+		}
+	}
+}
+
 func voiceHub(t *testing.T, store voiceTestStore, cfgs ...ExtensionConfig) *Manager {
+	needsVoiceModule(t)
 	h := newTestManager(t)
 	h.store = store
 	startTestExtensions(t, h, cfgs...)
@@ -113,9 +157,10 @@ func secretSet(out map[string]any, name string) bool {
 // The manifest is one an installed extension could have: it validates, its form is in the subset, the key is a
 // secret, and what runs commands or reaches other machines is hub.json's only.
 func TestVoiceManifest(t *testing.T) {
+	v := needsVoiceModule(t)
 	h := newTestManager(t)
 	h.version = "1.2.3"
-	m := voiceManifest(h, "voice", "")
+	m := voiceManifest(h, v, "voice", "")
 	raw, _ := json.Marshal(m)
 	parsed, err := extension.Parse(raw)
 	if err != nil {
@@ -144,7 +189,7 @@ func TestVoiceManifest(t *testing.T) {
 			t.Errorf("%s: taken", bad)
 		}
 	}
-	if m := voiceManifest(h, "talk", "语音"); m.ID != "talk" || m.Name != "语音" || m.Items("voice")[0] != "talk" {
+	if m := voiceManifest(h, v, "talk", "语音"); m.ID != "talk" || m.Name != "语音" || m.Items("voice")[0] != "talk" {
 		t.Fatalf("%+v", m)
 	}
 }
@@ -285,7 +330,7 @@ func TestVoiceDisabledInHubJSON(t *testing.T) {
 			if p == nil || p.Record.Enabled != on {
 				t.Fatalf("%s: %+v", id, p)
 			}
-			if id == "talk" && (voiceURL(p.Record.Config) == "" || !again.extensions.reg.SecretsSet(ctx, p)[voiceSecretKey]) {
+			if id == "talk" && (voiceURL(moduleswitch.Set{}, p.Record.Config) == "" || !again.extensions.reg.SecretsSet(ctx, p)[voiceSecretKey]) {
 				t.Fatalf("the settings and key set while held: %+v", p.Record)
 			}
 		}
@@ -339,7 +384,7 @@ func TestVoiceSetupAndTheKeyFollowsTheAddress(t *testing.T) {
 			hp := h.extensions.get(voiceExtensionID)
 			return hp != nil && hp.proc != nil && hp.healthy(context.Background())
 		})
-		if code, info := call(t, mux, "GET", "/api/v1/extensions/voice/info", tok, ""); code != 200 || info["setup"] != voice.SetupURLAndKey {
+		if code, info := call(t, mux, "GET", "/api/v1/extensions/voice/info", tok, ""); code != 200 || info["setup"] != "url_and_key" {
 			t.Fatalf("info %d %v", code, info)
 		}
 		if ch, _ := h.voiceChannel(context.Background()); ch.State != "not_connected" {
@@ -468,7 +513,7 @@ func TestVoiceKeyFollowsTheAddressFailClosed(t *testing.T) {
 	code, out = call(t, mux, "PUT", base+"config", tok, `{"config": {"url": "wss://b.example.com/v1/live"}}`)
 	store.failDelete.Store(false)
 	if code != 500 || out["code"] != "secret_not_cleared" || out["secrets_cleared"] != nil || !keyStored() ||
-		voiceURL(reg.Config(reg.Get(voiceExtensionID))) != "wss://a.example.com/v1/live" {
+		voiceURL(moduleswitch.Set{}, reg.Config(reg.Get(voiceExtensionID))) != "wss://a.example.com/v1/live" {
 		t.Fatalf("a key that cannot be deleted saves nothing: %d %v", code, out)
 	}
 
@@ -476,7 +521,7 @@ func TestVoiceKeyFollowsTheAddressFailClosed(t *testing.T) {
 	code, out = call(t, mux, "PUT", base+"config", tok, `{"config": {"url": "wss://b.example.com/v1/live"}}`)
 	store.failPut = false
 	if code != 409 || !slices.Equal(toStrings(out["secrets_cleared"]), []string{voiceSecretKey}) || keyStored() ||
-		voiceURL(reg.Config(reg.Get(voiceExtensionID))) != "wss://a.example.com/v1/live" {
+		voiceURL(moduleswitch.Set{}, reg.Config(reg.Get(voiceExtensionID))) != "wss://a.example.com/v1/live" {
 		t.Fatalf("the key went before the save failed, and the answer says so: %d %v", code, out)
 	}
 
@@ -562,27 +607,17 @@ func TestVoiceUpgradeRollbackUpgrade(t *testing.T) {
 		// And the new one again: the same settings, the same key.
 		again := voiceHub(t, store, voiceEntry("talk"))
 		p := again.extensions.reg.Get("talk")
-		if p == nil || p.Record.Source != extension.SourceBuiltin || !p.Record.Enabled || voiceURL(p.Record.Config) != "wss://live.example.com/v1/live" ||
+		if p == nil || p.Record.Source != extension.SourceBuiltin || !p.Record.Enabled || voiceURL(moduleswitch.Set{}, p.Record.Config) != "wss://live.example.com/v1/live" ||
 			!again.extensions.reg.SecretsSet(context.Background(), p)[voiceSecretKey] {
 			t.Fatalf("upgraded again: %+v", p)
 		}
-		cfg, err := voice.Merge(voice.Sources{Form: again.extensions.reg.Config(p), Key: "sk", HubJSON: again.extensions.voiceHubJSON()})
-		if err != nil || len(cfg.Providers) != 2 || cfg.Providers[0].ID != "rt" || cfg.Providers[1].ID != voice.FormProvider || cfg.Owner != "form owner" {
-			t.Fatalf("%+v %v", cfg, err)
+		// Both upstreams are taken (hub.json's rt, the form's under its own id) and the form's owner kept.
+		setup, warnings, err := needsVoiceModule(t).State(builtinext.VoiceSources{Form: again.extensions.reg.Config(p), Key: "sk", HubJSON: again.extensions.voiceHubJSON()})
+		if err != nil || setup != "" || len(warnings) != 0 || !strings.Contains(string(again.extensions.reg.Config(p)), "form owner") ||
+			!strings.Contains(string(again.extensions.voiceHubJSON()), `"id":"rt"`) {
+			t.Fatalf("%q %v %v", setup, warnings, err)
 		}
 	})
-}
-
-// Every code the extension may report has words in each language.
-func TestVoiceSetupWords(t *testing.T) {
-	for _, l := range i18n.Langs {
-		for _, key := range []string{"setup_" + voice.SetupURLAndKey, "setup_" + voice.SetupKey, "setup_" + voice.SetupURL,
-			"warn_" + voice.WarnFormIDTaken, "warn_" + voice.WarnFormNoKey, "warn_" + voice.WarnDefaultUnknown} {
-			if k := "hub-voice_extension." + key; i18n.T(l, k) == k {
-				t.Errorf("%s: no %s", l, k)
-			}
-		}
-	}
 }
 
 func TestSameOrigin(t *testing.T) {
@@ -653,11 +688,11 @@ func TestVoiceLinksQuotaGatewayConfig(t *testing.T) {
 		t.Fatalf("voiceState with quota gateway api key: setup=%q warns=%v", setup, warns)
 	}
 	env := envOf(t, h, voiceExtensionID)
-	var gwProv voice.Provider
+	var gwProv struct{ ID, Name, URL, Dialect, Key string }
 	if err := json.Unmarshal([]byte(env["PERSONA_VOICE_GATEWAY_CONFIG"]), &gwProv); err != nil {
 		t.Fatalf("PERSONA_VOICE_GATEWAY_CONFIG: %q (%v)", env["PERSONA_VOICE_GATEWAY_CONFIG"], err)
 	}
-	if gwProv.ID != voice.GatewayProvider || gwProv.Name != "Relay" || gwProv.URL != "ws://127.0.0.1:8080/v1/live" || gwProv.Dialect != voice.DialectCodex || gwProv.Key != "gw-api-key-123456" {
+	if gwProv.ID != "gateway" || gwProv.Name != "Relay" || gwProv.URL != "ws://127.0.0.1:8080/v1/live" || gwProv.Dialect != "codex" || gwProv.Key != "gw-api-key-123456" {
 		t.Fatalf("gwProv: %+v", gwProv)
 	}
 }

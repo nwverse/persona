@@ -391,6 +391,42 @@ func (d *DB) ActivateConversationSegment(ctx context.Context, machine, session, 
 	})
 }
 
+// AcceptIdleConversationSwitch accepts an activated batch operation only while
+// no real input needs the first-turn delivery/rollback protocol. The input
+// check and outcome share the logical row lock, so an input arriving at the
+// boundary is either preserved for that protocol or queued after acceptance.
+func (d *DB) AcceptIdleConversationSwitch(ctx context.Context, machine, session, operation string, expectedEpoch int64) (accepted bool, err error) {
+	err = conversationTransaction(ctx, d, func(tx pgx.Tx) error {
+		var epoch int64
+		if err := tx.QueryRow(ctx, `SELECT epoch FROM logical_conversations WHERE machine_id=$1 AND session_id=$2 AND deleted_at IS NULL FOR UPDATE NOWAIT`, machine, session).Scan(&epoch); err != nil {
+			return err
+		}
+		var phase string
+		var recordedExpected int64
+		if err := tx.QueryRow(ctx, `SELECT phase,expected_epoch FROM conversation_switches WHERE logical_machine=$1 AND logical_session=$2 AND operation_id=$3`, machine, session, operation).Scan(&phase, &recordedExpected); err != nil {
+			return err
+		}
+		if phase == "accepted" {
+			accepted = true
+			return nil
+		}
+		if phase != "active" || recordedExpected != expectedEpoch || epoch != expectedEpoch+1 {
+			return ErrConversationEpoch
+		}
+		pending, err := conversationInputPending(ctx, tx, machine, session)
+		if err != nil || pending {
+			return err
+		}
+		// No input carried the handoff: it stays for the conversation's next one (ConversationPendingHandoff, #14488).
+		if err := resolveConversationSwitch(ctx, tx, machine, session, operation, "accepted", "", true); err != nil {
+			return err
+		}
+		accepted = true
+		return nil
+	})
+	return accepted, err
+}
+
 // ResolveConversationSwitch is a forward-only outcome. The source is marked for
 // closure only after acceptance; a definite rejection restores it at a new epoch.
 func (d *DB) ResolveConversationSwitch(ctx context.Context, machine, session, operation, outcome, reason string) error {
@@ -403,6 +439,13 @@ func (d *DB) ResolveConversationSwitch(ctx context.Context, machine, session, op
 }
 
 func resolveConversationSwitchTx(ctx context.Context, tx pgx.Tx, machine, session, operation, outcome, reason string) error {
+	return resolveConversationSwitch(ctx, tx, machine, session, operation, outcome, reason, false)
+}
+
+// resolveConversationSwitch settles operation as outcome. A settled switch discards its handoff unless keepHandoff:
+// an idle acceptance keeps it for the conversation's next input, which no queued input carried yet. Accepting a switch
+// also discards the handoff an earlier idle acceptance kept: its target is retired for good.
+func resolveConversationSwitch(ctx context.Context, tx pgx.Tx, machine, session, operation, outcome, reason string, keepHandoff bool) error {
 	var epoch int64
 	if err := tx.QueryRow(ctx, `SELECT epoch FROM logical_conversations WHERE machine_id=$1 AND session_id=$2 AND deleted_at IS NULL FOR UPDATE NOWAIT`, machine, session).Scan(&epoch); err != nil {
 		return err
@@ -419,11 +462,19 @@ func resolveConversationSwitchTx(ctx context.Context, tx pgx.Tx, machine, sessio
 		return ErrConversationEpoch
 	}
 	activated := phase == "active" || epoch == expected+1
+	if activated && outcome == "in_doubt" {
+		// A late preparation failure cannot undo activation. The reconciler
+		// will observe the activated operation and finish or drain its input.
+		return ErrConversationEpoch
+	}
 	if outcome == "accepted" {
 		if !activated || epoch != expected+1 {
 			return ErrConversationEpoch
 		}
 		if _, err := tx.Exec(ctx, `UPDATE conversation_segments SET close_pending=true WHERE id=$1 AND state='retired'`, source); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE conversation_switches SET handoff=NULL WHERE logical_machine=$1 AND logical_session=$2 AND operation_id<>$3 AND phase='accepted' AND handoff IS NOT NULL`, machine, session, operation); err != nil {
 			return err
 		}
 	}
@@ -454,7 +505,7 @@ func resolveConversationSwitchTx(ctx context.Context, tx pgx.Tx, machine, sessio
 			}
 		}
 	}
-	_, err := tx.Exec(ctx, `UPDATE conversation_switches SET phase=$4,error=$5,handoff=CASE WHEN $4 IN ('accepted','rejected') THEN NULL ELSE handoff END,updated_at=now() WHERE logical_machine=$1 AND logical_session=$2 AND operation_id=$3`, machine, session, operation, outcome, reason)
+	_, err := tx.Exec(ctx, `UPDATE conversation_switches SET phase=$4,error=$5,handoff=CASE WHEN $4 IN ('accepted','rejected') AND NOT $6::boolean THEN NULL ELSE handoff END,updated_at=now() WHERE logical_machine=$1 AND logical_session=$2 AND operation_id=$3`, machine, session, operation, outcome, reason, keepHandoff)
 	return err
 }
 
@@ -699,6 +750,12 @@ func (d *DB) ResolveConversationDelivery(ctx context.Context, machine, session, 
 				return err
 			}
 		}
+		if outcome == "accepted" {
+			// The input carried the handoff an idle acceptance kept (drainLogicalInput attaches it): it is used up.
+			if _, err := tx.Exec(ctx, `UPDATE conversation_switches SET handoff=NULL WHERE logical_machine=$1 AND logical_session=$2 AND phase='accepted' AND handoff IS NOT NULL`, machine, session); err != nil {
+				return err
+			}
+		}
 		// A rejected first input can have been requeued by rollback above. Keep
 		// that payload; only terminal states may discard content/provenance.
 		_, err = tx.Exec(ctx, `UPDATE conversation_inputs SET payload='{}'::bytea WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3 AND state IN ('accepted','rejected')`, machine, session, id)
@@ -754,6 +811,17 @@ func (d *DB) PutConversationHandoff(ctx context.Context, machine, session, opera
 	}
 	_, err := d.pool.Exec(ctx, `UPDATE conversation_switches SET handoff=coalesce(handoff,$4),updated_at=now() WHERE logical_machine=$1 AND logical_session=$2 AND operation_id=$3 AND phase='preparing'`, machine, session, operation, []byte(raw))
 	return err
+}
+
+// ConversationPendingHandoff is the handoff an idle acceptance kept for segment, the conversation's active one: the
+// next input the conversation is sent carries it, and its acceptance discards it (#14488). Nil when there is none.
+func (d *DB) ConversationPendingHandoff(ctx context.Context, machine, session, segment string) (json.RawMessage, error) {
+	var raw []byte
+	err := d.pool.QueryRow(ctx, `SELECT handoff FROM conversation_switches WHERE logical_machine=$1 AND logical_session=$2 AND target_segment=$3 AND phase='accepted' AND handoff IS NOT NULL ORDER BY updated_at DESC LIMIT 1`, machine, session, segment).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return json.RawMessage(raw), err
 }
 
 func (d *DB) ConversationPreparation(ctx context.Context, machine, session, operation string) (json.RawMessage, bool, error) {

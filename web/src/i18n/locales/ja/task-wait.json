@@ -29,6 +29,7 @@
   "evidence_note": "担当の記録です。この画面では根拠の検証やイベント監視は行いません。",
   "missing_evidence_note": "待機の根拠の記録なし。状態やリンクだけでは送信済みと確認できません。",
   "details": "待機の詳細",
+  "hide_details": "詳細を隠す",
   "follow_up_due": "確認する時期です",
   "draft_reminder": "確認文を作成",
   "reminder": "{target}さん、「{title}」の進捗はいかがですか。\n\n前回の依頼：{request}",

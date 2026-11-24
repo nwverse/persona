@@ -66,7 +66,10 @@ import { ProviderLinkCopy } from "./settings/ProviderLinkCopy";
 import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type LauncherSync } from "../lib/launcher-list";
 import { TerminalModeRow } from "./settings/TerminalModeSetting";
 import { AgentOpenRow } from "./settings/AgentOpenSetting";
-import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, itemIsPage, itemState, NAV_GROUPS, openedFromSub, redirectLegacySettings, settingsAt, settingsHref, SENT_SUB, stepsToList, TAB_INFO, TABS, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
+import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, isCoreTab, isModuleTab, itemIsPage, itemState, navGroups, openedFromSub, redirectLegacySettings, settingsAt, settingsHref, SENT_SUB, stepsToList, tabInfo, TAB_INFO, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
+import { moduleFeaturesSource } from "../core/module-features";
+import { useModuleStates } from "../core/module-host";
+import { ModuleSettingsPage } from "../core/ModuleSettingsPage";
 import { searchSettings, type SearchGroup } from "./settings/search";
 import { GroupAction, GroupFooter, GroupTitle, hasFooter } from "./settings/SettingsGroups";
 import { SHEET_QUERY, useMedia } from "../ui/overlay";
@@ -151,8 +154,9 @@ export function tokens(n: number): string {
 // the sidebar (NavRow). Every other category draws with the Settings chunk as before.
 const Extensions = lazyPage(() => import("./settings/Extensions").then((m) => m.Extensions));
 const Connectors = lazyPage(() => import("./settings/Connectors").then((m) => m.Connectors));
-// Labs and its configuration form come with their own chunk, on first open (src/startup-preload.ts FIRST_SCREEN_BUDGET)
+// Labs and the shared configuration form load on first use.
 const LabsSettings = lazyPage(() => import("./settings/Labs").then((m) => m.LabsSettings));
+const ModuleFeaturesForm = lazyPage(() => import("./settings/configuration/ConfigurationForm").then((m) => m.ConfigurationForm));
 const TAB_PAGES: Partial<Record<Tab, { preload: () => Promise<unknown> }>> = { extensions: Extensions, connectors: Connectors };
 // a failed load is not kept (lazyPage): opening the page asks again, and PageBoundary shows the failure then
 const preloadTab = (k: Tab) => void TAB_PAGES[k]?.preload().catch(() => {});
@@ -164,6 +168,8 @@ function readSettingsLocation() {
 }
 
 export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
+  // a module switched on or off adds or takes away its categories (core/module-host.ts settingsTabs)
+  useModuleStates();
   const phone = useMedia(SHEET_QUERY);
   // list pages (channels / connectors / extensions) keep their list beside the open item from this width
   const twoCol = useMedia("(min-width: 900px)");
@@ -323,7 +329,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         {phone && at.tab ? (
           <>
             <IconButton icon="chevronLeft" label={up ? up.label : t("settings.back")} onClick={up ? () => pick(tab, up.sub) : toList} />
-            <h1 className="min-w-0 truncate text-[14px] font-semibold text-ink">{TAB_INFO[tab].label}</h1>
+            <h1 className="min-w-0 truncate text-[14px] font-semibold text-ink">{tabInfo(tab).label}</h1>
           </>
         ) : (
           <>
@@ -336,7 +342,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         {!phone && (
           <SettingsNav tab={tab} query={query} onQuery={setQuery} search={search} shown={shown} onPick={pick} onGroup={goGroup} contentId={contentId} />
         )}
-        <div ref={scroller} id={contentId} role={listed ? undefined : "region"} aria-label={listed ? undefined : TAB_INFO[tab].label} tabIndex={0} className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent">
+        <div ref={scroller} id={contentId} role={listed ? undefined : "region"} aria-label={listed ? undefined : tabInfo(tab).label} tabIndex={0} className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent">
           {listed ? (
             <div className="px-4 py-5" style={{ animation: `fade-up 320ms ${EASE} both` }}>
               <SettingsList shown={shown} onPick={pick} />
@@ -373,13 +379,13 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                   <div className="w-[300px] shrink-0"><ChannelList openBeside={sub} onOpen={(id) => pick("channels", id)} onMarketItem={(market, id) => pick("extensions", routeSub({ kind: "item", market, id }))} /></div>
                   <div className="min-w-0 flex-1"><ChannelPage key={sub} {...parseOwnedSub(sub)} onBack={() => pick("channels")} onSettings={(url) => {
                     const target = settingsTarget(url);
-                    if (target && TABS.includes(target.tab as Tab)) pick(target.tab as Tab, target.sub);
+                    if (target && (isCoreTab(target.tab) || isModuleTab(target.tab))) pick(target.tab as Tab, target.sub);
                   }} /></div>
                 </div>
               ) : (
                 <ChannelPage key={sub} {...parseOwnedSub(sub)} onBack={() => pick("channels")} headerBack={phone} onSettings={(url) => {
                   const target = settingsTarget(url);
-                  if (target && TABS.includes(target.tab as Tab)) pick(target.tab as Tab, target.sub);
+                  if (target && (isCoreTab(target.tab) || isModuleTab(target.tab))) pick(target.tab as Tab, target.sub);
                 }} />
               )) : (
                 <ChannelList onOpen={(id) => pick("channels", id)} onMarketItem={(market, id) => pick("extensions", routeSub({ kind: "item", market, id }))} />
@@ -408,6 +414,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                 <AgentGroup />
               </>}
               {tab === "managers" && <ManagersSettings />}
+              {!isCoreTab(tab) && <ModuleSettingsPage tab={tab} />}
             </div>
           )}
         </div>
@@ -426,7 +433,7 @@ function itemParent(tab: Tab, sub: string): { sub: string | null; label: string 
     if (r.kind === "page" || (r.kind === "item" && r.manager)) return { sub: routeSub({ kind: "extension", id: r.id, manager: r.manager }), label: t("settings-extensionview.back") };
     if (r.kind === "item" || r.kind === "markets") return { sub: routeSub({ kind: "catalog" }), label: t("settings.back_to", { name: t("settings-extensionmarket.market_title") }) };
   }
-  return { sub: null, label: t("settings.back_to", { name: TAB_INFO[tab].label }) };
+  return { sub: null, label: t("settings.back_to", { name: tabInfo(tab).label }) };
 }
 
 const AGENT_LABEL: Record<AgentTab, string> = { claude: "Claude Code", codex: "Codex", agy: "Antigravity", omp: "omp", grok: "Grok" };
@@ -540,7 +547,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, onPick, onGroup, cont
             {none && <p className="px-3 py-3 text-[12.5px] leading-relaxed text-ink-3">{t("settings.search_no_results")}</p>}
           </>
         ) : (
-          NAV_GROUPS.map((g) => {
+          navGroups().map((g) => {
             const its = g.tabs.filter(shown);
             if (!its.length) return null;
             return (
@@ -561,7 +568,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, onPick, onGroup, cont
 }
 
 function NavRow({ k, selected, contentId, onPick }: { k: Tab; selected: boolean; contentId: string; onPick: (k: Tab) => void }) {
-  const info = TAB_INFO[k];
+  const info = tabInfo(k);
   return (
     <button
       type="button"
@@ -587,7 +594,7 @@ function GroupResult({ g, onGroup }: { g: SearchGroup; onGroup: (g: SearchGroup)
   return (
     <button type="button" onClick={() => onGroup(g)} className="flex w-full items-center gap-1.5 rounded-[7px] px-3 py-1.5 text-left text-[12.5px] text-ink-2 transition-colors hover:bg-hover hover:text-ink">
       <span className="min-w-0 break-words">
-        <span className="font-medium text-ink">{TAB_INFO[g.tab].label}</span>
+        <span className="font-medium text-ink">{tabInfo(g.tab).label}</span>
         <span className="mx-1 text-ink-3">›</span>
         <span>{g.group}</span>
       </span>
@@ -599,13 +606,13 @@ function GroupResult({ g, onGroup }: { g: SearchGroup; onGroup: (g: SearchGroup)
 function SettingsList({ shown, onPick }: { shown: (k: Tab) => boolean; onPick: (k: Tab) => void }) {
   return (
     <nav aria-label={t("settings.categories")}>
-      {NAV_GROUPS.map((g) => {
+      {navGroups().map((g) => {
         const tabs = g.tabs.filter(shown);
         if (!tabs.length) return null;
         return (
           <Group key={g.key} anchor={`nav-${g.key}`} title={<GroupTitle group={g.key} />} right={<GroupAction group={g.key} />} footer={hasFooter(g.key) ? <GroupFooter group={g.key} /> : undefined}>
             {tabs.map((k) => (
-              <Row key={k} icon={TAB_INFO[k].icon} label={TAB_INFO[k].label} hint={TAB_INFO[k].hint} onClick={() => onPick(k)} />
+              <Row key={k} icon={tabInfo(k).icon} label={tabInfo(k).label} hint={tabInfo(k).hint} onClick={() => onPick(k)} />
             ))}
           </Group>
         );
@@ -622,6 +629,7 @@ function General({ onModel }: { onModel: () => void }) {
   const theme = useTheme();
   const replyMotion = useReplyMotionSetting();
   const starred = useStarredSetting();
+  const features = moduleFeaturesSource();
 
   const themes: { k: Theme; label: string; icon: IconName }[] = [
     { k: "system", label: t("language.system"), icon: "monitor" },
@@ -668,6 +676,11 @@ function General({ onModel }: { onModel: () => void }) {
       <DesktopSettings />
       <StartPageGroup />
       <SidebarPagesGroup />
+      {features && (
+        <div className="mb-6">
+          <Suspense fallback={<Loading />}><ModuleFeaturesForm source={features} /></Suspense>
+        </div>
+      )}
 
       <section id="settings-translation" className="scroll-mt-4">
         <TranslationSettings onConfigure={onModel} />
