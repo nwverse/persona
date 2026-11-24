@@ -334,7 +334,11 @@ struct ExtensionMap: View {
     private var isStatic: Bool { map.static == true }
     private var routes: [ExtensionMapRoute] { map.routes ?? [] }
     private var markers: [ExtensionMapMarker] { map.markers ?? [] }
-    private var safeLinks: [(title: String, url: URL)] { ExtensionMapGeometry.sanitizedLinks(map.links) }
+    private var safeLinks: [ExtensionMapSafeLink] {
+        ExtensionMapGeometry.sanitizedLinks(map.links).enumerated().map {
+            ExtensionMapSafeLink(index: $0.offset, title: $0.element.title, url: $0.element.url)
+        }
+    }
     private var horizontalMargin: CGFloat { (!compact && cardInset == nil) ? Theme.Space.page : Theme.Space.flush }
 
     private var activeRoute: ExtensionMapRoute? {
@@ -643,29 +647,12 @@ struct ExtensionMap: View {
     }
 
     @ViewBuilder private var linksRow: some View {
-        if !safeLinks.isEmpty {
-            ScrollView(.horizontal) {
-                HStack(spacing: Theme.Space.s) {
-                    ForEach(Array(safeLinks.enumerated()), id: \.offset) { index, item in
-                        Button {
-                            link = LinkTarget(url: item.url)
-                        } label: {
-                            Label(item.title, systemImage: Theme.Icon.open)
-                                .font(Theme.Font.labelStrong)
-                                .lineLimit(1)
-                                .padding(.horizontal, Theme.Space.m)
-                                .padding(.vertical, Theme.Space.xs)
-                                .background(Theme.Fill.chip, in: .capsule)
-                        }
-                        .buttonStyle(.plain)
-                        .tapTargetHeight()
-                        .contentShape(.rect)
-                        .accessibilityIdentifier("extension-map-link-\(index)")
-                    }
-                }
-                .padding(.horizontal, horizontalMargin)
-            }
-            .scrollIndicators(.hidden)
+        ExtensionMapLinksStrip(
+            links: safeLinks,
+            horizontalPadding: horizontalMargin,
+            identifierPrefix: "extension-map-link"
+        ) { url in
+            link = LinkTarget(url: url)
         }
     }
 
@@ -873,7 +860,11 @@ private struct ExtensionMapCover: View {
 
     private var routes: [ExtensionMapRoute] { map.routes ?? [] }
     private var markers: [ExtensionMapMarker] { map.markers ?? [] }
-    private var safeLinks: [(title: String, url: URL)] { ExtensionMapGeometry.sanitizedLinks(map.links) }
+    private var safeLinks: [ExtensionMapSafeLink] {
+        ExtensionMapGeometry.sanitizedLinks(map.links).enumerated().map {
+            ExtensionMapSafeLink(index: $0.offset, title: $0.element.title, url: $0.element.url)
+        }
+    }
 
     private var activeRoute: ExtensionMapRoute? {
         if let selectedRouteID, let matched = routes.first(where: { $0.id == selectedRouteID }) {
@@ -933,17 +924,33 @@ private struct ExtensionMapCover: View {
                             .padding(.horizontal, Theme.Space.page)
                         }
                         .scrollIndicators(.hidden)
-                    } else if let route = activeRoute, let meta = ExtensionMapFormatting.routeMetadata(route) {
-                        HStack(spacing: Theme.Space.s) {
-                            ThemedIcon(ExtensionMapFormatting.modeIcon(route.mode))
-                                .font(Theme.Font.labelStrong)
-                                .foregroundStyle(ExtensionMapFormatting.resolveColor(tone: route.tone, color: route.color))
-                            Text(meta).font(Theme.Font.captionMedium)
-                            if let summary = route.summary, !summary.isEmpty {
-                                Text(summary).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+                    } else if let route = activeRoute {
+                        let meta = ExtensionMapFormatting.routeMetadata(route)
+                        let summary = route.summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if meta != nil || (summary?.isEmpty == false) {
+                            HStack(spacing: Theme.Space.s) {
+                                ThemedIcon(ExtensionMapFormatting.modeIcon(route.mode))
+                                    .font(Theme.Font.labelStrong)
+                                    .foregroundStyle(ExtensionMapFormatting.resolveColor(tone: route.tone, color: route.color))
+                                    .accessibilityHidden(true)
+                                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                                    if let meta {
+                                        Text(meta)
+                                            .font(Theme.Font.captionMedium)
+                                            .foregroundStyle(Color.primary)
+                                    }
+                                    if let summary, !summary.isEmpty {
+                                        Text(summary)
+                                            .font(Theme.Font.label)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(2)
+                                    }
+                                }
+                                Spacer(minLength: Theme.Space.flush)
                             }
+                            .padding(.horizontal, Theme.Space.page)
+                            .accessibilityElement(children: .combine)
                         }
-                        .padding(.horizontal, Theme.Space.page)
                     }
 
                     if !markers.isEmpty || !safeLinks.isEmpty {
@@ -961,27 +968,14 @@ private struct ExtensionMapCover: View {
                                         onDeferAction: onDeferAction
                                     )
                                 }
-                                if !safeLinks.isEmpty {
-                                    HStack(spacing: Theme.Space.s) {
-                                        ForEach(Array(safeLinks.enumerated()), id: \.offset) { index, item in
-                                            Button {
-                                                link = LinkTarget(url: item.url)
-                                            } label: {
-                                                Label(item.title, systemImage: Theme.Icon.open)
-                                                    .font(Theme.Font.labelStrong)
-                                                    .lineLimit(1)
-                                                    .padding(.horizontal, Theme.Space.m)
-                                                    .padding(.vertical, Theme.Space.xs)
-                                                    .background(Theme.Fill.chip, in: .capsule)
-                                                    .tapTargetHeight()
-                                                    .contentShape(.rect)
-                                            }
-                                            .buttonStyle(.plain)
-                                            .accessibilityIdentifier("extension-map-cover-link-\(index)")
-                                        }
-                                    }
-                                    .padding(.top, Theme.Space.xs)
+                                ExtensionMapLinksStrip(
+                                    links: safeLinks,
+                                    horizontalPadding: Theme.Space.flush,
+                                    identifierPrefix: "extension-map-cover-link"
+                                ) { url in
+                                    link = LinkTarget(url: url)
                                 }
+                                .padding(.top, safeLinks.isEmpty ? Theme.Space.flush : Theme.Space.xs)
                             }
                             .padding(.horizontal, Theme.Space.page)
                         }
@@ -1406,6 +1400,47 @@ private struct ExtensionMapStopRow: View {
                     in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
         .tapTargetHeight()
         .contentShape(.rect)
+    }
+}
+
+private struct ExtensionMapSafeLink: Identifiable {
+    var index: Int
+    var title: String
+    var url: URL
+    var id: String { "\(index)|\(url.absoluteString)" }
+}
+
+private struct ExtensionMapLinksStrip: View {
+    var links: [ExtensionMapSafeLink]
+    var horizontalPadding: CGFloat
+    var identifierPrefix: String
+    var onOpen: (URL) -> Void
+
+    var body: some View {
+        if !links.isEmpty {
+            ScrollView(.horizontal) {
+                HStack(spacing: Theme.Space.s) {
+                    ForEach(links) { item in
+                        Button {
+                            onOpen(item.url)
+                        } label: {
+                            Label(item.title, systemImage: Theme.Icon.open)
+                                .font(Theme.Font.labelStrong)
+                                .lineLimit(1)
+                                .padding(.horizontal, Theme.Space.m)
+                                .padding(.vertical, Theme.Space.xs)
+                                .background(Theme.Fill.chip, in: .capsule)
+                        }
+                        .buttonStyle(.plain)
+                        .tapTargetHeight()
+                        .contentShape(.rect)
+                        .accessibilityIdentifier("\(identifierPrefix)-\(item.index)")
+                    }
+                }
+                .padding(.horizontal, horizontalPadding)
+            }
+            .scrollIndicators(.hidden)
+        }
     }
 }
 #endif
