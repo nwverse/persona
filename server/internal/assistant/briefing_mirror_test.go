@@ -87,6 +87,7 @@ func (p *briefingMirrorPosts) snapshot() []briefingMirrorPost {
 // This drives the scheduled run's production completion callback. The fake model's HTTP server and runNow setup
 // stay outside synctest; only direct fake app calls, channels and retry timers belong to the virtual-clock bubble.
 func TestBriefingMirrorCompletion(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, tc := range []struct {
 		name                        string
 		postError                   error

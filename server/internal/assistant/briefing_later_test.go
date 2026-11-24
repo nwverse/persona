@@ -108,6 +108,7 @@ func TestBriefCardHasACanWaitSection(t *testing.T) {
 
 // With nothing in the queue the card has no such section (not an empty one every morning).
 func TestBriefCardLeavesOutAnEmptyCanWaitSection(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefRunEnv(t, true)
 	e.mirror()
 	if card := e.cards()[0]; strings.Contains(card, "晚点答") || strings.Contains(card, "later_done") {
@@ -117,6 +118,7 @@ func TestBriefCardLeavesOutAnEmptyCanWaitSection(t *testing.T) {
 
 // Too many questions are not cut off in the middle of the card: briefRowsMax of them, the rest counted, inside the size Lark takes.
 func TestBriefCardCountsQuestionsThatDoNotFit(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefRunEnvWith(t, true, func(e *briefRunEnv) {
 		for i := 0; i < 13; i++ {
 			e.later(fmt.Sprint(i), "todo_a", fmt.Sprintf("问题%02d", i), time.Duration(100-i)*time.Hour)
@@ -343,6 +345,7 @@ func TestBriefRunPushSaysHowManyCanWait(t *testing.T) {
 // Every section over-full at once: the card stays inside Lark's element and size limits, and each "and N more" line is the last
 // line of its section (never after a section that lost its heading).
 func TestBriefCardWithEverySectionOverfullStaysInsideTheLimits(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefRunEnvWith(t, true, func(e *briefRunEnv) {
 		var sessions []proto.Session
 		for i := 0; i < 12; i++ {
