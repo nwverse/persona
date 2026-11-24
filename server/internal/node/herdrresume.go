@@ -105,7 +105,10 @@ func dquote(s string) string {
 // environment (agentenv.go). ok is false when the command cannot be said without an apostrophe (a path with one in
 // it): herdr would refuse it.
 func (n *Node) claudeResumeArgv(spec claudeLaunch, id string) (argv []string, ok bool) {
-	cmd := withHerdrAgent(resumeHerdrAgent("claude"), n.claudeCommandLine(spec, "--resume "+id, dquote))
+	if validModes("", spec.Effort) != nil {
+		return nil, false
+	}
+	cmd := withHerdrAgent(resumeHerdrAgent("claude"), n.claudeCommandLine(spec, "--resume "+id+modeFlags("", spec.Effort), dquote))
 	cmd = n.agentCommand(cmd, dquote, herdrPaneShell())
 	if !resumeSayable(cmd) || !validID(id) {
 		return nil, false
@@ -221,11 +224,13 @@ func (n *Node) agentResumeArgv(spec agentLaunch, id string) (argv []string, ok b
 	} else if _, program, ok := workAgent(kind); ok {
 		launcher := spec.Launcher
 		resumeID := id
+		model := spec.Model
 		if kind == agyAgent {
 			launcher = n.launcherCommandQ(launcher, dquote)
 			resumeID = spec.AgyConversation
+			model = agyEffortModel(model, spec.Effort)
 		}
-		cmd = withHerdrAgent(resumeHerdrAgent(kind), workAgentResume(kind, workAgentCommand(launcher, program, spec.Model, spec.Effort, spec.Mode), resumeID))
+		cmd = withHerdrAgent(resumeHerdrAgent(kind), workAgentResume(kind, workAgentCommand(launcher, program, model, spec.Effort, spec.Mode), resumeID))
 	} else {
 		cmd = withHerdrAgent(resumeHerdrAgent(kind), n.launcherCommandQ(spec.Launcher, dquote)+codexTaskFlags(spec.TaskInstructions)+" resume "+id)
 	}
@@ -476,7 +481,7 @@ func (n *Node) backfillResume(agents []host.Agent) {
 			if w.kind == "claude" || w.kind == "" {
 				settings, hooks := n.claudeStartSettings(ctx, w.st.Launcher, "claude", w.st.Cwd)
 				spec = agentLaunch{Agent: w.kind, Launcher: w.st.Launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks),
-					TaskInstructionFile: w.st.TaskInstructionFile, Model: w.st.Model, Plugins: n.claudeLoadsPlugins(ctx), ID: w.id}
+					TaskInstructionFile: w.st.TaskInstructionFile, Model: n.claudeModelArg(w.st.Launcher, w.st.Model), Effort: w.st.ModelEffort, Plugins: n.claudeLoadsPlugins(ctx), ID: w.id}
 			} else {
 				spec = agentLaunch{Agent: w.kind, Launcher: w.st.Launcher, Model: w.st.Model, Effort: w.st.ModelEffort, ID: w.id, AgyConversation: w.agy, TaskInstructions: codexKeptTaskInstructions(w.st)}
 			}
