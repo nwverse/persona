@@ -107,8 +107,9 @@ type Script struct {
 	// Level scales the audio's levels (0: 1): below about 0.15 a sentence is quieter than the adapter's speech
 	// detection hears, while the service still does (a phone on the table in a quiet room).
 	Level float64
-	// SecondVerbatimStartGate 在记录前挡住第二个 verbatim 会话；caption 和第一个 verbatim 仍能完成任务就绪。
-	SecondVerbatimStartGate <-chan struct{}
+	// BeforeSecondVerbatimStart can hold the second verbatim start before
+	// recording it, while the caption and first verbatim sessions start.
+	BeforeSecondVerbatimStart func()
 }
 
 // InventedReplies are what rogue sessions write instead of a sentence, each its own (by its number): two rogue sessions
@@ -443,7 +444,7 @@ func (c *conn) start(raw json.RawMessage) {
 	listener := listening[ins]
 	l := c.l
 	l.mu.Lock()
-	if !listener && l.s.SecondVerbatimStartGate != nil {
+	if !listener && l.s.BeforeSecondVerbatimStart != nil {
 		verbatim := 0
 		for _, started := range l.starts {
 			ins, _ := started["instructions"].(string)
@@ -453,7 +454,7 @@ func (c *conn) start(raw json.RawMessage) {
 		}
 		if verbatim == 1 {
 			l.mu.Unlock()
-			<-l.s.SecondVerbatimStartGate
+			l.s.BeforeSecondVerbatimStart()
 			l.mu.Lock()
 		}
 	}
