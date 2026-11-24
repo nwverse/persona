@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError } from "./api";
+import { ApiError } from "../../lib/api";
 import {
-  arrangeConversations, conversationPreview, filterConversations, getLarkHome, LarkChatsStore, listProblem, mergeConversations, setLarkHome, unreadBadge,
+  arrangeConversations, conversationPreview, filterConversations, LarkChatsStore, listProblem, mergeConversations, unreadBadge,
   type LarkChatsDeps, type LarkConversation, type LarkConversationPage,
 } from "./lark-chats";
+import { getLarkHome, setLarkHome } from "./home";
 
 const c = (id: string, extra: Partial<LarkConversation> = {}): LarkConversation => ({
   id, name: `会话 ${id}`, is_group: false, unread: 0, at_me: false, muted: false, preview: "", is_mine: false, updated_at: "2026-01-01T10:00:00Z", ...extra,

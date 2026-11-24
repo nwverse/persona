@@ -1129,6 +1129,8 @@ type memStore struct {
 	failPut error
 	// failKeys: what reading one key fails with, the other keys still reading (set through failKey).
 	failKeys map[string]error
+	// routing: the model_routing rows written (PutModelRouting).
+	routing []db.ModelRoutingRow
 }
 
 // rawSetting returns a cloned copy of the raw JSON bytes stored for key under m.mu.
@@ -1197,6 +1199,22 @@ func (m *memStore) PutPlacement(ctx context.Context, p db.PlacementRow) error {
 }
 
 func (noPlans) PutPlacement(context.Context, db.PlacementRow) error { return nil }
+
+func (m *memStore) PutModelRouting(_ context.Context, r db.ModelRoutingRow) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.routing = append(m.routing, r)
+	return nil
+}
+
+// modelRoutings are the model_routing rows written so far.
+func (m *memStore) modelRoutings() []db.ModelRoutingRow {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.routing)
+}
+
+func (noPlans) PutModelRouting(context.Context, db.ModelRoutingRow) error { return nil }
 
 func (noPlans) CreateTaskPlan(context.Context, db.TaskPlanRow) error {
 	return errors.New("no task_plans here")

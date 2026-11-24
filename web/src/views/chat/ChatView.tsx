@@ -74,6 +74,7 @@ import { FailureNote, showsFailureNote } from "./FailureNote";
 import { LazyCloseoutCard } from "./closeout-chunks";
 import { shownCloseout } from "../../lib/closeout";
 import { AWAIT_MS, awaitingTurn, DOCK_MAX, turnStart } from "./dock";
+const ChatEmptyState = lazyPage(() => import("./ChatEmptyState").then((m) => m.ChatEmptyState));
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
 import { AgentModelPill, AssistantModelPill, useAssistantTurnFix } from "./ModelPill";
 import { switchRefused } from "../../lib/session-models";
@@ -1622,17 +1623,39 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       // a worker's conversation in a Team panel, and an Agent's in a task's or an Agent's side panel, leave Esc to the
       // panel (it closes it) and to the page beside it
       if (embedded || inPanel) return;
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      if (e.target instanceof Element && e.target.closest("[data-session-overview]")) return;
-      if ((state === "working" || awaiting) && view !== "term" && !document.querySelector("[role=dialog],[role=menu]")) {
-        e.preventDefault();
-        void interrupt();
+      if (e.key === "Escape" && !e.defaultPrevented) {
+        if (e.target instanceof Element && e.target.closest("[data-session-overview]")) return;
+        if ((state === "working" || awaiting) && view !== "term" && !document.querySelector("[role=dialog],[role=menu]")) {
+          e.preventDefault();
+          void interrupt();
+          return;
+        }
+      }
+      // Type-anywhere auto-focus into composer (inspired by Moshi-Web)
+      if (
+        !e.defaultPrevented &&
+        view !== "term" &&
+        !offlineLine &&
+        canCompose &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        e.key.length === 1 &&
+        e.key !== " " &&
+        !document.querySelector("[role=dialog],[role=menu]")
+      ) {
+        const target = e.target instanceof HTMLElement ? e.target : null;
+        if (target && (target.closest("input, textarea, select, [contenteditable='true']") || target.isContentEditable)) return;
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed) return;
+        const ta = composerBox.current?.querySelector("textarea");
+        if (ta && !ta.disabled) ta.focus();
       }
     };
     addEventListener("keydown", key);
     return () => removeEventListener("keydown", key);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, awaiting, session, view, embedded, inPanel]);
+  }, [state, awaiting, session, view, embedded, inPanel, canCompose, offlineLine]);
 
   // Once the hub says the turn is over, four kinds of background work draw the last exchange finished (its work folded,
   // any run's card inside it) instead of keeping the turn's "Working…" clock going: first a workflow (#3434), then
@@ -2268,7 +2291,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const background = useMemo(() => backgroundLine(session), [session]);
   // ✓ Done only for a turn that finished: one waiting on you, stopped or cut off by an error keeps its last words
   const done = turnDone(state, session, lastLine, tr.items);
-  const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={runningWorking} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={!backgroundState || backgroundState.kind === "workflow" ? background : null} wait={wait} subtasks={subtasks} command={command} /> : null;
+  const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={runningWorking} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={!backgroundState || backgroundState.kind === "workflow" ? background : null} wait={wait} subtasks={subtasks} command={command} onStop={sessionCan(session, "interrupt") ? interrupt : undefined} /> : null;
   // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
   // the run's status. The same element while nothing in it changes: the composer is memoized.
   const queue = useMemo(
@@ -2603,6 +2626,15 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             )}
             <LiveClockContext.Provider value={countClock}>
             <LatestMessageTime.Provider value={latestTime}>
+            {!tr.loading && !tr.error && !starting && !embedded && tr.items.length === 0 && !tr.streaming && shownPending.length === 0 && outbox.length === 0 && (!assistant || feed.length === 0) && (
+              <LazyChatEmptyState
+                assistant={assistant}
+                personaName={persona.name}
+                cwd={session?.cwd}
+                canCompose={canCompose}
+                onPick={(prompt) => void sendDraft(draftKey, { type: "replace", text: prompt })}
+              />
+            )}
             <ChatContext.Provider value={ctx}>
               <CardConversation.Provider value={assistant ? sid : ""}>
               {earlier.host && <Suspense fallback={null}><EarlierStretches {...earlier.host} offscreen={offscreen} /></Suspense>}
@@ -3007,6 +3039,17 @@ export function ComposerSource({ session, assistant }: { session: Session; assis
       {info.anchor && <Menu anchor={info.anchor} onClose={info.close} side="top" align="left" width={280} header={t("chat-chatview.session_info")} items={footerRows(session, assistant)} />}
     </span>
   );
+}
+
+/** Defers mounting the lazy ChatEmptyState to the next frame so it stays off the first-screen bundle and never suspends synchronous mounts. */
+function LazyChatEmptyState(props: { assistant?: boolean; personaName: string; cwd?: string; canCompose?: boolean; onPick: (prompt: string) => void }) {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setReady(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+  if (!ready) return null;
+  return <Suspense fallback={null}><ChatEmptyState {...props} /></Suspense>;
 }
 
 /** The line under the composer as menu rows (#3533): the value in full (wrapped), what it is beside it; choosing one

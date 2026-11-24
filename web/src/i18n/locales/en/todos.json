@@ -357,12 +357,17 @@
   "reorganize_success_transferred_other": "Updated {count} items ({transferred} supervision transferred)",
   "detail_template_work_goal": "Work goal",
   "detail_ownership_region": "Work goal ownership",
+  "detail_status_summary_region": "Work goal status summary",
   "detail_parent_label": "Goal: {title}",
-  "detail_schedule_reminder": "Schedule & reminder",
-  "detail_notes_expand": "Expand notes",
-  "detail_notes_collapse": "Collapse notes",
   "detail_subtasks_section": "Subtasks · {done}/{total}",
   "detail_open_active_agent": "Open active Agent",
   "detail_open_pr": "Open PR",
-  "detail_add_agent": "Add Agent"
+  "detail_add_agent": "Add Agent",
+  "v2_header_needs_you_one": "{count} needs you",
+  "v2_header_needs_you_other": "{count} need you",
+  "v2_labs_badge": "Labs · v2",
+  "v2_labs_badge_hint": "Using experimental To-dos v2 — open Settings › Labs to switch back",
+  "parked_folded_hint": "Waiting externally",
+  "slim_repo_count_one": "{count} repo",
+  "slim_repo_count_other": "{count} repos"
 }

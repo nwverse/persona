@@ -146,6 +146,9 @@ type Service struct {
 	// startCandidates lists the presets a start-defaults rule can pick on a machine (start_candidates.go); nil: the
 	// built-in model-profile source. A dynamic candidates source is injected here without touching matching or retries.
 	startCandidates startCandidateSource
+	// tierRank orders the usable candidates of a tier with several (tier_pick.go); nil: the user's order. Scoring
+	// (#14701) sets it; a trial of a profile not in use (#14702) calls pickTierCandidateIn with that profile.
+	tierRank tierRanker
 	// refs is the provider extensions' values for launcher keys that are references (launcher_secrets.go); nil: none.
 	refs launcherSecrets
 	// trans reaches the transcription contributions (meeting_transcribe_ext.go): the extensions' when they offer it
