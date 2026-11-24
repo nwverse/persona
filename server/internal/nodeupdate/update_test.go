@@ -1162,7 +1162,12 @@ func TestDeclaredSupervisorUpdateConfirmsOrRollsBack(t *testing.T) {
 				t.Fatal("the detached watchdog did not record itself")
 			}
 			_, watchBirth := procState(p.WatchPID) // while it runs: the pid names it as long as this start does
-			if outcome != "confirmed" {
+			// The watchdog reads the transaction's deadline on every tick, so the test can bring it forward. A crashing
+			// new program has nothing to show first: its deadline comes now. An unconfirmed one must be seen running in
+			// place before the watchdog takes it back, so its deadline comes once it is (below): set now, a slow start
+			// could outlast it and the new program would never be seen.
+			soon := func() {
+				t.Helper()
 				if err := locked(exe, func() error {
 					p, err := loadPending(markerPath(exe))
 					if err != nil {
@@ -1173,6 +1178,9 @@ func TestDeclaredSupervisorUpdateConfirmsOrRollsBack(t *testing.T) {
 				}); err != nil {
 					t.Fatal(err)
 				}
+			}
+			if outcome == "startup-crash" {
+				soon()
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			_ = peer.Call(ctx, "response-written", proto.NodeUpdateCommitParams{ID: begin.ID}, nil)
@@ -1225,6 +1233,7 @@ func TestDeclaredSupervisorUpdateConfirmsOrRollsBack(t *testing.T) {
 				// runs the old program, which clears the transaction.
 				if outcome == "unconfirmed" {
 					waitFor(t, 5*time.Second, func() bool { p, ok := proofOf(proof); return ok && p.Version == "next" && p.PID == firstPID })
+					soon()
 				}
 				waitFor(t, 10*time.Second, func() bool {
 					p, ok := proofOf(proof)

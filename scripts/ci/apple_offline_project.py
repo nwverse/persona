@@ -33,8 +33,11 @@ PACKAGES = {
     "PersonaModuleAPI": {"path": "Packages/PersonaModuleAPI"},
     "MarqueeGlow": {"url": "https://github.com/szupzj18/MarqueeGlow", "exactVersion": "0.1.0"},
 }
+MODULE_CONDITIONS = "$(inherited) PERSONA_MODULE_SCREEN_SHARE PERSONA_MODULE_HEALTH"
 SOURCES = {
     "Persona": [
+        {"path": "Modules/ScreenShare", "excludes": ["**/*.md"]},
+        {"path": "Modules/Health", "excludes": ["**/*.md"]},
         {"path": "Persona", "excludes": ["**/*.md"]},
         {"path": "Shared"},
         {"path": "LiveActivity"},
@@ -53,7 +56,8 @@ SOURCES = {
             "Shared/RequestClientMetadata.swift", "Shared/ExtensionSurfaceEntities.swift",
             "Shared/ExtensionSurfaceView.swift", "Shared/ExtensionSystemWidget.swift",
             "Shared/Design/ExtensionSurfaceTokens.swift", "Shared/Design/PersonaFace.swift", "Shared/HomeWidgets",
-            "Shared/Design/HomeWidgetTokens.swift", "Shared/Localization",
+            "Shared/Design/HomeWidgetTokens.swift", "Shared/Design/HealthIntakePalette.swift",
+            "Shared/Localization",
         )),
     ],
     "PersonaNotify": [
@@ -116,6 +120,9 @@ def validate_canonical_graph(project):
                                                    for dependency in target["dependencies"]):
                 raise ValueError("offline tests must retain the real Persona host dependency")
             raise ValueError(f"the canonical {name} dependencies changed; review the offline graph")
+    conditions = project["targets"]["Persona"]["settings"]["base"].get("SWIFT_ACTIVE_COMPILATION_CONDITIONS")
+    if conditions != MODULE_CONDITIONS:
+        raise ValueError("the canonical Persona module compilation conditions changed; review the offline graph")
     for name, kind, platform in (
         ("Persona", "application", "iOS"),
         ("PersonaTests", "bundle.unit-test", "iOS"),

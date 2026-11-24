@@ -36,6 +36,7 @@ func withdrawArgs() map[string]any {
 }
 
 func TestSupervisorWithdrawsItsNeedsUserQuietly(t *testing.T) {
+	needsLarkLayer(t)
 	ctx := context.Background()
 	database := todoTestDB(t)
 	s, f, todo, posts, updates := setupNeedsUserTaskWithLark(t, database)
@@ -189,25 +190,24 @@ func TestWithdrawNeedsUserNeedsANeedsUser(t *testing.T) {
 	}
 }
 
-// The judge's owner wait (needs_user without a decision card) is withdrawn the same way: the hub is told the to-do is
-// over and nothing new goes out.
+// The judge's owner wait (held by the supervisor, never pushed: noteOwnerWait) is withdrawn the same way when the
+// supervisor finds it is not the user's: the hub is told the to-do is over and nothing goes out.
 func TestSupervisorWithdrawsAnOwnerWait(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
 	withWebBot(f, testWeb)
 	work := time.Now().UTC()
 	s.superviseJudged(context.Background(), todo, work, taskDoneCheck{Verdict: verdictNeedsUser, Reason: "需要你本人操作"}, nil)
-	waitFor(t, "the needs-user push", func() bool { return len(f.pushed()) == 1 })
-	card := assistantwire.TodoAskCardID(todo.ID)
-	if p := f.pushed()[0]; p.RelatedKey != assistantwire.TodoPushKey(todo.ID, assistantwire.TodoPushNeedsUser) || p.CardID != "" {
-		t.Fatalf("needs-user push related=%q card=%q", p.RelatedKey, p.CardID)
+	if w := todoNow(s, todo.ID).Supervision.Waits; w == nil || len(f.pushed()) != 0 {
+		t.Fatalf("owner wait = %+v, pushes %+v", w, f.pushed())
 	}
+	card := assistantwire.TodoAskCardID(todo.ID)
 	reviewTask(t, s, todo.ID, withdrawArgs())
 	got := todoNow(s, todo.ID)
 	if got.DoneAt == nil || got.Supervision.State != reviewAccepted || got.Supervision.Waits != nil {
 		t.Fatalf("after withdrawing the owner wait: done=%v state=%q waits=%+v", got.DoneAt, got.Supervision.State, got.Supervision.Waits)
 	}
-	if n := len(f.pushed()); n != 1 {
-		t.Fatalf("withdrawing the owner wait pushed %d more", n-1)
+	if n := len(f.pushed()); n != 0 {
+		t.Fatalf("withdrawing the owner wait pushed %d", n)
 	}
 	if !toldResolved(f, card) {
 		t.Fatal("the hub was not told the owner wait is over")

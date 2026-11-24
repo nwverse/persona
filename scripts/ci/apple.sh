@@ -1,13 +1,13 @@
 #!/bin/bash
 # Public, local-runnable Apple checks. Requires XcodeGen, Python 3 and rsync.
 # The default lane uses macOS 26 and Xcode 26.0.x; ios18 uses the 18.6 simulator.
-# Usage: scripts/ci/apple.sh [all|ios|ios18|packages|ios-build|ios-focused|ios-regressions|ios-ipad-diagnostic]
+# Usage: scripts/ci/apple.sh [all|ios|ios18|packages|ios-build|ios-focused|ios-regressions|ios-model-picker|ios-ipad-diagnostic]
 # Cache CI_SPM_CACHE (default ~/Library/Caches/persona-ci/spm); keep the printed
 # output directory's *.xcresult bundles when investigating failures.
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 LANE="${1:-all}"
-case "$LANE" in all|ios|ios18|packages|ios-build|ios-focused|ios-regressions|ios-ipad-diagnostic) ;; *) printf 'Usage: %s [all|ios|ios18|packages|ios-build|ios-focused|ios-regressions|ios-ipad-diagnostic]\n' "$0" >&2; exit 2 ;; esac
+case "$LANE" in all|ios|ios18|packages|ios-build|ios-focused|ios-regressions|ios-model-picker|ios-ipad-diagnostic) ;; *) printf 'Usage: %s [all|ios|ios18|packages|ios-build|ios-focused|ios-regressions|ios-model-picker|ios-ipad-diagnostic]\n' "$0" >&2; exit 2 ;; esac
 [ "$#" -le 1 ] || { printf 'apple-ci: too many arguments\n' >&2; exit 2; }
 [ "$(uname -s)" = Darwin ] || { printf 'apple-ci: FAIL requires macOS with Xcode\n' >&2; exit 1; }
 for tool in python3 xcodebuild xcrun xcodegen rsync git; do
@@ -196,7 +196,7 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
   ci_run 'Isolation lint unit tests' 900 xcrun swift test -c release --disable-testable-imports --package-path "$SPM/IsolationLint/package" --scratch-path "$SPM/IsolationLint/build"
   ci_run 'Blocking calls on the main actor (isolation lint)' 300 "$SPM/IsolationLint/build/release/isolation-lint" --root "$SOURCE" --baseline "$SOURCE/scripts/test/apple_isolation_baseline.json"
 fi
-if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ] || [ "$LANE" = ios-regressions ] || [ "$LANE" = ios-ipad-diagnostic ]; then
+if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ] || [ "$LANE" = ios-regressions ] || [ "$LANE" = ios-model-picker ] || [ "$LANE" = ios-ipad-diagnostic ]; then
   for sdk in iphoneos iphonesimulator watchos watchsimulator; do
     ci_run "Require $sdk SDK" 60 xcrun --sdk "$sdk" --show-sdk-version
   done
@@ -208,6 +208,10 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE
   # The pinned Xcode selects compatible patch runtimes (such as iOS 26.0.1).
   # Validate 26.0.x explicitly; never substitute a newer minor or compiler.
   for platform in iOS watchOS; do
+    # This focused lane runs no Watch or device batch, so it prepares only iOS.
+    if [ "$LANE" = ios-model-picker ] && [ "$platform" = watchOS ]; then
+      continue
+    fi
     runtimes="$OUTPUT/runtimes-$platform-before.json"
     ci_run "List $platform simulator runtimes" 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$runtimes"
     if ! runtime=$(python3 "$CI_ROOT/scripts/ci/apple_runtime.py" "$runtimes" --platform "$platform"); then
@@ -220,6 +224,7 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE
     if [ "$platform" = iOS ]; then IOS_RUNTIME="$runtime"; fi
   done
   resolve Persona
+  if [ "$LANE" != ios-model-picker ]; then
   # Generic device builds compile the actual watch/widget/notification/share
   # dependency graph; do not delete the watch target to accommodate the runner.
   ci_run 'Unsigned iOS and embedded watch/extensions build' 1800 "${XCODE[@]}" -scheme Persona \
@@ -233,6 +238,15 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE
   # device build fail here (#6735; MainPagesStackTests measures the run-time part in the simulator).
   ci_run 'Debug view stack frames (device build)' 300 python3 "$CI_ROOT/scripts/ci/apple_stack_frames.py" \
     "$OUTPUT/ios-device/Build/Products/Debug-iphoneos/Persona.app"
+  # The app without its moved feature modules (apple/modules-core-only.yml, #14017; docs/apple/ios.md "Modules"): the
+  # core must build with every apple/Modules/<Name> left out. Generated into the same project, built, then the whole
+  # project generated again for the steps below. Only the app scheme: the watch and extensions compile no module.
+  ci_run 'Generate core-only Apple project' 120 env PERSONA_CORE_ONLY=YES xcodegen generate --spec "$SOURCE/apple/project.yml" --project "$SOURCE/apple"
+  ci_run 'Core-only iOS build' 1800 "${XCODE[@]}" -scheme Persona \
+    -destination 'generic/platform=iOS' -derivedDataPath "$OUTPUT/ios-core-only" \
+    -disableAutomaticPackageResolution "${UNSIGNED[@]}" build
+  ci_run 'Generate Apple project again (whole)' 120 xcodegen generate --spec "$SOURCE/apple/project.yml" --project "$SOURCE/apple"
+  fi
 fi
 if [ "$LANE" = ios18 ]; then
   runtimes="$OUTPUT/runtimes-iOS-before.json"
@@ -293,6 +307,11 @@ else
   IOS_UNIT_SELECTION=("${IOS_EXCLUSIONS[@]}" -only-testing:PersonaTests
     -skip-testing:PersonaTests/AboutVersionRegularVisualTests
     -skip-testing:PersonaTests/AssistantHTMLCardTests -skip-testing:PersonaTests/AssistantHTMLSecurityTests)
+fi
+  if [ "$LANE" = ios-model-picker ]; then
+  # Run the two merged Assistant switching suites, then stop before unrelated batches.
+  IOS_UNIT_SELECTION=(-only-testing:PersonaTests/AssistantModelChoiceTests
+    -only-testing:PersonaTests/AssistantModelPanelModelTests)
 fi
   if [ "$LANE" = ios-regressions ]; then
   # Run only the two remaining regressions after the shared build/readiness gates.
@@ -460,8 +479,12 @@ fi
     -resultBundlePath "$OUTPUT/ios-unit.xcresult" test-without-building
   if [ "$LANE" = ios-focused ] || [ "$LANE" = ios-ipad-diagnostic ]; then
     result ios-unit "$SIM" PageSearchableTests StarredMessagesTests LauncherModelChoiceTests OmpNewAgentTests PaseoPermissionModesTests PaseoProvidersTests AboutVersionCompactVisualTests
-  elif [ "$LANE" != ios-regressions ]; then
+  elif [ "$LANE" != ios-regressions ] && [ "$LANE" != ios-model-picker ]; then
     result ios-unit "$SIM" TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests
+  fi
+  if [ "$LANE" = ios-model-picker ]; then
+    result ios-unit "$SIM" AssistantModelChoiceTests AssistantModelPanelModelTests
+    exit "$IOS_FAILED"
   fi
   if [ "$LANE" = ios-regressions ]; then
     result ios-unit "$SIM" MainPagesStackTests PhoneSystemToolsTests
