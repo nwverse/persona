@@ -54,7 +54,7 @@ export class Tokens {
   static readonly replyHeading4: number = 18;
   static readonly replyBodyLeading: number = 1.45;
   static readonly replyHeadingLeading: number = 1.3;
-  static readonly inlineCodeScale: number = 0.94;
+  static readonly inlineCodeScale: number = 0.9;
   static readonly codeLeading: string = '20fp';
   static readonly markdownHeading1: number = 32;
   static readonly markdownHeading2: number = 28;
