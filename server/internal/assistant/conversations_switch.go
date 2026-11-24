@@ -247,6 +247,11 @@ func (s *Service) planConversationSwitchItem(ctx context.Context, state conversa
 	}
 	item.Before = conversationExecutionNow(machine, row, c)
 	item.Target.Machine = cmp.Or(item.Target.Machine, item.Before.Machine)
+	if require == nil {
+		// advanceLogicalConversation inherits the source permission mode when omitted;
+		// record that same effective mode so restore_batch_id's fence matches the prepared segment.
+		item.Target.PermissionMode = cmp.Or(item.Target.PermissionMode, item.Before.PermissionMode)
+	}
 	if c != nil && c.Switch != nil {
 		return refuse("another logical switch is still running")
 	}
@@ -305,6 +310,9 @@ func (s *Service) planConversationSwitches(ctx context.Context, state conversati
 			continue
 		}
 		require := old.Target
+		if require.PermissionMode == "" {
+			require.PermissionMode = old.Before.PermissionMode
+		}
 		items = append(items, s.planConversationSwitchItem(ctx, state, st, old.Machine, old.ConversationID, old.Before, &require, resolve))
 	}
 	return items, checkConversationSwitchUnique(items)
