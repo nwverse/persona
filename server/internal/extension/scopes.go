@@ -14,6 +14,7 @@ const (
 	ScopeAgentsPermissionMode    = extwire.ScopeAgentsPermissionMode
 	ScopeAgentsRead              = extwire.ScopeAgentsRead
 	ScopeAssistantAsk            = extwire.ScopeAssistantAsk
+	ScopeSpaces                  = extwire.ScopeSpaces
 	ScopeCallPrefix              = extwire.ScopeCallPrefix
 	ScopeInboxRead               = extwire.ScopeInboxRead
 	ScopeInboxWrite              = extwire.ScopeInboxWrite
@@ -43,7 +44,7 @@ const (
 
 // HubScopes are the scopes, in the order the install screen lists them.
 var HubScopes = []string{ScopeKBRead, ScopeKBWrite, ScopeSentRead, ScopeInboxRead, ScopeInboxWrite, ScopeAgentsRead, ScopeAgentsControl,
-	ScopeAgentsPermissionMode, ScopeMachinesRead, ScopeMachinesPair, ScopeBrowserRun, ScopeNotify, ScopePushGrading, ScopeAssistantAsk, ScopeAssistantRead, ScopeAssistantMemoryRead, ScopeAssistantEntriesRead,
+	ScopeAgentsPermissionMode, ScopeMachinesRead, ScopeMachinesPair, ScopeBrowserRun, ScopeNotify, ScopePushGrading, ScopeAssistantAsk, ScopeSpaces, ScopeAssistantRead, ScopeAssistantMemoryRead, ScopeAssistantEntriesRead,
 	ScopeTodosRead, ScopeTodosWrite, ScopeDecisionsRaise, ScopeLeadersRead, ScopeLeadersWrite, ScopeAssistantDispatchPolicy, ScopeAssistantStartDefaults, ScopeDispatchGuard, ScopeModels,
 	ScopeTranscription, ScopeMarketRefreshOwn}
 
@@ -56,7 +57,7 @@ var HubScopes = []string{ScopeKBRead, ScopeKBWrite, ScopeSentRead, ScopeInboxRea
 // browser.run (which runs scripts in a paired computer's browser), and
 // market.refresh_own (which spends the source marketplace's API quota).
 func InEveryScope(s string) bool {
-	return s != ScopeAgentsPermissionMode && s != ScopePushGrading && s != ScopeAssistantStartDefaults && s != ScopeDecisionsRaise && s != ScopeDispatchGuard && s != ScopeMachinesPair && s != ScopeBrowserRun && s != ScopeMarketRefreshOwn
+	return s != ScopeAgentsPermissionMode && s != ScopePushGrading && s != ScopeAssistantStartDefaults && s != ScopeDecisionsRaise && s != ScopeDispatchGuard && s != ScopeMachinesPair && s != ScopeBrowserRun && s != ScopeMarketRefreshOwn && s != ScopeSpaces
 }
 
 // EveryScope is the scopes of a token of every scope (InEveryScope), in HubScopes' order.
@@ -79,6 +80,7 @@ var scopeTitles = map[string]string{
 	ScopeNotify:                  "scope_notify",
 	ScopePushGrading:             "scope_push_grading",
 	ScopeAssistantAsk:            "scope_assistant_ask",
+	ScopeSpaces:                  "scope_spaces",
 	ScopeTodosRead:               "scope_todos_read",
 	ScopeTodosWrite:              "scope_todos_write",
 	ScopeDecisionsRaise:          "scope_decisions_raise",

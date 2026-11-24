@@ -94,7 +94,11 @@ func (s *Service) scheduledLimitRetryDue(ctx context.Context, w delayedWait) (Ta
 	}
 	// The conversation may have gone on during the long wait. Replaying the task then could repeat work it already did.
 	if res.OK && (res.Session.Status == proto.StatusWorking || !sameTurn(res.Session, retry.LimitTurn)) {
-		s.logf("task %s run %s: its conversation went on after the usage limit: not retried", failed.RefID, failed.ID)
+		s.logf("task %s run %s: its conversation went on before retry: not retried", failed.RefID, failed.ID)
+		return Task{}, false, nil
+	}
+	if s.hasPendingTransientWake(failed.MachineID, failed.SessionID) {
+		s.logf("task %s run %s: transient recovery is pending on its conversation: not retried", failed.RefID, failed.ID)
 		return Task{}, false, nil
 	}
 	return cur, true, nil
@@ -102,7 +106,11 @@ func (s *Service) scheduledLimitRetryDue(ctx context.Context, w delayedWait) (Ta
 
 func (s *Service) dispatchScheduledLimitRetry(cur Task, w delayedWait) {
 	failed := w.Retry.Run
-	if _, err := s.runTask(cur, time.Now(), time.Now(), false, true); err != nil {
+	due := time.Now()
+	if (cur.Facts || cur.Report) && !failed.Due.IsZero() {
+		due = failed.Due // one scheduled occurrence keeps its identity across the automatic retry
+	}
+	if _, err := s.runTask(cur, due, time.Now(), false, true); err != nil {
 		s.logf("task %s retry: %v", failed.RefID, err)
 	}
 }

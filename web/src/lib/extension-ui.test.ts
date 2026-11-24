@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import {
-  actUI, applyBadge, askText, barSpans, blocks, chartExtent, compactNumber, edgeLabels, extensionSettingsHref, fieldValues, inboxItemPlace, inboxSourceItem, isHttps, isUnsupported, labelWidth, linear, niceTicks, numberProblem, outcome,
+  actUI, applyBadge, askText, barSpans, blocks, chartExtent, compactNumber, edgeLabels, extensionSettingsHref, extensionTrackRoute, fieldValues, inboxItemPlace, inboxSourceItem, isHttps, isUnsupported, labelWidth, linear, niceTicks, numberProblem, outcome,
   percent, placesOf, pointText, readView, refreshDelay, renderUI, seriesColors, stackedShare, submitValues, thinLabels, toneOf, uiContext, uiIcon, uiPlaces, UI_VERSION, type UIPlace, type UIView,
 } from "./extension-ui";
 
@@ -78,6 +78,11 @@ describe("画一页", () => {
     expect(outcome({ view })).toMatchObject({ view, reload: false });
     expect(outcome({ open_url: "https://example.com/keys" })).toMatchObject({ reload: false, url: "https://example.com/keys" });
     expect(outcome({ open_url: "http://example.com/keys" })).toMatchObject({ reload: false, url: undefined });
+    expect(extensionTrackRoute("persona://tracks/computer-example/reading/session-example")).toEqual({ name: "persona", mid: "computer-example", sid: "session-example" });
+    expect(extensionTrackRoute("persona://tracks/computer-example/health/session-example")).toBeUndefined();
+    expect(extensionTrackRoute("persona://settings/extensions/example")).toBeUndefined();
+    expect(extensionTrackRoute("https://example.com/tracks/computer-example/reading/session-example")).toBeUndefined();
+    expect(outcome({ open_url: "persona://tracks/computer-example/reading/session-example" })).toHaveProperty("track");
   });
   it("hides a section the extension says is not its gateway (404 unsupported), and only that", () => {
     expect(isUnsupported(new ApiError(404, "not my gateway", { code: "unsupported" }))).toBe(true);

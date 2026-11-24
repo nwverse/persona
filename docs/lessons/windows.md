@@ -121,9 +121,9 @@ The Windows project/session extension was checked with local tests, mock protoco
 - **A folder alone cannot identify a Codex project:** multiple projects can share it. Carry the catalog source ID, check its profile tag, resolve only verified legacy/native mappings and recheck the selected project's live roots. An unmigrated JSON-only project must fail explicitly instead of selecting another one by folder.
 - **A failed start can already have created a conversation:** preserve the returned session ID and separate creation from first-message delivery. Retry content through that session's send route; retry an empty Claude conversation with its known `resume_session_id` to finish import only. An unknown delivery result must stay uncertain, not trigger another creation.
 
-## Historical tray (WebView2, notification area)
+## Tray (WebView2, notification area)
 
-Retired with the independent Link service (#6770); the implementation notes are in [windows-records.md](../archive/operations/windows-records.md) and [link-menu-tray.md](../archive/operations/link-menu-tray.md). These findings are historical, not a reason to restore a tray UI. Found on a physical Windows 11 machine on 2026-11-07:
+The tray (`server/internal/linktray`, [windows.md](../operations/windows.md), "Tray") was removed with #6770 and restored, without notifications and with the Persona helper as its icon, on 2026-11-25. Found on a physical Windows 11 machine on 2026-11-07:
 
 - **WebView2 holds back its callbacks while one of them runs**: creating a WebView inside a `WebMessageReceived` handler gets the environment back, but the controller's completion waits until the handler returns.
   go-webview2's `Embed` spins a nested message loop until then, so it never returned: the pairing window stayed hidden, and the tray's thread stayed inside that loop (which also swallowed the quit message). Handle page messages after the event has returned (`app.fromPage` queues them).

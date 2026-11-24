@@ -254,6 +254,9 @@ func (n *Node) refreshCodexAppHistory(id string) error {
 		n.logf("codex app history %s: %v", src.thread, err)
 		return err
 	}
+	n.mu.Lock()
+	delete(n.metas, p)
+	n.mu.Unlock()
 	live := map[string]codexAppThread{}
 	for id, row := range codexAppThreads(src.home) {
 		live[id] = row

@@ -40,7 +40,7 @@ interface SystemAudioFocus {
  * The core's audio broker (#13847 item 2): one holder at a time across every module. A request is refused while the
  * holder's use outranks it ([AudioUse.outranks]); otherwise it takes the audio, and the previous holder's `onLost` runs
  * once. The system's focus follows the holder: taken for the new use, given back when the last grant
- * is released. Losing the system's focus to another app is not reported to modules (the voice conversation never was).
+ * is released. Losing the system's focus to another app is not reported to modules.
  */
 class AudioBroker(private val system: SystemAudioFocus, private val warn: (String) -> Unit = ModuleRegistry::logWarning) : AudioFocus {
     private class Holder(val owner: String, val use: AudioUse, val onLost: () -> Unit)

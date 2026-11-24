@@ -29,14 +29,14 @@ nonisolated extension ExtensionUIPlace: Identifiable {
 nonisolated extension ExtensionUIContext {
     #if os(iOS)
     /// The UI version a whole page of the app draws (`ExtensionPageView`): 8's columns (#9158), 9's gauge rings
-    /// (`ExtensionTiles.swift`), 10's native graph canvas (`ExtensionGraph.swift`, #9727) and 11's 3D scene
-    /// (`ExtensionScene.swift`, #12544).
-    static let pageVersion = 11
+    /// (`ExtensionTiles.swift`), 10's native graph canvas (`ExtensionGraph.swift`, #9727), 11's 3D scene
+    /// (`ExtensionScene.swift`, #12544) and 12's interactive map (`ExtensionMap.swift`).
+    static let pageVersion = 12
 
     /// The UI version the app's cards and sections draw: the same components, with code components read-only and a
-    /// graph or 3D scene as a still preview which opens full screen. Widgets, the watch and the system extensions keep
-    /// `version` (Shared, 3): they draw none of it.
-    static let cardVersion = 11
+    /// graph, 3D scene or map as a still preview which opens full screen. Widgets, the watch and the system extensions
+    /// keep `version` (Shared, 3): they draw none of it.
+    static let cardVersion = 12
     #else
     /// Other older surfaces keep the version they can actually draw.
     static let pageVersion = 8
@@ -104,6 +104,7 @@ nonisolated extension ExtensionComponent {
         case .carousel(let c): c.key
         case .graph(let c): c.key
         case .scene(let c): c.key
+        case .map(let c): c.key
         case .unknown: nil
         }
     }
@@ -853,6 +854,7 @@ extension APIClient {
     /// (`InboxSourceLink`), never another item's.
     static func opens(_ url: URL, item: String?, owner: String? = nil) -> Bool {
         if url.scheme?.lowercased() == "https" { return url.host()?.isEmpty == false && url.user == nil && url.password == nil }
+        if owner == "space-conversations" && ExtensionConversationLink.session(url) != nil { return true }
         // the subscription pages' Set Up with … (#5278): their text to the assistant, never an extension's
         if SubscriptionsUI.askText(url) != nil || SubscriptionsUI.isGraph(url) { return owner == SubscriptionsUI.id }
         if let settings = ExtensionSettingsLink.extensionID(url) { return owner != nil && settings == owner }

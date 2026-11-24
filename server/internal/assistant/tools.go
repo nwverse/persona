@@ -17,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/healthhost"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/kbwire"
@@ -49,7 +50,10 @@ var toolNames = []string{"resource_status", "ask_user", "notify_user", "supervis
 
 // Tools are the assistant's tools (assistant.tools).
 func (s *Service) Tools(ctx context.Context) []proto.Tool {
-	tools := toolsNamed(toolNames)
+	tools := toolsNamed(withKnowledgeUI(toolNames, s))
+	if !s.healthOn() { // the Health module's tool (health_layer.go)
+		tools = slices.DeleteFunc(tools, func(t proto.Tool) bool { return t.Name == healthhost.Tool })
+	}
 	// A bare Service has no settings store and is used by registry tests. With no
 	// store the opt-in is false; do not call the nil store function just to hide it.
 	if s.store != nil && ownerReplyApprovalOn(s.settings(ctx)) {
@@ -161,7 +165,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 	case spaceStateTool: // a space track's conversations only (track_space_md.go)
 		return s.toolSpaceStateUpdate(ctx, machine, self, args)
 	case "health_intake":
-		return s.toolHealthIntake(ctx, args)
+		return s.healthTool(ctx, args)
 	case "repository_add":
 		return s.toolRepositoryAdd(ctx, machine, self, args)
 	case "repositories_list", "repository_get":
@@ -242,7 +246,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		})
 		return s.toolKB(ctx, name, args)
 	case "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume":
-		return s.historyTools().Call(ctx, name, args) // kbhistory/tools.go
+		return s.historyTool(ctx, name, args) // the knowledge-ui module (knowledge_ui.go)
 	case "interaction_answer":
 		return s.toolInteractionAnswer(ctx, self, args)
 	case "ask_escalate":
@@ -682,15 +686,18 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// The tier is resolved first (an unknown one asks and starts nothing), then Model Settings' Agents laid over it as
 		// the start lays it: what runs is said on the card (a hand-off from a space that confirms what leaves it asks) and in the answer.
 		tier := strings.TrimSpace(a.Tier)
+		var tierChoice *tierPick // the tier's candidate when the tier gives the start its launcher
 		if tier != "" {
-			t, err := s.tierModel(ctx, tier)
+			pick, err := s.pickTierCandidate(ctx, tier, tierFacts{Machine: am.ID})
 			if err != nil {
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
+			t := pick.Tier
 			model := a.Model
 			if !layTier(t, &a.Launcher, &a.Model, &a.Effort) {
 				tier = "" // a launcher of its own: the tier gives it nothing
 			} else {
+				tierChoice = &pick
 				if a.Speed == "" && (model == "" || model == t.Model) {
 					a.Speed = t.Speed
 				}
@@ -737,6 +744,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			a.Speed, _ = run["speed"].(string)
 			a.PermissionMode, _ = run["permission_mode"].(string)
 			tier = "" // the tier's launcher is not what runs
+			tierChoice = nil
 		}
 		// traex, omp…: no effort or permission mode (launcher_modes.go). One this call names is refused before the user is asked, rather
 		// than by the computer after they said yes; one a tier filled in is dropped. pi, cursor: dropped either way.
@@ -1017,6 +1025,11 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		s.nameStartedAgent(sctx, am.ID, res.Session, title)
 		s.recordStartSuccess(ctx, am.ID, ranLauncher(launcher, res.Instead, res.Session))
+		if tierChoice != nil {
+			row := modelRoutingOf(*tierChoice, am.ID)
+			row.TodoID, row.SessionID = task.ID, res.Session.SessionID
+			s.recordModelRouting(ctx, row)
+		}
 		if said := s.startInsteadNote(ctx, am, res.Instead, res.Session); said != "" {
 			note += " Note: " + said + "." // the engine ran another of the same kind, its default model, a lower effort (#8140)
 		}
@@ -1569,12 +1582,13 @@ func (s *Service) machineIDs(ctx context.Context) string {
 }
 
 // agentCallerSpace uses the calling conversation on its own machine. Calls without
-// a known session can reach only the ordinary space, as with knownSpace.
+// a snapshot use only the node-attested launch directory, if available.
 func (s *Service) agentCallerSpace(ctx context.Context, machine, self string) string {
 	if self != "" && machine != "" {
-		if c, ok := s.session(ctx, machine, self); ok {
+		if c, ok := s.callerSpaceSession(ctx, machine, self); ok {
 			return runSpace(c) // a space's subdirectories count for the tools' access boundary
 		}
+		return runSpace(proto.Session{Cwd: s.callerCwd(ctx, machine, self)})
 	}
 	return ""
 }

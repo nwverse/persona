@@ -133,7 +133,7 @@ setting; the 4 GB Gradle daemon and non-heap allocations are separate.
 | Platform / reusable workflow | Local entry | Checks | Hosted runner | Planning duration (warm / cold) |
 | --- | --- | --- | --- | --- |
 | Server / `.github/workflows/server-test.yml` | `scripts/ci/server.sh` | gofmt, vet, complete Go tests against disposable Postgres 18, build, Windows cross-build/vet, the programs and tunnel tests with `server/build-tags.txt`, extension schema/examples/SDK bundle, Go SDK tests; hub route/architecture, prompts and hub i18n guards are Go tests | ubuntu-latest | 8–15 / 15–30 min |
-| Web / `.github/workflows/web-test.yml` | `scripts/ci/web.sh` | npm ci, scoped ESLint, TypeScript, complete Vitest, production build and privacy | ubuntu-latest | 2–4 / 4–7 min |
+| Web / `.github/workflows/web-test.yml` | `scripts/ci/web.sh` | npm ci, scoped ESLint, TypeScript, complete Vitest in two disjoint native file shards, production build and privacy; the core-only build and suite use the same two shards | ubuntu-latest, two lanes | 2–4 / 4–7 min |
 | Android / `.github/workflows/android-test.yml` | `scripts/ci/android.sh` | i18n/token/motion checker tests, translations/literals, token and motion ratchets, all-module lint and unit-test variants, debug APK | ubuntu-latest, two lanes | 8–15 / 15–30 min (branch runs with main's caches measured 15–18 min, #3056); each shard's job timeout is 90 minutes, while individual checks retain their own timeout and final verdict |
 | Apple / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios` and `scripts/ci/apple.sh macos` | PersonaKit/iOS/Watch/HTML and Mac build/unit tests, and in the iOS lane the isolation lint with its own tests (`scripts/test/isolation-lint.sh`; `docs/apple/performance.md`, "Isolation lint") and the no-CallKit check of the device and simulator apps (`scripts/release/check_no_callkit.py`; `docs/operations/release.md`, "No CallKit"); synthetic configuration, no distribution signing; real results remain visible | macos-26 runners, Xcode 26.0.1 (Swift 6.2) | queue and execution measured separately |
 | iOS 18.6 compatibility / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios18` | offline `PersonaTests` at the deployment floor, with iPhone 16 Pro and iPad layout coverage, separate HTML batches and a test-host restart check | macos-15 (arm64), Xcode 26.3 | one runner for up to 150 minutes per manual dispatch, about 8.86 GB to download a missing runtime |
@@ -141,6 +141,13 @@ setting; the 4 GB Gradle daemon and non-heap allocations are separate.
 | Rust core / `.github/workflows/core-test.yml` | `scripts/ci/core.sh` | rustfmt, clippy, the shared core's unit tests and the fixtures it implements (directly and through its runtime), generated codecs up to date, the HarmonyOS NAPI binding linted for `aarch64-unknown-linux-ohos` with its `ohos` feature (the Rust target only, no SDK and nothing linked) and its notices, the generated ArkTS codec against the real runtime on the host (`harmony/tests/core-host/`, Node.js from the workflow) plus the two existing ArkTS core tests, release library, an independently compiled C11 client and dynamic-export check on Linux (not Swift/Apple ABI); the Android lane also builds it for `:core:rustcore`'s binding tests | ubuntu-latest | measured on the first runs |
 | Runtimes / `.github/workflows/runtimes-test.yml` | `scripts/ci/runtimes.sh` | TypeScript SDK typecheck/test/portability, every runtime integration's npm tests | ubuntu-latest | 2–4 / 4–7 min |
 | Container and Release / `.github/workflows/release.yml` | `scripts/ci/hub-image.sh` | amd64 build; isolated Compose Postgres, HTTP/TLS health, pairing, web, admin isolation, file ownership/0600; publication remains amd64+arm64, then a version-tag run creates the GitHub Release | ubuntu-latest | 8–15 / 15–30 min |
+
+Web's hosted workflow sets `PERSONA_WEB_TEST_SHARD` to `1/2` and `2/2` on two independent runners, with `fail-fast: false`.
+Vitest partitions both the ordinary and core-only test files natively, so their shard union is the complete suite and the
+partitions do not overlap. The small Node regression wrapper runs only on shard 1; local `npm test` and `npm run
+test:core-only` leave the variable unset and still run everything. An explicitly requested local shard uses the same
+contract. Each hosted lane repeats lint, typecheck and the production/core-only builds: this reduces wall-clock latency at
+the cost of repeated runner setup and compilation, not by dropping tests or raising a deadline (#14907).
 
 These planning estimates predate sharding and are not measured success claims; use job timestamps and each script's PASS/FAIL/TIMEOUT
 durations for an actual run. Parallelism reduces wall-clock latency but can increase total runner minutes through repeated setup and
@@ -156,6 +163,10 @@ tracked in #1214; cache-based test substitution is not allowed.
 
 To check the iOS deployment floor (#10261), dispatch **Apple CI** with lane **ios18**
 (`gh workflow run apple-test.yml -f lane=ios18`). The regular CI workflow continues to select `ios`.
+Selecting `lane=ios` runs both the main `apple` job (`scripts/ci/apple.sh ios`, 120-minute limit) and the parallel
+`ios-core-only` job (`scripts/ci/apple.sh ios-core-only`, 60-minute limit, building `PERSONA_CORE_ONLY=YES` without
+feature modules) under the same `apple` workflow call, so a failure in either blocks **CI required** (#14496);
+`gh workflow run apple-test.yml -f lane=ios-core-only` runs the core-only build on its own.
 The compatibility job uses the runner's installed iOS 18.6 image, or requests that exact version from Xcode.
 Each dispatch resolves packages, builds the ad-hoc test host, and runs the offline suites with the regular iOS fixture exclusions.
 The About version comparisons use their English visual configuration and disposable screenshot directories. The compact suite
@@ -1076,6 +1087,17 @@ does not drive the direction's running mark. It is off by default and composes w
 legacy 404 intact. `python3 -I scripts/mock/test_direction_tree_mock.py` checks the fixture and its reset behavior.
 `OutsideDirectionsUITests` uses it through `PERSONA_OUTSIDE_DIRECTIONS_HUB` for the mixed sidebar's interactions and for
 sidebar / To-dos / Agents captures in light and dark, at default and AX5 text (`PERSONA_SHOTS` saves them).
+
+`MOCK_DASHBOARDS=1|off|empty|removed|pinned` (`scripts/mock/dashboards_mock.py`, #15017) plays the default manager's
+Dashboards for the clients: the `assistant_pages` feature, the `dashboards` switch in `GET`/`PUT /api/v1/assistant`, the
+`-pages` places appended to `GET /api/v1/extensions/-/ui` (the index while a page is kept or one waits in Recently
+removed, then up to three pinned pages) and their pages over `POST /api/v1/extensions/-pages/-/ui/{index|pg_…}`. A tap on
+the running page's Done today answers the toast and a footer line "Received"; `GET /mock/dashboards?advance=1` moves it
+on to delivered, working and the page's update. Pinning, removing and the switch push `assistant_pages` and
+`extension_ui {invalidate}`. `off` keeps the pages with the switch off and `empty` has the switch on with nothing kept:
+both list nothing, for before / after captures; `removed` lists the index alone; `pinned` three pinned pages. Without
+`MOCK_EXTENSIONS=1` it also announces UI slots and lists only its own places. `python3 scripts/mock/test_dashboards_mock.py`
+checks it.
 
 **No new switch in `mock_hub.py` (#12737).** Most of what `mock_hub.py` gains comes with a new `MOCK_*` switch (89 of the 195
 commits that changed it from 2026-11-14 to 2026-11-22 added one, with 72% of its net added lines), so its switch names are

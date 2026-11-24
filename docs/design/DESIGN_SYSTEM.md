@@ -517,8 +517,8 @@ on-demand model panel, not the everyday Assistant home (#6887).
 `RunningTokenRatePopover`, and cindy wins over what this document said before; `web/src/views/chat/RunningStatusBar.tsx`,
 `docs/web/web.md` "Live status and streaming"). One row above the composer while a turn runs, 13 px medium, 8 px side and
 6 px vertical padding, its two sides 12 px apart:
-- Left: a 14 px mark and a short state in `--status-accent`, truncating. The sparkle (layers while compacting, activity for
-  background subtasks, a 2.5-stroke check for **Done**). An Agent session says what the turn does in cindy's words
+- Left: a 14 px mark (`--accent-ink` for normal work, `--ai` for background workflows, `--status-working` for retries) and a short state in `--ink-2` (or `--status-working` for retry headlines), truncating. The sparkle (layers while compacting, activity for
+  background subtasks, retry while retrying, a 2.5-stroke check for **Done**). An Agent session says what the turn does in cindy's words
   ("Thinking…", "Generating…", "Editing files…", "Searching the web…", "Spawning a subagent…", "Bash running…",
   "Compacting context…", "Working…"); a Persona conversation says it in cindy's plain phases ("Thinking…", "Replying…",
   "Reading files…", "Updating files…", "Searching files…", "Searching the web…", "Reading web pages…", "Organizing the
@@ -2263,6 +2263,8 @@ for VoiceOver, as section 4.8.1 keeps red for what is still wrong; one that time
 page cut, the result shows the output's end (End of output), where a build or test run says why it failed, before View
 full text. Without an outcome (an older node) a row draws as before.
 
+**Tool views (`tool_views`) and Map component (UI version 12, #14730)**. Out-of-band declarative views returned by connector tools (`Item.tool_views` / `Fold.tool_views`) render **outside** the collapsed tool work summary, beside "Images viewed this turn" and above the final reply, so visual routes and locations are immediately visible without opening raw tool calls (while Super Rule 2 keeps them out of model context). `map` components follow platform map styling matching the shell's current light/dark scheme, preserve semantic `tone` or the 11 named `Hue` colors (never both) alongside plain text labels/metrics rather than conveying meaning by color alone, keep `wide` (16:9) / `square` (1:1) / `tall` aspect frames bounded in chat cards, and use standard `>= 44 pt` / `48 dp` tap targets for expanding interactive map detail sheets (with route/marker inspection and verified `https://` map links). UI copy ships in English, Simplified Chinese and Japanese.
+
 ### 4.7.1 Opening and closing in a chat keeps the tapped row in place
 
 Anything that opens or closes inside a chat, in Persona's conversations and Agent chats alike (work lines, tool steps,
@@ -2406,7 +2408,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   side (`folded_side`, its own Codex child) goes with that side.
 - **One count, per session**: the Agents list's Needs you section, its Needs you filter and the tab's badge count the sessions that wait for the user, each once, its requests in its row oldest first, the way `docs/assistant/managers.md` ("Counts") counts an assistant's waiting agents (principle 4). The Inbox's Agent section and the Assistant's composer entries open the same requests; the composer's entries count tasks (`docs/assistant/unified-entry.md`).
 - **Background rounds and supervisors** (#4314, `docs/assistant/assistant.md` "Background rounds"): in the main conversation a round another conversation, a scheduled task or a follow-up started reuses the quiet supervision record, one muted line `@<source> · Background round` that always opens, never a new component; a round that asked or told the user stays shown. A completed, non-live round with a successful silent finish and no promotion instead leaves no timeline row and adds no unread count or badge. **Background activity**, reachable from the conversation menu and Inbox, retains the full round, its inline tools and its `task` / `routed` / `answered` feed cards inside the same half-open interval; plans, message cards, notices and decisions stay in the main timeline. Opening the list marks nothing seen and full-history APIs stay complete. A successful internal `task_review accepted` receipt with hub-issued `background=true` follows this same split; the hub derives it only from the current plan's `user_requested` / `parent` and the supervision ledger's current completed `auto_review` / `round`, while `user_check`, `needs_user`, unmarked legacy reviews and unknown provenance stay visible. The main conversation's waiting count contains only current direct user questions, user-only authorizations and explicit user-acceptance deliveries: unstarted or failed-start tasks, agent permission requests, terminal dialogs and superseded questions stay out. Tapping it opens exactly the counted items on iPhone and the shared web/Mac UI, without changing the Agents list's separate count. While background folding is on, the composer's Needs you groups rows under the conversation supervising them, this one's first, with a plain caption header and no other change: the same rows, order within a group and count.
-- **Cut off** (web, 2026-11-14): the dock's cards over the composer keep to their cap (55% of the visible height, #5375) and
+- **Cut off** (web, 2026-11-14): the dock's cards over the composer keep to their usual cap (55% of the visible height, #5375) and
   scroll; a card whose answer row stands at the box's bottom edge while the end of its body is under that row or below
   the box says so in that row: its title and what it asks (the command) beside the answers, the whole of it as the
   tooltip, a click bringing the whole card into view with the focus on it. A card that asks only its title (a question)
@@ -2414,6 +2416,9 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   cut off, the first says **N pending** at the end of its kicker row (the room that row already has), on a narrow screen
   once the stack is opened in full (folded, its "N more" row says it), so the stack never hides how many it holds.
   Wherever an Allow is in view, what it allows is in view too.
+- **Answer a waiting command** (web, #14571): the composer's **Answer** focuses that command's existing card. On compact
+  screens the dock may grow to 72% of the visible height, with the composer still below it. Returning to the composer or
+  resolving the card restores the usual cap. A reported Antigravity queue hold reuses the background wait status.
 - **Room** (web, #4656): an open tray of requests takes the room its cards need, up to most of the visible height (the assistant's Needs you / In progress tray lets the dock grow to 82% of it while open), never a fixed short box. Its header (title, All, Expand, Close) stays and only its list scrolls; a card's answer row stays at the list's bottom edge with a hairline over what scrolls under it. **Expand** in the header fills the chat column for going through many requests, the composer still on screen; the same button, **Restore size**, or closing the tray gives the room back.
 - **Card text**: the title names the request and what happens next, in the same words on every client: the request titles in section 5.6. The body gives only what the decision needs: the command, the plan's summary, the question and its choices. Commands render formatted, never as raw JSON. A script ask whose interaction has `format: "markdown"` draws its permission summary or question with the existing reply Markdown renderer on iOS and the web, including inline styles, lists and short tables; missing and unrecognized formats keep the literal card text (#10857).
 - **A plan's recorded following mode** (#3784): when the plan interaction carries `plan_then`, the existing approval card names that mode with the general permission-mode label and offers one approval, not a competing set of modes; the recorded mode came from the task's start, so it wins on older clients too. Send Back stays. A card without the field keeps the existing approval-mode choices and default. This changes only the affected approval's content, reusing the current buttons, menu-free action row and localized labels.
@@ -2940,7 +2945,7 @@ This requested HarmonyOS presentation uses compact icon submissions while retain
 | DS-31 | Web working and caution are one color: `--status-working` is `var(--orange)`, the caution role, so a direction-tree task's 在做 and its 卡住 / 待验收 (#4352) differ only by their word, where Apple has amber working and orange caution | `web/src/styles.css:264`; `web/src/lib/direction-tree.ts` (`DIRECTION_STATE_TONE`) | Working and stuck read as the same urgency at a glance | Give the web the Apple working amber as its own token (with DS-01's move of needs-you to blue), then point `--status-working` at it |
 | DS-31 | Defined but unused tokens: `Space.lines`, `Space.block`, `Size.box140`, `Size.meter`, `Attach.badgeTarget`, `Syntax.all`, `Icon.forkChat`; on Android `Tokens.System`, `Surface`, `Shape`, `Watch` | `apple/Shared/Design/Theme.swift`; `apple/Shared/Design/Icons.swift:138` | Noise | Delete or use |
 | DS-32 | `SecureField` still used for secrets on iOS; `HubTag` and `StatusLabel` dead | `apple/Persona/Views/Settings/ConnectorSignInViews.swift:553`; `apple/Persona/Views/Settings/ExtensionAuthViews.swift:206`; `apple/Persona/DesignSystem/HubComponents.swift:16`; `apple/Persona/DesignSystem/Components.swift:348` | Breaks a written rule; dead code | Use `SecretField`; delete the dead views |
-| DS-33 | Pages read `AppStyle.current.usesBeautifulUI` and duplicate BeautifulUI forms (about 330 lines) | `apple/Persona/Views/Interactions/InteractionViews.swift:1323`; `apple/Persona/Views/Voice/VoiceBar.swift:135` | Two renderings to test | Move branches into design-system components |
+| DS-33 | Pages read `AppStyle.current.usesBeautifulUI` and duplicate BeautifulUI forms (about 330 lines) | `apple/Persona/Views/Interactions/InteractionViews.swift:1323`; `apple/Modules/Voice/VoiceBar.swift:135` | Two renderings to test | Move branches into design-system components |
 | DS-34 | Reduce Motion not honored by navigation, toast, press and symbol effects | `apple/Persona/Views/Shell/ShellPager.swift:158`; `apple/Persona/DesignSystem/Toasts.swift:74`; `apple/Persona/DesignSystem/Styling.swift:187` | Accessibility | Gate through `Theme.Motion.reduced` |
 | DS-35 | Resolved 11-11 (#4209): the Android ratchet scans the design system module too (331 color and 1193 dp literals at the start), so its literals can only go down | `scripts/app/android_token_baseline.py`; `android/core/designsystem/tools/token-baseline.json` | None left; moving the literals to tokens is phase 1's T2 to T4 | Keep lowering the baseline |
 
@@ -3055,7 +3060,7 @@ A declared list of extension accounts, gateways or similar entries (#9504) belon
 ## Sidebar icon colors (#10822)
 
 Who it serves: anyone whose sidebar lists many pages and who finds it quicker to scan when each page has a color. It is
-an option, off by default (principle 2): Settings › General › Appearance › **Sidebar icons**, **Monochrome** or
+an option, off by default (principle 2): Settings › Advanced › Appearance › **Sidebar icons** (#13398), **Monochrome** or
 **Colored**, kept in this browser as the theme color is (`web/src/lib/sidebar-icons.ts`). Monochrome is the sidebar as
 it was, pixel for pixel: every page's line icon in `--ink-3`, the open page's in `--ink`, and nothing is stored.
 
@@ -4242,3 +4247,46 @@ a menu with one destructive Remove, never a bare x that removes on touch: a chip
 nothing. iOS draws the close mark before the words, where every `Chip` draws its symbol (#6578; the web puts its
 button after them), and the menu's label is a finger's height (`tapTargetHeight`). A chip the user may not take away carries the lock mark and is read as set by its owner. What was removed comes
 back from a + menu at the end of the row. The change shows at once and rolls back with a toast when the hub refuses it.
+
+## Usage treemap (#14576)
+
+A computer's disk usage map (`docs/server/machine-usage-map.md`, "The map") is a squarified treemap: every box's area is
+its bytes, and the local disk and the cloud are drawn on one scale. iOS draws it natively (`TreemapLayout.swift`,
+`UsageTreemapView.swift`, `UsageMapView.swift` under `apple/Persona/Views/Machines/`); the web draws the same map
+with the same values as `--umap-*` in `web/src/views/machines/usage-map.css` (loaded with the map, not the token
+sheet), labels in `--ink` on every fill.
+
+| Token (`Theme.UsageMap`, `apple/Shared/Design/UsageMapTokens.swift`) | Light | Dark | Meaning |
+|---|---|---|---|
+| `apps` | `#A9C8F5` | `#234B82` | Applications |
+| `personal` | `#A6DBB3` | `#1F5C35` | The user's own folders |
+| `appdata` | `#CDB9F2` | `#4A3685` | App data and containers |
+| `cache` | `#F6C78F` | `#7A4411` | Caches the hub can clean |
+| `system` | `#C5CAD3` | `#404753` | The system and what it keeps |
+| `free` | `#EEF0F3` | `#1C1F23` | Free space (the strip at the right or bottom edge) |
+| `other` | `#DADADF` | `#35353A` | Not measured / anything else |
+| `Age.recent` | `#E6EEF7` | `#262B32` | Last used within 30 days |
+| `Age.months` | `#BFD5EE` | `#22405F` | 30 to 180 days |
+| `Age.halfYear` | `#8DB5E0` | `#1F5187` | 180 to 365 days |
+| `Age.year` | `#5D93D0` | `#1D62B0` | More than a year |
+
+- Labels use `Theme.UsageMap.ink` on every fill; StyleSpecTests keeps it at 4.5:1 or more on all eleven fills in both
+  modes. Color is never the only signal: the detail line, the selection rows and VoiceOver say the kind and the age.
+- Nesting: three levels on a wide map, two on a phone. A box draws its children only when it is at least 72 × 50 pt
+  (96 wide on a wide map) after its 22 pt title strip; labels draw only where they fit, never truncated mid-box.
+- One `Canvas` draws all boxes; a custom `Layout` places at most 200 hit targets, each at least 24 pt, over the largest
+  boxes. Tap opens a box (or selects a leaf); touch and hold opens its menu, where an action that cannot apply stays
+  visible, disabled, with the reason. Drag a box onto the cloud side to offload it. The keyboard moves between
+  neighbors with the arrows, opens with Return, selects with Space and goes up with Escape. VoiceOver reads each target
+  with its custom actions.
+- Zooming animates one progress value (`Theme.UsageMap.zoom`); with Reduce Motion it cross-fades.
+- Local | channel | cloud: the cloud side keeps at least 120 pt, and when the shared scale would make it wider than
+  45 % it is compressed and says so ("Cloud 1 : N"). On a phone the sides are stacked. Ribbons in the channel join an
+  offloaded item's ghost on the local side to its box in the cloud.
+- The tray under the map holds the "what if" (free space after the selection), the selection as rows (the map's
+  accessible list), its actions, the free-up goal slider and an offload's progress. Every change goes through a
+  confirmation that names what it touches; installing an offload tool is a separate confirmation.
+
+Development: `MOCK_USAGE_MAP=1 python3 scripts/mock/mock_hub.py` serves a 93 % full Mac Studio, two folder levels that
+measure for a moment first, and one neutral offload provider; `-tab settings -openMachines YES -openUsageMap studio`
+(or `reclaim:studio`) opens the map at launch in Debug builds.

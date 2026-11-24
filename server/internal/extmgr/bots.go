@@ -73,7 +73,7 @@ type FeishuBotSettings struct {
 	// dropped past botAISourcesKeep. Like the topic chats, the owner's: it goes when the owner does.
 	AISources []BotAISource `json:"ai_sources,omitempty"`
 	// NudgeAfter is how many minutes a card the bot sent may wait unanswered before the assistant nudges under it once
-	// (#6084, assistant/feishu_nudge.go): 0 is off, nil (never set) is assistantwire.NudgeAfterDefault.
+	// (#6084, modules/lark/nudge.go): 0 is off, nil (never set) is assistantwire.NudgeAfterDefault.
 	NudgeAfter *int `json:"nudge_after,omitempty"`
 	// SourceReportDelayMinutes is the preview window before a reply to the source group. Zero skips it.
 	SourceReportDelayMinutes *int `json:"source_report_delay_minutes,omitempty"`

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -65,8 +66,12 @@ func TestSegmentSpanPastTheSourceEndIsEmptyAtTheEnd(t *testing.T) {
 
 func TestSegmentProjectionRewritesReferencesWithoutMutatingSource(t *testing.T) {
 	s := Segment{ID: "second", Ordinal: 2, Offset: 100}
+	lat, lon := 39.9, 116.3
+	view := wire.View{Fallback: "Route", Sections: []wire.Section{{Items: []wire.Component{{Type: wire.ComponentMap, Markers: []wire.MapMarker{{ID: "p1", Lat: &lat, Lon: &lon, Label: "A"}}}}}}}
 	it := proto.Item{ID: "tool", Seq: 2, Stored: &proto.StoredItem{MachineID: "physical", SessionID: "private", History: "source", ItemID: "tool"},
-		Fold: &proto.Fold{ThroughSeq: 5, ThroughID: "last", LatestThinking: &proto.Item{ID: "thought", Seq: 3}}}
+		ToolViews: []wire.View{view},
+		Fold: &proto.Fold{ThroughSeq: 5, ThroughID: "last", LatestThinking: &proto.Item{ID: "thought", Seq: 3},
+			ToolViews: []proto.FoldToolView{{ItemID: "res1", ToolUseID: "use1", Tool: "amap_route", View: view}}}}
 	before, _ := json.Marshal(it)
 	got, ok, err := s.Project(it, "logical-machine", "logical-chat", "logical-history")
 	if err != nil || !ok {
@@ -78,9 +83,14 @@ func TestSegmentProjectionRewritesReferencesWithoutMutatingSource(t *testing.T) 
 	if got.Fold.ThroughSeq != 105 || got.Fold.ThroughID != s.ItemID("last") || got.Fold.LatestThinking.Seq != 103 {
 		t.Fatalf("fold is not projected %+v", got.Fold)
 	}
+	if len(got.Fold.ToolViews) != 1 || got.Fold.ToolViews[0].ItemID != s.ItemID("res1") || got.Fold.ToolViews[0].ToolUseID != s.ItemID("use1") {
+		t.Fatalf("fold tool views not projected: %+v", got.Fold.ToolViews)
+	}
+	got.ToolViews[0].Fallback = "Mutated"
+	got.Fold.ToolViews[0].Tool = "mutated"
 	after, _ := json.Marshal(it)
 	if string(before) != string(after) {
-		t.Fatal("mutated runtime-owned pointers")
+		t.Fatal("mutated runtime-owned pointers or slices")
 	}
 }
 

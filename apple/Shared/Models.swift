@@ -1229,6 +1229,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// nil for the assistant's own. Not a host's space (`spaceKind` / `spaceID` are herdr's and Orca's).
     var assistantSpace: String? = nil
     var spaceKind: String?
+    /// Terminal host reported by the hub ("herdr", "herdr-core", "orca", "tern", "rex", "botmux"); optional on older hubs.
+    var host: String? = nil
     var spaceID: String?
     var spaceName: String?
     var spaceIndex: Int?
@@ -1654,7 +1656,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case machineID = "machine_id", sessionID = "session_id", paneID = "pane_id", tabID = "tab_id",
              workspaceID = "workspace_id", agentName = "agent_name", startedByPersona = "started_by_persona", assistant, archived, state,
              assistantSpace = "space",
-             spaceKind = "space_kind", spaceID = "space_id", spaceName = "space_name", spaceIndex = "space_index", parentSpaceID = "parent_space_id",
+             spaceKind = "space_kind", host, spaceID = "space_id", spaceName = "space_name", spaceIndex = "space_index", parentSpaceID = "parent_space_id",
              slotID = "slot_id", slotName = "slot_name", slotIndex = "slot_index", paneIndex = "pane_index", seenAt = "seen_at", stateSince = "state_since", queued, background, loop, goal, subagents, workflows, ports,
              updatedAt = "updated_at", lastText = "last_text", asks, awaitsReply = "awaits_reply", backgroundWaiting = "background_waiting", backgroundWorking = "background_working", activity, activityAt = "activity_at", pendingInteractions = "pending_interactions", rev, suggestion, suggestionRisky = "suggestion_risky",
              starting, awaitingFirstMessage = "awaiting_first_message", startError = "start_error", startErrorCode = "start_error_code", startErrorArgs = "start_error_args", todo, quiet, hubGroup = "app_hub_group",
@@ -1738,6 +1740,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         hiddenByDirectory = try c.decodeIfPresent(Bool.self, forKey: .hiddenByDirectory)
         assistantSpace = try c.decodeIfPresent(String.self, forKey: .assistantSpace).flatMap { $0.isEmpty ? nil : $0 }
         spaceKind = try c.decodeIfPresent(String.self, forKey: .spaceKind)
+        host = try c.decodeIfPresent(String.self, forKey: .host)
         spaceID = try c.decodeIfPresent(String.self, forKey: .spaceID)
         spaceName = try c.decodeIfPresent(String.self, forKey: .spaceName)
         spaceIndex = try c.decodeIfPresent(Int.self, forKey: .spaceIndex)
@@ -2610,11 +2613,27 @@ nonisolated struct Fold: Codable, Hashable, Sendable {
     var supervisionUser: Bool? = nil
     /// What the folded items used (#5426). Omitted when none of them carried usage, and from older nodes.
     var usage: [TokenUsage]? = nil
+    /// Declarative UI views returned out-of-band by folded tool results (`Fold.toolViews`, UI version 12).
+    var toolViews: [FoldToolView]? = nil
 
     enum CodingKeys: String, CodingKey {
         case items, tools, thoughts, until, images, tasks, usage
+        case toolViews = "tool_views"
         case supervisionUser = "supervision_user"
         case throughSeq = "through_seq", throughID = "through_id"
+    }
+}
+
+/// One declarative UI view returned out-of-band by a folded run's tool_result (`Fold.toolViews`, UI version 12).
+nonisolated struct FoldToolView: Codable, Hashable, Sendable {
+    var itemID: String?
+    var toolUseID: String
+    var tool: String
+    var view: ExtensionView
+
+    enum CodingKeys: String, CodingKey {
+        case tool, view
+        case itemID = "item_id", toolUseID = "tool_use_id"
     }
 }
 
@@ -2823,6 +2842,8 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var sourceFingerprint: String? = nil
     /// The model that wrote this assistant item, including tool work after the last words. Older hubs omit it.
     var model: String? = nil
+    /// kind == .toolResult: out-of-band declarative UI views (maps, routes, search pins) drawn in the chat, never shown to models.
+    var toolViews: [ExtensionView]? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome, usage, model
@@ -2830,6 +2851,7 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
         case sourceFingerprint = "source_fingerprint"
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",
              clientMsgID = "client_msg_id", supervisionUser = "supervision_user"
+        case toolViews = "tool_views"
     }
 
     /// The text without the line the hub adds where it cut it (the app offers the whole text itself).

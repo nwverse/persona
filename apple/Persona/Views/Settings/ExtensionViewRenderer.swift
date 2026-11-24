@@ -112,9 +112,10 @@ struct ExtensionParts: Identifiable {
                 // receive the assistant sandbox context).
                 if case .unknown = c { leftOut = true; continue }
                 #if !os(iOS)
-                // Only iPhone and iPad draw UI version 11's 3D scene (#12544); older surfaces leave an assistant card's
-                // raw scene out rather than framing an empty section.
+                // Only iPhone and iPad draw UI version 11's 3D scene (#12544) and UI version 12's interactive map;
+                // older surfaces leave an assistant card's raw scene/map out rather than framing an empty section.
                 if case .scene = c { leftOut = true; continue }
+                if case .map = c { leftOut = true; continue }
                 #endif
                 if case .html = c, !includeHTML { leftOut = true; continue }
                 parts[parts.count - 1].append(Item(id: Item.id(c, section: i, index: j), component: c))
@@ -272,6 +273,7 @@ enum ExtensionUIStyle {
         case "wind": Theme.Icon.pluginWind
         case "leaf": Theme.Icon.pluginLeaf
         case "car": Theme.Icon.pluginCar
+        case "map": Theme.Icon.map
         case "location": Theme.Icon.currentLocation
         case "robot": Theme.Icon.pluginRobot
         case "wifi": Theme.Icon.pluginWifi
@@ -401,6 +403,15 @@ struct ExtensionItemRow: View {
         case .scene(let scene):
             #if os(iOS)
             ExtensionScene(scene: scene, controller: model, link: $link)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: Theme.Space.s, leading: Theme.Space.flush,
+                                          bottom: Theme.Space.s, trailing: Theme.Space.flush))
+            #else
+            EmptyView()
+            #endif
+        case .map(let map):
+            #if os(iOS)
+            ExtensionMap(map: map, controller: model, link: $link)
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets(top: Theme.Space.s, leading: Theme.Space.flush,
                                           bottom: Theme.Space.s, trailing: Theme.Space.flush))
@@ -537,6 +548,7 @@ struct ExtensionViewStack: View {
         if case .unknown = c { return true }
         #if !os(iOS)
         if case .scene = c { return true }
+        if case .map = c { return true }
         #endif
         if case .html = c, !html { return true }
         return false
@@ -713,7 +725,12 @@ struct ExtensionPageView: View {
                 if let error = outcome.error { app.toast = Toast(error, style: .error) }
                 else if let toast = outcome.toast { app.toast = Toast(toast) }
                 if let url = outcome.url, !app.openIfExtensionSettings(url, from: outcome.settingsOwner), !app.openIfAsk(url), !app.openIfSourcesGraph(url) {
-                    link = LinkTarget(url: url)
+                    if let key = ExtensionConversationLink.session(url) {
+                        app.extensionOpen = nil
+                        app.openAssistantConversation(key)
+                    } else {
+                        link = LinkTarget(url: url)
+                    }
                 }
             } else { await page.load() }
         }
