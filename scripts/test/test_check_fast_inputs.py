@@ -344,7 +344,7 @@ class CheckFastServerInputsTests(unittest.TestCase):
                                  self.vet_calls(), out)
 
     def test_a_group_with_no_windows_package_is_left_out_of_the_windows_vet(self):
-        # Every file of server/internal/fleetsoak is //go:build unix and server/cmd/password-wasm is js && wasm: given
+        # Every file of server/scripts/fleetsoak is //go:build unix and server/cmd/password-wasm is js && wasm: given
         # only such groups, GOOS=windows go vet says "no packages to vet" and exits 1, where CI's ./... passes over them.
         # This go says so too, and its go list answers as the real one does for such a group. A group is left out only
         # on that answer: a go list that fails, or lists nothing without the warning, leaves the group in.
@@ -373,16 +373,16 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.assertIn(left_out, out)
         self.assertEqual(["server|vet -ldflags= ./..."], self.vet_calls())
 
-    def test_a_removed_group_is_left_out_of_the_windows_vet(self):
-        # The group's directory is gone: go vet of ./internal/bar/... fails on the missing directory alone. The other
-        # changed group is still vetted for Windows.
-        (self.repo / "server/internal/bar/bar_test.go").unlink()
-        (self.repo / "server/internal/bar").rmdir()
-        self.write("server/internal/foo/x.go", "package foo\n")
-        out, _ = self.check_fast()
+    def test_a_moved_tool_runs_tests_and_windows_vet_at_its_new_path(self):
+        (self.repo / "server/scripts").mkdir()
+        self.git("mv", "server/internal/bar", "server/scripts/bar")
+        out, packages = self.check_fast()
+        self.assertIn("./scripts/bar/...", packages, out)
+        self.assertNotIn("./internal/bar/...", packages, out)
+        self.assertNotIn("server|build ./...", self.go_calls(), out)
         self.assertIn("PASS     server go vet (", out)
         self.assertIn("; windows vet left out ./internal/bar/...: no package there builds for windows)", out)
-        self.assertEqual(["server|vet -ldflags= ./...", "server|GOOS=windows vet -ldflags= ./internal/foo/..."],
+        self.assertEqual(["server|vet -ldflags= ./...", "server|GOOS=windows vet -ldflags= ./scripts/bar/..."],
                          self.vet_calls())
         self.assertNotIn("server|GOOS=windows list ./internal/bar/...", self.go_calls())
 
@@ -667,12 +667,12 @@ def load_paths(root=ROOT):
     return module
 
 
-# A fake node that reports major version 22 (check-fast.sh's gate) and passes anything else, and a fake npm and npx
-# that record each call ("<cwd basename>|<args>", npx's as "npx <args>") instead of installing or testing anything.
-FAKE_NODE = '#!/bin/sh\nif [ "$1" = -e ]; then echo 22; fi\n'
+# A fake node that reports major version 22 (check-fast.sh's gate) and records the supervised Vitest entry, and fake
+# npm/npx commands that record each call ("<cwd basename>|<args>", npx's as "npx <args>") instead of installing/testing.
+FAKE_NODE = '#!/bin/sh\nif [ "$1" = -e ]; then echo 22; elif [ "$1" = scripts/process-group.mjs ]; then printf "%s|node %s\\n" "${PWD##*/}" "$*" >> "$FAKE_NPM_LOG"; fi\n'
 FAKE_NPM = '#!/bin/sh\nprintf "%s|%s\\n" "${PWD##*/}" "$*" >> "$FAKE_NPM_LOG"\n'
 FAKE_NPX = '#!/bin/sh\nprintf "%s|npx %s\\n" "${PWD##*/}" "$*" >> "$FAKE_NPM_LOG"\n'
-VITEST_RELATED = "web|npx --no -- vitest related --run --passWithNoTests "
+VITEST_RELATED = "web|node scripts/process-group.mjs --timeout-ms 300000 -- npx --no -- vitest related --run --passWithNoTests "
 WEB_FULL = ["web|run check:deps", "web|run typecheck", "web|test"]
 
 # A web tree that reads files outside web/ in each form the scan knows (#10619). reads.test.ts reads through fs and a

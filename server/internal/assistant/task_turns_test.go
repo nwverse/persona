@@ -140,9 +140,11 @@ func restartedOn(t *testing.T, st Store) (*Service, *fakeHub) {
 	t.Helper()
 	s, f := newTaskServiceOn(t, st)
 	shortSupervise(t, s)
+	f.mu.Lock()
 	f.hello.Assistant.MachineID = "server"
-	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	f.known["conv1"] = true
+	f.mu.Unlock()
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
 	return s, f
 }
@@ -295,7 +297,10 @@ func TestCompletionAcrossRestart(t *testing.T) {
 			s, f, todo := newSupervisedServiceOn(t, database)
 			ctx := context.Background()
 			nodeListed(s, f, turnRow(proto.StatusIdle, 1, ""))
-			s.superviseWatch(ctx, time.Now()) // the first manager's sweep has run: the turns' ledger is kept from here on
+			// The first manager's sweep has run, its looks too: the turns' ledger is kept from here on. A look of it still
+			// going when the turn below ends could take that end up as a start nobody heard, ahead of the list's start
+			// and end (#13701).
+			sweeps(t, s, todo.ID, 1)
 			done := turnRow(proto.StatusDone, 3, "修好了")
 			page := turnPage("turn-1", "修好了", true)
 			switch at {
@@ -1004,6 +1009,7 @@ func TestCompletionAfterAnUnnamedTurnWithTheNodeClockBehind(t *testing.T) {
 // A meeting's turn in the task's agent is never the task's completion: found by the sweep with no start heard, it is
 // left alone (no receipt, no start taken), kept as seen and not read again.
 func TestCompletionUnheardMeetingTurn(t *testing.T) {
+	needsRecordingModule(t) // a path of the recording module's
 	s, f, todo := newSupervisedService(t)
 	nodeListed(s, f, turnRow(proto.StatusIdle, 1, ""))
 	sweeps(t, s, todo.ID, 1)
