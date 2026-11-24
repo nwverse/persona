@@ -64,13 +64,13 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
                   paneBadges: AgentMenuFacts.paneBadges(AgentMenuRouting.shared.gitStatus(session)),
                   currentPane: currentPane, review: model.features(session.group).contains("git_review") && !session.cwd.isEmpty,
                   preview: !model.isDemo && model.features(session.group).contains(PreviewLogic.feature) && !session.cwd.isEmpty,
-                  screen: model.canShowScreen(session.key.machineRef),
+                  screen: model.liveScreen?.canShow(session.key.machineRef) ?? false,
                   todoHub: TodoStore.shared.isSupported && TodosLogic.isOnTodosHub(sessionGroup: session.group, hubGroup: model.hub?.group),
                   sideCount: (sides ?? (hosted ? SideSessions() : model.sides(of: session.key))).rows.count,
                   hosted: hosted, showsSpace: showsSpace,
                   terminalResume: session.status == .offline || session.status == .unknown
                     ? session.terminalResume(on: model.machine(session.key.machineRef)) : .hidden,
-                  phone: AgentMenuFacts.isPhone, moveChoices: moveChoices)
+                  phone: AgentMenuFacts.supportsTakeover, moveChoices: moveChoices)
     }
 
     /// Test and preview construction needs no live hub. Production uses the model initializer above.
@@ -115,9 +115,15 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
             && a.session.canDelete == b.session.canDelete && a.session.canInterrupt == b.session.canInterrupt
             && (a.session.loop != nil) == (b.session.loop != nil)
             && a.session.todo == b.session.todo
-            && a.session.subagents?.count == b.session.subagents?.count && a.session.spaceID == b.session.spaceID
+            && a.session.subagents?.count == b.session.subagents?.count
+            && a.subagentCount == b.subagentCount
+            && a.session.spaceID == b.session.spaceID
             && a.session.paneID == b.session.paneID && a.paneActions == b.paneActions
             && a.moveChoices == b.moveChoices
+    }
+
+    nonisolated var subagentCount: Int {
+        ChildSessions.totalSubagentCount(session)
     }
 
     /// The complete ordered inventory, including the nested node actions as separate entries.
@@ -131,7 +137,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
         for pane in panes where pane == .files || pane == .git { add(pane == .files ? .files : .git) }
         if review { add(.review) }
         if preview { add(.preview) }
-        if !hosted, let n = session.subagents?.count, n > 0 { add(.subagents) }
+        if !hosted, subagentCount > 0 { add(.subagents) }
         if sideCount > 0 { add(.sideSessions) }
         if showsSpace, session.spaceID != nil { add(.space) }
         if session.canAttach { add(.attach) }
@@ -175,9 +181,10 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
 }
 
 enum AgentMenuFacts {
-    @MainActor static var isPhone: Bool {
+    /// Takeover and continuation are available on iOS (iPhone and iPad); retired native Mac stays excluded.
+    nonisolated static var supportsTakeover: Bool {
         #if os(iOS)
-        UIDevice.current.userInterfaceIdiom == .phone
+        true
         #else
         false
         #endif
@@ -244,7 +251,7 @@ extension AgentActionFacts {
     /// What More's items are and say: a change builds its nested menu again (`AgentActionMenu.more`).
     nonisolated var moreIdentity: [String] {
         layout.more.map(\.id.rawValue) + [muted ? "muted" : "", paneBadges[.git] ?? "", "\(sideCount)",
-                                          "\(session.subagents?.count ?? 0)", session.todo?.title ?? "", "\(terminalResume)"]
+                                          "\(subagentCount)", session.todo?.title ?? "", "\(terminalResume)"]
             + moveChoices.map(\.id)
     }
 }
@@ -370,7 +377,7 @@ struct AgentActionMenu: View, Equatable {
                 .accessibilityIdentifier("chat-preview")
         case .subagents:
             Button { handlers.navigate(s, .subagents) } label: {
-                Label(String(localized: "All Subagents (\(s.subagents?.count ?? 0))"), systemImage: Theme.Icon.list).lineLimit(1)
+                Label(String(localized: "Subagents (\(facts.subagentCount)) [Session Overview]"), systemImage: Theme.Icon.subagent).lineLimit(1)
             }
         case .sideSessions:
             Button { handlers.navigate(s, .sideSessions) } label: {
@@ -433,7 +440,7 @@ struct AgentActionMenu: View, Equatable {
                 Task { await model.askPersona(AgentHandoff.prompt(s, machine: model.machine(s.machineRef)?.name)) }
             } label: { Label("Hand to Persona", systemImage: Theme.Icon.ai) }
         case .screen:
-            ScreenMenu(machine: facts.key.machineRef, from: facts.key)
+            ModuleViews(place: .chatMenu, context: .init(machine: facts.key.machineRef, from: facts.key))
         case .copyDirectory:
             Button { UIPasteboard.general.string = now()?.cwd } label: { Label("Copy Directory", systemImage: Theme.Icon.folder) }
         case .terminal:
