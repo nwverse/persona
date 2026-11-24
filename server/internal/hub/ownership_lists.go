@@ -287,8 +287,8 @@ func (h *Hub) pagedList(w http.ResponseWriter, r *http.Request, key string, ask 
 
 // pagedTodoList answers a paginated to-dos read from one manager. A cursor belongs to one manager's list, so merging
 // pages would silently drop the other managers' rows. The request names its manager (X-Persona-Manager or ?manager=),
-// an extension's token implies its own, and a hub with exactly one manager answers from it; otherwise the read is
-// refused rather than answered from part of the list.
+// an extension's token implies its own, and a hub whose roster holds exactly one manager (connected, or installed with
+// a kept answer) answers from it; otherwise the read is refused rather than answered from part of the list.
 func (h *Hub) pagedTodoList(w http.ResponseWriter, r *http.Request, key string, ask func(http.ResponseWriter, *http.Request, string)) {
 	named, err := impliedManager(r)
 	if err != nil {
@@ -296,7 +296,11 @@ func (h *Hub) pagedTodoList(w http.ResponseWriter, r *http.Request, key string, 
 		return
 	}
 	if named == "" {
-		ids := h.listManagers(r.Context())
+		ids, err := h.retainedListManagers(r.Context())
+		if err != nil {
+			writeErr(w, http.StatusServiceUnavailable, err)
+			return
+		}
 		if len(ids) != 1 {
 			writeErrCode(w, http.StatusBadRequest, "todos_pagination_manager_required",
 				errors.New("a paginated to-do list is one manager's: name it with X-Persona-Manager or the manager query parameter"))
