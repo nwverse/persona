@@ -11,6 +11,7 @@
   "prompt_changed": "终端提示已变化，请刷新后再回答。",
   "attach_busy": "另一客户端正在使用这段会话，请等待它可用。",
   "terminal_not_ready": "电脑上的终端还没准备好启动 Agent，这次什么都没发出去，请再试一次。",
+  "agy_companion_offline": "这台电脑上的 Antigravity 没有连上 Persona，所以没有启动。请先让它重新连上，或改为在终端里启动 agy。",
   "node_outdated": "这台电脑上的 Persona 服务版本太旧，请先更新。",
   "in_doubt": "无法确认是否送达，请检查结果后再发送。",
   "offline": "这台电脑不在线。请确认它已开机、已联网，并且 Persona Link 正在运行，然后再试。",
@@ -109,5 +110,6 @@
   "omp_stopped": "这个 omp 会话已停止，没有这个操作：发一条消息会在电脑上接着它运行。",
   "conversation_retired": "此会话已不再运行该对话。",
   "agent_assistant_workspace": "不能在助手工作区派出 Agent。请选择项目目录或独立的 worktree；尚未启动 Agent。",
-  "codex_writable_symlink": "无法以 workspace-write 模式启动 Codex：可写根目录下的 {name} 是符号链接，沙箱无法保护该只读路径。请改用项目目录作为 cwd，或选择只读模式。尚未启动，也未修改符号链接。"
+  "codex_writable_symlink": "无法以 workspace-write 模式启动 Codex：可写根目录下的 {name} 是符号链接，沙箱无法保护该只读路径。请改用项目目录作为 cwd，或选择只读模式。尚未启动，也未修改符号链接。",
+  "agy_in_terminal": "这个 Antigravity 对话正在那台电脑的终端里由 agy 打开，Persona 连不到那个终端，所以没有发送。请在终端里回复，或者先在那边退出 agy 再试。"
 }

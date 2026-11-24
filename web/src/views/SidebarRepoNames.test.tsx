@@ -25,7 +25,10 @@ const herdr = (id: string, cwd: string, patch: Partial<HostWorkspace> = {}): Hos
 const agent = (id: string, title: string, workspace: string, cwd: string, patch: Partial<Session> = {}): Session => ({ machine_id: machine.id, session_id: id, title, cwd, space_kind: "herdr", workspace_id: workspace, status: "idle", state: "idle", ...patch });
 let host: HTMLDivElement, root: Root;
 let inventory: HostWorkspace[], sessions: Session[];
-const flush = async () => { for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); }); };
+const flush = async () => {
+  await act(async () => { await vi.dynamicImportSettled(); });
+  for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); });
+};
 const render = async (actions?: WorkspaceTreeActions) => {
   await act(() => refresh());
   act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} workspaceActions={actions} />));
