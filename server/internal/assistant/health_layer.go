@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/healthhost"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
 )
 
 // The Health module (internal/modules/health, docs/architecture/core-and-modules.md "Health"): Health intake, the water
@@ -21,13 +22,10 @@ import (
 // health_intake capability, offers no health_intake tool and sends no water reminder. The Health space (health.go)
 // stays in the core.
 
-// healthRoutes makes the module's layer, unless the build has no module or the modules row switches it off (off,
-// Options.ModulesOff), and registers its routes in the core's order.
-func (s *Service) healthRoutes(off []string) {
-	if slices.Contains(off, healthhost.ModuleID) {
-		return
-	}
-	if l, ok := healthhost.New(healthHost{s}); ok {
+// healthRoutes makes the module's layer, unless the build has no module or the modules row switches it off (the port
+// asks the switch, moduleswitch, as every provider seam does), and registers its routes in the core's order.
+func (s *Service) healthRoutes() {
+	if l, ok := healthhost.New(s.moduleSwitch, healthHost{s}); ok {
 		s.healthMod = l
 		l.Routes(s.handle)
 	}
@@ -54,7 +52,7 @@ func (s *Service) healthTool(ctx context.Context, args json.RawMessage) (string,
 // withHealth is caps without the health_intake capability when svc has no Health layer (none yet: when the build has
 // no Health module), so the hub announces no health_intake feature.
 func withHealth(caps []string, svc *Service) []string {
-	on := healthhost.InBuild()
+	on := healthhost.InBuild(moduleswitch.Set{}) // no service yet: as the build has it
 	if svc != nil {
 		on = svc.healthOn()
 	}

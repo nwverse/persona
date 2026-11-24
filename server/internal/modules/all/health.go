@@ -10,5 +10,5 @@ import (
 // The Health module: its layer, which the assistant reaches through internal/healthhost.
 func init() {
 	modules = append(modules, health.Module{})
-	healthhost.Provide(func(h healthhost.Host) healthhost.Layer { return health.New(h) })
+	healthhost.Provide(health.Module{}.Info().ID, func(h healthhost.Host) healthhost.Layer { return health.New(h) })
 }

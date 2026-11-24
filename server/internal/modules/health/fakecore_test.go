@@ -205,6 +205,13 @@ type memStore struct {
 	failKeys    map[string]error
 }
 
+// putCount returns the number of settings writes recorded under m.mu.
+func (m *memStore) putCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.puts
+}
+
 // failKey makes reading key fail with err from now on; nil reads it again.
 func (m *memStore) failKey(key string, err error) {
 	m.mu.Lock()

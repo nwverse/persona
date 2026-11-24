@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/healthhost"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -26,7 +27,7 @@ import (
 // needsHealthModule skips t when the build has no Health module (persona_without_health, persona_core_only).
 func needsHealthModule(t testing.TB) {
 	t.Helper()
-	if !healthhost.InBuild() {
+	if !healthhost.InBuild(moduleswitch.Set{}) {
 		t.Skip("the Health module is not in this build (persona_without_health, persona_core_only)")
 	}
 }
@@ -162,7 +163,7 @@ func TestHealthFollowsItsModule(t *testing.T) {
 			}
 			var modulesOff []string
 			if off {
-				modulesOff = []string{healthhost.ModuleID}
+				modulesOff = []string{"health"}
 			}
 			f, st := newFakeHub(), &intakeTestStore{}
 			s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), ModulesOff: modulesOff}))

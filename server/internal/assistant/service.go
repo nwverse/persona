@@ -461,7 +461,7 @@ func New(o Options) *Service {
 	s.startRoutes()
 	s.skillRoutes()
 	s.workoutRoutes()
-	s.healthRoutes(o.ModulesOff) // the Health module (health_layer.go)
+	s.healthRoutes() // the Health module (health_layer.go)
 	s.scheduleRoutes()
 	s.scheduleGrantRoutes()
 	s.placeRoutes()

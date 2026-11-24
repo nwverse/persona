@@ -188,6 +188,7 @@ What switched off means, by seam (each port follows `Set.On`; a build without th
 | `server/internal/botport` | `lark` | No bot client is made: the bot cannot be bound, registered or started |
 | `server/internal/cliport` | `lark` | `lark.cli` is not read (logged at start) and the extension host's lark-cli integration is off |
 | `server/internal/larkhost` | `lark` | The outbound channel port is `larkhost.None`, as without the module |
+| `server/internal/healthhost` | `health` | No layer: the intake routes answer 404, no `health_intake` tool or capability, no water reminders |
 | `server/internal/recordinghost` | `recording` | No layer: the recording routes answer 404, no audio socket, room tools, final passes or meeting capabilities |
 | `server/internal/node/imessageport` | `imessage` | The node answers as a computer without Messages; the manager sends it no `connector.*` call and drops `imessage` from the node's built-in programs |
 | `server/internal/node/iphoneport` | `phone-extra` | The node lists no `iphone` program and has none of its methods; the manager drops `iphone` from the node's built-in programs, so it offers and calls no phone control |
@@ -497,7 +498,8 @@ which the kernel announces while it is loaded (it left `modapi.ClientModules` wi
   apps' events, the language and time zone, standby and quiet push, the push with its card, and the extension page's
   fitting). The module declares its own `Host` with the same methods and types (`server/internal/modules/health/host.go`),
   so it imports no core service; `server/internal/modules/all/health.go` provides its layer under
-  `!persona_without_health && !persona_core_only`. The assistant makes the layer where it registered the routes before
+  `!persona_without_health && !persona_core_only`; its port is a `moduleswitch.Port`, so the `modules` row switches it
+  off as the other seams. The assistant makes the layer where it registered the routes before
   (`server/internal/assistant/health_layer.go`), so routes, the tool's place in the list and the hello stay as they were.
 - **Shared with the core**: the entry's type is a contract (`assistantwire.HealthIntakeRow`, which `db.HealthIntakeRow`
   aliases); the `health_intake` table and its SQL stay in `internal/db`; the tool's description stays in
