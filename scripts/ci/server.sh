@@ -30,8 +30,8 @@ fi
 if [ "$lane" = build ]; then exit 0; fi
 
 # Persona Core without its feature modules, one group of steps per lane so that no hosted job outgrows its 20 minutes
-# (the build lane alone ran them all and was cancelled at the limit, #14285's follow-up): the node lane and the
-# core-only node lane are the two shortest shards and carry them. `all` runs both groups.
+# (the build lane alone ran them all and was cancelled at the limit; two lanes were still too few: core-node reached
+# 20 minutes with three of them): four shards carry one or two each. `all` runs every group.
 if [ "$lane" = all ] || [ "$lane" = node ]; then
   # The node's modules (docs/architecture/core-and-modules.md "The node's modules"): their node halves reach the node
   # through the node's ports (internal/nodecmd/commandport, internal/node/screenport, internal/node/iphoneport) from
@@ -44,6 +44,8 @@ if [ "$lane" = all ] || [ "$lane" = node ]; then
   # check the core without it) pass, with every module left out and with the pilot left out. The assistant runs a -run
   # subset: its whole package takes about 9 minutes per tag, too long for this lane.
   ci_run 'Core-only and module-less builds' 900 bash -c 'cd server && for t in persona_core_only persona_without_briefing; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/modapi/... ./internal/modules/all/... ./internal/modules/briefing/... ./internal/assistant/kernel/... && go test -tags "$t" -count=1 -timeout=6m -run "Brief|Module|Setting|Routine|Facts|ScheduledConfiguration|NorthStar|Accept|Later|Golden" ./internal/assistant/ || exit 1; done'
+fi
+if [ "$lane" = all ] || [ "$lane" = managers ]; then
   # Mail (docs/architecture/core-and-modules.md "Provider seams"): the extension manager reaches it through its port, so
   # the core without it builds and the manager's mail, inbox, connector and settings tests pass (those of mail itself
   # skip; TestManagerWithoutMail checks it is absent).
@@ -62,6 +64,8 @@ if [ "$lane" = all ] || [ "$lane" = core-node ]; then
   # build, the extension host has no bot client (internal/botport) and no lark-cli adapter or connector
   # (internal/cliport), and their tests skip; the rest of the extension host and the assistant's Feishu paths still pass.
   ci_run 'Builds without the Lark module' 900 bash -c 'cd server && for t in persona_core_only persona_without_lark; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/botport/... ./internal/botcard/... ./internal/larkhost/... ./internal/cliport/... ./internal/cliwire/... ./internal/modules/all/... ./internal/archguard/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=8m -run "Lark|Feishu|Bot|Card|Connector|Inbox|Builtin|SelfSettings|Golden" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "Feishu|Bot|Card|Golden" ./internal/assistant/ || exit 1; done'
+fi
+if [ "$lane" = all ] || [ "$lane" = core-other ]; then
   # The connector modules (docs/architecture/core-and-modules.md "Provider seams"): GitHub and iMessage reach the
   # extension manager through their ports (iMessage's node side through the node's), so the core without either builds,
   # the manager registers no such connector (the connector, inbox, sent and golden tests pass; those that need the
