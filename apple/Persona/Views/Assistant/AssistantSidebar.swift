@@ -1434,17 +1434,23 @@ extension AssistantSidebar {
     /// title and badge, in the hub's order. Nothing with a hub without slots.
     @ViewBuilder private var extensionRows: some View {
         if let onOpenExtension, ExtensionSlots.shared.available {
-            ForEach(ExtensionSlots.shared.pages) { p in
+            ForEach(ExtensionSlots.shared.pages, id: \.scopedID) { p in
                 extensionRow(p) { onOpenExtension(ExtensionNavRoute(p)) }
             }
         }
     }
 
+    nonisolated static func isExtensionSelected(_ place: ExtensionUIPlace, shown: ShellPage?) -> Bool {
+        guard case .extensionPage(let route) = shown else { return false }
+        return route.id == place.scopedID
+    }
+
     @ViewBuilder private func extensionRow(_ p: ExtensionUIPlace, run: @escaping () -> Void) -> some View {
         let symbol = ExtensionSlots.icon(p.icon)
+        let selected = Self.isExtensionSelected(p, shown: shownPlace)
         Group {
             if AppStyle.current.usesBeautifulUI {
-                BUISidebarRow(p.title, symbol: Theme.Icon.styled(symbol), action: run) {
+                BUISidebarRow(p.title, symbol: Theme.Icon.styled(symbol), isActive: selected, action: run) {
                     if let b = p.badge { ExtensionBadgeView(badge: b) }
                 }
             } else {
@@ -1461,6 +1467,9 @@ extension AssistantSidebar {
                     .padding(.horizontal, Theme.Space.m)
                     .padding(.vertical, Theme.Sidebar.rowPadding)
                     .scaledFrame(minHeight: Theme.Sidebar.row)
+                    .background {
+                        if selected { SidebarSelectedShade() }
+                    }
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
@@ -1469,7 +1478,7 @@ extension AssistantSidebar {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(p.title)
         .accessibilityValue(p.badge?.text ?? "")
-        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { run() }
         .accessibilityIdentifier("sidebar-extension-\(p.owner)-\(p.id)")
     }
