@@ -165,6 +165,8 @@ struct ChatLines {
             let quietRelay = foldRoutineRelayReplies && source?.kind == "conversation"
             guard Supervision.completedSilent(trace.flatMap(Self.lineItems), results: results, live: running, showReply: { item in
                 !quietRelay || item.id == attentionReply || APIErrorInfo.parse(item.text) != nil
+            }, needsAttention: { item in
+                item.id == attentionReply || APIErrorInfo.parse(item.text) != nil
             }) else {
                 timeline.append(line)
                 continue
@@ -197,6 +199,8 @@ struct ChatLines {
     /// Background rounds fold too (docs/apple/ios.md "Background rounds"): the main conversation and the leader
     /// conversations (`AssistantInfo.leaders`, #6595), with the hub's `main_background_folded` on. Needs `foldSupervision`.
     var foldBackground = false
+    /// The main Assistant conversation: completed silent rounds have a separate Background activity projection.
+    var main = false
     /// The main conversation explicitly opted into folding routine relay replies.
     var foldRoutineRelayReplies = false
     var latestReplyNeedsAttention = false
@@ -283,6 +287,8 @@ struct ChatLines {
             let quietRelay = foldRoutineRelayReplies && source?.kind == "conversation"
             if Supervision.visible(evidence, results: results, live: running, showReply: { item in
                 !quietRelay || item.id == attentionReply || APIErrorInfo.parse(item.text) != nil
+            }, needsAttention: { item in
+                item.id == attentionReply || APIErrorInfo.parse(item.text) != nil
             }) {
                 out += trace
             } else {

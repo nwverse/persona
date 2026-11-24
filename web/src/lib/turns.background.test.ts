@@ -107,6 +107,21 @@ describe("background rounds in the main conversation", () => {
   );
 
 
+  it("keeps a host-failed relay on main even with a successful silent receipt", () => {
+    const finish = call(2, "mcp__persona__supervision_finish");
+    const receipt = result(3, finish, '{"visibility":"silent"}');
+    const reply = answer(4, "The host reported a failure after this reply.");
+    const items = [relayed(1), finish, receipt, reply];
+    const session = { status: "done", failure_reason: "The host stopped the turn on an error." } as Session;
+    const visible = chatLines(items, { ...on, main: true, latestReplyNeedsAttention: Boolean(session.failure_reason || relayNeedsAttention(session)) });
+    expect(kinds(visible)).toEqual(["segment"]);
+    expect(visible[0]).not.toMatchObject({ completedSilent: true });
+
+    // Without an attention signal, the same canonical silent round still belongs in Background activity.
+    const ordinary = chatLines(items, { ...on, main: true });
+    expect(ordinary[0]).toMatchObject({ kind: "supervision", completedSilent: true });
+  });
+
   it("shows a cut-off API error as its usual error card even with routine folding enabled", () => {
     expect(kinds(chatLines([relayed(1), answer(2, "API Error: 529 overloaded")], on))).toContain("apiError");
   });

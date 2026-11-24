@@ -70,6 +70,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "persona", group: t("settings-assistantsettings.routines"), hint: t("settings-assistantsettings.proactive_title"), anchor: "routines" },
   { tab: "persona", group: t("settings-assistantsettings.quiet_tasks"), anchor: "quiet-tasks" },
   { tab: "persona", group: t("settings-assistantsettings.background_folded"), anchor: "background-folded" },
+  { tab: "persona", group: t("settings-assistantsettings.relay_replies"), anchor: "relay-replies" },
   { tab: "persona", group: t("settings-assistantsettings.recent_task_chats"), anchor: "recent-task-chats" },
   { tab: "persona", group: t("settings-assistantsettings.next_suggestions"), anchor: "next-suggestions" },
   { tab: "persona", group: t("settings-assistantsettings.claude_interactive"), anchor: "claude-interactive" },

@@ -35,7 +35,7 @@ import PersonaWire
     private func build(_ items: [Item], background: Bool = true, main: Bool = true, relayPreference: Bool? = nil, latestNeedsAttention: Bool = false, open: Set<String> = [], active: Bool = false) -> [ChatLine] {
         let blocks = ChatStore.rebuild(items, settled: nil).blocks
         let live = active ? blocks.last.flatMap { if case .turn(let t) = $0 { t.id } else { nil } } : nil
-        return ChatLines(openWork: [], foldSupervision: true, foldBackground: background, foldRoutineRelayReplies: main && relayPreference == true, latestReplyNeedsAttention: latestNeedsAttention, openSupervision: open, active: active)
+        return ChatLines(openWork: [], foldSupervision: true, foldBackground: background, main: main, foldRoutineRelayReplies: main && relayPreference == true, latestReplyNeedsAttention: latestNeedsAttention, openSupervision: open, active: active)
             .build(blocks, live: live)
     }
 
@@ -98,6 +98,29 @@ import PersonaWire
         let lines = build([relayed(), item(2, text: "Please choose the next step.")],
                           relayPreference: true, latestNeedsAttention: ChatLines.needsReplyAttention(session))
         #expect(folded(lines) == nil)
+    }
+
+    @Test func hostFailureCanOverrideASilentRelayReceipt() {
+        var finish = item(2, kind: .toolUse)
+        finish.toolName = "mcp__persona__supervision_finish"
+        finish.toolUseID = "synthetic-silent-finish"
+        var receipt = item(3, role: "user", kind: .toolResult, text: #"{"visibility":"silent"}"#)
+        receipt.toolUseID = finish.toolUseID
+        let reply = item(4, text: "The host reported a failure after this reply.")
+        let blocks = ChatStore.rebuild([relayed(), finish, receipt, reply], settled: nil).blocks
+        func projection(attention: Bool) -> ChatLines.Projection {
+            ChatLines(openWork: [], foldSupervision: true, foldBackground: true, main: true,
+                      foldRoutineRelayReplies: true, latestReplyNeedsAttention: attention)
+                .projection(blocks, live: nil)
+        }
+        let failed = projection(attention: true)
+        #expect(failed.activity.isEmpty)
+        #expect(failed.timeline.contains { $0.holds(reply.id) })
+
+        // Without an attention signal, the same canonical silent round still belongs in Background activity.
+        let ordinary = projection(attention: false)
+        #expect(ordinary.timeline.isEmpty)
+        #expect(ordinary.activity.count == 1)
     }
 
     @Test func mainRelayReplyStaysFoldedAndInspectable() throws {

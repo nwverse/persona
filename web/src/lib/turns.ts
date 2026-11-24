@@ -800,7 +800,7 @@ function supervisionVisibility(ordered: Item[], results: ReadonlyMap<string, Ite
       // A failed or malformed receipt does not decide visibility.
     }
   }
-  const visible = !live && !silent && hasBackgroundReply(ordered, routineMainRelay, attentionReply);
+  const visible = !live && hasBackgroundReply(ordered, routineMainRelay, attentionReply, silent);
   return { visible, completedSilent: !live && silent && !visible };
 }
 
@@ -809,15 +809,16 @@ export function supervisionVisible(ordered: Item[], results: ReadonlyMap<string,
 }
 
 /** An answer ends the round's work. Older runtimes also emit plain intermediate text before their next call. */
-function hasBackgroundReply(items: Item[], routineMainRelay: boolean, attentionReply?: string): boolean {
+function hasBackgroundReply(items: Item[], routineMainRelay: boolean, attentionReply: string | undefined, silent: boolean): boolean {
   let last: Item | undefined;
   for (const item of items) {
     const relevant = isAnswerText(item) || item.kind === "tool_use" || item.kind === "thinking" || item.kind === "fold" ||
       item.wake || item.model_refusal || isInterruptNotice(item);
     if (relevant && (!last || blockOrder(last, item) < 0)) last = item;
   }
-  return !!last && isAnswerText(last) && !last.narration && !last.codex_heartbeat_quiet &&
-    (!routineMainRelay || last.id === attentionReply || parseAPIError(last.text) !== null);
+  if (!last || !isAnswerText(last) || last.narration || last.codex_heartbeat_quiet) return false;
+  const needsAttention = last.id === attentionReply || parseAPIError(last.text) !== null;
+  return (!routineMainRelay || needsAttention) && (!silent || needsAttention);
 }
 
 /** Message sources whose rounds fold in the main conversation while `assistant.main_background_folded` is on
