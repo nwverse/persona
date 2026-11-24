@@ -387,7 +387,7 @@ func TestInboxReplyPolicyDeliverNotesRechecksPolicyAfterHello(t *testing.T) {
 	}
 	h.setConfig(func(c *assistantwire.InboxConfig) {
 		cfg := replyPolicyTestConfig()
-		cfg.Categories["ordinary_coordination"] = ReplyRouteOwnerOnly
+		cfg.Routes["ordinary_coordination"] = ReplyRouteOwnerOnly
 		cfg.Revision = "test-v2"
 		c.ReplyPolicy = cfg
 	})

@@ -18,8 +18,8 @@ import (
 
 func replyPolicyTestConfig() assistantwire.InboxReplyPolicyConfig {
 	return assistantwire.InboxReplyPolicyConfig{
-		Enabled: true, Revision: "test-v1",
-		Categories: map[string]string{
+		Enabled: true, Revision: "test-v1", Sources: []string{"lark"}, UnknownMode: ReplyRouteOwnerOnly,
+		Routes: map[string]string{
 			"personal_transaction": "owner_only", "security_compliance": "owner_only",
 			"approval_permission": "owner_only", "decision_delegation": "owner_only",
 			"technical_qa": "bot", "research": "bot", "alert_triage": "bot", "ppe_deploy": "bot", "mr_precheck": "bot",

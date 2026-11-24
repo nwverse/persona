@@ -417,13 +417,17 @@ type InboxReplyPolicyConfig struct {
 	// Categories maps classifier-produced category names to server routes (owner_draft, bot, owner_only, no_reply).
 	// When omitted while Enabled is true, the built-in default category table is used.
 	Categories map[string]string `json:"categories,omitempty"`
+	// Routes is the original reply-policy route map. Its fixed safety categories and whole-configuration validation
+	// remain available for legacy configurations; Categories is upstream's configurable category schema.
+	Routes map[string]string `json:"routes,omitempty"`
 	// Rules is optional extra classification guidance; it never grants or overrides server routes.
 	Rules string `json:"rules,omitempty"`
 	// TimeoutSeconds bounds each classification call (default 30 seconds).
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 	// Sources limits the policy to these sources; an empty list applies it to every source.
 	Sources []string `json:"sources,omitempty"`
-	// UnknownMode routes an explicitly configured unknown category when no category mapping applies.
+	// UnknownMode is validated for compatibility and bound into the effective revision. Invalid values invalidate
+	// the enabled policy; unknown categories always fail closed rather than using this setting as permission.
 	UnknownMode string `json:"unknown_mode,omitempty"`
 	// RequireIndependentReview requires a second classifier to confirm an owner-draft category.
 	RequireIndependentReview bool `json:"require_independent_review,omitempty"`

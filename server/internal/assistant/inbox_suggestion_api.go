@@ -163,6 +163,20 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 			if (vetoErr != nil || configChanged) && !recordVeto {
 				return InboxItem{}, errReplyPolicyBlocked
 			}
+			if vetoErr == nil {
+				// Agent starts and handbacks otherwise consume their card before their final authorization runs. Check those
+				// paths before any state transition. Ordinary replies keep the durable failed-attempt path below.
+				b.mu.Lock()
+				live := b.items[id]
+				g := currentSuggestion(live)
+				denied := live != nil && g != nil && g.Version == in.Version &&
+					(g.Kind == SuggestAgent || g.Kind == SuggestReply && g.Handback) &&
+					verifyReplyPolicySuggestionLocked(live, g, nil, freshPolicy) != nil
+				b.mu.Unlock()
+				if denied {
+					return InboxItem{}, errReplyPolicyBlocked
+				}
+			}
 			inboxCfg = freshCfg
 		}
 	}

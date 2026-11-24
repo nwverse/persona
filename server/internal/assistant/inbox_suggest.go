@@ -146,8 +146,13 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		return "", nil, nil, false, errInboxUnavailable
 	}
 	var policy replyPolicySpec
-	if in.Kind == SuggestReply || in.Kind == SuggestAgent {
-		policy = compileReplyPolicy(s.inboxConfig(ctx).ReplyPolicy)
+	policyAuthorization := in.Kind == SuggestReply || in.Kind == SuggestAgent
+	if policyAuthorization {
+		cfg, err := s.inboxConfigFresh(ctx)
+		if err != nil {
+			return "", nil, nil, false, errReplyPolicyBlocked
+		}
+		policy = compileReplyPolicy(cfg.ReplyPolicy)
 	}
 	b := &s.inbox
 	b.mu.Lock()
@@ -163,7 +168,9 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		it = b.itemOfAgent(sessionID)
 		// A conversation that answers before its start returned (an agent runtime already running starts a turn at
 		// once): its item learns the conversation's id a moment later.
+		waited := false
 		for wait := time.Now().Add(inboxDraftWait); it == nil && b.agentStarting() && time.Now().Before(wait); {
+			waited = true
 			b.mu.Unlock()
 			time.Sleep(100 * time.Millisecond)
 			b.mu.Lock()
@@ -172,6 +179,23 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		if it == nil {
 			b.mu.Unlock()
 			return "", nil, nil, false, errNotProcessing
+		}
+		if waited && policyAuthorization {
+			// The association wait can outlive both the policy and the session binding used at admission. Refresh after
+			// the wait, then prove that the same live item is still bound to this conversation before publishing anything.
+			waitingItem := it
+			b.mu.Unlock()
+			freshCfg, freshErr := s.inboxConfigFresh(ctx)
+			b.mu.Lock()
+			if freshErr != nil {
+				b.mu.Unlock()
+				return "", nil, nil, false, errReplyPolicyBlocked
+			}
+			if b.items[waitingItem.ID] != waitingItem || b.itemOfAgent(sessionID) != waitingItem {
+				b.mu.Unlock()
+				return "", nil, nil, false, errNotProcessing
+			}
+			policy = compileReplyPolicy(freshCfg.ReplyPolicy)
 		}
 	}
 	if from == nil && in.ProcessingTurn != it.Agent.ProcessingTurn {
