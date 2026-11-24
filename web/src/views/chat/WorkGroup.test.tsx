@@ -10,7 +10,6 @@ import { Answer, bubbleLines, SegmentView, UserBubble } from "./SegmentView";
 import { SubagentCard } from "./SubagentCard";
 import { LiveThinking } from "./ThinkingCard";
 import { ThinkingRow } from "./ThinkingRow";
-import { shortenDiffPath, summarizeTurnDiffs, TurnDiffSummary } from "./TurnDiffSummary";
 import { ClusterRow, clusterWorkChildren, summarizeWorkSteps, WorkGroup, type WorkProps } from "./WorkGroup";
 
 const T0 = Date.parse("2026-11-04T10:00:00Z");
@@ -349,40 +348,6 @@ describe("DiffBlocks & formatUnifiedDiff", () => {
     const html = renderToStaticMarkup(<DiffBlocks diffs={[d1, d2]} />);
     expect(html).toContain("data-diff-gap");
     expect(formatUnifiedDiff([d1, d2])).toBe("-a\n+b\n@@\n-c\n+d");
-  });
-});
-
-describe("TurnDiffSummary", () => {
-  it("returns null when no files were edited", () => {
-    const nodes = [group([tool("r1", "Read", { file_path: "/a.ts" }), tool("c1", "Bash", { command: "ls" })], false, 1000)];
-    expect(summarizeTurnDiffs(nodes)).toEqual([]);
-    expect(renderToStaticMarkup(<TurnDiffSummary nodes={nodes} mid="m" sid="s" />)).toBe("");
-  });
-
-  it("deduplicates files, aggregates +add/−del across nested groups, and renders summary header", () => {
-    const nodes = [
-      group(
-        [
-          tool("e1", "Edit", { file_path: "/repo/src/a.ts", old_string: "a\nb", new_string: "a\nB\nc" }),
-          tool("e2", "Edit", { file_path: "/repo/src/a.ts", old_string: "x", new_string: "y\nz" }),
-          tool("w1", "Write", { file_path: "/repo/src/new.ts", content: "1\n2\n3" }),
-        ],
-        false,
-        4000,
-      ),
-    ];
-    const entries = summarizeTurnDiffs(nodes);
-    expect(entries).toHaveLength(2);
-    expect(entries[0]).toMatchObject({ path: "/repo/src/a.ts", add: 4, del: 2 });
-    expect(entries[1]).toMatchObject({ path: "/repo/src/new.ts", add: 3, del: 0 });
-    expect(shortenDiffPath("/repo/src/a.ts", "/repo")).toBe("src/a.ts");
-    expect(shortenDiffPath("/very/long/path/to/file.ts")).toBe("…/to/file.ts");
-
-    const html = renderToStaticMarkup(<TurnDiffSummary nodes={nodes} mid="m" sid="s" cwd="/repo" />);
-    expect(html).toContain("data-turn-diff-summary");
-    expect(html).toContain("变更 2 个文件");
-    expect(html).toContain(">+7<");
-    expect(html).toContain(">−2<");
   });
 });
 

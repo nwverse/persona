@@ -1,8 +1,0 @@
-{
-  "usage_title": "コンテキスト使用量：{pct}%（{used} / {window}）",
-  "live_output": "このターンの出力：↓ {tokens} tokens",
-  "heading": "コンテキスト使用量",
-  "generating": "生成中",
-  "used_window": "使用済み / 上限",
-  "compact_action": "/compact で圧縮"
-}

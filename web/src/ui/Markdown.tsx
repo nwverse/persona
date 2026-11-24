@@ -17,10 +17,7 @@ import { MermaidBlock } from "./Mermaid";
 import { ExternalImage } from "./ExternalImage";
 import { ReplyPicturesContext } from "./reply-pictures-context";
 import { LocalImageRun, ReplyImagesRun, useReplyImages } from "./reply-images-lazy";
-import { lazyPage } from "../lib/lazy-page";
 import { AssistantCard, CARD_LANGUAGES } from "./AssistantCard";
-const VISUAL_LANGUAGES = new Set(["visual", "visual-html", "persona-visual", "html-visual"]);
-const VisualCard = lazyPage(() => import("./VisualCard").then((m) => m.VisualCard));
 import { rehypePathLinks, textPaths, writtenText } from "./PathLinks";
 import { usePathLinks } from "../lib/path-presence";
 import { StreamChunk } from "./stream/Chunk";
@@ -378,12 +375,11 @@ function Link({ href, children, mid, cwd, line, title: hover }: { href?: string;
 // rehype-katex turns those into formulas before they get here.
 const hasClass = (cls: string | undefined, name: string) => (cls ?? "").split(/\s+/).includes(name);
 
-function renderPre(children: React.ReactNode, streaming?: boolean) {
+function renderPre(children: React.ReactNode) {
   const code = () => textOf(children).replace(/\n$/, "");
   if (hasClass(codeClass(children), "math-display")) return <div className="whitespace-pre-wrap" data-math-pending="display">{`$$\n${code()}\n$$`}</div>;
   const lang = codeLanguage(children);
   if (lang === "mermaid") return <MermaidBlock code={code()} />;
-  if (VISUAL_LANGUAGES.has(lang)) return <Suspense fallback={null}><VisualCard code={code()} streaming={streaming} /></Suspense>;
   // the assistant's cards (#1850): drawn with the extensions' components; a block that does not read stays code
   if (CARD_LANGUAGES.includes(lang)) return <AssistantCard lang={lang} code={textOf(children)} fallback={<CodeBlock lang={lang}>{children}</CodeBlock>} />;
   return <CodeBlock lang={lang}>{children}</CodeBlock>;
@@ -656,10 +652,7 @@ function componentsFor(mid: string, cwd: string | undefined): Components {
 // `lineBreaks`: a reply, read line by line as it was written (#2088, `reply-breaks.ts`): a single line break is one,
 // and steps numbered on from 5 right under a line of text are a list.
 export const Markdown = memo(function Markdown({ text: raw, small, compact, mid, cwd, streaming, fade, lineBreaks, askImages }: { text: string; small?: boolean; compact?: boolean; mid?: string; cwd?: string; streaming?: boolean; fade?: boolean; lineBreaks?: boolean; askImages?: boolean }) {
-  const components = useMemo<Components>(() => {
-    const base = mid ? componentsFor(mid, cwd) : markdownComponents;
-    return streaming ? { ...base, pre: ({ children }) => renderPre(children, true) } : base;
-  }, [mid, cwd, streaming]);
+  const components = useMemo<Components>(() => (mid ? componentsFor(mid, cwd) : markdownComponents), [mid, cwd]);
   const text = useThrottledText(raw, Boolean(streaming));
   const motion = useReplyMotion();
   const wordFade = useWordFade(Boolean(streaming) && motion, Boolean(fade && !streaming) && motion, text);

@@ -1,9 +1,0 @@
-{
-  "duration": "Took {duration}",
-  "tools_one": "{count} tool call",
-  "tools_other": "{count} tool calls",
-  "thoughts_one": "{count} reasoning block",
-  "thoughts_other": "{count} reasoning blocks",
-  "copied": "Copied",
-  "copy_reply": "Copy turn reply"
-}

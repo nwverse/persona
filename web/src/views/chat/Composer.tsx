@@ -39,7 +39,6 @@ import { Icon } from "../../ui/icons";
 import { ContextChips, ContextChipList } from "../link/ContextChips";
 import { ForwardBars } from "./ForwardCard";
 import { QuoteBars } from "./Quote";
-const HistorySearchPopover = lazyPage(() => import("./HistorySearchPopover").then((m) => m.HistorySearchPopover));
 import type { ComposerPanelHandle, MentionRow, MentionSource, PanelPick } from "./ComposerPanel";
 import { OverlayBoundary } from "../LazyOverlay";
 import type { PlanMode } from "./PermissionPicker";
@@ -113,28 +112,6 @@ interface ConfirmState {
 
 const PASTE_CHIP_CHARS = 800;
 const PASTE_CHIP_LINES = 12;
-const HISTORY_LIMIT = 50;
-
-function readHistory(key: string): string[] {
-  if (typeof sessionStorage === "undefined") return [];
-  try {
-    const raw = sessionStorage.getItem(`chat-history:${key}`);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeHistory(key: string, list: string[]) {
-  if (typeof sessionStorage === "undefined") return;
-  try {
-    sessionStorage.setItem(`chat-history:${key}`, JSON.stringify(list.slice(-HISTORY_LIMIT)));
-  } catch {
-    // ignore storage errors
-  }
-}
 
 export const AGENT_COMMANDS: Command[] = [
   { word: t("chat-composer.cmd_continue_word"), desc: t("chat-composer.cmd_continue_desc"), text: t("chat-composer.cmd_continue_text") },
@@ -291,9 +268,6 @@ export const Composer = memo(function Composer({
   const [pastedBlocks, setPastedBlocks] = useState<PastedBlock[]>([]);
   const [previewPasteId, setPreviewPasteId] = useState<string | null>(null);
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
-  const [historyIdx, setHistoryIdx] = useState(-1);
-  const [historySearchOpen, setHistorySearchOpen] = useState(false);
-  const stashedDraft = useRef("");
   const [dismissed, setDismissed] = useState(false);
   const [active, setActive] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -432,9 +406,6 @@ export const Composer = memo(function Composer({
     setAtts([]);
     setPastedBlocks([]);
     setPreviewPasteId(null);
-    setHistoryIdx(-1);
-    setHistorySearchOpen(false);
-    stashedDraft.current = "";
     // not on a touch screen alone: there the focus brings the keyboard up over the conversation just opened. Nor when
     // the person already went to another field or a dialog by then.
     if (!autoFocus || !hasFinePointer()) return;
@@ -510,7 +481,6 @@ export const Composer = memo(function Composer({
                 return;
               }
               setDraft(kept.text);
-              setHistoryIdx(-1);
               setDismissed(false);
               requestAnimationFrame(() => {
                 const el = input.current;
@@ -525,7 +495,6 @@ export const Composer = memo(function Composer({
         if (nextQuotes) setQuotes(draftKey, nextQuotes);
         if (selected) restoreSkills(skillDraft(selected.skills, selected.text));
         setDraft(next);
-        setHistoryIdx(-1);
         setDismissed(false);
         requestAnimationFrame(() => {
           const el = input.current;
@@ -703,7 +672,7 @@ export const Composer = memo(function Composer({
     offered: Boolean(onEditLastMessage),
     busy: Boolean(working || needsYou || disabled || blocked || loadingDraft),
     holds: Boolean(draft || pastedBlocks.length || atts.length || files.length || reading.current || contexts.length || quotes.length),
-    menu: Boolean(slashOpen || mOpen || history.searching || historySearchOpen || document.querySelector("[role=dialog],[role=menu]")),
+    menu: Boolean(slashOpen || mOpen || history.searching || document.querySelector("[role=dialog],[role=menu]")),
   });
 
   // `text` at the caret (or the end), a space before it when it would touch a word: a dropped Files entry, a file from the +
@@ -937,8 +906,6 @@ export const Composer = memo(function Composer({
     draftNow.current = "";
     unsaved.current = null;
     storeDraft(draftKey, "");
-    setHistoryIdx(-1);
-    stashedDraft.current = "";
     setAtts([]);
     setPastedBlocks([]);
     setPreviewPasteId(null);
@@ -961,11 +928,6 @@ export const Composer = memo(function Composer({
     if (ok && now && queues) await onSendNow?.();
     if (ok) {
       history.record(skillDraft(refs, fullText));
-      const trimmed = fullText.trim();
-      if (trimmed) {
-        const hist = readHistory(draftKey);
-        if (hist[hist.length - 1] !== trimmed) writeHistory(draftKey, [...hist, trimmed]);
-      }
       releaseAttachments(sent);
     } else {
       // the box closed or shows another conversation now: the words go back to this conversation's draft (its open
@@ -1003,12 +965,10 @@ export const Composer = memo(function Composer({
       // `/permissions` opens the permission menu at once; where the chat has no picker it goes in the box as any command
       if (c.text === PERMISSIONS_COMMAND && requestPermissionPicker(draftKey)) {
         setDraft("");
-        setHistoryIdx(-1);
         setDismissed(true);
         return;
       }
       changeText(c.text);
-      setHistoryIdx(-1);
       setDismissed(true);
       input.current?.focus({ preventScroll: true });
     };
@@ -1080,32 +1040,6 @@ export const Composer = memo(function Composer({
       )}
 
       {pill && <Suspense fallback={null}><ComposerOverlay text={pill} onFill={() => fillSuggestion(pill)} onSend={suggestionRisky ? undefined : () => { setSentPill(pill); void submit(pill); }} /></Suspense>}
-
-      {historySearchOpen && (
-        <Suspense fallback={null}>
-          <HistorySearchPopover
-            open={historySearchOpen}
-            currentDraftKey={draftKey}
-            onSelect={(text) => {
-              setDraft(text);
-              setHistoryIdx(-1);
-              setDismissed(true);
-              setHistorySearchOpen(false);
-              requestAnimationFrame(() => {
-                const el = input.current;
-                if (!el) return;
-                el.focus();
-                el.setSelectionRange(text.length, text.length);
-                setCaret(text.length);
-              });
-            }}
-            onClose={() => {
-              setHistorySearchOpen(false);
-              requestAnimationFrame(() => input.current?.focus());
-            }}
-          />
-        </Suspense>
-      )}
 
       <div
         className={cx(
@@ -1212,8 +1146,7 @@ export const Composer = memo(function Composer({
                       type="button"
                       onClick={() => {
                         changeText(draft ? `${draft}\n\n${previewPaste.text}` : previewPaste.text);
-                        setHistoryIdx(-1);
-                        setPastedBlocks((cur) => cur.filter((x) => x.id !== previewPaste.id));
+                                  setPastedBlocks((cur) => cur.filter((x) => x.id !== previewPaste.id));
                         setPreviewPasteId(null);
                         input.current?.focus();
                       }}
@@ -1260,8 +1193,7 @@ export const Composer = memo(function Composer({
             const next = e.target.value;
             if (parseSlash(next) !== query) setActive(0);
             changeText(next);
-            setHistoryIdx(-1);
-            setDismissed(false);
+                setDismissed(false);
             setCaret(e.target.selectionStart);
           }}
           onSelect={trackCaret}
@@ -1291,12 +1223,6 @@ export const Composer = memo(function Composer({
             if (ime.busy(e.nativeEvent)) {
               // the IME's own Escape (cancelling a candidate) must not reach ChatView's interrupt on the window
               if (e.key === "Escape") e.stopPropagation();
-              return;
-            }
-            if (!editor && !disabled && !e.metaKey && !e.altKey && e.ctrlKey && e.key.toLowerCase() === "r") {
-              e.preventDefault();
-              setDismissed(true);
-              setHistorySearchOpen(true);
               return;
             }
             const send = !editor && enterSends(e, hasFinePointer());
@@ -1347,68 +1273,6 @@ export const Composer = memo(function Composer({
                 e.preventDefault();
                 e.stopPropagation();
                 setDismissed(true);
-                return;
-              }
-            }
-            if (!editor && !mOpen && !slashOpen) {
-              const el = input.current;
-              if (
-                e.key === "ArrowUp" &&
-                (draft === "" || (historyIdx !== -1 && el && el.selectionStart === 0 && el.selectionEnd === 0))
-              ) {
-                const hist = readHistory(draftKey);
-                if (hist.length > 0) {
-                  if (historyIdx === -1) {
-                    e.preventDefault();
-                    stashedDraft.current = draft;
-                    const nextIdx = hist.length - 1;
-                    setHistoryIdx(nextIdx);
-                    setDraft(hist[nextIdx]);
-                    requestAnimationFrame(() => {
-                      input.current?.setSelectionRange(0, 0);
-                      setCaret(0);
-                    });
-                    return;
-                  }
-                  if (historyIdx > 0) {
-                    e.preventDefault();
-                    const nextIdx = historyIdx - 1;
-                    setHistoryIdx(nextIdx);
-                    setDraft(hist[nextIdx]);
-                    requestAnimationFrame(() => {
-                      input.current?.setSelectionRange(0, 0);
-                      setCaret(0);
-                    });
-                    return;
-                  }
-                }
-              }
-              if (
-                e.key === "ArrowDown" &&
-                historyIdx !== -1 &&
-                el &&
-                ((el.selectionStart === draft.length && el.selectionEnd === draft.length) || (!draft.includes("\n") && el.selectionStart === el.selectionEnd))
-              ) {
-                e.preventDefault();
-                const hist = readHistory(draftKey);
-                if (historyIdx < hist.length - 1) {
-                  const nextIdx = historyIdx + 1;
-                  const nextText = hist[nextIdx];
-                  setHistoryIdx(nextIdx);
-                  setDraft(nextText);
-                  requestAnimationFrame(() => {
-                    input.current?.setSelectionRange(nextText.length, nextText.length);
-                    setCaret(nextText.length);
-                  });
-                } else {
-                  const restored = stashedDraft.current;
-                  setHistoryIdx(-1);
-                  setDraft(restored);
-                  requestAnimationFrame(() => {
-                    input.current?.setSelectionRange(restored.length, restored.length);
-                    setCaret(restored.length);
-                  });
-                }
                 return;
               }
             }

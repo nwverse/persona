@@ -42,7 +42,6 @@ import { useFoldScroll } from "./fold-scroll";
 import { useChatContext } from "./chat-context";
 import { useFreshWords } from "./fresh-words";
 import { Icon } from "../../ui/icons";
-import { TurnFooter } from "./TurnFooter";
 import { WorkGroup, WorkNodes, type WorkProps } from "./WorkGroup";
 import { TurnChanges, turnChangesHeight } from "./TurnChanges";
 import { turnChanges } from "../../lib/turn-changes";
@@ -281,7 +280,7 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, st
         },
       } : undefined}>
       {cut && <p className="mb-1 text-[13px] leading-[1.384615] text-ink-2" data-cut-short>{t("chat-messageactions.cut_short")}</p>}
-      <div className={ANSWER} data-answer={live ? "streaming" : true} data-chat-quote-source data-source-fingerprint={item?.source_fingerprint} data-items={item?.id}>
+      <div className={ANSWER} data-answer={live ? "streaming" : true} data-source-fingerprint={item?.source_fingerprint} data-items={item?.id}>
         {/* the cards in it are this item's blocks (ui/AssistantCard.tsx): `<item id>/<n>` */}
         <CardItem.Provider value={item?.id ? { id: item.id, text } : null}>
           <Markdown text={text} mid={mid} cwd={cwd} streaming={live || undefined} fade={fade || undefined} lineBreaks />
@@ -442,7 +441,7 @@ export const SegmentView = memo(function SegmentView({
     return [...user, ...own.flatMap((s) => s.kind === "tool" ? [toolChip(s.use), s.result?.text] : [s.item.text])].filter(Boolean).join("\n");
   }, [mounted, own, seg.user, trace]);
   return (
-    <section ref={box} className={offscreen ? "seg-cv flex flex-col gap-3.5" : "flex flex-col gap-3.5"} style={guess} data-segment data-turn-id={seg.id}>
+    <section ref={box} className={offscreen ? "seg-cv flex flex-col gap-3.5" : "flex flex-col gap-3.5"} style={guess} data-segment>
       {mounted ? <Fragment>
       {/* the first message the conversation's new engine got (#5054): the switch divider above it, the user's words below */}
       {seg.engineSwitch && <EngineSwitchDivider sw={seg.engineSwitch} id={seg.id} item={switchItem(seg)} mid={mid} sid={sid} />}
@@ -458,7 +457,6 @@ export const SegmentView = memo(function SegmentView({
       {(latestItem || streaming !== undefined) && <Suspense key="latest-text" fallback={null}><LatestAnswer item={streaming === undefined ? latestItem : undefined} streaming={streaming} mid={mid} sid={sid} noCloseout={noCloseout || undefined} done={(!live && !busy) || undefined} cut={(!live && seg.cut) || undefined} usage={usage} usageMs={usageMs} ttftMs={!live && !trace ? seg.ttftMs : undefined} /></Suspense>}
       {sourced && <Suspense key="turn-sources" fallback={null}><TurnSources steps={own} /></Suspense>}
       {changes && <TurnChanges key="turn-changes" changes={changes} mid={mid} sid={sid} cwd={cwd} />}
-      {!live && !changes && <TurnFooter seg={seg} />}
       </Fragment> : <div className="whitespace-pre-wrap" style={{ blockSize: "var(--seg-est)" }} data-segment-placeholder>{placeholder}</div>}
     </section>
   );

@@ -1,8 +1,0 @@
-{
-  "usage_title": "上下文用量：{pct}%（{used} / {window}）",
-  "live_output": "本轮输出：↓ {tokens} tokens",
-  "heading": "上下文用量",
-  "generating": "生成中",
-  "used_window": "已用 / 窗口",
-  "compact_action": "执行 /compact 压缩"
-}
