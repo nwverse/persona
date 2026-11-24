@@ -270,7 +270,7 @@ values in the contract `server/internal/cliwire`; the connector builds on the co
 module `botport.Available()` and `cliport.Available()` are false: the bot cannot be bound, registered or started (the
 setting answers that it is not part of this build), `lark.cli` is not read (a warning at start), and the extension
 host's tests of them skip (`needsLarkModule`, `needsLarkCLI`). `scripts/ci/server.sh build` builds and tests with `persona_core_only` and with
-`persona_without_lark`.
+`persona_without_lark`. The assistant's own Feishu layer reaches the module through `server/internal/larkhost` ("Lark" below).
 
 ### The node's modules
 
@@ -426,6 +426,30 @@ manifest declares `feature: module.recording`, which the kernel announces while 
   answer 404, the audio socket is unknown, the hello names none of the nine meeting and recording capabilities (so
   the hub announces none of their feature flags), no room tool is offered and no final pass or attending feeder runs
   (`TestRecordingFollowsItsModule`). The recordings already stored stay in the knowledge base.
+
+### Lark
+
+The assistant's Feishu / Lark layer (`server/internal/assistant/feishu*.go`: the chat's turns, cards, commands,
+workbench, topics and pushes, about 10k lines) is moving into the `lark` module (#13404), in the shape of recording's.
+
+- **The seam**: `server/internal/larkhost`. Its `Outbound` is the **outbound channel port**, the one way core code
+  (acceptance, briefing, reports, conclusions, decisions, owner actions, to-dos and their sources, concerns) reaches
+  the owner's chat: `Status` and `Features` (what the channel supports now), `Post` (a card, with a text fallback and
+  an idempotency key), `Note` and `Reply` (a line under a message), `UpdateCard` and `ThreadPost` (a line for a to-do's
+  chat thread; the core writes the text). Its values are the contract's (`assistantwire.ChannelTarget`,
+  `assistantwire.ThreadEvent`) and `internal/botcard`'s. `Layer` (core -> module) embeds the port and grows with each
+  move; `Host` (module -> core) is what the moved code reads of the assistant. The module declares its own `Host`
+  with the same methods (`server/internal/modules/lark/layer.go`), so it imports no core service, and
+  `server/internal/modules/all/lark.go` provides its layer under `!persona_without_lark && !persona_core_only`.
+- **The core asks the port**, `s.chat()` (`server/internal/assistant/lark.go`), never a `feishu*.go` function: a
+  core file that posts to the chat calls the port. The implementation still lives in `feishu*.go` and is served to the
+  module through the host under the port's names; each move takes code into the module and drops the host methods
+  it no longer needs, so the host only shrinks.
+- **With the module absent** (`persona_without_lark`, `persona_core_only`) the port is `larkhost.None`, a bot switched
+  off: its status reads without an error as neither on nor ready (so an acceptance ask is card-less and a briefing
+  goes out by push, as with the bot off), it supports nothing, a post or a reply answers `larkhost.ErrNoChannel`, and
+  notes and thread lines are dropped.
+  The run-time `modules` switch does not cover it yet, as for mail.
 
 ### How to add a module
 
