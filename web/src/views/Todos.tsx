@@ -95,8 +95,10 @@ import {
   isTodoListFilter,
   isTodoListSort,
   listFilterCounts,
+  matchesKindFilter,
   matchesListFilter,
   sortTriageGroups,
+  type TodoKindFilter,
   type TodoListFilter,
   type TodoListSort,
 } from "../lib/todo-list-filter";
@@ -146,6 +148,7 @@ const SORT_KEY = "persona.todos.sort";
 /** A filter's and a sort's name, as the menu and the chip say them. */
 const filterLabel = (f: TodoListFilter) => t(`todos.filter_${f}`);
 const sortLabel = (s: TodoListSort) => t(`todos.sort_${s}`);
+const kindFilterLabel = (k: TodoKindFilter) => t(`todos.kind_filter_${k}`);
 
 type TodoGrouping = "status" | "folder" | "direction" | "request";
 
@@ -281,9 +284,21 @@ export function TodosView({
     () => new Map(todos.map((td) => [td.id, triage(td, lookup, Date.now(), restored.get(td.id) ?? 0, superseded.has(td.id)).section])),
     [todos, lookup, restored, superseded, tick],
   );
+  // Unified Labs toggle for To-dos v2 (#14584, #14642): strictly gated on the selected assistant's `todos_v2 === true`.
+  const assistant = useStore((s) => s.assistant);
+  const todosV2 = Boolean(assistant && sameManager(assistant.manager ?? repositoryManager, repositoryManager) && assistant.todos_v2 === true);
+  // open todos under the knowledge-base project they are in (#2581), else the one their agents work in (#2526)
+  const kbProjects = useTodoProjects();
+  const projectName = useMemo(() => projectNames(kbProjects), [kbProjects]);
   // A sessions push builds a new lookup: what it leaves in the same order stays the same list (and the same groups,
   // the same row views below), so the rows and sections it did not touch skip their render.
-  const views = useSteady(useMemo(() => todoRowViews(todos, lookup, interactions, sectionOf, needs), [todos, lookup, interactions, sectionOf, needs]), steadyViews);
+  const views = useSteady(
+    useMemo(
+      () => todoRowViews(todos, lookup, interactions, sectionOf, needs, todosV2 ? projectName : undefined),
+      [todos, lookup, interactions, sectionOf, needs, todosV2, projectName],
+    ),
+    steadyViews,
+  );
 
   // The filter by due date and the order inside each section (#3740): this browser's, in both groupings
   const [listFilter, setListFilter] = useState<TodoListFilter>(() => {
@@ -294,6 +309,9 @@ export function TodosView({
     const v = pref(SORT_KEY);
     return isTodoListSort(v) ? v : "recent";
   });
+  // Lightweight All / To-dos / Tasks filter gated behind todos_v2 (#14642); turning todos_v2 off reverts immediately.
+  const [kindFilter, setKindFilter] = useState<TodoKindFilter>("all");
+  const effectiveKindFilter: TodoKindFilter = todosV2 ? kindFilter : "all";
   const chooseFilter = (f: TodoListFilter) => {
     setPref(FILTER_KEY, f);
     setListFilter(f);
@@ -302,7 +320,7 @@ export function TodosView({
     setPref(SORT_KEY, s);
     setListSort(s);
   };
-  const inFilter = (td: Todo) => matchesListFilter(td, listFilter, tick);
+  const inFilter = (td: Todo) => matchesListFilter(td, listFilter, tick) && matchesKindFilter(td, effectiveKindFilter);
   // Filter by search query
   const matchesSearch = (t: Todo) => {
     const q = search.trim().toLowerCase();
@@ -325,7 +343,7 @@ export function TodosView({
       const r = orderWaitGroups(triageTodos(todos.filter(filterTodo), lookup, Date.now(), restored, { superseded }), Date.now());
       return fromView ? drawnFromView(r, Date.now(), restored) : r;
     },
-    [todos, lookup, restored, search, listFilter, superseded, tick, fromView],
+    [todos, lookup, restored, search, listFilter, effectiveKindFilter, superseded, tick, fromView],
   );
   // the header's counts: what the filter shows, whatever is searched
   const triageAll = useMemo(
@@ -334,7 +352,7 @@ export function TodosView({
       const r = orderWaitGroups(triageTodos(todos.filter(inFilter), lookup, Date.now(), restored, { superseded }), Date.now());
       return fromView ? drawnFromView(r, Date.now(), restored) : r;
     },
-    [todos, lookup, restored, search, listFilter, superseded, triaged, tick, fromView],
+    [todos, lookup, restored, search, listFilter, effectiveKindFilter, superseded, triaged, tick, fromView],
   );
   // Where the status sections place each to-do the search and the filter leave: its row's section (a merged row takes
   // its most urgent member's), and whether it counts as open (countsAsOpen, the header's Not done, its own reading).
@@ -365,9 +383,6 @@ export function TodosView({
     useMemo(() => sortTodos(todos.filter((td) => placed.row.get(td.id) === "cancelled"), lookup), [todos, placed, lookup]),
     sameList,
   );
-  // open todos under the knowledge-base project they are in (#2581), else the one their agents work in (#2526)
-  const kbProjects = useTodoProjects();
-  const projectName = useMemo(() => projectNames(kbProjects), [kbProjects]);
   const projectGroups = useSteady(
     // a folder holding a to-do in Needs you says so, a failed start waiting on the owner too (audit item 13)
     useMemo(() => groupTodosByProject(filteredUncompleted, lookup, Date.now(), projectName, (td) => sectionOf.get(td.id) === "waiting"), [filteredUncompleted, lookup, projectName, sectionOf]),
@@ -433,10 +448,10 @@ export function TodosView({
   }, [grouping, byDirection, triaged, placed, listSort]);
   // what waits on the user that the filter leaves out: the line over the sections says how many (#3740)
   const hiddenWaitingCount = useMemo(
-    () => (listFilter === "all" ? 0 : hiddenWaiting(todos.filter(matchesSearch), inFilter, lookup, Date.now(), restored, superseded)),
-    [todos, lookup, restored, search, listFilter, superseded, tick],
+    () => (listFilter === "all" ? 0 : hiddenWaiting(todos.filter((td) => matchesSearch(td) && matchesKindFilter(td, effectiveKindFilter)), (td) => matchesListFilter(td, listFilter, tick), lookup, Date.now(), restored, superseded)),
+    [todos, lookup, restored, search, listFilter, effectiveKindFilter, superseded, tick],
   );
-  const filterCounts = useMemo(() => listFilterCounts(todos.filter(matchesSearch), tick), [todos, search, tick]);
+  const filterCounts = useMemo(() => listFilterCounts(todos.filter((td) => matchesSearch(td) && matchesKindFilter(td, effectiveKindFilter)), tick), [todos, search, effectiveKindFilter, tick]);
   const onRestore = useCallback(
     (id: string) => {
       restoreTodo(id);
@@ -699,7 +714,14 @@ export function TodosView({
               <span className="text-[12px] whitespace-nowrap text-ink-3 max-sm:hidden" data-testid="todos-summary">
                 {/* one count in every grouping (audit item 12): open as countsAsOpen counts it, section counts as their
                     titles do, with Cancelled always separate from Done (#11085, #5732) */}
-                {t(listFilter === "all" ? "todos.summary_triage" : "todos.summary_filtered", { filter: filterLabel(listFilter), open: triageAll.open, parked: sectionSize(triageAll, "parked"), shelved: sectionSize(triageAll, "shelved"), done: sectionSize(triageAll, "done"), cancelled: sectionSize(triageAll, "cancelled") })}
+                {t(listFilter === "all" && effectiveKindFilter === "all" ? "todos.summary_triage" : "todos.summary_filtered", {
+                  filter: [effectiveKindFilter !== "all" ? kindFilterLabel(effectiveKindFilter) : "", listFilter !== "all" ? filterLabel(listFilter) : ""].filter(Boolean).join(" · "),
+                  open: triageAll.open,
+                  parked: sectionSize(triageAll, "parked"),
+                  shelved: sectionSize(triageAll, "shelved"),
+                  done: sectionSize(triageAll, "done"),
+                  cancelled: sectionSize(triageAll, "cancelled"),
+                })}
               </span>
             )}
           </div>
@@ -779,6 +801,7 @@ export function TodosView({
                 onOpenHandover={() => openHandover()}
                 onOpenTodo={(id) => navigate(calendarRoute(calendarMode, anchor, id))}
                 onDeleteClick={() => askDelete(selectedTodo.id)}
+                todosV2={todosV2}
               />
             </div>
           )}
@@ -821,6 +844,21 @@ export function TodosView({
               compact
             />
           </div>
+          {todosV2 && !requestMode && (
+            <div className="px-3 pb-2" data-testid="todos-kind-filter">
+              <Segmented
+                label={t("todos.kind_filter_label")}
+                value={effectiveKindFilter}
+                options={[
+                  { v: "all", label: t("todos.kind_filter_all") },
+                  { v: "todos", label: t("todos.kind_filter_todos") },
+                  { v: "tasks", label: t("todos.kind_filter_tasks") },
+                ]}
+                onChange={setKindFilter}
+                compact
+              />
+            </div>
+          )}
 
           {/* List Content */}
           {requestMode ? (
@@ -868,6 +906,18 @@ export function TodosView({
                     {t("todos.filter_empty_body")}
                   </Empty>
                 </>
+              ) : effectiveKindFilter !== "all" ? (
+                <Empty
+                  icon="todo"
+                  title={t(`todos.kind_empty_${effectiveKindFilter}`)}
+                  action={
+                    <Button tone="secondary" onClick={() => setKindFilter("all")}>
+                      {t("todos.filter_show_all")}
+                    </Button>
+                  }
+                >
+                  {t("todos.filter_empty_body")}
+                </Empty>
               ) : (
                 <Empty
                   icon="todo"
@@ -950,6 +1000,7 @@ export function TodosView({
                     group={g}
                     views={sectionViews.get(g.key)!}
                     selectedId={activeTodo?.id}
+                    hideUnsortedHeader={todosV2}
                     onSelect={openFromList}
                     onToggleDone={toggleDone}
                     onSeen={seenOn ? onSeen : undefined}
@@ -1053,6 +1104,7 @@ export function TodosView({
               onOpenHandover={() => openHandover()}
               onOpenTodo={openFromList}
               onDeleteClick={() => askDelete(activeTodo.id)}
+              todosV2={todosV2}
             />
           ) : (
             <div className="flex flex-1 items-center justify-center text-[13px] text-ink-3">
@@ -1206,6 +1258,7 @@ const TodoProjectSection = memo(function TodoProjectSection({
   group,
   views,
   selectedId,
+  hideUnsortedHeader,
   onSelect,
   onToggleDone,
   onSeen,
@@ -1215,6 +1268,8 @@ const TodoProjectSection = memo(function TodoProjectSection({
   /** Its todos' row views, in the same order as group.todos. */
   views: readonly TodoRowView[];
   selectedId: string | undefined;
+  /** Under todos_v2 (#14642), omit the noisy "Unsorted / 未归类" placeholder header for uncategorized rows. */
+  hideUnsortedHeader?: boolean;
   onSelect: (id: string) => void;
   onToggleDone: (todo: Todo, open?: boolean) => void;
   /** Got it on a row in Just finished (one closed in the last day stays in its folder until it is seen). */
@@ -1223,6 +1278,24 @@ const TodoProjectSection = memo(function TodoProjectSection({
 }) {
   const holds = group.todos.some((td) => td.id === selectedId);
   const [folded, toggle] = useFolded(group.key, group.folded, { follow: true, holds });
+  if (hideUnsortedHeader && group.key === "todos-project:\u0000") {
+    return (
+      <div className="mt-1 first:mt-0 flex flex-col gap-1" data-testid="todo-group" data-group={group.key}>
+        {group.todos.map((todo, i) => (
+          <TodoListItem
+            key={todo.id}
+            todo={todo}
+            view={views[i]}
+            selected={selectedId === todo.id}
+            onSelect={onSelect}
+            onToggleDone={onToggleDone}
+            onSeen={onSeen}
+            onMenu={onMenu}
+          />
+        ))}
+      </div>
+    );
+  }
   return (
     <div className="mt-1 first:mt-0" data-testid="todo-group" data-group={group.key}>
       <button type="button" aria-expanded={!folded} onClick={toggle} className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-control px-2 text-left text-[12px] text-ink-2 hover:bg-hover">
@@ -1610,6 +1683,8 @@ export type TodoRowView = {
   wait?: WaitReason;
   /** Why the sidebar's To-dos badge counts it (#11838, lib/todo-owner-needs.ts), unset when it does not: its mark. */
   owner?: OwnerNeed;
+  /** Under todos_v2 (#14642), the resolved project name when assigned; undefined when unset or todos_v2 is off. */
+  projectLabel?: string;
 };
 
 const DOT_STATE: Record<TodoStatus, AgentState> = {
@@ -1681,8 +1756,25 @@ function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interacti
 }
 
 /** Every todo's row view by id, with its status section and why the sidebar's badge counts it (`needs`, its own set). */
-function todoRowViews(todos: Todo[], lookup: SessionLookup, interactions: Interaction[], sections: ReadonlyMap<string, TriageSection>, needs: ReadonlyMap<string, OwnerNeed>): ReadonlyMap<string, TodoRowView> {
-  return new Map(todos.map((td) => [td.id, { ...todoRowView(td, lookup, interactions), section: sections.get(td.id), owner: needs.get(td.id) }]));
+function todoRowViews(
+  todos: Todo[],
+  lookup: SessionLookup,
+  interactions: Interaction[],
+  sections: ReadonlyMap<string, TriageSection>,
+  needs: ReadonlyMap<string, OwnerNeed>,
+  projectLabel?: (slug: string) => string,
+): ReadonlyMap<string, TodoRowView> {
+  return new Map(
+    todos.map((td) => [
+      td.id,
+      {
+        ...todoRowView(td, lookup, interactions),
+        section: sections.get(td.id),
+        owner: needs.get(td.id),
+        projectLabel: projectLabel && td.project ? projectLabel(td.project) : undefined,
+      },
+    ]),
+  );
 }
 
 const TONE_CLASS = TODO_TONE_CLASS;
@@ -1775,11 +1867,12 @@ const TodoListItem = memo(function TodoListItem({
       {/* Body */}
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2">
-          {view.ultracode || todo.kind === "concern" || view.owner ? (
+          {view.ultracode || todo.kind === "concern" || view.owner || view.projectLabel ? (
             <span className="flex min-w-0 items-center gap-1">
               <span className={cx("truncate text-[13.5px] font-semibold text-ink", !view.ultracode && !open && "text-ink-3 font-normal", !view.ultracode && strikesThrough(todo, open) && "line-through")} data-testid="todo-title">{todo.title}</span>
               {view.ultracode && <UltraMark size={11} />}
               {todo.kind === "concern" && <Tag><span data-testid="todo-concern">{t("todos.concern")}</span></Tag>}
+              {view.projectLabel && <Tag><span data-testid="todo-project-tag">{view.projectLabel}</span></Tag>}
               {view.owner && <OwnerMark need={view.owner} />}
             </span>
           ) : (
@@ -1969,7 +2062,7 @@ function PlanField({ value, onCommit, ...field }: { value: string; onCommit: (va
 
 /** The detail's due date (a day, with a time when one is set), reminder, priority and project. A pick from a menu is
  *  saved at once, a date or time once it is entered (PlanField); no field is disabled while it saves, so the focus stays. */
-function TodoPlanEditor({ todo }: { todo: Todo }) {
+function TodoPlanEditor({ todo, todosV2 }: { todo: Todo; todosV2?: boolean }) {
   const [busy, setBusy] = useState(false);
   const projects = projectChoices(useTodoProjects(), todo.project);
   const save = async (patch: TodoPatch) => {
@@ -2046,7 +2139,7 @@ function TodoPlanEditor({ todo }: { todo: Todo }) {
           className={cx(PLAN_FIELD, "max-w-56 truncate")}
           data-testid="todo-plan-project"
         >
-          <option value="">{t("todos.project_none")}</option>
+          <option value="" aria-label={t("todos.project_none")}>{todosV2 ? "" : t("todos.project_none")}</option>
           {projects.map((p) => (
             <option key={p.slug} value={p.slug}>
               {p.name}
@@ -2395,6 +2488,7 @@ function TodoDetail({
   onOpenHandover,
   onOpenTodo,
   onDeleteClick,
+  todosV2,
 }: {
   todo: Todo;
   owner: string;
@@ -2412,6 +2506,7 @@ function TodoDetail({
   onOpenHandover: () => void;
   onOpenTodo: (id: string) => void;
   onDeleteClick: () => void;
+  todosV2?: boolean;
 }) {
   const title = useTodoField({
     remote: todo.title, owner, allowEmpty: false,
@@ -2605,7 +2700,7 @@ function TodoDetail({
       <HeldForBriefing todo={todo} />
 
       {/* Due date, reminder, priority (#1683) */}
-      <TodoPlanEditor todo={todo} />
+      <TodoPlanEditor todo={todo} todosV2={todosV2} />
       {/* The brief its work is held to (#3822): who asked and in what words above the criteria; the scope changes
           and who worked on it under them. */}
       {todo.brief && (
