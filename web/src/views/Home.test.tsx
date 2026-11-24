@@ -473,7 +473,7 @@ describe("tasks in progress", () => {
       const html = render([agent(1, 0, "working"), agent(2, 0, "unread")], [{ id: "c1", machine_id: "mac", session_id: "s1", kind: "question", question: "ok?" } as Interaction]);
       expect(heading(html, "进行中的任务")).toBeGreaterThan(-1);
       expect(heading(html, "进行中的任务")).toBeLessThan(heading(html, "需要你"));
-      expect(heading(html, "需要你")).toBeLessThan(heading(html, "完成未看"));
+      expect(heading(html, "需要你")).toBeLessThan(heading(html, "新回复"));
       expect(heading(html, "工作中")).toBe(-1);
       expect(html.indexOf("</h1>")).toBeLessThan(heading(html, "进行中的任务"));
     } finally {

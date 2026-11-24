@@ -122,6 +122,7 @@ async function run(browser, size, theme, language, textSize = "standard") {
     assert.equal(await page.locator('[data-needs-row="task:unattended"] [data-task-todo-state]').count(), 1);
     await page.screenshot({ path: name("needs-you") });
     await open("running");
+    await page.locator('[data-task-status="reported_done"]').waitFor();
     assert.equal(await page.locator("[data-task-slot]").count(), 2, "working plus an uncounted reported finish");
     assert.equal(await page.locator('[data-task-status="working"]').count(), 1);
     assert.equal(await page.locator('[data-task-status="reported_done"]').textContent(), words[language].done);
