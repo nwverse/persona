@@ -67,8 +67,6 @@ import { usePanes } from "../lib/terminal-panes";
 import { buildTerminalTree, shellsOnly, type TermSpace } from "../lib/terminals";
 import type { LinkTargetSpace } from "./LinkTodoDialog";
 import { lazyDialog } from "./LazyOverlay";
-import { reportBoundary } from "../lib/error-reports";
-import { isChunkError } from "./PageBoundary";
 import { lazyPage } from "../lib/lazy-page";
 import { FoldScope, useFolded } from "../lib/use-folded";
 import { clipsOverflow, glideBox, glideStyle, sameBox, type GlideBox, type Span } from "../lib/glide";
