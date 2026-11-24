@@ -123,12 +123,16 @@ func (s *Service) filledChannel(ctx context.Context, v channel.View) channel.Vie
 		if pref.Target != nil {
 			t = *pref.Target
 		}
+		threadMode := pref.ThreadMode.Normalized()
+		threadIdleHours := pref.ThreadIdleHours
 		features := channel.PluginFeatures(s.botLang(ctx), v.Capabilities, pref.Features)
 		c.mu.Unlock()
 		if t.Kind == channel.TargetConversation && t.Title == "" {
 			t.Title = s.conversationTitle(ctx, t.MachineID, t.SessionID)
 		}
 		v.Target = &t
+		v.ThreadMode = threadMode
+		v.ThreadIdleHours = threadIdleHours
 		if v.Kind == channel.KindIM {
 			v.Features = features
 		}
@@ -185,14 +189,20 @@ func (s *Service) channelDetail(ctx context.Context, id string) (channel.Detail,
 	ov, hasOverrides := c.overrides[id], c.hasOverrides
 	c.mu.Unlock()
 	if !d.ReadOnly && d.Source != channel.SourceMarket && d.Target != nil {
-		switch {
-		case hasOverrides:
-			if ov != nil {
-				cp := *ov
-				d.TargetOverride = &cp
+		if v.Source == channel.SourcePlugin && v.Installed && s.integrationsV2On(ctx) {
+			if d.ThreadMode == channel.ThreadModePerGroupAndTopic || d.ThreadMode == channel.ThreadModePerTopic {
+				d.TargetOverride = &channel.TargetOverride{Mode: channel.TargetOverrideTopics}
 			}
-		case v.Source == channel.SourcePlugin && v.Installed && v.Capabilities.Threads:
-			d.TargetOverride = &channel.TargetOverride{Mode: channel.TargetOverrideThreads}
+		} else {
+			switch {
+			case hasOverrides:
+				if ov != nil {
+					cp := *ov
+					d.TargetOverride = &cp
+				}
+			case v.Source == channel.SourcePlugin && v.Installed && v.Capabilities.Threads:
+				d.TargetOverride = &channel.TargetOverride{Mode: channel.TargetOverrideThreads}
+			}
 		}
 	}
 	for i := range d.Conversations {
