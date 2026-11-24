@@ -5986,9 +5986,10 @@ every device of theirs follows it.
   know or a page that is not there now, keeping the choice.
 - `start` is left out of the answer until a PUT stores one; `""` once the default was chosen. An app that kept a choice of its
   own while there was no record (a hub or manager without the route, a new default manager) PUTs it when the answer has none.
-- `pages` is the sidebar's arrangement (#9071 groups), as the web keeps it (`web/src/lib/sidebar-pages.ts`):
-  `{"order": [<page>], "shown": [<page>], "hidden": [<page>], "groups"?: [{"id", "title"?}], "assign"?: {<page>: <group id>}, "removed"?: [<group id>]}`.
-  `order` is the user's order; `shown` / `hidden` the pages switched into the sidebar or put under More; `groups` the groups in
+- `pages` is the sidebar's arrangement (#9071 groups, #13798 More), as the web keeps it (`web/src/lib/sidebar-pages.ts`):
+  `{"order": [<page>], "shown": [<page>], "hidden": [<page>], "more"?: boolean, "groups"?: [{"id", "title"?}], "assign"?: {<page>: <group id>}, "removed"?: [<group id>]}`.
+  `order` is the user's order; `shown` / `hidden` the pages switched into the sidebar or put under More; `more: false` hides
+  the More entry itself without changing those page choices (absent or true leaves it visible); `groups` the groups in
   their order, where `""` is the built-in **Pages**, `u:<id>` a group the user made (a title is required) and any other id an
   extension's `nav_page` group (`docs/extensions/extensions.md` "UI slots"; a title renames it); `assign` the group a page was moved
   to; `removed` the extensions' groups the user removed. The manager checks only the shape (at most 256 keys a list and 256 moves,

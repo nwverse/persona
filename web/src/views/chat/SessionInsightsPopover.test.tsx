@@ -2,6 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatNumber, t } from "../../i18n";
 import { COMPACT_FEATURE } from "../../lib/compaction";
 import { setRoute } from "../../lib/feed";
 import { clearRateHistories, emptyRateHistory, recordTokens, saveRateHistory } from "../../lib/token-rate";
@@ -100,6 +101,21 @@ async function waitForPopover(): Promise<HTMLElement> {
 }
 
 describe("ContextMeter + lazy SessionInsightsPopover", () => {
+  it("shows the agy window in the dialog, then just current context when the capacity disappears", async () => {
+    const agy = { ...baseSession, agent: "agy", model: "gemini-4-neon-high", context_tokens: 262_144, context_window: 1_048_576 };
+    await mount(<ContextMeter session={agy} items={sampleItems} />);
+    await act(async () => host.querySelector("button")!.click());
+    const dialog = await waitForPopover();
+    const section = () => dialog.querySelector("[data-insights-context]");
+    expect(section()?.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("25");
+    expect(section()?.textContent).toContain(t("context.summary", { used: 25, left: 75 }));
+
+    await mount(<ContextMeter session={{ ...agy, model: "custom", context_window: 0 }} items={sampleItems} />);
+    expect(section()?.textContent).toContain(t("context.current_tokens", { tokens: formatNumber(agy.context_tokens) }));
+    expect(section()?.textContent).not.toMatch(/%|\//);
+    expect(section()?.querySelector('[role="progressbar"]')).toBeNull();
+    expect(dialog.querySelector("[data-insights-tokens]")?.textContent).toContain("13.5k");
+  });
   it("opens the lazy popover on click and displays context, tokens, cache hit rate, multi-model, and speed", async () => {
     let h = emptyRateHistory();
     h = recordTokens(h, { turn: "t1", tokens: 40, at: 1000, now: 1000 });
@@ -290,7 +306,7 @@ describe("ContextMeter + lazy SessionInsightsPopover", () => {
     );
     expect(document.querySelector("[data-insights-compact]")).toBeNull();
 
-    setRoute("s1", null);
+    await act(async () => setRoute("s1", null));
     await mount(
       <SessionInsightsPopover anchor={anchor} session={baseSession} items={sampleItems} onCompact={onCompact} compactBlocked onClose={() => {}} />,
     );
