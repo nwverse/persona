@@ -121,4 +121,10 @@ func TestAgentsListKeepsCrossMachineFoldedApprovalOnParent(t *testing.T) {
 		!strings.Contains(got, "interaction_id=cross-approval") {
 		t.Fatalf("cross-machine folded child approval must attach to parent on mac without listing child:\n%s", got)
 	}
+	// Filtering by parent's machine ("mac") must STILL retain the cross-machine child's interaction_id.
+	byParentMachine := s.describeAgents(context.Background(), proto.StateNeedsYou, "mac", "")
+	if strings.Count(byParentMachine, "session_id=") != 1 || !strings.Contains(byParentMachine, "session_id=parent ") ||
+		!strings.Contains(byParentMachine, "interaction_id=cross-approval") {
+		t.Fatalf("agents_list(machine=mac) dropped cross-machine folded child approval:\n%s", byParentMachine)
+	}
 }

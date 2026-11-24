@@ -69,13 +69,18 @@ personad tool a2a_send '{"machine_id":"box","session_id":"runtime.session-1","me
 To start a new cross-machine or cross-harness subagent, provide the target
 `machine_id` (which may be the caller's own computer for cross-harness work such
 as Claude launching Codex) and `cwd`, with an optional `launcher` and optional
-`permission_mode` (defaulting to `plan` and capped at the calling session's own
-permission mode). Launching subagents is enabled by default on the manager's
+`permission_mode`. New launches default to `plan`. Requesting any mode above
+`plan` (`default`, `acceptEdits`, `auto`, `bypassPermissions`) requires live
+source-node permission attestation bound to the calling request (cached session
+snapshots are never trusted, and unmapped modes fail closed): `prompting`
+attestation allows at most `default`, while `bypass` attestation allows any
+supported mode. Launching subagents is enabled by default on the manager's
 confirmed personal computers, using the manager's Agent model and existing
 depth (1) and concurrency (`agents.dispatch.max_active`, default 3) limits. Set
 `agents.a2a.launch` to `false` in `manager.json` to disable launching new
-sessions while keeping peer messaging, or set `agents.a2a.machines` to `[]` to
-disable A2A altogether.
+sessions while keeping peer messaging (queued launches that have not yet called
+`session.start` also recheck this switch and fail cleanly), or set
+`agents.a2a.machines` to `[]` to disable A2A altogether.
 Sessions launched by `a2a_send` or `dispatch_start` are durably tagged as
 subagents (`is_subagent`, `parent_machine_id`, `parent_session_id`,
 `a2a_task_id`, `subagent_origin`) and folded under their parent session across

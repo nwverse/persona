@@ -1701,6 +1701,31 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 			rows = append(rows, row{m, c})
 		}
 	}
+	// When machine filtering skipped a cross-machine child's machine, verify folded approvals
+	// belonging to included parent rows so agents_list(machine=<parent>) keeps their interaction_ids.
+	if machine != "" && wanted && len(folded) > 0 {
+		needMachines := map[string]bool{}
+		for _, r := range rows {
+			for _, p := range pending[[2]string{r.m.ID, r.c.SessionID}] {
+				if p.folded && !folded[p.source] && p.source[0] != want.ID {
+					needMachines[p.source[0]] = true
+				}
+			}
+		}
+		for childMid := range needMachines {
+			list, _, _ := s.sessionsMuted(ctx, childMid)
+			for _, c := range list {
+				if c.HiddenByDirectory() || c.IsDeleted() || runSpace(c) != space {
+					continue
+				}
+				if source := [2]string{childMid, c.SessionID}; c.FoldedUnder() != "" {
+					if _, tracked := folded[source]; tracked {
+						folded[source] = true
+					}
+				}
+			}
+		}
+	}
 	order := map[string]int{proto.StateNeedsYou: 0, proto.StateWorking: 1, proto.StateUnread: 2, proto.StateIdle: 3}
 	sort.SliceStable(rows, func(i, j int) bool {
 		oi, oj := order[agentsListState(rows[i].c)], order[agentsListState(rows[j].c)]

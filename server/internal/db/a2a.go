@@ -218,16 +218,18 @@ func (d *DB) A2AClaim(ctx context.Context, limit int) ([]A2ARow, error) {
 	return out, rows.Err()
 }
 
-// A2ALaunches lists recent and active A2A-launched tasks (body ? 'launch') so the
-// manager can restore subagent parent attribution across restarts.
-func (d *DB) A2ALaunches(ctx context.Context, since time.Time) ([]A2ARow, error) {
+// A2ALaunchesForTargets resolves durable A2A/dispatch launch rows for the exact set of
+// visible target sessions on machine, with no age or global row-count truncation.
+func (d *DB) A2ALaunchesForTargets(ctx context.Context, machine string, sessions []string) ([]A2ARow, error) {
+	if machine == "" || len(sessions) == 0 {
+		return nil, nil
+	}
 	rows, err := d.pool.Query(ctx, `SELECT `+a2aColumns+` FROM a2a_tasks
-		WHERE body ? 'launch'
+		WHERE target_machine = $1
+		  AND target_session = ANY($2::text[])
+		  AND body ? 'launch'
 		  AND source_session <> ''
-		  AND target_session <> ''
-		  AND (created_at >= $1 OR state IN ('queued','submitted','working','input_required','auth_required'))
-		ORDER BY created_at DESC,id DESC
-		LIMIT 2000`, since)
+		ORDER BY created_at DESC,id DESC`, machine, sessions)
 	if err != nil {
 		return nil, err
 	}

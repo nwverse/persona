@@ -1,7 +1,6 @@
 package assistant
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -54,7 +54,7 @@ type a2aStore interface {
 	A2AClaim(context.Context, int) ([]db.A2ARow, error)
 	A2AReady(context.Context, string, string) error
 	A2ADispatches(context.Context, string, string, string, time.Time) ([]db.A2ARow, error)
-	A2ALaunches(context.Context, time.Time) ([]db.A2ARow, error)
+	A2ALaunchesForTargets(context.Context, string, []string) ([]db.A2ARow, error)
 }
 
 type a2aRef struct {
@@ -335,16 +335,27 @@ func a2aActiveDelivery(e a2aEvent) bool {
 }
 
 func (s *Service) a2aStart(ctx context.Context, st a2aStore, cfg assistantwire.A2AConfig, c a2aCaller, to a2aRef, id, contextID, text string, wake bool, launch *a2aLaunch) (*a2aTask, error) {
+	if !a2aValidID(id) || !a2aValidText(text) || contextID != "" && !a2aValidID(contextID) {
+		return nil, errA2AInvalid
+	}
 	if launch != nil {
 		if c.Ref.Session == "" || to.Session != "" || contextID != "" {
 			return nil, errA2AInvalid
 		}
+		dev, ok := s.machineByName(ctx, to.Machine)
+		if !ok || dev.ID != to.Machine || !s.a2aMachineAllowed(ctx, cfg, to.Machine) || !a2aValidText(launch.CWD) || s.trackPolicy(ctx, identity.SpaceAt(launch.CWD)).HideFromExtensions {
+			return nil, errA2AUnavailable
+		}
+		launch.PermissionMode = strings.TrimSpace(launch.PermissionMode)
+		launch.Subagent = true
+		launch.CWD = proto.ExpandHome(launch.CWD, dev.Home)
+		// Check for an idempotent retry BEFORE validating current launch toggle or caller permission,
+		// so a caller recovering from a lost launch reply is never blocked by later policy/mode changes.
+		if old, err := decodeA2A(st.A2ARequest(ctx, c.Owner, id)); old != nil || err != nil {
+			return a2aCheckRetry(old, err, to, contextID, text, wake, launch)
+		}
 		if !cfg.LaunchAllowed() {
 			return nil, fmt.Errorf("%w: starting new A2A subagent sessions is disabled by configuration", errA2AUnavailable)
-		}
-		dev, ok := s.machineByName(ctx, to.Machine)
-		if !ok || dev.ID != to.Machine || !a2aValidText(launch.CWD) || s.trackPolicy(ctx, identity.SpaceAt(launch.CWD)).HideFromExtensions {
-			return nil, errA2AUnavailable
 		}
 		if launch.PermissionMode != "" {
 			mode, err := s.a2aLaunchPermissionMode(ctx, c.Ref, launch.PermissionMode)
@@ -353,13 +364,11 @@ func (s *Service) a2aStart(ctx context.Context, st a2aStore, cfg assistantwire.A
 			}
 			launch.PermissionMode = mode
 		}
-		launch.Subagent = true
-		launch.CWD = proto.ExpandHome(launch.CWD, dev.Home)
 		to.Session = newStartSessionID()
 		s.dispatch.admit.Lock()
 		defer s.dispatch.admit.Unlock()
 	}
-	if !a2aValidID(id) || !a2aValidText(text) || contextID != "" && !a2aValidID(contextID) || to == c.Ref {
+	if to == c.Ref {
 		return nil, errA2AInvalid
 	}
 	if !s.a2aEndpointAllowed(ctx, cfg, to, launch != nil) {
@@ -402,38 +411,53 @@ func (s *Service) a2aStart(ctx context.Context, st a2aStore, cfg assistantwire.A
 	return out, err
 }
 
-// a2aLaunchPermissionMode validates an explicit permission_mode on an A2A launch and caps it
-// to the caller's own permission level so a subagent can never escalate past its parent.
+// a2aPermissionRank assigns an explicit privilege rank to every supported permission mode.
+// Unknown or unmapped modes return (_, false) and fail closed — never silently treated as plan.
+func a2aPermissionRank(mode string) (int, bool) {
+	switch mode {
+	case "plan":
+		return 0, true
+	case "default":
+		return 1, true
+	case "acceptEdits":
+		return 2, true
+	case "auto":
+		return 3, true
+	case "bypassPermissions":
+		return 4, true
+	default:
+		return -1, false
+	}
+}
+
+// a2aLaunchPermissionMode validates an explicit permission_mode on an A2A launch.
+// "plan" is always permitted. Any higher mode requires live node-attested SourcePermission
+// evidence bound to the calling session (never a cached session-list snapshot, #9671) and
+// fails closed when missing or insufficient:
+//   - prompting attestation permits at most "default" (interactive approval on every write/command);
+//   - bypass attestation permits any allowlisted mode up to "bypassPermissions".
 func (s *Service) a2aLaunchPermissionMode(ctx context.Context, caller a2aRef, requested string) (string, error) {
 	requested = strings.TrimSpace(requested)
-	if !slices.Contains(proto.PermissionModes, requested) {
+	reqRank, ok := a2aPermissionRank(requested)
+	if !ok || !slices.Contains(proto.PermissionModes, requested) {
 		return "", fmt.Errorf("%w: unsupported permission_mode %q", errA2AInvalid, requested)
 	}
-	if requested == "plan" {
+	if reqRank == 0 {
 		return "plan", nil
 	}
-	parentMode := ""
-	if parent, ok := s.session(ctx, caller.Machine, caller.Session); ok {
-		parentMode = parent.PermissionMode
+	proof := devicewire.SourcePermissionFrom(ctx)
+	if !proof.Valid() || proof.Session != caller.Session {
+		return "", fmt.Errorf("%w: permission_mode %q requires live source-node permission attestation; omit permission_mode or use \"plan\"", errA2AInvalid, requested)
 	}
-	rank := func(m string) int {
-		switch m {
-		case "plan":
-			return 0
-		case "default":
-			return 1
-		case "acceptEdits":
-			return 2
-		case "dontAsk":
-			return 3
-		case "bypassPermissions":
-			return 4
-		default:
-			return 0
-		}
+	maxRank := -1
+	switch proof.Class {
+	case "prompting":
+		maxRank = 1 // "default"
+	case "bypass":
+		maxRank = 4 // "bypassPermissions"
 	}
-	if parentMode == "" || rank(requested) > rank(parentMode) {
-		return "", fmt.Errorf("%w: requested permission_mode %q exceeds parent session permission %q", errA2AInvalid, requested, cmp.Or(parentMode, "plan"))
+	if reqRank > maxRank {
+		return "", fmt.Errorf("%w: requested permission_mode %q exceeds live source permission class %q", errA2AInvalid, requested, proof.Class)
 	}
 	return requested, nil
 }

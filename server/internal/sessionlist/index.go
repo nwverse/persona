@@ -97,6 +97,31 @@ func (v *Item) rootMachine() string {
 	return v.Machine
 }
 
+// isCrossMachineFolded reports whether v is folded under a listed parent on another machine.
+func (v *Item) isCrossMachineFolded() bool {
+	return v.Fold != nil && v.Fold.Root != "" && v.Fold.RootMachine != "" && v.Fold.RootMachine != v.Machine
+}
+
+// isSameMachineFolded reports whether v is folded under a listed parent on its own machine.
+func (v *Item) isSameMachineFolded() bool {
+	return v.Fold != nil && v.Fold.Root != "" && (v.Fold.RootMachine == "" || v.Fold.RootMachine == v.Machine)
+}
+
+// hiddenByRoots reports whether Options.Roots excludes v. When crossMachine is true
+// (cross_machine_hierarchy=1), all folded children (same- and cross-machine) and all orphan
+// subagents are excluded. Without cross_machine_hierarchy=1, legacy clients do not read
+// folded_under_machine_id, so cross-machine folded rows and needs_you orphan subagents stay
+// listed so blocked subagents and their approval cards remain reachable.
+func (v *Item) hiddenByRoots(crossMachine bool) bool {
+	if crossMachine {
+		return v.root() != "" || v.Subagent
+	}
+	if v.isSameMachineFolded() {
+		return true
+	}
+	return v.Subagent && v.root() == "" && v.State != "needs_you"
+}
+
 // matchesUnder reports whether v belongs under parent (machine, session): either folded under it
 // (all depths) or, for an orphan subagent whose parent is no longer listed (e.g. archived), directly
 // naming that parent so the parent's Session Overview can still inspect its subagents.
@@ -146,15 +171,18 @@ type Options struct {
 	// cursor is bound to it. It is the adapter's to set (not a key Parse reads): the adapter knows which owners exist
 	// and who may ask for which.
 	Manager string
-	// Roots (roots=1) leaves the items folded under another (Fold.Root) and orphan subagents (Item.Subagent) out of
-	// the rows, the totals and every count, and filters and counts the rest by their folded state (Fold.State). Under
-	// (parent_session_id, with UnderMachine from parent_machine_id or machine_id) selects the items folded under that
-	// parent across machines, all depths; optional Machine filters child rows to one machine when UnderMachine is given.
-	// Roots and Under cannot be combined. Both bind a cursor, as the other filters do.
-	Roots        bool
-	Under        string
-	UnderMachine string
-	Summary      bool
+	// Roots (roots=1) leaves the items folded under another (Fold.Root) and orphan subagents out of the rows,
+	// totals and every count, and filters and counts the rest by their folded state (Fold.State). When
+	// CrossMachineHierarchy (cross_machine_hierarchy=1) is set, cross-machine folded rows and all orphan subagents
+	// are folded/hidden too; without it, legacy clients keep cross-machine folded rows and needs_you orphan
+	// subagents reachable. Under (parent_session_id, with UnderMachine from parent_machine_id or machine_id)
+	// selects the items folded under that parent, all depths; optional Machine filters child rows to one machine
+	// when UnderMachine is given. Roots and Under cannot be combined. All bind a cursor.
+	Roots                 bool
+	CrossMachineHierarchy bool
+	Under                 string
+	UnderMachine          string
+	Summary               bool
 	// NoPrivate leaves the Private items out of the rows, the totals and every count; like Manager it is the adapter's
 	// to set (who asks), not a key Parse reads, and it binds a cursor as the other filters do.
 	NoPrivate bool
@@ -269,8 +297,8 @@ type filters struct {
 	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager, Under, UnderMachine, Todo, Waiting, ExcludePaneSource, JustFinished string
 	// Places and Spaces are Options' as placesKey spells them, Providers as
 	// providersKey spells the set: filters stay comparable.
-	Places, Spaces, Providers                   string
-	Roots, NoPrivate, IncludeHidden, AgentsOnly bool
+	Places, Spaces, Providers                                          string
+	Roots, CrossMachineHierarchy, NoPrivate, IncludeHidden, AgentsOnly bool
 }
 
 type binding struct {

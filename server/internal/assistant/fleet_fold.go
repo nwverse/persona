@@ -29,7 +29,7 @@ type sessionFold struct {
 type tabKey struct{ kind, space, slot string }
 
 // foldEntry holds only the lightweight hierarchy metadata needed to fold across machines without retaining full
-// ~1.5 KB proto.Session copies.
+// ~1.5 KB proto.Session copies. All fields are comparable so slices.Equal detects unchanged fold inputs cheaply.
 type foldEntry struct {
 	sessionID             string
 	state                 string
@@ -222,9 +222,9 @@ func foldSessions(list []proto.Session, hidden map[string]bool) sessionFold {
 }
 
 // foldFleet folds decorated lists across every machine in lists: same-machine children, tab teams and side sessions
-// fold as foldSessions does, and cross-machine children (ParentMachineID != machine) walk up to their topmost listed
-// ancestor across machines, setting underMachine on the child's fold and rolling their state into the ancestor's
-// SessionChildren on the parent machine.
+// fold identically to foldSessions, and cross-machine children (ParentMachineID != machine) walk up to their topmost
+// listed ancestor across machines, setting underMachine on the child's fold and rolling their state into the
+// ancestor's SessionChildren on the parent machine.
 func foldFleet(lists map[string][]proto.Session, hidden map[string]map[string]bool) map[string]sessionFold {
 	entries := make(map[string][]foldEntry, len(lists))
 	for m, list := range lists {
@@ -241,7 +241,11 @@ func foldFleetEntries(machines map[string][]foldEntry) map[string]sessionFold {
 	at := make(map[string]map[string]int, len(machines))
 	sides := make(map[string]map[int]int, len(machines))
 	leads := make(map[string]map[int]int, len(machines))
+	// Use *sessionFold entries during the walk so same-machine child and root mutations (mf and rf when
+	// top.machine == m) update the exact same struct and never overwrite folded_as or children.
+	foldsPtr := make(map[string]*sessionFold, len(machines))
 	for m, list := range machines {
+		foldsPtr[m] = &sessionFold{}
 		idxMap := make(map[string]int, len(list))
 		for i := range list {
 			if _, dup := idxMap[list[i].sessionID]; !dup && list[i].listed() {
@@ -293,12 +297,9 @@ func foldFleetEntries(machines map[string][]foldEntry) map[string]sessionFold {
 		return nodeRef{}, false
 	}
 
-	folds := make(map[string]sessionFold, len(machines))
-	for m := range machines {
-		folds[m] = sessionFold{}
-	}
 	var path []nodeRef
 	for m, list := range machines {
+		mf := foldsPtr[m]
 		for i := range list {
 			if at[m][list[i].sessionID] != i || !list[i].listed() {
 				continue
@@ -324,7 +325,6 @@ func foldFleetEntries(machines map[string][]foldEntry) map[string]sessionFold {
 			id := list[i].sessionID
 			rootID := machines[top.machine][top.idx].sessionID
 
-			mf := folds[m]
 			if mf.under == nil {
 				mf.under = map[string]string{}
 			}
@@ -335,9 +335,8 @@ func foldFleetEntries(machines map[string][]foldEntry) map[string]sessionFold {
 				}
 				mf.underMachine[id] = top.machine
 			}
-			folds[m] = mf
 
-			rf := folds[top.machine]
+			rf := foldsPtr[top.machine]
 			if rf.children == nil {
 				rf.children = map[string]*proto.SessionChildren{}
 			}
@@ -355,7 +354,6 @@ func foldFleetEntries(machines map[string][]foldEntry) map[string]sessionFold {
 			}
 			_, side := sides[m][i]
 			if _, worker := leads[m][i]; worker || side {
-				mf = folds[m]
 				if mf.as == nil {
 					mf.as = map[string]string{}
 				}
@@ -374,27 +372,26 @@ func foldFleetEntries(machines map[string][]foldEntry) map[string]sessionFold {
 					mf.as[id] = proto.FoldedAsWorker
 					c.Workers++
 				}
-				folds[m] = mf
-				folds[top.machine] = rf
 				continue
 			}
-			folds[top.machine] = rf
 			if top.machine == m {
 				for _, p := range path[1 : len(path)-1] {
 					if p.machine == m {
 						if _, ok := sides[m][p.idx]; ok {
-							mf = folds[m]
 							if mf.side == nil {
 								mf.side = map[string]string{}
 							}
 							mf.side[id] = machines[m][p.idx].sessionID
-							folds[m] = mf
 							break
 						}
 					}
 				}
 			}
 		}
+	}
+	folds := make(map[string]sessionFold, len(foldsPtr))
+	for m, f := range foldsPtr {
+		folds[m] = *f
 	}
 	return folds
 }
@@ -573,9 +570,13 @@ func (f sessionFold) apply(list []proto.Session) {
 	}
 }
 
+func sameInteractionFold(a, b sessionFold) bool {
+	return maps.Equal(a.under, b.under) && maps.Equal(a.underMachine, b.underMachine) &&
+		maps.Equal(a.as, b.as) && maps.Equal(a.side, b.side)
+}
+
 func sameSessionFold(a, b sessionFold) bool {
-	if !maps.Equal(a.under, b.under) || !maps.Equal(a.underMachine, b.underMachine) ||
-		!maps.Equal(a.as, b.as) || !maps.Equal(a.side, b.side) || len(a.children) != len(b.children) {
+	if !sameInteractionFold(a, b) || len(a.children) != len(b.children) {
 		return false
 	}
 	for k, va := range a.children {
@@ -633,10 +634,194 @@ func (s *Service) foldSeedMachine(machine string) []foldEntry {
 	return toFoldEntries(rows, s.reviewerHiddenFor(machine))
 }
 
-// foldInventory folds machine's complete list (foldSessions for purely single-machine fleets; foldFleetEntries when
-// any cross-machine subagent is active), puts the fold on its rows and keeps it for the rows decorated on their own
-// (foldSubset) and the cards sent to the apps (withTask) until the next complete list. When a cross-machine child's
-// state changes another machine's parent rollup, that machine is republished asynchronously.
+// updateCrossEdgesLocked updates crossParents[machine] and its reverse index crossChildren, returning the set of
+// previously linked parent machines that were disconnected by this update. Caller holds s.fleet.foldMu.
+func (s *Service) updateCrossEdgesLocked(machine string, nextParents map[string]bool) []string {
+	f := &s.fleet
+	var detached []string
+	if old := f.crossParents[machine]; len(old) > 0 {
+		for pm := range old {
+			if !nextParents[pm] {
+				detached = append(detached, pm)
+				if ch := f.crossChildren[pm]; ch != nil {
+					delete(ch, machine)
+					if len(ch) == 0 {
+						delete(f.crossChildren, pm)
+					}
+				}
+			}
+		}
+	}
+	if len(nextParents) == 0 {
+		delete(f.crossParents, machine)
+	} else {
+		if f.crossParents == nil {
+			f.crossParents = map[string]map[string]bool{}
+		}
+		if f.crossChildren == nil {
+			f.crossChildren = map[string]map[string]bool{}
+		}
+		cp := make(map[string]bool, len(nextParents))
+		for pm := range nextParents {
+			cp[pm] = true
+			if f.crossChildren[pm] == nil {
+				f.crossChildren[pm] = map[string]bool{}
+			}
+			f.crossChildren[pm][machine] = true
+		}
+		f.crossParents[machine] = cp
+	}
+	return detached
+}
+
+// crossComponentLocked returns the connected component of cross-machine-linked machines reachable from seeds.
+// Caller holds s.fleet.foldMu.
+func (s *Service) crossComponentLocked(seeds ...string) map[string]bool {
+	f := &s.fleet
+	seen := make(map[string]bool, len(seeds))
+	queue := make([]string, 0, len(seeds))
+	add := func(m string) {
+		if m != "" && !seen[m] {
+			seen[m] = true
+			queue = append(queue, m)
+		}
+	}
+	for _, m := range seeds {
+		add(m)
+	}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for pm := range f.crossParents[cur] {
+			add(pm)
+		}
+		for cm := range f.crossChildren[cur] {
+			add(cm)
+		}
+	}
+	return seen
+}
+
+// dropRemovedFoldMachinesLocked removes machines that are no longer in s.devs from foldMeta/folds and returns
+// the remaining machines whose cross-machine parent or child edge was broken by the removal.
+// Caller holds s.fleet.foldMu.
+func (s *Service) dropRemovedFoldMachinesLocked() []string {
+	if s.devs == nil || len(s.fleet.foldMeta) == 0 {
+		return nil
+	}
+	f := &s.fleet
+	var affected []string
+	for m := range f.foldMeta {
+		if s.devs.Has(m) {
+			continue
+		}
+		delete(f.foldMeta, m)
+		delete(f.folds, m)
+		for pm := range f.crossParents[m] {
+			if ch := f.crossChildren[pm]; ch != nil {
+				delete(ch, m)
+				if len(ch) == 0 {
+					delete(f.crossChildren, pm)
+				}
+			}
+			affected = append(affected, pm)
+		}
+		delete(f.crossParents, m)
+		for cm := range f.crossChildren[m] {
+			if ps := f.crossParents[cm]; ps != nil {
+				delete(ps, m)
+				if len(ps) == 0 {
+					delete(f.crossParents, cm)
+				}
+			}
+			affected = append(affected, cm)
+		}
+		delete(f.crossChildren, m)
+	}
+	return affected
+}
+
+// pruneRemovedFoldMachines drops any removed machine's cached cross-machine fold entries and republishes any
+// remaining machine whose parent rollup or child fold changed as a result.
+func (s *Service) pruneRemovedFoldMachines() {
+	if !s.fleetOn() {
+		return
+	}
+	s.fleet.foldMu.Lock()
+	if len(s.fleet.foldMeta) == 0 {
+		s.fleet.foldMu.Unlock()
+		return
+	}
+	affected := s.dropRemovedFoldMachinesLocked()
+	if len(affected) == 0 {
+		s.fleet.foldMu.Unlock()
+		return
+	}
+	comp := s.crossComponentLocked(affected...)
+	sub := make(map[string][]foldEntry, len(comp))
+	for m := range comp {
+		if rows, ok := s.fleet.foldMeta[m]; ok {
+			sub[m] = rows
+		}
+	}
+	recomputed := foldFleetEntries(sub)
+	var changedOthers []string
+	var cardChanged map[string]bool
+	for m, next := range recomputed {
+		prev := s.fleet.folds[m]
+		s.fleet.folds[m] = next
+		if !sameSessionFold(prev, next) {
+			changedOthers = append(changedOthers, m)
+		}
+		if !sameInteractionFold(prev, next) {
+			if cardChanged == nil {
+				cardChanged = map[string]bool{}
+			}
+			cardChanged[m] = true
+		}
+		if len(s.fleet.crossParents[m]) == 0 && len(s.fleet.crossChildren[m]) == 0 {
+			delete(s.fleet.foldMeta, m)
+		}
+	}
+	if len(s.fleet.foldMeta) == 0 {
+		s.fleet.foldMeta = nil
+	}
+	s.fleet.foldMu.Unlock()
+	s.notifyFoldDependents(changedOthers, cardChanged)
+}
+
+func (s *Service) hasPendingCardOn(machines map[string]bool) bool {
+	if len(machines) == 0 {
+		return false
+	}
+	s.fleet.mu.Lock()
+	defer s.fleet.mu.Unlock()
+	for _, p := range s.fleet.interactions {
+		if !p.claimed && machines[p.ix.MachineID] {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) notifyFoldDependents(republish []string, cardMachines map[string]bool) {
+	if !s.fleetOn() {
+		return
+	}
+	for _, other := range republish {
+		other := other
+		go s.publishSessions(other)
+	}
+	if s.hasPendingCardOn(cardMachines) {
+		go s.refreshPendingCards()
+	}
+}
+
+// foldInventory folds machine's complete list: unrelated machines (neither hosting nor referenced by a cross-machine
+// subagent) take the single-machine foldSessions fast path with zero cross-machine allocations. Participating
+// machines fold only their connected cross-machine component, skip recomputation when fold-relevant fields are
+// unchanged, prune removed machines, republish affected parent/child machines asynchronously, and refresh pending
+// interaction cards whose folded target changed.
 func (s *Service) foldInventory(machine string, list []proto.Session) {
 	// Include remembered archive rows added after live inventory decoration.
 	s.decorateSubagents(context.Background(), machine, list)
@@ -647,8 +832,8 @@ func (s *Service) foldInventory(machine string, list []proto.Session) {
 	crossRefs := crossParentMachines(machine, list)
 
 	s.fleet.foldMu.Lock()
-	hasCross := len(crossRefs) > 0 || len(s.fleet.foldMeta) > 0
-	if !hasCross {
+	participates := len(crossRefs) > 0 || len(s.fleet.crossParents[machine]) > 0 || len(s.fleet.crossChildren[machine]) > 0
+	if !participates {
 		s.fleet.foldMu.Unlock()
 		f := foldSessions(list, hidden)
 		f.apply(list)
@@ -656,8 +841,12 @@ func (s *Service) foldInventory(machine string, list []proto.Session) {
 		if s.fleet.folds == nil {
 			s.fleet.folds = map[string]sessionFold{}
 		}
+		prev := s.fleet.folds[machine]
 		s.fleet.folds[machine] = f
 		s.fleet.foldMu.Unlock()
+		if !sameInteractionFold(prev, f) && s.fleetOn() && s.hasPendingCardOn(map[string]bool{machine: true}) {
+			go s.refreshPendingCards()
+		}
 		return
 	}
 	var missing []string
@@ -680,51 +869,70 @@ func (s *Service) foldInventory(machine string, list []proto.Session) {
 
 	entries := toFoldEntries(list, hidden)
 	s.fleet.foldMu.Lock()
+	removedAffected := s.dropRemovedFoldMachinesLocked()
 	if s.fleet.foldMeta == nil {
 		s.fleet.foldMeta = map[string][]foldEntry{}
 	}
+	seededAny := false
 	for pm, rows := range seeded {
 		if s.fleet.foldMeta[pm] == nil {
 			s.fleet.foldMeta[pm] = rows
+			seededAny = true
 		}
 	}
+	prevEntries, hadEntries := s.fleet.foldMeta[machine]
+	detachedParents := s.updateCrossEdgesLocked(machine, crossRefs)
 	s.fleet.foldMeta[machine] = entries
-	anyCross := false
-	for m, rows := range s.fleet.foldMeta {
-		for i := range rows {
-			if rows[i].parentMachineID != "" && rows[i].parentMachineID != m {
-				anyCross = true
-				break
-			}
-		}
-		if anyCross {
-			break
+
+	// Short-circuit when nothing in this machine's fold inputs, graph edges, or fleet membership changed.
+	if hadEntries && !seededAny && len(removedAffected) == 0 && len(detachedParents) == 0 && slices.Equal(prevEntries, entries) {
+		cur := s.fleet.folds[machine]
+		s.fleet.foldMu.Unlock()
+		cur.apply(list)
+		return
+	}
+
+	seeds := make([]string, 0, 1+len(detachedParents)+len(removedAffected))
+	seeds = append(seeds, machine)
+	seeds = append(seeds, detachedParents...)
+	seeds = append(seeds, removedAffected...)
+	comp := s.crossComponentLocked(seeds...)
+
+	sub := make(map[string][]foldEntry, len(comp))
+	for m := range comp {
+		if rows, ok := s.fleet.foldMeta[m]; ok {
+			sub[m] = rows
 		}
 	}
-	allFolds := foldFleetEntries(s.fleet.foldMeta)
-	if !anyCross {
-		s.fleet.foldMeta = nil
-	}
+	recomputed := foldFleetEntries(sub)
 	if s.fleet.folds == nil {
 		s.fleet.folds = map[string]sessionFold{}
 	}
 	var changedOthers []string
-	for m, next := range allFolds {
+	var cardChanged map[string]bool
+	for m, next := range recomputed {
 		prev := s.fleet.folds[m]
 		s.fleet.folds[m] = next
 		if m != machine && !sameSessionFold(prev, next) {
 			changedOthers = append(changedOthers, m)
 		}
-	}
-	cur := allFolds[machine]
-	s.fleet.foldMu.Unlock()
-	cur.apply(list)
-	if len(changedOthers) > 0 && s.fleetOn() {
-		for _, other := range changedOthers {
-			other := other
-			go s.publishSessions(other)
+		if !sameInteractionFold(prev, next) {
+			if cardChanged == nil {
+				cardChanged = map[string]bool{}
+			}
+			cardChanged[m] = true
+		}
+		if len(s.fleet.crossParents[m]) == 0 && len(s.fleet.crossChildren[m]) == 0 {
+			delete(s.fleet.foldMeta, m)
 		}
 	}
+	if len(s.fleet.foldMeta) == 0 {
+		s.fleet.foldMeta = nil
+	}
+	cur := recomputed[machine]
+	s.fleet.foldMu.Unlock()
+	cur.apply(list)
+	s.notifyFoldDependents(changedOthers, cardChanged)
 }
 
 // foldSubset puts on rows decorated without the rest of their machine's list what its last complete list folded them

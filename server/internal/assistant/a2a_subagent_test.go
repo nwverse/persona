@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -154,18 +156,23 @@ func (m *memA2AStore) A2ADispatches(_ context.Context, owner, machine, session s
 	return out, nil
 }
 
-func (m *memA2AStore) A2ALaunches(_ context.Context, since time.Time) ([]db.A2ARow, error) {
+func (m *memA2AStore) A2ALaunchesForTargets(_ context.Context, machine string, sessions []string) ([]db.A2ARow, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	want := make(map[string]bool, len(sessions))
+	for _, sid := range sessions {
+		want[sid] = true
+	}
 	var out []db.A2ARow
 	for _, r := range m.rows {
-		var body a2aBody
-		if json.Unmarshal(r.Body, &body) != nil || body.Launch == nil || r.SourceSession == "" || r.TargetSession == "" {
+		if r.TargetMachine != machine || !want[r.TargetSession] || r.SourceSession == "" {
 			continue
 		}
-		if !r.Created.Before(since) || !a2aTerminal(r.State) {
-			out = append(out, r)
+		var body a2aBody
+		if json.Unmarshal(r.Body, &body) != nil || body.Launch == nil {
+			continue
 		}
+		out = append(out, r)
 	}
 	return out, nil
 }
@@ -239,15 +246,20 @@ func TestA2ADefaultSubagentFlowWithoutPostgres(t *testing.T) {
 		t.Fatalf("cross launch = %+v, starts = %+v", tk.Launch, h.starts)
 	}
 
-	// 2. Default same-machine cross-harness launch (mac Claude -> mac Codex) with permission_mode capped at acceptEdits.
+	// 2. Default same-machine cross-harness launch (mac Claude -> mac Codex) with live bypass attestation
+	// allows acceptEdits; cached session mode alone without live attestation must fail closed.
 	rawSame, _ := json.Marshal(map[string]any{
 		"machine_id": parent.Ref.Machine, "cwd": "/code/app", "launcher": "codex",
 		"permission_mode": "acceptEdits",
 		"message_id":      "m-same-1", "text": "Review patch with Codex.",
 	})
-	resSame := s.mcpCall(ctx, parent.Ref.Machine, parent.Ref.Session, "a2a_send", rawSame, false)
+	if unattested := s.mcpCall(ctx, parent.Ref.Machine, parent.Ref.Session, "a2a_send", rawSame, false); !unattested.IsError {
+		t.Fatalf("acceptEdits without live source-node attestation must fail closed: %s", resultText(unattested))
+	}
+	bypassCtx := devicewire.WithSourcePermission(ctx, testSourcePermission(parent.Ref.Session, "a2a_send", rawSame, "bypass"))
+	resSame := s.mcpCall(bypassCtx, parent.Ref.Machine, parent.Ref.Session, "a2a_send", rawSame, false)
 	if resSame.IsError {
-		t.Fatalf("same-machine cross-harness launch failed: %s", resultText(resSame))
+		t.Fatalf("same-machine cross-harness A2A launch with bypass attestation failed: %s", resultText(resSame))
 	}
 	var sameView a2aTaskView
 	if err := json.Unmarshal([]byte(resultText(resSame)), &sameView); err != nil {
@@ -262,14 +274,48 @@ func TestA2ADefaultSubagentFlowWithoutPostgres(t *testing.T) {
 		t.Fatalf("same-machine launch permission_mode not honored: %+v", h.starts)
 	}
 
-	// 3. Permission escalation past parent's acceptEdits is rejected.
-	rawEsc, _ := json.Marshal(map[string]any{
-		"machine_id": "box", "cwd": "/code/app", "permission_mode": "bypassPermissions",
-		"message_id": "m-esc", "text": "Escalate.",
-	})
-	if r := s.mcpCall(ctx, parent.Ref.Machine, parent.Ref.Session, "a2a_send", rawEsc, false); !r.IsError {
-		t.Fatalf("permission escalation was allowed: %s", resultText(r))
+	// 3. Permission policy: every proto.PermissionModes member is explicitly ranked; "auto" is never
+	// treated as "plan", unknown modes fail closed, and prompting attestation caps at "default".
+	for _, m := range proto.PermissionModes {
+		rank, ok := a2aPermissionRank(m)
+		if !ok {
+			t.Fatalf("proto.PermissionModes entry %q missing from a2aPermissionRank", m)
+		}
+		if (m == "plan") != (rank == 0) {
+			t.Fatalf("mode %q rank=%d, only plan may have rank 0", m, rank)
+		}
 	}
+	if _, ok := a2aPermissionRank("unknown_mode"); ok {
+		t.Fatal("unknown permission mode must fail closed")
+	}
+	// Prompting attestation allows "default" but rejects "acceptEdits", "auto", and "bypassPermissions".
+	for _, mode := range []string{"acceptEdits", "auto", "bypassPermissions", "dontAsk"} {
+		rawMode, _ := json.Marshal(map[string]any{
+			"machine_id": "box", "cwd": "/code/app", "permission_mode": mode,
+			"message_id": "m-mode-" + mode, "text": "Check.",
+		})
+		promptCtx := devicewire.WithSourcePermission(ctx, testSourcePermission(parent.Ref.Session, "a2a_send", rawMode, "prompting"))
+		if r := s.mcpCall(promptCtx, parent.Ref.Machine, parent.Ref.Session, "a2a_send", rawMode, false); !r.IsError {
+			t.Fatalf("prompting attestation allowed %q: %s", mode, resultText(r))
+		}
+		// Even with cached bypassPermissions on the session row, missing live attestation rejects "auto" and above.
+		h.sessions[parent.Ref.Machine][0].PermissionMode = "bypassPermissions"
+		if r := s.mcpCall(ctx, parent.Ref.Machine, parent.Ref.Session, "a2a_send", rawMode, false); !r.IsError {
+			t.Fatalf("cached bypass session without live attestation allowed %q: %s", mode, resultText(r))
+		}
+	}
+	// Idempotent retry of m-same-1 MUST succeed even without live bypass attestation AND even if Launch=false!
+	offToggle := false
+	h.hello.Agents.A2A = assistantwire.A2AConfig{Launch: &offToggle}
+	retrySame := s.mcpCall(ctx, parent.Ref.Machine, parent.Ref.Session, "a2a_send", rawSame, false)
+	if retrySame.IsError {
+		t.Fatalf("idempotent retry of m-same-1 was blocked by changed permission/launch policy: %s", resultText(retrySame))
+	}
+	var retryView a2aTaskView
+	if err := json.Unmarshal([]byte(resultText(retrySame)), &retryView); err != nil || retryView.ID != sameView.ID {
+		t.Fatalf("retry returned wrong task: %+v vs %+v (%v)", retryView, sameView, err)
+	}
+	h.hello.Agents.A2A = assistantwire.A2AConfig{}
 
 	// 4. Ordinary A2A message to an existing independent peer NEVER marks it as a subagent.
 	rawPeer, _ := json.Marshal(map[string]any{
@@ -280,7 +326,13 @@ func TestA2ADefaultSubagentFlowWithoutPostgres(t *testing.T) {
 		t.Fatalf("peer send failed: %s", resultText(r))
 	}
 
-	// 5. Simulated restart: fresh Service recovers subagent provenance from durable store.
+	// 5. Simulated restart: even a 90-day-old A2A subagent still listed recovers full provenance
+	// via A2ALaunchesForTargets (no 30-day or 2000-row truncation).
+	st.mu.Lock()
+	oldRow := st.rows[tk.ID]
+	oldRow.Created = time.Now().Add(-90 * 24 * time.Hour).UTC()
+	st.rows[tk.ID] = oldRow
+	st.mu.Unlock()
 	restarted := New(Options{Hub: h, Store: func() Store { return st }, Logf: testLogf(t)})
 	subRef := tk.target()
 	boxRows := []proto.Session{
@@ -295,7 +347,7 @@ func TestA2ADefaultSubagentFlowWithoutPostgres(t *testing.T) {
 	}
 	if sub := boxRows[1]; !sub.IsSubagent || sub.ParentSessionID != parent.Ref.Session ||
 		sub.ParentMachineID() != parent.Ref.Machine || sub.A2ATaskID() != tk.ID || sub.SubagentOrigin() != proto.SubagentOriginA2A {
-		t.Fatalf("A2A subagent lost provenance after restart: %+v %+v", sub, sub.Hierarchy)
+		t.Fatalf("90-day-old A2A subagent lost provenance after restart: %+v %+v", sub, sub.Hierarchy)
 	}
 	// Same-machine subagent omits parent_machine_id.
 	sameRows := []proto.Session{{MachineID: parent.Ref.Machine, SessionID: sameView.Target.Session, Status: proto.StatusIdle, Agent: "codex"}}
@@ -344,9 +396,32 @@ func TestA2ADefaultSubagentFlowWithoutPostgres(t *testing.T) {
 		t.Fatalf("subagent completion report failed: %s", resultText(r))
 	}
 
-	// 7. Config opt-outs: Launch=false disables launches while preserving peer discovery; Machines=[] disables all.
+	// 7. Offline queued launch rechecks agents.a2a.launch=false before its first session.start.
+	h.mu.Lock()
+	h.offline = map[string]bool{"box": true}
+	h.mu.Unlock()
+	rawQueued, _ := json.Marshal(map[string]any{"machine_id": "box", "cwd": "/code/app", "message_id": "m-queued-offline", "text": "Run when box returns."})
+	resQueued := restarted.mcpCall(ctx, parent.Ref.Machine, parent.Ref.Session, "a2a_send", rawQueued, false)
+	if resQueued.IsError {
+		t.Fatalf("offline queued launch failed to enqueue: %s", resultText(resQueued))
+	}
+	var queuedView a2aTaskView
+	if err := json.Unmarshal([]byte(resultText(resQueued)), &queuedView); err != nil {
+		t.Fatal(err)
+	}
+	startsBefore := len(h.starts)
 	off := false
 	h.hello.Agents.A2A = assistantwire.A2AConfig{Launch: &off}
+	h.mu.Lock()
+	h.offline = nil
+	h.mu.Unlock()
+	queuedDone := processMemA2A(t, restarted, st, restarted.a2aConfig(ctx), queuedView.ID)
+	if queuedDone.State != a2aFailed || queuedDone.Launch.Pending || len(h.starts) != startsBefore {
+		t.Fatalf("disabled launch started or did not fail cleanly: state=%s pending=%v starts=%d (was %d)",
+			queuedDone.State, queuedDone.Launch.Pending, len(h.starts), startsBefore)
+	}
+
+	// 8. Config opt-outs: Launch=false disables new launches while preserving peer discovery; Machines=[] disables all.
 	rawDisabled, _ := json.Marshal(map[string]any{"machine_id": "box", "cwd": "/code/app", "message_id": "m-off", "text": "No."})
 	if r := restarted.mcpCall(ctx, parent.Ref.Machine, parent.Ref.Session, "a2a_send", rawDisabled, false); !r.IsError {
 		t.Fatalf("Launch=false allowed launch: %s", resultText(r))
@@ -358,4 +433,5 @@ func TestA2ADefaultSubagentFlowWithoutPostgres(t *testing.T) {
 	if r := restarted.mcpCall(ctx, parent.Ref.Machine, parent.Ref.Session, "a2a_send", rawDisabled, false); !r.IsError {
 		t.Fatalf("Machines=[] allowed launch: %s", resultText(r))
 	}
+	_ = slices.Contains(proto.PermissionModes, "auto")
 }

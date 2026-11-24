@@ -4,18 +4,14 @@ import (
 	"cmp"
 	"context"
 	"strings"
-	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// subagentKeep bounds how far back historical finished A2A launches are loaded into the
-// in-memory subagent index on restart; active (non-terminal) launches are always loaded.
-const subagentKeep = 30 * 24 * time.Hour
-
 // subagentLink records durable parent provenance for a manager-launched subagent session
 // (A2A launch, cross-machine dispatch, or task_spawn) so decoration and cross-machine
-// folding survive manager restarts.
+// folding survive manager restarts without age or row-count truncation.
 type subagentLink struct {
 	ParentMachine string
 	ParentSession string
@@ -23,67 +19,39 @@ type subagentLink struct {
 	Origin        string
 }
 
-func (s *Service) ensureSubagentsLoaded(ctx context.Context) {
+func (s *Service) ensureLegacySubagentsLoaded(ctx context.Context) {
 	f := &s.fleet
 	f.subagentsMu.RLock()
-	loaded := f.subagentsLoaded
+	loaded := f.subagentsLegacyLoaded
 	f.subagentsMu.RUnlock()
 	if loaded {
 		return
 	}
-	f.subagentsMu.Lock()
-	defer f.subagentsMu.Unlock()
-	if f.subagentsLoaded {
-		return
-	}
-	// If there is no store at all (unit tests without Postgres, or zero-value Service), mark loaded
-	// immediately so hot paths (such as fleetSnapshot) do zero extra work.
 	if s.store == nil || s.store() == nil {
-		f.subagentsLoaded = true
+		f.subagentsMu.Lock()
+		f.subagentsLegacyLoaded = true
+		f.subagentsMu.Unlock()
 		return
 	}
-	loadOK := true
-	if st, err := s.a2aStore(); err == nil {
-		rows, err := st.A2ALaunches(ctx, time.Now().Add(-subagentKeep))
-		if err != nil {
-			s.logf("subagent index: load A2A launches: %v", err)
-			loadOK = false
-		} else {
-			for i := range rows {
-				t, err := decodeA2A(&rows[i], nil)
-				if err != nil || t == nil || t.Launch == nil || t.SourceSession == "" || t.TargetSession == "" {
-					continue
-				}
-				origin := proto.SubagentOriginA2A
-				if t.Launch.Dispatch {
-					origin = proto.SubagentOriginDispatch
-				}
-				s.putSubagentLinkLocked(t.TargetMachine, t.TargetSession, subagentLink{
-					ParentMachine: t.SourceMachine,
-					ParentSession: t.SourceSession,
-					A2ATaskID:     t.ID,
-					Origin:        origin,
-				})
-			}
-		}
+	var legacy []struct {
+		machine, session string
+		link             subagentLink
 	}
 	for _, dt := range s.dispatched(ctx) {
 		if dt.FromSession == "" || dt.Session == "" {
 			continue
 		}
-		key := [2]string{dt.Machine, dt.Session}
-		if f.subagents != nil {
-			if _, exists := f.subagents[key]; exists {
-				continue
-			}
-		}
-		s.putSubagentLinkLocked(dt.Machine, dt.Session, subagentLink{
+		legacy = append(legacy, struct {
+			machine, session string
+			link             subagentLink
+		}{dt.Machine, dt.Session, subagentLink{
 			ParentMachine: dt.FromMachine,
 			ParentSession: dt.FromSession,
 			Origin:        proto.SubagentOriginDispatch,
-		})
+		}})
 	}
-	if s.ensureTodosLoaded(ctx) == nil {
+	todosOK := s.ensureTodosLoaded(ctx) == nil
+	if todosOK {
 		s.todos.mu.RLock()
 		for _, td := range s.todos.todos {
 			for _, a := range td.Agents {
@@ -94,23 +62,101 @@ func (s *Service) ensureSubagentsLoaded(ctx context.Context) {
 				if !ok || pm == "" || ps == "" {
 					continue
 				}
-				key := [2]string{a.MachineID, a.SessionID}
-				if f.subagents != nil {
-					if _, exists := f.subagents[key]; exists {
-						continue
-					}
-				}
-				s.putSubagentLinkLocked(a.MachineID, a.SessionID, subagentLink{
+				legacy = append(legacy, struct {
+					machine, session string
+					link             subagentLink
+				}{a.MachineID, a.SessionID, subagentLink{
 					ParentMachine: pm,
 					ParentSession: ps,
 					Origin:        proto.SubagentOriginSpawned,
-				})
+				}})
 			}
 		}
 		s.todos.mu.RUnlock()
 	}
-	if loadOK {
-		f.subagentsLoaded = true
+	f.subagentsMu.Lock()
+	for _, item := range legacy {
+		key := [2]string{item.machine, item.session}
+		if f.subagents != nil {
+			if _, exists := f.subagents[key]; exists {
+				continue
+			}
+		}
+		s.putSubagentLinkLocked(item.machine, item.session, item.link)
+	}
+	if todosOK {
+		f.subagentsLegacyLoaded = true
+	}
+	f.subagentsMu.Unlock()
+}
+
+// ensureSubagentsChecked resolves durable A2A launch provenance for any unchecked target
+// sessions on machine via an exact target-set query (no age or global row limit).
+func (s *Service) ensureSubagentsChecked(ctx context.Context, machine string, sessions []string) {
+	if machine == "" || len(sessions) == 0 {
+		return
+	}
+	s.ensureLegacySubagentsLoaded(ctx)
+	if s.store == nil || s.store() == nil {
+		return
+	}
+	st, err := s.a2aStore()
+	if err != nil {
+		return
+	}
+	f := &s.fleet
+	var missing []string
+	f.subagentsMu.RLock()
+	for _, sid := range sessions {
+		if sid == "" {
+			continue
+		}
+		if !f.subagentsChecked[[2]string{machine, sid}] {
+			missing = append(missing, sid)
+		}
+	}
+	f.subagentsMu.RUnlock()
+	if len(missing) == 0 {
+		return
+	}
+	rows, err := st.A2ALaunchesForTargets(ctx, machine, missing)
+	if err != nil {
+		s.logf("subagent index: load A2A launches for %s: %v", machine, err)
+		return
+	}
+	s.applyLoadedA2ALaunches(machine, missing, rows)
+}
+
+func (s *Service) applyLoadedA2ALaunches(machine string, checked []string, rows []db.A2ARow) {
+	f := &s.fleet
+	f.subagentsMu.Lock()
+	defer f.subagentsMu.Unlock()
+	if f.subagentsChecked == nil {
+		f.subagentsChecked = make(map[[2]string]bool, len(checked))
+	}
+	for _, sid := range checked {
+		f.subagentsChecked[[2]string{machine, sid}] = true
+	}
+	seenTarget := map[string]bool{}
+	for i := range rows {
+		t, err := decodeA2A(&rows[i], nil)
+		if err != nil || t == nil || t.Launch == nil || t.SourceSession == "" || t.TargetSession == "" {
+			continue
+		}
+		if seenTarget[t.TargetSession] {
+			continue // rows are newest first; keep the newest launch row per target
+		}
+		seenTarget[t.TargetSession] = true
+		origin := proto.SubagentOriginA2A
+		if t.Launch.Dispatch {
+			origin = proto.SubagentOriginDispatch
+		}
+		s.putSubagentLinkLocked(t.TargetMachine, t.TargetSession, subagentLink{
+			ParentMachine: t.SourceMachine,
+			ParentSession: t.SourceSession,
+			A2ATaskID:     t.ID,
+			Origin:        origin,
+		})
 	}
 }
 
@@ -121,6 +167,9 @@ func (s *Service) putSubagentLinkLocked(machine, session string, link subagentLi
 	f := &s.fleet
 	if f.subagents == nil {
 		f.subagents = map[[2]string]subagentLink{}
+	}
+	if f.subagentsChecked == nil {
+		f.subagentsChecked = map[[2]string]bool{}
 	}
 	key := [2]string{machine, session}
 	if link.A2ATaskID != "" {
@@ -133,6 +182,7 @@ func (s *Service) putSubagentLinkLocked(machine, session string, link subagentLi
 		f.subagentsByTask[link.A2ATaskID] = key
 	}
 	f.subagents[key] = link
+	f.subagentsChecked[key] = true
 }
 
 // recordA2ASubagent records a newly created or resolved A2A/dispatch launch in the in-memory
@@ -185,7 +235,10 @@ func (s *Service) recordSubagentLink(machine, session, parentMachine, parentSess
 }
 
 func (s *Service) lookupSubagentLink(ctx context.Context, machine, session string) (subagentLink, bool) {
-	s.ensureSubagentsLoaded(ctx)
+	if machine == "" || session == "" {
+		return subagentLink{}, false
+	}
+	s.ensureSubagentsChecked(ctx, machine, []string{session})
 	f := &s.fleet
 	f.subagentsMu.RLock()
 	link, ok := f.subagents[[2]string{machine, session}]
@@ -206,7 +259,30 @@ func (s *Service) isA2ASubagent(ctx context.Context, ref a2aRef) bool {
 // task_spawn) onto decorated sessions. Native/runtime node subagents keep their existing wire
 // representation untouched, and ordinary rows allocate nothing.
 func (s *Service) decorateSubagents(ctx context.Context, machine string, list []proto.Session) {
-	s.ensureSubagentsLoaded(ctx)
+	if len(list) == 0 {
+		return
+	}
+	s.ensureLegacySubagentsLoaded(ctx)
+	if s.store != nil && s.store() != nil {
+		if st, err := s.a2aStore(); err == nil {
+			f := &s.fleet
+			var missing []string
+			f.subagentsMu.RLock()
+			for i := range list {
+				if !list[i].Assistant && list[i].SessionID != "" && !f.subagentsChecked[[2]string{machine, list[i].SessionID}] {
+					missing = append(missing, list[i].SessionID)
+				}
+			}
+			f.subagentsMu.RUnlock()
+			if len(missing) > 0 {
+				if rows, err := st.A2ALaunchesForTargets(ctx, machine, missing); err != nil {
+					s.logf("subagent index: load A2A launches for %s: %v", machine, err)
+				} else {
+					s.applyLoadedA2ALaunches(machine, missing, rows)
+				}
+			}
+		}
+	}
 	f := &s.fleet
 	f.subagentsMu.RLock()
 	if len(f.subagents) == 0 {
@@ -237,4 +313,31 @@ func (s *Service) decorateSubagents(ctx context.Context, machine string, list []
 		)
 	}
 	f.subagentsMu.RUnlock()
+}
+
+// pruneSubagentChecked drops negative lookup entries for sessions no longer in a machine's complete list
+// so the cache stays bounded to active/listed rows while retaining known positive subagent hits.
+func (s *Service) pruneSubagentChecked(machine string, list []proto.Session) {
+	f := &s.fleet
+	f.subagentsMu.RLock()
+	n := len(f.subagentsChecked)
+	f.subagentsMu.RUnlock()
+	if n == 0 {
+		return
+	}
+	listed := make(map[string]bool, len(list))
+	for i := range list {
+		if list[i].SessionID != "" {
+			listed[list[i].SessionID] = true
+		}
+	}
+	f.subagentsMu.Lock()
+	for k := range f.subagentsChecked {
+		if k[0] == machine && !listed[k[1]] {
+			if _, isHit := f.subagents[k]; !isHit {
+				delete(f.subagentsChecked, k)
+			}
+		}
+	}
+	f.subagentsMu.Unlock()
 }

@@ -729,11 +729,11 @@ func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager stri
 			return
 		}
 		childMachine := opts.Machine
-		if opts.Under != "" && opts.UnderMachine == "" {
+		if opts.Under != "" && opts.UnderMachine == "" && opts.CrossMachineHierarchy {
 			childMachine = ""
 		}
 		if childMachine == "" && len(own) == 1 {
-			if opts.Under != "" && opts.UnderMachine == "" {
+			if opts.Under != "" && opts.UnderMachine == "" && opts.CrossMachineHierarchy {
 				opts.UnderMachine = opts.Machine
 			}
 			opts.Machine = own[0]
@@ -841,7 +841,9 @@ func supervisorHeldCard(ix proto.Interaction) bool {
 
 // heldNeedsIDs are the list ids of the sessions whose pending cards are all held: held, only P1/P2 cards for push
 // grading (no supervisor's among them counted either way); supervised, only cards their supervisor holds.
-func (h *Hub) heldNeedsIDs() (held, supervised []string) {
+// When crossMachine is false (legacy client without cross_machine_hierarchy=1), cross-machine folded children stay
+// listed on their own machine, so their cards are credited to their own row rather than a parent on another machine.
+func (h *Hub) heldNeedsIDs(crossMachine bool) (held, supervised []string) {
 	interactions := h.pendingInteractions()
 	if len(interactions) == 0 {
 		return nil, nil
@@ -856,7 +858,7 @@ func (h *Hub) heldNeedsIDs() (held, supervised []string) {
 	for _, ix := range interactions {
 		home := ix.FoldedUnder
 		homeMachine := ix.FoldedUnderMachineID
-		if home == "" {
+		if home == "" || (!crossMachine && homeMachine != "" && homeMachine != ix.MachineID) {
 			home = ix.SessionID
 			homeMachine = ix.MachineID
 		} else if homeMachine == "" {
@@ -903,7 +905,7 @@ func (h *Hub) countsWithHeld(index *sessionlist.Index, opts sessionlist.Options,
 	if err != nil {
 		return sessionlist.Counts{}, err
 	}
-	held, supervised := h.heldNeedsIDs()
+	held, supervised := h.heldNeedsIDs(opts.CrossMachineHierarchy)
 	if counts.State[proto.StateNeedsYou] == 0 {
 		return counts, nil
 	}
@@ -917,6 +919,9 @@ func (h *Hub) countsWithHeld(index *sessionlist.Index, opts sessionlist.Options,
 		n := 0
 		for _, mid := range own {
 			o := opts
+			if o.Under != "" && o.UnderMachine == "" && o.CrossMachineHierarchy {
+				o.UnderMachine = o.Machine
+			}
 			o.Machine, o.Cursor = mid, ""
 			c, err := index.CountMatchingState(o, proto.StateNeedsYou, ids)
 			if err != nil {
@@ -943,7 +948,7 @@ func ownCounts(index *sessionlist.Index, opts sessionlist.Options, own []string)
 	}
 	for _, mid := range own {
 		o := opts
-		if o.Under != "" && o.UnderMachine == "" {
+		if o.Under != "" && o.UnderMachine == "" && o.CrossMachineHierarchy {
 			o.UnderMachine = o.Machine
 		}
 		o.Machine, o.Cursor = mid, "" // current membership (a cursor's frozen view is of every machine)
@@ -977,11 +982,11 @@ func ownPage(index *sessionlist.Index, opts sessionlist.Options, own []string, p
 		return json.Unmarshal([]byte(id), &k) != nil || !keep(k[0])
 	})
 	underMachine := opts.UnderMachine
-	if opts.Under != "" && underMachine == "" {
+	if opts.Under != "" && underMachine == "" && opts.CrossMachineHierarchy {
 		underMachine = opts.Machine
 	}
 	counts, err := ownCounts(index, sessionlist.Options{Since: opts.Since, State: opts.State, Project: opts.Project, Group: opts.Group,
-		Source: opts.Source, Provider: opts.Provider, Q: opts.Q, Manager: opts.Manager, Roots: opts.Roots, Under: opts.Under, UnderMachine: underMachine, NoPrivate: opts.NoPrivate, AgentsOnly: opts.AgentsOnly, Places: opts.Places, Spaces: opts.Spaces}, own)
+		Source: opts.Source, Provider: opts.Provider, Q: opts.Q, Manager: opts.Manager, Roots: opts.Roots, CrossMachineHierarchy: opts.CrossMachineHierarchy, Under: opts.Under, UnderMachine: underMachine, NoPrivate: opts.NoPrivate, AgentsOnly: opts.AgentsOnly, Places: opts.Places, Spaces: opts.Spaces}, own)
 	if err != nil {
 		return sessionlist.Page{}, err
 	}

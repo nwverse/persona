@@ -458,6 +458,11 @@ func (s *Service) a2aLaunch(ctx context.Context, st a2aStore, t *a2aTask) error 
 		}
 		return nil
 	}
+	if !t.Launch.Dispatch && !s.a2aConfig(ctx).LaunchAllowed() {
+		t.fail("Starting new A2A subagent sessions is disabled by configuration.", true)
+		s.forgetA2ASubagent(t.ID)
+		return s.a2aSave(ctx, st, t)
+	}
 	dev, ok := s.machineByName(ctx, t.TargetMachine)
 	if !ok || !dev.Online && !dev.Reachable {
 		return nil

@@ -15,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -1146,24 +1147,31 @@ func TestA2ADefaultSubagentLaunchCrossMachineAndSameMachineCrossHarness(t *testi
 	}
 
 	// 2. Same-machine cross-harness launch (e.g. Claude -> Codex on mac) succeeds by default
-	// and honors permission_mode capped at parent's mode.
+	// and honors permission_mode only with live source-node attestation.
 	rawSame, _ := json.Marshal(map[string]any{
 		"machine_id": parent.Ref.Machine, "cwd": "/code/app", "launcher": "codex",
 		"permission_mode": "acceptEdits",
 		"message_id":      "same-machine-cross-harness", "text": "Review this diff with Codex.",
 	})
-	resSame := s.mcpCall(ctx, parent.Ref.Machine, parent.Ref.Session, "a2a_send", rawSame, false)
+	if unattested := s.mcpCall(ctx, parent.Ref.Machine, parent.Ref.Session, "a2a_send", rawSame, false); !unattested.IsError {
+		t.Fatalf("same-machine acceptEdits without live attestation must fail: %s", resultText(unattested))
+	}
+	bypassCtx := devicewire.WithSourcePermission(ctx, testSourcePermission(parent.Ref.Session, "a2a_send", rawSame, "bypass"))
+	resSame := s.mcpCall(bypassCtx, parent.Ref.Machine, parent.Ref.Session, "a2a_send", rawSame, false)
 	if resSame.IsError {
 		t.Fatalf("same-machine cross-harness A2A launch failed: %s", resultText(resSame))
 	}
 
-	// 3. Escalating permission_mode past parent's permission level is refused.
-	rawEsc, _ := json.Marshal(map[string]any{
-		"machine_id": "box", "cwd": "/code/app", "permission_mode": "bypassPermissions",
-		"message_id": "escalate-attempt", "text": "Should fail.",
-	})
-	if resEsc := s.mcpCall(ctx, parent.Ref.Machine, parent.Ref.Session, "a2a_send", rawEsc, false); !resEsc.IsError {
-		t.Fatalf("permission escalation should be rejected, got: %s", resultText(resEsc))
+	// 3. Escalating permission_mode (including "auto" and "bypassPermissions") under prompting attestation is refused.
+	for _, mode := range []string{"acceptEdits", "auto", "bypassPermissions"} {
+		rawEsc, _ := json.Marshal(map[string]any{
+			"machine_id": "box", "cwd": "/code/app", "permission_mode": mode,
+			"message_id": "escalate-attempt-" + mode, "text": "Should fail.",
+		})
+		promptCtx := devicewire.WithSourcePermission(ctx, testSourcePermission(parent.Ref.Session, "a2a_send", rawEsc, "prompting"))
+		if resEsc := s.mcpCall(promptCtx, parent.Ref.Machine, parent.Ref.Session, "a2a_send", rawEsc, false); !resEsc.IsError {
+			t.Fatalf("permission escalation to %q should be rejected, got: %s", mode, resultText(resEsc))
+		}
 	}
 
 	// 4. Explicit launch=false blocks new launches while keeping peer discovery available.

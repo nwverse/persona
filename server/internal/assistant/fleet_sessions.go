@@ -634,6 +634,9 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		decorateSuggestion(&list[i], suggested)
 	}
 	s.decorateSubagents(context.Background(), machine, list)
+	if complete {
+		s.pruneSubagentChecked(machine, list)
+	}
 	s.decorateTodos(machine, list)
 	for i := range list {
 		// The todos' alone, stripped before push to client (#762).

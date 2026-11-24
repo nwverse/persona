@@ -351,7 +351,7 @@ func TestPagedCountsSupervisorHeld(t *testing.T) {
 	if c.State[proto.StateNeedsYou] != 6 || c.SupervisorHeld != 2 || c.HeldNeeds != 1 {
 		t.Fatalf("counts = %+v, want needs_you=6 supervisor_held=2 held_needs=1", c)
 	}
-	held, supervised := h.heldNeedsIDs()
+	held, supervised := h.heldNeedsIDs(false)
 	slices.Sort(supervised)
 	if want := []string{runtimeListID("demo", "perm"), runtimeListID("demo", "screen")}; !slices.Equal(supervised, want) {
 		t.Fatalf("supervised = %v, want %v", supervised, want)
@@ -397,15 +397,25 @@ func TestRuntimeListCrossMachineHierarchyAndOrphanSubagents(t *testing.T) {
 		t.Fatal("sessions_cross_machine_hierarchy must be advertised by the hub")
 	}
 
-	// roots=1 returns only mac/lead and box/box-solo: local kid, remote kid, and both orphan subagents are excluded.
-	roots := runtimePage(t, h, "summary=1&limit=50&roots=1")
+	// New client: roots=1&cross_machine_hierarchy=1 returns only mac/lead and box/box-solo:
+	// local kid, remote kid, and both orphan subagents are excluded.
+	roots := runtimePage(t, h, "summary=1&limit=50&roots=1&cross_machine_hierarchy=1")
 	if got := pageIDs(roots); !slices.Equal(got, []string{"box/box-solo", "mac/lead"}) || roots.Total != 2 {
-		t.Fatalf("roots = %v (total %d), want [box/box-solo mac/lead]", got, roots.Total)
+		t.Fatalf("roots+cross = %v (total %d), want [box/box-solo mac/lead]", got, roots.Total)
 	}
-	// parent_machine_id + parent_session_id returns BOTH local-kid and remote-kid with provenance preserved.
+	// Legacy client: roots=1 WITHOUT cross_machine_hierarchy=1 still hides same-machine folded children and
+	// non-blocking orphan subagents, while keeping cross-machine folded box/remote-kid reachable so its
+	// approval card is never stranded on older clients.
+	legacyRoots := runtimePage(t, h, "summary=1&limit=50&roots=1")
+	if got := pageIDs(legacyRoots); !slices.Equal(got, []string{"box/box-solo", "box/remote-kid", "mac/lead"}) || legacyRoots.Total != 3 {
+		t.Fatalf("legacy roots = %v (total %d), want [box/box-solo box/remote-kid mac/lead]", got, legacyRoots.Total)
+	}
+
+	// parent_machine_id + parent_session_id and machine_id + parent_session_id + cross_machine_hierarchy=1
+	// return BOTH local-kid and remote-kid with provenance preserved.
 	for _, query := range []string{
 		"summary=1&parent_machine_id=mac&parent_session_id=lead",
-		"summary=1&machine_id=mac&parent_session_id=lead",
+		"summary=1&machine_id=mac&parent_session_id=lead&cross_machine_hierarchy=1",
 		"summary=0&parent_machine_id=mac&parent_session_id=lead",
 	} {
 		kids := runtimePage(t, h, query)
@@ -416,6 +426,10 @@ func TestRuntimeListCrossMachineHierarchyAndOrphanSubagents(t *testing.T) {
 			rk.ParentMachineID() != "mac" || rk.A2ATaskID() != "task-cross-1" || rk.SubagentOrigin() != proto.SubagentOriginA2A {
 			t.Fatalf("%s: remote kid lost hierarchy metadata: %+v", query, rk.Hierarchy)
 		}
+	}
+	// Legacy machine_id=mac&parent_session_id=lead (without cross_machine_hierarchy=1) returns same-machine children only.
+	if legacyKids := runtimePage(t, h, "summary=1&machine_id=mac&parent_session_id=lead"); !slices.Equal(pageIDs(legacyKids), []string{"mac/local-kid"}) {
+		t.Fatalf("legacy machine_id+parent_session_id = %v, want [mac/local-kid]", pageIDs(legacyKids))
 	}
 	// Filtering child machine with parent_machine_id + machine_id=box returns only box/remote-kid.
 	boxKids := runtimePage(t, h, "summary=1&parent_machine_id=mac&parent_session_id=lead&machine_id=box")
@@ -428,15 +442,20 @@ func TestRuntimeListCrossMachineHierarchyAndOrphanSubagents(t *testing.T) {
 		t.Fatalf("archivedKids = %v (total %d)", got, archivedKids.Total)
 	}
 
-	// Cross-machine held P1 interaction credits mac/lead, not box/lead.
+	// Cross-machine held P1 interaction credits mac/lead when cross_machine_hierarchy=1, and credits
+	// box/remote-kid (the visible row) on legacy clients without cross_machine_hierarchy=1.
 	h.reported.mu.Lock()
 	h.reported.interactions = map[string]proto.Interaction{
 		"ix-remote": {ID: "ix-remote", MachineID: "box", SessionID: "remote-kid", FoldedUnder: "lead", FoldedUnderMachineID: "mac", Kind: proto.IxPermission, PushLevel: assistantwire.LevelP1},
 	}
 	h.reported.mu.Unlock()
-	c := hierarchyCounts(t, h, "agents_only=1&roots=1")
+	c := hierarchyCounts(t, h, "agents_only=1&roots=1&cross_machine_hierarchy=1")
 	if c.State[proto.StateNeedsYou] != 1 || c.HeldNeeds != 1 {
 		t.Fatalf("cross-machine held counts = %+v, want needs_you=1 held_needs=1", c)
+	}
+	cLegacy := hierarchyCounts(t, h, "agents_only=1&roots=1")
+	if cLegacy.HeldNeeds != 1 {
+		t.Fatalf("legacy held counts = %+v, want held_needs=1 credited to visible box/remote-kid", cLegacy)
 	}
 
 	// Validation: parent_machine_id without parent_session_id returns 400 invalid_query.
@@ -447,12 +466,12 @@ func TestRuntimeListCrossMachineHierarchyAndOrphanSubagents(t *testing.T) {
 	}
 
 	// Removing mac/lead re-evaluates box/remote-kid: it drops out of folded roots, stays excluded
-	// from roots=1 (orphan IsSubagent), and remains queryable via DirectParent for mac/lead's overview.
+	// from roots=1&cross_machine_hierarchy=1 (orphan IsSubagent), and remains queryable via DirectParent.
 	mac.mu.Lock()
 	mac.sessions = []proto.Session{localKid, codexOrphan, reviewOrphan}
 	mac.mu.Unlock()
 	h.sessionsChanged(mac)
-	if rootsAfter := runtimePage(t, h, "summary=1&limit=50&roots=1"); !slices.Equal(pageIDs(rootsAfter), []string{"box/box-solo"}) {
+	if rootsAfter := runtimePage(t, h, "summary=1&limit=50&roots=1&cross_machine_hierarchy=1"); !slices.Equal(pageIDs(rootsAfter), []string{"box/box-solo"}) {
 		t.Fatalf("roots after parent removal = %v, want [box/box-solo]", pageIDs(rootsAfter))
 	}
 	if kidsAfter := runtimePage(t, h, "summary=1&parent_machine_id=mac&parent_session_id=lead"); !slices.Equal(pageIDs(kidsAfter), []string{"box/remote-kid", "mac/local-kid"}) {
