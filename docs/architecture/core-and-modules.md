@@ -560,9 +560,9 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
   with the same methods (`server/internal/modules/lark/layer.go`), so it imports no core service, and
   `server/internal/modules/all/lark.go` provides its layer under `!persona_without_lark && !persona_core_only`.
 - **The core asks the port**, `s.chat()` (`server/internal/assistant/lark.go`), never a `feishu*.go` function: a
-  core file that posts to the chat calls the port. The implementation still lives in `feishu*.go` and is served to the
-  module through the host under the port's names; each move takes code into the module and drops the host methods
-  it no longer needs, so the host only shrinks.
+  core file that posts to the chat calls the port. The transport (`feishu_transport.go`) still lives in the core and is
+  served to the module through the host under the port's names; each move takes code into the module and drops the
+  host methods it no longer needs.
 - **The Feishu turns are the module's** (`server/internal/modules/lark/turn.go`, `cot.go`, `cot_worker.go`,
   `stream.go`): a Feishu run's progress card and CardKit entity, its agent message and the worker that writes it, and
   its answer. The channels' pipeline (the runs, their lock, finishing, folding and dropping them) stays in the core,
@@ -584,16 +584,34 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
 - **A to-do's topic lines are the module's** (`server/internal/modules/lark/thread_posts.go`): the queue (a line a
   minute at most, what came meanwhile joined), the wording and the post under the topic's latest message. The module
   implements the port's `ThreadPost`, so the host no longer serves it. It reads the to-do's Feishu thread, the bot's
-  status, the topic anchors (kept with the chat's state in the core, `server/internal/assistant/todo_thread_topics.go`),
+  status, the topic anchors (kept with the chat's state, `server/internal/modules/lark/chat_state.go`),
   the to-do's link, and the core's clock and timer (`PostNow`, `PostLater`, which a to-do's source report waits on
   too).
+- **The chat is the module's** (`server/internal/modules/lark/chat_state.go`, `message.go`, `commands.go`,
+  `card_actions.go`, `text_answer.go`, `read.go`, `models.go`, `elsewhere.go`, `thread.go`, `thread_open.go`,
+  `nudge.go`): its state (the settings row `bots.feishu.state`, read and written through the host's `Setting` and
+  `PutSetting`, with unchanged bytes: the values both sides name are `assistantwire.ChatTarget`, `ChatCard`,
+  `ChatCardRef`, `ChatBoardRef` and `CompanionBot`), the owner's messages and presses, the commands, the nudges, the
+  topics' messages and the to-dos they open. The core reaches it through `larkhost.Chat`: the hub's events
+  (`Message`, `Action`, `Owner`, `Recalled`, `View`, which the Service's `Feishu*` methods pass on), what the core asks
+  (`StatusKept`, `Route`, `SetTarget`, `RememberThread`, `Send`, `CardsWaiting`, `CardNudged`, `TopicAnchor`,
+  `LegacyRuns`, `NudgeTick`, which the core's nudge sweep runs once a minute) and `Book`, which runs a function on the
+  chat's records under its lock for the core's cards, standing board and companion bots (it shrinks as they move).
+  What the chat asks of the core is the host's chat group: where a target is and the run a message starts
+  (`feishu_route.go`, which other channels use too), an interaction answered or closed, an acceptance pressed, the
+  main conversation's model, and the to-do, decision and question ledgers of a topic (`TodoOfThread`, `ThreadRoutes`,
+  `TopicDecision`, `OpenTodo`), which stay in the core. The chat's times are module timings (`turn_wait`,
+  `topic_lookup_wait`, `card_answer_wait`, `start_card_window`, `form_window`), its clock the core's per-instance knob;
+  `Layer.Wait` also waits for the chat's messages being handled and the agents and forms a press starts.
 - **Tests**: the turns' own tests run in the module on a fake core (`server/internal/modules/lark/service_test.go`:
-  the channels' runs, their finishing, folding and dropping, and the hub's transport); the assistant's tests of the
-  turns through the channels' pipeline stay in `internal/assistant` and skip without the module (`needsLarkLayer`).
+  the channels' runs, their finishing, folding and dropping, and the hub's transport; `chat_fake_test.go`: the chat's
+  host methods as the core answers the plain case); the assistant's tests of the turns through the channels' pipeline
+  stay in `internal/assistant` and skip without the module (`needsLarkLayer`), and its tests of the chat hand it the
+  owner's messages and presses as the hub does (`server/internal/assistant/lark_chat_test.go`).
 - **With the module absent** (`persona_without_lark`, `persona_core_only`) the port is `larkhost.None`, a bot switched
   off: its status reads without an error as neither on nor ready (so an acceptance ask is card-less and a briefing
   goes out by push, as with the bot off), it supports nothing, a post or a reply answers `larkhost.ErrNoChannel`, and
-  notes and thread lines are dropped.
+  notes and thread lines are dropped; the chat takes nothing, nothing waits in it, and its records are empty.
   Switched off in the `modules` row it is the same: `larkhost`, `botport` and `cliport` all follow the switch ("The
   switch").
 

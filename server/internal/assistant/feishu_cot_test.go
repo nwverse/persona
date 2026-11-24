@@ -352,6 +352,7 @@ func TestFeishuProgressCardThrottled(t *testing.T) {
 }
 
 func TestClipPanelLine(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	cases := []struct{ name, in, want string }{
 		{"ascii", strings.Repeat("a", 300), strings.Repeat("a", 120) + "…"},
 		{"runes", strings.Repeat("字", 200), strings.Repeat("字", 120) + "…"},
@@ -379,6 +380,7 @@ func pathologicalSteps(n int) []string {
 
 // Ordinary short steps render verbatim (41 steps: the newest 40 show, one hidden).
 func TestProcessPanelShortUnchanged(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	var steps []string
 	for i := 0; i < 41; i++ {
 		steps = append(steps, fmt.Sprintf("运行 `cmd%02d`", i))
@@ -398,6 +400,7 @@ func TestProcessPanelShortUnchanged(t *testing.T) {
 
 // A pathological panel bounds itself: the oldest calls hide first, the newest stay.
 func TestProcessPanelPathologicalBounded(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	c := botcard.NewCard("", "", "")
 	processPanel(i18n.ZhHans, c, pathologicalSteps(40))
 	js := c.JSON()

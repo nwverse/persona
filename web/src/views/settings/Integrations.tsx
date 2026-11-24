@@ -332,9 +332,10 @@ export function Integrations({
   if (route.kind === "catalog") {
     return (
       <MarketCatalog
+        backLabel={t("settings-integrations.back")}
         onBack={headerBack ? undefined : () => onOpen(null)}
         onOpen={(it) => go({ kind: "item", market: it.market, id: it.id })}
-        onMarkets={() => go({ kind: "markets" })}
+        onManageMarkets={() => go({ kind: "markets" })}
       />
     );
   }
@@ -440,16 +441,23 @@ export function Integrations({
   };
 
   const listHeader = (
-    <div className={cx(compactList ? "mb-2.5 flex items-center gap-2" : "mb-3 flex flex-wrap items-center gap-2")}>
+    <div className={cx(compactList ? "mb-2.5 flex items-center gap-1.5" : "mb-3 flex flex-wrap items-center gap-2")}>
       {!headerBack && (
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-card-title font-semibold text-ink">{t("settings-integrations.list_title")}</h1>
         </div>
       )}
       {headerBack && <span className="flex-1" />}
-      {markets && !compactList && (
-        <Button tone="secondary" icon="search" onClick={() => go({ kind: "catalog" })}>
-          {t("settings-integrations.browse_market_action")}
+      {markets && (
+        <Button
+          tone="secondary"
+          size={compactList ? "sm" : undefined}
+          icon="search"
+          title={compactList ? t("settings-integrations.browse_market_action") : undefined}
+          testId="integrations-market-entry"
+          onClick={() => go({ kind: "catalog" })}
+        >
+          {t(compactList ? "settings-integrations.browse_market_compact" : "settings-integrations.browse_market_action")}
         </Button>
       )}
       <IconButton icon="retry" label={t("settings-integrations.refresh")} onClick={() => void loadAll()} disabled={loading} />
@@ -568,29 +576,6 @@ export function Integrations({
           }
         >
           {installedExtensions.map((item) => renderRow(item))}
-        </Group>
-      )}
-
-      {markets && (
-        <Group title={t("settings-extensions.market_title")} footer={t("settings-extensions.market_footer")} anchor="market">
-          <Row
-            label={
-              <span className="flex items-center gap-2">
-                <Icon name="search" size={13} className="shrink-0 text-ink-3" />
-                {t("settings-extensions.browse_market")}
-              </span>
-            }
-            onClick={() => go({ kind: "catalog" })}
-          />
-          <Row
-            label={
-              <span className="flex items-center gap-2">
-                <Icon name="gear" size={13} className="shrink-0 text-ink-3" />
-                {t("settings-extensions.manage_markets")}
-              </span>
-            }
-            onClick={() => go({ kind: "markets" })}
-          />
         </Group>
       )}
 

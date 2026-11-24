@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/larkhost"
@@ -809,10 +810,8 @@ func (s *Service) requeueReports(items []*reportItem) {
 
 // botCardOut: the bot has posted (or is posting) a card for interaction id.
 func (s *Service) botCardOut(id string) bool {
-	b := &s.fbot
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	_, ok := b.cards[id]
+	ok := false
+	s.larkModule().Book(context.Background(), func(b assistantwire.ChatBook) { _, ok = b.Card(id) })
 	return ok
 }
 

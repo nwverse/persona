@@ -271,7 +271,9 @@ func TestLegacyOwnerPriorityPreservesOwnerDecisions(t *testing.T) {
 			writeDecision(t, s, task.ID, "Should the update be published?", "Do not publish")
 			database.down.Store(false)
 			// A recorded decision can be delivered before restart. Finish that digest so its receipt is
-			// already durable, just as it would be after a clean shutdown of the first manager.
+			// already durable, just as it would be after a clean shutdown of the first manager. Quiet timings
+			// above hold only the inspection of pending state; this explicit send uses the usual short interval.
+			setSuperviseTimings(s, shortSuperviseTimings)
 			s.sendDigest(ctx)
 			before := decisionsTold(firstHub)
 			wantBefore := 1

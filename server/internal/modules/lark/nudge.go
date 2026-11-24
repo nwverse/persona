@@ -1,4 +1,4 @@
-package assistant
+package lark
 
 import (
 	"context"
@@ -16,19 +16,17 @@ import (
 
 // The nudge under a card nobody answered (#6084, docs/extensions/bots.md "Nudging a card nobody answered"): a card the Lark bot
 // sent (a question, a plan, a permission) that has waited nudge_after without an answer gets one short reply under it,
-// "Still waiting for you: …", so it reaches the user where they answer. Like the reply reminder (agents_reply.go) it is
-// a sweep once a minute over what waits, rules only, costing no tokens; unlike it, it follows the card into Lark and
-// does not need the card to have been seen.
+// "Still waiting for you: …", so it reaches the user where they answer. Like the reply reminder (the core's
+// agents_reply.go) it is a sweep once a minute over what waits (the core runs it, Layer.NudgeTick), rules only, costing
+// no tokens; unlike it, it follows the card into Lark and does not need the card to have been seen.
 //
 // One nudge per card, ever: the card's record (botCardRef) keeps when it was nudged, so a restart does not nudge again.
 // None for a card answered, dismissed or expired (its record is gone), or whose agent is gone. The hub's quiet hours
 // (#5806) hold a nudge back: it goes out in the first sweep after them, if the card still waits.
 
-// nudgeEvery is how often the cards are looked at, the reply reminder's.
-const nudgeEvery = replyEvery
-
-// nudgeOldest: a card still unnudged this long after it was due is let go (the user left it), as replyOldest.
-const nudgeOldest = replyOldest
+// nudgeOldest: a card still unnudged this long after it was due is let go (the user left it), as the reply reminder's
+// replyOldest.
+const nudgeOldest = 24 * time.Hour
 
 // A send that fails for a reason that may pass is tried again, at most nudgeMaxTries times in all and only within
 // nudgeRetryWindow of the first: Feishu drops a repeated key only for about an hour, so a later try could land twice.
@@ -73,14 +71,14 @@ type dueNudge struct {
 	kind nudgeKind
 }
 
-func (c botCard) progress(kind nudgeKind) nudgeProgress {
+func cardProgress(c botCard, kind nudgeKind) nudgeProgress {
 	if kind == deadlineNudge {
 		return c.DeadlineNudge
 	}
 	return nudgeProgress{NudgedAt: c.NudgedAt, SkippedAt: c.SkippedAt, Tries: c.Tries, TriedAt: c.TriedAt}
 }
 
-func (c *botCard) setProgress(kind nudgeKind, p nudgeProgress) {
+func setCardProgress(c *botCard, kind nudgeKind, p nudgeProgress) {
 	if kind == deadlineNudge {
 		c.DeadlineNudge = p
 		return
@@ -89,7 +87,7 @@ func (c *botCard) setProgress(kind nudgeKind, p nudgeProgress) {
 }
 
 func deadlineNudgeDue(c botCard, now time.Time) bool {
-	if c.DeadlineNudge.settled() {
+	if c.DeadlineNudge.Settled() {
 		return false
 	}
 	at, ok := deadlineNudgeAt(c.At, c.Ix.ExpiresAt)
@@ -107,25 +105,10 @@ func nudgeAfterOf(st FeishuStatus) time.Duration {
 	return time.Duration(max(n, 0)) * time.Minute
 }
 
-func (s *Service) nudgeLoop(ctx context.Context) {
-	t := time.NewTicker(nudgeEvery)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			cctx, cancel := context.WithTimeout(ctx, time.Minute)
-			s.nudgeTick(cctx)
-			cancel()
-		}
-	}
-}
-
 // nudgeTick nudges the cards that waited nudge_after, outside quiet hours. With no card kept it does nothing, not even
 // asking the hub for the bot's status.
-func (s *Service) nudgeTick(ctx context.Context) {
-	b := &s.fbot
+func (s core) nudgeTick(ctx context.Context) {
+	b := s.fbot()
 	b.mu.Lock()
 	s.loadBotLocked(ctx)
 	idle := !b.loaded || len(b.cards) == 0
@@ -166,7 +149,7 @@ func (s *Service) nudgeTick(ctx context.Context) {
 			due = append(due, dueNudge{id: id, kind: deadlineNudge})
 		}
 		// A card left more than a day past its ordinary wait is let go (the user left it).
-		if !c.nudgeSettled() && now.Sub(c.At) >= after && now.Sub(c.At) <= after+nudgeOldest {
+		if !c.NudgeSettled() && now.Sub(c.At) >= after && now.Sub(c.At) <= after+nudgeOldest {
 			due = append(due, dueNudge{id: id, kind: ordinaryNudge})
 		}
 	}
@@ -179,9 +162,9 @@ func (s *Service) nudgeTick(ctx context.Context) {
 	if turnedOn {
 		for _, d := range due {
 			c := b.cards[d.id]
-			p := c.progress(d.kind)
+			p := cardProgress(c, d.kind)
 			p.SkippedAt = now
-			c.setProgress(d.kind, p)
+			setCardProgress(&c, d.kind, p)
 			s.keepBotCardLocked(d.id, &c)
 		}
 		b.mu.Unlock()
@@ -205,11 +188,11 @@ func (s *Service) nudgeTick(ctx context.Context) {
 }
 
 // nudgeQuiet says whether the user is in their quiet hours now (the hub's, notify.quiet).
-func (s *Service) nudgeQuiet(ctx context.Context) (bool, error) {
+func (s core) nudgeQuiet(ctx context.Context) (bool, error) {
 	var res struct {
 		Quiet bool `json:"quiet"`
 	}
-	if err := s.appCall(ctx, AppNotify, NotifyQuietGet, map[string]any{}, &res); err != nil {
+	if err := s.appCallTo(ctx, assistantwire.AppNotify, NotifyQuietGet, map[string]any{}, &res); err != nil {
 		return false, err
 	}
 	return res.Quiet, nil
@@ -218,23 +201,23 @@ func (s *Service) nudgeQuiet(ctx context.Context) (bool, error) {
 // nudgeCard nudges under the card of interaction id if it still waits and this
 // kind of nudge has not settled. Every send re-reads the live card, so an answer,
 // withdrawal, pause, replacement or extended deadline during the sweep wins.
-func (s *Service) nudgeCard(ctx context.Context, id, owner string, kind nudgeKind) {
-	ix, end := s.botCardLook(ctx, id)
-	if end != cardWaiting || ix.Private || s.agentGone(ix) { // ended, private, or its agent went away
+func (s core) nudgeCard(ctx context.Context, id, owner string, kind nudgeKind) {
+	ix, waiting := s.h.CardLook(ctx, id)
+	if !waiting || ix.Private || s.h.AgentGone(ix) { // ended, private, or its agent went away
 		return
 	}
 	expires := ix.ExpiresAt
 	if kind == deadlineNudge {
 		var waiting bool
-		expires, waiting = s.approvalNudgeDeadline(ix)
+		expires, waiting = s.h.ApprovalNudgeDeadline(ix)
 		if !waiting {
 			return
 		}
 	}
-	b := &s.fbot
+	b := s.fbot()
 	b.mu.Lock()
 	c, ok := b.cards[id] // read again: it may have been answered while the hub was asked
-	if !ok || c.MessageID == "" || c.progress(kind).settled() {
+	if !ok || c.MessageID == "" || cardProgress(c, kind).Settled() {
 		b.mu.Unlock()
 		return
 	}
@@ -246,11 +229,11 @@ func (s *Service) nudgeCard(ctx context.Context, id, owner string, kind nudgeKin
 			return
 		}
 	}
-	p := c.progress(kind)
+	p := cardProgress(c, kind)
 	if !p.TriedAt.IsZero() && now.Sub(p.TriedAt) > nudgeRetryWindow {
 		// Feishu drops a repeated key only for about an hour: a send tried again later could land twice.
 		p.SkippedAt = now
-		c.setProgress(kind, p)
+		setCardProgress(&c, kind, p)
 		s.keepBotCardLocked(id, &c)
 		b.mu.Unlock()
 		return
@@ -260,45 +243,34 @@ func (s *Service) nudgeCard(ctx context.Context, id, owner string, kind nudgeKin
 	}
 	p.Tries++
 	p.NudgedAt = now
-	c.setProgress(kind, p)
+	setCardProgress(&c, kind, p)
 	s.keepBotCardLocked(id, &c) // marked before it is sent: a restart in between loses a nudge, never doubles one
 	b.mu.Unlock()
 	err := s.botNudge(ctx, c, ix, owner, kind)
 	if err == nil {
-		s.boardChanged() // its line on the waiting-for-you board says it was nudged
+		s.h.BoardChanged() // its line on the waiting-for-you board says it was nudged
 		return
 	}
 	s.logf("bots: nudge under card %s: %v", id, err)
 	// Refused (the card or its chat is gone): nothing to nudge under. Otherwise it may not have gone out, and the next
 	// sweep tries again under the same key, so one that did go out lands once, up to nudgeMaxTries and nudgeRetryWindow.
-	giveUp := chatRefused(err) || botcard.MessageGone(err) || p.Tries >= nudgeMaxTries
+	giveUp := s.h.ChatRefused(err) || botcard.MessageGone(err) || p.Tries >= nudgeMaxTries
 	b.mu.Lock()
 	if cur, still := b.cards[id]; still && cur.MessageID == c.MessageID {
-		p := cur.progress(kind)
+		p := cardProgress(cur, kind)
 		p.NudgedAt = time.Time{}
 		if giveUp {
 			p.SkippedAt = b.clock()
 		}
-		cur.setProgress(kind, p)
+		setCardProgress(&cur, kind, p)
 		s.keepBotCardLocked(id, &cur)
 	}
 	b.mu.Unlock()
 }
 
-// agentGone: the agent ix asks for is no longer in its computer's list (a list that is read, and does not have it).
-func (s *Service) agentGone(ix proto.Interaction) bool {
-	if ix.SessionID == "" {
-		return false
-	}
-	// Only whether it is listed: no copy of the list, nor of the card (the closure takes the id alone).
-	sid := ix.SessionID
-	found, listed := s.nodeSessionsWhere(ix.MachineID, func(c *proto.Session) bool { return c.SessionID == sid })
-	return listed > 0 && len(found) == 0
-}
-
 // botNudge replies under c with the nudge: in a topic group in the topic, @-mentioning the owner, which is what makes
 // it reach them there; in the owner's private chat a plain reply, which notifies by itself.
-func (s *Service) botNudge(ctx context.Context, c botCard, ix proto.Interaction, owner string, kind nudgeKind) error {
+func (s core) botNudge(ctx context.Context, c botCard, ix proto.Interaction, owner string, kind nudgeKind) error {
 	text := s.nudgeText(ctx, ix)
 	to := feishuTarget{NoDetour: true} // under the card or nowhere: a card that was withdrawn is not nudged
 	if c.ChatID != "" {
@@ -306,7 +278,7 @@ func (s *Service) botNudge(ctx context.Context, c botCard, ix proto.Interaction,
 		text = feishuMention(owner) + " " + text
 	}
 	p := targetParams(to, map[string]any{"reply_to": c.MessageID, "text": text, "uuid": nudgeKey(ix.ID, kind)})
-	return s.appCall(ctx, AppFeishu, FeishuText, p, nil)
+	return s.appCall(ctx, FeishuText, p, nil)
 }
 
 // feishuMention is a text message's @ of the user with open id (Feishu's text syntax, which the name inside the tag
@@ -329,16 +301,16 @@ func nudgeKey(id string, kind nudgeKind) string {
 
 // nudgeText is the one line: what the card asks, in the user's language. A permission's is the tool only, never the
 // command or the path it would run on.
-func (s *Service) nudgeText(ctx context.Context, ix proto.Interaction) string {
+func (s core) nudgeText(ctx context.Context, ix proto.Interaction) string {
 	l := s.botLang(ctx)
 	what := ""
 	switch ix.Kind {
 	case proto.IxPermission:
 		if ix.ToolName != "" {
-			return i18n.T(l, "assistant-feishu_cards.nudge_permission", i18n.Args{"tool": ixToolName(ix)})
+			return i18n.T(l, "assistant-feishu_cards.nudge_permission", i18n.Args{"tool": s.h.IxToolName(ix)})
 		}
 	case proto.IxQuestion:
-		what = firstQuestion(ix)
+		what = s.h.FirstQuestion(ix)
 	case proto.IxPlan:
 		what = ix.Plan
 	case proto.IxScreen:
@@ -356,8 +328,8 @@ func (s *Service) nudgeText(ctx context.Context, ix proto.Interaction) string {
 }
 
 // cardNudged: the card asking interaction id was nudged under (the waiting-for-you board marks its row).
-func (s *Service) cardNudged(id string) bool {
-	b := &s.fbot
+func (s core) cardNudged(id string) bool {
+	b := s.fbot()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	s.loadBotLocked(context.Background())

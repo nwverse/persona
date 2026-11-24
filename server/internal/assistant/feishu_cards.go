@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/deeplink"
@@ -26,8 +27,8 @@ import (
 // dialog shows in the chat as a card with the same choices as the app's card; answering it in either place answers it
 // (interactions.resolve), and the card in Feishu then says how it was answered (interaction.ended). Cards go out for
 // what the chat drives (its target, and the conversations of its runs), or for everything with all_cards. The card
-// buttons, the chat's commands, and the pushes and sync mirror are in feishu_card_actions.go, feishu_commands.go and
-// feishu_push.go.
+// buttons and the chat's commands are the lark module's (card_actions.go, commands.go); the pushes and sync mirror are
+// in feishu_push.go.
 
 const (
 	maxFormQuestions     = 6     // more questions than this are answered in the app (keeps the form under ~200 components)
@@ -59,7 +60,7 @@ func (s *Service) feishuInteraction(ix proto.Interaction) {
 // feishuCardWanted: the bot posts a card for ix (feishuInteraction): it is on with the cards switch, and the chat
 // drives the conversation or "all cards" is on (not for a card that says something sensitive).
 func (s *Service) feishuCardWanted(ctx context.Context, ix proto.Interaction) bool {
-	f, ready := s.feishuFeatures(ctx)
+	f, ready := s.chat().Features(ctx)
 	if !ready || !f.Cards {
 		return false
 	}
@@ -156,18 +157,20 @@ func finalStatus(status string) bool {
 
 // postInteractionCard posts ix's card once, unless it ended meanwhile.
 func (s *Service) postInteractionCard(ctx context.Context, ix proto.Interaction) {
-	if s.interactionEnded(ix.ID) { // ended while this looked at the bot: not asked (s.chans before s.fbot, never in it)
+	if s.interactionEnded(ix.ID) { // ended while this looked at the bot: not asked (s.chans before the chat, never in it)
 		return
 	}
-	b := &s.fbot
-	b.mu.Lock()
-	s.loadBotLocked(ctx)
-	if _, ok := b.cards[ix.ID]; ok {
-		b.mu.Unlock()
+	chat := s.larkModule()
+	claimed := false
+	chat.Book(ctx, func(b assistantwire.ChatBook) {
+		if _, ok := b.Card(ix.ID); !ok {
+			b.KeepCard(ix.ID, &botCard{}) // claimed: a second announce of the same card does not post twice
+			claimed = true
+		}
+	})
+	if !claimed {
 		return
 	}
-	s.keepBotCardLocked(ix.ID, &botCard{}) // claimed: a second announce of the same card does not post twice
-	b.mu.Unlock()
 	reply, to, topic := s.interactionPlace(ix)
 	ctx = feishuSendAs(ctx, string(ix.Kind), ix.MachineID, ix.SessionID)
 	fallback := ""
@@ -188,9 +191,7 @@ func (s *Service) postInteractionCard(ctx context.Context, ix proto.Interaction)
 	if s.interactionEnded(ix.ID) {
 		// Answered while its card was being made (a program that answers cards at once): nobody needs to look at it,
 		// so nothing is posted and the claim goes (#5430). One that ends during the post is closed after it, below.
-		b.mu.Lock()
-		s.keepBotCardLocked(ix.ID, nil)
-		b.mu.Unlock()
+		chat.Book(ctx, func(b assistantwire.ChatBook) { b.KeepCard(ix.ID, nil) })
 		return
 	}
 	// A card for a topic is a reply to its run's message and belongs under it: if that message is gone it would be a
@@ -209,21 +210,24 @@ func (s *Service) postInteractionCard(ctx context.Context, ix proto.Interaction)
 		mid, err = s.botPostTo(ctx, to, "", card, fallback, "")
 	}
 	ended := s.interactionEnded(ix.ID)
-	b.mu.Lock()
 	if err != nil {
 		s.logf("bots: card for %s: %v", ix.ID, err)
-		s.keepBotCardLocked(ix.ID, nil)
-		b.mu.Unlock()
+		chat.Book(ctx, func(b assistantwire.ChatBook) { b.KeepCard(ix.ID, nil) })
 		return
 	}
-	if _, still := b.cards[ix.ID]; !still || ended { // answered while it was being posted
-		s.keepBotCardLocked(ix.ID, nil)
-		b.mu.Unlock()
+	kept := false
+	chat.Book(ctx, func(b assistantwire.ChatBook) {
+		if _, still := b.Card(ix.ID); !still || ended { // answered while it was being posted
+			b.KeepCard(ix.ID, nil)
+			return
+		}
+		b.KeepCard(ix.ID, &botCard{MessageID: mid, Ix: ix, At: b.Now(), Thread: reply, ChatID: to.ChatID})
+		kept = true
+	})
+	if !kept {
 		s.botCardDone(ctx, mid, ix, i18n.T(s.botLang(ctx), "assistant-feishu_cards.handled"))
 		return
 	}
-	s.keepBotCardLocked(ix.ID, &botCard{MessageID: mid, Ix: ix, At: b.clock(), Thread: reply, ChatID: to.ChatID})
-	b.mu.Unlock()
 	if topic != nil {
 		// The run was asked in a topic and the card went to the DM: the topic is told where it is.
 		s.botNoteTo(ctx, topic.to, topic.reply, i18n.T(s.botLang(ctx), "assistant-feishu_cards.sent_to_dm"))
@@ -305,17 +309,12 @@ func (s *Service) botDrives(ctx context.Context, machine, session string) bool {
 			return true
 		}
 	}
-	b := &s.fbot
-	b.mu.Lock()
-	s.loadBotLocked(ctx)
-	cur := b.st.Current
-	for _, t := range b.st.Threads {
-		if t.Target.MachineID == machine && t.Target.SessionID == session && b.clock().Sub(t.At) < 24*time.Hour {
-			b.mu.Unlock()
-			return true
-		}
+	bound := false
+	s.larkModule().Book(ctx, func(b assistantwire.ChatBook) { bound = b.Bound(machine, session, 24*time.Hour) })
+	if bound {
+		return true
 	}
-	b.mu.Unlock()
+	cur := s.larkModule().Route("", "")
 	if session == "" {
 		return false
 	}
@@ -333,15 +332,16 @@ func (s *Service) feishuInteractionDone(ix proto.Interaction, how string) {
 // feishuInteractionEnded is feishuInteractionDone; inChat: the card was taken back because the user wrote in the
 // conversation, so their next words are no late answer to it.
 func (s *Service) feishuInteractionEnded(ix proto.Interaction, how string, inChat bool) {
-	b := &s.fbot
-	b.mu.Lock()
-	s.loadBotLocked(context.Background()) // a card posted before a restart is in the chat's state
-	c, ok := b.cards[ix.ID]
-	s.keepBotCardLocked(ix.ID, nil)
-	if ok && typedAnswerable(c) && !inChat {
-		b.noteEndedLocked(c)
-	}
-	b.mu.Unlock()
+	var c botCard
+	ok := false
+	// A card posted before a restart is in the chat's state, which Book reads first.
+	s.larkModule().Book(context.Background(), func(b assistantwire.ChatBook) {
+		c, ok = b.Card(ix.ID)
+		b.KeepCard(ix.ID, nil)
+		if ok && !inChat {
+			b.NoteEnded(c) // a question a plain message could have answered: an option typed for it late is no new message
+		}
+	})
 	if !ok || c.MessageID == "" {
 		return
 	}
@@ -369,29 +369,31 @@ type detachedCard struct {
 // feishuDetach: the cards ids are about to end because their node went away. Their Feishu cards say "Ended" as any
 // ended card's, and are kept for resumeGrace in case the same card comes back (#4583).
 func (s *Service) feishuDetach(ids []string) {
-	b := &s.fbot
-	b.mu.Lock()
-	now := b.clock()
-	for id, d := range b.detached {
-		if now.Sub(d.at) > resumeGrace {
-			delete(b.detached, id)
-		}
-	}
+	dc := &s.fdetached
+	dc.mu.Lock()
 	var closing []detachedCard
-	for _, id := range ids {
-		c, ok := b.cards[id]
-		if !ok || c.MessageID == "" {
-			continue
+	s.larkModule().Book(context.Background(), func(b assistantwire.ChatBook) {
+		now := b.Now()
+		for id, d := range dc.cards {
+			if now.Sub(d.at) > resumeGrace {
+				delete(dc.cards, id)
+			}
 		}
-		s.keepBotCardLocked(id, nil) // closed here, not again by feishuInteractionDone
-		if b.detached == nil {
-			b.detached = map[string]detachedCard{}
+		for _, id := range ids {
+			c, ok := b.Card(id)
+			if !ok || c.MessageID == "" {
+				continue
+			}
+			b.KeepCard(id, nil) // closed here, not again by feishuInteractionDone
+			if dc.cards == nil {
+				dc.cards = map[string]detachedCard{}
+			}
+			d := detachedCard{card: c, at: now, closed: make(chan struct{})}
+			dc.cards[id] = d
+			closing = append(closing, d)
 		}
-		d := detachedCard{card: c, at: now, closed: make(chan struct{})}
-		b.detached[id] = d
-		closing = append(closing, d)
-	}
-	b.mu.Unlock()
+	})
+	dc.mu.Unlock()
 	for _, d := range closing {
 		go func() {
 			defer close(d.closed)
@@ -406,18 +408,24 @@ func (s *Service) feishuDetach(ids []string) {
 // closed when the node went away, asks it again, in the same message and without a new one. A card that did not come
 // back (answered, moved on, away past resumeGrace) stays closed.
 func (s *Service) feishuCardBack(ix proto.Interaction) {
-	b := &s.fbot
-	b.mu.Lock()
-	d, ok := b.detached[ix.ID]
-	delete(b.detached, ix.ID)
-	_, posted := b.cards[ix.ID]
-	if !ok || posted || b.clock().Sub(d.at) > resumeGrace {
-		b.mu.Unlock()
+	chat := s.larkModule()
+	dc := &s.fdetached
+	dc.mu.Lock()
+	d, ok := dc.cards[ix.ID]
+	delete(dc.cards, ix.ID)
+	back := false
+	chat.Book(context.Background(), func(b assistantwire.ChatBook) {
+		if _, posted := b.Card(ix.ID); !ok || posted || b.Now().Sub(d.at) > resumeGrace {
+			return
+		}
+		b.KeepCard(ix.ID, &botCard{MessageID: d.card.MessageID, Thread: d.card.Thread, ChatID: d.card.ChatID, Ix: ix, At: b.Now(),
+			NudgedAt: d.card.NudgedAt, SkippedAt: d.card.SkippedAt, Tries: d.card.Tries, TriedAt: d.card.TriedAt})
+		back = true
+	})
+	dc.mu.Unlock()
+	if !back {
 		return
 	}
-	s.keepBotCardLocked(ix.ID, &botCard{MessageID: d.card.MessageID, Thread: d.card.Thread, ChatID: d.card.ChatID, Ix: ix, At: b.clock(),
-		NudgedAt: d.card.NudgedAt, SkippedAt: d.card.SkippedAt, Tries: d.card.Tries, TriedAt: d.card.TriedAt})
-	b.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	select {
@@ -427,20 +435,17 @@ func (s *Service) feishuCardBack(ix proto.Interaction) {
 	}
 	if err := s.botUpdateCard(ctx, d.card.MessageID, s.interactionCard(ctx, ix)); err != nil {
 		s.logf("bots: reopen card %s: %v", ix.ID, err)
-		b.mu.Lock()
-		if c, still := b.cards[ix.ID]; still && c.MessageID == d.card.MessageID {
-			s.keepBotCardLocked(ix.ID, nil)
-		}
-		b.mu.Unlock()
+		chat.Book(ctx, func(b assistantwire.ChatBook) {
+			if c, still := b.Card(ix.ID); still && c.MessageID == d.card.MessageID {
+				b.KeepCard(ix.ID, nil)
+			}
+		})
 		return
 	}
-	b.mu.Lock()
-	_, still := b.cards[ix.ID]
-	b.mu.Unlock()
+	still := false
+	chat.Book(ctx, func(b assistantwire.ChatBook) { _, still = b.Card(ix.ID) })
 	if _, pending := s.pendingIx(ix.ID); !still || !pending { // answered or ended meanwhile: it says so again
-		b.mu.Lock()
-		s.keepBotCardLocked(ix.ID, nil)
-		b.mu.Unlock()
+		chat.Book(ctx, func(b assistantwire.ChatBook) { b.KeepCard(ix.ID, nil) })
 		s.botCardDone(ctx, d.card.MessageID, ix, i18n.T(s.botLang(ctx), "assistant-feishu_cards.handled"))
 	}
 }
@@ -1003,7 +1008,7 @@ func (s *Service) openButton(ctx context.Context, machine, session string) botca
 // openLink is the conversation's page in the web app the hub serves (the app's home without a conversation) and what
 // a link to it says; "" when the hub has no http(s) address for it.
 func (s *Service) openLink(ctx context.Context, machine, session string) (label, web string) {
-	st, _ := s.feishuStatusKept(ctx)
+	st, _ := s.larkModule().StatusKept(ctx)
 	web = strings.TrimRight(st.PublicURL, "/")
 	if session != "" {
 		web = sessionLink(web, machine, session, s.isAssistantConversation(ctx, machine, session))
@@ -1038,7 +1043,7 @@ func safeLinkButton(label, web string) botcard.Button {
 // linkNamer names a link's button by what it opens (botcard.RenderAnswerWith): a page of the hub's web app by the
 // page, a Feishu document as one, any other site by its name.
 func (s *Service) linkNamer(ctx context.Context) func(*url.URL) string {
-	st, _ := s.feishuStatusKept(ctx)
+	st, _ := s.larkModule().StatusKept(ctx)
 	return linkNamer(s.botLang(ctx), st.PublicURL)
 }
 
@@ -1138,4 +1143,17 @@ func jsonStrings(raw string) []string {
 	}
 	walk(v)
 	return out
+}
+
+// pendingQuestion is one line saying what a pending interaction waits for; "" when it says nothing.
+func pendingQuestion(ix proto.Interaction) string {
+	switch ix.Kind {
+	case proto.IxQuestion:
+		return strings.TrimSpace(questionSummary(ix))
+	case proto.IxPlan:
+		return strings.TrimSpace(planTitle(ix.Plan))
+	case proto.IxPermission:
+		return strings.TrimSpace(ixToolName(ix) + " " + oneLine(ix.Summary))
+	}
+	return strings.TrimSpace(oneLine(ix.Summary))
 }
