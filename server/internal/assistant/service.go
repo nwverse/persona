@@ -359,6 +359,7 @@ type Service struct {
 	inbox            inboxBook         // inbox_book.go
 	board            boardBook         // workspace_board.go: the workspace board
 	viewEvents       viewNotifications // views.go: only coalesced notifications; contents are stored first
+	pages            pagesRuntime      // pages_actions.go, pages_events.go: the pages' events, taps and turns (Dashboards)
 	viewMemo         viewMemo          // views.go: encoded cards for the feed snapshot, checked against the database
 
 	devs                 Devices // the computers (devices.go); nil: no fleet
@@ -1127,6 +1128,7 @@ func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn
 	s.taskWorking(ctx, r.MachineID, r.SessionID, row)
 	s.workStartedObserved(ctx, r.MachineID, r.SessionID, time.Now(), newTurn)
 	s.availTurnStarted(r.MachineID, r.SessionID, newTurn, time.Now())
+	s.pageTurnStarted(r.MachineID, r.SessionID, time.Now()) // a tap on a page it took up (pages_actions.go)
 }
 
 // TurnEnded: a task's agent may be done (in the background: it waits for the agents to settle), an agent's turn is
@@ -1148,6 +1150,7 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 		s.infoTagTurnEnded(ctx, r.SessionID) // its categories are not known until it is tagged (info_use.go)
 		s.backgroundRoundTurnEnded(ctx, r.SessionID, time.Now())
 		s.availTurnEnded(ctx, r.MachineID, r.SessionID, time.Now()) // an assistant conversation's round (availability.go)
+		s.pageTurnEnded(r.MachineID, r.SessionID, time.Now())       // the taps on pages it took up are answered (pages_actions.go)
 		s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, r.MachineID, r.SessionID)
 		// A review's reviewer answered (supervise_autoreview.go, agents_session_review.go).
 		go s.autoReviewTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
