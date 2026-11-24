@@ -178,12 +178,13 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const summaryMode = root.isSummary();
   // a hub that folds child sessions (#5120): every read and count of this list leaves them out, as the root's do
   const rootsMode = root.isRoots();
+  const crossMachineMode = root.isCrossMachineHierarchy();
   const queryPath = `${path}${path.includes("?") ? "&" : "?"}`;
-  const countsPath = rootsMode ? `${queryPath}roots=1&` : queryPath;
+  const countsPath = rootsMode ? `${queryPath}roots=1&${crossMachineMode ? "cross_machine_hierarchy=1&" : ""}` : queryPath;
   const rowOrder = grouping?.rowOrder;
   const presentation = useMemo(() => rowOrder ? { ...rowOrder, parentOf } : undefined, [rowOrder, parentOf]);
-  const list = useMemo(() => filtered ? new SessionList<T>(path, identity, compare, undefined, removeIdentity, { summary: summaryMode, roots: rootsMode, pageCounts: () => root.usesPageCounts(), presentation }) : root,
-    [filtered, path, identity, compare, removeIdentity, summaryMode, rootsMode, root, filters, presentation]);
+  const list = useMemo(() => filtered ? new SessionList<T>(path, identity, compare, undefined, removeIdentity, { summary: summaryMode, roots: rootsMode, crossMachineHierarchy: crossMachineMode, pageCounts: () => root.usesPageCounts(), presentation }) : root,
+    [filtered, path, identity, compare, removeIdentity, summaryMode, rootsMode, crossMachineMode, root, filters, presentation]);
   // The root is shared with the hub's counts and invalidation. Apply the same retention as a filtered list instead of
   // letting an activity-only transport prefix displace a flat list's shown rows (#11801).
   // The sidebar's list also lets go of it when the activity order is chosen (Settings › Agents), which has none.
@@ -485,8 +486,8 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   };
   const chooseGroup = (key: string) => setPicked(key ? groups.find((g) => g.key === key) ?? null : null);
   // an open section reads the collection as the list above it does
-  const source: GroupedSource<T> = useMemo(() => ({ path, identity, compare, removeIdentity, event, summary: summaryMode, roots: rootsMode, parentOf, rowOrder, excludeIdentities, hold: Boolean(grouping?.hold) && Boolean(grouping?.byUpdate) }),
-    [path, identity, compare, removeIdentity, event, summaryMode, rootsMode, parentOf, rowOrder, excludeIdentities, grouping?.hold, grouping?.byUpdate]);
+  const source: GroupedSource<T> = useMemo(() => ({ path, identity, compare, removeIdentity, event, summary: summaryMode, roots: rootsMode, crossMachineHierarchy: crossMachineMode, parentOf, rowOrder, excludeIdentities, hold: Boolean(grouping?.hold) && Boolean(grouping?.byUpdate) }),
+    [path, identity, compare, removeIdentity, event, summaryMode, rootsMode, crossMachineMode, parentOf, rowOrder, excludeIdentities, grouping?.hold, grouping?.byUpdate]);
   const openRow = sections && isOpen && placeOf ? rootPage.rows.find(isOpen) : undefined;
   const autoMore = useRef(0);
   useEffect(() => {

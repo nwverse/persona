@@ -35,11 +35,15 @@ the Manager's enrolled computers. Enable this for runtimes you trust with that a
 ## Send and receive
 
 Use the tools through Persona MCP, a runtime's existing `callTool` API, or
-`personad tool` from a shell associated with a supported session.
+`personad tool` from a shell associated with a supported session. The node's
+program is not always on an Agent's `PATH` as `personad` (on macOS it can be
+installed under another name); notes the node writes for an Agent name its
+absolute path, as the task handoff does.
 
 | Tool | Purpose |
 | --- | --- |
 | `a2a_sessions` | Discover eligible session addresses, harnesses and states |
+| `a2a_read` | Read a session's recent conversation: the user's messages, its replies and one line per tool call |
 | `a2a_send` | Send a request to a session, start an Agent, or answer its request for input |
 | `a2a_get` | Get a task and its delivery receipts, or list the caller's incoming and outgoing tasks |
 | `a2a_report` | Report progress, request input, complete the task, or report a failure |
@@ -66,10 +70,28 @@ JSON-RPC metadata uses `personaWaitingSince`, `personaWaitingSeconds`, and
 personad tool a2a_send '{"machine_id":"box","session_id":"runtime.session-1","message_id":"request-001","text":"Run the checks and return the failing cases."}'
 ```
 
-To start a new Agent, provide the machine and `cwd`, with an optional
-`launcher`. The start uses the manager's Agent model and plan permission.
-Starting an Agent remotely requires either the existing Agent dispatch setting
-or an explicit A2A machine list.
+To start a new cross-machine or cross-harness subagent, provide the target
+`machine_id` (which may be the caller's own computer for cross-harness work such
+as Claude launching Codex) and `cwd`, with an optional `launcher` and optional
+`permission_mode`. New launches default to `plan`. Requesting any mode above
+`plan` (`default`, `acceptEdits`, `auto`, `bypassPermissions`) requires live
+source-node permission attestation bound to the calling request (cached session
+snapshots are never trusted, and unmapped modes fail closed): `prompting`
+attestation allows at most `default`, while `bypass` attestation allows any
+supported mode. Launching subagents is enabled by default on the manager's
+confirmed personal computers, using the manager's Agent model and existing
+depth (1) and concurrency (`agents.dispatch.max_active`, default 3) limits. Set
+`agents.a2a.launch` to `false` in `manager.json` to disable launching new
+sessions while keeping peer messaging (queued launches that have not yet called
+`session.start` also recheck this switch and fail cleanly), or set
+`agents.a2a.machines` to `[]` to disable A2A altogether.
+Sessions launched by `a2a_send` or `dispatch_start` are durably tagged as
+subagents (`is_subagent`, `parent_machine_id`, `parent_session_id`,
+`a2a_task_id`, `subagent_origin`) and folded under their parent session across
+machines; ordinary A2A messages sent to existing independent sessions never mark
+them as subagents. Subagents are excluded from `a2a_sessions` peer discovery,
+while remaining allowed to receive messages, call `a2a_report`, and be observed
+on their own launch task.
 Reuse the same `message_id` when a tool reply is lost. The manager records the
 request and a reserved session ID before attempting the launch.
 
@@ -108,6 +130,40 @@ delivery is shown as `uncertain` for up to ten minutes. It then records
 `unconfirmed` and releases the task's hold on the recipient. A closed receiving
 session ends the task and sends the parent a status update.
 
+## Read a session
+
+`a2a_read` takes a session's exact `machine_id` and `session_id` and an
+optional `turns` (2 by default, at most 10). It returns the session's recent
+conversation as text: a line with its title, harness, computer, state and
+folder, then the user's messages, its replies and one line per tool call, cut
+to the last 40,000 bytes. It reads the sessions `a2a_send` can address in the
+same scope, and also read-only sessions in that scope, which take no messages.
+It never reads guest, work-trust, pending, hidden, archived or health sessions,
+or the assistant's own conversations. Reading changes no task and does not
+notify the session.
+
+```sh
+personad tool a2a_read '{"machine_id":"box","session_id":"runtime.session-1","turns":4}'
+```
+
+## Sessions quoted with @
+
+In a chat on the web, iOS or Android, picking another session in the @ menu
+puts a quote of it in front of the message: a `<persona-context kind="context">`
+block whose `url` is the session's address,
+`persona://session/<machine>/<session>`, with its title, folder and last words.
+Before an Agent gets the message, its node ends that quote's body with a note in
+the owner's language: the session's `machine_id` and `session_id`, `a2a_read`
+to read more of it, and `a2a_send` to message it when the user's request calls
+for that. For a harness without the Persona MCP tools, the note names the
+node's executable to run with `tool a2a_read` or `tool a2a_send` and one JSON
+object. The chip shown for the quote is unchanged; the note shows when the
+quote is opened. A quote that already carries its note, such as an edited
+message sent again, is left alone. The assistant's conversations and guests
+get the quote as written: the assistant reads Agents with `agent_read`.
+A new Agent whose first prompt goes with its start, rather than as its first
+message, gets the quote without the note.
+
 ## Client and harness coverage
 
 Web, Electron desktop, iOS, iPadOS, macOS, visionOS, Android and HarmonyOS
@@ -118,8 +174,9 @@ notification and interaction APIs.
 
 | Integration | A2A participation |
 | --- | --- |
-| Claude Code with Persona MCP | Can send and report when the node can bind the MCP process to the session |
-| Codex with a Node-verifiable thread or terminal session | Can send and report with `personad tool` |
+| Claude Code with Persona MCP | Every Claude Code Agent Persona starts carries `--mcp-config` with the node's `mcp.json`, which lists the A2A tools, `a2a_read` included, while the session is in scope. Calls work when the node can bind the MCP process to the session |
+| Codex with a Node-verifiable thread or terminal session | Has no Persona MCP tools: discovers, reads, sends and reports by running the node's executable with `tool <name>` (`personad tool`). `personad` may not be on its `PATH`; the node's notes name the executable |
+| Antigravity CLI in a terminal engine | Persona attaches no MCP server to it: as Codex, it runs the node's executable with `tool <name>` from its shell, and the node binds the call to the pane's session |
 | DSH and Grok runtime tool bridges | Discover the generic tool catalog and forward calls with a runtime-owned session ID |
 | Pi and Oh My Pi with the Persona extension | Register A2A tools in the harness using its current session ID |
 | OpenCode v2 with the Persona plugin | Registers A2A tools through the native tool editor and uses the executing OpenCode session ID |

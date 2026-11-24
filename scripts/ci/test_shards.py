@@ -1,6 +1,9 @@
 import importlib.util
+import io
 from pathlib import Path
+import sys
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -32,23 +35,25 @@ class ServerShardCommandTests(unittest.TestCase):
                                                           ["-run", "^(TestB|TestE)$", "./internal/node"],
                                                           ["-run", "^(TestC|TestF)$", "./internal/node"]])
 
-    def test_the_managers_shard_runs_internal_assistant_and_hub_in_their_partitions_beside_voice(self):
+    def test_the_managers_shard_runs_internal_assistant_hub_and_voice_in_their_partitions(self):
         managers = ["example/server/internal/assistant", "example/server/internal/assistant/fleet",
-                    "example/server/internal/hub", "example/server/internal/voice"]
+                    "example/server/internal/hub", "example/server/internal/modules/voice"]
         self.assertEqual(server.select_packages(managers + self.node, "managers"), managers)
         runs = server.commands(managers, "managers", "/tmp/db.json",
-                               {"./internal/assistant": ["^(TestX)$", "^(TestY)$"], "./internal/hub": ["^(TestH)$"]})
-        self.assertEqual(len(runs), 4)
+                               {"./internal/assistant": ["^(TestX)$", "^(TestY)$"], "./internal/hub": ["^(TestH)$"],
+                                "./internal/modules/voice": ["^(TestV)$"]})
+        self.assertEqual(len(runs), 5)
         for run in runs:
             self.assertEqual(run[run.index("go"):run.index("go") + 7],
                              ["go", "test", "-json", "-p", "3", "-count=1", "-timeout=10m"])
-        self.assertEqual(runs[0][-2:], ["example/server/internal/assistant/fleet", "example/server/internal/voice"])
+        self.assertEqual(runs[0][-2:], ["-timeout=10m", "example/server/internal/assistant/fleet"])
         self.assertEqual([run[-3:] for run in runs[1:]], [["-run", "^(TestX)$", "./internal/assistant"],
                                                           ["-run", "^(TestY)$", "./internal/assistant"],
-                                                          ["-run", "^(TestH)$", "./internal/hub"]])
+                                                          ["-run", "^(TestH)$", "./internal/hub"],
+                                                          ["-run", "^(TestV)$", "./internal/modules/voice"]])
 
     def test_shards_without_a_partitioned_package_stay_one_process(self):
-        self.assertEqual(len(server.commands(["example/server/internal/voice"], "managers", "/tmp/db.json")), 1)
+        self.assertEqual(len(server.commands(["example/server/internal/assistant/fleet"], "managers", "/tmp/db.json")), 1)
         self.assertEqual(len(server.commands(["example/server/internal/node/sub"], "node", "/tmp/db.json")), 1)
         self.assertEqual(len(server.commands(["example/server/internal/assistantwire"], "other", "/tmp/db.json")), 1)
 
@@ -58,6 +63,56 @@ class ServerShardCommandTests(unittest.TestCase):
                 server.commands(packages, shard, "/tmp/db.json", {})
             with self.assertRaises(ValueError):
                 server.commands(packages, shard, "/tmp/db.json")
+
+    def test_partition_listing_uses_the_same_server_test_env_prefix_as_partition_runs(self):
+        db = "/tmp/db.json"
+        prefix = server.server_test_env(db)
+        for shard in (*server.SHARDS, server.AFFECTED):
+            self.assertEqual(server.go_test(shard, db)[:len(prefix)], prefix)
+        listing = "TestA\nTestB\nok  \texample/server/internal/assistant\t0.1s\n"
+        with mock.patch.object(server.go_partitions.subprocess, "check_output", return_value=listing) as listed:
+            patterns = server.list_patterns("./internal/assistant", db)
+        self.assertEqual(patterns, ["^(TestA)$", "^(TestB)$"])
+        self.assertEqual(listed.call_args.args[0], [*prefix, "go", "test", "-list", ".*", "./internal/assistant"])
+        self.assertEqual(listed.call_args.kwargs["cwd"], ROOT / "server")
+
+    def test_main_lists_partitions_through_server_test_env_before_spawning_workers(self):
+        db = "/tmp/db.json"
+        events = []
+
+        def fake_check_output(command, **kwargs):
+            if command[:2] == ["go", "list"]:
+                return "example/server/internal/assistant\nexample/server/internal/assistant/fleet\n"
+            events.append(("list", command))
+            return "TestOne\nTestTwo\nok  \texample/server/internal/assistant\t0.1s\n"
+
+        class FakeProcess:
+            def __init__(self, command, **kwargs):
+                events.append(("run", command))
+                self.stdout = io.StringIO("")
+                self.returncode = 0
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout=None):
+                return self.returncode
+
+        with mock.patch.object(sys, "argv", ["server-shards.py", "managers", "--database-file", db]), \
+                mock.patch.object(server.subprocess, "check_output", side_effect=fake_check_output), \
+                mock.patch.object(server.go_partitions.subprocess, "check_output", side_effect=fake_check_output), \
+                mock.patch.object(server.subprocess, "Popen", side_effect=FakeProcess), \
+                mock.patch.object(sys, "stdout", io.StringIO()):
+            self.assertEqual(server.main(), 0)
+        list_calls = [cmd for kind, cmd in events if kind == "list"]
+        run_calls = [cmd for kind, cmd in events if kind == "run"]
+        self.assertEqual(len(list_calls), 1)
+        self.assertEqual(len(run_calls), 3)  # fleet + 2 assistant partitions
+        self.assertEqual(events[0][0], "list")
+        prefix = server.server_test_env(db)
+        self.assertEqual(list_calls[0], [*prefix, "go", "test", "-list", ".*", "./internal/assistant"])
+        for command in run_calls:
+            self.assertEqual(command[:len(prefix)], prefix)
 
 
 def output(test, *lines, package="example/server/internal/node"):
@@ -188,6 +243,7 @@ class ShardTests(unittest.TestCase):
         self.assertEqual(len(selected), len(set(selected)))
         self.assertEqual(server.select_packages(packages, "node"), [packages[0], packages[-3]])
         self.assertIn("example/server/internal/hubedge", server.select_packages(packages, "other"))
+        self.assertIn("example/server/internal/modules/voice", server.select_packages(packages + ["example/server/internal/modules/voice"], "managers"))
         with self.assertRaises(ValueError):
             server.select_packages(packages, "typo")
 
@@ -214,7 +270,7 @@ class ShardTests(unittest.TestCase):
     def test_source_server_shard_installs_the_pinned_bundler(self):
         workflow = (ROOT / ".github/workflows/server-test.yml").read_text()
         setup = """      - uses: oven-sh/setup-bun@v2
-        if: matrix.shard == 'other'
+        if: matrix.shard == 'other' || matrix.shard == 'core-other'
         with:
           bun-version: '1.4.2'
 """
@@ -232,14 +288,26 @@ class ShardTests(unittest.TestCase):
 
     def test_server_workflow_covers_build_and_every_test_shard(self):
         workflow = (ROOT / ".github/workflows/server-test.yml").read_text()
-        self.assertIn("shard: [node, managers, other, build]", workflow)
+        self.assertIn("shard: [node, managers, other, build, core-node, core-managers, core-other]", workflow)
         self.assertIn("fail-fast: false", workflow)
         self.assertIn('scripts/ci/server.sh "$CI_SERVER_SHARD"', workflow)
         script = (ROOT / "scripts/ci/server.sh").read_text()
         for label in ("Go formatting", "Server vet", "Server build", "Windows node build and vet", "Go SDK tests",
-                      "Server programs with build-tags.txt", "Tunnel tests with build-tags.txt"):
+                      "Server programs with build-tags.txt", "Tunnel tests with build-tags.txt", "Core-only hub smoke",
+                      "Builds without each module", "Server $shard tests with Postgres, core only"):
             self.assertIn(label, script)
         self.assertIn('lane="${1:-all}"', script)
+
+    def test_managers_outer_budget_lets_the_inner_go_timeout_report(self):
+        script = (ROOT / "scripts/ci/server.sh").read_text()
+        self.assertIn("shard_budget=600", script)
+        self.assertIn('if [ "$shard" = managers ]; then shard_budget=900; fi', script)
+        self.assertIn('ci_run "Server $shard tests with Postgres" "$shard_budget"', script)
+        workflow = (ROOT / ".github/workflows/server-test.yml").read_text()
+        self.assertIn("timeout-minutes: 20", workflow)
+        # The inner Go timeout, test selection and assertions stay unchanged: a genuinely stuck test still gets 10m.
+        shards = (ROOT / "scripts/ci/server-shards.py").read_text()
+        self.assertIn('"--", "go", "test", "-json", "-p", str(workers), "-count=1", "-timeout=10m"]', shards)
 
     def test_server_go_cache_is_saved_only_by_main_dispatches(self):
         # actions/cache saves on every ref; branch entries pushed main's out of the 10 GB repository cache.

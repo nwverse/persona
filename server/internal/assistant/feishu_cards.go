@@ -12,9 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/deeplink"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -26,8 +27,8 @@ import (
 // dialog shows in the chat as a card with the same choices as the app's card; answering it in either place answers it
 // (interactions.resolve), and the card in Feishu then says how it was answered (interaction.ended). Cards go out for
 // what the chat drives (its target, and the conversations of its runs), or for everything with all_cards. The card
-// buttons, the chat's commands, and the pushes and sync mirror are in feishu_card_actions.go, feishu_commands.go and
-// feishu_push.go.
+// buttons and the chat's commands are the lark module's (card_actions.go, commands.go); the pushes and sync mirror are
+// in feishu_push.go.
 
 const (
 	maxFormQuestions     = 6     // more questions than this are answered in the app (keeps the form under ~200 components)
@@ -59,7 +60,7 @@ func (s *Service) feishuInteraction(ix proto.Interaction) {
 // feishuCardWanted: the bot posts a card for ix (feishuInteraction): it is on with the cards switch, and the chat
 // drives the conversation or "all cards" is on (not for a card that says something sensitive).
 func (s *Service) feishuCardWanted(ctx context.Context, ix proto.Interaction) bool {
-	f, ready := s.feishuFeatures(ctx)
+	f, ready := s.chat().Features(ctx)
 	if !ready || !f.Cards {
 		return false
 	}
@@ -156,18 +157,20 @@ func finalStatus(status string) bool {
 
 // postInteractionCard posts ix's card once, unless it ended meanwhile.
 func (s *Service) postInteractionCard(ctx context.Context, ix proto.Interaction) {
-	if s.interactionEnded(ix.ID) { // ended while this looked at the bot: not asked (s.chans before s.fbot, never in it)
+	if s.interactionEnded(ix.ID) { // ended while this looked at the bot: not asked (s.chans before the chat, never in it)
 		return
 	}
-	b := &s.fbot
-	b.mu.Lock()
-	s.loadBotLocked(ctx)
-	if _, ok := b.cards[ix.ID]; ok {
-		b.mu.Unlock()
+	chat := s.larkModule()
+	claimed := false
+	chat.Book(ctx, func(b assistantwire.ChatBook) {
+		if _, ok := b.Card(ix.ID); !ok {
+			b.KeepCard(ix.ID, &botCard{}) // claimed: a second announce of the same card does not post twice
+			claimed = true
+		}
+	})
+	if !claimed {
 		return
 	}
-	s.keepBotCardLocked(ix.ID, &botCard{}) // claimed: a second announce of the same card does not post twice
-	b.mu.Unlock()
 	reply, to, topic := s.interactionPlace(ix)
 	ctx = feishuSendAs(ctx, string(ix.Kind), ix.MachineID, ix.SessionID)
 	fallback := ""
@@ -188,9 +191,7 @@ func (s *Service) postInteractionCard(ctx context.Context, ix proto.Interaction)
 	if s.interactionEnded(ix.ID) {
 		// Answered while its card was being made (a program that answers cards at once): nobody needs to look at it,
 		// so nothing is posted and the claim goes (#5430). One that ends during the post is closed after it, below.
-		b.mu.Lock()
-		s.keepBotCardLocked(ix.ID, nil)
-		b.mu.Unlock()
+		chat.Book(ctx, func(b assistantwire.ChatBook) { b.KeepCard(ix.ID, nil) })
 		return
 	}
 	// A card for a topic is a reply to its run's message and belongs under it: if that message is gone it would be a
@@ -198,7 +199,7 @@ func (s *Service) postInteractionCard(ctx context.Context, ix proto.Interaction)
 	// owner instead, as with a chat that refused it.
 	to.NoDetour = to.ChatID != ""
 	mid, err := s.botPostTo(ctx, to, reply, card, fallback, "")
-	if err != nil && to.ChatID != "" && (chatRefused(err) || feishubot.MessageGone(err)) {
+	if err != nil && to.ChatID != "" && (chatRefused(err) || botcard.MessageGone(err)) {
 		// The topic was refused outright (the group was taken off the owner's list, the bot is not in it, it was
 		// dissolved) or the message to reply under is gone: nothing went out there, and the owner's DM gets the card
 		// instead, as a message of its own (a reply to the topic's message would land in the topic). Any other failure
@@ -209,21 +210,24 @@ func (s *Service) postInteractionCard(ctx context.Context, ix proto.Interaction)
 		mid, err = s.botPostTo(ctx, to, "", card, fallback, "")
 	}
 	ended := s.interactionEnded(ix.ID)
-	b.mu.Lock()
 	if err != nil {
 		s.logf("bots: card for %s: %v", ix.ID, err)
-		s.keepBotCardLocked(ix.ID, nil)
-		b.mu.Unlock()
+		chat.Book(ctx, func(b assistantwire.ChatBook) { b.KeepCard(ix.ID, nil) })
 		return
 	}
-	if _, still := b.cards[ix.ID]; !still || ended { // answered while it was being posted
-		s.keepBotCardLocked(ix.ID, nil)
-		b.mu.Unlock()
+	kept := false
+	chat.Book(ctx, func(b assistantwire.ChatBook) {
+		if _, still := b.Card(ix.ID); !still || ended { // answered while it was being posted
+			b.KeepCard(ix.ID, nil)
+			return
+		}
+		b.KeepCard(ix.ID, &botCard{MessageID: mid, Ix: ix, At: b.Now(), Thread: reply, ChatID: to.ChatID})
+		kept = true
+	})
+	if !kept {
 		s.botCardDone(ctx, mid, ix, i18n.T(s.botLang(ctx), "assistant-feishu_cards.handled"))
 		return
 	}
-	s.keepBotCardLocked(ix.ID, &botCard{MessageID: mid, Ix: ix, At: b.clock(), Thread: reply, ChatID: to.ChatID})
-	b.mu.Unlock()
 	if topic != nil {
 		// The run was asked in a topic and the card went to the DM: the topic is told where it is.
 		s.botNoteTo(ctx, topic.to, topic.reply, i18n.T(s.botLang(ctx), "assistant-feishu_cards.sent_to_dm"))
@@ -237,7 +241,7 @@ func chatRefused(err error) bool {
 	if errors.As(err, &re) && re.Code == CodeChatDenied {
 		return true
 	}
-	return feishubot.ChatRefused(err)
+	return botcard.ChatRefused(err)
 }
 
 // interactionPlace is where the card of ix goes: the message of the run it answers to reply to, and the topic if that
@@ -305,17 +309,12 @@ func (s *Service) botDrives(ctx context.Context, machine, session string) bool {
 			return true
 		}
 	}
-	b := &s.fbot
-	b.mu.Lock()
-	s.loadBotLocked(ctx)
-	cur := b.st.Current
-	for _, t := range b.st.Threads {
-		if t.Target.MachineID == machine && t.Target.SessionID == session && b.clock().Sub(t.At) < 24*time.Hour {
-			b.mu.Unlock()
-			return true
-		}
+	bound := false
+	s.larkModule().Book(ctx, func(b assistantwire.ChatBook) { bound = b.Bound(machine, session, 24*time.Hour) })
+	if bound {
+		return true
 	}
-	b.mu.Unlock()
+	cur := s.larkModule().Route("", "")
 	if session == "" {
 		return false
 	}
@@ -333,15 +332,16 @@ func (s *Service) feishuInteractionDone(ix proto.Interaction, how string) {
 // feishuInteractionEnded is feishuInteractionDone; inChat: the card was taken back because the user wrote in the
 // conversation, so their next words are no late answer to it.
 func (s *Service) feishuInteractionEnded(ix proto.Interaction, how string, inChat bool) {
-	b := &s.fbot
-	b.mu.Lock()
-	s.loadBotLocked(context.Background()) // a card posted before a restart is in the chat's state
-	c, ok := b.cards[ix.ID]
-	s.keepBotCardLocked(ix.ID, nil)
-	if ok && typedAnswerable(c) && !inChat {
-		b.noteEndedLocked(c)
-	}
-	b.mu.Unlock()
+	var c botCard
+	ok := false
+	// A card posted before a restart is in the chat's state, which Book reads first.
+	s.larkModule().Book(context.Background(), func(b assistantwire.ChatBook) {
+		c, ok = b.Card(ix.ID)
+		b.KeepCard(ix.ID, nil)
+		if ok && !inChat {
+			b.NoteEnded(c) // a question a plain message could have answered: an option typed for it late is no new message
+		}
+	})
 	if !ok || c.MessageID == "" {
 		return
 	}
@@ -369,29 +369,31 @@ type detachedCard struct {
 // feishuDetach: the cards ids are about to end because their node went away. Their Feishu cards say "Ended" as any
 // ended card's, and are kept for resumeGrace in case the same card comes back (#4583).
 func (s *Service) feishuDetach(ids []string) {
-	b := &s.fbot
-	b.mu.Lock()
-	now := b.clock()
-	for id, d := range b.detached {
-		if now.Sub(d.at) > resumeGrace {
-			delete(b.detached, id)
-		}
-	}
+	dc := &s.fdetached
+	dc.mu.Lock()
 	var closing []detachedCard
-	for _, id := range ids {
-		c, ok := b.cards[id]
-		if !ok || c.MessageID == "" {
-			continue
+	s.larkModule().Book(context.Background(), func(b assistantwire.ChatBook) {
+		now := b.Now()
+		for id, d := range dc.cards {
+			if now.Sub(d.at) > resumeGrace {
+				delete(dc.cards, id)
+			}
 		}
-		s.keepBotCardLocked(id, nil) // closed here, not again by feishuInteractionDone
-		if b.detached == nil {
-			b.detached = map[string]detachedCard{}
+		for _, id := range ids {
+			c, ok := b.Card(id)
+			if !ok || c.MessageID == "" {
+				continue
+			}
+			b.KeepCard(id, nil) // closed here, not again by feishuInteractionDone
+			if dc.cards == nil {
+				dc.cards = map[string]detachedCard{}
+			}
+			d := detachedCard{card: c, at: now, closed: make(chan struct{})}
+			dc.cards[id] = d
+			closing = append(closing, d)
 		}
-		d := detachedCard{card: c, at: now, closed: make(chan struct{})}
-		b.detached[id] = d
-		closing = append(closing, d)
-	}
-	b.mu.Unlock()
+	})
+	dc.mu.Unlock()
 	for _, d := range closing {
 		go func() {
 			defer close(d.closed)
@@ -406,18 +408,24 @@ func (s *Service) feishuDetach(ids []string) {
 // closed when the node went away, asks it again, in the same message and without a new one. A card that did not come
 // back (answered, moved on, away past resumeGrace) stays closed.
 func (s *Service) feishuCardBack(ix proto.Interaction) {
-	b := &s.fbot
-	b.mu.Lock()
-	d, ok := b.detached[ix.ID]
-	delete(b.detached, ix.ID)
-	_, posted := b.cards[ix.ID]
-	if !ok || posted || b.clock().Sub(d.at) > resumeGrace {
-		b.mu.Unlock()
+	chat := s.larkModule()
+	dc := &s.fdetached
+	dc.mu.Lock()
+	d, ok := dc.cards[ix.ID]
+	delete(dc.cards, ix.ID)
+	back := false
+	chat.Book(context.Background(), func(b assistantwire.ChatBook) {
+		if _, posted := b.Card(ix.ID); !ok || posted || b.Now().Sub(d.at) > resumeGrace {
+			return
+		}
+		b.KeepCard(ix.ID, &botCard{MessageID: d.card.MessageID, Thread: d.card.Thread, ChatID: d.card.ChatID, Ix: ix, At: b.Now(),
+			NudgedAt: d.card.NudgedAt, SkippedAt: d.card.SkippedAt, Tries: d.card.Tries, TriedAt: d.card.TriedAt})
+		back = true
+	})
+	dc.mu.Unlock()
+	if !back {
 		return
 	}
-	s.keepBotCardLocked(ix.ID, &botCard{MessageID: d.card.MessageID, Thread: d.card.Thread, ChatID: d.card.ChatID, Ix: ix, At: b.clock(),
-		NudgedAt: d.card.NudgedAt, SkippedAt: d.card.SkippedAt, Tries: d.card.Tries, TriedAt: d.card.TriedAt})
-	b.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	select {
@@ -427,20 +435,17 @@ func (s *Service) feishuCardBack(ix proto.Interaction) {
 	}
 	if err := s.botUpdateCard(ctx, d.card.MessageID, s.interactionCard(ctx, ix)); err != nil {
 		s.logf("bots: reopen card %s: %v", ix.ID, err)
-		b.mu.Lock()
-		if c, still := b.cards[ix.ID]; still && c.MessageID == d.card.MessageID {
-			s.keepBotCardLocked(ix.ID, nil)
-		}
-		b.mu.Unlock()
+		chat.Book(ctx, func(b assistantwire.ChatBook) {
+			if c, still := b.Card(ix.ID); still && c.MessageID == d.card.MessageID {
+				b.KeepCard(ix.ID, nil)
+			}
+		})
 		return
 	}
-	b.mu.Lock()
-	_, still := b.cards[ix.ID]
-	b.mu.Unlock()
+	still := false
+	chat.Book(ctx, func(b assistantwire.ChatBook) { _, still = b.Card(ix.ID) })
 	if _, pending := s.pendingIx(ix.ID); !still || !pending { // answered or ended meanwhile: it says so again
-		b.mu.Lock()
-		s.keepBotCardLocked(ix.ID, nil)
-		b.mu.Unlock()
+		chat.Book(ctx, func(b assistantwire.ChatBook) { b.KeepCard(ix.ID, nil) })
 		s.botCardDone(ctx, d.card.MessageID, ix, i18n.T(s.botLang(ctx), "assistant-feishu_cards.handled"))
 	}
 }
@@ -538,11 +543,11 @@ func answerText(l i18n.Lang, ix proto.Interaction, r proto.Resolution) string {
 }
 
 // interactionCard is the card asking ix, with the app's choices.
-func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *feishubot.Card {
+func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *botcard.Card {
 	l := s.botLang(ctx)
 	place, secondary := s.feishuAgentPlace(ctx, ix)
 	place = s.ixTaskPlace(ctx, ix, place)
-	where := feishubot.EscapeMarkdown(place)
+	where := botcard.EscapeMarkdown(place)
 	val := func(extra map[string]any) map[string]any {
 		v := map[string]any{"a": "ix", "id": ix.ID}
 		for k, x := range extra {
@@ -552,15 +557,15 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 	}
 	open := s.openButton(ctx, ix.MachineID, ix.SessionID)
 	// The "more" menu every card ends its row of actions with: dismissing it where it can be, and its conversation.
-	menu := func(dismiss bool) feishubot.Button {
-		var items []feishubot.MenuItem
+	menu := func(dismiss bool) botcard.Button {
+		var items []botcard.MenuItem
 		if dismiss {
-			items = append(items, feishubot.MenuItem{Label: i18n.T(l, "assistant-feishu_cards.dismiss"), Value: map[string]any{"dismiss": "1"}})
+			items = append(items, botcard.MenuItem{Label: i18n.T(l, "assistant-feishu_cards.dismiss"), Value: map[string]any{"dismiss": "1"}})
 		}
 		if label, web := s.openLink(ctx, ix.MachineID, ix.SessionID); web != "" {
-			items = append(items, feishubot.MenuItem{Label: label, URL: web, PC: feishubot.SidebarURL(web)})
+			items = append(items, botcard.MenuItem{Label: label, URL: web, PC: botcard.SidebarURL(web)})
 		}
-		return feishubot.Overflow(val(nil), items...)
+		return botcard.Overflow(val(nil), items...)
 	}
 	switch ix.Kind {
 	case proto.IxQuestion:
@@ -568,18 +573,18 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 		if len(ix.Questions) == 1 && !ix.Questions[0].MultiSelect && len(ix.Questions[0].Options) <= 4 {
 			q := ix.Questions[0]
 			c.Markdown(questionText(l, q))
-			var bs []feishubot.Button
-			submit := feishubot.Primary // the card's one primary: the recommended option, else the written answer
+			var bs []botcard.Button
+			submit := botcard.Primary // the card's one primary: the recommended option, else the written answer
 			for _, o := range q.Options {
-				style := feishubot.Default
+				style := botcard.Default
 				if o.Label == q.Recommend { // what the asker recommends is the one to press
-					style, submit = feishubot.Primary, feishubot.Default
+					style, submit = botcard.Primary, botcard.Default
 				}
-				bs = append(bs, feishubot.Btn(clip(o.Label, 30), style, val(map[string]any{"q": "0", "v": o.Label})))
+				bs = append(bs, botcard.Btn(clip(o.Label, 30), style, val(map[string]any{"q": "0", "v": o.Label})))
 			}
 			c.Buttons(append(bs, menu(true))...)
-			c.Form("other", []any{feishubot.Input("text", "", i18n.T(l, "assistant-feishu_cards.or_write_answer"), false)},
-				feishubot.Submit(i18n.T(l, "assistant-feishu_cards.answer"), submit, "q_submit", val(map[string]any{"q": "0", "free": "1"})))
+			c.Form("other", []any{botcard.Input("text", "", i18n.T(l, "assistant-feishu_cards.or_write_answer"), false)},
+				botcard.Submit(i18n.T(l, "assistant-feishu_cards.answer"), submit, "q_submit", val(map[string]any{"q": "0", "free": "1"})))
 			if len(q.Options) > 0 {
 				c.Note(i18n.T(l, "assistant-feishu_cards.answer_by_text"))
 			}
@@ -589,26 +594,26 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 			// sent: that many questions are answered in the app.
 			c.Note(i18n.T(l, "assistant-feishu_cards.questions_in_app", i18n.Args{"count": len(ix.Questions)}))
 			if open != nil {
-				open["type"] = feishubot.Primary
+				open["type"] = botcard.Primary
 			}
 			return safeCard(l, c.Buttons(open, menu(true)), open)
 		} else {
 			var fields []any
 			for i, q := range ix.Questions {
-				fields = append(fields, feishubot.MarkdownBlock(questionText(l, q)))
-				var opts []feishubot.Option
+				fields = append(fields, botcard.MarkdownBlock(questionText(l, q)))
+				var opts []botcard.Option
 				for j, o := range q.Options {
 					if j >= maxFormOptions {
 						break
 					}
-					opts = append(opts, feishubot.Option{Label: clip(o.Label, 60), Value: o.Label})
+					opts = append(opts, botcard.Option{Label: clip(o.Label, 60), Value: o.Label})
 				}
 				if len(opts) > 0 {
-					fields = append(fields, feishubot.Select("q"+strconv.Itoa(i), map[bool]string{false: i18n.T(l, "assistant-feishu_cards.pick_one"), true: i18n.T(l, "assistant-feishu_cards.pick_some")}[q.MultiSelect], opts, q.MultiSelect))
+					fields = append(fields, botcard.Select("q"+strconv.Itoa(i), map[bool]string{false: i18n.T(l, "assistant-feishu_cards.pick_one"), true: i18n.T(l, "assistant-feishu_cards.pick_some")}[q.MultiSelect], opts, q.MultiSelect))
 				}
-				fields = append(fields, feishubot.Input("t"+strconv.Itoa(i), "", i18n.T(l, "assistant-feishu_cards.or_write"), false))
+				fields = append(fields, botcard.Input("t"+strconv.Itoa(i), "", i18n.T(l, "assistant-feishu_cards.or_write"), false))
 			}
-			c.Form("answers", fields, feishubot.Submit(i18n.T(l, "assistant-feishu_cards.submit"), feishubot.Primary, "qs_submit", val(map[string]any{"form": "1"})))
+			c.Form("answers", fields, botcard.Submit(i18n.T(l, "assistant-feishu_cards.submit"), botcard.Primary, "qs_submit", val(map[string]any{"form": "1"})))
 			// A form of one question with options also takes a plain reply; a form of several is submitted as one (a
 			// reply is not split over its questions), and a free-text question has no options.
 			if len(ix.Questions) == 1 && len(ix.Questions[0].Options) > 0 {
@@ -618,23 +623,23 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 		return safeCard(l, c.Buttons(menu(true)), open)
 	case proto.IxPlan:
 		c := s.ixCard(ctx, ix, "assistant-feishu_cards.tag_plan", i18n.T(l, "assistant-feishu_cards.plan_summary"))
-		c.Markdown(feishubot.CardMarkdown(clipPlan(ix.Plan, i18n.T(l, "assistant-feishu_cards.plan_clipped"))))
+		c.Markdown(botcard.CardMarkdown(clipPlan(ix.Plan, i18n.T(l, "assistant-feishu_cards.plan_clipped"))))
 		// Approving to run on its own lets the agent go on without asking: Feishu's dialog asks first.
 		c.Buttons(
-			feishubot.Confirm(feishubot.Btn(i18n.T(l, "assistant-feishu_cards.approve_run"), feishubot.Primary, val(map[string]any{"approve": "1", "mode": "bypassPermissions"})),
+			botcard.Confirm(botcard.Btn(i18n.T(l, "assistant-feishu_cards.approve_run"), botcard.Primary, val(map[string]any{"approve": "1", "mode": "bypassPermissions"})),
 				i18n.T(l, "assistant-feishu_cards.confirm_run_title"), i18n.T(l, "assistant-feishu_cards.confirm_run_text")),
-			feishubot.Btn(i18n.T(l, "assistant-feishu_cards.approve_edits"), feishubot.Default, val(map[string]any{"approve": "1", "mode": "acceptEdits"})),
+			botcard.Btn(i18n.T(l, "assistant-feishu_cards.approve_edits"), botcard.Default, val(map[string]any{"approve": "1", "mode": "acceptEdits"})),
 			menu(false),
 		)
-		c.Form("reject", []any{feishubot.Input("feedback", "", i18n.T(l, "assistant-feishu_cards.feedback_placeholder"), true)},
-			feishubot.Submit(i18n.T(l, "assistant-feishu_cards.send_back"), feishubot.Danger, "plan_reject", val(map[string]any{"approve": "0"})))
+		c.Form("reject", []any{botcard.Input("feedback", "", i18n.T(l, "assistant-feishu_cards.feedback_placeholder"), true)},
+			botcard.Submit(i18n.T(l, "assistant-feishu_cards.send_back"), botcard.Danger, "plan_reject", val(map[string]any{"approve": "0"})))
 		return safeCard(l, c, open)
 	case proto.IxPermission:
 		c := s.ixCard(ctx, ix, "assistant-feishu_cards.tag_permission", i18n.T(l, "assistant-feishu_cards.permission_summary", i18n.Args{"tool": ixToolName(ix)}))
 		var b strings.Builder
-		fmt.Fprintf(&b, "**%s**", feishubot.EscapeMarkdown(ixToolName(ix)))
+		fmt.Fprintf(&b, "**%s**", botcard.EscapeMarkdown(ixToolName(ix)))
 		if ix.Reason != "" {
-			fmt.Fprintf(&b, "\n%s", feishubot.EscapeMarkdown(clip(ix.Reason, maxPermissionReason)))
+			fmt.Fprintf(&b, "\n%s", botcard.EscapeMarkdown(clip(ix.Reason, maxPermissionReason)))
 		}
 		c.Markdown(b.String())
 		if sum := strings.TrimSpace(ix.Summary); sum != "" {
@@ -648,20 +653,20 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 		if ix.CanClarify && !ix.Private {
 			// Question-only form: no Resolution.Values, Allow or Deny travels with
 			// it. Field-bearing cards keep their fields App-only but may still ask.
-			c.Form("clarify", []any{feishubot.Input("question", "", i18n.T(l, "assistant-feishu_cards.question_placeholder"), false)},
-				feishubot.Submit(i18n.T(l, "assistant-feishu_cards.have_question"), feishubot.Default, "permission_clarify", val(map[string]any{"clarify": "1"})))
+			c.Form("clarify", []any{botcard.Input("question", "", i18n.T(l, "assistant-feishu_cards.question_placeholder"), false)},
+				botcard.Submit(i18n.T(l, "assistant-feishu_cards.have_question"), botcard.Default, "permission_clarify", val(map[string]any{"clarify": "1"})))
 		}
 		if len(ix.Fields) > 0 {
 			// A password or a code is typed in the app, never in a chat.
 			c.Note(i18n.T(l, "assistant-feishu_cards.fields_in_app"))
 			if open != nil {
-				open["type"] = feishubot.Primary
+				open["type"] = botcard.Primary
 			}
 			return safeCard(l, c.Buttons(open), open)
 		}
-		bs := []feishubot.Button{
-			feishubot.Btn(i18n.T(l, "assistant-feishu_cards.allow"), feishubot.Primary, val(map[string]any{"allow": "1"})),
-			feishubot.Btn(i18n.T(l, "assistant-feishu_cards.deny"), feishubot.Danger, val(map[string]any{"allow": "0"})),
+		bs := []botcard.Button{
+			botcard.Btn(i18n.T(l, "assistant-feishu_cards.allow"), botcard.Primary, val(map[string]any{"allow": "1"})),
+			botcard.Btn(i18n.T(l, "assistant-feishu_cards.deny"), botcard.Danger, val(map[string]any{"allow": "0"})),
 		}
 		// As the app's card (InteractionViews.swift's BUIPermissionForm, web's PermissionCard): Always allow for this session for
 		// Claude on a conversation, and for another agent only what it says that always allows — a runtime cannot keep
@@ -678,7 +683,7 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 		}
 		if label != "" {
 			// A permission that stays for the session asks first.
-			bs = append(bs, feishubot.Confirm(feishubot.Btn(clip(label, 20), feishubot.Default, val(map[string]any{"allow": "1", "always": "1"})),
+			bs = append(bs, botcard.Confirm(botcard.Btn(clip(label, 20), botcard.Default, val(map[string]any{"allow": "1", "always": "1"})),
 				i18n.T(l, "assistant-feishu_cards.confirm_always_title"), i18n.T(l, "assistant-feishu_cards.confirm_always_text")))
 		}
 		return safeCard(l, c.Buttons(append(bs, menu(false))...), open)
@@ -696,8 +701,8 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 			if r := []rune(q); len(r) > maxDialogRunes {
 				q = string(r[:maxDialogRunes]) + i18n.T(l, "assistant-feishu_cards.clipped")
 			}
-			c.Markdown(feishubot.EscapeMarkdown(q))
-			var bs []feishubot.Button
+			c.Markdown(botcard.EscapeMarkdown(q))
+			var bs []botcard.Button
 			for _, o := range d.Options {
 				if o.Kind == "type_something" || o.Kind == "chat" {
 					continue
@@ -705,7 +710,7 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 				if len(bs) >= maxDialogOptions {
 					break
 				}
-				bs = append(bs, feishubot.Btn(clip(o.Label, 30), feishubot.Default, val(map[string]any{"opt": o.Key})))
+				bs = append(bs, botcard.Btn(clip(o.Label, 30), botcard.Default, val(map[string]any{"opt": o.Key})))
 			}
 			c.Buttons(append(bs, menu(false))...)
 		} else {
@@ -725,16 +730,16 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 			}
 			c.Markdown("```\n" + strings.ReplaceAll(screen, "```", "'''") + "\n```")
 			c.Buttons(
-				feishubot.Btn(i18n.T(l, "assistant-feishu_cards.enter"), feishubot.Default, val(map[string]any{"keys": "enter"})),
-				feishubot.Btn("Esc", feishubot.Default, val(map[string]any{"keys": "esc"})),
-				feishubot.Btn("1", feishubot.Default, val(map[string]any{"keys": "1"})),
-				feishubot.Btn("2", feishubot.Default, val(map[string]any{"keys": "2"})),
+				botcard.Btn(i18n.T(l, "assistant-feishu_cards.enter"), botcard.Default, val(map[string]any{"keys": "enter"})),
+				botcard.Btn("Esc", botcard.Default, val(map[string]any{"keys": "esc"})),
+				botcard.Btn("1", botcard.Default, val(map[string]any{"keys": "1"})),
+				botcard.Btn("2", botcard.Default, val(map[string]any{"keys": "2"})),
 				menu(false),
 			)
 		}
 		if !ix.Secret {
-			c.Form("type", []any{feishubot.Input("text", "", i18n.T(l, "assistant-feishu_cards.type_placeholder"), false)},
-				feishubot.Submit(i18n.T(l, "assistant-feishu_cards.send"), feishubot.Primary, "screen_text", val(map[string]any{"typed": "1"})))
+			c.Form("type", []any{botcard.Input("text", "", i18n.T(l, "assistant-feishu_cards.type_placeholder"), false)},
+				botcard.Submit(i18n.T(l, "assistant-feishu_cards.send"), botcard.Primary, "screen_text", val(map[string]any{"typed": "1"})))
 		} else {
 			c.Note(i18n.T(l, "assistant-feishu_cards.secret_in_app"))
 		}
@@ -742,7 +747,7 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 	case proto.IxElicitation:
 		return safeCard(l, s.elicitationCard(ctx, ix, open, menu(false)), open)
 	}
-	return safeCard(l, feishubot.NewCard(where, feishubot.Grey, "").Subtitle(secondary).Buttons(open), open)
+	return safeCard(l, botcard.NewCard(where, botcard.Grey, "").Subtitle(secondary).Buttons(open), open)
 }
 
 // clipPlan is a plan longer than maxPlanRunes cut to its first channel.Split piece, then note. The piece ends at a line
@@ -760,7 +765,7 @@ func clipPlan(plan, note string) string {
 
 // safeCard returns c, or, when it would still be too big for Feishu after the clipping above, a short card that sends
 // the owner to the app (with the open button, if any).
-func safeCard(l i18n.Lang, c *feishubot.Card, open feishubot.Button) *feishubot.Card {
+func safeCard(l i18n.Lang, c *botcard.Card, open botcard.Button) *botcard.Card {
 	if len(c.JSON()) <= maxCardJSONBytes {
 		return c
 	}
@@ -768,7 +773,7 @@ func safeCard(l i18n.Lang, c *feishubot.Card, open feishubot.Button) *feishubot.
 	if c.Header != nil {
 		title = c.Header.Title.Content
 	}
-	fallback := feishubot.NewCard(title, feishubot.Orange, "")
+	fallback := botcard.NewCard(title, botcard.Orange, "")
 	fallback.Note(i18n.T(l, "assistant-feishu_cards.too_long_in_app"))
 	if len(open) > 0 {
 		fallback.Buttons(open)
@@ -796,7 +801,7 @@ var elicitationURLRe = lazyre.New(`(?i)^https?://[^/\\?#@]`)
 
 // elicitationCard is an MCP server asking to authorize (a link) or to fill in a form: what it asks on the card, its
 // link as a button; a form is filled in the app (its values may be secrets), so only its fields' names are shown.
-func (s *Service) elicitationCard(ctx context.Context, ix proto.Interaction, open, menu feishubot.Button) *feishubot.Card {
+func (s *Service) elicitationCard(ctx context.Context, ix proto.Interaction, open, menu botcard.Button) *botcard.Card {
 	l := s.botLang(ctx)
 	var msg, link, host string
 	var fields []string
@@ -821,14 +826,14 @@ func (s *Service) elicitationCard(ctx context.Context, ix proto.Interaction, ope
 	c := s.ixCard(ctx, ix, "assistant-feishu_cards.tag_elicitation",
 		i18n.T(l, "assistant-feishu_cards.elicitation_summary", i18n.Args{"message": clip(oneLine(msg), 60)}))
 	if msg != "" {
-		c.Markdown(feishubot.EscapeMarkdown(clip(msg, 2000)))
+		c.Markdown(botcard.EscapeMarkdown(clip(msg, 2000)))
 	}
 	if link != "" {
 		// The host on its own line: the link's text could look like another site's (as the apps show it).
-		c.Markdown(i18n.T(l, "assistant-feishu_cards.elicitation_host", i18n.Args{"host": feishubot.Code(host)}))
+		c.Markdown(i18n.T(l, "assistant-feishu_cards.elicitation_host", i18n.Args{"host": botcard.Code(host)}))
 		c.Note(i18n.T(l, "assistant-feishu_cards.elicitation_confirm_in_app"))
-		authorize := feishubot.LinkBtn(i18n.T(l, "assistant-feishu_cards.elicitation_open"), link)
-		authorize["type"] = feishubot.Primary
+		authorize := botcard.LinkBtn(i18n.T(l, "assistant-feishu_cards.elicitation_open"), link)
+		authorize["type"] = botcard.Primary
 		return c.Buttons(authorize, menu)
 	}
 	if len(fields) > 0 {
@@ -836,7 +841,7 @@ func (s *Service) elicitationCard(ctx context.Context, ix proto.Interaction, ope
 	}
 	c.Note(i18n.T(l, "assistant-feishu_cards.elicitation_in_app"))
 	if open != nil {
-		open["type"] = feishubot.Primary
+		open["type"] = botcard.Primary
 	}
 	return c.Buttons(open)
 }
@@ -851,9 +856,9 @@ func firstQuestion(ix proto.Interaction) string {
 func questionText(l i18n.Lang, q proto.Question) string {
 	s := ""
 	if q.Header != "" {
-		s = "**" + feishubot.EscapeMarkdown(clip(q.Header, 60)) + "**\n"
+		s = "**" + botcard.EscapeMarkdown(clip(q.Header, 60)) + "**\n"
 	}
-	s += feishubot.EscapeMarkdown(clip(q.Question, maxQuestionRunes))
+	s += botcard.EscapeMarkdown(clip(q.Question, maxQuestionRunes))
 	descBudget := maxOptionDescBudget
 	clippedOptions := 0
 	for i, o := range q.Options {
@@ -867,7 +872,7 @@ func questionText(l i18n.Lang, q proto.Question) string {
 				desc = clip(desc, descBudget)
 			}
 			descBudget -= len([]rune(desc))
-			s += "\n- " + feishubot.EscapeMarkdown(clip(o.Label, 40)) + "：" + feishubot.EscapeMarkdown(desc)
+			s += "\n- " + botcard.EscapeMarkdown(clip(o.Label, 40)) + "：" + botcard.EscapeMarkdown(desc)
 		}
 	}
 	if clippedOptions > 0 {
@@ -907,19 +912,19 @@ func dotJoin(parts ...string) string {
 }
 
 // ixCard starts the card asking ix: who asks in the header, orange (the owner is to act), its kind as a tag.
-func (s *Service) ixCard(ctx context.Context, ix proto.Interaction, kind, summary string) *feishubot.Card {
+func (s *Service) ixCard(ctx context.Context, ix proto.Interaction, kind, summary string) *botcard.Card {
 	title, sub := s.ixWho(ctx, ix)
-	return feishubot.NewCard(title, feishubot.Orange, summary).Subtitle(sub).Tag(i18n.T(s.botLang(ctx), kind), feishubot.Orange)
+	return botcard.NewCard(title, botcard.Orange, summary).Subtitle(sub).Tag(i18n.T(s.botLang(ctx), kind), botcard.Orange)
 }
 
 // answeredCard is an interaction's card once it is over: grey and small, what it asked in a line and how it ended,
 // its conversation's page as a link in small text; no buttons.
-func (s *Service) answeredCard(ctx context.Context, ix proto.Interaction, how string) *feishubot.Card {
+func (s *Service) answeredCard(ctx context.Context, ix proto.Interaction, how string) *botcard.Card {
 	l := s.botLang(ctx)
 	title, sub := s.ixWho(ctx, ix)
-	c := feishubot.NewCard(title, feishubot.Grey, how).Subtitle(sub)
+	c := botcard.NewCard(title, botcard.Grey, how).Subtitle(sub)
 	if kind := ixKindTags[ix.Kind]; kind != "" {
-		c.Tag(i18n.T(l, kind), feishubot.Neutral)
+		c.Tag(i18n.T(l, kind), botcard.Neutral)
 	}
 	var asked []string
 	switch ix.Kind {
@@ -931,24 +936,24 @@ func (s *Service) answeredCard(ctx context.Context, ix proto.Interaction, how st
 			qs = qs[:maxAnsweredQuestions]
 		}
 		for _, q := range qs {
-			asked = append(asked, feishubot.EscapeMarkdown(clip(oneLine(q.Question), maxAnsweredQRunes)))
+			asked = append(asked, botcard.EscapeMarkdown(clip(oneLine(q.Question), maxAnsweredQRunes)))
 		}
 		if more > 0 {
 			asked = append(asked, strings.TrimSpace(i18n.T(l, "assistant-feishu_cards.clipped")))
 		}
 	case proto.IxPermission:
-		asked = append(asked, feishubot.EscapeMarkdown(ixToolName(ix)+" "+clip(oneLine(ix.Summary), 200)))
+		asked = append(asked, botcard.EscapeMarkdown(ixToolName(ix)+" "+clip(oneLine(ix.Summary), 200)))
 	case proto.IxPlan:
-		asked = append(asked, feishubot.EscapeMarkdown(clip(planTitle(ix.Plan), 200)))
+		asked = append(asked, botcard.EscapeMarkdown(clip(planTitle(ix.Plan), 200)))
 	}
 	if len(asked) > 0 {
 		c.Markdown("<font color='grey'>" + strings.Join(asked, "\n") + "</font>")
 	}
-	c.Markdown("**✓ " + feishubot.EscapeMarkdown(how) + "**")
+	c.Markdown("**✓ " + botcard.EscapeMarkdown(how) + "**")
 	// The conversation's page rides on the card as a link, and the button on safeCard's short card, which takes its
 	// place when this one would exceed Feishu's size budget.
 	if label, web := s.openLink(ctx, ix.MachineID, ix.SessionID); web != "" && boardLinkOK(web) {
-		c.Meta("[" + feishubot.EscapeMarkdown(label) + "](" + web + ")")
+		c.Meta("[" + botcard.EscapeMarkdown(label) + "](" + web + ")")
 	}
 	return safeCard(l, c, s.openButton(ctx, ix.MachineID, ix.SessionID))
 }
@@ -995,7 +1000,7 @@ func (s *Service) ixTask(ctx context.Context, ix proto.Interaction) (label strin
 // openButton opens the conversation in the web app the hub serves; nil (Card.Buttons leaves it out) when the hub has
 // no http(s) address for it. Card links are documented for http(s) and AppLink
 // only: a persona:// link (the iPhone app) might get the whole card refused, so it is not used.
-func (s *Service) openButton(ctx context.Context, machine, session string) feishubot.Button {
+func (s *Service) openButton(ctx context.Context, machine, session string) botcard.Button {
 	_, web := s.openLink(ctx, machine, session)
 	return s.openLinkButton(ctx, web)
 }
@@ -1003,7 +1008,7 @@ func (s *Service) openButton(ctx context.Context, machine, session string) feish
 // openLink is the conversation's page in the web app the hub serves (the app's home without a conversation) and what
 // a link to it says; "" when the hub has no http(s) address for it.
 func (s *Service) openLink(ctx context.Context, machine, session string) (label, web string) {
-	st, _ := s.feishuStatusKept(ctx)
+	st, _ := s.larkModule().StatusKept(ctx)
 	web = strings.TrimRight(st.PublicURL, "/")
 	if session != "" {
 		web = sessionLink(web, machine, session, s.isAssistantConversation(ctx, machine, session))
@@ -1018,27 +1023,27 @@ func (s *Service) openLink(ctx context.Context, machine, session string) (label,
 // openLinkButton is the button that opens a page of the web app already built (sessionLink, todoLink), named by what
 // it opens and opened in Feishu's sidebar on the desktop; nil for an empty or non-http(s) one, so a card never
 // carries a dead empty link (#4073).
-func (s *Service) openLinkButton(ctx context.Context, web string) feishubot.Button {
+func (s *Service) openLinkButton(ctx context.Context, web string) botcard.Button {
 	u, err := url.Parse(web)
 	if web == "" || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil
 	}
-	return feishubot.PageBtn(s.linkNamer(ctx)(u), web)
+	return botcard.PageBtn(s.linkNamer(ctx)(u), web)
 }
 
 // safeLinkButton is a labeled open_url button for web, nil when web is empty or not http(s) with a host: card links
 // are documented for http(s) only, so a dirty address (no scheme, empty host) never becomes a dead button.
-func safeLinkButton(label, web string) feishubot.Button {
+func safeLinkButton(label, web string) botcard.Button {
 	if u, err := url.Parse(web); web == "" || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil
 	}
-	return feishubot.LinkBtn(label, web)
+	return botcard.LinkBtn(label, web)
 }
 
-// linkNamer names a link's button by what it opens (feishubot.RenderAnswerWith): a page of the hub's web app by the
+// linkNamer names a link's button by what it opens (botcard.RenderAnswerWith): a page of the hub's web app by the
 // page, a Feishu document as one, any other site by its name.
 func (s *Service) linkNamer(ctx context.Context) func(*url.URL) string {
-	st, _ := s.feishuStatusKept(ctx)
+	st, _ := s.larkModule().StatusKept(ctx)
 	return linkNamer(s.botLang(ctx), st.PublicURL)
 }
 
@@ -1138,4 +1143,17 @@ func jsonStrings(raw string) []string {
 	}
 	walk(v)
 	return out
+}
+
+// pendingQuestion is one line saying what a pending interaction waits for; "" when it says nothing.
+func pendingQuestion(ix proto.Interaction) string {
+	switch ix.Kind {
+	case proto.IxQuestion:
+		return strings.TrimSpace(questionSummary(ix))
+	case proto.IxPlan:
+		return strings.TrimSpace(planTitle(ix.Plan))
+	case proto.IxPermission:
+		return strings.TrimSpace(ixToolName(ix) + " " + oneLine(ix.Summary))
+	}
+	return strings.TrimSpace(oneLine(ix.Summary))
 }

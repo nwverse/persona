@@ -422,12 +422,20 @@ export interface Session {
   /** Newest running workflow, compact metadata only (no agents, phases or tools). */
   workflow_progress?: Workflow;
   parent_session_id?: string;
+  /** Parent session's machine ID when a subagent runs on another computer (empty = same machine). */
+  parent_machine_id?: string;
   root_session_id?: string;
   is_subagent?: boolean;
   /** The listed session this child folds under (an Agent another Agent started: a Codex subagent, an Agent a Paseo Agent
-   *  created), set by the hub's manager (docs/protocol/protocol.md "Session hierarchy", #5120): the web never lists or
-   *  counts it on its own, and draws it as a card in that session's chat. */
+   *  created, or an A2A subagent), set by the hub's manager (docs/protocol/protocol.md "Session hierarchy", #5120): the
+   *  web never lists or counts it on its own, and draws it under that session. */
   folded_under?: string;
+  /** Machine ID of `folded_under` when folded across computers (empty = same machine). */
+  folded_under_machine_id?: string;
+  /** A2A task ID that launched this subagent, if any. */
+  a2a_task_id?: string;
+  /** How this subagent session was created (`"a2a" | "dispatch" | "spawned" | "runtime"`). */
+  subagent_origin?: string;
   /** The session on the same machine this one is drawn under while staying a session of its own (#5935): a Claude
    *  desktop app's side chat, /btw question or spawned session names the one it was started from. Unlike `folded_under`
    *  it folds nothing away: the row keeps its state and counts and only moves under its parent, a level in
@@ -911,6 +919,7 @@ export interface Interaction {
   cwd?: string;
   kind: "question" | "plan" | "permission" | "screen" | "elicitation";
   created_at?: string;
+  expires_at?: string;
   tool_name?: string;
   questions?: Question[];
   plan?: string;
@@ -962,6 +971,8 @@ export interface Interaction {
   agent_type?: string;
   /** The session the card's session folds under (Session.folded_under, #5120): the card's home is that session's page. */
   folded_under?: string;
+  /** Machine ID of `folded_under` when the card's session folds under a parent on another computer (empty = same machine). */
+  folded_under_machine_id?: string;
   /** Session.folded_as of the card's session (#5180): `"worker"` when a lead's worker asks, `"side"` when a side
    *  session does (#7944). */
   folded_as?: "worker" | "side";
@@ -1057,6 +1068,8 @@ export interface AssistantInfo {
   leaders?: string[];
   /** "Fold background rounds" in effect (#4314, docs/assistant/assistant.md "Background rounds"); absent from an older hub, which means on. */
   main_background_folded?: boolean;
+  /** Opt-in to fold routine relay replies and skip their finished notification in the main conversation. */
+  fold_routine_relay_replies?: boolean;
   /** "Show scheduled task chats" in the sidebar's Recent (#8324, lib/recent-task-chats.ts): one value on the hub for all
    *  of the user's devices, off by default; absent from an older hub (no switch, and Recent leaves them out). */
   recent_task_chats?: boolean;
@@ -1071,6 +1084,10 @@ export interface AssistantInfo {
   /** The background supervisor's conversation (#4927, lib/background-supervisor.ts): its session id once the hub made
    *  it; absent before that and from an older hub. Read-only. */
   background_supervisor?: string;
+  /** Unified experimental To-dos & Tasks Labs toggle (#14538, #14584); off by default and absent from older hubs. */
+  todos_v2?: boolean;
+  /** Unified experimental Integrations & Extensions Labs toggle (#14802, #14805); off by default and absent from older hubs. */
+  integrations_v2?: boolean;
   conversations: Session[];
 }
 

@@ -14,8 +14,8 @@ import (
 
 	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -87,6 +87,7 @@ func TestWebClarifyRouteKeepsPrivateCardInItsPrivateConversation(t *testing.T) {
 }
 
 func TestFeishuClarifyRequiresFreshCardBoundOwnerActionAndRoutesAnswerHome(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	ft := newFleetTestNoStore(t)
 	preparedTestConversation(ft)
 	done := startPreparedTest(t, ft, "ix_lark_question", "", nil)
@@ -107,14 +108,14 @@ func TestFeishuClarifyRequiresFreshCardBoundOwnerActionAndRoutesAnswerHome(t *te
 		used[action] = true
 		return map[string]any{}, nil
 	})
-	press := func(token, action, question string) *feishubot.CardResponse {
-		var a feishubot.CardAction
+	press := func(token, action, question string) *botcard.CardResponse {
+		var a botcard.CardAction
 		a.Token = token
 		a.Action.Value = map[string]any{"a": "ix", "id": "ix_lark_question", "clarify": "1"}
 		a.Action.FormValue = map[string]any{"question": question, "password": "must-not-travel"}
 		a.Context.ChatID = "oc_owner_private"
 		a.Context.MessageID = "om_original_card"
-		return ft.s.botCardAction(context.Background(), &a, action)
+		return ft.s.larkModule().Action(context.Background(), &a, action)
 	}
 	res := press("callback-token-1", "owner-action-1", "  Why this change?  ")
 	if res == nil || res.Toast == nil || res.Card != nil || res.Toast.Type != "success" {
@@ -164,6 +165,7 @@ func TestFeishuClarifyRequiresFreshCardBoundOwnerActionAndRoutesAnswerHome(t *te
 }
 
 func TestFeishuTokenlessCallbacksDoNotCollapseDistinctQuestions(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	ft := newFleetTestNoStore(t)
 	preparedTestConversation(ft)
 	done := startPreparedTest(t, ft, "ix_lark_tokenless", "", nil)
@@ -172,11 +174,11 @@ func TestFeishuTokenlessCallbacksDoNotCollapseDistinctQuestions(t *testing.T) {
 	})
 	press := func(action, question string) {
 		t.Helper()
-		var a feishubot.CardAction
+		var a botcard.CardAction
 		a.Action.Value = map[string]any{"a": "ix", "id": "ix_lark_tokenless", "clarify": "1"}
 		a.Action.FormValue = map[string]any{"question": question}
 		a.Context.ChatID, a.Context.MessageID = "oc_owner", "om_card"
-		if res := ft.s.botCardAction(context.Background(), &a, action); res == nil || res.Toast == nil || res.Toast.Type != "success" {
+		if res := ft.s.larkModule().Action(context.Background(), &a, action); res == nil || res.Toast == nil || res.Toast.Type != "success" {
 			t.Fatalf("tokenless callback = %+v", res)
 		}
 	}

@@ -122,6 +122,32 @@ installation user's existing HTTPS credential mechanism, with interactive prompt
 Updates execute build code from this project's repository.
 Docker Hubs and Windows Hubs retain their original update paths.
 
+Settings › Hub shows the current step and elapsed phase time during a development build,
+snapshot backup or saved-version preparation. Build progress covers the pinned checkout,
+`npm ci`, the Web development and public-share bundles, precompression and runtime assets,
+program/platform targets, and manifest checksum verification.
+
+The backup starts by pausing writers. Database progress shows completed dumps and the
+cumulative bytes written by `pg_dump`; the final dump size is unknown while it runs.
+Before writing `files.tar.gz`, the helper scans the included trees for regular file counts
+and sizes using the archive exclusions. The archive reports completed files and uncompressed
+file bytes read. Program and Node package archiving, external writer resume when configured,
+and snapshot verification have their own steps. Applying a saved version shows the snapshot
+checksum scan and the copy of compressed program and Node packages into staging. The byte
+totals describe each step's inputs. A percentage describes that step's bytes or completed build
+targets. The Web uses its standard file-size units and shows a smoothed rate in MB/s.
+
+`GET /api/v1/hub/update` adds the optional `development_progress` object while these phases
+run. It carries `phase` (`building`, `backing_up` or `applying_backup`), `step`, the one-based
+`step_index`, `step_total` and `elapsed_seconds`. When available it also carries `item_label`,
+`item_done`, `item_total`, `bytes_done`, `bytes_total`, `bytes_per_second` and `percent`.
+The page polls for counters about once per second. The helper reports counter samples at most
+about every 750 ms, with an immediate event at step changes and when totals become available.
+The structured pipe carries only fixed step and target labels and numbers. Tool diagnostics
+stay in private logs and the result stays in its own file. On a failure the error names the
+failed step and phase log. Progress is cleared when the phase ends. Existing clients can keep
+reading `state` and the legacy `progress` string.
+
 The helper resolves the full commit of `refs/heads/main`; a missing `main` branch is an error.
 Settings shows `main` and the installed/target commits. A detached private checkout fetches that
 exact object even if the remote advances while building. There are no repository/branch overrides

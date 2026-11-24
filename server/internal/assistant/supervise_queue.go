@@ -28,6 +28,71 @@ func decodeDigestSignals(raw string) ([]superviseSignal, bool) {
 	return list, true
 }
 
+// Outside directions never appear in a session listing to drain a digest queued by an older manager.
+func (s *Service) recoverOutsideDirectionDigests(ctx context.Context) {
+	here := s.settings(ctx)
+	if here.Main == "" {
+		return
+	}
+	r := &s.relays
+	r.mu.Lock()
+	var queues []string
+	if s.relayLocked(ctx) {
+		queues = slices.Collect(maps.Keys(r.st.Queue))
+	}
+	r.mu.Unlock()
+	moved := false
+	for _, from := range queues {
+		d, _, _ := s.directionSnapshot(ctx, from)
+		if d.Outside != nil && from != here.Main && s.moveOutsideDirectionDigests(ctx, from, here.Main) {
+			moved = true
+		}
+	}
+	if moved {
+		s.drainConversations(here.MachineID, []string{here.Main})
+	}
+}
+
+// Move the queued messages in one checkpoint. Queue admission already acknowledged their fingerprints.
+// Main's normal drain rechecks each structured signal against the current task and renders it for its recipient.
+func (s *Service) moveOutsideDirectionDigests(ctx context.Context, from, main string) bool {
+	r := &s.relays
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !s.relayLocked(ctx) || r.draining[from] {
+		return false
+	}
+	var moved, kept []relayMsg
+	for _, msg := range r.st.Queue[from] {
+		signals, structured := decodeDigestSignals(msg.Signals)
+		if msg.Tool != superviseTool || !structured || len(signals) == 0 || msg.Withdrawn || !msg.TriedAt.IsZero() || !msg.DoubtedAt.IsZero() {
+			kept = append(kept, msg)
+			continue
+		}
+		msg.OnceID = "" // the delivery id includes its destination
+		moved = append(moved, msg)
+	}
+	if len(moved) == 0 {
+		return false
+	}
+	next := r.st
+	next.Queue = maps.Clone(r.st.Queue)
+	if len(kept) == 0 {
+		delete(next.Queue, from)
+	} else {
+		next.Queue[from] = kept
+	}
+	next.Queue[main] = append(slices.Clone(next.Queue[main]), moved...)
+	if st := s.store(); st != nil {
+		if err := st.PutSetting(ctx, relayKey, next); err != nil {
+			s.logf("supervise: could not move the outside direction's queue to main: %v", err)
+			return false
+		}
+	}
+	r.st = next
+	return true
+}
+
 // Keep the same rendering for initial dispatch and a queue that has waited while tasks changed.
 func (s *Service) renderQueuedDigest(ctx context.Context, to string, list []prompts.SuperviseEntry, originalFresh ...bool) string {
 	here := s.settings(ctx)
@@ -155,15 +220,22 @@ func (s *Service) recheckDigestTo(ctx context.Context, cfg Settings, g supervise
 	return lead
 }
 
-// recheckDigestTarget applies the same runtime policy boundary as an immediate delivery without discarding the
-// supervisor preserved by recheckDigestTo.
+// recheckDigestTarget resolves the delivery conversation for the supervisor preserved by recheckDigestTo.
 func (s *Service) recheckDigestTarget(ctx context.Context, cfg Settings, g superviseSignal) string {
-	return s.digestRuntimeTarget(ctx, cfg, g, s.recheckDigestTo(ctx, cfg, g))
+	return s.digestConversation(ctx, cfg, g, s.recheckDigestTo(ctx, cfg, g))
 }
 
 // Recheck structured queue entries at the last delivery boundary. Unknown task state keeps the original queue.
 // Legacy text-only entries retain their behavior; their task facts cannot safely be reconstructed from prose.
 func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayMsg) (relayMsg, bool, bool) {
+	return s.recheckQueuedDigestAt(ctx, to, msg, false, nil)
+}
+
+// recheckQueuedDigestAt is recheckQueuedDigest, optionally for a queued message behind the head. The timeout sweep
+// uses anywhere only while the source conversation is not draining; the ordinary drain always rechecks the head.
+// change runs after the original signal's validity recheck, so an escalation cannot revive a resolved worker signal.
+func (s *Service) recheckQueuedDigestAt(ctx context.Context, to string, msg relayMsg, anywhere bool,
+	change func(superviseSignal) (superviseSignal, bool)) (relayMsg, bool, bool) {
 	var signals []superviseSignal
 	if msg.Signals == "" {
 		return msg, false, false
@@ -175,8 +247,9 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 		return msg, false, true
 	}
 	now := time.Now()
+	tried := !msg.TriedAt.IsZero() || !msg.DoubtedAt.IsZero()
 	var deferred []superviseSignal
-	if msg.TriedAt.IsZero() {
+	if !tried {
 		signals, deferred = s.partitionFinalWakeSignals(ctx, signals, now, "drain")
 	}
 	// A tried message cannot change its text or identity; do not let wake partitioning strand it at the queue head.
@@ -219,13 +292,21 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 				}
 			}
 		}
-		if e, ok := s.digestEntry(ctx, g, web); ok {
+		if e, ok := s.digestEntryRecheck(ctx, g, web, tried); ok {
 			if g.Kind == sigAsk {
 				g.Cards = e.Asks
 			}
 			// A worker reassigned to an Agent needs the ordinary dispatcher, not assistant.send to its old conversation.
 			if _, handled, _ := s.leaderRoute(g); handled {
 				return msg, false, true
+			}
+			if change != nil {
+				if changed, replace := change(g); replace {
+					g = changed
+					if e, ok = s.digestEntryRecheck(ctx, g, web, tried); !ok {
+						continue
+					}
+				}
 			}
 			target := s.recheckDigestTarget(ctx, here, g)
 			if target == "" {
@@ -260,12 +341,19 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 	b := &s.relays
 	b.mu.Lock()
 	q := b.st.Queue[to]
-	if len(q) == 0 || q[0] != msg {
+	index := 0
+	if anywhere {
+		index = slices.Index(q, msg)
+		if index < 0 || b.draining[to] || b.replacing[to] {
+			b.mu.Unlock()
+			return msg, false, true
+		}
+	} else if len(q) == 0 || q[0] != msg {
 		b.mu.Unlock()
 		return msg, false, true
 	}
 	// Do not change the identity or destination of a send that may already have landed.
-	if !msg.TriedAt.IsZero() && (next.Text != msg.Text || len(groups) > 1 || len(groups[to]) == 0) {
+	if tried && (next.Text != msg.Text || len(groups) > 1 || len(groups[to]) == 0) {
 		b.mu.Unlock()
 		return msg, false, true
 	}
@@ -276,9 +364,9 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 	}
 	if len(groups[to]) > 0 {
 		state.Queue[to] = slices.Clone(q)
-		state.Queue[to][0] = next
+		state.Queue[to][index] = next
 	} else {
-		state.Queue[to] = slices.Clone(q[1:])
+		state.Queue[to] = slices.Delete(slices.Clone(q), index, index+1)
 		if len(state.Queue[to]) == 0 {
 			delete(state.Queue, to)
 		}

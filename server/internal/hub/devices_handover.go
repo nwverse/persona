@@ -50,6 +50,7 @@ func (h *Hub) devicesConfigFor(id string) devicewire.Config {
 	}
 	if h.cfg != nil {
 		out.TailcatDERPMapURL = h.cfg.Tailcat.DERPMapURL
+		out.PrivateNetwork = h.cfg.Security.PrivateNetworkOnly
 		out.WebURL = h.webURL()
 		out.LinkSwitch = h.linkPairable() // and it answers devices.link_switch.* (link_switch.go)
 	}

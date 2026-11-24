@@ -41,6 +41,27 @@ func TestBuildWithoutBriefingLoadsNone(t *testing.T) {
 	assertBriefingAbsent(t, s)
 }
 
+// The manager's log names the loaded modules, or none (scripts/ci/core-only-smoke.py reads the line of a core-only build).
+func TestLoadedModulesNamesThemOrNone(t *testing.T) {
+	if got := loadedModules(kernel.New(nil, nil, nil)); got != "none" {
+		t.Fatalf("no modules: %q, want none", got)
+	}
+	if got := loadedModules(nil); got != "none" {
+		t.Fatalf("nil kernel: %q, want none", got)
+	}
+	var want []string
+	for _, m := range kernel.Builtin() {
+		want = append(want, m.Info().ID)
+	}
+	k := kernel.New(kernel.Builtin(), nil, nil)
+	if len(k.Modules()) != len(want) {
+		t.Skip("a built-in module does not load here; the kernel's tests say why")
+	}
+	if got := loadedModules(k); len(want) > 0 && got != strings.Join(want, ", ") {
+		t.Fatalf("loaded %q, want %q", got, strings.Join(want, ", "))
+	}
+}
+
 // A stored null is never set: it reads as nil and is left out when the settings are written again; a value round-trips
 // byte for byte.
 func TestModuleValueNullIsNeverSet(t *testing.T) {
@@ -76,6 +97,9 @@ func TestBriefingModuleIsLoadedByDefault(t *testing.T) {
 	}
 	if !slices.Contains(ownSettingKeys(s), "assistant.briefing_waits") {
 		t.Fatal("persona_settings does not list assistant.briefing_waits with the module on")
+	}
+	if !slices.Contains(s.moduleFeatures(), "module.briefing") {
+		t.Fatalf("the briefing module feature is not announced: %v", s.moduleFeatures())
 	}
 }
 
@@ -162,6 +186,7 @@ func assertBriefingAbsent(t *testing.T, s *Service) {
 // End to end: the morning routine with facts on runs with the module absent as a routine with facts off does: its answer
 // goes out, with no briefing rows and no brief item.
 func TestMorningRoutineRunsWithoutTheBriefingModule(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	off := briefRunEnvWith(t, true, func(e *briefRunEnv) { e.s.modules = kernel.New(nil, nil, nil) })
 	off.mirror()
 	plain := newBriefRunEnv(t, false)

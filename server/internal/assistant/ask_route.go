@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -27,18 +28,20 @@ import (
 // spending, what cannot be undone, and what only they can do). It answers a question itself (interaction_answer; the
 // answer becomes the task's decision), and allows or denies a tool permission or a plan itself too (interaction_answer
 // with allow; answeredApproval): the agent gets it marked as the assistant's answer (AnsweredBy), never as the user's.
-// What stays the user's — a card with a form or a secret, or an approval that would send, reply or comment in the
-// user's name, spend money or delete (userApproval) — the supervisor hands up with ask_escalate: every card of the task
-// still waiting then rings the user once, with the supervisor's reason and recommendation, and a leader's escalation
-// is an escalated entry in the main conversation, so the layers above know.
+// Allowing what stays the user's — a card with a form or a secret, or an approval that would send, reply or comment in
+// the user's name, spend money or delete (userApproval) — needs ask_escalate: every card of the task still waiting
+// then rings the user once, with the supervisor's reason and recommendation, and a leader's escalation is an escalated
+// entry in the main conversation, so the layers above know. Denying any permission or plan remains the supervisor's:
+// denial executes nothing and returns its reason to the agent.
 //
 // Nothing reaches the user on a timeout. A card nobody handles within askHoldFor moves one rung up (leader, then the
 // main conversation; one rung, the background supervisor or the main conversation, for a task no leader supervises),
 // and a permission or plan moves up at once when the conversation holding it itself waits for the user. Past its last
 // rung a card goes back to its task's supervisor and stays there (parked): the supervisor is reminded of it each
 // askHoldFor, at most askRemindMax times, the card stays on the apps marked as the supervisor's, and only ask_escalate
-// hands it to the user. A parsed terminal choice stays with its supervising conversation until the supervisor
-// explicitly escalates it. Only a human can send keys to the terminal.
+// hands it to the user. A parsed terminal dialog (supervisedScreen: an ordinary choice, or a command approval Claude
+// Code asks on its own screen) stays with its supervising conversation, which picks its option itself
+// (interaction_answer; answeredScreen) unless it is the user's (userScreen), or escalates it explicitly.
 //
 // The route lives on the pending card, not in the store: after a manager restart the card is back on the apps without
 // a push (as every card is), and its route is made again from the task's supervisor (restoreRoute) so that the
@@ -100,28 +103,63 @@ type escalatedCard struct {
 // escalatedKeep bounds how long an escalated card is remembered unanswered (it expired, was cancelled or its node went).
 const escalatedKeep = 48 * time.Hour
 
-// terminalQuestion is a parsed choice the supervisor can read and escalate. Never
-// forward the raw screen, typed values, secrets or command approvals to the model.
+// terminalQuestion is a parsed ordinary choice: a question with plain options and nothing about a command, a warning
+// or a countdown (the bot's and the main conversation's wording of it). Never forward the raw screen, typed values or
+// secrets to the model.
 func terminalQuestion(ix proto.Interaction) bool {
 	d := ix.Dialog
-	if ix.Kind != proto.IxScreen || ix.Private || ix.Secret || len(ix.Fields) > 0 || d == nil || strings.TrimSpace(d.Question) == "" ||
-		d.Command != "" || d.Warning != "" || d.Risk != "" || d.Deadline != "" || d.DeadlineAction != "" {
+	if !supervisedScreen(ix) || d.Command != "" || d.Warning != "" || d.Risk != "" || d.Deadline != "" || d.DeadlineAction != "" {
 		return false
 	}
-	// Claude's startup trust and Bypass Permissions confirmations have ordinary
-	// option rows, even though they authorize access. Leave them with the user.
-	for _, o := range d.Options {
-		label := strings.ToLower(strings.TrimSpace(o.Label))
-		if label == "yes, i trust this folder" || label == "yes, i accept" && strings.Contains(d.Detail+" "+d.Question, "Bypass Permissions mode") {
-			return false
-		}
+	return userScreen(ix) == ""
+}
+
+// supervisedScreen is a terminal dialog of an agent its task's supervisor decides on, as it decides on the agent's
+// tool permissions (#13752): a parsed dialog with a question and options to pick, a command approval Claude Code asks
+// on its own screen (a safety check its hooks never see, "Dangerous rmdir operation…") among them. Unparsed screens,
+// typed values, secrets and forms are not: the supervisor could not read them, so they stay with the user.
+func supervisedScreen(ix proto.Interaction) bool {
+	d := ix.Dialog
+	if ix.Kind != proto.IxScreen || ix.Private || ix.Secret || len(ix.Fields) > 0 || d == nil || strings.TrimSpace(d.Question) == "" {
+		return false
 	}
 	return slices.ContainsFunc(d.Options, func(o screen.Option) bool { return o.Kind == "" && o.Label != "" })
 }
 
+// userScreen says why supervised terminal dialog ix is the user's to decide, not its supervisor's ("" when the
+// supervisor may pick its option): Claude's startup trust and Bypass Permissions confirmations, which have ordinary
+// option rows though they authorize access, and a command that would send, reply or comment in the user's name,
+// spend money or delete (userApprovalWords). The supervisor hands those to the user with ask_escalate.
+func userScreen(ix proto.Interaction) string {
+	d := ix.Dialog
+	if d == nil {
+		return "is not a dialog a supervisor can read"
+	}
+	for _, o := range d.Options {
+		label := strings.ToLower(strings.TrimSpace(o.Label))
+		if label == "yes, i trust this folder" || label == "yes, i accept" && strings.Contains(d.Detail+" "+d.Question, "Bypass Permissions mode") {
+			return "authorizes the agent's access, which only the user grants"
+		}
+	}
+	if d.Risk == screen.RiskDelete {
+		return "may delete files (" + clip(oneLine(d.Warning), 80) + ")"
+	}
+	text := strings.ToLower(strings.Join([]string{d.Question, d.Command, d.Description}, "\n"))
+	var hit []string
+	for _, w := range userApprovalWords {
+		if strings.Contains(text, w) {
+			hit = append(hit, w)
+		}
+	}
+	if len(hit) > 0 {
+		return fmt.Sprintf("would send, reply or comment in the user's name, spend money or delete (%s)", strings.Join(hit, ", "))
+	}
+	return ""
+}
+
 // terminalQuestionText is the question and its choice labels, as plain text in the
-// supervisor's conversation and the bot's text fallback. A free-text row may
-// contain what the user is typing, so only selectable labels are quoted.
+// supervisor's conversation and the bot's text fallback, with the command it asks about and the agent's warning when
+// it has them. A free-text row may contain what the user is typing, so only selectable labels are quoted.
 func terminalQuestionText(ix proto.Interaction) string {
 	d := ix.Dialog
 	choices := make([]string, 0, len(d.Options))
@@ -134,6 +172,12 @@ func terminalQuestionText(ix proto.Interaction) string {
 		}
 	}
 	question := clip(oneLine(d.Question), 300)
+	if d.Command != "" {
+		question += " · $ " + clip(oneLine(d.Command), 300)
+	}
+	if d.Warning != "" {
+		question += " · ⚠ " + clip(oneLine(d.Warning), 160)
+	}
 	if len(choices) == 0 {
 		return question
 	}
@@ -152,7 +196,7 @@ func routable(ix proto.Interaction) bool {
 	case proto.IxPermission, proto.IxPlan:
 		return true
 	case proto.IxScreen:
-		return terminalQuestion(ix)
+		return supervisedScreen(ix)
 	}
 	return false
 }
@@ -673,15 +717,30 @@ func (s *Service) askAnswered(ctx context.Context, todo, self string, ix proto.I
 // merging and deploying are not among them: those are the supervisor's within the task the user asked for.
 var userApprovalWords = []string{"发消息", "回复", "评论", "comment", "send", "发送", "删除", "delete", "购买", "付费", "续费", "充值"} // i18n-ignore: matched against the card
 
-// userApproval says why permission or plan card ix is the user's to decide, not its supervisor's ("" when the
-// supervisor may allow or deny it): it asks for a form or a secret, it is an owner-action proposal or a secret
-// hand-off, or what it would do goes out in the user's name, spends money or deletes (userApprovalWords).
+// userApprovalActionVerbs are tool-name verbs, normalized by connector.WriteVerb, that delete or spend even when the
+// payload has no risk word. Outward verbs use the connector gate's existing list (outboundVerbs in card_layers.go).
+var userApprovalActionVerbs = []string{"delete", "remove", "destroy", "erase", "purge", "trash", "buy", "purchase", "pay", "charge"}
+
+// userApproval says why permission or plan card ix is the user's to allow, not its supervisor's ("" when the
+// supervisor may allow it; either may always deny it): it asks for a form or a secret, it is an owner-action proposal
+// or a secret hand-off, or its actual action goes out in the user's name, spends money or deletes. A local file edit's
+// payload is data, not an outward or destructive action; known tool actions are classified structurally before the
+// remaining text falls back to userApprovalWords.
 func userApproval(ix proto.Interaction) string {
 	switch {
 	case len(ix.Fields) > 0, ix.Secret, ix.Elicitation != nil:
 		return "asks for a form or a secret, which only the user fills in"
 	case ix.OwnerProposal, ix.ApprovalBatchID != "", ix.ToolName == proto.SecretHandoffTool:
 		return "is an owner action"
+	}
+	if ix.Kind == proto.IxPermission {
+		switch ix.ToolName {
+		case "Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch":
+			return ""
+		}
+	}
+	if verb := connector.WriteVerb(ix.ToolName); slices.Contains(outboundVerbs, verb) || slices.Contains(userApprovalActionVerbs, verb) {
+		return fmt.Sprintf("would send, reply or comment in the user's name, spend money or delete (tool action %s)", verb)
 	}
 	text := strings.ToLower(strings.Join([]string{ix.ToolName, ix.ToolTitle, ix.Summary, ix.Reason, ix.Plan, ix.EditableText,
 		string(ix.ToolInput)}, "\n"))
@@ -725,6 +784,38 @@ func (s *Service) answeredApproval(ctx context.Context, todo, self string, ix pr
 	}
 	l := s.lang(ctx)
 	q, c := decisionText(interactionQuestion(l, ix)), decisionText(resolutionText(l, ix, r))
+	if q == "" || c == "" {
+		return nil
+	}
+	at := decisionNow()
+	wrote, err := s.insertDecision(ctx, st, db.TodoDecisionRow{ID: "dec_" + randomHex(8), TodoID: todo, Question: q, Choice: c,
+		Reason: decisionText(reason), Source: db.DecisionAgent, SourceSession: self, SourceMessage: ix.ID, CreatedAt: at})
+	if err != nil {
+		s.logf("decisions: todo %s, card %s: %v", todo, ix.ID, err)
+		return nil
+	}
+	if wrote {
+		s.decisionsChanged(ctx, todo, at)
+	}
+	return nil
+}
+
+// answeredScreen picks option o of terminal dialog ix of task todo for its supervisor, conversation self, as
+// answeredApproval allows a permission: the keys go to the agent's terminal (the card's own answer, screenAnswer), the
+// history and the channels say the assistant answered (AnsweredBy), and the pick is kept as the task's decision, made
+// by self, never the user's.
+func (s *Service) answeredScreen(ctx context.Context, todo, self string, ix proto.Interaction, o screen.Option, reason string) error {
+	r := proto.Resolution{Option: o.Key, AnsweredBy: proto.AnsweredByAssistant, Reason: reason}
+	if err := s.resolveRemembered(ix.ID, r, false); err != nil {
+		return err
+	}
+	s.workEvent(ix.MachineID, ix.SessionID, "ask_supervisor_answered", map[string]any{"by": self, "todo": todo, "card": ix.ID, "kind": ix.Kind, "option": o.Key})
+	st := s.todoDB()
+	if st == nil {
+		return nil
+	}
+	l := s.lang(ctx)
+	q, c := decisionText(screenQuestion(l, ix)), decisionText(o.Label)
 	if q == "" || c == "" {
 		return nil
 	}

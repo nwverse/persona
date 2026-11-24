@@ -17,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // Recordings (docs/assistant/knowledge.md "Recordings", docs/protocol/protocol.md "Recording sync"): the phone uploads each recording's transcript,
@@ -50,26 +51,17 @@ const (
 // Defined in the contract package kbwire (docs/server/architecture.md "Contract packages"); the old names stay.
 type RecordingSegment = kbwire.RecordingSegment
 
-// RecordingBookmark is a mark the user set while recording: seconds from the start.
-type RecordingBookmark struct {
-	At    float64 `json:"at"`
-	Label string  `json:"label,omitempty"`
-}
+// RecordingBookmark is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type RecordingBookmark = recordingwire.RecordingBookmark
 
-// RecordingCalendar is the event of the phone's own calendar a recording belongs to: a hint for its name and the
-// minutes' attendees and place (docs/assistant/meeting-minutes.md "Field contract").
-type RecordingCalendar struct {
-	Title     string   `json:"title"`
-	Attendees []string `json:"attendees,omitempty"`
-	Location  string   `json:"location,omitempty"`
-}
+// RecordingCalendar is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type RecordingCalendar = recordingwire.RecordingCalendar
 
-// Recording kinds: a meeting gets minutes (minutes.go); a note (or none) only the summary; an all-day recording
-// (recording_day.go) a recap of its day and never minutes nor a summary.
+// Re-exported from recordingwire.
 const (
-	RecordingNote    = "note"
-	RecordingMeeting = "meeting"
-	RecordingDay     = "day"
+	RecordingNote    = recordingwire.RecordingNote
+	RecordingMeeting = recordingwire.RecordingMeeting
+	RecordingDay     = recordingwire.RecordingDay
 )
 
 // Limits of an upload's calendar hint.
@@ -129,18 +121,14 @@ type RecordingUpload struct {
 	transcriptionProblem string
 }
 
-// MeetingRef is the knowledge base's calendar item (meetings or events) a recording overlaps.
-type MeetingRef struct {
-	Kind string `json:"kind"`
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
+// MeetingRef is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type MeetingRef = recordingwire.MeetingRef
 
-// Minutes states (meta.json's minutes_state; "" when the recording is not a meeting).
+// Re-exported from recordingwire.
 const (
-	MinutesPending = "pending"
-	MinutesReady   = "ready"
-	MinutesFailed  = "failed"
+	MinutesPending = recordingwire.MinutesPending
+	MinutesReady   = recordingwire.MinutesReady
+	MinutesFailed  = recordingwire.MinutesFailed
 )
 
 // Recording is a recording's meta.json.
@@ -273,40 +261,14 @@ type Recording struct {
 // Trimmed: the transcript went with recording_days; only the metadata and the minutes are left.
 func (r *Recording) Trimmed() bool { return r.TrimmedAt != nil }
 
-// RecordingState is a recording as the phone reconciles against it (GET /api/v1/recordings).
-type RecordingState struct {
-	ID           string    `json:"id"`
-	Revision     int64     `json:"revision"`
-	Complete     bool      `json:"complete"`
-	StartedAt    time.Time `json:"started_at"`
-	MinutesState string    `json:"minutes_state,omitempty"`
-	// TrimmedAt: only its minutes are kept (Recording.TrimmedAt). Listed all the same, at the revision it had, so a phone
-	// that still holds it sees the hub has it and sends nothing (an upload of it would be expired).
-	TrimmedAt *time.Time `json:"trimmed_at,omitempty"`
-	// An all-day recording's only (recording_day.go): Next and Base always, 0 when lost (an older manager rewrote its
-	// meta.json; the phone sends a PUT), so an entry of kind day without base is an older manager's.
-	Kind         string     `json:"kind,omitempty"`
-	Day          string     `json:"day,omitempty"`
-	Part         int        `json:"part,omitempty"`
-	Next         *int       `json:"next,omitempty"`
-	Base         *int64     `json:"base,omitempty"`
-	RecapState   string     `json:"recap_state,omitempty"`
-	RecapFinal   bool       `json:"recap_final,omitempty"`
-	RecapFinalAt *time.Time `json:"recap_final_at,omitempty"`
-	// Name is what the hub calls it and NameSource where that came from (#8873, NameSource); both absent while it is
-	// called only by when it started.
-	Name       string `json:"name,omitempty"`
-	NameSource string `json:"name_source,omitempty"`
-	// Space is the track a recording was saved into instead (#13501, RecordingUpload.Space): set by the manager on the
-	// ones it lists beside these, never by RecordingStates.
-	Space string `json:"space,omitempty"`
-}
+// RecordingState is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type RecordingState = recordingwire.RecordingState
 
-// What PutRecording did.
+// Re-exported from recordingwire.
 const (
-	RecordingStored  = "stored"
-	RecordingStale   = "stale"
-	RecordingExpired = "expired"
+	RecordingStored  = recordingwire.RecordingStored
+	RecordingStale   = recordingwire.RecordingStale
+	RecordingExpired = recordingwire.RecordingExpired
 )
 
 // RecordingPut is PutRecording's result: Status is RecordingStored, RecordingStale or RecordingExpired; Attendance the
@@ -440,13 +402,12 @@ func (s *Store) recordingName(r *Recording) string {
 	return "录音 " + r.StartedAt.In(s.Zone()).Format("2006-01-02 15:04")
 }
 
-// Where a recording's name comes from (RecordingState.NameSource, #8873): an open set, "" when it is named only by
-// when it started (or, an all-day recording, by its day).
+// Re-exported from recordingwire.
 const (
-	NamedByRename   = "renamed"  // the owner's name given on the web (Renamed, #8877)
-	NamedByTitle    = "title"    // the upload's title, not its calendar hint's
-	NamedByCalendar = "calendar" // the phone's calendar hint, or the knowledge base's calendar item it overlaps
-	NamedByModel    = "model"    // AITitle
+	NamedByRename   = recordingwire.NamedByRename
+	NamedByTitle    = recordingwire.NamedByTitle
+	NamedByCalendar = recordingwire.NamedByCalendar
+	NamedByModel    = recordingwire.NamedByModel
 )
 
 // NameSource is where r's name comes from: the owner's name from the web, the upload's title (the phone's calendar when

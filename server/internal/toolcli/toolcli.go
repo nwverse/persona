@@ -99,7 +99,7 @@ const (
 	usageCLI  = "personad tool --cli <connector> [--format json|text] <words…>"
 	usage     = "personad tool: a connector's tools from the assistant's shell, through the Persona hub\n  " + usageTool + "\n  " + usageCLI +
 		"\n  from an Agent's pane: its own tools (task_spawn, todo_decisions, a task leader's task_plan, …), as its MCP server calls them" +
-		"\n  a2a_sessions, a2a_send, a2a_get, a2a_report, a2a_cancel: communicate through Persona A2A" +
+		"\n  a2a_sessions, a2a_read, a2a_send, a2a_get, a2a_report, a2a_cancel: communicate through Persona A2A" +
 		"\n  personad tool secret_store --from-file <private metadata manifest | ->: phone-approved encrypted writes from local field files"
 )
 
@@ -226,7 +226,7 @@ func commandLine(ctx context.Context, args []string, stdin io.Reader, stdout, st
 			if *p.Exit == exitOK {
 				fmt.Fprintln(stderr, strings.TrimRight(p.Stderr, "\n"))
 			} else {
-				return out.fail(*p.Exit, p.Stderr, 0)
+				return out.fail(*p.Exit, strings.TrimRight(p.Stderr, "\n"), 0)
 			}
 		}
 		return *p.Exit
@@ -304,7 +304,11 @@ func (f failer) fail(code int, msg string, retry int) int {
 		fmt.Fprintln(f.stderr, f.name+": "+msg)
 		return code
 	}
-	out := map[string]any{"error": msg, "kind": kinds[code]}
+	kind := kinds[code]
+	if kind == "" {
+		kind = "failed"
+	}
+	out := map[string]any{"error": msg, "kind": kind}
 	if retry > 0 {
 		out["retry_after"] = retry
 	}

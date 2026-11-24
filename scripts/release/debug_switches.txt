@@ -198,6 +198,7 @@ openTranslationSettings
 openTriageSettings
 openUploadDemo
 openUrgentCallSettings
+openUsageMap
 openViewedImage
 openVoice
 openWelcome
@@ -314,6 +315,7 @@ showInboxSuggestionEdit
 showInboxSuggestionStale
 showInboxTodo
 showInfo
+showIntakeSyncStatus
 showJumpPerf
 showKeyMods
 showKnowledgeDay

@@ -1,3 +1,4 @@
+import PersonaWire
 import SwiftUI
 import Testing
 import UIKit
@@ -74,6 +75,20 @@ struct StyleSpecTests {
         #expect(found.isEmpty, "white on the accent under 3.5:1: \(found)")
     }
 
+    /// The disk usage map's labels (docs/design/DESIGN_SYSTEM.md "Usage treemap"): its ink on every category and every
+    /// Last Used step, ≥ 4.5:1 in light and in dark; and the four steps get darker (light) as they get older.
+    @Test func usageMapLabelsReadOnEveryFill() {
+        let fills = StorageUsageCategory.allCases.map { ("\($0)", Theme.UsageMap.pair($0)) }
+            + Theme.UsageMap.Age.allCases.map { ("age \($0)", $0.pair) }
+        let ink = Theme.UsageMap.ink
+        for (name, f) in fills {
+            #expect(PersonaPalette.contrast(ink.light, f.light) >= 4.5, "light ink on \(name)")
+            #expect(PersonaPalette.contrast(ink.dark, f.dark) >= 4.5, "dark ink on \(name)")
+        }
+        let steps = Theme.UsageMap.Age.allCases.map { PersonaPalette.contrast($0.pair.light, 0xFFFFFF) }
+        #expect(steps == steps.sorted(), "the Last Used steps don't darken with age")
+    }
+
     @Test func healthRingsHaveDistinctHuesAndReadableActivityLabels() {
         func hue(_ hex: UInt32) -> Double {
             let color = UIColor(hex: hex)
@@ -92,6 +107,22 @@ struct StyleSpecTests {
             for color in [Theme.Health.move, Theme.Health.exercise, Theme.Health.stand] {
                 #expect(Self.contrast(color, Theme.Health.activityBackground, ui) >= 4.5)
             }
+        }
+    }
+
+    @Test func healthWidgetsShareIntakeColorsAndKeepActivityNeutral() {
+        for ui in [UIUserInterfaceStyle.light, .dark] {
+            let water = Self.rgb(HomeWidgetTokens.water, ui), appWater = Self.rgb(Theme.Health.water, ui)
+            let protein = Self.rgb(HomeWidgetTokens.protein, ui), appProtein = Self.rgb(Theme.Health.protein, ui)
+            #expect(water.0 == appWater.0 && water.1 == appWater.1 && water.2 == appWater.2)
+            #expect(protein.0 == appProtein.0 && protein.1 == appProtein.1 && protein.2 == appProtein.2)
+            let neutral = Self.rgb(HomeWidgetTokens.activity, ui)
+            #expect(abs(neutral.0 - neutral.1) < 0.02 && abs(neutral.1 - neutral.2) < 0.03)
+            #expect(Self.contrast(HomeWidgetTokens.healthTodaySteps, HomeWidgetTokens.surface, ui) >= 4.5)
+            var hue: CGFloat = 0
+            UIColor(HomeWidgetTokens.healthTodaySteps).resolvedColor(with: UITraitCollection(userInterfaceStyle: ui))
+                .getHue(&hue, saturation: nil, brightness: nil, alpha: nil)
+            #expect(hue > 0.6 && hue < 0.85, "steps stays purple, clear of Move's red")
         }
     }
 
