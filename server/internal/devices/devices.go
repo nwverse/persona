@@ -126,8 +126,9 @@ type Devices struct {
 	opts Options
 	logf func(format string, args ...any)
 
-	transfers transfers // computer to computer file transfers running or just over (transfer.go)
-	held      heldBook  // the owner's messages held for Agents whose computer is away (held.go)
+	transfers  transfers     // computer to computer file transfers running or just over (transfer.go)
+	held       heldBook      // the owner's messages held for Agents whose computer is away (held.go)
+	heldStarts heldStartBook // the owner's new-Agent starts held while their computer is away (held_starts.go)
 
 	mu    sync.Mutex
 	cfg   devicewire.Config
@@ -625,6 +626,7 @@ func (d *Devices) BusUp() {
 	if ctx != nil {
 		d.rehook(ctx)
 	}
+	d.heldStartWakeAll() // held Agent starts waiting for the bus to the hub go now (held_starts.go)
 	for _, m := range d.machinesNow() {
 		m.mu.Lock()
 		list := slices.Clone(m.sessions)

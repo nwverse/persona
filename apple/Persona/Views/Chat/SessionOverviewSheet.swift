@@ -90,6 +90,7 @@ struct SessionOverviewSheet: View {
 
     private var liveSession: Session? { model.session(key) ?? session }
     private var isAssistant: Bool { assistant || liveSession?.assistant == true }
+    private var preferHerdrTabName: Bool { model.prefersHerdrTabName(for: key.group) }
 
     /// Equatable change token so `SubagentOverview.build` runs only when subagent inputs or `ChatStore.tasks`
     /// (embedded completion/failure statuses) change (P4), never per body.
@@ -98,7 +99,8 @@ struct SessionOverviewSheet: View {
             session: liveSession,
             children: model.childRows(key),
             pending: model.interactions(for: key),
-            tasks: model.chat(key).tasks
+            tasks: model.chat(key).tasks,
+            preferTab: preferHerdrTabName
         )
     }
 
@@ -198,7 +200,8 @@ struct SessionOverviewSheet: View {
             foldedChildren: children,
             pendingInteractions: pending,
             machineName: { ref in model.namedMachine(ref)?.title },
-            agentStatuses: tasks.agentStatuses
+            agentStatuses: tasks.agentStatuses,
+            preferTab: preferHerdrTabName
         )
         if subagentsSnapshot != built {
             subagentsSnapshot = built
@@ -501,12 +504,21 @@ struct SessionOverviewSheet: View {
 
     private var header: some View {
         let s = liveSession
-        let place = [model.namedMachine(key.machineRef)?.title ?? key.machineID, s?.spaceName, s?.slotLabel]
+        let preferTab = s.map { model.prefersHerdrTabName(for: $0) } ?? false
+        let primaryTab = s?.displayTabName(preferTab: preferTab)
+        let titleDetail = s?.displayTitleDetail(preferTab: preferTab)
+        let place = [model.namedMachine(key.machineRef)?.title ?? key.machineID, s?.spaceName, primaryTab != nil ? nil : s?.slotLabel]
             .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " › ")
         return VStack(alignment: .leading, spacing: Theme.Space.sm) {
-            Text(s?.displayTitle ?? String(localized: "Session"))
+            Text(s?.displayTitle(preferTab: preferTab) ?? String(localized: "Session"))
                 .font(Theme.Font.title)
                 .lineLimit(2)
+            if let titleDetail {
+                Text(titleDetail)
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
             HStack(spacing: Theme.Space.sm) {
                 if let st = s?.state {
                     HStack(spacing: Theme.Space.xs) {
@@ -716,7 +728,8 @@ struct SubagentDetailPage: View {
         case .embedded(_, let agent):
             return agent.title
         case .session(let key):
-            let title = childSession?.displayTitle.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let preferTab = childSession.map { model.prefersHerdrTabName(for: $0) } ?? false
+            let title = childSession?.displayTitle(preferTab: preferTab).trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return title.isEmpty ? key.sessionID : title
         }
     }
@@ -834,8 +847,8 @@ struct SessionOverviewPresentation: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .inspector(isPresented: Binding(get: { on && usesInspector && ui.showOverview },
-                                            set: { ui.showOverview = $0 })) {
+            .overviewInspector(isPresented: Binding(get: { on && usesInspector && ui.showOverview },
+                                                    set: { ui.showOverview = $0 })) {
                 SessionOverviewInspectorContent(
                     parent: parent,
                     assistant: assistant,
@@ -980,5 +993,18 @@ private struct SessionOverviewFullDetailContent: View {
             onExpand: nil,
             onShowInChat: showInChat
         )
+    }
+}
+
+private extension View {
+    /// `.inspector` where the SDK has one; visionOS has none (#14484), and there the overview is always the sheet
+    /// (`usesInspector` is false). Decided at compile time, so the view's identity never changes on a device.
+    @ViewBuilder func overviewInspector<Inspector: View>(isPresented: Binding<Bool>,
+                                                         @ViewBuilder content: () -> Inspector) -> some View {
+        #if os(visionOS)
+        self
+        #else
+        inspector(isPresented: isPresented, content: content)
+        #endif
     }
 }

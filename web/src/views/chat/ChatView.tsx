@@ -46,7 +46,7 @@ import { lastEditablePrompt, promptsOf, rewindBlock, rewindDone, rewindSession, 
 import { EDIT_SEND_SETTLE_MS } from "../../lib/edit-last-key";
 import { sendDraft } from "../../lib/drafts";
 import { chatLines, freshWords, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
-import { foldsBackgroundRounds } from "../../lib/background-fold";
+import { foldsBackgroundRounds, relayNeedsAttention } from "../../lib/background-fold";
 import type { Interaction, Item, Session, Subagent } from "../../lib/types";
 import { REVIEW_FEATURE } from "../../lib/types";
 import { anchoredScroll, followsAgain, isScrollbarPress, jumpLabel, leavesOnKey, leavesOnScrollbarDrag, leavesOnTouch, leavesOnWheel, followsAfterUnfold, UNFOLD_PAUSE, type ScrollAnchor } from "../../lib/disclosure";
@@ -1659,9 +1659,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // AssistantInfo has not arrived but the cached main id has: keep the main chat folded (the absent switch means on).
   const foldBackground = useStore((s) =>
     foldsBackgroundRounds(sid, s.assistant ?? (mainCache ? { main: mainCache.scope } : undefined)));
+  const foldRoutineRelayReplies = useStore((s) => assistant && sid === s.assistant?.main && s.assistant.fold_routine_relay_replies);
+  const latestReplyNeedsAttention = Boolean(turnFailure || relayNeedsAttention(session));
   const allLines = useMemo(
-    () => stabilizeLines(lastLines.current, chatLines(earlier.liveItems, { live: lastLive && !outgoing, background: foldBackground, main: isMain })),
-    [earlier.liveItems, lastLive, outgoing, foldBackground, isMain],
+    () => stabilizeLines(lastLines.current, chatLines(earlier.liveItems, { live: lastLive && !outgoing, background: foldBackground, main: isMain, foldRoutineRelayReplies, latestReplyNeedsAttention })),
+    [earlier.liveItems, lastLive, outgoing, foldBackground, isMain, foldRoutineRelayReplies, latestReplyNeedsAttention],
   );
   lastLines.current = allLines;
   // The timeline split and the assistant display use the same history boundary: one feed walk per items change.
@@ -1707,8 +1709,18 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // off screen (SegmentView `offscreen`). Not on a touch-only screen: a script moving the view (keeping it still as one
   // is drawn) can stop a fling there.
   const touch = useMedia(NO_HOVER);
-  const drawnLast = useMemo(() => new Set(lines.filter((l) => l.kind === "segment").slice(-2).map((l) => l.id)), [lines]);
-  const offscreen = (line: ChatLine) => (!touch && line.kind === "segment" && !line.live && !drawnLast.has(line.id) ? watchSegment : undefined);
+  let drawnLastA: string | undefined;
+  let drawnLastB: string | undefined;
+  for (let i = lines.length - 1; i >= 0 && drawnLastA === undefined; i--) {
+    const line = lines[i];
+    if (line.kind !== "segment") continue;
+    if (drawnLastB === undefined) drawnLastB = line.id;
+    else drawnLastA = line.id;
+  }
+  const offscreen = useCallback(
+    (line: ChatLine) => (!touch && line.kind === "segment" && !line.live && line.id !== drawnLastA && line.id !== drawnLastB ? watchSegment : undefined),
+    [touch, drawnLastA, drawnLastB, watchSegment],
+  );
   const linesNow = useRef(lines);
   linesNow.current = lines;
   const limitOn = limitLine ? lines.reduce((id, line) => (line.kind === "apiError" ? line.id : id), "") : "";
