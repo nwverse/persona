@@ -108,6 +108,7 @@ type fakeHub struct {
 	replies        []string      // the model's answers, in turn (the last one again when they run out)
 	answers        []fakeAnswer  // how each of those answers comes, in turn (none: at once and whole)
 	modelDown      bool          // the model's gateway answers 502 to the calls replies would answer: asked, never answering
+	modelRequests  int           // every model HTTP request, across all purposes
 	noModel        bool
 	asked          []modelCall
 	pushes         []Notification
@@ -233,9 +234,11 @@ type fakeHub struct {
 	doctor      map[string]string
 	doctorState map[string]string // each machine's claude-version state ("unanswered": no version came this time)
 	// auth is claude.auth_status's answer by "machine/launcher" (nil: the node has no such method), and the
-	// questions it got.
-	auth      map[string]proto.ClaudeAuthStatus
-	authAsked []string
+	// questions it got. authBy, when set, answers claude.auth_status from the full RPC params.
+	auth       map[string]proto.ClaudeAuthStatus
+	authBy     func(device string, params map[string]any) proto.ClaudeAuthStatus
+	authAsked  []string
+	authParams []map[string]any
 	// authHold, when set, holds claude.auth_status's answer until it is closed (a node running a slow launcher).
 	authHold chan struct{}
 	// nodes answer node methods on any machine, by method, before the answers below (answerNode).
@@ -655,6 +658,7 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	case assistantwire.DeviceClaudeAuthStatus:
 		name, _ := a["name"].(string)
 		f.authAsked = append(f.authAsked, p.Device+"/"+name)
+		f.authParams = append(f.authParams, maps.Clone(a))
 		if hold := f.authHold; hold != nil {
 			f.mu.Unlock()
 			select {
@@ -662,6 +666,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			case <-ctx.Done():
 			}
 			f.mu.Lock()
+		}
+		if f.authBy != nil {
+			return json.Marshal(f.authBy(p.Device, a))
 		}
 		if f.auth == nil {
 			return nil, errors.New("unknown method claude.auth_status")
@@ -1123,6 +1130,8 @@ type memStore struct {
 	failPut error
 	// failKeys: what reading one key fails with, the other keys still reading (set through failKey).
 	failKeys map[string]error
+	// routing: the model_routing rows written (PutModelRouting).
+	routing []db.ModelRoutingRow
 }
 
 // rawSetting returns a cloned copy of the raw JSON bytes stored for key under m.mu.
@@ -1191,6 +1200,22 @@ func (m *memStore) PutPlacement(ctx context.Context, p db.PlacementRow) error {
 }
 
 func (noPlans) PutPlacement(context.Context, db.PlacementRow) error { return nil }
+
+func (m *memStore) PutModelRouting(_ context.Context, r db.ModelRoutingRow) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.routing = append(m.routing, r)
+	return nil
+}
+
+// modelRoutings are the model_routing rows written so far.
+func (m *memStore) modelRoutings() []db.ModelRoutingRow {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.routing)
+}
+
+func (noPlans) PutModelRouting(context.Context, db.ModelRoutingRow) error { return nil }
 
 func (noPlans) CreateTaskPlan(context.Context, db.TaskPlanRow) error {
 	return errors.New("no task_plans here")
@@ -1450,6 +1475,7 @@ func newServiceOn(t testing.TB, f *fakeHub, st Store) *Service {
 // withSettings saves f.settings as s's own (none: s keeps what it has), and gives the hub's hello the fake model.
 func withSettings(t testing.TB, f *fakeHub, s *Service) *Service {
 	t.Helper()
+	installTestTrackKinds(s)
 	f.fakeModel(t)
 	// These tests are about what a plan does once it exists; what task_plan requires of a brief is task_brief_test.go's,
 	// which turns this off.
@@ -1674,6 +1700,9 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 	jsonOnly := strings.TrimSpace(prompts.RenderJSONOnly(""))
 	tabName := prompts.RenderTabName()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.modelRequests++
+		f.mu.Unlock()
 		if r.Method == http.MethodGet && r.URL.Path == "/" { // a node's port probe (node/ports.go), not this test's client
 			http.NotFound(w, r)
 			return

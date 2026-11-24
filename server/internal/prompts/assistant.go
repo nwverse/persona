@@ -112,8 +112,11 @@ type AssistantHealthClaudeMD struct {
 	StateDir string
 	// HealthDir is the health space's directory name in StateDir: "" is the built-in manager's "health", another's
 	// "health-<id>" (identity.HealthDirName).
-	HealthDir string
-	Language  string
+	HealthDir      string
+	Language       string
+	Water          bool // The owner's added intake items; false when the Health module is absent or unavailable.
+	Protein        bool
+	ItemsAvailable bool // The module can add items, including when neither intake item is added yet.
 }
 
 func RenderAssistantHealthClaudeMD(d AssistantHealthClaudeMD) string {
@@ -324,10 +327,13 @@ type SnapshotProfile struct {
 	Unreadable, Gone bool
 }
 
-// SnapshotTier is one tier of the profile in use: what an Agent started on it runs on ("" model or effort: the
-// launcher's), and when to use it.
+// SnapshotTier is one tier of the profile in use: what an Agent started on it runs on first ("" model or effort: the
+// launcher's), how many other candidates follow it (the hub picks among them at dispatch), the older names it answers
+// to, and when to use it.
 type SnapshotTier struct {
 	Name, Launcher, Model, Effort, Speed, PermissionMode, Description string
+	More                                                              int
+	Aliases                                                           []string
 }
 
 // Snapshot is the live context a starting assistant gets in its system prompt.

@@ -943,6 +943,8 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p sessionStartRequest, handoff bool) {
+	orig := p
+	replay := heldStartReplayOf(r.Context())
 	if strings.HasPrefix(p.ClientMsgID, proto.A2ADeliveryPrefix) {
 		writeErrCode(w, http.StatusBadRequest, "client_msg_id_reserved", i18n.Err("hub-send.reserved_id"))
 		return
@@ -955,7 +957,7 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	if apierr.ImagesOverLimit(w, proto.HubImageLimits.For(p.AgentType), len(p.Images)) {
 		return
 	}
-	if !handoff {
+	if !handoff && replay == nil {
 		r = h.captureHumanSubmission(r, p.Prompt)
 	}
 	if p.TodoID != "" && principalOf(r.Context()).Role != roleFull {
@@ -1000,6 +1002,21 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	if h.machineUntrusted(m.cfg.ID) { // not confirmed yet (machine_trust.go)
 		writeErrCode(w, http.StatusConflict, "machine_pending", i18n.Err("hub-machine_trust.start_pending"))
 		return
+	}
+	if p.AgentType != "" && !agentTypeRe.MatchString(p.AgentType) {
+		writeErr(w, http.StatusBadRequest, errors.New("unsupported agent type"))
+		return
+	}
+	opID := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Persona-Op-Id")))
+	if replay != nil {
+		opID = replay.opID
+	}
+	canHold := replay == nil && !handoff && p.ResumeSessionID == "" && opID != "" &&
+		clientOpUUID.MatchString(opID) && personSent(r.Context()) && h.requestWants(r, proto.FeatureAgentStartHold)
+	if canHold && !m.isConnected() {
+		if h.tryHoldStart(r.Context(), w, r, m, orig, opID, true) {
+			return
+		}
 	}
 	decided := ""
 	var handoffImages []proto.Image
@@ -1152,7 +1169,19 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	if checkedResume {
 		params["resume_outside_health"] = true // nodeproto.ResumeOutsideHealth: set after the manager's fill, never the caller's
 	}
-	if err := m.call(ctx, method, params, &res); err != nil {
+	if p.ResumeSessionID == "" && opID != "" {
+		params["op_id"] = opID // nodeproto.StartOpID: recorded by the node for reconnect reconciliation (#10674)
+	}
+	err = m.call(ctx, method, params, &res)
+	if replay != nil {
+		replay.nodeCalled, replay.nodeErr = true, err
+	}
+	if err != nil {
+		if canHold && errors.Is(err, errOffline) {
+			if h.tryHoldStart(ctx, w, r, m, orig, opID, false) {
+				return
+			}
+		}
 		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, err)
 		if re := (*rpc.Error)(nil); checkedResume && errors.As(err, &re) && re.Code == proto.CodeResumeUnknown {
 			// The answer the hub gives a conversation it lists in the space or does not know: the extension is not

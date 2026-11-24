@@ -41,6 +41,10 @@ import PersonaWire
     /// The hub has the slots (and so the context, charts and badges).
     var available: Bool { features().hasExtensionFeature("ui_slots") }
 
+    /// The optional domain-space product surface is enabled only while its
+    /// extension contributes a running navigation page.
+    var spaceConversationsEnabled: Bool { pages.contains { $0.owner == "space-conversations" && $0.id == "home" } }
+
     /// Asks the hub again for the entries and the cards (a list that cannot be read keeps what there was).
     func reload(for hub: String? = nil) async {
         reloadGeneration += 1

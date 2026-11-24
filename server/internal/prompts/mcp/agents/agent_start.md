@@ -73,7 +73,7 @@ Give `ultracode: true` for a large task: one that spans many files or needs chec
     },
     "tier": {
       "type": "string",
-      "description": "Agent preset from the snapshot's 模型档位 line; choose by purpose; resolved before approval and shown on the card; explicit launcher/model/effort/speed overrides"
+      "description": "Agent preset from the 模型档位 line, by kind of work (old names work); picked before approval, shown on the card; explicit launcher/model/effort/speed overrides"
     },
     "host": {
       "type": "string",

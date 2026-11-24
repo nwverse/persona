@@ -1345,7 +1345,7 @@ extension AssistantSidebar {
     // MARK: Spaces (#13500)
 
     /// The assistant has tracks and this sidebar opens spaces.
-    private var showsSpaces: Bool { openSpace != nil && SpaceStore.shared.supported == true }
+    private var showsSpaces: Bool { openSpace != nil && ExtensionSlots.shared.spaceConversationsEnabled && SpaceStore.shared.supported == true }
 
     /// The whole sidebar's Spaces: a heading over the spaces' rows and New space, under the places.
     @ViewBuilder private var spacesSection: some View {

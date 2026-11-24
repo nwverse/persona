@@ -412,6 +412,11 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 				svc.transcriptionReadinessChanged()
 			}
 		},
+		TracksChanged: func() {
+			if svc != nil {
+				svc.tracksChanged()
+			}
+		},
 		AssistantTools: func() []proto.Tool { return svc.toolsNow() },
 		// The model providers' keys that are references, for their provider extensions' details (launcher_secrets.go).
 		LauncherReferences: func(ctx context.Context) []extmgr.LauncherReference { return svc.launcherReferences(ctx) },
@@ -441,7 +446,7 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 	svc = New(Options{Hub: bh, Store: func() Store { return assistantStore }, Logf: logf, Devices: devs,
 		ModulesOff: modulesOff, // the built-in modules switched off (modules.go)
 		KB:         &KBOptions{Dir: o.KBDir, KeyDir: o.HandlesDir}, SecretKey: o.SecretKey,
-		Trust: devs, AgentDirs: devs, ID: o.ID, Build: version, RepositoryConfig: o.ConfigFile,
+		Trust: devs, AgentDirs: devs, HerdrSessions: devs, ID: o.ID, Build: version, RepositoryConfig: o.ConfigFile,
 		RemoteImageCache: filepath.Join(home, "cache", "remote-images")})
 	svc.SetExtensions(ext) // the connectors', Cua's and ego's tools, in this process (fleet_tools.go)
 	// When the north star's recording began (north_star.go).

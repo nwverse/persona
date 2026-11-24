@@ -1660,6 +1660,17 @@ runtime's row into a pane's, go through every field the runtime knows better, no
 The Antigravity companion lists every recent agy conversation on disk, including ones an `agy` in a terminal is
 running. When the node had no pane row to merge it into (herdr-core terminals were not recognised as agy), a message to
 `agy-<conversation>`, card answers included, went to the companion, which ran a second agy on the same conversation: the
-terminal never saw it, and the companion's turn overwrote the stored steps from where it had last loaded them. The
-terminal agy holds an exclusive flock on `presence/<conversation>.lock`; the file stays after agy exits, so test the lock,
-never the file. Calls that drive the conversation go to the pane, or are refused (`agy_in_terminal`) while the lock is held.
+terminal never saw it, and the companion's turn overwrote the stored steps from where it had last loaded them. The terminal agy holds an exclusive flock on `presence/<conversation>.lock` and leaves the file after agy exits; never
+probe it by taking even a shared `flock` (`LOCK_SH|LOCK_NB`), because a starting `agy` tries `LOCK_EX|LOCK_NB` once and
+runs its whole session without a lock if that fails (#14561). On Linux, read `/proc/locks` for the file's device and
+inode; where no lock table can be read, fall back to the presence file plus recent transcript writes by another process.
+Calls that drive the conversation go to the pane, or are refused (`agy_in_terminal`) while held.
+
+## First tool discovery can precede the session list (#14855)
+
+An assistant process can ask for MCP tools before its node publishes `sessions.changed`, even while the manager's
+`assistant.send` is still waiting. Resolve an unknown caller's space from the node's verified process launch directory,
+never a model argument or a claimed session's directory. An existing session row remains authoritative. Bind fallback
+evidence to its node machine and caller, and use one session snapshot for both a discovery list and its revision;
+otherwise a row arriving between those reads can leave an incomplete list cached as current. Test the order with real
+`Service.Start`, returning the requested prepare directory and delaying only the node reply and session publication.
