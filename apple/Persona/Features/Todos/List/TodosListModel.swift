@@ -172,7 +172,7 @@ final class TodosListModel {
     /// A minute passed while the list was held: every row's time is said again once it rests, not mid-glide.
     @ObservationIgnored private var clockWaits = false
     /// What the search found in the current assistant's to-dos (`TodoSearch`), by id, and the to-dos it looked through:
-    /// a push while the list searches looks through the ones it changed again (`refreshHits`).
+    /// a push while the list searches looks through the ones whose title or notes it changed again (`refreshHits`).
     @ObservationIgnored private var hits: [String: TodoSearchHit] = [:]
     @ObservationIgnored private var hitsFrom: [String: TodoItem] = [:]
     /// The hits the drawn layout was laid out with: while the list is held, what it draws keeps them, but for the rows
@@ -404,33 +404,30 @@ final class TodosListModel {
         return items
     }
 
-    /// The store moved while the list searches: the cached to-dos are compared with the ones the search looked through,
-    /// and those that changed are looked through again here, as a push changes a few (up to `lookedThroughHere`); many at
-    /// once (a first read) are looked through off the main actor again, the results drawn until then. A search still
-    /// looking does this as it lands. True when the hits changed here (the caller lays the list out). With the field
-    /// empty it is the one guard.
+    /// The store moved while the list searches: the titles and notes of the cached to-dos, all a search reads
+    /// (`TodoSearch.hit`), are compared with those the search looked through, and the to-dos whose words changed are
+    /// looked through again here, as a push changes a few (up to `lookedThroughHere`); many at once (a first read) are
+    /// looked through off the main actor again, the results drawn until then. A to-do gone keeps its hit unread, since
+    /// only the rows there are drawn. A search still looking does this as it lands. True when the hits changed here (the
+    /// caller lays the list out). With the field empty it is the one guard.
     @discardableResult private func refreshHits() -> Bool {
         guard !searchedWords.isEmpty, searchingFor == nil else { return false }
-        let items = searchedItems(snapshot)
-        var changed: [String] = []
-        var added = 0
-        for (id, item) in items {
-            guard let was = hitsFrom[id] else {
-                changed.append(id)
-                added += 1
-                continue
-            }
-            if was != item { changed.append(id) }
+        var changed: [String: TodoItem] = [:]
+        for row in snapshot.filed {
+            guard let item = snapshot.items[row.id] else { continue }
+            if let was = hitsFrom[row.id], was.title == item.title, was.notes == item.notes { continue }
+            changed[row.id] = item
+            if changed.count > Self.lookedThroughHere { break } // looked through off the main actor again
         }
-        let removed = hitsFrom.count + added - items.count
-        guard !changed.isEmpty || removed > 0 else { return false }
-        guard changed.count + removed <= Self.lookedThroughHere else {
+        guard !changed.isEmpty else { return false }
+        guard changed.count <= Self.lookedThroughHere else {
             look(for: searchedWords, forStore: true)
             return false
         }
-        if removed > 0 { for id in hitsFrom.keys where items[id] == nil { hits[id] = nil } }
-        for id in changed { hits[id] = items[id].flatMap { TodoSearch.hit($0, words: searchedWords) } }
-        hitsFrom = items
+        for (id, item) in changed {
+            hits[id] = TodoSearch.hit(item, words: searchedWords)
+            hitsFrom[id] = item
+        }
         return true
     }
 
