@@ -32,6 +32,7 @@ import { SourcesUI } from "./subscriptions/SourcesUI";
 import { useInboxSourcesShown } from "../lib/subscriptions";
 import { ModelConfiguration } from "./settings/ModelConfiguration";
 import { HiddenAgentDirs } from "./settings/HiddenAgentDirs";
+import { HerdrSessions } from "./settings/HerdrSessions";
 import { AgentSettings } from "./settings/AgentSettings";
 import { SidebarPagesGroup } from "./settings/SidebarPages";
 import { StartPageGroup } from "./settings/StartPage";
@@ -516,6 +517,7 @@ function AgentSections({ section }: { section: SettingsSection | null }) {
   return (
     <>
       <HiddenAgentDirs />
+      <HerdrSessions />
       {AGENT_KINDS.map((id) => {
         const shown = !closed.has(id);
         return (

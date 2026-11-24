@@ -5,20 +5,6 @@ import SwiftUI
 // itself, so the page (ChatView, the hot path: docs/apple/ios-state.md) only asks `VoiceCalls.isBound` and is not drawn again
 // as words come in.
 
-extension VoiceCalls {
-    /// The call bound to `key`, live or ended.
-    func call(on key: SessionKey) -> VoiceConversation? {
-        guard let call = current, call.key == key else { return nil }
-        return call
-    }
-
-    /// A call bound to `key` is on (not ended): the page's footer keeps out of its way.
-    func isLive(on key: SessionKey) -> Bool {
-        guard let call = call(on: key) else { return false }
-        return !call.isOver
-    }
-}
-
 /// The call's captions at the end of the thread (`VoiceThreadTail`): temporary rows, on this device only, not saved
 /// (docs/assistant/voice.md 1.2 C). What the user says and what the voice says, the last few, in the order they were said (a late
 /// caption of the user's is put before the answer it came in: `VoiceConversation.caption`, #5673); ⋯ › All Captions

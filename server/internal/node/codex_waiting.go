@@ -364,6 +364,10 @@ func (n *Node) codexHeldThreads() codexHeld {
 				continue
 			}
 			id := n.codexPublicID(home, thread)
+			if n.herdrSessionBlocked(p.herdrSession) && !n.isAssistantSession(id) && !n.keptSessions()[id] {
+				n.noteHerdrSessionID(id, p.herdrSession)
+				continue
+			}
 			held.owner[id] = pane
 			if pane != "" {
 				held.byPane[pane] = append(held.byPane[pane], heldThread{home: home, id: id, path: path})

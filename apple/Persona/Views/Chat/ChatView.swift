@@ -622,13 +622,13 @@ struct ChatView: View {
         // leaves the phone's voice chat bound to it with the bar back to it at the top, and coming back takes the bar away
         // (docs/assistant/voice.md 6.5; #9887 one button: it no longer ends there).
         .onChange(of: key) { old, new in
-            VoiceCalls.shared.leave(old)
-            VoiceCalls.shared.returned(new)
+            model.voice?.leave(old)
+            model.voice?.returned(new)
         }
-        .onTabVisibility(appear: { [key] in VoiceCalls.shared.returned(key) }, disappear: { [key] in VoiceCalls.shared.leave(key) })
+        .onTabVisibility(appear: { [key, model] in model.voice?.returned(key) }, disappear: { [key, model] in model.voice?.leave(key) })
         // The bar back to this conversation's voice chat tapped over a cover of this page (#9887: a full-screen picture,
         // the terminal): the cover goes, and the page showing again takes the bar away (`VoiceCalls.returnTo`).
-        .onChange(of: VoiceCalls.shared.returning == key) { _, back in if back { closeCovers() } }
+        .onChange(of: model.voice?.isReturning(to: key) ?? false) { _, back in if back { closeCovers() } }
         .onChange(of: status) { _, st in if !st.isActive { Task { await loadGit() } } }
         .stackSegment()
     }
@@ -1704,7 +1704,7 @@ struct ChatView: View {
     /// unsent message, error or call captions. Read loosely: anything that might be there counts.
     private var newestAlone: Bool {
         shownPending.isEmpty && sendPhase == nil && store.error == nil && (frozen?.text ?? store.liveText).isEmpty
-            && !(viewing == nil && VoiceCalls.shared.isBound(to: key))
+            && !(viewing == nil && (model.voice?.isBound(to: key) ?? false))
     }
 
     /// How far off the newest end may be placed before the list is built again (rounding, a pixel).
@@ -2769,7 +2769,7 @@ struct ChatView: View {
         let tasks = TasksStore.shared
         // What waits for the owner, one card at a time behind To Decide (#12831): the conversation's own cards and its tasks'.
         let own = dockCards
-        QuestionDock(own: own, conversation: conversation, room: footerRoom, state: dock, inCall: VoiceCalls.shared.isLive(on: key))
+        QuestionDock(own: own, conversation: conversation, room: footerRoom, state: dock, inCall: model.voice?.isLive(on: key) ?? false)
             .environment(\.cardSources, cardSources)
             .task(id: CardSourceInputs(cards: own.map(\.id), count: store.items.count, last: store.items.last?.id)) {
                 if !own.isEmpty { findCardSources() }
@@ -2787,7 +2787,7 @@ struct ChatView: View {
             }
         }
         // Out of the way of a voice call (docs/assistant/voice.md 6.2「通话期间」), back when it ends.
-        VoiceCallHides(key: key) {
+        HiddenDuringCall(key: key) {
             // Needs You / In Progress in the dock's capsules, each opening its tray (#3393), on every device.
             AssistantActionBar(conversation: conversation, key: key, computer: computerActivity, dock: dock, dockOwn: own)
             RouteChip(conversation: conversation)
@@ -2841,7 +2841,7 @@ struct ChatView: View {
             cards.append(PendingCards.Card(interaction: ix, enabled: true, localOnly: true))
         }
         // `-showVoiceSample asking|approval|plan_feedback`: the card the voice asks about or points to.
-        cards += VoiceSample.cards(key).map { PendingCards.Card(interaction: $0, enabled: true) }
+        cards += (model.voice?.sampleCards(key) ?? []).map { PendingCards.Card(interaction: $0, enabled: true) }
         // `-showSideSessions …`: the sample side's question, in its own chat and in its parent's.
         if let parent = model.sideParent(of: key), let ix = SideSessionSamples.card(for: key, parent: parent) {
             cards.append(PendingCards.Card(interaction: ix, enabled: true))
@@ -3057,8 +3057,8 @@ struct ChatView: View {
                 .id(Self.bottomID)
             // A voice call's captions, the thread's last rows while it is bound here (docs/assistant/voice.md 6.2): they read the
             // call themselves; the page only asks whether one is bound.
-            if viewing == nil, VoiceCalls.shared.isBound(to: key) {
-                VoiceThreadTail(key: key, held: frozen != nil)
+            if viewing == nil, let voice = model.voice, voice.isBound(to: key) {
+                voice.threadTail(key: key, held: frozen != nil)
                     .flippedBack()
                     .id("voice-tail")
             }
@@ -3426,7 +3426,7 @@ struct ChatView: View {
         // Not while a tapped header is held in place (`ChatPin`): opening a work line loads its steps.
         .onChange(of: store.items.count) { _, _ in contentArrived(foldChrome: true) }
         .modifier(ChatStreamFollow(store: store) { contentArrived(foldChrome: true) })
-        .modifier(VoiceTailFollow(key: key) { contentArrived(foldChrome: false) }) // a voice call's captions, likewise
+        .background { model.voice?.tailFollower(key: key) { contentArrived(foldChrome: false) } } // a voice call's captions, likewise
         // Your own message brings you to the newest — only yours (one typed on the computer, or sent by another session,
         // used to pull you out of the history you were reading too), and only if you have not scrolled since sending it:
         // Claude can take it in seconds later, while you went back up to read (2026-10-30).
@@ -4139,7 +4139,7 @@ struct ChatView: View {
     /// (Agents chats, a subagent's transcript, a voice call, which puts the capsules away): there the chat is gone by the
     /// composer's top edge.
     private var underFooter: CGFloat {
-        style == .assistant && !backgroundActivity && viewing == nil && !VoiceCalls.shared.isLive(on: key) ? Self.underDock : 0
+        style == .assistant && !backgroundActivity && viewing == nil && !(model.voice?.isLive(on: key) ?? false) ? Self.underDock : 0
     }
 
     /// The fog over the list's end: clear `newestGap` above the footer, where the newest message rests, and solid from
@@ -5724,33 +5724,27 @@ struct Composer: View, Equatable {
     @State private var showPermissions = false
     @State private var permissionsPick: String?
     @FocusState private var focused: Bool
-    /// The 「+」 menu's Voice Chat where the page offers no call: why (docs/assistant/voice.md 1.3).
-    @State private var voiceNote: VoiceUnavailableNote?
     /// The model menu's "Other Model…" (#1644): a model ID typed by hand, through POST …/modes.
     @State private var typingModel = false
 
-    /// The voice call bound to this conversation, live or ended (docs/assistant/voice.md 6.2): the bar takes the box's place while
-    /// it is on, and 「语音已结束 · 继续」 sits over the box after it ended by itself.
-    private var voiceCall: VoiceConversation? { VoiceCalls.shared.call(on: key) }
-
     /// The composer's phone icon (docs/assistant/voice.md 6.1; #9887 one button: the one voice entry): only where a call
     /// can start. On the iPhone it calls this conversation through the system; elsewhere it is the voice chat in the app
-    /// (`VoiceEntry.start`). Why a call could not be placed shows over the app (`PersonaCalls.refusal`).
+    /// (the voice module's `ConversationVoice`). Why a call could not be placed shows over the app (`PersonaCalls.refusal`).
     private var voiceEntry: (() -> Void)? {
-        guard VoiceSupport.shared.availability(for: model.session(key), group: key.group).isAvailable else { return nil }
+        guard model.voice?.offersCall(in: key) == true else { return nil }
         return { startVoice() }
     }
 
     /// `inApp`: the voice chat in the app whatever the device (DEBUG `-openVoice`).
     private func startVoice(inApp: Bool = false) {
         focused = false
-        voiceNote = VoiceEntry.start(key, model: model, inApp: inApp) { voiceNote = $0 }
+        model.voice?.start(key, inApp: inApp)
     }
 
     /// Voice Chat in the 「+」 menu of the composers with no phone icon (Apple Vision Pro's: the Mac has no call audio yet,
     /// docs/assistant/voice.md 6.9). The iPhone's and the iPad's + have none: the phone icon is their one voice entry.
     @ViewBuilder private var voiceMenuItem: some View {
-        if VoicePlatform.current == .phone {
+        if model.voice?.listsVoiceChat == true {
             Button { startVoice() } label: { Label("Voice Chat", systemImage: Theme.Icon.voiceChannel) }
                 .accessibilityIdentifier("composer-menu-voice")
         }
@@ -6072,8 +6066,8 @@ struct Composer: View, Equatable {
     private var gate: SendGate? { isMain && !status.isActive ? model.readinessGate(route: $failureRoute, pickModel: openAssistantModel) : nil }
 
     private var composerNotes: some View {
-        let call = voiceCall
-        let inCall = call.map { !$0.isOver } ?? false
+        let voice = model.voice
+        let inCall = voice?.isLive(on: key) ?? false
         return VStack(spacing: Theme.Space.s) {
             SessionLiveRetryNote(key: key)
             if offlineManager == nil, let session = model.session(key), let away = model.offlineAgent(session) {
@@ -6163,12 +6157,12 @@ struct Composer: View, Equatable {
                 }
             }
             // A call that ended by itself: 「语音已结束 · 继续」 over the box, until the page goes (docs/assistant/voice.md 1.2 L).
-            if let call, call.isOver, case .ended(let end) = call.phase, let note = VoiceEndNote.make(end, extensionID: call.extensionID) {
-                VoiceEndedStrip(call: call, note: note)
+            if let voice, !inCall, voice.showsEnded(on: key) {
+                voice.endedLine(key: key)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            if let call, inCall {
-                VoiceBar(call: call, key: key, label: VoiceEntry.label(key, model: model))
+            if let voice, inCall {
+                voice.bar(key: key, label: nil)
                     .transition(.opacity)
             } else if usesShellComposer {
                 // The shell's composer (docs/apple/ios.md「New shell」), whatever the style: the assistant's and an agent's (#1091).
@@ -6178,7 +6172,7 @@ struct Composer: View, Equatable {
                                  hasAttachments: hasAttachments,
                                  stop: status.isActive && model.session(key)?.canInterrupt == true ? { Task { await model.interrupt(key) } } : nil,
                                  voice: voiceEntry,
-                                 voiceLabel: VoiceEntry.iconLabel(key),
+                                 voiceLabel: model.voice?.iconLabel(key),
                                  modesTitle: modesTitle,
                                  modesDisclosure: assistantModelPickAvailable,
                                  quotes: contexts,
@@ -6224,7 +6218,7 @@ struct Composer: View, Equatable {
                                hasAttachments: hasAttachments,
                                stop: status.isActive && model.session(key)?.canInterrupt == true ? { Task { await model.interrupt(key) } } : nil,
                                attach: PromptItems.attachments(camera: CameraPicker.isAvailable, modules: Modules.registry.composerActions)
-                                   + (VoicePlatform.current == .phone ? [PromptItems.voice] : []),
+                                   + (model.voice?.listsVoiceChat == true ? [PromptItems.voice] : []),
                                mentions: mentions,
                                commands: promptCommands,
                                models: canPickModel ? PromptItems.composerModels(running: model.session(key)?.model, list: runningModels) : [],
@@ -6320,7 +6314,7 @@ struct Composer: View, Equatable {
             await declarations.refreshWhileActive(api: model.api(key.group))
         }
         // Voice (docs/assistant/voice.md 6.1): asks the hub about it, says why there is none, and the DEBUG switches (6.8).
-        .modifier(ComposerVoice(key: key, note: $voiceNote, active: phase == .active, offered: { voiceEntry != nil }, start: { startVoice(inApp: true) }))
+        .background { model.voice?.composerSupport(key: key, active: phase == .active, offered: { voiceEntry != nil }, start: { startVoice(inApp: true) }) }
         #if DEBUG
         .task { // `-showSampleQuotes YES`: a page's text and another session quoted over the box (#986, screenshots)
             guard UserDefaults.standard.bool(forKey: "showSampleQuotes") else { return }
