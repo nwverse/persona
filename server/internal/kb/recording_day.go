@@ -3,7 +3,6 @@ package kb
 import (
 	"cmp"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -11,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // All-day recordings (docs/assistant/day-recap.md, #4741): kind day, one recording per local day (or a few parts of
@@ -24,8 +25,10 @@ import (
 // minutes, no attending, no summary of its own; matched_rev and summarized_rev stay at its revision so an older
 // manager after a rollback does neither either.
 
-// MaxAppendSegments is how many segments one append carries at most.
-const MaxAppendSegments = 500
+// Re-exported from recordingwire.
+const (
+	MaxAppendSegments = recordingwire.MaxAppendSegments
+)
 
 // Limits of a day recording's coverage.
 const (
@@ -33,14 +36,14 @@ const (
 	maxGapReason    = 32 // bytes
 )
 
-// Why the phone has no text for a stretch of the day (CoverageGap.Reason, an open set: an unknown one is kept).
+// Re-exported from recordingwire.
 const (
-	GapPaused      = "paused"
-	GapInterrupted = "interrupted"
-	GapStopped     = "stopped"
-	GapPending     = "pending"
-	GapLost        = "lost"
-	GapErased      = "erased"
+	GapPaused      = recordingwire.GapPaused
+	GapInterrupted = recordingwire.GapInterrupted
+	GapStopped     = recordingwire.GapStopped
+	GapPending     = recordingwire.GapPending
+	GapLost        = recordingwire.GapLost
+	GapErased      = recordingwire.GapErased
 )
 
 // RecordingCoverage is the phone's view of a day recording, sent whole every time: To is the seconds since started_at
@@ -57,72 +60,23 @@ type CoverageGap struct {
 	Reason string  `json:"reason"`
 }
 
+// Re-exported from recordingwire.
 var (
-	// ErrKindChanged: a PUT would make a day recording another kind, or another recording a day recording.
-	ErrKindChanged = errors.New("a recording becomes a day recording only at its first upload, and stays one")
-	// ErrNotDay: an append to a recording that is not a day recording.
-	ErrNotDay = errors.New("this recording is not an all-day recording")
-	// ErrBaseChanged: an append names a base another PUT replaced; a BaseChangedError says which is current.
-	ErrBaseChanged = errors.New("another upload replaced this recording since that base")
-	// ErrSegmentsGap: an append's from is above the positions held; a SegmentsGapError says how many there are.
-	ErrSegmentsGap = errors.New("segments are missing before from")
-	// ErrDayFull: the request would pass maxRecordingSegments positions or maxRecordingText bytes of text; nothing of
-	// it was stored. A DayFullError says how many positions there are.
-	ErrDayFull = errors.New("this part of the day is full; continue in the next part")
+	ErrKindChanged = recordingwire.ErrKindChanged
+	ErrNotDay      = recordingwire.ErrNotDay
+	ErrBaseChanged = recordingwire.ErrBaseChanged
+	ErrSegmentsGap = recordingwire.ErrSegmentsGap
+	ErrDayFull     = recordingwire.ErrDayFull
 )
 
-// BaseChangedError is ErrBaseChanged with the current base (0: a manager that did not know bases rewrote it) and count.
-// errors.As finds it as a BaseChangedError and as a *BaseChangedError, like LiveGapError.
-type BaseChangedError struct {
-	Base int64
-	Next int
-}
+// BaseChangedError is declared in recordingwire.
+type BaseChangedError = recordingwire.BaseChangedError
 
-func (e BaseChangedError) Error() string {
-	return fmt.Sprintf("%v: base %d, next %d", ErrBaseChanged, e.Base, e.Next)
-}
-func (e BaseChangedError) Unwrap() error { return ErrBaseChanged }
+// SegmentsGapError is declared in recordingwire.
+type SegmentsGapError = recordingwire.SegmentsGapError
 
-func (e BaseChangedError) As(target any) bool {
-	if p, ok := target.(**BaseChangedError); ok {
-		c := e
-		*p = &c
-		return true
-	}
-	return false
-}
-
-// SegmentsGapError is ErrSegmentsGap with how many positions the hub holds: the phone sends again from Next.
-type SegmentsGapError struct{ Next int }
-
-func (e SegmentsGapError) Error() string {
-	return fmt.Sprintf("%v: send from %d", ErrSegmentsGap, e.Next)
-}
-func (e SegmentsGapError) Unwrap() error { return ErrSegmentsGap }
-
-func (e SegmentsGapError) As(target any) bool {
-	if p, ok := target.(**SegmentsGapError); ok {
-		c := e
-		*p = &c
-		return true
-	}
-	return false
-}
-
-// DayFullError is ErrDayFull with how many positions the hub holds.
-type DayFullError struct{ Next int }
-
-func (e DayFullError) Error() string { return fmt.Sprintf("%v (next %d)", ErrDayFull, e.Next) }
-func (e DayFullError) Unwrap() error { return ErrDayFull }
-
-func (e DayFullError) As(target any) bool {
-	if p, ok := target.(**DayFullError); ok {
-		c := e
-		*p = &c
-		return true
-	}
-	return false
-}
+// DayFullError is declared in recordingwire.
+type DayFullError = recordingwire.DayFullError
 
 // RecordingAppend is POST /api/v1/recordings/{id}/segments's body. A nil field is absent: unchanged.
 type RecordingAppend struct {

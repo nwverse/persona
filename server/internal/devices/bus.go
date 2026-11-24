@@ -314,6 +314,7 @@ func (d *Devices) Handler(next http.Handler) http.Handler {
 	route("POST /api/v1/machines/{mid}/link-switch", d.postLinkSwitch)
 	route("GET /api/v1/machines/{mid}/diagnosis", d.getDiagnosis)
 	route("POST /api/v1/machines/{mid}/cleanup", d.postCleanup)
+	d.usageMapRoutes(route)
 	route("GET /api/v1/machines/{mid}/claude-dirs", d.getClaudeDirs)
 	route("GET /api/v1/machines/{mid}/agent-dirs/hidden", d.getHiddenAgentDirs)
 	route("PUT /api/v1/machines/{mid}/agent-dirs/hidden", d.putHiddenAgentDirs)
