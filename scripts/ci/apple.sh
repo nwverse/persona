@@ -181,6 +181,8 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
   # The pixel scroll record (#7775), shared by Persona Input and the iOS app, and Persona Input itself, a package apart
   # from Persona Screen's.
   ci_run 'PersonaInputKit unit tests' 300 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaInputKit" --scratch-path "$SPM/PersonaInputKit" -Xswiftc -warnings-as-errors
+  # The module contract and registry (#13432, docs/apple/ios.md "Modules").
+  ci_run 'PersonaModuleAPI unit tests' 300 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaModuleAPI" --scratch-path "$SPM/PersonaModuleAPI" -Xswiftc -warnings-as-errors
   ci_run 'Persona Input build' 600 xcrun swift build -c release --package-path "$SOURCE/apple/PersonaLink/Input" --scratch-path "$SPM/PersonaInput" -Xswiftc -warnings-as-errors
   # The independent Link package contains only Persona Screen, built as mac-link.sh builds it; PersonaScreenCore's tests
   # cover its capture decisions. There is no menu-bar app or separate Link UI test target to build.
@@ -231,6 +233,14 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE
   # device build fail here (#6735; MainPagesStackTests measures the run-time part in the simulator).
   ci_run 'Debug view stack frames (device build)' 300 python3 "$CI_ROOT/scripts/ci/apple_stack_frames.py" \
     "$OUTPUT/ios-device/Build/Products/Debug-iphoneos/Persona.app"
+  # The app without its moved feature modules (apple/modules-core-only.yml, #14017; docs/apple/ios.md "Modules"): the
+  # core must build with every apple/Modules/<Name> left out. Generated into the same project, built, then the whole
+  # project generated again for the steps below. Only the app scheme: the watch and extensions compile no module.
+  ci_run 'Generate core-only Apple project' 120 env PERSONA_CORE_ONLY=YES xcodegen generate --spec "$SOURCE/apple/project.yml" --project "$SOURCE/apple"
+  ci_run 'Core-only iOS build' 1800 "${XCODE[@]}" -scheme Persona \
+    -destination 'generic/platform=iOS' -derivedDataPath "$OUTPUT/ios-core-only" \
+    -disableAutomaticPackageResolution "${UNSIGNED[@]}" build
+  ci_run 'Generate Apple project again (whole)' 120 xcodegen generate --spec "$SOURCE/apple/project.yml" --project "$SOURCE/apple"
 fi
 if [ "$LANE" = ios18 ]; then
   runtimes="$OUTPUT/runtimes-iOS-before.json"

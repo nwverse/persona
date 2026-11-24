@@ -30,6 +30,7 @@ PACKAGES = {
     "PersonaCore": {"path": "Packages/PersonaCore"},
     "PersonaScreenKit": {"path": "Packages/PersonaScreenKit"},
     "PersonaInputKit": {"path": "Packages/PersonaInputKit"},
+    "PersonaModuleAPI": {"path": "Packages/PersonaModuleAPI"},
     "MarqueeGlow": {"url": "https://github.com/szupzj18/MarqueeGlow", "exactVersion": "0.1.0"},
 }
 SOURCES = {
@@ -52,7 +53,8 @@ SOURCES = {
             "Shared/RequestClientMetadata.swift", "Shared/ExtensionSurfaceEntities.swift",
             "Shared/ExtensionSurfaceView.swift", "Shared/ExtensionSystemWidget.swift",
             "Shared/Design/ExtensionSurfaceTokens.swift", "Shared/Design/PersonaFace.swift", "Shared/HomeWidgets",
-            "Shared/Design/HomeWidgetTokens.swift", "Shared/Localization",
+            "Shared/Design/HomeWidgetTokens.swift", "Shared/Design/HealthIntakePalette.swift",
+            "Shared/Localization",
         )),
     ],
     "PersonaNotify": [
@@ -72,11 +74,12 @@ DEPENDENCIES = {
         {"target": "PersonaNotify"},
         *({"package": name} for name in (
             "MarkdownUI", "BeautifulUI", "PersonaSSH", "PersonaKit", "PersonaCore",
-            "MarqueeGlow", "PersonaScreenKit", "PersonaInputKit",
+            "MarqueeGlow", "PersonaScreenKit", "PersonaInputKit", "PersonaModuleAPI",
         )),
     ],
     "PersonaTests": [
         {"package": "PersonaWire"},
+        {"package": "PersonaModuleAPI"},
         {"target": "Persona"},
         {"sdk": "LiveCommunicationKit.framework", "weak": True},
         {"package": "PersonaCore", "product": "PersonaCoreTestSupport"},

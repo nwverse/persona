@@ -292,6 +292,10 @@ pi, the Cursor CLI (`cursor-agent`) and the Antigravity CLI (`agy`) are agents t
 
 **agy's permission mode is its start's.** An agy start runs in Allow all (`--dangerously-skip-permissions`) unless it names another mode: `acceptEdits` passes `--mode accept-edits`, `auto` passes `--mode auto`, and `default` passes no flag (agy's own approval). Like Claude Code, an agy worker from `agent_start` or `task_plan` gets Allow all when nothing names a mode (`startAgent.allowAll`), since nobody at the pane answers agy's approval prompt; a mode the call or plan names stays. The row reports the mode it started in as `permission_mode`, and a herdr restart resumes it with the same flag. The mode, effort and model cannot be changed afterwards: `session.modes` on an agy or Cursor pane is refused with `modes_unsupported` (409) and no key reaches the pane, and their rows say `capabilities.modes: false`, so no client offers the chips. agy cycles its own modes with shift+tab, but its footer is not Claude Code's and Allow all is a start flag outside that cycle, so the node does not drive it. Antigravity's runtime (`agy acp`, the companion conversation) keeps its own mode switch.
 
+A managed Antigravity launcher with a key (`GOOGLE_GEMINI_BASE_URL` / `GEMINI_API_KEY`) also decides how the Antigravity companion (Agents without a terminal, agy as the assistant, the model list) signs in: the node gives the companion that launcher's variables and `PERSONA_AGY_MODEL_PROVIDER=gemini`, and the companion then uses the Gemini API key provider instead of a Google account (`docs/integrations/runtimes.md`, "Gemini API key provider", #13762). With several such launchers the first by name is used (fetched ahead whatever its delivery, #13871), and removing the key (or the launcher) restarts the companion on the sign-in again.
+
+**Creating one** (`POST /api/v1/launchers`, a full-device token): `{"kind": "launcher", "agent": "agy", "name": "agy-gw", "base_url": "https://<gateway address>", "api_key": "<key>", "model": "<an agy model id the gateway serves>"}`. `model` is required (it is the launcher's default; pick one from `agy models`, such as `gemini-4-neon-high`), `auth` is not used (agy sends the key in `x-goog-api-key` itself), and `name` may be left out. The key is stored sealed and never sent back. A herdr pane start or resume of that launcher types `personad launch agy-gw …`, which fetches the launcher's `GOOGLE_GEMINI_BASE_URL` / `GEMINI_API_KEY` from the node (launch key, as for a managed Claude launcher) and execs `agy --settings '{"modelProvider":"gemini"}' …`; the key is in no typed line, no argument and no resume command. An `--settings` the pane's own arguments carry is kept as it is.
+
 For herdr starts, the Antigravity model picker reads the local launcher's `models` output and uses the standard catalog cache and refresh. Picking an effort passes `--effort` with one of `low`, `medium`, `high`, `xhigh` or `max`. Leaving an override unset uses the launcher's default. pi and Cursor keep their own effort.
 
 The first message is never typed into the pane:
@@ -780,11 +784,12 @@ Persona checks the effective Base URL/provider address, never the launcher name.
 | Header | Value |
 | --- | --- |
 | `X-Persona-Role` | `main` for interactive main/side chats; `leader` for direction conversations; `routine` for scheduled runs and their conversations; `task_agent` for work Agents; `background` for sorting, knowledge helpers, supervision and model health probes |
-| `X-Persona-Todo` | Linked to-do ID, when known |
+| `X-Persona-Todo` | Linked to-do ID, when known at process start (an `agent_start` makes its to-do before the start, so its Agent names it) |
 | `X-Persona-Routine` | Scheduled-task ID, when known |
 | `X-Persona-Session` | Persona session ID, when known at process start/resume |
 
-Only role enums and validated IDs enter these fields. A routine delivered into an interactive conversation has the
+Persona's own gateway reads for extensions (quota and usage through the hub or a node) and provider tests and model
+lists are `background`. Only role enums and validated IDs enter these fields. A routine delivered into an interactive conversation has the
 routine's accounting role for that run; the next interactive message restores the conversation's role. Manager-owned
 records supply the metadata on starts, sends and autonomous resumes. Source changes participate in process reuse,
 and node state preserves attribution through the manager's database boundary.
@@ -799,6 +804,8 @@ Codex uses a final CLI helper after normal shell launcher expansion, or after a 
 per-invocation `-c` overrides for the selected custom provider's `env_http_headers`. Existing literal headers are carried
 in environment bindings too, so credentials never enter the new arguments. Authentication, provider URL and unrelated
 headers stay intact. These local configuration overrides keep attribution on that process rather than a shared daemon.
+A terminal's shell has its engine's environment, not the node's, so the node hands its allowlist to that helper in the
+start file (`codex-start`) or in its answer to `personad launch`; the shell need not export `PERSONA_MODEL_SOURCE_HOSTS`.
 Some Codex traffic cannot carry the fields: the built-in `openai` provider ignores ordinary provider header overrides;
 explicit remote/desktop app-servers and external runtimes own their own HTTP transport; project-level provider choices
 are skipped because only Codex knows whether it trusts that project configuration. Unknown/unreadable provider
