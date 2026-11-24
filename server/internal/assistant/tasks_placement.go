@@ -111,6 +111,9 @@ func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, ow
 		return agent, err
 	}
 	if t.Readonly {
+		// The Antigravity companion holds a plan start read-only (caps.readonly): a read-only agy task whose launcher it
+		// runs starts there and never in a pane (start_host.go, #13464).
+		s.companionStartHost(ctx, m, agent, params)
 		if err := s.readonlyLauncherRefusal(ctx, m, params, agent); err != nil {
 			return startAgent{}, err
 		}
@@ -136,12 +139,14 @@ func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, ow
 // the node refuses their plan-mode start too (node/control.go). No other launcher is put in its place: the plan named
 // that agent. Anything else goes on as before: a launcher whose agent the computer's list does not say goes to the node
 // with plan, which refuses what it cannot hold read-only (nothing is refused here on a guess), and a start an engine
-// runtime runs is the runtime's to refuse (Paseo holds only its Claude Code providers read-only, caps.readonly).
+// runtime runs is the runtime's to refuse (Paseo holds only its Claude Code providers read-only, caps.readonly). So is
+// an agy start on the Antigravity companion (host agy, fitTaskLauncher), which runs plan in agy's own plan mode (#13464).
 func (s *Service) readonlyLauncherRefusal(ctx context.Context, m Device, params map[string]any, agent startAgent) error {
 	if !proto.IsWorkAgentType(agent.agent) {
 		return nil
 	}
-	if host, _ := params["host"].(string); agentStartHost(m, host) != "" {
+	host, _ := params["host"].(string)
+	if agentStartHost(m, host) != "" || agent.agent == "agy" && host == proto.HostAgy {
 		return nil
 	}
 	launcher, _ := params["launcher"].(string)
@@ -250,6 +255,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	// A self-planning constraint applies only while a policy rule asks for it on this try.
 	t.planFirst = false
 	params := map[string]any{"model_source": planModelSource(*t), "launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "speed": t.Speed, "tier": t.Tier}
+	if t.Host != "" {
+		params["host"] = t.Host // before the fit: an engine host's runtime runs its own launchers (#8140)
+	}
 	// The start-defaults policy: its preset goes in before the start is resolved, as if the task had named that tier;
 	// its effort and ultracode after the launcher fit, and the goal (a rule's or the Codex default) after that.
 	defaults, withDefaults := s.taskStartDefaults(ctx, t)
@@ -257,9 +265,23 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if withDefaults {
 		presetNote = s.applyStartPreset(ctx, t, caller, defaults, params)
 	}
-	own, err := s.resolveStart(ctx, params, t.LauncherDefaultModel)
+	tierCtx, tierSlot := withTierStart(ctx, t.Machine)
+	own, err := s.resolveStart(tierCtx, params, t.LauncherDefaultModel)
 	if err != nil {
 		return "", "", err
+	}
+	// The candidate the tier gave this start (pickTierCandidate): on the plan card as the task's dispatch, and one
+	// model_routing row once the Agent started.
+	t.Dispatch, t.tierChoice = nil, tierSlot.pick
+	if tierSlot.pick != nil {
+		t.Dispatch = tierSlot.pick.dispatch()
+		defer func() {
+			if err == nil && sid != "" {
+				row := modelRoutingOf(*tierSlot.pick, mid)
+				row.TodoID, row.PlanID, row.TaskIndex, row.SessionID = t.TodoID, t.planID, t.planIndex, sid
+				s.recordModelRouting(ctx, row)
+			}
+		}()
 	}
 	if t.defaulted || t.Launcher == "" {
 		own.launcher, t.defaulted = "", true // filled in from a default, by this try or an earlier one
@@ -287,6 +309,12 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err != nil {
 		return "", "", err
 	}
+	if err := checkHostLauncher(params, fit); err != nil {
+		return "", "", err
+	}
+	// An agy task that names no host starts on the computer's Antigravity companion where that runs its launcher
+	// (start_host.go, #13447); a retry in a pane an earlier try opened, or a prepared backend workspace, stays as it was.
+	companion := t.inPane == "" && !t.backendWorkspace() && s.companionStartHost(ctx, m, fit, params)
 	if t.CallerPermission != nil && !t.preservePermission {
 		keepSettled := false
 		if retry && settledPermission != "" && *t.CallerPermission == "" && t.RetryFromAgent != "" {
@@ -309,7 +337,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if !t.preservePermission {
 		switch {
 		case t.Readonly:
-			if fit.allowAll() {
+			// Allow all and the first message's constraint, as for Claude Code; the companion keeps plan, which it runs
+			// read-only (#13464), unless assistant.readonly_mode is prompt.
+			if fit.allowAll() && !(t.Permission == "plan" && params["host"] == proto.HostAgy) {
 				t.Permission = "bypassPermissions"
 			}
 		case configuredMode != "" && fit.supportsPermissionMode(configuredMode):
@@ -573,7 +603,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	// once, in whatever order the node refuses them; both refusals come before anything starts.
 	var skipped string
 	var refused bool
-	for range 2 {
+	for range 3 {
 		if reason, no := s.goalRefusal(err, params); no {
 			delete(params, "goal")
 			s.logf("task %s: start: %s; starting without a goal", t.TodoID, reason)
@@ -587,6 +617,21 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			skipped, refused = reason, true
 			delete(params, "ultracode")
 			s.logf("task %s: start: %s; starting without ultracode", t.TodoID, skipped)
+			err = start()
+			continue
+		}
+		// The companion the hub picked went away before the start reached it: nothing ran, and the start goes to the
+		// computer's default host instead (a pane), never for a read-only task, which only the companion holds read-only.
+		if companionAway(err, companion) && !t.Readonly {
+			companion = false
+			delete(params, "host")
+			s.logf("task %s: start: the Antigravity companion is not connected on %s; starting in its default host", t.TodoID, m.ID)
+			if err := s.checkContinuationScope(t); err != nil {
+				return "", "", err
+			}
+			if err := s.checkRequestStart(ctx, *t); err != nil {
+				return "", "", err
+			}
 			err = start()
 			continue
 		}

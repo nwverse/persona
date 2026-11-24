@@ -212,6 +212,7 @@ func TestWorkAgentFirstMessageGivesUpAfterTries(t *testing.T) {
 	if row == nil || row.Status != proto.StatusBlocked || row.AttentionReason != want {
 		t.Fatalf("listed as %+v, want blocked with %q", row, want)
 	}
+	stubAgyNativePrompt(t, x.n, x.f, "w1:p2", agyTestID)
 	if _, err := request(t, x.n, "session.send", map[string]any{"session_id": id, "text": "Please start on the task above."}); err != nil {
 		t.Fatalf("send: %v", err)
 	}

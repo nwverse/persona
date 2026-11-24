@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistant/todo/projection"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
@@ -49,11 +50,12 @@ type todoPageCursor struct {
 // HasMore is always present in this mode; NextCursor only while HasMore. Oversized marks a page holding one row that
 // alone is larger than todoPageBudgetBytes: it is complete, never truncated.
 type todoPage struct {
-	Todos      []listedTodo             `json:"todos"`
-	Counts     assistantwire.TodoCounts `json:"counts"`
-	NextCursor string                   `json:"next_cursor,omitempty"`
-	HasMore    bool                     `json:"has_more"`
-	Oversized  bool                     `json:"oversized,omitempty"`
+	Todos          []listedTodo               `json:"todos"`
+	Counts         assistantwire.TodoCounts   `json:"counts"`
+	SharedBlockers []projection.SharedBlocker `json:"shared_blockers,omitempty"`
+	NextCursor     string                     `json:"next_cursor,omitempty"`
+	HasMore        bool                       `json:"has_more"`
+	Oversized      bool                       `json:"oversized,omitempty"`
 }
 
 // todoListPageQuery reads a list request's page. paged is false when it names neither parameter: the complete answer.
@@ -165,7 +167,14 @@ func todoPageOf(list []listedTodo, limit int, after *todoPageCursor) (page []lis
 
 // writeTodoPage answers GET /api/v1/todos's paginated read; p is the projection of the whole visible list, which the
 // counts describe.
-func writeTodoPage(w http.ResponseWriter, list []listedTodo, p todoProjection, limit int, after *todoPageCursor) {
+func writeTodoPage(w http.ResponseWriter, list []listedTodo, p todoProjection, sharedBlockers []projection.SharedBlocker, limit int, after *todoPageCursor) {
 	page, next, hasMore, oversized := todoPageOf(list, limit, after)
-	apierr.WriteJSON(w, todoPage{Todos: page, Counts: p.counts(), NextCursor: next, HasMore: hasMore, Oversized: oversized})
+	apierr.WriteJSON(w, todoPage{
+		Todos:          page,
+		Counts:         p.counts(),
+		SharedBlockers: sharedBlockers,
+		NextCursor:     next,
+		HasMore:        hasMore,
+		Oversized:      oversized,
+	})
 }

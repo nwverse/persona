@@ -108,6 +108,7 @@ type fakeHub struct {
 	replies        []string      // the model's answers, in turn (the last one again when they run out)
 	answers        []fakeAnswer  // how each of those answers comes, in turn (none: at once and whole)
 	modelDown      bool          // the model's gateway answers 502 to the calls replies would answer: asked, never answering
+	modelRequests  int           // every model HTTP request, across all purposes
 	noModel        bool
 	asked          []modelCall
 	pushes         []Notification
@@ -129,6 +130,7 @@ type fakeHub struct {
 	failStart    error
 	refuseUltra  error            // session.start's answer to a start that asks for ultracode (a node refusing it, #3596)
 	refuseGoal   error            // session.start's answer to a start that carries a goal (a node too old for it)
+	refuseHost   map[string]error // session.start's answer to a start naming that host (a node whose Antigravity companion went away)
 	startFailed  string           // the StartError of the sessions session.start answers (the launcher failed in its new tab)
 	worktrees    []map[string]any // worktree.prepare / worktree.create params, {"method": …} added
 	failWorktree error            // worktree.create's answer when set
@@ -232,9 +234,11 @@ type fakeHub struct {
 	doctor      map[string]string
 	doctorState map[string]string // each machine's claude-version state ("unanswered": no version came this time)
 	// auth is claude.auth_status's answer by "machine/launcher" (nil: the node has no such method), and the
-	// questions it got.
-	auth      map[string]proto.ClaudeAuthStatus
-	authAsked []string
+	// questions it got. authBy, when set, answers claude.auth_status from the full RPC params.
+	auth       map[string]proto.ClaudeAuthStatus
+	authBy     func(device string, params map[string]any) proto.ClaudeAuthStatus
+	authAsked  []string
+	authParams []map[string]any
 	// authHold, when set, holds claude.auth_status's answer until it is closed (a node running a slow launcher).
 	authHold chan struct{}
 	// nodes answer node methods on any machine, by method, before the answers below (answerNode).
@@ -264,6 +268,19 @@ func (f *fakeHub) Hello(context.Context) (Hello, error) {
 		h.Models = in.hubModels()
 	}
 	return h, nil
+}
+
+// setHello updates the hub's hello under f.mu so tests can mutate it after a
+// Service has started background work without racing against Hello.
+func (f *fakeHub) setHello(fn func(*Hello)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn(&f.hello)
+}
+
+// setLocale sets the hub hello's locale under f.mu.
+func (f *fakeHub) setLocale(locale string) {
+	f.setHello(func(h *Hello) { h.Locale = locale })
 }
 
 // deviceCallsForTest records calls made with the test's context under fakeHub.mu.
@@ -641,6 +658,7 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	case assistantwire.DeviceClaudeAuthStatus:
 		name, _ := a["name"].(string)
 		f.authAsked = append(f.authAsked, p.Device+"/"+name)
+		f.authParams = append(f.authParams, maps.Clone(a))
 		if hold := f.authHold; hold != nil {
 			f.mu.Unlock()
 			select {
@@ -648,6 +666,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			case <-ctx.Done():
 			}
 			f.mu.Lock()
+		}
+		if f.authBy != nil {
+			return json.Marshal(f.authBy(p.Device, a))
 		}
 		if f.auth == nil {
 			return nil, errors.New("unknown method claude.auth_status")
@@ -698,6 +719,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		}
 		if g, _ := a["goal"].(string); f.refuseGoal != nil && g != "" {
 			return nil, f.refuseGoal
+		}
+		if h, _ := a["host"].(string); f.refuseHost[h] != nil {
+			return nil, f.refuseHost[h]
 		}
 		if f.onStart != nil {
 			f.onStart(f, a) // the node changes state (for example its session list) while handling this start
@@ -1102,10 +1126,47 @@ type memStore struct {
 	puts    int
 	// failSetting: what reading a setting fails with (nil: it reads; set through setFailSetting).
 	failSetting error
-	// failPut: what writing settings fails with (nil: it writes); nothing is written then.
+	// failPut: what writing settings fails with (nil: it writes; set through setFailPut); nothing is written then.
 	failPut error
 	// failKeys: what reading one key fails with, the other keys still reading (set through failKey).
 	failKeys map[string]error
+	// routing: the model_routing rows written (PutModelRouting).
+	routing []db.ModelRoutingRow
+}
+
+// rawSetting returns a cloned copy of the raw JSON bytes stored for key under m.mu.
+func (m *memStore) rawSetting(key string) ([]byte, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	raw, ok := m.vals[key]
+	if !ok {
+		return nil, false
+	}
+	return slices.Clone(raw), true
+}
+
+// setRawSetting stores raw JSON bytes directly for key under m.mu without incrementing puts (for seeding raw or corrupt JSON).
+func (m *memStore) setRawSetting(key string, raw []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.vals == nil {
+		m.vals = map[string][]byte{}
+	}
+	m.vals[key] = slices.Clone(raw)
+}
+
+// putCount returns the number of settings writes recorded under m.mu.
+func (m *memStore) putCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.puts
+}
+
+// snapshotRaw captures putCount and a cloned copy of key's stored JSON bytes atomically under m.mu.
+func (m *memStore) snapshotRaw(key string) (int, []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.puts, slices.Clone(m.vals[key])
 }
 
 // setFailSetting makes reading every setting fail with err from now on; nil reads them again. It takes the lock, as the
@@ -1139,6 +1200,22 @@ func (m *memStore) PutPlacement(ctx context.Context, p db.PlacementRow) error {
 }
 
 func (noPlans) PutPlacement(context.Context, db.PlacementRow) error { return nil }
+
+func (m *memStore) PutModelRouting(_ context.Context, r db.ModelRoutingRow) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.routing = append(m.routing, r)
+	return nil
+}
+
+// modelRoutings are the model_routing rows written so far.
+func (m *memStore) modelRoutings() []db.ModelRoutingRow {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.routing)
+}
+
+func (noPlans) PutModelRouting(context.Context, db.ModelRoutingRow) error { return nil }
 
 func (noPlans) CreateTaskPlan(context.Context, db.TaskPlanRow) error {
 	return errors.New("no task_plans here")
@@ -1398,6 +1475,7 @@ func newServiceOn(t testing.TB, f *fakeHub, st Store) *Service {
 // withSettings saves f.settings as s's own (none: s keeps what it has), and gives the hub's hello the fake model.
 func withSettings(t testing.TB, f *fakeHub, s *Service) *Service {
 	t.Helper()
+	installTestTrackKinds(s)
 	f.fakeModel(t)
 	// These tests are about what a plan does once it exists; what task_plan requires of a brief is task_brief_test.go's,
 	// which turns this off.
@@ -1622,6 +1700,9 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 	jsonOnly := strings.TrimSpace(prompts.RenderJSONOnly(""))
 	tabName := prompts.RenderTabName()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.modelRequests++
+		f.mu.Unlock()
 		if r.Method == http.MethodGet && r.URL.Path == "/" { // a node's port probe (node/ports.go), not this test's client
 			http.NotFound(w, r)
 			return

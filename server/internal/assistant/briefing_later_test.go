@@ -297,9 +297,9 @@ func TestBriefLaterRouteOnAStoreFailure(t *testing.T) {
 		}
 	}
 
-	e.st.failPut = errors.New("database unavailable")
+	e.st.setFailPut(errors.New("database unavailable"))
 	failed(e.s, "not written")
-	e.st.failPut = nil
+	e.st.setFailPut(nil)
 
 	restarted := newBoardEnvOn(t, e.st) // its to-dos are in memory: the question's one is still open
 	restarted.s.todos.todos["todo_a"] = &Todo{ID: "todo_a", Title: "todo_a", Origin: "conv1"}

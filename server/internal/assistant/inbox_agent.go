@@ -722,6 +722,12 @@ func (b *inboxBook) agentStarting() bool {
 	return false
 }
 
+// itemAgentStarting: item id's own agent is being started and does not know its conversation yet. Callers hold b.mu.
+func (b *inboxBook) itemAgentStarting(id string) bool {
+	it := b.items[id]
+	return it != nil && it.Agent != nil && it.Agent.State == AgentRunning && it.Agent.SessionID == ""
+}
+
 // messageCardOf is the card for an item whose draft is about a task; nil when it is about none. Under b.mu.
 func messageCardOf(it *InboxItem) *MessageCard {
 	if it.Agent == nil || it.Agent.TodoID == "" || it.Agent.Draft == "" {

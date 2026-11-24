@@ -136,6 +136,7 @@ var catalogItemTypes = map[string]reflect.Type{
 	"mcp_servers":      reflect.TypeFor[MCPServerItem](),
 	"messaging":        reflect.TypeFor[wire.MessagingItem](),
 	"ui":               reflect.TypeFor[UIItem](),
+	"track_kinds":      reflect.TypeFor[TrackKindItem](),
 	"events":           reflect.TypeFor[EventsItem](),
 	"error_reports":    reflect.TypeFor[ErrorReportsItem](),
 	"auth_relay":       reflect.TypeFor[AuthRelayItem](),

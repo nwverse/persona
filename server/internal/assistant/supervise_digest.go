@@ -53,6 +53,13 @@ func (s *Service) sendDigest(ctx context.Context) {
 	b.dedupMu.Lock()
 	defer b.dedupMu.Unlock()
 	b.mu.Lock()
+	if !s.autoSupervisionOn(ctx) {
+		// Switched off while this digest waited for its turn: nothing is taken out of the gather, and the withdrawal
+		// empties it.
+		b.mu.Unlock()
+		s.syncAutoSupervision(ctx)
+		return
+	}
 	b.timer, b.timerAt = nil, time.Time{}
 	b.syncBatchInterval(batch)
 	list := make([]superviseSignal, 0, len(b.pending))
@@ -567,6 +574,12 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		return true
 	}
 	if err := s.tryDirectRelay(ctx, here.MachineID, to, &msg); err != nil {
+		if relaySuppressed(err) {
+			// Switched off since the digest was gathered: not delivered, not queued, not retried. The reservation is
+			// released (the deferred rollback) and what is left of the outbox goes with the withdrawal.
+			s.ackSupervisePending(list)
+			return false
+		}
 		if s.refusedDirect(ctx, here.MachineID, to, msg, err) {
 			accepted = true // retire this delivery while keeping the task available for review
 			return true
@@ -625,13 +638,17 @@ func (s *Service) queueDigest(to string, msg relayMsg, kept []superviseSignal, a
 	msg.Interject = false // interject is never persisted in the relay queue
 	b := &s.supervise
 	msg.Signals = encodeDigestSignals(kept)
-	if n, err := s.queueRelayDurable(to, msg); err == nil && n > 0 {
+	n, err := s.queueRelayDurable(to, msg)
+	if err == nil && n > 0 {
 		b.mu.Lock()
 		if !wasInterject {
 			b.setQueuedLocked(to, kept)
 		}
 		b.mu.Unlock()
 		return true
+	}
+	if relaySuppressed(err) {
+		return false // switched off since the digest was gathered: nothing waits, and nothing is retried
 	}
 	retry := s.superviseTimings().urgent
 	s.logf("supervise: the relay queue can't be read; %d signal(s) wait, trying again in %s", len(kept), retry)
@@ -692,6 +709,9 @@ func (s *Service) replaceQueuedSupervise(to string, msg relayMsg) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !s.relayLocked(context.Background()) {
+		return false
+	}
+	if !s.autoSupervisionOn(context.Background()) {
 		return false
 	}
 	previousQueue := b.st.Queue
@@ -916,6 +936,10 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 			}
 			g.Detail = strings.TrimSpace(g.Detail + " " + r.ExternalPR.detail())
 		}
+	case sigReviewNudge:
+		if !s.settings(ctx).todosV2On() || st != reviewPending || v.handoffResult() != nil {
+			return prompts.SuperviseEntry{}, false
+		}
 	case sigNeedsYou:
 		if !s.taskWaits(ctx, t) {
 			return prompts.SuperviseEntry{}, false // answered meanwhile
@@ -977,8 +1001,14 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 		if p := v.parking(); p != nil && p.Handoff != nil || v.handoffResult() != nil {
 			return prompts.SuperviseEntry{}, false // an acknowledged handoff already explains the stop
 		}
-		if o, ok := s.orphanOf(t.ID); !ok || o.key != g.Key {
-			return prompts.SuperviseEntry{}, false // an agent is back at it, or it is another stretch by now
+		if !strings.HasPrefix(g.Key, nodeRecoveryKeyPrefix) {
+			if o, ok := s.orphanOf(t.ID); !ok || o.key != g.Key {
+				return prompts.SuperviseEntry{}, false // an agent is back at it, or it is another stretch by now
+			}
+		}
+	case sigRecovered:
+		if st == reviewClosing || st == reviewTimedOut || st == reviewUserCheck || st == reviewPending {
+			return prompts.SuperviseEntry{}, false // closed, timed out, or already waiting for review meanwhile
 		}
 	case sigUndecidable:
 		if st != reviewNeedsUser {
@@ -1095,7 +1125,8 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 	}
 	if g.Kind == sigDecide {
 		e.Recommend = g.Ask // the task leader's recommendation
-		e.LeaderGone = g.Unreachable
+		e.LeaderGone = g.Unreachable && g.Recipient == ""
+		e.SupervisorGone = g.Unreachable && g.Recipient != ""
 	}
 	if g.Kind == sigAsk {
 		e.Asks, e.Decisions = asks, s.todoDecisionsContext(ctx, t.ID) // what was settled already, not to be gone against
@@ -1211,7 +1242,7 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 
 // sortEntries puts what waits on a decision first.
 func sortEntries(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
-	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigDeliveryHold: 1, sigRecheck: 1, sigCardlessWait: 1, sigNeedsUserExternalInfo: 1, sigEstimateDue: 2, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigTodoReady: 3, sigPRMerged: 3, sigParentCloseout: 3, sigInterrupted: 4, sigOrphaned: 4, sigTimedOut: 4, sigReview: 5, sigStalled: 6, sigNoProgress: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
+	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigDeliveryHold: 1, sigRecheck: 1, sigCardlessWait: 1, sigNeedsUserExternalInfo: 1, sigEstimateDue: 2, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigTodoReady: 3, sigPRMerged: 3, sigParentCloseout: 3, sigInterrupted: 4, sigOrphaned: 4, sigRecovered: 4, sigTimedOut: 4, sigReview: 5, sigReviewNudge: 5, sigStalled: 6, sigNoProgress: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
 	at := func(e prompts.SuperviseEntry) int {
 		switch {
 		case e.Kind == sigCheck && e.Report == checkDecidedReport: // the owner's answer
