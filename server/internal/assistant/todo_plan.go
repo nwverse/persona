@@ -41,6 +41,7 @@ func (t *Todo) setPlan(row db.TodoRow) {
 	t.RequireAcceptedAfter = row.RequireAcceptedAfter
 	t.Responsible = cloneResponsible(row.Responsible)
 	t.Audience = row.Audience
+	t.DirectionID = row.DirectionID
 }
 
 // keepPlan writes t's plan, project and the owner's marks (seen, restored, Someday) into row: a row made in memory for a
@@ -61,6 +62,7 @@ func (t *Todo) keepPlan(row *db.TodoRow) {
 	row.RequireAcceptedAfter = t.RequireAcceptedAfter
 	row.Responsible = cloneResponsible(t.Responsible)
 	row.Audience = t.Audience
+	row.DirectionID = t.DirectionID
 }
 
 // todoRowOf is todo t as a row (what memory has of it; the store-less PATCH changes it).
@@ -103,11 +105,12 @@ func (t Todo) dueText(loc *time.Location) string {
 // todoPlanIn is the plan in a POST or PATCH body: due_at (RFC 3339) or due_date (YYYY-MM-DD), remind_at (RFC 3339),
 // priority. A field left out is kept, null (or "") clears it.
 type todoPlanIn struct {
-	DueAt    json.RawMessage `json:"due_at"`
-	DueDate  json.RawMessage `json:"due_date"`
-	RemindAt json.RawMessage `json:"remind_at"`
-	Priority *string         `json:"priority"`
-	Audience *string         `json:"audience"`
+	DueAt       json.RawMessage `json:"due_at"`
+	DueDate     json.RawMessage `json:"due_date"`
+	RemindAt    json.RawMessage `json:"remind_at"`
+	Priority    *string         `json:"priority"`
+	Audience    *string         `json:"audience"`
+	DirectionID *string         `json:"direction_id"`
 }
 
 // edit puts the plan into e; an error says which field could not be read.
@@ -146,6 +149,10 @@ func (p todoPlanIn) edit(e *db.TodoEdit) error {
 			return err
 		}
 		e.Audience = &aud
+	}
+	if p.DirectionID != nil {
+		dir := strings.TrimSpace(*p.DirectionID)
+		e.DirectionID = &dir
 	}
 	return nil
 }
