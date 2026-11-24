@@ -1,4 +1,4 @@
-Apply supplied fields now, no confirmation. "" clears notes/due/remind/project/part_of/audience/direction_id. [] clears after. Use todo_complete or todo_reopen. outward_reply records the original HTTPS topic, permalink, exact text and RFC3339 provider time. Never sends. promise overrides detection, due_at overrides 24h.{{template "shared/mcp_language" .}}
+Apply only supplied fields now; no confirmation. "" clears notes/due/remind/project/part_of/audience/direction_id. [] clears after. Use todo_complete or todo_reopen. outward_reply records only: original HTTPS topic, permalink, exact text, RFC3339 send time. promise overrides detection, due_at overrides 24h.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -7,15 +7,15 @@ Apply supplied fields now, no confirmation. "" clears notes/due/remind/project/p
   "properties": {
     "id": {"type": "string"},
     "title": {"type": "string"},
-    "notes": {"type": "string", "description": "Replace notes, keep needed text."},
-    "due": {"type": "string", "description": "Date or local/RFC3339 time."},
-    "remind": {"type": "string", "description": "Future local/RFC3339 time or 30m/2h/1d. Notifies again."},
+    "notes": {"type": "string", "description": "Replace; keep needed text."},
+    "due": {"type": "string", "description": "Date or local/RFC3339."},
+    "remind": {"type": "string", "description": "Future local/RFC3339 or 30m/2h/1d. Renotifies."},
     "priority": {"type": "string", "enum": ["high", "normal", "low"]},
-    "project": {"type": "string", "description": "Existing KB project, no duplicates."},
+    "project": {"type": "string", "description": "Existing KB slug/name; no dupes."},
     "audience": {"type": "string", "description": "human or autonomous."},
     "direction_id": {"type": "string"},
     "part_of": {"type": "string", "description": "Request ID. Changes clear after."},
-    "after": {"type": "array", "items": {"type": "string"}, "description": "Replace sibling dependencies."},
+    "after": {"type": "array", "items": {"type": "string"}, "description": "Replace sibling IDs."},
     "outward_reply": {
       "type": "object",
       "required": ["topic_url", "sent_url", "text", "sent_at"],
