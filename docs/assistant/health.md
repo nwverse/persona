@@ -214,6 +214,8 @@ The original rule from #4329 (implemented in #4385) resumed the latest health ch
 ## Water and protein
 
 Persona keeps water and protein entries in the default assistant manager's database (#13175).
+The server half is the Health module (`server/internal/modules/health`, docs/architecture/core-and-modules.md
+"Health"); a hub built or switched without it serves none of the routes below and announces no `health_intake`.
 These are Persona's own records, counted independently of other apps' dietary samples below.
 An entry has a UUID, kind, amount (ml or g), measurement time and optional food note. Recording
 the same UUID again returns the original. Delete marks an entry as undone; it never revives on

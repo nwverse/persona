@@ -133,6 +133,7 @@ go server/internal/extmgr/storage core
 go server/internal/extwire core
 go server/internal/githubwire core
 go server/internal/imessagewire core
+go server/internal/healthhost core
 go server/internal/herdr core
 go server/internal/herdrcore core
 go server/internal/host core
