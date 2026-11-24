@@ -396,14 +396,10 @@ func TestAcceptanceReplyWithMedia(t *testing.T) {
 			card := askOf(s, id).MessageID
 			ev := dmReply("om_reply", "", card, card)
 			ev.Message.MessageType, ev.Message.Content = c.msgType, c.content
-			st, err := s.chat().Status(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
 			f.mu.Lock()
 			before := len(f.agentSent)
 			f.mu.Unlock()
-			s.feishuMessage(ev, st, "")
+			feishuSay(t, s, f, nil, ev, "")
 			f.mu.Lock()
 			sent := f.agentSent[before:]
 			f.mu.Unlock()

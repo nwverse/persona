@@ -87,11 +87,7 @@ func privateEvent(id, text string) botcard.MessageEvent {
 // deliver hands ev to the handler the way FeishuMessage does once it has taken it.
 func (e *threadEnv) deliver(ev botcard.MessageEvent) {
 	e.t.Helper()
-	st, err := e.s.chat().Status(context.Background())
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	e.s.feishuMessage(ev, st, "")
+	feishuSay(e.t, e.s, e.f, nil, ev, "")
 	e.s.todos.titling.Wait() // the model naming a to-do a topic opened (the fake has none to ask: the title stays)
 }
 
@@ -358,10 +354,7 @@ func TestRunAnswersGoBackIntoTheTopic(t *testing.T) {
 	if tp, pp := e.s.runExt(&topicRun, "cot_off") != "", e.s.runExt(&privateRun, "cot_off") != ""; tp || pp {
 		t.Fatalf("agent messages: off for the topic's run %v, for the private run %v; want both usable", tp, pp)
 	}
-	e.s.fbot.mu.Lock()
-	_, remembered := e.s.fbot.st.Threads["om_post"]
-	e.s.fbot.mu.Unlock()
-	if !remembered { // the private run's cards are bound to its conversation as ever
+	if remembered := e.s.larkModule().Route("", "om_post"); remembered != botTargetOf(&privateRun) { // the private run's cards are bound to its conversation as ever
 		t.Fatal("the private chat's cards are no longer bound to their conversation")
 	}
 }
@@ -631,9 +624,8 @@ func TestCardsOfATopicsRunGoIntoTheTopic(t *testing.T) {
 		}
 		// The card's record keeps the group it is in, which a nudge under it needs (feishu_nudge.go); a card in the DM none.
 		for _, ix := range asks {
-			e.s.fbot.mu.Lock()
-			got := e.s.fbot.cards[ix.ID].ChatID
-			e.s.fbot.mu.Unlock()
+			card, _ := chatCard(e.s, ix.ID)
+			got := card.ChatID
 			if want := map[bool]string{true: testChat}[c.inTopic]; got != want {
 				t.Errorf("%s: the record of %s has chat %q, want %q", c.name, ix.ID, got, want)
 			}
@@ -711,9 +703,7 @@ func TestCardOfATopicsRunFallsBackToTheDMOnlyWhenRefused(t *testing.T) {
 		if tried != 1 || landed != want {
 			t.Fatalf("%s: tried the topic %d times, the DM %d times; want 1 and %d", c.name, tried, landed, want)
 		}
-		e.s.fbot.mu.Lock()
-		card, ok := e.s.fbot.cards["ix_p"]
-		e.s.fbot.mu.Unlock()
+		card, ok := chatCard(e.s, "ix_p")
 		if c.fallback != (ok && card.MessageID == "om_dm_card" && card.Thread == "" && card.ChatID == "") {
 			t.Errorf("%s: the card kept: %+v (ok %v)", c.name, card, ok)
 		}

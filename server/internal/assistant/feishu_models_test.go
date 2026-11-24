@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -23,11 +24,15 @@ func TestFeishuModelCommands(t *testing.T) {
 		return map[string]any{}, nil
 	})
 	s.larkModule().SetTarget(botTarget{Kind: targetMain})
+	said := 0
 	command := func(text string) {
 		t.Helper()
 		note = ""
-		if handled, rest := s.botCommand(ctx, FeishuFeatures{Main: true}, "om", text, "", ""); !handled || rest != "" {
-			t.Fatalf("%s: handled=%v rest=%q", text, handled, rest)
+		before := len(sendOnces(f))
+		said++
+		botSay(t, s, f, FeishuFeatures{Main: true}, fmt.Sprintf("om_%d", said), text, "", "")
+		if sent := len(sendOnces(f)) - before; sent != 0 || note == "" { // handled: answered with a note, nothing sent on
+			t.Fatalf("%s: sent %d, note %q", text, sent, note)
 		}
 	}
 	command("/modellist")

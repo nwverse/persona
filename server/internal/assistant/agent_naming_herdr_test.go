@@ -135,8 +135,7 @@ func TestFeishuAgentsCardHerdrSessionNames(t *testing.T) {
 			c := row
 			c.Title, c.SlotName = tc.title, tc.tab
 			f.sessions["server"] = []proto.Session{c}
-			card, fallback := s.agentsCard(ctx, "")
-			body := string(card.JSON())
+			body, fallback := botCommandCard(t, s, f, FeishuFeatures{Agents: true}, "om_agents_"+tc.name, "/agents")
 			if !strings.Contains(body, "**"+tc.primary+"**") || !strings.Contains(fallback, tc.primary) {
 				t.Fatalf("primary %q missing: %s\n%s", tc.primary, body, fallback)
 			}

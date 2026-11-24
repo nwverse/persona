@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -134,4 +135,70 @@ func p2pText(mid, text, root, parent string) botcard.MessageEvent {
 	ev.Message.Content = string(content)
 	ev.Sender.SenderType = "user"
 	return ev
+}
+
+// botAnswer hands the owner's text message mid (replying to parent in the thread rooted at root, with action) to the
+// chat and says whether the chat took it as the answer to a card: it did not go on into a conversation.
+func botAnswer(t testing.TB, s *Service, f *fakeHub, mid, text, action, root, parent string) bool {
+	t.Helper()
+	before := len(sendOnces(f))
+	feishuSay(t, s, f, nil, p2pText(mid, text, root, parent), action)
+	return len(sendOnces(f)) == before
+}
+
+// seedTopicAnchor makes message id the latest the owner said in the topic (chat, thread), as the hub hands one over:
+// the lines the bot says into the topic reply under it. The topic is bound to no to-do yet, so the chat tells it so (a
+// hint under the message); that hint is taken out of what the fake recorded, and the test sees only its own lines.
+func seedTopicAnchor(t testing.TB, s *Service, f *fakeHub, chat, thread, id string) {
+	t.Helper()
+	st := withFeatures(f, FeishuFeatures{})
+	var ev botcard.MessageEvent
+	ev.Message.MessageID, ev.Message.ChatID, ev.Message.ChatType, ev.Message.ThreadID = id, chat, "group", thread
+	ev.Message.RootID, ev.Message.ParentID = "om_root", "om_root"
+	ev.Message.MessageType, ev.Message.Content = "text", `{"text":"seed"}`
+	ev.Sender.SenderType, ev.Sender.SenderID.OpenID = "user", st.Owner
+	feishuSay(t, s, f, nil, ev, "")
+	if got := s.larkModule().TopicAnchor(context.Background(), chat, thread); got != id {
+		t.Fatalf("the topic's anchor is %q, want %q", got, id)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.appCalls = slices.DeleteFunc(f.appCalls, func(c AppCall) bool {
+		var p map[string]any
+		_ = json.Unmarshal(c.Params, &p)
+		return c.AppID == AppFeishu && c.Method == FeishuText && p["reply_to"] == id
+	})
+}
+
+// botCommandCard is the card a command (text, message mid) posts in the private chat with the bot's switches ff: its
+// JSON and the text it goes as when refused.
+func botCommandCard(t testing.TB, s *Service, f *fakeHub, ff FeishuFeatures, mid, text string) (card, fallback string) {
+	t.Helper()
+	before := len(f.appParams(AppFeishu, FeishuPost))
+	botSay(t, s, f, ff, mid, text, "", "")
+	posts := f.appParams(AppFeishu, FeishuPost)
+	if len(posts) != before+1 {
+		t.Fatalf("%s posted %d cards, want 1", text, len(posts)-before)
+	}
+	card, _ = posts[len(posts)-1]["card"].(string)
+	fallback, _ = posts[len(posts)-1]["fallback"].(string)
+	return card, fallback
+}
+
+// feishuHand hands ev over as the hub does a message it marked as from (assistantwire.FeishuFrom*: a /read, an /ai
+// from elsewhere), and returns once the chat handled it.
+func feishuHand(t testing.TB, s *Service, f *fakeHub, ev botcard.MessageEvent, from string) {
+	t.Helper()
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FeishuMessage(context.Background(), FeishuMessage{Event: raw, From: from}); err != nil {
+		t.Fatalf("feishu.message %s: %v", ev.Message.MessageID, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.larkModule().Wait(ctx); err != nil {
+		t.Fatalf("the chat did not handle %s: %v", ev.Message.MessageID, err)
+	}
 }

@@ -178,13 +178,11 @@ func TestPersistentOwnerActionSurvivesFormerDeadlineCallerAndRestart(t *testing.
 			if pending := restarted.pendingInteractions(); len(pending) != 0 {
 				t.Fatalf("decided proposal remains on the original surface: %+v", pending)
 			}
-			restarted.fbot.mu.Lock()
 			for _, id := range ids {
-				if ref := restarted.fbot.st.Cards[id]; ref != nil {
+				if ref, ok := chatCardRef(restarted, id); ok {
 					t.Errorf("decided Feishu proposal %s retains its pending mapping: %+v", id, ref)
 				}
 			}
-			restarted.fbot.mu.Unlock()
 
 			// A granted call passes the existing connector gate without a second card;
 			// a denied or already consumed call must first get a fresh ordinary card.
@@ -319,14 +317,12 @@ func assertPersistentOwnerSurfaces(t *testing.T, s *Service, book *ownerActionBo
 	if !slices.Equal(gotIDs, wantIDs) {
 		t.Fatalf("original pending cards = %v, want %v", gotIDs, wantIDs)
 	}
-	s.fbot.mu.Lock()
 	for _, id := range ids {
-		ref := s.fbot.st.Cards[id]
-		if ref == nil || !ref.OwnerProposal || !ref.NoExpiry || ref.MessageID == "" {
+		ref, ok := chatCardRef(s, id)
+		if !ok || !ref.OwnerProposal || !ref.NoExpiry || ref.MessageID == "" {
 			t.Errorf("Feishu proposal %s missing or not persistent: %+v", id, ref)
 		}
 	}
-	s.fbot.mu.Unlock()
 	batch, found, err := book.batch(context.Background(), batchID)
 	if err != nil || !found {
 		t.Fatalf("durable batch read: found=%v err=%v", found, err)

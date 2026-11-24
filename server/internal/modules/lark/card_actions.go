@@ -86,7 +86,9 @@ func (s core) botCardAction(ctx context.Context, a *botcard.CardAction, action s
 		}
 		// Feishu gives the callback 3 s and the post goes over the bus to the feishu app, so the /start form is
 		// posted from a goroutine (as botStartAgent posts its card), quoting the pressed list card.
+		s.t.workers.Add(1) // the layer's background work (Layer.Wait)
 		go func() {
+			defer s.t.workers.Done()
 			cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			if _, err := s.botPost(cctx, mid, s.startAgentCard(cctx, ""), ""); err != nil {
@@ -120,7 +122,9 @@ func (s core) botCardAction(ctx context.Context, a *botcard.CardAction, action s
 				return toast("info", i18n.T(l, "assistant-feishu_cards.starting"))
 			}
 		}
+		s.t.workers.Add(1) // the layer's background work (Layer.Wait)
 		go func() {
+			defer s.t.workers.Done()
 			if err := s.botStartAgent(machine, cwd, prompt, mode); err != nil && mid != "" {
 				// Nothing started, so a retry press of the same card must go through. at makes this a compare-and-swap:
 				// a failure arriving after the window only frees the slot if a later press has not re-stamped it.

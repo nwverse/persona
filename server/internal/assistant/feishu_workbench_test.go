@@ -13,7 +13,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -55,10 +54,29 @@ func newWorkbenchEnv(t *testing.T, f FeishuFeatures) *workbenchEnv {
 	return e
 }
 
+// command is the owner sending cmd to the bot: whether it was taken as a command (nothing went on into a
+// conversation), else the words that went on.
 func (e *workbenchEnv) command(cmd string) (bool, string) {
 	e.t.Helper()
 	f, _ := e.s.chat().Features(context.Background())
-	return e.s.botCommand(context.Background(), f, "om_cmd", cmd, "", "")
+	e.said++
+	before := len(sendOnces(e.f))
+	botSay(e.t, e.s, e.f, f, fmt.Sprintf("om_cmd_%d", e.said), cmd, "", "")
+	sent := sendOnces(e.f)
+	if len(sent) == before {
+		return true, ""
+	}
+	text, _ := sent[len(sent)-1]["text"].(string)
+	return false, stripContext(text)
+}
+
+// startCard is the /start form the bot posts.
+func (e *workbenchEnv) startCard() string {
+	e.t.Helper()
+	f, _ := e.s.chat().Features(context.Background())
+	e.said++
+	js, _ := botCommandCard(e.t, e.s, e.f, f, fmt.Sprintf("om_cmd_%d", e.said), "/start")
+	return js
 }
 
 func (e *workbenchEnv) postJSON(i int) string {
@@ -90,7 +108,7 @@ func TestWorkbenchOffChangesNothing(t *testing.T) {
 			t.Fatalf("%s with the workbench off: handled %v, %q", cmd, h, rest)
 		}
 	}
-	if js := e.s.startAgentCard(context.Background(), "").JSON(); strings.Contains(js, `"name":"mode"`) {
+	if js := e.startCard(); strings.Contains(js, `"name":"mode"`) {
 		t.Fatalf("/start has a permission field with the workbench off: %s", js)
 	}
 	if _, err := e.s.botPost(context.Background(), "", botcard.NewCard("t", botcard.Blue, "t").Markdown("hello"), ""); err != nil {
@@ -99,8 +117,7 @@ func TestWorkbenchOffChangesNothing(t *testing.T) {
 	if js := e.postJSON(-1); strings.Contains(js, `"to":"home"`) {
 		t.Fatalf("a card got the workbench button with the workbench off: %s", js)
 	}
-	l := e.s.botLang(context.Background())
-	if strings.Contains(botHelp(l, FeishuFeatures{Main: true, Agents: true}), "/home") {
+	if help, _ := botCommandCard(t, e.s, e.f, FeishuFeatures{Main: true, Agents: true}, "om_help", "/help"); strings.Contains(help, "/home") {
 		t.Fatal("/help mentions /home with the workbench off")
 	}
 	if _, pins, recalls, _ := e.counts(); pins+recalls != 0 {
@@ -319,7 +336,7 @@ func TestWorkbenchFooterKeepsNavigationTogether(t *testing.T) {
 // the agent's start, one that is not a mode does not.
 func TestWorkbenchStartAsksForAPermissionMode(t *testing.T) {
 	e := newWorkbenchEnv(t, workbenchOnFeatures)
-	js := e.s.startAgentCard(context.Background(), "").JSON()
+	js := e.startCard()
 	if !strings.Contains(js, `"name":"mode"`) || !strings.Contains(js, `"bypassPermissions"`) || !strings.Contains(js, `"acceptEdits"`) {
 		t.Fatalf("the /start form: %s", js)
 	}
@@ -337,7 +354,12 @@ func TestWorkbenchStartAsksForAPermissionMode(t *testing.T) {
 	f.answerApp(AppFeishu, FeishuText, func(json.RawMessage) (any, error) { return map[string]any{}, nil })
 	f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) { return map[string]any{"message_id": "om_started"}, nil })
 	for i, c := range []struct{ mode, want string }{{"bypassPermissions", "bypassPermissions"}, {"everything", ""}, {"", ""}} {
-		if err := s.botStartAgent("box", "/code", "", c.mode); err != nil {
+		// The /start form pressed with the mode picked (no card message: each press is a press of its own).
+		var a botcard.CardAction
+		a.Action.Value = map[string]any{"a": "start"}
+		a.Action.FormValue = map[string]any{"machine": "box", "cwd": "/code", "mode": c.mode}
+		s.larkModule().Action(context.Background(), &a, "")
+		if err := s.larkModule().Wait(context.Background()); err != nil {
 			t.Fatalf("mode %q: %v", c.mode, err)
 		}
 		f.mu.Lock()
@@ -350,14 +372,6 @@ func TestWorkbenchStartAsksForAPermissionMode(t *testing.T) {
 		if got != c.want {
 			t.Fatalf("mode %q: permission_mode %q, want %q", c.mode, got, c.want)
 		}
-	}
-}
-
-// /help with the workbench on names its commands.
-func TestWorkbenchHelpNamesItsCommands(t *testing.T) {
-	l := i18n.Lang("en")
-	if h := botHelp(l, workbenchOnFeatures); !strings.Contains(h, "/home") || !strings.Contains(h, "/inbox") {
-		t.Fatalf("help: %s", h)
 	}
 }
 
@@ -527,14 +541,5 @@ func TestWorkbenchHomeRowsArePressedWhole(t *testing.T) {
 		!strings.Contains(js, `"content":"等你 1"`) {
 		t.Fatalf("the home card: %s", js)
 	}
-	sess := proto.Session{State: proto.StateWorking, LastText: "在跑**测试**"}
-	row := agentRowMarkdown(i18n.ZhHans, "修登录", "", "box", sess, 70)
-	if row != "<text_tag color='blue'>工作中</text_tag> **修登录** · box\n<font color='grey'>在跑测试</font>" {
-		t.Fatalf("agent row %q", row)
-	}
-	// An agent named by its herdr tab shows its other name under the label.
-	row = agentRowMarkdown(i18n.ZhHans, "登录", "修登录的测试", "box", sess, 70)
-	if row != "<text_tag color='blue'>工作中</text_tag> **登录** · box\n修登录的测试\n<font color='grey'>在跑测试</font>" {
-		t.Fatalf("agent row with a secondary name %q", row)
-	}
+	// An agent's row: the module's TestAgentRowMarkdown.
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/channel"
@@ -63,11 +64,7 @@ func (e *threadEnv) readLive(id string) *channel.Run {
 // read hands ev over the way FeishuMessage does for a message marked FeishuFromRead.
 func (e *threadEnv) read(ev botcard.MessageEvent) {
 	e.t.Helper()
-	st, err := e.s.chat().Status(context.Background())
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	e.s.feishuRead(ev, st)
+	feishuHand(e.t, e.s, e.f, ev, assistantwire.FeishuFromRead)
 }
 
 func TestFeishuReadSendsTheRequestToTheMainConversation(t *testing.T) {

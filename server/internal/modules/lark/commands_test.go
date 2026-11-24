@@ -1,8 +1,12 @@
-package assistant
+package lark
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // A command is still a command when a line break, a tab or a full-width space follows it, or when it starts with a
@@ -31,8 +35,8 @@ func TestBotCommandSplitsOnAnyWhiteSpace(t *testing.T) {
 		{"a path", "/tmp/a 是什么", false, "/tmp/a 是什么"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			s := newTestService(t, newFakeHub().withMachine())
-			h, rest := s.botCommand(ctx, FeishuFeatures{Main: true}, "om", c.text, "", "")
+			s := newTestService(t, newFakeHub())
+			h, rest := s.chat().botCommand(ctx, FeishuFeatures{Main: true}, "om", c.text, "", "")
 			if h != c.handled || rest != c.rest {
 				t.Fatalf("botCommand(%q) = %v, %q; want %v, %q", c.text, h, rest, c.handled, c.rest)
 			}
@@ -68,5 +72,52 @@ func TestParseBotCommand(t *testing.T) {
 		if cmd != c.cmd || rest != c.rest || ok != c.ok {
 			t.Errorf("parseBotCommand(%q) = %q, %q, %v; want %q, %q, %v", c.text, cmd, rest, ok, c.cmd, c.rest, c.ok)
 		}
+	}
+}
+
+// "/new <text>" goes on with just the text; a command the bot does not know goes on as it is (it may be the
+// conversation's own).
+func TestBotCommandsPassTheRestOn(t *testing.T) {
+	s := newTestService(t, newFakeHub())
+	ctx := context.Background()
+	if h, rest := s.chat().botCommand(ctx, FeishuFeatures{Main: true}, "om", "/new 帮我写周报", "", ""); h || rest != "帮我写周报" {
+		t.Fatalf("/new with text: handled=%v rest=%q", h, rest)
+	}
+	if got := s.layer.Route("", ""); got.Kind != targetPersona || got.SessionID != "" {
+		t.Fatalf("/new points the chat at a new conversation: %+v", got)
+	}
+	if h, rest := s.chat().botCommand(ctx, FeishuFeatures{}, "om", "/compact", "", ""); h || rest != "/compact" {
+		t.Fatalf("an unknown command goes on as it is: handled=%v rest=%q", h, rest)
+	}
+}
+
+// The help reads in the user's language and lists only what the bot's switches allow (the assistant's
+// TestBotTextInLanguages checks its other lines).
+func TestBotHelpInEnglish(t *testing.T) {
+	if got := botHelp(i18n.En, FeishuFeatures{Main: true}); !strings.Contains(got, "`/main` back to the main chat") || strings.Contains(got, "/agents") {
+		t.Fatal(got)
+	}
+}
+
+// /help with the workbench on names its commands.
+func TestWorkbenchHelpNamesItsCommands(t *testing.T) {
+	l := i18n.Lang("en")
+	if h := botHelp(l, FeishuFeatures{Main: true, Agents: true, Workbench: true}); !strings.Contains(h, "/home") || !strings.Contains(h, "/inbox") {
+		t.Fatalf("help: %s", h)
+	}
+}
+
+// An agent's row shows its state as a tag, its label and computer, and its last words without their Markdown; an agent
+// named by its herdr tab shows its other name under the label. (The assistant's home-card test draws the card.)
+func TestAgentRowMarkdown(t *testing.T) {
+	sess := proto.Session{State: proto.StateWorking, LastText: "在跑**测试**"}
+	row := agentRowMarkdown(i18n.ZhHans, "修登录", "", "box", sess, 70)
+	if row != "<text_tag color='blue'>工作中</text_tag> **修登录** · box\n<font color='grey'>在跑测试</font>" {
+		t.Fatalf("agent row %q", row)
+	}
+	// An agent named by its herdr tab shows its other name under the label.
+	row = agentRowMarkdown(i18n.ZhHans, "登录", "修登录的测试", "box", sess, 70)
+	if row != "<text_tag color='blue'>工作中</text_tag> **登录** · box\n修登录的测试\n<font color='grey'>在跑测试</font>" {
+		t.Fatalf("agent row with a secondary name %q", row)
 	}
 }

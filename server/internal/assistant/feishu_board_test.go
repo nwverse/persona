@@ -24,6 +24,7 @@ type boardEnv struct {
 	st  *memStore
 	clk *fakeClock
 	d   *fleetDevs
+	said int // the /tasks messages the owner sent (each a message of its own)
 
 	mu        sync.Mutex
 	pairedAt  time.Time
@@ -113,9 +114,11 @@ func (e *boardEnv) tasks(cmd string) {
 	e.mu.Lock()
 	f := e.features
 	e.mu.Unlock()
-	_, _ = e.s.chat().Status(context.Background()) // what a message from the owner does first: the pairing is kept
-	if h, rest := e.s.botCommand(context.Background(), f, "om_cmd", cmd, "", ""); !h || rest != "" {
-		e.t.Fatalf("botCommand(%q) = %v, %q", cmd, h, rest)
+	e.said++
+	before := len(sendOnces(e.f))
+	botSay(e.t, e.s, e.f, f, fmt.Sprintf("om_cmd_%d", e.said), cmd, "", "") // its status read first: the pairing is kept
+	if sent := len(sendOnces(e.f)) - before; sent != 0 { // handled: nothing sent on into a conversation
+		e.t.Fatalf("%q went on into a conversation", cmd)
 	}
 }
 
@@ -950,10 +953,8 @@ func TestBoardMarksANudgedRow(t *testing.T) {
 	}
 	old := e.card("ix_old", "box", "ag1", "旧的问题", 61*time.Minute)
 	e.card("ix_new", "box", "ag2", "新的问题", time.Minute)
-	e.s.fbot.mu.Lock()
-	e.s.keepBotCardLocked(old.ID, &botCard{MessageID: "om_" + old.ID, Ix: old, At: e.clk.Now().Add(-61 * time.Minute)})
-	e.s.keepBotCardLocked("ix_new", &botCard{MessageID: "om_ix_new", Ix: proto.Interaction{ID: "ix_new", MachineID: "box", SessionID: "ag2", Kind: proto.IxQuestion}, At: e.clk.Now().Add(-time.Minute)})
-	e.s.fbot.mu.Unlock()
+	keepChatCard(e.s, old.ID, &botCard{MessageID: "om_" + old.ID, Ix: old, At: e.clk.Now().Add(-61 * time.Minute)})
+	keepChatCard(e.s, "ix_new", &botCard{MessageID: "om_ix_new", Ix: proto.Interaction{ID: "ix_new", MachineID: "box", SessionID: "ag2", Kind: proto.IxQuestion}, At: e.clk.Now().Add(-time.Minute)})
 	e.tasks("/tasks")
 	card := cardOf(e.posts[0])
 	if strings.Contains(card, "已催过") {
@@ -963,7 +964,7 @@ func TestBoardMarksANudgedRow(t *testing.T) {
 	e.clk.advance(boardSettle) // whatever the first board scheduled has run
 	_, before := e.counts()
 	e.s.larkModule().ForgetStatus()
-	e.s.nudgeTick(context.Background()) // ix_old waited 61 minutes, ix_new one
+	e.s.larkModule().NudgeTick(context.Background()) // ix_old waited 61 minutes, ix_new one
 	if len(e.texts) != 1 || e.texts[0]["reply_to"] != "om_ix_old" {
 		t.Fatalf("nudges: %v", e.texts)
 	}
@@ -987,10 +988,8 @@ func TestBoardDoesNotMarkWhatWasNotNudged(t *testing.T) {
 	skipped := e.card("ix_skipped", "box", "ag1", "放过的问题", time.Hour)
 	trying := e.card("ix_trying", "box", "ag2", "重试中的问题", time.Hour)
 	at := e.clk.Now().Add(-time.Hour)
-	e.s.fbot.mu.Lock()
-	e.s.keepBotCardLocked(skipped.ID, &botCard{MessageID: "om_s", Ix: skipped, At: at, SkippedAt: e.clk.Now(), Tries: 3, TriedAt: at})
-	e.s.keepBotCardLocked(trying.ID, &botCard{MessageID: "om_t", Ix: trying, At: at, Tries: 1, TriedAt: at})
-	e.s.fbot.mu.Unlock()
+	keepChatCard(e.s, skipped.ID, &botCard{MessageID: "om_s", Ix: skipped, At: at, SkippedAt: e.clk.Now(), Tries: 3, TriedAt: at})
+	keepChatCard(e.s, trying.ID, &botCard{MessageID: "om_t", Ix: trying, At: at, Tries: 1, TriedAt: at})
 	e.tasks("/tasks")
 	if card := cardOf(e.posts[0]); !strings.Contains(card, "放过的问题") || !strings.Contains(card, "重试中的问题") || strings.Contains(card, "已催过") {
 		t.Fatalf("the board:\n%s", card)

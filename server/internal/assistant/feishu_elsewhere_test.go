@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/db"
@@ -68,7 +69,7 @@ func newAskEnv(t *testing.T, database *db.DB) *askEnv {
 	te.sessions("server", proto.Session{SessionID: "mask", Assistant: true}, proto.Session{SessionID: "c1x1x1", Assistant: true})
 	te.sessions("box", proto.Session{SessionID: "agent01", Title: "修发版"})
 	e := &askEnv{threadEnv: te, database: database, home: askHome, thread: "omt_home", readable: map[string]map[string]any{}, clock: clock}
-	e.s.fbot.lookupWait = time.Nanosecond
+	e.s.setLarkTiming("topic_lookup_wait", time.Nanosecond)
 	e.f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		chats := []string{}
 		if e.home != "" {
@@ -130,11 +131,7 @@ func ownerAsk(id, text string) botcard.MessageEvent {
 // ask hands ev to the assistant the way the hub does for such a message (FeishuFromElsewhere).
 func (e *askEnv) ask(ev botcard.MessageEvent) {
 	e.t.Helper()
-	st, err := e.s.chat().Status(context.Background())
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	e.s.feishuElsewhere(ev, st)
+	feishuHand(e.t, e.s, e.f, ev, assistantwire.FeishuFromElsewhere)
 	e.s.todos.titling.Wait()
 }
 
@@ -364,7 +361,7 @@ func TestElsewhereReplyCarriesTheQuotedText(t *testing.T) {
 		e2.ask(ev)
 		root, _ = textsTo(e2.f, askHome)[0]["text"].(string)
 		lines := strings.Split(root, "\n")
-		if len(lines) != 3 || len([]rune(lines[1])) > len([]rune(e.said("elsewhere_root_quote", i18n.Args{"quote": ""})))+elsewhereQuoteMax+2 || !strings.Contains(lines[1], "…") {
+		if len(lines) != 3 || len([]rune(lines[1])) > len([]rune(e.said("elsewhere_root_quote", i18n.Args{"quote": ""})))+300+2 /* the module's elsewhereQuoteMax */ || !strings.Contains(lines[1], "…") {
 			t.Fatalf("the quote was not clipped: %d runes: %q", len([]rune(lines[1])), lines[1])
 		}
 
@@ -562,7 +559,7 @@ func TestElsewhereFailuresAreAnsweredWhereAskedAndLeaveNothing(t *testing.T) {
 		if todoCount(e.s) != 0 || len(reactions(e.f)) != 0 || len(got) != 1 || !strings.Contains(got[0]["text"].(string), e.said("elsewhere_no_topic")) {
 			t.Fatalf("%d todos, reactions %v, texts %v", todoCount(e.s), reactions(e.f), e.f.appParams(AppFeishu, FeishuText))
 		}
-		if n := len(e.f.appParams(AppFeishu, FeishuMessages)); n != topicLookupTries {
+		if n := len(e.f.appParams(AppFeishu, FeishuMessages)); n != 4 { // the module's topicLookupTries
 			t.Fatalf("the topic was looked up %d times", n)
 		}
 	})
@@ -586,35 +583,6 @@ func TestElsewhereFailuresAreAnsweredWhereAskedAndLeaveNothing(t *testing.T) {
 			}
 		}
 	})
-}
-
-// The entry knows nothing of who received the request: a Source built by any channel opens the same topic, and a
-// channel the report cannot go back through is refused before anything is posted.
-func TestOpenFromElsewhereIsIdentityAgnostic(t *testing.T) {
-	e := newAskEnv(t, nil)
-	todo, err := e.s.openFromElsewhere(context.Background(), Source{Channel: channel.Feishu, ChatID: "oc_owner_own_chat", MessageID: "om_own1", Text: "整理一下会议纪要", Quote: "上周的纪要见文档"})
-	if err != nil || todo.Source == nil || todo.Source.ChatID != "oc_owner_own_chat" || todo.Thread == nil || todo.Thread.ChatID != askHome {
-		t.Fatalf("%+v %v", todo, err)
-	}
-	if len(reactions(e.f)) != 1 || reactions(e.f)[0] != "om_root1" { // only the run's own, on the topic's first message
-		t.Fatalf("reactions %v", reactions(e.f))
-	}
-	before := len(e.f.appParams(AppFeishu, FeishuText))
-	for name, src := range map[string]Source{
-		"a channel it cannot answer through": {Channel: "wechat", ChatID: "c", MessageID: "m", Text: "x"},
-		"no chat":                            {Channel: channel.Feishu, MessageID: "m", Text: "x"},
-		"no message":                         {Channel: channel.Feishu, ChatID: "c", Text: "x"},
-	} {
-		if _, err := e.s.openFromElsewhere(context.Background(), src); err == nil || errors.Is(err, errNoWords) {
-			t.Fatalf("%s: %v", name, err)
-		}
-	}
-	if _, err := e.s.openFromElsewhere(context.Background(), Source{Channel: channel.Feishu, ChatID: "c", MessageID: "m", Text: "  "}); !errors.Is(err, errNoWords) {
-		t.Fatalf("no words: %v", err)
-	}
-	if got := len(e.f.appParams(AppFeishu, FeishuText)); got != before || todoCount(e.s) != 1 {
-		t.Fatalf("something was posted or made for a refused source: %d texts (was %d), %d todos", got, before, todoCount(e.s))
-	}
 }
 
 // ---- reporting back ----

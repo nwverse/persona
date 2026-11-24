@@ -55,9 +55,7 @@ func TestFeishuNewFirstMessageIgnoresOldReply(t *testing.T) {
 					ev.Message.ParentID, ev.Message.RootID = "om_old", "om_old"
 				}
 				if strings.Contains(binding, "question") {
-					s.fbot.mu.Lock()
-					s.fbot.cards = map[string]botCard{ix.ID: {MessageID: "om_old", Ix: ix, At: time.Now()}}
-					s.fbot.mu.Unlock()
+					keepChatCard(s, ix.ID, &botCard{MessageID: "om_old", Ix: ix, At: time.Now()})
 				}
 				raw, err := json.Marshal(ev)
 				if err != nil {
@@ -68,14 +66,11 @@ func TestFeishuNewFirstMessageIgnoresOldReply(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				s.fbot.mu.Lock()
-				done := s.fbot.line
-				s.fbot.mu.Unlock()
-				select {
-				case <-done:
-				case <-time.After(10 * time.Second):
+				wctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				if err := s.larkModule().Wait(wctx); err != nil {
 					t.Fatal("DM did not finish")
 				}
+				cancel()
 				runs := s.channelRuns(channel.Feishu)
 				if len(runs) != 1 || runs[0].SessionID == "oldchat01" || runs[0].ReplyTo != "om_new" {
 					t.Fatalf("new run: %+v", runs)
@@ -140,14 +135,11 @@ func deliverNewReplyDM(t *testing.T, s *Service, id, text, parent, root, action 
 	if err := s.FeishuMessage(context.Background(), FeishuMessage{Event: raw, Action: action}); err != nil {
 		t.Fatal(err)
 	}
-	s.fbot.mu.Lock()
-	done := s.fbot.line
-	s.fbot.mu.Unlock()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
+	wctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := s.larkModule().Wait(wctx); err != nil {
 		t.Fatal("DM did not finish")
 	}
+	cancel()
 }
 
 func newCommandReplyBot(t *testing.T, features FeishuFeatures) (*Service, *fakeHub) {
@@ -245,9 +237,7 @@ func TestFeishuNewOrdinaryCardReplyStillAnswers(t *testing.T) {
 	for _, m := range []string{InteractionsGet, InteractionsResolve} {
 		f.answerApp(AppInteractions, m, func(json.RawMessage) (any, error) { return map[string]any{"ok": true}, nil })
 	}
-	s.fbot.mu.Lock()
-	s.fbot.cards = map[string]botCard{ix.ID: {MessageID: "om_old", Ix: ix, At: time.Now()}}
-	s.fbot.mu.Unlock()
+	keepChatCard(s, ix.ID, &botCard{MessageID: "om_old", Ix: ix, At: time.Now()})
 	deliverNewReplyDM(t, s, "om_answer", "2", "om_old", "om_old", "oa_test")
 	resolves := f.appParams(AppInteractions, InteractionsResolve)
 	if len(resolves) != 1 || resolves[0]["interaction_id"] != ix.ID {

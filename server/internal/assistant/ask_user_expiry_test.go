@@ -51,7 +51,7 @@ func askUserCard(t *testing.T, s *Service) proto.Interaction {
 func TestAskUserCardOutlivesTheDefaultNudge(t *testing.T) {
 	r := newNudgeRig(t)
 	ix := askUserCard(t, r.s)
-	nudgeDue := ix.CreatedAt.Add(nudgeAfterOf(FeishuStatus{})) // the status says nothing: the default
+	nudgeDue := ix.CreatedAt.Add(time.Hour) // the status says nothing: the default nudge_after (the module's nudgeAfterOf)
 	if !ix.ExpiresAt.After(nudgeDue) {
 		t.Errorf("the ask_user card lives %v (expires %s) but the default nudge is due after %v (%s): the card is gone before the nudge",
 			ix.ExpiresAt.Sub(ix.CreatedAt), ix.ExpiresAt.Format(time.TimeOnly), nudgeDue.Sub(ix.CreatedAt), nudgeDue.Format(time.TimeOnly))
@@ -246,8 +246,13 @@ func TestMessageAfterAWithdrawnQuestionIsNotALateAnswer(t *testing.T) {
 	for time.Now().Before(deadline) && a.closed() == "" {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if a.s.botAnswerQuestion(context.Background(), "om_next", "Yes", "oa_1", "", "") {
-		t.Fatal("a message after the withdrawal was taken as a late answer and swallowed")
+	// Taken as a late answer, it would be swallowed with a note under it that it was handled elsewhere.
+	feishuSay(t, a.s, a.f, nil, p2pText("om_next", "Yes", "", ""), "oa_1")
+	elsewhere := i18n.T(a.s.botLang(context.Background()), "assistant-channels_plugin.answered_elsewhere")
+	for _, n := range a.f.appParams(AppFeishu, FeishuText) {
+		if n["reply_to"] == "om_next" && n["text"] == elsewhere {
+			t.Fatal("a message after the withdrawal was taken as a late answer and swallowed")
+		}
 	}
 }
 

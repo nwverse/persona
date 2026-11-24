@@ -128,8 +128,7 @@ func TestConversationsCardOpenButtons(t *testing.T) {
 		f.setSessions("server",
 			proto.Session{SessionID: "main0", MachineID: "server", Assistant: true, Title: "主对话", UpdatedAt: now},
 			proto.Session{SessionID: "c1", MachineID: "server", Assistant: true, Title: "修登录", UpdatedAt: now.Add(-time.Minute)})
-		card, fallback := s.conversationsCard(context.Background())
-		got := card.JSON()
+		got, fallback := botCommandCard(t, s, f, FeishuFeatures{Main: true}, "om_list", "/list")
 		if n := strings.Count(got, "open_url"); n != 2 {
 			t.Fatalf("open_url count=%d, want one button per row: %s", n, got)
 		}
@@ -148,8 +147,7 @@ func TestConversationsCardOpenButtons(t *testing.T) {
 		s := newTestService(t, f)
 		setSettings(t, s, func(v *Settings) { v.MachineID = "server"; v.Main = "main0" })
 		f.setSessions("server", proto.Session{SessionID: "main0", MachineID: "server", Assistant: true, Title: "主对话"})
-		card, _ := s.conversationsCard(context.Background())
-		got := card.JSON()
+		got, _ := botCommandCard(t, s, f, FeishuFeatures{Main: true}, "om_list", "/list")
 		if strings.Contains(got, "open_url") || strings.Contains(got, `"default_url":""`) {
 			t.Fatalf("a link without a web address: %s", got)
 		}
@@ -170,8 +168,7 @@ func TestConversationsCardOpenButtons(t *testing.T) {
 				Title: longListName(i), LastText: strings.Repeat("很长的最近消息。", 30), UpdatedAt: now.Add(-time.Duration(i) * time.Minute)})
 		}
 		f.setSessions("server", cs...)
-		card, _ := s.conversationsCard(context.Background())
-		got := card.JSON()
+		got, _ := botCommandCard(t, s, f, FeishuFeatures{Main: true}, "om_list", "/list")
 		if n := strings.Count(got, "open_url"); n != 8 {
 			t.Fatalf("open_url count=%d, want exactly the eight rows kept", n)
 		}

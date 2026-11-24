@@ -28,12 +28,9 @@ func deliverImageFallback(t *testing.T, s *Service, msgType, content string) {
 	if err = s.FeishuMessage(context.Background(), FeishuMessage{Event: raw}); err != nil {
 		t.Fatal(err)
 	}
-	s.fbot.mu.Lock()
-	done := s.fbot.line
-	s.fbot.mu.Unlock()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.larkModule().Wait(ctx); err != nil {
 		t.Fatal("message turn did not finish")
 	}
 }
@@ -85,7 +82,7 @@ func TestFeishuImageFileFallbackEntry(t *testing.T) {
 	if resourceCalls != 6 || saves != 1 {
 		t.Fatalf("resource calls=%d saves=%d", resourceCalls, saves)
 	}
-	if images := sentImages(f); len(images) != botImagesMax {
+	if images := sentImages(f); len(images) != 4 { // the most a message passes on as pictures (the module's botImagesMax)
 		t.Fatalf("images %v", images)
 	}
 	for _, image := range sentImages(f) {

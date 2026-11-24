@@ -219,8 +219,9 @@ func TestInboxAndThreadAndPrereqSignalsWakeDuringNeedsUser(t *testing.T) {
 		ev.Message.MessageID = "om_reply_1"
 		ev.Message.ChatID = "oc_group1"
 		ev.Message.ThreadID = "omt_thread1"
+		ev.Message.ChatType, ev.Message.MessageType, ev.Message.Content = "group", "text", `{"text":"Go ahead after QA signs off"}`
 		st := FeishuStatus{Ready: true, Enabled: true, Owner: "ou_me", Features: FeishuFeatures{Main: true, Cards: true, Reports: true}}
-		s.threadMessage(ctx, ev, st, botcard.Content{Text: "Go ahead after QA signs off"})
+		feishuSay(t, s, f, &st, ev, "")
 
 		waitFor(t, "thread external info wake", func() bool {
 			for _, n := range f.notices()[beforeNotices:] {

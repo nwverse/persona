@@ -693,15 +693,11 @@ func TestFeishuConclusionQuestionGoesToSupervisorWithoutAnswering(t *testing.T) 
 	waitsForReview(t, s, f, todo.ID, "Two options: start with ten percent or defer the rollout.")
 	reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "Which rollout do you want?", "recommend": "Start with ten percent"})
 	a := askOf(s, todo.ID)
-	status, err := s.chat().Status(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
 	before := len(sentToAgent(f))
 	var ev botcard.MessageEvent
 	ev.Message.ChatType, ev.Message.ParentID, ev.Message.MessageType = "p2p", a.MessageID, "text"
 	ev.Message.MessageID, ev.Message.Content = "om_background", `{"text":"能补充一下这个决定的背景吗"}`
-	s.feishuMessage(ev, status, "")
+	feishuSay(t, s, f, nil, ev, "")
 	task := todoNow(s, todo.ID)
 	if got := askOf(s, todo.ID); got == nil || !got.AcceptedAt.IsZero() || task.Supervision.State != reviewNeedsUser ||
 		task.DoneAt != nil || len(sentToAgent(f)) != before {
@@ -713,7 +709,7 @@ func TestFeishuConclusionQuestionGoesToSupervisorWithoutAnswering(t *testing.T) 
 	}
 	// The existing option still answers this exact card after the clarification.
 	ev.Message.MessageID, ev.Message.Content = "om_choice", `{"text":"B"}`
-	s.feishuMessage(ev, status, "")
+	feishuSay(t, s, f, nil, ev, "")
 	if got := askOf(s, todo.ID); got == nil || got.AcceptedAt.IsZero() {
 		t.Fatalf("explicit option did not answer: %+v", got)
 	}

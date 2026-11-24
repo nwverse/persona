@@ -12,6 +12,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -310,10 +311,9 @@ func TestFeishuTodoReminderRetryAuthority(t *testing.T) {
 					return FeishuStatus{Ready: true, Owner: owner, PairedAt: paired, PublicURL: "https://hub.example.com", Features: FeishuFeatures{Pushes: true, Workbench: true}}, nil
 				})
 				companion := func() {
-					s.fbot.mu.Lock()
-					s.loadBotLocked(context.Background())
-					s.fbot.st.Companions = []CompanionBot{{Kind: CompanionNotify, Name: "Synthetic", AppID: "cli_synthetic"}}
-					s.fbot.mu.Unlock()
+					s.larkModule().Book(context.Background(), func(b assistantwire.ChatBook) {
+						b.SetCompanions([]CompanionBot{{Kind: CompanionNotify, Name: "Synthetic", AppID: "cli_synthetic"}})
+					})
 					s.companions.mu.Lock()
 					s.companions.polled = time.Now()
 					s.companions.mu.Unlock()

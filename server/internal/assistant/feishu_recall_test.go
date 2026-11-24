@@ -26,7 +26,7 @@ func TestFeishuRecalledMessageIsNotSent(t *testing.T) {
 	ev.Message.MessageID, ev.Message.ChatType, ev.Message.MessageType, ev.Message.Content = "om_x", "p2p", "text", `{"text":"发错了"}`
 
 	s.FeishuRecalled(FeishuRecalled{MessageID: "om_x"})
-	s.feishuMessage(ev, FeishuStatus{Ready: true, Features: FeishuFeatures{Main: true}}, "")
+	feishuSay(t, s, f, withFeatures(f, FeishuFeatures{Main: true}), ev, "")
 	if text := sendOnceText(f); text != "" {
 		t.Fatalf("a recalled message was sent: %q", text)
 	}

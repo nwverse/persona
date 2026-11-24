@@ -122,22 +122,6 @@ func TestBotStepAndStripContext(t *testing.T) {
 	}
 }
 
-// "/new <text>" goes on with just the text; a command the bot does not know goes on as it is (it may be the
-// conversation's own).
-func TestBotCommandsPassTheRestOn(t *testing.T) {
-	s := newTestService(t, newFakeHub().withMachine())
-	ctx := context.Background()
-	if h, rest := s.botCommand(ctx, FeishuFeatures{Main: true}, "om", "/new 帮我写周报", "", ""); h || rest != "帮我写周报" {
-		t.Fatalf("/new with text: handled=%v rest=%q", h, rest)
-	}
-	if got := s.larkModule().Route("", ""); got.Kind != targetPersona || got.SessionID != "" {
-		t.Fatalf("/new points the chat at a new conversation: %+v", got)
-	}
-	if h, rest := s.botCommand(ctx, FeishuFeatures{}, "om", "/compact", "", ""); h || rest != "/compact" {
-		t.Fatalf("an unknown command goes on as it is: handled=%v rest=%q", h, rest)
-	}
-}
-
 // Commands run before the normal message's feature gate, so /stop and /status must check botAllowed against the
 // target they resolve: a feature that is off can neither be interrupted nor shown in a status (#3903).
 func TestBotCommandFeatureGate(t *testing.T) {
@@ -160,7 +144,6 @@ func TestBotCommandFeatureGate(t *testing.T) {
 		return map[string]any{"message_id": "om_card"}, nil
 	})
 	s := newTestService(t, f)
-	ctx := context.Background()
 	s.larkModule().SetTarget(botTarget{Kind: targetAgent, MachineID: "box", SessionID: "agent01"})
 	s.larkModule().RememberThread("om_agent", botTarget{Kind: targetAgent, MachineID: "box", SessionID: "agent01"}, "agent")
 
@@ -171,9 +154,7 @@ func TestBotCommandFeatureGate(t *testing.T) {
 	} {
 		before := len(f.interrupted())
 		notes = nil
-		if h, _ := s.botCommand(ctx, FeishuFeatures{}, "om", "/stop", c.root, c.parent); !h {
-			t.Fatalf("%s: /stop was not handled", c.name)
-		}
+		botSay(t, s, f, FeishuFeatures{}, "om_stop_"+c.name, "/stop", c.root, c.parent)
 		if got := f.interrupted()[before:]; len(got) != 0 {
 			t.Fatalf("%s: interrupted %v, want none", c.name, got)
 		}
@@ -189,27 +170,21 @@ func TestBotCommandFeatureGate(t *testing.T) {
 	before := len(f.interrupted())
 	notes = nil
 	mainOff := i18n.T("", "assistant-feishu.main_off_agents_on")
-	if h, _ := s.botCommand(ctx, FeishuFeatures{Agents: true}, "om", "/stop", "", ""); !h {
-		t.Fatal("main off: /stop not handled")
-	}
+	botSay(t, s, f, FeishuFeatures{Agents: true}, "om_stop_main_off", "/stop", "", "")
 	if got := f.interrupted()[before:]; len(got) != 0 || len(notes) != 1 || notes[0] != mainOff {
 		t.Fatalf("main off: interrupted %v notes %v, want none + %q", got, notes, mainOff)
 	}
 	// /status must not reveal a target the features do not allow, and must not post a card.
 	notes, posts = nil, nil
 	s.larkModule().SetTarget(botTarget{Kind: targetAgent, MachineID: "box", SessionID: "agent01"})
-	if h, _ := s.botCommand(ctx, FeishuFeatures{}, "om", "/status", "", "om_agent"); !h {
-		t.Fatal("agents off /status: not handled")
-	}
+	botSay(t, s, f, FeishuFeatures{}, "om_status_off", "/status", "", "om_agent")
 	if len(notes) != 1 || notes[0] != i18n.T("", "assistant-feishu.agents_off") || len(posts) != 0 {
 		t.Fatalf("agents off /status: notes %v posts %d, want one agents_off note and no card", notes, len(posts))
 	}
 	// With Agents on, /stop interrupts as before.
 	s.larkModule().SetTarget(botTarget{Kind: targetAgent, MachineID: "box", SessionID: "agent01"})
 	before = len(f.interrupted())
-	if h, _ := s.botCommand(ctx, FeishuFeatures{Agents: true}, "om", "/stop", "", ""); !h {
-		t.Fatal("agents on: /stop not handled")
-	}
+	botSay(t, s, f, FeishuFeatures{Agents: true}, "om_stop_agents_on", "/stop", "", "")
 	if got := f.interrupted()[before:]; len(got) != 1 || got[0] != "box/agent01" {
 		t.Fatalf("agents on: interrupted %v, want [box/agent01]", got)
 	}
@@ -222,7 +197,6 @@ func TestBotStopFollowsTheRepliedThread(t *testing.T) {
 	f.setSessions("box", proto.Session{SessionID: "cur0001", MachineID: "box", Agent: "claude"},
 		proto.Session{SessionID: "agent01", MachineID: "box", Agent: "claude"})
 	s := newTestService(t, f)
-	ctx := context.Background()
 	s.larkModule().SetTarget(botTarget{Kind: targetAgent, MachineID: "box", SessionID: "cur0001"})
 	s.larkModule().RememberThread("om_agent", botTarget{Kind: targetAgent, MachineID: "box", SessionID: "agent01"}, "agent")
 	for _, c := range []struct {
@@ -236,9 +210,7 @@ func TestBotStopFollowsTheRepliedThread(t *testing.T) {
 		{"an unbound thread falls back to current", "om_other", "om_reply", "box/cur0001"},
 	} {
 		before := len(f.interrupted())
-		if h, _ := s.botCommand(ctx, FeishuFeatures{Agents: true}, "om_cmd", "/stop", c.root, c.parent); !h {
-			t.Fatalf("%s: /stop was not handled", c.name)
-		}
+		botSay(t, s, f, FeishuFeatures{Agents: true}, "om_cmd_"+c.name, "/stop", c.root, c.parent)
 		got := f.interrupted()[before:]
 		if len(got) != 1 || got[0] != c.want {
 			t.Fatalf("%s: interrupted %v, want [%s]", c.name, got, c.want)
@@ -534,6 +506,9 @@ func TestFeishuCatchUpClosesOnlyCardsThatEnded(t *testing.T) {
 	}
 }
 
+// botCardsKeep is how many cards the chat's state keeps at most (the lark module's chat_state.go).
+const botCardsKeep = 100
+
 // Records are kept small when read too: none older than a week, at most the newest hundred.
 func TestFeishuCardRecordsAreTrimmedOnLoad(t *testing.T) {
 	st := &memStore{}
@@ -544,13 +519,10 @@ func TestFeishuCardRecordsAreTrimmedOnLoad(t *testing.T) {
 	_ = st.PutSetting(context.Background(), botStateKey, botState{Current: botTarget{Kind: targetMain}, Cards: cards})
 	f, _ := feishuHub("ou_a", time.Unix(100, 0))
 	s := newServiceOn(t, f, st)
-	b := &s.fbot
-	b.mu.Lock()
-	s.loadBotLocked(context.Background())
-	n, _, old := len(b.cards), b.cards["ix_000"], b.cards["old"]
-	b.mu.Unlock()
-	if n != botCardsKeep || old.MessageID != "" {
-		t.Fatalf("%d cards, old %+v", n, old)
+	kept := chatCards(s)
+	n, first, old := len(kept), kept["ix_000"], kept["old"]
+	if n != botCardsKeep || first.MessageID != "" || old.MessageID != "" {
+		t.Fatalf("%d cards, the oldest of the newest %+v, old %+v", n, first, old)
 	}
 }
 
@@ -722,14 +694,18 @@ func TestChannelsReadFailureNeverOverwrites(t *testing.T) {
 	_ = store.PutSetting(ctx, channelsKey, map[string]*channelPrefs{"telegram": {Features: map[string]bool{"asks": false}}})
 	_ = store.PutSetting(ctx, channelsStateKey, channelsState{Runs: []*channel.Run{{ID: "wechat_x_m0", Channel: "wechat_x"}},
 		Seen: map[string][]string{"wechat_x": {"m0"}}})
-	pairing := "ou_example"
+	pairing := "ou_example@100" // the hub's pairing below: its owner and when it paired
 	_ = store.PutSetting(ctx, botStateKey, botState{Current: botTarget{Kind: targetMain}, Pairing: &pairing,
 		Threads: map[string]*botThread{"om_old": {Target: botTarget{Kind: targetMain}}}})
 	before := store.stored()
 	store.failReads(true)
 	// The runs' machine is known: otherwise their watchers drop them (the machine left the configuration) while the
 	// test is still looking.
-	h := newServiceOn(t, newFakeHub().withMachine(), store)
+	f := newFakeHub().withMachine()
+	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
+		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_example", PairedAt: time.Unix(100, 0)}, nil
+	})
+	h := newServiceOn(t, f, store)
 
 	func() {
 		defer func() {
@@ -742,8 +718,9 @@ func TestChannelsReadFailureNeverOverwrites(t *testing.T) {
 		if !errors.As(err, &re) || re.Code != CodeTryAgain {
 			t.Fatalf("channels.receive while unreadable: %v, want %s", err, CodeTryAgain)
 		}
-		if first, err := h.claimBotMessage("om_new"); first || err == nil {
-			t.Fatalf("a Feishu message while unreadable: first %v, err %v", first, err)
+		// A Feishu message is handed back to the hub to try again (it is not taken: nothing is written).
+		if err := h.FeishuMessage(ctx, feishuEvent("om_new", "示例")); !errors.As(err, &re) || re.Code != CodeTryAgain {
+			t.Fatalf("a Feishu message while unreadable: %v, want %s", err, CodeTryAgain)
 		}
 		h.larkModule().RememberThread("om_bot", botTarget{Kind: targetMain}, "示例")
 		h.larkModule().SetTarget(botTarget{Kind: targetAgent, MachineID: "server", SessionID: "s2"})
@@ -789,12 +766,15 @@ func TestChannelsReadFailureNeverOverwrites(t *testing.T) {
 	if prefs["telegram"] == nil {
 		t.Fatalf("the channels' settings: %s", store.stored()[channelsKey])
 	}
-	if first, err := h.claimBotMessage("om_new"); !first || err != nil {
-		t.Fatalf("a Feishu message once readable: first %v, err %v", first, err)
+	if err := h.FeishuMessage(ctx, feishuEvent("om_new", "示例")); err != nil {
+		t.Fatalf("a Feishu message once readable: %v", err)
+	}
+	if err := h.larkModule().Wait(ctx); err != nil {
+		t.Fatal(err)
 	}
 	var bot botState
 	_, _ = store.Setting(ctx, botStateKey, &bot)
-	if bot.Pairing == nil || *bot.Pairing != pairing || bot.Threads["om_old"] == nil {
+	if !slices.Contains(bot.Seen, "om_new") || bot.Pairing == nil || *bot.Pairing != pairing || bot.Threads["om_old"] == nil {
 		t.Fatalf("the chat's state: %s", store.stored()[botStateKey])
 	}
 }
@@ -810,9 +790,6 @@ func TestBotTextInLanguages(t *testing.T) {
 	}
 	bash := proto.Item{Kind: proto.KindToolUse, ToolName: "Bash", ToolInput: json.RawMessage(`{"command":"go test ./..."}`)}
 	if got := botStep(i18n.Ja, bash); got != "実行 `go test ./...`" {
-		t.Fatal(got)
-	}
-	if got := botHelp(i18n.En, FeishuFeatures{Main: true}); !strings.Contains(got, "`/main` back to the main chat") || strings.Contains(got, "/agents") {
 		t.Fatal(got)
 	}
 	if err := botAllowed(i18n.Ja, FeishuFeatures{}, botTarget{Kind: targetMain}); err == nil || !strings.Contains(err.Error(), "Larkボット") {
@@ -1234,9 +1211,7 @@ func TestFeishuMessageNotHandledPassesTheTurnOn(t *testing.T) {
 	f.answerApp(AppFeishu, FeishuText, func(json.RawMessage) (any, error) { return map[string]any{}, nil })
 	st := &memStore{}
 	s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t)}))
-	s.fbot.mu.Lock()
-	s.fbot.turnWait = time.Hour // a turn not passed on would hang the test, not wait it out
-	s.fbot.mu.Unlock()
+	s.setLarkTiming("turn_wait", time.Hour) // a turn not passed on would hang the test, not wait it out
 	ctx := context.Background()
 	if err := s.FeishuMessage(ctx, feishuEvent("om_1", "一")); err != nil {
 		t.Fatal(err)
@@ -1315,9 +1290,7 @@ func TestFeishuStuckMessageHoldsTheNextOnlySoLong(t *testing.T) {
 	defer close(h.letGo)
 	st := &memStore{}
 	s := withSettings(t, f, New(Options{Hub: h, Store: func() Store { return st }, Logf: testLogf(t)}))
-	s.fbot.mu.Lock()
-	s.fbot.turnWait = 200 * time.Millisecond
-	s.fbot.mu.Unlock()
+	s.setLarkTiming("turn_wait", 200*time.Millisecond)
 	ctx := context.Background()
 	pic, _ := json.Marshal(map[string]any{"message": map[string]any{"message_id": "om_pic", "chat_id": "oc_1", "chat_type": "p2p",
 		"message_type": "image", "content": `{"image_key":"img_1"}`}})

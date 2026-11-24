@@ -35,10 +35,7 @@ func TestBotCommandListCardsClipAndFallback(t *testing.T) {
 			Title: longListName(i), UpdatedAt: now.Add(-time.Duration(i) * time.Minute)})
 	}
 	f.setSessions("server", cs...)
-	ctx := context.Background()
-	if h, _ := s.botCommand(ctx, FeishuFeatures{Main: true}, "om", "/对话", "", ""); !h {
-		t.Fatal("/list not handled")
-	}
+	botSay(t, s, f, FeishuFeatures{Main: true}, "om_list", "/对话", "", "")
 	post := (*posts)[len(*posts)-1]
 	card, _ := post["card"].(string)
 	fallback, _ := post["fallback"].(string)
@@ -63,9 +60,7 @@ func TestBotCommandListCardsClipAndFallback(t *testing.T) {
 			Title: longListName(i), State: states[i%4], UpdatedAt: now})
 	}
 	f.setSessions("box", as...)
-	if h, _ := s.botCommand(ctx, FeishuFeatures{Agents: true}, "om", "/agents", "", ""); !h {
-		t.Fatal("/agents not handled")
-	}
+	botSay(t, s, f, FeishuFeatures{Agents: true}, "om_agents_list", "/agents", "", "")
 	post = (*posts)[len(*posts)-1]
 	card, _ = post["card"].(string)
 	fallback, _ = post["fallback"].(string)
@@ -198,14 +193,6 @@ func (f *fakeHub) agentCount() int { // successful session.start calls only (the
 	return f.agents
 }
 
-// pressSlotHeld reports whether message mid's button kind slot is still taken (test only).
-func (s *Service) pressSlotHeld(mid, kind string) bool {
-	s.fbot.mu.Lock()
-	defer s.fbot.mu.Unlock()
-	_, ok := s.fbot.pressAt[mid+kind]
-	return ok
-}
-
 // waitForStart polls until the fake saw wantStarts session starts and drains the newPosts started-cards that go
 // with this step, so the goroutine botStartAgent spawns has posted before the test moves on.
 func waitForStart(t *testing.T, f *fakeHub, posts chan struct{}, says chan string, wantStarts, newPosts int) {
@@ -293,12 +280,10 @@ func TestStartCardFailedStartLetsNextPressThrough(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("the failure note was not sent")
 	}
-	deadline := time.Now().Add(2 * time.Second) // the note lands before the slot is released
-	for s.pressSlotHeld("om_card1", "start") && time.Now().Before(deadline) {
-		time.Sleep(2 * time.Millisecond)
-	}
-	if s.pressSlotHeld("om_card1", "start") {
-		t.Fatal("the failed start kept its dedup slot")
+	// The note lands before the slot is released: the start's work ends after it (the press below shows the slot
+	// was released; the slot itself is the module's TestStartCardLateFailureKeepsNewerSlot).
+	if err := s.larkModule().Wait(ctx); err != nil {
+		t.Fatal(err)
 	}
 	if got := f.agentCount(); got != 0 {
 		t.Fatalf("started agents after failure = %d, want 0", got)
@@ -317,8 +302,7 @@ func TestStartCardPressAgainAfterWindow(t *testing.T) {
 
 	s.larkModule().Action(ctx, startCardAction("om_card1"), "")
 	waitForStart(t, f, posts, says, 1, 1)
-	botStartCardWindow = 0 // the first press is now older than the window
-	t.Cleanup(func() { botStartCardWindow = 60 * time.Second })
+	s.setLarkTiming("start_card_window", 0) // the first press is now older than the window
 	s.larkModule().Action(ctx, startCardAction("om_card1"), "")
 	waitForStart(t, f, posts, says, 2, 1)
 }
@@ -332,32 +316,6 @@ func TestStartCardWithoutMessageIDIsNotDeduped(t *testing.T) {
 	s.larkModule().Action(ctx, startCardAction(""), "")
 	s.larkModule().Action(ctx, startCardAction(""), "")
 	waitForStart(t, f, posts, says, 2, 2)
-}
-
-// A start that fails only after the window must not free a slot a later manual press has taken: the late failure
-// callback carries the timestamp its own press stamped, and the compare-and-swap leaves the newer slot in place, so
-// a third press is still swallowed instead of starting a third agent.
-func TestStartCardLateFailureKeepsNewerSlot(t *testing.T) {
-	s, _, _, _ := startCardHub(t)
-	mid := "om_card1"
-
-	botStartCardWindow = 0 // both presses are past the window, so the second press re-stamps the slot
-	t.Cleanup(func() { botStartCardWindow = 60 * time.Second })
-	_, first := s.startCardPressed(mid)
-	time.Sleep(time.Millisecond)
-	if blocked, second := s.startCardPressed(mid); blocked || !second.After(first) {
-		t.Fatalf("second press after the window: blocked=%v second=%v first=%v, want it to take a fresh slot", blocked, second, first)
-	}
-	// The first start's failure arrives late; it owns the old timestamp and must not delete the newer slot.
-	s.forgetStartCard(mid, first)
-	if !s.pressSlotHeld(mid, "start") {
-		t.Fatal("the late failure released the second press's slot")
-	}
-	// Inside the restored window a third press is therefore still swallowed.
-	botStartCardWindow = 60 * time.Second
-	if blocked, _ := s.startCardPressed(mid); !blocked {
-		t.Fatal("third press was not deduped: the late failure had dropped the newer slot")
-	}
 }
 
 // pressStartForm presses the agents card's "Start new agent" button on message mid, as Lark delivers a press, and
@@ -411,8 +369,7 @@ func TestStartFormPressAgainAfterWindow(t *testing.T) {
 
 	pressStartForm(t, s, "om_agents")
 	waitForForm(t, posts, "the first start form was not posted")
-	botFormWindow = 0
-	t.Cleanup(func() { botFormWindow = 10 * time.Second })
+	s.setLarkTiming("form_window", 0)
 	pressStartForm(t, s, "om_agents")
 	waitForForm(t, posts, "a press after the window posted no start form")
 }

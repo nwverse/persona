@@ -73,9 +73,7 @@ func TestStopCardPressMakesTheSameInterruptCallAsStopCommand(t *testing.T) {
 	}
 
 	s.larkModule().RememberThread("om_topic", target, "修 bug")
-	if h, _ := s.botCommand(ctx, FeishuFeatures{Main: true}, "om", "/stop", "om_topic", ""); !h {
-		t.Fatal("/stop was not handled")
-	}
+	botSay(t, s, f, FeishuFeatures{Main: true}, "om_stop", "/stop", "om_topic", "")
 	got := f.interrupted()
 	if len(got) != 2 || got[0] != got[1] {
 		t.Fatalf("interrupts %v, want two identical calls", got)
@@ -192,9 +190,7 @@ func TestStopWithNoTurnRunningSaysSo(t *testing.T) {
 			stopped := i18n.T("", "assistant-feishu_cards.stopped", i18n.Args{"label": "主对话"})
 			none := i18n.T("", "assistant-feishu_cards.nothing_running")
 
-			if h, _ := s.botCommand(ctx, FeishuFeatures{Main: true}, "om", "/stop", "", ""); !h {
-				t.Fatal("/stop was not handled")
-			}
+			botSay(t, s, f, FeishuFeatures{Main: true}, "om_stop", "/stop", "", "")
 			a := currentStopCard(s, target)
 			if !c.sent {
 				s.chans.st.Runs[len(s.chans.st.Runs)-1].Seen = true

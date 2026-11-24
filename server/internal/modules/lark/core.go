@@ -24,8 +24,8 @@ type turns struct {
 	mu sync.Mutex
 	// kitDown: CardKit would not make a progress card (stream.go); until then they are sent as messages.
 	kitDown time.Time
-	// workers are the agent messages' workers and the chat's messages being handled (message.go), still running
-	// (Layer.Wait).
+	// workers are the agent messages' workers, the chat's messages being handled (message.go) and the agents and
+	// start forms a card's press starts (card_actions.go), still running (Layer.Wait).
 	workers sync.WaitGroup
 	// posts are the to-do topic lines waiting to be said (thread_posts.go).
 	posts threadPoster

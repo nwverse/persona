@@ -114,8 +114,8 @@ func newPostEnv(t *testing.T) *postEnv {
 func (e *postEnv) bound(title, thread string) string {
 	e.t.Helper()
 	id := e.create(title).ID
+	seedTopicAnchor(e.t, e.s, e.f, testChat, thread, "om_"+thread)
 	e.must("PUT", "/api/v1/todos/"+id+"/thread", `{"channel":"feishu","chat_id":"`+testChat+`","thread_id":"`+thread+`"}`)
-	e.s.rememberTopicMessage(context.Background(), testChat, thread, "om_"+thread)
 	return id
 }
 
@@ -295,9 +295,9 @@ func newFleetPost(t *testing.T) *fleetPost {
 	ft.f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) { return map[string]any{"message_id": "om_x"}, nil })
 	clk := newFakeClock()
 	clk.install(ft.s)
+	seedTopicAnchor(t, ft.s, ft.f, testChat, testThread, "om_anchor")
 	putTodo(ft.s, Todo{ID: "todo_f", Title: "修登录", Thread: &TodoThread{Channel: "feishu", ChatID: testChat, ThreadID: testThread},
 		Agents: []TodoAgent{{MachineID: "mac", SessionID: "s1"}}})
-	ft.s.rememberTopicMessage(context.Background(), testChat, testThread, "om_anchor")
 	return &fleetPost{ft, clk}
 }
 
@@ -541,13 +541,8 @@ func TestThreadPostsAnchorGone(t *testing.T) {
 	if len(got) != n+1 || got[n]["reply_to"] != "om_new" || !strings.Contains(textOf(got[n]), "最后发网页") {
 		t.Fatalf("after the owner wrote again: %v", got[n:])
 	}
-	// A newer anchor that came meanwhile is not forgotten with the old one.
-	e.s.rememberTopicMessage(context.Background(), testChat, testThread, "om_old")
-	e.s.rememberTopicMessage(context.Background(), testChat, testThread, "om_newer")
-	e.s.forgetTopicMessage(context.Background(), testChat, testThread, "om_old")
-	if got := e.s.larkModule().TopicAnchor(context.Background(), testChat, testThread); got != "om_newer" {
-		t.Fatalf("anchor %q", got)
-	}
+	// A newer anchor that came meanwhile is not forgotten with the old one: the module's
+	// TestTopicAnchorForgetKeepsANewerOne.
 }
 
 // What the user wrote in the private chat as the answer to a "Please verify" card stays there; every other manual
@@ -656,8 +651,8 @@ func TestThreadPostsNothingToAChatNotInTheList(t *testing.T) {
 	needsLarkLayer(t)
 	e := newPostEnv(t)
 	id := e.create("发版").ID
+	seedTopicAnchor(t, e.s, e.f, "oc_made_up", "omt_x", "om_x")
 	e.must("PUT", "/api/v1/todos/"+id+"/thread", `{"channel":"feishu","chat_id":"oc_made_up","thread_id":"omt_x"}`)
-	e.s.rememberTopicMessage(context.Background(), "oc_made_up", "omt_x", "om_x")
 	e.decide(id, "先发安卓")
 	e.must("PATCH", "/api/v1/todos/"+id, `{"done":true}`)
 	e.clk.advance(time.Hour)
@@ -732,24 +727,12 @@ func TestThreadPostsGoIntoTheTopicByItsLatestMessage(t *testing.T) {
 	if e2 != "om_t2" {
 		t.Fatalf("anchor %q", e2)
 	}
-	e.s.fbot.mu.Lock()
-	kept := e.s.fbot.st.Topics[testChat+"/"+testThread]
-	e.s.fbot.mu.Unlock()
-	if kept == nil || kept.MessageID != "om_t2" {
+	var stored botState
+	if _, err := e.s.store().Setting(context.Background(), botStateKey, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if kept := stored.Topics[testChat+"/"+testThread]; kept == nil || kept.MessageID != "om_t2" {
 		t.Fatalf("kept %+v", kept)
-	}
-}
-
-// The remembered messages are bounded, and old ones go.
-func TestTopicAnchorsAreBounded(t *testing.T) {
-	now := time.Now()
-	m := map[string]*topicAnchor{"old": {MessageID: "om_old", At: now.Add(-topicAnchorsKeepFor - time.Hour)}}
-	for i := 0; i < topicAnchorsKeep+10; i++ {
-		m[fmt.Sprintf("k%d", i)] = &topicAnchor{MessageID: "om", At: now.Add(-time.Duration(i) * time.Minute)}
-	}
-	pruneTopicAnchors(m, now)
-	if len(m) != topicAnchorsKeep || m["old"] != nil || m["k0"] == nil || m[fmt.Sprintf("k%d", topicAnchorsKeep+9)] != nil {
-		t.Fatalf("kept %d: old %v", len(m), m["old"])
 	}
 }
 
