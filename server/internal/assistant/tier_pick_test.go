@@ -279,17 +279,24 @@ func TestTaskStartRecordsTheDispatch(t *testing.T) {
 	if w := request(s, http.MethodPost, "/api/v1/task-plans/"+p.ID+"/start", ""); w.Code != http.StatusOK {
 		t.Fatalf("start: %d %s", w.Code, w.Body)
 	}
-	waitFor(t, "the dispatch record", func() bool { return len(st.memStore.modelRoutings()) != 0 })
+	waitFor(t, "the dispatch record", func() bool { return len(st.memStore.modelRoutings()) >= 2 })
 	rows := st.memStore.modelRoutings()
 	todo := onlyTodo(s)
-	if len(rows) != 1 || len(todo.Agents) != 1 {
+	if len(rows) != 2 || len(todo.Agents) != 1 {
 		t.Fatalf("rows %+v todo %+v", rows, todo)
 	}
 	r := rows[0]
 	if !r.Active || r.ProfileID != "performance" || r.Tier != "dev" || r.Candidate != 0 || r.Of != 1 || r.Launcher != "codex" ||
 		r.Model != "test-performance" || r.Effort != "high" || r.Reason != tierReasonOnly || r.TodoID != todo.ID || r.PlanID != p.ID ||
 		r.SessionID != todo.Agents[0].SessionID || r.SessionID == "" {
-		t.Fatalf("model_routing row: %+v", r)
+		t.Fatalf("model_routing active row: %+v", r)
+	}
+	// Inactive profile economy (which has tier standard → dev) gets a trial row; empty (no tiers) writes nothing.
+	tr := rows[1]
+	if tr.Active || tr.ProfileID != "economy" || tr.Tier != "dev" || tr.Candidate != 0 || tr.Of != 1 || tr.Launcher != "claude" ||
+		tr.Model != "test-economy" || tr.Effort != "low" || tr.Reason != tierReasonOnly || tr.TodoID != todo.ID || tr.PlanID != p.ID ||
+		tr.SessionID != r.SessionID {
+		t.Fatalf("model_routing trial row: %+v", tr)
 	}
 	waitFor(t, "the plan's dispatch", func() bool {
 		current, err := s.loadPlan(context.Background(), p.ID)
