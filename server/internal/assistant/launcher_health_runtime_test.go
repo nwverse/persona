@@ -82,6 +82,38 @@ func TestLauncherHealthRoundRechecksTheMainChatsRuntime(t *testing.T) {
 	}
 }
 
+// A round keeps old runtime records for inspection. Only current failures of launchers the round covers can
+// start repair or acquire a blocked reason, including when no repair agent is configured (#14600).
+func TestLauncherHealthRoundRepairsOnlyCurrentEligibleFailures(t *testing.T) {
+	s, f := launcherHealthRuntimeHub(t)
+	ctx := context.Background()
+	now := time.Now()
+	records := []struct {
+		machine, launcher string
+		age               time.Duration
+	}{
+		{"server", "dsh", 7 * time.Hour}, // expired and outside periodic checks
+		{"l4", "dsh", time.Minute},       // current, outside periodic checks
+		{"box", "agy", 7 * time.Hour},    // eligible main chat runtime, expired
+	}
+	for _, tc := range records {
+		s.recordHealth(ctx, tc.machine, tc.launcher, healthResult{err: agyRouteError, source: healthSourceStart, at: now.Add(-tc.age)})
+	}
+
+	s.healthRound(ctx, true)
+	checked := checkedNow(f)
+	for _, tc := range records {
+		r := healthState(s, tc.machine, tc.launcher)
+		if r.State != healthFailing || !r.CheckedAt.Equal(now.Add(-tc.age)) || r.BlockedReason != "" || r.Repairs != 0 ||
+			slices.Contains(checked, tc.machine+"/"+tc.launcher) {
+			t.Errorf("%s/%s should keep its recorded failure: %+v, checked %v", tc.machine, tc.launcher, r, checked)
+		}
+	}
+	if r := healthState(s, "l4", "work"); r.State != healthBlocked || r.BlockedReason == "" {
+		t.Errorf("current failure of a checked launcher should still enter repair: %+v", r)
+	}
+}
+
 // Agents' default launcher is a runtime's too: its failure is rechecked the same way; the main chat's launcher, not
 // failing anywhere, is not checked.
 func TestLauncherHealthRoundRechecksAgentsDefaultRuntime(t *testing.T) {

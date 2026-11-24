@@ -63,7 +63,9 @@ class AppleOfflineUnitSchemeTests(unittest.TestCase):
         self.assertIn('OFFLINE_PROJECT="$SOURCE/apple/PersonaOfflineUnitTests.xcodeproj"', script)
         self.assertIn('ci_run \'Generate iPhone-only offline unit-test project\' 120 bash -c', script)
         self.assertIn('xcodegen dump --spec "$spec" --type json > "$output/Persona.whole.json"', script)
-        self.assertIn('python3 "$3" "$output/Persona.whole.json" "$output/PersonaOfflineUnitTests.json"', script)
+        self.assertIn('python3 "$3" "$output/Persona.whole.json" "$output/PersonaOfflineUnitTests.json" \\', script)
+        self.assertIn('--profile "$profile" --source-root "$tests"', script)
+        self.assertIn('"$OFFLINE_PROFILE" "$SOURCE/apple/PersonaTests"', script)
         self.assertIn('ci_run \'Generate offline unit-test Xcode project\' 120 xcodegen generate \\\n'
                       '    --spec "$OUTPUT/PersonaOfflineUnitTests.json" --project-root "$SOURCE/apple" \\\n'
                       '    --project "$SOURCE/apple"', script)
@@ -76,6 +78,35 @@ class AppleOfflineUnitSchemeTests(unittest.TestCase):
         self.assertIn('ci_run \'Unsigned iOS and embedded watch/extensions build\' 1800 "${XCODE[@]}" -scheme Persona', script)
         self.assertIn('ci_run \'Generate offline unit-test Xcode project\'', script)
         self.assertIn('xcodegen dump --spec "$spec"', script)
+
+    def test_only_focused_lanes_narrow_compiled_test_sources(self):
+        script = self.script
+        generation = script[script.index('  OFFLINE_PROFILE=full'):script.index(
+            "  ci_run 'Generate offline unit-test Xcode project'")]
+        self.assertEqual(script.count('OFFLINE_PROFILE=focused'), 1)
+        self.assertEqual(script.count('OFFLINE_PROFILE=ipad-diagnostic'), 1)
+        self.assertIn('if [ "$LANE" = ios-focused ]; then\n    OFFLINE_PROFILE=focused', generation)
+        self.assertIn('elif [ "$LANE" = ios-ipad-diagnostic ]; then\n    OFFLINE_PROFILE=ipad-diagnostic', generation)
+        self.assertIn('spec="$1"; output="$2"; profile="$4"; tests="$5"', generation)
+        self.assertIn('--profile "$profile"', generation)
+        # Full ordinary, floor and regression builds retain all test sources.
+        self.assertNotIn('ios-regressions ]; then\n    OFFLINE_PROFILE', generation)
+        self.assertNotIn('ios18 ]; then\n    OFFLINE_PROFILE', generation)
+        self.assertNotIn('LANE" = all', generation)
+        self.assertIn('BUILD_SECONDS=1800', script)
+        self.assertIn('UNIT_SECONDS=1800', script)
+        for deadline in (
+                "ci_run 'Verify hosted iOS test readiness' 900",
+                "ci_run 'Verify hosted regular iPad test readiness' 900",
+                "ci_run 'iOS regular-width About visual test on real iPad' 600",
+                "test_batch ios-html-card 'iOS HTML card tests (separate batch)' 600",
+                "test_batch ios-html-security 'iOS bounded HTML security tests (separate batch)' 600"):
+            self.assertIn(deadline, script)
+        self.assertIn('if [ "$LANE" != ios-focused ]; then', script)
+        # Device and simulator products use distinct SDKs, signing and graphs.
+        self.assertIn('-derivedDataPath "$OUTPUT/ios-device"', script)
+        self.assertIn('-derivedDataPath "$OUTPUT/ios-tests"', script)
+        self.assertNotIn('-derivedDataPath "$OUTPUT/ios-device" \\\n    -parallel-testing-enabled NO', script)
 
     def test_local_ui_test_entry_keeps_default_scheme_and_ui_target(self):
         ui_test = (ROOT / 'scripts/app/ui-test.sh').read_text()
@@ -241,7 +272,7 @@ class AppleCIPreparationTests(unittest.TestCase):
         for lane in ('ios', 'ios-focused', 'ios-regressions'):
             current = script.replace('      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" \\\n      --derived-data "$output/ios-tests" &',
                                      '      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" &')
-            offline_generation = script[script.index("  # The same real Persona test host and all of PersonaTests"):
+            offline_generation = script[script.index('  OFFLINE_PROFILE=full'):
                                        script.index("  # A generic destination must retain the host's single runnable architecture.")]
             current = current.replace(offline_generation, '')
             current = current.replace('OFFLINE_PROJECT="$SOURCE/apple/PersonaOfflineUnitTests.xcodeproj"\n', '')

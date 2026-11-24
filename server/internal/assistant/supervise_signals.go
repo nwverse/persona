@@ -267,6 +267,7 @@ type superviseBook struct {
 	told             map[string]time.Time // conversation → last accepted supervision message
 	timer            *time.Timer
 	timerAt          time.Time
+	off              supervisionOff // the automatic-supervision switch's memory (supervise_switch.go)
 
 	resuming map[[2]string]struct{} // fingerprints of offline leader sends in flight, under dedupMu
 
@@ -907,6 +908,9 @@ func (s *Service) signal(g superviseSignal) {
 
 // signalReplacing records g and, when old is still pending, atomically replaces that older stretch in the outbox.
 func (s *Service) signalReplacing(old *superviseSignal, g superviseSignal) {
+	if !s.autoSupervisionOn(context.Background()) {
+		return // automatic supervision messages are off: nothing is gathered, scheduled or told (supervise_switch.go)
+	}
 	if g.Todo != "" {
 		if t, ok := s.todoNow(g.Todo); ok && s.reporterStopped(context.Background(), t.Origin) {
 			return // /stop silences the reporting task's notices on every route until the user speaks again (#3308)
@@ -971,6 +975,9 @@ func (s *Service) releaseReportsLocked(g superviseSignal) []string {
 
 // queueSignalReplacing also removes the older stretch it supersedes from the durable outbox.
 func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) {
+	if !s.autoSupervisionOn(context.Background()) {
+		return // the same for a signal that skipped signal (supervise_switch.go)
+	}
 	if g.Kind != sigAsk {
 		g = s.currentSupervisorSignal(g)
 	}
@@ -1057,8 +1064,8 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 
 // scheduleDigestLocked sets the timer for when the pending signals are due; s.supervise.mu is held.
 func (s *Service) scheduleDigestLocked(now time.Time) {
-	if s.runCtx().Err() != nil {
-		return
+	if s.runCtx().Err() != nil || !s.autoSupervisionOn(context.Background()) {
+		return // stopping, or automatic supervision messages are off: no digest is scheduled
 	}
 	b := &s.supervise
 	batch := s.supervisionBatchInterval(context.Background())
@@ -1084,7 +1091,7 @@ func (s *Service) scheduleDigestLocked(now time.Time) {
 
 // retryDigestLocked tries the digest again in d, unless one is due sooner (b.mu held).
 func (s *Service) retryDigestLocked(d time.Duration) {
-	if s.runCtx().Err() != nil {
+	if s.runCtx().Err() != nil || !s.autoSupervisionOn(context.Background()) {
 		return
 	}
 	b := &s.supervise
@@ -1222,6 +1229,7 @@ func (s *Service) superviseLoop(ctx context.Context) {
 // conversation left waiting to the main conversation's follow-up (handOverUnreviewed), and lets go of a hold on the
 // main conversation's pushes that outlived superviseHoldMax.
 func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
+	s.syncAutoSupervision(ctx) // a switch left off, also across a restart, empties what automatic supervision holds
 	s.autoReviewTick(ctx, now)
 	s.sessionReviewTick(ctx, now)
 	s.askTick(now)                 // cards held past their time go up a rung (ask_route.go)
@@ -1240,6 +1248,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	history := s.planHistoryOnce() // and the plans read once, when a task's start needs them (start_remedy.go)
 	s.backfillBriefs(ctx, tasks)   // tasks from before briefs get one from what they still have (task_brief.go)
 	groups := allStoppedTaskGroups(tasks)
+	todosV2 := s.settings(ctx).todosV2On()
 	backfilled := 0
 	for _, t := range tasks {
 		if t.Supervision == nil && t.DoneAt == nil {
@@ -1317,6 +1326,9 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 				s.signal(g)
 			}
 			s.signalCardlessWait(ctx, t, agents, lists, now) // a review the owner cannot answer (#12648)
+			if todosV2 {
+				s.signalPendingReviewNudge(ctx, t, agents, lists, now) // todos_v2 >2h lightweight supervisor nudge (#14620)
+			}
 		}
 		if g, ok := s.deliveryHoldSignal(ctx, t, now); ok { // an owner hold with no card goes to its supervisor first
 			s.signal(g)

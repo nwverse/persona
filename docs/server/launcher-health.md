@@ -180,6 +180,7 @@ Every new Agent is now held to what its target computer can start before anythin
 
 ## Automatic repair
 
+- Only launchers covered by the periodic check are eligible for automatic repair. The latest failure must still be in effect. Other listed runtime launchers keep their records for inspection and can be checked with **Test again**.
 - One repair round per computer at a time (several launchers on one computer usually share one cause: the gateway config is broken and every launcher returns 400); at most two repairs per round, then it is recorded as `blocked` and waits for a person.
   Blocked launchers are still retested at the normal interval and recover on their own when they pass.
 - **Upgrade the CLI**: the node's `launchers.repair {name, action: "upgrade_cli"}` does only a fixed thing: for Claude launchers it runs `claude update` (login shell, 5-minute timeout);
@@ -216,9 +217,11 @@ set `default` if you want it to wait for your approval at every step. Member hub
 ## In the App
 
 Decided with the user (2026-11-11): the two model lists offer only what works now, so a launcher whose latest check failed is not listed at all (#4437). Earlier (#1643) the clients grayed out a `blocked` launcher with the reason and kept it selectable.
+Decided with the owner (2026-11-24, #14535): New Agent still does not offer such a launcher, but no longer leaves it missing. It comes in the answer's `unavailable` (code `launcher_unhealthy`) with a reason in the request's language: the failure's class on that computer (key or sign-in rejected, gateway can't use the model, CLI too old, no answer, usage limit, no gateway account free, first-run setup, else failed its last check) and the record's line, clipped to one short line. The clients already draw `unavailable` after the launchers, grayed with its reason and How to fix (the provider's page, whose Test availability clears the record), and never pick it, so a person can tell a failing launcher from one the computer does not have. The main chat's list is unchanged.
 
 - **New Agent** (iOS / Mac / visionOS `LauncherPicker` in `NewChatView`, web `NewAgent.tsx`) and the main chat's launcher menu both read `GET /api/v1/machines/{mid}/launchers`, which now leaves out a launcher whose latest check failed on that computer
   (a `failing`, `repairing` or `blocked` record within 6 hours, a usage limit until its reset) — the same records that route starts elsewhere. `failing` and `repairing` used to be offered; they are hidden too now.
+  For New Agent (`purpose` empty or `agent.new`) the launchers left out come back in `unavailable` with why (#14535, above), never in both lists; the presets that name them stay out.
   A launcher that was never checked stays: no result is not a failure, and the periodic checks are off unless the manager turns them on.
 - It comes back with a passing check on that computer (a periodic round when those are on, or **Test availability**), or when the record stops counting: the failure is older than 6 hours, or a usage limit's reset has passed.
   A successful start does not clear these: `recordStartSuccess` only clears `not_in_terminal`.

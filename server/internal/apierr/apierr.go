@@ -274,6 +274,8 @@ var rpcFailureKeys = map[string]string{
 	"attach_busy":              "rpc-errors.attach_busy",
 	proto.CodeTerminalNotReady: "rpc-errors.terminal_not_ready",
 	proto.CodeCodexNotLoggedIn: "rpc-errors.codex_not_logged_in", // a start that met Codex's sign-in screen (node/codex_start.go)
+	// a start that named the Antigravity companion while it is not connected (node/starthost.go, #13447)
+	proto.CodeAgyCompanionOffline: "rpc-errors.agy_companion_offline",
 	// a start's new tab stopped on its shell (node/shellsettle.go, #2570)
 	proto.CodeShellWaiting:      "rpc-errors.shell_waiting",
 	proto.CodeStartLineRejected: "rpc-errors.start_line_rejected",
@@ -569,7 +571,7 @@ func Summary(l i18n.Lang, code string, data map[string]any) string {
 // file the launchers are listed in (launcher_shell, rc_file). What a 409 says, and a session's start_error.
 func Sentence(l i18n.Lang, code string, data map[string]any) string {
 	switch code {
-	case "readonly_unsupported", proto.CodeDirectoryUntypable, "omp_options": // refusal needs no request parameters
+	case "readonly_unsupported", proto.CodeDirectoryUntypable, "omp_options", proto.CodeAgyCompanionOffline: // refusal needs no request parameters
 		return i18n.T(l, rpcFailureKeys[code])
 	}
 	// a start's new tab (node/shellsettle.go, #2570), or the Codex in it on its sign-in screen (node/codex_start.go)

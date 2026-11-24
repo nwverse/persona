@@ -37,6 +37,8 @@ data class AssistantConfig(
     @SerialName("notes_effective") val notesEffective: String = "",
     /** The main conversation's session id; it lives on [machineId]. */
     val main: String? = null,
+    /** Leader (direction) conversation ids; empty when none or omitted by an older hub. */
+    val leaders: List<String> = emptyList(),
     /**
      * "Notify only in the main chat": tasks the main conversation sends out stay out of pushes and the badge (the main conversation
      * tells you instead); null from a hub without the setting.
