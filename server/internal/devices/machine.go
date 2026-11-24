@@ -173,6 +173,8 @@ type Machine struct {
 	claudeDirsMu sync.Mutex
 	// hiddenDirs is the machine's hidden Agent folders, cached (agentdirs.go).
 	hiddenDirs hiddenDirsCache
+	// herdrSessionsBlocked is the machine's blocked named herdr sessions, cached (herdrsessions.go).
+	herdrSessionsBlocked herdrSessionsCache
 	// nodeCmd replaces the node command (tests).
 	nodeCmd func(context.Context) *exec.Cmd
 	// localNote is why the last start of a local node passed a program beside it over (localNode), said once until it

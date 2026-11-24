@@ -315,6 +315,31 @@ func decodeSingleJSONObject(w http.ResponseWriter, r *http.Request, dst any, lim
 	return json.Unmarshal(raw, dst)
 }
 
+// mergeTierInput is the tiers a PUT stores, given the profile's own (was). A tier the body sends without candidates
+// is in an older client's shape, which knows only the flat fields: they replace its first candidate, and the other
+// candidates and the aliases stay as they were. A tier with candidates, or with aliases, says them itself (an empty
+// list clears them). A tier the body leaves out is removed, as it always was.
+func mergeTierInput(was, in map[string]ModelTier) map[string]ModelTier {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]ModelTier, len(in))
+	for name, t := range in {
+		old, ok := was[name]
+		if ok && t.Candidates == nil {
+			first := t.first()
+			t.Candidates = slices.Clone(old.Candidates)
+			t.setFirst(first)
+		}
+		if ok && t.Aliases == nil {
+			t.Aliases = slices.Clone(old.Aliases)
+		}
+		t.normalize()
+		out[name] = t
+	}
+	return out
+}
+
 func (s *Service) modelProfileRoutes() {
 	view := func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.modelProfilesView(r.Context())
@@ -348,7 +373,7 @@ func (s *Service) modelProfileRoutes() {
 		_, err := s.saveModelProfile(ctx, in.Revision, r.PathValue("id"), profileActor(r), func(p *ModelProfile, exists bool) error {
 			p.Name, p.Description = in.Name, in.Description
 			if !in.Capture {
-				p.Purposes, p.Launchers, p.Tiers = in.Purposes, in.Launchers, in.Tiers
+				p.Purposes, p.Launchers, p.Tiers = in.Purposes, in.Launchers, mergeTierInput(p.Tiers, in.Tiers)
 				return nil
 			}
 			purposes, launchers, tiers, err := s.captureModels(ctx)
@@ -357,7 +382,7 @@ func (s *Service) modelProfileRoutes() {
 			}
 			p.Purposes, p.Launchers = purposes, launchers
 			if in.Tiers != nil {
-				p.Tiers = in.Tiers
+				p.Tiers = mergeTierInput(p.Tiers, in.Tiers)
 			} else if !exists {
 				p.Tiers = tiers
 			}

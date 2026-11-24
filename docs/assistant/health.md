@@ -3,6 +3,41 @@
 Health-related chats are split out of the assistant's main chat into a separate **Health** space: its own entry point, its own chat directory, its own memory.
 The first version is modeled on ChatGPT Health and starts with the hub and the web (#2789); the iOS and Mac entry points then reuse the same APIs (#2901). Android has a minimal entry (#4329): its health chats and a new health chat page.
 
+## Health items
+
+Who it serves: everyday people choosing what Health tracks for them (#14711).
+The Health module keeps one ordered list in the manager setting `health.items`, with a revision.
+Its catalog contains water and protein (`persona`), Activity rings and trends (`apple_health`).
+Clients provide the titles. The hub forwards GET and PUT requests from full-access devices;
+watch answer tokens and extensions cannot change the list. Hello advertises `health_items` only when
+the default manager names it. See `docs/protocol/protocol.md` ("Health items") for the wire contract.
+
+Before a first save, reads compute defaults without saving: Activity rings and trends; water
+and protein too if intake entries (including undone entries), an intake setting, or a pending
+water extension import exists. A fresh owner gets only Activity rings and trends. Each save
+replaces the entire ordered list at the revision read; stale writes return 409 and the current
+state. Clients preserve items they do not display. Removing an item keeps its records; adding
+it again makes them available. A successful save increments once and sends one `health_items` event, which also
+refreshes the default manager's watch complications and widgets through the intake wake path.
+
+Reads show recognized IDs once each, in stored order. If a newer hub saved IDs this version
+does not recognize, reads omit them without changing the setting. PUT and `add_item` saves
+keep those IDs at the end in their original order, including repeated unknown IDs. This lets
+an older hub change known items without erasing newer ones. Unknown or duplicate IDs in a
+PUT request are still rejected. An unknown-only saved list stays saved and reads as empty.
+
+The Health chat includes recording guidance only for added water/protein items, while phone
+health summaries and workouts remain available. Logging an absent item says to ask the owner
+whether to add it. Only after `ask_user` consent does the chat call `health_intake` with
+`action:add_item` and `item`, then records the entry. The item is appended after the other
+recognized items, before any preserved unknown IDs. Adding an existing item is idempotent;
+list and delete remain available. Without the module, the chat has no intake-item guidance.
+
+Water reminders stop while water is absent. GET intake includes the ordered `items` so watch
+complications and Log Water can ask the owner to add Water in Health. Intake HTTP writes and
+imports still accept absent items for older clients; Apple Health sync follows all records
+and undo markers regardless of the list. This server change does not add client screens.
+
 ## Why split it out
 
 Health information is more private than work information, and longer-lived: allergies, medications, checkup results need to stay useful once recorded, but they should not show up in the context of work chats,

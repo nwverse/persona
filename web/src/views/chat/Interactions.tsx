@@ -331,6 +331,25 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
   });
   // paging to another question shows a new option set: its answers restart the guard window
   const tapGuard = useChatCardTapGuard(ix, `:q${qi}`);
+  const toggleRef = useRef<(label: string) => void>(() => {});
+
+  useEffect(() => {
+    if (!q || busy || (!canApprove && !localOnly)) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
+      if (e.key >= "1" && e.key <= "9") {
+        const opt = q.options?.[Number(e.key) - 1];
+        if (!opt || (localOnly && opt.action !== "defer")) return;
+        e.preventDefault();
+        toggleRef.current(opt.label);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [q, busy, canApprove, localOnly]);
+
   if (!q) return null;
   const looking = isDelegating(ix);
   const picks = recommendedLabels(qs, ix.delegate?.recommend);
@@ -382,7 +401,7 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
     if (singleChoice && !hasCustomAnswer) void send(label);
     else if (!q.multi_select && !last) slide.current = window.setTimeout(() => setQi((i) => Math.min(qs.length - 1, i + 1)), 380);
   };
-
+  toggleRef.current = toggle;
   return (
     <Card
       kicker={q.header || t("chat-interactions.question")}
@@ -971,7 +990,7 @@ function PlainScreenCard({ ix }: { ix: Interaction }) {
           )}
         </div>
       ) : (
-        <pre className="max-h-56 overflow-auto rounded-[8px] bg-[#1b1c1f] px-3 py-2 font-mono text-[11.5px] leading-[1.5] whitespace-pre text-[#e6e7e9]">{ix.screen}</pre>
+        <pre className="max-h-56 overflow-auto rounded-[8px] bg-[var(--term-bg,#1b1c1f)] px-3 py-2 font-mono text-[11.5px] leading-[1.5] whitespace-pre text-[var(--term-fg,#e6e7e9)]">{ix.screen}</pre>
       )}
     </Card>
   );
@@ -1476,7 +1495,7 @@ export function TurnCards({ asks }: { asks: readonly TurnAsk[] }) {
  * screen (#1996) they sit in a box that scrolls on its own; while the keyboard is up, one line for all of them (tapping
  * it puts the keyboard away), and on a phone on its side one line until tapped.
  */
-export function PendingCards({ interactions, answered, delegated = [], offerNext, narrow, short = false, keyboard, onDismissKeyboard }: {
+export function PendingCards({ interactions, answered, delegated = [], offerNext, narrow, short = false, keyboard, onDismissKeyboard, reveal }: {
   interactions: Interaction[];
   answered: Answered[];
   /** The questions the assistant answered for the user (#544): shown with the answered ones, until put away. */
@@ -1488,6 +1507,8 @@ export function PendingCards({ interactions, answered, delegated = [], offerNext
   short?: boolean;
   keyboard: boolean;
   onDismissKeyboard: () => void;
+  /** Open the short-screen fold when the composer points to an existing card. */
+  reveal?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const count = interactions.length;
@@ -1497,6 +1518,7 @@ export function PendingCards({ interactions, answered, delegated = [], offerNext
   useEffect(() => {
     if (!count) setOpen(false);
   }, [count]);
+  useEffect(() => { if (short && reveal) setOpen(true); }, [short, reveal]);
   // the cards cut off below the box (each Card says): while any is, a stack of two or more says how many it holds
   const [cutCards, setCutCards] = useState<ReadonlySet<string>>(() => new Set());
   const report = useCallback((key: string, cut: boolean) => setCutCards((had) => {
@@ -1509,7 +1531,7 @@ export function PendingCards({ interactions, answered, delegated = [], offerNext
   const ids = interactions.map((ix) => ix.id).join("\n");
   const run = useRun(ids);
   const slot = useSlotFocus(interactions[0]?.id);
-  const { full, summary } = cardFold(count, { narrow, keyboard, open, short });
+  const { full, summary } = cardFold(count, { narrow, keyboard, open: open || (short && reveal === true), short });
   if (!count && !answered.length && !delegated.length) return null;
   const shown = showsAnswered({ narrow, keyboard, open, short });
   const done = shown

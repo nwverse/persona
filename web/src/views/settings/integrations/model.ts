@@ -21,7 +21,7 @@ export type IntegrationTarget =
       name?: string;
       description?: string;
       channelId?: string;
-      connectorId?: string;
+      connectorId?: string | null;
       manager?: string;
     }
   | {
@@ -121,6 +121,7 @@ export function resolveBuiltinChannelId(target: Extract<IntegrationTarget, { kin
 
 /** Default hub connector id associated with a built-in integration when not explicitly overridden. */
 export function resolveBuiltinConnectorId(target: Extract<IntegrationTarget, { kind: "builtin" }>): string | null {
+  if (target.connectorId === null) return null;
   if (target.connectorId) return target.connectorId;
   if (target.id === "mail" || target.id === "feishu-bot" || target.id === "lark") return null;
   return target.id;

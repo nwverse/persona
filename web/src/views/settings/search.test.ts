@@ -72,6 +72,8 @@ const views = new URL("../", import.meta.url);
 const sources = (readdirSync(views, { recursive: true }) as string[])
   .filter((f) => f.endsWith(".tsx") && !f.includes(".test."))
   .map((f) => readFileSync(new URL(f, views), "utf8"))
+  // Advanced › Appearance's extension theme row is drawn by ui/ExtensionThemePicker.tsx when a theme is installed
+  .concat(readFileSync(new URL("../../ui/ExtensionThemePicker.tsx", import.meta.url), "utf8"))
   .join("\n");
 
 // The index reads t() at module scope, just as it does after the page loads its catalog. Build an independent
