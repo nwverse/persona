@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/kb"
 )
@@ -429,7 +428,7 @@ func (d *historyDriver) download(ctx context.Context, w historyWork) kb.Download
 			return nil
 		}
 		for {
-			var m connector.Media
+			var m connectorwire.Media
 			c, err := d.call(ctx, historyImageMethod, filing, w.chat.ID, true, func(cctx context.Context) (int, string, string, error) {
 				got, err := d.src.Media(cctx, d.source, ref)
 				m = got
@@ -467,11 +466,11 @@ func (d *historyDriver) download(ctx context.Context, w historyWork) kb.Download
 }
 
 // saveHistoryImage writes an image the source handed over (0600): only a picture within the size an attachment may be.
-func saveHistoryImage(m connector.Media, dst string) error {
+func saveHistoryImage(m connectorwire.Media, dst string) error {
 	if !strings.HasPrefix(strings.ToLower(m.Mime), "image/") {
 		return fmt.Errorf("not an image: %q", m.Mime)
 	}
-	if len(m.Data) == 0 || len(m.Data) > connector.ArchiveMediaMost {
+	if len(m.Data) == 0 || len(m.Data) > connectorwire.ArchiveMediaMost {
 		return fmt.Errorf("an image of %d bytes", len(m.Data))
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
