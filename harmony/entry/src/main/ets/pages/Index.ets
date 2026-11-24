@@ -9,7 +9,13 @@ import { extensionIcon } from '../design/ExtensionIcons';
 import type { ExtensionUINavigationEffect } from '../models/ExtensionUI';
 import { ComputerScreenPage } from '../components/ComputerScreenPage';
 import { isPairingAddress } from '../core/WireCompatibility';
-import { scanBarcode, scanCore } from '@kit.ScanKit';
+import { detectBarcode, scanBarcode, scanCore } from '@kit.ScanKit';
+import { photoAccessHelper } from '@kit.MediaLibraryKit';
+import { HubDemoVideo } from '../components/HubDemoVideo';
+import { WorkspaceConnections } from '../components/WorkspaceConnections';
+import { HubWelcome } from '../components/HubWelcome';
+import { HubPairingForm } from '../components/HubPairingForm';
+import { HttpFailure } from '../platform/HubTransport';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { RemoteDocumentPage } from '../components/RemoteDocumentPage';
 import { TodoWorkspacePage } from '../components/TodoWorkspacePage';
@@ -94,8 +100,15 @@ struct Index {
   @Local address: string = '';
   @Local pairCode: string = '';
   private pairingRevision: number = 0;
-  @Local scanning: boolean = false;
-  private scanRevision: number = 0;
+  @Local pairMode: string = 'scan';
+  @Local pairBusy: boolean = false;
+  @Local pairError: string = '';
+  @Local pairTarget?: PairingTarget;
+  private pendingPair?: Pairing;
+  private pairOwner?: ClientModel;
+  private pairGeneration: number = -1;
+  private pairScope: string = '';
+  private launchPairCamera: boolean = false;
   @Local resourceKind: string = 'todo';
   @Local newTask: string = '';
   @Local selectedMachine: number = 0;
@@ -223,10 +236,37 @@ struct Index {
   }
   private openReader(address: string): void { const safe = readerLink(address); if (safe) { this.readerAddress = safe; this.readerTitle = readerHost(safe); this.readerShown = true; } }
   @Builder readerContent() { LinkReader({ address: this.readerAddress, onHost: (host: string) => this.readerTitle = host }) }
-  private openSheet(kind: string): void { this.navigationIntent++; if (kind === 'connect') this.pairingRevision++; this.readerShown = false; if (kind === 'newagent') { this.prepareAgent(); return; } this.sheetKind = kind; this.showSheet = true; }
-  private sheetTitle(): string { return tr(this.sheetKind === 'hub' ? 'hub' : this.sheetKind === 'newagent' ? 'new_agent' : 'welcome'); }
+  private openSheet(kind: string): void {
+    if (kind === 'connect') { this.openPairing('scan'); return; }
+    this.navigationIntent++; this.readerShown = false;
+    if (kind === 'newagent') { this.prepareAgent(); return; }
+    this.sheetKind = kind; this.showSheet = true;
+  }
+  private openPairing(mode: string, scan: boolean = false, link: string = ''): void {
+    this.navigationIntent++; this.readerShown = false;
+    this.resetPairing(mode); this.address = link;
+    this.launchPairCamera = scan && this.pairMode === 'scan';
+    this.sheetKind = 'connect'; this.showSheet = true;
+  }
+  private resetPairing(mode: string): void {
+    this.pairingRevision++;
+    this.pairMode = mode === 'scan' && !canIUse('SystemCapability.Multimedia.Scan.ScanBarcode') ? 'link' : mode;
+    this.pairTarget = undefined; this.pendingPair = undefined; this.pairOwner = undefined;
+    this.address = ''; this.pairCode = ''; this.pairBusy = false; this.pairError = ''; this.launchPairCamera = false;
+  }
+  @Monitor('showSheet') pairingSheetChanged(): void {
+    if (!this.showSheet && this.sheetKind === 'connect') this.resetPairing('scan');
+  }
+  private sheetAppeared(): void {
+    if (this.sheetKind === 'connect' && this.showSheet && this.launchPairCamera) {
+      this.launchPairCamera = false; this.scanPairing(false);
+    }
+  }
+  private sheetTitle(): string { return tr(this.sheetKind === 'tour' ? 'hub_tour_title' : this.sheetKind === 'hub' ? 'hub' : this.sheetKind === 'newagent' ? 'new_agent' : 'welcome'); }
   @Builder sheetContent() {
-    if (this.sheetKind === 'hub') this.workspaceSheet()
+    if (this.sheetKind === 'tour') {
+      HubDemoVideo({ onDemo: () => { this.showSheet = false; this.model.useDemo(); } })
+    } else if (this.sheetKind === 'hub') this.workspaceSheet()
     else if (this.sheetKind === 'newagent') this.newAgentForm()
     else this.pairingForm()
   }
@@ -250,7 +290,7 @@ struct Index {
     this.bindDeviceOwner(this.model);
     this.applications.bind(this.model); this.applications.refresh();
   }
-  aboutToDisappear(): void { this.finishComputerFullscreen(); this.agentWorkspace.hide(); this.applications.dispose(); this.dismissChatActions(); }
+  aboutToDisappear(): void { this.finishComputerFullscreen(); this.resetPairing('scan'); this.agentWorkspace.hide(); this.applications.dispose(); this.dismissChatActions(); }
   @Monitor('model.profile', 'model.connected', 'model.features') applicationOwnerChanged(): void {
     this.applications.bind(this.model); this.applications.connectionChanged();
   }
@@ -301,7 +341,8 @@ struct Index {
     this.changeSection(row.kind === 'conversation' ? 0 : 1); this.openRow(row, false);
   }
   private consumePairingLink(): void {
-    if (!this.model.pairingLink) return; this.address = this.model.pairingLink; this.pairCode = ''; this.model.pairingLink = ''; this.openSheet('connect');
+    if (!this.model.pairingLink) return;
+    const link = this.model.pairingLink; this.model.pairingLink = ''; this.openPairing('link', false, link);
   }
   private savePath(): void {
     if (this.activeScope !== this.model.scope()) this.restoreScope();
@@ -444,30 +485,51 @@ struct Index {
     this.detailRoute = key; this.chatReady = true;
   }
   private settingsModel(param: Object): ClientModel { return NavigationContext.from('settings', param as string).scoped ? this.detailModel : this.model; }
-  private async connect(): Promise<void> {
-    const generation = this.model.connectionGeneration(), scope = this.model.scope(), address = this.address, code = this.pairCode, revision = this.pairingRevision;
-    const current = (): boolean => this.showSheet && this.sheetKind === 'connect' && revision === this.pairingRevision && this.model.owns(generation, scope) && this.address === address && this.pairCode === code;
-    this.model.busy = true; this.model.error = '';
-    try {
-      const pairing = isPairingAddress(this.address.trim()) ? Pairing.parse(this.address.trim()) : Pairing.manual(this.address.trim(), this.pairCode.trim());
-      const target = await pairing.inspect(); if (!current()) return; this.model.busy = false;
-      this.getUIContext().showAlertDialog({ title: tr('verify'), message: target.name + '\n' + target.baseUrl + '\n' + target.hubId,
-        primaryButton: { value: tr('cancel'), action: () => {} },
-        secondaryButton: { value: tr('trust'), action: () => { if (current()) this.redeem(pairing, target, current); } } });
-    } catch (error) {
-      if (!current()) return;
-      const detail = error as Error as Object as Record<string, Object>; const code = detail['code'];
-      this.model.diagnosticCode = error instanceof Error && /^[a-z_0-9]{1,64}$/.test(error.message) ? error.message : typeof code === 'number' ? String(code) : 'pairing_failed';
-      hilog.error(0x0000, 'PersonaPair', '%{public}s', this.model.diagnosticCode);
-      this.model.error = 'connection_failed';
-    } finally { if (this.model.owns(generation, scope)) this.model.busy = false; }
+  private pairingCurrent(revision: number): boolean {
+    return this.showSheet && this.sheetKind === 'connect' && this.pairingRevision === revision;
   }
-  private async redeem(pairing: Pairing, target: PairingTarget, admit: () => boolean): Promise<void> {
-    const revision = this.pairingRevision, address = this.address, code = this.pairCode;
+
+  private pairingError(error: Error, redeeming: boolean): string {
+    const failure = error as HttpFailure;
+    if (redeeming && (failure.status === 410 || (failure.status === 401 && failure.code === 'invalid_token'))) return 'hub_code_expired';
+    if (['hub_identity_mismatch', 'hub_identity_changed', 'hub_pin_mismatch', 'pairing_target_changed'].includes(error.message)) return 'hub_identity_error';
+    if (['invalid_pairing', 'invalid_endpoint', 'invalid_pin', 'pin_requires_https'].includes(error.message)) return 'hub_invalid_input';
+    return 'hub_unreachable';
+  }
+
+  private async connect(): Promise<void> {
+    if (this.pairBusy || !this.showSheet || this.sheetKind !== 'connect') return;
+    const revision = ++this.pairingRevision, owner = this.model, generation = owner.connectionGeneration(), scope = owner.scope();
+    this.pairBusy = true; this.pairError = '';
     try {
-      await this.model.pair(pairing, target, admit);
-      if (this.sheetKind === 'connect' && revision === this.pairingRevision && this.address === address && this.pairCode === code && this.model.profile.id === target.hubId) { this.pairCode = ''; this.address = ''; this.showSheet = false; }
-    } catch (_) { if (admit()) this.model.error = 'connection_failed'; }
+      const pairing = this.pairMode === 'manual' ? Pairing.manual(this.address.trim(), this.pairCode.trim()) : Pairing.parse(this.address.trim());
+      const target = await pairing.inspect();
+      if (!this.pairingCurrent(revision)) return;
+      if (owner !== this.model || !owner.owns(generation, scope)) { this.pairError = 'request_updated'; return; }
+      this.pairGeneration = generation; this.pairScope = scope; this.pairOwner = owner;
+      this.pendingPair = pairing; this.pairTarget = target;
+    } catch (error) {
+      if (this.pairingCurrent(revision)) this.pairError = this.pairingError(error as Error, false);
+    } finally { if (this.pairingRevision === revision) this.pairBusy = false; }
+  }
+
+  private async trustPairing(): Promise<void> {
+    const owner = this.pairOwner, target = this.pairTarget, pairing = this.pendingPair, revision = this.pairingRevision;
+    if (!owner || !target || !pairing || this.pairBusy || !this.pairingCurrent(revision)) return;
+    const current = (): boolean => this.pairingCurrent(revision) && this.model === owner && this.pairTarget === target &&
+      owner.owns(this.pairGeneration, this.pairScope);
+    if (!current()) { this.resetPairing(this.pairMode); this.pairError = 'request_updated'; return; }
+    this.pairBusy = true;
+    try {
+      await owner.pair(pairing, target, current);
+      if (this.pairingCurrent(revision) && this.model === owner && owner.profile.id === target.hubId) this.showSheet = false;
+    } catch (error) {
+      if (this.pairingCurrent(revision)) {
+        this.pendingPair = undefined; this.pairTarget = undefined;
+        this.pairError = this.pairingError(error as Error, true);
+        if (this.pairError === 'hub_code_expired') { this.pairCode = ''; if (this.pairMode !== 'manual') this.address = ''; }
+      }
+    } finally { if (this.pairingRevision === revision) this.pairBusy = false; }
   }
   private menus(): NavigationMenuItem[] {
     if (this.rail()) return [];
@@ -529,7 +591,7 @@ struct Index {
     return Colors.secondary;
   }
   private spaceTitle(kind: string): string {
-    if (kind === 'hub') return this.model.profile.name || tr('hub');
+    if (kind === 'hub') return tr('hub') + ' · ' + this.model.workspaceName(this.model.profile);
     if (kind === 'persona') return tr('main_chat');
     if (kind === 'todo') return tr('todos');
     if (kind === 'health') return tr('health_home_title');
@@ -719,8 +781,8 @@ struct Index {
   }
   @Builder settingsList() {
     List() {
-      ForEach(['assistant', 'memory', 'machines', 'devices', 'managers', 'launchers', 'engine', 'models', 'schedules', 'extensions', 'connectors', 'channels', 'translation', 'triage', 'ledger', 'phone', 'ssh', 'appearance', 'notifications', 'hub_update', 'node_update', 'privacy', 'diagnostics'], (page: string) => {
-        ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr(this.settingsLabel(page)) }) }) }.selectable(true).selected(!!this.activeChild && (this.shownName === 'extension' ? page === 'extensions' : this.shownName === 'settings' && this.settingsFamily(this.settingsKind(this.shownParam)) === page)).onClick(() => this.openSettings(page)).id('settings.' + page)
+      ForEach(['assistant', 'memory', 'machines', 'devices', 'hub', 'managers', 'launchers', 'engine', 'models', 'schedules', 'extensions', 'connectors', 'channels', 'translation', 'triage', 'ledger', 'phone', 'ssh', 'appearance', 'notifications', 'hub_update', 'node_update', 'privacy', 'diagnostics'], (page: string) => {
+        ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr(this.settingsLabel(page)) }) }) }.selectable(true).selected(!!this.activeChild && (this.shownName === 'extension' ? page === 'extensions' : this.shownName === 'settings' && this.settingsFamily(this.settingsKind(this.shownParam)) === page)).onClick(() => { if (page === 'hub') this.openSheet('hub'); else this.openSettings(page); }).id('settings.' + page)
       }, (page: string) => page)
     }.width('100%').height('100%').padding({ bottom: Tokens.listTail })
   }
@@ -729,36 +791,45 @@ struct Index {
     else this.personaList()
   }
   @Builder workspaceSheet() {
-    List() {
-      ForEach(this.model.profiles, (profile: HubProfile) => { ListItem() { Text(profile.name).padding(Tokens.page) }
-        .onClick(() => { this.model.selectProfile(profile); this.showSheet = false; }) }, (profile: HubProfile) => profile.id)
-      ForEach(this.model.managers, (manager: ResourceRow) => { ListItem() { Text(manager.title).padding(Tokens.page) }
-        .onClick(() => { this.model.selectManager(manager.id); this.showSheet = false; }) }, (manager: ResourceRow) => manager.id)
-      ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('connect')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('connect', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('connect')).bindTips(tr('connect')).onClick(() => { this.showSheet = false; this.openSheet('connect'); }) }
-    }.width('100%')
+    WorkspaceConnections({ model: this.model, onClose: () => this.showSheet = false,
+      onAdd: () => this.openPairing('scan') })
   }
-  private async scanPairing(): Promise<void> {
-    const host = this.getUIContext().getHostContext(); if (!host || this.scanning) return;
-    const revision = ++this.scanRevision, generation = this.model.connectionGeneration(), scope = this.model.scope(); this.scanning = true;
+  private async scanPairing(photo: boolean): Promise<void> {
+    const host = this.getUIContext().getHostContext();
+    if (!host || this.pairBusy || !this.showSheet || this.sheetKind !== 'connect') return;
+    const revision = ++this.pairingRevision, owner = this.model, scope = owner.scope(), epoch = owner.pairingRevision();
+    const current = (): boolean => this.pairingCurrent(revision) && this.model === owner && owner.scope() === scope && owner.pairingRevision() === epoch;
+    this.pairBusy = true; this.pairError = '';
     try {
-      const result = await scanBarcode.startScanForResult(host, { scanTypes: [scanCore.ScanType.QR_CODE], enableAlbum: true, enableMultiMode: false });
-      if (revision !== this.scanRevision || !this.showSheet || this.sheetKind !== 'connect' || !this.model.owns(generation, scope)) return;
-      Pairing.parse(result.originalValue); this.address = result.originalValue; this.pairCode = ''; this.model.error = '';
-    } catch (error) { if (revision === this.scanRevision && (error as BusinessError).code !== 1000500002) this.model.error = 'connection_failed'; }
-    finally { if (revision === this.scanRevision) this.scanning = false; }
+      let value = '';
+      const options: scanBarcode.ScanOptions = { scanTypes: [scanCore.ScanType.QR_CODE], enableAlbum: true, enableMultiMode: false };
+      if (photo) {
+        const optionsPhoto = new photoAccessHelper.PhotoSelectOptions();
+        optionsPhoto.MIMEType = photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE; optionsPhoto.maxSelectNumber = 1;
+        const selected = await new photoAccessHelper.PhotoViewPicker().select(optionsPhoto);
+        if (!selected.photoUris.length || !current()) return;
+        const matches = (await detectBarcode.decode({ uri: selected.photoUris[0] }, options))
+          .filter((item: scanBarcode.ScanResult) => isPairingAddress(item.originalValue.trim()));
+        if (matches.length === 1) value = matches[0].originalValue;
+      } else {
+        value = (await scanBarcode.startScanForResult(host, options)).originalValue;
+      }
+      if (!current()) return;
+      try { Pairing.parse(value.trim()); } catch (_) { this.pairError = 'hub_wrong_qr'; return; }
+      this.address = value.trim(); this.pairCode = ''; this.pairBusy = false;
+      await this.connect();
+    } catch (error) {
+      if (current() && (error as BusinessError).code !== 1000500002) this.pairError = photo ? 'hub_photo_failed' : 'hub_camera_failed';
+    } finally { if (this.pairingRevision === revision) this.pairBusy = false; }
   }
+
   @Builder pairingForm() {
-    Column({ space: Tokens.page }) {
-      Row({ space: Tokens.gap }) {
-        TextInput({ text: this.address, placeholder: tr('hub_address') }).onChange((value: string) => this.address = value).id('pair.address').layoutWeight(1)
-        if (canIUse('SystemCapability.Multimedia.Scan.ScanBarcode')) Button({ type: ButtonType.Circle }) {
-          SymbolGlyph($r('sys.symbol.qrcode')).fontSize(Tokens.symbolFont).fontColor([Colors.link])
-        }.attributeModifier(ButtonStyles.chrome).accessibilityText(tr('scan_qr')).enabled(!this.scanning && !this.model.busy).onClick(() => this.scanPairing()).id('pair.scan')
-      }.width('100%')
-      TextInput({ text: this.pairCode, placeholder: tr('pair_code') }).type(InputType.Password).onChange((value: string) => this.pairCode = value).id('pair.code')
-      if (this.model.error) Text(tr(this.model.error)).fontColor($r('app.color.persona_danger'))
-      Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('verify')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('verify', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('verify')).bindTips(tr('verify')).enabled(!!this.address.trim() && (!!this.pairCode.trim() || isPairingAddress(this.address.trim())) && !this.model.busy).onClick(() => this.connect()).id('pair.verify').alignSelf(ItemAlign.End)
-    }.padding(Tokens.page).width('100%')
+    HubPairingForm({ mode: this.pairMode, address: this.address, code: this.pairCode, busy: this.pairBusy,
+      error: this.pairError, targetName: this.pairTarget?.name || '', targetAddress: this.pairTarget?.baseUrl || '',
+      alreadyPaired: !!this.pairTarget && this.model.profiles.some((p: HubProfile) => p.hubId === this.pairTarget?.hubId || p.id === this.pairTarget?.hubId),
+      onMode: (mode: string) => this.resetPairing(mode), onAddress: (value: string) => { this.address = value; this.pairError = ''; },
+      onCode: (value: string) => { this.pairCode = value; this.pairError = ''; }, onScan: (photo: boolean) => this.scanPairing(photo),
+      onVerify: () => this.connect(), onTrust: () => this.trustPairing(), onCancel: () => this.resetPairing(this.pairMode) })
   }
   private createAgentKey(): string {
     if (this.creatingAgent) return 'sending';
@@ -1022,15 +1093,15 @@ struct Index {
     WithTheme({ theme: nativeLookTheme(this.look, this.model.style, this.environment.dark), colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT }) {
     ThemeScope() {
     Column() {
-      if (!this.model.profile.id) {
-        Column({ space: Tokens.section }) {
-          Text(tr('welcome')).fontSize(Tokens.title).fontWeight(FontWeight.Bold)
-          if (this.model.error) Text(tr(this.model.error)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
-          Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('connect')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('connect', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('connect')).bindTips(tr('connect')).onClick(() => this.openSheet('connect')).id('welcome.connect')
-          Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('experience')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('experience', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('experience')).bindTips(tr('experience')).onClick(() => this.model.useDemo()).id('welcome.demo')
-          if (this.model.pendingCleanupCount > 0) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry_cleanup')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry_cleanup', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry_cleanup')).bindTips(tr('retry_cleanup')).onClick(() => this.model.retryCleanup())
-        }.justifyContent(FlexAlign.Center).width('100%').height('100%')
-          .bindSheet($$this.showSheet, this.sheetContent(), { title: { title: this.sheetTitle() }, height: SheetSize.LARGE, showClose: true })
+      if (!this.model.ready && !this.model.profile.id) {
+        Column() { LoadingProgress().width(Tokens.avatar).height(Tokens.avatar).color(Colors.link) }
+          .justifyContent(FlexAlign.Center).width('100%').height('100%')
+      } else if (!this.model.profile.id) {
+        HubWelcome({ error: this.model.error, cleanup: this.model.pendingCleanupCount > 0,
+          onScan: () => this.openPairing('scan', true), onOther: () => this.openPairing('link'), onGuide: () => this.openPairing('guide'),
+          onDemo: () => this.model.useDemo(), onVideo: () => this.openSheet('tour'), onCleanup: () => this.model.retryCleanup() })
+          .bindSheet($$this.showSheet, this.sheetContent(), { title: { title: this.sheetTitle() }, height: SheetSize.LARGE, showClose: true,
+            keyboardAvoidMode: this.sheetKind === 'connect' ? SheetKeyboardAvoidMode.RESIZE_ONLY : undefined, onAppear: () => this.sheetAppeared() })
       } else {
         Navigation(this.stack) { this.primaryContent() }.title({ builder: this.peerTitle, height: this.headerHeight() }, { systemMaterial: this.titleMaterial }).titleMode(NavigationTitleMode.Mini)
           .hideBackButton(true).hideTitleBar(this.rail()).menus([])
@@ -1041,7 +1112,8 @@ struct Index {
           .minContentWidth(Tokens.detailMin).enableDragBar(!this.rail()).navDestination(this.destination)
           .onAreaChange(() => this.updateBreakpoint()).width('100%').height('100%')
 
-          .bindSheet($$this.showSheet, this.sheetContent(), { title: { title: this.sheetTitle() }, height: SheetSize.LARGE, showClose: true })
+          .bindSheet($$this.showSheet, this.sheetContent(), { title: { title: this.sheetTitle() }, height: SheetSize.LARGE, showClose: true,
+            keyboardAvoidMode: this.sheetKind === 'connect' ? SheetKeyboardAvoidMode.RESIZE_ONLY : undefined, onAppear: () => this.sheetAppeared() })
       }
     }.width('100%').height('100%')
       .bindSheet($$this.spacesShown, this.spacesContent(), { title: { title: tr('conversation_spaces') }, height: SheetSize.LARGE, showClose: true, onAppear: () => { this.spacesLayoutReady = true; this.measureSpaces(); }, onDisappear: () => this.spacesLayoutReady = false })

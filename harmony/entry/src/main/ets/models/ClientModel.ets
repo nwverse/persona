@@ -74,6 +74,8 @@ export class ClientModel {
   @Trace connected: boolean = false;
   @Trace demo: boolean = false;
   @Trace profiles: HubProfile[] = [];
+  @Trace private pairingRequired: boolean = false;
+  @Trace private workspaceNames: Map<string, string> = new Map();
   @Trace profile: HubProfile = new HubProfile();
   @Trace managers: ResourceRow[] = [];
   @Trace features: string[] = [];
@@ -187,7 +189,38 @@ export class ClientModel {
     return Array.from(this.views.values()).find((view: ClientModel) => !view.retired && view.profile.id === group && view.profile.manager === row.manager);
   }
   directoryOwners(): ClientModel[] { const owners: ClientModel[] = [this]; for (const owner of this.views.values()) if (!owner.retired && !this.forgettingProfiles.has(owner.profile.id)) owners.push(owner); return owners; }
-  groupName(row: ResourceRow): string { return this.profiles.find((profile: HubProfile) => profile.id === (row.group || this.profile.id))?.name || this.profile.name; }
+  workspaceName(profile: HubProfile): string {
+    return this.workspaceNames.get(profile.id) || profile.name || tr('hub');
+  }
+  workspaceStatus(profile: HubProfile): string {
+    if (profile.id === this.profile.id) {
+      if (this.pairingRequired) return 'workspace_pair_again';
+      return this.connected ? 'online' : this.error ? 'offline' : 'workspace_disconnected';
+    }
+    const views = Array.from(this.views.values()).filter((view: ClientModel) => !view.retired && view.profile.id === profile.id);
+    if (views.some((view: ClientModel) => view.connected)) return 'online';
+    if (views.some((view: ClientModel) => view.pairingRequired)) return 'workspace_pair_again';
+    return views.some((view: ClientModel) => !!view.error) ? 'offline' : 'workspace_disconnected';
+  }
+  groupName(row: ResourceRow): string {
+    const profile = this.profiles.find((p: HubProfile) => p.id === (row.group || this.profile.id)) || this.profile;
+    return (this.directoryParent || this).workspaceName(profile);
+  }
+  async renameWorkspace(profile: HubProfile, name: string): Promise<void> {
+    if (!this.profiles.includes(profile) || this.forgettingProfiles.has(profile.id)) throw new Error('request_updated');
+    const previous = this.workspaceNames.get(profile.id);
+    const alias = name.trim();
+    if (alias && alias !== profile.name) this.workspaceNames.set(profile.id, alias);
+    else this.workspaceNames.delete(profile.id);
+    try { await this.saveProfiles(); }
+    catch (error) {
+      if (this.profiles.includes(profile) && this.workspaceName(profile) === (alias || profile.name)) {
+        if (previous) this.workspaceNames.set(profile.id, previous);
+        else this.workspaceNames.delete(profile.id);
+      }
+      throw error as Error;
+    }
+  }
   async refreshDirectory(): Promise<void> {
     if (this.detached || this.demo) { this.publishDirectory(); return; }
     const generation = this.generation, scope = this.scope(), owner = JSON.stringify([generation, scope]);
@@ -296,7 +329,7 @@ export class ClientModel {
   private reconnectAttempt: number = 0;
   private stopReconnect(): void { if (this.reconnectTimer !== -1) clearTimeout(this.reconnectTimer); this.reconnectTimer = -1; }
   private scheduleReconnect(): void {
-    if (!this.foreground || this.demo || !this.profile.id || this.cleanupProfiles.has(this.profile.id) || this.reconnectTimer !== -1 || this.pairingProfiles.size > 0) return;
+    if (!this.foreground || this.demo || this.pairingRequired || !this.profile.id || this.cleanupProfiles.has(this.profile.id) || this.reconnectTimer !== -1 || this.pairingProfiles.size > 0) return;
     const generation = this.generation, scope = this.scope(), delay = Math.min(30000, 1000 * Math.pow(2, Math.min(5, this.reconnectAttempt++)));
     this.reconnectTimer = setTimeout(() => { this.reconnectTimer = -1;
       if (this.foreground && this.owns(generation, scope) && !this.connected) this.selectProfile(this.profile, true).catch((error: Error) => this.failure(error));
@@ -375,6 +408,8 @@ export class ClientModel {
     this.profiles = Wire.rows(saved, 'profiles').map((item: Record<string, Object>) => {
       const profile = new HubProfile(Wire.text(item, 'id'), Wire.text(item, 'name'), Wire.text(item, 'baseUrl'));
       profile.addresses = Wire.strings(item, 'addresses'); profile.hubId = Wire.text(item, 'hubId'); profile.pin = Wire.text(item, 'pin'); profile.manager = Wire.text(item, 'manager');
+      const label = Wire.text(item, 'label');
+      if (label) this.workspaceNames.set(profile.id, label);
       return profile;
     });
     this.ready = true;
@@ -397,13 +432,17 @@ export class ClientModel {
   private failure(error: Error): void {
     if (error instanceof HttpFailure) {
       if (error.status === 401 || error.status === 403) this.stopReconnect();
+      if (error.status === 401) this.pairingRequired = true;
       this.error = error.resultPending ? 'pending' : error.resultUnknown ? 'result_unknown' : error.status === 401 ? 'welcome' :
         error.status === 403 ? 'permission_denied' : error.status === 409 || error.status === 410 ? 'request_updated' : 'failed';
     } else this.error = ['offline', 'pending_action'].includes(error.message) ? error.message : 'failed';
   }
   private async saveProfiles(): Promise<void> {
     if (this.detached) return;
-    await this.local.put('profiles', JSON.stringify({ profiles: this.profiles, active: this.profile.id }));
+    const profiles = this.profiles.map((p: HubProfile) => Wire.payload(
+      ['id', 'name', 'baseUrl', 'addresses', 'hubId', 'pin', 'manager', 'label'],
+      [p.id, p.name, p.baseUrl, p.addresses, p.hubId, p.pin, p.manager, this.workspaceNames.get(p.id) || '']));
+    await this.local.put('profiles', JSON.stringify({ profiles: profiles, active: this.profile.id }));
   }
   private async applyAppearance(change: DevicePreferenceChange): Promise<void> {
     await this.changePreferences(async (): Promise<void> => {
@@ -496,6 +535,7 @@ export class ClientModel {
     }
     this.local.allowHub(profile.id); ChatAttachments.allowHub(profile.hubId || profile.id);
     this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); const keep = preserve && profile.id === this.profile.id && profile.manager === this.profile.manager;
+    this.pairingRequired = false;
     const saved = this.persistDraft(); this.closeTranscript(); this.releaseTerminal(); this.repository?.close(); this.repository = undefined;
     const generation = ++this.generation; this.selectionGeneration++; const selection = this.selected;
     this.profile = profile; const scope = this.scope(); this.connected = false;
@@ -509,7 +549,7 @@ export class ClientModel {
     await this.saveProfiles(); if (!this.owns(generation, scope) || !this.foreground) return;
     const token = await this.vault?.get(profile.id);
     if (!this.owns(generation, scope)) return;
-    if (!token) { this.error = 'welcome'; return; }
+    if (!token) { this.error = 'workspace_pair_again'; this.pairingRequired = true; return; }
     if (profile.manager) await this.restoreSnapshot(generation, scope);
     let proxy: SshProxyLease | undefined;
     try {
@@ -625,7 +665,7 @@ export class ClientModel {
     if (this.context) { try { clearImagePreviews(this.context, profile.hubId || id); } catch (_) { cleanupFailed = true; } }
     try { await nativeNotifications.clear(id); } catch (_) { cleanupFailed = true; }
     try { await this.credentialChange(id, async (): Promise<void> => { await this.vault?.remove(id, true); }); } catch (_) { cleanupFailed = true; }
-    this.profiles = this.profiles.filter((item: HubProfile) => item.id !== id); this.publishDirectory();
+    this.profiles = this.profiles.filter((item: HubProfile) => item.id !== id); this.workspaceNames.delete(id); this.publishDirectory();
     try { await this.saveProfiles(); } catch (_) { cleanupFailed = true; }
     if (cleanupFailed) { this.error = 'cleanup_incomplete'; throw new Error('cleanup_incomplete'); }
     this.cleanupProfiles.delete(id);
@@ -1476,7 +1516,7 @@ export class ClientModel {
   }
   useDemo(): void {
     this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.releaseTerminal(); this.retireViews(); this.repository?.close(); this.generation++; this.selectionGeneration++;
-    this.demo = true; this.connected = true; this.profile = new HubProfile('demo', tr('local_demo')); this.profile.hubId = 'demo'; this.profile.manager = 'demo';
+    this.demo = true; this.pairingRequired = false; this.connected = true; this.profile = new HubProfile('demo', tr('local_demo')); this.profile.hubId = 'demo'; this.profile.manager = 'demo';
     this.demoRepository = new DemoRepository(this.local); this.repository = this.demoRepository;
     this.selected = new ResourceRow(); this.messages = []; this.revisionItems = []; this.clearPendingDecisions(); this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.draftLoading = false;
     this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); this.unresolvedWrites = []; this.operationState = ''; this.resourceRows = []; this.detail = ''; this.reply = '';

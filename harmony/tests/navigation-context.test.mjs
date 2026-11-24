@@ -15,8 +15,10 @@ function method(name){
  for(;i<source.length&&depth;i++){const c=source[i];if(quote){if(escape)escape=false;else if(c==='\\')escape=true;else if(c===quote)quote='';}else if(c==='"'||c==="'"||c==='`')quote=c;else if(c==='{')depth++;else if(c==='}')depth--;}
  assert.equal(depth,0,name);return source.slice(start,i);
 }
-const names=['consumeNotification','destinationBackHidden','chatSelectionShown','activeModule','readingAgentDetail','routeTarget','openRow','mainDestination','openMain','hideChatTitle','newConversation','resolveMainDestination','ensureMainDestination','pushChat','redeem','childKey','routeRow','openSettings','settingsKind','settingsModel','targetReady','openLinkedResource','openFrom','openComputer','handoffResource','restoreTarget','routeShown','dismissChatActions','markDetailReady'];
-const NativeNavigation=new Function('NavigationContext','ResourceRow','mainConversationData','Wire','Tokens','return '+stripTypeScriptTypes('class NativeNavigation {'+names.map(method).join('\n')+'}'))(NavigationContext,ResourceRow,mainConversationData,Wire,Tokens);
+const names=['consumeNotification','destinationBackHidden','chatSelectionShown','activeModule','readingAgentDetail','routeTarget','openRow','mainDestination','openMain','hideChatTitle','newConversation','resolveMainDestination','ensureMainDestination','pushChat','pairingCurrent','trustPairing','pairingError','connect','childKey','routeRow','openSettings','settingsKind','settingsModel','targetReady','openLinkedResource','openFrom','openComputer','handoffResource','restoreTarget','routeShown','dismissChatActions','markDetailReady'];
+let inspectedPair;
+const testPairing = { parse: () => inspectedPair, manual: () => inspectedPair };
+const NativeNavigation=new Function('NavigationContext','ResourceRow','mainConversationData','Wire','Tokens','Pairing','return '+stripTypeScriptTypes('class NativeNavigation {'+names.map(method).join('\n')+'}'))(NavigationContext,ResourceRow,mainConversationData,Wire,Tokens,testPairing);
 function row(id='source',manager='owner-b',kind='conversation'){const r=new ResourceRow(id,id,kind);r.manager=manager;r.machine='machine';r.session=id;return r;}
 function deferred(){let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};}
 function fixture(){const shell=new NativeNavigation(),pushed=[];let gen=1;
@@ -76,10 +78,56 @@ test('computer routes capture the machine owner and restore independently of cha
  assert.equal(detail.selected.kind,'machine');assert.equal(shell.targetReady('computer',pushed[0].param),true);
 });
 
-test('a late pairing UI completion does not clear a newly opened connection form or its navigation',async()=>{const {shell,primary}=fixture(),gate=deferred();shell.pairingRevision=1;shell.address='first-link';shell.pairCode='first-code';shell.showSheet=true;primary.pair=()=>gate.promise;const completing=shell.redeem({}, {hubId:'paired-a'},()=>false);shell.pairingRevision=2;shell.address='new-link';shell.pairCode='new-code';primary.profile.id='chosen-c';gate.resolve();await completing;assert.equal(shell.address,'new-link');assert.equal(shell.pairCode,'new-code');assert.equal(shell.showSheet,true);assert.equal(primary.profile.id,'chosen-c');});
+function reviewedPair(shell, owner, target) {
+ shell.showSheet = true; shell.sheetKind = 'connect'; shell.pairingRevision = 1;
+ shell.pairOwner = owner; shell.pairTarget = target; shell.pendingPair = {};
+ shell.pairGeneration = owner.connectionGeneration(); shell.pairScope = owner.scope();
+}
 
-test('pairing completion cannot dismiss a later non-connect sheet in the same selected Hub',async()=>{const {shell,primary}=fixture(),gate=deferred();shell.pairingRevision=1;shell.sheetKind='connect';shell.address='confirmed-link';shell.pairCode='confirmed-code';shell.showSheet=false;primary.profile.id='paired-a';primary.pair=()=>gate.promise;const old=shell.redeem({}, {hubId:'paired-a'},()=>true);shell.sheetKind='hub';shell.showSheet=true;gate.resolve();await old;assert.equal(shell.sheetKind,'hub');assert.equal(shell.showSheet,true);assert.equal(shell.address,'confirmed-link');});
+test('a late pairing UI completion does not clear a newly opened connection form or its navigation', async () => {
+ const { shell, primary } = fixture(), gate = deferred(); let calls = 0;
+ reviewedPair(shell, primary, { hubId: 'paired-a' });
+ primary.pair = () => { calls++; return gate.promise; };
+ const completing = shell.trustPairing();
+ assert.equal(calls, 1);
+ shell.pairingRevision++; shell.address = 'new-link'; shell.pairCode = 'new-code'; primary.profile.id = 'chosen-c';
+ gate.resolve(); await completing;
+ assert.equal(shell.address, 'new-link'); assert.equal(shell.pairCode, 'new-code');
+ assert.equal(shell.showSheet, true); assert.equal(primary.profile.id, 'chosen-c');
+});
 
+test('pairing completion cannot dismiss a later non-connect sheet in the same selected Hub', async () => {
+ const { shell, primary } = fixture(), gate = deferred(); let calls = 0;
+ primary.profile.id = 'paired-a'; reviewedPair(shell, primary, { hubId: 'paired-a' });
+ primary.pair = () => { calls++; return gate.promise; };
+ const old = shell.trustPairing(); await shell.trustPairing(); assert.equal(calls, 1);
+ shell.sheetKind = 'hub'; shell.showSheet = true; gate.resolve(); await old;
+ assert.equal(shell.sheetKind, 'hub'); assert.equal(shell.showSheet, true);
+});
+
+test('an expired credential clears the reviewed target and the one-time code', async () => {
+ const { shell, primary } = fixture(); reviewedPair(shell, primary, { hubId: 'paired-a' });
+ shell.pairMode = 'manual'; shell.address = 'hub address'; shell.pairCode = 'sample';
+ primary.pair = async () => { throw Object.assign(new Error('invalid_token'), { status: 401, code: 'invalid_token' }); };
+ await shell.trustPairing();
+ assert.equal(shell.pairError, 'hub_code_expired'); assert.equal(shell.pairCode, '');
+ assert.equal(shell.address, 'hub address'); assert.equal(shell.pairTarget, undefined); assert.equal(shell.showSheet, true);
+});
+
+
+test('inspecting a link shows the specific Hub and defers redemption until explicit confirmation', async () => {
+ const { shell, primary } = fixture();
+ Object.assign(shell, { sheetKind:'connect', showSheet:true, pairingRevision:0, pairMode:'link', address:'sample' });
+ let redemptions=0;
+ const target={hubId:'new-hub',name:'Sample',baseUrl:'https://example.invalid'};
+ inspectedPair={inspect:async()=>target};
+ primary.pair=async (pair,confirmed,admit) => {
+   assert.equal(pair,inspectedPair); assert.equal(confirmed,target); assert.ok(admit());
+   redemptions++; primary.profile.id=target.hubId;
+ };
+ await shell.connect(); assert.equal(shell.pairTarget,target); assert.equal(redemptions,0);
+ await shell.trustPairing(); assert.equal(redemptions,1); assert.equal(shell.showSheet,false);
+});
 
 test('native extension pushes have distinct route identities and an eight-page limit',()=>{
  const NativeExtensions = new Function('ResourceRow','Wire','util','tr','return '+stripTypeScriptTypes('class NativeExtensions {'+method('openExtension')+'}'))(ResourceRow,{payload:(keys,values)=>Object.fromEntries(keys.map((key,i)=>[key,values[i]]))},{generateRandomUUID:(()=>{let id=0;return()=>String(++id);})()},value=>value);

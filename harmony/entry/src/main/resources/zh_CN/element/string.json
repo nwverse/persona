@@ -5041,6 +5041,102 @@
       "value": "暂无已撤销设备。"
     },
     {
+      "name": "hub_welcome_summary",
+      "value": "连接你的 Persona Hub，在手机上查看电脑、跟进 Agent 的工作。"
+    },
+    {
+      "name": "hub_scan_connect",
+      "value": "扫码连接 Hub"
+    },
+    {
+      "name": "hub_where_code",
+      "value": "扫描设置 Hub 时显示的手机配对码，也可在已连接设备的「设置 › 设备 › 连接新设备」获取。"
+    },
+    {
+      "name": "hub_other_ways",
+      "value": "其他连接方式"
+    },
+    {
+      "name": "hub_guide_first",
+      "value": "完成 Hub 设置后，页面会显示手机配对码。需要新的码时，可在这台电脑的终端运行下方命令。"
+    },
+    {
+      "name": "hub_guide_existing",
+      "value": "打开「设置 › 设备 › 连接新设备」，选择手机，生成配对链接或二维码。"
+    },
+    {
+      "name": "hub_have_link",
+      "value": "使用配对链接"
+    },
+    {
+      "name": "hub_open_camera",
+      "value": "打开相机扫码"
+    },
+    {
+      "name": "hub_choose_photo",
+      "value": "从相册选择二维码"
+    },
+    {
+      "name": "hub_manual",
+      "value": "输入地址和配对码"
+    },
+    {
+      "name": "hub_paste_link",
+      "value": "粘贴配对链接"
+    },
+    {
+      "name": "hub_manual_hint",
+      "value": "填写同一次配对中提供的 Hub 地址和一次性配对码。"
+    },
+    {
+      "name": "hub_link_hint",
+      "value": "粘贴从 Hub 或已连接设备复制的完整手机配对链接。"
+    },
+    {
+      "name": "hub_pairing_link",
+      "value": "配对链接"
+    },
+    {
+      "name": "hub_confirm_title",
+      "value": "连接到这个 Hub 吗？"
+    },
+    {
+      "name": "hub_confirm_hint",
+      "value": "请核对名称和地址，确认是你要连接的 Hub 后再继续。"
+    },
+    {
+      "name": "hub_refresh_pairing",
+      "value": "这部手机已经绑定过此 Hub。再次连接会更新此手机的凭证。"
+    },
+    {
+      "name": "hub_code_expired",
+      "value": "配对码已过期或已使用，请生成新的手机配对码。"
+    },
+    {
+      "name": "hub_identity_error",
+      "value": "Hub 身份和配对信息不一致，请核对地址并重新生成配对码。"
+    },
+    {
+      "name": "hub_invalid_input",
+      "value": "请检查 Hub 地址和配对信息是否完整。"
+    },
+    {
+      "name": "hub_unreachable",
+      "value": "未能连接 Hub。请确认 Hub 正在运行，且手机可以访问该地址。"
+    },
+    {
+      "name": "hub_wrong_qr",
+      "value": "请扫描手机配对码。浏览器的登录码请到「设备」页扫描。"
+    },
+    {
+      "name": "hub_photo_failed",
+      "value": "未能从图片识别配对码。请选择只含一个清晰配对码的图片。"
+    },
+    {
+      "name": "hub_camera_failed",
+      "value": "未能打开扫码器。你也可以从相册选择二维码，或使用配对链接。"
+    },
+    {
       "name": "machine_detail",
       "value": "机器详情"
     },
@@ -5125,6 +5221,10 @@
       "value": "Hub 的机器列表中已找不到这台电脑。"
     },
     {
+      "name": "hub_welcome_code_hint",
+      "value": "在电脑的 Hub 设置页找到手机配对码。"
+    },
+    {
       "name": "machine_copy_link",
       "value": "复制配对链接"
     },
@@ -5143,6 +5243,70 @@
     {
       "name": "machine_view_pair",
       "value": "查看配对信息"
+    },
+    {
+      "name": "hub_demo_title",
+      "value": "体验演示"
+    },
+    {
+      "name": "hub_demo_note",
+      "value": "用示例数据试用，无需绑定。"
+    },
+    {
+      "name": "hub_get_code",
+      "value": "获取配对码"
+    },
+    {
+      "name": "hub_get_code_note",
+      "value": "在电脑或已连接设备上取码。"
+    },
+    {
+      "name": "hub_code_computer",
+      "value": "在运行 Hub 的电脑上"
+    },
+    {
+      "name": "hub_code_device",
+      "value": "在已连接的设备上"
+    },
+    {
+      "name": "hub_tour_title",
+      "value": "Persona 演示短片"
+    },
+    {
+      "name": "hub_tour_short",
+      "value": "看短片"
+    },
+    {
+      "name": "hub_tour_play",
+      "value": "播放短片"
+    },
+    {
+      "name": "hub_tour_pause",
+      "value": "暂停播放"
+    },
+    {
+      "name": "hub_tour_try",
+      "value": "进入互动演示"
+    },
+    {
+      "name": "hub_tour_note",
+      "value": "12 秒无声短片，演示机器总览、Agent 详情和新电脑确认。"
+    },
+    {
+      "name": "hub_tour_error",
+      "value": "短片暂时无法播放，可以直接进入互动演示。"
+    },
+    {
+      "name": "workspace_current",
+      "value": "当前"
+    },
+    {
+      "name": "workspace_local_name",
+      "value": "名称仅在这台手机上显示，留空可恢复 Hub 名称。"
+    },
+    {
+      "name": "workspace_add",
+      "value": "添加工作空间"
     },
     {
       "name": "machine_rename",
@@ -5173,8 +5337,20 @@
       "value": "移除"
     },
     {
+      "name": "workspace_disconnected",
+      "value": "未连接"
+    },
+    {
       "name": "machine_admin_root",
       "value": "请在 Hub 的直连地址打开管理页，移除这台电脑。"
+    },
+    {
+      "name": "workspace_pair_again",
+      "value": "需要重新配对"
+    },
+    {
+      "name": "workspace_pair_action",
+      "value": "重新配对"
     },
     {
       "name": "devices_no_match",

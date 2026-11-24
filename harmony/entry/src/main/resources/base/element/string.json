@@ -5041,6 +5041,102 @@
       "value": "No revoked devices."
     },
     {
+      "name": "hub_welcome_summary",
+      "value": "Connect your phone to your Persona Hub to see your computers and work with their agents."
+    },
+    {
+      "name": "hub_scan_connect",
+      "value": "Scan to connect a Hub"
+    },
+    {
+      "name": "hub_where_code",
+      "value": "Scan the phone pairing code shown when you set up your Hub, or get one from a connected device in Settings › Devices › Connect a new device."
+    },
+    {
+      "name": "hub_other_ways",
+      "value": "Other ways to connect"
+    },
+    {
+      "name": "hub_guide_first",
+      "value": "Hub setup shows a phone pairing code. To make a new one, run this command in a terminal on that computer."
+    },
+    {
+      "name": "hub_guide_existing",
+      "value": "Open Settings › Devices › Connect a new device and choose a phone to generate a link or QR code."
+    },
+    {
+      "name": "hub_have_link",
+      "value": "Use a pairing link"
+    },
+    {
+      "name": "hub_open_camera",
+      "value": "Open camera"
+    },
+    {
+      "name": "hub_choose_photo",
+      "value": "Choose QR code from photos"
+    },
+    {
+      "name": "hub_manual",
+      "value": "Enter address and code"
+    },
+    {
+      "name": "hub_paste_link",
+      "value": "Paste a pairing link"
+    },
+    {
+      "name": "hub_manual_hint",
+      "value": "Use the Hub address and one-time code from the same pairing request."
+    },
+    {
+      "name": "hub_link_hint",
+      "value": "Paste the full link copied from the Hub or a connected device."
+    },
+    {
+      "name": "hub_pairing_link",
+      "value": "Pairing link"
+    },
+    {
+      "name": "hub_confirm_title",
+      "value": "Connect to this Hub?"
+    },
+    {
+      "name": "hub_confirm_hint",
+      "value": "Check the name and address. Connect only if you recognize this Hub."
+    },
+    {
+      "name": "hub_refresh_pairing",
+      "value": "This Hub is already paired. Connecting again refreshes this phone’s credentials."
+    },
+    {
+      "name": "hub_code_expired",
+      "value": "This code expired or was already used. Generate a new phone pairing code."
+    },
+    {
+      "name": "hub_identity_error",
+      "value": "The Hub identity has changed. Check the address and generate a fresh pairing code."
+    },
+    {
+      "name": "hub_invalid_input",
+      "value": "Check the Hub address and pairing information."
+    },
+    {
+      "name": "hub_unreachable",
+      "value": "Couldn’t reach the Hub. Check that it is running and that this phone can reach its address."
+    },
+    {
+      "name": "hub_wrong_qr",
+      "value": "Scan a phone pairing code. Browser sign-in codes belong in Devices."
+    },
+    {
+      "name": "hub_photo_failed",
+      "value": "Couldn’t read a pairing code from this image. Choose a clear photo of one code."
+    },
+    {
+      "name": "hub_camera_failed",
+      "value": "Couldn’t open the scanner. Try a photo or a pairing link."
+    },
+    {
       "name": "machine_detail",
       "value": "Machine details"
     },
@@ -5125,6 +5221,10 @@
       "value": "This computer is no longer listed by the Hub."
     },
     {
+      "name": "hub_welcome_code_hint",
+      "value": "Find the phone pairing code on your Hub’s setup page."
+    },
+    {
       "name": "machine_copy_link",
       "value": "Copy pairing link"
     },
@@ -5143,6 +5243,70 @@
     {
       "name": "machine_view_pair",
       "value": "View pairing information"
+    },
+    {
+      "name": "hub_demo_title",
+      "value": "Explore a demo"
+    },
+    {
+      "name": "hub_demo_note",
+      "value": "Try sample data before pairing."
+    },
+    {
+      "name": "hub_get_code",
+      "value": "Get a pairing code"
+    },
+    {
+      "name": "hub_get_code_note",
+      "value": "Get a code from a computer or connected device."
+    },
+    {
+      "name": "hub_code_computer",
+      "value": "On the Hub computer"
+    },
+    {
+      "name": "hub_code_device",
+      "value": "On a connected device"
+    },
+    {
+      "name": "hub_tour_title",
+      "value": "Persona walkthrough"
+    },
+    {
+      "name": "hub_tour_short",
+      "value": "Video"
+    },
+    {
+      "name": "hub_tour_play",
+      "value": "Play walkthrough"
+    },
+    {
+      "name": "hub_tour_pause",
+      "value": "Pause"
+    },
+    {
+      "name": "hub_tour_try",
+      "value": "Try the interactive demo"
+    },
+    {
+      "name": "hub_tour_note",
+      "value": "12-second silent tour of the machine list, agent details and pairing approval."
+    },
+    {
+      "name": "hub_tour_error",
+      "value": "The video could not play. You can still explore the interactive demo."
+    },
+    {
+      "name": "workspace_current",
+      "value": "Current"
+    },
+    {
+      "name": "workspace_local_name",
+      "value": "Name on this phone. Leave blank to use the Hub name."
+    },
+    {
+      "name": "workspace_add",
+      "value": "Add Hub"
     },
     {
       "name": "machine_rename",
@@ -5173,8 +5337,20 @@
       "value": "Remove"
     },
     {
+      "name": "workspace_disconnected",
+      "value": "Not connected"
+    },
+    {
       "name": "machine_admin_root",
       "value": "Open the admin page at the Hub’s direct address to remove this computer."
+    },
+    {
+      "name": "workspace_pair_again",
+      "value": "Pairing required"
+    },
+    {
+      "name": "workspace_pair_action",
+      "value": "Pair Again"
     },
     {
       "name": "devices_no_match",

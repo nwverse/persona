@@ -5041,6 +5041,102 @@
       "value": "取り消したデバイスはありません。"
     },
     {
+      "name": "hub_welcome_summary",
+      "value": "Persona Hub に接続して、スマートフォンからコンピュータとエージェントの作業を確認できます。"
+    },
+    {
+      "name": "hub_scan_connect",
+      "value": "スキャンして Hub に接続"
+    },
+    {
+      "name": "hub_where_code",
+      "value": "Hub のセットアップで表示されるスマートフォン用 QR コードを読み取ります。接続済み端末の「設定 › デバイス › 新しいデバイスを接続」からも取得できます。"
+    },
+    {
+      "name": "hub_other_ways",
+      "value": "その他の接続方法"
+    },
+    {
+      "name": "hub_guide_first",
+      "value": "セットアップ画面にスマートフォン用のコードが表示されます。新規発行するには、このコンピュータのターミナルで次のコマンドを実行します。"
+    },
+    {
+      "name": "hub_guide_existing",
+      "value": "「設定 › デバイス › 新しいデバイスを接続」でスマートフォンを選ぶと、リンクや QR コードを発行できます。"
+    },
+    {
+      "name": "hub_have_link",
+      "value": "ペアリングリンクを使う"
+    },
+    {
+      "name": "hub_open_camera",
+      "value": "カメラでスキャン"
+    },
+    {
+      "name": "hub_choose_photo",
+      "value": "写真から QR コードを選ぶ"
+    },
+    {
+      "name": "hub_manual",
+      "value": "アドレスとコードを入力"
+    },
+    {
+      "name": "hub_paste_link",
+      "value": "ペアリングリンクを貼り付け"
+    },
+    {
+      "name": "hub_manual_hint",
+      "value": "同じペアリングで発行された Hub アドレスとワンタイムコードを入力します。"
+    },
+    {
+      "name": "hub_link_hint",
+      "value": "Hub または接続済み端末からコピーしたスマートフォン用リンクを貼り付けます。"
+    },
+    {
+      "name": "hub_pairing_link",
+      "value": "ペアリングリンク"
+    },
+    {
+      "name": "hub_confirm_title",
+      "value": "この Hub に接続しますか？"
+    },
+    {
+      "name": "hub_confirm_hint",
+      "value": "名前とアドレスを確認し、自分が信頼している Hub に接続してください。"
+    },
+    {
+      "name": "hub_refresh_pairing",
+      "value": "この Hub とは接続済みです。もう一度接続すると、この端末の認証情報が更新されます。"
+    },
+    {
+      "name": "hub_code_expired",
+      "value": "コードは期限切れか使用済みです。新しいスマートフォン用コードを作成してください。"
+    },
+    {
+      "name": "hub_identity_error",
+      "value": "Hub の識別情報が一致しません。アドレスを確認し、新しいコードを作成してください。"
+    },
+    {
+      "name": "hub_invalid_input",
+      "value": "Hub アドレスとペアリング情報を確認してください。"
+    },
+    {
+      "name": "hub_unreachable",
+      "value": "Hub に接続できません。Hub が起動していて、このスマートフォンからアドレスにアクセスできるか確認してください。"
+    },
+    {
+      "name": "hub_wrong_qr",
+      "value": "スマートフォン用のペアリングコードを読み取ってください。ブラウザのログインコードは「デバイス」からスキャンします。"
+    },
+    {
+      "name": "hub_photo_failed",
+      "value": "画像からコードを読み取れませんでした。ペアリングコードが一つだけ写った写真を選んでください。"
+    },
+    {
+      "name": "hub_camera_failed",
+      "value": "スキャナーを開けませんでした。写真またはペアリングリンクを使ってください。"
+    },
+    {
       "name": "machine_detail",
       "value": "マシンの詳細"
     },
@@ -5125,6 +5221,10 @@
       "value": "このコンピュータは Hub の一覧から削除されました。"
     },
     {
+      "name": "hub_welcome_code_hint",
+      "value": "スマートフォン用のコードは Hub の設定画面で確認できます。"
+    },
+    {
       "name": "machine_copy_link",
       "value": "ペアリングリンクをコピー"
     },
@@ -5143,6 +5243,70 @@
     {
       "name": "machine_view_pair",
       "value": "ペアリング情報を表示"
+    },
+    {
+      "name": "hub_demo_title",
+      "value": "デモを試す"
+    },
+    {
+      "name": "hub_demo_note",
+      "value": "接続せずにサンプルを試せます。"
+    },
+    {
+      "name": "hub_get_code",
+      "value": "ペアリングコードを入手"
+    },
+    {
+      "name": "hub_get_code_note",
+      "value": "コンピュータや接続済み端末から取得します。"
+    },
+    {
+      "name": "hub_code_computer",
+      "value": "Hub を実行中のコンピュータ"
+    },
+    {
+      "name": "hub_code_device",
+      "value": "接続済みの端末"
+    },
+    {
+      "name": "hub_tour_title",
+      "value": "Persona の紹介動画"
+    },
+    {
+      "name": "hub_tour_short",
+      "value": "動画"
+    },
+    {
+      "name": "hub_tour_play",
+      "value": "動画を再生"
+    },
+    {
+      "name": "hub_tour_pause",
+      "value": "一時停止"
+    },
+    {
+      "name": "hub_tour_try",
+      "value": "デモを操作する"
+    },
+    {
+      "name": "hub_tour_note",
+      "value": "約12秒の無音動画で、マシン、エージェント、接続の承認を紹介します。"
+    },
+    {
+      "name": "hub_tour_error",
+      "value": "動画を再生できませんでした。操作デモは利用できます。"
+    },
+    {
+      "name": "workspace_current",
+      "value": "現在"
+    },
+    {
+      "name": "workspace_local_name",
+      "value": "この端末での表示名。空欄で Hub の名前に戻ります。"
+    },
+    {
+      "name": "workspace_add",
+      "value": "Hub を追加"
     },
     {
       "name": "machine_rename",
@@ -5173,8 +5337,20 @@
       "value": "削除"
     },
     {
+      "name": "workspace_disconnected",
+      "value": "未接続"
+    },
+    {
       "name": "machine_admin_root",
       "value": "Hub の直接アドレスで管理画面を開き、このコンピュータを削除してください。"
+    },
+    {
+      "name": "workspace_pair_again",
+      "value": "再ペアリングが必要"
+    },
+    {
+      "name": "workspace_pair_action",
+      "value": "再ペアリング"
     },
     {
       "name": "devices_no_match",
