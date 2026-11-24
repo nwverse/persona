@@ -74,6 +74,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/extensions/-/operations/{op}
 -                    DELETE /api/v1/extensions/{id}/-/dev
 -                    DELETE /api/v1/extensions/{id}/-/handoff-rules/{rule}
+-                    DELETE /api/v1/extensions/{id}/-/offload/{cid}/jobs/{job}
 -                    DELETE /api/v1/extensions/{id}/-/secrets/{name}
 -                    DELETE /api/v1/extensions/{id}/-/{$}
 -                    DELETE /api/v1/imessage/data
@@ -218,6 +219,7 @@ decisions.raise      GET /api/v1/decisions/{id}
 -                    GET /api/v1/extensions
 -                    GET /api/v1/extensions/-/audit
 -                    GET /api/v1/extensions/-/catalog/{mid}/{id}/icon
+-                    GET /api/v1/extensions/-/offload
 -                    GET /api/v1/extensions/-/operations
 -                    GET /api/v1/extensions/-/operations/{op}
 -                    GET /api/v1/extensions/-/prompts
@@ -232,6 +234,8 @@ decisions.raise      GET /api/v1/decisions/{id}
 -                    GET /api/v1/extensions/{id}/-/dev/logs
 -                    GET /api/v1/extensions/{id}/-/icon
 -                    GET /api/v1/extensions/{id}/-/image/{token}
+-                    GET /api/v1/extensions/{id}/-/offload/{cid}/inventory
+-                    GET /api/v1/extensions/{id}/-/offload/{cid}/jobs/{job}
 -                    GET /api/v1/extensions/{id}/-/storage/retained
 -                    GET /api/v1/extensions/{id}/-/{$}
 -                    GET /api/v1/fleet
@@ -338,6 +342,7 @@ machines.read        GET /api/v1/machines/{id}/usage
 machines.read        GET /api/v1/machines/{mid}/stat
 -                    GET /api/v1/machines/{mid}/storage
 -                    GET /api/v1/machines/{mid}/storage/hotspots
+-                    GET /api/v1/machines/{mid}/storage/usage
 -                    GET /api/v1/machines/{mid}/toolchain
 -                    GET /api/v1/managers
 -                    GET /api/v1/messaging
@@ -346,6 +351,7 @@ machines.read        GET /api/v1/machines/{mid}/stat
 -                    GET /api/v1/model-config/providers/{id}/models
 -                    GET /api/v1/model-config/purposes/{id}
 -                    GET /api/v1/model-profiles
+-                    GET /api/v1/model-profiles/{id}/candidates
 -                    GET /api/v1/mutes
 -                    GET /api/v1/navigation
 -                    GET /api/v1/ops/{id}
@@ -560,6 +566,7 @@ market.refresh_own   POST /api/v1/extensions/-/self/market/refresh
 -                    POST /api/v1/extensions/{id}/-/auth/step
 -                    POST /api/v1/extensions/{id}/-/detach
 -                    POST /api/v1/extensions/{id}/-/dev/restart
+-                    POST /api/v1/extensions/{id}/-/offload/{cid}/run
 -                    POST /api/v1/extensions/{id}/-/rollback
 -                    POST /api/v1/extensions/{id}/-/shortcut/{sid}
 -                    POST /api/v1/extensions/{id}/-/storage/restore
@@ -652,6 +659,9 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/services/action
 -                    POST /api/v1/machines/{mid}/spaces/{wid}/rename
 -                    POST /api/v1/machines/{mid}/storage/cleanup
+-                    POST /api/v1/machines/{mid}/storage/trash
+-                    POST /api/v1/machines/{mid}/storage/trash/purge
+-                    POST /api/v1/machines/{mid}/storage/trash/undo
 -                    POST /api/v1/machines/{mid}/tabs/close
 -                    POST /api/v1/machines/{mid}/tabs/rename
 -                    POST /api/v1/machines/{mid}/worktree/add

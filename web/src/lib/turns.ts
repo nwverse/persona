@@ -594,12 +594,20 @@ export const TOOL_LABEL: Record<string, string> = {
 };
 
 const AGY_PERSONA_MCP_RE = new RegExp(`^mcp_(?:${[...PERSONA_SERVERS].join("|")})(?:_[0-9a-fA-F]{8,16})?_([a-z][a-z0-9_]*)$`);
+const AGY_TOOL_RESULT_HEADER_RE = /^(?:Created At: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\r?\nCompleted At: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})(?:\r?\n|$))+/;
 
 /** Normalize Antigravity's single-underscore Persona MCP names (`mcp_persona_<tool>`, `mcp_persona_<hex>_<tool>`) to `mcp__persona__<tool>`. */
 export function canonicalMcpToolName(name?: string): string | undefined {
   if (!name || !name.startsWith("mcp_") || name.startsWith("mcp__")) return name;
   const m = AGY_PERSONA_MCP_RE.exec(name);
   return m ? `mcp__persona__${m[1]}` : name;
+}
+
+/** Strip leading Antigravity Created At / Completed At RFC3339 wrapper lines (and an immediate Output: line) from tool results. */
+export function stripToolResultTimestampHeaders(text: string): string {
+  if (!text.startsWith("Created At: ")) return text;
+  const m = AGY_TOOL_RESULT_HEADER_RE.exec(text);
+  return m ? text.slice(m[0].length).replace(/^Output:\r?\n/, "") : text;
 }
 
 export function toolLabel(rawName?: string): string {
@@ -782,7 +790,7 @@ function supervisionVisibility(ordered: Item[], results: ReadonlyMap<string, Ite
       let internalAccepted = false;
       if (verdict === "accepted" && use.tool_input?.user_check !== true) {
         try {
-          const { background } = JSON.parse(result.text ?? "");
+          const { background } = JSON.parse(stripToolResultTimestampHeaders(result.text ?? ""));
           internalAccepted = background === true;
         } catch {
           // Legacy and malformed receipts keep the accepted review visible.
@@ -793,7 +801,7 @@ function supervisionVisibility(ordered: Item[], results: ReadonlyMap<string, Ite
     }
     if (name !== "supervision_finish") return { visible: true, completedSilent: false };
     try {
-      const { visibility } = JSON.parse(result.text ?? "");
+      const { visibility } = JSON.parse(stripToolResultTimestampHeaders(result.text ?? ""));
       if (visibility === "user") return { visible: true, completedSilent: false };
       if (visibility === "silent") silent = true;
     } catch {

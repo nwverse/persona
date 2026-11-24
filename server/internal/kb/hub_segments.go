@@ -7,6 +7,8 @@ import (
 	"slices"
 	"time"
 	"unicode/utf8"
+
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // The hub's own transcript of a hub-mode meeting (docs/assistant/meeting-minutes.md "The transcript of record"):
@@ -21,12 +23,8 @@ import (
 
 const hubSegmentsFile = "hub_segments.json"
 
-// HubTranscript is hub_segments.json: the hub's own sentences, with their own revision.
-type HubTranscript struct {
-	Rev      int64              `json:"rev"`
-	Pass     string             `json:"pass"` // HubPassLive | HubPassFinal
-	Segments []RecordingSegment `json:"segments"`
-}
+// HubTranscript is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type HubTranscript = recordingwire.HubTranscript
 
 // readHubLocked is recording id's hub_segments.json (an empty one when there is none). The caller holds recFilesMu.
 func (s *Store) readHubLocked(id string) (HubTranscript, error) {
@@ -128,7 +126,7 @@ func (e *Engine) HubTranscriptPut(rawID, pass string, segs []RecordingSegment) (
 	}
 	if chars := recordChars(record); chars != r.Chars {
 		r.Chars = chars
-		r.planMinutes()
+		planMinutes(r)
 		if err := st.putEntity(KindRecording, r.ID, r, &r.Tagging, false); err != nil {
 			return h.Rev, err
 		}
@@ -243,7 +241,7 @@ func recordChars(segs []RecordingSegment) int {
 }
 
 // hubMode: m says the recording is transcribed on the hub.
-func hubMode(m *Meeting) bool { return m != nil && m.Transcription.hub() }
+func hubMode(m *Meeting) bool { return m != nil && m.Transcription.Hub() }
 
 // recordSnapshot is recording id's committed files (recordingSnapshot: an upload's undo journal while one is pending),
 // its meeting.json (nil without one, or when it cannot be read: device mode) and its hub transcript, read together.
@@ -355,7 +353,7 @@ func (e *Engine) repairRecord(r *Recording) (bool, error) {
 	st.recFilesMu.Unlock()
 	if chars := recordChars(record); chars != r.Chars {
 		r.Chars = chars
-		r.planMinutes()
+		planMinutes(r)
 		if err := st.putRecordingMeta(r); err != nil {
 			return changed, err
 		}
