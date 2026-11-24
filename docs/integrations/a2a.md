@@ -50,6 +50,15 @@ absolute path, as the task handoff does.
 | `a2a_cancel` | Cancel a request that has not entered a turn, or one waiting for input |
 
 For an existing session, send its exact machine and session IDs.
+An address names the session's conversation. When its computer lists that
+conversation under another ID by the time an Agent uses the address, a tool
+that takes the address acts on the row listed now, which names the IDs the
+conversation went by in its `aliases` (`docs/protocol/protocol.md`). The
+common case is an Antigravity CLI conversation: it is listed under its terminal
+pane's row while a pane shows it, and under its own `agy-<conversation id>`
+otherwise (`docs/integrations/engines.md`). An ID that no listed row names, or
+that two rows name, is not resolved. A task keeps the target it was created with.
+
 Each receiving session runs one active A2A task at a time; additional sends to a
 busy session are queued and delivered in FIFO order when the active task ends.
 An active request waiting for delivery is retried when the recipient becomes idle.
