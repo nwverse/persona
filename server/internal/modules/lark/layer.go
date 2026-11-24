@@ -352,7 +352,9 @@ func (l *Layer) ForgetStatus() { l.chat().feishuForgetStatus() }
 func (l *Layer) Unpaired() { l.chat().feishuUnpaired() }
 
 // Route is where a message replying to parent in the thread rooted at root goes.
-func (l *Layer) Route(root, parent string) assistantwire.ChatTarget { return l.chat().botTargetFor(root, parent) }
+func (l *Layer) Route(root, parent string) assistantwire.ChatTarget {
+	return l.chat().botTargetFor(root, parent)
+}
 
 // SetTarget makes the chat's messages go to t.
 func (l *Layer) SetTarget(t assistantwire.ChatTarget) { l.chat().setBotCurrent(t) }
@@ -383,8 +385,8 @@ func (l *Layer) TopicAnchor(ctx context.Context, chatID, threadID string) string
 	return l.chat().topicMessage(ctx, chatID, threadID)
 }
 
-// NudgeLoop nudges under the cards nobody answered, until ctx ends.
-func (l *Layer) NudgeLoop(ctx context.Context) { l.chat().nudgeLoop(ctx) }
+// NudgeTick nudges under the cards nobody answered that are due.
+func (l *Layer) NudgeTick(ctx context.Context) { l.chat().nudgeTick(ctx) }
 
 // Book runs f on the chat's records under the chat's lock, the state read first (the core's cards, standing board
 // and companion bots).

@@ -38,9 +38,7 @@ func (e *briefEnv) closed(id, title string, age time.Duration, startError string
 
 // nudge marks the bot as having nudged under the card of ix.
 func (e *briefEnv) nudge(ix proto.Interaction) {
-	e.s.fbot.mu.Lock()
-	e.s.keepBotCardLocked(ix.ID, &botCard{MessageID: "om_" + ix.ID, Ix: ix, At: ix.CreatedAt, NudgedAt: e.clk.Now()})
-	e.s.fbot.mu.Unlock()
+	keepChatCard(e.s, ix.ID, &botCard{MessageID: "om_" + ix.ID, Ix: ix, At: ix.CreatedAt, NudgedAt: e.clk.Now()})
 }
 
 // The two sections of what waits are the standing board's rows, in the board's order: the cards that hold an Agent up

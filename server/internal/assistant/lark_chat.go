@@ -117,6 +117,27 @@ func (s *Service) updateFeishuChannel(ctx context.Context, enabled *bool, target
 	return nil
 }
 
+// ---- the nudges under the bot's cards nobody answered ----
+
+// nudgeEvery is how often the bot's cards are looked at for a nudge (the lark module's nudge.go): the reply reminder's.
+const nudgeEvery = replyEvery
+
+// nudgeLoop runs the chat's nudge sweep every nudgeEvery until ctx ends.
+func (s *Service) nudgeLoop(ctx context.Context) {
+	t := time.NewTicker(nudgeEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			cctx, cancel := context.WithTimeout(ctx, time.Minute)
+			s.larkModule().NudgeTick(cctx)
+			cancel()
+		}
+	}
+}
+
 // ---- the cards closed when their node went away (feishu_cards.go) ----
 
 // detachedCards are the Feishu cards closed because their node's connection ended (feishuDetach), by interaction id,

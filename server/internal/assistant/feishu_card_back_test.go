@@ -60,9 +60,7 @@ func waitFeishu(seen func() (int, []string), d time.Duration, ok func(int, []str
 func waitCardKept(t *testing.T, ft *fleetTest) {
 	t.Helper()
 	waitFor(t, "the Feishu card's message id kept", func() bool {
-		ft.s.fbot.mu.Lock()
-		defer ft.s.fbot.mu.Unlock()
-		for _, c := range ft.s.fbot.cards {
+		for _, c := range chatCards(ft.s) {
 			if c.MessageID != "" {
 				return true
 			}

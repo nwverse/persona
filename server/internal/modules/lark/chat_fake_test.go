@@ -242,7 +242,9 @@ func (s *Service) AcceptReply(_ context.Context, messageID, text string, _ bool,
 	return false
 }
 
-func (s *Service) ApproveOwnerAction(context.Context, botcard.MessageEvent, string, string) bool { return false }
+func (s *Service) ApproveOwnerAction(context.Context, botcard.MessageEvent, string, string) bool {
+	return false
+}
 
 func (s *Service) StopConversation(_ context.Context, f assistantwire.FeishuFeatures, t assistantwire.ChatTarget) (string, string) {
 	if err := s.Allowed("", f, t); err != nil {
@@ -323,7 +325,9 @@ func (s *Service) ListsModel(res proto.LauncherModels, model string) bool {
 	return false
 }
 
-func (s *Service) PickModel(context.Context, string, string, proto.ModelPick, i18n.Lang) error { return nil }
+func (s *Service) PickModel(context.Context, string, string, proto.ModelPick, i18n.Lang) error {
+	return nil
+}
 
 // FinalStatus is the core's finalStatus.
 func (s *Service) FinalStatus(status string) bool {
@@ -381,12 +385,14 @@ func (s *Service) ClarifyInteraction(context.Context, string, string, string, st
 	return true, nil
 }
 
-func (s *Service) AcceptAction(context.Context, *botcard.CardAction) (string, string) { return "info", "accepted" }
-func (s *Service) LaterHandled(context.Context, string) (bool, error)                 { return true, nil }
-func (s *Service) TabName(context.Context, string) string                             { return "" }
-func (s *Service) ApplyModel(context.Context, string, map[string]any) error           { return nil }
-func (s *Service) NodeCall(context.Context, string, string, any, any) error           { return nil }
-func (s *Service) StartChannelRun(r *channel.Run)                                     { s.startChannelRun(r) }
+func (s *Service) AcceptAction(context.Context, *botcard.CardAction) (string, string) {
+	return "info", "accepted"
+}
+func (s *Service) LaterHandled(context.Context, string) (bool, error)       { return true, nil }
+func (s *Service) TabName(context.Context, string) string                   { return "" }
+func (s *Service) ApplyModel(context.Context, string, map[string]any) error { return nil }
+func (s *Service) NodeCall(context.Context, string, string, any, any) error { return nil }
+func (s *Service) StartChannelRun(r *channel.Run)                           { s.startChannelRun(r) }
 
 func (s *Service) CardLook(_ context.Context, id string) (proto.Interaction, bool) {
 	if f := s.ch().look; f != nil {
@@ -439,7 +445,7 @@ func (s *Service) FirstQuestion(ix proto.Interaction) string {
 	return ""
 }
 
-func (s *Service) SourceChannels() []string                 { return []string{channel.Feishu} }
+func (s *Service) SourceChannels() []string                { return []string{channel.Feishu} }
 func (s *Service) EnsureTodosLoaded(context.Context) error { return nil }
 
 func (s *Service) TodoOfThread(chat, thread string) (assistantwire.ChatTodo, bool) {
@@ -467,9 +473,11 @@ func (s *Service) TopicDecision(_ context.Context, todoID, _, text, messageID st
 
 func (s *Service) TopicWake(context.Context, string, string, string, string) {}
 
-func (s *Service) AskTodoTopicAnswer(context.Context, string, string) (string, bool) { return "", false }
-func (s *Service) SettleAskClaim(context.Context, string, bool)                      {}
-func (s *Service) CloseAskTodo(context.Context, string)                              {}
+func (s *Service) AskTodoTopicAnswer(context.Context, string, string) (string, bool) {
+	return "", false
+}
+func (s *Service) SettleAskClaim(context.Context, string, bool) {}
+func (s *Service) CloseAskTodo(context.Context, string)         {}
 
 func (s *Service) OpenTarget(_ context.Context, st FeishuStatus) (assistantwire.ChatTarget, string, string) {
 	if f := s.ch().openTarget; f != nil {

@@ -111,10 +111,8 @@ func TestFeishuAgentDoneCard(t *testing.T) {
 				t.Fatalf("the phone push changed: %+v", got)
 			}
 			time.Sleep(50 * time.Millisecond) // rememberBotThread runs right after the post
-			ft.s.fbot.mu.Lock()
-			th := ft.s.fbot.st.Threads["om_done"]
-			ft.s.fbot.mu.Unlock()
-			if th == nil || th.Target.Kind != targetAgent || th.Target.MachineID != "mac" || th.Target.SessionID != "s1" {
+			// A reply to the card goes to the agent: the card is bound to it.
+			if th := ft.s.larkModule().Route("", "om_done"); th.Kind != targetAgent || th.MachineID != "mac" || th.SessionID != "s1" {
 				t.Fatalf("the card is not bound to the agent: %+v", th)
 			}
 			time.Sleep(200 * time.Millisecond) // the same completion settles once: no second card

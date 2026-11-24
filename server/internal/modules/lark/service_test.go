@@ -862,8 +862,8 @@ func (s *Service) ReplyInbox(_ context.Context, id, text, clientID string) (bool
 
 // threadData is the fake core's to-do threads, and the timers the lines asked for (tests set them).
 type threadData struct {
-	bound   map[string][2]string // to-do → chat, thread
-	later   []func()
+	bound map[string][2]string // to-do → chat, thread
+	later []func()
 }
 
 func (s *Service) th() *threadData {

@@ -29,9 +29,7 @@ func TestFeishuCardAnsweredWhileBeingMadeIsNotPosted(t *testing.T) {
 			t.Fatalf("a card was posted for an interaction already answered: %v", p)
 		}
 	}
-	e.s.fbot.mu.Lock()
-	_, kept := e.s.fbot.cards[ix.ID]
-	e.s.fbot.mu.Unlock()
+	_, kept := chatCard(e.s, ix.ID)
 	if kept {
 		t.Fatal("the card's claim is kept for an interaction that is over")
 	}

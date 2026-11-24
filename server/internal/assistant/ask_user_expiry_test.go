@@ -117,10 +117,7 @@ func (a *askRig) ask(t *testing.T) (ix proto.Interaction, done chan string) {
 		if qs := a.s.pendingQuestions(); len(qs) == 1 {
 			ix = qs[0]
 			if _, up := a.s.pendingIx(ix.ID); up {
-				b := &a.s.fbot
-				b.mu.Lock()
-				a.s.keepBotCardLocked(ix.ID, &botCard{MessageID: "om_" + ix.ID, Thread: "om_run", Ix: ix, At: a.now})
-				b.mu.Unlock()
+				keepChatCard(a.s, ix.ID, &botCard{MessageID: "om_" + ix.ID, Thread: "om_run", Ix: ix, At: a.now})
 				return ix, done
 			}
 		}
@@ -291,10 +288,7 @@ func TestExpiredAskUserCardIsEndedForGood(t *testing.T) {
 	short.ID = "ix_expiring"
 	short.CreatedAt = time.Now().UTC()
 	short.ExpiresAt = short.CreatedAt.Add(300 * time.Millisecond)
-	b := &a.s.fbot
-	b.mu.Lock()
-	a.s.keepBotCardLocked(short.ID, &botCard{MessageID: "om_" + short.ID, Thread: "om_run", Ix: short, At: a.now})
-	b.mu.Unlock()
+	keepChatCard(a.s, short.ID, &botCard{MessageID: "om_" + short.ID, Thread: "om_run", Ix: short, At: a.now})
 	res, err := a.s.waitInteraction(context.Background(), short)
 	if err != nil || !res.Dismiss {
 		t.Fatalf("expired card resolved with %+v, %v; want a dismiss", res, err)

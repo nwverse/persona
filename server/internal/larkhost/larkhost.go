@@ -149,8 +149,8 @@ type Chat interface {
 	LegacyRuns(ctx context.Context) []*channel.Run
 	// TopicAnchor is the message to reply to in a topic, "" when none is known.
 	TopicAnchor(ctx context.Context, chatID, threadID string) string
-	// NudgeLoop nudges under the cards nobody answered, until ctx ends.
-	NudgeLoop(ctx context.Context)
+	// NudgeTick nudges under the cards nobody answered that are due (the core's sweep runs it once a minute).
+	NudgeTick(ctx context.Context)
 	// Book runs f on the chat's records under the chat's lock, the state read first.
 	Book(ctx context.Context, f func(assistantwire.ChatBook))
 }
@@ -397,7 +397,7 @@ func (None) CardsWaiting() int                                      { return 0 }
 func (None) CardNudged(string) bool                                 { return false }
 func (None) LegacyRuns(context.Context) []*channel.Run              { return nil }
 func (None) TopicAnchor(context.Context, string, string) string     { return "" }
-func (None) NudgeLoop(context.Context)                              {}
+func (None) NudgeTick(context.Context)                              {}
 func (None) Book(_ context.Context, f func(assistantwire.ChatBook)) { f(noBook{}) }
 
 // noBook is the records of a chat switched off: none, and nothing kept.

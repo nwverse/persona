@@ -62,9 +62,7 @@ func TestPersistentOwnerActionSurvivesFormerDeadlineCallerAndRestart(t *testing.
 				if ix.ToolName == ownerActionBatchTool {
 					batchIX = ix
 				}
-				s.fbot.mu.Lock()
-				s.keepBotCardLocked(ix.ID, &botCard{MessageID: "om_" + ix.ID, Ix: ix, At: time.Now()})
-				s.fbot.mu.Unlock()
+				keepChatCard(s, ix.ID, &botCard{MessageID: "om_" + ix.ID, Ix: ix, At: time.Now()})
 			}
 			if batchIX.ID == "" {
 				t.Fatalf("no batch card in %+v", cards)

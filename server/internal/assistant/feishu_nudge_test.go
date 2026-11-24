@@ -2,6 +2,8 @@ package assistant
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -137,10 +139,7 @@ func (r *nudgeRig) askWith(s *Service, ix proto.Interaction, chat string) proto.
 	s.fleet.interactions[ix.ID] = &pending{ix: ix}
 	s.fleet.mu.Unlock()
 	thread := "om_run"
-	b := &s.fbot
-	b.mu.Lock()
-	s.keepBotCardLocked(ix.ID, &botCard{MessageID: "om_" + ix.ID, Thread: thread, ChatID: chat, Ix: ix, At: r.now})
-	b.mu.Unlock()
+	keepChatCard(s, ix.ID, &botCard{MessageID: "om_" + ix.ID, Thread: thread, ChatID: chat, Ix: ix, At: r.now})
 	return ix
 }
 
@@ -155,16 +154,20 @@ func (r *nudgeRig) tick(s *Service, d time.Duration) {
 	r.t.Helper()
 	r.now = r.now.Add(d)
 	s.larkModule().ForgetStatus() // the status is kept a few seconds of real time
-	s.nudgeTick(context.Background())
+	s.larkModule().NudgeTick(context.Background())
 }
 
-func (r *nudgeRig) cardOf(s *Service, id string) (botCard, bool) {
-	b := &s.fbot
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	s.loadBotLocked(context.Background())
-	c, ok := b.cards[id]
-	return c, ok
+func (r *nudgeRig) cardOf(s *Service, id string) (botCard, bool) { return chatCard(s, id) }
+
+// nudgeKey is the key a nudge under the card of interaction id goes out under, as the lark module makes it (its
+// nudge.go): a retry lands once, and the ordinary and the deadline nudge never deduplicate each other.
+func nudgeKey(id string, deadline bool) string {
+	what := "nudge:" + id
+	if deadline {
+		what = "deadline-nudge:" + id
+	}
+	sum := sha256.Sum256([]byte(what))
+	return "nudge-" + hex.EncodeToString(sum[:12])
 }
 
 func wantNudges(t *testing.T, r *nudgeRig, want int, when string) []map[string]any {
@@ -324,13 +327,6 @@ func TestNudgeOffFromTheStart(t *testing.T) {
 	r.ask(r.s, "ix_a", "")
 	r.tick(r.s, 2*time.Hour)
 	wantNudges(t, r, 0, "off from the start")
-	if n := nudgeAfterOf(FeishuStatus{}); n != time.Hour {
-		t.Errorf("no setting = %v, want 1h", n)
-	}
-	zero := 0
-	if n := nudgeAfterOf(FeishuStatus{NudgeAfter: &zero}); n != 0 {
-		t.Errorf("0 = %v, want off", n)
-	}
 }
 
 // A nudge due in quiet hours waits for their end and goes out once, in the first sweep after; a card answered
@@ -423,42 +419,6 @@ func TestNudgeOfAPermissionNamesNoCommand(t *testing.T) {
 	text, _ := got[0]["text"].(string)
 	if !strings.Contains(text, "Bash") || strings.Contains(text, "rm -rf") || strings.Contains(text, "secret") || strings.Contains(text, "clean up") {
 		t.Errorf("text = %q", text)
-	}
-}
-
-// The line is one line, in the user's language: a long multi-line plan is cut to its first line.
-func TestNudgeLineIsOneShortLine(t *testing.T) {
-	r := newNudgeRig(t)
-	ctx := context.Background()
-	long := strings.Repeat("x", 300)
-	for _, c := range []struct {
-		name string
-		ix   proto.Interaction
-		want []string
-	}{
-		{"plan", proto.Interaction{Kind: proto.IxPlan, Plan: "1. Change the login\n2. Test it\n3. Ship"}, []string{"1. Change the login"}},
-		{"question cut", proto.Interaction{Kind: proto.IxQuestion, Questions: []proto.Question{{Question: long}}}, nil},
-		{"nothing to say", proto.Interaction{Kind: proto.IxQuestion}, nil},
-		{"permission without a tool", proto.Interaction{Kind: proto.IxPermission}, nil},
-	} {
-		text := r.s.nudgeText(ctx, c.ix)
-		if strings.Contains(text, "\n") || len([]rune(text)) > 140 || text == "" {
-			t.Errorf("%s: %q", c.name, text)
-		}
-		for _, w := range c.want {
-			if !strings.Contains(text, w) || strings.Contains(text, "Test it") {
-				t.Errorf("%s: %q", c.name, text)
-			}
-		}
-	}
-	// All three languages have all three lines.
-	for _, l := range []i18n.Lang{"en", "zh-Hans", "ja"} {
-		for _, key := range []string{"nudge", "nudge_permission", "nudge_bare"} {
-			got := i18n.T(l, "assistant-feishu_cards."+key, i18n.Args{"what": "W", "tool": "T"})
-			if got == "" || got == "assistant-feishu_cards."+key {
-				t.Errorf("%s has no %s", l, key)
-			}
-		}
 	}
 }
 
@@ -667,40 +627,6 @@ func TestNudgeTriesSurviveARestart(t *testing.T) {
 	}
 }
 
-func TestNudgeDeadlineAt(t *testing.T) {
-	created := time.Date(2027, time.January, 2, 3, 4, 5, 0, time.UTC)
-	for _, tc := range []struct {
-		name     string
-		lifetime time.Duration
-		want     time.Duration
-		ok       bool
-	}{
-		{name: "half of a fifteen minute card", lifetime: 15 * time.Minute, want: 7*time.Minute + 30*time.Second, ok: true},
-		{name: "five minute margin on a short card", lifetime: 8 * time.Minute, want: 3 * time.Minute, ok: true},
-		{name: "two minute lower bound", lifetime: 4 * time.Minute, want: 2 * time.Minute, ok: true},
-		{name: "shortest useful card", lifetime: 3 * time.Minute, want: 2 * time.Minute, ok: true},
-		{name: "no room before expiry", lifetime: 2 * time.Minute},
-		{name: "no lifetime", lifetime: 0},
-		{name: "half of a long card", lifetime: time.Hour, want: 30 * time.Minute, ok: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok := deadlineNudgeAt(created, created.Add(tc.lifetime))
-			if ok != tc.ok {
-				t.Fatalf("ok = %v, want %v (at %s)", ok, tc.ok, got)
-			}
-			if ok && !got.Equal(created.Add(tc.want)) {
-				t.Errorf("nudge at %s, want %s after creation", got.Sub(created), tc.want)
-			}
-		})
-	}
-	if _, ok := deadlineNudgeAt(created, time.Time{}); ok {
-		t.Error("a card without a deadline has a deadline nudge")
-	}
-	if _, ok := deadlineNudgeAt(time.Time{}, created.Add(time.Hour)); ok {
-		t.Error("a card without a creation time has a deadline nudge")
-	}
-}
-
 func TestNudgeDeadlineBeforeExpiry(t *testing.T) {
 	r := newNudgeRig(t)
 	r.askExpiring(r.s, "ix_deadline", 15*time.Minute)
@@ -730,7 +656,7 @@ func TestNudgeDeadlineIndependentOfOrdinary(t *testing.T) {
 	ordinary := wantNudges(t, r, 1, "the positive ordinary wait")
 	r.tick(r.s, 6*time.Minute+30*time.Second)
 	both := wantNudges(t, r, 2, "the ordinary wait does not postpone the deadline nudge")
-	if ordinary[0]["uuid"] != nudgeKey("ix_both", ordinaryNudge) || both[1]["uuid"] != nudgeKey("ix_both", deadlineNudge) {
+	if ordinary[0]["uuid"] != nudgeKey("ix_both", false) || both[1]["uuid"] != nudgeKey("ix_both", true) {
 		t.Errorf("nudge keys = %v, %v", ordinary[0]["uuid"], both[1]["uuid"])
 	}
 	if ordinary[0]["uuid"] == both[1]["uuid"] {
@@ -750,7 +676,7 @@ func TestNudgeDeadlineZeroDisablesAll(t *testing.T) {
 	r.tick(r.s, 61*time.Minute)
 	wantNudges(t, r, 0, "nudge_after zero disables both kinds")
 	c, _ := r.cardOf(r.s, "ix_off")
-	if c.nudgeSettled() || c.DeadlineNudge.settled() || c.Tries != 0 || c.DeadlineNudge.Tries != 0 {
+	if c.NudgeSettled() || c.DeadlineNudge.Settled() || c.Tries != 0 || c.DeadlineNudge.Tries != 0 {
 		t.Errorf("a disabled nudge changed state: %+v", c)
 	}
 }
@@ -876,7 +802,7 @@ func TestNudgeDeadlineRetriesUnderOneKey(t *testing.T) {
 	r.mu.Lock()
 	keys := append([]any(nil), r.keys...)
 	r.mu.Unlock()
-	if len(keys) != 3 || keys[0] != nudgeKey("ix_retry", deadlineNudge) || keys[1] != keys[0] || keys[2] != keys[0] {
+	if len(keys) != 3 || keys[0] != nudgeKey("ix_retry", true) || keys[1] != keys[0] || keys[2] != keys[0] {
 		t.Errorf("deadline retry keys = %v", keys)
 	}
 	c, _ := r.cardOf(r.s, "ix_retry")

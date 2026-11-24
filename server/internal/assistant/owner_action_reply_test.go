@@ -37,9 +37,7 @@ func putOwnerReplyPending(s *Service, ix proto.Interaction) {
 
 func keepOwnerReplyCard(s *Service, ix proto.Interaction, messageID string) {
 	putOwnerReplyPending(s, ix)
-	s.fbot.mu.Lock()
-	s.keepBotCardLocked(ix.ID, &botCard{MessageID: messageID, Ix: ix, At: time.Unix(1000, 0)})
-	s.fbot.mu.Unlock()
+	keepChatCard(s, ix.ID, &botCard{MessageID: messageID, Ix: ix, At: time.Unix(1000, 0)})
 }
 
 func ownerReplyBatchIX(batch ownerActionBatch) proto.Interaction {
@@ -303,9 +301,7 @@ func TestOwnerActionFeishuReplyFailuresGrantNothing(t *testing.T) {
 			batch := createOwnerTestBatch(t, book, `{"body":"unchanged"}`)
 			ix := ownerReplyBatchIX(batch)
 			putOwnerReplyPending(s, ix)
-			s.fbot.mu.Lock()
-			s.keepBotCardLocked(ix.ID, &botCard{MessageID: "om_batch", ChatID: tc.cardChat, Ix: ix, At: time.Unix(1000, 0)})
-			s.fbot.mu.Unlock()
+			keepChatCard(s, ix.ID, &botCard{MessageID: "om_batch", ChatID: tc.cardChat, Ix: ix, At: time.Unix(1000, 0)})
 			calls := 0
 			answerOwnerProof(f, "oa_reply", ix.ID, &calls, tc.mutateProof)
 			ev := ownerReplyEvent(tc.parent)

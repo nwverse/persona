@@ -16,16 +16,13 @@ import (
 
 // The nudge under a card nobody answered (#6084, docs/extensions/bots.md "Nudging a card nobody answered"): a card the Lark bot
 // sent (a question, a plan, a permission) that has waited nudge_after without an answer gets one short reply under it,
-// "Still waiting for you: …", so it reaches the user where they answer. Like the reply reminder (the core's agents_reply.go) it is
-// a sweep once a minute over what waits, rules only, costing no tokens; unlike it, it follows the card into Lark and
-// does not need the card to have been seen.
+// "Still waiting for you: …", so it reaches the user where they answer. Like the reply reminder (the core's
+// agents_reply.go) it is a sweep once a minute over what waits (the core runs it, Layer.NudgeTick), rules only, costing
+// no tokens; unlike it, it follows the card into Lark and does not need the card to have been seen.
 //
 // One nudge per card, ever: the card's record (botCardRef) keeps when it was nudged, so a restart does not nudge again.
 // None for a card answered, dismissed or expired (its record is gone), or whose agent is gone. The hub's quiet hours
 // (#5806) hold a nudge back: it goes out in the first sweep after them, if the card still waits.
-
-// nudgeEvery is how often the cards are looked at, the reply reminder's (the core's replyEvery).
-const nudgeEvery = time.Minute
 
 // nudgeOldest: a card still unnudged this long after it was due is let go (the user left it), as the reply reminder's
 // replyOldest.
@@ -106,21 +103,6 @@ func nudgeAfterOf(st FeishuStatus) time.Duration {
 		n = *st.NudgeAfter
 	}
 	return time.Duration(max(n, 0)) * time.Minute
-}
-
-func (s core) nudgeLoop(ctx context.Context) {
-	t := time.NewTicker(nudgeEvery)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			cctx, cancel := context.WithTimeout(ctx, time.Minute)
-			s.nudgeTick(cctx)
-			cancel()
-		}
-	}
 }
 
 // nudgeTick nudges the cards that waited nudge_after, outside quiet hours. With no card kept it does nothing, not even
