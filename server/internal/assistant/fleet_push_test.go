@@ -229,6 +229,33 @@ func TestFinishedPushFoldsOnlyRoutineMainRelay(t *testing.T) {
 	}
 }
 
+// A runtime can report a host-side failure without a model TurnError. That failure must still reach the owner even
+// when the transcript's last answer looks routine and the owner opted into quiet relay replies.
+func TestFinishedPushDeliversRuntimeHostFailure(t *testing.T) {
+	ft := newFleetTestNoStore(t)
+	fastDone(ft)
+	setSettings(t, ft.s, func(v *Settings) {
+		v.Main = "main-1"
+		v.FoldRoutineRelayReplies = new(true)
+	})
+	ft.f.setItems(
+		proto.Item{ID: "u1", Role: "user", Kind: proto.KindText, Text: "Report the result.", Source: &proto.MessageSource{Kind: proto.SourceConversation, ConversationID: "leader"}},
+		proto.Item{ID: "a1", Role: "assistant", Kind: proto.KindText, Text: "Verification passed."},
+	)
+	work := proto.Session{SessionID: "main-1", Title: "Delegated check", Cwd: "/home/u/.persona/assistant", Assistant: true,
+		Agent: "dsh", SourceKind: proto.SourceRuntime, Status: proto.StatusWorking}
+	ft.f.setSessions("mac", work)
+	ft.sessions("mac", work)
+	done := work
+	done.Status, done.LastText = proto.StatusDone, "Verification passed."
+	done.FailureReason = "The host stopped the turn on an error."
+	ft.sessions("mac", done)
+	got := ft.pushesOf(assistantwire.NotifyDone, 1, 450*time.Millisecond)
+	if len(got) != 1 || got[0].SessionID != "main-1" {
+		t.Fatalf("host failure finished pushes = %+v, want the normal notification", got)
+	}
+}
+
 // A turn that a channel answers is no push to the phone, nor is an inbox agent's.
 func TestFinishedPushSkipsChannelTurns(t *testing.T) {
 	ft := newFleetTestNoStore(t)

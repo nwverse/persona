@@ -377,7 +377,8 @@ func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings)
 }
 
 func (s *Service) quietBackgroundReply(machine string, sess proto.Session) bool {
-	if !sess.Assistant || sess.AwaitsReply || sess.TurnErrorKind != "" || sess.Status == proto.StatusBlocked || sess.Status == proto.StatusInterrupted || !assistantwire.NormalFinish(sess) {
+	if !sess.Assistant || sess.AwaitsReply || strings.TrimSpace(sess.FailureReason) != "" || sess.TurnErrorKind != "" ||
+		sess.Status == proto.StatusBlocked || sess.Status == proto.StatusInterrupted || !assistantwire.NormalFinish(sess) {
 		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

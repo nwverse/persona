@@ -489,6 +489,62 @@ func TestBoolSettingsSet(t *testing.T) {
 	}
 }
 
+// The approval card names the new relay preference in the owner's language, rather than falling back to the English
+// description shown to the assistant. Declining each card leaves the setting ready for the next language case.
+func TestFoldRoutineRelayRepliesApprovalTitleLocalized(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeHub().withMachine()
+	s := newTestService(t, f)
+	const key = "assistant.fold_routine_relay_replies"
+	var setting ownSetting
+	for _, candidate := range s.ownSettings() {
+		if candidate.Key == key {
+			setting = candidate
+			break
+		}
+	}
+	if setting.Key != key {
+		t.Fatalf("%s is not an own setting", key)
+	}
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		t.Run(string(lang), func(t *testing.T) {
+			f.mu.Lock()
+			f.hello.Locale = string(lang)
+			f.mu.Unlock()
+			done := make(chan error, 1)
+			go func() {
+				_, err := s.ownSettingAction(ctx, ToolCall{MachineID: "server", SessionID: "c1"}, setting, "set", json.RawMessage(`true`))
+				done <- err
+			}()
+			card, ok := awaitCard(s)
+			if !ok {
+				t.Fatal("the setting change did not wait for approval")
+			}
+			var shown struct{ Setting string }
+			if err := json.Unmarshal(card.ToolInput, &shown); err != nil {
+				t.Fatal(err)
+			}
+			allow := false
+			raw, _ := json.Marshal(proto.Resolution{Allow: &allow})
+			if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: card.ID, Answer: raw}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the declined setting change did not finish")
+			}
+			want := i18n.T(lang, "assistant-settings_tool.title_fold_routine_relay_replies")
+			if shown.Setting != want {
+				t.Errorf("approval setting title = %q, want %q", shown.Setting, want)
+			}
+		})
+	}
+}
+
 // The agents of open todos are kept listed however long they have been quiet (#4510): a busy machine's newest
 // transcripts crowded a finished, exited task agent out of the list and its task showed "Starting Agent" for ever. A
 // done todo's or a released agent is not kept.
