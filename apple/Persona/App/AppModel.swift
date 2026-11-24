@@ -2011,7 +2011,8 @@ final class AppModel {
     /// Reads all folded / cross-machine / archived-parent children of `parent` for Session Overview, serialized through
     /// the per-parent `childHints` gate so concurrent reads never race or roll back `childIndex`'s checkpoint.
     func refreshOverviewChildren(_ parent: SessionKey) async {
-        guard features(parent.group).contains(ChildSessions.feature),
+        guard !Task.isCancelled,
+              features(parent.group).contains(ChildSessions.feature),
               let api = api(parent.group),
               socket(parent.group)?.state == .connected else { return }
         await runChildRefresh(parent, api: api, hint: nil, force: true)
@@ -2094,8 +2095,12 @@ final class AppModel {
     @ObservationIgnored private var childHints: [SessionKey: FetchHint] = [:]
     /// Parents with a forced Overview child refresh queued behind an in-flight `childHints` read.
     @ObservationIgnored private var childForceQueued: Set<SessionKey> = []
-    /// Callers waiting for the active per-parent `childHints` refresh loop to finish.
-    @ObservationIgnored private var childRefreshWaiters: [SessionKey: [CheckedContinuation<Void, Never>]] = [:]
+    /// Active model-owned per-parent child refresh runner tasks (never cancelled by a sheet `.task` closing).
+    @ObservationIgnored private(set) var childRefreshTasks: [SessionKey: Task<Void, Never>] = [:]
+    /// Latest `APIClient` supplied for each active per-parent child refresh loop.
+    @ObservationIgnored private var childRefreshAPIs: [SessionKey: APIClient] = [:]
+    /// Per-caller cancellable waiters for the active per-parent `childHints` refresh loop, keyed by waiter token.
+    @ObservationIgnored private var childRefreshWaiters: [SessionKey: [UUID: CheckedContinuation<Void, Never>]] = [:]
     /// Folded children of open chats, kept out of the root list window.
     let childIndex = ChildSessionIndex()
     /// One parent's folded children, observed on their own. A push about any other agent does not redraw the chat.
@@ -2244,31 +2249,39 @@ final class AppModel {
     }
 
     /// Single per-parent serialized child-page runner shared by `refreshOpenChildren` and `refreshOverviewChildren`:
-    /// at most one `childIndex.refresh` runs per `key` at a time, preventing concurrent reads from racing and rolling
-    /// back `ChildSessionIndex`'s checkpoint.
+    /// runs in a model-owned `Task` (`childRefreshTasks[key]`) so cancelling a caller (such as closing
+    /// `SessionOverviewSheet`) detaches only that caller's waiter and never cancels an in-flight or
+    /// `sessions_list`-queued refresh.
     func runChildRefresh(_ key: SessionKey, api: APIClient, hint: String?, force: Bool) async {
+        childRefreshAPIs[key] = api
         var gate = childHints[key] ?? FetchHint()
         guard gate.start(hint) else {
             childHints[key] = gate
             if force {
                 childForceQueued.insert(key)
-                await withCheckedContinuation { continuation in
-                    childRefreshWaiters[key, default: []].append(continuation)
-                }
+                await waitForChildRefresh(key)
             }
             return
         }
         childHints[key] = gate
+        childRefreshTasks[key] = Task { [weak self] in
+            await self?.drainChildRefresh(key, initialAPI: api)
+        }
+        await waitForChildRefresh(key)
+    }
+
+    private func drainChildRefresh(_ key: SessionKey, initialAPI: APIClient) async {
         while true {
+            let api = childRefreshAPIs[key] ?? initialAPI
             await childIndex.refresh(parent: key, api: api)
             childRowsRead(key)
-            gate = childHints[key] ?? FetchHint()
+            var gate = childHints[key] ?? FetchHint()
             let pending = gate.finish()
             let forced = childForceQueued.remove(key) != nil
             switch pending {
             case .none:
                 childHints[key] = gate
-                resumeChildRefreshWaiters(for: key)
+                finishChildRefresh(for: key)
                 return
             case .hint(let queued):
                 let shouldContinue: Bool
@@ -2283,7 +2296,7 @@ final class AppModel {
                 }
                 guard shouldContinue else {
                     childHints[key] = gate
-                    resumeChildRefreshWaiters(for: key)
+                    finishChildRefresh(for: key)
                     return
                 }
                 _ = gate.start(queued)
@@ -2292,9 +2305,43 @@ final class AppModel {
         }
     }
 
+    private func finishChildRefresh(for key: SessionKey) {
+        childRefreshTasks[key] = nil
+        childRefreshAPIs[key] = nil
+        resumeChildRefreshWaiters(for: key)
+    }
+
+    private func waitForChildRefresh(_ key: SessionKey) async {
+        let waiterID = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled || childRefreshTasks[key] == nil {
+                    continuation.resume()
+                    return
+                }
+                childRefreshWaiters[key, default: [:]][waiterID] = continuation
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancelChildRefreshWaiter(waiterID, for: key)
+            }
+        }
+    }
+
+    private func cancelChildRefreshWaiter(_ waiterID: UUID, for key: SessionKey) {
+        guard var waiters = childRefreshWaiters[key],
+              let continuation = waiters.removeValue(forKey: waiterID) else { return }
+        if waiters.isEmpty {
+            childRefreshWaiters[key] = nil
+        } else {
+            childRefreshWaiters[key] = waiters
+        }
+        continuation.resume()
+    }
+
     private func resumeChildRefreshWaiters(for key: SessionKey) {
         guard let waiters = childRefreshWaiters.removeValue(forKey: key) else { return }
-        for continuation in waiters { continuation.resume() }
+        for continuation in waiters.values { continuation.resume() }
     }
 
     /// `row` where the list has its session (any other copy of it dropped), or at the end when it has none: an unchanged

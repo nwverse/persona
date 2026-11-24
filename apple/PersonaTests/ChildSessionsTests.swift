@@ -591,8 +591,136 @@ import Testing
         #expect(model.childRows(parentKey).first?.rev == 2)
     }
 
-    @Test func childRollupDeduplicatesEmbeddedAndIndependentSubagentsAndSumsDistinctRunning() throws {
-        // 1 embedded running + 1 cross-machine A2A child running => 2 running (never undercounted to max(1, 1) = 1).
+    @Test func cancellingOverviewWaiterDoesNotCancelInFlightOrQueuedChildRefresh() async throws {
+        final class Tracker: @unchecked Sendable {
+            var requests: [[String: String]] = []
+            var cancelledDuringRequest: [Bool] = []
+            var firstStarted: CheckedContinuation<Void, Never>?
+            var firstRelease: CheckedContinuation<Void, Never>?
+        }
+        let tracker = Tracker()
+        let model = AppModel()
+        let parent = try sessionRow("parent", machine: "box-a", extra: ["children": ["total": 1, "working": 1]])
+        model.applySessions([parent.machineRef: [parent]])
+
+        var api = APIClient(config: ServerConfig(url: URL(string: "http://127.0.0.1:18660")!, token: "t"), group: "")
+        api.sessionsHierarchy = true
+        api.sessionsCrossMachineHierarchy = true
+        api.transport = { req in
+            let call = tracker.requests.count + 1
+            tracker.requests.append(req.query)
+            if call == 1 {
+                tracker.firstStarted?.resume()
+                tracker.firstStarted = nil
+                await withCheckedContinuation { cont in
+                    tracker.firstRelease = cont
+                }
+                tracker.cancelledDuringRequest.append(Task.isCancelled)
+                return Data(#"{"sessions":[{"machine_id":"box-b","session_id":"c1","title":"C1","cwd":"/tmp","status":"idle","state":"working","rev":1,"waiting":true,"folded_under":"parent","folded_under_machine_id":"box-a"}],"remove":[],"has_more":false,"revision":"r1","total":1}"#.utf8)
+            }
+            tracker.cancelledDuringRequest.append(Task.isCancelled)
+            return Data(#"{"sessions":[{"machine_id":"box-b","session_id":"c1","title":"C1","cwd":"/tmp","status":"idle","state":"idle","rev":2,"waiting":false,"folded_under":"parent","folded_under_machine_id":"box-a"}],"remove":[],"has_more":false,"revision":"r2","total":1}"#.utf8)
+        }
+
+        let started = Task { @MainActor in
+            await withCheckedContinuation { cont in
+                tracker.firstStarted = cont
+            }
+        }
+        // Overview sheet opens and starts the model-owned per-parent refresh runner.
+        let overviewTask = Task { @MainActor in
+            await model.runChildRefresh(parent.key, api: api, hint: nil, force: true)
+        }
+        await started.value
+
+        // A `sessions_list` hint queues a follow-up refresh while the first read is in flight.
+        await model.runChildRefresh(parent.key, api: api, hint: "r2", force: false)
+
+        // Closing SessionOverviewSheet cancels its `.task`: ONLY its waiter detaches; the runner stays alive.
+        overviewTask.cancel()
+        await overviewTask.value
+        #expect(tracker.requests.count == 1)
+        let activeRunner = model.childRefreshTasks[parent.key]
+        #expect(activeRunner != nil)
+
+        // Releasing request #1 completes it and drains the queued `sessions_list` follow-up ("r2") uncancelled.
+        tracker.firstRelease?.resume()
+        tracker.firstRelease = nil
+        await activeRunner?.value
+
+        #expect(tracker.requests.count == 2)
+        #expect(tracker.requests[0]["since"] == nil)
+        #expect(tracker.requests[1]["since"] == "r1")
+        #expect(tracker.cancelledDuringRequest == [false, false])
+        #expect(model.childIndex.checkpoint(parent.key) == "r2")
+        #expect(model.childRows(parent.key).first?.rev == 2)
+        #expect(model.childRefreshTasks[parent.key] == nil)
+    }
+
+    @Test func ordinaryToolCallWithMachineAndSessionIDIsNotMatchedAsChildCardTarget() throws {
+        let child = try childRow("child-1", under: "parent", state: "working", machine: "box-b", extra: [
+            "folded_under_machine_id": "box-a",
+            "started_at": "2026-11-01T00:00:10Z",
+        ])
+        let ordinaryItem = Item(
+            id: "toolu_01ordinary",
+            seq: 1,
+            ts: Date(timeIntervalSince1970: 5),
+            role: "assistant",
+            kind: .toolUse,
+            text: nil,
+            toolUseID: nil,
+            toolName: "mcp__persona__inspect_session",
+            toolInput: .object([
+                "machine_id": .string("box-b"),
+                "session_id": .string("child-1"),
+            ]),
+            isError: nil,
+            image: nil
+        )
+        let ordinaryCall = ToolCall(use: ordinaryItem)
+        #expect(ChildSessionLines.childKey(of: ordinaryCall) == nil)
+
+        let barePrefixCall = ToolCall(use: Item(
+            id: ChildSessions.callPrefix,
+            seq: 2,
+            ts: Date(timeIntervalSince1970: 6),
+            role: "assistant",
+            kind: .toolUse,
+            text: nil,
+            toolName: "Child",
+            toolInput: .object(["machine_id": .string("box-b"), "session_id": .string("child-1")]),
+            isError: nil,
+            image: nil
+        ))
+        #expect(ChildSessionLines.childKey(of: barePrefixCall) == nil)
+
+        let workWithoutChildCard = ChatLine.work(
+            id: "w-1",
+            items: [.step(.call(ordinaryCall))],
+            live: false,
+            start: Date(timeIntervalSince1970: 0),
+            end: nil
+        )
+        #expect(ChildSessionLines.target(of: child.key, in: [workWithoutChildCard]) == nil)
+        #expect(ChildSessionLines.target(matching: ChildReveal(key: child.key, token: 1), in: [workWithoutChildCard]) == nil)
+        #expect(ChildSessionLines.target(matching: ChildReveal(sessionID: child.sessionID, token: 2), in: [workWithoutChildCard]) == nil)
+
+        // Once the real synthetic `child:...` card is inserted beside the ordinary tool call, targeting resolves
+        // strictly to the synthetic child card and never the ordinary tool call.
+        var seen: [SessionKey: Date?] = [:]
+        let places = ChildSessions.places([child], seen: &seen)
+        let inserted = ChildSessionLines.insert([workWithoutChildCard], places: places, sessions: [child.key: child], complete: true)
+        let target = ChildSessionLines.target(of: child.key, in: inserted)
+        #expect(target?.groupID == "w-1")
+        #expect(target?.stepID == ChildSessions.callID(for: child.key))
+        #expect(target?.stepID != ordinaryItem.id)
+        #expect(ChildSessionLines.target(matching: ChildReveal(key: child.key, token: 3), in: inserted) == target)
+        #expect(ChildSessionLines.target(matching: ChildReveal(sessionID: child.sessionID, token: 4), in: inserted) == target)
+    }
+
+    @Test func childRollupDeduplicatesEmbeddedAndIndependentSubagentsAndFallsBackNonAdditivelyWhenUnloaded() throws {
+        // 1. Loaded children: 1 embedded running + 1 distinct cross-machine A2A child running => 2 running & 2 total.
         let parent = try sessionRow("parent", machine: "box-a", extra: [
             "subagents": [[
                 "id": "a1", "session_id": "parent@a1", "description": "Explore", "running": true,
@@ -604,11 +732,9 @@ import Testing
         ])
         #expect(ChildSessions.shownRunning(parent, heldChildren: [remoteA2A]) == 2)
         #expect(ChildSessions.childRollup(parent, heldChildren: [remoteA2A]).kind == .running(2))
-        #expect(ChildSessions.shownRunning(parent) == 2)
-        #expect(parent.childRollup.kind == .running(2))
         #expect(ChildSessions.totalSubagentCount(parent, heldChildren: [remoteA2A]) == 2)
 
-        // Overlapping same-machine child present in both `subagents` and `heldChildren` is counted ONCE (aligned with SubagentOverview).
+        // 2. Loaded overlapping child: present in both `subagents` and `heldChildren` => counted ONCE.
         let overlappingParent = try sessionRow("parent", machine: "box-a", extra: [
             "subagents": [[
                 "id": "local-1", "session_id": "local-1", "description": "Local child", "running": true,
@@ -619,5 +745,77 @@ import Testing
         #expect(ChildSessions.shownRunning(overlappingParent, heldChildren: [localChild]) == 1)
         #expect(ChildSessions.childRollup(overlappingParent, heldChildren: [localChild]).kind == .running(1))
         #expect(ChildSessions.totalSubagentCount(overlappingParent, heldChildren: [localChild]) == 1)
+
+        // 3. Unloaded children (`heldChildren` omitted, e.g. menu or Agents list row): non-additive `max` fallback so
+        //    an overlapping subagent reported in both `subagents` and `children` is NEVER double-counted as 2.
+        #expect(ChildSessions.shownRunning(overlappingParent) == 1)
+        #expect(overlappingParent.childRollup.kind == .running(1))
+        #expect(ChildSessions.totalSubagentCount(overlappingParent) == 1)
+        #expect(ChildSessions.shownRunning(parent) == 1)
+        #expect(parent.childRollup.kind == .running(1))
+        #expect(ChildSessions.totalSubagentCount(parent) == 1)
+
+        // Unloaded asymmetric counts pick the larger side without adding.
+        let moreChildren = try sessionRow("parent", machine: "box-a", extra: [
+            "subagents": [[
+                "id": "a1", "session_id": "parent@a1", "description": "Explore", "running": true,
+            ]],
+            "children": ["total": 3, "working": 3],
+        ])
+        #expect(ChildSessions.shownRunning(moreChildren) == 3)
+        #expect(ChildSessions.totalSubagentCount(moreChildren) == 3)
+
+        // Partial load (1 distinct held child + 1 embedded + 1 more unloaded child): `max(1+1, 2) == 2`, never 3.
+        let partialParent = try sessionRow("parent", machine: "box-a", extra: [
+            "subagents": [[
+                "id": "a1", "session_id": "parent@a1", "description": "Explore", "running": true,
+            ]],
+            "children": ["total": 2, "working": 2],
+        ])
+        #expect(ChildSessions.shownRunning(partialParent, heldChildren: [remoteA2A]) == 2)
+        #expect(ChildSessions.totalSubagentCount(partialParent, heldChildren: [remoteA2A]) == 2)
+    }
+
+    @Test func summaryRowPrefersAuthoritativeRunningSubagentsScalarOverStaleCachedSubagents() throws {
+        let full = try sessionRow("parent", machine: "box-a", state: "working", extra: [
+            "subagents": [[
+                "id": "a1", "session_id": "parent@a1", "description": "Deep audit", "running": true,
+            ]],
+        ])
+        #expect(ChildSessions.shownRunning(full) == 1)
+        #expect(full.childRollup.kind == .running(1))
+
+        // Fresh `summary=1` row with `waiting: false` and omitted `running_subagents` (omitted => 0 per protocol.md):
+        // `preservingDetails` keeps cached `subagents` for inspection, while `shownRunning` trusts the summary scalar (0).
+        let summaryEnded = try sessionRow("parent", machine: "box-a", state: "idle", extra: [
+            "waiting": false,
+            "background_tasks_count": 0,
+        ]).preservingDetails(from: full)
+        #expect(summaryEnded.subagents?.first?.running == true)
+        #expect(ChildSessions.shownRunning(summaryEnded) == 0)
+        #expect(summaryEnded.shownRunningChildren == 0)
+        #expect(summaryEnded.childRollup.kind == .quiet)
+        // Cached ended subagent remains discoverable in totalSubagentCount (e.g. for Session Overview menu entry).
+        #expect(ChildSessions.totalSubagentCount(summaryEnded) == 1)
+
+        // Explicit `running_subagents: 0` on a waiting summary row (e.g. waiting on a loop/shell) also reports 0 running subagents.
+        let summaryExplicitZero = try sessionRow("parent", machine: "box-a", state: "working", extra: [
+            "waiting": true,
+            "running_subagents": 0,
+            "background_tasks_count": 1,
+        ]).preservingDetails(from: full)
+        #expect(summaryExplicitZero.subagents?.first?.running == true)
+        #expect(ChildSessions.shownRunning(summaryExplicitZero) == 0)
+        #expect(summaryExplicitZero.childRollup.kind == .quiet)
+
+        // Summary row with higher authoritative `running_subagents: 2` overrides stale cached 1-entry array.
+        let summaryTwoRunning = try sessionRow("parent", machine: "box-a", state: "working", extra: [
+            "waiting": true,
+            "running_subagents": 2,
+            "background_tasks_count": 0,
+        ]).preservingDetails(from: full)
+        #expect(ChildSessions.shownRunning(summaryTwoRunning) == 2)
+        #expect(summaryTwoRunning.childRollup.kind == .running(2))
+        #expect(ChildSessions.totalSubagentCount(summaryTwoRunning) == 2)
     }
 }

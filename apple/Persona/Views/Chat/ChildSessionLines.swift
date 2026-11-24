@@ -20,7 +20,12 @@ enum ChildSessionLines {
     }
 
     /// Recovers the full `SessionKey` carried by a synthetic child work-step call.
+    /// Strictly requires `ChildSessions.callPrefix` so ordinary tool calls whose inputs happen to contain
+    /// `machine_id` and `session_id` are never misidentified as synthetic child cards.
     static func childKey(of call: ToolCall) -> SessionKey? {
+        guard call.id.hasPrefix(ChildSessions.callPrefix), call.id.count > ChildSessions.callPrefix.count else {
+            return nil
+        }
         if let machine = call.input["machine_id"]?.string, !machine.isEmpty,
            let session = call.input["session_id"]?.string, !session.isEmpty {
             let group = call.input["hub_group"]?.string ?? ""

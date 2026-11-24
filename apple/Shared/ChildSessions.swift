@@ -162,17 +162,25 @@ nonisolated enum ChildSessions {
         return children(of: parent, in: rows).filter { !SideFold.isSideRow($0) && $0.foldedAs != "worker" }
     }
 
-    /// Subagents running on the parent row, deduplicated by full `SessionKey` across embedded `row.subagents` and
-    /// non-side/non-worker standalone children (matching `SubagentOverview.build`), summing distinct running subagents.
-    /// Falls back to `max(reported, childrenWorking)` on summary rows where `row.subagents` is omitted so a lead that
-    /// also counts its same-machine folded children in `running_subagents` is not counted twice.
+    /// Whether `row` came from a bounded `summary=1` response whose scalar counts (`running_subagents`, omitted => 0)
+    /// are authoritative even when `preservingDetails(from:)` retained an older full row's `subagents` array.
+    private static func isSummaryRow(_ row: Session) -> Bool {
+        row.listWaiting != nil || row.listBackgroundTasksCount != nil
+    }
+
+    /// Subagents running on the parent row:
+    /// - On `summary=1` rows, prefers the hub's authoritative scalar `listRunningSubagents` (omitted => 0) over any
+    ///   stale cached `row.subagents`, combined non-additively (`max`) with folded children.
+    /// - On full rows (`summary=0` / legacy) with `row.subagents`, deduplicates embedded subagents against loaded
+    ///   non-side/non-worker `heldChildren` by full `SessionKey` and sums only those known distinct items, falling back
+    ///   non-additively (`max`) against unloaded `children.working` counts so overlapping children are never double-counted.
     static func shownRunning(_ row: Session, heldChildren: [Session] = []) -> Int {
         let heldSubagents = subagentChildren(of: row.key, in: heldChildren)
         let hubWorking = max(0, (row.children?.working ?? 0) - (row.children?.sidesWorking ?? 0))
         let heldWorking = heldSubagents.filter { $0.state == .working || $0.backgroundWorking }.count
         let childrenWorking = max(heldWorking, hubWorking)
 
-        if let embedded = row.subagents {
+        if !isSummaryRow(row), let embedded = row.subagents {
             let heldKeys = Set(heldSubagents.map(\.key))
             var embeddedRunningKeys: Set<SessionKey> = []
             for agent in embedded where agent.running {
@@ -182,7 +190,7 @@ nonisolated enum ChildSessions {
                     embeddedRunningKeys.insert(key)
                 }
             }
-            return embeddedRunningKeys.count + childrenWorking
+            return max(embeddedRunningKeys.count + heldWorking, hubWorking)
         }
 
         let reported = max(0, row.listRunningSubagents ?? 0)
@@ -190,11 +198,13 @@ nonisolated enum ChildSessions {
     }
 
     /// Total subagents (running + ended) on the parent row, deduplicated by full `SessionKey` across embedded
-    /// `row.subagents` and standalone non-side/non-worker children.
+    /// `row.subagents` and loaded standalone non-side/non-worker children. Uses non-additive `max` against unloaded
+    /// `children.total` / `running_subagents` counts so an overlapping child is never double-counted when child rows
+    /// are not loaded.
     static func totalSubagentCount(_ row: Session, heldChildren: [Session] = []) -> Int {
         let heldSubagents = subagentChildren(of: row.key, in: heldChildren)
         let nonSideChildren = max(0, (row.children?.total ?? 0) - (row.children?.sides ?? 0))
-        let childrenTotal = max(heldSubagents.count, nonSideChildren)
+        let reported = max(0, row.listRunningSubagents ?? 0)
 
         if let embedded = row.subagents {
             let heldKeys = Set(heldSubagents.map(\.key))
@@ -206,11 +216,10 @@ nonisolated enum ChildSessions {
                     embeddedKeys.insert(key)
                 }
             }
-            return embeddedKeys.count + childrenTotal
+            return max(embeddedKeys.count + heldSubagents.count, nonSideChildren, reported)
         }
 
-        let reported = max(0, row.listRunningSubagents ?? 0)
-        return max(reported, childrenTotal)
+        return max(reported, heldSubagents.count, nonSideChildren)
     }
 
     /// Pure unified parent-row rollup (#27): Needs you priority > Running > quiet when all ended.

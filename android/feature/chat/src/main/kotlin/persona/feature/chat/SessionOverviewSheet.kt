@@ -145,16 +145,16 @@ internal fun SessionOverviewSheet(
     }
 
     // On bounded/paginated hubs, a summary=1 parent row omits embedded `subagents`, `background`, `workflows`, and `loop`.
-    // Load the complete parent row on demand when overview opens so embedded subagents and background tasks are complete.
+    // When `completeDetail.row` arrives (summary=0), its detail fields are authoritative (e.g. `loop == null` means stopped).
     val completeDetail = backgroundDetail(session, actions, connection, exact, bgRetry)
     val effectiveSession = remember(session, completeDetail.row) {
         val full = completeDetail.row ?: return@remember session
         session.copy(
-            subagents = full.subagents ?: session.subagents,
-            background = full.background ?: session.background,
-            backgroundEnded = full.backgroundEnded ?: session.backgroundEnded,
-            workflows = full.workflows ?: session.workflows,
-            loop = full.loop ?: session.loop,
+            subagents = full.subagents,
+            background = full.background,
+            backgroundEnded = full.backgroundEnded,
+            workflows = full.workflows,
+            loop = full.loop,
         )
     }
 
@@ -191,7 +191,8 @@ internal fun SessionOverviewSheet(
             bgSections.completedCommands.isNotEmpty()
         )
     val loadingEmbeddedSubagents = subagents.isEmpty && completeDetail.loading && session.waiting != null
-    val subagentsSectionMounted = !subagents.isEmpty || loadingEmbeddedSubagents
+    val failedEmbeddedSubagents = subagents.isEmpty && completeDetail.failed && session.waiting != null && completeDetail.row == null
+    val subagentsSectionMounted = !subagents.isEmpty || loadingEmbeddedSubagents || failedEmbeddedSubagents
 
     // Keep the scroll request pending until the Subagents section header is actually mounted in the list.
     LaunchedEffect(scrollToSubagents, subagentsSectionMounted, envRows.size, contextRows.size, info != null, infoError != null) {
@@ -324,6 +325,17 @@ internal fun SessionOverviewSheet(
                 if (loadingEmbeddedSubagents) {
                     item(key = "subagents-loading") {
                         JLoading()
+                    }
+                } else if (failedEmbeddedSubagents) {
+                    item(key = "subagents-error") {
+                        val canRetry = exact && actions != null
+                        JNotice(
+                            stringResource(R.string.chat_background_details_failed),
+                            status = Status.NeedsYou,
+                            icon = PersonaIcons.error,
+                            actionLabel = if (canRetry) stringResource(R.string.chat_info_retry) else null,
+                            onAction = if (canRetry) ({ bgRetry++ }) else null,
+                        )
                     }
                 }
 

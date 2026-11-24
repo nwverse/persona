@@ -168,5 +168,19 @@ class ChildSessionsTest {
         // p@emb1 is in both embedded and held (counted once), p@emb2 is embedded-only (+1), box-b/a2a-1 is remote (+1) => 3 total.
         assertEquals(ChildRollup(ChildRollupKind.Running, 3), childRollup(parentWithEmbedded, listOf(sameKeyChild, remoteWorkingChild)))
         assertEquals(3, buildOverviewSubagents(parentWithEmbedded, listOf(sameKeyChild, remoteWorkingChild)).running.size)
+
+        // Conflict case: embedded says running=true while authoritative standalone child row says idle -> both agree it is NOT running.
+        val idleStandalone = Session("box-a", "p@emb1", state = "idle", isSubagent = true, foldedUnder = "p")
+        val conflictParent = base.copy(subagents = listOf(Subagent("emb1", sessionId = "p@emb1", running = true)))
+        assertNull(childRollup(conflictParent, listOf(idleStandalone)))
+        val conflictOverview = buildOverviewSubagents(conflictParent, listOf(idleStandalone))
+        assertTrue(conflictOverview.running.isEmpty())
+        assertEquals(1, conflictOverview.ended.size)
+
+        // Reverse conflict: embedded says running=false while standalone child row says working -> both agree it IS running.
+        val workingStandalone = Session("box-a", "p@emb1", state = "working", isSubagent = true, foldedUnder = "p")
+        val reverseParent = base.copy(subagents = listOf(Subagent("emb1", sessionId = "p@emb1", running = false)))
+        assertEquals(ChildRollup(ChildRollupKind.Running, 1), childRollup(reverseParent, listOf(workingStandalone)))
+        assertEquals(1, buildOverviewSubagents(reverseParent, listOf(workingStandalone)).running.size)
     }
 }

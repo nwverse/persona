@@ -250,4 +250,127 @@ class SessionOverviewSheetTest {
         rule.onNodeWithTag("session-overview-list").performScrollToKey("sub-end:session:linux-box/ended-1")
         rule.onNodeWithText("Completed remote task").assertExists()
     }
+
+    @Test fun authoritativeCompleteRowClearsStoppedLoopAndFailureShowsSubagentsRetryForAssistant() {
+        val res = ApplicationProvider.getApplicationContext<Context>().resources
+        var shouldFail = true
+        val fullAssistant = Session(
+            machineId = "mac",
+            sessionId = "asst-summary",
+            title = "Assistant chat",
+            cwd = "/repo/app",
+            agent = "claude",
+            assistant = true,
+            state = "working",
+            loop = null,
+            subagents = listOf(
+                Subagent(
+                    id = "emb-recovered",
+                    sessionId = "asst-summary@emb-recovered",
+                    description = "Recovered embedded worker",
+                    running = true,
+                    startedAt = "2026-11-24T00:40:00Z",
+                ),
+            ),
+        )
+        val retryActions = object : ChatActions {
+            override suspend fun isMuted(session: Session) = false
+            override suspend fun execute(session: Session, action: ChatAction) = ChatActionResult.Done
+            override suspend fun verify(session: Session, action: ChatAction) = ChatActionResult.Done
+            override suspend fun info(session: Session) = SessionInfo(sessionId = session.sessionId, cwd = "/repo/app")
+            override suspend fun completeRow(session: Session): Session {
+                if (shouldFail) throw IllegalStateException("offline")
+                return fullAssistant
+            }
+        }
+        val state = ChatChromeState(res, retryActions, CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate), {}, {})
+        // Summary=1 assistant parent with stale loop + runningSubagents=1, omitting subagents array.
+        val summaryAssistant = fullAssistant.copy(
+            subagents = null,
+            waiting = true,
+            runningSubagents = 1,
+            loop = LoopInfo(kind = "interval", intervalSeconds = 60),
+        )
+
+        rule.setContent {
+            CompositionLocalProvider(LocalHubFeatures provides setOf("sessions_lookup")) {
+                PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
+                    SessionOverviewSheet(
+                        session = summaryAssistant,
+                        machine = Machine("mac", "MacBook", online = true),
+                        machines = listOf(Machine("mac", "MacBook", online = true)),
+                        childRows = emptyList(),
+                        state = state,
+                        actions = retryActions,
+                        onDismiss = {},
+                    )
+                }
+            }
+        }
+        rule.mainClock.advanceTimeBy(300)
+        rule.waitForIdle()
+
+        // Complete-row failure keeps Subagents section mounted with inline Retry even for Assistant sessions.
+        rule.onNodeWithTag("session-overview-list").performScrollToKey("section-subagents")
+        rule.onNodeWithText("Subagents").assertExists()
+        rule.onNodeWithTag("session-overview-list").performScrollToKey("subagents-error")
+
+        // Retrying succeeds: authoritative complete row loads embedded subagent and does not resurrect stopped loop.
+        shouldFail = false
+        rule.onNodeWithText("Retry").performClick()
+        rule.mainClock.advanceTimeBy(300)
+        rule.waitForIdle()
+
+        rule.onNodeWithTag("session-overview-list").performScrollToKey("sub-run:embedded:mac/asst-summary:emb-recovered")
+        rule.onNodeWithText("Recovered embedded worker").assertExists()
+    }
+
+    @Test fun authoritativeCompleteRowClearsStoppedLoopInOverview() {
+        val res = ApplicationProvider.getApplicationContext<Context>().resources
+        val stoppedLoopFull = Session(
+            machineId = "mac",
+            sessionId = "agent-loop-stopped",
+            title = "Agent chat",
+            cwd = "/repo/app",
+            agent = "claude",
+            state = "idle",
+            loop = null,
+            background = emptyList(),
+            workflows = emptyList(),
+        )
+        val staleSummary = stoppedLoopFull.copy(
+            waiting = true,
+            loop = LoopInfo(kind = "interval", intervalSeconds = 60, reason = "Stale loop"),
+        )
+        val fullActions = object : ChatActions {
+            override suspend fun isMuted(session: Session) = false
+            override suspend fun execute(session: Session, action: ChatAction) = ChatActionResult.Done
+            override suspend fun verify(session: Session, action: ChatAction) = ChatActionResult.Done
+            override suspend fun info(session: Session) = SessionInfo(sessionId = session.sessionId, cwd = "/repo/app")
+            override suspend fun completeRow(session: Session): Session = stoppedLoopFull
+        }
+        val state = ChatChromeState(res, fullActions, CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate), {}, {})
+
+        rule.setContent {
+            CompositionLocalProvider(LocalHubFeatures provides setOf("sessions_lookup")) {
+                PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
+                    SessionOverviewSheet(
+                        session = staleSummary,
+                        machine = Machine("mac", "MacBook", online = true),
+                        machines = listOf(Machine("mac", "MacBook", online = true)),
+                        childRows = emptyList(),
+                        state = state,
+                        actions = fullActions,
+                        onDismiss = {},
+                    )
+                }
+            }
+        }
+        rule.mainClock.advanceTimeBy(300)
+        rule.waitForIdle()
+
+        // Complete parent row returned loop=null, so stale summary loop must not resurrect Background tasks section.
+        rule.onNodeWithText("Background tasks").assertDoesNotExist()
+        rule.onNodeWithText("Stale loop").assertDoesNotExist()
+    }
 }

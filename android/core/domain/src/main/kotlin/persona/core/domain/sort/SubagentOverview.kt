@@ -76,6 +76,71 @@ fun buildOverviewSubagents(
     val rawEntries = mutableListOf<RawEntry>()
     val seenKeys = LinkedHashSet<SessionKey>()
 
+    // Map embedded entries by full target SessionKey so standalone child rows can enrich metadata (e.g. lastTool /
+    // startedAt) while keeping standalone live state authoritative — identical to `childRollup`'s dedupe precedence.
+    val embeddedByKey = LinkedHashMap<SessionKey, Subagent>()
+    for (sub in embeddedList) {
+        val sid = sub.sessionId.takeIf(String::isNotBlank) ?: "${parent.sessionId}@${sub.id}"
+        embeddedByKey.putIfAbsent(SessionKey(parent.machineId, sid), sub)
+    }
+
+    val eligibleChildren = childRows.filter { row ->
+        row.key != parent.key &&
+            row.sideHome == null &&
+            row.foldedAs != FoldedAs.WORKER &&
+            (row.belongsToParent(parent.key) ||
+                (!parent.sourceThreadId.isNullOrBlank() && row.machineId == parent.machineId && row.parentThreadId == parent.sourceThreadId))
+    }
+
+    // 1. Standalone folded & cross-machine child sessions first (authoritative live state when duplicated with embedded).
+    for (child in eligibleChildren) {
+        if (!seenKeys.add(child.key)) continue
+        val embeddedMatch = embeddedByKey[child.key]
+        val status = childOverviewStatus(child)
+        val childHarness = harnessDisplayName(child)
+        val originChip = progressiveOriginChip(
+            parentMachineId = parent.machineId,
+            parentHarness = parentHarness,
+            childMachineId = child.machineId,
+            childHarness = childHarness,
+            machineNames = machineNames,
+        )
+        val activity = if (status.isActive) {
+            when (status) {
+                OverviewSubagentStatus.NeedsYou -> child.attentionReason?.trim()?.takeIf(String::isNotEmpty)
+                    ?: child.activity?.trim()?.takeIf(String::isNotEmpty)
+                else -> child.activity?.trim()?.takeIf(String::isNotEmpty)
+                    ?: embeddedMatch?.lastTool?.summary?.takeIf(String::isNotBlank)
+                    ?: embeddedMatch?.lastTool?.name?.takeIf(String::isNotBlank)
+            }
+        } else null
+        val directParent = child.parentKey?.takeIf { it != parent.key && it != child.key }
+        val linkKey = "session:${child.key.path}"
+        rawEntries += RawEntry(
+            id = linkKey,
+            linkId = linkKey,
+            parentLinkId = directParent?.let { "session:${it.path}" },
+            targetKey = child.key,
+            title = child.title.trim().takeIf { it.isNotEmpty() && it != "Claude Code" }
+                ?: embeddedMatch?.description?.trim()?.takeIf(String::isNotEmpty)
+                ?: child.folderName.takeIf(String::isNotBlank),
+            status = status,
+            startedAt = parseTime(child.startedAt) ?: parseTime(embeddedMatch?.startedAt),
+            updatedAt = parseTime(child.updatedAt) ?: parseTime(embeddedMatch?.updatedAt) ?: parseTime(child.startedAt),
+            activityLine = activity,
+            originChip = originChip,
+            session = child,
+            embedded = embeddedMatch,
+            agent = child.agent,
+            launcher = child.launcher,
+            agentLabelHint = child.agentLabelHint,
+            agentSurface = child.agentSurface,
+            agentLabel = childHarness,
+            canSend = child.canSend,
+        )
+    }
+
+    // 2. Embedded `parent.subagents` entries not already represented by a standalone child row.
     for (sub in embeddedList) {
         val sid = sub.sessionId.takeIf(String::isNotBlank) ?: "${parent.sessionId}@${sub.id}"
         val target = SessionKey(parent.machineId, sid)
@@ -107,57 +172,6 @@ fun buildOverviewSubagents(
             agentSurface = parent.agentSurface,
             agentLabel = parentHarness,
             canSend = false,
-        )
-    }
-
-    val eligibleChildren = childRows.filter { row ->
-        row.key != parent.key &&
-            row.sideHome == null &&
-            row.foldedAs != FoldedAs.WORKER &&
-            (row.belongsToParent(parent.key) ||
-                (!parent.sourceThreadId.isNullOrBlank() && row.machineId == parent.machineId && row.parentThreadId == parent.sourceThreadId))
-    }
-
-    for (child in eligibleChildren) {
-        if (!seenKeys.add(child.key)) continue
-        val status = childOverviewStatus(child)
-        val childHarness = harnessDisplayName(child)
-        val originChip = progressiveOriginChip(
-            parentMachineId = parent.machineId,
-            parentHarness = parentHarness,
-            childMachineId = child.machineId,
-            childHarness = childHarness,
-            machineNames = machineNames,
-        )
-        val activity = if (status.isActive) {
-            when (status) {
-                OverviewSubagentStatus.NeedsYou -> child.attentionReason?.trim()?.takeIf(String::isNotEmpty)
-                    ?: child.activity?.trim()?.takeIf(String::isNotEmpty)
-                else -> child.activity?.trim()?.takeIf(String::isNotEmpty)
-            }
-        } else null
-        val directParent = child.parentKey?.takeIf { it != parent.key && it != child.key }
-        val linkKey = "session:${child.key.path}"
-        rawEntries += RawEntry(
-            id = linkKey,
-            linkId = linkKey,
-            parentLinkId = directParent?.let { "session:${it.path}" },
-            targetKey = child.key,
-            title = child.title.trim().takeIf { it.isNotEmpty() && it != "Claude Code" }
-                ?: child.folderName.takeIf(String::isNotBlank),
-            status = status,
-            startedAt = parseTime(child.startedAt),
-            updatedAt = parseTime(child.updatedAt) ?: parseTime(child.startedAt),
-            activityLine = activity,
-            originChip = originChip,
-            session = child,
-            embedded = null,
-            agent = child.agent,
-            launcher = child.launcher,
-            agentLabelHint = child.agentLabelHint,
-            agentSurface = child.agentSurface,
-            agentLabel = childHarness,
-            canSend = child.canSend,
         )
     }
 
