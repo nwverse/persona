@@ -384,6 +384,15 @@ func (s *Service) allOwnSettings() []ownSetting {
 				return fmt.Sprint(backgroundKeepsContext(s.settings(ctx))), nil
 			},
 			set: s.setBackgroundSupervisorKeepsContext},
+		{Setting: Setting{Key: "assistant.chat_reply_relay", Title: "Tell chats where it wrote as me about new replies", Actions: getSet,
+			About: "off (the default): nothing is passed on. on: after a conversation wrote into a Lark chat as the user, other " +
+				"people's new messages in that chat are told to that conversation (once, at most every 10 minutes per chat), for all " +
+				"chats, not one by one. Turning it off drops those still waiting in a conversation's queue",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) {
+				return fmt.Sprint(chatReplyRelayOn(s.settings(ctx))), nil
+			},
+			set: s.setChatReplyRelay},
 		{Setting: Setting{Key: "assistant.launcher", Title: "Persona 的启动器", Actions: getSet,
 			About: "which launcher (model) new Persona conversations start with by default",
 			Value: "a launcher name from this setting's get"},
@@ -630,7 +639,7 @@ var settingTitles = map[string]string{modulesKey: "title_modules", standingAutho
 	"assistant.task_workspace_preference": "title_task_workspace_preference",
 	"assistant.start_requested_tasks":     "title_start_requested_tasks", "assistant.launcher": "title_launcher",
 	"assistant.recording_days": "title_recording_days", "assistant.delivery_gate": "title_delivery_gate", "assistant.done_needs_delivery": "title_done_needs_delivery",
-	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders", "assistant.briefing_waits": "title_briefing_waits", "assistant.background_supervisor_keeps_context": "title_background_supervisor_keeps_context",
+	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders", "assistant.briefing_waits": "title_briefing_waits", "assistant.background_supervisor_keeps_context": "title_background_supervisor_keeps_context", "assistant.chat_reply_relay": "title_chat_reply_relay",
 	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.task_lessons": "title_task_lessons", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "inbox.todo_forward.enabled": "title_inbox_todo_forward", "assistant.pr_events_route_to_agent": "title_pr_events_route_to_agent", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", "model_profiles.tiers": "title_model_tiers",
 	"assistant.load_all_tools":                "title_load_all_tools",
 	"assistant.meeting_transcription_default": "title_meeting_transcription_default",
@@ -1162,6 +1171,26 @@ func (s *Service) setBackgroundSupervisorKeepsContext(ctx context.Context, v jso
 		}, func(v *Settings) **bool { return &v.BackgroundSupervisorKeepsContext },
 		"assistant.background_supervisor_keeps_context is %v from the background supervisor's next round (one running now "+
 			"finishes as it is).")
+}
+
+func (s *Service) setChatReplyRelay(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	ch, err := s.setBoolSetting(ctx, v, func(ctx context.Context) bool { return chatReplyRelayOn(s.settings(ctx)) },
+		"assistant.chat_reply_relay is unchanged", func(l i18n.Lang, before, after string) string {
+			return i18n.T(l, "assistant-settings_tool.change_chat_reply_relay", i18n.Args{"before": before, "after": after})
+		}, func(v *Settings) **bool { return &v.ChatReplyRelay },
+		"assistant.chat_reply_relay is %v from now on.")
+	if err != nil || ch == nil || ch.apply == nil {
+		return ch, err
+	}
+	apply := ch.apply
+	ch.apply = func(ctx context.Context) (string, error) {
+		out, err := apply(ctx)
+		if err == nil && !chatReplyRelayOn(s.settings(ctx)) {
+			s.dropQueuedChatReplies(ctx)
+		}
+		return out, err
+	}
+	return ch, nil
 }
 
 // launchers are the launchers of the assistant's machine, as the apps list them.

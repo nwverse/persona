@@ -1227,7 +1227,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		// The companion's agy-<conversation> while an agy in a terminal has it open (agypresence.go, #13603): a message
 		// or an interrupt goes to the pane running it; nothing else may drive it from the companion.
 		if pane != "" && (method == "session.send" || method == "session.interrupt") {
-			if res, err, handled := n.workAgentCalls(ctx, method, pane, a, params); handled {
+			if res, err, handled := n.workAgentCalls(ctx, method, pane, a, params, paneMessage{Text: p.Text, Images: p.Images}); handled {
 				return res, err
 			}
 		}
@@ -1251,7 +1251,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	} else if a, ok := n.agent(p.SessionID); ok && (a.Agent == cursorAgent || a.Agent == agyAgent) {
 		// Herdr drives the pane (workagent.go). Messages go through agent.prompt, and Persona sends Esc through
 		// herdr to interrupt. Agy reads the verified pane conversation when available. Cursor shows a terminal notice.
-		if res, err, handled := n.workAgentCalls(ctx, method, p.SessionID, a, params); handled {
+		if res, err, handled := n.workAgentCalls(ctx, method, p.SessionID, a, params, paneMessage{Text: p.Text, Images: p.Images}); handled {
 			return res, err
 		}
 	} else if r, ok := n.terminalOnly(p.SessionID); ok { // a pi or opencode without its extension, any other agent (opencode.go)
@@ -2857,11 +2857,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			}
 			return map[string]any{"cwd": dir, "plugin_skills_need": need, "space_md_digest": digestOf(spaceMD)}, nil
 		}
-		// The same instructions for both agents: Claude reads CLAUDE.md, Codex AGENTS.md.
-		for _, name := range []string{"CLAUDE.md", "AGENTS.md"} {
-			if err := os.WriteFile(filepath.Join(dir, name), []byte(a.ClaudeMD), 0o600); err != nil {
-				return nil, err
-			}
+		// Bounded entry files and native rules preserve the same complete instructions for every launcher.
+		if err := writeAssistantInstructionFiles(dir, a.ClaudeMD); err != nil {
+			return nil, err
 		}
 		return map[string]any{"cwd": dir, "plugin_skills_need": need}, nil
 	case "session.info":
