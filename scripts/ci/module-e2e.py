@@ -76,6 +76,9 @@ SERVER = {
                    ["POST", "/api/v1/assistant/health/water/reminder", {}]],
     },
     "glasses": {},
+    # Its server half (the history import, the sent marks) shows nothing over HTTP on a hub with no connector: its tools
+    # reach the MCP through a node, and the selection page's chat list answers 404 for a source without history either
+    # way. Its absence is TestKnowledgeUIFollowsItsModule's; here, its flag and the manager's line.
     "knowledge-ui": {},
     "recording": {
         "routes": ["/api/v1/recordings"],

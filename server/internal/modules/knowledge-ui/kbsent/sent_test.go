@@ -5,31 +5,31 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/kb"
 )
 
 func TestKBMarkSent(t *testing.T) {
 	at := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
 	chat := &kb.Chat{Source: "example", SourceID: "thread"}
-	base := db.SentAsUser{ID: 1, At: at.Add(30 * time.Second), Connector: "example", Target: json.RawMessage(`{"chat":"thread"}`), Text: "same text", MessageRef: "ref"}
+	base := connectorwire.SentAsUser{ID: 1, At: at.Add(30 * time.Second), Connector: "example", Target: json.RawMessage(`{"chat":"thread"}`), Text: "same text", MessageRef: "ref"}
 	for _, tc := range []struct {
 		name    string
 		refs    []string
 		text    []string
 		offsets []time.Duration
-		rows    []db.SentAsUser
+		rows    []connectorwire.SentAsUser
 		want    []int64
 	}{
-		{"exact ref beats text", []string{"ref", "human"}, []string{"changed text", "same text"}, nil, []db.SentAsUser{base}, []int64{1, 0}},
-		{"legacy normalized text", nil, []string{"same\n  text"}, nil, []db.SentAsUser{base}, []int64{1}},
-		{"different ref cannot fallback", []string{"human"}, []string{"same text"}, nil, []db.SentAsUser{base}, []int64{0}},
-		{"duplicate text is ambiguous", nil, []string{"same text", "same text"}, []time.Duration{0, time.Minute}, []db.SentAsUser{base}, []int64{0, 0}},
-		{"one ref cannot mark two rows", []string{"ref", "ref"}, []string{"same text", "changed text"}, nil, []db.SentAsUser{base}, []int64{0, 0}},
-		{"duplicate ledger is ambiguous", []string{"ref"}, []string{"same text"}, nil, []db.SentAsUser{base, base}, []int64{0}},
-		{"outside window remains human", nil, []string{"same text", "same text"}, []time.Duration{0, 10 * time.Minute}, []db.SentAsUser{base}, []int64{1, 0}},
-		{"no prefix match", nil, []string{"same text and more"}, nil, []db.SentAsUser{base}, []int64{0}},
-		{"case matters", nil, []string{"Same text"}, nil, []db.SentAsUser{base}, []int64{0}},
+		{"exact ref beats text", []string{"ref", "human"}, []string{"changed text", "same text"}, nil, []connectorwire.SentAsUser{base}, []int64{1, 0}},
+		{"legacy normalized text", nil, []string{"same\n  text"}, nil, []connectorwire.SentAsUser{base}, []int64{1}},
+		{"different ref cannot fallback", []string{"human"}, []string{"same text"}, nil, []connectorwire.SentAsUser{base}, []int64{0}},
+		{"duplicate text is ambiguous", nil, []string{"same text", "same text"}, []time.Duration{0, time.Minute}, []connectorwire.SentAsUser{base}, []int64{0, 0}},
+		{"one ref cannot mark two rows", []string{"ref", "ref"}, []string{"same text", "changed text"}, nil, []connectorwire.SentAsUser{base}, []int64{0, 0}},
+		{"duplicate ledger is ambiguous", []string{"ref"}, []string{"same text"}, nil, []connectorwire.SentAsUser{base, base}, []int64{0}},
+		{"outside window remains human", nil, []string{"same text", "same text"}, []time.Duration{0, 10 * time.Minute}, []connectorwire.SentAsUser{base}, []int64{1, 0}},
+		{"no prefix match", nil, []string{"same text and more"}, nil, []connectorwire.SentAsUser{base}, []int64{0}},
+		{"case matters", nil, []string{"Same text"}, nil, []connectorwire.SentAsUser{base}, []int64{0}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			messages := make([]kb.DayMessage, len(tc.text))
@@ -53,15 +53,15 @@ func TestKBMarkSent(t *testing.T) {
 			}
 		})
 	}
-	for _, mutation := range []func(*db.SentAsUser){
-		func(r *db.SentAsUser) { r.Connector = "other" },
-		func(r *db.SentAsUser) { r.Target = json.RawMessage(`{"chat":"other"}`) },
-		func(r *db.SentAsUser) { r.Target = json.RawMessage(`{"subject":"thread"}`) },
+	for _, mutation := range []func(*connectorwire.SentAsUser){
+		func(r *connectorwire.SentAsUser) { r.Connector = "other" },
+		func(r *connectorwire.SentAsUser) { r.Target = json.RawMessage(`{"chat":"other"}`) },
+		func(r *connectorwire.SentAsUser) { r.Target = json.RawMessage(`{"subject":"thread"}`) },
 	} {
 		row := base
 		mutation(&row)
 		m := kb.DayMessage{}
-		kbMarkSent([]kbSentLine{{message: &m, identity: kb.MessageIdentity{Ref: "ref"}, mine: true, minute: at, body: "sametext"}}, chat, []db.SentAsUser{row})
+		kbMarkSent([]kbSentLine{{message: &m, identity: kb.MessageIdentity{Ref: "ref"}, mine: true, minute: at, body: "sametext"}}, chat, []connectorwire.SentAsUser{row})
 		if m.SentBy != "" {
 			t.Fatalf("wrong destination matched: %+v", row)
 		}
@@ -72,8 +72,8 @@ func TestKBMarkSentMissingReferenceAndRecall(t *testing.T) {
 	at := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
 	recalled := at.Add(time.Hour)
 	m := kb.DayMessage{}
-	row := db.SentAsUser{ID: 3, At: at, Connector: "example", Target: json.RawMessage(`{"chat":"thread"}`), Text: "content", RecalledAt: &recalled}
-	kbMarkSent([]kbSentLine{{message: &m, identity: kb.MessageIdentity{Ref: "archive-only"}, mine: true, minute: at, body: "content"}}, &kb.Chat{Source: "example", SourceID: "thread"}, []db.SentAsUser{row})
+	row := connectorwire.SentAsUser{ID: 3, At: at, Connector: "example", Target: json.RawMessage(`{"chat":"thread"}`), Text: "content", RecalledAt: &recalled}
+	kbMarkSent([]kbSentLine{{message: &m, identity: kb.MessageIdentity{Ref: "archive-only"}, mine: true, minute: at, body: "content"}}, &kb.Chat{Source: "example", SourceID: "thread"}, []connectorwire.SentAsUser{row})
 	if m.SentBy != "assistant" || m.SentLedgerID != 3 || m.RecalledAt == nil || !m.RecalledAt.Equal(recalled) {
 		t.Fatalf("missing ref or recall: %+v", m)
 	}
@@ -88,11 +88,11 @@ func TestKBMarkSentDoesNotReassignDuplicateLedger(t *testing.T) {
 		{message: &messages[0], identity: kb.MessageIdentity{Ref: "ref"}, mine: true, minute: at, body: "same"},
 		{message: &messages[1], mine: true, minute: at.Add(time.Minute), body: "same"},
 	}
-	row := db.SentAsUser{ID: 1, At: at, Connector: "example", Target: json.RawMessage(`{"chat":"thread"}`), Text: "same", MessageRef: "ref"}
+	row := connectorwire.SentAsUser{ID: 1, At: at, Connector: "example", Target: json.RawMessage(`{"chat":"thread"}`), Text: "same", MessageRef: "ref"}
 	duplicate := row
 	duplicate.ID = 2
 	duplicate.MessageRef = ""
-	kbMarkSent(lines, &kb.Chat{Source: "example", SourceID: "thread"}, []db.SentAsUser{row, duplicate})
+	kbMarkSent(lines, &kb.Chat{Source: "example", SourceID: "thread"}, []connectorwire.SentAsUser{row, duplicate})
 	if messages[0].SentLedgerID != 1 || messages[1].SentBy != "" {
 		t.Fatalf("duplicate reassigned: %+v", messages)
 	}
@@ -133,7 +133,7 @@ func TestKBSentAmbiguousMinuteBlocksNearbyHumanText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	kbMarkSent(lines, &kb.Chat{Source: "example", SourceID: "thread"}, []db.SentAsUser{{ID: 1, At: at, Connector: "example", Target: json.RawMessage(`{"chat":"thread"}`), Text: "same"}})
+	kbMarkSent(lines, &kb.Chat{Source: "example", SourceID: "thread"}, []connectorwire.SentAsUser{{ID: 1, At: at, Connector: "example", Target: json.RawMessage(`{"chat":"thread"}`), Text: "same"}})
 	for _, m := range messages {
 		if m.SentBy != "" {
 			t.Fatalf("ambiguous minute reassigned: %+v", messages)
@@ -149,7 +149,7 @@ func TestKBSentProviderReferencesStayInTheirSource(t *testing.T) {
 	} {
 		for _, source := range []string{tc.connector, "posts"} {
 			message := kb.DayMessage{}
-			kbMarkSent([]kbSentLine{{message: &message, mine: true, identity: kb.MessageIdentity{Ref: tc.ref}}}, &kb.Chat{Connector: tc.connector, Source: source, SourceID: "thread"}, []db.SentAsUser{{ID: 1, Connector: tc.connector, Action: tc.action, MessageRef: "42"}})
+			kbMarkSent([]kbSentLine{{message: &message, mine: true, identity: kb.MessageIdentity{Ref: tc.ref}}}, &kb.Chat{Connector: tc.connector, Source: source, SourceID: "thread"}, []connectorwire.SentAsUser{{ID: 1, Connector: tc.connector, Action: tc.action, MessageRef: "42"}})
 			if (message.SentBy == "assistant") != (source == tc.connector) {
 				t.Errorf("%s/%s: %+v", tc.connector, source, message)
 			}

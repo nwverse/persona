@@ -87,7 +87,7 @@
     <string name="chat_chrome_conn_details">连接诊断</string>
     <string name="chat_chrome_got_it">知道了</string>
     <string name="chat_composer_placeholder">输入消息</string>
-    <string name="chat_composer_photo_limit">最多添加 4 张照片</string>
+    <string name="chat_composer_photo_limit">一次最多 %1$d 张</string>
     <string name="chat_composer_attachment_unreadable">附件无法读取，请重新选择；输入已保留</string>
     <string name="chat_composer_no_camera_app">这台手机上没有能拍照的应用</string>
     <string name="chat_composer_camera_failed">无法打开相机，请稍后再试</string>

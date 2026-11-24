@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -68,7 +67,7 @@ type fakeHistory struct {
 	took     time.Duration                         // how long each call takes (on the clock)
 	real     time.Duration                         // and in real time (for the in-flight test)
 	hook     func(n int, q connectorwire.HistoryQuery) (connectorwire.HistoryPage, error, bool)
-	media    func(ref string) (connector.Media, error)
+	media    func(ref string) (connectorwire.Media, error)
 	calls    []string
 	queries  []connectorwire.HistoryQuery
 	pages    int
@@ -172,7 +171,7 @@ func (f *fakeHistory) Anchors(_ context.Context, _ string, q connectorwire.Histo
 	return connectorwire.HistoryAnchors{Anchors: f.anchors[q.Since.Year()]}, nil
 }
 
-func (f *fakeHistory) Media(_ context.Context, _ string, ref string) (connector.Media, error) {
+func (f *fakeHistory) Media(_ context.Context, _ string, ref string) (connectorwire.Media, error) {
 	defer f.enter()()
 	f.mu.Lock()
 	f.calls = append(f.calls, "media "+ref)
@@ -181,7 +180,7 @@ func (f *fakeHistory) Media(_ context.Context, _ string, ref string) (connector.
 	if media != nil {
 		return media(ref)
 	}
-	return connector.Media{Mime: "image/png", Data: []byte("png")}, nil
+	return connectorwire.Media{Mime: "image/png", Data: []byte("png")}, nil
 }
 
 func (f *fakeHistory) count(prefix string) int {
@@ -530,11 +529,11 @@ func TestHistoryFullDownloadsImages(t *testing.T) {
 	msgs[9].Type, msgs[9].Media = "FILE", []string{"doc.pdf"}
 	src := &fakeHistory{info: assistantwire.ArchiveSource{ID: testSource, History: true, Media: true},
 		chats: []connectorwire.HistoryChat{{ID: "a", Kind: "dm"}}, convs: map[string][]kb.SourceMessage{"a": msgs},
-		media: func(ref string) (connector.Media, error) {
+		media: func(ref string) (connectorwire.Media, error) {
 			if ref == "not-a-picture" {
-				return connector.Media{Mime: "video/mp4", Data: []byte("mp4")}, nil
+				return connectorwire.Media{Mime: "video/mp4", Data: []byte("mp4")}, nil
 			}
-			return connector.Media{Mime: "image/png", Data: []byte("png")}, nil
+			return connectorwire.Media{Mime: "image/png", Data: []byte("png")}, nil
 		}}
 	ht := newHistoryTest(t, src)
 	ht.e.AttachmentDaysBySource = map[string]int{testSource: 3650}
