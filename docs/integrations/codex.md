@@ -61,7 +61,7 @@ Continuation filenames may append `_<segment UUID>` after the thread UUID. The a
 Commentary is ordinary assistant text on the wire, so it can answer a mid-turn question in the latest-text slot. Latest-page folding keeps the newest commentary visible until a final answer follows it; earlier commentary and commentary on historical pages fold into completed work through an internal-only narration marker. It is not counted as thinking or exposed as another item kind. The iOS `ChatCache` version changes with this kind mapping so cached thinking items cannot hide the answers.
 
 Codex's own XML in UserMessage (all rollouts on the local and hub machines scanned 2026-10-26):
-`<send_user_message_question_reply>` (answers to Codex `request_user_input`, containing JSON) displays the answer itself, one "question: answer" line per question;
+`<send_user_message_question_reply>` (answers to Codex `request_user_input`, containing JSON) keeps the answer in `text`, with one "question: answer" line per question for multiple answers. A standalone envelope also carries `question_replies` so HarmonyOS can show each original question as a collapsible quotation. For a single reply the answer comes from the existing `text` field.
 strip `<in-app-browser-context>` (browser state automatically attached by the Codex App); `local_image` content becomes `<attached_images>` paths, displayed as thumbnails.
 `<environment_context>`, `<INSTRUCTIONS>`, `<skill>`, `<turn_aborted>`, `<subagent_notification>`, `<realtime_delegation>`,
 and `<codex_internal_context>` appear only in response_item (model input), not in the chat.

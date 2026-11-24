@@ -2478,10 +2478,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		fold := func(page []proto.Item) []proto.Item {
 			n.ttft.annotate(p.SessionID, page, p.BeforeSeq == 0)
 			if p.FoldWork {
-				if p.BeforeSeq == 0 {
-					return transcript.FoldWorkLatest(page)
-				}
-				return transcript.FoldWork(page)
+				return f.FoldPage(page, p.BeforeSeq == 0)
 			}
 			return page
 		}
