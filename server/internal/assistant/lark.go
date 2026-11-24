@@ -24,8 +24,8 @@ import (
 // what the channel supports (Status, Features), a card (Post), a line under a message (Note, Reply), a card edited in
 // place (UpdateCard) and a line for a to-do's chat thread (ThreadPost). With the module in the build the port is the
 // module's layer; without it (persona_without_lark, persona_core_only) it is larkhost.None, which posts nothing and
-// says so. The transport that posts and edits cards (feishu_transport.go) is still the core's and is served to the module through larkHost; the
-// chat itself (its state, the owner's messages and presses) is the module's, reached through larkhost.Chat
+// says so. The transport that posts and edits cards (feishu_transport.go) is still the core's and is served to the
+// module through larkHost; the chat itself (its state, the owner's messages and presses) is the module's, reached through larkhost.Chat
 // (lark_chat.go).
 
 // larkLayer is the module's layer, made once per service on first use (a service a test makes without New has one
