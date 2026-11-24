@@ -131,8 +131,8 @@ describe("CommandInputCard", () => {
 
   it("is the card a command-input interaction gets, and no quick path answers it", async () => {
     act(() => root.render(<InteractionCard ix={card()} />));
-    await flush();
-    expect(host.querySelector("[data-command-input-command]")).not.toBeNull();
+    // drawn by the permission card's lazy chunk
+    await vi.waitFor(() => expect(host.querySelector("[data-command-input-command]")).not.toBeNull());
     expect(quickAnswers(card())).toBeNull();
     expect(quickAnswers({ ...card(), fields: undefined })).toBeNull();
   });
