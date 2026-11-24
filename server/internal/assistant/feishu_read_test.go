@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/channel"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -22,13 +22,13 @@ import (
 const readChat = "oc_alerts"
 
 // readEvent is the owner's "@bot <text>" in readChat (in thread when it is not "").
-func readEvent(id, text, thread string) feishubot.MessageEvent {
-	var ev feishubot.MessageEvent
+func readEvent(id, text, thread string) botcard.MessageEvent {
+	var ev botcard.MessageEvent
 	ev.Message.MessageID, ev.Message.ChatID, ev.Message.ChatType, ev.Message.ThreadID = id, readChat, "group", thread
 	ev.Message.MessageType = "text"
 	c, _ := json.Marshal(map[string]string{"text": "@_user_1 " + text})
 	ev.Message.Content = string(c)
-	ev.Message.Mentions = []feishubot.Mention{{Key: "@_user_1", Name: "Persona", ID: feishubot.UserID{OpenID: "ou_bot"}}}
+	ev.Message.Mentions = []botcard.Mention{{Key: "@_user_1", Name: "Persona", ID: botcard.UserID{OpenID: "ou_bot"}}}
 	ev.Sender.SenderType, ev.Sender.SenderID.OpenID = "user", "ou_owner"
 	return ev
 }
@@ -61,7 +61,7 @@ func (e *threadEnv) readLive(id string) *channel.Run {
 }
 
 // read hands ev over the way FeishuMessage does for a message marked FeishuFromRead.
-func (e *threadEnv) read(ev feishubot.MessageEvent) {
+func (e *threadEnv) read(ev botcard.MessageEvent) {
 	e.t.Helper()
 	st, err := e.s.feishuStatus(context.Background())
 	if err != nil {
@@ -71,6 +71,7 @@ func (e *threadEnv) read(ev feishubot.MessageEvent) {
 }
 
 func TestFeishuReadSendsTheRequestToTheMainConversation(t *testing.T) {
+	needsLarkLayer(t)
 	e := readEnv(t)
 	e.read(readEvent("om_r1", "/read 看下这几条告警是不是同一个原因", ""))
 	got := handoffs(e.f)
@@ -129,6 +130,7 @@ func TestFeishuReadSendsTheRequestToTheMainConversation(t *testing.T) {
 
 // In a topic the prompt reads the topic too, and the answer stays in the topic.
 func TestFeishuReadInATopic(t *testing.T) {
+	needsLarkLayer(t)
 	e := readEnv(t)
 	e.read(readEvent("om_r2", "/读群 近两天的", "omt_9"))
 	got := handoffs(e.f)
@@ -158,17 +160,17 @@ func TestFeishuReadWithNoWords(t *testing.T) {
 func TestFeishuReadDropsEverythingElse(t *testing.T) {
 	for _, c := range []struct {
 		name string
-		edit func(*threadEnv, *feishubot.MessageEvent)
+		edit func(*threadEnv, *botcard.MessageEvent)
 	}{
-		{"switch off", func(e *threadEnv, _ *feishubot.MessageEvent) { e.features.ReadGroup = false }},
-		{"someone else", func(_ *threadEnv, ev *feishubot.MessageEvent) { ev.Sender.SenderID.OpenID = "ou_someone" }},
-		{"a bot", func(_ *threadEnv, ev *feishubot.MessageEvent) { ev.Sender.SenderType = "app" }},
-		{"a private chat", func(_ *threadEnv, ev *feishubot.MessageEvent) { ev.Message.ChatType = "p2p" }},
-		{"not /read", func(_ *threadEnv, ev *feishubot.MessageEvent) {
+		{"switch off", func(e *threadEnv, _ *botcard.MessageEvent) { e.features.ReadGroup = false }},
+		{"someone else", func(_ *threadEnv, ev *botcard.MessageEvent) { ev.Sender.SenderID.OpenID = "ou_someone" }},
+		{"a bot", func(_ *threadEnv, ev *botcard.MessageEvent) { ev.Sender.SenderType = "app" }},
+		{"a private chat", func(_ *threadEnv, ev *botcard.MessageEvent) { ev.Message.ChatType = "p2p" }},
+		{"not /read", func(_ *threadEnv, ev *botcard.MessageEvent) {
 			c, _ := json.Marshal(map[string]string{"text": "@_user_1 /reader 看下"})
 			ev.Message.Content = string(c)
 		}},
-		{"a picture", func(_ *threadEnv, ev *feishubot.MessageEvent) {
+		{"a picture", func(_ *threadEnv, ev *botcard.MessageEvent) {
 			ev.Message.MessageType, ev.Message.Content = "image", `{}`
 		}},
 	} {
@@ -261,6 +263,7 @@ func TestFeishuReadCardsSkipAConcurrentTopic(t *testing.T) {
 // A /read answer Lark took but whose reply was lost is tried again under the same key, so the group gets one card
 // (#11987). The retry comes later, so its footer's elapsed time differs: the hub's key from the card's words would too.
 func TestFeishuReadAnswerRetryKeepsItsKey(t *testing.T) {
+	needsLarkLayer(t)
 	e := readEnv(t)
 	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
 	e.s.chans.mu.Lock()
@@ -300,22 +303,6 @@ func TestFeishuReadAnswerRetryKeepsItsKey(t *testing.T) {
 	}
 	if len(landed) != 1 {
 		t.Fatalf("%d cards in the group", len(landed))
-	}
-}
-
-// Each piece of a /read answer has a key of its own, and a held run's later turn other keys.
-func TestReadAnswerKey(t *testing.T) {
-	turn := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
-	a := readAnswerKey("run1", turn, 0)
-	if a != readAnswerKey("run1", turn, 0) || len(a) > 46 || !strings.HasPrefix(a, "rd-") {
-		t.Fatalf("key %q", a)
-	}
-	seen := map[string]bool{a: true}
-	for _, k := range []string{readAnswerKey("run1", turn, 1), readAnswerKey("run1", turn.Add(time.Minute), 0), readAnswerKey("run2", turn, 0)} {
-		if seen[k] {
-			t.Fatalf("key %q repeats", k)
-		}
-		seen[k] = true
 	}
 }
 

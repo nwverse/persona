@@ -15,11 +15,18 @@ const (
 	ScopeAgentsRead    = "agents.read"
 	ScopeAgentsControl = "agents.control"
 	ScopeMachinesRead  = "machines.read"
+	// ScopeMachinesPair lets an extension request a one-time active-mode pairing link (machines.pair_link) for a
+	// pending link computer and read its connection status (machines.status). Granted by name only; newly added
+	// computers still wait for the owner's "This is my computer" confirmation.
+	ScopeMachinesPair = "machines.pair"
 	// ScopeBrowserRun lets an extension list browser-enabled computers (browser.machines) and run scripts inside an
 	// extension-isolated task space (browser.run) via a pluggable BrowserBackend (e.g. ego lite, future CDP). Granted
 	// by name only (#12866).
-	ScopeBrowserRun   = "browser.run"
-	ScopeNotify       = "notify"
+	ScopeBrowserRun = "browser.run"
+	ScopeNotify     = "notify"
+	// ScopePushGrading lets an extension manage its own push grading layer and preview grading decisions.
+	// It is granted by name only and does not include reading held pushes or changing the owner's base settings.
+	ScopePushGrading  = "push.grading"
 	ScopeAssistantAsk = "assistant.ask"
 	ScopeTodosRead    = "todos.read"
 	ScopeTodosWrite   = "todos.write"

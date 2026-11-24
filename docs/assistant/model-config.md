@@ -171,7 +171,8 @@ only the prompt and the answer travel.
   day, purpose, route, provider and model (calls, failures, the four token sums); a write drops the days older than 60.
   `GET /api/v1/model-config` gives each listed purpose its last 7 UTC days as `usage` (its own calls and those of the
   unlisted uses under it: Information processing's titles, translation and the rest), and the web's Settings › Models
-  shows "Last 7 days: N calls · M tokens" under a purpose with calls (#10498). Its tokens are input + output + cache
+  shows "Last 7 days: N calls · M tokens" under a purpose with calls (#10498), then "· K failed" in red when any of
+  them failed, so a purpose whose every call fails does not read as merely busy. Its tokens are input + output + cache
   writes; cache reads are left out of that number, since they cost a fraction and would swamp it, and the line's
   tooltip lists all four. The Apple and Android apps do not show it yet.
 - **How it runs and isolation guarantees**: the node runs the launcher in a fresh `persona-check-*` temporary directory
@@ -213,6 +214,13 @@ only the prompt and the answer travel.
   (the CLI's own subscription limits do).
 
 ## Editing and inheritance
+
+The web model, profile and scheduled task editors group launcher models when at least two catalog IDs share a base
+and end in their advertised default effort. The model picker shows the base name, searches the concrete IDs, and
+accepts custom IDs. The effort selector shows the levels the catalog and save path support. Choosing a group starts
+at Medium when available, or the first listed level, and keeps an explicit effort choice the group supports.
+The saved model ID carries the level. A supported legacy effort takes precedence over the suffix and is cleared on
+save once the catalog identifies the group. An effort override on a followed variant pins the matching concrete ID.
 
 Each category shows both “In Effect” and “Model Settings”:
 
@@ -614,7 +622,7 @@ Persona names no model in code and preselects none (`docs/design/PRINCIPLES.md` 
 | Worker, well-scoped | the task's (`agent.new`) | A bug fix, a feature against a spec, a read-only investigation | One tier below the daily driver (Sonnet 5.5) at `medium` | A second rework round: raise to `high`, then to the daily-driver tier (Opus 5.5) at `medium` |
 | Worker, open-ended | the task's (`agent.new`) | Debugging without a known cause, work across several PRs, computer use | The daily-driver tier (Opus 5.5) at `medium` | Still short at `high`: the top tier (Fable 5.2) at `medium` |
 | Independent reviewer | `agents.review` in `manager.json` | Reads a finished change cold and reports findings | The tier of the agent that wrote the change, never below it | Findings miss what the supervisor then catches |
-| Triage, routing, done judge, titles, question delegation | The categories `inbox.triage` (Inbox sorting, and with it the read-only `agent.triage`, `inbox.judge` and `info.tag`), `kb` (titles, and with it the read-only `assistant.route`), `agent.delegate` | Classify, extract, name, decide who answers | The smallest tier (Haiku 5.5) at its default | A measured error rate that costs more than the tier saves; the delegate first, since a wrong answer there reaches an agent |
+| Triage, routing, done judge, titles, question delegation | The categories `inbox.triage` (Inbox sorting, and with it the read-only `agent.triage`, `inbox.judge`, `info.tag` and `capture.sort`), `kb` (titles, and with it the read-only `assistant.route`), `agent.delegate` | Classify, extract, name, decide who answers | The smallest tier (Haiku 5.5) at its default | A measured error rate that costs more than the tier saves; the delegate first, since a wrong answer there reaches an agent |
 
 - **The main chat's tier is not lowered to make it fast.** What makes it slow is background work in its conversation, which the background supervisor and the owner-first queue remove (`docs/assistant/assistant.md` "Messages from the system wait for the owner", `docs/assistant/unified-entry.md` "Background supervisor"). Only when its reply wait fails on idle days is the model the cause.
 - **One model per conversation.** A prompt cache belongs to the model that wrote it, so a changed binding costs a cache write on the whole conversation at its next message. A different model for supervision is free only because the background supervisor is a conversation of its own.

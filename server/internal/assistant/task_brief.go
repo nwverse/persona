@@ -75,6 +75,8 @@ const (
 	briefEventDispatch    = "dispatch"
 	briefEventCompletion  = "completion"
 	briefEventEstimateDue = "estimate_due"
+	// briefEventMemory: the memory entries a start of the to-do carried in its first message (memory_handoff.go).
+	briefEventMemory = "memory"
 )
 
 // BriefRequest is the owner's message that led to a task: its words as they wrote them (cut at briefRequestMax, then
@@ -115,7 +117,11 @@ type BriefEvent struct {
 	Added         []string      `json:"added,omitempty"`
 	Dropped       []string      `json:"dropped,omitempty"`
 	Approval      *BriefRequest `json:"approval,omitempty"`
-	eventID       string        // process-local continuation rollback identity; never part of the wire or stored schema
+	// Entries are the memory entries a memory event's start carried, SensitiveEntries the sensitive ones among them
+	// (#13532): what the first message took of the user's memory, for the owner to check.
+	Entries          []string `json:"entries,omitempty"`
+	SensitiveEntries []string `json:"sensitive_entries,omitempty"`
+	eventID          string   // process-local continuation rollback identity; never part of the wire or stored schema
 }
 
 // BriefCriterion is one criterion's result when the work ended: met, not_met, unchecked (nobody checked it), or dropped
@@ -917,7 +923,8 @@ func (s *Service) linkTaskBrief(ctx context.Context, id, todoID, continues, reas
 	return nil
 }
 
-// unlinkTaskBrief takes back a continuation whose adoption failed, including only its uniquely marked scope event.
+// unlinkTaskBrief takes back a continuation whose adoption failed, including only its uniquely marked scope or estimate
+// event (an estimate-only takeover logs an estimate event, applyScope).
 // Durable writes go first: a failure leaves memory matching what a restart would read rather than hiding stale lineage
 // or criteria only until then. Scope and link removal are separate steps; the caller restores ledgers from the brief
 // that actually remains after both attempts.
@@ -931,7 +938,7 @@ func (s *Service) unlinkTaskBrief(ctx context.Context, todoID, eventID string) e
 			kept := make([]BriefEvent, 0, len(tb.st.Log))
 			removed := false
 			for _, ev := range tb.st.Log {
-				if ev.Kind == briefEventScope && ev.Todo == todoID && ev.eventID == eventID {
+				if (ev.Kind == briefEventScope || ev.Kind == briefEventEstimate) && ev.Todo == todoID && ev.eventID == eventID {
 					removed = true
 					continue
 				}
@@ -985,6 +992,7 @@ func (s *Service) changeBriefLocked(ctx context.Context, id string, change func(
 		return v, false, nil
 	}
 	tb.revision++
+	s.trevision.changed() // briefs and lineage are in the full to-do list too
 	tb.pending++
 	raw, err := json.Marshal(tb.st)
 	v := tb.view()
