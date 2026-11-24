@@ -453,7 +453,7 @@ An owner who relies on the assistant can name backup launchers (#14435): when a 
 
 Persona **sends to Agents on its own** the following kinds of message, none introducing new intent:
 
-1. Continuation after a transient error: like "Retry" on the App's error card, it resumes the interrupted task; likewise the continuation once a subscription's usage limit reset (`prompts/agents/limit_continue.md`: go on with what you were doing, without redoing what is done), and the same on the backup launcher a usage limit moved an Assistant conversation to (`prompts/agents/limit_fallback_continue.md`, "Usage limits: a backup launcher");
+1. Continuation after a transient error: like "Retry" on the App's error card, it resumes the interrupted task; likewise the continuation once a subscription's usage limit reset (`prompts/agents/limit_continue.md`: go on with what you were doing, without redoing what is done), and the same on the backup launcher a usage limit moved an Assistant conversation to ("Usage limits: a backup launcher" above);
 2. A wakeup after a registered wait: asks only whether the awaited event is ready, and explicitly says `接下来要推代码、部署、给别人发消息、合并或改别人的 MR 时先停下来问用户，不要自己做` ("Before pushing code, deploying, messaging others, or merging / modifying someone else's MR, stop and ask the user; do not do it yourself");
 3. The answer the user selected on a card;
 4. After the auth relay completed the authorization link it stopped at ([auth-relay.md](../operations/auth-relay.md)): go on with what it was doing;
