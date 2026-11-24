@@ -44,4 +44,3 @@ export default function ContinuationCard({ handoff: planned }: { handoff: Handof
   };
   return <div className="flex min-w-0 flex-col gap-1.5"><LiveHandoffCard handoff={shown} /><ContinuationHistory error={task.error!} deliveryError={handoff.deliveryError} todo={handoff.currentTodo} /></div>;
 }
-
