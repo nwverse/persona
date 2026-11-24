@@ -572,6 +572,10 @@ const (
 	// would act on when an engine types the directory (Orca's `cd`, node/hostorca_launch.go). Nothing ran; a refusal of
 	// the request, not the launcher's fault.
 	CodeDirectoryUntypable = "directory_untypable"
+	// CodeAgyCompanionOffline: the start named HostAgy on a computer whose Antigravity companion is not connected
+	// (node/starthost.go). Nothing ran. A task start the hub sent there by default starts again in the computer's
+	// default host (assistant/tasks_placement.go, #13447); one that named the host is refused.
+	CodeAgyCompanionOffline = "agy_companion_offline"
 )
 
 // Codes session.modes refuses with (node/modes.go), the text in the request's language (apierr.Call). 409.
