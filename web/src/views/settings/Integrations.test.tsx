@@ -440,24 +440,69 @@ describe("Integrations unified list view", () => {
     await act(async () => chip("all").click());
     expect(rows()).toHaveLength(8);
 
-    // Clicking larkx opens IntegrationDetail in desktop two-column split pane with larkx highlighted.
+    // Clicking larkx opens IntegrationDetail in desktop two-column split pane with larkx highlighted,
+    // independent left/right scroll containers, single-row filter chips, and no redundant Back button.
     const larkxRow = rows().find((r) => r.dataset.integrationId === "larkx")!;
     await act(async () => larkxRow.click());
     await flush();
     expect(currentSub).toBe("ext:larkx");
-    expect(host.querySelector("[data-integrations-split]")).not.toBeNull();
+    const split = host.querySelector<HTMLElement>("[data-integrations-split]")!;
+    expect(split).not.toBeNull();
+    expect(split.classList.contains("overflow-hidden")).toBe(true);
+    expect(split.classList.contains("h-full")).toBe(true);
+    const listHeader = host.querySelector<HTMLElement>("[data-integrations-list-header]")!;
+    expect(listHeader).not.toBeNull();
+    expect(listHeader.classList.contains("shrink-0")).toBe(true);
+    const listScroll = host.querySelector<HTMLElement>("[data-integrations-list-scroll]")!;
+    expect(listScroll.classList.contains("overflow-y-auto")).toBe(true);
+    expect(listScroll.classList.contains("overscroll-contain")).toBe(true);
+    expect(listScroll.classList.contains("pb-8")).toBe(true);
+    const detailScroll = host.querySelector<HTMLElement>("[data-integrations-detail-scroll]")!;
+    expect(detailScroll.classList.contains("overflow-y-auto")).toBe(true);
+    expect(detailScroll.classList.contains("overscroll-contain")).toBe(true);
+    // Filter chips stay single-row non-wrapping in the 300px compact list header.
+    const compactFilters = listHeader.querySelector<HTMLElement>("[data-integrations-filters]")!;
+    expect(compactFilters).not.toBeNull();
+    expect(compactFilters.classList.contains("flex-nowrap")).toBe(true);
+    expect(compactFilters.classList.contains("flex-wrap")).toBe(false);
+    expect(compactFilters.classList.contains("overflow-x-auto")).toBe(true);
+    expect(compactFilters.classList.contains("scrollbar-none")).toBe(true);
+    for (const btn of compactFilters.querySelectorAll<HTMLButtonElement>("button")) {
+      expect(btn.classList.contains("shrink-0")).toBe(true);
+      expect(btn.classList.contains("whitespace-nowrap")).toBe(true);
+    }
     const detail = host.querySelector<HTMLElement>("[data-mock-integration-detail]")!;
     expect(detail.dataset.kind).toBe("extension");
     expect(detail.dataset.id).toBe("larkx");
     expect(detail.dataset.channelId).toBe("larkx-bot");
     expect(detail.dataset.connectorId).toBe("larkx");
+    // Desktop split-pane hides redundant Back button in right pane.
+    expect(host.querySelector("[data-mock-detail-back]")).toBeNull();
     expect(host.querySelector('[data-integration-id="larkx"]')?.getAttribute("aria-current")).toBe("true");
 
-    // Phone layout (twoCol=false) drills down into full-width IntegrationDetail without split pane.
+    // Switching items in split-pane resets the right detail scroll without touching the left list scroll.
+    listScroll.scrollTop = 180;
+    detailScroll.scrollTop = 320;
+    await render("builtin:mail", true);
+    expect(host.querySelector<HTMLElement>("[data-integrations-list-scroll]")?.scrollTop).toBe(180);
+    expect(host.querySelector<HTMLElement>("[data-integrations-detail-scroll]")?.scrollTop).toBe(0);
+
+    // Narrow single-column layout (twoCol=false, headerBack=false) drills down without nested scrollers and keeps Back.
     await render("ext:larkx", false);
     expect(host.querySelector("[data-integrations-split]")).toBeNull();
     expect(host.querySelector("[data-integrations-list]")).toBeNull();
+    expect(host.querySelector("[data-integrations-list-scroll]")).toBeNull();
+    expect(host.querySelector("[data-integrations-detail-scroll]")).toBeNull();
     expect(host.querySelector("[data-mock-integration-detail]")?.getAttribute("data-id")).toBe("larkx");
+    expect(host.querySelector("[data-mock-detail-back]")).not.toBeNull();
+
+    // Phone layout (twoCol=false, headerBack=true) omits inner Back because the top bar provides Back.
+    await act(async () => {
+      root.render(<Integrations open="ext:larkx" twoCol={false} headerBack={true} onOpen={(n) => (currentSub = n)} />);
+    });
+    await flush();
+    expect(host.querySelector("[data-integrations-split]")).toBeNull();
+    expect(host.querySelector("[data-mock-detail-back]")).toBeNull();
 
     // Extension Market entry opens MarketCatalog and Manage Markets cleanly.
     await render(null, true);
@@ -483,12 +528,12 @@ describe("Integrations unified list view", () => {
     expect(host.querySelector('[data-integration-id="mail"]')).not.toBeNull();
   });
 
-  it.each(["en", "zh-Hans", "ja"])("renders localized labels and capability chips in %s", async (lang) => {
+  it.each(["en", "zh-Hans", "ja"])("renders localized labels and single-row narrow capability chips in %s", async (lang) => {
     stubFullHubFetch();
     try {
       await initI18n(lang);
       await act(async () => {
-        root.render(<Integrations open={null} onOpen={() => {}} />);
+        root.render(<Integrations open="ext:larkx" twoCol={true} onOpen={() => {}} />);
       });
       await flush();
       expect(host.textContent).toContain(t("settings-integrations.list_title"));
@@ -496,6 +541,9 @@ describe("Integrations unified list view", () => {
       expect(host.textContent).toContain(t("settings-integrations.filter_channels"));
       expect(host.textContent).toContain(t("settings-integrations.filter_data"));
       expect(host.textContent).toContain(t("settings-integrations.filter_tools"));
+      const filters = host.querySelector<HTMLElement>("[data-integrations-filters]")!;
+      expect(filters.classList.contains("flex-nowrap")).toBe(true);
+      expect(filters.classList.contains("overflow-x-auto")).toBe(true);
     } finally {
       await initI18n("zh-Hans");
     }
@@ -563,5 +611,75 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     expect(location.pathname + location.search).toBe("/settings?tab=extensions&extension=larkx");
     const opens = [...host.querySelectorAll('[data-page="legacy-extensions"]')].map((el) => el.getAttribute("data-open"));
     expect(opens).toContain("larkx");
+    // Legacy Extensions stays on the original single outer scroller (zero split-host change).
+    const region = host.querySelector<HTMLElement>('[role="region"]')!;
+    expect(region.hasAttribute("data-integrations-split-host")).toBe(false);
+    expect(region.classList.contains("overflow-y-auto")).toBe(true);
+  });
+
+  it("locks the Settings content host to viewport height only in desktop integrations_v2 split-pane detail state", async () => {
+    state.integrationsV2 = true;
+    state.twoCol = true;
+    state.phone = false;
+    stubFullHubFetch();
+
+    // 1. Desktop list-only view: single natural scroll container (not viewport-locked split host).
+    history.replaceState(null, "", "/settings?tab=integrations");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    const listRegion = host.querySelector<HTMLElement>('[role="region"]')!;
+    expect(listRegion.hasAttribute("data-integrations-split-host")).toBe(false);
+    expect(listRegion.classList.contains("overflow-y-auto")).toBe(true);
+    expect(listRegion.classList.contains("overflow-hidden")).toBe(false);
+    expect(host.querySelector("[data-integrations-list-scroll]")).toBeNull();
+    expect(host.querySelector("[data-integrations-detail-scroll]")).toBeNull();
+
+    // 2. Clicking a row enters desktop split-pane: outer region locks height, two independent scrollers mount, no redundant Back.
+    const larkxRow = host.querySelector<HTMLButtonElement>('[data-integration-id="larkx"]')!;
+    await act(async () => larkxRow.click());
+    await flush();
+    const splitRegion = host.querySelector<HTMLElement>('[role="region"]')!;
+    expect(splitRegion.hasAttribute("data-integrations-split-host")).toBe(true);
+    expect(splitRegion.classList.contains("flex")).toBe(true);
+    expect(splitRegion.classList.contains("h-full")).toBe(true);
+    expect(splitRegion.classList.contains("min-h-0")).toBe(true);
+    expect(splitRegion.classList.contains("overflow-hidden")).toBe(true);
+    expect(splitRegion.classList.contains("overflow-y-auto")).toBe(false);
+    expect(host.querySelector("[data-integrations-list-scroll]")).not.toBeNull();
+    expect(host.querySelector("[data-integrations-detail-scroll]")).not.toBeNull();
+    expect(host.querySelector("[data-mock-detail-back]")).toBeNull();
+
+    // 3. Narrow desktop (< 900px, twoCol=false, phone=false): single natural scroller, Back button kept.
+    state.twoCol = false;
+    await act(async () => root.render(null));
+    history.replaceState(null, "", "/settings?tab=integrations&integration=ext%3Alarkx");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    const narrowRegion = host.querySelector<HTMLElement>('[role="region"]')!;
+    expect(narrowRegion.hasAttribute("data-integrations-split-host")).toBe(false);
+    expect(narrowRegion.classList.contains("overflow-y-auto")).toBe(true);
+    expect(host.querySelector("[data-integrations-list-scroll]")).toBeNull();
+    expect(host.querySelector("[data-integrations-detail-scroll]")).toBeNull();
+    expect(host.querySelector("[data-mock-detail-back]")).not.toBeNull();
+
+    // 4. Phone (twoCol=false, phone=true): single natural scroller, top-bar Back present, no inner Back.
+    state.phone = true;
+    await act(async () => root.render(null));
+    history.replaceState(null, "", "/settings?tab=integrations&integration=ext%3Alarkx");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    const phoneRegion = host.querySelector<HTMLElement>('[role="region"]')!;
+    expect(phoneRegion.hasAttribute("data-integrations-split-host")).toBe(false);
+    expect(phoneRegion.classList.contains("overflow-y-auto")).toBe(true);
+    expect(host.querySelector("[data-integrations-list-scroll]")).toBeNull();
+    expect(host.querySelector("[data-integrations-detail-scroll]")).toBeNull();
+    expect(host.querySelector("[data-mock-detail-back]")).toBeNull();
+    expect(host.querySelector("header button:first-child")).not.toBeNull();
   });
 });
