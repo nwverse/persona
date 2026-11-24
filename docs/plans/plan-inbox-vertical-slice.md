@@ -276,7 +276,7 @@ for it.
   - Web, a first byte-neutral PR separate from W1: `web/src/views/inbox/lark.svg`, the only brand mark outside
     `web/src/ui/brands`, moves there (`web/src/ui/BrandMark.tsx` and `web/src/views/inbox/InboxParts.tsx` import it),
     and a boundary test lists every outside importer of `web/src/views/inbox`: the lazy route in `web/src/App.tsx`,
-    `web/src/views/messages/Messages.tsx`'s LarkThread (the designed exception), the 7 importers of InboxParts,
+    `web/src/modules/lark/Messages.tsx`'s LarkThread (the designed exception), the 7 importers of InboxParts,
     `web/src/modules/recording/RecordingHandoff.tsx` (HandOffTargets), `web/src/lib/inbox-actions.test.ts` and
     `web/src/views/extensions/ExtensionSlots.managers.test.tsx`. The Inbox's Chip moves to `web/src/ui` only with a
     `docs/design/DESIGN_SYSTEM.md` row; its Count stays, since converging on `web/src/ui/CountBadge.tsx` changes pixels
