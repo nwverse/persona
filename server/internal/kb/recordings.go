@@ -105,20 +105,20 @@ type RecordingUpload struct {
 	// to PutRecording. "" (and absent): the knowledge base, as ever. Never stored here.
 	Space string `json:"space,omitempty"`
 	// next is how many positions a day upload carried (empty segments included); dayFull: it is over the limits.
-	next    int
-	dayFull bool
+	Next    int
+	DayFull bool
 	// badRole, badSession: the JSON held a value of the wrong type for these two fields (UnmarshalJSON), which
 	// turns attending off rather than failing the upload.
-	badRole, badSession bool
+	BadRole, BadSession bool
 	// room is the upload's room (meeting.go), nil without one; roomProblem what was wrong with its role.
-	room        *roomUpload
-	roomProblem string
+	Room        *roomUpload
+	RoomProblem string
 	// transcription is the mode the upload names ("" when none, or a value that names none) and timeline its timeline
 	// (nil without one, or when it was malformed or over the limits); transcriptionProblem why the mode it named was
 	// not taken (transcription.go).
-	transcription        string
-	timeline             *Timeline
-	transcriptionProblem string
+	Transcription        string
+	Timeline             *Timeline
+	TranscriptionProblem string
 }
 
 // MeetingRef is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
@@ -338,7 +338,7 @@ func (s *Store) Recording(id string) (*Recording, bool) {
 	if r.Kind == RecordingDay && r.Chars > 0 && r.TextRev == 0 {
 		r.TextRev = 1 // a day recording's text stored without its count: what no recap or note read yet
 	}
-	r.persisted = true
+	r.Persisted = true
 	s.recFilesMu.RLock()
 	m, err := s.readMeeting(id)
 	s.recFilesMu.RUnlock()
@@ -431,8 +431,8 @@ func (r *Recording) NameSource() string {
 	return ""
 }
 
-// clean checks an upload and puts its segments in order (empty ones dropped).
-func (u *RecordingUpload) clean() error {
+// cleanUpload checks an upload and puts its segments in order (empty ones dropped).
+func cleanUpload(u *RecordingUpload) error {
 	if u.Revision <= 0 {
 		return badRecording("revision must be > 0")
 	}
@@ -448,9 +448,9 @@ func (u *RecordingUpload) clean() error {
 		if !day {
 			return badRecording("at most %d segments", maxRecordingSegments)
 		}
-		u.dayFull = true
+		u.DayFull = true
 	}
-	u.next = len(u.Segments)
+	u.Next = len(u.Segments)
 	// A fresh slice: the caller's upload (its Segments' backing array) is never changed.
 	segs := make([]RecordingSegment, 0, len(u.Segments))
 	total := 0
@@ -470,7 +470,7 @@ func (u *RecordingUpload) clean() error {
 		if !day {
 			return badRecording("the transcript is over %d bytes", maxRecordingText)
 		}
-		u.dayFull = true
+		u.DayFull = true
 	}
 	sort.SliceStable(segs, func(i, j int) bool { return segs[i].Start < segs[j].Start })
 	u.Segments = segs
@@ -488,16 +488,16 @@ func (u *RecordingUpload) clean() error {
 		u.Kind = RecordingNote
 	case RecordingMeeting:
 	case RecordingDay:
-		return u.cleanDay()
+		return cleanUploadDay(u)
 	default:
 		return badRecording("kind must be meeting, note or day")
 	}
 	u.Day, u.TZ, u.Part, u.Coverage = "", "", 0, nil // a day recording's only
-	return u.cleanCalendar()
+	return cleanUploadCalendar(u)
 }
 
-// cleanCalendar trims the calendar hint, dropping it when it says nothing.
-func (u *RecordingUpload) cleanCalendar() error {
+// cleanUploadCalendar trims the calendar hint, dropping it when it says nothing.
+func cleanUploadCalendar(u *RecordingUpload) error {
 	c := u.Calendar
 	if c == nil {
 		return nil
@@ -546,10 +546,10 @@ type recordingPut struct {
 // putRecording is PutRecording; live reports a stored upload the attending feeder should look at.
 func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (put recordingPut, live bool, err error) {
 	put.Attendance = AttendanceOff
-	put.Room = u.room != nil
+	put.Room = u.Room != nil
 	// Whatever the upload became (stored, stale, expired), the mode in effect after it.
 	defer func() {
-		put.Transcription, put.TranscriptionProblem = transcriptionOf(put.Meeting, u.transcription, u.Kind, u.transcriptionProblem)
+		put.Transcription, put.TranscriptionProblem = transcriptionOf(put.Meeting, u.Transcription, u.Kind, u.TranscriptionProblem)
 	}()
 	if e.Store.ReadOnly() {
 		return put, false, ErrReadOnly
@@ -559,14 +559,14 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 		return put, false, badRecording("id must be a UUID")
 	}
 	put.id = id
-	if err := u.clean(); err != nil {
+	if err := cleanUpload(&u); err != nil {
 		return put, false, err
 	}
 	put.Segments = u.Segments
-	put.AttendanceProblem = u.normalizeAttendance()
+	put.AttendanceProblem = normalizeAttendance(&u)
 	day := u.Kind == RecordingDay
 	if day {
-		put.AttendanceProblem, put.Room = u.dropRoom(put.AttendanceProblem), false
+		put.AttendanceProblem, put.Room = dropUploadRoom(&u, put.AttendanceProblem), false
 	}
 	put.Revision = u.Revision
 	st := e.Store
@@ -597,10 +597,10 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 	}
 	if exists && r.Revision > u.Revision {
 		put.Status, put.Attendance = RecordingStale, r.AttendanceRole()
-		put.named(r)
+		putNamed(&put.RecordingPut, r)
 		return put, false, nil
 	}
-	if u.dayFull {
+	if u.DayFull {
 		return put, false, DayFullError{Next: put.Next}
 	}
 	rebase, recapped := false, false
@@ -618,7 +618,7 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 	}
 	defer e.meetingChanged(id, parts)
 	if meeting != nil && meeting.Room != nil {
-		put.Room, put.AttendanceProblem = true, u.roomProblem
+		put.Room, put.AttendanceProblem = true, u.RoomProblem
 	}
 	put.Meeting = meeting
 	// A newer transcript (not a retry of the accepted upload): its minutes are pushed as before.
@@ -655,16 +655,16 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 		r.Chars = recordChars(TranscriptOfRecord(true, u.Segments, st.hubSegmentsOf(id)))
 	}
 	if day {
-		r.putDay(&u)
+		putDay(r, &u)
 		if rebase {
-			r.rebaseRecap(recapped, now)
+			rebaseRecap(r, recapped, now)
 		}
 	}
 	if advanced {
 		r.MinutesQuiet = 0 // a retry keeps a generation made again only for a photo quiet
 	}
-	r.planMinutes() // after Chars: a meeting that completed with no text gets none
-	r.planRecap()
+	planMinutes(r) // after Chars: a meeting that completed with no text gets none
+	planRecap(r)
 	r.Name = e.recordingName(r)
 	r.Updated = now.UTC()
 	if day && exists {
@@ -679,8 +679,8 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 	}
 	put.Status, put.Attendance = RecordingStored, r.AttendanceRole()
 	put.Revision, put.Base, put.Next = r.Revision, r.Base, r.Next
-	put.named(r)
-	put.TitleDue = r.liveTitleDue(now)
+	putNamed(&put.RecordingPut, r)
+	put.TitleDue = liveTitleDue(r, now)
 	st.notify(KindRecording, id, "metadata")
 	st.notify(KindRecording, id, "messages")
 	e.index(KindRecording, id, r.Name, r.Tagging, r.OneLine, r.StartedAt)
@@ -984,7 +984,7 @@ func (e *Engine) SummarizeRecordings(ctx context.Context, max int) int {
 	var todo []*Recording
 	due := map[string]bool{}
 	for _, r := range e.Store.Recordings() {
-		if r.summaryDue() {
+		if summaryDue(r) {
 			due[r.ID] = true
 			if e.retries().recordings.waits(r.ID, recordingAbout(r), now) {
 				continue
@@ -1023,7 +1023,7 @@ func (e *Engine) SummarizeRecordings(ctx context.Context, max int) int {
 // transcript is in (a new upload, or the final pass's end, is tried at once).
 func recordingAbout(r *Recording) string {
 	about := strconv.FormatInt(r.Revision, 10)
-	if r.hubFinalIn() {
+	if hubFinalIn(r) {
 		about += "/final"
 	}
 	return about
@@ -1032,18 +1032,18 @@ func recordingAbout(r *Recording) string {
 // summaryDue: recording r's short summary is to be written (again): a complete recording with text, not trimmed nor
 // an all-day one, whose latest revision has none, or, in hub mode, whose summary was written before the final pass
 // stored its transcript ("the short summary (made again after the final pass)"). r's Conv is read.
-func (r *Recording) summaryDue() bool {
+func summaryDue(r *Recording) bool {
 	if !r.Complete || r.Chars == 0 || r.Trimmed() || r.Kind == RecordingDay {
 		return false
 	}
-	return r.SummarizedRev < r.Revision || r.hubFinalIn() && !r.SummarizedFinal
+	return r.SummarizedRev < r.Revision || hubFinalIn(r) && !r.SummarizedFinal
 }
 
 // hubFinalIn: r is transcribed on the hub and its final pass ended (final or failed): its transcript of record is the
 // final one.
-func (r *Recording) hubFinalIn() bool {
-	t := r.hubTranscription()
-	return t != nil && t.done()
+func hubFinalIn(r *Recording) bool {
+	t := hubTranscription(r)
+	return t != nil && t.Done()
 }
 
 // summarizeRecording writes r's summary; called: the model was asked (not when r changed meanwhile so that it needs
@@ -1062,7 +1062,7 @@ func (e *Engine) summarizeRecording(ctx context.Context, r *Recording) (called b
 	}
 	snapshot.Conv = meeting
 	r = &snapshot
-	if !r.summaryDue() {
+	if !summaryDue(r) {
 		return false, nil // a day recording's summary is its recap's (day_recap.go): it would read the whole day
 	}
 	var device []RecordingSegment
@@ -1090,7 +1090,7 @@ func (e *Engine) summarizeRecording(ctx context.Context, r *Recording) (called b
 		return true, nil // deleted or trimmed meanwhile: no summary of a transcript that is gone
 	}
 	now := time.Now().UTC()
-	if s := strings.TrimSpace(out.Summary); s != "" && !cur.fieldLocked("summary") {
+	if s := strings.TrimSpace(out.Summary); s != "" && !taggingFieldLocked(&cur.Tagging, "summary") {
 		if err := st.putSummary(KindRecording, cur.ID, s+"\n", false); err != nil {
 			return true, err
 		}
@@ -1103,7 +1103,7 @@ func (e *Engine) summarizeRecording(ctx context.Context, r *Recording) (called b
 	cur.Name = st.recordingName(cur)
 	// It summarized r's revision, and r's final transcript when it was in: a newer upload meanwhile, or the final pass
 	// ending meanwhile, has it summarized again.
-	cur.SummarizedRev, cur.SummarizedFinal = r.Revision, r.hubFinalIn()
+	cur.SummarizedRev, cur.SummarizedFinal = r.Revision, hubFinalIn(r)
 	for _, p := range out.Projects {
 		pr := e.FindProject(p.Name)
 		if pr == nil || !pr.Live() {

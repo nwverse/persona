@@ -1124,7 +1124,7 @@ func TestDayRecordingNeverMeeting(t *testing.T) {
 	if r.Meeting != nil || r.MinutesState != "" || r.Name != "全天录音 2026-11-11" || r.MinutesAsked || len(r.Items) != 0 {
 		t.Errorf("a meeting: %+v", r)
 	}
-	if r.isMeeting() || r.IsMeeting() {
+	if isMeeting(r) || r.IsMeeting() {
 		t.Error("a meeting by isMeeting or IsMeeting")
 	}
 	if notes, merges := f.counts(); notes != 0 || merges != 0 {

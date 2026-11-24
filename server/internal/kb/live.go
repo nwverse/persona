@@ -155,23 +155,23 @@ func (u *RecordingUpload) UnmarshalJSON(data []byte) error {
 	u.Spoken = readSpoken(aux.Spoken)
 	u.readRoomAndPrivate(aux.Room, aux.Private)
 	u.readTranscription(aux.Transcription, aux.Timeline)
-	u.Attendance, u.AttendingSession, u.badRole, u.badSession = "", nil, false, false
+	u.Attendance, u.AttendingSession, u.BadRole, u.BadSession = "", nil, false, false
 	if raw := aux.Attendance; !jsonNull(raw) {
-		u.badRole = json.Unmarshal(raw, &u.Attendance) != nil
+		u.BadRole = json.Unmarshal(raw, &u.Attendance) != nil
 	}
 	if raw := aux.AttendingSession; !jsonNull(raw) {
 		var keys map[string]json.RawMessage
 		if json.Unmarshal(raw, &keys) != nil {
-			u.badSession = true
+			u.BadSession = true
 			return nil
 		}
 		ref := &SessionRef{}
 		for key, dst := range map[string]*string{"machine_id": &ref.MachineID, "session_id": &ref.SessionID} {
 			if v := keys[key]; !jsonNull(v) && json.Unmarshal(v, dst) != nil {
-				u.badSession = true
+				u.BadSession = true
 			}
 		}
-		if !u.badSession {
+		if !u.BadSession {
 			u.AttendingSession = ref
 		}
 	}
@@ -188,12 +188,12 @@ func jsonNull(raw json.RawMessage) bool {
 // an unknown role, a role on a recording that is not a meeting, or a session with exactly one id or one over
 // maxSessionIDRunes leaves attending off, and the problem says which. Off is "" with no session; a session with no
 // ids is nil (the main chat). Watch recordings are not refused here: the phone never gives them a role.
-func (u *RecordingUpload) normalizeAttendance() (problem string) {
+func normalizeAttendance(u *RecordingUpload) (problem string) {
 	role := strings.ToLower(strings.TrimSpace(u.Attendance))
 	session := u.AttendingSession
 	u.Attendance, u.AttendingSession = "", nil
 	switch {
-	case u.badRole:
+	case u.BadRole:
 		return AttendanceUnknownRole
 	case role == "" || role == AttendanceOff:
 		return ""
@@ -201,7 +201,7 @@ func (u *RecordingUpload) normalizeAttendance() (problem string) {
 		return AttendanceUnknownRole
 	case u.Kind != RecordingMeeting:
 		return AttendanceNotMeeting
-	case u.badSession:
+	case u.BadSession:
 		return AttendanceBadSession
 	}
 	if session != nil {

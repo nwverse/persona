@@ -97,23 +97,23 @@ func markEcho(segs []RecordingSegment, spans []SpokenSpan) {
 // isEcho: the line start–end saying text is Persona's echo by one of spans.
 func isEcho(start, end float64, text string, spans []SpokenSpan) bool {
 	for _, sp := range spans {
-		if sp.echoes(start, end, text) {
+		if spanEchoes(sp, start, end, text) {
 			return true
 		}
 	}
 	return false
 }
 
-// echoes: the line is Persona's echo by this span. A span without text keeps the time rule from before #5905 (holds).
-func (sp SpokenSpan) echoes(start, end float64, text string) bool {
+// spanEchoes: the line is Persona's echo by this span. A span without text keeps the time rule from before #5905 (holds).
+func spanEchoes(sp SpokenSpan, start, end float64, text string) bool {
 	if sp.Text == "" {
-		return sp.holds(start, end)
+		return spanHolds(sp, start, end)
 	}
-	return sp.overlaps(start, end) && echoMatches(text, sp.Text)
+	return spanOverlaps(sp, start, end) && echoMatches(text, sp.Text)
 }
 
-// overlaps: the line overlaps the span widened by echoMargin on both sides; a line of no length, when it starts inside.
-func (sp SpokenSpan) overlaps(start, end float64) bool {
+// spanOverlaps: the line overlaps the span widened by echoMargin on both sides; a line of no length, when it starts inside.
+func spanOverlaps(sp SpokenSpan, start, end float64) bool {
 	from, to := sp.Start-echoMargin, sp.End+echoMargin
 	if end <= start {
 		return start >= from && start <= to
@@ -121,9 +121,9 @@ func (sp SpokenSpan) overlaps(start, end float64) bool {
 	return end >= from && start <= to
 }
 
-// holds is the time rule from before #5905: at least half of the line inside the span (no margin); a line of no
+// spanHolds is the time rule from before #5905: at least half of the line inside the span (no margin); a line of no
 // length, when it starts inside.
-func (sp SpokenSpan) holds(start, end float64) bool {
+func spanHolds(sp SpokenSpan, start, end float64) bool {
 	length := end - start
 	if length <= 0 {
 		return start >= sp.Start && start <= sp.End

@@ -190,7 +190,7 @@ func (e *Engine) earlierMeetings(r *Recording, question string) []EarlierMeeting
 		if err != nil {
 			continue
 		}
-		mins.spanOf(o, zone)
+		minutesSpanOf(mins, o, zone)
 		// Named by its minutes only: the recording's name may be the summary's title, made from the transcript.
 		em := EarlierMeeting{ID: o.ID, Name: cmp.Or(mins.Title, mins.When), When: mins.When, Start: mins.Start, End: mins.End,
 			Minutes:  materialMinutes(mins),

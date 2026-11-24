@@ -187,7 +187,7 @@ func (t Timeline) RoleAt(at float64, otherwise string) string {
 	return role
 }
 
-func (t *Timeline) clone() *Timeline {
+func (t *Timeline) Clone() *Timeline {
 	if t == nil {
 		return nil
 	}
@@ -227,40 +227,40 @@ type MeetingTranscription struct {
 	UsageSeconds float64      `json:"usage_seconds,omitempty"` // the upstream's billed seconds, diagnostics only
 }
 
-func (t *MeetingTranscription) clone() *MeetingTranscription {
+func (t *MeetingTranscription) Clone() *MeetingTranscription {
 	if t == nil {
 		return nil
 	}
 	c := *t
-	c.Timeline = t.Timeline.clone()
+	c.Timeline = t.Timeline.Clone()
 	c.Gaps = slices.Clone(t.Gaps)
 	return &c
 }
 
 // hub: t is a hub-mode transcription.
-func (t *MeetingTranscription) hub() bool { return t != nil && t.Mode == TranscriptionHub }
+func (t *MeetingTranscription) Hub() bool { return t != nil && t.Mode == TranscriptionHub }
 
 // done: the final pass has run (final), or the hub made nothing usable (failed).
-func (t *MeetingTranscription) done() bool {
+func (t *MeetingTranscription) Done() bool {
 	return t.State == TranscriptionFinal || t.State == TranscriptionFailed
 }
 
 // audioClosed: the hub takes no more audio of it (the final pass started or ran, or the audio is gone).
-func (t *MeetingTranscription) audioClosed() bool {
-	return !t.FinalFrom.IsZero() || t.done() || !t.AudioGoneAt.IsZero()
+func (t *MeetingTranscription) AudioClosed() bool {
+	return !t.FinalFrom.IsZero() || t.Done() || !t.AudioGoneAt.IsZero()
 }
 
-// timeline is t's timeline (empty without one).
-func (t *MeetingTranscription) timeline() Timeline {
+// transcriptionTimeline is t's timeline (empty without one).
+func transcriptionTimeline(t *MeetingTranscription) Timeline {
 	if t == nil || t.Timeline == nil {
 		return Timeline{}
 	}
 	return *t.Timeline
 }
 
-// settle keeps t's own rules after a change: a hub-mode transcription has a state; once final or failed the final
+// settleTranscription keeps t's own rules after a change: a hub-mode transcription has a state; once final or failed the final
 // pass has started and ended; no empty gaps or timeline.
-func (t *MeetingTranscription) settle(now time.Time) {
+func settleTranscription(t *MeetingTranscription, now time.Time) {
 	if t.Mode != TranscriptionHub {
 		*t = MeetingTranscription{Mode: t.Mode}
 		return
@@ -268,7 +268,7 @@ func (t *MeetingTranscription) settle(now time.Time) {
 	if t.State == "" {
 		t.State = TranscriptionLive
 	}
-	if t.done() {
+	if t.Done() {
 		if t.FinalAt.IsZero() {
 			t.FinalAt = now.UTC()
 		}
@@ -295,7 +295,7 @@ func transcriptionShown(t *MeetingTranscription) any {
 	if len(t.Gaps) > 0 {
 		gaps = t.Gaps
 	}
-	done, end, _ := t.finalProgress()
+	done, end, _ := t.FinalProgress()
 	return struct {
 		Mode, State, Problem string
 		Gaps                 [][2]float64
@@ -307,8 +307,8 @@ func transcriptionShown(t *MeetingTranscription) any {
 // finalProgress is how far the final pass is, for the apps (#13461): the recording seconds it has finished and the
 // recording's end, while the state is finishing and the pass has started (it may be waiting for its next try), and
 // the end is known. done is at most end.
-func (t *MeetingTranscription) finalProgress() (done, end float64, ok bool) {
-	if !t.hub() || t.State != TranscriptionFinishing || t.FinalFrom.IsZero() || t.End <= 0 {
+func (t *MeetingTranscription) FinalProgress() (done, end float64, ok bool) {
+	if !t.Hub() || t.State != TranscriptionFinishing || t.FinalFrom.IsZero() || t.End <= 0 {
 		return 0, 0, false
 	}
 	return min(max(t.FinalDone, 0), t.End), t.End, true
@@ -326,26 +326,26 @@ func (m Meeting) TranscriptionView(gaps [][2]float64) *TranscriptionView {
 	if t == nil || t.Mode == "" {
 		return nil
 	}
-	if !t.hub() {
+	if !t.Hub() {
 		return &TranscriptionView{Mode: t.Mode}
 	}
-	if gaps == nil || t.audioClosed() {
+	if gaps == nil || t.AudioClosed() {
 		gaps = t.Gaps
 	}
 	shown := append([][2]float64{}, gaps...)
 	state := cmp.Or(t.State, TranscriptionLive)
 	v := &TranscriptionView{Mode: t.Mode, State: state, Gaps: &shown, Problem: t.Problem, Fallback: t.Fallback}
-	if done, end, ok := t.finalProgress(); ok {
+	if done, end, ok := t.FinalProgress(); ok {
 		v.FinalDone, v.End = &done, &end
 	}
 	return v
 }
 
 // HubTranscribed: r's meeting.json has mode hub (an unreadable meeting.json: false).
-func (r Recording) HubTranscribed() bool { return r.Conv != nil && r.Conv.Transcription.hub() }
+func (r Recording) HubTranscribed() bool { return r.Conv != nil && r.Conv.Transcription.Hub() }
 
 // hubTranscription is r's hub-mode transcription, nil when r is not transcribed on the hub.
-func (r *Recording) hubTranscription() *MeetingTranscription {
+func hubTranscription(r *Recording) *MeetingTranscription {
 	if !r.HubTranscribed() {
 		return nil
 	}
@@ -354,15 +354,15 @@ func (r *Recording) hubTranscription() *MeetingTranscription {
 
 // transcriptionHolds: r's minutes wait for its final transcript: hub mode, the state not final nor failed, at most
 // minutesHubWait after the complete upload.
-func (r *Recording) transcriptionHolds(now time.Time) bool {
-	t := r.hubTranscription()
-	return t != nil && !t.done() && !t.CompleteAt.IsZero() && now.Before(t.CompleteAt.Add(minutesHubWait))
+func transcriptionHolds(r *Recording, now time.Time) bool {
+	t := hubTranscription(r)
+	return t != nil && !t.Done() && !t.CompleteAt.IsZero() && now.Before(t.CompleteAt.Add(minutesHubWait))
 }
 
 // transcriptionDone: r is transcribed on the hub and its final pass has run or failed.
-func (r *Recording) transcriptionDone() bool {
-	t := r.hubTranscription()
-	return t != nil && t.done()
+func transcriptionDone(r *Recording) bool {
+	t := hubTranscription(r)
+	return t != nil && t.Done()
 }
 
 // ---- the upload ----
@@ -371,13 +371,13 @@ func (r *Recording) transcriptionDone() bool {
 // not "device" or "hub" (another string, another type, null) names no mode; a timeline that ParseTimeline does not
 // take is none. Neither fails the upload.
 func (u *RecordingUpload) readTranscription(mode, timeline json.RawMessage) {
-	u.transcription, u.timeline, u.transcriptionProblem = "", nil, ""
+	u.Transcription, u.Timeline, u.TranscriptionProblem = "", nil, ""
 	var s string
 	if !jsonNull(mode) && json.Unmarshal(mode, &s) == nil {
-		u.transcription = transcriptionMode(s)
+		u.Transcription = transcriptionMode(s)
 	}
 	if t, ok := ParseTimeline(timeline); ok {
-		u.timeline = &t
+		u.Timeline = &t
 	}
 }
 
@@ -392,7 +392,7 @@ func transcriptionMode(s string) string {
 
 // SetTranscription gives an upload a transcription mode and a timeline (tests and the HTTP layer build uploads in Go).
 func (u *RecordingUpload) SetTranscription(mode string, t *Timeline) {
-	u.transcription, u.timeline = mode, t
+	u.Transcription, u.Timeline = mode, t
 }
 
 // putTranscriptionFields applies what upload u (cleaned) says of the transcription to m, recording id's meeting.json
@@ -401,7 +401,7 @@ func (u *RecordingUpload) SetTranscription(mode string, t *Timeline) {
 // the complete upload's duration, or the end of the audio held when that is later, while the socket said no end). A
 // note or day upload's are ignored.
 func (e *Engine) putTranscriptionFields(id string, m *Meeting, u *RecordingUpload, now time.Time) {
-	asked := transcriptionMode(u.transcription)
+	asked := transcriptionMode(u.Transcription)
 	if u.Kind != RecordingMeeting {
 		return
 	}
@@ -409,17 +409,17 @@ func (e *Engine) putTranscriptionFields(id string, m *Meeting, u *RecordingUploa
 	if t == nil && asked != "" {
 		mode := asked
 		if mode == TranscriptionHub && (e.TranscriptionReady == nil || !e.TranscriptionReady()) {
-			mode, u.transcriptionProblem = TranscriptionDevice, TranscriptionUnavailable
+			mode, u.TranscriptionProblem = TranscriptionDevice, TranscriptionUnavailable
 		}
 		t = &MeetingTranscription{Mode: mode}
 		m.Transcription = t
 	}
-	if !t.hub() {
+	if !t.Hub() {
 		return
 	}
-	if u.timeline != nil {
-		tl := t.timeline()
-		tl.Merge(*u.timeline)
+	if u.Timeline != nil {
+		tl := transcriptionTimeline(t)
+		tl.Merge(*u.Timeline)
 		t.Timeline = &tl
 	}
 	if u.Complete {
@@ -431,8 +431,8 @@ func (e *Engine) putTranscriptionFields(id string, m *Meeting, u *RecordingUploa
 			t.End = max(u.Duration, e.audioHeldEnd(id))
 		}
 	}
-	t.settle(now)
-	if !t.audioClosed() {
+	settleTranscription(t, now)
+	if !t.AudioClosed() {
 		t.Gaps = e.audioGaps(id, t.End)
 	}
 }
@@ -474,18 +474,18 @@ func (e *Engine) TranscriptionUpdate(rawID string, fn func(t *MeetingTranscripti
 	now := e.now()
 	m, err := e.MeetingUpdate(id, func(m *Meeting, r Recording) error {
 		t := m.Transcription
-		if !t.hub() {
+		if !t.Hub() {
 			return ErrNotHub
 		}
-		open, gaps := !t.audioClosed(), slices.Clone(t.Gaps)
+		open, gaps := !t.AudioClosed(), slices.Clone(t.Gaps)
 		if err := fn(t, r); err != nil {
 			return err
 		}
 		t.Mode = TranscriptionHub
-		t.settle(now)
+		settleTranscription(t, now)
 		if open && sameSpans(gaps, t.Gaps) {
 			t.Gaps = e.audioGaps(id, t.End)
-			t.settle(now)
+			settleTranscription(t, now)
 		}
 		return nil
 	})
@@ -496,7 +496,7 @@ func (e *Engine) TranscriptionUpdate(rawID string, fn func(t *MeetingTranscripti
 	if !t.FinalFrom.IsZero() {
 		e.Store.audioFinal(id)
 	}
-	return *t.clone(), nil
+	return *t.Clone(), nil
 }
 
 // HubRecordings are the hub-mode recordings still needing the manager, oldest first: their state not final nor
@@ -504,7 +504,7 @@ func (e *Engine) TranscriptionUpdate(rawID string, fn func(t *MeetingTranscripti
 func (e *Engine) HubRecordings() ([]string, error) {
 	var rs []*Recording
 	for _, r := range e.Store.Recordings() {
-		if t := r.hubTranscription(); t != nil && !r.Trimmed() && (!t.done() || t.AudioGoneAt.IsZero()) {
+		if t := hubTranscription(r); t != nil && !r.Trimmed() && (!t.Done() || t.AudioGoneAt.IsZero()) {
 			rs = append(rs, r)
 		}
 	}
@@ -534,7 +534,7 @@ func (e *Engine) trimTranscription(id string, now time.Time) []string {
 			return nil
 		}
 		t.Gaps, t.Problem, t.Fallback, t.Timeline = nil, "", false, nil
-		if t.hub() && t.AudioGoneAt.IsZero() {
+		if t.Hub() && t.AudioGoneAt.IsZero() {
 			t.AudioGoneAt = now.UTC()
 		}
 		return nil

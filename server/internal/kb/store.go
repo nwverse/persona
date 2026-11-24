@@ -52,7 +52,7 @@ type Tagging struct {
 	// Excluded: links the user removed by hand, by list ("people", "chats", "projects", "items") and the id that list
 	// named: automatic writes leave them out while the rest of the list keeps changing (exclude.go).
 	Excluded  map[string][]string `json:"excluded,omitempty"`
-	persisted bool
+	Persisted bool
 }
 
 // Chat is one conversation: a Feishu chat (lark-<feedId>) or the mail exchanged with one address (mail-<account>-<addr>).
@@ -375,7 +375,7 @@ func (s *Store) Chat(id string) (*Chat, bool) {
 	if !ok || err != nil {
 		return nil, false
 	}
-	c.persisted = true
+	c.Persisted = true
 	return &c, true
 }
 
@@ -387,7 +387,7 @@ func (s *Store) Person(id string) (*Person, bool) {
 	if !ok || err != nil {
 		return nil, false
 	}
-	p.persisted = true
+	p.Persisted = true
 	return &p, true
 }
 
@@ -401,7 +401,7 @@ func (s *Store) Project(slug string) (*Project, bool) {
 	if !ok || err != nil {
 		return nil, false
 	}
-	p.persisted = true
+	p.Persisted = true
 	return &p, true
 }
 
@@ -416,7 +416,7 @@ func (s *Store) Item(kind, id string) (*Item, bool) {
 	if !ok || err != nil {
 		return nil, false
 	}
-	it.persisted = true
+	it.Persisted = true
 	return &it, true
 }
 

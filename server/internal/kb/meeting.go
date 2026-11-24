@@ -123,7 +123,7 @@ func (m Meeting) Clone() Meeting {
 		f := *m.Followup
 		out.Followup = &f
 	}
-	out.Transcription = m.Transcription.clone()
+	out.Transcription = m.Transcription.Clone()
 	out.Handoffs = slices.Clone(m.Handoffs)
 	return out
 }
@@ -338,21 +338,21 @@ func (e *Engine) SetPrivate(rawID string, private bool) (Meeting, error) {
 // roomUpload is an upload's room: the role its room conversation attends in.
 type roomUpload struct {
 	Attendance string
-	bad        bool // attendance was not a string
+	Bad        bool // attendance was not a string
 }
 
 // readRoomAndPrivate reads an upload's room and private (unmarshalRecordingUpload): a room that is not an object
 // counts as absent, a private that is not a boolean is ignored.
 func (u *RecordingUpload) readRoomAndPrivate(room, private json.RawMessage) {
-	u.room, u.Private = nil, nil
+	u.Room, u.Private = nil, nil
 	if !jsonNull(room) {
 		var keys map[string]json.RawMessage
 		if json.Unmarshal(room, &keys) == nil && keys != nil {
 			ru := &roomUpload{}
 			if v := keys["attendance"]; !jsonNull(v) && json.Unmarshal(v, &ru.Attendance) != nil {
-				ru.bad = true
+				ru.Bad = true
 			}
-			u.room = ru
+			u.Room = ru
 		}
 	}
 	if !jsonNull(private) {
@@ -364,18 +364,18 @@ func (u *RecordingUpload) readRoomAndPrivate(room, private json.RawMessage) {
 }
 
 // SetRoom gives an upload a room in role (tests and the HTTP layer build uploads in Go).
-func (u *RecordingUpload) SetRoom(role string) { u.room = &roomUpload{Attendance: role} }
+func (u *RecordingUpload) SetRoom(role string) { u.Room = &roomUpload{Attendance: role} }
 
 // HasRoom: the upload carries room.
-func (u *RecordingUpload) HasRoom() bool { return u.room != nil }
+func (u *RecordingUpload) HasRoom() bool { return u.Room != nil }
 
-// roomRole is the role an upload's room asks for, normalized as #2981's attendance is (normalizeAttendance), with
+// uploadRoomRole is the role an upload's room asks for, normalized as #2981's attendance is (normalizeAttendance), with
 // notes besides (#8851): a value that is not one of the four is off with AttendanceUnknownRole, a role on a recording
 // that is not a meeting off with AttendanceNotMeeting. The upload is cleaned (its Kind set).
-func (u *RecordingUpload) roomRole() (role, problem string) {
-	role = strings.ToLower(strings.TrimSpace(u.room.Attendance))
+func uploadRoomRole(u *RecordingUpload) (role, problem string) {
+	role = strings.ToLower(strings.TrimSpace(u.Room.Attendance))
 	switch {
-	case u.room.bad:
+	case u.Room.Bad:
 		return "", AttendanceUnknownRole
 	case role == "" || role == AttendanceOff:
 		return "", ""
@@ -408,9 +408,9 @@ func (e *Engine) putMeetingFields(id string, u *RecordingUpload, now time.Time) 
 	}
 	m := before.Clone()
 	switch {
-	case u.room != nil:
-		role, problem := u.roomRole()
-		u.roomProblem = problem
+	case u.Room != nil:
+		role, problem := uploadRoomRole(u)
+		u.RoomProblem = problem
 		if m.Room == nil {
 			m.Room = &MeetingRoom{State: RoomNone}
 		}
