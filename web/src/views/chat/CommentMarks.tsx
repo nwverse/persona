@@ -1,18 +1,18 @@
 // Comments in the transcript (#2437, Moshi's "Comment"): selecting words shows a small "Comment" pill under the
-// selection (the C key does the same), which puts the words above the input as a comment card to write the note in;
-// while the comment waits there, its words stay lit in the transcript with the card's number beside them. The marks
+// selection (the C key does the same), which opens the editor below the selected words.
+// Drafts stay lit and numbered in the transcript until removed or sent. The marks
 // are drawn in the scroller's own content, so they scroll with it; they are measured again when the transcript
 // re-renders or resizes (streaming, a fold opening), and go with the card when it is removed or sent.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { anchorOf, onJumpToComment, rangeFor } from "../../lib/comment-marks";
 import { textQuote, type TextAnchor } from "../../lib/comments";
-import { addQuote, editNote, useQuotes } from "../../lib/drafts";
+import { addQuote, editNote, removeQuote, useQuotes } from "../../lib/drafts";
 import { focusKind } from "../../lib/shortcuts";
 import { cx, EASE } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { scrollBehavior } from "../../ui/stream/motion";
-import { NumberDot } from "./CommentCard";
+import { CommentCard, NumberDot } from "./CommentCard";
 import { useChatActions } from "./chat-actions";
 import { t } from "../../i18n";
 import { composing } from "../../lib/send-history";
@@ -28,11 +28,15 @@ const FLASH_MS = 1400;
 
 /** `jump`: brings words into view `topOffset` px from the top and keeps them there while the exchanges around them are
  *  drawn (ChatView landRow); without it, the scroller's own smooth scroll. */
-export function CommentMarks({ scroller, jump }: { scroller: RefObject<HTMLDivElement | null>; jump?: (words: Range, topOffset: number) => void }) {
+export function CommentMarks({ scroller, jump, beforeInlineEdit }: {
+  scroller: RefObject<HTMLDivElement | null>;
+  jump?: (words: Range, topOffset: number) => void;
+  beforeInlineEdit: () => void;
+}) {
   const chat = useChatActions();
   const key = chat?.draftKey ?? "";
   const can = Boolean(chat?.canCompose);
-  const { list } = useQuotes(key);
+  const { list, editing, inline } = useQuotes(key);
 
   // ── the pill ──
   const [pill, setPill] = useState<{ x: number; y: number } | null>(null);
@@ -48,7 +52,7 @@ export function CommentMarks({ scroller, jump }: { scroller: RefObject<HTMLDivEl
     };
     if (!can || !el || !sel || sel.isCollapsed || sel.rangeCount === 0 || dragging.current) return hide();
     const range = sel.getRangeAt(0);
-    const text = sel.toString().trim();
+    const text = range.toString().trim();
     if (!text || !el.contains(range.commonAncestorContainer)) return hide();
     const rects = range.getClientRects();
     const last = rects.length ? rects[rects.length - 1] : range.getBoundingClientRect();
@@ -100,11 +104,12 @@ export function CommentMarks({ scroller, jump }: { scroller: RefObject<HTMLDivEl
   const add = useCallback(() => {
     const cur = picked.current;
     if (!cur || !key) return;
-    addQuote(key, textQuote(cur.text, cur.anchor ?? undefined), true);
+    if (cur.anchor) beforeInlineEdit();
+    addQuote(key, textQuote(cur.text, cur.anchor ?? undefined), true, Boolean(cur.anchor));
     document.getSelection()?.removeAllRanges();
     picked.current = null;
     setPill(null);
-  }, [key]);
+  }, [key, beforeInlineEdit]);
 
   // C, with words picked and the keyboard not in a field
   useEffect(() => {
@@ -197,6 +202,30 @@ export function CommentMarks({ scroller, jump }: { scroller: RefObject<HTMLDivEl
     [scroller, jump],
   );
 
+  const editorBox = inline ? boxes.find((b) => b.id === editing) : undefined;
+  const editorQuote = editorBox && list.find((q) => q.id === editorBox.id);
+  const editor = useRef<HTMLDivElement>(null);
+  const editorId = editorBox?.id;
+  const editorAnchor = editorBox?.rects.at(-1);
+  useLayoutEffect(() => {
+    const el = editor.current;
+    const scroll = scroller.current;
+    if (!el || !scroll || !editorAnchor) return;
+    const place = () => {
+      const above = editorAnchor.y - scroll.scrollTop;
+      const below = scroll.clientHeight - above - editorAnchor.h;
+      // Keep the passage in place. Open on the roomier side when the editor cannot fit below.
+      const opensAbove = below < el.scrollHeight && above > below;
+      el.style.top = `${opensAbove ? editorAnchor.y : editorAnchor.y + editorAnchor.h}px`;
+      el.style.transform = opensAbove ? "translateY(-100%)" : "";
+      el.style.maxHeight = `${Math.max(0, opensAbove ? above : below)}px`;
+    };
+    place();
+    const resize = new ResizeObserver(place);
+    resize.observe(scroll);
+    return () => resize.disconnect();
+  }, [editorAnchor, scroller]);
+
   return (
     <>
       {boxes.length > 0 && (
@@ -214,15 +243,28 @@ export function CommentMarks({ scroller, jump }: { scroller: RefObject<HTMLDivEl
                 ))}
                 <button
                   type="button"
-                  tabIndex={-1}
+                  aria-expanded={editorId === b.id}
                   aria-label={t("chat-comments.comment_n", { n: b.n })}
-                  onClick={() => key && editNote(key, b.id)}
-                  className="pointer-events-auto absolute flex cursor-pointer items-center justify-center rounded-full"
+                  onClick={() => {
+                    beforeInlineEdit();
+                    editNote(key, b.id, true);
+                  }}
+                  className="touch-hit pointer-events-auto absolute! flex cursor-pointer items-center justify-center rounded-full focus-visible:outline-2 focus-visible:outline-accent"
                   // like a footnote mark: after the words, a little above their line
                   style={{ left: last.x + last.w - 2, top: last.y - DOT / 2, width: DOT, height: DOT }}
                 >
                   <NumberDot n={b.n} />
                 </button>
+                {editorId === b.id && editorQuote && (
+                  <div
+                    ref={editor}
+                    className="pointer-events-auto absolute z-10 w-80 max-w-[calc(100%-2rem)] overflow-y-auto rounded-[10px] bg-surface shadow-overlay"
+                    style={{ left: `clamp(1rem, ${last.x}px, 100% - min(100% - 2rem, 20rem) - 1rem)`, top: last.y + last.h }}
+                    data-inline-comment-editor
+                  >
+                    <CommentCard draftKey={key} quote={editorQuote} n={b.n} editing onRemove={() => removeQuote(key, b.id)} />
+                  </div>
+                )}
               </div>
             );
           })}

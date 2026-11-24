@@ -2726,7 +2726,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             )}
             <ChatTail {...slotPage} />
           </div>
-          <CommentMarks scroller={scroller} jump={landRow} />
+          <CommentMarks scroller={scroller} jump={landRow} beforeInlineEdit={() => follow(false)} />
           </ChatActionsContext.Provider>
         </div>
         {/* A transient edge overlay; native scrolling and the centered text column keep their existing layout. */}

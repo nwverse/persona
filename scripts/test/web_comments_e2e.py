@@ -2,7 +2,7 @@
 """End-to-end check of comments (comments on picked words and on lines of code, #2437) in the web chat.
 
 Words in the transcript: selecting some shows a "Comment" pill under the selection (the C key does the same); it puts a
-card above the input to write the note in (Enter keeps it, Esc takes a new card back); the words stay lit in the
+card below the selected passage to write the note in (Enter keeps it, Esc takes a new card back); the words stay lit in the
 transcript with the card's number beside them, through a scroll, until the card goes or the message is sent; the
 message goes out with `Comment N` / `Selected text:` and the note in the `> ` block in front of it, and the sent bubble
 draws a card per comment.
@@ -123,8 +123,9 @@ def transcript_case(browser, base, size, theme, shots):
     # the C key does what the pill does, the note is written in the new card
     page.keyboard.press("c")
     card = page.locator("[data-comment-card='1']")
-    expect(card).to_be_visible()
-    note = card.locator("textarea")
+    inline = page.locator("[data-inline-comment-editor]")
+    expect(inline).to_be_visible()
+    note = inline.locator("textarea")
     expect(note).to_be_focused()
     expect(pill).to_have_count(0)
     note.fill("降雨条的颜色也要和 App 一样")
@@ -170,7 +171,7 @@ def transcript_case(browser, base, size, theme, shots):
     pick(page, "不在这台电脑上", within="不在这台电脑上")
     expect(pill).to_be_visible()
     pill.click()
-    expect(page.locator("[data-comment-card='2']")).to_be_visible()
+    expect(inline.locator("[data-comment-card='2']")).to_be_visible()
     expect(page.locator("[data-comment-mark='2']")).to_have_count(1)
     page.keyboard.type("先不写了")
     page.keyboard.press("Escape")
