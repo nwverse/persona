@@ -15,7 +15,8 @@ PERSONA_HOME) is read. The hub starts the persona-manager beside it, as an insta
   an unknown subcommand of personad and persona-node, and their usage does not list it;
 - every connector a module registers on every hub (its port provided in server/internal/modules/all, ALWAYS_CONNECTORS)
   is not in /api/v1/connectors?all=1, and its route (/api/v1/connectors/<id>/auth) answers 404;
-- every built-in extension a connector module adds (MODULE_EXTENSIONS) is not in /api/v1/extensions;
+- every built-in extension a connector module adds (MODULE_EXTENSIONS) is not in /api/v1/extensions, and the routes
+  a module serves through its seam (MODULE_ROUTES: mail, recording) answer 404;
 - SIGTERM stops the hub and the manager within the timeout, exit 0.
 
 --full runs the same against a default build and expects the opposite (every module loaded, the programs, extensions
@@ -87,18 +88,29 @@ def by_module(root, pattern, mapping=None):
     return found
 
 
+def calls_found(root, call, found):
+    """Every call of call in the root's files was read (a changed call shape must not make the checks vacuous)."""
+    calls = sum(text.count(call + "(") for _, text in root_files(root))
+    names = sum(len(n) for n in found.values())
+    if calls != names:
+        raise Failed(f"{root}: {calls} calls of {call}, {names} read: update the smoke's pattern")
+    return found
+
+
 def flat(found, ids=None):
     return sorted({n for m, names in found.items() if ids is None or m in ids for n in names})
 
 
 def module_programs():
-    """The extension programs the built-in modules provide: builtinext.AddProgram("<name>", …) in modules/all."""
-    return by_module("internal/modules/all", r'builtinext\.AddProgram\(\s*"([^"]+)"')
+    """The extension programs the built-in modules provide: builtinext.AddProgram(<module>, "<name>", …) in modules/all."""
+    return calls_found("internal/modules/all", "builtinext.AddProgram",
+                       by_module("internal/modules/all", r'builtinext\.AddProgram\([^"]*"([^"]+)"'))
 
 
 def node_commands():
     """The device commands the modules' node halves provide: commandport.AddCommand("<name>", …) in modules/all/node."""
-    return by_module("internal/modules/all/node", r'commandport\.AddCommand\(\s*"([^"]+)"')
+    return calls_found("internal/modules/all/node", "commandport.AddCommand",
+                       by_module("internal/modules/all/node", r'commandport\.AddCommand\([^"]*"([^"]+)"'))
 
 
 # The connector modules whose connector the manager registers on every hub, unconfigured too: the port the composition
@@ -106,6 +118,11 @@ def node_commands():
 ALWAYS_CONNECTORS = {"githubport": "github"}
 # The connector modules that add a built-in extension of the extension manager's (its settings form), by port.
 MODULE_EXTENSIONS = {"imessageport": "imessage"}
+
+
+# A route a module serves through its provider seam (not the kernel's hub_routes), by module id: answered (not 404)
+# while it is there, 404 once it is gone.
+MODULE_ROUTES = {"mail": "/api/v1/mail/accounts", "recording": "/api/v1/recordings"}
 
 
 def module_connectors():
@@ -310,6 +327,10 @@ def expect(base, token, loaded, present, absent, programs, connectors, module_ex
             check((name in listed) == want, f"connector {name} {what}: {sorted(listed)}")
             status, _ = http(f"{base}/api/v1/connectors/{name}/auth", token)
             check(status == (200 if want else 404), f"/api/v1/connectors/{name}/auth: {status}")
+        for id in ids:
+            if id in MODULE_ROUTES:
+                status, _ = http(base + MODULE_ROUTES[id], token)
+                check((status != 404) == want, f"{MODULE_ROUTES[id]} ({id}): {status}, want {'not ' if want else ''}404")
     if flags and (present or absent):
         check("modules" in features, "the hub's features lack the modules marker")
 
@@ -398,7 +419,8 @@ def main():
         print(f"PASS {kind} smoke: built, hub healthy, modules loaded: {', '.join(loaded) or 'none'}, "
               f"absent{' then back' if off else ''}: {', '.join(gone) or 'none'} (module programs "
               f"{', '.join(flat(programs, gone)) or 'none'}, connectors {', '.join(flat(connectors, gone)) or 'none'}, "
-              f"extensions {', '.join(flat(module_exts, gone)) or 'none'}), node commands "
+              f"extensions {', '.join(flat(module_exts, gone)) or 'none'}, routes "
+              f"{', '.join(MODULE_ROUTES[i] for i in gone if i in MODULE_ROUTES) or 'none'}), node commands "
               f"{'present' if default else 'absent'} ({', '.join(flat(commands)) or 'none'}), clean shutdown "
               f"({time.monotonic() - started:.0f}s)")
         return 0

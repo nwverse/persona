@@ -19,9 +19,10 @@ import (
 
 // Check runs both checks for the composition root in dir (its non-test files) and the module ids this build keeps
 // (built). own lists the root's own calls in a file of no module (kernel.Provide, which hands the kernel the list;
-// the kernel follows the switch itself). pending lists calls (`pkg.Func`) of seams that do not follow the switch yet, as known debt: an entry that is
-// no longer called fails, so the list only shrinks.
-func Check(t *testing.T, dir string, built, own, pending []string) {
+// the kernel follows the switch itself). binaryOnly lists calls (`pkg.Func`) that add a subcommand to the binary
+// (`personad office`): a command run as its own process has no hub to read the switch from, so only a build without
+// the module removes it; an entry that is no longer called fails.
+func Check(t *testing.T, dir string, built, own, binaryOnly []string) {
 	t.Helper()
 	seams := moduleswitch.Seams()
 	for _, s := range seams {
@@ -63,24 +64,28 @@ func Check(t *testing.T, dir string, built, own, pending []string) {
 		if !slices.Contains(built, c.module) {
 			continue // a file this build leaves out: its ports are not provided
 		}
-		if slices.Contains(pending, c.call) {
+		if slices.Contains(binaryOnly, c.call) {
 			continue
 		}
-		if !hasSeam(seams, c.module, c.pkg) {
+		if !hasSeam(seams, c.module, c.pkg, c.call) {
 			t.Errorf("%s: %s's init calls %s, which records no seam of %s that follows the switch (moduleswitch.Port)", c.file, c.module, c.call, c.module)
 		}
 	}
-	for _, p := range pending {
+	for _, p := range binaryOnly {
 		if !used[p] {
-			t.Errorf("pending entry %s is no longer called by the root: remove it", p)
+			t.Errorf("binary-only entry %s is no longer called by the root: remove it", p)
 		}
 	}
 }
 
-// hasSeam: a seam of module whose port is the package pkg (its name, or the end of its path).
-func hasSeam(seams []moduleswitch.Seam, module, pkg string) bool {
+// hasSeam: a seam of module whose port is the package pkg (its name, or the end of its path), or, for a package of
+// several ports, the call itself (pkg.Func).
+func hasSeam(seams []moduleswitch.Seam, module, pkg, call string) bool {
 	for _, s := range seams {
-		if s.Module == module && (s.Port == pkg || strings.HasSuffix(s.Port, "/"+pkg)) {
+		if s.Module != module {
+			continue
+		}
+		if s.Port == pkg || strings.HasSuffix(s.Port, "/"+pkg) || s.Port == call || strings.HasSuffix(s.Port, "/"+call) {
 			return true
 		}
 	}

@@ -24,6 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/cliport"
+
 	"github.com/coder/websocket"
 
 	"github.com/nwverse/persona/server/internal/agents"
@@ -230,6 +232,12 @@ func New(opts Options) *Manager {
 	}
 	if cfg.dir == "" {
 		cfg.dir = opts.Dir
+	}
+	if cfg.Lark.CLI != nil && !cliport.Available(opts.Modules) { // built in but switched off: as a build without it
+		opts.Logf("extensions: lark.cli is not read: the lark module is switched off in the modules setting")
+		c := *cfg
+		c.Lark.CLI = nil
+		cfg = &c
 	}
 	h := &Manager{opts: opts, cfg: cfg, version: opts.Build.Version, build: opts.Build, store: opts.Store,
 		logger: log.New(logWriter(opts.Logf), "", 0)}
@@ -474,4 +482,21 @@ func (h *Manager) secretKeyPath() string {
 		return h.opts.SecretKey
 	}
 	return filepath.Join(h.cfg.dir, secretKeyFile)
+}
+
+// modules is the run-time module switch the manager started with (Options.Modules); a nil manager (a test's) has every
+// module on.
+func (h *Manager) modules() moduleswitch.Set {
+	if h == nil {
+		return moduleswitch.Set{}
+	}
+	return h.opts.Modules
+}
+
+// modules is the manager's switch the extensions were made with, every module on without one.
+func (ps *extensions) modules() moduleswitch.Set {
+	if ps == nil {
+		return moduleswitch.Set{}
+	}
+	return ps.moduleSwitch
 }

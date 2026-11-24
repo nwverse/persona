@@ -19,6 +19,10 @@ func NewPort[T any](name string) *Port[T] { return &Port[T]{name: name} }
 // Provide sets the module's provider; the composition root calls it from init. It records the seam (Provided).
 func (p *Port[T]) Provide(module string, v T) {
 	p.mu.Lock()
+	if p.ok {
+		p.mu.Unlock()
+		panic("moduleswitch: port " + p.name + " provided twice")
+	}
 	p.module, p.v, p.ok = module, v, true
 	p.mu.Unlock()
 	Provided(p.name, module, func(s Set) bool { _, ok := p.Get(s); return ok })
@@ -34,6 +38,12 @@ func (p *Port[T]) Get(s Set) (T, bool) {
 		return zero, false
 	}
 	return p.v, true
+}
+
+// On reports whether the port has a provider and s has its module on: Get without the value.
+func (p *Port[T]) On(s Set) bool {
+	_, ok := p.Get(s)
+	return ok
 }
 
 // Module is the id of the module that provided the port, "" when none did.

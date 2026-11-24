@@ -1,6 +1,7 @@
 package node
 
 import (
+	"github.com/nwverse/persona/server/internal/node/screenport"
 	"sync/atomic"
 
 	"github.com/nwverse/persona/server/internal/moduleswitch"
@@ -30,4 +31,13 @@ func setHubModules(features []string) {
 	}
 	s := moduleswitch.FromFeatures(features, known)
 	hubModules.Store(&s)
+}
+
+// screenLinks are the screen-share module's sessions (screenport), nil when this build has none or the hub switched
+// the module off: a live screen is then the plain relayed stream, as in a build without it.
+func (n *Node) screenLinks() screenport.Links {
+	if n.links == nil || !screenport.On(nodeModules()) {
+		return nil
+	}
+	return n.links
 }
