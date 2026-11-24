@@ -25,21 +25,20 @@ internal/ai app-exported-record 6
 internal/ai app-named-primitive 1
 internal/apns app-exported-record 4
 internal/approval app-exported-record 2
-internal/assistant app-exported-record 159
+internal/assistant app-exported-record 164
+internal/assistant app-exported-record ConcernDirection #15068
+internal/assistant app-exported-record ConcernView #15068
+internal/assistant app-exported-record ConcernWord #15068
 internal/assistant app-exported-record HandoffDiffRef #14334
 internal/assistant app-exported-record HandoffGap #14334
 internal/assistant app-exported-record HandoffSourceRange #14334
 internal/assistant app-exported-record InboxFeedback #4512
 internal/assistant app-exported-record InboxProgress #4512
 internal/assistant app-exported-record MessageAuthorization #9782
-internal/assistant app-exported-record ModelCandidateHeadroom #14908
-internal/assistant app-exported-record ModelCandidateStats #14908
-internal/assistant app-exported-record ModelCandidateStatus #14908
-internal/assistant app-exported-record ModelProfileCandidatesView #14908
 internal/assistant app-exported-record ModelProfilePermissionChange #12042
-internal/assistant app-exported-record ModelProfileTrial #14908
 internal/assistant app-exported-record PlanContinuationRecovery #13587
 internal/assistant app-exported-record TaskDistinctFrom #9744 #12524
+internal/assistant app-exported-record TaskFollow #15068
 internal/assistant app-exported-record TodoContextHandoff #14334
 internal/assistant app-exported-record TodoUsage #13027 #14147
 internal/assistant app-exported-record TodoUsageModel #13027 #14147
@@ -56,7 +55,7 @@ internal/assistant app-exported-record WatchSchedule #13882 #13914 #14029 #14104
 internal/assistant app-exported-record WatchTable #13882 #13914 #14029 #14104 #14362 #14995
 internal/assistant app-exported-record WatchView #13882 #13914 #14029 #14104 #14362 #14995
 internal/assistant app-lifecycle-write 30
-internal/assistant app-named-primitive 26
+internal/assistant app-named-primitive 27
 internal/assistant app-named-primitive ModelPurposeStatusCode #12300 #12307
 internal/assistant app-named-primitive launcherFit #12300 #12307
 internal/assistant app-named-primitive scopeHeadingKind #13820 #13912
@@ -147,9 +146,10 @@ internal/extension/host app-exported-record 2
 internal/extension/hubrelay app-exported-record 1
 internal/extension/sandbox app-exported-record 8
 internal/extension/serve app-exported-record 1
-internal/extmgr app-exported-record 64
+internal/extmgr app-exported-record 65
 internal/extmgr app-named-primitive 3
 internal/extmgr/storage app-exported-record 21
+internal/feishubot app-exported-record BotMenu #12964
 internal/herdr app-exported-record 20
 internal/herdrcore app-exported-record 7
 internal/host app-exported-record 12
@@ -161,7 +161,7 @@ internal/hubedge app-exported-record 4
 internal/i18n app-exported-record 1
 internal/i18n app-named-primitive 2
 internal/imageorient app-exported-record 1
-internal/kb app-exported-record 70
+internal/kb app-exported-record 51
 internal/kb app-exported-record Milestone #13784 #13891 #13914 #14029 #14104 #14362 #14934
 internal/kb app-exported-record MilestoneEdit #13784 #13891 #13914 #14029 #14104 #14362 #14934
 internal/kb app-exported-record ProjectRef #13784 #13891 #13914 #14029 #14104 #14362 #14934
