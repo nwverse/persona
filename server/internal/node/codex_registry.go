@@ -43,6 +43,7 @@ type codexRegistry struct {
 	remoteDiags   map[string]codexRemoteDiag // resolved endpoint → last connection failure kind
 	byPane        map[string]string
 	threads       map[string]codexSource
+	desktopAsks   map[string]codexSource
 	remotes       map[string]*codexRemote
 	retries       map[string]codexRetry // server id -> attempts that did not connect (codex_backoff.go)
 	report        func(proto.CodexConfig)
@@ -768,6 +769,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 		parent, root string
 	}
 	var adopted []adoption
+	desktopAsks := map[string]codexSource{}
 	for id, src := range sources {
 		src, visible := n.listedCodexSource(id, src, pass)
 		if !visible || seen[id] || n.isAssistantSessionIn(id, pass) || n.ownedAssistantSource(src.thread) {
@@ -897,8 +899,12 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 			s.ReadOnlyReason = i18n.T(i18n.Default, codexDesktopUnavailableKey)
 			n.placeCodexDesktopIn(&s, src, src.thread, false, pass)
 			if s.Capabilities.Send {
+				s.Capabilities.AnswerQuestions = true
 				s.ReadOnlyReason = ""
 				n.codexDesktopEffortRow(&s, src, m) // codex_desktop_effort.go
+				if time.Since(s.UpdatedAt) < codexAskMaxAge {
+					desktopAsks[id] = src
+				}
 			}
 		} else if o := codexThreadOrigin(src); o.desktop { // a subagent whose rollout is gone too: its database row (#8191)
 			if o.parent != "" {
@@ -941,6 +947,9 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 				s.Title = "Codex"
 			}
 		}
+		if !s.Capabilities.Send || s.IsSubagent {
+			delete(desktopAsks, id)
+		}
 		seen[id] = true
 		out = append(out, s)
 	}
@@ -957,5 +966,8 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 	sort.Slice(out, func(i, j int) bool { return out[i].SessionID < out[j].SessionID })
 	resolveCodexHierarchy(out)
 	slotCodexDesktop(out)
+	n.codices.mu.Lock()
+	n.codices.desktopAsks = desktopAsks
+	n.codices.mu.Unlock()
 	return out
 }
