@@ -195,6 +195,65 @@ class HealthIntakeMockTests(unittest.TestCase):
         self.assertEqual(self.events, [])
 
 
+class HealthItemsMockTests(unittest.TestCase):
+    """What Health tracks (#14716): the whole list at a revision, 409 with the current list, one message per save."""
+    path = "/api/v1/assistant/health/items"
+
+    def setUp(self):
+        intake.HEALTH_INTAKE_ENABLED = True
+        intake.HEALTH_ITEMS_MODE = "existing"
+        intake.health_items_reset()
+        self.addCleanup(intake.health_items_reset)
+        self.events = []
+        self.broadcast = patch.object(hub, "broadcast", self.events.append)
+        self.broadcast.start()
+        self.addCleanup(self.broadcast.stop)
+
+    def request(self, method="GET", body=None, headers=None, path=None, query=None):
+        handler = Handler(headers)
+        self.assertTrue(intake.health_items_route(handler, method, path or self.path, query or {"space": ["health"]},
+                                                  json.dumps(body).encode() if body is not None else b""))
+        return handler
+
+    def test_defaults_follow_the_owner(self):
+        got = self.request().result
+        self.assertEqual([c["id"] for c in got["catalog"]], ["water", "protein", "activity", "trends"])
+        self.assertEqual((got["items"], got["revision"], got["saved"]), (["water", "protein", "activity", "trends"], 0, False))
+        self.request(path="/mock/health-items", query={"mode": ["fresh"]})
+        self.assertEqual(self.request().result["items"], ["activity", "trends"])
+
+    def test_save_bumps_the_revision_once_and_says_so(self):
+        saved = self.request("PUT", {"items": ["protein", "activity", "water", "trends"], "revision": 0})
+        self.assertEqual((saved.status, saved.result["revision"], saved.result["saved"]), (200, 1, True))
+        self.assertEqual(self.events, [{"type": "health_items", "revision": 1}])
+        self.assertEqual(self.request().result["items"], ["protein", "activity", "water", "trends"])
+
+    def test_a_stale_revision_gets_the_current_list(self):
+        self.request("PUT", {"items": [], "revision": 0})
+        stale = self.request("PUT", {"items": ["water"], "revision": 0})
+        self.assertEqual((stale.status, stale.result["items"], stale.result["revision"]), (409, [], 1))
+        self.assertEqual(len(self.events), 1)
+
+    def test_invalid_lists_and_other_managers_are_refused(self):
+        for body in ({"items": ["water", "water"], "revision": 0}, {"items": ["steps"], "revision": 0},
+                     {"items": ["water"]}, {"items": None, "revision": 0}, {"items": [], "revision": -1},
+                     {"items": [], "revision": 0, "extra": 1}):
+            with self.subTest(body=body):
+                self.assertEqual(self.request("PUT", body).status, 400)
+        self.assertEqual(self.request(headers={"X-Persona-Manager": "work"}).status, 400)
+        self.assertEqual(self.events, [])
+
+    def test_off_has_no_route_and_intake_has_no_items(self):
+        self.request(path="/mock/health-items", query={"mode": ["off"]})
+        self.assertEqual(self.request().status, 404)
+        view = Handler()
+        intake.health_intake_route(view, "GET", "/api/v1/assistant/health/intake", {"space": ["health"]})
+        self.assertNotIn("items", view.result)
+        self.request(path="/mock/health-items", query={"mode": ["existing"]})
+        intake.health_intake_route(view, "GET", "/api/v1/assistant/health/intake", {"space": ["health"]})
+        self.assertEqual(view.result["items"], ["water", "protein", "activity", "trends"])
+
+
 class HealthIntakeMigrationHTTPTests(unittest.TestCase):
     def test_registered_domain_import_and_reset(self):
         from test_readiness_mock import Hub
@@ -212,6 +271,20 @@ class HealthIntakeMigrationHTTPTests(unittest.TestCase):
         self.assertEqual(after["water"]["today"], before["water"]["today"] + 450)
         self.assertEqual(h.call("GET", "/mock/reset")[0], 200)
         self.assertEqual(h.call("GET", path)[1]["water_extension"], "pending")
+
+    def test_registered_domain_health_items(self):
+        from test_readiness_mock import Hub
+        h = Hub(MOCK_HEALTH_ITEMS="fresh")
+        self.addCleanup(h.stop)
+        path = "/api/v1/assistant/health/items?space=health"
+        code, before = h.call("GET", path)
+        self.assertEqual((code, before["items"], before["saved"]), (200, ["activity", "trends"], False))
+        self.assertIn("health_items", h.call("GET", "/api/v1/health")[1]["features"])
+        code, saved = h.call("PUT", path, {"items": ["water", "activity", "trends"], "revision": 0})
+        self.assertEqual((code, saved["revision"]), (200, 1))
+        self.assertEqual(h.call("PUT", path, {"items": [], "revision": 0})[0], 409)
+        self.assertEqual(h.call("GET", "/mock/reset")[0], 200)
+        self.assertEqual(h.call("GET", path)[1]["revision"], 0)
 
     def test_registered_domain_initial_modes(self):
         from test_readiness_mock import Hub

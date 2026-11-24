@@ -1,7 +1,8 @@
 // "Today" at the top of the Health home (#13176, docs/assistant/health.md): the water and protein
 // rings with today's amount and goal, and the buttons that log them. A press moves the ring at once and the hub's total
 // settles it (useHealthIntake.ts); a logged one offers Undo, a failed one says why and offers Retry with the same record
-// number, so a retry never logs twice. Shown only when the hub says it has intake.
+// number, so a retry never logs twice. Shown only when the hub says it has intake; on a hub that keeps what Health tracks
+// (#14716, useHealthItems.ts) only the rings added there, in their order, and nothing when neither is.
 import { useState } from "react";
 import { errorText } from "../../lib/api";
 import { currentLanguage, t } from "../../i18n";
@@ -11,19 +12,32 @@ import { BASE } from "../../lib/base";
 import { navigate } from "../../lib/router";
 import { GaugeFace } from "../../ui/GaugeFace";
 import { inputClass, SectionTitle } from "../../views/assistant/parts";
-import { INTAKE_MIN, INTAKE_MAX, newDraft, parseAmount, type IntakeDraft, type IntakeEntry, type IntakeKind } from "./intake";
+import { INTAKE_KINDS, INTAKE_MIN, INTAKE_MAX, newDraft, parseAmount, type IntakeDraft, type IntakeEntry, type IntakeKind } from "./intake";
 import { useHealthIntake, type Ring } from "./useHealthIntake";
 
 const num = (n: number) => new Intl.NumberFormat(currentLanguage(), { maximumFractionDigits: 1 }).format(n);
 const COLOR: Record<IntakeKind, string> = { water: "var(--health-water)", protein: "var(--health-protein)" };
 const unitOf = (kind: IntakeKind) => (kind === "water" ? t("health.today_unit_water") : t("health.today_unit_protein"));
 
-export function HealthToday() {
+/** Which rings to draw, from the hub's list of what Health tracks: `kinds` null while it is being read (with its read's
+ *  failure in `error`). Without it both rings are drawn, as before the list. */
+export interface TodayItems {
+  kinds: readonly IntakeKind[] | null;
+  error: string;
+  reload: () => void;
+}
+
+export function HealthToday({ items }: { items?: TodayItems }) {
   const intake = useHealthIntake();
   const [ask, setAsk] = useState<IntakeKind | null>(null);
   const [text, setText] = useState("");
   const [invalid, setInvalid] = useState(false);
   if (!intake.enabled) return null;
+  const kinds = items ? items.kinds : INTAKE_KINDS;
+  if (kinds?.length === 0) return null;
+  // the list's failure first: without it there is nothing to choose the rings by
+  const error = kinds ? intake.error : items?.error;
+  const retry = kinds ? intake.reload : items!.reload;
 
   const undo = async (e: IntakeEntry) => {
     try {
@@ -62,20 +76,23 @@ export function HealthToday() {
   return (
     <section className="mb-7" data-testid="health-today">
       <SectionTitle>{t("health.today_title")}</SectionTitle>
-      {intake.rings ? (
+      {kinds && intake.rings ? (
         <div className="grid grid-cols-2 gap-2">
-          <RingCard kind="water" ring={intake.rings.water}>
-            <Button tone="primary" onClick={() => void record(newDraft("water"))}>{t("health.today_drank")}</Button>
-            <Button onClick={() => open("water")}>{t("health.today_other")}</Button>
-          </RingCard>
-          <RingCard kind="protein" ring={intake.rings.protein}>
-            <Button tone="primary" onClick={() => open("protein")}>{t("health.today_grams")}</Button>
-          </RingCard>
+          {kinds.map((kind) => kind === "water" ? (
+            <RingCard key={kind} kind="water" ring={intake.rings!.water}>
+              <Button tone="primary" onClick={() => void record(newDraft("water"))}>{t("health.today_drank")}</Button>
+              <Button onClick={() => open("water")}>{t("health.today_other")}</Button>
+            </RingCard>
+          ) : (
+            <RingCard key={kind} kind="protein" ring={intake.rings!.protein}>
+              <Button tone="primary" onClick={() => open("protein")}>{t("health.today_grams")}</Button>
+            </RingCard>
+          ))}
         </div>
-      ) : intake.error ? (
+      ) : error ? (
         <div className="flex items-center gap-3 rounded-card bg-surface px-4 py-3 shadow-card">
-          <p className="min-w-0 flex-1 text-meta break-words text-ink-2" role="alert">{t("health.today_load_failed", { error: intake.error })}</p>
-          <Button icon="retry" onClick={intake.reload}>{t("health.retry")}</Button>
+          <p className="min-w-0 flex-1 text-meta break-words text-ink-2" role="alert">{kinds ? t("health.today_load_failed", { error }) : t("health.items_load_failed", { error })}</p>
+          <Button icon="retry" onClick={retry}>{t("health.retry")}</Button>
         </div>
       ) : (
         <div className="flex justify-center py-8"><Loading /></div>

@@ -1,4 +1,4 @@
-"""Synthetic Health intake records and detail pages for clients and bundled demos (#13176)."""
+"""Synthetic Health intake records, detail pages and health items for clients and bundled demos (#13176, #14716)."""
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
@@ -14,6 +14,12 @@ HEALTH_INTAKE_LOCK = threading.RLock()
 HEALTH_WATER_EXTENSION_MODE = "pending"
 HEALTH_WATER_EXTENSION_PENDING = True
 HEALTH_INTAKE_SETTINGS = {}
+# What Health tracks (docs/protocol/protocol.md "Health items", #14716): the catalog, then the list as the hub keeps it.
+# MOCK_HEALTH_ITEMS picks the owner: existing (default, records on file: the hub's defaults add water and protein), fresh
+# (Activity rings and trends only, so the web asks once) or off (a hub before #14711: no feature, no route).
+HEALTH_ITEMS_CATALOG = (("water", "persona"), ("protein", "persona"), ("activity", "apple_health"), ("trends", "apple_health"))
+HEALTH_ITEMS_MODE = "existing"
+HEALTH_ITEMS = {}
 
 
 def health_intake_reset():
@@ -41,6 +47,66 @@ def health_intake_seed():
 
 HEALTH_INTAKE_ENTRIES = {}
 health_intake_reset()
+
+
+def health_items_reset():
+    """The never-saved list the hub reads for the owner MOCK_HEALTH_ITEMS names."""
+    with HEALTH_INTAKE_LOCK:
+        HEALTH_ITEMS.clear()
+        HEALTH_ITEMS.update(items=([] if HEALTH_ITEMS_MODE == "fresh" else ["water", "protein"]) + ["activity", "trends"],
+                            revision=0, saved=False)
+
+
+def health_items_state():
+    with HEALTH_INTAKE_LOCK:
+        return {"catalog": [{"id": i, "source": s} for i, s in HEALTH_ITEMS_CATALOG], "items": list(HEALTH_ITEMS["items"]),
+                "revision": HEALTH_ITEMS["revision"], "saved": HEALTH_ITEMS["saved"]}
+
+
+health_items_reset()
+
+
+def health_items_route(h, method, path, query, body=b""):
+    """GET and PUT /api/v1/assistant/health/items as the hub answers them: the whole list at a revision, 409 with the
+    current list for a stale one, one `health_items` message per save. /mock/health-items?mode=existing|fresh|off starts
+    the owner over (reload the page for the hello's features)."""
+    global HEALTH_ITEMS_MODE
+    if path == "/mock/health-items":
+        if query.get("mode", [""])[0] in ("existing", "fresh", "off"):
+            HEALTH_ITEMS_MODE = query["mode"][0]
+            health_items_reset()
+        h.send_json({"mode": HEALTH_ITEMS_MODE, **health_items_state()})
+        return True
+    if HEALTH_ITEMS_MODE == "off" or not HEALTH_INTAKE_ENABLED:
+        h.send_json({"error": "Not found"}, 404)
+        return True
+    if h.headers.get("X-Persona-Manager"):
+        h.send_json({"error": "Health items belong to the default manager"}, 400)
+        return True
+    if method == "GET":
+        h.send_json(health_items_state())
+        return True
+    try:
+        req = json.loads(body or b"null")
+    except ValueError:
+        req = None
+    known = [i for i, _ in HEALTH_ITEMS_CATALOG]
+    items = req.get("items") if isinstance(req, dict) else None
+    revision = req.get("revision") if isinstance(req, dict) else None
+    if (not isinstance(req, dict) or set(req) != {"items", "revision"} or not isinstance(items, list)
+            or any(not isinstance(i, str) or i not in known for i in items) or len(set(items)) != len(items)
+            or isinstance(revision, bool) or not isinstance(revision, int) or revision < 0):
+        h.send_json({"error": "Invalid health items", "code": "invalid_health_items"}, 400)
+        return True
+    with HEALTH_INTAKE_LOCK:
+        if revision != HEALTH_ITEMS["revision"]:
+            h.send_json(health_items_state(), 409)
+            return True
+        HEALTH_ITEMS.update(items=list(items), revision=HEALTH_ITEMS["revision"] + 1, saved=True)
+        state = health_items_state()
+    HUB.broadcast({"type": "health_items", "revision": state["revision"]})
+    h.send_json(state)
+    return True
 
 
 def health_intake_snapshot(days=7):
@@ -116,7 +182,10 @@ def health_intake_route(h, method, path, query, body=b""):
             if method == "GET" and path == base:
                 days = int(query.get("days", ["7"])[0])
                 if not 1 <= days <= 366: raise ValueError("days must be 1–366")
-                h.send_json(health_intake_snapshot(days))
+                snapshot = health_intake_snapshot(days)
+                if HEALTH_ITEMS_MODE != "off":
+                    snapshot["items"] = list(HEALTH_ITEMS["items"])
+                h.send_json(snapshot)
                 return True
             if method == "POST" and path == base + "/ui":
                 import health_intake_ui
@@ -165,16 +234,28 @@ def route(h, req):
     return health_intake_route(h, req.method, req.path, req.query, req.body)
 
 
+def items_route(h, req):
+    return health_items_route(h, req.method, req.path, req.query, req.body)
+
+
 def register(d):
-    global HUB, HEALTH_INTAKE_ENABLED, HEALTH_WATER_EXTENSION_MODE
+    global HUB, HEALTH_INTAKE_ENABLED, HEALTH_WATER_EXTENSION_MODE, HEALTH_ITEMS_MODE
     HUB = d.hub
     HEALTH_INTAKE_ENABLED = os.environ.get("MOCK_HEALTH_INTAKE") != "off"
     HEALTH_WATER_EXTENSION_MODE = os.environ.get("MOCK_WATER_EXTENSION", "pending")
+    HEALTH_ITEMS_MODE = os.environ.get("MOCK_HEALTH_ITEMS", "existing")
     health_intake_reset()
+    health_items_reset()
     d.help("MOCK_HEALTH_INTAKE=off  omit Health intake and refuse its routes (#13176)")
     d.help("MOCK_WATER_EXTENSION=none|migrated  omit the water migration card; default pending (#13636)")
+    d.help("MOCK_HEALTH_ITEMS=fresh|off  an owner who never chose what Health tracks (asked once), or a hub without the list; default existing (#14716)")
     d.on_reset(health_intake_reset)
+    d.on_reset(health_items_reset)
     d.feature("health_intake", when=lambda: HEALTH_INTAKE_ENABLED)
+    d.feature("health_items", when=lambda: HEALTH_INTAKE_ENABLED and HEALTH_ITEMS_MODE != "off")
     for method in ("GET", "POST", "DELETE"):
         d.route(method, r"/api/v1/assistant/health/intake(?:/.*)?", route)
         d.route(method, "/mock/health-intake", route)
+    for method in ("GET", "PUT"):
+        d.route(method, r"/api/v1/assistant/health/items", items_route)
+    d.route("GET", "/mock/health-items", items_route)
