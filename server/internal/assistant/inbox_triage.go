@@ -426,7 +426,12 @@ func (s *Service) draftReply(ctx context.Context, id, instruction string) (strin
 		if hit == "" {
 			if livePolicy := compileReplyPolicy(s.inboxConfig(ctx).ReplyPolicy); livePolicy.enabled {
 				b.mu.Lock()
-				liveCV := replyPolicyContentVersion(b.items[id])
+				live := b.items[id]
+				if live == nil {
+					b.mu.Unlock()
+					return "", errNoInboxItem
+				}
+				liveCV := replyPolicyContentVersion(live)
 				b.mu.Unlock()
 				if !policy.enabled || livePolicy.revision != policy.revision || liveCV != policyItem.contentVersion {
 					return "", errReplyPolicyBlocked

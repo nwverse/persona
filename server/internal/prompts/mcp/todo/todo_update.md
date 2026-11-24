@@ -1,4 +1,4 @@
-Edit supplied fields. "" clears notes/due/remind/project/part_of/audience. [] clears after. Use todo_complete or todo_reopen. outward_reply records the sent reply's HTTPS topic, permalink, exact text and RFC3339 provider time. Retry recording only. promise overrides detection and due_at overrides 24h.{{template "shared/mcp_language" .}}
+Edit supplied fields. "" clears notes/due/remind/project/part_of/audience/direction_id. [] clears after. Use todo_complete or todo_reopen. outward_reply records the original HTTPS topic, permalink, exact text and RFC3339 provider time. Retry recording only. promise overrides detection. due_at overrides 24h.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -9,11 +9,12 @@ Edit supplied fields. "" clears notes/due/remind/project/part_of/audience. [] cl
     "title": {"type": "string"},
     "notes": {"type": "string", "description": "Keep needed notes."},
     "due": {"type": "string", "description": "YYYY-MM-DD or RFC3339."},
-    "remind": {"type": "string", "description": "Future time or 30m/2h/1d. Notifies again."},
+    "remind": {"type": "string", "description": "Future time or 30m/2h/1d. Renotifies."},
     "priority": {"type": "string", "enum": ["high", "normal", "low"]},
-    "project": {"type": "string", "description": "Existing KB project slug/name."},
-    "audience": {"type": "string", "description": "human, autonomous, or \"\" to clear."},
-    "part_of": {"type": "string", "description": "Request id; changing clears after."},
+    "project": {"type": "string", "description": "KB project slug/name."},
+    "audience": {"type": "string", "description": "human or autonomous."},
+    "direction_id": {"type": "string"},
+    "part_of": {"type": "string", "description": "Request ID. Changes clear after."},
     "after": {"type": "array", "items": {"type": "string"}, "description": "Sibling piece ids."},
     "outward_reply": {
       "type": "object",

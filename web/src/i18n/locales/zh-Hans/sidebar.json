@@ -167,8 +167,11 @@
   "side_unread_also": "另有新回复：{titles}",
   "module_recording": "会议录音",
   "module_recording_hint": "在知识库查看录音的纪要、全天回顾、转写和照片。",
+  "module_screen_share": "屏幕共享",
+  "module_screen_share_hint": "在「机器」里的电脑页面打开它的实时屏幕，并在浏览器里操作。",
   "subagents_running": "{count} 个运行中",
   "subagents_need_you": "{count} 个等你确认",
   "sort_activity": "按最近更新排序",
-  "show_list_filter": "显示筛选"
+  "show_list_filter": "显示筛选",
+  "show_empty_workspaces": "显示空工作区"
 }

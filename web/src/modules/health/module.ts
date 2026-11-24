@@ -4,7 +4,8 @@
 // Its hub flag is module.health (core/module-host.ts, the hub flag rule): a hub that publishes module flags turns it off
 // by leaving the flag out. Older hubs keep it on. Settings › General › Optional features can turn it off in a browser.
 import { byLanguage, t, type CatalogModule } from "../../i18n";
-import { moduleFeature, type ModuleDescriptor } from "../../core/module-host";
+import { moduleFeature } from "../../core/module-flags";
+import type { ModuleDescriptor } from "../../core/module-host";
 import { HEALTH_INTAKE_UI } from "../../lib/health-intake-ui";
 
 export const health: ModuleDescriptor = {

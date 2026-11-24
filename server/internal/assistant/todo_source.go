@@ -512,7 +512,7 @@ func (s *Service) tellOwner(ctx context.Context, t Todo, st FeishuStatus, key st
 func (s *Service) sendSourceReport(ctx context.Context, src TodoSource, todoID string) error {
 	switch src.Channel {
 	case channel.Feishu:
-		if !larkhost.InBuild() {
+		if !larkhost.InBuild(s.moduleSwitch) {
 			return larkhost.ErrNoChannel
 		}
 		r := outboundReply{ID: reportKey(todoID, src.MessageID), TodoID: todoID, Text: src.ReportText,

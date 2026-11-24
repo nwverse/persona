@@ -140,7 +140,7 @@ Exclusions are case-insensitive. Directory paths are relative to the configured 
     summary.md              # Who they are, relationship to me, recent conversations with me
   projects/<slug>/          # One directory per project
     meta.json               # Name, type (short requirement / long mission), status, members, related chats / docs / meetings / Agent directories
-    summary.md              # Goal, current state, next steps, risks, my role
+    summary.md              # Goal, current state, decisions with reasons/results/source times, next steps, risks, my role
     log.md                  # Timeline: append an entry for each update (date · source · one line)
     memory.jsonl            # Typed worker outcomes, decisions with reasons, pitfalls, and lessons from accepted tasks (todos.md "Lessons from accepted tasks"); provenance/time/supersession (not searched)
     .topics.json            # How far the knowledge points curation read the timeline ("Topics"; bookkeeping, not searched; a chat has one too)
@@ -253,8 +253,9 @@ assistant is not connected, the knowledge base closes once no lane runs; a lane 
    Aliases collected before these rules are pruned when the knowledge base opens (`PruneProjectAliases`): another unmerged project's name or slug, the project's own name, repeats, generic ones,
    and everything past the first 12 go; names of projects merged into it (directly or through another merged project) stay and do not count. An alias two unmerged projects share stays on both (whose it is cannot be told),
    and projects whose aliases are locked (set by hand) are not touched.
-   Rewrite dirty project summaries, at most 3 calls per round with failed ones counted (#4246), each from the old summary + latest 40 timeline entries + summaries of up to 8 related chats; a failed one waits like a chat whose compression failed. Person / chat / project associations are written into each
+   Rewrite dirty project summaries, at most 3 calls per round with failed ones counted (#4246), each from the old summary + latest 40 timeline entries + bounded `memory.jsonl` records + summaries of up to 8 related chats; a failed one waits like a chat whose compression failed. Person / chat / project associations are written into each
    `meta.json` bidirectionally. Long-term projects (`long`) never revert to short-term.
+   The memory input has at most 5 outcomes, 5 effective decisions and 3 pitfalls, newest first by kind. Each decision keeps its reason, the outcome matched by its durable record ID (never the legacy turn/item tuple), source time and verification; distinct conflicting IDs stay separate, and missing fields stay unrecorded. `summary.md` has a fixed **Decisions and reasons** section. The exact memory records join the frozen-input commit guard and freshness evidence, so a change during the model call cannot commit a stale summary. For freshness, each bounded record's ID and content hash are compared with the summary's recorded cutoff; new or changed records contribute to the existing uncovered-evidence review count. A `memory.jsonl` with no usable records (missing, empty, malformed or unreadable) adds no memory block, creates no file and needs no migration; the old summary/timeline/chat input is unchanged.
 3b. **Topics** (#3783, `kb/topic_distill.go`, `kb/topic_merge.go`; "Topics" below): in the topics lane, at most 2 distill calls (new timeline lines or a changed chat summary → candidate
    knowledge points) and 2 merges (a topic's candidates folded into its points) per run, two calls at a time, while `assistant.kb_topics` is on.
 4. **Documents / meetings / events**: every 30 minutes read Lark calendar (yesterday through 8 days ahead, busy events) and the latest 30 meetings, fill titles for 10 documents (first line of Markdown export),

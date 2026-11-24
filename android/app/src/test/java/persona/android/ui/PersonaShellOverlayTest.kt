@@ -848,6 +848,7 @@ class PersonaShellOverlayTest {
                 override fun notice(message: String) = false
             }
             override val terminalPanes: TerminalPanes? = null
+            override val audioFocus = persona.core.moduleapi.AudioBroker.withoutSystem()
             override fun groupTerminal(key: SessionKey): TerminalTransport? = null
             override fun exitDemo() = Unit
         }

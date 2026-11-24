@@ -16,7 +16,7 @@ const placed = (id: string, cwd: string, repo: string, worktree: string, patch: 
 const herdr = (id: string, cwd: string, patch: Partial<HostWorkspace> = {}): HostWorkspace => ({
   id: `qualified-${id}`, machine_id: "machine-a", source: "herdr", source_id: id, title: cwd.split("/").pop()!, cwd, ...patch,
 });
-const options = (workspaces: HostWorkspace[]): RepoCatalogOptions => ({ owner: "credential-a", manager: "manager-a", workspaces });
+const options = (workspaces: HostWorkspace[], patch: Partial<RepoCatalogOptions> = {}): RepoCatalogOptions => ({ owner: "credential-a", manager: "manager-a", workspaces, ...patch });
 const sections = (tree: RepoMachine[]) => tree.flatMap((m) => m.repos.map((r) => ({ machine: m.machine.id, name: r.name, count: r.count, rows: r.worktrees.map((w) => w.name) })));
 
 describe("a folder of trees kept apart from its repository", () => {
@@ -50,8 +50,11 @@ describe("a folder of trees kept apart from its repository", () => {
     expect(sections(tree)).toEqual([{ machine: "machine-a", name: "app", count: 2, rows: ["main", "fix"] }]);
   });
 
-  it("puts an empty herdr workspace in that folder under its repository", () => {
-    const tree = buildRepoMachineTree([placed("main", "/code/app", "/code/app", "/code/app")], machines, options([herdr("w-fix", `${trees}/fix`)]));
+  it("puts an empty herdr workspace in that folder under its repository when opted in", () => {
+    const emptyFix = [herdr("w-fix", `${trees}/fix`)];
+    const hidden = buildRepoMachineTree([placed("main", "/code/app", "/code/app", "/code/app")], machines, options(emptyFix));
+    expect(sections(hidden)).toEqual([{ machine: "machine-a", name: "app", count: 1, rows: ["main"] }]);
+    const tree = buildRepoMachineTree([placed("main", "/code/app", "/code/app", "/code/app")], machines, options(emptyFix, { showEmptyWorkspaces: true }));
     expect(sections(tree)).toEqual([{ machine: "machine-a", name: "app", count: 1, rows: ["main", "fix"] }]);
   });
 

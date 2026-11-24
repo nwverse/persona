@@ -484,8 +484,18 @@ func (n *Node) workAgentCalls(ctx context.Context, method, id string, a host.Age
 			}
 			msg.Text = strings.TrimSpace(attachImages(msg.Text, paths))
 		}
+		typedAt := time.Now()
+		var delivery *agySendWatch
+		if a.Agent == agyAgent {
+			delivery = n.watchAgySend(id, a.PaneID, msg.Text, typedAt)
+		}
 		if err := n.hostPrompt(ctx, a.PaneID, msg.Text); err != nil {
 			return nil, fmt.Errorf("send: %w", err), true
+		}
+		if a.Agent == agyAgent {
+			if err := n.confirmAgySend(ctx, id, a.PaneID, msg.Text, typedAt, delivery); err != nil {
+				return nil, err, true
+			}
 		}
 		n.lostFirst.clear(id) // the message the start could not deliver went in now, or another one
 		// Working until herdr shows the turn, so an interrupt right after the send stops it (worksent.go, #11437).
