@@ -459,6 +459,17 @@ const RESERVED_UI_PATHS: Record<string, string> = {
 };
 /** Whether `extension` is one of the manager's own pages: drawn over HTTP only, never as an extension's. */
 export const isReservedUI = (extension: string): boolean => Object.hasOwn(RESERVED_UI_PATHS, extension);
+/** Whether `extension` is a manager's own id (it starts with "-", which no extension's can): its pages are drawn over
+ *  HTTP only and never open the native UI stream, the reserved ids above and those asked at the extensions' own path
+ *  alike (Dashboards' `-pages`, #15017; the hub answers the stream's open for them with `negotiation`). */
+export const httpOnlyUI = (extension: string): boolean => extension.startsWith("-");
+/** Dashboards' reserved id (#15017): the pages the assistant keeps, listed among the extensions' places and drawn at
+ *  their path (/api/v1/extensions/-pages/-/ui/{index|pg_…}) by the default manager. */
+export const PAGES_UI = "-pages";
+/** The Dashboards place itself, the list of pages; every other id of `-pages` is one page (`pg_` and 16 hex). */
+export const PAGES_INDEX = "index";
+/** The hello feature of a hub whose default manager has Dashboards: Settings › Assistant shows their switch. */
+export const ASSISTANT_PAGES_FEATURE = "assistant_pages";
 export const uiPath = (extension: string, ui: string) =>
   (isReservedUI(extension) ? RESERVED_UI_PATHS[extension] : undefined) ?? `${extRoot()}/${enc(extension)}/-/ui/${enc(ui)}`;
 
