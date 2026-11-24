@@ -83,6 +83,15 @@ class Socket:
                 return seen
         raise AssertionError("no matching frame in %s s; saw %s" % (timeout, [x.get("type") for x in seen]))
 
+    def until_binary(self, timeout=15):
+        """Wait for actual audio, not a caption emitted just before speak(True)."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            op, data = self.frame()
+            if op == 2:
+                return data
+        raise AssertionError("no audio frame in %s s" % timeout)
+
     def close(self):
         self.sock.close()
 
@@ -312,6 +321,9 @@ class VoiceMockTests(unittest.TestCase):
         try:
             ws.send({"type": "start", "protocol": 2, "target": TARGET})
             ws.until(lambda f: f["type"] == "transcript" and f["id"] == "a1")
+            # A caption is written immediately before speak(True). Wait for the
+            # actual audio frame so interrupt cannot arrive in that gap.
+            ws.until_binary(timeout=5)
             self.assertIsNone(self.get("/mock/voice2")["starts"][-1]["speech_gate"], "not said: the gate on")
             ws.send({"type": "interrupt"})
             ws.until(lambda f: f["type"] == "clear", timeout=5)
