@@ -54,6 +54,7 @@ func agentSession() proto.Session {
 // the phone's push: green for done, orange with ⚠️ for a turn error or a model-service cut-off, the result text, the
 // machine in the note, the open button, and a reply routes back to that agent (#4674).
 func TestFeishuAgentDoneCard(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, tc := range []struct {
 		name      string
 		lastText  string
@@ -126,6 +127,7 @@ func TestFeishuAgentDoneCard(t *testing.T) {
 // Nothing is posted when the pushes switch is off, the session is muted, or another Feishu path owns the turn (the
 // main conversation, a scheduled task's own conversation, health), or the turn was asked and answered in Feishu.
 func TestFeishuAgentDoneGated(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, tc := range []struct {
 		name     string
 		pushes   bool
@@ -171,6 +173,7 @@ func TestFeishuAgentDoneGated(t *testing.T) {
 
 // A result longer than the card's budget still goes out as one card, marked as cut short.
 func TestFeishuAgentDoneLongResult(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	ft := newFleetTest(t)
 	fastDone(ft)
 	answerAgentDoneBot(ft, true)
@@ -190,6 +193,7 @@ func TestFeishuAgentDoneLongResult(t *testing.T) {
 // When the card's JSON size exceeds answerCardMaxBytes and gets halved, the note and fallback
 // must mark it as cut short even if the original text was <= agentDoneClip (#4944).
 func TestFeishuAgentDoneHalvedCardMarksClipped(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	ft := newFleetTest(t)
 	fastDone(ft)
 	answerAgentDoneBot(ft, true)
@@ -216,6 +220,7 @@ func TestFeishuAgentDoneHalvedCardMarksClipped(t *testing.T) {
 // A long result shows its beginning, the rest folded; an agent that asks the owner something is orange; the one
 // button opens its conversation, primary.
 func TestFeishuAgentDoneLooks(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	ft := newFleetTest(t)
 	fastDone(ft)
 	answerAgentDoneBot(ft, true)
@@ -234,6 +239,7 @@ func TestFeishuAgentDoneLooks(t *testing.T) {
 }
 
 func TestAgentDoneState(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, c := range []struct {
 		head   string
 		asks   bool

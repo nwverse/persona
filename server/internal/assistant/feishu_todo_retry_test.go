@@ -62,6 +62,7 @@ func installRetryTodo(s *Service, todo Todo) {
 }
 
 func TestFeishuTodoReminderRecovery(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, tc := range []struct {
 		name                       string
 		postErr                    error
@@ -158,6 +159,7 @@ func TestFeishuTodoReminderRecovery(t *testing.T) {
 }
 
 func TestFeishuTodoReminderMultipartRecovery(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, s, _ := todoReminderHub(t)
 	synctest.Test(t, func(t *testing.T) {
 		var capture todoRetryPosts
@@ -210,6 +212,7 @@ func TestFeishuTodoReminderMultipartRecovery(t *testing.T) {
 }
 
 func TestFeishuTodoReminderOccurrenceKeys(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	_, s, posts := todoReminderHub(t)
 	at := time.Date(2026, 11, 21, 10, 0, 0, 123, time.UTC)
 	todo := Todo{ID: "todo_identity", Title: "Reminder", RemindAt: &at}
@@ -239,6 +242,7 @@ func TestFeishuTodoReminderOccurrenceKeys(t *testing.T) {
 }
 
 func TestFeishuTodoReminderStopsObsoleteOccurrence(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, change := range []string{"done", "deleted", "rearmed", "removed"} {
 		t.Run(change, func(t *testing.T) {
 			f, s, _ := todoReminderHub(t)
@@ -291,6 +295,7 @@ func (h *todoRetrySourceHub) DeviceCall(ctx context.Context, p DeviceCall) (json
 
 // These controls concern authorization and privacy, not the provider's response to a duplicate UUID.
 func TestFeishuTodoReminderRetryAuthority(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, change := range []string{"owner", "generation", "health disconnected", "unknown source", "known ordinary", "companion after bot", "companion after unknown first", "route refusal", "initial companion"} {
 		t.Run(change, func(t *testing.T) {
 			f, s, _ := todoReminderHub(t)
@@ -415,6 +420,7 @@ func TestFeishuTodoReminderRetryAuthority(t *testing.T) {
 
 // The fake never promises an old message ID for duplicate UUIDs. Acceptance and a usable receipt are separate.
 func TestFeishuTodoReminderUnknownDuplicateReceipt(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, paused := range []bool{false, true} {
 		t.Run(fmt.Sprint(paused), func(t *testing.T) {
 			f, s, _ := todoReminderHub(t)

@@ -11,6 +11,7 @@ import (
 // has dozens of threads; listed as they are, one Agent fills the section with its own copies and the others drop out
 // of sight, keyed alike on both clients (web and iOS key those rows by session id).
 func TestFeishuViewListsEachAgentOnce(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s := newTestService(t, newFakeHub().withMachine())
 	now := time.Unix(10_000_000, 0)
 	s.setLarkNow(func() time.Time { return now })
@@ -53,6 +54,7 @@ func TestFeishuViewListsEachAgentOnce(t *testing.T) {
 // State written by hand or by an older version can bind threads with no time at all (pruneBotThreads documents that);
 // those rows still keep one order on every load.
 func TestFeishuViewOrdersRowsWithoutATime(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s := newTestService(t, newFakeHub().withMachine())
 	s.setLarkNow(func() time.Time { return time.Time{} }) // the bindings carry no time
 	ctx := context.Background()

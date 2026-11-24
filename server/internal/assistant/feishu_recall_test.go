@@ -15,6 +15,7 @@ import (
 
 // A message the owner recalled before it went into its conversation is not sent, and its OnIt reaction goes.
 func TestFeishuRecalledMessageIsNotSent(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, _ := feishuHub("ou_a", time.Unix(100, 0))
 	f.settings = &Settings{MachineID: "server", Main: "m1"}
 	f.setSessions("server", proto.Session{SessionID: "m1", Assistant: true})
@@ -158,6 +159,7 @@ func TestFeishuRecallOfAFoldedMessageKeepsTheTurn(t *testing.T) {
 
 // Recalled after its answer went out: nothing changes.
 func TestFeishuRecallAfterTheAnswerChangesNothing(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f, r, prog, posts, reacts, unreacts := recallHub(t)
 	prog.from = 3
 	s.finishChannelRun(r, &channel.Result{Answer: "结论在这里"})

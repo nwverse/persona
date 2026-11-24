@@ -38,6 +38,7 @@ func stopCardAction(t botTarget) *botcard.CardAction {
 // A run's progress card carries the Stop button with the run's own conversation, in the card's language; a card with
 // no live run carries no button (the answer and idle cards never do).
 func TestProgressCardStopButton(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	target := botTarget{Kind: targetPersona, MachineID: "server", SessionID: "conv0001"}
 	b, _ := json.Marshal(progressCard("", "Persona", time.Second, nil, "", "", liveView{}, target))
 	card := string(b)
@@ -59,6 +60,7 @@ func TestProgressCardStopButton(t *testing.T) {
 // Pressing the progress card's Stop button interrupts the same conversation with the same device call as /stop in
 // that conversation's thread: both use the same interrupt call after their own checks.
 func TestStopCardPressMakesTheSameInterruptCallAsStopCommand(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f := stopCardHub(t, FeishuFeatures{Main: true})
 	ctx := context.Background()
 	target := botTarget{Kind: targetPersona, MachineID: "server", SessionID: "conv0001"}
@@ -92,6 +94,7 @@ func TestStopCardPressMakesTheSameInterruptCallAsStopCommand(t *testing.T) {
 // When the node cannot stop the turn, the press answers with an error toast that carries the reason, rather than
 // staying silent.
 func TestStopCardPressInterruptFailureSaysWhy(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f := stopCardHub(t, FeishuFeatures{Main: true})
 	f.failInterrupt = errors.New("node is down")
 	ctx := context.Background()
@@ -108,6 +111,7 @@ func TestStopCardPressInterruptFailureSaysWhy(t *testing.T) {
 // gone (an agent no longer listed), no conversation exists yet, or the Agents feature gates agent targets exactly as
 // it does for /stop.
 func TestStopCardPressWithNothingToStopSaysSo(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	feats := FeishuFeatures{Main: true, Agents: true}
 	f := newFakeHub().withMachine()
 	f.setSessions("server")
@@ -152,6 +156,7 @@ func TestStopCardPressWithNothingToStopSaysSo(t *testing.T) {
 // or just being opened still stops, and so does one whose state cannot be told at all, or that this chat just sent a
 // message into that was not seen working yet (its state may just not have caught up): the owner asked, so it is tried.
 func TestStopWithNoTurnRunningSaysSo(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, c := range []struct {
 		name string
 		sess proto.Session

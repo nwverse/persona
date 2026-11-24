@@ -49,6 +49,7 @@ func ixPress(id, v string) *botcard.CardAction {
 // A typed answer or a press whose resolve fails on the way puts the card back only while it still waits: one that
 // ended while the answer was out (its interaction.ended found no card) stays closed, not a ghost card (#5012).
 func TestFailedAnswerRestoresOnlyAPendingCard(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, c := range []struct {
 		name     string
 		press    bool // the button path; else a typed answer
@@ -117,6 +118,7 @@ func TestFailedAnswerRestoresOnlyAPendingCard(t *testing.T) {
 // of it: one that failed posts a note under the card, which waits again for another press; one that lost to another
 // surface closes the card as handled instead of leaving its buttons live (#4123).
 func TestLatePressOutcomeIsSaidInTheChat(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	waits := func(s *Service, id string) bool {
 		_, ok := chatCard(s, id)
 		return ok
@@ -212,6 +214,7 @@ func TestLatePressOutcomeIsSaidInTheChat(t *testing.T) {
 // A press or typed answer on a card the hub no longer has pending says why: it expired, it was withdrawn, or (answered,
 // dismissed, unknown) it was handled elsewhere (#5012).
 func TestEndedCardSaysWhy(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, c := range []struct {
 		status, toast, note, closed string
 	}{

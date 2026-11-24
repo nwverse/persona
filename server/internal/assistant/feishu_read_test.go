@@ -145,6 +145,7 @@ func TestFeishuReadInATopic(t *testing.T) {
 
 // A bare /read asks for a summary of the group.
 func TestFeishuReadWithNoWords(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := readEnv(t)
 	e.read(readEvent("om_r3", "/read", ""))
 	got := handoffs(e.f)
@@ -155,6 +156,7 @@ func TestFeishuReadWithNoWords(t *testing.T) {
 
 // What is not the owner's /read with the switch on is dropped without a word: nothing is sent, posted or reacted to.
 func TestFeishuReadDropsEverythingElse(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, c := range []struct {
 		name string
 		edit func(*threadEnv, *botcard.MessageEvent)
@@ -187,6 +189,7 @@ func TestFeishuReadDropsEverythingElse(t *testing.T) {
 // A question or approval the run raises goes to the owner's private chat, never to the group; and a private message
 // to the same conversation is not folded into the /read's answer.
 func TestFeishuReadKeepsCardsAndPrivateRunsOutOfTheGroup(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := readEnv(t)
 	e.read(readEvent("om_r4", "/read 看下", ""))
 	reply, to, note := e.s.interactionPlace(proto.Interaction{MachineID: "server", SessionID: "m1"})
@@ -212,6 +215,7 @@ func TestFeishuReadKeepsCardsAndPrivateRunsOutOfTheGroup(t *testing.T) {
 // A topic's run of the same conversation going on beside a /read does not take the /read's question into its group:
 // with no private run, the card goes to the owner's DM on its own, and no line in the topic points at it.
 func TestFeishuReadCardsSkipAConcurrentTopic(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := readEnv(t)
 	e.topicTodo("发版")
 	e.deliver(topicEvent("om_t1", "开始"))
@@ -305,6 +309,7 @@ func TestFeishuReadAnswerRetryKeepsItsKey(t *testing.T) {
 
 // The manager forwards the original post, so the assistant must preserve the same at/text boundary on reparse.
 func TestFeishuReadAdjacentPostMention(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, space := range []string{"", " "} {
 		t.Run("separator="+space, func(t *testing.T) {
 			e := readEnv(t)

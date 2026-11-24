@@ -38,6 +38,7 @@ func addActiveTodo(s *Service, td Todo, sessions ...[2]string) {
 
 // /tasks and both aliases post one display-only card with both sections, the pending links and a hand-made todo.
 func TestTasksCommandShowsOverviewCard(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, cmd := range []string{"/tasks", "/进展", "/总览"} {
 		t.Run(cmd, func(t *testing.T) {
 			s, d, posts := overviewHub(t, "https://hub.example.com")
@@ -76,6 +77,7 @@ func TestTasksCommandShowsOverviewCard(t *testing.T) {
 // Empty sections show their empty text on one unnumbered card (done todo hidden); with no public URL rows still
 // render but carry no link.
 func TestTasksOverviewEmptyAndNoLinks(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	doneAt, _ := time.Parse(time.RFC3339, "2026-11-06T10:00:00Z")
 	s, _, posts := overviewHub(t, "https://hub.example.com")
 	addActiveTodo(s, Todo{ID: "finished", Title: "做完的任务", Origin: "c2", DoneAt: &doneAt}, [2]string{"server", "s9"})
@@ -104,6 +106,7 @@ func TestTasksOverviewEmptyAndNoLinks(t *testing.T) {
 
 // Many heavy todos split into numbered cards, each inside the byte/element budget, each with a fallback.
 func TestTasksOverviewPaginatesWithinBudget(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, _, posts := overviewHub(t, "https://hub.example.com")
 	for i := 0; i < 25; i++ {
 		id := fmt.Sprintf("todo_%02d", i)
@@ -138,6 +141,7 @@ func TestTasksOverviewPaginatesWithinBudget(t *testing.T) {
 // Manual todos (Origin "") bound to no working session are absent from todoReport's links, yet they must be listed;
 // a done manual todo stays hidden and a session-bound todo keeps its Agent link (the manual one has none).
 func TestTasksOverviewListsManualTodos(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, d, posts := overviewHub(t, "https://hub.example.com")
 	d.setSessions("server", []proto.Session{{SessionID: "pane", Cwd: "/code", PaneID: "%1"}})
 	s.todos.todos["todo_manual"] = &Todo{ID: "todo_manual", Title: "随手记下的手工任务"}
@@ -166,6 +170,7 @@ func TestTasksOverviewListsManualTodos(t *testing.T) {
 // A public_url without a scheme is a dirty value: rows still render, but no open_url button goes out on either a
 // pending row or a todo row.
 func TestTasksOverviewDirtyPublicURLHasNoButtons(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, _, posts := overviewHub(t, "hub.example.com")
 	addPending(s, "ix1", "server", "pane", "要发布吗？")
 	s.todos.todos["todo_1"] = &Todo{ID: "todo_1", Title: "脏地址的任务"}

@@ -293,6 +293,7 @@ func TestBriefAcceptButtonIsForItsRoundOnly(t *testing.T) {
 
 // The briefing card carries the tasks to verify, so the "still not verified" cards are not sent again that day.
 func TestBriefCardReplacesThatDaysAcceptanceReminders(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefRunEnv(t, true)
 	e.mirror()
 	n := len(e.cards())
@@ -318,6 +319,7 @@ func TestBriefReminderComesWhenTheBriefingDoesNot(t *testing.T) {
 
 // The model is given the facts the card lists, in the message that starts the run; without facts it is not.
 func TestBriefRoutineGivesTheModelTheSameFacts(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	text := newBriefRunEnv(t, true)
 	sent, _ := text.f.lastSend(t)["text"].(string)
 	for _, want := range []string{"Persona 算好的事实", "等用户处理的 2 件", "旧的问题", "等用户验收的 1 件", "修登录崩溃", "登录不再崩溃"} {
@@ -334,6 +336,7 @@ func TestBriefRoutineGivesTheModelTheSameFacts(t *testing.T) {
 // A long list of what finished does not push out what did not go through: the failed rows come first in the last twelve
 // hours' section (#4124), the finished ones after them up to the section's ten rows.
 func TestBriefShowsFailuresBeforeALongListOfDoneTasks(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefRunEnvWith(t, true, func(e *briefRunEnv) {
 		for i := 0; i < 12; i++ {
 			at := time.Now().Add(-time.Duration(i+1) * time.Minute)
@@ -358,6 +361,7 @@ func TestBriefShowsFailuresBeforeALongListOfDoneTasks(t *testing.T) {
 // answered as any other. A failed model turn does not mirror its raw error: the scheduled-run watcher sends the fixed-facts
 // fallback once instead (briefing_fallback_test.go), and a later successful retry has facts of its own.
 func TestBriefCardIsForTheRunsOwnTurnOnly(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefRunEnv(t, true)
 	setSession := func(s proto.Session) { e.f.setSessions("server", s) }
 
@@ -435,6 +439,7 @@ func TestBriefReminderGraceOnlyWhenTheCardCanGoOut(t *testing.T) {
 // Without the Lark card (the bot's pushes are off) the model is told to list the rows itself; the web app has the item, the
 // phone apps do not yet.
 func TestBriefRoutineWithoutACardTellsTheModelToListTheRows(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	sent, _ := newBriefRunEnvWith(t, true, func(e *briefRunEnv) { e.features(FeishuFeatures{Main: true}) }).f.lastSend(t)["text"].(string)
 	if !strings.Contains(sent, "这次不会发飞书卡片") || strings.Contains(sent, "你不用再逐条列") || !strings.Contains(sent, "旧的问题") {
 		t.Errorf("a run without a card:\n%s", sent)
@@ -442,6 +447,7 @@ func TestBriefRoutineWithoutACardTellsTheModelToListTheRows(t *testing.T) {
 }
 
 func TestBriefCardsKeepEveryOwnerWaitWithinPhysicalBudget(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f := &briefFacts{l: i18n.En, loc: time.UTC, At: time.Date(2026, 11, 18, 8, 0, 0, 0, time.UTC), web: "https://example.com"}
 	d := prompts.BriefDirection{Name: "Main", Open: 220, Link: "https://example.com/main"}
 	for i := 0; i < 220; i++ {
@@ -496,6 +502,7 @@ func TestBriefCardsKeepEveryOwnerWaitWithinPhysicalBudget(t *testing.T) {
 // The answer the card quotes is cut as Markdown: a code block the cut lands in is closed and an emphasis or link the cut
 // lands in is dropped, so the quoted answer does not turn the rest of itself into code or show half a marker.
 func TestBriefCardQuotesItsAnswerAsMarkdown(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f := &briefFacts{l: i18n.En, loc: time.UTC, At: time.Date(2026, 11, 11, 8, 0, 0, 0, time.UTC)}
 	card := func(answer string) string {
 		t.Helper()

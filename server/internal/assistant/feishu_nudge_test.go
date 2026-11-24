@@ -182,6 +182,7 @@ func wantNudges(t *testing.T, r *nudgeRig, want int, when string) []map[string]a
 // A card unanswered for nudge_after gets one reply under it (default 60 minutes, the status says none), a card
 // answered before that gets nothing, and it is never nudged twice.
 func TestNudgeOnceAfterTheWait(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.ask(r.s, "ix_a", "")
 	r.tick(r.s, 59*time.Minute)
@@ -212,6 +213,7 @@ func TestNudgeOnceAfterTheWait(t *testing.T) {
 
 // nudge_after is the owner's: 30 minutes nudges at 31.
 func TestNudgeAfterIsTheSetting(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.setAfter(30)
 	r.ask(r.s, "ix_a", "")
@@ -224,6 +226,7 @@ func TestNudgeAfterIsTheSetting(t *testing.T) {
 // In the owner's private chat a reply notifies by itself, so it does not @; in a topic group it @-mentions the owner
 // and stays in the topic.
 func TestNudgeMentionsTheOwnerOnlyInATopicGroup(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.ask(r.s, "ix_dm", "")
 	r.ask(r.s, "ix_topic", "oc_group")
@@ -258,6 +261,7 @@ func TestNudgeMentionsTheOwnerOnlyInATopicGroup(t *testing.T) {
 // A card that was answered (anywhere), dismissed, expired or withdrawn is not nudged; neither is one whose agent is
 // gone, or that is no longer pending.
 func TestNudgeSkipsCardsThatAreOver(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.ask(r.s, "ix_answered", "")
 	r.ask(r.s, "ix_goneagent", "")
@@ -284,6 +288,7 @@ func TestNudgeSkipsCardsThatAreOver(t *testing.T) {
 
 // Answered after the nudge is due but before the sweep gets to it: nothing.
 func TestNudgeNotSentForACardAnsweredBeforeTheSweep(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	ix := r.ask(r.s, "ix_a", "")
 	r.now = r.now.Add(59 * time.Minute)
@@ -298,6 +303,7 @@ func TestNudgeNotSentForACardAnsweredBeforeTheSweep(t *testing.T) {
 // nudge_after 0 turns nudges off. Turned on again, what is already due is let go, not nudged all at once; a card
 // asked after that is nudged after its wait.
 func TestNudgeOffAtZero(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.setAfter(0)
 	r.ask(r.s, "ix_a", "")
@@ -322,6 +328,7 @@ func TestNudgeOffAtZero(t *testing.T) {
 
 // Nudges off from the start (never switched on in this process) are off too, and a hub that does not say is the default.
 func TestNudgeOffFromTheStart(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.setAfter(0)
 	r.ask(r.s, "ix_a", "")
@@ -332,6 +339,7 @@ func TestNudgeOffFromTheStart(t *testing.T) {
 // A nudge due in quiet hours waits for their end and goes out once, in the first sweep after; a card answered
 // meanwhile gets none.
 func TestNudgeWaitsOutQuietHours(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.ask(r.s, "ix_late", "")
 	ix := r.ask(r.s, "ix_answered", "")
@@ -354,6 +362,7 @@ func TestNudgeWaitsOutQuietHours(t *testing.T) {
 
 // Not knowing whether it is quiet (the hub does not answer) holds the nudge back rather than risking a night-time one.
 func TestNudgeHeldWhenQuietHoursCannotBeRead(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.f.answerApp(AppNotify, NotifyQuietGet, func(json.RawMessage) (any, error) { return nil, errors.New("hub busy") })
 	r.ask(r.s, "ix_a", "")
@@ -367,6 +376,7 @@ func TestNudgeHeldWhenQuietHoursCannotBeRead(t *testing.T) {
 // A restart does not nudge a card a second time, and one asked before the restart is nudged once, whatever the
 // restarted manager knows of the card (the record keeps only where it is, never what it asks).
 func TestNudgeNotRepeatedAfterARestart(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	ix := r.ask(r.s, "ix_nudged", "")
 	r.ask(r.s, "ix_later", "")
@@ -387,6 +397,7 @@ func TestNudgeNotRepeatedAfterARestart(t *testing.T) {
 // A restart between a card and its nudge does not lose the nudge, and the line still says what it asks (the manager
 // asks the hub for the card again).
 func TestNudgeAfterARestartBeforeItIsDue(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	ix := r.ask(r.s, "ix_a", "oc_group")
 	r.tick(r.s, 20*time.Minute)
@@ -411,6 +422,7 @@ func (r *nudgeRig) askWithoutCard(s *Service, ix proto.Interaction) {
 
 // A permission card's nudge says which tool, never the command it would run.
 func TestNudgeOfAPermissionNamesNoCommand(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.askWith(r.s, proto.Interaction{ID: "ix_p", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, ToolName: "Bash",
 		ToolInput: json.RawMessage(`{"command":"rm -rf /home/someone/secret-project"}`), Reason: "clean up the build"}, "")
@@ -425,6 +437,7 @@ func TestNudgeOfAPermissionNamesNoCommand(t *testing.T) {
 // A send that failed for a reason that may pass is tried again in the next sweep, under the same key, and still
 // nudges once; a refusal (the card is gone) is not tried again.
 func TestNudgeRetriesAFailedSendOnceItGoesOut(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.ask(r.s, "ix_a", "")
 	r.mu.Lock()
@@ -470,6 +483,7 @@ func TestNudgeRetriesAFailedSendOnceItGoesOut(t *testing.T) {
 
 // A card left more than a day is let go.
 func TestNudgeLetsGoOfAnOldCard(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.ask(r.s, "ix_a", "")
 	r.now = r.now.Add(25 * time.Hour)
@@ -479,6 +493,7 @@ func TestNudgeLetsGoOfAnOldCard(t *testing.T) {
 
 // Not paired or not connected: nothing to nudge with.
 func TestNudgeNeedsABotThatCanSend(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.ask(r.s, "ix_a", "")
 	r.f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
@@ -490,6 +505,7 @@ func TestNudgeNeedsABotThatCanSend(t *testing.T) {
 
 // nudge_after up to six days works: a card is not let go before the wait is over, and a day after it is.
 func TestNudgeLongWaitIsStillNudged(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.setAfter(2880) // 48 hours
 	r.ask(r.s, "ix_a", "")
@@ -504,6 +520,7 @@ func TestNudgeLongWaitIsStillNudged(t *testing.T) {
 
 // With no card kept the sweep does not even ask the hub for the bot's status.
 func TestNudgeCostsNothingWithoutCards(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.tick(r.s, 2*time.Hour)
 	r.tick(r.s, 2*time.Hour)
@@ -519,6 +536,7 @@ func TestNudgeCostsNothingWithoutCards(t *testing.T) {
 
 // Nudges off when the manager restarts, then on: the backlog of cards due is let go, as without the restart.
 func TestNudgeBacklogLetGoAcrossARestartWhileOff(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.setAfter(0)
 	ix := r.ask(r.s, "ix_a", "")
@@ -536,6 +554,7 @@ func TestNudgeBacklogLetGoAcrossARestartWhileOff(t *testing.T) {
 
 // A send that keeps failing is tried three times and then given up, not forever; the card is not shown as nudged.
 func TestNudgeGivesUpAfterThreeTries(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.ask(r.s, "ix_a", "")
 	r.mu.Lock()
@@ -561,6 +580,7 @@ func TestNudgeGivesUpAfterThreeTries(t *testing.T) {
 
 // A retry after Feishu's key window (an hour from the first try) could land twice: it is given up instead.
 func TestNudgeDoesNotRetryPastTheKeyWindow(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.ask(r.s, "ix_a", "")
 	r.mu.Lock()
@@ -582,6 +602,7 @@ func TestNudgeDoesNotRetryPastTheKeyWindow(t *testing.T) {
 
 // A refused nudge is not shown as sent.
 func TestNudgeRefusedIsNotShownAsNudged(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.ask(r.s, "ix_a", "oc_group")
 	r.mu.Lock()
@@ -596,6 +617,7 @@ func TestNudgeRefusedIsNotShownAsNudged(t *testing.T) {
 // The card is answered in the moment between the sweep deciding on it and marking it (the hub is asked, the agent's
 // list is read): nothing is sent.
 func TestNudgeNotSentForACardAnsweredDuringTheSweep(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	ix := r.ask(r.s, "ix_a", "")
 	r.onSessions = func() { r.s.feishuInteractionDone(ix, "answered") }
@@ -609,6 +631,7 @@ func TestNudgeNotSentForACardAnsweredDuringTheSweep(t *testing.T) {
 // The tries are kept with the card: a restart after a failed send does not give the next sweep a fresh hour, so a
 // retry past Feishu's key window is still not made.
 func TestNudgeTriesSurviveARestart(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	ix := r.ask(r.s, "ix_a", "")
 	r.mu.Lock()
@@ -628,6 +651,7 @@ func TestNudgeTriesSurviveARestart(t *testing.T) {
 }
 
 func TestNudgeDeadlineBeforeExpiry(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.askExpiring(r.s, "ix_deadline", 15*time.Minute)
 	r.tick(r.s, 7*time.Minute)
@@ -649,6 +673,7 @@ func TestNudgeDeadlineBeforeExpiry(t *testing.T) {
 }
 
 func TestNudgeDeadlineIndependentOfOrdinary(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.setAfter(1)
 	r.askExpiring(r.s, "ix_both", 15*time.Minute)
@@ -669,6 +694,7 @@ func TestNudgeDeadlineIndependentOfOrdinary(t *testing.T) {
 }
 
 func TestNudgeDeadlineZeroDisablesAll(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.setAfter(0)
 	r.askExpiring(r.s, "ix_off", 15*time.Minute)
@@ -682,6 +708,7 @@ func TestNudgeDeadlineZeroDisablesAll(t *testing.T) {
 }
 
 func TestNudgeDeadlineSkipsEndedCards(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, status := range []string{"answered", "dismissed", "replaced", "expired", "withdrawn"} {
 		t.Run(status, func(t *testing.T) {
 			r := newNudgeRig(t)
@@ -694,6 +721,7 @@ func TestNudgeDeadlineSkipsEndedCards(t *testing.T) {
 }
 
 func TestNudgeDeadlineNeverSendsAPrivateCard(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.askWith(r.s, proto.Interaction{ID: "ix_private", MachineID: "mac", SessionID: "s1", Kind: proto.IxQuestion, Private: true,
 		Questions: []proto.Question{{Question: "private content that must stay out of Lark"}}, ExpiresAt: r.now.Add(15 * time.Minute)}, "")
@@ -706,6 +734,7 @@ func TestNudgeDeadlineNeverSendsAPrivateCard(t *testing.T) {
 }
 
 func TestNudgeDeadlineWaitsForResume(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.askExpiring(r.s, "ix_paused", 15*time.Minute)
 	r.s.fleet.mu.Lock()
@@ -728,6 +757,7 @@ func TestNudgeDeadlineWaitsForResume(t *testing.T) {
 }
 
 func TestNudgeDeadlineFollowsExtendedApprovalWindow(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.setAfter(100000) // keep the independent ordinary nudge out of this long-window check
 	r.askExpiring(r.s, "ix_extended", 15*time.Minute)
@@ -746,6 +776,7 @@ func TestNudgeDeadlineFollowsExtendedApprovalWindow(t *testing.T) {
 }
 
 func TestNudgeDeadlineSurvivesRestartWithoutRepeating(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	ix := r.askExpiring(r.s, "ix_restart", 15*time.Minute)
 	r.tick(r.s, 6*time.Minute)
@@ -767,6 +798,7 @@ func TestNudgeDeadlineSurvivesRestartWithoutRepeating(t *testing.T) {
 }
 
 func TestNudgeDeadlineWaitsOutQuietHours(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	t.Run("released before expiry", func(t *testing.T) {
 		r := newNudgeRig(t)
 		r.askExpiring(r.s, "ix_quiet", 15*time.Minute)
@@ -789,6 +821,7 @@ func TestNudgeDeadlineWaitsOutQuietHours(t *testing.T) {
 }
 
 func TestNudgeDeadlineRetriesUnderOneKey(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	r := newNudgeRig(t)
 	r.askExpiring(r.s, "ix_retry", 15*time.Minute)
 	r.mu.Lock()

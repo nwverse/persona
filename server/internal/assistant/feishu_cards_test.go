@@ -25,6 +25,7 @@ func longListName(i int) string {
 // same list as the card's text fallback (with Markdown metacharacters stripped), so a refused card still delivers
 // it (#4362).
 func TestBotCommandListCardsClipAndFallback(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, posts := feishuHub("ou_a", time.Unix(100, 0))
 	s := newTestService(t, f)
 	setSettings(t, s, func(v *Settings) { v.MachineID = "server"; v.Main = "main0" })
@@ -88,6 +89,7 @@ func TestBotCommandListCardsClipAndFallback(t *testing.T) {
 // reply to the card has it as the parent and a topic started on it has it as the root, so botTargetFor routes both
 // to the target (#5438).
 func TestSwitchBindsPressedCard(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, _, _, _ := startCardHub(t)
 	ctx := context.Background()
 	var a botcard.CardAction
@@ -113,6 +115,7 @@ func TestSwitchBindsPressedCard(t *testing.T) {
 // The agents card's "Start new agent" button posts the same form /start builds (startAgentCard), quoting the
 // pressed list card, and starts nothing itself (#5438).
 func TestStartFormCallbackPostsStartCard(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f, posts, _ := startCardHub(t)
 	ctx := context.Background()
 	var a botcard.CardAction
@@ -224,6 +227,7 @@ func waitForStart(t *testing.T, f *fakeHub, posts chan struct{}, says chan strin
 // A double press of the same /start card (a double tap, Feishu's redelivery, or the hub's resend) starts one agent:
 // both presses get the same "Starting" toast and a different card can still start another agent (#4340).
 func TestStartCardDoublePressStartsOneAgent(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f, posts, says := startCardHub(t)
 	ctx := context.Background()
 	want := i18n.T("", "assistant-feishu_cards.starting")
@@ -253,6 +257,7 @@ func TestStartCardDoublePressStartsOneAgent(t *testing.T) {
 // A press whose form fails validation (no directory) answers the warning without taking the dedup slot: a corrected
 // press of the same card right afterwards still starts one agent.
 func TestStartCardInvalidFormDoesNotTakeSlot(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f, posts, says := startCardHub(t)
 	ctx := context.Background()
 
@@ -270,6 +275,7 @@ func TestStartCardInvalidFormDoesNotTakeSlot(t *testing.T) {
 // When the start itself fails (the node refused it), the dedup slot is released: the owner sees the failure and can
 // press the same card again to retry, instead of getting a bare "Starting" with nothing starting.
 func TestStartCardFailedStartLetsNextPressThrough(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f, posts, says := startCardHub(t)
 	ctx := context.Background()
 	f.failStart = errors.New("node is down")
@@ -297,6 +303,7 @@ func TestStartCardFailedStartLetsNextPressThrough(t *testing.T) {
 // block on the machine and directory. The window is shrunk after the first start fully posted; botStartAgent's
 // goroutine never reads the window, so shrinking it cannot race with that goroutine.
 func TestStartCardPressAgainAfterWindow(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f, posts, says := startCardHub(t)
 	ctx := context.Background()
 
@@ -310,6 +317,7 @@ func TestStartCardPressAgainAfterWindow(t *testing.T) {
 // A press without a card message id is never deduped (the guard keys on the card message), so a malformed callback
 // cannot lock the machine out.
 func TestStartCardWithoutMessageIDIsNotDeduped(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f, posts, says := startCardHub(t)
 	ctx := context.Background()
 
@@ -345,6 +353,7 @@ func waitForForm(t *testing.T, posts chan struct{}, why string) {
 // up on) opens one form: the second press gets the same toast and posts nothing, as the /start button does. A press
 // of another list card is another press and opens its own form (#3789).
 func TestStartFormPressOpensOneForm(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, _, posts, _ := startCardHub(t)
 
 	pressStartForm(t, s, "om_agents")
@@ -365,6 +374,7 @@ func TestStartFormPressOpensOneForm(t *testing.T) {
 // After the form window, pressing the same card again opens another form: the guard covers a press delivered twice,
 // not the owner asking for a new form a moment later.
 func TestStartFormPressAgainAfterWindow(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, _, posts, _ := startCardHub(t)
 
 	pressStartForm(t, s, "om_agents")
@@ -377,6 +387,7 @@ func TestStartFormPressAgainAfterWindow(t *testing.T) {
 // A start form that could not be posted says so and frees its press slot: the owner can press the same button again
 // instead of getting "Opening the start form" and nothing after it (#3789).
 func TestStartFormFailedPostFreesThePress(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f, posts, says := startCardHub(t)
 	f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) { return nil, errors.New("the app is down") })
 
@@ -434,6 +445,7 @@ func cardButtons(t *testing.T, c *botcard.Card) map[string]map[string]any {
 // for Claude on a conversation, and for another agent only what it says that always allows. A runtime cannot keep
 // Claude's session rule (node/runtimes.go), so the button there would allow once and ask again.
 func TestFeishuPermissionCardOffersAlwaysOnlyWhereItWorks(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, _ := feishuHub("ou_a", time.Unix(100, 0))
 	s := newTestService(t, f)
 	ctx := context.Background()
@@ -512,6 +524,7 @@ func cardMarkdown(t *testing.T, c *botcard.Card) string {
 // A plan too long for its card is cut at a line break, and a code block the cut lands in is closed, so the clipped
 // note after it reads as text, not as the code's last line. A plan that fits is shown as it is.
 func TestFeishuPlanCardClipClosesItsCodeBlock(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s := newTestService(t, newFakeHub())
 	ctx := i18n.With(context.Background(), i18n.En)
 	note := i18n.T(i18n.En, "assistant-feishu_cards.plan_clipped")
@@ -577,6 +590,7 @@ func TestFeishuPlanCardClipClosesItsCodeBlock(t *testing.T) {
 // a tag; one row of actions ending in a "more" menu with dismissing and the conversation's page; an approval that
 // lets the agent go on by itself asks first.
 func TestInteractionCardsLook(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, _ := feishuHub("ou_a", time.Unix(100, 0))
 	withWebBot(f, "https://hub.example.com")
 	s := newTestService(t, f)
@@ -613,6 +627,7 @@ func TestInteractionCardsLook(t *testing.T) {
 // An agent that goes by its herdr tab name is named by it on the card asking the owner and on the card once answered,
 // its CLI title at the end of the subtitle.
 func TestInteractionCardHerdrSessionNames(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s := newTestService(t, newFakeHub())
 	ctx := context.Background()
 	if err := s.store().PutSetting(ctx, agentsUseHerdrTabNameKey, true); err != nil {
@@ -638,6 +653,7 @@ func TestInteractionCardHerdrSessionNames(t *testing.T) {
 
 // The option the asker recommends is the card's primary button.
 func TestQuestionCardRecommendIsPrimary(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s := newTestService(t, newFakeHub())
 	ix := proto.Interaction{ID: "ix_q", Kind: proto.IxQuestion, Questions: []proto.Question{{Question: "用哪个库？",
 		Options: []proto.QuestionOption{{Label: "A"}, {Label: "B"}}, Recommend: "B"}}}
@@ -650,6 +666,7 @@ func TestQuestionCardRecommendIsPrimary(t *testing.T) {
 
 // With the option the asker recommends as the primary button, the written answer's submit is not one too.
 func TestQuestionCardOnePrimary(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s := newTestService(t, newFakeHub())
 	ix := proto.Interaction{ID: "ix_q", Kind: proto.IxQuestion, Questions: []proto.Question{{Question: "用哪个库？",
 		Options: []proto.QuestionOption{{Label: "A"}, {Label: "B"}}, Recommend: "B"}}}

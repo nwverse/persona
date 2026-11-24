@@ -208,6 +208,7 @@ func index(t *testing.T, card, want string) int {
 // With `board` on, /tasks sends one card; a second /tasks (or an alias) edits it and sends no other card, and says so in
 // a line that replies to the board.
 func TestBoardIsSentOnceThenEditedInPlace(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	e.card("ix1", "box", "ag1", "要发布吗？", time.Minute)
 	e.tasks("/tasks")
@@ -236,6 +237,7 @@ func TestBoardIsSentOnceThenEditedInPlace(t *testing.T) {
 
 // A new card from an Agent is on the board within a few seconds, and answering it (anywhere) takes it off.
 func TestBoardTakesANewCardAndDropsAnAnsweredOne(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	e.tasks("/tasks")
 	ix := e.card("ix1", "box", "ag1", "先发预发还是直接上线？", 0)
@@ -261,6 +263,7 @@ func TestBoardTakesANewCardAndDropsAnAnsweredOne(t *testing.T) {
 // The rows are sorted: what holds up an Agent and has waited longest first, then the rest, then the to-dos waiting for
 // the owner's check, however long they have waited. Each row says how long, and who asked.
 func TestBoardOrdersByWaitAndSaysWhoAsked(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	e.card("ix_short", "box", "ag1", "短的问题", 2*time.Minute)
 	e.card("ix_long", "server", "asm", "长的问题", 80*time.Minute)
@@ -283,6 +286,7 @@ func TestBoardOrdersByWaitAndSaysWhoAsked(t *testing.T) {
 }
 
 func TestBoardWaitReadsLikeAPerson(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, c := range []struct {
 		l    i18n.Lang
 		d    time.Duration
@@ -301,6 +305,7 @@ func TestBoardWaitReadsLikeAPerson(t *testing.T) {
 // A permission's line says only that it needs approval: not the command, not the path (the board sits in a chat that may
 // be seen in a screenshot). A terminal dialog's line is generic too.
 func TestBoardPermissionLineHasNoCommand(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	e.add(proto.Interaction{ID: "ix_perm", MachineID: "box", SessionID: "ag1", Kind: proto.IxPermission, ToolName: "Bash",
 		Summary: "rm -rf /data/secret-project", ToolInput: json.RawMessage(`{"command":"rm -rf /data/secret-project"}`),
@@ -324,6 +329,7 @@ func TestBoardPermissionLineHasNoCommand(t *testing.T) {
 
 // Nothing waiting: the board says so, and is still the board (edited, not removed).
 func TestBoardWithNothingWaitingSaysSo(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	e.tasks("/tasks")
 	if c := cardOf(e.posts[0]); !strings.Contains(bodyOf(t, c), "现在没有等你的事") {
@@ -338,6 +344,7 @@ func TestBoardWithNothingWaitingSaysSo(t *testing.T) {
 // A board that can no longer be edited (older than Feishu's 14 days, deleted, or Feishu says so) is replaced by a new one,
 // and the bot remembers the new one: the next edit goes to it.
 func TestBoardIsReplacedWhenItCannotBeEdited(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, c := range []struct {
 		name  string
 		fail  error
@@ -379,6 +386,7 @@ func TestBoardIsReplacedWhenItCannotBeEdited(t *testing.T) {
 // An edit that fails for a passing reason (the network, a timeout, a rate limit, a server error, a token) is not a reason
 // for a second board: the board stays, and /tasks answers with the snapshot as it does with the switch off.
 func TestBoardStaysWhenAnEditFailsForAPassingReason(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, err := range []error{
 		errors.New("feishu update card: 230020 too frequent"),
 		errors.New("feishu update card: 99991400 request trigger frequency limit"),
@@ -406,6 +414,7 @@ func TestBoardStaysWhenAnEditFailsForAPassingReason(t *testing.T) {
 }
 
 func TestBoardFrequencyLimitedEditKeepsOriginalForNextUpdate(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	e.tasks("/tasks")
 	e.failUpdates(errors.New("feishu update card: 230429 This operation triggers the frequency limit."))
@@ -432,6 +441,7 @@ func TestBoardFrequencyLimitedEditKeepsOriginalForNextUpdate(t *testing.T) {
 // A board that was sent as rich text (Feishu refused the card) has the id of a text message, and every edit of it fails
 // the same way for good: it is replaced, not kept for ever. So is a board Feishu refuses for any other answer.
 func TestBoardIsReplacedWhenFeishuWillNeverTakeTheEdit(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, err := range []error{
 		errors.New("feishu update card: 230001 Only interactive messages can be updated"),
 		errors.New("feishu update card: 230099 Failed to create card content"),
@@ -455,6 +465,7 @@ func TestBoardIsReplacedWhenFeishuWillNeverTakeTheEdit(t *testing.T) {
 // With `board` off nothing changes: /tasks sends its snapshot every time, no board is made or edited, and a board from
 // when the switch was on is left alone.
 func TestBoardOffChangesNothing(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	e.setFeatures(FeishuFeatures{Main: true})
 	e.card("ix1", "box", "ag1", "要发布吗？", time.Minute)
@@ -486,6 +497,7 @@ func TestBoardOffChangesNothing(t *testing.T) {
 
 // Changes that come together are one edit: five cards in a row are one change of the board, and a later one is another.
 func TestBoardEditsAreDebounced(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	e.tasks("/tasks")
 	var ixs []proto.Interaction
@@ -515,6 +527,7 @@ func TestBoardEditsAreDebounced(t *testing.T) {
 
 // A chat with no board schedules nothing, whatever happens.
 func TestBoardNothingScheduledWithoutABoard(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	ix := e.card("ix1", "box", "ag1", "问题", 0)
 	e.announce(ix)
@@ -529,6 +542,7 @@ func TestBoardNothingScheduledWithoutABoard(t *testing.T) {
 // cards that are pending: before that the list is empty because it is not read, and a board written then would say that
 // nothing is waiting.
 func TestBoardIsRefreshedWhenTheFleetIsUp(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	e.tasks("/tasks")
 	e.s.standing.fleetUp.Store(false) // a restart: the fleet is not up yet
@@ -552,6 +566,7 @@ func TestBoardIsRefreshedWhenTheFleetIsUp(t *testing.T) {
 
 // A to-do enters the board when its "Please verify" card goes out and leaves it when it is passed or closed.
 func TestBoardFollowsPleaseVerify(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	e.setFeatures(FeishuFeatures{Main: true, Board: true, Reports: true})
 	e.tasks("/tasks")
@@ -593,6 +608,7 @@ func TestBoardFollowsPleaseVerify(t *testing.T) {
 
 // More rows than one card holds: the board lists as many as fit and counts the rest.
 func TestBoardCountsWhatDoesNotFit(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	for i := 0; i < boardRowsMax+5; i++ {
 		e.card(fmt.Sprintf("ix%02d", i), "box", "ag1", fmt.Sprintf("问题%02d", i), time.Duration(i+1)*time.Minute)
@@ -611,6 +627,7 @@ func TestBoardCountsWhatDoesNotFit(t *testing.T) {
 
 // A card that ended is not on the board even while the Agent's entry for it is still being taken away.
 func TestBoardLeavesWhatEndedAtOnce(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	ix := e.card("ix1", "box", "ag1", "已经回答了的问题", time.Minute)
 	e.tasks("/tasks")
@@ -682,6 +699,7 @@ func TestBoardTakesADeployedTaskAndDropsItWhenPassed(t *testing.T) {
 // A change the board does not show (a to-do's title, its agents) costs no edit; the board is edited again when what it
 // shows differs, which includes how long things have waited.
 func TestBoardSkipsAnEditThatSaysTheSame(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	e.tasks("/tasks")
 	ix := e.card("ix1", "box", "ag1", "要发布吗？", 0)
@@ -709,6 +727,7 @@ func TestBoardSkipsAnEditThatSaysTheSame(t *testing.T) {
 
 // Two /tasks at once make one board: the second finds the first's and edits it.
 func TestBoardTwoTasksAtOnceSendOneBoard(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	e.mu.Lock()
 	e.postDelay = 50 * time.Millisecond
@@ -729,6 +748,7 @@ func TestBoardTwoTasksAtOnceSendOneBoard(t *testing.T) {
 
 // The settle-time edit waits for a write that is under way (a /tasks, a replacement) instead of running beside it.
 func TestBoardRefreshWaitsForAWriteInProgress(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	e.tasks("/tasks")
 	e.card("ix1", "box", "ag1", "等一等再写", 0)
@@ -754,6 +774,7 @@ func TestBoardRefreshWaitsForAWriteInProgress(t *testing.T) {
 
 // After a restart the board is the one in the chat's state: /tasks edits it and sends no second.
 func TestBoardSurvivesARestart(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	e.tasks("/tasks")
 	e2 := newBoardEnvOn(t, e.st)
@@ -769,6 +790,7 @@ func TestBoardSurvivesARestart(t *testing.T) {
 // A card heavier than the 30 rows allow is cut by the card's size, not by the count: the board stays inside it and counts
 // what it left out, so rows shown and rows counted are all of them.
 func TestBoardIsCutByTheCardsSize(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	const total = 30
 	long := strings.Repeat("s", 900)
@@ -793,6 +815,7 @@ func TestBoardIsCutByTheCardsSize(t *testing.T) {
 // With `board` off /tasks says exactly what it said before the board: the posts are the snapshot's cards, replying to the
 // message, byte for byte, and nothing else is called.
 func TestBoardOffTasksIsTheSnapshotByteForByte(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	e.setFeatures(FeishuFeatures{Main: true})
 	e.card("ix1", "box", "ag1", "要发布吗？", 5*time.Minute)
@@ -821,6 +844,7 @@ func TestBoardOffTasksIsTheSnapshotByteForByte(t *testing.T) {
 
 // A bot paired again is a new chat: the board of the old owner is not edited, and /tasks sends a new one.
 func TestBoardOfAnOldPairingIsNotEdited(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	e.tasks("/tasks")
 	e.mu.Lock()
@@ -845,6 +869,7 @@ func TestBoardOfAnOldPairingIsNotEdited(t *testing.T) {
 // A board sent again after a send that timed out has the key of the first try, so Feishu makes one message of the two; the
 // next replacement has another key.
 func TestBoardResendKeepsItsKey(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	e.tasks("/tasks")
 	e.clk.advance(14*24*time.Hour + time.Hour)
@@ -882,6 +907,7 @@ func TestBoardResendKeepsItsKey(t *testing.T) {
 // What changes while the board is going out is on it afterwards: the look that finds the new board is scheduled when it is
 // remembered.
 func TestBoardChangeDuringTheFirstSendIsOnTheBoard(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	var ix proto.Interaction
 	e.mu.Lock()
@@ -904,6 +930,7 @@ func TestBoardChangeDuringTheFirstSendIsOnTheBoard(t *testing.T) {
 // Without a board, or with the switch off, the to-dos changing all the time cost no call for the bot's status (the off
 // switch is looked at once a minute at most).
 func TestBoardTodoChangesCostNoStatusCalls(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	statusCalls := func() int { return len(e.f.appParams(AppFeishu, FeishuStatusGet)) }
 	for i := 0; i < 20; i++ { // no board yet
@@ -937,6 +964,7 @@ func TestBoardTodoChangesCostNoStatusCalls(t *testing.T) {
 // A row whose card the bot nudged under says so (#6084); one it did not nudge says nothing. Nudging a card brings the
 // board up to date, so the row is marked without anyone asking for the board.
 func TestBoardMarksANudgedRow(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	e.s.setLarkNow(e.clk.Now)
 	e.f.answerApp(AppNotify, NotifyQuietGet, func(json.RawMessage) (any, error) { return map[string]bool{"quiet": false}, nil })
@@ -982,6 +1010,7 @@ func TestBoardMarksANudgedRow(t *testing.T) {
 // A nudge that was let go, refused or given up, or that is only being tried, is not shown as sent: the mark is for what
 // went out.
 func TestBoardDoesNotMarkWhatWasNotNudged(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	skipped := e.card("ix_skipped", "box", "ag1", "放过的问题", time.Hour)
 	trying := e.card("ix_trying", "box", "ag2", "重试中的问题", time.Hour)

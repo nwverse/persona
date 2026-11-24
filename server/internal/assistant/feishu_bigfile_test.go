@@ -34,6 +34,7 @@ func bigFileHub(t *testing.T) (*fakeHub, *Service, *[]string) {
 // A message with words and a file too large to pass on: the words go into the conversation, and a line says which
 // file was left out.
 func TestFeishuTooLargeFileLeavesTheRest(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, s, notes := bigFileHub(t)
 	var ev botcard.MessageEvent
 	ev.Message.MessageID, ev.Message.ChatType, ev.Message.MessageType = "om_big", "p2p", "post"
@@ -52,6 +53,7 @@ func TestFeishuTooLargeFileLeavesTheRest(t *testing.T) {
 
 // Only a file too large and nothing else: nothing to send, and the answer says it is too large.
 func TestFeishuOnlyATooLargeFile(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, s, _ := bigFileHub(t)
 	var ev botcard.MessageEvent
 	ev.Message.MessageID, ev.Message.ChatType, ev.Message.MessageType = "om_big", "p2p", "file"

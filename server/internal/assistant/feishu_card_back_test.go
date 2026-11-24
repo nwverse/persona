@@ -72,6 +72,7 @@ func waitCardKept(t *testing.T, ft *fleetTest) {
 // The node's connection drops and comes back while the agent still waits on the same dialog: the Feishu card closed
 // as "Ended" asks it again, in the same message, not as a second card (#4583).
 func TestFeishuCardBackAfterTheNodeReconnects(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	ft, n := newCardFleet(t, false)
 	seen := feishuCardsOn(ft)
 	n.setScreen(pickModel)
@@ -99,6 +100,7 @@ func TestFeishuCardBackAfterTheNodeReconnects(t *testing.T) {
 
 // The agent moved on while its node was away: the card does not come back, and its Feishu card stays "Ended".
 func TestFeishuCardThatEndedWhileTheNodeWasAwayStaysClosed(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	ft, n := newCardFleet(t, false)
 	seen := feishuCardsOn(ft)
 	n.setScreen(pickModel)

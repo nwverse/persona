@@ -11,6 +11,7 @@ import (
 )
 
 func TestFeishuModelCommands(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	ctx := context.Background()
 	s, f := pickFixture(t)
 	f.agentModels = map[string][]proto.AgentModel{"gw": {{ID: "m1"}, {ID: "m2"}}}

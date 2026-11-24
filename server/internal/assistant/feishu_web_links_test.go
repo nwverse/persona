@@ -23,6 +23,7 @@ func withWebBot(f *fakeHub, publicURL string) {
 // A resolved interaction card carries the conversation's web link: /persona/<id> for a Persona conversation and
 // /s/<machine>/<id> for a coding agent's; without a public URL it carries no link at all (#4073).
 func TestAnsweredCardOpenButton(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, tc := range []struct {
 		name    string
 		web     string
@@ -119,6 +120,7 @@ func TestFeishuAnswerOpenButtonOnLastPiece(t *testing.T) {
 // /list gives every conversation a link to its own page; without a public URL it only keeps the switch buttons, and
 // more than eight conversations still leave the first eight whole and the card within its size budget.
 func TestConversationsCardOpenButtons(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	t.Run("links per conversation", func(t *testing.T) {
 		f, _ := feishuHub("ou_a", time.Unix(100, 0))
 		withWebBot(f, "https://hub.example.com")

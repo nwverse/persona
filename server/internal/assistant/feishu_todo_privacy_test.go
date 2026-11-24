@@ -11,6 +11,7 @@ import (
 
 // Exercise the scheduled reminder entry and inspect the whole outgoing payload, including card metadata.
 func TestFeishuTodoReminderCardPrivacyAtReminderEntry(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, health := range []bool{false, true} {
 		name := "ordinary"
 		if health {

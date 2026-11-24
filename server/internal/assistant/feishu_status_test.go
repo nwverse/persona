@@ -53,6 +53,7 @@ func putStatusPending(s *Service, id, kind, text string, at int64) {
 }
 
 func TestStatusCardStates(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, c := range []struct{ state, want string }{
 		{proto.StateWorking, "工作中"}, {proto.StateNeedsYou, "等你拍板"}, {proto.StateIdle, "空闲"},
 		{proto.StateUnread, "空闲"}, {proto.StateOffline, "离线 / 状态未知"},
@@ -70,6 +71,7 @@ func TestStatusCardStates(t *testing.T) {
 }
 
 func TestStatusCardGoal(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for i, status := range []string{proto.GoalActive, "", proto.GoalComplete} {
 		s, f, _ := statusHub(t, "")
 		f.setSessions("server", proto.Session{SessionID: "agent0001", MachineID: "server", Agent: "claude",
@@ -82,6 +84,7 @@ func TestStatusCardGoal(t *testing.T) {
 
 // Pending rows belong to the target session only, with a web link (none without a public URL) and the fallback.
 func TestStatusCardPending(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	setup := func(t *testing.T, url string) *Service {
 		t.Helper()
 		s, f, _ := statusHub(t, url)
@@ -118,6 +121,7 @@ func TestStatusCardPending(t *testing.T) {
 
 // More pending interactions than the cap are truncated with a "more" note, so a long queue can't overflow the card.
 func TestStatusCardPendingCap(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f, _ := statusHub(t, "https://hub.example.com")
 	f.setSessions("server", proto.Session{SessionID: "agent0001", MachineID: "server", Agent: "claude", State: proto.StateNeedsYou})
 	for i := 0; i < statusPendingMax+3; i++ {
@@ -132,6 +136,7 @@ func TestStatusCardPendingCap(t *testing.T) {
 
 // In a thread /status follows the thread's target, and the post carries the content as a non-empty fallback.
 func TestStatusCommandFollowsThreadTarget(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f, posts := statusHub(t, "")
 	f.setSessions("server",
 		proto.Session{SessionID: "main0", MachineID: "server", Assistant: true, State: proto.StateIdle, LastText: "主对话最近一句"},
@@ -147,6 +152,7 @@ func TestStatusCommandFollowsThreadTarget(t *testing.T) {
 }
 
 func TestStatusCardRunCount(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	ctx := context.Background()
 	st := &memStore{}
 	if err := st.PutSetting(ctx, channelsStateKey, channelsState{Runs: []*channel.Run{{ID: "fb_1", Channel: channel.Feishu, MachineID: "server", SessionID: "main0"}}}); err != nil {
@@ -164,6 +170,7 @@ func TestStatusCardRunCount(t *testing.T) {
 
 // Without a public URL there is no web app to send the reader to: the "more" note just counts (#5677).
 func TestStatusCardPendingCapWithoutWeb(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, c := range []struct {
 		url     string
 		web     bool
@@ -185,6 +192,7 @@ func TestStatusCardPendingCapWithoutWeb(t *testing.T) {
 // The fallback is plain text: the last activity loses its Markdown like every other line, and no line is doubled
 // into a blank one (#5677).
 func TestStatusCardFallbackPlain(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f, _ := statusHub(t, "")
 	f.setSessions("server", proto.Session{SessionID: "agent0001", MachineID: "server", Agent: "claude",
 		State: proto.StateIdle, LastText: "改好了 **foo_bar** 和 `x[1]`"})

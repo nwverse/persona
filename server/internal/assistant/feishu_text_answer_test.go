@@ -62,6 +62,7 @@ func noteText(ns *[]map[string]any) string {
 
 // A typed option resolves like the press (same id, answers, one-use owner action); the latest posted card wins.
 func TestTypedAnswerResolvesTheCard(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, c := range []struct {
 		text, want, id string
 		multi          bool
@@ -103,6 +104,7 @@ func TestTypedAnswerResolvesTheCard(t *testing.T) {
 
 // Non-options/no-action/plan/form messages stay for the agent; over-elsewhere handled and swallowed; failed resolve keeps waiting.
 func TestTypedAnswerGuards(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	free, plan := qCard("ix_q", false, "北京", "上海"), proto.Interaction{ID: "ix_plan", Kind: proto.IxPlan}
 	form := proto.Interaction{ID: "ix_form", Kind: proto.IxQuestion, Questions: []proto.Question{{Question: "一"}, {Question: "二"}}}
 	for _, c := range []struct {
@@ -136,6 +138,7 @@ func TestTypedAnswerGuards(t *testing.T) {
 // A message inside an agent's topic only answers a card waiting in that topic; a card elsewhere keeps waiting and the
 // words go to that agent. In the root chat the newest card anywhere is still answered.
 func TestTypedAnswerStaysInItsTopic(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	rootCard := qCard("ix_root", false, "甲", "乙")
 	topicCard := qCard("ix_topic", false, "子", "丑")
 	otherCard := qCard("ix_other", false, "寅", "卯")
@@ -180,6 +183,7 @@ func TestTypedAnswerStaysInItsTopic(t *testing.T) {
 
 // End to end through the handler: the owner's text answers the waiting card and starts no conversation.
 func TestFeishuMessageTypedAnswer(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	ix := qCard("ix_q", false, "北京", "上海", "广州")
 	s, f, _, _, rs := textAnswerBot(t, nil, ix)
 	seedCard(s, ix)
@@ -196,6 +200,7 @@ func TestFeishuMessageTypedAnswer(t *testing.T) {
 // closes it; an option typed for it afterwards is still read as a late answer: the owner is told it was handled
 // elsewhere and the words do not start a turn. Free words, and anything after them, go on as ordinary messages.
 func TestTypedAnswerToACardEndedElsewhereIsNotForwarded(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	ix := qCard("ix_q", false, "北京", "上海", "广州")
 	s, f, _, notes, rs := textAnswerBot(t, nil)
 	seedCard(s, ix)
@@ -258,6 +263,7 @@ func TestTypedAnswerToACardEndedElsewhereIsNotForwarded(t *testing.T) {
 // In the root chat the words still go to the conversation. A card that is no longer pending (interactions.get !ok)
 // swallows them with the handled note, while a card closed into b.ended still lets free words start a turn (#5461).
 func TestTypedFreeAnswerInTopic(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	free := proto.Interaction{ID: "ix_free", MachineID: "server", SessionID: "m1", Kind: proto.IxQuestion,
 		Questions: []proto.Question{{Question: "为什么？"}}}
 	opts := qCard("ix_opts", false, "北京", "上海")

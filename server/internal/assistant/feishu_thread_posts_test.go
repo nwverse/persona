@@ -258,6 +258,7 @@ func TestThreadPostsNotWhatTheTopicSaid(t *testing.T) {
 // The bot's own line in the topic is no reply: it is not from the owner (a bot's messages carry no user sender), so the
 // topic path drops it before anything is recorded or handed on.
 func TestThreadBotsOwnLineIsNoReply(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newPostEnv(t)
 	id := e.bound("发版", testThread)
 	e.must("PUT", "/api/v1/todos/"+id+"/agents/box/agent01", "")
@@ -421,6 +422,7 @@ func TestThreadPostsNeedsYouNotHiddenByAnotherTopicsRun(t *testing.T) {
 // An agent with no name is "an agent", not two spaces: a bare directory mark is no name (the line's wording is the lark
 // module's, TestThreadPostTextWithoutAnAgentName there).
 func TestThreadNameOfAnAgentWithoutOne(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, name := range []string{"", ".", "/", "  "} {
 		if got := threadName(name); got != "" {
 			t.Fatalf("threadName(%q) = %q", name, got)
@@ -431,6 +433,7 @@ func TestThreadNameOfAnAgentWithoutOne(t *testing.T) {
 // A card asked in the topic itself (its run was asked there) is right there already: no line about it. One of an agent
 // whose todo has no thread is not said anywhere.
 func TestThreadPostsNoLineForACardInTheTopicItself(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	p := newFleetPost(t)
 	c := &p.ft.s.chans
 	c.mu.Lock()
@@ -448,6 +451,7 @@ func TestThreadPostsNoLineForACardInTheTopicItself(t *testing.T) {
 // A conversation with a private run and a topic's: the card goes to the DM and the topic gets its own line saying so
 // (feishu_cards.go); no second line about the same card.
 func TestThreadPostsNoLineWhenTheCardWentToTheDM(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	p := newFleetPost(t)
 	c := &p.ft.s.chans
 	c.mu.Lock()
@@ -678,6 +682,7 @@ func TestThreadPostsNothingToAChatNotInTheList(t *testing.T) {
 
 // 7. A todo with no thread says nothing, and queues nothing.
 func TestThreadPostsNothingWithoutAThread(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newPostEnv(t)
 	id := e.create("发版").ID
 	e.decide(id, "先发安卓")

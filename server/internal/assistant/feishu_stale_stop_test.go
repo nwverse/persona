@@ -95,6 +95,7 @@ func currentStopCard(s *Service, target botTarget) *botcard.CardAction {
 }
 
 func TestFeishuStaleStopOwnership(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, name := range []string{"current", "missing message", "unknown message", "missing target", "wrong machine", "wrong session", "wrong kind", "unknown kind", "wrong channel", "entity only", "unwatched", "removed", "recalled", "finished", "answering", "answer retry", "held waiting", "held continuation", "finished turn"} {
 		t.Run(name, func(t *testing.T) {
 			s, f := stopCardHub(t, FeishuFeatures{Main: true, Agents: true})
@@ -164,6 +165,7 @@ func TestFeishuStaleStopOwnership(t *testing.T) {
 // A lookup can yield while lifecycle state changes. Even an identical run ID and
 // card string on a replacement object must not authorize the original callback.
 func TestFeishuStaleStopRechecksAfterResolution(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, name := range []string{"remove", "replace run", "replace live", "replace card", "answer starts", "recall", "finish"} {
 		t.Run(name, func(t *testing.T) {
 			s, f := stopCardHub(t, FeishuFeatures{Main: true})
@@ -202,6 +204,7 @@ func TestFeishuStaleStopRechecksAfterResolution(t *testing.T) {
 }
 
 func TestFeishuStaleStopConcurrentCurrentPresses(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f := stopCardHub(t, FeishuFeatures{Main: true})
 	a := currentStopCard(s, botTarget{Kind: targetPersona, MachineID: "server", SessionID: "conv0001"})
 	start := make(chan struct{})
@@ -330,6 +333,7 @@ func testFeishuStopBeforeTheRunWatcher(t *testing.T, delivered chan struct{}, ho
 // only after releasing and joining the real delivery; the old cleanup order never
 // runs, so a matching timeout without that marker fails this regression.
 func TestFeishuStopWatcherTimeoutReleasesDelivery(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	const childEnv = "PERSONA_TEST_STOP_WATCHER_TIMEOUT"
 	if os.Getenv(childEnv) == "1" {
 		testFeishuStopBeforeTheRunWatcher(t, make(chan struct{}), make(chan struct{}))
@@ -354,6 +358,7 @@ func TestFeishuStopWatcherTimeoutReleasesDelivery(t *testing.T) {
 }
 
 func TestFeishuStaleStopFailedInterruptCanRetry(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f := stopCardHub(t, FeishuFeatures{Main: true})
 	a := currentStopCard(s, botTarget{Kind: targetPersona, MachineID: "server", SessionID: "conv0001"})
 	f.failInterrupt = errors.New("synthetic node refusal")
@@ -375,6 +380,7 @@ func TestFeishuStaleStopFailedInterruptCanRetry(t *testing.T) {
 // Stored historical routing is not restored by pressing a card. Only after the
 // ordinary channel-state load and watcher restore can its current message act.
 func TestFeishuStaleStopRestoredOwnership(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f := stopCardHub(t, FeishuFeatures{Main: true})
 	target := botTarget{Kind: targetPersona, MachineID: "server", SessionID: "conv0001"}
 	r := &channel.Run{ID: "fb_restored", Channel: channel.Feishu, MachineID: target.MachineID, SessionID: target.SessionID, Ext: map[string]string{"card": "om_restored"}, Started: time.Now()}
@@ -446,6 +452,7 @@ func TestFeishuStaleStopAcrossHeldContinuation(t *testing.T) {
 }
 
 func TestFeishuStaleStopFeaturePolicy(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, tc := range []struct {
 		name     string
 		features FeishuFeatures

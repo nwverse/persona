@@ -102,6 +102,7 @@ func (e *workbenchEnv) counts() (posts, pins, recalls, updates int) {
 // Off (the default), nothing of it exists: the commands go on as text, /start has no permission field, no card gets a
 // workbench button and /help does not mention it.
 func TestWorkbenchOffChangesNothing(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newWorkbenchEnv(t, FeishuFeatures{Main: true, Agents: true})
 	for _, cmd := range []string{"/home", "/today", "/inbox", "/工作台"} {
 		if h, rest := e.command(cmd); h || rest != cmd {
@@ -254,6 +255,7 @@ func behaviorPayload(t *testing.T, button map[string]any, kind string) map[strin
 // Navigation added at different times still forms one footer. Approval and form callbacks keep their own row, and the
 // card-size guard still leaves Workbench off an oversized card (#5317).
 func TestWorkbenchFooterKeepsNavigationTogether(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newWorkbenchEnv(t, workbenchOnFeatures)
 	t.Run("navigation", func(t *testing.T) {
 		card := botcard.NewCard("", "", "answer").Note("Main chat").Buttons(botcard.LinkBtn("Open on web", "https://example.com"))
@@ -335,6 +337,7 @@ func TestWorkbenchFooterKeepsNavigationTogether(t *testing.T) {
 // /start asks for a permission mode before what to do, offering every mode the agents take; the mode picked goes to
 // the agent's start, one that is not a mode does not.
 func TestWorkbenchStartAsksForAPermissionMode(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newWorkbenchEnv(t, workbenchOnFeatures)
 	js := e.startCard()
 	if !strings.Contains(js, `"name":"mode"`) || !strings.Contains(js, `"bypassPermissions"`) || !strings.Contains(js, `"acceptEdits"`) {
@@ -418,6 +421,7 @@ func TestWorkbenchCompanionsAreLinkedFromTheHomeCard(t *testing.T) {
 // A push goes to the notifications companion only while it polls and the workbench is on; otherwise to the chat.
 // A press it relays is taken only when it needs no owner's action.
 func TestWorkbenchNoticesGoToAPollingCompanion(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newWorkbenchEnv(t, workbenchOnFeatures)
 	e.companionsCall("PUT", "/api/v1/assistant/feishu/companions", companionsBody)
 

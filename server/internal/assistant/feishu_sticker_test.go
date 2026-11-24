@@ -11,6 +11,7 @@ import (
 
 // A sticker carries no request: it is accepted silently, with no reaction, no run and no reply.
 func TestFeishuStickerIsAcceptedSilently(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, _ := feishuHub("ou_a", time.Unix(100, 0))
 	f.settings = &Settings{MachineID: "server", Main: "m1"}
 	f.setSessions("server", proto.Session{SessionID: "m1", Assistant: true})

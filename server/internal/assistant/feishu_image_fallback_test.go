@@ -36,6 +36,7 @@ func deliverImageFallback(t *testing.T, s *Service, msgType, content string) {
 }
 
 func TestFeishuImageFileFallbackEntry(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, s, _ := bigFileHub(t)
 	resourceCalls, saves := 0, 0
 	f.answerApp(AppFeishu, FeishuResource, func(p json.RawMessage) (any, error) {
@@ -101,6 +102,7 @@ func TestFeishuImageFileFallbackEntry(t *testing.T) {
 }
 
 func TestFeishuOversizeImageEntry(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, only := range []bool{false, true} {
 		name := "with text"
 		if only {
@@ -144,6 +146,7 @@ func TestFeishuOversizeImageEntry(t *testing.T) {
 }
 
 func TestFeishuImageFailureMessages(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, saveFailure := range []bool{false, true} {
 		name, key := "download", "download_image"
 		if saveFailure {
@@ -177,6 +180,7 @@ func TestFeishuImageFailureMessages(t *testing.T) {
 }
 
 func TestFeishuImageFallbackEmptySavedPath(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, s, notes := bigFileHub(t)
 	f.answerApp(AppFeishu, FeishuResource, func(json.RawMessage) (any, error) {
 		return map[string]any{"path": "", "name": "img_empty.jpg", "mime": "image/jpeg"}, nil
@@ -188,6 +192,7 @@ func TestFeishuImageFallbackEmptySavedPath(t *testing.T) {
 }
 
 func TestFeishuQuotedImageFileFallback(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, s := quoteHub(t, func(p json.RawMessage) (any, error) {
 		var a map[string]any
 		_ = json.Unmarshal(p, &a)

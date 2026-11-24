@@ -53,6 +53,7 @@ func sentImages(f *fakeHub) []any {
 // Replying to a picture to ask about it: the picture goes to the model with the question, downloaded with the
 // message it is in, not only the "[image]" line in the quote.
 func TestFeishuReplyToAPictureCarriesThePicture(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	var asked []string
 	f, s := quoteHub(t, func(p json.RawMessage) (any, error) {
 		var a map[string]any
@@ -78,6 +79,7 @@ func TestFeishuReplyToAPictureCarriesThePicture(t *testing.T) {
 
 // A quoted picture that can't be had does not hold the question back: it goes with the quote's words.
 func TestFeishuQuotedPictureGoneStillSends(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, s := quoteHub(t, func(json.RawMessage) (any, error) { return nil, errors.New("resource gone") })
 	ev := quoteReply()
 	content := botcard.ParseContent(ev.Message.MessageType, ev.Message.Content, nil)
@@ -95,6 +97,7 @@ func TestFeishuQuotedPictureGoneStillSends(t *testing.T) {
 // A quote reply to a notify_user copy returns to the conversation that made the notification and carries the copied
 // card's identity and text. Two nearby notices make a default-conversation fallback visible.
 func TestFeishuQuoteReplyToOwnNotificationKeepsSourceAndQuote(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newThreadEnv(t, nil)
 	e.features.Pushes = true
 	e.s.larkModule().SetTarget(botTarget{Kind: targetPersona, MachineID: "server", SessionID: "m1"})
@@ -139,6 +142,7 @@ func TestFeishuQuoteReplyToOwnNotificationKeepsSourceAndQuote(t *testing.T) {
 
 // An ordinary private reply does not read or invent a quote.
 func TestFeishuPlainPrivateReplySkipsQuoteLookup(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newThreadEnv(t, nil)
 	e.deliver(privateEvent("om_plain", "Plain private words"))
 	h := onlyHandoff(t, e.f)
@@ -152,6 +156,7 @@ func TestFeishuPlainPrivateReplySkipsQuoteLookup(t *testing.T) {
 
 // An unknown source keeps the existing current-conversation fallback, but the quoted message still has its ID.
 func TestFeishuQuoteReplyUnknownSourceKeepsFallbackAndQuoteID(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newThreadEnv(t, nil)
 	e.s.larkModule().SetTarget(botTarget{Kind: targetPersona, MachineID: "server", SessionID: "c1x1x1"})
 	e.f.answerApp(AppFeishu, FeishuMessages, func(json.RawMessage) (any, error) {
@@ -177,6 +182,7 @@ func TestFeishuQuoteReplyUnknownSourceKeepsFallbackAndQuoteID(t *testing.T) {
 // A quoted or forwarded message read back carries its own mentions: an @ in it reaches the model as the person's name,
 // not as the message's @_user_N key.
 func TestFeishuQuoteAndForwardNameTheirMentions(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	mentions := []map[string]any{{"key": "@_user_1", "name": "Alice"}}
 	t.Run("quote", func(t *testing.T) {
 		f, s := quoteHub(t, func(json.RawMessage) (any, error) { return nil, errors.New("no media") })

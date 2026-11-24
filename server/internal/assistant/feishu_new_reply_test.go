@@ -13,6 +13,7 @@ import (
 
 // Exercise the public DM entrance, including commands, card decisions, target lookup and Start.
 func TestFeishuNewFirstMessageIgnoresOldReply(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, kind := range []string{targetPersona, targetAgent} {
 		for _, binding := range []string{"parent", "root", "both", "question", "unbound question"} {
 			t.Run(kind+"/"+binding, func(t *testing.T) {
@@ -164,6 +165,7 @@ func newCommandReplyBot(t *testing.T, features FeishuFeatures) (*Service, *fakeH
 }
 
 func TestFeishuNewBareCommandDefersStart(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f := newCommandReplyBot(t, FeishuFeatures{Main: true, Cards: true})
 	deliverNewReplyDM(t, s, "om_bare", "/new \n", "om_old", "om_old", "oa_test")
 	f.mu.Lock()
@@ -187,6 +189,7 @@ func TestFeishuNewBareCommandDefersStart(t *testing.T) {
 }
 
 func TestFeishuNewReplyControls(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, c := range []struct {
 		name, text string
 		disabled   bool
@@ -217,6 +220,7 @@ func TestFeishuNewReplyControls(t *testing.T) {
 }
 
 func TestFeishuNewReplyCommandSpellings(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, text := range []string{"/NEW\tFirst\n\n  second", "／new\u3000First\n\n  second", "/新对话 First\n\n  second"} {
 		t.Run(text, func(t *testing.T) {
 			s, f := newCommandReplyBot(t, FeishuFeatures{Main: true})
@@ -231,6 +235,7 @@ func TestFeishuNewReplyCommandSpellings(t *testing.T) {
 }
 
 func TestFeishuNewOrdinaryCardReplyStillAnswers(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f := newCommandReplyBot(t, FeishuFeatures{Main: true, Cards: true})
 	ix := proto.Interaction{ID: "ix_control", MachineID: "server", SessionID: "oldchat01", Kind: proto.IxQuestion,
 		Questions: []proto.Question{{Question: "Which option?", Options: []proto.QuestionOption{{Label: "First"}, {Label: "Second"}}}}}
