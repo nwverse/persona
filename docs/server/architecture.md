@@ -99,12 +99,16 @@ The parts (the hub, the managers, the node on each computer, extensions) talk on
 | --- | --- |
 | `assistantwire`, `devicewire`, `extwire` | The bus between the hub and a manager: methods, events, routes the hub relays, extension scopes and manifest types the bus carries; in `assistantwire` also the To-dos view, counts and places, generated from `schema/wire/todo-view.schema.json` (`server/internal/assistantwire/todo_view_gen.go`, never edited by hand) |
 | `kbwire` | Knowledge-base entities, identity hints, updates and chat context as they cross the bus and the connector protocol |
-| `connectorwire` | Inbox things and replies, conversation batches, posts and snapshots from connectors (`docs/protocol/connector-protocol.md`) |
+| `connectorwire` | The connector SPI: `Connector`, its `Manifest` and capability interfaces, statuses, sign-in prompts, threads and recall errors; inbox things and replies, conversation batches, posts and snapshots from connectors (`docs/protocol/connector-protocol.md`, `docs/extensions/connectors.md`) |
 | `aiwire` | A model setting (`aiwire.Config`) |
 | `dialogwire` | A terminal dialog read off a screen, as the node and the apps see it |
 | `repositorywire` | A task's requested refs, repository layouts and the preparation snapshot a manager hands to a node, with the alias and ref rules both apply; `assistant/repository` aliases them |
 | `nodeproto` | The node protocol handshake: the protocol version and capability names a node announces (`docs/protocol/protocol.md` "Node handshake") |
 | `proto`, `rpc`, `relayproto` | The client API and node protocol types, the JSON-RPC framing, the push relay |
+| `githubwire` | What the extension manager and the GitHub connector module pass (manager.json's `github` section, the token source, the CI-check snapshot the assistant reads) and the `Connector` the manager drives (`docs/architecture/core-and-modules.md` "Provider seams") |
+| `imessagewire` | What the extension manager, the node and the iMessage connector module pass (manager.json's `imessage` section, the `Caller` to a Mac's node and its errors) and the `Remote` the manager drives and the node's `connector.*` handler (`docs/architecture/core-and-modules.md` "Provider seams") |
+| `mailwire` | What the extension manager and the mail module pass (accounts, messages, sends) and the `Service` the manager reaches mail through (`docs/architecture/core-and-modules.md` "Provider seams") |
+| `modapi` | The feature-module contract: a module's manifest, its registration and the `Host` it reaches the core through (`docs/architecture/core-and-modules.md`) |
 | `sdk/go/wire` (the SDK's module) | The extension protocol's types generated from its schema (an error report the bus carries, say), shared with extensions written against the SDK |
 
 The business packages alias the contract types so their callers keep the old names (`type InboxThing = connectorwire.InboxThing` in `connector`, `type Update = kbwire.Update` in `kb`).
@@ -116,6 +120,9 @@ Where the business type needs fields of its own, it stays a separate type with t
 - **Pure contracts**: every package in `testdata/contracts.txt` depends only on the standard library and other listed packages (the SDK's `sdk/go/wire` is listed by its full import path), and every package named `*wire` must be listed.
 - **Part boundaries**: the hub (`hub`, `hubedge`) depends on no manager (`assistant`, `devices`, `extmgr`, `manager`) or node package, a manager on no hub package, and the node (`node`) on neither.
   Known violations would go into `testdata/boundary_allowed.txt` (shrink-only, each line naming the step that removes it); it is empty, and a line that no longer applies fails too.
+- **Core and modules**: no core package imports a feature module (`internal/modules/<id>`), and a module imports only
+  `modapi`, the contract packages and the modules it needs (`TestCoreImportsNoModule`, `TestModulesUseOnlyTheSPI`;
+  `docs/architecture/core-and-modules.md` "Guards").
 - **Reap first**: every production `osproc.ReapInherited` call (the hub's `claimInherited`, the manager's `runManager`, `managercli.Assistant`, the node's `runNode`) comes before anything that could start a child, and the hub's `Run`, `Serve` and `RunSlot` call `claimInherited` first (`reap_test.go`).
   Only the calls its list names, each with why it starts no process, may run ahead; a new call site has to be listed.
 

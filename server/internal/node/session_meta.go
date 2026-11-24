@@ -9,6 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/modelretry"
 	"github.com/nwverse/persona/server/internal/node/transcripttail"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
@@ -109,6 +110,8 @@ type quickMeta struct {
 // limit's reset (zero: not known), whether the CLI goes on by itself after it and whether the turn did work first.
 type turnFailure struct {
 	text, kind, code   string
+	line               string
+	streak             int
 	resetsAt           time.Time
 	resumes, afterWork bool
 }
@@ -134,6 +137,9 @@ func reported(text, kind string, rollout turnFailure) turnFailure {
 		if rollout.text == text {
 			f.code = rollout.code
 		}
+	}
+	if f.code == "" && modelretry.AccountExhausted(text) {
+		f.code = proto.TurnErrorUpstreamUnavailable
 	}
 	return f
 }
@@ -186,7 +192,7 @@ func (n *Node) meta(path string, st os.FileInfo) quickMeta {
 			// and a stale one would have it continued again. None for a few seconds is the safe side (#2185). The CLI's word
 			// that it resumes by itself stays: it keeps anything from typing into the session, the safe side too, and the
 			// writes that make the read stale are its own continuation at the reset or the wakes of the wait (#1710).
-			m.turnErr = turnFailure{resumes: m.turnErr.resumes}
+			m.turnErr = turnFailure{resumes: m.turnErr.resumes, line: m.turnErr.line, streak: m.turnErr.streak}
 		}
 		return m
 	}
@@ -409,8 +415,20 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 		m.claudeTurn, m.turnClosed = before.claudeTurn, before.turnClosed
 	}
 	m.modelFallback = tm.ModelFallback
-	m.turnErr = turnFailure{text: tm.TurnError, kind: tm.TurnErrorKind, code: tm.TurnErrorCode, resetsAt: tm.TurnErrorResetsAt,
-		resumes: tm.TurnErrorResumes, afterWork: tm.TurnErrorAfterWork}
+	streak := tm.UpstreamErrorStreak
+	if prev.size > 0 && prev.size <= st.Size() && !rewound {
+		streak = tm.ResolveUpstreamStreak(off, prev.turnErr.streak, prev.turnErr.line)
+	}
+	upstreamLine := ""
+	if streak > 0 {
+		upstreamLine = tm.LastUpstreamLine()
+	}
+	errCode := tm.TurnErrorCode
+	if errCode == "" && tm.TurnError != "" && (streak >= 2 || modelretry.AccountExhausted(tm.TurnError)) {
+		errCode = proto.TurnErrorUpstreamUnavailable
+	}
+	m.turnErr = turnFailure{text: tm.TurnError, kind: tm.TurnErrorKind, code: errCode, line: upstreamLine,
+		streak: streak, resetsAt: tm.TurnErrorResetsAt, resumes: tm.TurnErrorResumes, afterWork: tm.TurnErrorAfterWork}
 	if tm.TurnErrorKind == proto.TurnErrorUsageLimit && !tm.TurnErrorResumesSaid() && prev.size > 0 && prev.size <= st.Size() {
 		// Claude Code's notice that it goes on by itself is written once, at the first refused turn; the wait's wakes
 		// write request lines of hundreds of KB each, and soon the tail starts after it. Nothing in the tail took it
@@ -648,18 +666,30 @@ func lastUsed(m quickMeta, st os.FileInfo) time.Time {
 	return st.ModTime().UTC()
 }
 
-// untitled gives sessions without an AI title (headless ones) their first message as title: what the user wrote,
-// not the context blocks it starts with (the main conversation's, a Feishu /agent request's), or the title of the
-// block it is made of only ("continue the old main chat"). Stripped first, clipped after.
+// untitled gives sessions without an AI title (headless ones) their first message as title (promptTitle).
 func untitled(s *proto.Session, m quickMeta) {
-	if first := transcript.Title(m.first); s.Title == "" && first != "" {
-		r := []rune(snippet(first))
-		if len(r) > 40 {
-			r = append(r[:40], '…')
-		}
-		s.Title = string(r)
+	if s.Title != "" {
+		return
+	}
+	if title := promptTitle(m.first); title != "" {
+		s.Title = title
 		if m.titleSource == "prompt" {
 			s.TitleSource = proto.TitleSourcePrompt
 		}
 	}
+}
+
+// promptTitle is a first message as a row's title: what the user wrote, not the context blocks it starts with (the
+// main conversation's, a Feishu /agent request's), or the title of the block it is made of only ("continue the old main
+// chat"). Stripped first, clipped after. An agy pane's row falls back to it too (agytitle.go).
+func promptTitle(first string) string {
+	first = transcript.Title(first)
+	if first == "" {
+		return ""
+	}
+	r := []rune(snippet(first))
+	if len(r) > 40 {
+		r = append(r[:40], '…')
+	}
+	return string(r)
 }

@@ -498,8 +498,10 @@ func (h *Manager) attachExtensions(ctx context.Context) {
 	if err := reg.AddBuiltinTranslated(iphoneManifest(h), "", false, iphoneTranslations()); err != nil { // the same, for paired iPhones (iphone.go)
 		h.logf("plugin iphone: %v", err)
 	}
-	if err := reg.AddBuiltin(imessageManifest(h), "", false); err != nil { // which Mac's Messages (imessage_extension.go)
-		h.logf("plugin imessage: %v", err)
+	if m := imessageManifest(h); m != nil { // which Mac's Messages (imessage_extension.go); none without the module
+		if err := reg.AddBuiltin(m, "", false); err != nil {
+			h.logf("plugin imessage: %v", err)
+		}
 	}
 	h.addVoiceExtension(ctx, reg, store) // `personad voice`, taking hub.json's entry of it over (voice_extension.go)
 	h.addVolcExtension(ctx, reg, store)  // `personad volc`, off until the owner turns it on (volc_extension.go)
@@ -548,6 +550,7 @@ func (h *Manager) startExtensions(ctx context.Context) {
 // changed is the registry's news: the plugin runs again as it is now; one just upgraded that fails to come up is
 // rolled back.
 func (ps *extensions) changed(c extension.Change) {
+	memorySourcesChanged() // the memory sources are read again at the next assembly (memory_sources.go)
 	if ps.h != nil && ps.h.opts.TranscriptionChanged != nil {
 		defer ps.h.opts.TranscriptionChanged()
 	}
@@ -782,6 +785,7 @@ func (ps *extensions) apply(ctx context.Context, id string) {
 	default:
 		spec, err := ps.spec(ctx, p, hp)
 		if err != nil {
+			ps.logf("plugin %s: %v", id, err)
 			hp.status, hp.err = host.StateError, err.Error()
 			break
 		}
@@ -1158,6 +1162,8 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			return ps.extensionKBCall(ctx, id, method, params)
 		case "assistant.conversations", "assistant.messages", "assistant.memory", assistantwire.MethodAssistantEntriesList: // assistant.read, assistant.memory.read (extension_assistant_read.go)
 			return ps.extensionAssistantCall(ctx, id, method, params)
+		case "machines.pair_link", "machines.status": // machines.pair / machines.read (extension_machines.go)
+			return ps.extensionMachinesCall(ctx, id, method, params)
 		case "browser.machines", "browser.run": // browser.run (extension_browser.go)
 			return ps.extensionBrowserCall(ctx, id, method, params)
 		case "model.complete": // assistantwire.MethodModelComplete (extension_model_calls.go)
