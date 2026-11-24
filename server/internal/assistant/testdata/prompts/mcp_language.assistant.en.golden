@@ -2328,7 +2328,7 @@
   },
   {
     "name": "task_plan",
-    "description": "Plan code, repo research and multi-step work in separate tasks. Check machines_list, KB, agents_list and preferences. Main/lead, read-only, user_requested and preapproved plans start now. Others and owner_step need 开始. Check dispatched to-dos and use agent_send. Reminders and events stay separate.\n\nFixed machine_policy keeps the machine and rejects unavailable launchers. Flexible moves portable work after failed health checks and says why. Leads own signals, cards, start fixes, reviews and cancels. Main owns its tasks and receives needs_user. Main may choose a lead. agent_transfer persists ownership. Leads need supervision_policy. Check supervisor and similar work. Use todo_id for an unassigned to-do. Issue/PR URLs in title, goal or prompt block duplicates of open work. Use continues, todo_id or distinct_from. Other hints are advisory.\n\nStarted tasks keep a hub brief (owner request or started_why). Give goal, done_when and out_of_bounds. Writes need done_when (PR/issue defaults to merged+closed unless PR/draft-only). Reads need goal. Omit expect_minutes for auto estimate; positive overrides (manual Agents lack estimate_due). Use continues+continues_why to continue, task_retry for failed starts, task_scope+scope_revision for approved changes.\n\nEdits need readonly=false and authorized write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds a read-only constraint. Claude-family uses bypassPermissions for both; Codex and companion agy use plan unless assistant.readonly_mode=prompt; pi/cursor refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review (workers cannot delegate).\n\nThe user's explicit repository URL or path takes precedence. Resolve unclear identity via repositories_list, then repository_get if useful. A binding is a reference, not authorization. Verify machine and checkout independently. Non-repository tasks need no lookup; retrieval is not a mandatory dispatch preflight. The owner chooses terminal cleanup on Start.\n\nUse {\"backend\":{\"operation_id\":\"\u003cid\u003e\"}} with todo_id for a saved workspace. For a container use {\"container\":{\"selected_repo_ids\":[\"\u003crepo_id\u003e\",...]}} or {\"container\":{\"operation_id\":\"\u003cid\u003e\"}} with todo_id. Repos must be ready. Optional host selects the engine.\n\nWorkspace: \"new\" isolates; {\"new\":{\"branch\":\"task/my-change\"}} names its branch. {\"existing\":\"\u003ccwd or workspace_id\u003e\",\"queue\":true} selects it. queue:true or owner in after queues FIFO until free. Otherwise busy refuses with owner. \"none\" creates nothing. If omitted, readonly uses none. Writable Git follows assistant.task_workspace_preference (prefer-existing unless busy, prefer-new isolates). Explicit existing never switches. Reuse of a new branch needs a clean checkout, no live Agent and no open owner; else refuse with path/owner. Engine creates and registers it. Never run git worktree add. The card previews the path. Default branch: task/\u003ctodo id\u003e. Creation failure starts no Agent. Workspaces stay after acceptance. Follow org read-only refusals; never retry unchanged.\n\n`wait_seconds` observes up to 50s after dispatch. `Inline observation` JSON: `completed` (this input's `reply`), `question` (pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, known input/session ids. It never answers questions, accepts tasks, resends or cancels work. Normal supervision via `task_review` applies. Older nodes may time out to avoid an unrelated reply. Only one immediately dispatchable task waits. Cards and multi-task plans return immediately.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Plan code, repo research and multi-step work in separate tasks. Check machines_list, KB, agents_list and preferences. Main/lead, read-only, user_requested and preapproved plans start now. Others and owner_step need 开始. Check dispatched to-dos and use agent_send. Reminders and events stay separate.\n\nFixed machine_policy keeps the machine and rejects unavailable launchers. Flexible moves portable work after failed health checks and says why. Leads own signals, cards, start fixes, reviews and cancels. Main owns its tasks and receives needs_user. Main may choose a lead. agent_transfer persists ownership. Leads need supervision_policy. Check supervisor and similar work. Use todo_id for an unassigned to-do. Issue/PR URLs in title, goal or prompt block duplicates of open work. Use continues, todo_id or distinct_from. Other hints are advisory.\n\nStarted tasks keep a hub brief (owner request or started_why). Give goal, done_when and out_of_bounds. Writes need done_when (PR/issue defaults to merged+closed unless PR/draft-only). Reads need goal. Omit expect_minutes for auto estimate; positive overrides (manual Agents lack estimate_due). Use continues+continues_why to continue, task_retry for failed starts, task_scope+scope_revision for approved changes.\n\nEdits need readonly=false and authorized write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds a read-only constraint. Claude-family uses bypassPermissions for both; Codex and companion agy use plan unless assistant.readonly_mode=prompt; pi/cursor refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review (workers cannot delegate).\n\nAn explicit repository URL or path takes precedence. Resolve ambiguity via repositories_list and, if useful, repository_get. A binding gives context only. Verify machine and checkout separately. Non-repository tasks need no lookup; retrieval is not a mandatory dispatch preflight. Owners choose terminal cleanup on Start.\n\nUse {\"backend\":{\"operation_id\":\"\u003cid\u003e\"}} with todo_id for a saved workspace. For a container use {\"container\":{\"selected_repo_ids\":[\"\u003crepo_id\u003e\",...]}} or {\"container\":{\"operation_id\":\"\u003cid\u003e\"}} with todo_id. Repos must be ready. Optional host selects the engine.\n\nWorkspace: \"new\" isolates; {\"new\":{\"branch\":\"task/my-change\"}} names its branch. {\"existing\":\"\u003ccwd or workspace_id\u003e\",\"queue\":true} selects it. queue:true or owner in after queues FIFO until free. Otherwise busy refuses with owner. \"none\" creates nothing. If omitted, readonly uses none. Writable Git follows assistant.task_workspace_preference (prefer-existing unless busy, prefer-new isolates). Explicit existing never switches. Reuse of a new branch needs a clean checkout, no live Agent and no open owner; else refuse with path/owner. Engine creates and registers it. Never run git worktree add. The card previews the path. Default branch: task/\u003ctodo id\u003e. Creation failure starts no Agent. Workspaces stay after acceptance. Follow org read-only refusals; never retry unchanged.\n\n`wait_seconds` observes up to 50s after dispatch. `Inline observation` JSON: `completed` (this input's `reply`), `question` (pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, known input/session ids. It never answers questions, accepts tasks, resends or cancels work. Normal supervision via `task_review` applies. Older nodes may time out to avoid an unrelated reply. Only one immediately dispatchable task waits. Cards and multi-task plans return immediately.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2657,11 +2657,19 @@
               "expect_minutes": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Optional minutes override. Omit/0: comparable history, or the 60-minute system_default; positive: override. Review at 1×; stuck at 1.5× (min 20m); overdue at 3× (min 24h)."
+                "description": "Optional minutes override (omit/0: history or 60m default). Review 1×; stuck 1.5× (min 20m); overdue 3× (min 24h)."
               },
               "project": {
                 "type": "string",
                 "description": "Existing kb_list projects slug/name for a clear long-term area; no near-duplicates."
+              },
+              "audience": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "autonomous"
+                ],
+                "description": "Optional to-do audience."
               },
               "part_of": {
                 "type": "string",
@@ -2680,7 +2688,7 @@
               },
               "inbox_item": {
                 "type": "string",
-                "description": "Inbox item id; omit for the conversation's sole eligible open handoff. Several require an id; none leaves work unlinked. Never files or replies."
+                "description": "Inbox ID or 'none' to skip. Omit to link the sole eligible handoff. Multiple need an ID. No handoff leaves it unlinked. Never files or replies."
               },
               "tier": {
                 "type": "string",
@@ -3661,11 +3669,11 @@
         },
         "due": {
           "type": "string",
-          "description": "Day only: YYYY-MM-DD; otherwise YYYY-MM-DD HH:MM (user time zone) or RFC3339. Relative 2h/3d accepted."
+          "description": "YYYY-MM-DD, YYYY-MM-DD HH:MM (local), RFC3339, or 2h/3d."
         },
         "remind": {
           "type": "string",
-          "description": "Future reminder (user time zone/RFC3339 or relative 30m/2h/1d). Only if requested or deadline close and important."
+          "description": "Future reminder (local/RFC3339 or 30m/2h/1d). Only if asked or urgent."
         },
         "priority": {
           "type": "string",
@@ -3682,7 +3690,15 @@
             "todo",
             "concern"
           ],
-          "description": "todo (default); concern (main chat only) tracks a user-raised matter until concern_report reports its outcome; other completion tools cannot close it."
+          "description": "todo (default); concern (main chat only) closes only via concern_report."
+        },
+        "audience": {
+          "type": "string",
+          "enum": [
+            "human",
+            "autonomous"
+          ],
+          "description": "Optional: human or autonomous."
         },
         "project": {
           "type": "string",
@@ -3839,7 +3855,7 @@
   },
   {
     "name": "todo_update",
-    "description": "Update supplied title, notes, due/reminder, priority, project, part_of or after immediately, including task to-dos; no confirmation. Omitted fields stay; \"\" clears notes/due/remind/project/part_of, [] clears after. New reminder times notify again. Completion/reopening uses todo_complete/todo_reopen.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Update supplied fields immediately, including task to-dos; no confirmation. Omitted fields stay; \"\" clears notes/due/remind/project/part_of/audience, [] clears after. New remind notifies again. Close/reopen via todo_complete/todo_reopen.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3860,11 +3876,11 @@
         },
         "due": {
           "type": "string",
-          "description": "New due date YYYY-MM-DD or datetime (user's time zone/RFC3339); \"\" clears."
+          "description": "YYYY-MM-DD or datetime (local/RFC3339); \"\" clears."
         },
         "remind": {
           "type": "string",
-          "description": "New reminder datetime (user's time zone/RFC3339) or relative 30m/2h/1d; never past. \"\" clears."
+          "description": "Future datetime (local/RFC3339) or 30m/2h/1d; \"\" clears."
         },
         "priority": {
           "type": "string",
@@ -3876,7 +3892,11 @@
         },
         "project": {
           "type": "string",
-          "description": "Existing knowledge-base project slug/name (kb_list projects), preferably a long-term work area. Set only when clear; do not invent near-duplicates. \"\" clears."
+          "description": "Existing kb_list project slug/name; only when clear, no near-duplicates. \"\" clears."
+        },
+        "audience": {
+          "type": "string",
+          "description": "human, autonomous, or \"\" clears."
         },
         "part_of": {
           "type": "string",
