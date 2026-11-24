@@ -25,10 +25,11 @@ var (
 
 // systemProxy holds validated OS-level proxy URLs and NO_PROXY exceptions.
 type systemProxy struct {
-	HTTP       string
-	HTTPS      string
-	SOCKS      string
-	Exceptions []string
+	HTTP                   string
+	HTTPS                  string
+	SOCKS                  string
+	Exceptions             []string
+	ExcludeSimpleHostnames bool
 }
 
 func (p systemProxy) hasProxy() bool {
@@ -36,9 +37,9 @@ func (p systemProxy) hasProxy() bool {
 }
 
 // withSystemProxyEnv falls back to OS system proxy settings (macOS `scutil --proxy`, no-op on other OSes) when base
-// sets no active proxy variable of its own. Explicit proxy variables in base are never overwritten.
+// does not explicitly set any proxy variable (including an explicit empty value such as `HTTPS_PROXY=`).
 func withSystemProxyEnv(ctx context.Context, base []string) []string {
-	if hasActiveProxyEnv(base) {
+	if hasExplicitProxyEnv(base) {
 		return base
 	}
 	return applySystemProxyEnv(base, detectSystemProxy(ctx))
@@ -46,7 +47,7 @@ func withSystemProxyEnv(ctx context.Context, base []string) []string {
 
 // applySystemProxyEnv merges validated system proxy settings into base without mutating base.
 func applySystemProxyEnv(base []string, p systemProxy) []string {
-	if !p.hasProxy() || hasActiveProxyEnv(base) {
+	if !p.hasProxy() || hasExplicitProxyEnv(base) {
 		return base
 	}
 	env := slices.Clone(base)
@@ -67,23 +68,18 @@ func applySystemProxyEnv(base []string, p systemProxy) []string {
 	if len(p.Exceptions) > 0 {
 		noProxy = mergeNoProxy(noProxy, strings.Join(p.Exceptions, ","))
 	}
+	if p.ExcludeSimpleHostnames {
+		if host := simpleGatewayHost(lastEnvValue(env, "GOOGLE_GEMINI_BASE_URL")); host != "" {
+			noProxy = mergeNoProxy(noProxy, host)
+		}
+	}
 	env = setEnvVar(env, "NO_PROXY", noProxy)
 	env = setEnvVar(env, "no_proxy", noProxy)
 	return env
 }
 
-// hasActiveProxyEnv reports whether env has any non-empty HTTP/HTTPS/ALL proxy variable in either case.
-func hasActiveProxyEnv(env []string) bool {
-	for _, k := range proxyVars {
-		if strings.TrimSpace(lastEnvValue(env, k)) != "" {
-			return true
-		}
-	}
-	return false
-}
-
 // hasExplicitProxyEnv reports whether env explicitly names any HTTP/HTTPS/ALL proxy variable, even with an empty
-// value (e.g. a managed launcher clearing a proxy with `HTTP_PROXY=`).
+// value (e.g. a launchd plist or managed launcher clearing a proxy with `HTTPS_PROXY=`).
 func hasExplicitProxyEnv(env []string) bool {
 	for _, kv := range env {
 		k, _, ok := strings.Cut(kv, "=")
@@ -126,9 +122,29 @@ func setEnvVar(env []string, key, value string) []string {
 	return out
 }
 
+// simpleGatewayHost extracts a validated single-label hostname (no dots, not an IP) from a configured gateway URL,
+// used when macOS `ExcludeSimpleHostnames` is enabled so local single-label gateways stay direct.
+func simpleGatewayHost(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	host := u.Hostname()
+	if host == "" || strings.ContainsAny(host, ".:") || !isValidHostname(host) {
+		return ""
+	}
+	return host
+}
+
 // parseScutilProxy parses the text output of macOS `/usr/sbin/scutil --proxy`.
 // Only top-level HTTP/HTTPS/SOCKS entries and top-level `ExceptionsList` entries are read; nested dictionaries such
-// as `__SCOPED__` are ignored so per-interface overrides cannot clobber top-level values.
+// as `__SCOPED__` are ignored so per-interface overrides cannot clobber top-level values. When PAC or WPAD is
+// enabled (`ProxyAutoConfigEnable` or `ProxyAutoDiscoveryEnable`), manual proxies are skipped because macOS routes
+// through PAC first.
 func parseScutilProxy(out string) systemProxy {
 	top := map[string]string{}
 	var rawExceptions []string
@@ -183,6 +199,10 @@ func parseScutilProxy(out string) systemProxy {
 		}
 	}
 
+	if top["ProxyAutoConfigEnable"] == "1" || top["ProxyAutoDiscoveryEnable"] == "1" {
+		return systemProxy{}
+	}
+
 	var p systemProxy
 	if top["HTTPEnable"] == "1" {
 		p.HTTP = formatProxyURL("http", top["HTTPProxy"], top["HTTPPort"])
@@ -194,6 +214,7 @@ func parseScutilProxy(out string) systemProxy {
 	if top["SOCKSEnable"] == "1" {
 		p.SOCKS = formatProxyURL("socks5h", top["SOCKSProxy"], top["SOCKSPort"])
 	}
+	p.ExcludeSimpleHostnames = top["ExcludeSimpleHostnames"] == "1"
 	if len(rawExceptions) > 0 {
 		seen := make(map[string]bool, len(rawExceptions))
 		for _, item := range rawExceptions {
@@ -254,7 +275,9 @@ func formatProxyURL(scheme, rawHost, rawPort string) string {
 }
 
 // normalizeNoProxyException converts one macOS scutil `ExceptionsList` item into a safe `NO_PROXY` token, or "" to
-// drop macOS-specific tokens (`<local>`) and malformed entries.
+// drop macOS-specific tokens (`<local>`), bare exact domains (which Go's `NO_PROXY` would silently widen to match all
+// subdomains), and malformed entries. Only wildcard suffixes (`*.domain` / `.domain`), `*`, IP literals/CIDRs, and
+// `localhost` are exported.
 func normalizeNoProxyException(raw string) string {
 	s := strings.Trim(raw, " \t")
 	if s == "" || strings.EqualFold(s, "<local>") {
@@ -320,12 +343,12 @@ func normalizeNoProxyException(raw string) string {
 		if addr, err := netip.ParseAddr(host); err == nil && addr.Is4() {
 			return net.JoinHostPort(addr.String(), portStr)
 		}
-		if isValidNoProxyDomain(host) {
+		if isValidNoProxySuffixOrLocalhost(host) {
 			return host + ":" + portStr
 		}
 		return ""
 	}
-	if isValidNoProxyDomain(s) {
+	if isValidNoProxySuffixOrLocalhost(s) {
 		return s
 	}
 	return ""
@@ -366,12 +389,17 @@ func expandShorthandIPv4CIDR(raw string) (string, bool) {
 	return candidate, true
 }
 
-func isValidNoProxyDomain(s string) bool {
-	if s == "" || s == "." {
+// isValidNoProxySuffixOrLocalhost accepts only explicit wildcard domain suffixes (`.domain`, converted from `*.domain`)
+// and `localhost`; bare domains like `example.org` are rejected so Go's `NO_PROXY` does not widen exact macOS host
+// exemptions into wildcard subdomain exemptions.
+func isValidNoProxySuffixOrLocalhost(s string) bool {
+	if strings.EqualFold(s, "localhost") {
+		return true
+	}
+	if !strings.HasPrefix(s, ".") || s == "." {
 		return false
 	}
-	host := strings.TrimPrefix(s, ".")
-	return isValidHostname(host)
+	return isValidHostname(s[1:])
 }
 
 func isValidHostname(host string) bool {
