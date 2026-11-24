@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -599,5 +600,95 @@ func TestAutoSupervisionOffBackgroundMigrationTellsNothing(t *testing.T) {
 	}
 	if len(f.notices()) != 0 {
 		t.Fatalf("sent %q", f.notices())
+	}
+}
+
+// persona_settings reads and changes the switch like the other assistant switches: a set shows a phone card with
+// before and after, nothing changes until it is approved, and the approved change applies at once (what waited is
+// withdrawn), the same as the PUT the web settings page uses.
+func TestAutoSupervisionPersonaSettingsToolSwitchesAtOnce(t *testing.T) {
+	ctx := context.Background()
+	s, f, tasks := queuedDigestFixture(t, "Queued example")
+	s.updateSupervisePending(func(p map[string]superviseSignal) {
+		g := superviseSignal{Todo: tasks[0].ID, Kind: sigStalled, Key: "pending", Minutes: 50}
+		p[g.id()] = g
+	})
+	tool := func(args string) (string, bool) {
+		r := s.Tool(ctx, ToolCall{Name: "persona_settings", Arguments: json.RawMessage(args), MachineID: "server", SessionID: "c1"})
+		return r.Content[0].Text, r.IsError
+	}
+	decide := func(allow bool, wantCard string) {
+		go func() {
+			q, ok := awaitCard(s)
+			if !ok {
+				return
+			}
+			if wantCard != "" && q.Summary != wantCard {
+				t.Errorf("approval card: %q want %q", q.Summary, wantCard)
+			}
+			answer, _ := json.Marshal(proto.Resolution{Allow: &allow})
+			if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: q.ID, Answer: answer}); err != nil {
+				t.Errorf("answer: %v", err)
+			}
+		}()
+	}
+	if got, isErr := tool(`{"action":"get","key":"assistant.auto_supervision_messages"}`); isErr || got != "true" {
+		t.Fatalf("default read: %q error=%v", got, isErr)
+	}
+	if out, isErr := tool(`{"action":"set","key":"assistant.auto_supervision_messages","value":"off"}`); !isErr {
+		t.Fatalf("a value that is not true or false was accepted: %q", out)
+	}
+	if out, isErr := tool(`{"action":"set","key":"assistant.auto_supervision_messages","value":true}`); isErr || len(s.pendingQuestions()) != 0 {
+		t.Fatalf("the value in effect should be a no-op: %q error=%v", out, isErr)
+	}
+
+	// Declined: nothing changes and what waits stays.
+	decide(false, "")
+	if out, isErr := tool(`{"action":"set","key":"assistant.auto_supervision_messages","value":false}`); !isErr {
+		t.Fatalf("a declined change reported success: %q", out)
+	}
+	if !s.autoSupervisionOn(ctx) {
+		t.Fatal("a declined card turned the switch off")
+	}
+	if n, _ := queuedSupervise(s, "conv1"); n != 1 {
+		t.Fatalf("a declined card withdrew the queue: %d", n)
+	}
+
+	// Approved: it reads back off, the queue is withdrawn, and the web view agrees.
+	decide(true, i18n.T(i18n.Default, "assistant-settings_tool.change_auto_supervision_messages", i18n.Args{"before": "on", "after": "off"}))
+	if out, isErr := tool(`{"action":"set","key":"assistant.auto_supervision_messages","value":false}`); isErr {
+		t.Fatalf("approved change: %q", out)
+	}
+	if got, _ := tool(`{"action":"get","key":"assistant.auto_supervision_messages"}`); got != "false" || s.autoSupervisionOn(ctx) {
+		t.Fatalf("read back after the change: %q", got)
+	}
+	if getAssistantView(t, s)["auto_supervision_messages"] != false {
+		t.Fatal("the assistant's settings view disagrees with persona_settings")
+	}
+	if n, _ := queuedSupervise(s, "conv1"); n != 0 {
+		t.Fatalf("what waited was not withdrawn: %d", n)
+	}
+	if mem, durable, timer := gatheredSignals(s); mem != 0 || durable != 0 || timer {
+		t.Fatalf("gathered after the change: memory=%d durable=%d timer=%v", mem, durable, timer)
+	}
+	pushes := len(f.pushes)
+	drainQueuedDigest(t, s, f)
+	if len(f.notices()) != 0 || len(f.pushes) != pushes {
+		t.Fatalf("a supervision message went out with the switch off: sends=%q", f.notices())
+	}
+
+	// Back on through the tool: it reads on again and replays nothing.
+	decide(true, "")
+	if out, isErr := tool(`{"action":"set","key":"assistant.auto_supervision_messages","value":true}`); isErr {
+		t.Fatalf("turning it on: %q", out)
+	}
+	if got, _ := tool(`{"action":"get","key":"assistant.auto_supervision_messages"}`); got != "true" {
+		t.Fatalf("read back after turning on: %q", got)
+	}
+	if n, _ := queuedSupervise(s, "conv1"); n != 0 {
+		t.Fatalf("turning it on replayed %d withdrawn message(s)", n)
+	}
+	if settingTitles["assistant.auto_supervision_messages"] != "title_auto_supervision_messages" {
+		t.Fatal("no approval-card title for assistant.auto_supervision_messages")
 	}
 }
