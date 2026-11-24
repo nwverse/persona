@@ -260,7 +260,7 @@ interface Pending extends QueueCandidate {
 
 function queuesWhileWorking(row?: Session): boolean {
   return Boolean(row && stateOf(row) === "working" && !row.background_waiting && (
-    (row.queued?.length ?? 0) > (row.queued_relayed ?? 0) || row.capabilities?.queue_edit || row.capabilities?.queue_send_now ||
+    (row.queued?.length ?? 0) > (row.queued_relayed ?? 0) || row.capabilities?.queue_edit || row.capabilities?.queue_send_now || row.capabilities?.queue_next_turn ||
     row.space_kind === "codex_app" ||
     (row.source_kind !== "runtime" && (!row.agent || row.agent === "claude"))
   ));
@@ -1358,7 +1358,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       const key = outboxKey(mid, sid);
       const launcher = assistant ? pickedLauncher(conversationKey(mid, sid)) : undefined;
       const model = assistant ? pickedModel(conversationKey(mid, sid)) : undefined;
-      keepOutgoing(key, { id, text: out.text, images: out.images, at: p.at, launcher, model });
+      keepOutgoing(key, { id, text: out.text, images: out.images, at: p.at, launcher, model, queueNextTurn: out.queueNextTurn });
       if (queueing) cancelBeforePost.current.set(id, () => {
         cancelBeforePost.current.delete(id);
         flight.finish("failed");
@@ -1381,7 +1381,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             // a switch to another launcher the user picked for this Agent goes with their own message from here, and only
             // with it (#5035): the agent restarts there first
             json: { text: out.text, images: out.images.length ? out.images : undefined, client_msg_id: id, clear_draft: clearDraft, launcher, model,
-              apply_switch: !assistant && row?.pending_switch ? true : undefined },
+              queue_next_turn: out.queueNextTurn, apply_switch: !assistant && row?.pending_switch ? true : undefined },
           });
         });
         if (!flight.current()) return true;
@@ -1452,7 +1452,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
    *  repeats it; what needs you more gets more: the computer's draft (a dialog that can clear it), the main
    *  conversation's setup (a card above the composer with what to do). */
   function failed(e: unknown, out: Outgoing, p: Pending) {
-    keepFailed(mid, sid, { id: p.id, text: out.text, images: out.images, at: p.at, launcher: assistant ? pickedLauncher(conversationKey(mid, sid)) : undefined, model: assistant ? pickedModel(conversationKey(mid, sid)) : undefined }, e);
+    keepFailed(mid, sid, { id: p.id, text: out.text, images: out.images, at: p.at, launcher: assistant ? pickedLauncher(conversationKey(mid, sid)) : undefined, model: assistant ? pickedModel(conversationKey(mid, sid)) : undefined, queueNextTurn: out.queueNextTurn }, e);
     if (e instanceof ApiError && e.code === "input_draft") {
       setDraftRefusal({ id: p.id, draft: String(e.body.draft ?? ""), clearable: typeof e.body.clearable === "string" ? e.body.clearable : undefined });
     } else if (assistant && !(e instanceof ApiError && (e.code === "dialog_open" || e.body.delivered === "unknown"))) {
@@ -2878,6 +2878,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           working={state === "working" || awaiting}
           needsYou={state === "needs_you"}
           onSend={send}
+          queueNextTurn={session?.capabilities?.queue_next_turn}
           onSendNow={session && (session.capabilities?.queue_send_now ?? (assistant || (session.agent === "claude" && session.source_kind !== "runtime"))) ? sendQueueNow : undefined}
           disabled={composerDisabled}
           onEditLastMessage={onEditLastMessage}

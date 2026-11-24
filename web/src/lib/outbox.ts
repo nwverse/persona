@@ -57,6 +57,7 @@ export interface OutboxEntry {
   restored?: boolean;
   launcher?: string;
   model?: string;
+  queueNextTurn?: boolean;
 }
 
 /** How long a sent message waits for the transcript before its bubble goes (the transcript may word it differently). */
@@ -271,7 +272,7 @@ export function inSendOrder<T>(key: string, post: () => Promise<T>): Promise<T> 
 
 const KEPT_PREFIX = "outbox-msg:";
 const keptKey = (key: string, id: string) => `${KEPT_PREFIX}${key}/${id}`;
-type Outgoing = Pick<OutboxEntry, "id" | "text" | "images" | "at" | "launcher" | "model"> & Partial<Pick<OutboxEntry, "newId" | "inDoubt" | "error" | "code" | "state" | "wordsOnly" | "acceptedAt" | "clearable" | "relay">>;
+type Outgoing = Pick<OutboxEntry, "id" | "text" | "images" | "at" | "launcher" | "model" | "queueNextTurn"> & Partial<Pick<OutboxEntry, "newId" | "inDoubt" | "error" | "code" | "state" | "wordsOnly" | "acceptedAt" | "clearable" | "relay">>;
 
 /** Keeps one message's words until its transcript copy arrives (pictures are not kept: they would fill the
  *  storage). Storage can be full or refused; the message then lasts only as long as the page. */
@@ -279,7 +280,7 @@ export function keepOutgoing(key: string, e: Outgoing) {
   if (conversationKeyDeleted(key)) return;
   if (!e.text.trim()) return;
   try {
-    storeValue(keptKey(key, e.id), JSON.stringify({ id: e.id, text: e.text, at: e.at, launcher: e.launcher, model: e.model, newId: e.newId, inDoubt: e.inDoubt, error: e.error, code: e.code, relay: e.relay, state: e.state, acceptedAt: e.acceptedAt, wordsOnly: e.wordsOnly, clearable: e.clearable, images: e.images.length }));
+    storeValue(keptKey(key, e.id), JSON.stringify({ id: e.id, text: e.text, at: e.at, launcher: e.launcher, model: e.model, queueNextTurn: e.queueNextTurn, newId: e.newId, inDoubt: e.inDoubt, error: e.error, code: e.code, relay: e.relay, state: e.state, acceptedAt: e.acceptedAt, wordsOnly: e.wordsOnly, clearable: e.clearable, images: e.images.length }));
   } catch {
     // only this page's copy then
   }
@@ -394,7 +395,7 @@ async function deliver(mid: string, sid: string, e: OutboxEntry, clearDraft?: st
       ...flight.request,
       method: "POST",
       opId: e.id,
-      json: { text: e.text, images: e.images.length ? e.images : undefined, client_msg_id: e.id, launcher: e.launcher || undefined, model: e.model || undefined, clear_draft: clearDraft },
+      json: { text: e.text, images: e.images.length ? e.images : undefined, client_msg_id: e.id, launcher: e.launcher || undefined, model: e.model || undefined, clear_draft: clearDraft, queue_next_turn: e.queueNextTurn },
     }));
     if (!flight.current()) return true;
     assertDelivered(r); // a bare operation receipt is no delivery (#10194)

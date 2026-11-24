@@ -1,5 +1,6 @@
 import { conversationDeletionScope, conversationKeyDeleted } from "../../lib/conversation-deleted";
 import { storedValue } from "../../lib/compatibility";
+import { useBusySend } from "../../lib/busy-send";
 // Beautiful UI's Prompt Bar, wired to a session: multi-line input, / commands, @ files and sessions, image attachments
 // (paste, drop, pick; click one to mark it up), files uploaded to the session's machine, send — and stop while the
 // agent works and nothing is typed. Quotes, edits and edited images from the chat arrive as draft events (drafts.ts).
@@ -80,6 +81,8 @@ export interface Outgoing {
   images: { mime: string; data: string }[];
   /** Ctrl/⌘+Enter hands the message over immediately through the queue's Send now action. */
   sendNow?: boolean;
+  /** Use the terminal's next-turn queue rather than its normal follow-up. */
+  queueNextTurn?: boolean;
   /** A real Quote action, not typed Markdown, a comment or an edit's restored quote (#10346): keep an earlier reader's
    *  place; already at the end, the send follows as usual. UI-only, never part of the hub's wire body. */
   quoteReply?: boolean;
@@ -165,6 +168,7 @@ export const Composer = memo(function Composer({
   onSend = async () => false,
   onStop,
   onSendNow,
+  queueNextTurn,
   onEditLastMessage,
   editingLast,
   loadingDraft,
@@ -205,6 +209,7 @@ export const Composer = memo(function Composer({
   /** Ctrl/⌘+Enter while the agent works or waits: after the message is queued, hands the queue over now (the queue panel's
    *  Send now). Absent where the agent cannot take messages now; Ctrl/⌘+Enter then queues as Enter does. */
   onSendNow?: () => void | Promise<void>;
+  queueNextTurn?: boolean;
   /** Starts editing the last Claude prompt in this box (↑ in it while empty, Esc twice; #4503, #2945). */
   onEditLastMessage?: () => void;
   /** Set while the box edits the last message: a bar says so, Esc or × cancels, and a send rewinds first. */
@@ -857,6 +862,9 @@ export const Composer = memo(function Composer({
   const showStop = working && !typed && onStop;
   const secondStop = Boolean(working && typed && onStop && !blocked);
   const queues = Boolean(working || needsYou);
+  const busySend = useBusySend();
+  const choosesBusySend = Boolean(working && !needsYou && (queueNextTurn || (agent === "agy" && onSendNow)));
+  const followsUp = choosesBusySend && busySend === "follow_up";
   // an empty box and an idle agent: a primary action takes the send button's place (it would be off anyway), as on iOS
   const roundAction = Boolean(action?.primary) && !canSend && !showStop && !blocked && !disabled;
 
@@ -868,7 +876,7 @@ export const Composer = memo(function Composer({
     return opened;
   };
 
-  const submit = async (text = draft, now = false) => {
+  const submit = async (text = draft, alternate = false) => {
     if (!canWriteDraft()) return;
     if (pickerCommand(text)) return;
     const refs = getContexts(draftKey);
@@ -921,8 +929,10 @@ export const Composer = memo(function Composer({
     const said = !fullText.trim() && !sent.length && sentFiles.length ? t("chat-composer.see_files") : fullText;
     const body = withFiles(withQuoteBlock(q, said), sentFiles);
     const quoteReply = !edit && q.some((x) => !x.comment);
+    const now = choosesBusySend ? followsUp !== alternate : alternate && Boolean(onSendNow);
     const ok = await onSend({ text: withContexts(refs, body, sent.length > 0), images: sent.map((a) => ({ mime: a.mime, data: a.data })),
       ...(now && queues ? { sendNow: true } : {}),
+      ...(choosesBusySend && queueNextTurn && !now ? { queueNextTurn: true } : {}),
       ...(quoteReply ? { quoteReply: true } : {}), ...(committed ? { edit: committed } : {}) });
     if (!canWriteDraft()) { releaseAttachments(sent); return; }
     if (ok && now && queues) await onSendNow?.();
@@ -1305,7 +1315,7 @@ export const Composer = memo(function Composer({
               e.preventDefault();
               // any Enter while blocked says why (also an empty box or attachments only): submit() would do nothing
               if (blocked) nudgeBlocked(e.repeat);
-              else void submit(draft, modEnter && Boolean(onSendNow));
+              else void submit(draft, modEnter);
             }
           }}
           placeholder={pill && hasFinePointer() ? t("chat-composer.suggestion", { suggestion: pill }) : placeholder}
@@ -1410,8 +1420,11 @@ export const Composer = memo(function Composer({
               type="button"
               data-testid="composer-send"
               // a message sent while the agent works or waits on you goes in its queue (Session.queued)
-              aria-label={queues ? t("chat-composer.queue") : t("chat-composer.send")}
-              title={queues ? t("chat-composer.queue_hint") : t("chat-composer.send_hint")}
+              aria-label={followsUp ? t("settings-agentopen.busy_follow_up") : queues ? t("chat-composer.queue") : t("chat-composer.send")}
+              title={choosesBusySend ? t("settings-agentopen.busy_send_action", {
+                action: t(followsUp ? "settings-agentopen.busy_follow_up" : "settings-agentopen.busy_queue"),
+                alternate: t(followsUp ? "settings-agentopen.busy_queue" : "settings-agentopen.busy_follow_up"),
+              }) : queues ? t("chat-composer.queue_hint") : t("chat-composer.send_hint")}
               disabled={!canSend}
               onClick={() => void submit()}
               className={ROUND}

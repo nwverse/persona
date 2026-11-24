@@ -2,5 +2,10 @@
   "label": "打开 Agent 的方式",
   "hint": "在对话里点开 Agent 或任务时，它在哪里打开。「右侧面板」让对话留在旁边，手机这么窄的窗口里会盖住对话；「整页打开」换到它自己的页面，可以一键回到对话。只对这个浏览器生效。",
   "panel": "右侧面板",
-  "page": "整页打开"
+  "page": "整页打开",
+  "busy_send": "Agent 工作时的发送方式",
+  "busy_send_hint": "对当前浏览器中支持此功能的 TRAE 和 Antigravity 终端生效。排队等待下一轮；追加更早发送，在 Antigravity 中会发送整个队列。",
+  "busy_queue": "排队",
+  "busy_follow_up": "追加",
+  "busy_send_action": "{action}（Enter）· {alternate}（Ctrl/⌘+Enter）"
 }

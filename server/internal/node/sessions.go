@@ -217,6 +217,14 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			}
 		}
 		if a.Agent == traexAgent {
+			if host.ParsePane(a.PaneID).Kind == host.Herdr && s.Capabilities == nil && s.Status != proto.StatusOffline && s.Status != proto.StatusInterrupted {
+				s.Capabilities = &proto.SessionCapabilities{Read: true, Send: true, Interrupt: true, Approve: true, Terminal: true, QueueNextTurn: true, QueueEdit: proto.Bool(false)}
+			}
+			if s.Capabilities != nil && s.Capabilities.QueueNextTurn && s.Status == proto.StatusWorking {
+				if box, err := n.readTraeComposer(ctx, a.PaneID); err == nil {
+					s.Queued = box.queued
+				}
+			}
 			if t, ok := n.traexThread(id); ok {
 				if s.Title == "" && t.Title != "" {
 					s.Title = t.Title

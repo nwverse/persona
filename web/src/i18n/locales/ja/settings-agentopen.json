@@ -2,5 +2,10 @@
   "label": "Agent の開き方",
   "hint": "チャットで Agent やタスクをクリックしたときの開き方です。「右側のパネル」はチャットを横に残したまま開き、スマートフォンほどの幅ではチャットの上に重ねて開きます。「ページ全体」は専用のページで開き、ワンクリックでチャットに戻れます。このブラウザにのみ適用されます。",
   "panel": "右側のパネル",
-  "page": "ページ全体"
+  "page": "ページ全体",
+  "busy_send": "Agent の実行中に送信するとき",
+  "busy_send_hint": "このブラウザで対応する TRAE と Antigravity のターミナルに適用されます。キューは次のターンまで待機します。追加送信はより早く届き、Antigravity ではキュー全体を送信します。",
+  "busy_queue": "キューに追加",
+  "busy_follow_up": "追加送信",
+  "busy_send_action": "{action}（Enter）・{alternate}（Ctrl/⌘+Enter）"
 }

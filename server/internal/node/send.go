@@ -284,7 +284,12 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 		watch = n.watchPrompt(id, text) // where the transcript ends before the typing: what comes after may be this (sendsafe_submit.go)
 	}
 	typedAt := time.Now()
-	err = n.prompt(ctx, pane, text)
+	traeTerminal := kind == traexAgent && host.ParsePane(pane).Kind == host.Herdr
+	if traeTerminal {
+		err = n.sendTraeTerminal(ctx, pane, text, opts.QueueNextTurn)
+	} else {
+		err = n.prompt(ctx, pane, text)
+	}
 	if errors.Is(err, host.ErrAgentBlocked) && (kind == "codex" || kind == traexAgent) {
 		// herdr refuses to prompt a Codex with an async question open; its box (checked above) takes the message.
 		err = n.codexType(ctx, pane, text, func(draft string) bool { return stillPrompted(draft, text) || pastedRE.MatchString(draft) })
@@ -294,7 +299,7 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 		return r
 	}
 	if err == nil {
-		if (kind == "codex" || kind == traexAgent) && host.ParsePane(pane).Kind != host.Botmux {
+		if !traeTerminal && (kind == "codex" || kind == traexAgent) && host.ParsePane(pane).Kind != host.Botmux {
 			if err := n.codexSubmitted(ctx, pane); err != nil {
 				return err
 			}

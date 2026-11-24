@@ -396,4 +396,20 @@ describe("the round button (#5324)", () => {
     const order = [...row.children].map((c) => c.getAttribute("data-testid")).filter(Boolean);
     expect(order).toEqual(["composer-stop", "composer-voice", "composer-send"]);
   });
+
+  it.each([
+    ["traex", true, "follow_up", { sendNow: true }, false],
+    ["traex", true, "queue", { queueNextTurn: true }, false],
+    ["agy", false, "follow_up", { sendNow: true }, true],
+    ["agy", false, "queue", {}, false],
+  ] as const)("uses the busy send preference for %s (%s, %s)", async (agent, queueNextTurn, mode, fields, flush) => {
+    localStorage.setItem("persona.busy-send", mode);
+    localStorage.setItem(`draft:${KEY}`, "A follow-up");
+    const onSend = vi.fn(async () => true);
+    const onSendNow = vi.fn();
+    render({ agent, working: true, queueNextTurn, onSend, onSendNow: agent === "agy" ? onSendNow : undefined });
+    await act(async () => send()!.click());
+    expect(onSend).toHaveBeenCalledWith({ text: "A follow-up", images: [], ...fields });
+    expect(onSendNow).toHaveBeenCalledTimes(flush ? 1 : 0);
+  });
 });

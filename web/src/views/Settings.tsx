@@ -67,6 +67,7 @@ import { ProviderLinkCopy } from "./settings/ProviderLinkCopy";
 import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type LauncherSync } from "../lib/launcher-list";
 import { TerminalModeRow } from "./settings/TerminalModeSetting";
 import { AgentOpenRow } from "./settings/AgentOpenSetting";
+import { BusySendRow } from "./settings/BusySendSetting";
 import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, isCoreTab, isModuleTab, itemIsPage, itemState, navGroups, openedFromSub, redirectLegacySettings, resolveSettingsTarget, settingsAt, settingsHref, SENT_SUB, stepsToList, tabInfo, TAB_INFO, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
 import { formatIntegrationsSub, isLegacyIntegrationTab, normalizeIntegrationFilter, parseIntegrationsSub } from "./settings/integrations-route";
 import { moduleFeaturesSource } from "../core/module-features";
@@ -786,6 +787,7 @@ function AgentPreferences() {
   return (
     <Group title={t("settings.agent_preferences")} anchor="agent-preferences">
       <AgentOpenRow />
+      <BusySendRow />
       <TerminalModeRow />
       {!workBrowserReady && <Row label={t("settings.sidebar_terminals")} hint={t("settings.sidebar_terminals_hint")} wrapHint>
         <Switch on={sidebarTerminals} onChange={setSidebarTerminals} label={t("settings.sidebar_terminals")} />

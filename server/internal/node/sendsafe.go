@@ -108,6 +108,8 @@ type sendOpts struct {
 	WorkspaceLabel string `json:"workspace_label"`
 	// ClearDraft is the draft the user saw in a refusal and chose to clear: cleared only if the box still shows it.
 	ClearDraft string `json:"clear_draft"`
+	// QueueNextTurn chooses TRAE CLI's next-turn queue over its normal follow-up.
+	QueueNextTurn bool `json:"queue_next_turn"`
 	// WaitForEffort says the sender can keep the message if the thinking effort is still pending.
 	WaitForEffort bool `json:"wait_for_effort"`
 	// DismissNotice: a notice that Enter only closes («Enter to continue», no options) is closed before the text is
@@ -186,6 +188,9 @@ const noticeTries = 3
 // checkPaneFor is checkPane with the send's options: the draft to clear and whether to close a notice.
 func (n *Node) checkPaneFor(ctx context.Context, pane, kind string, opts sendOpts) error {
 	clearDraft := opts.ClearDraft
+	if kind == traexAgent && host.ParsePane(pane).Kind == host.Herdr {
+		return nil // sendTraeTerminal checks the active screen immediately before pasting.
+	}
 	// Codex and compatible variants: their own screen (codexask.go) — a draft in the box, an approval or a question overlay refuses;
 	// the transcript pager and 0.163's question pane are only shown, and step aside.
 	if kind == "codex" || kind == traexAgent {

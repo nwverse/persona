@@ -243,7 +243,7 @@ func codexDraft(raw, plain []string, i int, noColor bool) string {
 			text = strings.TrimPrefix(text, "›")
 		}
 		if !noColor {
-			text = undimmed(raw[k])
+			text = Undimmed(raw[k])
 			if k == i {
 				text = strings.TrimPrefix(strings.TrimLeft(text, " "), "›")
 			}
@@ -288,8 +288,8 @@ func codexStatusStart(plain []string, i, hint int) int {
 	return -1
 }
 
-// undimmed is a colored row's text without its dim runs.
-func undimmed(line string) string {
+// Undimmed is a colored row's text without its dim runs.
+func Undimmed(line string) string {
 	var b strings.Builder
 	for _, r := range sgrRuns(line) {
 		if !r.dim {
