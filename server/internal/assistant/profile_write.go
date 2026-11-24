@@ -466,6 +466,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	if in.SupervisionBatchMinutes != nil && supervisionBatchMinutesOf(s.settings(ctx)) != supervisionBatchMinutesOf(before) {
 		s.rescheduleSupervision()
 	}
+	if in.TodosV2 != nil && s.settings(ctx).todosV2On() != before.todosV2On() {
+		s.todosPushSoon()
+	}
 	if in.MeetingTranscriptionExtension != nil {
 		s.transcriptionReadinessChanged() // named again: probed again (the answer stands meanwhile)
 	}
