@@ -5,7 +5,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LarkConversation } from "../../lib/lark-chats";
+import type { LarkConversation } from "./lark-chats";
 
 type Listener = (msg: Record<string, unknown>) => void;
 const hub = vi.hoisted(() => ({ listeners: new Map<string, Set<(msg: Record<string, unknown>) => void>>(), rowRenders: 0 }));
@@ -18,8 +18,8 @@ vi.mock("../../lib/store", async (original) => ({
   },
 }));
 // Only ChatRow builds a chat's second line, once per render: the count of those calls is the count of row renders.
-vi.mock("../../lib/lark-chats", async (original) => {
-  const real = await original<typeof import("../../lib/lark-chats")>();
+vi.mock("./lark-chats", async (original) => {
+  const real = await original<typeof import("./lark-chats")>();
   return {
     ...real,
     conversationPreview: (...args: Parameters<typeof real.conversationPreview>) => {
@@ -29,7 +29,7 @@ vi.mock("../../lib/lark-chats", async (original) => {
   };
 });
 import { t } from "../../i18n";
-import { setLarkHome } from "../../lib/lark-chats";
+import { setLarkHome } from "./home";
 import { Messages } from "./Messages";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
