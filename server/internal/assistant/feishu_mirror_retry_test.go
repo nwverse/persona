@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -78,9 +78,8 @@ func TestFeishuMirrorRetryKeepsItsKey(t *testing.T) {
 	if keys[0] == "" || keys[0] != keys[1] {
 		t.Fatalf("keys %q", keys)
 	}
-	if got := w.s.botTargetFor("om_card", ""); got.SessionID != "m1" {
-		t.Fatalf("thread %+v", got)
-	}
+	// The fake records the key when it receives the post; the card's thread is remembered once the post returns.
+	waitFor(t, "the card's thread", func() bool { return w.s.botTargetFor("om_card", "").SessionID == "m1" })
 }
 
 // One that keeps failing is tried feishuMirrorRetries more times, then given up.
@@ -96,7 +95,7 @@ func TestFeishuMirrorGivesUpAfterItsTries(t *testing.T) {
 
 // A refusal Feishu will repeat (the card's content, a permission) is not tried again.
 func TestFeishuMirrorRefusedIsNotTriedAgain(t *testing.T) {
-	w := mirrorRetryHub(t, func(int) error { return &feishubot.APIError{Op: "send", Code: 230002, Msg: "bot not in chat"} })
+	w := mirrorRetryHub(t, func(int) error { return &botcard.APIError{Op: "send", Code: 230002, Msg: "bot not in chat"} })
 	w.s.feishuMirror(context.Background(), "server", "m1")
 	time.Sleep(100 * time.Millisecond)
 	if got := len(w.tried()); got != 1 {

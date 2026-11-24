@@ -292,7 +292,7 @@ pi, the Cursor CLI (`cursor-agent`) and the Antigravity CLI (`agy`) are agents t
 
 **agy's permission mode is its start's.** An agy start runs in Allow all (`--dangerously-skip-permissions`) unless it names another mode: `acceptEdits` passes `--mode accept-edits`, `auto` passes `--mode auto`, and `default` passes no flag (agy's own approval). Like Claude Code, an agy worker from `agent_start` or `task_plan` gets Allow all when nothing names a mode (`startAgent.allowAll`), since nobody at the pane answers agy's approval prompt; a mode the call or plan names stays. The row reports the mode it started in as `permission_mode`, and a herdr restart resumes it with the same flag. The mode, effort and model cannot be changed afterwards: `session.modes` on an agy or Cursor pane is refused with `modes_unsupported` (409) and no key reaches the pane, and their rows say `capabilities.modes: false`, so no client offers the chips. agy cycles its own modes with shift+tab, but its footer is not Claude Code's and Allow all is a start flag outside that cycle, so the node does not drive it. Antigravity's runtime (`agy acp`, the companion conversation) keeps its own mode switch.
 
-A managed Antigravity launcher with a key (`GOOGLE_GEMINI_BASE_URL` / `GEMINI_API_KEY`) also decides how the Antigravity companion (Agents without a terminal, agy as the assistant, the model list) signs in: the node gives the companion that launcher's variables and `PERSONA_AGY_MODEL_PROVIDER=gemini`, and the companion then uses the Gemini API key provider instead of a Google account (`docs/integrations/runtimes.md`, "Gemini API key provider", #13762). With several such launchers the first by name is used, and removing the key (or the launcher) restarts the companion on the sign-in again.
+A managed Antigravity launcher with a key (`GOOGLE_GEMINI_BASE_URL` / `GEMINI_API_KEY`) also decides how the Antigravity companion (Agents without a terminal, agy as the assistant, the model list) signs in: the node gives the companion that launcher's variables and `PERSONA_AGY_MODEL_PROVIDER=gemini`, and the companion then uses the Gemini API key provider instead of a Google account (`docs/integrations/runtimes.md`, "Gemini API key provider", #13762). With several such launchers the first by name is used (fetched ahead whatever its delivery, #13871), and removing the key (or the launcher) restarts the companion on the sign-in again.
 
 **Creating one** (`POST /api/v1/launchers`, a full-device token): `{"kind": "launcher", "agent": "agy", "name": "agy-gw", "base_url": "https://<gateway address>", "api_key": "<key>", "model": "<an agy model id the gateway serves>"}`. `model` is required (it is the launcher's default; pick one from `agy models`, such as `gemini-4-neon-high`), `auth` is not used (agy sends the key in `x-goog-api-key` itself), and `name` may be left out. The key is stored sealed and never sent back. A herdr pane start or resume of that launcher types `personad launch agy-gw …`, which fetches the launcher's `GOOGLE_GEMINI_BASE_URL` / `GEMINI_API_KEY` from the node (launch key, as for a managed Claude launcher) and execs `agy --settings '{"modelProvider":"gemini"}' …`; the key is in no typed line, no argument and no resume command. An `--settings` the pane's own arguments carry is kept as it is.
 
@@ -812,6 +812,17 @@ are skipped because only Codex knows whether it trusts that project configuratio
 configuration, compact `-c...` / `-p...` options and legacy administrator provider overlays are also skipped.
 Use a Persona-managed or ordinary custom Responses provider on a local CLI when attribution is required. A new Codex session's ID is allocated after startup, so its initial process may omit
 `X-Persona-Session`; a resume with a known ID can include it.
+
+Persona does not add source headers to Antigravity (`agy`) Agent requests. Managed launchers with a Gemini API key
+select `modelProvider: gemini` by default. In agy 1.5.10, both the CLI and ACP ignored `AGY_LLM_GATEWAY_HEADERS`
+when sending generation requests to `GOOGLE_GEMINI_BASE_URL`. To check attribution, inspect a
+`streamGenerateContent` POST in the gateway log. A model catalog GET can carry headers that generation omits.
+
+Antigravity's Enterprise Gateway can send operator-configured headers on generation requests. Its headers apply
+to the whole process. Persona's ACP companion shares one process across ordinary work Agents, so setting a task ID
+there would label other Agents' requests with the same ID. For a terminal Agent, an allowlist check would need
+the effective gateway destination because administrator settings can override the URL independently of the headers.
+See Google's [Enterprise Gateway configuration and precedence](https://docs.cloud.google.com/gemini/enterprise/docs/ai-developer-tools/deploy-enterprise-gateway#settings-precedence).
 
 Direct Messages, Responses and Chat Completions helpers use `background`, including helpers sent through a node.
 Cross-origin redirects strip all source fields, even when the next origin is also allowlisted. A gateway should also

@@ -105,6 +105,13 @@ const (
 	// rows). The hub lists the todo_view feature only while every manager whose to-dos it merges names it; until then
 	// clients keep their own rules, and draw a row without `view` as before.
 	CapabilityTodoView = "todo_view"
+	// CapabilityTodoRevision: the manager answers GET /api/v1/todos/revision with a cheap validator for the full list's
+	// to-do writes and stable view classes (#13804). The hub lists todo_revision only while every manager whose to-dos it
+	// merges names it; older and mixed fleets keep reading the complete list after a push.
+	CapabilityTodoRevision = "todo_revision"
+	// TodoRevisionHeader carries the manager's or merged hub's lightweight to-do validator on GET /api/v1/todos and
+	// GET /api/v1/todos/revision. It is separate from the full body's ETag.
+	TodoRevisionHeader = "X-Persona-Todos-Revision"
 	// CapabilityTodoPlaces: the manager answers GET /api/v1/todos/places, the To-dos sidebar's places with the list's
 	// counts (#10226, TodoPlaces). The hub lists the todo_places feature only while every manager whose to-dos it
 	// merges names it.
@@ -187,7 +194,7 @@ const (
 	CodeStaleSnapshot    = "stale_snapshot"    // ErrStaleSnapshot
 	CodeAssistantOffline = "assistant_offline" // the hub has no connection from the assistant
 	// CodeFeishuAPI: Feishu answered the bot's call with an error code (Data: {"code": n}): a refusal or a passing
-	// failure the assistant tells apart (the agent messages, feishu_cot.go).
+	// failure the assistant tells apart (the agent messages, internal/modules/lark/cot.go).
 	CodeFeishuAPI = "feishu_api"
 	// CodeFeishuSave: the image downloaded, but saving its bytes on the selected machine failed.
 	CodeFeishuSave = "feishu_save"
@@ -472,6 +479,9 @@ var Routes = []string{
 	"GET /api/v1/assistant/conversations/{id}/segments",
 	"POST /api/v1/assistant/conversations/{id}/switch",
 	"GET /api/v1/assistant/conversations/{id}/switch/{operation}",
+	// A batch of those switches (conversations_switch.go there, docs/assistant/assistant.md, #14222).
+	"POST /api/v1/assistant/conversation-switches",
+	"GET /api/v1/assistant/conversation-switches/{batch}",
 	// The selection: what the knowledge base brings in and keeps (kb_selection.go there).
 	"GET /api/v1/kb/selection",
 	"PUT /api/v1/kb/selection",

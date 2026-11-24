@@ -60,6 +60,7 @@ func (n *Node) setManaged(list []proto.ManagedLauncher) {
 	n.managed.mu.Lock()
 	n.managed.byID, n.managed.full, n.managed.infer = m, nil, infer
 	n.managed.mu.Unlock()
+	forgetOfflineScan() // cached transcript rows include the launcher's context window
 }
 
 // setCatalog is launchers.catalog: the providers in this computer's scope. What was pulled stays while the provider is
@@ -72,7 +73,9 @@ func (n *Node) setCatalog(list []proto.ManagedLauncher) {
 			continue
 		}
 		m[l.Name] = l
-		if l.Withheld && l.Pushed() {
+		// A pushed provider is kept ahead of a start. So is an agy one whatever its delivery: the Antigravity
+		// companion runs all the time and takes its key at start (agyProviderEnv), so on demand is now (#13871).
+		if l.Withheld && (l.Pushed() || l.AgentType() == "agy") {
 			prefetch = append(prefetch, l.Name)
 		}
 	}
@@ -86,6 +89,7 @@ func (n *Node) setCatalog(list []proto.ManagedLauncher) {
 	infer := buildManagedInferLaunchers(m)
 	n.managed.byID, n.managed.full, n.managed.infer = m, full, infer
 	n.managed.mu.Unlock()
+	forgetOfflineScan()
 	n.syncAgyProvider()
 	if len(prefetch) > 0 {
 		go func() {

@@ -2,7 +2,7 @@
 
 The default runtime directory is `~/.persona`; what the old names (commands, directories, variables) still reach is in [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md). Existing systemd / launchd, database / container / volume, and release-file identities in this document are retained rather than rebuilt for the rename. Migration-version differences: [Configuration and compatibility](../operations/config.md#命名与兼容).
 
-Go, `server/cmd/`: the six programs under "Programs" below, all of one build, and `pushrec`, a development tool that records what an app gets from a hub for the push replay test (`docs/operations/testing.md`). Modes: `docs/server/architecture.md`; protocol: docs/protocol/protocol.md.
+The six programs listed below share one build and live under `server/cmd/`. The push recorder and fleet soak harness live under `server/scripts/`. See [testing](../operations/testing.md) for their commands, [server architecture](architecture.md) for the program modes and [the protocol](../protocol/protocol.md) for the wire format.
 
 ## Programs
 
@@ -189,7 +189,7 @@ Publishing and approving are separate actions. A reader may retrieve a published
 | `internal/bus` | Service-to-hub bus client: dialing, handshake, reconnect, keepalive; `docs/protocol/protocol.md`, “Bus” |
 | `internal/netaddr` | Local addresses, Linux netlink flags and address-change notifications; not proof of public reachability |
 | `internal/db` | Postgres connection pool, embedded SQL migrations in two sets (`migrations/hub/`, `migrations/manager/`; “Migrations” below), table access |
-| `internal/mail` | IMAP/SMTP, encrypted account storage, mail HTTP APIs and MCP tools (`docs/extensions/mail.md`) |
+| `internal/modules/mail` | IMAP/SMTP, encrypted account storage, mail HTTP APIs and MCP tools (`docs/extensions/mail.md`) |
 | `internal/mcpserver` | personad mcp: stdio MCP server for Claude |
 | `internal/nodecmd` | The device's command line (`personad` and `persona-node` both dispatch it) |
 | `internal/nodeclient` | The client side of `node.sock` for hook / mcp / ask / notify / tool |

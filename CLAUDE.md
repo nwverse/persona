@@ -106,7 +106,8 @@ This is a public open-source repository; everyone and every Agent maintains it t
   built with `fmt` / `+` in Go. Update the golden tests and read the diff (`docs/assistant/prompts.md`).
 - **Prompt language**: user- and agent-facing templates carry `Language` / `Lang` from the caller and add en / zh-Hans / ja goldens. Preserve source data and existing empty-language bytes; follow `docs/assistant/prompts.md` ("Language migration"). The prompt-language CI inventory may only shrink.
 - **Phones reach the hub directly over the internet** (TLS, preferring IPv6; VPNs are the user's own business), with the LAN kept
-  compatible (`docs/operations/network.md`).
+  compatible (`docs/operations/network.md`) An organization can instead keep everything on its own network
+  (`security.private_network_only`, "Office network mode" there).
 
 ### Product and UI
 
@@ -132,6 +133,10 @@ This is a public open-source repository; everyone and every Agent maintains it t
 - **Design principles**: `docs/design/PRINCIPLES.md` holds the seven product principles (defaults first, progressive disclosure,
   user control, consistency first, model and product separate, checkable rules, fast/local-first/stateful), each with how to check it. They apply to UI,
   settings and defaults, and how numbers are counted; acceptance criteria and the PR template's self-check are written against them.
+- **Web Labs admission**: temporary trials or stable/new implementation choices only. Keep the stable default and lossless
+  rollback, and link an issue with a plan to graduate or remove the entry. Put shipped module switches in General and lasting
+  preferences in their owning category. Keep irreversible changes, internal debug controls and placeholder demos out of Labs
+  (`docs/web/web.md`, "Labs").
 - **Read the spec first**: before adding or changing any UI or interaction (any client, watch and web included), read
   `docs/design/PRINCIPLES.md` and the sections of `docs/design/DESIGN_SYSTEM.md` your change touches. Follow them; they win over
   habits copied from other screens. Known gaps against Apple's guidelines are in `docs/design/HIG_AUDIT.md`; don't add new ones.

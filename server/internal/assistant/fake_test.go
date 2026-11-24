@@ -87,6 +87,8 @@ type fakeHub struct {
 	itemsFail      int                          // session.items fails this many more times (then recovers)
 	itemsFailPlain int                          // one-turn completion reads without lazy_images fail this many times
 	items          []proto.Item                 // session.items answers this
+	sentItems      map[string][]proto.Item      // user transcript items written by successful assistant.send calls, by session_id
+	omitSentItems  bool                         // suppress sentItems writes to simulate RPC success without a transcript item
 	page           func(turns int) []proto.Item // when set, session.items answers with this instead (a real transcript's PageTurns)
 	pageTurns      bool                         // and only the last n turns of it to "turns": n, as the node does (else all of it)
 	itemsPage      int                          // > 0: session.items with after_seq pages them by seq, this many a page
@@ -502,6 +504,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			return json.Marshal(map[string]any{"items": page, "more_after": more})
 		}
 		items := f.items
+		if sid, _ := a["session_id"].(string); sid != "" && len(f.sentItems[sid]) > 0 {
+			items = append(slices.Clone(items), f.sentItems[sid]...)
+		}
 		if n, _ := a["turns"].(float64); f.pageTurns && n > 0 {
 			items = lastTurns(items, int(n))
 		}
@@ -784,6 +789,22 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if f.assistantAnswer != nil {
 			maps.Copy(out, f.assistantAnswer(a))
 		}
+		if !f.omitSentItems && a[holdPushesParam] == true {
+			if text, _ := a["text"].(string); text != "" {
+				target, _ := out["session_id"].(string)
+				if target == "" {
+					target = id
+				}
+				if f.sentItems == nil {
+					f.sentItems = map[string][]proto.Item{}
+				}
+				item := proto.Item{Seq: len(f.sentItems[target]) + 1, Role: "user", Kind: proto.KindText, Text: text, TS: time.Now()}
+				if cid, _ := a["client_msg_id"].(string); cid != "" {
+					item.ClientMsgID = cid
+				}
+				f.sentItems[target] = append(f.sentItems[target], item)
+			}
+		}
 		return json.Marshal(out)
 	}
 	return json.RawMessage(`{}`), nil
@@ -846,7 +867,9 @@ func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, erro
 		return json.Marshal(map[string]any{"settings": []Setting{{Key: "inbox.rules", Title: "收件箱分拣规则", About: "the rules",
 			Value: "a string", Actions: []string{"get", "set"}}}})
 	case AppSettings + " " + AppTool:
-		return json.Marshal(proto.TextResult("the hub's: "+string(p.Params), false))
+		if f.apps[p.AppID+" "+p.Method] == nil { // else the test's answer (answerApp), below
+			return json.Marshal(proto.TextResult("the hub's: "+string(p.Params), false))
+		}
 	case AppPlugins + " " + assistantwire.PluginsPresets:
 		return json.Marshal(map[string]any{"presets": f.presets})
 	case AppPlugins + " " + assistantwire.PluginsVoice:
@@ -1111,6 +1134,12 @@ func (m *memStore) failKey(key string, err error) {
 // noPlans is a store without the task_plans and assistant_feed tables.
 type noPlans struct{}
 
+func (m *memStore) PutPlacement(ctx context.Context, p db.PlacementRow) error {
+	return m.PutSetting(ctx, "placement."+p.ID, p.Decision)
+}
+
+func (noPlans) PutPlacement(context.Context, db.PlacementRow) error { return nil }
+
 func (noPlans) CreateTaskPlan(context.Context, db.TaskPlanRow) error {
 	return errors.New("no task_plans here")
 }
@@ -1373,6 +1402,9 @@ func withSettings(t testing.TB, f *fakeHub, s *Service) *Service {
 	// These tests are about what a plan does once it exists; what task_plan requires of a brief is task_brief_test.go's,
 	// which turns this off.
 	s.briefsOptional = true
+	// And they start the main conversation's plans from their cards: that a supervisor's plan starts at once is
+	// plan_owner_step_test.go's, which turns this off.
+	s.mainPlansWait = true
 	// And about what a supervisor does with its tasks, told to the main conversation: the background supervisor that
 	// takes them by default is supervise_background_test.go's, which turns this off.
 	s.noBackground = true
