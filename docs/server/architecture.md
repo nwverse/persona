@@ -189,8 +189,8 @@ application package, a clock call, a goroutine, a channel, a select, or a field 
 `kit` lives only under `server/internal/domainkit`, `contract` if and only if `contracts.txt` lists the package,
 `core shared` holds only values, a library imports no core, kit or adapter and is counted like application code (so
 declaring `library` holds no domain concept either), an adapter's named basic types are counted as application code's
-and it exports no named collection, func or chan type, alias or constant (so declaring `adapter` exports no raw
-shape), and testkit is imported only by tests and other testkit and is no
+and it exports no named collection, func or chan type, alias or constant (so declaring `adapter` exports no raw shape;
+where an adapter lives is not checked yet, #15088), and testkit is imported only by tests and other testkit and is no
 program (`package main`, which nothing imports), so its code reaches no binary. A core is imported only by application
 code, adapters, testkit and tests (a shared kernel by cores too). The hub (`internal/hub`, `internal/hubedge`,
 `cmd/persona-hub`) relays contracts and imports no core, kit or adapter, and neither do `db` and `prompts`, libraries
