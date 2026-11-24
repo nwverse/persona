@@ -1,12 +1,14 @@
 package lark
 
-// The Feishu progress card's content, the folded process panel and the pieces note (moved from the core's feishu_progress.go).
+// The Feishu progress card's content, the folded process panel and the pieces note, drawn from what the core hands over
+// (assistantwire.RunProgress).
 
 import (
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -30,12 +32,12 @@ func listSep(l i18n.Lang) string {
 	return "、" // i18n-ignore: the CJK enumeration comma between list items, punctuation not prose
 }
 
-// progressCard is a run's card while it goes on; waiting: the note while its message is not found in the
-// conversation yet (runWaiting), "" once it is. A zero t means no live run: the card carries no Stop button.
-func progressCard(l i18n.Lang, label string, took time.Duration, steps []string, live, waiting string, v liveView, t botTarget) *botcard.Card {
+// progressCard is a run's card while it goes on; v.Waiting is the note while its message is not found in the
+// conversation yet, "" once it is. A zero v.Target means no live run: the card carries no Stop button.
+func progressCard(l i18n.Lang, label string, took time.Duration, steps []string, live string, v assistantwire.RunProgress) *botcard.Card {
 	summary := i18n.T(l, "assistant-feishu.working_summary_took", i18n.Args{"took": channel.Duration(l, took)})
 	state, color := i18n.T(l, "assistant-feishu.state_working"), botcard.Blue
-	switch waiting {
+	switch v.Waiting {
 	case "":
 	case "queued":
 		summary, state, color = i18n.T(l, "assistant-feishu.queued_summary"), i18n.T(l, "assistant-feishu.state_queued"), botcard.Neutral
@@ -48,17 +50,17 @@ func progressCard(l i18n.Lang, label string, took time.Duration, steps []string,
 	for _, md := range progressLines(l, steps, v) {
 		c.Markdown(md)
 	}
-	if n := v.calls; n > 0 {
+	if n := v.Calls; n > 0 {
 		parts := []string{i18n.T(l, "assistant-feishu.count_calls", i18n.Args{"count": n})}
 		for _, f := range []struct {
 			key string
 			n   int
-		}{{"assistant-feishu.count_read", v.read}, {"assistant-feishu.count_edited", v.edited}} {
+		}{{"assistant-feishu.count_read", v.Read}, {"assistant-feishu.count_edited", v.Edited}} {
 			if f.n == 0 {
 				continue
 			}
 			shown := strconv.Itoa(f.n)
-			if f.n >= liveFilesMost {
+			if f.n >= assistantwire.RunFilesMost {
 				shown += "+" // noteFile stops counting there
 			}
 			parts = append(parts, i18n.T(l, f.key, i18n.Args{"count": f.n, "n": shown}))
@@ -68,20 +70,20 @@ func progressCard(l i18n.Lang, label string, took time.Duration, steps []string,
 	// What the conversation is writing now, in an element of its own: a card entity streams it (the lark module's stream.go).
 	c.MarkdownID(progressLiveID, progressLive(live))
 	// The button is the /stop command on this run's conversation; it is only on the card of a run still in flight.
-	if t.Kind != "" {
+	if v.Target.Kind != "" {
 		c.Buttons(botcard.Btn(i18n.T(l, "assistant-feishu_cards.stop"), botcard.Danger,
-			map[string]any{"a": "stop", "k": t.Kind, "m": t.MachineID, "s": t.SessionID}))
+			map[string]any{"a": "stop", "k": v.Target.Kind, "m": v.Target.MachineID, "s": v.Target.SessionID}))
 	}
 	return c
 }
 
 // progressLines are the progress card's Markdown blocks: the newest call still running and for how long, the last
 // steps, the subagents.
-func progressLines(l i18n.Lang, steps []string, v liveView) []string {
+func progressLines(l i18n.Lang, steps []string, v assistantwire.RunProgress) []string {
 	var out []string
-	if n := len(v.open); n > 0 {
-		o := v.open[n-1]
-		now := i18n.T(l, "assistant-feishu.now_running", i18n.Args{"step": o.step, "took": channel.Duration(l, max(v.now.Sub(o.since), 0))})
+	if n := len(v.Open); n > 0 {
+		o := v.Open[n-1]
+		now := i18n.T(l, "assistant-feishu.now_running", i18n.Args{"step": o.Step, "took": channel.Duration(l, max(v.Now.Sub(o.Since), 0))})
 		if n > 1 {
 			now += " " + i18n.T(l, "assistant-feishu.and_more", i18n.Args{"count": n - 1})
 		}
@@ -98,28 +100,28 @@ func progressLines(l i18n.Lang, steps []string, v liveView) []string {
 		}
 		out = append(out, strings.TrimSpace(b.String()))
 	}
-	if n := len(v.subs); n > 0 {
+	if n := len(v.Subs); n > 0 {
 		var b strings.Builder
 		b.WriteString(i18n.T(l, "assistant-feishu.subtasks") + "\n")
-		subs := v.subs
+		subs := v.Subs
 		if n > 6 {
 			subs = subs[n-6:]
 		}
 		for _, st := range subs {
-			line := botcard.EscapeMarkdown(st.desc)
+			line := botcard.EscapeMarkdown(st.Desc)
 			if line == "" {
 				line = i18n.T(l, "assistant-feishu.step_subtask")
 			}
-			if st.kind != "" {
-				line += " " + botcard.Code(st.kind)
+			if st.Kind != "" {
+				line += " " + botcard.Code(st.Kind)
 			}
 			state := "assistant-feishu.subtask_running"
-			if st.done {
+			if st.Done {
 				state = "assistant-feishu.subtask_done"
 			}
 			b.WriteString("- " + line + " · " + i18n.T(l, state) + "\n")
 		}
-		if more := n - len(subs) + v.subsMore; more > 0 {
+		if more := n - len(subs) + v.SubsMore; more > 0 {
 			b.WriteString(i18n.T(l, "assistant-feishu.and_more", i18n.Args{"count": more}))
 		}
 		out = append(out, strings.TrimSpace(b.String()))

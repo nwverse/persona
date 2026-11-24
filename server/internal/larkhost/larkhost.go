@@ -99,6 +99,17 @@ type Turns interface {
 	Wait(ctx context.Context) error
 }
 
+// Cards lays out what the core says to the chat as the bot's cards (the module's, #13404). With no module there is
+// nothing to lay out: no cards and no note.
+type Cards interface {
+	// AnswerCards lays out a final answer as the bot's cards, each with the text it goes as when the card is refused:
+	// the process panel on the first when steps is not nil, foot under the last, none for quiet. name names the button
+	// of a bare address in the answer (nil: by its host).
+	AnswerCards(l i18n.Lang, name func(*url.URL) string, answer string, quiet bool, steps []string, foot string) (cards []*botcard.Card, fallbacks []string)
+	// MissingPiecesNote says which pieces of an answer did not get to Feishu (1-based) and where the whole is.
+	MissingPiecesNote(l i18n.Lang, missing []int) string
+}
+
 // Workbench is the Lark workbench (/home, /today, /inbox and their buttons, the home card).
 type Workbench interface {
 	WorkbenchCommand(ctx context.Context, f assistantwire.FeishuFeatures, cmd string) bool
@@ -112,6 +123,7 @@ type Workbench interface {
 type Layer interface {
 	Outbound
 	Turns
+	Cards
 	Workbench
 	Chat
 }
@@ -163,7 +175,6 @@ type Host interface {
 	// The bot's transport, which the core keeps with the hub's feishu.* calls (the outbound port forwards to it).
 	Post(ctx context.Context, to assistantwire.ChannelTarget, replyTo string, card *botcard.Card, fallback, key string) (string, error)
 	Note(ctx context.Context, to assistantwire.ChannelTarget, replyTo, text string)
-	Reply(ctx context.Context, to assistantwire.ChannelTarget, replyTo, text, key string, full bool) error
 	UpdateCard(ctx context.Context, messageID string, card *botcard.Card) error
 
 	// What a to-do's topic lines (thread_posts.go) read of the core: the Feishu thread the to-do is bound to (ok
@@ -186,9 +197,6 @@ type Host interface {
 	Call(ctx context.Context, method string, params, out any) error
 	CallApp(ctx context.Context, app, method string, params, out any) error
 	PostContent(ctx context.Context, to assistantwire.ChannelTarget, replyTo, content, fallback, key string) (string, error)
-	React(ctx context.Context, messageID, emoji string) (string, error)
-	Unreact(ctx context.Context, messageID, reactionID string)
-	Messages(ctx context.Context, messageID string) ([]botcard.Item, error)
 	WorkbenchStamp(ctx context.Context, c *botcard.Card) *botcard.Card
 	LinkNamer(ctx context.Context) func(*url.URL) string
 	OpenButton(ctx context.Context, machine, session string) botcard.Button
@@ -196,11 +204,8 @@ type Host interface {
 	Unreachable(err error) bool
 	Offline(err error) bool
 	StepParts(l i18n.Lang, it proto.Item) (verb, detail string)
-	ProgressCard(l i18n.Lang, r *channel.Run, took time.Duration, steps []string, live string) *botcard.Card
-	ProcessPanel(l i18n.Lang, c *botcard.Card, steps []string)
-	// MissingPiecesNote says which pieces of an answer did not get to Feishu (1-based) and where the whole is.
-	MissingPiecesNote(l i18n.Lang, missing []int) string
-	AnswerCards(l i18n.Lang, name func(*url.URL) string, answer string, quiet bool, steps []string, foot string) (cards []*botcard.Card, fallbacks []string)
+	// RunProgress is what run r's progress card shows besides its steps (the channels' live state of it).
+	RunProgress(r *channel.Run) assistantwire.RunProgress
 
 	// The channels' runs, under their lock.
 	Now() time.Time
@@ -267,7 +272,6 @@ type Host interface {
 	Hello(ctx context.Context) assistantwire.Hello
 	// AnswerLanguage is the language a prompt asks the answer in, for the owner's locale ("" for the default).
 	AnswerLanguage(locale string) string
-	ListSep(l i18n.Lang) string
 	// ReminderTodo is the to-do a reply to its reminder carries (nil: gone, unreadable or kept private).
 	ReminderTodo(ctx context.Context, todoID string) *prompts.BotTodo
 
@@ -372,6 +376,12 @@ func (None) TurnAnswer(context.Context, *channel.Run, string, string, time.Durat
 func (None) TurnProgressAfter(*channel.Run) time.Duration { return channel.ProgressAfter }
 func (None) TurnProgressIdle() time.Duration              { return channel.ProgressIdle }
 func (None) Wait(context.Context) error                   { return nil }
+
+// No cards without a channel.
+func (None) AnswerCards(i18n.Lang, func(*url.URL) string, string, bool, []string, string) ([]*botcard.Card, []string) {
+	return nil, nil
+}
+func (None) MissingPiecesNote(i18n.Lang, []int) string { return "" }
 
 // The chat without a channel: a bot switched off. Nothing is taken or answered, nothing waits, no target is set, and
 // its records are empty: what is kept in them is dropped.

@@ -560,18 +560,20 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
   with the same methods (`server/internal/modules/lark/layer.go`), so it imports no core service, and
   `server/internal/modules/all/lark.go` provides its layer under `!persona_without_lark && !persona_core_only`.
 - **The core asks the port**, `s.chat()` (`server/internal/assistant/lark.go`), never a `feishu*.go` function: a
-  core file that posts to the chat calls the port. The transport (`feishu_transport.go`) still lives in the core and is
-  served to the module through the host under the port's names; each move takes code into the module and drops the
-  host methods it no longer needs.
+  core file that posts to the chat calls the port. The transport that posts and edits cards (`feishu_transport.go`) still
+  lives in the core, because the cards, pushes, board and workbench pin that call it are still the core's, and it is
+  served to the module through the host under the port's names (the reply, reaction and message reads moved into the
+  module); each move takes code into the module and drops the host methods it no longer needs.
 - **The Feishu turns are the module's** (`server/internal/modules/lark/turn.go`, `cot.go`, `cot_worker.go`,
   `stream.go`): a Feishu run's progress card and CardKit entity, its agent message and the worker that writes it, and
   its answer. The channels' pipeline (the runs, their lock, finishing, folding and dropping them) stays in the core,
   which reaches the turns through `larkhost.Turns` (the core's `feishuSink` forwards to it). The module keeps its own
   state of each live run in the core's `chanLive.sink` (`Host.RunState`), which the core asks to `Abort` when it drops
   the run and to forget a held run's turn (`NextTurn`). What the turns read of the core is the host's second group of
-  methods: the channels' runs and their values under their lock, the hub's `feishu.*` transport, and what the core
-  still draws (the progress card's content, the answer's cards and the process panel, `feishu_progress.go` and
-  `feishu_answer.go`, which the core's own cards use too). The module's times (`timings.go`) come through
+  methods: the channels' runs and their values under their lock, the hub's `feishu.*` transport, and the run's live
+  notes (`Host.RunProgress`, `assistantwire.RunProgress`). The progress card, the folded process panel, the pieces note
+  and the answer's cards are the module's (`progress.go`, `answer.go`); the core's pushes and mirrors ask the layer for
+  the answer's cards and the note (`larkhost.Cards`: none without the module). The module's times (`timings.go`) come through
   `Host.Timings` from `assistant.Options.LarkTimings` and `LarkTimingLists`, a test and tuning knob as recording's;
   `Layer.Wait` waits for the agent messages' workers (the service waits for them when its connection ends).
 - **The workbench is the module's** (`server/internal/modules/lark/workbench.go`): `/home`, `/today` and `/inbox`,

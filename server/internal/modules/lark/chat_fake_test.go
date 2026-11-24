@@ -209,14 +209,6 @@ func (s *Service) AnswerLanguage(locale string) string {
 	return l.Name()
 }
 
-// ListSep is the core's listSep.
-func (s *Service) ListSep(l i18n.Lang) string {
-	if strings.HasPrefix(string(l), "en") {
-		return ", "
-	}
-	return "、" // i18n-ignore: the CJK enumeration comma, as the core's
-}
-
 func (s *Service) ReminderTodo(context.Context, string) *prompts.BotTodo { return nil }
 
 // NoReplyCommand is the core's noReplyCommand.

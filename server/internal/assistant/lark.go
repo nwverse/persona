@@ -24,7 +24,7 @@ import (
 // what the channel supports (Status, Features), a card (Post), a line under a message (Note, Reply), a card edited in
 // place (UpdateCard) and a line for a to-do's chat thread (ThreadPost). With the module in the build the port is the
 // module's layer; without it (persona_without_lark, persona_core_only) it is larkhost.None, which posts nothing and
-// says so. The transport (feishu_transport.go) is still the core's and is served to the module through larkHost; the
+// says so. The transport that posts and edits cards (feishu_transport.go) is still the core's and is served to the module through larkHost; the
 // chat itself (its state, the owner's messages and presses) is the module's, reached through larkhost.Chat
 // (lark_chat.go).
 
@@ -104,6 +104,22 @@ func (f feishuSink) progressAfter(r *channel.Run) time.Duration {
 }
 func (f feishuSink) progressIdle() time.Duration { return f.s.larkModule().TurnProgressIdle() }
 
+// botAnswerCard is one card of an answer and what is sent instead when Feishu refuses it.
+type botAnswerCard struct {
+	card     *botcard.Card
+	fallback string
+}
+
+// answerCards lays out a final answer as the bot's cards (the module's, Layer.AnswerCards); none without the module.
+func (s *Service) answerCards(l i18n.Lang, name func(*url.URL) string, answer string, quiet bool, steps []string, foot string) []botAnswerCard {
+	cards, fallbacks := s.larkModule().AnswerCards(l, name, answer, quiet, steps, foot)
+	out := make([]botAnswerCard, len(cards))
+	for i, c := range cards {
+		out[i] = botAnswerCard{card: c, fallback: fallbacks[i]}
+	}
+	return out
+}
+
 // larkHost is the core as the lark module reaches it (larkhost.Host).
 type larkHost struct{ s *Service }
 
@@ -113,10 +129,6 @@ func (h larkHost) Post(ctx context.Context, to larkhost.Target, replyTo string, 
 
 func (h larkHost) Note(ctx context.Context, to larkhost.Target, replyTo, text string) {
 	h.s.botNoteTo(ctx, to, replyTo, text)
-}
-
-func (h larkHost) Reply(ctx context.Context, to larkhost.Target, replyTo, text, key string, full bool) error {
-	return h.s.botReplyTo(ctx, to, replyTo, text, key, full)
 }
 
 func (h larkHost) UpdateCard(ctx context.Context, messageID string, card *botcard.Card) error {
@@ -160,18 +172,6 @@ func (h larkHost) PostContent(ctx context.Context, to larkhost.Target, replyTo, 
 	return h.s.botPostContent(ctx, to, replyTo, content, fallback, key)
 }
 
-func (h larkHost) React(ctx context.Context, messageID, emoji string) (string, error) {
-	return h.s.botReact(ctx, messageID, emoji)
-}
-
-func (h larkHost) Unreact(ctx context.Context, messageID, reactionID string) {
-	h.s.botUnreact(ctx, messageID, reactionID)
-}
-
-func (h larkHost) Messages(ctx context.Context, messageID string) ([]botcard.Item, error) {
-	return h.s.botMessages(ctx, messageID)
-}
-
 func (h larkHost) WorkbenchStamp(ctx context.Context, c *botcard.Card) *botcard.Card {
 	return h.s.workbenchStamp(ctx, c)
 }
@@ -187,26 +187,7 @@ func (h larkHost) Offline(err error) bool     { return errors.Is(err, bus.ErrOff
 
 func (h larkHost) StepParts(l i18n.Lang, it proto.Item) (string, string) { return botStepParts(l, it) }
 
-func (h larkHost) ProgressCard(l i18n.Lang, r *channel.Run, took time.Duration, steps []string, live string) *botcard.Card {
-	return progressCard(l, r.Label, took, steps, live, h.s.runWaiting(r), h.s.runLiveView(r.ID), botTargetOf(r))
-}
-
-func (h larkHost) ProcessPanel(l i18n.Lang, c *botcard.Card, steps []string) {
-	processPanel(l, c, steps)
-}
-
-func (h larkHost) MissingPiecesNote(l i18n.Lang, missing []int) string {
-	return missingPiecesNote(l, missing)
-}
-
-func (h larkHost) AnswerCards(l i18n.Lang, name func(*url.URL) string, answer string, quiet bool, steps []string, foot string) ([]*botcard.Card, []string) {
-	acs := answerCards(l, name, answer, quiet, steps, foot)
-	cards, fallbacks := make([]*botcard.Card, len(acs)), make([]string, len(acs))
-	for i, ac := range acs {
-		cards[i], fallbacks[i] = ac.card, ac.fallback
-	}
-	return cards, fallbacks
-}
+func (h larkHost) RunProgress(r *channel.Run) assistantwire.RunProgress { return h.s.runProgress(r) }
 
 func (h larkHost) Now() time.Time                           { return h.s.chansNow() }
 func (h larkHost) RunExt(r *channel.Run, key string) string { return h.s.runExt(r, key) }
