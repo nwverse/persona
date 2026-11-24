@@ -354,7 +354,11 @@ func TestHerdrTraexPanesAreMergedIntoTheList(t *testing.T) {
 	if _, ok := m[thread2]; ok {
 		t.Error("a claude pane was taken for TRAE CLI")
 	}
-	assertTrace(t, f.trace(), []string{call("session.snapshot", nil)})
+	assertTrace(t, f.trace(), []string{call("session.snapshot", nil), traeQueueRead("w3:p2")})
+}
+
+func traeQueueRead(pane string) string {
+	return call("pane.read", map[string]any{"format": "ansi", "lines": 80, "pane_id": pane, "source": "visible", "strip_ansi": false})
 }
 
 // TestTraexOwnerHelper is the child TestHerdrTraexStatusFromScreen names as a compatible CLI owner: it waits until killed.
@@ -405,12 +409,12 @@ func TestHerdrTraexStatusFromScreen(t *testing.T) {
 	if got := status(); got["w4:p1"] != proto.StatusWorking || got["w4:p2"] != proto.StatusBlocked || got["w4:p3"] != proto.StatusDone {
 		t.Fatalf("statuses %v", got)
 	}
-	assertTrace(t, sorted(f.trace()), []string{read("w4:p1"), read("w4:p2"), read("w4:p3"), call("session.snapshot", nil)})
+	assertTrace(t, sorted(f.trace()), []string{traeQueueRead("w4:p1"), read("w4:p1"), read("w4:p2"), read("w4:p3"), call("session.snapshot", nil)})
 
 	// Within 2 s the statuses are remembered: no read.
 	f.reset()
 	status()
-	assertTrace(t, f.trace(), []string{call("session.snapshot", nil)})
+	assertTrace(t, f.trace(), []string{call("session.snapshot", nil), traeQueueRead("w4:p1")})
 
 	// Past 2 s: read again, once each. A failed read keeps the last status; a pane never read is unknown.
 	ageTraexStatus()
@@ -425,7 +429,7 @@ func TestHerdrTraexStatusFromScreen(t *testing.T) {
 	if got := status(); got["w4:p1"] != proto.StatusWorking || got["w4:p2"] != proto.StatusBlocked || got["w4:p4"] != proto.StatusUnknown {
 		t.Fatalf("after failed reads %v", got)
 	}
-	assertTrace(t, sorted(f.trace()), []string{read("w4:p1"), read("w4:p2"), read("w4:p4"), call("session.snapshot", nil)})
+	assertTrace(t, sorted(f.trace()), []string{traeQueueRead("w4:p1"), read("w4:p1"), read("w4:p2"), read("w4:p4"), call("session.snapshot", nil)})
 }
 
 // The poll loop: one snapshot per tick (no event stream), a sessions.changed with the whole list when something it
