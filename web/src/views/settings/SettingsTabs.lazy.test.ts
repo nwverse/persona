@@ -9,14 +9,20 @@ import { describe, expect, it } from "vitest";
 const root = new URL("../../", import.meta.url);
 // each module, and the modules allowed to import it statically (admin/ is an entry of its own)
 const pages: Record<string, string[]> = {
-  Extensions: [],
-  Connectors: [],
-  ExtensionMarket: ["views/settings/Extensions.tsx", "admin/pages/Extensions.tsx"],
-  ExtensionAuth: ["views/settings/Extensions.tsx"],
-  ExtensionSettingsPage: ["views/settings/Extensions.tsx"],
+  Extensions: ["views/settings/IntegrationDetail.tsx"],
+  Connectors: ["views/settings/IntegrationDetail.tsx"],
+  IntegrationDetail: [],
+  ExtensionMarket: ["views/settings/Extensions.tsx", "views/settings/IntegrationDetail.tsx", "admin/pages/Extensions.tsx"],
+  ExtensionAuth: ["views/settings/Extensions.tsx", "views/settings/IntegrationDetail.tsx"],
+  ExtensionSettingsPage: ["views/settings/Extensions.tsx", "views/settings/IntegrationDetail.tsx"],
   ExtensionOperation: ["views/settings/ExtensionMarket.tsx"],
-  HubConnector: ["views/settings/Extensions.tsx", "views/settings/Connectors.tsx", "views/settings/FeishuBot.tsx"],
-  FeishuBot: ["views/settings/Connectors.tsx"],
+  HubConnector: [
+    "views/settings/Extensions.tsx",
+    "views/settings/Connectors.tsx",
+    "views/settings/FeishuBot.tsx",
+    "views/settings/integrations/ConnectorSection.tsx",
+  ],
+  FeishuBot: ["views/settings/Connectors.tsx", "views/settings/integrations/FeishuBotSection.tsx"],
   SentSettings: ["views/settings/Connectors.tsx"],
   SentChatRules: ["views/settings/SentSettings.tsx"],
 };

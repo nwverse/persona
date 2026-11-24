@@ -77,7 +77,7 @@ export function Connectors({ open, onOpen, onChannel, headerBack, openBeside }: 
 
 // ── Mail ────────────────────────────────────────────────
 
-function Mail() {
+export function Mail({ hideInboxSwitch = false }: { hideInboxSwitch?: boolean } = {}) {
   const [accounts, setAccounts] = useState<MailAccount[] | null>(null);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
@@ -153,7 +153,7 @@ function Mail() {
             />
           </div>
         ))}
-        {accounts && accounts.length > 0 && <MailInboxSwitch />}
+        {!hideInboxSwitch && accounts && accounts.length > 0 && <MailInboxSwitch />}
       </Group>
       <AddMail
         open={adding}
@@ -170,7 +170,7 @@ function Mail() {
 
 /** Mail's Add to Inbox (#5307): the same switch as Settings › Inbox Sources' mail page; off, no account's mail comes into
  *  the Inbox (search, replies and the knowledge base go on). Only a hub that has the switch lists it (`inbox`). */
-function MailInboxSwitch() {
+export function MailInboxSwitch() {
   const [on, setOn] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -506,7 +506,7 @@ function LarkAccountRow({ a, isDefault }: { a: LarkAccount; isDefault: boolean }
   );
 }
 
-function Feishu() {
+export function Feishu() {
   const [st, setSt] = useState<LarkStatus | null>(null);
   const [accounts, setAccounts] = useState<LarkAccountList | null>(null);
   const [error, setError] = useState("");
