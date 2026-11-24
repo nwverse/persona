@@ -488,7 +488,7 @@ export function mailAccounts(accounts: MailAccount[], items: InboxItem[]): MailA
  *  card goes by its parent's (#5120): the child has no row of its own to mute it from, and the switcher's count
  *  (lib/manager-attention.ts) mutes it the same way. */
 export function interactionMuted(ix: Interaction, sessions: Record<string, Session[]>, mutes: AgentMutes): boolean {
-  if (ix.folded_under) return interactionMuted({ ...ix, session_id: ix.folded_under, folded_under: undefined }, sessions, mutes);
+  if (ix.folded_under) return interactionMuted({ ...ix, machine_id: ix.folded_under_machine_id || ix.machine_id, session_id: ix.folded_under, folded_under: undefined, folded_under_machine_id: undefined }, sessions, mutes);
   const key = `${ix.machine_id}/${ix.session_id}`;
   if (mutes.sessions.includes(key)) return true;
   if (mutes.allowed?.includes(key)) return false;

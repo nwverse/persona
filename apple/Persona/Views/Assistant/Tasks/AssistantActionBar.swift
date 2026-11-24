@@ -647,8 +647,9 @@ struct AssistantActionBar: View {
                             }
                         }
                     }
-                    if ComputerActivityPill.shows(computer) {
-                        ComputerActivityPill(activity: computer).background(Theme.pageBackground, in: .capsule) // as the entries
+                    // A Mac the model operates (the screen-share module's pill), as the entries.
+                    ForEach(Modules.registry.views(at: .chatFooter).filter { $0.shows(.init(activity: computer)) }) {
+                        $0.view(.init(activity: computer)).background(Theme.pageBackground, in: .capsule)
                     }
                 }
                 .padding(.horizontal, Theme.Space.xs)

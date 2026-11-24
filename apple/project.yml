@@ -12,6 +12,11 @@ include:
   - path: watch-and-share.yml
   - path: lean-dev-build.yml
     enable: ${PERSONA_LEAN_DEV_BUILD}
+  # Feature modules in directories of their own (modules.yml), then the switch that leaves them all out
+  # (modules-core-only.yml, PERSONA_CORE_ONLY=YES). Before every include that adds sources of its own (siri-calls.yml).
+  - path: modules.yml
+  - path: modules-core-only.yml
+    enable: ${PERSONA_CORE_ONLY}
   - path: carplay-voice-entitlements.yml
     enable: ${PERSONA_CARPLAY_VOICE}
   - path: health-background-delivery-entitlements.yml
@@ -398,6 +403,7 @@ targets:
       # Persona's Home Screen widgets (docs/apple/home-widgets.md): the snapshot the app writes, the views, their tokens.
       - path: Shared/HomeWidgets
       - path: Shared/Design/HomeWidgetTokens.swift
+      - path: Shared/Design/HealthIntakePalette.swift
       # The app's String Catalog and interface language (docs/apple/ios.md「Interface language」).
       - path: Shared/Localization
     entitlements:
@@ -661,6 +667,12 @@ targets:
       # The All-Day Recording complication: the state the watch app wrote into the watch App Group.
       - path: Shared/Recording/AllDaySnapshot.swift
       - path: Shared/Design/WatchFaceTokens.swift
+      - path: Shared/WatchIntake.swift
+      - path: Shared/WatchIntakeConfiguration.swift
+      - path: Shared/WatchIntakeComplicationView.swift
+      - path: Shared/StatusPalette.swift
+      - path: Shared/Design/Palette.swift
+      - path: Shared/Design/HealthIntakePalette.swift
       - path: Shared/Localization
     entitlements:
       path: PersonaWatchWidgets/PersonaWatchWidgets.entitlements

@@ -38,12 +38,13 @@ import { PagedSessionList } from "./agents/PagedSessionList";
 import { runtimeIdentity } from "../lib/runtime-list";
 import { heldSeen } from "../lib/seen-outbox";
 import { heldLaunchWorking, launchForSession } from "../lib/launch-handoff";
-import { runningChildren } from "../lib/child-sessions";
+import { childRollup } from "../lib/child-sessions";
 import { childCards, foldedRow, ownRow } from "../lib/folded-rows";
 import { countSides, foldedStateWith, hubSides, unreadSides } from "../lib/side-fold";
 import { useChildSessions, useHeldSides } from "../lib/use-child-sessions";
 import { askSide } from "../lib/side-panel";
-import { backgroundStall, backgroundWork } from "../lib/background-work";
+import { askOverviewSubagents } from "../lib/subagent-link";
+import { backgroundStall } from "../lib/background-work";
 import { SESSIONS_LIST_FEATURE } from "../lib/session-list";
 import { personalHideDeps, personalOrder, personalSessions, removeAgentSession, useGoingIds } from "../lib/agents";
 import { BADGE_CLASS, CURRENT_ROW, type GoFn, GroupCount, pageIconStyle, type RegFn, ROW_TITLE_MIN, type RowMenuFn, Section } from "./SidebarParts";
@@ -192,7 +193,7 @@ export const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon
 }, sameProps);
 
 // The list's one-line notes (loading, no match), as each writes it.
-const NOTE = "px-2 py-1 text-[12px] text-ink-3";
+const NOTE = "px-2 py-1 text-label text-ink-3";
 
 // two shapes as well as two colors, so they tell apart without color: a bare prompt (no frame) and a window with a title bar
 const SOURCE_ICON = { terminal: { name: "run", tone: "text-source-terminal" }, desktop: { name: "appWindow", tone: "text-source-desktop" } } as const;
@@ -387,10 +388,22 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   const workflowTitle = workflow ? workflowLine(s, now) : "";
   // its own task list (#5302): 3/5 · the step in progress
   const plan = showState && !s.assistant && st !== "offline" && planInRow(s, st === "working") ? planLine(s) : "";
-  // its child sessions at work (#5120): how many subagents run, counted as the assistant's In progress counts them
-  // (lib/background-work.ts, so the ones a parent also lists as its own background agents count once)
-  const children = showState && !s.assistant ? runningChildren(s) : 0;
-  const childLine = children ? t("assistant-tasks.subagents_count_running", { count: backgroundWork(s)?.subagents ?? children }) : "";
+  // Unified parent-row subagent rollup (#27, Principle 4): waiting children > running subagents > quiet.
+  // Clear an optimistic needs_you count once answered locally so the subtitle stays aligned with the status mark.
+  const rollupSource = s !== given && st !== "needs_you" && s.children?.needs_you
+    ? { ...s, children: { ...s.children, needs_you: 0 } }
+    : s;
+  const rollup = showState && !s.assistant ? childRollup(rollupSource) : null;
+  const childLine = rollup
+    ? t(rollup.kind === "needs_you" ? "sidebar.subagents_need_you" : "sidebar.subagents_running", { count: rollup.count })
+    : "";
+  const openSubagents = useCallback((e: React.MouseEvent) => {
+    if (!to || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.stopPropagation();
+    rememberSessionRow(row);
+    askOverviewSubagents(row.machine_id, row.session_id);
+    go(to)(e);
+  }, [row, go, to]);
   // what sits at the row's end steps aside for the hover ⋯; the open row leaves room for its ⋯ instead
   const aside = active ? undefined : "group-hover/row:invisible";
   // A 常驻 row's counts stay on screen while the ⋯ fades in beside them (#6214): only its date can yield.
@@ -473,14 +486,33 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
           )}
           {line && <SecondLine line={line} draft={!!draft} />}
           {sideLine && <SideUnreadLine sides={sidesUnread} count={sideCount} open={openSide} />}
-          {childLine && (
-            <span data-children-line title={childLine} className="flex h-4 min-w-0 items-center gap-1 text-[11px] leading-4 text-ink-3">
-              <Icon name="agent" size={10} stroke={2.2} className="shrink-0" />
+          {rollup && childLine && (
+            <span
+              data-children-line={rollup.kind}
+              role={to ? "link" : undefined}
+              tabIndex={to ? 0 : undefined}
+              title={`${childLine} · ${t("chat-chatview.session_overview")}`}
+              onClick={to ? openSubagents : undefined}
+              onKeyDown={to ? (e) => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                e.stopPropagation();
+                e.currentTarget.click();
+              } : undefined}
+              className={cx(
+                "flex h-4 w-fit max-w-full min-w-0 items-center gap-1 rounded-[4px] text-submeta leading-4 whitespace-nowrap",
+                rollup.kind === "needs_you" ? "font-medium text-attention" : "text-ink-3",
+                to && "cursor-pointer hover:text-ink focus-visible:text-ink",
+              )}
+            >
+              {rollup.kind === "needs_you"
+                ? <Icon name="agent" size={10} stroke={2.2} className="shrink-0" />
+                : <StatusMark state="working" size="sm" label={false} />}
               <span className="truncate tabular-nums">{childLine}</span>
             </span>
           )}
           {stall && (
-            <span data-bg-stalled title={stall.title} className="flex h-4 min-w-0 items-center gap-1 text-[11px] leading-4 text-ink-3">
+            <span data-bg-stalled title={stall.title} className="flex h-4 min-w-0 items-center gap-1 text-submeta leading-4 text-ink-3">
               <Icon name="clock" size={10} stroke={2.2} className="shrink-0" />
               <span className="truncate">{stall.text}</span>
             </span>
