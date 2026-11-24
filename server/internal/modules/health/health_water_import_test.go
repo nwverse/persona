@@ -14,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/db/dbtest"
 )
 
 // This bridge can record the final drink at exactly the switch boundary.
@@ -102,9 +101,9 @@ func importHarness(t *testing.T, realDB bool) (*Service, *importWaterHub, health
 // newDatabase is a fresh database on PERSONA_TEST_DATABASE_URL's server, dropped when t ends; t skips without one.
 func newDatabase(t *testing.T) string {
 	t.Helper()
-	base := os.Getenv(dbtest.Env)
+	base := os.Getenv("PERSONA_TEST_DATABASE_URL") // dbtest.Env, the core's test database (scripts/test/test-server.sh)
 	if base == "" {
-		t.Skip(dbtest.Env + " not set")
+		t.Skip("PERSONA_TEST_DATABASE_URL not set")
 	}
 	name := "persona_health_t_" + randomHex(4)
 	url, err := db.WithDatabase(base, name)
