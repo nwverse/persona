@@ -77,6 +77,67 @@ export interface ModelProfileSaveInput {
   capture?: boolean;
 }
 
+/** Builds a PUT /api/v1/model-profiles/{id} body that captures the live model configuration while preserving name, description, and existing tiers. */
+export function captureProfileInput(
+  profile: Pick<ModelProfile, "name" | "description">,
+  revision: number,
+): ModelProfileSaveInput {
+  const input: ModelProfileSaveInput = {
+    revision,
+    name: profile.name,
+    capture: true,
+  };
+  if (profile.description) input.description = profile.description;
+  return input;
+}
+
+export type ParsedProfileChange =
+  | { kind: "purpose"; id: string }
+  | { kind: "launcher"; launcher: string; field: LauncherModelField }
+  | { kind: "other"; raw: string };
+
+/** Parses a `changes` entry from GET /api/v1/model-profiles into a category ID or a `<launcher>.<field>` override. */
+export function parseProfileChange(change: string, knownPurposeIds?: readonly string[]): ParsedProfileChange {
+  if (
+    (PROFILE_CATEGORY_IDS as readonly string[]).includes(change) ||
+    knownPurposeIds?.includes(change)
+  ) {
+    return { kind: "purpose", id: change };
+  }
+  const dot = change.lastIndexOf(".");
+  if (dot > 0) {
+    const field = change.slice(dot + 1);
+    if ((LAUNCHER_MODEL_FIELDS as readonly string[]).includes(field)) {
+      return { kind: "launcher", launcher: change.slice(0, dot), field: field as LauncherModelField };
+    }
+  }
+  return { kind: "other", raw: change };
+}
+
+/** Summarizes live-configuration drift relevant before applying `profile`. */
+export function profileApplyDrift(
+  profile: Pick<ModelProfile, "id" | "changes">,
+  activeProfile?: Pick<ModelProfile, "id" | "changes">,
+): {
+  targetChanges: string[];
+  activeDrift: string[];
+  hasDrift: boolean;
+  hasActiveDrift: boolean;
+  canCaptureActiveFirst: boolean;
+} {
+  const targetChanges = profile.changes ?? [];
+  const switchingFromOther = !!activeProfile && activeProfile.id !== profile.id;
+  const activeDrift = switchingFromOther ? (activeProfile.changes ?? []) : [];
+  const hasActiveDrift = activeDrift.length > 0;
+  return {
+    targetChanges,
+    activeDrift,
+    hasDrift: targetChanges.length > 0 || hasActiveDrift,
+    hasActiveDrift,
+    canCaptureActiveFirst: switchingFromOther,
+  };
+}
+
 type RequestContext = { token: string; tokenOwner: string; isAuthContextCurrent: () => boolean; signal?: AbortSignal };
 
 export const modelProfiles = (manager?: string, context?: RequestContext) =>

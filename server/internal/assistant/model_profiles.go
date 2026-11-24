@@ -5,6 +5,7 @@ import (
 	"context"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,12 +29,14 @@ const (
 	maxModelProfiles    = 20
 	maxModelTiers       = 12
 	maxProfileEvents    = 50
+	maxProfileRollbacks = 10
 	modelProfileName    = 40  // runes
 	modelProfileAbout   = 300 // runes
 	modelTierAbout      = 100 // runes: a tier's description is in every turn's snapshot
 	modelProfileValue   = 200 // bytes of a provider, model or launcher name
 	shownProfileEvents  = 20
 	modelProfileRolling = "rollback" // not an id: POST /api/v1/model-profiles/rollback
+	legacyRollbackID    = "previous" // fallback rollback id for legacy single-slot Previous images
 	// seededProfile is the template marked in use when the templates are made: a copy of the configuration, so
 	// nothing switches, and the tiers work from the start.
 	seededProfile = "performance"
@@ -144,20 +147,274 @@ type modelProfiles struct {
 }
 
 type modelProfileState struct {
-	Active   string              `json:"active,omitempty"` // the profile last switched to ("" none yet)
-	At       time.Time           `json:"at,omitzero"`
-	By       ProfileActor        `json:"by,omitzero"`
-	Previous *modelProfileImage  `json:"previous,omitempty"` // what the last switch replaced: one rollback's worth
-	Events   []ModelProfileEvent `json:"events,omitempty"`   // oldest first, the last maxProfileEvents
+	Active         string              `json:"active,omitempty"` // the profile last switched to ("" none yet)
+	At             time.Time           `json:"at,omitzero"`
+	By             ProfileActor        `json:"by,omitzero"`
+	Previous       *modelProfileImage  `json:"previous,omitempty"`         // latest rollback point (synced with Rollbacks for backward compatibility)
+	Rollbacks      []modelProfileImage `json:"rollbacks,omitempty"`        // oldest first, up to maxProfileRollbacks
+	NextRollbackID int64               `json:"next_rollback_id,omitempty"` // monotonic id sequence for rollback points
+	Events         []ModelProfileEvent `json:"events,omitempty"`           // oldest first, the last maxProfileEvents
 }
 
 // modelProfileImage is what a switch replaced: the categories' and launcher fields' values before it, and the profile
 // that was in use.
 type modelProfileImage struct {
+	ID        string                    `json:"id,omitempty"`
 	Profile   string                    `json:"profile,omitempty"`
 	At        time.Time                 `json:"at"`
 	Purposes  map[string]ModelBinding   `json:"purposes,omitempty"`
 	Launchers map[string]LauncherModels `json:"launchers,omitempty"`
+	Redo      bool                      `json:"redo,omitempty"` // true when this single entry redoes a rollback
+}
+
+func cloneLauncherModels(m LauncherModels) LauncherModels {
+	var out LauncherModels
+	dst := out.fields(nil)
+	for i, f := range m.fields(nil) {
+		if *f.set != nil {
+			*dst[i].set = profileValue(**f.set)
+		}
+	}
+	return out
+}
+
+func cloneProfileImage(img modelProfileImage) modelProfileImage {
+	out := img
+	if img.Purposes != nil {
+		out.Purposes = maps.Clone(img.Purposes)
+	}
+	if img.Launchers != nil {
+		out.Launchers = make(map[string]LauncherModels, len(img.Launchers))
+		for name, m := range img.Launchers {
+			out.Launchers[name] = cloneLauncherModels(m)
+		}
+	}
+	return out
+}
+
+// rollbackStack returns the ordered rollback points (oldest first, newest last), reading legacy single-slot Previous
+// when Rollbacks is empty.
+func (st *modelProfileState) rollbackStack() []modelProfileImage {
+	if len(st.Rollbacks) > 0 {
+		out := make([]modelProfileImage, len(st.Rollbacks))
+		for i, img := range st.Rollbacks {
+			out[i] = cloneProfileImage(img)
+		}
+		return out
+	}
+	if st.Previous != nil {
+		return []modelProfileImage{cloneProfileImage(*st.Previous)}
+	}
+	return nil
+}
+
+func (st *modelProfileState) nextRollbackID() string {
+	st.NextRollbackID++
+	return strconv.FormatInt(st.NextRollbackID, 10)
+}
+
+func (st *modelProfileState) setRollbacks(stack []modelProfileImage) {
+	if n := len(stack) - maxProfileRollbacks; n > 0 {
+		stack = slices.Delete(stack, 0, n)
+	}
+	if len(stack) == 0 {
+		st.Rollbacks = nil
+		st.Previous = nil
+		return
+	}
+	out := make([]modelProfileImage, len(stack))
+	for i, img := range stack {
+		img = cloneProfileImage(img)
+		if img.ID == "" {
+			img.ID = st.nextRollbackID()
+		}
+		out[i] = img
+	}
+	st.Rollbacks = out
+	top := cloneProfileImage(out[len(out)-1])
+	st.Previous = &top
+}
+
+// pushRollback appends a new switch's before-image to the bounded rollback stack, clearing any redo entry so undo
+// history stays strictly chronological across quick round-trip switches.
+func (st *modelProfileState) pushRollback(img modelProfileImage) {
+	stack := st.rollbackStack()
+	stack = slices.DeleteFunc(stack, func(entry modelProfileImage) bool { return entry.Redo })
+	img = cloneProfileImage(img)
+	img.Redo = false
+	img.ID = st.nextRollbackID()
+	stack = append(stack, img)
+	st.setRollbacks(stack)
+}
+
+// composeRollbackImage folds the delta images from the top of stack down to targetIdx into one atomic restore image
+// matching the exact configuration before stack[targetIdx]'s switch.
+func composeRollbackImage(stack []modelProfileImage, targetIdx int) modelProfileImage {
+	target := stack[targetIdx]
+	out := modelProfileImage{
+		ID:        target.ID,
+		Profile:   target.Profile,
+		At:        target.At,
+		Purposes:  map[string]ModelBinding{},
+		Launchers: map[string]LauncherModels{},
+		Redo:      target.Redo,
+	}
+	for i := len(stack) - 1; i >= targetIdx; i-- {
+		for cat, b := range stack[i].Purposes {
+			out.Purposes[cat] = b
+		}
+		for name, m := range stack[i].Launchers {
+			cur := out.Launchers[name]
+			dst := cur.fields(nil)
+			for k, f := range m.fields(nil) {
+				if *f.set != nil {
+					*dst[k].set = profileValue(**f.set)
+				}
+			}
+			out.Launchers[name] = cur
+		}
+	}
+	return out
+}
+
+func rollbackEntryID(img modelProfileImage) string {
+	if img.ID != "" {
+		return img.ID
+	}
+	return legacyRollbackID
+}
+
+func findRollbackIndex(stack []modelProfileImage, id string) int {
+	if len(stack) == 0 {
+		return -1
+	}
+	if id == "" {
+		return len(stack) - 1
+	}
+	for i := len(stack) - 1; i >= 0; i-- {
+		if rollbackEntryID(stack[i]) == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// migratableProvider returns provider when it names a configured provider suitable for pinning a legacy model-only
+// binding, or "" when no configured provider exists (for example an unconfigured legacy.* baseline with no BaseURL).
+func (s *Service) migratableProvider(ctx context.Context, provider string) string {
+	if provider == "" {
+		return ""
+	}
+	if strings.HasPrefix(provider, "legacy.") && s.legacyModelConfig(ctx, provider).BaseURL == "" {
+		return ""
+	}
+	return provider
+}
+
+// assistantDefaultLauncher returns the main chat's effective default launcher without mutating s.prefs' cache.
+func (s *Service) assistantDefaultLauncher(ctx context.Context) string {
+	var v Settings
+	s.prefs.mu.Lock()
+	if s.prefs.cached != nil && (s.store() == nil || time.Since(s.prefs.at) < settingsFresh) {
+		v = *s.prefs.cached
+		s.prefs.mu.Unlock()
+		return s.effective(ctx, v).Launcher
+	}
+	s.prefs.mu.Unlock()
+	if st := s.store(); st != nil {
+		_, _ = st.Setting(ctx, settingsKey, &v)
+	}
+	return s.effective(ctx, v).Launcher
+}
+
+// resolveLegacyModelProvider resolves the predictable provider for a legacy model-only binding (Provider == "" and
+// Model != "") on category id, preferring overlay (the profile's own bindings) over live records and reusing any
+// already-loaded records without extra store reads.
+func (s *Service) resolveLegacyModelProvider(ctx context.Context, id string, overlay map[string]ModelBinding, records map[string]modelRecord, stored []storedLauncher) (string, error) {
+	switch id {
+	case "assistant":
+		return launcherProvider(s.assistantDefaultLauncher(ctx)), nil
+	case "agent.new":
+		return "launcher.claude", nil
+	case "kb", "inbox.triage":
+		legacy := "legacy.kb"
+		if id == "inbox.triage" {
+			legacy = "legacy.triage"
+		}
+		if s.legacyModelConfig(ctx, legacy).BaseURL != "" {
+			return legacy, nil
+		}
+		if name := fallbackAPIProviderFrom(stored, s.hiddenLaunchers(ctx)); name != "" {
+			return launcherProvider(name), nil
+		}
+		return "", nil
+	case "agent.delegate", "translate":
+		if overlay != nil {
+			if triage, ok := overlay["inbox.triage"]; ok {
+				if triage.Provider != "" {
+					return s.migratableProvider(ctx, triage.Provider), nil
+				}
+				return s.resolveLegacyModelProvider(ctx, "inbox.triage", nil, records, stored)
+			}
+		}
+		if records != nil {
+			if r, ok := records["inbox.triage"]; ok {
+				if r.Binding.Provider != "" {
+					return s.migratableProvider(ctx, r.Binding.Provider), nil
+				}
+				return s.resolveLegacyModelProvider(ctx, "inbox.triage", nil, records, stored)
+			}
+		}
+		r, err := s.modelRecord(ctx, "inbox.triage")
+		if err != nil {
+			return "", err
+		}
+		if records != nil {
+			records["inbox.triage"] = r
+		}
+		if r.Binding.Provider != "" {
+			return s.migratableProvider(ctx, r.Binding.Provider), nil
+		}
+		return s.resolveLegacyModelProvider(ctx, "inbox.triage", nil, records, stored)
+	default:
+		return "", nil
+	}
+}
+
+// normalizeProfilePurposes migrates legacy model-only category bindings (Provider == "" && Model != "") to include
+// their resolved Provider so they are displayed, diffed, and applied predictably. Empty bindings ("follow the default")
+// and effort-only bindings are left untouched.
+func (s *Service) normalizeProfilePurposes(ctx context.Context, purposes map[string]ModelBinding, records map[string]modelRecord, stored []storedLauncher) (map[string]ModelBinding, error) {
+	if len(purposes) == 0 {
+		return purposes, nil
+	}
+	var out map[string]ModelBinding
+	for _, id := range modelCategoryIDs {
+		b, ok := purposes[id]
+		if !ok || b.Provider != "" || b.Model == "" {
+			continue
+		}
+		overlay := purposes
+		if out != nil {
+			overlay = out
+		}
+		provider, err := s.resolveLegacyModelProvider(ctx, id, overlay, records, stored)
+		if err != nil {
+			return nil, err
+		}
+		if provider == "" {
+			continue
+		}
+		if out == nil {
+			out = maps.Clone(purposes)
+		}
+		b.Provider = provider
+		out[id] = b
+	}
+	if out == nil {
+		return purposes, nil
+	}
+	return out, nil
 }
 
 // seed marks seededProfile in use when the templates are made (modelProfilesLocked said so): it is a copy of the
@@ -277,13 +534,18 @@ func (s *Service) captureModels(ctx context.Context) (map[string]ModelBinding, m
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		b := r.Binding
-		b.ConfigDir = ""
-		purposes[id] = b
 		effective, err := s.resolveModelRecord(ctx, id, &r)
 		if err != nil {
 			return nil, nil, nil, err
 		}
+		b := r.Binding
+		b.ConfigDir = ""
+		if b.Provider == "" && b.Model != "" {
+			if provider := s.migratableProvider(ctx, effective.Provider); provider != "" {
+				b.Provider = provider
+			}
+		}
+		purposes[id] = b
 		name, ok := strings.CutPrefix(effective.Provider, "launcher.")
 		if !ok {
 			continue

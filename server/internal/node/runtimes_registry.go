@@ -50,6 +50,9 @@ type runtimeRegistry struct {
 	// drove it (runtime.driven), so its cards go to the phone first as the starter's would.
 	started     map[string]startedSession
 	compactions map[string]*runtimeCompaction
+	// agyWork: per-conversation Antigravity companion driving state, so the non-Linux presence fallback distinguishes
+	// the companion's own turns and settling transcript exports from an external terminal agy (#14561).
+	agyWork map[string]*agyCompanionTurn
 }
 
 // startedSession is who started a session for the hub, and when (runtimeRegistry.started).
@@ -498,6 +501,7 @@ func (b *runtimeRegistry) remove(h *runtimeConn) {
 	h.mu.Unlock()
 	b.leftUnlisted(id)
 	b.leftRows(h, id)
+	b.agyWorkRemoveConnLocked(h, agyPresenceNow())
 	b.recomputeOwners()
 }
 
@@ -559,12 +563,17 @@ func (b *runtimeRegistry) setSessions(h *runtimeConn, list []proto.Session) (map
 	h.mu.Lock()
 	h.sessions = list
 	rt := h.hello.Runtime
+	agent := h.hello.Agent
+	if agent == "" {
+		agent = rt
+	}
 	h.mu.Unlock()
 	b.backAgain(rt) // its rows while it was away (runtimeaway.go): this list says what it has
 	b.recomputeOwners()
 	rewatch := map[string]runtimeWatchAttempt{}
 	var driven []string
 	now := time.Now()
+	b.agyWorkObserveSessionsLocked(h, agent, list, agyPresenceNow())
 	h.mu.Lock()
 	for _, s := range list {
 		if b.owner[s.SessionID] != h {

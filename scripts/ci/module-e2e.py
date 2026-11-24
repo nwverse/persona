@@ -76,6 +76,9 @@ SERVER = {
                    ["POST", "/api/v1/assistant/health/water/reminder", {}]],
     },
     "glasses": {},
+    # Its server half (the history import, the sent marks) shows nothing over HTTP on a hub with no connector: its tools
+    # reach the MCP through a node, and the selection page's chat list answers 404 for a source without history either
+    # way. Its absence is TestKnowledgeUIFollowsItsModule's; here, its flag and the manager's line.
     "knowledge-ui": {},
     "recording": {
         "routes": ["/api/v1/recordings"],
@@ -158,6 +161,17 @@ WEB = {
         "chunks": [r"/assets/(standalone|ScreenView|ScreenMenu|DisplayMenu|StatsOverlay|VideoPicture)-[\w-]+\.js",
                    r"/src/modules/screen-share/"],
         "chunk_when_on": [],  # the button is a link that opens a new tab: nothing of it loads on the machine page
+    },
+    "lark": {
+        "entries": [
+            # the "Show messages on home" row in the Lark section (a hub with feature `lark`: the mock hub); the Messages
+            # page's own address answers like a removed page while off
+            {"name": "Settings › Connectors › Lark row", "hubs": ["mock"], "page": "/settings?tab=connectors",
+             "ready": {"selector": "main"}, "text": r"^Show messages on home$",
+             "off_page": {"path": "/messages", "text": NOT_FOUND}},
+        ],
+        "chunks": [r"/assets/(lark-code|Messages|LarkHomeSwitch|lark-chats)-[\w-]+\.js", r"/src/modules/lark/"],
+        "chunk_when_on": ["mock"],  # the row is the module's code, loaded when the section draws
     },
     "recording": {
         "entries": [
