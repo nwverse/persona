@@ -12,8 +12,6 @@ cmd/persona-manager
 cmd/persona-node
 cmd/persona-projects
 cmd/personad
-cmd/pushrec
-cmd/vncbench
 internal/acceptloop
 internal/agents
 internal/agentsend
@@ -27,30 +25,33 @@ internal/assistant
 internal/assistant/archiverecovery
 internal/assistant/kbhistory
 internal/assistant/kbsent
+internal/assistant/kernel
 internal/assistant/repository
 internal/assistant/repositorystore
 internal/assistant/saved
 internal/assistant/todo/projection
 internal/assistantskills
 internal/assistantwire
+internal/botcard
+internal/botport
 internal/buildtags
 internal/buildtags/printtags
+internal/builtinext
 internal/bus
 internal/cachewarm
 internal/channel
 internal/channel/conformance
 internal/chatexport
 internal/claudeplugin
+internal/cliport
 internal/clitext
+internal/cliwire
 internal/closeout
 internal/compat
 internal/compatprobe
 internal/configuration
 internal/connector
 internal/connector/conformance
-internal/connector/github
-internal/connector/imessage
-internal/connector/larkcli
 internal/connector/proc
 internal/connector/serve
 internal/connectorwire
@@ -73,10 +74,12 @@ internal/extension/serve
 internal/extension/sourcevalidate
 internal/extension/uistream
 internal/extmgr
+internal/extmgr/githubport
+internal/extmgr/imessageport
+internal/extmgr/mailport
 internal/extmgr/storage
 internal/extwire
-internal/feishubot
-internal/fleetsoak
+internal/githubwire
 internal/herdr
 internal/herdrcore
 internal/host
@@ -87,19 +90,18 @@ internal/hubedge
 internal/i18n
 internal/identity
 internal/imageorient
-internal/iphone
-internal/iphonectl
+internal/imessagewire
 internal/jsonsubset
 internal/kb
 internal/kbwire
 internal/lark
-internal/larkcli
+internal/larkhost
 internal/lazyre
 internal/lcuconfirm
 internal/link
 internal/linktray
 internal/machineops
-internal/mail
+internal/mailwire
 internal/manager
 internal/managercli
 internal/managerconf
@@ -109,23 +111,50 @@ internal/mcptoolgolden
 internal/mcpwait
 internal/mdns
 internal/memtrim
+internal/modapi
 internal/modelhttp
 internal/modelretry
+internal/modules/all
+internal/modules/all/node
+internal/modules/briefing
+internal/modules/github
+internal/modules/imessage
+internal/modules/lark
+internal/modules/lark/connector/larkcli
+internal/modules/lark/feishubot
+internal/modules/lark/larkcli
+internal/modules/mail
+internal/modules/office
+internal/modules/office/office
+internal/modules/phone-extra
+internal/modules/phone-extra/iphone
+internal/modules/phone-extra/iphonectl
+internal/modules/phone-extra/nodeiphone
+internal/modules/recording
+internal/modules/screen-share
+internal/modules/screen-share/screenlink
+internal/modules/screen-share/vncbench
+internal/modules/voice
+internal/modules/voice/voicetest
+internal/modules/volc
+internal/modules/volc/volctest
 internal/netaddr
 internal/netproxy
 internal/netshape
 internal/node
 internal/node/clipshare
-internal/node/iphone
+internal/node/imessageport
+internal/node/iphoneport
 internal/node/machdiag
 internal/node/nodekit
+internal/node/screenport
 internal/node/transcripttail
 internal/nodeclient
 internal/nodecmd
+internal/nodecmd/commandport
 internal/nodeproto
 internal/nodesign
 internal/nodeupdate
-internal/office
 internal/operations/backup
 internal/orcart
 internal/orcart/orcarttest
@@ -145,16 +174,17 @@ internal/proto
 internal/proxyproto
 internal/pushcrypto
 internal/quota
+internal/recordinghost
 internal/relay
 internal/relayproto
 internal/remoteimage
 internal/repositorywire
+internal/resourcequeue
 internal/rexcli
 internal/rpc
 internal/runtimepkg
 internal/runtimepkg/gen
 internal/screen
-internal/screenlink
 internal/scriptcli
 internal/secretkey
 internal/sessionlist
@@ -163,6 +193,7 @@ internal/sessionsearch
 internal/shareproof
 internal/shareproxy
 internal/shellcmd
+internal/slowlinksoak
 internal/streams
 internal/subscriptions
 internal/subscriptionsui
@@ -176,6 +207,8 @@ internal/testhome
 internal/textfmt
 internal/tmux
 internal/toolcli
+internal/toolschema
+internal/transcribejob
 internal/transcribelive
 internal/transcript
 internal/tunnel
@@ -183,10 +216,6 @@ internal/tzguard
 internal/update
 internal/update/updatetest
 internal/usagesource
-internal/voice
-internal/voice/voicetest
-internal/volc
-internal/volc/volctest
 internal/webasset
 internal/webasset/precompress
 internal/webpush
@@ -194,12 +223,14 @@ internal/webpush/webpushtest
 internal/workspaceboard
 internal/workspacenaming
 plugins
+scripts/fleetsoak
+scripts/pushrec
 
 # Pending: the names the PRs open when this freeze landed were adding, each with its PRs
-# (python3 scripts/test/name_freezes.py pending --write, 2026-11-22; drafts idle more than 14 days left out).
+# (python3 scripts/test/name_freezes.py pending --write, 2026-11-24; drafts idle more than 14 days left out).
 # A name stays when its PR merges; a rerun of --write drops one whose PRs have all closed. No PR opened later gets a
 # line here.
+internal/assistant/kblark #13449
 internal/larkperson #13145
 internal/operations/recovery #12876
-internal/resourcequeue #13110
 internal/rpcio #1507
