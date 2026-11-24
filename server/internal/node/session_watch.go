@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -208,6 +209,7 @@ func (n *Node) pushItems(id string, items []proto.Item, span transcript.Span) {
 	n.mu.Unlock()
 	agentUsage(f, items) // finished subagents' results carry what they used (agent_usage.go)
 	items = n.echoed(id, f, items)
+	n.toolViews.attach(id, items, true, f)
 	n.ttft.annotate(id, items, true)
 	// On the bulk lane with credit: a push of a page with images otherwise went to the transport at once, and the
 	// pong behind it waited for all of it (rpc.Peer.NotifyBulk). Never called from the hub connection's read loop.
@@ -275,6 +277,11 @@ func itemSize(it proto.Item) int {
 	n := 256 + len(it.Text) + len(it.ToolInput)
 	if it.Image != nil {
 		n += len(it.Image.Data)
+	}
+	if len(it.ToolViews) > 0 {
+		if b, err := json.Marshal(it.ToolViews); err == nil {
+			n += len(b)
+		}
 	}
 	return n
 }
