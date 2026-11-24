@@ -140,7 +140,8 @@ Because a missing flag means off, every flag a client gates on has to be announc
 
 ### The switch
 
-- **At build time**: the build tag `persona_without_<id>` leaves one module out, `persona_core_only` leaves every module
+- **At build time**: the build tag `persona_without_<id>` leaves one module out (a `-` in the id is `_` in the tag, which
+  Go's build constraints need: `persona_without_screen_share`), `persona_core_only` leaves every module
   out. `go build -tags persona_core_only ./...` must pass. `scripts/ci/server.sh build` builds both and runs, with each
   tag, the module and kernel tests and a `-run` subset of `internal/assistant` (Brief, Module, Setting, Routine, Facts,
   ScheduledConfiguration, NorthStar, Accept, Later, Golden): the assistant's tests of the briefing itself skip
@@ -181,6 +182,9 @@ Persona Core is a product on its own: a hub built without any module starts, ser
   tests, so a module that moves is covered with no edit); the `core-node`, `core-managers` and `core-other` lanes (and
   `all`) run 'Server <shard> tests with Postgres, core only'. Measured on the hub machine (64 cores, shared): node
   about 5.5 minutes, managers about 6, other about 3.5.
+  The per-module steps ('Builds without the … module(s)', 'Core-only and module-less builds') run in the `node`,
+  `managers`, `core-node` and `core-other` lanes, one or two each, not in `build`: together they outgrow a hosted job's
+  20 minutes.
 - **Size**: `python3 scripts/diag/core_size.py [--no-build] [--json] <ref> …` prints the core's non-test Go lines (every
   `*.go` under `server/` that is not `_test.go`, `server/internal/modules/` left out), each module's lines, and the
   stripped sizes of `personad`, `persona-hub` and `persona-manager` built by default and with `persona_core_only`
@@ -269,7 +273,7 @@ values in the contract `server/internal/cliwire`; the connector builds on the co
 module `botport.Available()` and `cliport.Available()` are false: the bot cannot be bound, registered or started (the
 setting answers that it is not part of this build), `lark.cli` is not read (a warning at start), and the extension
 host's tests of them skip (`needsLarkModule`, `needsLarkCLI`). `scripts/ci/server.sh build` builds and tests with `persona_core_only` and with
-`persona_without_lark`.
+`persona_without_lark`. The assistant's own Feishu layer reaches the module through `server/internal/larkhost` ("Lark" below).
 
 ### The node's modules
 
@@ -283,6 +287,12 @@ needs in its own terms:
 
 - a device command: `server/internal/nodecmd/commandport` (`AddCommand`, `LookupCommand`). `nodecmd` runs a command
   it does not know itself if a module provides it, and its usage lists the provided commands (`CommandUsage`).
+- a live screen's sessions (#6398): `server/internal/node/screenport` (`Provide`, `New`, the `Links` and `Session`
+  interfaces). Without them the node offers no session, and a live screen is the plain relayed stream the phone gets
+  when it asks for none.
+- the built-in program `iphone` (phone control): `server/internal/node/iphoneport` (`Provide`, `Get`, the `Bridge`
+  interface of its methods over `proto` types). Without it `node.info` lists no `iphone` program, so the hub offers no
+  phone control on that computer, and the program's methods are unknown.
 
 Such a module keeps its manager side small: the module's root package (`internal/modules/<id>`) holds only its
 manifest and a `modapi.Module` that registers nothing, and `internal/modules/all` lists it, so a hub announces its flag
@@ -297,6 +307,15 @@ The modules of this kind:
 
 - `office` (`server/internal/modules/office`, #14258): `personad office …`, the Office files generator
   (`docs/assistant/office.md`), in `internal/modules/office/office`.
+- `screen-share` (`server/internal/modules/screen-share`, #14258): the node's screen sessions
+  (`internal/modules/screen-share/screenlink`, the relays and direct routes of `docs/extensions/computer-use.md`) and
+  the measuring tool `vncbench`. Its manifest's flag `module.screen-share` replaces the id's place in
+  `modapi.ClientModules`, so a hub whose manager lacks the module turns the clients' screen sharing off. The node's
+  `internal/screen` is not part of it: it reads Agents' terminal panes (dialogs, the input box, rewind) and is core.
+- `phone-extra` (`server/internal/modules/phone-extra`, #14258): phone control of this computer's paired iPhones
+  (`docs/extensions/iphone.md`): the built-in program `iphone` (`phone-extra/nodeiphone`), the device bridge's client
+  and pairing store (`phone-extra/iphone`), the look-and-do core (`phone-extra/iphonectl`), and `personad iphone …`.
+  It uses two small helpers of the node that are leaf libraries (`internal/clitext`, `internal/node/nodekit`).
 
 ### Guards
 
@@ -410,6 +429,44 @@ manifest declares `feature: module.recording`, which the kernel announces while 
   answer 404, the audio socket is unknown, the hello names none of the nine meeting and recording capabilities (so
   the hub announces none of their feature flags), no room tool is offered and no final pass or attending feeder runs
   (`TestRecordingFollowsItsModule`). The recordings already stored stay in the knowledge base.
+
+### Lark
+
+The assistant's Feishu / Lark layer (`server/internal/assistant/feishu*.go`: the chat's turns, cards, commands,
+workbench, topics and pushes, about 10k lines) is moving into the `lark` module (#13404), in the shape of recording's.
+
+- **The seam**: `server/internal/larkhost`. Its `Outbound` is the **outbound channel port**, the one way core code
+  (acceptance, briefing, reports, conclusions, decisions, owner actions, to-dos and their sources, concerns) reaches
+  the owner's chat: `Status` and `Features` (what the channel supports now), `Post` (a card, with a text fallback and
+  an idempotency key), `Note` and `Reply` (a line under a message), `UpdateCard` and `ThreadPost` (a line for a to-do's
+  chat thread; the core writes the text). Its values are the contract's (`assistantwire.ChannelTarget`,
+  `assistantwire.ThreadEvent`) and `internal/botcard`'s. `Layer` (core -> module) embeds the port and grows with each
+  move; `Host` (module -> core) is what the moved code reads of the assistant. The module declares its own `Host`
+  with the same methods (`server/internal/modules/lark/layer.go`), so it imports no core service, and
+  `server/internal/modules/all/lark.go` provides its layer under `!persona_without_lark && !persona_core_only`.
+- **The core asks the port**, `s.chat()` (`server/internal/assistant/lark.go`), never a `feishu*.go` function: a
+  core file that posts to the chat calls the port. The implementation still lives in `feishu*.go` and is served to the
+  module through the host under the port's names; each move takes code into the module and drops the host methods
+  it no longer needs, so the host only shrinks.
+- **The Feishu turns are the module's** (`server/internal/modules/lark/turn.go`, `cot.go`, `cot_worker.go`,
+  `stream.go`): a Feishu run's progress card and CardKit entity, its agent message and the worker that writes it, and
+  its answer. The channels' pipeline (the runs, their lock, finishing, folding and dropping them) stays in the core,
+  which reaches the turns through `larkhost.Turns` (the core's `feishuSink` forwards to it). The module keeps its own
+  state of each live run in the core's `chanLive.sink` (`Host.RunState`), which the core asks to `Abort` when it drops
+  the run and to forget a held run's turn (`NextTurn`). What the turns read of the core is the host's second group of
+  methods: the channels' runs and their values under their lock, the hub's `feishu.*` transport, and what the core
+  still draws (the progress card's content, the answer's cards and the process panel, `feishu_progress.go` and
+  `feishu_answer.go`, which the core's own cards use too). The module's times (`timings.go`) come through
+  `Host.Timings` from `assistant.Options.LarkTimings` and `LarkTimingLists`, a test and tuning knob as recording's;
+  `Layer.Wait` waits for the agent messages' workers (the service waits for them when its connection ends).
+- **Tests**: the turns' own tests run in the module on a fake core (`server/internal/modules/lark/service_test.go`:
+  the channels' runs, their finishing, folding and dropping, and the hub's transport); the assistant's tests of the
+  turns through the channels' pipeline stay in `internal/assistant` and skip without the module (`needsLarkLayer`).
+- **With the module absent** (`persona_without_lark`, `persona_core_only`) the port is `larkhost.None`, a bot switched
+  off: its status reads without an error as neither on nor ready (so an acceptance ask is card-less and a briefing
+  goes out by push, as with the bot off), it supports nothing, a post or a reply answers `larkhost.ErrNoChannel`, and
+  notes and thread lines are dropped.
+  The run-time `modules` switch does not cover it yet, as for mail.
 
 ### How to add a module
 

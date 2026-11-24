@@ -306,10 +306,11 @@ type relayState struct {
 	// Spoke: when the owner last sent each conversation a message, kept for ownerPresentFor (relay_presence.go).
 	Spoke map[string]time.Time `json:"spoke,omitempty"`
 	// Later: by receiver, what conversation_send with wake: false kept for it, to go in with its next delivered message
-	// (relay_later.go, #11614). A version that does not know it drops it on its next save: those acknowledgements are
-	// then not read.
+	// (relay_later.go, #11614, #12867). A version that does not know it drops it on its next save: those acknowledgements
+	// are then not read.
 	Later map[string][]relayMsg `json:"later,omitempty"`
-	// LaterSends freezes quiet-message context for retries under one assistant.send once_id (relay_later.go).
+	// LaterSends freezes quiet-message context for retries under one delivery ID: an assistant.send once_id or a scoped
+	// owner client_msg_id (relay_later.go).
 	LaterSends map[string]relayLaterSend `json:"later_sends,omitempty"`
 	// Handed: by direction's lead conversation, when a hand-over of the owner's quoted words last went into it
 	// (relay_lead_hold.go, #11699): until the owner next writes there (userSpoke), what it plans that writes waits for
@@ -350,6 +351,10 @@ type relayBook struct {
 	// before that are not counted. In memory like sent.
 	quoted     map[string]time.Time
 	roundsFrom map[string]time.Time
+	// ownerLater tracks in-flight hub owner sends (assistant.send_params -> session.assistant_sent) so unnamed sends
+	// (no client_msg_id) and older hubs settle their reserved quiet relays (relay_later.go, #12867).
+	ownerLater        map[string][]ownerLaterSend
+	ownerLaterNamedOn uint64
 }
 
 // ownerTurn is one conversation's owner-turn gate (#6394).

@@ -85,7 +85,7 @@ data class ContinuationReceiptReservation(
  * Persists unconfirmed continuation `operation_id` receipts scoped by hub pairing and canonical session key so closing
  * a preview, switching entry points (Agents / Space / Chat), or restarting the app always reconciles the same
  * `operation_id` via `GET /api/v1/ops/{id}` instead of starting a duplicate Codex agent
- * (`docs/protocol/protocol.md`, "Idempotent operations").
+ * (`docs/protocol/protocol.md`, "Operation receipts (client_ops)").
  */
 interface ContinuationReceiptStore {
     suspend fun get(scope: String, key: SessionKey): String?

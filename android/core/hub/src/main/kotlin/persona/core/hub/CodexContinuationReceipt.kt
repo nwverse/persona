@@ -19,7 +19,7 @@ import java.util.UUID
 
 /**
  * Shared operation-receipt helpers for Codex continuation starts (`POST /api/v1/sessions` + `GET /api/v1/ops/{id}`,
- * docs/protocol/protocol.md "Idempotent operations"). Both `HttpChatActions` and `HttpAgentOperations` follow the exact
+ * docs/protocol/protocol.md "Operation receipts (client_ops)"). Both `HttpChatActions` and `HttpAgentOperations` follow the exact
  * same receipt rules so lost responses reconcile against `/ops/{id}` rather than starting a duplicate agent.
  */
 internal object CodexContinuationReceipt {

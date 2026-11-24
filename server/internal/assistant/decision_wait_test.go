@@ -71,6 +71,7 @@ func TestDecisionThatCanWaitIsNotPushed(t *testing.T) {
 // near, and when the daily briefing on is not due while the owner would still have 12 hours to answer; without
 // can_wait nothing changes. (With no briefing on at all it is held: TestDecisionThatCanWaitWithoutABriefingIsNeverPushed.)
 func TestDecisionThatCannotWaitIsPushedAsBefore(t *testing.T) {
+	needsLarkLayer(t)
 	on := func(s *Service) { briefingOn(s, true) }
 	for _, c := range []struct {
 		name     string
@@ -249,6 +250,7 @@ func TestHeldDecisionStaysHeldWhenItsBriefingIsSwitchedOff(t *testing.T) {
 // A held decision the briefing that is on did not list is pushed after all, once, with its card: none ran within 24
 // hours.
 func TestHeldDecisionIsPushedWhenNoBriefingListsIt(t *testing.T) {
+	needsLarkLayer(t)
 	for _, c := range []struct {
 		name  string
 		off   bool
@@ -302,6 +304,7 @@ func TestHeldDecisionIsPushedWhenNoBriefingListsIt(t *testing.T) {
 // A card that cannot go out when the held decision is pushed is tried again for acceptPostWindow from the push, not
 // from when the decision was raised a day before.
 func TestHeldDecisionsCardIsRetriedFromThePush(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, todo, posts, _ := conclusionService(t, false)
 	briefingOn(s, true)
 	waitsForReview(t, s, f, todo.ID, "两种走法。")
