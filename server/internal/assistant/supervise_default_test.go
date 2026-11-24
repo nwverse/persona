@@ -124,17 +124,21 @@ func TestBackfillReturnsLegacyLeadPlansToTheirLead(t *testing.T) {
 	putTodo(s, Todo{ID: "legacy-no-plan", Origin: "lead1", PlanID: "gone-plan", Supervision: &Supervision{Supervisor: "conv1"}})
 	done := time.Now()
 	putTodo(s, Todo{ID: "closed-lead-plan", Origin: "lead1", PlanID: "gone-plan", DoneAt: &done, Supervision: &Supervision{Supervisor: "conv1"}})
+	// handed out by the lead without a plan (agent_start, todo_create): the origin names the lead
+	putTodo(s, Todo{ID: "lead-no-plan", Origin: "lead1", Supervision: &Supervision{Supervisor: "conv1"}})
+	// another conversation's, without a plan: kept
+	putTodo(s, Todo{ID: "side-no-plan", Origin: "side1", Supervision: &Supervision{Supervisor: "conv1"}})
 
 	s.backfillPlanSupervisors(ctx)
 	if got := todoNow(s, todo.ID).Supervision; got.Supervisor != "conv1" || got.SupervisorSource != "" || len(got.DoneWhen) != 2 || got.ExpectMinutes != 30 {
 		t.Fatalf("main's own task changed: %+v", got)
 	}
-	for id, want := range map[string]string{"explicit-leader": "lead1", "leader-worker": "box/leader-agent", "closed-lead-plan": "conv1"} {
+	for id, want := range map[string]string{"explicit-leader": "lead1", "leader-worker": "box/leader-agent", "side-no-plan": "conv1"} {
 		if got := todoNow(s, id).Supervision; got.Supervisor != want || got.SupervisorSource != "" {
 			t.Fatalf("%s changed to %+v, want %q kept", id, got, want)
 		}
 	}
-	for _, id := range []string{"legacy-leader-plan", "legacy-default-leader-plan", "legacy-no-plan"} {
+	for _, id := range []string{"legacy-leader-plan", "legacy-default-leader-plan", "legacy-no-plan", "closed-lead-plan", "lead-no-plan"} {
 		if got := todoNow(s, id).Supervision; got.Supervisor != "lead1" || got.SupervisorSource != "plan" {
 			t.Fatalf("%s was not backfilled to its planning lead: %+v", id, got)
 		}
@@ -157,6 +161,103 @@ func TestBackfillReturnsLegacyLeadPlansToTheirLead(t *testing.T) {
 	s.backfillPlanSupervisors(ctx)
 	if got := todoNow(s, "legacy-no-plan").Supervision; got.Supervisor != "conv1" || got.SupervisorSource != "explicit" {
 		t.Fatalf("a second backfill undid the explicit move: %+v", got)
+	}
+}
+
+// The original open-legacy regression now exercises the load-time backfill. Explicit leader assignments and
+// task-leader workers keep their specialized supervisor; a leader's unmarked planning stays with that leader (#13619).
+func TestOpenLegacySideTaskRehomesToMain(t *testing.T) {
+	s, _, todo := newSupervisedService(t)
+	ctx := context.Background()
+	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
+	putTodo(s, Todo{ID: "explicit-leader", Origin: "lead1", Supervision: &Supervision{Supervisor: "lead1"}})
+	putTodo(s, Todo{ID: "leader-worker", Origin: "conv1", Supervision: &Supervision{Supervisor: "box/leader-agent"}})
+	// A pre-#5732 task_plan(supervisor=leader): task_plan records the same assignment as the leader's plan now.
+	if err := s.savePlan(ctx, &TaskPlan{ID: "old-leader-plan", Tasks: []PlanTask{{TodoID: "legacy-leader-plan", Supervisor: "lead1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	putTodo(s, Todo{ID: "legacy-leader-plan", Origin: "conv1", PlanID: "old-leader-plan", Supervision: &Supervision{Supervisor: "lead1"}})
+	// A leader's old default plan has no explicit supervisor field; its saved conversation identifies the same topology.
+	if err := s.savePlan(ctx, &TaskPlan{ID: "old-default-leader-plan", Conversation: "lead1", Tasks: []PlanTask{{TodoID: "legacy-default-leader-plan"}}}); err != nil {
+		t.Fatal(err)
+	}
+	putTodo(s, Todo{ID: "legacy-default-leader-plan", Origin: "lead1", PlanID: "old-default-leader-plan", Supervision: &Supervision{Supervisor: "lead1"}})
+	cfg := s.settings(ctx)
+	for _, id := range []string{"legacy-leader-plan", "explicit-leader", "legacy-default-leader-plan"} {
+		if got := s.digestTo(ctx, cfg, superviseSignal{Todo: id, Kind: sigReview}); got != "lead1" {
+			t.Fatalf("%s routes to %q before the load-time pass, want its leader", id, got)
+		}
+	}
+	s.backfillPlanSupervisors(ctx)
+	if got := todoNow(s, todo.ID).Supervision; got.Supervisor != "conv1" || got.SupervisorSource != "" || len(got.DoneWhen) != 2 || got.ExpectMinutes != 30 {
+		t.Fatalf("main's own task changed: %+v", got)
+	}
+	if got := todoNow(s, "explicit-leader").Supervision; got.Supervisor != "lead1" || got.SupervisorSource != "" {
+		t.Fatalf("explicit leader changed to %+v", got)
+	}
+	if got := todoNow(s, "leader-worker").Supervision.Supervisor; got != "box/leader-agent" {
+		t.Fatalf("task-leader worker changed to %q", got)
+	}
+	for _, id := range []string{"legacy-leader-plan", "legacy-default-leader-plan"} {
+		if got := todoNow(s, id).Supervision; got.Supervisor != "lead1" || got.SupervisorSource != "plan" {
+			t.Fatalf("%s is not its leader's plan assignment: %+v", id, got)
+		}
+	}
+}
+
+// A hub upgraded across #6206 and #13346 in one step reads open ledgers that name a direction lead but no source: the
+// column arrived empty. Work the lead planned or handed out must keep reaching that lead after the restart, in
+// needs_user as well, as it did before the upgrade; only main-side manual assignments keep the compatibility route
+// (#13619).
+func TestLegacyLeaderWorkKeepsItsLeaderAfterUpgrade(t *testing.T) {
+	s, _ := newQuietService(t)
+	ctx := context.Background()
+	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
+	agent := func(session string) []TodoAgent {
+		return []TodoAgent{{MachineID: "box", SessionID: session, LinkedAt: time.Now(), Agent: "claude", Source: "plan"}}
+	}
+	if err := s.savePlan(ctx, &TaskPlan{ID: "lead-plan", Conversation: "lead1", Tasks: []PlanTask{{TodoID: "planned"}}}); err != nil {
+		t.Fatal(err)
+	}
+	// A task of the lead's own task_plan, and a task the lead opened without a plan id that its later plans continued,
+	// now waiting on the owner.
+	putTodo(s, Todo{ID: "planned", Origin: "lead1", PlanID: "lead-plan", Agents: agent("planned-agent"), Supervision: &Supervision{Supervisor: "lead1"}})
+	putTodo(s, Todo{ID: "handed-out", Origin: "lead1", Agents: agent("handed-agent"), Supervision: &Supervision{Supervisor: "lead1", State: reviewNeedsUser}})
+	// Not the lead's own Agent work: a direction to-do nothing runs on yet, and an Agent main assigned to the lead.
+	putTodo(s, Todo{ID: "direction", Origin: "lead1", Supervision: &Supervision{Supervisor: "lead1"}})
+	putTodo(s, Todo{ID: "manual", Origin: "conv1", Agents: agent("manual-agent"), Supervision: &Supervision{Supervisor: "lead1", State: reviewNeedsUser}})
+	s.backfillPlanSupervisors(ctx)
+	for _, id := range []string{"planned", "handed-out"} {
+		if got := todoNow(s, id).Supervision; got.Supervisor != "lead1" || got.SupervisorSource != "plan" {
+			t.Errorf("%s after the restart = %+v, want lead1's plan assignment", id, got)
+			continue
+		}
+		for _, state := range []string{"", reviewNeedsUser} {
+			if _, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool { v.State = state; return true }); err != nil {
+				t.Fatal(err)
+			}
+			cfg := s.settings(ctx)
+			for _, kind := range []string{sigReview, sigIdle, sigUndecidable, sigCardlessWait, sigAllStopped} {
+				g := superviseSignal{Todo: id, Kind: kind}
+				if got := s.digestTo(ctx, cfg, g); got != "lead1" {
+					t.Errorf("%s %q/%s went to %q, want lead1", id, state, kind, got)
+				}
+				if got := s.recheckDigestTo(ctx, cfg, g); got != "lead1" {
+					t.Errorf("queued %s %q/%s went to %q, want lead1", id, state, kind, got)
+				}
+			}
+			if got := s.digestTo(ctx, cfg, superviseSignal{Todo: id, Kind: sigEscalated}); got != "conv1" {
+				t.Errorf("%s escalation went to %q, want main", id, got)
+			}
+		}
+	}
+	for _, id := range []string{"direction", "manual"} {
+		if got := todoNow(s, id).Supervision; got.Supervisor != "lead1" || got.SupervisorSource != "" {
+			t.Fatalf("%s changed to %+v", id, got)
+		}
+	}
+	if got := s.digestTo(ctx, s.settings(ctx), superviseSignal{Todo: "manual", Kind: sigIdle}); got != "conv1" {
+		t.Fatalf("a manual leader Agent waiting on the owner went to %q, want main", got)
 	}
 }
 

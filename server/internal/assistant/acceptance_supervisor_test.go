@@ -87,6 +87,7 @@ func TestSupervisorAcceptedPassesPleaseVerify(t *testing.T) {
 	s.accept.mu.Lock()
 	s.accept.asks[todo.ID].AskedAt = time.Now().Add(-30 * time.Hour)
 	s.accept.mu.Unlock()
+	waitReportQueue(t, s) // report cards go out on their own timer: count only after them (#14138)
 	n := len(posts())
 	ctx := context.Background()
 	now := time.Now().In(s.location(ctx))

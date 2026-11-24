@@ -41,7 +41,7 @@ var toolNames = []string{"resource_status", "ask_user", "notify_user", "supervis
 	"inbox_folders", "inbox_move", "inbox_post", "kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run", "skill_import",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"repositories_list", "repository_get", "repository_add", "view_show", "view_update", "view_get",
-	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
+	"conversations_list", "conversations_switch", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
 	"conversation_tags_set",
 	"conversation_new", "conversation_send", "task_plan", "task_plan_withdraw", "task_review", "task_scope", "task_decided", "task_start_screen", "task_start_keys", "task_retry",
 	"todo_workspace", "todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add", "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
@@ -58,6 +58,7 @@ func (s *Service) Tools(ctx context.Context) []proto.Tool {
 	if s.urgentOn(ctx) {
 		tools = append(tools, toolsNamed([]string{"urgent_call"})...)
 	}
+	tools = append(tools, s.moduleTools()...)
 	return localizedMCPTools(append(tools, s.knowledgeFolderTools(ctx)...), s.toolLanguage(ctx))
 }
 
@@ -193,10 +194,19 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		res, err := s.toolTaskReview(ctx, self, args) // supervise_review.go
 		if err == nil {
 			var a struct {
-				Verdict string `json:"verdict"`
+				TodoID    string `json:"todo_id"`
+				Verdict   string `json:"verdict"`
+				UserCheck bool   `json:"user_check"`
 			}
-			if json.Unmarshal(args, &a) == nil && (a.Verdict == reviewAccepted || a.Verdict == reviewNeedsUser) {
-				s.promoteSupervision(self)
+			if json.Unmarshal(args, &a) == nil {
+				if a.Verdict == reviewAccepted && s.quietInternalAcceptedReview(ctx, a.TodoID, a.UserCheck) {
+					message := res + ` This internal accepted conclusion stays in Background activity. Finish this supervision wake-up with supervision_finish visibility="silent".`
+					body, marshalErr := json.Marshal(map[string]any{"background": true, "message": message})
+					return string(body), marshalErr
+				}
+				if a.Verdict == reviewAccepted || a.Verdict == reviewNeedsUser {
+					s.promoteSupervision(self)
+				}
 			}
 		}
 		return res, err
@@ -286,7 +296,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		// Asked for explicitly: every device, the Feishu bot too, and no separate push when this turn ends. pushResult holds
 		// it to its track's push_cap (track_attention.go), and the track tells immersive mode where it is from.
-		res, err := s.pushResult(ctx, Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body,
+		res, err := s.pushResult(withCard(ctx, cardNotifyUser), Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body,
 			Asked: true, Level: a.PushLevel, RelatedKey: clip(strings.TrimSpace(a.RelatedKey), 200), Track: space})
 		if err != nil {
 			return "", err
@@ -308,6 +318,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolUrgentCall(ctx, machine, self, args) // urgent_call_tool.go
 	case "conversations_list":
 		return s.toolConversationsList(ctx, self, args)
+	case "conversations_switch":
+		return s.toolConversationsSwitch(ctx, machine, self, args)
 	case "conversation_read":
 		return s.toolConversationRead(ctx, self, args)
 	case "conversation_rename":
@@ -461,10 +473,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if a.Task != nil {
 			words = strings.Join(append([]string{a.Task.Title, a.Text}, a.Task.DoneWhen...), "\n\n")
 		}
-		if ok, err := s.confirmOutbound(ctx, machine, self, name, words, summary, args); err != nil {
+		if ok, outcome, err := s.confirmOutbound(ctx, machine, self, name, words, summary, args); err != nil {
 			return "", err
 		} else if !ok {
-			return "The user declined on the phone: nothing was sent to that agent.", nil
+			return outboundNotDone(outcome, "The user declined on the phone: nothing was sent to that agent.", "nothing was sent to that agent"), nil
 		}
 		var task *handedTask
 		if a.Task != nil {
@@ -616,16 +628,17 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", waitErr
 		}
 		var a struct {
-			Machine        string `json:"machine"`
-			Cwd            string `json:"cwd"`
-			Prompt         string `json:"prompt"`
-			Launcher       string `json:"launcher"`
-			Model          string `json:"model"`
-			Effort         string `json:"effort"`
-			Speed          string `json:"speed"`
-			PermissionMode string `json:"permission_mode"`
-			Tier           string `json:"tier"`
-			Worktree       struct {
+			Machine           string `json:"machine"`
+			Cwd               string `json:"cwd"`
+			Prompt            string `json:"prompt"`
+			SkipProjectMemory bool   `json:"skip_project_memory"`
+			Launcher          string `json:"launcher"`
+			Model             string `json:"model"`
+			Effort            string `json:"effort"`
+			Speed             string `json:"speed"`
+			PermissionMode    string `json:"permission_mode"`
+			Tier              string `json:"tier"`
+			Worktree          struct {
 				Branch string `json:"branch"`
 			} `json:"worktree"`
 			Ultracode bool `json:"ultracode"`
@@ -661,7 +674,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if assistantWorkspace(am, a.Cwd) {
 			return "", i18n.Err("rpc-errors.agent_assistant_workspace")
 		}
-		own := startPick{launcher: strings.TrimSpace(a.Launcher), effort: strings.TrimSpace(a.Effort), speed: strings.TrimSpace(a.Speed), permission: a.PermissionMode} // before the tier
+		own := startPick{launcher: strings.TrimSpace(a.Launcher), model: a.Model, effort: strings.TrimSpace(a.Effort), speed: strings.TrimSpace(a.Speed), permission: a.PermissionMode} // before the tier
 		// The tier is resolved first (an unknown one asks and starts nothing), then Model Settings' Agents laid over it as
 		// the start lays it: what runs is said on the card (a hand-off from a space that confirms what leaves it asks) and in the answer.
 		tier := strings.TrimSpace(a.Tier)
@@ -754,10 +767,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if a.Ultracode {
 			where += " · ultracode"
 		}
-		if ok, err := s.confirmOutbound(ctx, machine, self, name, a.Prompt, where+"\n\n"+a.Prompt, withoutSecretEnv(args)); err != nil {
+		if ok, outcome, err := s.confirmOutbound(ctx, machine, self, name, a.Prompt, where+"\n\n"+a.Prompt, withoutSecretEnv(args)); err != nil {
 			return "", err
 		} else if !ok {
-			return "The user declined on the phone: no agent was started.", nil
+			return outboundNotDone(outcome, "The user declined on the phone: no agent was started.", "no agent was started"), nil
 		}
 		var res struct {
 			Session proto.Session `json:"session"`
@@ -769,10 +782,13 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// conversation's turn and given agentStartTimeout instead of the old 100s.
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartTimeout)
 		defer cancel()
-		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820).
+		// The tab is named from the prompt as written; unless this start opts out, its project's background goes before it (#2820).
 		title := s.tabName(sctx, a.Prompt)
 		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed, "permission_mode": a.PermissionMode, "tab_name": title, "title": title}
-		prompt := s.withProjectContext(sctx, am.ID, a.Cwd, self, a.Prompt)
+		prompt := a.Prompt
+		if !a.SkipProjectMemory {
+			prompt = s.withProjectContext(sctx, am.ID, a.Cwd, self, a.Prompt)
+		}
 		if a.Ultracode {
 			params["ultracode"] = true
 		}
@@ -877,6 +893,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("the task could not be recorded; no agent was started")
 		}
 		params["creation_id"], params["incarnation"] = task.ID, "start_"+randomHex(8)
+		// The to-do is there before the start, so the Agent's model requests name it from their first one: the headers are
+		// fixed when the Agent starts, and linking it to the to-do afterwards does not reach them.
+		params["model_source"] = planModelSource(PlanTask{TodoID: task.ID})
 		failBeforeStart := func(reason string) {
 			// The card already exists: every definite no-start exit must close it as a failed start, not leave an
 			// open task with no Agent and no explanation (#5732). Unknown start results are handled below instead.
@@ -969,6 +988,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		warning := agentStartTaskWarning(closedDuringStart, linkErr)
 		return finish(fmt.Sprintf("Started on %s in %s: session %s, a task of this conversation (its card is in the conversation; "+
 			"%s).%s", am.Name, a.Cwd, res.Session.SessionID, told, note) + warning), nil
+	}
+	if out, err, ok := s.runModuleTool(ctx, machine, self, name, args); ok {
+		return out, err
 	}
 	return "", fmt.Errorf("unknown tool %s", name)
 }
@@ -1317,6 +1339,8 @@ func (s *Service) ask(ctx context.Context, ix proto.Interaction) (proto.Resoluti
 	resume := pushMCPInteraction(ctx, ix)
 	defer resume()
 	ix = s.ownCard(ctx, ix)
+	s.cardAsks.Store(ix.ID, cmp.Or(cardSourceOf(ctx), ownCardSource(ix))) // what its push is counted as (card_layers.go)
+	defer s.cardAsks.Delete(ix.ID)
 	q := &question{ix: ix, answer: make(chan proto.Resolution, 1)}
 	if ix.ToolName == "ask_user" && ix.Kind == proto.IxQuestion {
 		q.release = make(chan struct{})
