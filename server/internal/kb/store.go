@@ -36,24 +36,9 @@ const (
 )
 
 // Tagging ranks anything in the knowledge base. The AI fills it in; Locked ones were set by hand (the app or a
-// kb_update call) and the AI no longer overrides importance / relevance.
-type Tagging struct {
-	Importance string    `json:"importance,omitempty"` // P0 (critical) … P3 (ignorable)
-	Relevance  int       `json:"relevance"`            // 0–100: how much it concerns the owner
-	Tags       []string  `json:"tags,omitempty"`
-	Locked     bool      `json:"locked,omitempty"`
-	TaggedAt   time.Time `json:"tagged_at,omitempty"`
-	// Pinned contains confirmed facts; pipeline writes cannot replace or clear it.
-	Pinned string `json:"pinned,omitempty"`
-	// LockedFields names update fields that automatic writes must preserve.
-	LockedFields []string `json:"locked_fields,omitempty"`
-	// Provenance: the extension holding a locked field (attribution.go); without an entry a locked field is the user's.
-	Provenance map[string]Provenance `json:"provenance,omitempty"`
-	// Excluded: links the user removed by hand, by list ("people", "chats", "projects", "items") and the id that list
-	// named: automatic writes leave them out while the rest of the list keeps changing (exclude.go).
-	Excluded  map[string][]string `json:"excluded,omitempty"`
-	persisted bool
-}
+// kb_update call) and the AI no longer overrides importance / relevance. It is the contract's type (kbwire.Tagging),
+// so a type that embeds it can live in a contract package (docs/plans/plan-kb-recording-port.md).
+type Tagging = kbwire.Tagging
 
 // Chat is one conversation: a Feishu chat (lark-<feedId>) or the mail exchanged with one address (mail-<account>-<addr>).
 type Chat struct {
@@ -375,7 +360,7 @@ func (s *Store) Chat(id string) (*Chat, bool) {
 	if !ok || err != nil {
 		return nil, false
 	}
-	c.persisted = true
+	c.Persisted = true
 	return &c, true
 }
 
@@ -387,7 +372,7 @@ func (s *Store) Person(id string) (*Person, bool) {
 	if !ok || err != nil {
 		return nil, false
 	}
-	p.persisted = true
+	p.Persisted = true
 	return &p, true
 }
 
@@ -401,7 +386,7 @@ func (s *Store) Project(slug string) (*Project, bool) {
 	if !ok || err != nil {
 		return nil, false
 	}
-	p.persisted = true
+	p.Persisted = true
 	return &p, true
 }
 
@@ -416,7 +401,7 @@ func (s *Store) Item(kind, id string) (*Item, bool) {
 	if !ok || err != nil {
 		return nil, false
 	}
-	it.persisted = true
+	it.Persisted = true
 	return &it, true
 }
 
