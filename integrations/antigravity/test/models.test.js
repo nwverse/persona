@@ -100,6 +100,22 @@ test('session controls confirm native state and preserve acknowledged fields on 
   await until('native configuration', () => row()?.permission_mode === 'bypassPermissions')
 })
 
+test('uses the ACP session window until the transcript reports its own', async (t) => {
+  const { n, home, catalog } = await fixture(t, { noStart: true })
+  catalog({ models: entries, windows: { [entries[0].modelId]: 524288, [entries[2].modelId]: 131072 } })
+  const { session } = await n.peer.call('session.start', { cwd: home })
+  const row = () => n.last('runtime.sessions')?.sessions.find((entry) => entry.session_id === session.session_id)
+  await until('initial ACP window', () => row()?.context_window === 524288)
+  await n.peer.call('session.modes', { session_id: session.session_id, model: entries[2].modelId })
+  await until('new model window', () => row()?.context_window === 131072)
+  const logs = join(home, 'settings', 'brain', session.session_id.slice(4), '.system_generated', 'logs')
+  mkdirSync(logs, { recursive: true })
+  writeFileSync(join(logs, 'transcript.jsonl'), JSON.stringify({ step_index: 0, type: 'PLANNER_RESPONSE',
+    model: entries[2].modelId.toUpperCase(), content: 'Done', input_tokens: 8000, context_window: 64000 }) + '\n')
+  await n.peer.call('session.rename', { session_id: session.session_id, title: 'Recorded usage' })
+  await until('transcript window overrides ACP', () => row()?.context_tokens === 8000 && row()?.context_window === 64000)
+})
+
 test('a rejected startup configuration closes the newly created native session', async (t) => {
   const { n, calls } = await fixture(t)
   await assert.rejects(n.peer.call('session.start', { model: 'missing' }), /Model unavailable/)

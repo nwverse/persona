@@ -83,6 +83,7 @@ func TestAgyContextWindowResolution(t *testing.T) {
 			{ID: "gemini-4-carbon", ContextWindow: 1_000_000},
 			{ID: "gemini-4-carbon-xhigh", ContextWindow: 2_000_000},
 			{ID: "route-narrow/gemini-4-carbon", ContextWindow: 512_000},
+			{ID: "gemini-3.8-flash", ContextWindow: 200_000},
 			{ID: "claude-sonnet-4-6", ContextWindow: 200_000},
 		},
 	}
@@ -124,7 +125,11 @@ func TestAgyContextWindowResolution(t *testing.T) {
 		{"built-in Claude 1M model with agy effort suffix", nil, "claude-opus-5-5-high", 0, 50_000, nil, nil, 1_000_000},
 		{"built-in Claude 200k model with agy effort suffix", nil, "claude-opus-4-6-medium", 0, 50_000, nil, nil, 200_000},
 		{"built-in Claude 200k model promotes over 200k usage", nil, "claude-opus-4-6-medium", 0, 250_000, nil, nil, 1_000_000},
-		{"unknown model with no catalog stays 0 (honest degradation)", &undeclared, "gemini-4-neon-high", 0, 50_000, nil, nil, 0},
+		{"Gemini without a declared window", &undeclared, "gemini-4-neon-high", 0, 50_000, nil, nil, 1_048_576},
+		{"Gemini cap survives usage past 200k", &catalog, "gemini-3.8-flash-high", 0, 210_000, lookup, nil, 200_000},
+		{"recorded window beats discovered size", nil, "gemini-4-neon-high", 200_000, 40_000, lookup, nil, 200_000},
+		{"known requested model for an opaque reply", nil, "ep-opaque", 0, 50_000, nil, []string{"gpt-oss-120b-medium"}, 131_072},
+		{"unlisted Gemini variant stays unknown", &undeclared, "gemini-4-custom-high", 0, 50_000, nil, nil, 0},
 		{"unknown opaque model stays 0", nil, "unknown-model-high", 0, 50_000, lookup, nil, 0},
 		{"synthetic placeholder stays 0", &catalog, "<synthetic>", 0, 5_000, lookup, nil, 0},
 		{"empty model without MaxContext stays 0", &catalog, "", 0, 5_000, lookup, nil, 0},
@@ -244,6 +249,19 @@ func TestAgyTranscriptTokenExtractionAndUsage(t *testing.T) {
 	}
 }
 
+func TestAgyTranscriptWindowFollowsTheModel(t *testing.T) {
+	var u agyTranscriptUsage
+	u.observePlanner(agyStep{Model: "custom", ContextWindow: 200_000, InputTokens: 8000})
+	u.observePlanner(agyStep{InputTokens: 8500})
+	if u.contextWindow != 200_000 {
+		t.Fatalf("same model lost its recorded window: %+v", u)
+	}
+	u.observePlanner(agyStep{Model: "gemini-4-argon-low", InputTokens: 9000})
+	if got := agyContextWindow(nil, u.model, u.contextWindow, u.contextTokens, nil); got != 1_048_576 {
+		t.Fatalf("window after switching to Gemini = %d", got)
+	}
+}
+
 func TestAgyTranscriptCheckpointResetsContextAndRewindExcludesAbandoned(t *testing.T) {
 	// Compaction at the tail leaves ContextTokens == 0 until the next reply.
 	const compacted = "" +
@@ -289,12 +307,6 @@ func TestAgyPaneSessionTokensAndInfo(t *testing.T) {
 	resetAgyModelWindowCache(t)
 	n, herdr, home := herdrNode(t)
 	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
-	n.setCatalog([]proto.ManagedLauncher{{
-		Name:   "my-agy",
-		Agent:  agyAgent,
-		Model:  "gemini-4-carbon",
-		Models: []proto.ProviderModel{{ID: "gemini-4-carbon", ContextWindow: 1_000_000}},
-	}})
 	n.state.put(agyTestRow, sessionState{Launcher: "my-agy", Cwd: home, Model: "gemini-4-carbon-high", StartedAt: time.Now()})
 	seedAgents(t, n, herdr, agyTestAgent(agyTestPane, home, agyTestID))
 
@@ -304,13 +316,16 @@ func TestAgyPaneSessionTokensAndInfo(t *testing.T) {
 		`{"step_index":2,"type":"GENERIC","status":"DONE","created_at":"2026-11-21T10:00:02Z","content":"ok"}`+"\n"+
 		`{"step_index":3,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-21T10:00:03Z","model":"gemini-4-carbon-high","content":"All good.","input_tokens":4500,"cache_read_tokens":30000,"cache_write_tokens":500,"output_tokens":250}`+"\n")
 
-	rows := listSessions(t, n)
-	var row proto.Session
-	for _, r := range rows {
-		if r.SessionID == agyTestRow {
-			row = r
-		}
+	if row := listed(t, n)[agyTestRow]; row.ContextWindow != 1_048_576 || row.ContextTokens != 35_000 {
+		t.Fatalf("before launcher catalog: got %d / %d tokens", row.ContextTokens, row.ContextWindow)
 	}
+	n.setCatalog([]proto.ManagedLauncher{{
+		Name:   "my-agy",
+		Agent:  agyAgent,
+		Model:  "gemini-4-carbon",
+		Models: []proto.ProviderModel{{ID: "gemini-4-carbon", ContextWindow: 1_000_000}},
+	}})
+	row := listed(t, n)[agyTestRow]
 	if row.Model != "gemini-4-carbon-high" || row.ContextTokens != 35_000 || row.ContextWindow != 1_000_000 || row.OutputTokens != 400 {
 		t.Fatalf("pane row = model:%q ctx:%d/%d out:%d", row.Model, row.ContextTokens, row.ContextWindow, row.OutputTokens)
 	}
@@ -343,13 +358,7 @@ func TestAgyPaneSessionTokensAndInfo(t *testing.T) {
 		`{"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-21T10:00:01Z","model":"unknown-model-high","content":"Hello","input_tokens":8000,"output_tokens":90}`+"\n")
 	seedAgents(t, n, herdr, agyTestAgent(agyTestPane, home, agyOtherTestID))
 	n.state.put(agyTestRow, sessionState{Launcher: "agy", Cwd: home, StartedAt: time.Now()})
-	rows = listSessions(t, n)
-	row = proto.Session{}
-	for _, r := range rows {
-		if r.SessionID == agyTestRow {
-			row = r
-		}
-	}
+	row = listed(t, n)[agyTestRow]
 	if row.ContextTokens != 8000 || row.ContextWindow != 0 || row.OutputTokens != 90 {
 		t.Fatalf("unknown model row = ctx:%d/%d out:%d, want 8000/0 out 90", row.ContextTokens, row.ContextWindow, row.OutputTokens)
 	}
@@ -618,6 +627,7 @@ func TestAgyRuntimeRowContextWindowWithoutLocalTranscript(t *testing.T) {
 	_ = rt.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{
 		{"session_id": "agy-remote-1", "agent": agyAgent, "cwd": n.home, "status": "idle", "launcher": "my-agy", "model": "gemini-4-carbon-high", "context_tokens": 42_000, "output_tokens": 120},
 		{"session_id": "agy-remote-2", "agent": agyAgent, "cwd": n.home, "status": "idle", "launcher": "agy", "model": "unknown-remote", "context_tokens": 9_000, "output_tokens": 30},
+		{"session_id": "agy-remote-3", "agent": agyAgent, "cwd": n.home, "status": "idle", "launcher": "agy", "model": "gemini-3.8-flash-low", "context_tokens": 15_000},
 	}})
 	waitFor(t, "remote agy rows listed", func() bool {
 		g := listed(t, n)
@@ -629,5 +639,8 @@ func TestAgyRuntimeRowContextWindowWithoutLocalTranscript(t *testing.T) {
 	}
 	if s := got["agy-remote-2"]; s.ContextTokens != 9_000 || s.ContextWindow != 0 || s.OutputTokens != 30 {
 		t.Fatalf("agy-remote-2 = ctx:%d/%d out:%d", s.ContextTokens, s.ContextWindow, s.OutputTokens)
+	}
+	if s := got["agy-remote-3"]; s.ContextTokens != 15_000 || s.ContextWindow != 1_048_576 {
+		t.Fatalf("Gemini runtime row = %d/%d", s.ContextTokens, s.ContextWindow)
 	}
 }
