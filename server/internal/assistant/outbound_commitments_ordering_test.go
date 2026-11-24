@@ -12,6 +12,7 @@ import (
 )
 
 func TestOutboundPromiseConcurrentPreparedUpdateOrdering(t *testing.T) {
+	needsLarkLayer(t)
 	for _, oldPath := range []string{"bot", "inbox"} {
 		t.Run(oldPath, func(t *testing.T) {
 			h, it := outwardMigratedInbox(t)

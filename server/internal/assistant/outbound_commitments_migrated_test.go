@@ -98,6 +98,7 @@ func TestOutboundPromiseMigratedFeishuCrossPathFulfillment(t *testing.T) {
 }
 
 func TestOutboundPromiseMigratedFeishuIdentityBoundaries(t *testing.T) {
+	needsLarkLayer(t)
 	for _, boundary := range []string{"other chat", "other thread", "readback failure", "wrong message", "wrong chat", "deleted message", "no topic", "failed update"} {
 		t.Run(boundary, func(t *testing.T) {
 			h, it := outwardMigratedInbox(t)

@@ -58,6 +58,7 @@ func outwardBot(t *testing.T, st Store) (*Service, *fakeHub, *channel.Run, *atom
 
 func sendOutwardBot(t *testing.T, s *Service, r *channel.Run, text string) {
 	t.Helper()
+	needsLarkLayer(t)
 	if err := (feishuSink{s}).answer(context.Background(), r, text, "", time.Second, true, false, channel.EndDone); err != nil {
 		t.Fatal(err)
 	}
@@ -126,6 +127,7 @@ func TestOutboundPromiseIgnoresNonPromisesAndPrivateBotChat(t *testing.T) {
 }
 
 func TestOutboundPromiseRequiresConfirmedDelivery(t *testing.T) {
+	needsLarkLayer(t)
 	st := &memStore{}
 	s, f, r, posts := outwardBot(t, st)
 	f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) {

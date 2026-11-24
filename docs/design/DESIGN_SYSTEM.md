@@ -1966,6 +1966,10 @@ This requested pagination correction does not add a setting or change placement.
 navigator on current main and is outside this fix's scope; it must not use its two-turn body window as a global count.
 When a web selection needs older messages, keep its loading status at the rail while the current transcript stays in
 place. Only the latest selection can move the transcript. If it fails, keep the marks available so it can be selected again.
+In Persona chats each mark also carries its question's state (#13021): not started (fainter), in progress (accent,
+pulsing, slowly under reduced motion like other busy indicators), unread (strong, with a red dot) or read (the plain mark); a follow-up's mark is
+shorter. The state is part of the mark's accessible label, and a tap jumps on touch screens. The geometry lives with the
+rail's other metrics (`web/src/ui/nav-rail-metrics.ts`); details in `docs/web/web.md` ("User-input rail (#1739, #2060)").
 
 The web Changes panel's secondary file tree (#10477) reuses the existing `ResizeHandle` separator from the sidebar and side panel: pointer drag, arrow keys, Home/End, and double-click/Enter to reset. Column dimensions live in `web/src/lib/layout.ts` (`CHANGES_TREE_DEFAULT`, `CHANGES_TREE_MIN`, `CHANGES_TREE_MAX`, `CHANGES_DIFF_MIN`). Its default remains 192 px; the browser remembers a user resize and temporarily fits it to the panel while keeping space for the diff. At narrow widths the tree stays above the diff. File names and indentation may truncate, while each row's unchanged addition/deletion counts remain whole and the full path remains on hover.
 
@@ -2172,15 +2176,33 @@ full-width card where they were launched (`TaskCard`: a bordered `rounded-xl` su
 round avatar, a small kind word ("Subagent"), the title on one line, the status word with its mark (Running, Completed,
 Failed, Stopped; only Failed is red), and a second line in the tertiary color: what ran it, a model chip (the model it
 actually ran on, short; never the requested one), tokens, tool uses, the time or "Running for …" each second. The head
-opens a subagent card in place (prompt, the latest result folded past four lines, last tool, output file), remembered
-per card; a workflow card's head opens the chat's Background dialog at its run. A subagent is never a conversation of
-its own (no panel, no page, no sidebar row). Like every tool call the cards sit inside the work summary, running or
+opens a subagent card in place (prompt, the latest result folded past four lines, last tool, output file, and a **View full** text button that opens the subagent's full detail view), remembered
+per card; a workflow card's head opens the chat's Background dialog at its run. A subagent never occupies a sidebar or
+Agents-list row of its own; users can inspect its full conversation from Session overview or an expanded TaskCard (in a
+side panel on wide Web viewports or a pushed full-screen view on phones), and going back always returns to the parent
+session. Each parent row rolls up its subagents' state via one shared rule (`childRollup`): waiting subagents take
+precedence over running subagents and elevate the parent row to Needs you without opening anything; ended subagents stay
+quiet. Like every tool call the cards sit inside the work summary, running or
 not (super rule 2; cindy's running cards outside it wait on #5047). Nested subagents are flat cards by start time. A card offers Stop only
 where the node can stop that task. Android draws these cards in Glass (#5045; Brief and Board keep their tool rows with
 "View sub-agent"); iOS still draws the earlier design (#5045).
-A child session (a Codex subagent, an Agent a Paseo Agent created; #5120) is the same card in its parent's chat, built
+A child session (a Codex subagent, an Agent a Paseo Agent created, or a cross-machine / cross-harness A2A subagent; #5120, #14215) is the same card in its parent's chat, built
 from its own row and placed by when it started, since no call in the parent's transcript names it: what runs it, its
-model and effort, its status and time; opened, its prompt, latest words and last tool. iOS and Android follow in #5140.
+model and effort, its status and time; opened, its prompt, latest words, last tool, and **View full**. iOS and Android follow the **Session overview · Subagents** specification below.
+
+#### Session overview · Subagents
+
+Every client presents Session overview sections in the same order: **Environment → Context → Subagents → Background tasks** (Web in the docked `SessionOverview` column, iOS in a medium/large sheet or iPad inspector, Android in `JSheet`).
+
+- **Unified aggregation**: the Subagents section aggregates all three subagent classes into one list — embedded `session.subagents` (`<parent>@<agent>`), same-machine folded child sessions (including workers and runtime children), and cross-machine / cross-harness A2A subagents (including children of archived parents).
+- **Parent-row rollup (`childRollup`)**: no subagent (embedded, same-machine, cross-machine A2A, or orphan) occupies a row in the primary Agents list. The parent row shows at most one single-line subtitle by priority: waiting subagents (`N need you` in attention color, with the parent status elevated to Needs you) → running subagents (`N running` in tertiary ink with a working mark) → silent when all subagents have ended. Tapping the subtitle opens the parent session and focuses the Session overview Subagents section. Unattached orphans that need the user surface only in Needs you; quiet orphans never appear in the main list.
+- **Grouping and default collapse**:
+  - **Running · N**: waiting (`needs_you`) items pinned first, remaining items newest start first. Hidden completely when empty (no empty-state placeholder).
+  - **Ended · N**: collapsed by default into one single-line toggle showing up to four stacked 20 px harness brand marks, the ended count (`N ended`), and a chevron; expands in place to the full list.
+- **Single-line row anatomy**: `[20 px harness brand mark] title (1-line truncated) [provenance chip] … status ›`. All row labels stay on one line without wrapping; active items add one truncated second line showing the latest tool or activity summary; nested subagents indent at most two levels before flattening.
+- **Progressive provenance chip**: shown only when the subagent's computer or harness differs from the parent session, naming only what differs (`<computer> · <harness>`, `<computer>`, or `<harness>`) in the tertiary tag style (`--ink-3`).
+- **Status words and color**: running shows a working mark + tabular elapsed duration; waiting shows an attention dot + "Needs you"; failed shows red "Failed" (the only red state); ended shows a quiet tertiary timestamp.
+- **Full detail view**: opening any subagent from Session overview or an expanded TaskCard's **View full** opens its full transcript (`kind: "subagent"` side panel on wide Web viewports keeping the parent chat column untouched, full-screen overlay on narrow Web viewports, pushed full-screen view on phones). The header offers `‹ Session overview` back (when opened from overview), title, provenance chip, status, Stop when node-interruptible, and a `⋯` menu with **Show in chat** (shown only when the launching call exists in the parent transcript) and **Open as page** (explicit standalone route that bypasses deep-link redirection back to the parent). Interactivity is strictly gated by `sessionCan(child, "send")`; read-only subagents show a quiet read-only bar in place of a composer. Deep links to `<parent>@<agent>` or folded child sessions open the parent session with the subagent detail panel open.
 
 **The plan card and pill** (web, #5156; the owner asked on 2026-11-12 that the plan follow cindy's `InlinePlanCard` and
 `TodoListCard` exactly, which replaces the one-line card and the side panel's Plan). One card per exchange, where its

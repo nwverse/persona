@@ -1,11 +1,11 @@
-package assistant
+package lark
 
 import (
 	"context"
 	"crypto/sha256"
-	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 )
@@ -18,20 +18,13 @@ import (
 // else that fails sends the run back to updating its card as a message, which a card sent as an entity still takes
 // (the answer always goes that way): nothing waits on CardKit. The entity's id is in the run's Ext ("card_id"), so an
 // assistant started again ends its streaming too. CardKit goes on taking writes into an entity whose message was
-// withdrawn or deleted, so the message itself is read back every kitCheckEvery (kitGone): one gone is forgotten as a
+// withdrawn or deleted, so the message itself is read back every kit_check_every (timings.go) (kitGone): one gone is forgotten as a
 // message update that finds it gone forgets it, and the next tick posts a new card.
 
 const (
-	// progressLiveID is the element of the progress card the conversation's words are streamed into.
-	progressLiveID = "live"
-	// progressLiveMost is how much of the words the card shows (their end): text that has outgrown it is written over
-	// rather than streamed on, as it no longer starts the same.
-	progressLiveMost = 2000
 	// kitDownFor is how long progress cards go as messages after CardKit would not make one (the app lacks its
 	// permission, an older hub): it is not asked on every run.
 	kitDownFor = 10 * time.Minute
-	// kitCheckEvery is how often an entity's message is read back to see it is still there (kitGone).
-	kitCheckEvery = 30 * time.Second
 	// codeStreamClosed is CardKit's answer to a write into a card that is not streaming (any more).
 	codeStreamClosed = 300309
 )
@@ -39,7 +32,7 @@ const (
 // kitEpoch is where the entities' sequences count from.
 var kitEpoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-// cardKit is a run's progress card as an entity, under its chanLive's mu.
+// cardKit is a run's progress card as an entity, under its run's progress lock.
 type cardKit struct {
 	id       string    // the entity
 	seq      int64     // its last write's sequence
@@ -60,19 +53,10 @@ func (k *cardKit) next(now time.Time) int64 {
 	return n
 }
 
-// progressLive is the conversation's words as the progress card shows them: escaped, and only their end when long.
-func progressLive(live string) string {
-	live = strings.TrimSpace(live)
-	if r := []rune(live); len(r) > progressLiveMost {
-		live = "…" + string(r[len(r)-progressLiveMost:])
-	}
-	return botcard.EscapeMarkdown(live)
-}
-
 // liveElement is the card's element the words go in, nil when it has none.
 func liveElement(c *botcard.Card) map[string]any {
 	for _, el := range c.Body.Elements {
-		if m, ok := el.(map[string]any); ok && m["element_id"] == progressLiveID {
+		if m, ok := el.(map[string]any); ok && m["element_id"] == botcard.ProgressLiveID {
 			return m
 		}
 	}
@@ -94,7 +78,7 @@ func kitShape(c *botcard.Card) [32]byte {
 
 // kitOf is the run's entity: the one prog keeps, or the one its Ext names (an assistant started again; what it streamed
 // is not known, so the next write is the whole card). nil when the card is not an entity, or CardKit failed for it.
-func (s *Service) kitOf(r *channel.Run, prog *chanLive) *cardKit {
+func (s core) kitOf(r *channel.Run, prog *runLive) *cardKit {
 	if prog.kit == nil {
 		if id := s.runExt(r, "card_id"); id != "" {
 			prog.kit = &cardKit{id: id}
@@ -108,12 +92,12 @@ func (s *Service) kitOf(r *channel.Run, prog *chanLive) *cardKit {
 
 // kitPost makes the run's first progress card an entity streaming its words and sends it by its id. ok is false when
 // CardKit did not make one: the caller sends the card as a message.
-func (f feishuSink) kitPost(ctx context.Context, r *channel.Run, prog *chanLive, c *botcard.Card, to feishuTarget) (mid string, err error, ok bool) {
+func (f feishuSink) kitPost(ctx context.Context, r *channel.Run, prog *runLive, c *botcard.Card, to feishuTarget) (mid string, err error, ok bool) {
 	s := f.s
 	now := s.chansNow()
-	s.chans.mu.Lock()
-	down := now.Before(s.chans.kitDown)
-	s.chans.mu.Unlock()
+	s.t.mu.Lock()
+	down := now.Before(s.t.kitDown)
+	s.t.mu.Unlock()
 	if down {
 		return "", nil, false
 	}
@@ -121,11 +105,11 @@ func (f feishuSink) kitPost(ctx context.Context, r *channel.Run, prog *chanLive,
 	var made struct {
 		CardID string `json:"card_id"`
 	}
-	if err := s.appCall(ctx, AppFeishu, FeishuCardCreate, map[string]any{"card": c.JSON()}, &made); err != nil || made.CardID == "" {
+	if err := s.appCall(ctx, assistantwire.FeishuCardCreate, map[string]any{"card": c.JSON()}, &made); err != nil || made.CardID == "" {
 		s.logf("bots: progress card as a card entity: %v; sending it as a message for %s", err, kitDownFor)
-		s.chans.mu.Lock()
-		s.chans.kitDown = now.Add(kitDownFor)
-		s.chans.mu.Unlock()
+		s.t.mu.Lock()
+		s.t.kitDown = now.Add(kitDownFor)
+		s.t.mu.Unlock()
 		return "", nil, false
 	}
 	mid, err = s.botPostContent(ctx, to, r.ReplyTo, botcard.CardEntityContent(made.CardID), "", "")
@@ -144,7 +128,7 @@ func (f feishuSink) kitPost(ctx context.Context, r *channel.Run, prog *chanLive,
 // kitProgress writes the progress card into its entity: whole when more than its words changed (with the words it
 // has), then its words streamed. false when the card is not an entity, or CardKit failed now: the caller updates it
 // as a message.
-func (f feishuSink) kitProgress(ctx context.Context, r *channel.Run, prog *chanLive, c *botcard.Card) bool {
+func (f feishuSink) kitProgress(ctx context.Context, r *channel.Run, prog *runLive, c *botcard.Card) bool {
 	s := f.s
 	k := s.kitOf(r, prog)
 	if k == nil {
@@ -158,7 +142,7 @@ func (f feishuSink) kitProgress(ctx context.Context, r *channel.Run, prog *chanL
 	words, _ := el["content"].(string)
 	if shape := kitShape(c); shape != k.shape {
 		el["content"] = k.streamed // the rest is streamed below
-		err := f.kitWrite(ctx, k, FeishuCardUpdate, func(seq int64) map[string]any {
+		err := f.kitWrite(ctx, k, assistantwire.FeishuCardUpdate, func(seq int64) map[string]any {
 			return map[string]any{"card_id": k.id, "card": c.JSON(), "sequence": seq}
 		})
 		el["content"] = words
@@ -168,8 +152,8 @@ func (f feishuSink) kitProgress(ctx context.Context, r *channel.Run, prog *chanL
 		k.shape = shape
 	}
 	if words != k.streamed {
-		err := f.kitWrite(ctx, k, FeishuCardStream, func(seq int64) map[string]any {
-			return map[string]any{"card_id": k.id, "element": progressLiveID, "text": words, "sequence": seq}
+		err := f.kitWrite(ctx, k, assistantwire.FeishuCardStream, func(seq int64) map[string]any {
+			return map[string]any{"card_id": k.id, "element": botcard.ProgressLiveID, "text": words, "sequence": seq}
 		})
 		if err != nil {
 			return f.kitFailed(k, err)
@@ -180,11 +164,11 @@ func (f feishuSink) kitProgress(ctx context.Context, r *channel.Run, prog *chanL
 }
 
 // kitGone reports whether the message of the run's entity was withdrawn or deleted, reading it back at most every
-// kitCheckEvery. A read that fails for another reason (a rate limit, the hub away) says nothing: the card goes on.
+// kit_check_every. A read that fails for another reason (a rate limit, the hub away) says nothing: the card goes on.
 func (f feishuSink) kitGone(ctx context.Context, k *cardKit, messageID string) bool {
 	s := f.s
 	now := s.chansNow()
-	if now.Sub(k.checked) < kitCheckEvery {
+	if now.Sub(k.checked) < s.timing("kit_check_every") {
 		return false
 	}
 	k.checked = now
@@ -203,7 +187,7 @@ func (f feishuSink) kitGone(ctx context.Context, k *cardKit, messageID string) b
 // forgetProgressCard drops a run's progress card that is gone from the chat (withdrawn or deleted): the next tick
 // posts a new one, and the answer does not go into this one. Its entity goes with it, so no later write streams into
 // a card nobody sees, nor does an assistant started again take the entity up from the run's Ext.
-func (s *Service) forgetProgressCard(r *channel.Run, prog *chanLive) {
+func (s core) forgetProgressCard(r *channel.Run, prog *runLive) {
 	s.setRunExt(r, "card", "")
 	s.setRunExt(r, "card_id", "")
 	prog.kit = nil
@@ -214,14 +198,14 @@ func (s *Service) forgetProgressCard(r *channel.Run, prog *chanLive) {
 // tried once more.
 func (f feishuSink) kitWrite(ctx context.Context, k *cardKit, method string, params func(seq int64) map[string]any) error {
 	s := f.s
-	err := s.appCall(ctx, AppFeishu, method, params(k.next(s.chansNow())), nil)
+	err := s.appCall(ctx, method, params(k.next(s.chansNow())), nil)
 	if feishuCode(err) != codeStreamClosed {
 		return err
 	}
-	if err := s.appCall(ctx, AppFeishu, FeishuCardSettings, map[string]any{"card_id": k.id, "streaming": true, "sequence": k.next(s.chansNow())}, nil); err != nil {
+	if err := s.appCall(ctx, assistantwire.FeishuCardSettings, map[string]any{"card_id": k.id, "streaming": true, "sequence": k.next(s.chansNow())}, nil); err != nil {
 		return err
 	}
-	return s.appCall(ctx, AppFeishu, method, params(k.next(s.chansNow())), nil)
+	return s.appCall(ctx, method, params(k.next(s.chansNow())), nil)
 }
 
 // kitFailed leaves CardKit for the run's card: it is updated as a message from now on.
@@ -232,10 +216,10 @@ func (f feishuSink) kitFailed(k *cardKit, err error) bool {
 }
 
 // kitEnd turns the streaming of a run's entity off before its card is written for the last time (the answer, a fold,
-// a recall): written as a message, it then shows as any other card. k is the run's entity as its chanLive keeps it
+// a recall): written as a message, it then shows as any other card. k is the run's entity as its runLive keeps it
 // (nil when it keeps none: the run was folded, or the assistant started again), ext the run's values. Best effort:
 // CardKit ends streaming by itself.
-func (s *Service) kitEnd(ctx context.Context, k *cardKit, ext map[string]string) {
+func (s core) kitEnd(ctx context.Context, k *cardKit, ext map[string]string) {
 	switch {
 	case k != nil && k.off:
 		return
@@ -244,7 +228,7 @@ func (s *Service) kitEnd(ctx context.Context, k *cardKit, ext map[string]string)
 	case k == nil:
 		k = &cardKit{id: ext["card_id"]}
 	}
-	if err := s.appCall(ctx, AppFeishu, FeishuCardSettings, map[string]any{"card_id": k.id, "streaming": false, "sequence": k.next(s.chansNow())}, nil); err != nil {
+	if err := s.appCall(ctx, assistantwire.FeishuCardSettings, map[string]any{"card_id": k.id, "streaming": false, "sequence": k.next(s.chansNow())}, nil); err != nil {
 		s.logf("bots: end the progress card's streaming: %v", err)
 	}
 }
