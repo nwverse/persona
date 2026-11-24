@@ -151,6 +151,7 @@ var catalogItemTypes = map[string]reflect.Type{
 	"iphone":           reflect.TypeFor[ComputerItem](),
 
 	"repository_providers": reflect.TypeFor[RepositoryProviderItem](),
+	"disk_offload":         reflect.TypeFor[DiskOffloadItem](),
 }
 
 // Include the parsed projection as well as the signed entry fields: callers may
