@@ -64,8 +64,9 @@ func (s *Service) createConcernWithImages(ctx context.Context, title, notes stri
 
 // reportConcern writes report, what the owner was told of concern id's outcome, as its reported decision and closes it
 // with it (db.ReportConcern); machine and session are the conversation that told them ("" by hand). closed is false
-// when it was closed already (the report is kept). db.ErrTodoNotFound, db.ErrNotConcern as the store says.
-func (s *Service) reportConcern(ctx context.Context, id, report, machine, session string) (Todo, bool, error) {
+// when it was closed already (the report is kept). seen: the owner has it already, so it is confirmed in the same
+// write. db.ErrTodoNotFound, db.ErrNotConcern as the store says.
+func (s *Service) reportConcern(ctx context.Context, id, report, machine, session string, seen bool) (Todo, bool, error) {
 	st := s.todoDB()
 	if st == nil {
 		return Todo{}, false, errConcernNoStore
@@ -84,7 +85,7 @@ func (s *Service) reportConcern(ctx context.Context, id, report, machine, sessio
 	row := db.TodoDecisionRow{ID: "dec_" + randomHex(8), TodoID: id, Question: decisionText(cur.Title), Choice: text,
 		Source: db.DecisionReported, SourceMachine: machine, SourceSession: session, CreatedAt: decisionNow()}
 	s.todos.writing.Lock() // memory takes the rows in the order the store committed them (todoBook.writing)
-	stored, closed, err := st.ReportConcern(ctx, row, clip(oneLine(text), 300))
+	stored, closed, err := st.ReportConcern(ctx, row, clip(oneLine(text), 300), seen)
 	if err != nil {
 		s.todos.writing.Unlock()
 		return Todo{}, false, err
@@ -128,7 +129,7 @@ func (s *Service) toolConcernReport(ctx context.Context, machine, self string, a
 	if !t.isConcern() {
 		return "", fmt.Errorf("%s is not a concern: complete a to-do with todo_complete", t.ID)
 	}
-	out, closed, err := s.reportConcern(ctx, t.ID, a.Report, machine, self)
+	out, closed, err := s.reportConcern(ctx, t.ID, a.Report, machine, self, a.OwnerSaw)
 	if err != nil {
 		if errors.Is(err, db.ErrTodoNotFound) {
 			return "It was deleted meanwhile: nothing to report on.", nil
@@ -136,14 +137,8 @@ func (s *Service) toolConcernReport(ctx context.Context, machine, self string, a
 		return "", fmt.Errorf("the report could not be saved, the concern stays open: %w", err)
 	}
 	s.clearConcernAsk(ctx, t.ID) // reported: nothing waits for the owner's answer (concern_matters.go)
-	if a.OwnerSaw {
-		// answered in full right there in the chat: the owner has it already, so it does not wait at the top
-		c, err := s.confirmFinished(ctx, t.ID, true)
-		if err != nil {
-			return "", fmt.Errorf("reported and closed, but it could not be marked as seen: %w", err)
-		}
-		out = c
-	} // a report on a closed concern clears its confirm in the store (db.ReportConcern), for every caller
+	// owner_saw (answered in full right there in the chat) confirms it in the report's own write; without it a report
+	// on a closed concern clears its confirm there, so it waits again (db.ReportConcern)
 	now, loc := time.Now(), s.location(ctx)
 	if !closed {
 		if a.OwnerSaw {

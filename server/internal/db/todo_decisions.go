@@ -153,8 +153,10 @@ func (d *DB) InsertTodoDecision(ctx context.Context, r TodoDecisionRow) (inserte
 // ReportConcern writes r, the report of a concern's outcome to the owner (Source DecisionReported), and closes the
 // concern with it (DoneByReported, reason the report) in one transaction: a concern is never closed without its report,
 // and a report is never written on one left open. A concern already closed keeps its close and gains the report
-// (closed is false then), and its confirmed_at is cleared: the newer report waits for the owner again. ErrTodoNotFound when it is gone, ErrNotConcern when it is not a concern.
-func (d *DB) ReportConcern(ctx context.Context, r TodoDecisionRow, reason string) (row *TodoRow, closed bool, err error) {
+// (closed is false then), and its confirmed_at is cleared: the newer report waits for the owner again. seen: the owner
+// has the report already (concern_report owner_saw, or Got it on the card), so it is confirmed in the same write.
+// ErrTodoNotFound when it is gone, ErrNotConcern when it is not a concern.
+func (d *DB) ReportConcern(ctx context.Context, r TodoDecisionRow, reason string, seen bool) (row *TodoRow, closed bool, err error) {
 	if r.Source != DecisionReported {
 		return nil, false, errors.New("a concern's report has source reported")
 	}
@@ -189,6 +191,9 @@ func (d *DB) ReportConcern(ctx context.Context, r TodoDecisionRow, reason string
 		} else {
 			// a newer report on a closed concern: whatever Got it the owner gave was for the earlier one, so it waits again
 			cur.ConfirmedAt = nil
+		}
+		if seen {
+			cur.ConfirmedAt = &at
 		}
 		cur.UpdatedAt = at
 		if _, err := tx.Exec(ctx, `UPDATE todos SET done_at = $2, done_by = $3, done_reason = $4, start_error = $5, updated_at = $6,

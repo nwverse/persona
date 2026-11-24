@@ -645,15 +645,21 @@ func (s *Service) confirmMatter(ctx context.Context, id, report string) (Todo, e
 		if strings.TrimSpace(report) == "" {
 			return Todo{}, errEmptyReport
 		}
-		if _, _, err := s.reportConcern(ctx, id, report, "", ""); err != nil {
+		// reported and confirmed in one write: the owner pressed Got it on that very conclusion
+		r, _, err := s.reportConcern(ctx, id, report, "", "", true)
+		if err != nil {
 			return Todo{}, err
 		}
 		s.clearConcernAsk(ctx, id)
+		t = r
+	} else {
+		c, err := s.confirmFinished(ctx, id, true)
+		if err != nil {
+			return Todo{}, err
+		}
+		t = c
 	}
-	out, err := s.confirmFinished(ctx, id, true)
-	if err != nil {
-		return Todo{}, err
-	}
+	out := t
 	for _, task := range s.matterTasks(ctx, id) {
 		if task.DoneAt != nil && !confirmedSinceReport(task) {
 			if _, err := s.confirmFinished(ctx, task.ID, true); err != nil {

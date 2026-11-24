@@ -49,10 +49,10 @@ func TestConcernClosesOnlyByItsReport(t *testing.T) {
 
 	report := func(id string, at time.Time) (*TodoRow, bool, error) {
 		return d.ReportConcern(ctx, TodoDecisionRow{ID: id, TodoID: "todo_concern", Question: "发版会不会拖到下周",
-			Choice: "不会，周四发", Source: DecisionReported, SourceSession: "main_example", CreatedAt: at}, "不会，周四发")
+			Choice: "不会，周四发", Source: DecisionReported, SourceSession: "main_example", CreatedAt: at}, "不会，周四发", false)
 	}
 	if _, _, err := d.ReportConcern(ctx, TodoDecisionRow{ID: "d_plain", TodoID: "todo_plain", Question: "q", Choice: "c",
-		Source: DecisionReported, CreatedAt: base}, "c"); !errors.Is(err, ErrNotConcern) {
+		Source: DecisionReported, CreatedAt: base}, "c", false); !errors.Is(err, ErrNotConcern) {
 		t.Fatalf("a plain to-do reported: %v", err)
 	}
 	r, closed, err := report("d_report_1", base.Add(2*time.Minute))
@@ -80,7 +80,7 @@ func TestConcernClosesOnlyByItsReport(t *testing.T) {
 		t.Fatalf("report on a closed concern: %+v %v %v", r, closed, err)
 	}
 	if _, _, err := d.ReportConcern(ctx, TodoDecisionRow{ID: "d_gone", TodoID: "todo_gone", Question: "q", Choice: "c",
-		Source: DecisionReported, CreatedAt: base}, "c"); !errors.Is(err, ErrTodoNotFound) {
+		Source: DecisionReported, CreatedAt: base}, "c", false); !errors.Is(err, ErrTodoNotFound) {
 		t.Fatalf("a gone todo: %v", err)
 	}
 }

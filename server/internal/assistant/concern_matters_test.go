@@ -582,3 +582,19 @@ func TestReorganizeUnderAMatter(t *testing.T) {
 		t.Fatalf("three levels under the matter: matter %q, want %q", got.Matter, c.ID)
 	}
 }
+
+// A request root that enforces accepted prerequisites may sit under a matter: it is still the request's root.
+func TestEnforcedRequestUnderAMatter(t *testing.T) {
+	e := newConcernEnv(t)
+	e.f.setItems(ownerSaid("m1", "ship the release", time.Now().UTC()))
+	if _, err := e.tool("concern_file", map[string]any{"title": "the release"}); err != nil {
+		t.Fatal(err)
+	}
+	c := concernNamed(t, e.matters(), "the release")
+	req := e.create("cut the release")
+	e.must("PATCH", "/api/v1/todos/"+req.ID, `{"part_of":"`+c.ID+`"}`)
+	e.must("PATCH", "/api/v1/todos/"+req.ID, `{"require_accepted_after":true}`)
+	if w := e.do("PATCH", "/api/v1/todos/"+c.ID, `{"require_accepted_after":true}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("a concern enforcing prerequisites: %d %s", w.Code, w.Body)
+	}
+}

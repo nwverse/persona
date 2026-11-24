@@ -39,6 +39,13 @@ func concernIn(book map[string]*Todo, id string) bool {
 	return ok && t.isConcern()
 }
 
+// concernNow: id is a concern in the book now (a request root under one is still a request's root).
+func (s *Service) concernNow(id string) bool {
+	s.todos.mu.RLock()
+	defer s.todos.mu.RUnlock()
+	return concernIn(s.todos.todos, id)
+}
+
 // pieceEdit is a change to a to-do's place in a request; nil leaves that part as it is. Changing part_of without
 // giving after empties after: the pieces it waited for belong to the request it left.
 type pieceEdit struct {
@@ -272,7 +279,7 @@ func (s *Service) recheckPieces(id string, e db.TodoEdit) (db.TodoEdit, error) {
 	if e.RequireAcceptedAfter != nil {
 		enforced = *e.RequireAcceptedAfter
 	}
-	if enforced && (partOf != "" || cur.isConcern()) {
+	if enforced && (partOf != "" && !s.concernNow(partOf) || cur.isConcern()) {
 		return links, &pieceError{errRequestGateRoot}
 	}
 	return links, nil

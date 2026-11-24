@@ -64,7 +64,7 @@ func (s *Service) requestBlockers(ctx context.Context, task PlanTask) []string {
 		s.todos.mu.RUnlock()
 		return nil
 	}
-	if parent == nil || parent.Cancelled() || parent.PartOf != "" || piece == nil || piece.PartOf != task.RequestGate {
+	if parent == nil || parent.Cancelled() || parent.PartOf != "" && !concernIn(book, parent.PartOf) || piece == nil || piece.PartOf != task.RequestGate {
 		s.todos.mu.RUnlock()
 		return []string{task.RequestGate}
 	}
