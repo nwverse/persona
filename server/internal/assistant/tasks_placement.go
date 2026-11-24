@@ -550,13 +550,13 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	clearStandardSpeed(params)
 	s.setPlanThen(ctx, m.ID, params)
-	if err := s.checkContinuationScope(t); err != nil {
-		return "", "", err
-	}
-	if err := s.checkRequestStart(ctx, *t); err != nil {
-		return "", "", err
-	}
-	start := func() error {
+	callNode := func() error {
+		if err := s.checkContinuationScope(t); err != nil {
+			return err
+		}
+		if err := s.checkRequestStart(ctx, *t); err != nil {
+			return err
+		}
 		if err := s.checkClaimedGatewayStart(ctx, *t); err != nil {
 			return err
 		}
@@ -566,6 +566,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		}
 		return s.startBackendTask(bindCtx, t, params, &res)
 	}
+	start := func() error { return s.startWithCodexRouteNotice(ctx, t.TodoID, fit.agent, params, callNode) }
 	sentAt := time.Now()
 	err = start()
 	// Extras the agent it landed on cannot have (ultracode #3596, a start goal: start_defaults.go) are each dropped
@@ -579,12 +580,6 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			if !defaultGoal { // a goal the owner never asked for is no news on the task's card
 				t.noteWhy(i18n.T(s.lang(ctx), "assistant-tasks.start_goal_skipped", i18n.Args{"reason": reason}))
 			}
-			if err := s.checkContinuationScope(t); err != nil {
-				return "", "", err
-			}
-			if err := s.checkRequestStart(ctx, *t); err != nil {
-				return "", "", err
-			}
 			err = start()
 			continue
 		}
@@ -592,12 +587,6 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			skipped, refused = reason, true
 			delete(params, "ultracode")
 			s.logf("task %s: start: %s; starting without ultracode", t.TodoID, skipped)
-			if err := s.checkContinuationScope(t); err != nil {
-				return "", "", err
-			}
-			if err := s.checkRequestStart(ctx, *t); err != nil {
-				return "", "", err
-			}
 			err = start()
 			continue
 		}
@@ -776,4 +765,35 @@ func (s *Service) updatePlanTask(ctx context.Context, planID string, i int, t Pl
 	}); err != nil {
 		s.logf("plan %s: %v", planID, err)
 	}
+}
+
+// A typed pre-launch refusal is safe to retry once the fallback is on the same
+// task card as its receipts and progress reports. Never replay an uncertain start.
+func (s *Service) startWithCodexRouteNotice(ctx context.Context, todoID, agent string, params map[string]any, start func() error) error {
+	effort, _ := params["effort"].(string)
+	if todoID == "" || agent != "codex" || effort == "" || params["codex_effort_fallback"] == proto.CodexFallbackAnnounced {
+		return start()
+	}
+	params["codex_effort_fallback"] = proto.CodexFallbackNotify
+	err := start()
+	if !refusedWith(err, proto.CodeCodexEffortTerminal) {
+		return err
+	}
+	task, ok := s.todoNow(todoID)
+	if !ok || task.DoneAt != nil {
+		return err
+	}
+	note := i18n.T(s.lang(ctx), "assistant-tasks.codex_effort_terminal")
+	report := reportBody{Kind: upReportProgress, Text: note}
+	if _, err := s.appendFeed(ctx, task.Origin, feedReport, todoID, report); err != nil {
+		return err
+	}
+	if v := task.Supervision; v != nil && v.Supervisor != "" && v.Supervisor != task.Origin {
+		if _, err := s.appendFeed(ctx, v.Supervisor, feedReport, todoID, report); err != nil {
+			return err
+		}
+	}
+	s.noteProgress(ctx, todoID, TaskProgress{Kind: upReportProgress, Text: note, At: time.Now().UTC()})
+	params["codex_effort_fallback"] = proto.CodexFallbackAnnounced
+	return start()
 }

@@ -2,6 +2,8 @@ package node
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -148,6 +150,50 @@ func resumeSayable(cmd string) bool {
 		strings.IndexFunc(cmd, unicode.IsControl) < 0
 }
 
+// Keep alias credentials out of herdr's persisted command. A restore reads the
+// launcher's words again and hands them to the same resolver as a file-based start.
+func (n *Node) herdrCodexLauncher(name string) string {
+	launcherCache.Lock()
+	words := launcherCache.codex[name]
+	launcherCache.Unlock()
+	if len(words) == 0 {
+		if _, managed := n.managedLauncher(name); managed {
+			return dquote(n.bin) + " launch " + dquote(name)
+		}
+		if name == "codex" {
+			return "codex" // codex-start resolves the stock CLI even before discovery
+		}
+	}
+	if name == "codex" && len(words) == 1 && (words[0] == "codex" || filepath.IsAbs(words[0])) {
+		return dquote(words[0])
+	}
+	// Rediscover custom launcher words in the marked shell on restore.
+	return "--launcher " + dquote(name)
+}
+
+func herdrCodexRestore(args []string) (codexStartFile, error) {
+	if len(args) >= 2 && args[0] == "--launcher" {
+		name := args[1]
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		env := append(codexPaneEnv(&herdrHost{}), codexStartMarker)
+		out, err := scanLaunchers(ctx, env...)
+		if err != nil {
+			return codexStartFile{}, err
+		}
+		_, launchers, _, _ := mergeLaunchers(string(out))
+		words := launchers[name]
+		if len(words) == 0 {
+			if name != "codex" {
+				return codexStartFile{}, fmt.Errorf("%s Codex launcher %q not found", codexStartError, name)
+			}
+			words = []string{"codex"} // a function or PATH entry only the marked shell sees
+		}
+		args = append(words, args[2:]...)
+	}
+	return codexStartFile{Argv: args, Agent: herdrAgentName("codex")}, nil
+}
+
 // agentResumeArgv is the resume_argv for an agent Persona started (Claude, Codex, a compatible CLI, pi, the Cursor
 // CLI, the Antigravity CLI). A Codex, and a work agent herdr detects, gets HERDR_AGENT like Claude. A work agent's
 // command keeps its model and effort overrides. Pi names its session, omp requires its session file, and agy adds a
@@ -169,8 +215,10 @@ func (n *Node) agentResumeArgv(spec agentLaunch, id string) (argv []string, ok b
 		}
 		return []string{"eval", cmd}, true
 	}
-	cmd := withHerdrAgent(resumeHerdrAgent(kind), n.launcherCommandQ(spec.Launcher, dquote)+codexTaskFlags(spec.TaskInstructions)+" resume "+id)
-	if _, program, ok := workAgent(kind); ok {
+	var cmd string
+	if kind == "codex" {
+		cmd = dquote(n.bin) + " codex-start --herdr-resume " + n.herdrCodexLauncher(spec.Launcher) + codexTaskFlags(spec.TaskInstructions) + " resume " + id
+	} else if _, program, ok := workAgent(kind); ok {
 		launcher := spec.Launcher
 		resumeID := id
 		if kind == agyAgent {
@@ -178,6 +226,8 @@ func (n *Node) agentResumeArgv(spec agentLaunch, id string) (argv []string, ok b
 			resumeID = spec.AgyConversation
 		}
 		cmd = withHerdrAgent(resumeHerdrAgent(kind), workAgentResume(kind, workAgentCommand(launcher, program, spec.Model, spec.Effort, spec.Mode), resumeID))
+	} else {
+		cmd = withHerdrAgent(resumeHerdrAgent(kind), n.launcherCommandQ(spec.Launcher, dquote)+codexTaskFlags(spec.TaskInstructions)+" resume "+id)
 	}
 	cmd = n.agentCommand(cmd, dquote, herdrPaneShell())
 	if !resumeSayable(cmd) || (!validID(id) && !runtimeIDRe.MatchString(id)) {
