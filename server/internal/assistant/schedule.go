@@ -2252,23 +2252,26 @@ func (s *Service) resumeOwn(ctx context.Context, machine, sid string, params map
 }
 
 // notifyScheduleFailed hands a failed non-briefing scheduled run to its supervisor or the main conversation
-// instead of pushing to the owner. Falls back to the legacy push only when no supervisor or main conversation is set.
+// instead of pushing to the owner. Owner-subscribed briefings (Facts/Report) and environments with no
+// supervisor or main conversation keep pushing to the owner.
 func (s *Service) notifyScheduleFailed(ctx context.Context, t Task, run ScheduleRun, m *Device, body string) {
 	l := s.lang(ctx)
 	name := t.labelIn(l)
-	if to, ok := s.scheduleFailureTarget(ctx, t); ok {
-		title := i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name})
-		text := fmt.Sprintf("%s (task=%s run=%s)\n%s", title, t.ID, run.ID, body)
-		if _, kept := s.keepRelayLater(to, relayMsg{
-			From:      cardScheduleFailed,
-			FromTitle: title,
-			Tool:      cardScheduleFailed,
-			Text:      text,
-			At:        time.Now().UTC(),
-		}); kept {
-			s.publish(ctx)
+	if !t.Facts && !t.Report {
+		if to, ok := s.scheduleFailureTarget(ctx, t); ok {
+			title := i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name})
+			text := fmt.Sprintf("%s (task=%s run=%s)\n%s", title, t.ID, run.ID, body)
+			if _, kept := s.keepRelayLater(to, relayMsg{
+				From:      cardScheduleFailed,
+				FromTitle: title,
+				Tool:      cardScheduleFailed,
+				Text:      text,
+				At:        time.Now().UTC(),
+			}); kept {
+				s.publish(ctx)
+			}
+			return
 		}
-		return
 	}
 	// the lock screen does not name a task whose push says something sensitive (usage.go, scene 4)
 	if s.exitPolicy(ctx, name+"\n"+body, run.SessionID, t.Space).Redact {
@@ -2282,7 +2285,11 @@ func (s *Service) notifyScheduleFailed(ctx context.Context, t Task, run Schedule
 	if m != nil {
 		n.Subtitle, n.DeviceID = m.Name, m.ID
 	}
-	s.push(withCard(ctx, cardScheduleFailed), n)
+	src := cardScheduleFailed
+	if t.Facts || t.Report {
+		src = cardBriefFallback
+	}
+	s.push(withCard(ctx, src), n)
 }
 
 // oneOffFailed keeps the failure notice even when delivery is unknown and retrying is unsafe.

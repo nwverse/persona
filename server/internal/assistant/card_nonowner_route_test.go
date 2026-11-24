@@ -145,7 +145,10 @@ func TestAgentQuestionNonOwnerRoutedAndSixClassesStillPush(t *testing.T) {
 	trustDone := e.raise(trust)
 	waitFor(t, "folder trust screen pushed to owner", func() bool { return e.pushesOf(trust.ID) == 1 })
 
-	// Six-class IxElicitation -> still pushed to the owner.
+	// Six-class IxElicitation -> still pushed to the owner when elicitation clients are reachable.
+	e.s.fleet.mu.Lock()
+	e.s.fleet.clients.Elicitation = true
+	e.s.fleet.mu.Unlock()
 	elicit := proto.Interaction{
 		ID: "ix_elicit", MachineID: "mac", SessionID: "standalone-agent",
 		Kind: proto.IxElicitation, Summary: "Sign in form",
