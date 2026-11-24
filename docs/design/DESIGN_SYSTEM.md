@@ -1520,9 +1520,8 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   (`ink`), no frame at rest; hover and open draw a 1 px `--line-strong` border on `--hover`. Contents in order: the
   mark of the Agent the launcher runs (#5497: `AgentMark` at 15 px, `ink-2` for the one-colour marks, 4 px before the
   name; an Agent with no mark of its own gets the generic `agent` icon, never a letter, unless its runtime names it
-  (#8142), when it is drawn as the Agents list draws it), the model name (truncates), the
-  effort label 4 px after it without a
-  tier colour (English "Extra" for "Very high"; the full name on hover), a filled bolt for Fast and the workflow
+  (#8142), when it is drawn as the Agents list draws it), the model name (truncates), the canonical effort label in the
+  text colour 4 px after it, a filled bolt for Fast and the workflow
   `UltraMark` (`ink-2`), a 14 px chevron (`ink-2`). Widths by the composer card (`@container/composer`): ≥ 600 px 72–320 px;
   < 600 px the width its words need (name ≤ 108 px without a trailing bracketed qualifier, a context size kept as a short
   mark, "Opus 5.5 1M"; the whole name in the tooltip;
@@ -1532,7 +1531,7 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   the target engine's mark and the launcher's name in `ink-3` up to 96 px, hidden under 600 px, before the target's model and
   effort; the engine's name in its place when the engine changes; the tooltip "Current: …" over "Next message: …"),
   disabled (50% opacity, no pointer), and a label (not a button) where nothing can be switched. The click keeps the caret
-  in the message box.
+  in the message box. The name omits a parenthetical effort already shown by the pill and retains context sizes.
 - Agent launcher label (#10248): when the session reports its launcher, the existing pill says **launcher · model**,
   using the same launcher name as its model-panel row. Both the launcher and abbreviated model stay visible at phone
   width, truncating within the existing capsule; the full names remain in its tooltip and spoken label. The existing
