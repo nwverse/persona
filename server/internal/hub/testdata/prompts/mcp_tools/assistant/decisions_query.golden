@@ -1,6 +1,6 @@
 {
   "name": "decisions_query",
-  "description": "Decisions; scope:{executor,machine[],project[],personal}. memory[]: remembered entries this conversation may use (first page; none with by, trust or a status other than active).",
+  "description": "Decisions; scope:{executor,machine[],project[],personal} filters the ledger only. memory[]: remembered entries this conversation may use (first page). For memory, tag matches every whitespace-separated term in text, subjects, facet or categories (case-insensitive substrings); ledger tag matching is unchanged. With by, trust or a status other than active, memory is omitted with memory_omitted=ledger_filters; retry with tag alone for extension memory.",
   "input_schema": {
     "type": "object",
     "properties": {

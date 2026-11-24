@@ -109,13 +109,16 @@ func TestMemoryExtensionBatchOfFields(t *testing.T) {
 	for i := range memoryEntrySubjectsMost + 2 {
 		subjects = append(subjects, fmt.Sprintf("qa-subject-%d", i))
 	}
-	w := wire.MemoryEntry{ID: "qa-fields", Text: "qa: fields", Status: "active", Categories: []string{"qa-not-a-category"},
+	w := wire.MemoryEntry{ID: "qa-fields", Text: "qa: fields", Status: "active", Categories: []string{"qa-not-a-category"}, Facet: "workflow",
 		Subjects: subjects}
 	b := memoryExtensionBatchOf([]wire.MemoryEntriesResult{{Tagged: true, Entries: []wire.MemoryEntry{w}}})
 	if len(b.Entries) != 1 {
 		t.Fatalf("entries %v", memoryWireIDs(b))
 	}
 	e := b.Entries[0]
+	if e.Facet != "workflow" {
+		t.Errorf("facet = %q, want workflow", e.Facet)
+	}
 	if !slices.Equal(e.Categories, []string{"qa-not-a-category"}) {
 		t.Errorf("categories %v, want them as written", e.Categories)
 	}

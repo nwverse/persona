@@ -6890,8 +6890,8 @@ type MemoryEntry struct {
 	ID string `json:"id"`
 	// What the entry says, as the program would render it, on one or a few lines.
 	Text string `json:"text"`
-	// The program's own grouping (preferences, workflow, people…). Informational: the hub neither filters nor orders by
-	// it.
+	// The program's own grouping (preferences, workflow, people…). Used for explicit recall tag matching; it does not
+	// change priority or visibility.
 	Facet string `json:"facet,omitempty"`
 	// active: the program would use it today, whatever it calls that state itself (a program with its own stable or
 	// shifting states answers active for both); candidate: not borne out yet; dormant: not seen lately; retired: no

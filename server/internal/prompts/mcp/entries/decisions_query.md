@@ -1,4 +1,4 @@
-Decisions; scope:{executor,machine[],project[],personal}. memory[]: remembered entries this conversation may use (first page; none with by, trust or a status other than active).{{template "shared/mcp_language" .}}
+Decisions; scope:{executor,machine[],project[],personal} filters the ledger only. memory[]: remembered entries this conversation may use (first page). For memory, tag matches every whitespace-separated term in text, subjects, facet or categories (case-insensitive substrings); ledger tag matching is unchanged. With by, trust or a status other than active, memory is omitted with memory_omitted=ledger_filters; retry with tag alone for extension memory.{{template "shared/mcp_language" .}}
 
 ```json
 {"type":"object","properties":{"after":{"type":"string"},"limit":{"type":"integer"},"by":{"type":"string"},"trust":{"type":"string"},"status":{"type":"string"},"tag":{"type":"string"},"scope":{"type":"object"}},"additionalProperties":false}
