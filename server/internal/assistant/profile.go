@@ -217,6 +217,12 @@ type Settings struct {
 	// branches). nil is off (the default): each round starts from its first turn with only that round's facts and tools
 	// (supervise_round.go).
 	BackgroundSupervisorKeepsContext *bool `json:"background_supervisor_keeps_context,omitempty"`
+	// ChatReplyRelay: after a conversation wrote into a Lark chat as the user, other people's new messages there are
+	// told to it (chat_reply.go). nil is off (the default); on while true, and turning it off drops those still queued.
+	ChatReplyRelay *bool `json:"chat_reply_relay,omitempty"`
+	// ChatReplyHinted: the one-time hint that the feature exists was given to a conversation (chat_reply.go). The
+	// assistant writes it itself; PUT /api/v1/assistant does not.
+	ChatReplyHinted bool `json:"chat_reply_hinted,omitempty"`
 	// BackgroundSupervisor is the background supervisor's conversation, on BackgroundSupervisorMachineID, started at
 	// BackgroundSupervisorAt: made on first use, "" until then. BackgroundSupervisorAnnounced: the main conversation
 	// was told once that it follows up its tasks. The assistant writes these itself; PUT /api/v1/assistant does not.
@@ -718,7 +724,6 @@ func (s *Service) leadSessions(ctx context.Context, v Settings) []SessionRef {
 func (s *Service) settingsChanged(ctx context.Context) {
 	s.transcriptionSettingsChanged(ctx) // only another contribution chosen drops the readiness answer
 	s.ProfileChanged(ctx)
-	s.retryOwnerWaits(ctx) // a restored main/conversation can deliver an explicitly pending owner push
 	s.revalidateFailedStartDeferrals(ctx)
 	s.publish(ctx)
 }

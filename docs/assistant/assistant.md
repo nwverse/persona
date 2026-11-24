@@ -1570,7 +1570,8 @@ explicit user-facing actions still follow the usual visibility rules.
 
 - **Which rounds**: in the main conversation, a round whose first input has the message source (`Item.source.kind`, else
   the `persona-context kind="message-source"` metadata or the hub's `injected` mark, read by each client's `sourceOf`)
-  `conversation`, `followup` or `patrol`. A `followup` counts only as a scheduled follow-up (the hub gives those the
+  `conversation`, `followup` or `patrol`. Web also folds `notice` rounds such as delivery PR follow-ups under the same
+  setting. A `followup` counts only as a scheduled follow-up (the hub gives those the
   task's title): Persona continuing the user's own work after a usage limit reset (`injected.state: limit_continue`),
   waking the chat for what it waits on (`wake`) or an untitled follow-up is not a background round, so the answer to
   the user's question never folds away. Like a supervision round it lasts until the next genuine input; a queued user
@@ -1588,11 +1589,17 @@ explicit user-facing actions still follow the usual visibility rules.
   receipt, using the same paged history and full-record renderer. Opening it marks nothing seen. Full transcript and
   feed APIs are unchanged. The hub suppresses unread only for the matching latest silent round: earlier genuinely
   visible unread work remains unread, working and needs-you states win, and a failed transcript read fails open.
+  An accepted review is internal only when the hub resolves the task's current plan with `user_requested=false` and
+  finds at least one source: a current-round completed (`clean` or `blocking`) `auto_review`, `round>0` after rework,
+  or a nonempty `parent` for a leader's internal subtask. Its successful `task_review` receipt carries
+  `background=true`; the receipt, tool call and reply stay in Background activity. `user_check`, `needs_user`, an
+  unmarked legacy review, or missing/ambiguous source metadata stays visible. The attention-cache version changes
+  with this classification so an older visible verdict is recomputed.
   Existing daily-briefing totals keep their meaning; a separate exact silently-handled daily total is out of scope
   because round metrics do not record visibility.
 - **Not folded** (the visibility rule supervision rounds use, `supervisionVisible` / `fold.supervision_user` from
   `server/internal/transcript/fold_supervision.go`): a round that used `ask_user` or `notify_user` successfully, a pending
-  `ask_user` while it runs, a `task_review` with an `accepted` or `needs_user` verdict card, or a `supervision_finish`
+  `ask_user` while it runs, a `task_review` with an unmarked `accepted` or any `needs_user` verdict card, or a `supervision_finish`
   with user visibility. A completed round with a nonblank final reply also stays open, even if delivery tools were
   unavailable, unless it settled with silent visibility. The full reply uses the ordinary reply bubble so its
   formatting and links remain available. Its work keeps the usual collapsed summary. Intermediate narration,
@@ -1710,7 +1717,7 @@ answer reached Persona through the Inbox alone, and none of the Inbox's routes l
   told is remembered in memory: after a manager restart, a batch not yet in an event may be told once more; one still
   queued is not, since the queued message keeps its message ids (`chat` in `assistant.relay`).
 - **Unchanged.** The Inbox's own handling of the batch (triage, the AI twin, `inbox_signals`), the connector's
-  hand-over timing, the gate and its cards. There is no setting: the window and the spacing are fixed.
+  hand-over timing, the gate and its cards. The window and the spacing are fixed. One setting, `assistant.chat_reply_relay` (`persona_settings`, owner's phone approval; **off by default**), turns the whole thing on, for every chat, not chat by chat. While it is off nothing is queued or told; turning it off drops the chat_replies still queued (one going in right then is dropped by the drain). To make the feature findable, the first conversation that wrote into a chat as the user and has others' replies there gets one hint, once ever (`chat_reply_hinted`, no one's words, no push of its own): it tells the owner in one sentence that replies are not passed on and that they can ask to turn it on.
 - **Not covered.** Task Agents that write as the user (#9763 wakes a task's Agent on follow-ups in a topic bound to the
   task; they are left out here so that one answer does not wake the same Agent twice), a single topic within a chat,
   replies to one message, and the lark-cli source, whose ledger rows name a different chat id.
@@ -1776,18 +1783,24 @@ operation then read as accepted and the bubble waited for the transcript and wen
 - **Device signed out** (#10708). The hub gives the manager the sending device's credential ID when it keeps a
   message. Signing out that device fails its kept messages. Their rows say why and offer Delete. Messages kept
   before the hub recorded the sending credential have no device to match.
-- **Messages that need no reply** (#11614, `server/internal/assistant/relay_later.go`). `conversation_send` with
+- **Messages that need no reply** (#11614, #12867, `server/internal/assistant/relay_later.go`). `conversation_send` with
   `wake: false` is for acknowledgements and information the receiver does not have to act on. The message is kept
   for the receiver (`relayState.Later`, kept across a restart, at most 20 per conversation and 7 days) and goes in,
-  as a context block in front (`prompts/assistant/relay_later.md`), with the next message the manager delivers to
-  that conversation for anything else: a supervision message, another conversation's message, a scheduled follow-up,
-  a notice. It starts no turn of its own, costs no hop and no place in the relay rate, and is dropped only once the
-  message carrying it went in. Before a send with a `once_id`, its quiet-message context (including an empty one) is
-  saved and reused on retries, including after restart. A retry clears only that original context; later arrivals wait
-  for a new send ID. These reservations expire after seven days, beyond the node's ten-minute send-ID memory.
-  Nothing is guessed from the words: only the explicit argument decides. A `quote` (the
-  owner's request) always wakes, so the two together are refused. A turn the owner starts from an app does not carry
-  it; it shows above the composer meanwhile.
+  as a context block in front (`prompts/assistant/relay_later.md`), with the next message delivered to that
+  conversation for anything else: a supervision message, another conversation's message, a scheduled follow-up,
+  a notice, or an owner message sent from an app or web client (`assistant.send_params` and `session.assistant_sent`,
+  or kept undelivered retries). It starts no turn of its own, costs no hop and no place in the relay rate, and is
+  dropped (publishing the refreshed queue state immediately) only once the message carrying it went in. Before a manager
+  send with a `once_id`, its quiet-message context (including an empty one) is saved in `relayState.LaterSends` for
+  seven days and reused on retries, including after restart. For an owner send (`client_msg_id`), a reservation is saved
+  only when quiet messages are actually waiting to be carried (empty queues do zero relay writes), is deleted in the
+  same save once delivery is confirmed (or when a kept undelivered message is deleted), and expires after 24 hours
+  (`ownerLaterKeep`, matching `undeliveredGiveUp`) if never settled; an owner Retry of an earlier in-doubt kept send
+  only reuses an existing reservation without picking up later arrivals. If the relay state cannot be read on an owner
+  send, the send degrades and delivers the owner's own message without quiet context (leaving `Later` untouched), while
+  saving a carry reservation for waiting quiet messages stays fail-closed. Nothing is guessed from
+  the words: only the explicit argument decides. A `quote` (the owner's request) always wakes, so the two together are
+  refused. While kept, the message shows above the composer (`queuedRelays`) and disappears once consumed.
 - **Between conversations.** `conversation_send` to a conversation that cannot take the message now no longer fails:
   the message goes into its relay queue and is tried again under the same `once_id`. A conversation that failed to
   take a relayed message is tried again after `relayRetryGap` (30 s), not on every session list.
@@ -2312,10 +2325,16 @@ Assistant MCP tools (`assistant/conversations.go`, descriptions `prompts/mcp/ass
   - **Queue while running**: if target is running, already queued, or the owner is talking in it, persist in hub settings `assistant.relay` (survives restart), displayed above the input like typed queues
     (session `queued`). After its turn ends (no longer working) and the owner's hold is over, hub sends one at a time, by rank ("Messages from the system wait for the owner"). Don't write into running processes: Codex merges through `turn/steer`, not queueing.
     They come after the user's own queued messages, and `queued_relayed` counts them: the apps only show and copy them.
-  - **A queued send in doubt (#10690).** The manager saves the attempt time before sending. If the answer is lost or
+  - **A queued send in doubt (#10690) and direct supervision confirmation (#12567).** The manager saves the attempt time before sending. If the answer is lost or
     the manager stops, it checks the most recent three turns for the relay before sending again. It makes up to
     three checks, each with a 15-second timeout, and waits 10 seconds between checks. A match removes the relay
     from the queue. If the last check fails or still finds no match, the manager retries with the same `once_id`.
+    Direct and queued supervision sends apply the same transcript-confirmation boundary even when `assistant.send`
+    returns success: if the rendered supervision user item is not visible or the transcript cannot be read, the
+    relay (including tried PR, decision-reply, and unhandled-inbox digests) is persisted with its exact rendered
+    payload and attempt state under the same `once_id` for bounded reconciliation and retry. Untried special digests
+    continue to restore for revalidation, and an unresolved supervision relay (tried, durable-doubt, or withdrawn)
+    keeps decision-reply interjections pending until that relay is reconciled.
     An uncertain supervision digest stays queued if rechecking its tasks would change the text or destination.
     The node keeps that id for ten minutes or until it restarts. When there is no owner to ask, a possible duplicate
     is preferable to silently losing the relay.
@@ -2594,7 +2613,7 @@ including `command codex …`), retaining environment, `-c model_provider=…`, 
 thread id is session id (assigned by Codex, known only after new-chat `thread/start`), rollout is history (`docs/integrations/codex.md`), App displays normally.
 Handshake: `initialize` (experimentalApi) → `skills/extraRoots/set` → `thread/start` / `thread/resume`.
 Assistant conversations with no selected permission mode now default to Allow Everything. An explicitly selected mode continues to use the native mapping below, including managed restrictions. An explicit mode, including Default, still uses the mapping below; transcript policy readback is not treated as a selection. Inherited workspace policies keep their own network and writable-root settings, so memory access outside those roots may require approval. Existing persisted choices remain explicit.
-Snapshots accompany each message as Claude does (first `turn/start` / `turn/steer` input); `developerInstructions` holds only memory.
+Snapshots accompany each message as Claude does (first `turn/start` / `turn/steer` input); `developerInstructions` holds memory, any split instruction remainder and the authorized supervision policy.
 
 | Capability | Claude (`claude -p`) | Codex (`codex app-server`) |
 | --- | --- | --- |
@@ -2610,11 +2629,13 @@ Snapshots accompany each message as Claude does (first `turn/start` / `turn/stee
 | Permission mode | `--permission-mode` / control requests | Each `turn/start` uses `codexPolicy`: Default / Accept edits = `untrusted` + workspace-write with network; Auto = `on-request` + workspace-write without network, escalation for sandbox escape / network passes gate; Plan = `untrusted` + read-only; Allow Everything = `never` + danger-full-access. The same mapping applies to `thread/start` and `thread/resume`. Switches apply at the next `turn/start`; an active turn keeps its existing policy. Persisted per-session choices win over older rollout settings, including historical `untrusted` + danger-full-access turns. No machine defaults or other session settings are rewritten. Managed policy restrictions can still reject native settings and are returned as errors |
 | Effort | `--effort` / control | `turn/start` `effort`, low…max unchanged, gateway support depends on model |
 | Images | base64 image blocks | Files in `~/.persona/uploads/<date>/`, `localImage`; rollout path becomes App thumbnail |
-| Instructions | Shared `CLAUDE.md`; authorized supervision policy via `--append-system-prompt` | Shared `AGENTS.md` (identical to `CLAUDE.md`); authorized supervision policy via `developerInstructions`; also user `~/.codex/AGENTS.md` |
+| Instructions | Bounded shared `CLAUDE.md` plus the complete remainder in `.claude/rules/`; authorized supervision policy via `--append-system-prompt` | Bounded shared `AGENTS.md` (identical to `CLAUDE.md`), with the complete remainder supplied through `developerInstructions`; authorized supervision policy uses the same channel; also user `~/.codex/AGENTS.md` |
 | Extension skills | `.claude/skills/<name>` | Same directory as extra skill root (same format, visible in `skills/list`); gated commands on PATH, credentials in node proxy (previous environment tokens required `shell_environment_policy.ignore_default_excludes=true`, or Codex stripped `*TOKEN*` from command environments) |
 | Memory | Assistant-specific Claude auto memory | **Same files** (chosen 2026-11-01): `developerInstructions` gives directory, one-file-per-entry + `MEMORY.md` format, current index (`codexMemoryPrompt`); directory added to sandbox `writableRoots`. apply_patch and memory-only reads (cat / head / rg…, `readsOnlyMemory`) don't ask, but Plan writes do. Disable Codex's machine-wide rollout-derived `~/.codex/memories` for assistant (`features.memories=false`) |
 | Background / Monitor | `background_tasks_changed`, claude wakes on completion | Read `thread/backgroundTerminals/list` after every turn, record tasks and retain process, report lost tasks after restart; **completion doesn't wake chat**, no Monitor |
 | Prewarmed spare | Yes | Yes, pre-start thread reused (measured 50 ms return) |
+
+**Bounded instruction files (#14425).** The manager's rendered text remains the complete, unchanged source, including the user's About me bytes. At 19 KiB or below the node writes the historical one-file form. Above it, the identical `AGENTS.md` / `CLAUDE.md` entry holds the first lossless UTF-8 chunk and every later chunk is written twice: as a flat `.agents/rules/persona-assistant-NNNNNN.md` file with `trigger: always_on` for Antigravity, and as an unconditional `.claude/rules/` file for Claude Code. Every generated file stays below 20,000 bytes, leaving headroom under Antigravity's documented 24,000-byte per-file truncation boundary. Concatenating the entry and chunks in numeric order reproduces the manager's bytes exactly; generated envelopes add no replacement or summary. Codex receives the exact remainder through `developerInstructions` on both `thread/start` and `thread/resume`. Other generic runtimes receive it as context on every non-command message because their native rule-directory behavior is not part of the runtime contract. The instruction digest includes the remainder so a later-section change restarts Claude just like an entry change. Cleanup removes only numbered files carrying Persona's generated marker; a same-named user file is preserved and blocks replacement rather than being overwritten. Older nodes still receive the complete `claude_md` field and retain their previous behavior.
 
 User-visible differences:
 
@@ -2815,6 +2836,24 @@ repeated. Retired callers lose manager tool authority immediately. Physical appr
 activation; the node's retirement latch prevents recovery and idle-compaction work on that segment. Closure is retried
 when offline nodes reconnect. Deleting a conversation cascades through segment history and queue content, retaining
 only deletion markers and minimal offline closure identities.
+
+`conversations_switch` and `POST /api/v1/assistant/conversation-switches` coordinate an explicit set of these logical
+switches without adding another engine protocol. The settings-backed batch stores each conversation's before-image,
+target, expected epoch and operation ID before starting anything. Busy items wait for their current turn and pending
+work; no interrupt or synthetic message completes a batch. When an activated batch item has no durable input pending,
+the coordinator accepts the completed switch immediately. If real input is pending, the first-turn acceptance/refusal
+rules above remain unchanged. A late preparation failure cannot return an activated operation to `in_doubt`;
+reconciliation continues from the activated state. The existing history loop and session-list changes wake queued items
+after a restart.
+
+The batch response distinguishes queued, switching, switched and refused items; one refusal does not cancel independent
+items. `restore_batch_id` creates a new, itself-restorable batch toward the original per-conversation settings rather
+than a global default. It only includes completed items whose current epoch and execution still match that batch's
+target. A conversation changed independently is reported and left alone. Empty requested model/effort retain launcher-
+default behavior, while a saved empty permission mode restores explicit `default` instead of inheriting the fallback.
+Preview creates neither state nor a phone confirmation; MCP execution uses one existing whole-batch outbound
+confirmation and the caller's space-scoped conversation lookup. Full-role HTTP routes and batch status are documented in
+[../protocol/protocol.md](../protocol/protocol.md).
 
 `GET/PUT /api/v1/assistant/segments` controls **new switches**, enabled by default. Disabling it keeps segment routing,
 reads and recovery running. A manager binary from before segment routing is **not a safe downgrade after a switch**:

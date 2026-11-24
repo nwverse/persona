@@ -6,10 +6,11 @@ import (
 	"slices"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botport"
+
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
-	"github.com/nwverse/persona/server/internal/feishubot"
 )
 
 // Reading a group with /read (#11803, docs/extensions/bots.md "Reading a group with /read"): alert and problem groups are
@@ -43,7 +44,7 @@ func (s BotAISource) repliesMax() int {
 // the bot (told by its own open id) and whose words, the bot's leading @ taken off, start with /read (or /读群) as a
 // word. It is kept as a source, audited (never the words) and handed over. false leaves the message to the usual
 // rules, which is all that happens with the switch off: /read is then a word like any other.
-func (h *Manager) botReadGroup(api *feishubot.Client, set FeishuBotSettings, ev botcard.MessageEvent, raw json.RawMessage, since time.Time, pass func()) bool {
+func (h *Manager) botReadGroup(api botport.Client, set FeishuBotSettings, ev botcard.MessageEvent, raw json.RawMessage, since time.Time, pass func()) bool {
 	msg := ev.Message
 	if !set.Features.ReadGroup || msg.MessageType != "text" && msg.MessageType != "post" || msg.MessageID == "" || msg.ChatID == "" {
 		return false

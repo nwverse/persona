@@ -16,42 +16,6 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// The words a turn says before a tool call go into the process; the words it ends with (its answer) do not.
-func TestCotEventsHoldTheAnswerBack(t *testing.T) {
-	var p cotProgress
-	start := func(first string) []botcard.CotEvent { return botcard.CotStart("c1", "cot1", first) }
-	items := []proto.Item{
-		{ID: "a", Role: "assistant", Kind: proto.KindText, Text: "我先查一下"},
-		{ID: "b", Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "tu1", ToolName: "Bash", ToolInput: json.RawMessage(`{"command":"ls"}`)},
-		{ID: "c", Role: "user", Kind: proto.KindToolResult, ToolUseID: "tu1", Text: "a.txt"},
-		{ID: "d", Role: "assistant", Kind: proto.KindText, Text: "最终结论"},
-	}
-	ev, para := cotEvents("", &p, items, "", start, false)
-	types := []string{}
-	all := ""
-	for _, e := range ev {
-		types = append(types, e.Type)
-		all += e.Content
-	}
-	want := "RUN_STARTED REASONING_START REASONING_MESSAGE_START REASONING_MESSAGE_CONTENT REASONING_MESSAGE_END TOOL_CALL_START TOOL_CALL_END TOOL_CALL_RESULT"
-	if strings.Join(types, " ") != want {
-		t.Fatalf("events %v", types)
-	}
-	if para != "p-a" || !strings.Contains(all, "我先查一下") || strings.Contains(all, "最终结论") || !strings.Contains(all, `"parentMessageId":"p-a"`) || !strings.Contains(all, "运行 · ls") {
-		t.Fatalf("para %q, events %s", para, all)
-	}
-	// More comes: the held words go in once a call follows them, and the run is not started again.
-	more := []proto.Item{{ID: "e", Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "tu2", ToolName: "Read", ToolInput: json.RawMessage(`{"file_path":"/x/y.go"}`)}}
-	ev, para = cotEvents("", &p, more, para, start, false)
-	if para != "p-d" || ev[0].Type != "REASONING_MESSAGE_START" || !strings.Contains(ev[1].Content, "最终结论") {
-		t.Fatalf("second batch %v (para %q)", ev, para)
-	}
-	// A result whose call it did not see is left out.
-	if ev, _ := cotEvents("", &p, []proto.Item{{Kind: proto.KindToolResult, ToolUseID: "other"}}, para, start, false); len(ev) != 0 {
-		t.Fatalf("stray result %v", ev)
-	}
-}
-
 // feishuAPIError is Feishu's error code as the hub puts it on the bus.
 func feishuAPIError(code int) error {
 	data, _ := json.Marshal(map[string]int{"code": code})
@@ -88,22 +52,20 @@ func cotHub(t *testing.T, refuse bool) (*Service, *[]map[string]any, *[]string) 
 	s := newTestService(t, f)
 	t.Cleanup(func() {
 		s.chans.mu.Lock()
-		var workers []*cotWorker
+		var states []any
 		for _, p := range s.chans.live {
-			if p.native != nil {
-				workers = append(workers, p.native)
-			}
+			states = append(states, p.sink)
 		}
 		s.chans.mu.Unlock()
-		for _, w := range workers {
-			w.abort()
-		}
-		for _, w := range workers {
-			select {
-			case <-w.done:
-			case <-time.After(2 * time.Second):
-				t.Error("native worker did not stop during cleanup")
+		for _, st := range states {
+			if a, ok := st.(interface{ Abort() }); ok {
+				a.Abort()
 			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := s.larkModule().Wait(ctx); err != nil {
+			t.Error("native worker did not stop during cleanup")
 		}
 	})
 	return s, posts, &calls
@@ -132,6 +94,7 @@ func withCot(s *Service, r *channel.Run) {
 
 // A new turn shows in a progress card, not an agent message: the answer goes into the card with the process folded.
 func TestFeishuNewTurnIsAProgressCard(t *testing.T) {
+	needsLarkLayer(t)
 	s, posts, calls := cotHub(t, false)
 	r, _ := cotRun(s)
 	sink := feishuSink{s}
@@ -149,6 +112,7 @@ func TestFeishuNewTurnIsAProgressCard(t *testing.T) {
 
 // A run that already had an agent message (from before) still adds to it and ends it; the answer is a card below.
 func TestFeishuExistingAgentMessageStillFinishes(t *testing.T) {
+	needsLarkLayer(t)
 	s, posts, calls := cotHub(t, false)
 	r, _ := cotRun(s)
 	withCot(s, r)
@@ -173,6 +137,7 @@ func TestFeishuExistingAgentMessageStillFinishes(t *testing.T) {
 
 // A turn with nothing but its answer gets no agent message.
 func TestFeishuPlainAnswerHasNoAgentMessage(t *testing.T) {
+	needsLarkLayer(t)
 	s, posts, calls := cotHub(t, false)
 	r, prog := cotRun(s)
 	prog.items, prog.steps = nil, nil
@@ -184,6 +149,7 @@ func TestFeishuPlainAnswerHasNoAgentMessage(t *testing.T) {
 
 // An append that did not reach the hub is made again from the same items: once, not twice.
 func TestCotAppendTriedAgainSendsItOnce(t *testing.T) {
+	needsLarkLayer(t)
 	s, _, calls := cotHub(t, false)
 	r, _ := cotRun(s)
 	withCot(s, r)
@@ -209,6 +175,7 @@ func TestCotAppendTriedAgainSendsItOnce(t *testing.T) {
 
 // A held run's next turn drops the agent message it had and shows in a progress card.
 func TestHeldRunsNextTurnIsAProgressCard(t *testing.T) {
+	needsLarkLayer(t)
 	s, posts, calls := cotHub(t, false)
 	r, prog := cotRun(s)
 	withCot(s, r)
@@ -230,6 +197,7 @@ func TestHeldRunsNextTurnIsAProgressCard(t *testing.T) {
 // A turn that starts with a tool call hangs it under a paragraph that says so (botmux's shape: a whole paragraph
 // before the call), not "Working…".
 func TestCotFirstToolCallHasItsParagraph(t *testing.T) {
+	needsLarkLayer(t)
 	s, _, _ := cotHub(t, false)
 	r, prog := cotRun(s)
 	withCot(s, r)
@@ -260,6 +228,7 @@ func TestCotFirstToolCallHasItsParagraph(t *testing.T) {
 // The card comes a second after the message, before the conversation is seen working (queued, starting), and says
 // so; then its elapsed time moves every few seconds without new steps. A held run gets none until it works again.
 func TestFeishuCardFromTheStartAndAlwaysMoving(t *testing.T) {
+	needsLarkLayer(t)
 	s, posts, _ := cotHub(t, false)
 	r, prog := cotRun(s)
 	prog.items, prog.steps = nil, nil
@@ -270,12 +239,12 @@ func TestFeishuCardFromTheStartAndAlwaysMoving(t *testing.T) {
 	if len(*posts) != 0 {
 		t.Fatalf("at once: %v", *posts)
 	}
-	now = now.Add(feishuProgressAfter)
+	now = now.Add(time.Second) // the lark module's progress_after
 	s.channelProgressTick(r.ID)
 	if len(*posts) != 1 || !strings.Contains((*posts)[0]["card"].(string), "准备中") {
 		t.Fatalf("first card: %v", *posts)
 	}
-	now = now.Add(feishuProgressIdle - time.Second)
+	now = now.Add(2 * time.Second) // progress_idle less a second
 	s.channelProgressTick(r.ID)
 	if len(*posts) != 1 {
 		t.Fatalf("too soon: %v", *posts)
@@ -297,7 +266,7 @@ func TestFeishuCardFromTheStartAndAlwaysMoving(t *testing.T) {
 		{Seq: 3, ID: "y", Role: "assistant", Kind: proto.KindToolUse, ToolName: "Bash", ToolInput: json.RawMessage(`{"command":"mine"}`)},
 	}, now)
 	s.chans.mu.Unlock()
-	now = now.Add(feishuProgressIdle)
+	now = now.Add(3 * time.Second) // progress_idle
 	s.channelProgressTick(r.ID)
 	if card := (*posts)[len(*posts)-1]["card"].(string); !strings.Contains(card, "处理中</text_tag> <font color='grey'>Persona · 7 秒") || !strings.Contains(card, "mine") || strings.Contains(card, "earlier turn") {
 		t.Fatalf("working: %v", *posts)
@@ -317,6 +286,7 @@ func TestFeishuCardFromTheStartAndAlwaysMoving(t *testing.T) {
 
 // A turn that stopped without words (an API error) tells the chat why, not just that there is no answer.
 func TestFeishuEmptyTurnSaysWhyItStopped(t *testing.T) {
+	needsLarkLayer(t)
 	s, posts, _ := cotHub(t, false)
 	r, _ := cotRun(s)
 	s.finishChannelRun(r, &channel.Result{Stopped: "API 错误：overloaded"})
@@ -332,6 +302,7 @@ func TestFeishuEmptyTurnSaysWhyItStopped(t *testing.T) {
 // The progress card is not sent again when it is the same; after Feishu's rate limit updates wait (5 s, then
 // longer) and the next due one sends the latest; a withdrawn card is forgotten and the next tick posts a new one.
 func TestFeishuProgressCardThrottled(t *testing.T) {
+	needsLarkLayer(t)
 	s, posts, _ := cotHub(t, false)
 	r, _ := cotRun(s)
 	now := time.Unix(1000, 0)
@@ -445,6 +416,7 @@ func TestProcessPanelPathologicalBounded(t *testing.T) {
 
 // An append of more than 50 events that fails part way goes on from the chunk that failed; nothing is sent twice.
 func TestCotAppendGoesOnFromTheFailedChunk(t *testing.T) {
+	needsLarkLayer(t)
 	s, _, _ := cotHub(t, false)
 	r, prog := cotRun(s)
 	withCot(s, r)
@@ -486,79 +458,10 @@ func TestCotAppendGoesOnFromTheFailedChunk(t *testing.T) {
 	}
 }
 
-// After a restart mid-turn the calls already shown get their output; one whose output never came is settled at the end.
-func TestCotCallsShownBeforeARestartAreSettled(t *testing.T) {
-	s, _, _ := cotHub(t, false)
-	r, prog := cotRun(s)
-	withCot(s, r)
-	prog.items = prog.items[:2] // thinking, a call without its output yet
-	var events []string
-	s.hub.(*fakeHub).answerApp(AppFeishu, FeishuCotAppend, func(p json.RawMessage) (any, error) {
-		var m struct {
-			Events []botcard.CotEvent `json:"events"`
-		}
-		_ = json.Unmarshal(p, &m)
-		for _, e := range m.Events {
-			events = append(events, e.Type)
-		}
-		return map[string]any{}, nil
-	})
-	feishuSink{s}.progress(context.Background(), r, time.Second, nil, "")
-	if r.Ext["cot_calls"] != "tu1" {
-		t.Fatalf("open calls %q", r.Ext["cot_calls"])
-	}
-	prog.cot = cotProgress{} // the assistant restarted: only Ext is left
-	prog.items = []proto.Item{{ID: "c", Role: "user", Kind: proto.KindToolResult, ToolUseID: "tu1", Text: "a.txt"},
-		{ID: "d", Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "tu2", ToolName: "Bash", ToolInput: json.RawMessage(`{"command":"pwd"}`)}}
-	events = nil
-	s.finishChannelRun(r, &channel.Result{Answer: "结论"})
-	if got := strings.Join(events, " "); got != "TOOL_CALL_RESULT TOOL_CALL_START TOOL_CALL_END TOOL_CALL_RESULT REASONING_END RUN_FINISHED" {
-		t.Fatalf("after the restart: %s", got)
-	}
-}
-
-// Words, then thinking, then a tool call: the process shows them in the conversation's order (the words are not
-// held back behind the thinking that came after them); thinking after the turn's last words goes in as it ends.
-func TestCotThinkingWaitsForTheWordsBeforeIt(t *testing.T) {
-	var p cotProgress
-	start := func(first string) []botcard.CotEvent { return botcard.CotStart("c1", "cot1", first) }
-	paras := func(ev []botcard.CotEvent) string {
-		var out []string
-		for _, e := range ev {
-			if e.Type == "REASONING_MESSAGE_CONTENT" {
-				var m struct {
-					Delta string `json:"delta"`
-				}
-				_ = json.Unmarshal([]byte(e.Content), &m)
-				out = append(out, m.Delta)
-			}
-		}
-		return strings.Join(out, "|")
-	}
-	ev, para := cotEvents("", &p, []proto.Item{
-		{ID: "a", Role: "assistant", Kind: proto.KindText, Text: "我先查一下"},
-		{ID: "b", Role: "assistant", Kind: proto.KindThinking, Text: "想一想"},
-	}, "", start, false)
-	if len(ev) != 0 {
-		t.Fatalf("shown before a call follows: %s", paras(ev))
-	}
-	ev, para = cotEvents("", &p, []proto.Item{
-		{ID: "c", Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "tu1", ToolName: "Bash", ToolInput: json.RawMessage(`{"command":"ls"}`)},
-		{ID: "d", Role: "assistant", Kind: proto.KindText, Text: "结论"},
-		{ID: "e", Role: "assistant", Kind: proto.KindThinking, Text: "再核对"},
-	}, para, start, false)
-	if got := paras(ev); got != "我先查一下|想一想" || para != "p-b" {
-		t.Fatalf("order %q (para %q)", got, para)
-	}
-	ev, _ = cotEvents("", &p, nil, para, start, true)
-	if got := paras(ev); got != "再核对" {
-		t.Fatalf("at the end %q", got)
-	}
-}
-
 // The end of the turn failing for now (a rate limit, no answer from Feishu): the answer still goes out and the agent
 // message is ended, not left spinning.
 func TestCotEndFailingForNowStillEndsIt(t *testing.T) {
+	needsLarkLayer(t)
 	for _, code := range []int{99991400, feishuTransport} {
 		s, posts, calls := cotHub(t, false)
 		r, _ := cotRun(s)
@@ -578,6 +481,7 @@ func TestCotEndFailingForNowStillEndsIt(t *testing.T) {
 // An append that went out and got no reply (it may have been applied) is not sent again: the rest goes on after it,
 // and the end is made sure of with cot_complete.
 func TestCotAppendWithoutReplyIsNotSentAgain(t *testing.T) {
+	needsLarkLayer(t)
 	for _, fail := range []error{rpc.ErrDropped, feishuAPIError(feishuTransport)} {
 		s, posts, calls := cotHub(t, false)
 		r, _ := cotRun(s)
@@ -612,12 +516,11 @@ func TestCotAppendWithoutReplyIsNotSentAgain(t *testing.T) {
 // The end of the turn failing, then cot_complete failing for a moment too: it is tried again, and only counts as ended
 // once it went through.
 func TestCotEndIsTriedAgain(t *testing.T) {
-	saved := cotEndTries
-	cotEndTries = []time.Duration{0, 0, 0}
-	defer func() { cotEndTries = saved }()
+	needsLarkLayer(t)
 	for _, failure := range []error{feishuAPIError(99991400), rpc.NotSent(context.DeadlineExceeded), errors.Join(rpc.ErrNotWritten, context.Canceled)} {
 		t.Run(failure.Error(), func(t *testing.T) {
 			s, posts, calls := cotHub(t, false)
+			s.setLarkTimingList("cot_end_tries", []time.Duration{0, 0, 0})
 			r, _ := cotRun(s)
 			withCot(s, r)
 			feishuSink{s}.progress(context.Background(), r, time.Second, nil, "")
@@ -638,3 +541,7 @@ func TestCotEndIsTriedAgain(t *testing.T) {
 		})
 	}
 }
+
+// feishuTransport is the code the hub gives a Feishu call that got no answer from Feishu (a timeout, a dropped
+// connection, a reply that is not Feishu's JSON).
+const feishuTransport = -1

@@ -32,6 +32,8 @@ const TeamPanel = lazy(() => import("./chat/TeamPanel").then((m) => ({ default: 
 const SidesPanel = lazy(() => import("./chat/TeamPanel").then((m) => ({ default: m.SidesPanel })));
 // an Agent's Background tasks (#5421): opened by hand, outside the first screen
 const BackgroundPanel = lazy(() => import("./chat/BackgroundPanel").then((m) => ({ default: m.BackgroundPanel })));
+// a subagent's full conversation (#14323): shares SessionOverview's lazy chunk so overview -> detail needs no extra load
+const SubagentPanel = lazy(() => import("./chat/SessionOverview").then((m) => ({ default: m.SubagentPanel })));
 
 const WIDTH_KEY = "persona.panelWidth";
 const DEFAULT_WIDTH = 600;
@@ -166,6 +168,7 @@ export function SidePanel() {
 
 function panelLabel(p: Panel) {
   if (p.kind === "conversation-tasks") return t("sidepanel.conversation_tasks");
+  if (p.kind === "subagent") return t("sidepanel.subagent");
   return p.kind === "files" ? t("sidepanel.files") : p.kind === "git" ? "Git" : p.kind === "review" ? t("sidepanel.review") : p.kind === "changes" ? t("sidepanel.changes") : p.kind === "file" ? t("sidepanel.files") : p.kind === "preview" ? t("sidepanel.preview") : p.kind === "team" ? t("sidepanel.team") : p.kind === "sides" ? t("sidepanel.sides") : p.kind === "background" ? t("sidepanel.background") : p.kind === "task" ? t("sidepanel.task") : p.kind === "agent" ? t("sidepanel.agent") : t("sidepanel.link");
 }
 
@@ -198,6 +201,8 @@ function body(p: Panel) {
     case "background":
       // keyed by the session, not the run: asking for another run (a new object) goes to its detail without a remount
       return <BackgroundPanel key={`${p.mid}/${p.sid}`} mid={p.mid} sid={p.sid} opened={p} onClose={closePanel} />;
+    case "subagent":
+      return <SubagentPanel key={`${p.mid}/${p.sid}`} mid={p.mid} sid={p.sid} parentMid={p.parentMid} parentSid={p.parentSid} call={p.call} from={p.from} onClose={closePanel} />;
     case "preview":
       return <PreviewPanel key={`${p.mid}/${p.sid}/${p.port ?? ""}${p.path ?? ""}`} mid={p.mid} sid={p.sid} cwd={p.cwd} port={p.port} path={p.path} onClose={closePanel} />;
   }

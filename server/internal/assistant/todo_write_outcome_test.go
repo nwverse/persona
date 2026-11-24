@@ -345,6 +345,7 @@ func TestConversationRouteAnswerInDoubtSaysAnAnswer(t *testing.T) {
 // reached the Agent says so and to look first, never "nothing was changed; you can try again". The decision still
 // waits, so the button works again.
 func TestLarkSaysTheRecommendationMayHaveArrived(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, todo, _, notes := conclusionService(t, false)
 	ctx := context.Background()
 	waitsForReview(t, s, f, todo.ID, "Three ryokan fit the dates.")

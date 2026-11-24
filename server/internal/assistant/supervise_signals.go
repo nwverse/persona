@@ -242,12 +242,10 @@ func (g superviseSignal) immediate() bool { return supervisionBatchImmediate(g) 
 type superviseBook struct {
 	routingMu   sync.RWMutex // moves and card creation exclude routing/delivery; ordinary deliveries may run concurrently
 	mu          sync.Mutex
-	writeMu     sync.Mutex          // one ledger write at a time (updateSupervision)
-	roundEpochs map[string]uint64   // by todo, protected by writeMu; distinguishes a new round from a scope's state reset
-	ownerPushMu sync.Mutex          // ownerPushes only; never held across RPC, todo or database calls
-	ownerPushes map[string]struct{} // todo + work currently being pushed and receipted
-	digestMu    sync.Mutex          // one whole digest, including todo and durable-pending restoration; teardown drains it
-	dedupMu     sync.Mutex          // serializes digest reservations and delivery
+	writeMu     sync.Mutex        // one ledger write at a time (updateSupervision)
+	roundEpochs map[string]uint64 // by todo, protected by writeMu; distinguishes a new round from a scope's state reset
+	digestMu    sync.Mutex        // one whole digest, including todo and durable-pending restoration; teardown drains it
+	dedupMu     sync.Mutex        // serializes digest reservations and delivery
 	dedup       map[string]superviseFingerprint
 	// failedBatchMu serializes the durable leader-failure cooldown document. failedBatches is its memory-only
 	// fallback when this manager has no store; failedBatchesLoaded says whether deferred members were restored.
@@ -1179,12 +1177,15 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time, groups ...super
 	return out
 }
 
-// reviewKey names one review a task waits for: when it began to wait.
+// reviewKey names one review a task waits for: when it began to wait. The time is cut to the microsecond the database
+// keeps: a manager that loaded the task again (a restart) reads UpdatedAt back at that precision, and a key of the
+// nanosecond one would name the same review differently than the pending copy the manager before it left in the
+// outbox, so both would be told.
 func reviewKey(v *Supervision) string {
 	if r := v.externalPRWake(); r != nil {
 		return externalPRReviewPrefix + r.At.UTC().Format(time.RFC3339Nano)
 	}
-	return "review@" + v.UpdatedAt.UTC().Format(time.RFC3339Nano)
+	return "review@" + v.UpdatedAt.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)
 }
 
 // stallAfter is how long without progress counts as stuck for a task that should take expect minutes.
@@ -1230,6 +1231,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.recoverTaskInboxEvents(ctx)
 	// Only the open tasks: everything below passes the finished ones by, and there can be thousands of them.
 	tasks := s.todosWhere(ctx, "*", func(t *Todo) bool { return t.DoneAt == nil })
+	s.recoverOutsideDirectionDigests(ctx)
 	s.pruneAllStoppedDedup(ctx)
 	s.prunePRMergeWakes(ctx)
 	s.sweepTodoAfterReady(ctx)

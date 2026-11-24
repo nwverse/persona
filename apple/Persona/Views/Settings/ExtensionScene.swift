@@ -420,13 +420,19 @@ private struct ExtensionSceneCanvas: View {
                 }
                 .accessibilityElement(children: .contain)
                 .onTabVisibility(appear: { tabVisible = true }, disappear: { tabVisible = false })
+                // Full screen on an upright phone opens steeper (#14335); the card keeps the scene's own pitch.
+                .onChange(of: inCover && size.height > size.width, initial: true) { _, tall in
+                    if inCover { model.setTallView(tall) }
+                }
+                .onDisappear {
+                    if inCover { model.setTallView(false) }
+                }
             }
         }
     }
 
     private var controls: some View {
-        let defaultCamera = ExtensionSceneCameraState.resolved(scene.camera)
-        let atDefault = !model.touched && model.camera == defaultCamera
+        let atDefault = !model.touched && model.camera == model.defaultCamera
         return HStack(spacing: Theme.Space.flush) {
             control("extension-scene-zoom-out", label: String(localized: "Zoom Out"), icon: Theme.Icon.zoomOut,
                     disabled: model.camera.zoom <= Theme.Scene.minZoom) {
@@ -506,15 +512,16 @@ private struct ExtensionSceneCanvas: View {
             let iconPts = hasIcon ? Theme.Size.scenePinIconWidth : 0
             let stateGapPts = hasState ? Theme.Size.scenePinStateGap : 0
             let fullWidth = (Theme.Size.scenePinBaseWidth + iconPts + stateGapPts + min(textPts, Theme.Size.scenePinTextMaxWidth)) * scale
-            let candidate = CGRect(x: item.point.x - fullWidth * 0.5, y: item.point.y - pillHeight * 0.5,
-                                   width: fullWidth, height: pillHeight)
+            let candidate = projection.keptInside(CGRect(x: item.point.x - fullWidth * 0.5, y: item.point.y - pillHeight * 0.5,
+                                                         width: fullWidth, height: pillHeight), anchor: item.point)
             let collides = occupied.contains { $0.intersects(candidate) }
             let chosenRect = collides
-                ? CGRect(x: item.point.x - compactWidth * 0.5, y: item.point.y - pillHeight * 0.5,
-                         width: compactWidth, height: pillHeight)
+                ? projection.keptInside(CGRect(x: item.point.x - compactWidth * 0.5, y: item.point.y - pillHeight * 0.5,
+                                               width: compactWidth, height: pillHeight), anchor: item.point)
                 : candidate
             occupied.append(chosenRect)
-            out[item.pin.id] = PinPlacement(point: item.point, depth: item.depth, collapsed: collides, rect: chosenRect)
+            out[item.pin.id] = PinPlacement(point: CGPoint(x: chosenRect.midX, y: chosenRect.midY), depth: item.depth,
+                                            collapsed: collides, rect: chosenRect)
         }
         return out
     }

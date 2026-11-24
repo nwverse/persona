@@ -36,7 +36,6 @@ import { cardState } from "../../lib/card-focus";
 import { href, onLinkClick, type Route } from "../../lib/router";
 import { t } from "../../i18n";
 import { StatusMark } from "../../ui/StatusMark";
-import { useVoiceAsking } from "../../lib/voice/calls";
 import { InteractionMarks, ModuleCard, useCardRenderer } from "../../core/ChatSlots";
 import { useComposition } from "../../lib/ime";
 import { ErrorNotice } from "../../ui/ErrorNotice";
@@ -107,8 +106,6 @@ type CardKeys = ReturnType<typeof useCardKeys>;
  * so the footer's `sticky` follows the dock's scrolling and the buttons stay at its bottom edge while the card is taller
  * than the dock. `-bottom-1` cancels the dock's `p-1` (`bottom-0` would leave 4px of the body under the buttons).
  */
-/** The card the voice is asking about (docs/web/web.md "Voice"): InteractionCard says so, Card marks its kicker row. */
-const AskedByVoice = createContext(false);
 /** What modules mark the card with (core/module-host.ts `interaction.asked`): Card draws it in its kicker row. */
 const CardMarks = createContext<React.ReactNode>(null);
 /** The answer on its way for the card, as a line for its footer ("Sending: Allowed"); empty when none, or for its first
@@ -130,7 +127,6 @@ const StackCount = createContext(0);
 const QueueSlot = createContext<{ position: number; total: number; open: boolean; onToggle: () => void } | null>(null);
 
 export function Card({ title, titleContent, kicker, onDismiss, busy, children, footer, looking = false, cardKeys, tapGuard }: { title: string; titleContent?: React.ReactNode; kicker: string; onDismiss?: () => void; busy?: boolean; children: React.ReactNode; footer: React.ReactNode; looking?: boolean; cardKeys?: CardKeys; tapGuard?: { ref: RefObject<HTMLDivElement | null> } }) {
-  const asked = useContext(AskedByVoice);
   const marks = useContext(CardMarks);
   const sending = useContext(SendingAnswer);
   const from = useContext(AskedFrom);
@@ -167,13 +163,6 @@ export function Card({ title, titleContent, kicker, onDismiss, busy, children, f
             <div className={cx("mb-0.5 flex items-center gap-1.5 text-[11px] font-medium", looking ? "text-ink-3" : "text-attention")}>
               <StatusMark state={looking ? "working" : "needs_you"} size="sm" label={false} />
               {kicker}
-              {/* the card stays a quiet surface: a neutral chip, the voice's color only on its mark */}
-              {asked && (
-                <span data-testid="voice-asking" className="ml-0.5 inline-flex min-w-0 items-center gap-1 rounded-full bg-inset px-1.5 py-px text-[10.5px] font-medium whitespace-nowrap text-ink-2 shadow-hairline">
-                  <Icon name="voice" size={10} stroke={2.4} className="shrink-0 text-ai" />
-                  <span className="truncate">{t("voice.asking_mark")}</span>
-                </span>
-              )}
               {marks}
             </div>
             <div ref={head} className="text-[13.5px] font-medium text-ink">{titleContent ?? title}</div>
@@ -429,7 +418,7 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
                 </button>
               </>
             )}
-            {q.multi_select && <span className="text-[11.5px] text-ink-3">{t("chat-interactions.multi_select")}</span>}
+            {q.multi_select && <span className="text-submeta text-ink-3">{t("chat-interactions.multi_select")}</span>}
           </span>
           <SendArrow ready={last ? all : answered(qi) && allowed(qi)} busy={busy} kbd={keys.focused} label={last ? t("chat-interactions.send_answer") : t("chat-interactions.next_question")} onClick={() => (last ? void send() : advance())} />
         </>
@@ -1444,7 +1433,6 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
     : ix.kind === "elicitation" ? <ElicitationCard ix={ix} />
     // a kind the core has no card for, drawn by the module that names it (core/module-host.ts `cardRenderers`)
     : renderer ? <ModuleCard key={ix.id} module={renderer} interaction={ix} /> : <ScreenCard ix={ix} />;
-  const asked = useVoiceAsking(ix);
   const marks = <InteractionMarks interaction={ix} />;
   // a permission card says it in its body (PermissionBody); a secret run's or hand-off's card has none, so it says it here
   const from = ix.folded_under && (ix.kind !== "permission" || isSecretRun(ix) || isSecretHandoff(ix)) ? permissionFrom(ix) : "";
@@ -1456,8 +1444,7 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
   // card stays mounted for its local defer/dismiss actions; QuestionCard disables every message-sending control instead.
   return (
     <div data-card={ix.id} className="contents">
-      <AskedByVoice.Provider value={asked}>
-        <CardMarks.Provider value={marks}>
+      <CardMarks.Provider value={marks}>
         <SendingAnswer.Provider value={line}>
           <AskedFrom.Provider value={from}>
             <CardAbout.Provider value={about}>
@@ -1469,8 +1456,7 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
             </CardAbout.Provider>
           </AskedFrom.Provider>
         </SendingAnswer.Provider>
-        </CardMarks.Provider>
-      </AskedByVoice.Provider>
+      </CardMarks.Provider>
     </div>
   );
 }
