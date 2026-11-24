@@ -9,6 +9,8 @@ class NativeColors {
   readonly grouped: ResourceColor = $r('app.color.persona_grouped');
   readonly ink: ResourceColor = $r('app.color.persona_ink');
   readonly progress: ResourceColor = $r('app.color.persona_progress_text');
+  /** Inline code in replies: the body ink and the secondary ink blended 55:45 (DESIGN_SYSTEM 3.11). */
+  readonly inlineCode: ResourceColor = $r('app.color.persona_inline_code_ink');
   readonly reference: ResourceColor = $r('app.color.persona_reference');
   readonly activity: ResourceColor = $r('app.color.persona_activity');
   readonly secondary: ResourceColor = $r('app.color.persona_secondary');

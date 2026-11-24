@@ -8,6 +8,9 @@ export class MarkdownInline {
   url: string = '';
   source: string = '';
   children: MarkdownInline[] = [];
+  /** Inline code (or a file label drawn as code) that meets a CJK letter directly gets a thin space on that side. */
+  gapBefore: boolean = false;
+  gapAfter: boolean = false;
 
   constructor(kind: MarkdownInlineKind = 'text', text: string = '', url: string = '', children: MarkdownInline[] = [], source: string = '') {
     this.kind = kind;
@@ -249,16 +252,21 @@ export function markdownCodeSelection(nodes: readonly MarkdownInline[], start: n
       else pad();
     }
   }
+  function code(node: MarkdownInline, value: string): void {
+    if (node.gapBefore) pad();
+    append(value);
+    if (node.gapAfter) pad();
+  }
   function read(parts: readonly MarkdownInline[]): void {
     for (const node of parts) {
-      if (node.kind === 'code') { pad(); append(node.text); pad(); }
+      if (node.kind === 'code') code(node, node.text);
       else if (node.kind === 'text') prose(node.text);
       else if (node.kind === 'image') prose(markdownInlineText(node.children));
       else if (node.kind === 'file') {
         const label = markdownInlineText(node.children);
         if (hasMediaOwner && chatImagePath(node.url, workspaceRoot)) { pad(); pad(); append(label); }
         else if (chatFilePath(node.url, workspaceRoot)) append(label);
-        else { pad(); append(label); pad(); }
+        else code(node, label);
       } else {
         if (transcriptMarks && node.kind === 'link' && markdownLinkProvider(node.url)) pad();
         read(node.children);
@@ -476,6 +484,42 @@ function appendPlain(nodes: MarkdownInline[], text: string): void {
   } else nodes.push(new MarkdownInline('text', text, '', [], text));
 }
 
+/** A Han, kana, Hangul or bopomofo letter; CJK punctuation is not one. */
+function cjkLetter(ch: string | undefined): boolean {
+  const code = ch === undefined ? 0 : ch.codePointAt(0) ?? 0;
+  if (code === 0x30fb || code === 0x30fc) return false;
+  return (code >= 0x1100 && code <= 0x11ff) || (code >= 0x3040 && code <= 0x30ff) || (code >= 0x3100 && code <= 0x318f) ||
+    (code >= 0x31f0 && code <= 0x31ff) || (code >= 0x3400 && code <= 0x4dbf) || (code >= 0x4e00 && code <= 0x9fff) ||
+    (code >= 0xac00 && code <= 0xd7af) || (code >= 0xf900 && code <= 0xfaff) || (code >= 0xff66 && code <= 0xff9f) ||
+    (code >= 0x20000 && code <= 0x3ffff);
+}
+
+/** Mark inline code that meets a CJK letter directly, across emphasis and link edges (docs/design/DESIGN_SYSTEM.md 3.11). */
+function markCodeGaps(nodes: MarkdownInline[]): MarkdownInline[] {
+  const leaves: MarkdownInline[] = [];
+  const walk = (parts: MarkdownInline[]): void => {
+    for (const node of parts) {
+      if (node.kind === 'bold' || node.kind === 'italic' || node.kind === 'link') walk(node.children);
+      else leaves.push(node);
+    }
+  };
+  walk(nodes);
+  const words = (node: MarkdownInline | undefined): string[] => !node || node.kind === 'code' ? [] :
+    Array.from(node.kind === 'text' ? node.text : markdownInlineText(node.children));
+  leaves.forEach((node: MarkdownInline, index: number) => {
+    if (node.kind !== 'code' && node.kind !== 'file') return;
+    const before = words(leaves[index - 1]), after = words(leaves[index + 1]);
+    node.gapBefore = cjkLetter(before[before.length - 1]);
+    node.gapAfter = cjkLetter(after[0]);
+  });
+  return nodes;
+}
+
+/** A block's inline nodes, with the room inline code keeps beside CJK letters marked. */
+function parseInlines(value: string): MarkdownInline[] {
+  return markCodeGaps(parseInlineMarkdown(value));
+}
+
 export function parseInlineMarkdown(value: string): MarkdownInline[] {
   const nodes: MarkdownInline[] = [];
   let plain = '';
@@ -590,7 +634,7 @@ class MarkdownParser {
       if (heading) {
         const block = new MarkdownBlock('heading', line);
         block.level = heading[2].length;
-        block.inlines = parseInlineMarkdown(headingBody(heading[3]));
+        block.inlines = parseInlines(headingBody(heading[3]));
         blocks.push(block); this.index++; continue;
       }
       if (isRule(line)) { blocks.push(new MarkdownBlock('rule', line)); this.index++; continue; }
@@ -684,13 +728,13 @@ class MarkdownParser {
     block.alignments = alignments;
     const header = new MarkdownTableRow();
     header.header = true;
-    header.cells = headerCells.map((cell: string) => parseInlineMarkdown(cell));
+    header.cells = headerCells.map((cell: string) => parseInlines(cell));
     block.rows.push(header);
     this.index += 2;
     while (this.index < this.lines.length && this.lines[this.index].trim() && hasTableSeparator(this.lines[this.index])) {
       const cells = splitTableCells(this.lines[this.index]);
       const row = new MarkdownTableRow();
-      row.cells = headerCells.map((_label: string, index: number) => parseInlineMarkdown(cells[index] || ''));
+      row.cells = headerCells.map((_label: string, index: number) => parseInlines(cells[index] || ''));
       block.rows.push(row);
       this.index++;
     }
@@ -704,7 +748,7 @@ class MarkdownParser {
     while (this.index < this.lines.length && this.lines[this.index].trim() && !this.isBlockStart(this.index)) this.index++;
     const source = this.lines.slice(start, this.index).join('\n');
     const block = new MarkdownBlock('paragraph', source);
-    block.inlines = parseInlineMarkdown(source);
+    block.inlines = parseInlines(source);
     return block;
   }
 
