@@ -111,6 +111,7 @@ func TestWorkbenchOffChangesNothing(t *testing.T) {
 // /home posts the home card, pins it as the bot's only pin and makes it the board; the next /home posts a fresh one,
 // pins it and withdraws the one before. One too old to withdraw is redrawn to say where the workbench went.
 func TestWorkbenchHomeIsPinnedAndTheOnlyOne(t *testing.T) {
+	needsLarkLayer(t)
 	e := newWorkbenchEnv(t, workbenchOnFeatures)
 	l := e.s.botLang(context.Background())
 	if h, _ := e.command("/home"); !h {
@@ -157,6 +158,7 @@ func TestWorkbenchHomeIsPinnedAndTheOnlyOne(t *testing.T) {
 // With the workbench on, a card the bot posts gets the workbench button (once), the home card itself none; switched
 // off, the next card has none.
 func TestWorkbenchButtonOnEveryCard(t *testing.T) {
+	needsLarkLayer(t)
 	e := newWorkbenchEnv(t, workbenchOnFeatures)
 	e.command("/home")
 	if js := e.postJSON(0); strings.Contains(js, `"to":"home"`) {
@@ -374,6 +376,7 @@ const companionsBody = `{"bots":[{"kind":"inbox","name":"Inbox","icon":"📥","a
 // The companions are checked and kept; the home card links to them, and the Inbox companion's link replaces the
 // /inbox button. A read-only device cannot change them.
 func TestWorkbenchCompanionsAreLinkedFromTheHomeCard(t *testing.T) {
+	needsLarkLayer(t)
 	e := newWorkbenchEnv(t, workbenchOnFeatures)
 	if code, _ := e.companionsCall("PUT", "/api/v1/assistant/feishu/companions", `{"bots":[{"kind":"inbox","name":"Inbox","app_id":"not an app"}]}`); code != http.StatusBadRequest {
 		t.Fatalf("a bad app id: %d", code)
@@ -465,6 +468,7 @@ func TestWorkbenchNoticesGoToAPollingCompanion(t *testing.T) {
 // /inbox lists what needs the owner first, each with Done and (for a reply that can be sent) AI draft; Done files it
 // and the card is redrawn without it.
 func TestWorkbenchInboxCardFilesAnItem(t *testing.T) {
+	needsLarkLayer(t)
 	e := newWorkbenchEnv(t, workbenchOnFeatures)
 	now := time.Now()
 	e.s.inbox.mu.Lock()
@@ -513,6 +517,7 @@ func (u tokenSpanStore) UsageSpans(context.Context, []time.Time, db.UsageBy) ([]
 // What waits for the owner is rows pressed whole: a card that holds something up comes down. An agent's row says its
 // state as a tag, not a coloured dot.
 func TestWorkbenchHomeRowsArePressedWhole(t *testing.T) {
+	needsLarkLayer(t)
 	e := newWorkbenchEnv(t, workbenchOnFeatures)
 	e.s.fleet.interactions["ix_q"] = &pending{ix: proto.Interaction{ID: "ix_q", MachineID: "box", SessionID: "ag1", Kind: proto.IxQuestion,
 		Questions: []proto.Question{{Question: "用哪个库？"}}}}
