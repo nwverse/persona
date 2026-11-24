@@ -49,6 +49,9 @@ type fleetDevs struct {
 	heldLang  map[string]i18n.Lang
 	heldActs  []string
 	heldErr   error
+	// transfers: every AgentTransfer asked for, in order; transfer answers them (nil: done, with the paths asked).
+	transfers []devices.AgentTransfer
+	transfer  func(devices.AgentTransfer) (devices.AgentTransferResult, error)
 }
 
 type fleetNode struct {
@@ -712,6 +715,19 @@ func (d *fleetDevs) HeldRetry(_ context.Context, sid, msg string) (bool, error) 
 
 func (d *fleetDevs) HeldDelete(_ context.Context, sid, msg string) (bool, error) {
 	return d.heldAct("delete", sid, msg)
+}
+
+// AgentTransfer notes t and answers it with transfer (a done file at the path asked when that is nil).
+func (d *fleetDevs) AgentTransfer(_ context.Context, t devices.AgentTransfer) (devices.AgentTransferResult, error) {
+	d.mu.Lock()
+	d.transfers = append(d.transfers, t)
+	answer := d.transfer
+	d.mu.Unlock()
+	if answer != nil {
+		return answer(t)
+	}
+	return devices.AgentTransferResult{ID: "t1", Kind: proto.FilePackFile, Name: "report.pdf", Source: t.Path,
+		ResultPath: "/home/me/Downloads/Persona/report.pdf", Size: 2048, SHA256: "abababababababababababababababababababababababababababababababab"}, nil
 }
 
 // heldAct notes Retry or Delete (what) on held message msg of session sid, found on any machine or not; one found is
