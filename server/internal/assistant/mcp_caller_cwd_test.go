@@ -89,6 +89,13 @@ func TestSpaceFirstToolsBeforeSessionPublication(t *testing.T) {
 					if denied != (space != SpaceHealth) {
 						t.Fatalf("Health call boundary for %q: %+v", space, call)
 					}
+					if space == SpaceHealth && (!call.IsError || len(call.Content) == 0 || call.Content[0].Text != "action must be log, list or delete") {
+						t.Fatalf("Health call did not reach intake argument validation: %+v", call)
+					}
+					legacy := privacyRequest(t, s, "server", "mcp.call", map[string]any{"session_id": sid, "assistant": true, "name": "health_intake", "args": map[string]any{}}).(proto.ToolResult)
+					if !legacy.IsError || len(legacy.Content) == 0 || !strings.Contains(legacy.Content[0].Text, "known Health conversation") {
+						t.Fatalf("old node bypassed the unknown-space boundary: %+v", legacy)
+					}
 				}
 				return json.Marshal(map[string]any{"session_id": sid})
 			}}
