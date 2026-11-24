@@ -10,9 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The usage-limit fallback (#14435, limit_fallback.go) on the conversation-switch rig: real Postgres, the logical
@@ -350,6 +352,135 @@ func TestLimitFallbackSkipsALimitedBackupAndKeepsALaterChoice(t *testing.T) {
 	}
 	if a, ok := c.Active(); !ok || a.Launcher != "backup" || a.Model != "picked-model" {
 		t.Fatalf("the later choice was overwritten: %+v", c)
+	}
+}
+
+// A restore is durable before its first live target check. A brief disconnect there can also
+// hide the cached session on later passes. Reconnect must revalidate the same operation.
+func TestLimitFallbackRestoreReconnect(t *testing.T) {
+	for _, after := range []string{"recover", "owner pick", "unregistered launcher"} {
+		t.Run(after, func(t *testing.T) {
+			ctx := context.Background()
+			r, _ := newLimitFallbackRig(t)
+			const id = "main-chat"
+			limitRow(r, id, usageLimitTurn(time.Now().Add(2*time.Hour)))
+			r.s.limitFallbackTurnSettled(ctx, "server", id)
+			fallbacks, _ := limitFallbackBatches(limitFallbackState(t, r.s))
+			if len(fallbacks) != 1 {
+				t.Fatalf("fallbacks: %+v", fallbacks)
+			}
+			forward := fallbacks[0]
+			conversationSwitchTestDrive(t, r.s, forward.ID, map[string]string{id: conversationSwitchSwitched})
+			noSession := func(string, json.RawMessage) (any, error) { return map[string]bool{"ok": false}, nil }
+			if after == "recover" {
+				// A reset can also arrive while the node is already offline and its cached row is missing.
+				r.f.mu.Lock()
+				r.f.down = map[string]bool{"server": true}
+				r.f.nodes[DeviceSessionGet] = noSession
+				r.f.mu.Unlock()
+				forceLimitRestoreDue(t, r.s, forward.ID)
+				conversationSwitchTestStatus(t, r.s, forward.ID)
+				pending, restores := limitFallbackBatches(limitFallbackState(t, r.s))
+				if len(restores) != 0 || pending[0].Fallback.Done || !pending[0].Fallback.RestoreAt.After(time.Now()) {
+					t.Fatalf("restore was not postponed while its node was away: %+v, restores=%+v", pending, restores)
+				}
+				r.f.mu.Lock()
+				delete(r.f.down, "server")
+				delete(r.f.nodes, DeviceSessionGet)
+				r.f.mu.Unlock()
+			}
+			forceLimitRestoreDue(t, r.s, forward.ID)
+			conversationSwitchTestStatus(t, r.s, forward.ID)
+			_, restores := limitFallbackBatches(limitFallbackState(t, r.s))
+			if len(restores) != 1 {
+				t.Fatalf("restores: %+v", restores)
+			}
+			restore := restores[0]
+			item := restore.Items[0]
+			if item.Outcome != conversationSwitchQueued || item.OperationID == "" {
+				t.Fatalf("restore was not queued: %+v", item)
+			}
+
+			// The cached row is still readable. Only the target check sees the disconnect.
+			r.f.mu.Lock()
+			check := r.f.nodes["assistant.segment.check"]
+			r.f.mu.Unlock()
+			r.f.answerNode("assistant.segment.check", func(string, json.RawMessage) (any, error) {
+				r.f.down = map[string]bool{"server": true}
+				if after == "owner pick" {
+					return nil, rpc.ErrClosed
+				}
+				return nil, apierr.ErrOffline
+			})
+			assertQueued := func() {
+				t.Helper()
+				report := conversationSwitchTestStatus(t, r.s, restore.ID)
+				got := conversationSwitchTestItemFor(t, report, id)
+				if got.Outcome != conversationSwitchQueued || got.OperationID != item.OperationID {
+					t.Fatalf("restore lost its queued operation: %+v", got)
+				}
+			}
+			assertQueued()
+			// The node's session list disappears while it remains offline.
+			r.f.answerNode(DeviceSessionGet, noSession)
+			assertQueued()
+			assertQueued()
+
+			r.f.mu.Lock()
+			delete(r.f.down, "server")
+			delete(r.f.nodes, DeviceSessionGet)
+			r.f.nodes["assistant.segment.check"] = check
+			r.f.mu.Unlock()
+			if after == "owner pick" {
+				if err := r.d.SetConversationPick(ctx, "server", id, item.ExpectedEpoch, "backup", "owner-model", ""); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if after == "unregistered launcher" {
+				r.f.answerNode("assistant.segment.check", func(string, json.RawMessage) (any, error) { return segmentTarget{}, nil })
+			}
+			if after == "recover" {
+				// First-turn restores wait for input; the owner's next message accepts the original operation.
+				waitFor(t, "original restore to activate", func() bool {
+					conversationSwitchTestStatus(t, r.s, restore.ID)
+					r.s.logicalSweep(ctx)
+					op, err := r.d.ConversationSwitch(ctx, "server", id, item.OperationID)
+					return err == nil && op != nil && op.Phase == "active"
+				})
+				if err := r.s.call(ctx, "server", DeviceSessionSend, map[string]any{"session_id": id, "text": "continue", "client_msg_id": "owner-reconnected"}, nil); err != nil {
+					t.Fatal(err)
+				}
+				conversationSwitchTestDrive(t, r.s, restore.ID, map[string]string{id: conversationSwitchSwitched})
+			} else {
+				conversationSwitchTestDrive(t, r.s, restore.ID, map[string]string{id: conversationSwitchRefused})
+			}
+			_, restores = limitFallbackBatches(limitFallbackState(t, r.s))
+			if len(restores) != 1 || restores[0].ID != restore.ID || restores[0].Items[0].OperationID != item.OperationID {
+				t.Fatalf("restore replaced or duplicated: %+v", restores)
+			}
+			c, err := r.d.LogicalConversation(ctx, "server", id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			active, ok := c.Active()
+			if !ok || c.Switch != nil {
+				t.Fatalf("unsettled conversation: %+v", c)
+			}
+			switch after {
+			case "recover":
+				if active.Launcher != "sub" || active.Model != "old-model" || len(conversationSwitchTestPreparations(r)) != 2 {
+					t.Fatalf("expected one fallback and one restore: %+v", active)
+				}
+			case "owner pick":
+				if active.Launcher != "backup" || active.Model != "owner-model" {
+					t.Fatalf("owner pick lost: %+v", active)
+				}
+			case "unregistered launcher":
+				if active.Launcher != "backup" {
+					t.Fatalf("unsupported launcher accepted: %+v", active)
+				}
+			}
+		})
 	}
 }
 

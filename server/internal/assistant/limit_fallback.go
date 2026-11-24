@@ -380,6 +380,11 @@ func (s *Service) limitFallbackRestore(ctx context.Context, state *conversationS
 		return true
 	}
 	if actionableConversationSwitchItems(items) == 0 {
+		// While the node is away its session row may also be missing from the plan.
+		if s.limitRestoreNodeOffline(ctx, item.Machine) {
+			fb.RestoreAt = now.Add(limitFallbackRecheck).UTC()
+			return true
+		}
 		fb.Done = true
 		reason := ""
 		if len(items) > 0 {
@@ -398,6 +403,12 @@ func (s *Service) limitFallbackRestore(ctx context.Context, state *conversationS
 	state.Batches = append(state.Batches, restore) // b and fb are not used past here: the append may move the slice
 	s.logf("limit fallback %s/%s: back to %s (batch %s)", item.Machine, short(item.ConversationID), item.Before.Launcher, restore.ID)
 	return true
+}
+
+// A registered but unreachable node can come back. A removed machine is a permanent refusal.
+func (s *Service) limitRestoreNodeOffline(ctx context.Context, machine string) bool {
+	d, found := s.device(ctx, machine)
+	return found && !d.Reachable
 }
 
 // pruneLimitFallbacks forgets finished fallbacks older than limitFallbackKeep, with their restores once those

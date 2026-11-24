@@ -415,8 +415,13 @@ func (s *Service) runConversationSwitchItem(ctx context.Context, st logicalSwitc
 		}
 		return true
 	}
+	automaticRestore := restore && firstTurn
 	row, known := s.session(ctx, item.Machine, item.ConversationID)
 	if !known || !row.Assistant || row.PaneID != "" || row.IsDeleted() {
+		// Disconnected nodes can lose their cached row before their next snapshot. An explicit deletion is final.
+		if automaticRestore && !row.IsDeleted() && s.limitRestoreNodeOffline(ctx, item.Machine) {
+			return false
+		}
 		item.Outcome, item.Reason = conversationSwitchRefused, "the conversation is no longer available"
 		return true
 	}
@@ -442,6 +447,14 @@ func (s *Service) runConversationSwitchItem(ctx context.Context, st logicalSwitc
 		OperationID: item.OperationID, ExpectedEpoch: item.ExpectedEpoch, MachineID: item.Target.Machine,
 		Launcher: item.Target.Launcher, Model: item.Target.Model, Effort: item.Target.Effort, PermissionMode: permission,
 	})
+	// The row can still be cached when the original launcher's live check finds its link down.
+	// Keep this automatic return's durable operation and recheck its epoch and settings on the next pass.
+	if automaticRestore && err != nil {
+		linkErr := busError(err)
+		if errors.Is(linkErr, apierr.ErrOffline) || errors.Is(linkErr, rpc.ErrClosed) {
+			return false
+		}
+	}
 	if conversationSwitchBusyError(err) {
 		item.Outcome = conversationSwitchQueued
 		return false
