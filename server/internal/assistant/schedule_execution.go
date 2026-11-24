@@ -100,6 +100,21 @@ func (s *Service) taskSourceCwd(ctx context.Context, t Task) (string, bool) {
 	return cwd, err == nil && cwd != "" && c.Cwd == cwd
 }
 
+// resolvedTaskCwd is the prepared default (or space) directory a task without a directory of its own runs in, as the
+// node resolves it (assistant.directory): the form preview and save gave the task's selections
+// (taskInputDefaultDirectory). A skill's id includes the cwd and a file selection names it, so a symlink in the node's
+// home or data directory path must not give the run another form of the same directory (#15004). When the node does
+// not resolve it (an error, no answer, an older node), the run keeps the prepared path, as before.
+func (s *Service) resolvedTaskCwd(ctx context.Context, machine, cwd string) string {
+	var result struct {
+		Cwd string `json:"cwd"`
+	}
+	if cwd == "" || s.call(ctx, machine, assistantwire.DeviceAssistantDirectory, map[string]any{"path": cwd}, &result) != nil || result.Cwd == "" {
+		return cwd
+	}
+	return result.Cwd
+}
+
 func (s *Service) taskExecution(ctx context.Context, t Task, validate bool, binding ...ModelBinding) (TaskExecution, error) {
 	machine := s.taskMachine(ctx, t)
 	ex := TaskExecution{MachineID: machine, Cwd: t.Cwd, PermissionMode: cmp.Or(t.PermissionMode, s.settings(ctx).DefaultPermissionMode, "bypassPermissions")}
