@@ -49,11 +49,13 @@ describe("legacyOf", () => {
     expect(classify(local("just_done", "finished_unseen"), live, facts(), NOW)).toEqual({ kind: "same" });
   });
 
-  it("reads only sections and reasons this web knows", () => {
+  it("reads only phases, sections and reasons this web knows", () => {
     expect(knownView(view("todo", "rest"))).toBe(true);
+    expect(knownView(view("todo", "rest", { phase: "a_newer_phase" }))).toBe(false);
     expect(knownView(view("later", "rest"))).toBe(false);
     expect(knownView(view("todo", "a_newer_reason"))).toBe(false);
     expect(knownView(undefined)).toBe(false);
+    expect(classify(local("other", "rest"), view("todo", "rest", { phase: "a_newer_phase" }), facts(), NOW)).toEqual({ kind: "unknown" });
     expect(classify(local("other", "rest"), view("todo", "a_newer_reason"), facts(), NOW)).toEqual({ kind: "unknown" });
   });
 

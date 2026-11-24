@@ -3,18 +3,19 @@
 // (docs/design/proposals/todos-redesign.md 6.3; docs/assistant/todo-status-sop.md "The hub's view"), so the shadow
 // (view-shadow.ts) reports only the ones nothing explains. Pure: no state, no clock of its own.
 
-import { TODO_LIST_SECTIONS, TODO_REASONS, type TodoSummary } from "../../../lib/todo-view-wire";
+import { TODO_LIST_SECTIONS, TODO_PHASES, TODO_REASONS, type TodoSummary } from "../../../lib/todo-view-wire";
 import type { Triage, TriageRule, TriageSection } from "../../../lib/todo-triage";
 import type { SessionLookup, Todo } from "../../../lib/todos";
 import { stateOf } from "../../../lib/format";
 import { usageLimitAgent } from "../../../lib/usage-limit";
 
+const PHASES: ReadonlySet<string> = new Set(TODO_PHASES);
 const SECTIONS: ReadonlySet<string> = new Set(TODO_LIST_SECTIONS);
 const REASONS: ReadonlySet<string> = new Set(TODO_REASONS);
 
-/** A view this web can read: a row with a newer hub's section or reason is drawn as if it had none, and counted apart. */
+/** A view this web can read: a row with a newer hub's phase, section or reason is drawn as if it had none, and counted apart. */
 export function knownView(view: TodoSummary | undefined): view is TodoSummary {
-  return !!view && SECTIONS.has(view.section) && REASONS.has(view.reason);
+  return !!view && PHASES.has(view.phase) && SECTIONS.has(view.section) && REASONS.has(view.reason);
 }
 
 /** Today's section for each of the view's: Waiting is the web's Parked (a parked hold and an open PR wait there, 6.3

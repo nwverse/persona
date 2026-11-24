@@ -2493,11 +2493,13 @@ carries a `view` also goes through today's triage, and `view-legacy.ts` maps the
 Parked, Can wait is Needs you, To do with the Inactive mark is Shelved) and explains the differences the redesign decided
 (`docs/assistant/todo-status-sop.md` "The hub's view"). Only what nothing explains is recorded, as ids and enum words
 (`docs/operations/developing-persona.md`). The manager does not yet push when a run changes a view, so a row whose runs
-moved after the list was read is counted apart and the list is read again. With `localStorage persona.todos.viewDraw`
-set to `1` as well (then reload), the status sections and the header's counts come from the view (`view-triage.ts`; a row
-without one keeps its place). Each row's checkbox, Got it and line 2, and the folder and Pinned groupings, keep today's
-rules: a failed start the view files in To do still shows a ticked checkbox. Users without the switch see exactly what
-they saw before (`Todos.view-draw.test.tsx` pins the markup).
+moved after the list was read is counted apart and the list is read again. Independently of Developing Persona (#14583),
+whenever the hub lists `todo_view`, the To-dos status list's sections, rank and filtered header counts draw from the
+hub's `view` by default (`view-triage.ts`; a row without a `view` or with an unknown `phase`, `section` or `reason`
+falls back row-by-row to local triage via `view-legacy.ts`). Setting `localStorage persona.todos.viewDraw` to `0` (then
+reloading) reverts that browser to local triage. Each row's checkbox, Got it and line 2, the folder and Pinned
+groupings, and the sidebar badge / tray / detail actions keep today's rules: a failed start the view files in To do
+still shows a ticked checkbox (`Todos.view-draw.test.tsx` pins the default projection, rollback and fallback).
 
 ## Error reports (#5533)
 

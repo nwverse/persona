@@ -316,14 +316,14 @@ export function TodosView({
   // a search and the filter narrow the to-dos first; the sections (or the folders) place what is left
   const filterTodo = (t: Todo) => matchesSearch(t) && inFilter(t);
 
-  // Developing Persona's view switch (docs/web/web.md "Developing Persona"): the sections from the hub's view, a row
-  // without one placed as before
+  // Hub to-do view projection (#14583, docs/web/web.md "Developing Persona"): preferred by default when the hub lists
+  // `todo_view` (with `persona.todos.viewDraw=0` as browser rollback); a row without a readable view keeps today's place.
   const features = useStore((s) => s.features);
   const fromView = useMemo(() => viewDrawOn(features), [features]);
   const triaged = useMemo(
     () => {
       const r = orderWaitGroups(triageTodos(todos.filter(filterTodo), lookup, Date.now(), restored, { superseded }), Date.now());
-      return fromView ? drawnFromView(r, Date.now()) : r;
+      return fromView ? drawnFromView(r, Date.now(), restored) : r;
     },
     [todos, lookup, restored, search, listFilter, superseded, tick, fromView],
   );
@@ -332,7 +332,7 @@ export function TodosView({
     () => {
       if (!search.trim()) return triaged;
       const r = orderWaitGroups(triageTodos(todos.filter(inFilter), lookup, Date.now(), restored, { superseded }), Date.now());
-      return fromView ? drawnFromView(r, Date.now()) : r;
+      return fromView ? drawnFromView(r, Date.now(), restored) : r;
     },
     [todos, lookup, restored, search, listFilter, superseded, triaged, tick, fromView],
   );
