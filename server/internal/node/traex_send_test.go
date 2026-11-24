@@ -27,7 +27,7 @@ func TestTraeComposerSeparatesTheDraftFromQueuedMessages(t *testing.T) {
 func TestTraeTerminalSubmitsConfirmedDraftWithNativeKey(t *testing.T) {
 	for _, tc := range []struct {
 		name, before, key string
-		queue            bool
+		queue             bool
 	}{
 		{"follow up while busy", traeBusy, "enter", false},
 		{"queue while busy", traeBusy, "tab", true},
