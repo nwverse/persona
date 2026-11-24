@@ -2632,11 +2632,19 @@
               "expect_minutes": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Optional minutes override. Omit/0: comparable history, or the 60-minute system_default; positive: override. Review at 1×; stuck at 1.5× (min 20m); overdue at 3× (min 24h)."
+                "description": "Optional minutes override (omit/0: history or 60m default). Review 1×; stuck 1.5× (min 20m); overdue 3× (min 24h)."
               },
               "project": {
                 "type": "string",
                 "description": "Existing kb_list projects slug/name for a clear long-term area; no near-duplicates."
+              },
+              "audience": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "autonomous"
+                ],
+                "description": "Optional: human or autonomous."
               },
               "part_of": {
                 "type": "string",
@@ -2655,7 +2663,7 @@
               },
               "inbox_item": {
                 "type": "string",
-                "description": "Handed-off Inbox ID, or 'none' for unrelated work. Checks the conversation and manager; links without filing or replying."
+                "description": "Handed-off Inbox ID or 'none'; links without filing/replying."
               },
               "tier": {
                 "type": "string",
@@ -3632,11 +3640,11 @@
         },
         "due": {
           "type": "string",
-          "description": "Day only: YYYY-MM-DD; otherwise YYYY-MM-DD HH:MM (user time zone) or RFC3339. Relative 2h/3d accepted."
+          "description": "YYYY-MM-DD, YYYY-MM-DD HH:MM (local), RFC3339, or 2h/3d."
         },
         "remind": {
           "type": "string",
-          "description": "Future reminder (user time zone/RFC3339 or relative 30m/2h/1d). Only if requested or deadline close and important."
+          "description": "Future reminder (local/RFC3339 or 30m/2h/1d). Only if asked or urgent."
         },
         "priority": {
           "type": "string",
@@ -3653,7 +3661,15 @@
             "todo",
             "concern"
           ],
-          "description": "todo (default); concern (main chat only) tracks a user-raised matter until concern_report reports its outcome; other completion tools cannot close it."
+          "description": "todo (default); concern (main chat only) closes only via concern_report."
+        },
+        "audience": {
+          "type": "string",
+          "enum": [
+            "human",
+            "autonomous"
+          ],
+          "description": "Optional: human or autonomous."
         },
         "project": {
           "type": "string",
@@ -3810,7 +3826,7 @@
   },
   {
     "name": "todo_update",
-    "description": "Update supplied title, notes, due/reminder, priority, project, part_of or after immediately, including task to-dos; no confirmation. Omitted fields stay; \"\" clears notes/due/remind/project/part_of, [] clears after. New reminder times notify again. Completion/reopening uses todo_complete/todo_reopen.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Update supplied fields immediately, including task to-dos; no confirmation. Omitted fields stay; \"\" clears notes/due/remind/project/part_of/audience, [] clears after. New remind notifies again. Close/reopen via todo_complete/todo_reopen.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3831,11 +3847,11 @@
         },
         "due": {
           "type": "string",
-          "description": "New due date YYYY-MM-DD or datetime (user's time zone/RFC3339); \"\" clears."
+          "description": "YYYY-MM-DD or datetime (local/RFC3339); \"\" clears."
         },
         "remind": {
           "type": "string",
-          "description": "New reminder datetime (user's time zone/RFC3339) or relative 30m/2h/1d; never past. \"\" clears."
+          "description": "Future datetime (local/RFC3339) or 30m/2h/1d; \"\" clears."
         },
         "priority": {
           "type": "string",
@@ -3847,7 +3863,11 @@
         },
         "project": {
           "type": "string",
-          "description": "Existing knowledge-base project slug/name (kb_list projects), preferably a long-term work area. Set only when clear; do not invent near-duplicates. \"\" clears."
+          "description": "Existing kb_list project slug/name; only when clear, no near-duplicates. \"\" clears."
+        },
+        "audience": {
+          "type": "string",
+          "description": "human, autonomous, or \"\" clears."
         },
         "part_of": {
           "type": "string",
