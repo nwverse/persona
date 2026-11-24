@@ -76,6 +76,9 @@ SERVER = {
     },
     "github": {"connectors": ["github"], "routes": ["/api/v1/connectors/github/auth"]},
     "imessage": {"extensions": ["imessage"]},
+    # The Feishu / Lark bot is the hub's, set up at /api/v1/bots/feishu (its client is the module's, internal/botport);
+    # the lark-cli connector is registered only where lark.cli is configured, which the test hub is not.
+    "lark": {"routes": ["/api/v1/bots/feishu"]},
 }
 
 # What the web app shows of a module (web/e2e/module-gate.mjs). An entry:
