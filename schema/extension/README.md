@@ -406,6 +406,13 @@ an optional `SceneLight`). Numbers where 0 means something (`bottom`, `top`, `ya
 `x-go-pointer`. The hub's `downgrade11` (`server/internal/extension/ui_v11.go`) draws an older app the poster as an `image`, or
 without one a row per pin; a native stream's source may draw a scene too (`UIStreamItem` lists it), but its client never gets
 one: the hub draws it the same way. Its example is `examples/View.v11-scene-flat.json`.
+UI version 12 (#14730) adds one component, `map` (`MapComponent`: `alt`, `title`, `caption`, `viewport`, `markers` of
+`MapMarker`, `routes` of `MapRoute` using `MapCoordinate`, `links` of `MapLink`, `aspect`, `static`, `show_list`), validated
+by `sdk/go/wire/viewcheck12.go` (`CheckMap`). Numeric coordinates, viewport spans, and optional route metrics where zero
+is meaningful use `x-go-pointer`. A client on UI version 12 that omits another component may list it in
+`UIContext.unsupported` so older renderers keep selective downgrades without losing `map`. The hub's `downgrade12`
+(`server/internal/extension/ui_v12.go`) draws an older app or unsupported client summary text plus route, marker and
+link rows. Its example is `examples/View.v12-map-route.json`.
 
 ## Adding a call
 

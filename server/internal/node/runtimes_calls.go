@@ -211,6 +211,7 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 			return nil, err, true
 		}
 		out = n.echoedRaw(p.SessionID, out, "items") // echo.go
+		out = n.toolViews.attachRaw(p.SessionID, out, "items", p.BeforeSeq == 0 && p.ThroughSeq == 0)
 		out = n.ttft.annotateRaw(p.SessionID, out, "items", p.BeforeSeq == 0 && p.ThroughSeq == 0)
 		if !p.FoldWork || p.AfterSeq != nil || p.ThroughSeq > 0 {
 			return out, nil, true
@@ -234,6 +235,9 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		return page, nil, true
 	case "session.image", "session.item", "session.visualization":
 		out, err := call(method, params)
+		if method == "session.item" && err == nil {
+			out = n.toolViews.attachItemRaw(p.SessionID, out)
+		}
 		return out, err, true
 	case "session.watch":
 		attempt := n.runtimes.watch(h, p.SessionID, p.SinceSeq, p.History, rpc.ConnContext(ctx))

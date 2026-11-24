@@ -503,6 +503,68 @@ func (s schemas) compare(t *testing.T, at string, node map[string]any, g reflect
 			return
 		}
 	}
+	if disc := asString(node["x-discriminator"]); disc != "" {
+		if choices := asSlice(node["oneOf"]); len(choices) > 0 {
+			if g.Kind() != reflect.Struct {
+				t.Errorf("%s: the schema says discriminated union (%s), Go has %s", at, disc, g)
+				return
+			}
+			fields := map[string]goField{}
+			jsonFields(g, fields)
+			df, ok := fields[disc]
+			if !ok {
+				t.Errorf("%s.%s: discriminator in the schema, not in Go's %s", at, disc, g)
+			} else {
+				if df.omitempty {
+					t.Errorf("%s.%s: discriminator in the schema, Go's %s leaves it out when empty", at, disc, g)
+				}
+				if df.typ.Kind() != reflect.String {
+					t.Errorf("%s.%s: discriminator is string, Go has %s", at, disc, df.typ)
+				}
+			}
+			merged := map[string]map[string]any{}
+			for _, choice := range choices {
+				cm, _ := choice.(map[string]any)
+				ref := asString(cm["$ref"])
+				if ref == "" {
+					t.Errorf("%s: union branch without $ref", at)
+					continue
+				}
+				vname, variant := s.ref(t, ref)
+				vprops, _ := variant["properties"].(map[string]any)
+				dnode, _ := vprops[disc].(map[string]any)
+				if _, ok := dnode["const"].(string); !ok {
+					t.Errorf("%s→%s.%s: variant discriminator lacks string const", at, vname, disc)
+				}
+				for pname, pv := range vprops {
+					if pname == disc {
+						continue
+					}
+					pm, _ := pv.(map[string]any)
+					if _, exists := merged[pname]; !exists {
+						merged[pname] = pm
+					}
+				}
+			}
+			for pname, pm := range merged {
+				f, ok := fields[pname]
+				if !ok {
+					t.Errorf("%s.%s: in the schema, not in Go's %s", at, pname, g)
+					continue
+				}
+				s.compare(t, at+"."+pname, pm, f.typ, seen)
+			}
+			for fname := range fields {
+				if fname == disc {
+					continue
+				}
+				if _, ok := merged[fname]; !ok {
+					t.Errorf("%s.%s: Go's %s sends it, the schema does not say it", at, fname, g)
+				}
+			}
+			return
+		}
+	}
 	kind := func(want ...reflect.Kind) {
 		t.Helper()
 		if !slices.Contains(want, g.Kind()) {

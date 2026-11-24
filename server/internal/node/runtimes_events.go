@@ -90,6 +90,7 @@ func (n *Node) runtimeEvent(h *runtimeConn, event string, params json.RawMessage
 		n.runtimes.pushed(p.SessionID, last, p.History, p.FromSeq != nil && *p.FromSeq == 0)
 		if n.peer != nil {
 			raw := n.echoedRaw(p.SessionID, params, "items") // echo.go
+			raw = n.toolViews.attachRaw(p.SessionID, raw, "items", true)
 			raw = n.ttft.annotateRaw(p.SessionID, raw, "items", true)
 			_ = n.peer.Notify("session.items", raw)
 		}
