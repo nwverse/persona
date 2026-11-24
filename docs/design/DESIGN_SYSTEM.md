@@ -2263,6 +2263,8 @@ for VoiceOver, as section 4.8.1 keeps red for what is still wrong; one that time
 page cut, the result shows the output's end (End of output), where a build or test run says why it failed, before View
 full text. Without an outcome (an older node) a row draws as before.
 
+**Tool views (`tool_views`) and Map component (UI version 12, #14730)**. Out-of-band declarative views returned by connector tools (`Item.tool_views` / `Fold.tool_views`) render **outside** the collapsed tool work summary, beside "Images viewed this turn" and above the final reply, so visual routes and locations are immediately visible without opening raw tool calls (while Super Rule 2 keeps them out of model context). `map` components follow platform map styling matching the shell's current light/dark scheme, preserve semantic `tone` or the 11 named `Hue` colors (never both) alongside plain text labels/metrics rather than conveying meaning by color alone, keep `wide` (16:9) / `square` (1:1) / `tall` aspect frames bounded in chat cards, and use standard `>= 44 pt` / `48 dp` tap targets for expanding interactive map detail sheets (with route/marker inspection and verified `https://` map links). UI copy ships in English, Simplified Chinese and Japanese.
+
 ### 4.7.1 Opening and closing in a chat keeps the tapped row in place
 
 Anything that opens or closes inside a chat, in Persona's conversations and Agent chats alike (work lines, tool steps,

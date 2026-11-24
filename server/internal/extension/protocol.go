@@ -148,10 +148,15 @@ const (
 	// HubToolImages: a connector's tools.call answer may carry pictures for the model (images, #8484), within the
 	// limits of connector.ToolImagesMost and the rest. It is listed in HubCapabilities.
 	HubToolImages = "tool_images"
+	// HubToolViews: a connector's tools.call answer may carry out-of-band declarative views (views) rendered inline
+	// alongside assistant and agent turns without inflating model text. It is listed in HubCapabilities.
+	HubToolViews = "tool_views"
 )
 
 // HubCapabilities are this hub's.
-func HubCapabilities() []string { return []string{HubInboxGroup, HubInboxGroupState, HubToolImages} }
+func HubCapabilities() []string {
+	return []string{HubInboxGroup, HubInboxGroupState, HubToolImages, HubToolViews}
+}
 
 // ExtensionInfo is the plugin as the hub installed it.
 type ExtensionInfo struct {

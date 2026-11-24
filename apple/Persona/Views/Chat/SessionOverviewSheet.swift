@@ -839,7 +839,7 @@ struct SessionOverviewPresentation: ViewModifier {
 
     private var usesInspector: Bool {
         #if os(iOS)
-        widthClass == .regular
+        UIDevice.current.userInterfaceIdiom == .pad && widthClass == .regular
         #else
         false
         #endif
@@ -997,14 +997,20 @@ private struct SessionOverviewFullDetailContent: View {
 }
 
 private extension View {
-    /// `.inspector` where the SDK has one; visionOS has none (#14484), and there the overview is always the sheet
-    /// (`usesInspector` is false). Decided at compile time, so the view's identity never changes on a device.
+    /// `.inspector` on iPad only (#14484, #14730): wrapping compact iPhone `ChatView` inside `AssistantView`'s
+    /// value-based `NavigationStack(path:)` crashes `NavigationColumnState.boundPathChange` when pushing
+    /// `ShellRoute` destinations, and iOS `.inspector` adds stack frame overhead. visionOS, iPhone, and Mac always
+    /// use the `.sheet` presentation (`usesInspector` is false).
     @ViewBuilder func overviewInspector<Inspector: View>(isPresented: Binding<Bool>,
                                                          @ViewBuilder content: () -> Inspector) -> some View {
-        #if os(visionOS)
-        self
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            inspector(isPresented: isPresented, content: content)
+        } else {
+            self
+        }
         #else
-        inspector(isPresented: isPresented, content: content)
+        self
         #endif
     }
 }
