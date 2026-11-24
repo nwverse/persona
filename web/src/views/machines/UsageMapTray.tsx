@@ -1,4 +1,4 @@
-// The tray under the disk usage map (#14576, docs/server/machine-usage-map.md "Selection and what if"): the "what if"
+// The tray under the disk usage map (#14576, docs/server/machine-usage-map.md "The map"): the "what if"
 // line (free after, the gain, used before → after), the selection as rows with a remove button each (the map's
 // accessible, non-visual equivalent), the actions on it, the free-up goal slider, the trash notice with Undo and
 // Delete Permanently, and an offload job's progress. Nothing here calls the hub; UsageMap owns the state.
