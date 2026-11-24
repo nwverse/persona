@@ -1570,7 +1570,8 @@ explicit user-facing actions still follow the usual visibility rules.
 
 - **Which rounds**: in the main conversation, a round whose first input has the message source (`Item.source.kind`, else
   the `persona-context kind="message-source"` metadata or the hub's `injected` mark, read by each client's `sourceOf`)
-  `conversation`, `followup` or `patrol`. A `followup` counts only as a scheduled follow-up (the hub gives those the
+  `conversation`, `followup` or `patrol`. Web also folds `notice` rounds such as delivery PR follow-ups under the same
+  setting. A `followup` counts only as a scheduled follow-up (the hub gives those the
   task's title): Persona continuing the user's own work after a usage limit reset (`injected.state: limit_continue`),
   waking the chat for what it waits on (`wake`) or an untitled follow-up is not a background round, so the answer to
   the user's question never folds away. Like a supervision round it lasts until the next genuine input; a queued user
@@ -1588,11 +1589,17 @@ explicit user-facing actions still follow the usual visibility rules.
   receipt, using the same paged history and full-record renderer. Opening it marks nothing seen. Full transcript and
   feed APIs are unchanged. The hub suppresses unread only for the matching latest silent round: earlier genuinely
   visible unread work remains unread, working and needs-you states win, and a failed transcript read fails open.
+  An accepted review is internal only when the hub resolves the task's current plan with `user_requested=false` and
+  finds at least one source: a current-round completed (`clean` or `blocking`) `auto_review`, `round>0` after rework,
+  or a nonempty `parent` for a leader's internal subtask. Its successful `task_review` receipt carries
+  `background=true`; the receipt, tool call and reply stay in Background activity. `user_check`, `needs_user`, an
+  unmarked legacy review, or missing/ambiguous source metadata stays visible. The attention-cache version changes
+  with this classification so an older visible verdict is recomputed.
   Existing daily-briefing totals keep their meaning; a separate exact silently-handled daily total is out of scope
   because round metrics do not record visibility.
 - **Not folded** (the visibility rule supervision rounds use, `supervisionVisible` / `fold.supervision_user` from
   `server/internal/transcript/fold_supervision.go`): a round that used `ask_user` or `notify_user` successfully, a pending
-  `ask_user` while it runs, a `task_review` with an `accepted` or `needs_user` verdict card, or a `supervision_finish`
+  `ask_user` while it runs, a `task_review` with an unmarked `accepted` or any `needs_user` verdict card, or a `supervision_finish`
   with user visibility. A completed round with a nonblank final reply also stays open, even if delivery tools were
   unavailable, unless it settled with silent visibility. The full reply uses the ordinary reply bubble so its
   formatting and links remain available. Its work keeps the usual collapsed summary. Intermediate narration,
@@ -1776,18 +1783,24 @@ operation then read as accepted and the bubble waited for the transcript and wen
 - **Device signed out** (#10708). The hub gives the manager the sending device's credential ID when it keeps a
   message. Signing out that device fails its kept messages. Their rows say why and offer Delete. Messages kept
   before the hub recorded the sending credential have no device to match.
-- **Messages that need no reply** (#11614, `server/internal/assistant/relay_later.go`). `conversation_send` with
+- **Messages that need no reply** (#11614, #12867, `server/internal/assistant/relay_later.go`). `conversation_send` with
   `wake: false` is for acknowledgements and information the receiver does not have to act on. The message is kept
   for the receiver (`relayState.Later`, kept across a restart, at most 20 per conversation and 7 days) and goes in,
-  as a context block in front (`prompts/assistant/relay_later.md`), with the next message the manager delivers to
-  that conversation for anything else: a supervision message, another conversation's message, a scheduled follow-up,
-  a notice. It starts no turn of its own, costs no hop and no place in the relay rate, and is dropped only once the
-  message carrying it went in. Before a send with a `once_id`, its quiet-message context (including an empty one) is
-  saved and reused on retries, including after restart. A retry clears only that original context; later arrivals wait
-  for a new send ID. These reservations expire after seven days, beyond the node's ten-minute send-ID memory.
-  Nothing is guessed from the words: only the explicit argument decides. A `quote` (the
-  owner's request) always wakes, so the two together are refused. A turn the owner starts from an app does not carry
-  it; it shows above the composer meanwhile.
+  as a context block in front (`prompts/assistant/relay_later.md`), with the next message delivered to that
+  conversation for anything else: a supervision message, another conversation's message, a scheduled follow-up,
+  a notice, or an owner message sent from an app or web client (`assistant.send_params` and `session.assistant_sent`,
+  or kept undelivered retries). It starts no turn of its own, costs no hop and no place in the relay rate, and is
+  dropped (publishing the refreshed queue state immediately) only once the message carrying it went in. Before a manager
+  send with a `once_id`, its quiet-message context (including an empty one) is saved in `relayState.LaterSends` for
+  seven days and reused on retries, including after restart. For an owner send (`client_msg_id`), a reservation is saved
+  only when quiet messages are actually waiting to be carried (empty queues do zero relay writes), is deleted in the
+  same save once delivery is confirmed (or when a kept undelivered message is deleted), and expires after 24 hours
+  (`ownerLaterKeep`, matching `undeliveredGiveUp`) if never settled; an owner Retry of an earlier in-doubt kept send
+  only reuses an existing reservation without picking up later arrivals. If the relay state cannot be read on an owner
+  send, the send degrades and delivers the owner's own message without quiet context (leaving `Later` untouched), while
+  saving a carry reservation for waiting quiet messages stays fail-closed. Nothing is guessed from
+  the words: only the explicit argument decides. A `quote` (the owner's request) always wakes, so the two together are
+  refused. While kept, the message shows above the composer (`queuedRelays`) and disappears once consumed.
 - **Between conversations.** `conversation_send` to a conversation that cannot take the message now no longer fails:
   the message goes into its relay queue and is tried again under the same `once_id`. A conversation that failed to
   take a relayed message is tried again after `relayRetryGap` (30 s), not on every session list.
@@ -2815,6 +2828,24 @@ repeated. Retired callers lose manager tool authority immediately. Physical appr
 activation; the node's retirement latch prevents recovery and idle-compaction work on that segment. Closure is retried
 when offline nodes reconnect. Deleting a conversation cascades through segment history and queue content, retaining
 only deletion markers and minimal offline closure identities.
+
+`conversations_switch` and `POST /api/v1/assistant/conversation-switches` coordinate an explicit set of these logical
+switches without adding another engine protocol. The settings-backed batch stores each conversation's before-image,
+target, expected epoch and operation ID before starting anything. Busy items wait for their current turn and pending
+work; no interrupt or synthetic message completes a batch. When an activated batch item has no durable input pending,
+the coordinator accepts the completed switch immediately. If real input is pending, the first-turn acceptance/refusal
+rules above remain unchanged. A late preparation failure cannot return an activated operation to `in_doubt`;
+reconciliation continues from the activated state. The existing history loop and session-list changes wake queued items
+after a restart.
+
+The batch response distinguishes queued, switching, switched and refused items; one refusal does not cancel independent
+items. `restore_batch_id` creates a new, itself-restorable batch toward the original per-conversation settings rather
+than a global default. It only includes completed items whose current epoch and execution still match that batch's
+target. A conversation changed independently is reported and left alone. Empty requested model/effort retain launcher-
+default behavior, while a saved empty permission mode restores explicit `default` instead of inheriting the fallback.
+Preview creates neither state nor a phone confirmation; MCP execution uses one existing whole-batch outbound
+confirmation and the caller's space-scoped conversation lookup. Full-role HTTP routes and batch status are documented in
+[../protocol/protocol.md](../protocol/protocol.md).
 
 `GET/PUT /api/v1/assistant/segments` controls **new switches**, enabled by default. Disabling it keeps segment routing,
 reads and recovery running. A manager binary from before segment routing is **not a safe downgrade after a switch**:

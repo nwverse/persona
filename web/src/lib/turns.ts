@@ -778,16 +778,24 @@ function supervisionVisibility(ordered: Item[], results: ReadonlyMap<string, Ite
     }
     if (result.is_error) continue;
     if (name === "task_review") {
-      if (use.tool_input?.verdict === "accepted" || use.tool_input?.verdict === "needs_user") return { visible: true, completedSilent: false };
+      const verdict = use.tool_input?.verdict;
+      let internalAccepted = false;
+      if (verdict === "accepted" && use.tool_input?.user_check !== true) {
+        try {
+          const { background } = JSON.parse(result.text ?? "");
+          internalAccepted = background === true;
+        } catch {
+          // Legacy and malformed receipts keep the accepted review visible.
+        }
+      }
+      if ((verdict === "accepted" || verdict === "needs_user") && !internalAccepted) return { visible: true, completedSilent: false };
       continue;
     }
     if (name !== "supervision_finish") return { visible: true, completedSilent: false };
     try {
-      const value: unknown = JSON.parse(result.text ?? "");
-      if (value && typeof value === "object" && !Array.isArray(value) && "visibility" in value) {
-        if (value.visibility === "user") return { visible: true, completedSilent: false };
-        if (value.visibility === "silent") silent = true;
-      }
+      const { visibility } = JSON.parse(result.text ?? "");
+      if (visibility === "user") return { visible: true, completedSilent: false };
+      if (visibility === "silent") silent = true;
     } catch {
       // A failed or malformed receipt does not decide visibility.
     }
@@ -812,8 +820,8 @@ function hasBackgroundReply(items: Item[]): boolean {
 }
 
 /** Message sources whose rounds fold in the main conversation while `assistant.main_background_folded` is on
- *  (docs/assistant/assistant.md "Background rounds"): another conversation's message, a scheduled task, a follow-up. */
-const BACKGROUND_SOURCES: ReadonlySet<string> = new Set(["conversation", "followup", "patrol"]);
+ *  (docs/assistant/assistant.md "Background rounds"). */
+const BACKGROUND_SOURCES: ReadonlySet<string> = new Set(["conversation", "followup", "patrol", "notice"]);
 
 /** The input's source when it starts a background round. A `followup` is one only as a scheduled follow-up (the hub
  *  titles those): Persona continuing the user's own work after a usage limit reset (`limit_continue`) or waking the chat

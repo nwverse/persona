@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Start a Persona Core hub and manager built without any module, and check the core alone runs (#13978).
 
-Builds personad, persona-hub and persona-manager with -tags persona_core_only into a temporary directory, starts a
+Builds personad, persona-hub, persona-manager and persona-node with -tags persona_core_only into a temporary directory, starts a
 disposable Postgres 18 container on a private port, writes a hub.json for a temporary home (a token of its own, no
 computers) and runs `persona-hub run` with a clean environment, so nothing of this machine's own hub (~/.persona,
 PERSONA_HOME) is read. The hub starts the persona-manager beside it, as an installed hub does. Then it checks:
@@ -11,6 +11,11 @@ PERSONA_HOME) is read. The hub starts the persona-manager beside it, as an insta
 - every extension program a module provides (builtinext.AddProgram in server/internal/modules/all) is an unknown
   subcommand of personad and persona-manager (usage, exit 2), its built-in extension is not in /api/v1/extensions, and
   that extension's route (/api/v1/extensions/<id>/-/assistant-data) answers 404;
+- every device command a module's node half provides (commandport.AddCommand in server/internal/modules/all/node) is
+  an unknown subcommand of personad and persona-node, and their usage does not list it;
+- every connector a module registers on every hub (its port provided in server/internal/modules/all, ALWAYS_CONNECTORS)
+  is not in /api/v1/connectors?all=1, and its route (/api/v1/connectors/<id>/auth) answers 404;
+- every built-in extension a connector module adds (MODULE_EXTENSIONS) is not in /api/v1/extensions;
 - SIGTERM stops the hub and the manager within the timeout, exit 0.
 
 --full runs the same against a default build and expects the opposite (every module loaded, the programs, extensions
@@ -38,7 +43,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVER = ROOT / "server"
-PROGRAMS = ("personad", "persona-hub", "persona-manager")
+PROGRAMS = ("personad", "persona-hub", "persona-manager", "persona-node")
 DOCKER = os.environ.get("DOCKER", "docker")
 
 
@@ -58,6 +63,47 @@ def module_programs():
             continue
         names += re.findall(r'builtinext\.AddProgram\(\s*"([^"]+)"', path.read_text())
     return names
+
+
+def node_commands():
+    """The device commands the modules' node halves provide: commandport.AddCommand("<name>", …) in modules/all/node."""
+    names = []
+    for path in sorted((SERVER / "internal/modules/all/node").glob("*.go")):
+        if path.name.endswith("_test.go"):
+            continue
+        names += re.findall(r'commandport\.AddCommand\(\s*"([^"]+)"', path.read_text())
+    return names
+
+
+# The connector modules whose connector the manager registers on every hub, unconfigured too: the port the composition
+# root provides (server/internal/modules/all) and the connector's id.
+ALWAYS_CONNECTORS = {"githubport": "github"}
+# The connector modules that add a built-in extension of the extension manager's (its settings form), by port.
+MODULE_EXTENSIONS = {"imessageport": "imessage"}
+
+
+def module_connectors():
+    """The always-registered connectors the built-in modules provide: <port>.Provide(…) in modules/all."""
+    found = set()
+    for path in sorted((SERVER / "internal/modules/all").glob("*.go")):
+        if path.name.endswith("_test.go"):
+            continue
+        for port in re.findall(r"\b(\w+port)\.Provide\(", path.read_text()):
+            if port in ALWAYS_CONNECTORS:
+                found.add(ALWAYS_CONNECTORS[port])
+    return sorted(found)
+
+
+def module_extensions():
+    """The built-in extensions the connector modules add: <port>.Provide(…) in modules/all, MODULE_EXTENSIONS."""
+    found = set()
+    for path in sorted((SERVER / "internal/modules/all").glob("*.go")):
+        if path.name.endswith("_test.go"):
+            continue
+        for port in re.findall(r"\b(\w+port)\.Provide\(", path.read_text()):
+            if port in MODULE_EXTENSIONS:
+                found.add(MODULE_EXTENSIONS[port])
+    return sorted(found)
 
 
 def free_port():
@@ -144,6 +190,20 @@ def subcommands(bindir, full, programs):
                   f"{prog} {name}: the usage still lists the module's program")
 
 
+def device_commands(bindir, full, commands):
+    """A node half's device command is a subcommand of personad and persona-node only when the module is built in."""
+    for prog in ("personad", "persona-node"):
+        usage = run([str(bindir / prog), "no-such-command"], 30, stdin=subprocess.DEVNULL)
+        for name in commands:
+            listed = re.search(rf"\b(personad|persona-node) {re.escape(name)}\b", usage.stdout + usage.stderr)
+            if full:
+                check(listed, f"{prog}'s usage lacks {name}")
+                continue
+            check(not listed, f"{prog}'s usage still lists the module's command {name}")
+            r = run([str(bindir / prog), name], 30, stdin=subprocess.DEVNULL)
+            check(r.returncode == 2, f"{prog} {name}: exit {r.returncode}, want 2 (unknown subcommand)")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--full", action="store_true", help="a default build, expecting every module (the control)")
@@ -158,9 +218,13 @@ def main():
     started = time.monotonic()
     try:
         programs = module_programs()
+        connectors = module_connectors()
+        module_exts = module_extensions()
+        commands = node_commands()
         build("" if a.full else "persona_core_only", bindir)
         print(f"built {', '.join(PROGRAMS)} ({kind}) in {time.monotonic() - started:.0f}s", flush=True)
         subcommands(bindir, a.full, programs)
+        device_commands(bindir, a.full, commands)
         database = postgres(container)
         port, token = free_port(), secrets.token_hex(24)
         (home / ".persona").mkdir(parents=True)
@@ -168,7 +232,7 @@ def main():
         cfg.write_text(json.dumps({"listen": f"127.0.0.1:{port}", "token": token, "public_url": f"http://127.0.0.1:{port}",
                                    "database_url": database, "machines": []}))
         cfg.chmod(0o600)
-        # A clean environment: no PERSONA_HOME / JARVIS_HOME or other settings of this machine's own hub.
+        # A clean environment: no PERSONA_HOME (or its older name) or other settings of this machine's own hub.
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home), "TMPDIR": str(work), "LANG": "C.UTF-8",
                "PERSONA_LOCAL_NODE": "0"}
         with open(log, "w") as out:
@@ -200,6 +264,15 @@ def main():
             check((name in extensions) == a.full, f"extension {name} {'missing' if a.full else 'present'}: {sorted(extensions)}")
             status, _ = http(f"{base}/api/v1/extensions/{name}/-/assistant-data", token)
             check(status == (200 if a.full else 404), f"/api/v1/extensions/{name}/-/assistant-data: {status}")
+        for name in module_exts:
+            check((name in extensions) == a.full, f"extension {name} {'missing' if a.full else 'present'}: {sorted(extensions)}")
+        status, body = http(base + "/api/v1/connectors?all=1", token)
+        check(status == 200, f"/api/v1/connectors: {status}")
+        listed = {c["id"] for c in json.loads(body).get("connectors") or []}
+        for name in connectors:
+            check((name in listed) == a.full, f"connector {name} {'missing' if a.full else 'present'}: {sorted(listed)}")
+            status, _ = http(f"{base}/api/v1/connectors/{name}/auth", token)
+            check(status == (200 if a.full else 404), f"/api/v1/connectors/{name}/auth: {status}")
         os.killpg(hub.pid, signal.SIGTERM)
         try:
             code = hub.wait(60)
@@ -210,7 +283,9 @@ def main():
         check(not left, f"processes left after shutdown: {left}")
         hub = None
         print(f"PASS {kind} smoke: built, hub healthy, modules loaded: {loaded}, module programs "
-              f"{'present' if a.full else 'absent'} ({', '.join(programs) or 'none'}), clean shutdown "
+              f"{'present' if a.full else 'absent'} ({', '.join(programs) or 'none'}), module connectors "
+              f"{'present' if a.full else 'absent'} ({', '.join(connectors) or 'none'}), node commands "
+              f"{'present' if a.full else 'absent'} ({', '.join(commands) or 'none'}), clean shutdown "
               f"({time.monotonic() - started:.0f}s)")
         return 0
     except (Failed, TimedOut) as e:

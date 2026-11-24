@@ -64,13 +64,13 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
                   paneBadges: AgentMenuFacts.paneBadges(AgentMenuRouting.shared.gitStatus(session)),
                   currentPane: currentPane, review: model.features(session.group).contains("git_review") && !session.cwd.isEmpty,
                   preview: !model.isDemo && model.features(session.group).contains(PreviewLogic.feature) && !session.cwd.isEmpty,
-                  screen: model.canShowScreen(session.key.machineRef),
+                  screen: model.liveScreen?.canShow(session.key.machineRef) ?? false,
                   todoHub: TodoStore.shared.isSupported && TodosLogic.isOnTodosHub(sessionGroup: session.group, hubGroup: model.hub?.group),
                   sideCount: (sides ?? (hosted ? SideSessions() : model.sides(of: session.key))).rows.count,
                   hosted: hosted, showsSpace: showsSpace,
                   terminalResume: session.status == .offline || session.status == .unknown
                     ? session.terminalResume(on: model.machine(session.key.machineRef)) : .hidden,
-                  phone: AgentMenuFacts.isPhone, moveChoices: moveChoices)
+                  phone: AgentMenuFacts.supportsTakeover, moveChoices: moveChoices)
     }
 
     /// Test and preview construction needs no live hub. Production uses the model initializer above.
@@ -175,9 +175,10 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
 }
 
 enum AgentMenuFacts {
-    @MainActor static var isPhone: Bool {
+    /// Takeover and continuation are available on iOS (iPhone and iPad); retired native Mac stays excluded.
+    nonisolated static var supportsTakeover: Bool {
         #if os(iOS)
-        UIDevice.current.userInterfaceIdiom == .phone
+        true
         #else
         false
         #endif
@@ -433,7 +434,7 @@ struct AgentActionMenu: View, Equatable {
                 Task { await model.askPersona(AgentHandoff.prompt(s, machine: model.machine(s.machineRef)?.name)) }
             } label: { Label("Hand to Persona", systemImage: Theme.Icon.ai) }
         case .screen:
-            ScreenMenu(machine: facts.key.machineRef, from: facts.key)
+            ModuleViews(place: .chatMenu, context: .init(machine: facts.key.machineRef, from: facts.key))
         case .copyDirectory:
             Button { UIPasteboard.general.string = now()?.cwd } label: { Label("Copy Directory", systemImage: Theme.Icon.folder) }
         case .terminal:

@@ -11,6 +11,7 @@ import (
 // then writes into it — the whole card, an element's text streamed, its streaming turned off — each write with the
 // sequence it gives.
 func TestCardEntityCalls(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	card := botcard.NewCard("", "", "Working").MarkdownID("live", "").Streaming().JSON()
