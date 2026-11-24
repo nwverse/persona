@@ -319,6 +319,50 @@ func TestAgyStartResolvesSuffixedModelEffort(t *testing.T) {
 	}
 }
 
+// A read-only agy task the hub sends to the companion (host agy, plan) reaches it in plan mode only when the companion
+// promises read-only starts (caps.readonly, as the Antigravity companion does); otherwise it is refused before anything
+// starts. Either way no pane opens (#13464).
+func TestAgyCompanionPlanStartNeedsReadonly(t *testing.T) {
+	for _, readonly := range []bool{true, false} {
+		t.Run(map[bool]string{true: "readonly", false: "unverified"}[readonly], func(t *testing.T) {
+			n, f, home := herdrNode(t)
+			n.logger = log.New(io.Discard, "", 0)
+			n.runtimeSock = filepath.Join(filepath.Dir(f.sock), "runtime.sock")
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			if _, err := n.listenRuntimeSocket(ctx); err != nil {
+				t.Fatal(err)
+			}
+			hello := assistantRuntimeHello()
+			hello["runtime"], hello["agent"], hello["launcher"] = agyAgent, agyAgent, agyAgent
+			hello["launchers"] = []map[string]any{{"name": agyAgent, "agent": agyAgent}}
+			hello["caps"].(map[string]any)["readonly"] = readonly
+			companion := dialRuntime(t, n, hello)
+			companion.mu.Lock()
+			companion.answer = func(method string, _ json.RawMessage) (any, error) {
+				if method == "session.start" {
+					return map[string]any{"session": proto.Session{SessionID: "agy-readonly", Cwd: home, Status: proto.StatusIdle}}, nil
+				}
+				return map[string]any{"ok": true}, nil
+			}
+			companion.mu.Unlock()
+			_, err := nodeCall(t, n, "session.start", map[string]any{"cwd": home, "launcher": agyAgent, "host": proto.HostAgy,
+				"permission_mode": "plan", "prompt": "Inspect the project"})
+			starts := companion.got("session.start")
+			var start map[string]any
+			switch {
+			case readonly && (err != nil || len(starts) != 1 || json.Unmarshal(starts[0], &start) != nil || start["permission_mode"] != "plan"):
+				t.Fatalf("read-only start on the companion: %v, starts %s", err, starts)
+			case !readonly && (rpcCode(err) != "readonly_unsupported" || len(starts) != 0):
+				t.Fatalf("read-only start on a companion without caps.readonly: %v, starts %s", err, starts)
+			}
+			if len(f.trace("tab.create")) != 0 {
+				t.Fatal("a read-only companion start opened a pane")
+			}
+		})
+	}
+}
+
 func TestAgyStartRefusesInvalidEffortBeforeCreatingPane(t *testing.T) {
 	n, f, home := herdrNode(t)
 	for _, effort := range []string{"auto", "ultra", "bogus"} {

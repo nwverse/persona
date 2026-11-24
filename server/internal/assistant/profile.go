@@ -215,6 +215,11 @@ type Settings struct {
 	// MainSupervisesOwnTasks: the main conversation follows up the tasks no leader supervises itself. nil is off (the
 	// default, #4927): the background supervisor does (supervise_background.go).
 	MainSupervisesOwnTasks *bool `json:"main_supervises_own_tasks,omitempty"`
+	// AutoSupervisionMessages: the assistant sends its automatic supervision messages (the follow-up messages that wake
+	// the main, leader or background supervisor conversation). nil is on (the default); false stops them from being
+	// made, queued or sent, and withdraws the ones still waiting (supervise_switch.go). The task ledger, the owner's own
+	// questions and acceptance, permission cards and approval answers do not depend on it.
+	AutoSupervisionMessages *bool `json:"auto_supervision_messages,omitempty"`
 	// SupervisionBatchMinutes independently batches routine supervision per final recipient, anchored at its first
 	// routine signal. Nil or 0 preserves the legacy shared gather and spacing. Immediate signals bypass the batch.
 	SupervisionBatchMinutes *int `json:"supervision_batch_minutes,omitempty"`
@@ -729,6 +734,7 @@ func (s *Service) leadSessions(ctx context.Context, v Settings) []SessionRef {
 
 // settingsChanged: the hub learns them (the snapshot's profile) and the next message reads the time in the new zone.
 func (s *Service) settingsChanged(ctx context.Context) {
+	s.syncAutoSupervision(ctx)          // the automatic-supervision switch takes effect now (supervise_switch.go)
 	s.transcriptionSettingsChanged(ctx) // only another contribution chosen drops the readiness answer
 	s.ProfileChanged(ctx)
 	s.revalidateFailedStartDeferrals(ctx)
@@ -830,6 +836,8 @@ type assistantView struct {
 	// the tasks no leader supervises.
 	MainSupervisesOwnTasks  bool `json:"main_supervises_own_tasks"`
 	SupervisionBatchMinutes int  `json:"supervision_batch_minutes"`
+	// AutoSupervisionMessages is in effect (true unless the owner turned the automatic supervision messages off).
+	AutoSupervisionMessages bool `json:"auto_supervision_messages"`
 }
 
 // view is GET /api/v1/assistant; withArchived lists archived conversations too (flagged `archived`). It lists the
@@ -880,6 +888,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		PREventsRouteToAgent:         v.PREventsRouteToAgent != nil && *v.PREventsRouteToAgent,
 		MainSupervisesOwnTasks:       !s.backgroundOn(v),
 		SupervisionBatchMinutes:      supervisionBatchMinutesOf(v),
+		AutoSupervisionMessages:      autoSupervisionOf(v),
 		NextSuggestions:              v.NextSuggestions != nil && *v.NextSuggestions}
 	if d, ok := s.device(ctx, v.MachineID); ok {
 		out.Cwd = s.spaceCwd(ctx, d, sp)

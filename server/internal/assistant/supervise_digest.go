@@ -53,6 +53,13 @@ func (s *Service) sendDigest(ctx context.Context) {
 	b.dedupMu.Lock()
 	defer b.dedupMu.Unlock()
 	b.mu.Lock()
+	if !s.autoSupervisionOn(ctx) {
+		// Switched off while this digest waited for its turn: nothing is taken out of the gather, and the withdrawal
+		// empties it.
+		b.mu.Unlock()
+		s.syncAutoSupervision(ctx)
+		return
+	}
 	b.timer, b.timerAt = nil, time.Time{}
 	b.syncBatchInterval(batch)
 	list := make([]superviseSignal, 0, len(b.pending))
@@ -567,6 +574,12 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		return true
 	}
 	if err := s.tryDirectRelay(ctx, here.MachineID, to, &msg); err != nil {
+		if relaySuppressed(err) {
+			// Switched off since the digest was gathered: not delivered, not queued, not retried. The reservation is
+			// released (the deferred rollback) and what is left of the outbox goes with the withdrawal.
+			s.ackSupervisePending(list)
+			return false
+		}
 		if s.refusedDirect(ctx, here.MachineID, to, msg, err) {
 			accepted = true // retire this delivery while keeping the task available for review
 			return true
@@ -625,13 +638,17 @@ func (s *Service) queueDigest(to string, msg relayMsg, kept []superviseSignal, a
 	msg.Interject = false // interject is never persisted in the relay queue
 	b := &s.supervise
 	msg.Signals = encodeDigestSignals(kept)
-	if n, err := s.queueRelayDurable(to, msg); err == nil && n > 0 {
+	n, err := s.queueRelayDurable(to, msg)
+	if err == nil && n > 0 {
 		b.mu.Lock()
 		if !wasInterject {
 			b.setQueuedLocked(to, kept)
 		}
 		b.mu.Unlock()
 		return true
+	}
+	if relaySuppressed(err) {
+		return false // switched off since the digest was gathered: nothing waits, and nothing is retried
 	}
 	retry := s.superviseTimings().urgent
 	s.logf("supervise: the relay queue can't be read; %d signal(s) wait, trying again in %s", len(kept), retry)
@@ -692,6 +709,9 @@ func (s *Service) replaceQueuedSupervise(to string, msg relayMsg) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !s.relayLocked(context.Background()) {
+		return false
+	}
+	if !s.autoSupervisionOn(context.Background()) {
 		return false
 	}
 	previousQueue := b.st.Queue
