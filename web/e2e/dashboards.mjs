@@ -1,4 +1,4 @@
-// Dashboards on the web (#15017) against the mock hub's Dashboards domain (MOCK_DASHBOARDS, #15033): the sidebar unchanged
+// Dashboards on the web (#15017) against the mock hub's Dashboards domain (scripts/mock/dashboards_mock.py): the sidebar unchanged
 // with the switch off and with it on but nothing kept (compared pixel by pixel with a build of origin/main when --before
 // is given), then with Dashboards and one pinned page (the desktop list and the phone's page grid), the index, the
 // running page after a tap ("Received"), an unpinned page opened by its address (titled by itself, with the ownership

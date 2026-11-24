@@ -1413,7 +1413,7 @@ so the sidebar entry, the full page (`/extension/-pages/<id>`), the deep link, t
   the value the hub confirmed.
 - With the switch off, or on with nothing kept, nothing on the sidebar, the phone's page grid or Overview changes.
 
-To see it: the mock hub with `MOCK_DASHBOARDS=1` (its Dashboards domain, #15033; `off`, `empty`, `removed` and `pinned`
+To see it: the mock hub with `MOCK_DASHBOARDS=1` (`scripts/mock/dashboards_mock.py`; `off`, `empty`, `removed` and `pinned`
 for the other states) and `npx vite`. `node web/e2e/dashboards.mjs` (its header says how to start both) checks all of the
 above in light and dark at 1280 and 390 wide in each language, compares the sidebar with the switch off and on with
 nothing kept against a build of `origin/main` pixel by pixel (`--before`), and, with `--extensions`, that Dashboards stays
