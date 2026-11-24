@@ -6577,9 +6577,12 @@ closed only after first-turn acceptance. Full/image requests and scoped subscrip
 Logical seq values remain signed-int32-safe integers. Each later segment starts at the previous segment's offset plus
 its frozen physical end. First-segment item IDs and history remain unchanged; later item IDs have a segment namespace.
 Frozen-range backfill and retired-tail appends do not rewrite logical history. A real source-generation rewrite does.
-Live spans, empty boundary bridges, history pages and reconnect backlog follow the same projection. The manager may
-report `devices.state` machine `transport_for` to retain a bus identity after a source computer is removed; the hub
-validates manager ownership and forwards only, without resolving segments.
+Live spans, empty boundary bridges, history pages and reconnect backlog follow the same projection. A source batch
+with `from_seq` past `to_seq` (a cursor from an earlier numbering of a source that renumbered under a new history, as
+agy does when a turn's export replaces its live steps) is an empty span at the source's end: the page, live event or
+backlog still reaches the reader with the logical history the rewrite changed, and the reader starts over (#14354).
+The manager may report `devices.state` machine `transport_for` to retain a bus identity after a source computer is
+removed; the hub validates manager ownership and forwards only, without resolving segments.
 
 The logical-segment client first reads
 `GET /api/v1/assistant/conversations/{id}/segments?machine_id=...` to obtain the
