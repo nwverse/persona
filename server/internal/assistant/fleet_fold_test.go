@@ -819,3 +819,66 @@ func TestFoldInventoryRefreshesPendingInteractionOnFoldChange(t *testing.T) {
 		return false
 	})
 }
+
+// Adding an outgoing cross-machine edge to an already-cached parent machine is never treated as a
+// cache hit even when foldMeta[machine] was already pre-populated with identical entries (e.g. seeded).
+func TestFoldInventoryAddedOutgoingEdgeIsCacheMiss(t *testing.T) {
+	s := &Service{}
+	macList := []proto.Session{foldRow("lead", proto.StateIdle, func(r *proto.Session) { r.MachineID = "mac" })}
+	relayList := []proto.Session{foldRow("mid", proto.StateWorking, func(r *proto.Session) {
+		r.MachineID, r.IsSubagent, r.ParentSessionID = "relay", true, "lead"
+		r.SetParentMachineID("mac")
+	})}
+	// Simulate both machines already cached in foldMeta (e.g. via seeding) without the relay -> mac edge recorded yet.
+	s.fleet.foldMu.Lock()
+	s.fleet.foldMeta = map[string][]foldEntry{
+		"mac":   toFoldEntries(macList, nil),
+		"relay": toFoldEntries(relayList, nil),
+	}
+	s.fleet.folds = map[string]sessionFold{}
+	s.fleet.foldMu.Unlock()
+
+	s.foldInventory("relay", relayList)
+	if relayList[0].FoldedUnder() != "lead" || relayList[0].FoldedUnderMachineID() != "mac" {
+		t.Fatalf("added outgoing edge was short-circuited: folded=%q machine=%q", relayList[0].FoldedUnder(), relayList[0].FoldedUnderMachineID())
+	}
+	s.fleet.foldMu.Lock()
+	macFold := s.fleet.folds["mac"]
+	s.fleet.foldMu.Unlock()
+	if got := macFold.children["lead"]; got == nil || *got != (proto.SessionChildren{Total: 1, Working: 1}) {
+		t.Fatalf("parent rollup not computed after added outgoing edge: %+v", got)
+	}
+}
+
+// Concurrent local parent folding and cross-machine child arrival must never overwrite the parent's
+// cross-machine rollup when rechecking cross-machine membership under foldMu.
+func TestFoldInventoryLocalRecheckDoesNotClobberConcurrentCrossChild(t *testing.T) {
+	for range 32 {
+		s := &Service{}
+		macRows := func() []proto.Session {
+			return []proto.Session{foldRow("lead", proto.StateIdle, func(r *proto.Session) { r.MachineID = "mac" })}
+		}
+		boxRows := func() []proto.Session {
+			return []proto.Session{foldRow("sub", proto.StateWorking, func(r *proto.Session) {
+				r.MachineID, r.IsSubagent, r.ParentSessionID = "box", true, "lead"
+				r.SetParentMachineID("mac")
+			})}
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			s.foldInventory("box", boxRows())
+		}()
+		s.foldInventory("mac", macRows())
+		<-done
+
+		// Final settled fold for mac (after both goroutines finish, regardless of arrival order) MUST include box/sub.
+		s.foldInventory("mac", macRows())
+		s.fleet.foldMu.Lock()
+		got := s.fleet.folds["mac"].children["lead"]
+		s.fleet.foldMu.Unlock()
+		if got == nil || *got != (proto.SessionChildren{Total: 1, Working: 1}) {
+			t.Fatalf("concurrent local fold clobbered cross-machine rollup: %+v", got)
+		}
+	}
+}

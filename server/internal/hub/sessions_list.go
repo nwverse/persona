@@ -188,6 +188,34 @@ func (h *Hub) indexStampedLocked(mid string, list []proto.Session, stamp bool, m
 		items = make([]sessionlist.Item, len(ids))
 	}
 	var crossParents map[string]bool
+	var localKids map[string]proto.SessionChildren
+	for _, i := range rows {
+		if list[i].Children().Total > 0 {
+			localKids = map[string]proto.SessionChildren{}
+			break
+		}
+	}
+	if localKids != nil {
+		for _, i := range rows {
+			r := list[i].FoldedUnder()
+			rm := list[i].FoldedUnderMachineID()
+			if r == "" || (rm != "" && rm != mid) || !seen[r] {
+				continue
+			}
+			c := localKids[r]
+			c.Total++
+			switch list[i].State {
+			case proto.StateWorking:
+				c.Working++
+			case proto.StateNeedsYou:
+				c.NeedsYou++
+			}
+			if list[i].FoldedAs() == proto.FoldedAsSide && list[i].State == proto.StateUnread {
+				c.SidesUnread++
+			}
+			localKids[r] = c
+		}
+	}
 	for k, i := range rows {
 		root := list[i].FoldedUnder() // the paged list folds it only under a row it lists (roots, parent_session_id)
 		rootMachine := list[i].FoldedUnderMachineID()
@@ -209,7 +237,11 @@ func (h *Hub) indexStampedLocked(mid string, list []proto.Session, stamp bool, m
 				}
 			}
 		}
-		items[k] = indexedRow(mid, ids[k], &list[i], stamp, manager, root, rootMachine, full[list[i].SessionID], items[k])
+		var local proto.SessionChildren
+		if localKids != nil {
+			local = localKids[list[i].SessionID]
+		}
+		items[k] = indexedRow(mid, ids[k], &list[i], stamp, manager, root, rootMachine, local, full[list[i].SessionID], items[k])
 	}
 	// The machine's manager goes with its batch (?manager=<id>, sessionsManager): the one a kept list is stamped with,
 	// else the one its rows came stamped with (stamped: every row of a machine carries its manager).
@@ -298,7 +330,7 @@ func (h *Hub) reindexCrossDependentsLocked(parentMid string) {
 // the index holds under id (the zero Item for none). When indexed's Full is raw with the same pane_source, its Summary
 // is what row's is too: the summary is cut from the fields raw encodes. Both are then kept, and the item is unchanged
 // for Replace, rather than marshalled again. The scalars are always read from row.
-func indexedRow(mid, id string, row *proto.Session, stamp bool, manager, root, rootMachine string, raw json.RawMessage, indexed sessionlist.Item) sessionlist.Item {
+func indexedRow(mid, id string, row *proto.Session, stamp bool, manager, root, rootMachine string, localKids proto.SessionChildren, raw json.RawMessage, indexed sessionlist.Item) sessionlist.Item {
 	project := row.RepoRoot
 	if project == "" {
 		project = row.WorkspaceCwd
@@ -320,7 +352,7 @@ func indexedRow(mid, id string, row *proto.Session, stamp bool, manager, root, r
 		ID: id, Machine: mid, Project: project, Group: group, PaneSource: pane, HiddenByDirectory: row.HiddenByDirectory(),
 		State: row.State, BackgroundWaiting: row.BackgroundWaiting, JustFinished: row.Work != nil && row.Work.JustFinished,
 		Source: row.SourceKind, Provider: row.Agent, UpdatedAt: row.UpdatedAt,
-		Fold: indexedFold(mid, row, root, rootMachine, todo, indexed.Fold), Private: spaceSession(row), Assistant: row.Assistant,
+		Fold: indexedFold(mid, row, root, rootMachine, todo, localKids, indexed.Fold), Private: spaceSession(row), Assistant: row.Assistant,
 		Subagent: row.IsSubagent || row.IsCodexSubagent(),
 	}
 	// What q finds a row by: the fields the apps' own searches read, the branch too (#4770).
@@ -350,12 +382,32 @@ func indexedRow(mid, id string, row *proto.Session, stamp bool, manager, root, r
 // when it has neither and shows its own state and background wait (a row without children or a to-do), else was when
 // that is the same metadata, else a new one. A side session folded under root is searched as root's row (SearchAs,
 // #7944). Folds are shared between copies of an item and never written in place.
-func indexedFold(mid string, row *proto.Session, root, rootMachine, todo string, was *sessionlist.Fold) *sessionlist.Fold {
+func foldedStateWith(s *proto.Session, c proto.SessionChildren) string {
+	switch {
+	case s.State == proto.StateNeedsYou || c.NeedsYou > 0:
+		return proto.StateNeedsYou
+	case c.Working > 0 && s.State != proto.StateUnread && !(s.State == proto.StateIdle && s.AwaitsReply):
+		return proto.StateWorking
+	case c.SidesUnread > 0 && s.State != proto.StateWorking:
+		return proto.StateUnread
+	}
+	return s.State
+}
+
+func indexedFold(mid string, row *proto.Session, root, rootMachine, todo string, localKids proto.SessionChildren, was *sessionlist.Fold) *sessionlist.Fold {
 	if root == "" {
 		rootMachine = ""
 	}
 	kids := row.Children()
 	fold := sessionlist.Fold{Root: root, RootMachine: rootMachine, State: row.FoldedState(), Todo: todo, BackgroundWaiting: row.BackgroundWaiting && kids.Working == 0 && kids.NeedsYou == 0}
+	if kids.Total > 0 && localKids.Total < kids.Total {
+		// Parent rolls up at least one cross-machine child. Legacy roots=1 clients (without
+		// cross_machine_hierarchy=1) keep cross-machine children listed separately, so compute
+		// the parent's same-machine-only folded state to avoid double-counting needs_you/working.
+		fold.HasLegacyFold = true
+		fold.LegacyState = foldedStateWith(row, localKids)
+		fold.LegacyBackgroundWaiting = row.BackgroundWaiting && localKids.Working == 0 && localKids.NeedsYou == 0
+	}
 	if root == "" && (row.IsSubagent || row.IsCodexSubagent()) {
 		directParent := row.ParentSessionID
 		if directParent == "" {

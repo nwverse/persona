@@ -100,9 +100,9 @@ func TestQueryCrossMachineHierarchyAndOrphanSubagents(t *testing.T) {
 
 	var index Index
 	lead := testItem("lead", 1)
-	lead.Machine, lead.State, lead.Fold = "mac", "idle", &Fold{State: "working"}
+	lead.Machine, lead.State, lead.Fold = "mac", "idle", &Fold{State: "needs_you", HasLegacyFold: true, LegacyState: "working"}
 	localKid := testItem("local-kid", 2)
-	localKid.Machine, localKid.State, localKid.Subagent, localKid.Fold = "mac", "idle", true, &Fold{Root: "lead", State: "idle"}
+	localKid.Machine, localKid.State, localKid.Subagent, localKid.Fold = "mac", "working", true, &Fold{Root: "lead", State: "working"}
 	orphanSub := testItem("orphan-sub", 3)
 	orphanSub.Machine, orphanSub.State, orphanSub.Subagent, orphanSub.Fold = "mac", "working", true, &Fold{DirectParent: "archived-lead", State: "working"}
 	orphanNeeds := testItem("orphan-needs", 4)
@@ -128,12 +128,21 @@ func TestQueryCrossMachineHierarchyAndOrphanSubagents(t *testing.T) {
 			t.Fatalf("unexpected row in roots=1&cross_machine_hierarchy=1: %s", id)
 		}
 	}
+	newCounts, err := index.Counts(Options{Roots: true, CrossMachineHierarchy: true})
+	if err != nil || newCounts.State["needs_you"] != 1 || newCounts.State["working"] != 0 {
+		t.Fatalf("new counts = %+v (err %v), want needs_you=1 working=0", newCounts, err)
+	}
 
 	// Legacy clients (roots=1 WITHOUT cross_machine_hierarchy=1) hide same-machine folded & non-blocking
-	// orphan subagents, while keeping cross-machine folded rows and needs_you orphan subagents reachable.
+	// orphan subagents, keep cross-machine folded rows and needs_you orphan subagents reachable, and use
+	// LegacyState on the parent so cross-machine needs_you is NOT double-counted on both parent and child.
 	rootsLegacy := mustQuery(t, &index, Options{Limit: 20, Roots: true})
 	if rootsLegacy.Total != 4 || len(rootsLegacy.Sessions) != 4 {
 		t.Fatalf("legacy roots = total %d rows %+v, want 4 (remote-kid + orphan-plain + orphan-needs + lead)", rootsLegacy.Total, rootsLegacy.Sessions)
+	}
+	legacyCounts, err := index.Counts(Options{Roots: true})
+	if err != nil || legacyCounts.State["needs_you"] != 2 || legacyCounts.State["working"] != 1 {
+		t.Fatalf("legacy counts = %+v (err %v), want needs_you=2 (remote-kid + orphan-needs, not lead) and working=1 (lead)", legacyCounts, err)
 	}
 
 	// parent_machine_id+parent_session_id and machine_id+parent_session_id+cross_machine_hierarchy=1

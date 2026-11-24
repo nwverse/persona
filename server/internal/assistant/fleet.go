@@ -113,7 +113,7 @@ type fleetBook struct {
 	subagentsMu           sync.RWMutex
 	subagentsLegacyLoaded bool
 	subagents             map[[2]string]subagentLink
-	subagentsChecked      map[[2]string]bool
+	subagentsChecked      map[string]map[string]struct{} // machine -> checked sessionIDs
 	subagentsByTask       map[string][2]string
 
 	// rep is the last snapshot's parts the session lists show (fleetTakeSnapshot).

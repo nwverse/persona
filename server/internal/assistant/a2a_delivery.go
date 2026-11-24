@@ -160,6 +160,15 @@ func (s *Service) a2aProcess(ctx context.Context, st a2aStore, cfg assistantwire
 	if t.State == a2aQueued {
 		return nil
 	}
+	// If A2A subagent launches were disabled while a launch was still queued (never sent to a node),
+	// fail it explicitly even before the target computer comes back online. Already-attempted launches
+	// keep reconciling normally, and ordinary peer messages or dispatches are unaffected.
+	if t.Launch != nil && t.Launch.Pending && !t.Launch.Dispatch && !a2aTerminal(t.State) &&
+		len(t.Events) > 0 && t.Events[0].Delivery == a2aQueued && !cfg.LaunchAllowed() {
+		t.fail("Starting new A2A subagent sessions is disabled by configuration.", true)
+		s.forgetA2ASubagent(t.ID)
+		return s.a2aSave(ctx, st, t)
+	}
 	machine := s.logicalExecutionMachine(ctx, t.TargetMachine, t.TargetSession)
 	offline := s.computerState(machine).state == standingComputerOffline
 	if !a2aTerminal(t.State) && offline != t.Disconnected {

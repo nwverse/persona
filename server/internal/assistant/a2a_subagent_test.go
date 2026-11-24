@@ -21,8 +21,9 @@ import (
 // under `go test -race` even when PERSONA_TEST_DATABASE_URL is not configured.
 type memA2AStore struct {
 	memStore
-	mu   sync.Mutex
-	rows map[string]db.A2ARow
+	mu            sync.Mutex
+	rows          map[string]db.A2ARow
+	launchQueries int
 }
 
 func newMemA2AStore() *memA2AStore {
@@ -159,6 +160,7 @@ func (m *memA2AStore) A2ADispatches(_ context.Context, owner, machine, session s
 func (m *memA2AStore) A2ALaunchesForTargets(_ context.Context, machine string, sessions []string) ([]db.A2ARow, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.launchQueries++
 	want := make(map[string]bool, len(sessions))
 	for _, sid := range sessions {
 		want[sid] = true
@@ -396,7 +398,8 @@ func TestA2ADefaultSubagentFlowWithoutPostgres(t *testing.T) {
 		t.Fatalf("subagent completion report failed: %s", resultText(r))
 	}
 
-	// 7. Offline queued launch rechecks agents.a2a.launch=false before its first session.start.
+	// 7. Offline queued launch fails IMMEDIATELY when agents.a2a.launch=false (even while target is still
+	// offline), without affecting already-attempted launches or ordinary peer messages.
 	h.mu.Lock()
 	h.offline = map[string]bool{"box": true}
 	h.mu.Unlock()
@@ -409,17 +412,44 @@ func TestA2ADefaultSubagentFlowWithoutPostgres(t *testing.T) {
 	if err := json.Unmarshal([]byte(resultText(resQueued)), &queuedView); err != nil {
 		t.Fatal(err)
 	}
+	// Also enqueue a second launch and mark it already attempted (a2aSending) to verify launch=false does not clobber it.
+	rawInflight, _ := json.Marshal(map[string]any{"machine_id": "box", "cwd": "/code/app", "message_id": "m-inflight-offline", "text": "Already sent."})
+	resInflight := restarted.mcpCall(ctx, parent.Ref.Machine, parent.Ref.Session, "a2a_send", rawInflight, false)
+	if resInflight.IsError {
+		t.Fatalf("inflight launch enqueue failed: %s", resultText(resInflight))
+	}
+	var inflightView a2aTaskView
+	if err := json.Unmarshal([]byte(resultText(resInflight)), &inflightView); err != nil {
+		t.Fatal(err)
+	}
+	inflightTask, err := decodeA2A(st.A2AGet(ctx, inflightView.ID))
+	if err != nil || inflightTask == nil {
+		t.Fatalf("load inflight task: %v", err)
+	}
+	inflightTask.Events[0].Delivery = a2aSending
+	inflightTask.Events[0].Attempted = time.Now().UTC()
+	if err := restarted.a2aSave(ctx, st, inflightTask); err != nil {
+		t.Fatal(err)
+	}
+
 	startsBefore := len(h.starts)
 	off := false
 	h.hello.Agents.A2A = assistantwire.A2AConfig{Launch: &off}
+	// Target machine "box" is STILL OFFLINE: never-attempted queued launch must fail right away.
+	queuedDone := processMemA2A(t, restarted, st, restarted.a2aConfig(ctx), queuedView.ID)
+	if queuedDone.State != a2aFailed || queuedDone.Launch.Pending || len(h.starts) != startsBefore {
+		t.Fatalf("disabled offline queued launch did not fail immediately before online gate: state=%s pending=%v starts=%d (was %d)",
+			queuedDone.State, queuedDone.Launch.Pending, len(h.starts), startsBefore)
+	}
+	// Already-attempted launch stays pending reconciliation while offline.
+	inflightAfter := processMemA2A(t, restarted, st, restarted.a2aConfig(ctx), inflightView.ID)
+	if inflightAfter.State == a2aFailed || !inflightAfter.Launch.Pending {
+		t.Fatalf("already-attempted offline launch was prematurely failed by launch=false: state=%s pending=%v",
+			inflightAfter.State, inflightAfter.Launch.Pending)
+	}
 	h.mu.Lock()
 	h.offline = nil
 	h.mu.Unlock()
-	queuedDone := processMemA2A(t, restarted, st, restarted.a2aConfig(ctx), queuedView.ID)
-	if queuedDone.State != a2aFailed || queuedDone.Launch.Pending || len(h.starts) != startsBefore {
-		t.Fatalf("disabled launch started or did not fail cleanly: state=%s pending=%v starts=%d (was %d)",
-			queuedDone.State, queuedDone.Launch.Pending, len(h.starts), startsBefore)
-	}
 
 	// 8. Config opt-outs: Launch=false disables new launches while preserving peer discovery; Machines=[] disables all.
 	rawDisabled, _ := json.Marshal(map[string]any{"machine_id": "box", "cwd": "/code/app", "message_id": "m-off", "text": "No."})
@@ -434,4 +464,124 @@ func TestA2ADefaultSubagentFlowWithoutPostgres(t *testing.T) {
 		t.Fatalf("Machines=[] allowed launch: %s", resultText(r))
 	}
 	_ = slices.Contains(proto.PermissionModes, "auto")
+}
+
+// End-to-end manager mcp.call envelope verification for a2a_send live SourcePermission attestation:
+// bypass permits acceptEdits, prompting permits default and rejects acceptEdits, missing/mismatched fails closed.
+func TestA2ASendNodeRequestLiveSourcePermission(t *testing.T) {
+	ctx := context.Background()
+	s, _, _, parent, _ := memA2AFixture(t)
+	call := func(args map[string]any, proof proto.SourcePermission) proto.ToolResult {
+		t.Helper()
+		rawArgs, _ := json.Marshal(args)
+		env := map[string]any{
+			"name":       "a2a_send",
+			"session_id": parent.Ref.Session,
+			"args":       json.RawMessage(rawArgs),
+		}
+		if proof.Valid() {
+			env["source_permission"] = proof
+		}
+		rawEnv, _ := json.Marshal(env)
+		out, handled, err := s.NodeRequest(ctx, parent.Ref.Machine, "mcp.call", rawEnv)
+		if err != nil || !handled {
+			t.Fatalf("NodeRequest mcp.call: handled=%v err=%v", handled, err)
+		}
+		return out.(proto.ToolResult)
+	}
+
+	argsEdit := map[string]any{"machine_id": "box", "cwd": "/code/app", "permission_mode": "acceptEdits", "message_id": "m-nr-1", "text": "Edit."}
+	rawEdit, _ := json.Marshal(argsEdit)
+	// Missing proof fails closed.
+	if res := call(argsEdit, proto.SourcePermission{}); !res.IsError {
+		t.Fatalf("missing attestation allowed acceptEdits: %s", resultText(res))
+	}
+	// Prompting proof rejects acceptEdits...
+	if res := call(argsEdit, testSourcePermission(parent.Ref.Session, "a2a_send", rawEdit, "prompting")); !res.IsError {
+		t.Fatalf("prompting attestation allowed acceptEdits: %s", resultText(res))
+	}
+	// ...and accepts default.
+	argsDef := map[string]any{"machine_id": "box", "cwd": "/code/app", "permission_mode": "default", "message_id": "m-nr-2", "text": "Check."}
+	rawDef, _ := json.Marshal(argsDef)
+	if res := call(argsDef, testSourcePermission(parent.Ref.Session, "a2a_send", rawDef, "prompting")); res.IsError {
+		t.Fatalf("prompting attestation rejected default: %s", resultText(res))
+	}
+	// Bypass proof accepts acceptEdits.
+	if res := call(argsEdit, testSourcePermission(parent.Ref.Session, "a2a_send", rawEdit, "bypass")); res.IsError {
+		t.Fatalf("bypass attestation rejected acceptEdits: %s", resultText(res))
+	}
+	// Mismatched digest fails closed.
+	wrongDigest := testSourcePermission(parent.Ref.Session, "a2a_send", json.RawMessage(`{}`), "bypass")
+	argsEdit2 := map[string]any{"machine_id": "box", "cwd": "/code/app", "permission_mode": "acceptEdits", "message_id": "m-nr-3", "text": "Edit2."}
+	if res := call(argsEdit2, wrongDigest); !res.IsError {
+		t.Fatalf("mismatched digest attestation allowed acceptEdits: %s", resultText(res))
+	}
+}
+
+// Warm refreshes over an unchanged live + archived session list must make zero A2ALaunchesForTargets
+// queries, and pruning drops only removed sessions from that machine's bucket without affecting other machines.
+func TestSubagentCheckedWarmRefreshZeroQueriesAndPerMachinePrune(t *testing.T) {
+	ctx := context.Background()
+	s, _, st, _, _ := memA2AFixture(t)
+	// Seed one known A2A subagent on mac.
+	body, _ := json.Marshal(a2aBody{Launch: &a2aLaunch{CWD: "/code/app", Subagent: true}})
+	if _, err := st.A2ACreate(ctx, db.A2ARow{
+		ID: "task-warm-1", Owner: "mac/lead", Request: "req-warm-1", Context: "ctx-warm-1",
+		SourceMachine: "mac", SourceSession: "lead", TargetMachine: "mac", TargetSession: "sub-1",
+		State: a2aWorking, Body: body,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	buildComplete := func(liveIDs, archIDs []string) []proto.Session {
+		live := make([]proto.Session, 0, len(liveIDs))
+		for _, id := range liveIDs {
+			live = append(live, proto.Session{MachineID: "mac", SessionID: id, Status: proto.StatusIdle, Cwd: "/code/app", Agent: "claude"})
+		}
+		list := s.decorateInventory("mac", live, true)
+		for _, id := range archIDs {
+			list = append(list, proto.Session{MachineID: "mac", SessionID: id, Status: proto.StatusDone, Archived: true, Cwd: "/code/app", Agent: "claude"})
+		}
+		s.foldInventory("mac", list)
+		return list
+	}
+
+	// Prime another machine's bucket to verify per-machine pruning never touches it.
+	s.decorateSubagents(ctx, "box", []proto.Session{{MachineID: "box", SessionID: "box-live-1", Status: proto.StatusIdle}})
+
+	// Pass 1: cold pass queries mac live + archived rows (at most 2 queries: live then archived).
+	rows1 := buildComplete([]string{"live-1", "live-2", "sub-1"}, []string{"arch-1"})
+	if !rows1[2].IsSubagent || rows1[2].A2ATaskID() != "task-warm-1" {
+		t.Fatalf("sub-1 not decorated on cold pass: %+v %+v", rows1[2], rows1[2].Hierarchy)
+	}
+	st.mu.Lock()
+	afterCold := st.launchQueries
+	st.mu.Unlock()
+	if afterCold == 0 {
+		t.Fatal("expected cold pass to query A2ALaunchesForTargets")
+	}
+
+	// Pass 2: unchanged warm refresh (live + archived) MUST perform ZERO A2ALaunchesForTargets queries.
+	_ = buildComplete([]string{"live-1", "live-2", "sub-1"}, []string{"arch-1"})
+	st.mu.Lock()
+	afterWarm := st.launchQueries
+	st.mu.Unlock()
+	if afterWarm != afterCold {
+		t.Fatalf("warm refresh queried A2ALaunchesForTargets %d extra times (cold=%d warm=%d); archived negative cache was pruned prematurely",
+			afterWarm-afterCold, afterCold, afterWarm)
+	}
+
+	// Pass 3: removing live-2 from mac prunes only mac/live-2 while keeping mac/arch-1, mac/sub-1, and box/box-live-1.
+	_ = buildComplete([]string{"live-1", "sub-1"}, []string{"arch-1"})
+	s.fleet.subagentsMu.RLock()
+	_, macLive1 := s.fleet.subagentsChecked["mac"]["live-1"]
+	_, macLive2 := s.fleet.subagentsChecked["mac"]["live-2"]
+	_, macArch1 := s.fleet.subagentsChecked["mac"]["arch-1"]
+	_, macSub1 := s.fleet.subagentsChecked["mac"]["sub-1"]
+	_, boxLive1 := s.fleet.subagentsChecked["box"]["box-live-1"]
+	s.fleet.subagentsMu.RUnlock()
+	if !macLive1 || macLive2 || !macArch1 || !macSub1 || !boxLive1 {
+		t.Fatalf("per-machine prune state wrong: macLive1=%v macLive2=%v macArch1=%v macSub1=%v boxLive1=%v",
+			macLive1, macLive2, macArch1, macSub1, boxLive1)
+	}
 }

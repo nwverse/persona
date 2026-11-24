@@ -454,8 +454,8 @@ func TestRuntimeListCrossMachineHierarchyAndOrphanSubagents(t *testing.T) {
 		t.Fatalf("cross-machine held counts = %+v, want needs_you=1 held_needs=1", c)
 	}
 	cLegacy := hierarchyCounts(t, h, "agents_only=1&roots=1")
-	if cLegacy.HeldNeeds != 1 {
-		t.Fatalf("legacy held counts = %+v, want held_needs=1 credited to visible box/remote-kid", cLegacy)
+	if cLegacy.State[proto.StateNeedsYou] != 1 || cLegacy.HeldNeeds != 1 || cLegacy.State[proto.StateWorking] != 1 {
+		t.Fatalf("legacy held counts = %+v, want needs_you=1 (remote-kid only, not double-counted on mac/lead), held_needs=1, working=1 (mac/lead via local-kid)", cLegacy)
 	}
 
 	// Validation: parent_machine_id without parent_session_id returns 400 invalid_query.

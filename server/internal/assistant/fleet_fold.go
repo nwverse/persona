@@ -634,12 +634,12 @@ func (s *Service) foldSeedMachine(machine string) []foldEntry {
 	return toFoldEntries(rows, s.reviewerHiddenFor(machine))
 }
 
-// updateCrossEdgesLocked updates crossParents[machine] and its reverse index crossChildren, returning the set of
-// previously linked parent machines that were disconnected by this update. Caller holds s.fleet.foldMu.
-func (s *Service) updateCrossEdgesLocked(machine string, nextParents map[string]bool) []string {
+// updateCrossEdgesLocked updates crossParents[machine] and its reverse index crossChildren, returning the sets
+// of newly added and previously linked (detached) parent machines. Caller holds s.fleet.foldMu.
+func (s *Service) updateCrossEdgesLocked(machine string, nextParents map[string]bool) (added, detached []string) {
 	f := &s.fleet
-	var detached []string
-	if old := f.crossParents[machine]; len(old) > 0 {
+	old := f.crossParents[machine]
+	if len(old) > 0 {
 		for pm := range old {
 			if !nextParents[pm] {
 				detached = append(detached, pm)
@@ -663,6 +663,9 @@ func (s *Service) updateCrossEdgesLocked(machine string, nextParents map[string]
 		}
 		cp := make(map[string]bool, len(nextParents))
 		for pm := range nextParents {
+			if !old[pm] {
+				added = append(added, pm)
+			}
 			cp[pm] = true
 			if f.crossChildren[pm] == nil {
 				f.crossChildren[pm] = map[string]bool{}
@@ -671,7 +674,7 @@ func (s *Service) updateCrossEdgesLocked(machine string, nextParents map[string]
 		}
 		f.crossParents[machine] = cp
 	}
-	return detached
+	return added, detached
 }
 
 // crossComponentLocked returns the connected component of cross-machine-linked machines reachable from seeds.
@@ -823,8 +826,10 @@ func (s *Service) notifyFoldDependents(republish []string, cardMachines map[stri
 // unchanged, prune removed machines, republish affected parent/child machines asynchronously, and refresh pending
 // interaction cards whose folded target changed.
 func (s *Service) foldInventory(machine string, list []proto.Session) {
-	// Include remembered archive rows added after live inventory decoration.
+	// Include remembered archive rows added after live inventory decoration, then prune negative
+	// lookup cache entries against this final complete list (live + archived).
 	s.decorateSubagents(context.Background(), machine, list)
+	s.pruneSubagentChecked(machine, list)
 	for i := range list {
 		list[i].SetHiddenByDirectory(s.hiddenByDirectory(machine, list[i]))
 	}
@@ -836,18 +841,23 @@ func (s *Service) foldInventory(machine string, list []proto.Session) {
 	if !participates {
 		s.fleet.foldMu.Unlock()
 		f := foldSessions(list, hidden)
-		f.apply(list)
 		s.fleet.foldMu.Lock()
-		if s.fleet.folds == nil {
-			s.fleet.folds = map[string]sessionFold{}
+		// Recheck cross-machine membership under foldMu before storing the local fold so we never
+		// overwrite a cross-machine child rollup attached concurrently while foldSessions ran.
+		if len(s.fleet.crossParents[machine]) == 0 && len(s.fleet.crossChildren[machine]) == 0 {
+			if s.fleet.folds == nil {
+				s.fleet.folds = map[string]sessionFold{}
+			}
+			prev := s.fleet.folds[machine]
+			s.fleet.folds[machine] = f
+			s.fleet.foldMu.Unlock()
+			f.apply(list)
+			if !sameInteractionFold(prev, f) && s.fleetOn() && s.hasPendingCardOn(map[string]bool{machine: true}) {
+				go s.refreshPendingCards()
+			}
+			return
 		}
-		prev := s.fleet.folds[machine]
-		s.fleet.folds[machine] = f
-		s.fleet.foldMu.Unlock()
-		if !sameInteractionFold(prev, f) && s.fleetOn() && s.hasPendingCardOn(map[string]bool{machine: true}) {
-			go s.refreshPendingCards()
-		}
-		return
+		// Membership changed concurrently: stay on foldMu and continue into the cross-machine path.
 	}
 	var missing []string
 	for pm := range crossRefs {
@@ -881,11 +891,11 @@ func (s *Service) foldInventory(machine string, list []proto.Session) {
 		}
 	}
 	prevEntries, hadEntries := s.fleet.foldMeta[machine]
-	detachedParents := s.updateCrossEdgesLocked(machine, crossRefs)
+	addedParents, detachedParents := s.updateCrossEdgesLocked(machine, crossRefs)
 	s.fleet.foldMeta[machine] = entries
 
-	// Short-circuit when nothing in this machine's fold inputs, graph edges, or fleet membership changed.
-	if hadEntries && !seededAny && len(removedAffected) == 0 && len(detachedParents) == 0 && slices.Equal(prevEntries, entries) {
+	// Short-circuit only when fold inputs, graph edges (added or detached), and fleet membership are unchanged.
+	if hadEntries && !seededAny && len(removedAffected) == 0 && len(addedParents) == 0 && len(detachedParents) == 0 && slices.Equal(prevEntries, entries) {
 		cur := s.fleet.folds[machine]
 		s.fleet.foldMu.Unlock()
 		cur.apply(list)

@@ -75,7 +75,10 @@ type Fold struct {
 	Root, RootMachine, State, Todo    string
 	DirectParent, DirectParentMachine string
 	SearchAs, SearchSession           string
+	LegacyState                       string
 	BackgroundWaiting                 bool
+	HasLegacyFold                     bool
+	LegacyBackgroundWaiting           bool
 }
 
 // root is the session v is folded under ("" for none).
@@ -448,7 +451,7 @@ func (i *Index) ReplaceOwned(source, owner string, items []Item) {
 	for id, c := range changes {
 		if c.before != nil {
 			if !c.before.item.HiddenByDirectory {
-				addCount(&i.counts, c.before.item, false, -1)
+				addCount(&i.counts, c.before.item, false, false, -1)
 			}
 			if c.before.searchDocument == nil {
 				i.undecoded--
@@ -456,7 +459,7 @@ func (i *Index) ReplaceOwned(source, owner string, items []Item) {
 		}
 		if c.after != nil {
 			if !c.after.item.HiddenByDirectory {
-				addCount(&i.counts, c.after.item, false, 1)
+				addCount(&i.counts, c.after.item, false, false, 1)
 			}
 			i.undecoded++ // a new record: its document is decoded by the first search that reads it
 		}

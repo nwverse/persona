@@ -107,11 +107,12 @@ func (s *Service) ensureSubagentsChecked(ctx context.Context, machine string, se
 	f := &s.fleet
 	var missing []string
 	f.subagentsMu.RLock()
+	bucket := f.subagentsChecked[machine]
 	for _, sid := range sessions {
 		if sid == "" {
 			continue
 		}
-		if !f.subagentsChecked[[2]string{machine, sid}] {
+		if _, ok := bucket[sid]; !ok {
 			missing = append(missing, sid)
 		}
 	}
@@ -132,10 +133,15 @@ func (s *Service) applyLoadedA2ALaunches(machine string, checked []string, rows 
 	f.subagentsMu.Lock()
 	defer f.subagentsMu.Unlock()
 	if f.subagentsChecked == nil {
-		f.subagentsChecked = make(map[[2]string]bool, len(checked))
+		f.subagentsChecked = map[string]map[string]struct{}{}
+	}
+	bucket := f.subagentsChecked[machine]
+	if bucket == nil {
+		bucket = make(map[string]struct{}, len(checked))
+		f.subagentsChecked[machine] = bucket
 	}
 	for _, sid := range checked {
-		f.subagentsChecked[[2]string{machine, sid}] = true
+		bucket[sid] = struct{}{}
 	}
 	seenTarget := map[string]bool{}
 	for i := range rows {
@@ -169,7 +175,10 @@ func (s *Service) putSubagentLinkLocked(machine, session string, link subagentLi
 		f.subagents = map[[2]string]subagentLink{}
 	}
 	if f.subagentsChecked == nil {
-		f.subagentsChecked = map[[2]string]bool{}
+		f.subagentsChecked = map[string]map[string]struct{}{}
+	}
+	if f.subagentsChecked[machine] == nil {
+		f.subagentsChecked[machine] = map[string]struct{}{}
 	}
 	key := [2]string{machine, session}
 	if link.A2ATaskID != "" {
@@ -182,7 +191,7 @@ func (s *Service) putSubagentLinkLocked(machine, session string, link subagentLi
 		f.subagentsByTask[link.A2ATaskID] = key
 	}
 	f.subagents[key] = link
-	f.subagentsChecked[key] = true
+	f.subagentsChecked[machine][session] = struct{}{}
 }
 
 // recordA2ASubagent records a newly created or resolved A2A/dispatch launch in the in-memory
@@ -268,9 +277,13 @@ func (s *Service) decorateSubagents(ctx context.Context, machine string, list []
 			f := &s.fleet
 			var missing []string
 			f.subagentsMu.RLock()
+			bucket := f.subagentsChecked[machine]
 			for i := range list {
-				if !list[i].Assistant && list[i].SessionID != "" && !f.subagentsChecked[[2]string{machine, list[i].SessionID}] {
-					missing = append(missing, list[i].SessionID)
+				sid := list[i].SessionID
+				if !list[i].Assistant && sid != "" {
+					if _, ok := bucket[sid]; !ok {
+						missing = append(missing, sid)
+					}
 				}
 			}
 			f.subagentsMu.RUnlock()
@@ -315,28 +328,34 @@ func (s *Service) decorateSubagents(ctx context.Context, machine string, list []
 	f.subagentsMu.RUnlock()
 }
 
-// pruneSubagentChecked drops negative lookup entries for sessions no longer in a machine's complete list
-// so the cache stays bounded to active/listed rows while retaining known positive subagent hits.
+// pruneSubagentChecked drops negative lookup entries for sessions no longer in machine's final
+// complete list (including archived sessions) while retaining known positive subagent hits.
+// Entries are partitioned per machine so pruning scans only machine's own bucket, never the fleet.
 func (s *Service) pruneSubagentChecked(machine string, list []proto.Session) {
 	f := &s.fleet
 	f.subagentsMu.RLock()
-	n := len(f.subagentsChecked)
+	n := len(f.subagentsChecked[machine])
 	f.subagentsMu.RUnlock()
 	if n == 0 {
 		return
 	}
-	listed := make(map[string]bool, len(list))
+	listed := make(map[string]struct{}, len(list))
 	for i := range list {
-		if list[i].SessionID != "" {
-			listed[list[i].SessionID] = true
+		if sid := list[i].SessionID; sid != "" {
+			listed[sid] = struct{}{}
 		}
 	}
 	f.subagentsMu.Lock()
-	for k := range f.subagentsChecked {
-		if k[0] == machine && !listed[k[1]] {
-			if _, isHit := f.subagents[k]; !isHit {
-				delete(f.subagentsChecked, k)
+	if bucket := f.subagentsChecked[machine]; len(bucket) > 0 {
+		for sid := range bucket {
+			if _, ok := listed[sid]; !ok {
+				if _, isHit := f.subagents[[2]string{machine, sid}]; !isHit {
+					delete(bucket, sid)
+				}
 			}
+		}
+		if len(bucket) == 0 {
+			delete(f.subagentsChecked, machine)
 		}
 	}
 	f.subagentsMu.Unlock()
