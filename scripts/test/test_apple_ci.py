@@ -63,7 +63,9 @@ class AppleOfflineUnitSchemeTests(unittest.TestCase):
         self.assertIn('OFFLINE_PROJECT="$SOURCE/apple/PersonaOfflineUnitTests.xcodeproj"', script)
         self.assertIn('ci_run \'Generate iPhone-only offline unit-test project\' 120 bash -c', script)
         self.assertIn('xcodegen dump --spec "$spec" --type json > "$output/Persona.whole.json"', script)
-        self.assertIn('python3 "$3" "$output/Persona.whole.json" "$output/PersonaOfflineUnitTests.json"', script)
+        self.assertIn('python3 "$3" "$output/Persona.whole.json" "$output/PersonaOfflineUnitTests.json" \\', script)
+        self.assertIn('--profile "$profile" --source-root "$tests"', script)
+        self.assertIn('"$OFFLINE_PROFILE" "$SOURCE/apple/PersonaTests"', script)
         self.assertIn('ci_run \'Generate offline unit-test Xcode project\' 120 xcodegen generate \\\n'
                       '    --spec "$OUTPUT/PersonaOfflineUnitTests.json" --project-root "$SOURCE/apple" \\\n'
                       '    --project "$SOURCE/apple"', script)
@@ -76,6 +78,35 @@ class AppleOfflineUnitSchemeTests(unittest.TestCase):
         self.assertIn('ci_run \'Unsigned iOS and embedded watch/extensions build\' 1800 "${XCODE[@]}" -scheme Persona', script)
         self.assertIn('ci_run \'Generate offline unit-test Xcode project\'', script)
         self.assertIn('xcodegen dump --spec "$spec"', script)
+
+    def test_only_focused_lanes_narrow_compiled_test_sources(self):
+        script = self.script
+        generation = script[script.index('  OFFLINE_PROFILE=full'):script.index(
+            "  ci_run 'Generate offline unit-test Xcode project'")]
+        self.assertEqual(script.count('OFFLINE_PROFILE=focused'), 1)
+        self.assertEqual(script.count('OFFLINE_PROFILE=ipad-diagnostic'), 1)
+        self.assertIn('if [ "$LANE" = ios-focused ]; then\n    OFFLINE_PROFILE=focused', generation)
+        self.assertIn('elif [ "$LANE" = ios-ipad-diagnostic ]; then\n    OFFLINE_PROFILE=ipad-diagnostic', generation)
+        self.assertIn('spec="$1"; output="$2"; profile="$4"; tests="$5"', generation)
+        self.assertIn('--profile "$profile"', generation)
+        # Full ordinary, floor and regression builds retain all test sources.
+        self.assertNotIn('ios-regressions ]; then\n    OFFLINE_PROFILE', generation)
+        self.assertNotIn('ios18 ]; then\n    OFFLINE_PROFILE', generation)
+        self.assertNotIn('LANE" = all', generation)
+        self.assertIn('BUILD_SECONDS=1800', script)
+        self.assertIn('UNIT_SECONDS=1800', script)
+        for deadline in (
+                "ci_run 'Verify hosted iOS test readiness' 900",
+                "ci_run 'Verify hosted regular iPad test readiness' 900",
+                "ci_run 'iOS regular-width About visual test on real iPad' 600",
+                "test_batch ios-html-card 'iOS HTML card tests (separate batch)' 600",
+                "test_batch ios-html-security 'iOS bounded HTML security tests (separate batch)' 600"):
+            self.assertIn(deadline, script)
+        self.assertIn('if [ "$LANE" != ios-focused ]; then', script)
+        # Device and simulator products use distinct SDKs, signing and graphs.
+        self.assertIn('-derivedDataPath "$OUTPUT/ios-device"', script)
+        self.assertIn('-derivedDataPath "$OUTPUT/ios-tests"', script)
+        self.assertNotIn('-derivedDataPath "$OUTPUT/ios-device" \\\n    -parallel-testing-enabled NO', script)
 
     def test_local_ui_test_entry_keeps_default_scheme_and_ui_target(self):
         ui_test = (ROOT / 'scripts/app/ui-test.sh').read_text()
@@ -241,7 +272,7 @@ class AppleCIPreparationTests(unittest.TestCase):
         for lane in ('ios', 'ios-focused', 'ios-regressions'):
             current = script.replace('      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" \\\n      --derived-data "$output/ios-tests" &',
                                      '      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" &')
-            offline_generation = script[script.index("  # The same real Persona test host and all of PersonaTests"):
+            offline_generation = script[script.index('  OFFLINE_PROFILE=full'):
                                        script.index("  # A generic destination must retain the host's single runnable architecture.")]
             current = current.replace(offline_generation, '')
             current = current.replace('OFFLINE_PROJECT="$SOURCE/apple/PersonaOfflineUnitTests.xcodeproj"\n', '')
@@ -295,6 +326,10 @@ class AppleCIPreparationTests(unittest.TestCase):
         sleep 0.1
       done
       : > "$watch_log/observer.stop"
+      # This observer has its own process group, so the readiness timeout does
+      # not kill its evidence. Send the stop to that group explicitly: waiting
+      # without it would leave the observer collecting until the full horizon.
+      kill -TERM "-$watcher" 2>/dev/null || kill -TERM "$watcher" 2>/dev/null || true
       # The observer stops polling after its bounded product phase, then
       # completes final evidence. The outer 900-second deadline still owns a
       # stuck watcher; never kill it before that final collection.
@@ -363,6 +398,9 @@ class AppleCIPreparationTests(unittest.TestCase):
           sleep 0.1
         done
         : > "$watch_log/observer.stop"
+        # Signal the independent observer group explicitly; otherwise the
+        # stop-file cannot end its polling after the readiness shell is gone.
+        kill -TERM "-$watcher" 2>/dev/null || kill -TERM "$watcher" 2>/dev/null || true
         # Let the stop-aware observer finish bounded final evidence. The
         # existing readiness deadline remains the hard outer bound.
         wait "$watcher" || true
@@ -380,6 +418,24 @@ class AppleCIPreparationTests(unittest.TestCase):
         fi
         wait "$watcher" || true
 ''')
+            current = current.replace('''      # Noninteractive Bash gives the observer a separate process group only
+      # with job control enabled. The bounded readiness runner must never kill
+      # this group while it finishes its bounded final evidence.
+      set -m
+      bash -c "exec python3 \\"\\$@\\"" -- "$ci_root/scripts/ci/apple_readiness_watch.py" \\
+        --udid "$udid" --bundle-id "$bundle_id" --scope-root "$output" \\
+        --app "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/Persona" \\
+        --test-bundle "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/PlugIns/PersonaTests.xctest/PersonaTests" \\
+        --output "$watch_log" --seconds 900 &
+      watcher=$!
+      set +m''', '''      # Give the observer its own group so a probe deadline cannot leave its
+      # detached collectors behind. Both steps use the unchanged budget.
+      bash -c "exec python3 \\"\\$@\\"" -- "$ci_root/scripts/ci/apple_readiness_watch.py" \\
+        --udid "$udid" --bundle-id "$bundle_id" --scope-root "$output" \\
+        --app "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/Persona" \\
+        --test-bundle "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/PlugIns/PersonaTests.xctest/PersonaTests" \\
+        --output "$watch_log" --seconds 900 &
+      watcher=$!''')
             current = current.replace('      "$CI_ROOT" "$CI_BUNDLE_ID" "$OUTPUT" "$DIAGNOSTICS" "$LANE" "${IOS_COMMON[@]}" \\',
                                       '      "$CI_ROOT" "$CI_BUNDLE_ID" "$OUTPUT" "${IOS_COMMON[@]}" \\')
             current = current.replace('        if [ "$lane" = ios-ipad-diagnostic ]; then\n          timeout --kill-after=5s 180s python3 "$ci_root/scripts/ci/apple_diagnostics.py" \\\n            "$output" "$diagnostics" --scope regular || true\n        fi\n', '')
@@ -387,7 +443,33 @@ class AppleCIPreparationTests(unittest.TestCase):
             current = current.replace('      "$OUTPUT" "$DIAGNOSTICS" --scope "$scope"', '      "$OUTPUT" "$DIAGNOSTICS"')
             current = current.replace('  else\n    # pipefail keeps the bounded command\'s failure status. The existing failure\n    # collector retains this allowlisted console log with its xcresult.\n    ci_run "$@" 2>&1 | tee "$OUTPUT/$name.log"\n  fi\n}', '  else\n    ci_run "$@"\n  fi\n}')
             current = current.replace('    if [ "$LANE" = ios-ipad-diagnostic ]; then\n      # A deliberate app-host diagnostic stops after its own strict probe and\n      # observer cleanup; it neither runs nor substitutes for the visual suite.\n      exit 0\n    fi\n', '')
+            # This issue intentionally replaces only the ordinary visual command
+            # with its observation-only wrapper; every other lane stays exact.
+            visual_start = current.index('    mkdir -p "$OUTPUT/regular-shots"\n    # Observe the actual visual invocation')
+            visual_end = current.index('    result ios-about-regular', visual_start)
+            original_start = original_script.index('    mkdir -p "$OUTPUT/regular-shots"',
+                                                    original_script.index('if [ "$LANE" = ios18 ]; then',
+                                                                          original_script.index('REGULAR_SIM=')))
+            original_end = original_script.index('    result ios-about-regular', original_start)
+            current = current[:visual_start] + original_script[original_start:original_end] + current[visual_end:]
             self.assertEqual(current, original_script)
+
+    def test_regular_visual_observer_wraps_only_the_existing_visual_command(self):
+        script = SCRIPT.read_text()
+        start = script.index('    # Observe the actual visual invocation')
+        end = script.index('    result ios-about-regular', start)
+        visual = script[start:end]
+        self.assertIn("ci_run 'iOS regular-width About visual test on real iPad' 600 bash -c '", visual)
+        self.assertIn('--output "$watch_log" --seconds 600 &', visual)
+        self.assertIn('--record "$output/regular-visual-context.json"', visual)
+        self.assertIn('"$OUTPUT/diagnostics/live-regular-visual" "$REGULAR_SIM" "$CI_BUNDLE_ID"', visual)
+        self.assertIn('-only-testing:PersonaTests/AboutVersionRegularVisualTests', visual)
+        self.assertIn('test-without-building', visual)
+        self.assertIn('"$@" 2>&1 | tee "$output/ios-about-regular.log" || command_status=$?', visual)
+        self.assertIn('exit "$command_status"', visual)
+        self.assertNotIn('simctl boot', visual)
+        self.assertNotIn('simctl shutdown', visual)
+        self.assertNotIn('parallel-testing', visual)
 
     def test_regression_lane_stops_after_two_strict_suites(self):
         script = SCRIPT.read_text()
@@ -810,7 +892,7 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
             result.mkdir()
             (result / 'summary.json').write_text('test results')
             (result / 'external-key').symlink_to(output / 'private.key')
-            for name in ("live-readiness", "live-regular-readiness"):
+            for name in ("live-readiness", "live-regular-readiness", "live-regular-visual"):
                 observer = output / "diagnostics" / name
                 observer.mkdir(parents=True)
                 (observer / "observer.status.txt").write_text(name)
@@ -832,13 +914,41 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
                 'simulator.log', 'simulator-boot.log', 'simulator-readiness.log', 'runtimes-iOS-before.json',
                 'regular-simulator.log', 'regular-simulator-boot.log', 'regular-readiness.log', 'native-ssh-trace.log',
                 'ios-unit.xcresult', 'simctl-list.json', 'simctl-list.stderr.txt', 'simctl-list.status.txt',
-                'live-readiness', 'live-regular-readiness',
+                'live-readiness', 'live-regular-readiness', 'live-regular-visual',
                 'disk-space.txt', 'disk-space.stderr.txt', 'disk-space.status.txt',
                 'simulator-launch.status.txt',
             })
             self.assertEqual((destination / 'ios-unit.xcresult/summary.json').read_text(), 'test results')
             self.assertEqual((destination / 'native-ssh-trace.log').read_text(), 'diagnostic fixture')
             self.assertFalse((destination / 'ios-unit.xcresult/external-key').exists())
+
+    def test_visual_console_log_is_required_when_its_result_was_attempted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'output'
+            destination = Path(directory) / 'artifacts'
+            output.mkdir()
+            (output / 'regular-visual-context.json').write_text('{"scope":"visual"}')
+            runner = lambda command, **kwargs: subprocess.CompletedProcess(command, 0, '', '')
+            with self.assertRaisesRegex(RuntimeError, 'required visual console log is missing'):
+                apple_diagnostics.collect(output, destination, runner)
+            self.assertIn('not published', (destination / 'ios-about-regular.log.status.txt').read_text())
+            (output / 'ios-about-regular.log').write_text('actual xcodebuild stdout and stderr')
+            apple_diagnostics.collect(output, destination, runner)
+            self.assertEqual((destination / 'ios-about-regular.log').read_text(),
+                             'actual xcodebuild stdout and stderr')
+            self.assertIn('included', (destination / 'ios-about-regular.log.status.txt').read_text())
+
+    def test_visual_console_log_copy_failure_is_not_reported_as_included(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'output'
+            destination = Path(directory) / 'artifacts'
+            output.mkdir()
+            (output / 'regular-visual-context.json').write_text('{"scope":"visual"}')
+            (output / 'ios-about-regular.log').write_text('actual xcodebuild stdout and stderr')
+            runner = lambda command, **kwargs: subprocess.CompletedProcess(command, 0, '', '')
+            with patch('apple_diagnostics.shutil.copyfile', side_effect=OSError('write failed')):
+                with self.assertRaisesRegex(RuntimeError, 'could not be included'):
+                    apple_diagnostics.collect(output, destination, runner)
 
     def test_regular_diagnostic_scope_excludes_other_suite_artifacts(self):
         with tempfile.TemporaryDirectory() as directory:

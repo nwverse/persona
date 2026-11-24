@@ -19,11 +19,12 @@ if (process.argv.includes('models')) {
   }
 }
 const id = '11111111-2222-3333-4444-555555555555'
+const effortSuffix = /-(low|medium|high|xhigh|max)$/
 let model = 'gemini-future-medium'
 let effort = 'medium'
 let mode = 'default'
 const configuration = () => [
-  { id: 'model', category: 'model', currentValue: model.replace(/-(low|medium|high)$/, '') },
+  { id: 'model', category: 'model', currentValue: model.replace(effortSuffix, '') },
   { id: 'thought_level', currentValue: effort },
   { id: 'mode', currentValue: mode },
 ]
@@ -112,7 +113,8 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     loaded = true
     reportWindow()
     settingsAgentMode = nativeSettings().agentMode || 'default'
-    result = { sessionId: id, models: { availableModels: settings().models, currentModelId: model }, modes: { currentModeId: mode }, configOptions: configuration() }
+    const modes = settings().availableModes ? { currentModeId: mode, availableModes: settings().availableModes } : { currentModeId: mode }
+    result = { sessionId: id, models: { availableModels: settings().models, currentModelId: model }, modes, configOptions: configuration() }
   }
   if (method === 'session/prompt') {
     syncSettingsMode()
@@ -140,9 +142,14 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     if (!settings().models.some((entry) => entry.modelId === params.modelId)) error = { code: -32602, message: 'Model unavailable' }
     else {
       model = params.modelId
-      effort = model.split('-').at(-1)
+      effort = effortSuffix.exec(model)?.[1]
       reportWindow()
     }
+  }
+  // An Antigravity CLI from before session/set_mode (#14533) answers it as an unknown method.
+  if (method === 'session/set_mode' && settings().noSetMode) {
+    complete(request, undefined, { code: -32601, message: `Method not found: ${method}` })
+    return
   }
   if (method === 'session/set_mode') {
     if (params.modeId === 'accept-edits' && settings().holdFallback) {
@@ -165,8 +172,9 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     } else mode = params.modeId
   }
   if (method === 'session/set_config_option') {
-    if (!['low', 'medium', 'high'].includes(params.value)) error = { code: -32602, message: 'Thinking level unavailable' }
-    else { effort = params.value; model = model.replace(/-(low|medium|high)$/, `-${effort}`); result = { configOptions: configuration() } }
+    const nextModel = `${model.replace(effortSuffix, '')}-${params.value}`
+    if (!settings().models.some((entry) => entry.modelId === nextModel)) error = { code: -32602, message: 'Thinking level unavailable' }
+    else { effort = params.value; model = nextModel; result = { configOptions: configuration() } }
   }
   complete(request, result, error)
 })

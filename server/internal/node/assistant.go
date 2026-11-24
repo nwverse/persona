@@ -169,9 +169,12 @@ type assistantProc struct {
 	// (workingLocked).
 	lifecycle bool
 
-	// owner: the Node that took it over from an earlier connection of a resident node (assistant_keep.go); nil: the
-	// one that started it.
+	// owner: the Node that started it, or the one that took it over from an earlier connection of a resident node
+	// (assistant_keep.go); nil in synthetic tests that never went through spawn.
 	owner atomic.Pointer[Node]
+	// stopped: stop() has been invoked on this process, so its exit waiter sweeps any straggler descendants from its
+	// process group before dropping it from liveAssistants and closing exited.
+	stopped atomic.Bool
 
 	// round: it runs a round of the background supervisor, resumed at the end of the conversation's first turn
 	// (assistant_round.go). It is never compacted when idle: that would cut the first turn off the chain the next
@@ -1096,7 +1099,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if strings.TrimSpace(text) != "" || len(images) == 0 {
 		content = append(content, map[string]any{"type": "text", "text": text})
 	}
-	in := assistantInput{text: text, images: images, content: content}
+	in := assistantInput{text: text, images: images, content: content, supervision: ctx.Value(supervisionDeliveryKey{}) == true}
 	startAttemptsAt := time.Now()
 	if fresh && !p.born.IsZero() {
 		startAttemptsAt = p.born

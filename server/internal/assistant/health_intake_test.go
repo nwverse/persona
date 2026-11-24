@@ -145,8 +145,8 @@ func TestHealthIntakeSettings(t *testing.T) {
 	}
 	st := &intakeTestStore{}
 	s := newServiceOn(t, newFakeHub(), st)
-	before := st.puts
-	if got, err := s.healthIntakeSettings(context.Background()); err != nil || got != d || st.puts != before {
+	before := st.putCount()
+	if got, err := s.healthIntakeSettings(context.Background()); err != nil || got != d || st.putCount() != before {
 		t.Fatalf("reading defaults wrote settings: %+v %v", got, err)
 	}
 	if err := st.PutSetting(context.Background(), healthIntakeKey, map[string]any{"water": map[string]any{"cup_ml": 300}}); err != nil {
