@@ -62,9 +62,9 @@ func TestOtherAgentStartCommandLineBreaks(t *testing.T) {
 // startOtherAgent builds its command for the shell of the pane it made: a zsh pane sources it from a start file, and a
 // tcsh pane (no `.`) gets it typed out with the first message on one line.
 func TestOtherAgentStartTypesForThePaneShell(t *testing.T) {
-	for shell, want := range map[string]string{
-		"/bin/zsh":  "traex 'a b\nc'",
-		"/bin/tcsh": "traex 'a b c'",
+	for shell, tc := range map[string]struct{ model, want string }{
+		"/bin/zsh":  {"", "traex 'a b\nc'"},
+		"/bin/tcsh": {"example-fast", "traex --model 'example-fast' -- 'a b c'"},
 	} {
 		t.Run(shell, func(t *testing.T) {
 			withPaneShell(t, shell)
@@ -78,7 +78,8 @@ func TestOtherAgentStartTypesForThePaneShell(t *testing.T) {
 					cancel()
 				}
 			})
-			_, _ = n.startOtherAgent(ctx, n.hosts.Get(host.Herdr).(*herdrHost), home, traexAgent, traexAgent, "a\tb\nc", "", "w1", "")
+			_, _ = n.startOtherAgent(ctx, n.hosts.Get(host.Herdr).(*herdrHost), home, traexAgent, traexAgent, "a\tb\nc", "", "w1", "", modelExecution{Model: tc.model})
+			want := tc.want
 			if shell == "/bin/zsh" {
 				want = inAgentEnv(n.dir, want, shellQuote)
 			}

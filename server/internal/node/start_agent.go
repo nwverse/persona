@@ -146,11 +146,11 @@ func (n *Node) startOtherAgent(ctx context.Context, launch host.Launcher, cwd, l
 	}
 	command := n.launcherCommand(launcher)
 	var model string
-	if selected := executionOption(options).Model; kind == ompAgent && resume == "" && selected != "" {
+	if selected := executionOption(options).Model; (kind == ompAgent || kind == traexAgent) && resume == "" && selected != "" {
 		model = selected
 		command += " --model " + shellQuote(model)
 		if prompt != "" {
-			command += " --" // omp takes the first message as positional text, even when it begins with a dash.
+			command += " --" // The first message is positional text, even when it begins with a dash.
 		}
 	}
 	cmd := withHerdrAgent(typedHerdrAgent(launch, kind, shells...), otherAgentCommand(command, resume, prompt, argShells...))

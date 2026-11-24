@@ -590,12 +590,36 @@ func TestLauncherModelsKnowsRuntimeLaunchers(t *testing.T) {
 	}
 }
 
-func TestLauncherModelsOtherAgents(t *testing.T) {
+func TestLauncherModelsTraex(t *testing.T) {
 	n, _ := testNode(t)
-	res, err := n.launcherModels(context.Background(), "traex", "", false)
-	if err != nil || res.Agent != traexAgent || res.Models == nil || len(res.Models) != 0 {
+	t.Setenv("HOME", n.home)
+	t.Setenv("ZDOTDIR", n.home)
+	bin := t.TempDir()
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	script := `#!/bin/sh
+test "$#:$*" = '2:models --json' || exit 2
+printf '%s\n' '[{"config_name":"example-fast","name":"Example Fast","description":"Fast model","backend_model":"backend-only"},{"config_name":"example-fast","name":"Duplicate"},{"name":"Display only"},{"config_name":"--flag"},{"config_name":"example-small"}]'
+`
+	if err := os.WriteFile(filepath.Join(bin, "traex"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	res, err := n.launcherModels(context.Background(), traexAgent, "", true)
+	want := []proto.AgentModel{
+		{ID: "example-fast", Name: "Example Fast", Description: "Fast model"},
+		{ID: "example-small", Name: "example-small"},
+	}
+	if err != nil || res.Agent != traexAgent || len(res.Models) != len(want) {
 		t.Fatalf("got %+v %v", res, err)
 	}
+	for i, m := range res.Models {
+		if m.ID != want[i].ID || m.Name != want[i].Name || m.Description != want[i].Description || m.Default || len(m.Efforts) != 0 {
+			t.Errorf("model %d = %+v, want %+v", i, m, want[i])
+		}
+	}
+}
+
+func TestLauncherModelsRejectsInvalidName(t *testing.T) {
+	n, _ := testNode(t)
 	if _, err := n.launcherModels(context.Background(), "bad name;", "", false); err == nil {
 		t.Fatal("ran an invalid launcher name")
 	}
