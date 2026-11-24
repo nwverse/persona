@@ -175,6 +175,8 @@
   "side_unread_also": "Also with new replies: {titles}",
   "module_recording": "Meeting recording",
   "module_recording_hint": "Minutes, all-day recaps, transcripts and photos of what you record with Persona, on its entries in Knowledge.",
+  "module_screen_share": "Screen sharing",
+  "module_screen_share_hint": "Open a computer's live screen from its page in Machines and control it from the browser.",
   "subagents_running": "{count} running",
   "subagents_need_you": "{count} need you"
 }

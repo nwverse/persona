@@ -7,7 +7,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { t } from "../i18n";
+import { t } from "../../i18n";
 import { webTiers, webVideo } from "./video";
 
 type FakeRFB = EventTarget & { canvas: HTMLCanvasElement };
@@ -64,10 +64,10 @@ vi.mock("@novnc/novnc", () => ({
     }
   },
 }));
-vi.mock("../views/theme", () => ({}));
+vi.mock("../../views/theme", () => ({}));
 vi.mock("./aes", () => ({ ensureSubtleAES: () => {} }));
-vi.mock("../lib/api", async (actual) => ({
-  ...(await actual<typeof import("../lib/api")>()),
+vi.mock("../../lib/api", async (actual) => ({
+  ...(await actual<typeof import("../../lib/api")>()),
   api: async (path: string) =>
     path === "/machines"
       ? { machines: [{ id: "macbook", name: "MacBook", online: true }] }
@@ -135,18 +135,18 @@ describe("the picture switcher when the Mac advertises video", () => {
     await connect();
     await menuAppears();
     // Video by default where it plays, as on the iPhone, until a choice is kept.
-    expect(button()?.getAttribute("aria-label")).toBe(t("screen-video.picture_current", { current: t("screen-video.picture_video") }));
+    expect(button()?.getAttribute("aria-label")).toBe(t("screen-share-video.picture_current", { current: t("screen-share-video.picture_video") }));
 
     act(() => button()!.click());
     expect(rows().map((r) => [r.textContent, r.getAttribute("aria-checked")])).toEqual([
-      [t("screen-video.picture_video"), "true"],
-      [t("screen-video.picture_vnc"), "false"],
+      [t("screen-share-video.picture_video"), "true"],
+      [t("screen-share-video.picture_vnc"), "false"],
     ]);
 
     act(() => rows()[1].click()); // choose VNC
     await flush();
     expect(localStorage.getItem("persona.screen.picture.macbook")).toBe("vnc");
-    expect(button()?.getAttribute("aria-label")).toBe(t("screen-video.picture_current", { current: t("screen-video.picture_vnc") }));
+    expect(button()?.getAttribute("aria-label")).toBe(t("screen-share-video.picture_current", { current: t("screen-share-video.picture_vnc") }));
 
     act(() => button()!.click());
     act(() => rows()[0].click()); // and Video again
@@ -187,7 +187,7 @@ describe("the picture switcher when the Mac advertises video", () => {
     await open();
     await connect();
     await menuAppears();
-    expect(button()?.getAttribute("aria-label")).toBe(t("screen-video.picture_current", { current: t("screen-video.picture_video") }));
+    expect(button()?.getAttribute("aria-label")).toBe(t("screen-share-video.picture_current", { current: t("screen-share-video.picture_video") }));
     act(() => button()!.click());
     expect(rows(), "Video and VNC").toHaveLength(2);
   });
@@ -269,7 +269,7 @@ describe("data use", () => {
     await flush();
     expect([card(), localStorage.getItem("persona.screen.mobileData"), chunk.tierBudget]).toEqual([null, "clearer", { maxKbps: 4_000, fps: 60 }]);
     act(() => button()!.click());
-    expect(rows().map((r) => [r.textContent?.startsWith(t("screen-video.mobile_data_clearer")) || r.textContent?.startsWith(t("screen-video.mobile_data_saver")), r.getAttribute("aria-checked")]).slice(-2)).toEqual([
+    expect(rows().map((r) => [r.textContent?.startsWith(t("screen-share-video.mobile_data_clearer")) || r.textContent?.startsWith(t("screen-share-video.mobile_data_saver")), r.getAttribute("aria-checked")]).slice(-2)).toEqual([
       [true, "true"], // Clearer
       [true, "false"], // Data Saver
     ]);

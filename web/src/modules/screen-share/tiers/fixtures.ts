@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect } from "vitest";
 
-const root = fileURLToPath(new URL("../../../../spec/fixtures/screen-tiers/", import.meta.url));
+const root = fileURLToPath(new URL("../../../../../spec/fixtures/screen-tiers/", import.meta.url));
 
 /** Every scenario of a kind (`ladder`, `signals`, `policy`), by file name. */
 export function scenarios<T>(kind: string): [string, T][] {

@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { decode, encode, frame, MAX_MESSAGE_BYTES, VideoParser, VideoWireError, type VideoMessage } from "./video-wire";
 
 type Case = { name: string; input: { frame_hex: string }; expected: Record<string, unknown> & { type: string }; exact: boolean };
-const doc = JSON.parse(readFileSync(fileURLToPath(new URL("../../../spec/fixtures/screen-video/messages.json", import.meta.url)), "utf8")) as {
+const doc = JSON.parse(readFileSync(fileURLToPath(new URL("../../../../spec/fixtures/screen-video/messages.json", import.meta.url)), "utf8")) as {
   version: number;
   cases: Case[];
 };

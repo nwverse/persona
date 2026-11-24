@@ -4,7 +4,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { t } from "../i18n";
+import { t } from "../../i18n";
 
 type FakeRFB = EventTarget & { canvas: HTMLCanvasElement };
 const rfbs = vi.hoisted(() => [] as FakeRFB[]);
@@ -25,10 +25,10 @@ vi.mock("@novnc/novnc", () => ({
     }
   },
 }));
-vi.mock("../views/theme", () => ({}));
+vi.mock("../../views/theme", () => ({}));
 vi.mock("./aes", () => ({ ensureSubtleAES: () => {} }));
-vi.mock("../lib/api", async (actual) => ({
-  ...(await actual<typeof import("../lib/api")>()),
+vi.mock("../../lib/api", async (actual) => ({
+  ...(await actual<typeof import("../../lib/api")>()),
   api: async (path: string) => {
     if (path === "/machines") return { machines: [{ id: "macbook", name: "MacBook", online: true }] };
     status.asked++;
@@ -100,14 +100,14 @@ describe("ScreenView on a Mac with two displays", () => {
     await framebuffer(960, 300);
     await connect();
     await menuAppears();
-    expect(button()?.getAttribute("aria-label")).toBe(t("screen-displays.displays_current", { current: t("screen-displays.all_displays") }));
+    expect(button()?.getAttribute("aria-label")).toBe(t("screen-share-displays.displays_current", { current: t("screen-share-displays.all_displays") }));
     expect(screen().style.width).toBe("");
 
     act(() => button()!.click());
     expect(rows().map((r) => [r.textContent, r.getAttribute("aria-checked")])).toEqual([
-      [t("screen-displays.all_displays"), "true"],
-      [t("screen-displays.display_n", { n: 1 }), "false"],
-      [t("screen-displays.display_n", { n: 2 }), "false"],
+      [t("screen-share-displays.all_displays"), "true"],
+      [t("screen-share-displays.display_n", { n: 1 }), "false"],
+      [t("screen-share-displays.display_n", { n: 2 }), "false"],
     ]);
     act(() => rows()[2].click());
     await flush();
@@ -116,7 +116,7 @@ describe("ScreenView on a Mac with two displays", () => {
     const clip = screen().parentElement!;
     expect([clip.style.left, clip.style.top, clip.style.width, clip.style.height]).toEqual(["0px", "50px", "480px", "300px"]);
     expect([screen().style.left, screen().style.top, screen().style.width, screen().style.height]).toEqual(["-480px", "0px", "960px", "300px"]);
-    expect(button()?.getAttribute("aria-label")).toBe(t("screen-displays.displays_current", { current: t("screen-displays.display_n", { n: 2 }) }));
+    expect(button()?.getAttribute("aria-label")).toBe(t("screen-share-displays.displays_current", { current: t("screen-share-displays.display_n", { n: 2 }) }));
 
     // a new page for the same Mac comes back on display 2, from its first live frame: the menu came while it connected
     act(() => root.unmount());
