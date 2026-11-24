@@ -1,7 +1,7 @@
 import PersonaWire
 import SwiftUI
 
-/// Under the map (docs/server/machine-usage-map.md "Selection and \"what if\""): the last trash's notice with Undo and
+/// Under the map (docs/server/machine-usage-map.md "The map"): the last trash's notice with Undo and
 /// Delete Permanently, an offload's progress, the "what if" line, the selection as rows (the map's non-visual
 /// equivalent: every box action is here too) with its actions, and the free-up goal.
 struct UsageMapTray: View {

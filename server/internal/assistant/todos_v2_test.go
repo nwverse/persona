@@ -874,7 +874,14 @@ func TestTodosV2DirectionIDLosslessRollback(t *testing.T) {
 		if !exists {
 			t.Fatalf("todo %s lost after rollback", id)
 		}
-		if !reflect.DeepEqual(offRow["view"], onRow["view"]) {
+		// The time-derived cursor and rank can move between two reads; compare placement and content instead.
+		stable := func(v any) any {
+			m := maps.Clone(v.(map[string]any))
+			delete(m, "next_change_at")
+			delete(m, "rank")
+			return m
+		}
+		if !reflect.DeepEqual(stable(offRow["view"]), stable(onRow["view"])) {
 			t.Fatalf("todo %s view changed on rollback: off=%v on=%v", id, offRow["view"], onRow["view"])
 		}
 		for _, legacyKey := range []string{"id", "title", "notes", "created_at", "updated_at", "spaces", "agents", "quiet", "view"} {
