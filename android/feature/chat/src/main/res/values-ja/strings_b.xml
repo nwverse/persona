@@ -55,7 +55,6 @@
     <plurals name="chat_chrome_peers">
         <item quantity="other">同じスペース%1$d件</item>
     </plurals>
-    <string name="chat_chrome_switch_session">セッションを切り替え</string>
     <string name="chat_chrome_subagent">サブエージェント：%1$s</string>
     <string name="chat_chrome_interrupt">中断</string>
     <string name="chat_chrome_rename">名前を変更</string>

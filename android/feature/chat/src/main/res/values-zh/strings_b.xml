@@ -55,7 +55,6 @@
     <plurals name="chat_chrome_peers">
         <item quantity="other">同伴 %1$d</item>
     </plurals>
-    <string name="chat_chrome_switch_session">换会话</string>
     <string name="chat_chrome_subagent">子 Agent：%1$s</string>
     <string name="chat_chrome_interrupt">中断</string>
     <string name="chat_chrome_rename">重命名</string>

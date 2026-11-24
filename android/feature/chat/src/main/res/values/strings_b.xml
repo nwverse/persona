@@ -59,7 +59,6 @@
         <item quantity="one">%1$d peer</item>
         <item quantity="other">%1$d peers</item>
     </plurals>
-    <string name="chat_chrome_switch_session">Switch session</string>
     <string name="chat_chrome_subagent">Subagent: %1$s</string>
     <string name="chat_chrome_interrupt">Interrupt</string>
     <string name="chat_chrome_rename">Rename</string>
