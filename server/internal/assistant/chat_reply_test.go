@@ -386,3 +386,46 @@ func TestGoldenChatReply(t *testing.T) {
 	golden(t, "chat_reply.group.ja", prompts.RenderChatReply(prompts.ChatReply{Language: "日本語", Title: "On-call", Group: true,
 		Sender: "Sam", Sent: sent, Count: 3, Context: "14:20 Sam：OK"}))
 }
+
+// assistant.chat_reply_relay off: no new chat_reply is queued or told, and one still waiting is dropped when the owner
+// turns it off (through the setting's own change, as the phone card applies it). On again, replies come as before.
+func TestChatReplyRelaySettingTurnsItOff(t *testing.T) {
+	h := newChatReplyHarness(t, replyConv("conv-a"))
+	now := time.Now()
+	h.wrote(t, "server", "conv-a", replyChat, now.Add(-time.Hour))
+	h.round(migratedConnectorID, replyBatch(replyChat, KindGroup, now.Add(-3*time.Minute), "m1"))
+	h.round(migratedConnectorID, replyBatch(replyChat, KindGroup, now.Add(-2*time.Minute), "m2")) // waits its gap
+	if q := h.queued("conv-a"); len(q) != 1 || q[0].Tool != chatReplyTool {
+		t.Fatalf("a reply should wait in the queue: %+v", q)
+	}
+	ch, err := h.s.setChatReplyRelay(context.Background(), json.RawMessage(`false`))
+	if err != nil || ch.apply == nil {
+		t.Fatalf("setChatReplyRelay: %+v, %v", ch, err)
+	}
+	if _, err := ch.apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if q := h.queued("conv-a"); len(q) != 0 {
+		t.Fatalf("the queued chat_reply stayed: %+v", q)
+	}
+	h.round(migratedConnectorID, replyBatch(replyChat, KindGroup, now.Add(-time.Minute), "m3"))
+	if q := h.queued("conv-a"); len(q) != 0 {
+		t.Fatalf("a new chat_reply was queued while off: %+v", q)
+	}
+	if got := h.told("conv-a"); len(got) != 1 {
+		t.Fatalf("told while off: %q", got)
+	}
+	if ch, err = h.s.setChatReplyRelay(context.Background(), json.RawMessage(`false`)); err != nil || ch.summary == "" {
+		t.Fatalf("turning it off again should change nothing: %+v, %v", ch, err)
+	}
+	on, err := h.s.setChatReplyRelay(context.Background(), json.RawMessage(`true`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := on.apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !chatReplyRelayOn(h.s.settings(context.Background())) {
+		t.Fatal("still off")
+	}
+}

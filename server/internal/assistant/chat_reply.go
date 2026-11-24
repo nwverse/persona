@@ -121,10 +121,49 @@ func larkChatFeed(thread string) (string, bool) {
 	return rest, true
 }
 
+// chatReplyRelayOn is assistant.chat_reply_relay in effect with settings cfg: on unless set to false.
+func chatReplyRelayOn(cfg Settings) bool {
+	return cfg.ChatReplyRelay == nil || *cfg.ChatReplyRelay
+}
+
+// dropQueuedChatReplies takes every chat_reply that still waits in the relay queue out of it (assistant.chat_reply_relay
+// turned off). One going into its conversation right now (the head of a draining queue) is dropped by the drain.
+func (s *Service) dropQueuedChatReplies(ctx context.Context) {
+	b := &s.relays
+	b.mu.Lock()
+	if !s.relayLocked(ctx) {
+		b.mu.Unlock()
+		return
+	}
+	changed := false
+	for to, q := range b.st.Queue {
+		kept := q[:0:0]
+		for i, m := range q {
+			if m.Tool == chatReplyTool && !(i == 0 && b.draining[to]) {
+				changed = true
+				continue
+			}
+			kept = append(kept, m)
+		}
+		if len(kept) == 0 {
+			delete(b.st.Queue, to)
+		} else {
+			b.st.Queue[to] = kept
+		}
+	}
+	if changed {
+		s.saveRelayLocked()
+	}
+	b.mu.Unlock()
+	if changed {
+		s.publish(ctx)
+	}
+}
+
 // tellChatWriters takes the batches of new messages the Lark connector handed in a round (people's chats, not a
 // bot's) and tells the conversations that wrote into their chats as the user, in the background (tellChatBatches).
 func (s *Service) tellChatWriters(ctx context.Context, src assistantwire.InboxSource) {
-	if src.ID != migratedConnectorID {
+	if src.ID != migratedConnectorID || !chatReplyRelayOn(s.settings(ctx)) {
 		return
 	}
 	var batches []connector.InboxThing
@@ -154,7 +193,7 @@ func (s *Service) tellChatWriters(ctx context.Context, src assistantwire.InboxSo
 func (s *Service) tellChatBatches(ctx context.Context, batches []connector.InboxThing, now time.Time) {
 	ledger, ok := s.store().(chatSentStore)
 	machine := s.settings(ctx).MachineID
-	if !ok || machine == "" {
+	if !ok || machine == "" || !chatReplyRelayOn(s.settings(ctx)) {
 		return
 	}
 	b := &s.chatReplies

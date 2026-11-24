@@ -215,6 +215,9 @@ type Settings struct {
 	// branches). nil is off (the default): each round starts from its first turn with only that round's facts and tools
 	// (supervise_round.go).
 	BackgroundSupervisorKeepsContext *bool `json:"background_supervisor_keeps_context,omitempty"`
+	// ChatReplyRelay: after a conversation wrote into a Lark chat as the user, other people's new messages there are
+	// told to it (chat_reply.go). nil is on (the default); false stops new ones and drops those still queued.
+	ChatReplyRelay *bool `json:"chat_reply_relay,omitempty"`
 	// BackgroundSupervisor is the background supervisor's conversation, on BackgroundSupervisorMachineID, started at
 	// BackgroundSupervisorAt: made on first use, "" until then. BackgroundSupervisorAnnounced: the main conversation
 	// was told once that it follows up its tasks. The assistant writes these itself; PUT /api/v1/assistant does not.
