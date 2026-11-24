@@ -294,37 +294,47 @@ test('an open native tool sheet follows a late receipt and releases its selectio
   }
 });
 
-test('only visible, running calls breathe their outline and stop when hidden or finished', () => {
+test('only visible, running calls with an alternate icon play their own frame sequence', () => {
   const nativeEnvironment = { reduceMotion:false };
+  const sheets = { command:{ frames:100, duration:1667 }, read:{ frames:36, duration:600 } };
   const icon = pageMethods('../design/ToolGlyph',
-    ['get motionEnabled','syncMotion','stopMotion','aboutToDisappear'], { nativeEnvironment });
+    ['get sheet','get motionEnabled','syncMotion','stopMotion','aboutToDisappear'], { nativeEnvironment, sheets });
   const animations = [];
   icon.getUIContext = () => ({ createAnimator: options => {
     const animation = { options, play() {}, cancel() { this.cancelled = true; }, setExpectedFrameRateRange() {} };
     animations.push(animation);
     return animation;
   } });
-  Object.assign(icon, { running:true, visible:false, motion:'command', strength:1 });
+  Object.assign(icon, { running:true, visible:false, motion:'command', frame:0 });
   icon.syncMotion();
   assert.equal(animations.length, 0);
   icon.visible = true; icon.syncMotion(); icon.syncMotion();
-  const first = animations[0];
+  const terminal = animations[0];
   assert.equal(animations.length, 1);
-  assert.equal(first.options.duration, 1200);
-  first.onFrame(0.5); assert.ok(Math.abs(icon.strength - 0.58) < 1e-9);
+  assert.equal(terminal.options.duration, 1667);
+  terminal.onFrame(0.41); assert.equal(icon.frame, 41);
+  terminal.onFrame(1); assert.equal(icon.frame, 99);
   icon.motion = 'read'; icon.syncMotion();
-  assert.equal(first.cancelled, true);
-  assert.equal(animations.length, 2);
-  first.onFrame(0); assert.equal(icon.strength, 1);
+  assert.equal(terminal.cancelled, true);
+  assert.equal(animations.at(-1).options.duration, 600);
+  terminal.onFrame(0.5); assert.equal(icon.frame, 0);
+  animations.at(-1).onFrame(0.5); assert.equal(icon.frame, 18);
   for (const stop of [() => { icon.running = false; }, () => { nativeEnvironment.reduceMotion = true; },
-    () => { icon.visible = false; }]) {
+    () => { icon.visible = false; }, () => { icon.motion = undefined; }]) {
     const current = animations.at(-1);
-    current.onFrame(0.5);
     stop(); icon.syncMotion();
     assert.equal(current.cancelled, true);
-    assert.equal(icon.strength, 1);
-    icon.running = true; icon.visible = true; nativeEnvironment.reduceMotion = false; icon.syncMotion();
+    current.onFrame(0.4); assert.equal(icon.frame, 0);
+    icon.running = true; icon.visible = true; nativeEnvironment.reduceMotion = false; icon.motion = 'read'; icon.syncMotion();
   }
-  icon.aboutToDisappear();
-  assert.equal(animations.at(-1).cancelled, true);
+  icon.motion = undefined; icon.syncMotion();
+  const pulse = animations.at(-1);
+  assert.equal(pulse.options.duration,1200);
+  pulse.onFrame(0.5);assert.ok(icon.strength < 0.6,'fallback animates the original tool glyph');
+  icon.visible=false;icon.syncMotion();assert.equal(icon.strength,1);
+  icon.motion = 'read'; icon.visible = true; icon.syncMotion();
+  const last = animations.at(-1);
+  icon.aboutToDisappear(); last.onFrame(0.41);
+  assert.equal(last.cancelled, true);
+  assert.equal(icon.frame, 0);
 });
