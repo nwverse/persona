@@ -28,7 +28,7 @@ var mainOnlySignals = []string{sigFailed, sigStarted, sigEscalated, sigLeaderStu
 // backgroundSignals are the signals an existing background conversation can receive for explicitly addressed legacy
 // notices. Without that explicit legacy target, all of them stay with main for new assistant-dispatched work (#5732).
 var backgroundSignals = []string{sigReview, sigReviewNudge, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigAllStopped, sigInterrupted,
-	sigPRConflict, sigDraftPR, sigPRMerged, sigReport, sigOrphaned, sigAsk, sigDecide, sigDecisionReply, sigRecheck, sigUndecidable, sigDeliveryHold, sigCardlessWait,
+	sigPRConflict, sigDraftPR, sigPRMerged, sigReport, sigOrphaned, sigRecovered, sigAsk, sigDecide, sigDecisionReply, sigRecheck, sigUndecidable, sigDeliveryHold, sigCardlessWait,
 	sigOwnerCannot, sigParkedDue, sigParkedSummary, sigParkDecided, sigInbox, sigNeedsUserExternalInfo, sigOverdue, sigCheck}
 
 // roundConnectorTools are the round's tools that come with the Lark extension (lark_search) or the lark-cli connector

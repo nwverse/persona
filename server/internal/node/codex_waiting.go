@@ -939,11 +939,17 @@ func (n *Node) sendFirstCodexCall(ctx context.Context, w *codexWait, params json
 
 // withSessionID is params with session_id replaced: calls that read their own fields from params see the same id.
 func withSessionID(params json.RawMessage, id string) json.RawMessage {
+	return withParam(params, "session_id", id)
+}
+
+// withParam is params with key set to value, for the calls that read their own fields from params (an @-quote's note
+// in a message's text, session_mention.go); params as they are when they are no JSON object.
+func withParam(params json.RawMessage, key string, value any) json.RawMessage {
 	var m map[string]json.RawMessage
 	if json.Unmarshal(params, &m) != nil || m == nil {
 		return params
 	}
-	m["session_id"], _ = json.Marshal(id)
+	m[key], _ = json.Marshal(value)
 	b, err := json.Marshal(m)
 	if err != nil {
 		return params

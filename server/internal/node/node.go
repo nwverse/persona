@@ -1094,6 +1094,14 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		hasSelectedSkills = len(refs) > 0
 		ctx = withSkillOwner(ctx, p.SkillOwner)
 	}
+	if sessionSend {
+		// An @-quoted session's address (#13831), before any path below takes the message and records its echo: a Codex
+		// waiting for its first message, a runtime's session (Paseo's too), a stopped omp, an agy or Cursor pane, and
+		// session.send below. Those that read the text from params read it there.
+		if noted := n.withSessionMentions(ctx, p.SessionID, p.Text); noted != p.Text {
+			p.Text, params = noted, withParam(params, "text", noted)
+		}
+	}
 	if isCodexWaitID(p.SessionID) && (strings.HasPrefix(method, "session.") || strings.HasPrefix(method, "terminal.")) {
 		// A Codex opened with no first message (codex_waiting.go): the thread it became since the client looked, or
 		// what its row answers while it waits.
@@ -1302,8 +1310,6 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		running, known := n.herdrRunning(ctx)
 		installing, installErr := n.herdrInstalling() // herdrinstall.go
 		return map[string]any{"running": running, "known": known, "installing": installing, "install_error": installErr}, nil
-	case "herdr.sessions.list": // configurable named herdr sessions on this computer (#14898, herdrsessions.go)
-		return n.listHerdrSessions(ctx)
 	case "connector.list", "connector.chats", "connector.older", "connector.changes", "connector.search": // this Mac's own data (connectors.go)
 		return localConnector(ctx, method, params)
 	case "credential.gh_token": // the GitHub connector's token from this machine's gh login (credential.go)
@@ -1358,7 +1364,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			// leaves them as they are.
 			HerdrSessionsBlocked *[]string          `json:"herdr_sessions_blocked"`
 			Codex                *proto.CodexConfig `json:"codex"`
-			MachineID        string             `json:"machine_id"`
+			MachineID            string             `json:"machine_id"`
 			// Keep: sessions always listed, however old or crowded out (the assistant's main conversation).
 			Keep *[]string `json:"keep_sessions"`
 			// Botmux: list botmux's sessions (hub.json machines[].botmux); nil (a call that says nothing of it, an

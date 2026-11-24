@@ -3067,7 +3067,7 @@ A declared list of extension accounts, gateways or similar entries (#9504) belon
 ## Sidebar icon colors (#10822)
 
 Who it serves: anyone whose sidebar lists many pages and who finds it quicker to scan when each page has a color. It is
-an option, off by default (principle 2): Settings › General › Appearance › **Sidebar icons**, **Monochrome** or
+an option, off by default (principle 2): Settings › Advanced › Appearance › **Sidebar icons** (#13398), **Monochrome** or
 **Colored**, kept in this browser as the theme color is (`web/src/lib/sidebar-icons.ts`). Monochrome is the sidebar as
 it was, pixel for pixel: every page's line icon in `--ink-3`, the open page's in `--ink`, and nothing is stored.
 
