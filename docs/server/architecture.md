@@ -174,7 +174,7 @@ package fleetcount
 | `application seam` | a typed registration seam between application modules | `assistant/kernel` and later seams | as application |
 | `library` | technical code with no domain concept; its records and named primitives are counted as application code's | `lazyre`, `osproc`, `db`, `prompts`, `apierr`, `i18n` and the like | the standard library, third-party code, libraries, contracts |
 | `contract` | plain wire data | exactly the packages `server/internal/archguard/testdata/contracts.txt` lists | the standard library and contracts |
-| `testkit` | test support | `domainkit/domaintest`, `domainkit/clock/clocktest`, `*test` packages | anything; imported only by tests and other testkit |
+| `testkit` | test support, never a program (`package main`) | `domainkit/domaintest`, `domainkit/clock/clocktest`, `*test` packages | anything; imported only by tests and other testkit |
 
 A declaration is checked, or it would be a way around the rules: `application` must show an effect use (a call into
 `os`, `net`, `net/http`, `database/sql`, `os/exec`, `log`, `log/slog`, `syscall`, `crypto/rand`, `math/rand` or an
@@ -182,11 +182,12 @@ application package, a clock call, a goroutine, a channel, a select, or a field 
 `database/sql`, `net`, `os`, `os/exec` or `sync`; a `context.Context` parameter or an adapter import alone is none),
 `kit` lives only under `server/internal/domainkit`, `contract` if and only if `contracts.txt` lists the package,
 `core shared` holds only values, a library imports no core, kit or adapter and is counted like application code (so
-declaring `library` holds no domain concept either), and testkit is imported only by tests. A
-core is imported only by application code, adapters, testkit and tests (a shared kernel by cores too). The hub
-(`internal/hub`, `internal/hubedge`, `cmd/persona-hub`) relays contracts and imports no core, kit or adapter, and
-neither do `db` and `prompts`, libraries the hub links. A manager is application plus adapters, with its cores in its
-own tree; the node is application plus engine adapters, with any core under `node/<domain>`.
+declaring `library` holds no domain concept either), and testkit is imported only by tests and other testkit and is no
+program (`package main`, which nothing imports), so its code reaches no binary. A core is imported only by application
+code, adapters, testkit and tests (a shared kernel by cores too). The hub (`internal/hub`, `internal/hubedge`,
+`cmd/persona-hub`) relays contracts and imports no core, kit or adapter, and neither do `db` and `prompts`, libraries
+the hub links. A manager is application plus adapters, with its cores in its own tree; the node is application plus
+engine adapters, with any core under `node/<domain>`.
 
 A package that declares nothing counts as application. The packages that declared nothing when the rules landed are
 frozen by name in `server/internal/archguard/testdata/domain_layers/undeclared.txt`; a new package has to declare, and
@@ -195,13 +196,14 @@ from `python3 scripts/test/name_freezes.py pending --write`.
 
 ### Values
 
-One value object per concept: a struct whose state is unexported, made only by its own package. A one-field struct
-names its field for its type in lower camel case (an `ID` suffix may go: `MachineID{machine}`), and no two exported
-structs of a package share a field list, so no value converts into a sibling (`fleetcount.Role(state)` does not
-compile). There are no named primitives, aliases or conversions from outside, and a struct with more than one field
-holds no primitive. Every exported struct and sealed interface documents its zero value ("The zero Ref is no
-session"); where the zero is not a valid value, constructors refuse it and functions handed it raise a defect.
-Absence inside a core is `opt.Option`, never a nil pointer or a zero marker.
+One value object per concept: a struct whose state is unexported, made only by its own package. A one-field struct names
+its field for its type in lower camel case (an `ID` suffix may go: `MachineID{machine}`), and no two exported structs of
+a package share a field list, so no value converts into a sibling (`fleetcount.Role(state)` does not compile). There are
+no named primitives, aliases or conversions from outside, and a struct with more than one field holds no primitive, a
+kit type's argument included (a field of `opt.Option[string]` holds a `string`). Every exported struct and sealed
+interface documents its zero value ("The zero Ref is no session"); where the zero is not a valid value, constructors
+refuse it and functions handed it raise a defect. Absence inside a core is `opt.Option`, never a nil pointer or a zero
+marker.
 
 ```go
 // MachineID is one of the owner's computers. The zero MachineID is no machine; ParseRef never makes one.
@@ -262,14 +264,14 @@ func (a Agent) Counts(on Surface) bool {
 ### Building always-valid objects
 
 A value exists only in a valid state, from birth and from storage. `ParseX` is the only way in from raw input and the
-only exported function that takes primitives; `NewX` builds from domain values; both make a type of their own package
-(or an outcome of one); `RestoreX` rebuilds stored state and always returns an outcome; a closed set's values are
-`<Type><Value>`. Make, Create, Build, Init, From, To, Get, Set, Reconstruct and Must are refused as prefixes. No
-exported function takes more than four parameters: more inputs make a staged builder, whose stages are distinct types
-named for themselves (so they cannot convert into each other) and whose last stage, `XBuilder`, has `Build`. `Build`
-refuses a zero value in every part and reports every one, in order (`fail.Invalids`): Go cannot stop a stage from
-being declared zero, so a skipped stage fails at `Build`, never silently. Nothing fills in a default the caller did
-not pass.
+only exported function that takes primitives, a kit type's argument included (`opt.Option[string]` is raw input as
+`string` is); `NewX` builds from domain values; both make a type of their own package (or an outcome of one); `RestoreX`
+rebuilds stored state and always returns an outcome; a closed set's values are `<Type><Value>`. Make, Create, Build,
+Init, From, To, Get, Set, Reconstruct and Must are refused as prefixes. No exported function takes more than four
+parameters: more inputs make a staged builder, whose stages are distinct types named for themselves (so they cannot
+convert into each other) and whose last stage, `XBuilder`, has `Build`. `Build` refuses a zero value in every part and
+reports every one, in order (`fail.Invalids`): Go cannot stop a stage from being declared zero, so a skipped stage fails
+at `Build`, never silently. Nothing fills in a default the caller did not pass.
 
 ```go
 // ParseRef is the session a machine id and a session id name; either one empty is invalid.
@@ -482,26 +484,37 @@ A programmer error is a defect (`defect.Raise`), never a returned failure, and o
 
 ### Data objects and adapters
 
-Stored rows, wire types, prompt inputs and fixture shapes are plain data and live outside cores: in contracts, in
-`db` or `prompts`, or in the adapter that owns them, named `Record`. A core has no struct tags and no codec method
-(`String`, `Error`, `GoString`, `Format`, `MarshalJSON` and the other marshal and unmarshal methods, `AppendText`,
-`Scan`, `Value`, `LogValue`). A single value leaves through `Wire()`, which returns its field and which only adapters
-and testkit name, called or not; a composite leaves through `Accept`. Outside the core, its tests, adapters and
-testkit, nothing calls its `Parse` or `Restore`; nothing outside it builds its types by literal (the zero literal
-included: `var x pkg.T` names the documented zero), converts into them, aliases them, dot-imports the package, or
-reads them with `unsafe` or `reflect` (`reflect.DeepEqual` aside). An adapter returns nothing, core values (as
-outcomes), contracts, `db` rows, prompt inputs, its `Record`, `error`, or `Log`'s string, which goes straight into a
-log call; a pointer, slice, map or channel of them holds only them, a map's keys included. It hands out nothing else
-through its parameters either: what it writes through a pointer, slice, map or channel, passes to a callback or to an
-interface it declares is one of those (`Act`'s `save func(Record) error`). It takes no parameter of type `any`,
-`interface{}` or a type parameter, which can carry a pointer to anything, and no parameter of another package's type
-but one it may hand out: a named map or slice (`http.Header`, `url.Values`), a struct with a map inside
+Stored rows, wire types, prompt inputs and fixture shapes are plain data and live outside cores: in contracts, in `db`
+or `prompts`, or in the adapter that owns them, named `Record`. A core has no struct tags and no codec method (`String`,
+`Error`, `GoString`, `Format`, `MarshalJSON` and the other marshal and unmarshal methods, `AppendText`, `Scan`, `Value`,
+`LogValue`). A single value leaves through `Wire()`, which returns its field and which only adapters and testkit name,
+called or not; a composite leaves through `Accept`. Outside the core, its tests, adapters and testkit, nothing calls its
+`Parse` or `Restore`; nothing outside it builds its types by literal (the zero literal included: `var x pkg.T` names the
+documented zero), converts into them, aliases them, dot-imports the package, or reads them with `unsafe` or `reflect`
+(`reflect.DeepEqual` aside). An adapter returns nothing, core values (as outcomes), contracts, `db` rows, prompt inputs,
+its `Record`, `error`, or `Log`'s string, which goes straight into a log call; a pointer, slice, map or channel of them
+holds only them, a map's keys included. A contract's, `db`'s or `prompts`' type is plain data only in what it holds:
+what can be called on it is read from its declaration, and the methods of an interface (those it embeds included), a
+func type, and the func- and interface-typed exported fields of a struct, through the types of those packages it holds,
+take and return only what an adapter may hand out, or the type is a getter one layer out (`kbwire.ItemSource`, whose
+`DocTitle` returns a `string`). It hands out nothing else through its parameters either: what it writes through a
+pointer, slice, map or channel, passes to a callback, writes into what a callback returns, or passes to an interface it
+declares or to a contract's, `db`'s or `prompts`' interface, func or func field is one of those (`Act`'s
+`save func(Record) error` passes; `mailwire.Store`, whose `PutSetting` takes `any`, does not). It takes no parameter of
+type `any`, `interface{}` or a type parameter, which can carry a pointer to anything, and no parameter of another
+package's type but one it may hand out: a named map or slice (`http.Header`, `url.Values`), a struct with a map inside
 (`*http.Request`) or an interface whose methods take what the adapter passes them (`context.Context`'s `Value`) all
-reach the caller, and the rule cannot tell which of these a type is. No exported struct of its own but `Record` has an
-exported field, and it has no exported variable, a getter any caller can also replace. `io.Writer` and
-`http.ResponseWriter`, which an answer is written to, are the two ways out the rule does not read (`sinks` in
-`server/internal/archguard/domainrules/outside.go`): what an adapter writes there is a review's to check, and the
-adapter's signature still names the domain value it starts from. It exports no type named like one of its core's.
+reach the caller, and the rule does not read other packages' declarations. No exported struct of its own but `Record`
+has an exported field, and it has no exported variable, a getter any caller can also replace. It exports no type named
+like one of its core's.
+
+What the rule does not read is a review's to check, and the adapter's signature still names the domain value it starts
+from: `io.Writer` and `http.ResponseWriter`, which an answer is written to (`sinks` in
+`server/internal/archguard/domainrules/outside.go`); a contract of another module (`sdk/go/wire`, outside the server's
+tree), whose types pass as data; and, inside a contract's, `db`'s or `prompts`' type, a field or element of type `any`
+or `interface{}`, or of a type from a package that is none of these, read as data (`time.Time`) unless `knownInterfaces`
+in `server/internal/archguard/domainrules/core.go` lists it (`io.Reader`), in which case it is refused. #15088 tracks
+reading them.
 
 ```go
 // FromWire is the session a wire reference names.
@@ -646,7 +659,7 @@ run that does not name the baseline with `--only` leaves it out once main has it
 | `layer-shared` | a shared kernel's place and that it holds only values | fails at once |
 | `layer-application` | an application or seam package shows an effect use | fails at once |
 | `layer-library` | a library imports no core, kit or adapter | fails at once |
-| `layer-testkit` | testkit is imported only by tests and other testkit | fails at once |
+| `layer-testkit` | testkit is imported only by tests and other testkit, and no program (`package main`) declares it | fails at once |
 | `core-importers` | a core is imported only by application code, adapters, testkit and tests | fails at once |
 | `adapter-no-application` | an adapter imports no application package | fails at once |
 | `adapter-import` | an adapter imports another adapter only if it is a shared kernel's | fails at once |
@@ -664,9 +677,9 @@ run that does not name the baseline with `--only` leaves it out once main has it
 | `core-alias` | no exported alias | the package |
 | `core-field-name` | a one-field struct's field is named for its type | the package |
 | `core-distinct-shape` | no two exported structs of a package share a field list | the package |
-| `core-primitive-field` | a struct with more than one field holds no primitive | the package |
-| `core-primitive-signature` | primitives only as `ParseX` parameters, `bool` results and `Wire`'s result | the package |
-| `core-collection` | slices and maps in exported signatures only as `NewX` and `RestoreX` parameters | the package |
+| `core-primitive-field` | a struct with more than one field holds no primitive, a kit type's argument included | the package |
+| `core-primitive-signature` | primitives, a kit type's argument included, only as `ParseX` parameters, `bool` results and `Wire`'s result | the package |
+| `core-collection` | slices and maps in exported signatures, a kit type's argument included, only as `NewX` and `RestoreX` parameters | the package |
 | `core-interface-param` | no func or interface parameter but the package's own visitors and sealed interfaces | the package |
 | `core-accessor` | every exported method returns nothing, a bool, its receiver's type or an outcome of it, and no exported function or method but `ID` and `Wire` returns a field as it is | the package |
 | `core-pointer-receiver` | no pointer receivers | the package |
@@ -702,7 +715,7 @@ run that does not name the baseline with `--only` leaves it out once main has it
 | `out-rules-import` | only tests import `domainrules` | fails at once |
 | `out-log-use` | an adapter's `Log` result only as an argument of a logging call | the package it is in |
 | `adapter-name` | an adapter exports no type named like one of its core's | the adapter |
-| `adapter-exported-result` | an adapter hands out only what the section above lists, in results (a map's keys included), through parameters (none of type `any`, `interface{}`, a type parameter or another package's type but `io.Writer` and `http.ResponseWriter`) and in exported fields; it has no exported variable | the adapter |
+| `adapter-exported-result` | an adapter hands out only what the section above lists, in results (a map's keys included, and what a contract's, `db`'s or `prompts`' type can be called with), through parameters (none of type `any`, `interface{}`, a type parameter or another package's type but `io.Writer` and `http.ResponseWriter`; a contract's, `db`'s or `prompts`' type only where what it can be called with takes what an adapter may hand out) and in exported fields; it has no exported variable. What it does not read is listed above | the adapter |
 | `app-exported-record` | exported structs with an exported field, in undeclared, application and library packages (contracts, `db` and `prompts` aside) | the package |
 | `app-named-primitive` | named basic types, in undeclared, application and library packages | the package |
 | `app-lifecycle-write` | assignments to a `DoneAt` or `DoneBy` field, in undeclared, application and library packages | the package |

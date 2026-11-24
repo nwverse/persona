@@ -11,12 +11,14 @@ type outsideChecks struct {
 	findings
 	p   *Pkg
 	idx Index
+	err error // the first file that could not be read while resolving a contract's, db's or prompts' type
 }
 
 // Outside is the rules on p's parsed files as users of cores, the kit and adapters (out-*), p's own rules as an
 // adapter (adapter-*), and its imports as a part that takes no core (path-no-core). Files Full or the prefilter did
-// not parse are left alone: they use no domain package.
-func Outside(p *Pkg, idx Index) []Finding {
+// not parse are left alone: they use no domain package. An adapter's rules read the declarations of the contract,
+// db and prompts types it names, parsing the files that declare them (typeNamed).
+func Outside(p *Pkg, idx Index) ([]Finding, error) {
 	c := &outsideChecks{p: p, idx: idx}
 	c.pathNoCore()
 	if p.Layer == layerAdapter {
@@ -30,7 +32,7 @@ func Outside(p *Pkg, idx Index) []Finding {
 			c.file(f)
 		}
 	}
-	return c.list
+	return c.list, c.err
 }
 
 // ref is a domain package a file imports: the name it uses, the import and the package.
@@ -385,25 +387,35 @@ func (c *outsideChecks) adapterDecls() {
 		if !exported(fd.decl.Name.Name) || fd.recv != "" && !exported(fd.recv) {
 			return
 		}
+		say := func(what string) { c.at(fd.file, fd.decl.Name, "adapter-exported-result", c.p.Rel, what) }
 		for _, r := range params(fd.decl.Type.Results) {
-			if !c.adapterResult(fd, r) {
-				c.at(fd.file, fd.decl.Name, "adapter-exported-result", c.p.Rel, fd.name()+" returns "+exprString(r))
+			if ok, why := c.adapterResult(fd, r); !ok {
+				say(fd.name() + " returns " + exprString(r) + why)
 			}
 		}
 		tps := typeParams(fd.decl)
 		for _, p := range params(fd.decl.Type.Params) {
+			// One finding per parameter, the first way out it gives: an interface's methods may give many.
 			for _, out := range c.handedBack(fd.file, p, tps) {
-				switch {
-				case out == nil:
-					c.at(fd.file, fd.decl.Name, "adapter-exported-result", c.p.Rel,
-						fd.name()+" can hand out any value through "+exprString(p))
-				case out == p && !c.handsOutOnly(fd.file, out):
-					c.at(fd.file, fd.decl.Name, "adapter-exported-result", c.p.Rel,
-						fd.name()+" can hand back what it writes into "+exprString(p)+", a type of another package")
-				case !c.handsOutOnly(fd.file, out):
-					c.at(fd.file, fd.decl.Name, "adapter-exported-result", c.p.Rel,
-						fd.name()+" hands out "+exprString(out)+" through "+exprString(p))
+				through := exprString(p)
+				if out.via != "" {
+					through += " (" + out.via + ")"
 				}
+				ok, why := false, ""
+				if out.e != nil {
+					ok, why = c.handsOutOnly(out)
+				}
+				switch {
+				case ok:
+					continue
+				case out.e == nil:
+					say(fd.name() + " can hand out any value through " + through)
+				case out.e == p:
+					say(fd.name() + " can hand back what it writes into " + through + ", a type of another package" + why)
+				default:
+					say(fd.name() + " hands out " + exprString(out.e) + " through " + through + why)
+				}
+				break
 			}
 		}
 	}
@@ -438,23 +450,82 @@ func (c *outsideChecks) exportedFields(t *typeDecl) {
 }
 
 // sinks are the interfaces an adapter writes an answer to, by import path and name: what goes into one is not read by
-// the rule and is a review's to check (docs/server/architecture.md "Data objects and adapters"). They are the only
-// types of another package an adapter takes that the rule does not read as a way back to its caller.
+// the rule and is a review's to check. They and another module's contracts are the only types of another package an
+// adapter takes that the rule does not read as a way back to its caller (docs/server/architecture.md "Data objects and
+// adapters" lists what it does not read).
 var sinks = map[string]bool{"io.Writer": true, "net/http.ResponseWriter": true}
 
+// A typeIn is a type expression and the file it is written in, whose imports and own package name what it names. via
+// is the method or field of a contract's, db's or prompts' type a value of it goes through, for messages.
+type typeIn struct {
+	e   ast.Expr
+	f   *File
+	via string
+}
+
+// dataPkg says whether the package at path holds plain data an adapter may hand out: a contract (this module's or
+// another's, as contracts.txt lists them), db or prompts.
+func (c *outsideChecks) dataPkg(path string) bool {
+	if c.idx.layer(path) == layerContract {
+		return true
+	}
+	rel := c.idx.rel(path)
+	return under(rel, "internal/db") || under(rel, "internal/prompts")
+}
+
+// declared is the declaration of the type a type expression in f names in a package of the tree, with its import path
+// and name, and whether the rules can read that package (Index.typeNamed). An unqualified name is f's own package's;
+// a predeclared one is none.
+func (c *outsideChecks) declared(t typeIn) (td *typeDecl, path, name string, read bool) {
+	pkg, name := baseType(t.e)
+	switch {
+	case name == "":
+		return nil, "", "", true
+	case pkg == "":
+		if basic[name] {
+			return nil, "", name, true
+		}
+		path = t.f.pkg.Path
+	default:
+		imp, ok := c.idx.imports(t.f)[pkg]
+		if !ok {
+			return nil, "", name, true
+		}
+		path = imp.Path
+	}
+	td, read, err := c.idx.typeNamed(path, name)
+	if err != nil && c.err == nil {
+		c.err = err
+	}
+	return td, path, name, read
+}
+
 // handedBack is what an adapter can hand its caller through a parameter of type p of f: what a pointer, slice, map
-// or channel it can send on holds, written into it (a map's keys included); what a callback takes; and what the
-// methods of an interface take, called on it. A type the adapter declares counts as the type it is declared as. A
-// type of another package is itself what goes back: a named map or slice (http.Header, url.Values), a struct with a
-// map or pointer inside, or an interface whose methods take what the adapter passes them all reach the caller, and
-// the rule cannot see which of them a type is. So it passes only as a type an adapter may hand out (a core, shared
-// kernel, kit, contract, db or prompts type) or as one of the sinks. A nil entry stands for any value at all: a
-// parameter of type any, interface{} or a type parameter (tps) can carry a pointer to anything, which the adapter
-// can assert and write through. A value of a basic type, error or a struct the adapter declares hands nothing back.
-func (c *outsideChecks) handedBack(f *File, p ast.Expr, tps map[string]bool) []ast.Expr {
+// or channel it can send on holds, written into it (a map's keys included); what a callback or a method of an
+// interface it declares takes, and what the adapter can write into through what they return. A type the
+// adapter declares counts as the type it is declared as. A contract's, db's or prompts' type is read from its
+// declaration (calls): its data is what an adapter may hand out anyway, so what goes back is what its methods and
+// funcs take. Another package's type is itself what goes back: a named map or slice (http.Header, url.Values), a
+// struct with a map or pointer inside, or an interface whose methods take what the adapter passes them all reach the
+// caller, and the rule does not read their declarations. So it passes only as a type an adapter may hand out (a core,
+// shared kernel or kit type) or as one of the sinks. An entry with no type stands for any value at all: a parameter of
+// type any, interface{} or a type parameter (tps) can carry a pointer to anything, which the adapter can assert and
+// write through. A value of a basic type, error or a struct the adapter declares hands nothing back.
+func (c *outsideChecks) handedBack(f *File, p ast.Expr, tps map[string]bool) []typeIn {
 	seen := map[string]bool{}
-	var back func(p ast.Expr) []ast.Expr
-	back = func(p ast.Expr) []ast.Expr {
+	in := func(e ast.Expr) typeIn { return typeIn{e: e, f: f} }
+	var back func(p ast.Expr) []typeIn
+	called := func(ft *ast.FuncType) []typeIn {
+		var out []typeIn
+		for _, a := range params(ft.Params) {
+			out = append(out, in(a))
+		}
+		for _, r := range params(ft.Results) {
+			out = append(out, back(r)...) // what the caller's code returns, the adapter can write into
+		}
+		return out
+	}
+	back = func(p ast.Expr) []typeIn {
 		switch x := p.(type) {
 		case *ast.ParenExpr:
 			return back(x.X)
@@ -467,35 +538,39 @@ func (c *outsideChecks) handedBack(f *File, p ast.Expr, tps map[string]bool) []a
 				}
 				return nil
 			}
-			if imp, ok := c.idx.imports(f)[pkg]; ok && sinks[imp.Path+"."+name] {
+			imp, ok := c.idx.imports(f)[pkg]
+			if ok && sinks[imp.Path+"."+name] {
 				return nil
 			}
-			return []ast.Expr{x}
+			if ok && c.dataPkg(imp.Path) {
+				return c.calls(in(x), map[string]bool{})
+			}
+			return []typeIn{in(x)}
 		case *ast.StarExpr:
-			return []ast.Expr{x.X}
+			return []typeIn{in(x.X)}
 		case *ast.ArrayType:
 			if x.Len == nil {
-				return []ast.Expr{x.Elt}
+				return []typeIn{in(x.Elt)}
 			}
 			return back(x.Elt) // an array is copied, but not what its pointers reach
 		case *ast.Ellipsis:
-			return []ast.Expr{x.Elt}
+			return []typeIn{in(x.Elt)}
 		case *ast.MapType:
-			return []ast.Expr{x.Key, x.Value}
+			return []typeIn{in(x.Key), in(x.Value)}
 		case *ast.ChanType:
 			if x.Dir != ast.RECV {
-				return []ast.Expr{x.Value}
+				return []typeIn{in(x.Value)}
 			}
 		case *ast.FuncType:
-			return params(x.Params)
+			return called(x)
 		case *ast.InterfaceType:
 			if len(x.Methods.List) == 0 {
-				return []ast.Expr{nil}
+				return []typeIn{{}}
 			}
-			var out []ast.Expr
+			var out []typeIn
 			for _, m := range x.Methods.List {
 				if ft, ok := m.Type.(*ast.FuncType); ok {
-					out = append(out, params(ft.Params)...)
+					out = append(out, called(ft)...)
 				} else {
 					out = append(out, back(m.Type)...) // an embedded interface: any, the adapter's own or another package's
 				}
@@ -503,7 +578,7 @@ func (c *outsideChecks) handedBack(f *File, p ast.Expr, tps map[string]bool) []a
 			return out
 		case *ast.Ident:
 			if x.Name == "any" || tps[x.Name] {
-				return []ast.Expr{nil}
+				return []typeIn{{}}
 			}
 			if t := c.p.decls.types[x.Name]; t != nil && t.strct == nil && !seen[x.Name] {
 				seen[x.Name] = true
@@ -515,25 +590,128 @@ func (c *outsideChecks) handedBack(f *File, p ast.Expr, tps map[string]bool) []a
 	return back(p)
 }
 
-// adapterResult says whether an adapter may return a type: an outcome, a value of a core, shared kernel or the kit,
-// a contract, a db row or prompt input, its own Record, an error, or Log's string; or a pointer, slice, array, map or
-// channel of these, a map's keys included.
-func (c *outsideChecks) adapterResult(fd *funcDecl, r ast.Expr) bool {
-	if exprString(r) == "string" {
-		return fd.recv == "" && fd.decl.Name.Name == "Log" && len(params(fd.decl.Type.Results)) == 1
+// calls is what an adapter can hand its caller's code by calling what a value of a contract's, db's or prompts' type
+// t holds, read from the type's declaration: the parameters of an interface's exported methods (an embedded
+// interface's included) and of a func type, through the type's exported and embedded fields, the elements of its pointers,
+// slices, maps and channels, and the types of the same packages it holds. Its data, written into, is plain data like
+// any the adapter returns. An interface the rule cannot read, embedded or one of knownInterfaces, is itself what goes
+// back. Another module's contract, which the rule does not read, gives nothing.
+func (c *outsideChecks) calls(t typeIn, seen map[string]bool) []typeIn {
+	in := func(e ast.Expr) typeIn { return typeIn{e: e, f: t.f, via: t.via} }
+	switch x := t.e.(type) {
+	case *ast.ParenExpr:
+		return c.calls(in(x.X), seen)
+	case *ast.StarExpr:
+		return c.calls(in(x.X), seen)
+	case *ast.ArrayType:
+		return c.calls(in(x.Elt), seen)
+	case *ast.Ellipsis:
+		return c.calls(in(x.Elt), seen)
+	case *ast.MapType:
+		return append(c.calls(in(x.Key), seen), c.calls(in(x.Value), seen)...)
+	case *ast.ChanType:
+		return c.calls(in(x.Value), seen)
+	case *ast.FuncType:
+		var out []typeIn
+		for _, a := range params(x.Params) {
+			out = append(out, in(a))
+		}
+		return out
+	case *ast.InterfaceType:
+		var out []typeIn
+		for _, m := range x.Methods.List {
+			if ft, ok := m.Type.(*ast.FuncType); ok {
+				if !exported(m.Names[0].Name) {
+					continue // only the type's own package can call it
+				}
+				for _, a := range params(ft.Params) {
+					out = append(out, typeIn{e: a, f: t.f, via: m.Names[0].Name})
+				}
+			} else {
+				out = append(out, c.callsOf(in(m.Type), seen, true)...)
+			}
+		}
+		return out
+	case *ast.StructType:
+		var out []typeIn
+		for _, fl := range x.Fields.List {
+			for _, n := range fieldNames(fl) {
+				if exported(n) {
+					out = append(out, c.calls(typeIn{e: fl.Type, f: t.f, via: n}, seen)...)
+				}
+			}
+		}
+		return out
 	}
-	return c.handsOutOnly(fd.file, r)
+	return c.callsOf(t, seen, false)
+}
+
+// callsOf is calls on a named type: its declaration's when the rules read the package it is in and it is a
+// contract's, db's or prompts' type; itself when it is an interface the rule cannot read (embedded in an interface,
+// or one of knownInterfaces); nothing otherwise.
+func (c *outsideChecks) callsOf(t typeIn, seen map[string]bool, embedded bool) []typeIn {
+	td, path, name, read := c.declared(t)
+	if name == "" || basic[name] {
+		return nil
+	}
+	switch {
+	case !read && c.dataPkg(path):
+		return nil // another module's contract: not read
+	case td == nil && c.dataPkg(path):
+		return []typeIn{t} // a type the tree does not declare: itself, which handsOutOnly refuses
+	case td != nil && c.dataPkg(path):
+		if seen[path+"."+name] {
+			return nil
+		}
+		seen[path+"."+name] = true
+		return c.calls(typeIn{e: td.spec.Type, f: td.file, via: t.via}, seen)
+	case embedded || c.knownInterface(t):
+		return []typeIn{t}
+	}
+	return nil
+}
+
+// knownInterface says whether a type expression names one of knownInterfaces, the standard library's interfaces.
+func (c *outsideChecks) knownInterface(t typeIn) bool {
+	pkg, name := baseType(t.e)
+	return pkg != "" && knownInterfaces[pkg+"."+name]
+}
+
+// fieldNames is a struct field's names, an embedded field's being its type's.
+func fieldNames(fl *ast.Field) []string {
+	if len(fl.Names) == 0 {
+		_, name := baseType(fl.Type)
+		return []string{name}
+	}
+	var out []string
+	for _, n := range fl.Names {
+		out = append(out, n.Name)
+	}
+	return out
+}
+
+// adapterResult says whether an adapter may return a type (handsOutOnly), or Log's string, which goes straight into a
+// log call; when it may not, why says which method or func of a contract's type refuses it, if one does.
+func (c *outsideChecks) adapterResult(fd *funcDecl, r ast.Expr) (ok bool, why string) {
+	if exprString(r) == "string" {
+		return fd.recv == "" && fd.decl.Name.Name == "Log" && len(params(fd.decl.Type.Results)) == 1, ""
+	}
+	return c.handsOutOnly(typeIn{e: r, f: fd.file})
 }
 
 // handsOutOnly says whether every type a value of type t holds (handedParts) is one an adapter may hand out: an error,
-// or a type handedOut allows. A map hands out its keys as well as its values.
-func (c *outsideChecks) handsOutOnly(f *File, t ast.Expr) bool {
-	for _, part := range handedParts(t) {
-		if exprString(part) != "error" && !c.handedOut(f, part) {
-			return false
+// or a type handedOut allows. A map hands out its keys as well as its values. When one is not, why names the method
+// or func of a contract's, db's or prompts' type that refuses it, if one does.
+func (c *outsideChecks) handsOutOnly(t typeIn) (bool, string) {
+	for _, part := range handedParts(t.e) {
+		if exprString(part) == "error" {
+			continue
+		}
+		if ok, why := c.handedOutType(typeIn{e: part, f: t.f}, map[string]bool{}); !ok {
+			return false, why
 		}
 	}
-	return true
+	return true, ""
 }
 
 // handedParts is the types a value of type t gives whoever holds it: t itself, or what a pointer, slice, array, map
@@ -556,44 +734,170 @@ func handedParts(t ast.Expr) []ast.Expr {
 	return []ast.Expr{t}
 }
 
-// handedOut says whether an adapter may hand a type out, in a result or as a kit type's argument: its own Record, or
-// a type of a core, shared kernel, contract, db or prompts, or of the kit when every type argument is one of these
-// too, all the way down (handedParts). So outcome.Of[agentref.Ref, agentref.Fail] and opt.Option[[]fleetcount.Agent]
-// pass, and outcome.Of[string, fail.Fail], opt.Option[[]string] and opt.Option[map[string]fleetcount.Agent] are raw
-// values one layer out.
-func (c *outsideChecks) handedOut(f *File, t ast.Expr) bool {
-	for _, part := range handedParts(t) {
-		if !c.handedOutType(f, part) {
-			return false
+// handedOut says whether an adapter may hand a type out, as a kit type's argument or to what a contract's type
+// calls: every part of it (handedParts) is one handedOutType allows, an error not included.
+func (c *outsideChecks) handedOut(t typeIn, seen map[string]bool) (bool, string) {
+	for _, part := range handedParts(t.e) {
+		if ok, why := c.handedOutType(typeIn{e: part, f: t.f}, seen); !ok {
+			return false, why
 		}
 	}
-	return true
+	return true, ""
 }
 
-// handedOutType is handedOut on one type that holds no other (handedParts).
-func (c *outsideChecks) handedOutType(f *File, t ast.Expr) bool {
-	if exprString(t) == "Record" {
-		return true
+// handedOutType is whether an adapter may hand out one type that holds no other (handedParts): its own Record, a
+// type of a core or shared kernel, a kit type whose every type argument is one too, all the way down (so
+// outcome.Of[agentref.Ref, agentref.Fail] and opt.Option[[]fleetcount.Agent] pass, and outcome.Of[string, fail.Fail],
+// opt.Option[[]string] and opt.Option[map[string]fleetcount.Agent] are raw values one layer out), or a contract's,
+// db's or prompts' type that dataSafe allows. In a file of a contract, db or prompts, an unqualified name is that
+// package's type.
+func (c *outsideChecks) handedOutType(t typeIn, seen map[string]bool) (bool, string) {
+	if t.f.pkg == c.p && exprString(t.e) == "Record" {
+		return true, ""
 	}
-	pkg, _ := baseType(t)
-	if pkg == "" {
-		return false
+	pkg, name := baseType(t.e)
+	if name == "" || pkg == "" && (t.f.pkg == c.p || basic[name]) {
+		return false, ""
 	}
-	imp, ok := c.idx.imports(f)[pkg]
-	if !ok {
-		return false
+	path := t.f.pkg.Path
+	if pkg != "" {
+		imp, ok := c.idx.imports(t.f)[pkg]
+		if !ok {
+			return false, ""
+		}
+		path = imp.Path
 	}
-	switch c.idx.layer(imp.Path) {
+	switch c.idx.layer(path) {
 	case layerKit:
-		for _, a := range typeArgs(t) {
-			if !c.handedOut(f, a) {
-				return false
+		for _, a := range typeArgs(t.e) {
+			if ok, why := c.handedOut(typeIn{e: a, f: t.f}, seen); !ok {
+				return false, why
 			}
 		}
-		return true
-	case layerCore, layerShared, layerContract:
-		return true
+		return true, ""
+	case layerCore, layerShared:
+		return true, ""
 	}
-	rel := c.idx.rel(imp.Path)
-	return under(rel, "internal/db") || under(rel, "internal/prompts")
+	if c.dataPkg(path) {
+		return c.dataSafe(typeIn{e: t.e, f: t.f}, seen)
+	}
+	return false, ""
+}
+
+// dataSafe says whether an adapter may hand out a contract's, db's or prompts' type, read from its declaration: what
+// a value of it can be called with, an interface's methods and a func type, through its exported and embedded fields
+// and the types of the same packages it holds (callsSafe), takes and returns only what an adapter may hand out. Its
+// data is plain data; its methods, a type's own code, are not the adapter's. Another module's contract, which the
+// rule does not read, passes; a type the tree does not declare does not. why names the method or func that refuses
+// it.
+func (c *outsideChecks) dataSafe(t typeIn, seen map[string]bool) (bool, string) {
+	td, path, name, read := c.declared(t)
+	switch {
+	case !read:
+		return true, ""
+	case td == nil:
+		return false, ", which the server's tree does not declare"
+	case seen[path+"."+name]:
+		return true, ""
+	}
+	seen[path+"."+name] = true
+	return c.callsSafe(typeIn{e: td.spec.Type, f: td.file}, "", seen)
+}
+
+// callsSafe is dataSafe on a type expression in a contract's, db's or prompts' file; label names it in messages (the
+// field or method it is, "" for the type itself).
+func (c *outsideChecks) callsSafe(t typeIn, label string, seen map[string]bool) (bool, string) {
+	in := func(e ast.Expr) typeIn { return typeIn{e: e, f: t.f} }
+	switch x := t.e.(type) {
+	case *ast.ParenExpr:
+		return c.callsSafe(in(x.X), label, seen)
+	case *ast.StarExpr:
+		return c.callsSafe(in(x.X), label, seen)
+	case *ast.ArrayType:
+		return c.callsSafe(in(x.Elt), label, seen)
+	case *ast.Ellipsis:
+		return c.callsSafe(in(x.Elt), label, seen)
+	case *ast.MapType:
+		if ok, why := c.callsSafe(in(x.Key), label, seen); !ok {
+			return false, why
+		}
+		return c.callsSafe(in(x.Value), label, seen)
+	case *ast.ChanType:
+		return c.callsSafe(in(x.Value), label, seen)
+	case *ast.FuncType:
+		return c.takesAndReturns(x, t.f, label, seen)
+	case *ast.InterfaceType:
+		for _, m := range x.Methods.List {
+			if ft, ok := m.Type.(*ast.FuncType); ok {
+				if !exported(m.Names[0].Name) {
+					continue // only the type's own package can call it
+				}
+				if ok, why := c.takesAndReturns(ft, t.f, m.Names[0].Name, seen); !ok {
+					return false, why
+				}
+			} else if ok, why := c.namedSafe(in(m.Type), seen, true); !ok {
+				return false, why
+			}
+		}
+		return true, ""
+	case *ast.StructType:
+		for _, fl := range x.Fields.List {
+			for _, n := range fieldNames(fl) {
+				if exported(n) {
+					if ok, why := c.callsSafe(in(fl.Type), n, seen); !ok {
+						return false, why
+					}
+				}
+			}
+		}
+		return true, ""
+	}
+	return c.namedSafe(t, seen, false)
+}
+
+// namedSafe is callsSafe on a named type: dataSafe for a contract's, db's or prompts' type, refused for an interface
+// the rule cannot read (embedded in an interface, or one of knownInterfaces), and passed for other types, which are
+// data.
+func (c *outsideChecks) namedSafe(t typeIn, seen map[string]bool, embedded bool) (bool, string) {
+	pkg, name := baseType(t.e)
+	switch {
+	case name == "" || pkg == "" && basic[name]:
+		return true, ""
+	case pkg == "":
+		return c.dataSafe(t, seen)
+	}
+	if imp, ok := c.idx.imports(t.f)[pkg]; ok && c.dataPkg(imp.Path) {
+		return c.dataSafe(t, seen)
+	}
+	if embedded || c.knownInterface(t) {
+		return false, ", which holds " + exprString(t.e) + ", an interface the rule does not read"
+	}
+	return true, ""
+}
+
+// takesAndReturns says whether a method or func of a contract's, db's or prompts' type, which the caller can call on
+// what the adapter hands it, takes and returns only what an adapter may hand out (handedOut, an error included).
+func (c *outsideChecks) takesAndReturns(ft *ast.FuncType, f *File, name string, seen map[string]bool) (bool, string) {
+	for _, side := range []struct {
+		verb string
+		list *ast.FieldList
+	}{{"takes", ft.Params}, {"returns", ft.Results}} {
+		for _, p := range params(side.list) {
+			for _, part := range handedParts(p) {
+				if exprString(part) == "error" {
+					continue
+				}
+				if ok, why := c.handedOutType(typeIn{e: part, f: f}, seen); !ok {
+					if why == "" {
+						why = ", whose " + name + " " + side.verb + " " + exprString(p)
+						if name == "" {
+							why = ", which " + side.verb + " " + exprString(p)
+						}
+					}
+					return false, why
+				}
+			}
+		}
+	}
+	return true, ""
 }

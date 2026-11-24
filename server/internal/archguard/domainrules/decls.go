@@ -71,26 +71,7 @@ func index(p *Pkg) *decls {
 				for _, spec := range decl.Specs {
 					switch spec := spec.(type) {
 					case *ast.TypeSpec:
-						td := &typeDecl{name: spec.Name.Name, spec: spec, file: f}
-						switch {
-						case spec.Doc != nil:
-							td.doc = spec.Doc.Text()
-						case decl.Doc != nil && len(decl.Specs) == 1:
-							td.doc = decl.Doc.Text()
-						}
-						switch t := spec.Type.(type) {
-						case *ast.StructType:
-							td.strct = t
-						case *ast.InterfaceType:
-							td.iface = t
-							for _, m := range t.Methods.List {
-								for _, n := range m.Names {
-									if !exported(n.Name) {
-										td.sealed = true
-									}
-								}
-							}
-						}
+						td := newTypeDecl(f, decl, spec)
 						d.types[td.name] = td
 						d.order = append(d.order, td)
 					case *ast.ValueSpec:
@@ -107,6 +88,95 @@ func index(p *Pkg) *decls {
 		}
 	}
 	return d
+}
+
+// newTypeDecl is the declaration spec makes in f, inside decl.
+func newTypeDecl(f *File, decl *ast.GenDecl, spec *ast.TypeSpec) *typeDecl {
+	td := &typeDecl{name: spec.Name.Name, spec: spec, file: f}
+	switch {
+	case spec.Doc != nil:
+		td.doc = spec.Doc.Text()
+	case decl.Doc != nil && len(decl.Specs) == 1:
+		td.doc = decl.Doc.Text()
+	}
+	switch t := spec.Type.(type) {
+	case *ast.StructType:
+		td.strct = t
+	case *ast.InterfaceType:
+		td.iface = t
+		for _, m := range t.Methods.List {
+			for _, n := range m.Names {
+				if !exported(n.Name) {
+					td.sealed = true
+				}
+			}
+		}
+	}
+	return td
+}
+
+// typeNamed is the declaration of the type name in the non-test files of the package in dir, its generated files
+// included, nil when they declare none. It parses, once each, only the files whose text holds the name as a word,
+// since a file that declares a type names it: reading a contract's or a library's type costs the files that mention
+// it, not the package. The files it parses count in the budget (Parsed).
+func (t *tree) typeNamed(dir, name string) (*typeDecl, error) {
+	key := dir + " " + name
+	if td, ok := t.named[key]; ok {
+		return td, nil
+	}
+	var files []*File
+	if p := t.dirs[dir]; p != nil {
+		files = p.Files
+	}
+	files = append(files[:len(files):len(files)], t.generated[dir]...)
+	var found *typeDecl
+	for _, f := range files {
+		if f.Test || found != nil {
+			continue
+		}
+		if f.ast == nil {
+			src, err := t.read(f.Rel)
+			if err != nil {
+				return nil, err
+			}
+			if !holdsWord(string(src), name) {
+				continue
+			}
+			if err := f.parse(); err != nil {
+				return nil, err
+			}
+		}
+		for _, decl := range f.ast.Decls {
+			if g, ok := decl.(*ast.GenDecl); ok && g.Tok == token.TYPE {
+				for _, spec := range g.Specs {
+					if ts := spec.(*ast.TypeSpec); ts.Name.Name == name {
+						found = newTypeDecl(f, g, ts)
+					}
+				}
+			}
+		}
+	}
+	t.named[key] = found
+	return found, nil
+}
+
+// holdsWord says whether text holds word with no letter, digit or underscore on either side.
+func holdsWord(text, word string) bool {
+	ident := func(b byte) bool {
+		return b == '_' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= 0x80
+	}
+	for from := 0; ; {
+		i := strings.Index(text[from:], word)
+		if i < 0 {
+			return false
+		}
+		i += from
+		end := i + len(word)
+		if (i == 0 || !ident(text[i-1])) && (end == len(text) || !ident(text[end])) {
+			return true
+		}
+		from = i + 1
+	}
 }
 
 // receiverName is a receiver's type name and whether it is a pointer: T for T, *T, T[K] and *T[K, V].
@@ -232,13 +302,22 @@ var basic = map[string]bool{
 }
 
 // primitive says whether a type expression is a primitive: a predeclared basic type, error or any, an empty
-// interface, a func or chan type, or a slice, array or pointer of one, or a map with one as key or value.
+// interface, a func or chan type, or a slice, array or pointer of one, a map with one as key or value, or a generic
+// type with one among its type arguments. A kit type is no wrapper that makes raw input domain input:
+// opt.Option[string] and outcome.Of[[]int, Fail] are primitives as string and []int are.
 func primitive(e ast.Expr) bool {
 	switch x := e.(type) {
 	case *ast.Ident:
 		return basic[x.Name]
 	case *ast.ParenExpr:
 		return primitive(x.X)
+	case *ast.IndexExpr, *ast.IndexListExpr:
+		for _, a := range typeArgs(x) {
+			if primitive(a) {
+				return true
+			}
+		}
+		return false
 	case *ast.StarExpr:
 		return primitive(x.X)
 	case *ast.ArrayType:
@@ -255,13 +334,20 @@ func primitive(e ast.Expr) bool {
 	return false
 }
 
-// collection says whether a type expression is a slice, array or map (or a variadic parameter).
+// collection says whether a type expression is a slice, array or map (or a variadic parameter), or a generic type
+// with one among its type arguments, all the way down (opt.Option[[]Agent], outcome.Of[map[Key]Agent, Fail]).
 func collection(e ast.Expr) bool {
 	switch x := e.(type) {
 	case *ast.ParenExpr:
 		return collection(x.X)
 	case *ast.ArrayType, *ast.MapType, *ast.Ellipsis:
 		return true
+	case *ast.IndexExpr, *ast.IndexListExpr:
+		for _, a := range typeArgs(x) {
+			if collection(a) {
+				return true
+			}
+		}
 	}
 	return false
 }

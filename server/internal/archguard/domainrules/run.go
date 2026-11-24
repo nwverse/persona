@@ -98,7 +98,11 @@ func Run(pkgs []*Pkg, idx Index, scope string) ([]Finding, Stats, error) {
 		if p.decls != nil {
 			all = append(all, Core(p, idx)...)
 		}
-		all = append(all, Outside(p, idx)...)
+		fs, err := Outside(p, idx)
+		if err != nil {
+			return nil, st, err
+		}
+		all = append(all, fs...)
 	}
 	st.Parsed = Parsed(pkgs)
 	if scope != "" {

@@ -7,7 +7,8 @@ import (
 
 // Layers is the rules on declarations and imports across packages: every package declares one known layer in its
 // package comment (layer-declared, layer-one), and each declaration is a checked fact (layer-kit, layer-contract,
-// layer-shared, layer-application, layer-library, layer-testkit); cores are imported only from the layers that may
+// layer-shared, layer-application, layer-library, layer-testkit: testkit is imported only by tests and other testkit
+// and is no program, so its code reaches no binary); cores are imported only from the layers that may
 // (core-importers), and domainrules only from tests (out-rules-import). Declared application packages, and shared
 // kernels, must be parsed in full (Full) for the facts that read their code.
 func Layers(pkgs []*Pkg, idx Index) []Finding {
@@ -53,6 +54,9 @@ func declaration(fs *findings, p *Pkg, idx Index) {
 	switch {
 	case p.Layer == layerKit && !under(p.Rel, "internal/domainkit"):
 		fs.add(placed[0].pos, "layer-kit", p.Rel, name+" declares kit outside internal/domainkit")
+	case p.Layer == layerTestkit && p.Name == "main":
+		// A program is imported by nothing, so who imports it cannot keep it out of production: it is application.
+		fs.add(placed[0].pos, "layer-testkit", p.Rel, name+" declares testkit but is a program (package main)")
 	case p.Layer == layerContract && !listed:
 		fs.add(placed[0].pos, "layer-contract", p.Rel, name+" declares contract but is not in contracts.txt")
 	case p.Layer != layerContract && listed:

@@ -85,6 +85,10 @@ type tree struct {
 	module string
 	fset   *token.FileSet
 	parsed int // files parsed in full
+
+	dirs      map[string]*Pkg      // the packages, by directory
+	generated map[string][]*File   // the generated non-test files, which no package holds, by directory
+	named     map[string]*typeDecl // what typeNamed found, by "<dir> <name>", nil for a type it did not
 }
 
 // Load reads every non-generated .go file under root, skipping testdata, vendor and hidden directories: each file's
@@ -95,7 +99,8 @@ func Load(root, module string) ([]*Pkg, error) { return LoadOver(root, module, n
 // disk (or is missing there), by path under the root, and gone the files on disk to leave out. It rebuilds another
 // commit's tree from the files a change touched, without reading every file into memory.
 func LoadOver(root, module string, changed map[string]string, gone map[string]bool) ([]*Pkg, error) {
-	t := &tree{root: root, module: module, fset: token.NewFileSet(), files: map[string][]byte{}, gone: gone}
+	t := &tree{root: root, module: module, fset: token.NewFileSet(), files: map[string][]byte{}, gone: gone,
+		generated: map[string][]*File{}, named: map[string]*typeDecl{}}
 	for rel, text := range changed {
 		t.files[rel] = []byte(text)
 	}
@@ -137,7 +142,8 @@ func LoadOver(root, module string, changed map[string]string, gone map[string]bo
 
 // LoadFiles is Load over files in memory: their text by path under the root (slash-separated), under module.
 func LoadFiles(module string, files map[string]string) ([]*Pkg, error) {
-	t := &tree{module: module, files: map[string][]byte{}, fset: token.NewFileSet()}
+	t := &tree{module: module, files: map[string][]byte{}, fset: token.NewFileSet(), generated: map[string][]*File{},
+		named: map[string]*typeDecl{}}
 	var rels []string
 	for rel, text := range files {
 		t.files[rel] = []byte(text)
@@ -212,12 +218,16 @@ func (t *tree) load(rels []string) ([]*Pkg, error) {
 		if err != nil {
 			return nil, err
 		}
-		if ast.IsGenerated(f) {
-			continue
-		}
 		dir := ""
 		if i := strings.LastIndex(rel, "/"); i >= 0 {
 			dir = rel[:i]
+		}
+		if ast.IsGenerated(f) {
+			// Left out of the rules, but a contract's types may be declared there (typeNamed).
+			if !strings.HasSuffix(rel, "_test.go") {
+				t.generated[dir] = append(t.generated[dir], &File{Rel: rel})
+			}
+			continue
 		}
 		p := byDir[dir]
 		if p == nil {
@@ -273,6 +283,20 @@ func (t *tree) load(rels []string) ([]*Pkg, error) {
 				p.Layer = d.layer
 				break
 			}
+		}
+	}
+	t.dirs = byDir
+	for dir, files := range t.generated {
+		p := byDir[dir]
+		if p == nil {
+			// A package whose files are all generated: a stand-in that holds them, which no rule runs over.
+			p = &Pkg{Rel: dir, Path: t.module, tree: t}
+			if dir != "" {
+				p.Path = t.module + "/" + dir
+			}
+		}
+		for _, f := range files {
+			f.pkg = p
 		}
 	}
 	return pkgs, nil

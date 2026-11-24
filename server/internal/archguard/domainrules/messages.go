@@ -53,7 +53,7 @@ var rules = map[string]ruleText{
 	},
 	"layer-testkit": {
 		"test support must not become production behaviour",
-		"import it only from _test.go files",
+		"import it only from _test.go files, and declare a program (package main) application",
 		"server/internal/domainkit/domaintest",
 	},
 	"core-importers": {

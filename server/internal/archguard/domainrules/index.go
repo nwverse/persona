@@ -30,6 +30,7 @@ type Index struct {
 	pkgs      map[string]*Pkg
 	contracts map[string]bool // import paths testdata/contracts.txt lists
 	rules     string          // domainrules' own import path
+	tree      *tree           // where the packages were read
 }
 
 // NewIndex indexes pkgs; contracts is testdata/contracts.txt's entries (paths under the module, or full import
@@ -39,6 +40,7 @@ func NewIndex(module string, pkgs []*Pkg, contracts []string) Index {
 		rules: module + "/internal/archguard/domainrules"}
 	for _, p := range pkgs {
 		idx.pkgs[p.Path] = p
+		idx.tree = p.tree
 	}
 	for _, c := range contracts {
 		if strings.Contains(strings.SplitN(c, "/", 2)[0], ".") {
@@ -81,6 +83,20 @@ func core(layer string) bool { return layer == layerCore || layer == layerShared
 func (idx Index) domain(path string) bool {
 	l := idx.layer(path)
 	return core(l) || l == layerKit
+}
+
+// typeNamed is the declaration of the type name in the package at path (tree.typeNamed), and whether the rules can
+// read that package: false for a package outside the tree, such as another module's contract.
+func (idx Index) typeNamed(path, name string) (*typeDecl, bool, error) {
+	dir, ok := strings.CutPrefix(path, idx.module+"/")
+	if path == idx.module {
+		dir, ok = "", true
+	}
+	if !ok || idx.tree == nil {
+		return nil, false, nil
+	}
+	td, err := idx.tree.typeNamed(dir, name)
+	return td, true, err
 }
 
 // pkg is the package at path, or nil.
