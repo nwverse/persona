@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -32,6 +33,11 @@ func TestMain(m *testing.M) {
 	// The tests make, commit to and add worktrees to repositories of their own: none of that may reach the repository
 	// this run was started from (`git bisect run` exports GIT_DIR; #13610).
 	testhome.ClearGit()
+	if os.Getenv("NODE_TEST_TASK_TERMINAL_IDLE") == "1" {
+		fmt.Println("ready")
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		os.Exit(0)
+	}
 	if os.Getenv("NODE_TEST_LAUNCH") == "1" { // the real managed-launch path, before the test harness clears its environment
 		if err := Launch(context.Background(), os.Args[2], os.Args[3:], ""); err != nil {
 			panic(err)
