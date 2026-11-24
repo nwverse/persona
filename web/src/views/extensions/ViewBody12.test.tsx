@@ -132,6 +132,15 @@ describe("UI 12: vector map canvas", () => {
     const links = [...d.querySelectorAll("[data-map-link]")];
     expect(links).toHaveLength(1);
     expect(links[0].getAttribute("href")).toBe("https://maps.example.com/route?id=commute");
+    // Tab whose label matches its travel mode should not repeat the mode label twice (e.g. "Transit Transit").
+    const transitTab = d.querySelector('[data-map-route="r-alt"]')?.textContent ?? "";
+    expect(transitTab).toContain(t("extensions-viewbody.map_mode_transit"));
+    expect(transitTab.split(t("extensions-viewbody.map_mode_transit")).length - 1).toBe(1);
+    // Compact mode (no tab title) retains the mode label alongside duration and distance.
+    const compactHtml = renderToStaticMarkup(
+      <MapCanvas item={drawItem({ sections: [{ items: [{ ...SAMPLE_VIEW.sections[0].items[0], routes: [SAMPLE_VIEW.sections[0].items[0].routes[1]] }] }] })} compact busy="" onPress={() => {}} />,
+    );
+    expect(doc(compactHtml).querySelector("[data-map-route-summary]")?.textContent).toContain(t("extensions-viewbody.map_mode_transit"));
   });
 
   it("formats distance and duration through localized strings", () => {

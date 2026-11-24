@@ -14,6 +14,7 @@ import {
   actUI, fieldValues, isReservedUI, isUnsupported, numberProblem, outcome, pushPage, refreshDelay, renderUI, submitValues, uiPlaces, UI_VERSION,
   type UIAction, type UIContext, type UIFilter, type UIItem, type UIMore, type UIPage, type UIPlace, type UIPush, type UISearch, type UITabs, type UIView,
 } from "../../lib/extension-ui";
+import { takeOverlayEntry, withoutOverlayState } from "../../lib/back-close";
 import { navigate } from "../../lib/router";
 import { isResumed } from "../../lib/reconnect";
 import { appSocketReady, onAppSocket, onHubEvent } from "../../lib/store";
@@ -466,7 +467,13 @@ export function LegacyExtensionUI({
       return;
     }
     const next = pushPage(stack, p, top.ui);
-    if (historied && next.length > stack.length) history.pushState({ ...(history.state ?? {}), extPage: next.length }, "", location.href);
+    if (historied && next.length > stack.length) {
+      // Pushing onto this stack from inside an open overlay (e.g. a Full screen map/graph stop) replaces the
+      // overlay's entry without its markers so closing the overlay does not immediately history.back() off the new page.
+      const nextState = { ...(withoutOverlayState(history.state) ?? {}), extPage: next.length };
+      if (takeOverlayEntry()) history.replaceState(nextState, "", location.href);
+      else history.pushState(nextState, "", location.href);
+    }
     setStack(next);
   };
   const pop = () => {

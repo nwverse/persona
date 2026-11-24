@@ -54,7 +54,7 @@ try {
     const markerCount = await p.locator("[data-map-marker]").count();
     const routeLines = await p.locator("polyline[data-map-route-line]").count();
     const linkHref = await p.locator("[data-map-link]").first().getAttribute("href");
-    const resetInitiallyDisabled = await p.locator('button[aria-label="Reset View"]').isDisabled();
+    const resetInitiallyDisabled = await p.locator('button[aria-label="Reset view"]').isDisabled();
     check(`1440 ${theme}: nav_page renders 3 markers, 2 routes, reset disabled`, markerCount === 3 && routeLines === 2 && resetInitiallyDisabled, { markerCount, routeLines, resetInitiallyDisabled });
     check(`1440 ${theme}: HTTPS link preserved`, linkHref === "https://maps.example.com/route?id=commute", linkHref);
     await p.screenshot({ path: join(shots, `map-page-1440-${theme}.png`) });
@@ -65,13 +65,13 @@ try {
     check(`1440 ${theme}: switching route selects r-alt polyline`, altSelected === "true", altSelected);
     await p.locator('[data-map-route="r-fastest"]').click();
 
-    // Zoom in enables Reset View, clicking Reset View disables it
+    // Zoom in enables Reset view, clicking Reset view disables it
     await p.locator('button[aria-label="Zoom in"]').click();
-    const resetEnabledAfterZoom = !(await p.locator('button[aria-label="Reset View"]').isDisabled());
-    check(`1440 ${theme}: Zoom in enables Reset View`, resetEnabledAfterZoom);
-    await p.locator('button[aria-label="Reset View"]').click();
-    const resetDisabledAgain = await p.locator('button[aria-label="Reset View"]').isDisabled();
-    check(`1440 ${theme}: Reset View re-fits and disables itself`, resetDisabledAgain);
+    const resetEnabledAfterZoom = !(await p.locator('button[aria-label="Reset view"]').isDisabled());
+    check(`1440 ${theme}: Zoom in enables Reset view`, resetEnabledAfterZoom);
+    await p.locator('button[aria-label="Reset view"]').click();
+    const resetDisabledAgain = await p.locator('button[aria-label="Reset view"]').isDisabled();
+    check(`1440 ${theme}: Reset view re-fits and disables itself`, resetDisabledAgain);
 
     // Open Full screen -> capture screenshot -> click actionable stop -> verify pushed view & back
     await p.locator('button[aria-label="Full screen"]').click();
@@ -82,11 +82,14 @@ try {
     const pushedOk = await p.waitForFunction(() => document.body.textContent?.includes("Stop details for Coffee Stop"), null, { timeout: 15_000 }).then(() => true, () => false);
     check(`1440 ${theme}: clicking stop in Full screen pushes stop detail page`, pushedOk);
     await p.goBack();
-    await p.locator("[data-map-stage]").waitFor({ state: "visible", timeout: 15_000 });
+    const backOk = await p.locator("[data-map-stage]").waitFor({ state: "visible", timeout: 15_000 }).then(() => true, () => false);
+    const backDialogCount = await p.locator('[role="dialog"]').count();
+    check(`1440 ${theme}: Back from stop detail returns to map page without modal`, backOk && backDialogCount === 0, { backOk, backDialogCount });
     await p.context().close();
 
-    // Overview card compact preview -> opens Full screen on click -> Escape returns focus
+    // Overview card compact preview -> scroll into view for screenshot -> opens Full screen on click -> Escape returns focus
     const ov = await openPage({ width: 1440, height: 900, theme, at: "/overview", waitForSelector: ".map-preview" });
+    await ov.locator(".map-preview").first().scrollIntoViewIfNeeded();
     const previewH = await ov.locator(".map-preview").first().evaluate((el) => Math.round(el.getBoundingClientRect().height));
     check(`1440 ${theme}: overview card compact preview is ~200px tall`, Math.abs(previewH - 200) <= 4, previewH);
     await ov.screenshot({ path: join(shots, `map-overview-1440-${theme}.png`) });

@@ -212,9 +212,12 @@ function routeTitle(route: UIMapRoute, index: number): string {
   return t("extensions-viewbody.map_route_numbered", { index: index + 1 });
 }
 
-function routeSummaryMeta(route: UIMapRoute): string {
+function routeSummaryMeta(route: UIMapRoute, tabTitle?: string): string {
   const parts: string[] = [];
-  if (route.mode) parts.push(modeLabel(route.mode));
+  if (route.mode) {
+    const label = modeLabel(route.mode);
+    if (!tabTitle || label.trim().toLowerCase() !== tabTitle.trim().toLowerCase()) parts.push(label);
+  }
   if (route.duration_seconds !== undefined && route.duration_seconds > 0) parts.push(formatMapDuration(route.duration_seconds));
   if (route.distance_meters !== undefined && route.distance_meters >= 0) parts.push(formatMapDistance(route.distance_meters));
   return parts.join(" · ");
@@ -958,7 +961,8 @@ export function MapCanvas({
     >
       {routes.map((r, i) => {
         const selected = activeRouteId === r.id;
-        const meta = routeSummaryMeta(r);
+        const title = routeTitle(r, i);
+        const meta = routeSummaryMeta(r, title);
         return (
           <button
             key={r.id}
@@ -975,7 +979,7 @@ export function MapCanvas({
             )}
           >
             <ModeGlyph mode={r.mode} size={13} className="shrink-0" style={!selected ? { color: resolveColor(r.tone, r.color) } : undefined} />
-            <span>{routeTitle(r, i)}</span>
+            <span>{title}</span>
             {meta && <span className={cx("tabular-nums", selected ? "text-accent-ink" : "text-ink-3")}>{meta}</span>}
           </button>
         );
