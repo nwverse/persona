@@ -68,6 +68,8 @@ export function ExtensionNavPage({ extension, ui, onToggleSidebar }: { extension
   const title = viewTitle || place?.title || (pages ? t("extensions-extensionslots.dashboards") : ui);
   // the extension's name after the title, unless it only says the title again (a Dashboards page says who keeps it instead)
   const name = owned ? undefined : nameBesideTitle(place?.extension_name, title);
+  // one heading, under which a Dashboards page adds its ownership line
+  const heading = <h1 className="min-w-0 truncate text-[14px] font-semibold text-ink">{title}</h1>;
   // the index opens a page as a page of its own (its title, its ownership line, its address), not on its own stack
   const openPage = useCallback(
     (p: UIPush) => {
@@ -89,11 +91,11 @@ export function ExtensionNavPage({ extension, ui, onToggleSidebar }: { extension
         </span>
         {owned ? (
           <div className="min-w-0">
-            <h1 className="truncate text-[14px] font-semibold text-ink">{title}</h1>
+            {heading}
             <p className="truncate text-label text-ink-3" data-ownership-line>{t("extensions-extensionslots.kept_by_persona")}</p>
           </div>
         ) : (
-          <h1 className="min-w-0 truncate text-[14px] font-semibold text-ink">{title}</h1>
+          heading
         )}
         {name && <span className="hidden min-w-0 truncate text-[12px] text-ink-3 sm:inline">{name}</span>}
         <span className="flex-1" />
