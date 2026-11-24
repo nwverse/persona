@@ -835,15 +835,6 @@ type ChatReply struct {
 
 func RenderChatReply(d ChatReply) string { return render("assistant/chat_reply", d) }
 
-// ChatReplyHint is the one-time note to a conversation that wrote into a chat as the user while assistant.chat_reply_relay
-// is off (the default): others replied there, Persona does not pass it on, and the owner can turn that on.
-type ChatReplyHint struct {
-	Language, Title string
-	Group           bool
-}
-
-func RenderChatReplyHint(d ChatReplyHint) string { return render("assistant/chat_reply_hint", d) }
-
 // AskTodoAnswer is the message to the conversation whose ask_user question became a to-do (#1617): the user's call on it
 // (Thread: said in the to-do's Lark topic), or that the to-do was closed without one (Dropped). The questions and choices
 // are escaped by the caller.
