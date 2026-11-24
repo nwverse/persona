@@ -60,7 +60,7 @@ func (s *Service) applyStartTier(ctx context.Context, params map[string]any) err
 	slot := tierStartOf(ctx)
 	facts := tierFacts{}
 	if slot != nil {
-		facts.Machine = slot.machine
+		facts.Machine, facts.Keep = slot.machine, slot.keep
 	}
 	pick, err := s.pickTierCandidate(ctx, tier, facts)
 	if err != nil {
