@@ -56,7 +56,9 @@ func (s sessionNotes) note(language, machine, session string) string {
 
 // withSessionMentions is text for Agent session id with each leading session quote noted; text as it is for the
 // assistant's conversations and guests, which read quotes with their own tools, and for a message with none. It runs
-// before the send is recorded for its echo, so the transcript's line is the text recorded.
+// for every session.send before any path takes the message (node.go handleMethod: a pane herdr types into, a
+// runtime's session, the node's own send) and before the send is recorded for its echo, so the transcript's line is
+// the text recorded.
 func (n *Node) withSessionMentions(ctx context.Context, id, text string) string {
 	if !strings.Contains(text, sessionMentionURL) || n.isAssistantSession(id) || n.guestOf(id) != nil {
 		return text

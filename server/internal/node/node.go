@@ -1075,6 +1075,14 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		hasSelectedSkills = len(refs) > 0
 		ctx = withSkillOwner(ctx, p.SkillOwner)
 	}
+	if sessionSend {
+		// An @-quoted session's address (#13831), before any path below takes the message and records its echo: a Codex
+		// waiting for its first message, a runtime's session (Paseo's too), a stopped omp, an agy or Cursor pane, and
+		// session.send below. Those that read the text from params read it there.
+		if noted := n.withSessionMentions(ctx, p.SessionID, p.Text); noted != p.Text {
+			p.Text, params = noted, withParam(params, "text", noted)
+		}
+	}
 	if isCodexWaitID(p.SessionID) && (strings.HasPrefix(method, "session.") || strings.HasPrefix(method, "terminal.")) {
 		// A Codex opened with no first message (codex_waiting.go): the thread it became since the client looked, or
 		// what its row answers while it waits.
@@ -2004,7 +2012,6 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			return nil, n.stoppedRefusal(p.SessionID)
 		}
 		ctx, sendSpace := withTaskSpace(ctx, opts.TaskID, opts.WorkspaceID, opts.WorkspaceLabel)
-		p.Text = n.withSessionMentions(ctx, p.SessionID, p.Text) // an @-quoted session's address, before the echo records it (#13831)
 		var retry *echoRecord
 		var previous *sendRecord
 		if method == proto.MethodSessionSendUnseen {

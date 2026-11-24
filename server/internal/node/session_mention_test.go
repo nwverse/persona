@@ -1,8 +1,12 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -136,5 +140,97 @@ func TestSendNotesASessionQuoteBeforeItsEcho(t *testing.T) {
 	}
 	if check := n.checkEcho(context.Background(), sidA, "msg-quote"); check.state != proto.EchoSeen {
 		t.Fatalf("the noted line was not tied to its client_msg_id: %v", check.state)
+	}
+}
+
+// notedQuote is quoteMessage's session quote as n notes it for an Agent in English: the text every path below must
+// deliver.
+func notedQuote(t *testing.T, n *Node) (text, noted string) {
+	t.Helper()
+	text = quoteMessage("persona-context", "persona://session/box/"+quotedSession)
+	noted = newSessionNotes("English", cmp.Or(n.bin, n.exe)).apply(text)
+	if noted == text || !strings.Contains(noted, "a2a_read") {
+		t.Fatalf("no note to expect:\n%s", noted)
+	}
+	return text, noted
+}
+
+// The paths that take session.send before the node's own send deliver the note too (#13831): an agy pane and a
+// Cursor pane, typed through herdr's agent.prompt (workagent.go), went without it.
+func TestPaneAgentsTypedThroughHerdrGetTheSessionMentionNote(t *testing.T) {
+	for _, tc := range []struct{ agent, row string }{{agyAgent, agyTestRow}, {cursorAgent, "cursor-w1-p1"}} {
+		t.Run(tc.agent, func(t *testing.T) {
+			n, f, home := herdrNode(t)
+			t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
+			pane := agyTestAgent(agyTestPane, home, agyTestID)
+			if tc.agent == cursorAgent {
+				pane = agentOf(cursorAgent, agyTestID, proto.StatusIdle, agyTestPane, "w1:t1", "w1", home, "cursor")
+			}
+			seedAgents(t, n, f, pane)
+			text, noted := notedQuote(t, n)
+			agyTestCall(t, n, "session.send", tc.row, map[string]any{"text": text, "prompt_language": "English"})
+			assertTrace(t, f.trace("agent.prompt"), []string{call("agent.prompt", map[string]any{"target": agyTestPane, "text": noted})})
+		})
+	}
+}
+
+// A runtime's session (Paseo's bridge, the pi family's and OpenCode's extensions: runtimes_calls.go) gets the note in
+// the text the node hands the runtime.
+func TestRuntimeSessionGetsTheSessionMentionNote(t *testing.T) {
+	n, _ := runtimeNode(t)
+	host := dialRuntime(t, n, dshHello())
+	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{{"session_id": "session-quote", "status": "idle"}}})
+	waitFor(t, "listed", func() bool { _, ok := listed(t, n)["session-quote"]; return ok })
+	text, noted := notedQuote(t, n)
+	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": "session-quote", "text": text, "client_msg_id": "m-quote",
+		"prompt_language": "English"}); err != nil {
+		t.Fatal(err)
+	}
+	sent := host.got("session.send")
+	var p struct {
+		Text        string `json:"text"`
+		ClientMsgID string `json:"client_msg_id"`
+	}
+	if len(sent) != 1 || json.Unmarshal(sent[0], &p) != nil || p.Text != noted || p.ClientMsgID != "m-quote" {
+		t.Fatalf("the runtime got %s", sent)
+	}
+}
+
+// A Codex waiting for its first message (codex_waiting.go) gets the note in the paste, and the thread it begins is
+// found by the noted text it was sent.
+func TestCodexFirstMessageGetsTheSessionMentionNote(t *testing.T) {
+	n, f, cwd, _ := codexWaitHerdr(t)
+	home := filepath.Dir(cwd)
+	s := startWaiting(t, n)
+	text, noted := notedQuote(t, n)
+	var mu sync.Mutex
+	var pasted string
+	f.after(func(c herdrCall) {
+		if str(c.Params["pane_id"]) != "w1:p2" {
+			return
+		}
+		switch {
+		case c.Method == "pane.send_text":
+			mu.Lock()
+			pasted = str(c.Params["text"])
+			mu.Unlock()
+			f.setScreen("w1:p2", fmt.Sprintf("› [Pasted Content %d chars]\n\n  gpt-6 xhigh · /tmp/proj\n", len([]rune(noted))))
+		case c.Method == "pane.send_keys" && slices.Equal(keysOf(c), []string{"enter"}):
+			f.setScreen("w1:p2", "› quote\n\n• Working (0s • esc to interrupt)\n\n› Ask Codex to do anything\n")
+			writeWaitRollout(t, home, cwd, startThread, time.Now(), noted)
+		}
+	})
+	res, err := request(t, n, "session.send", map[string]any{"session_id": s.SessionID, "text": text, "client_msg_id": "m-quote",
+		"prompt_language": "English"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decodeSessions(t, []any{res["session"]})[0]; got.SessionID != startThread {
+		t.Fatalf("answered %+v", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if pasted != pasteStart+noted+pasteEnd {
+		t.Fatalf("pasted:\n%q", pasted)
 	}
 }
