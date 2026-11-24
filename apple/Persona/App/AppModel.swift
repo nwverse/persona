@@ -1771,10 +1771,23 @@ final class AppModel {
         do {
             let st = try await api.setAssistant(mainBackgroundFolded: on)
             guard showsPage(of: api) else { return }
-            assistantConfig = st
+            assistantConfig?.mainBackgroundFolded = st.mainBackgroundFolded
         } catch {
             if showsPage(of: api) { assistantConfig?.mainBackgroundFolded = was }
             show(error)
+        }
+    }
+
+    /// Change only the main conversation's relay policy. Apply it to the transcript after this hub confirms the write.
+    func setRoutineRelayReplies(_ on: Bool) async {
+        guard let api, let current = assistantConfig?.foldRoutineRelayReplies, current != on else { return }
+        do {
+            let state = try await api.setAssistant(APIClient.AssistantConfigBody(foldRoutineRelayReplies: on))
+            guard showsPage(of: api) else { return }
+            assistantConfig?.foldRoutineRelayReplies = state.foldRoutineRelayReplies
+            if state.foldRoutineRelayReplies != on { show(URLError(.badServerResponse)) }
+        } catch {
+            if showsPage(of: api) { show(error) }
         }
     }
 

@@ -318,16 +318,25 @@ fi
   IOS_UNIT_SELECTION=(-only-testing:PersonaTests/MainPagesStackTests
     -only-testing:PersonaTests/PhoneSystemToolsTests)
 fi
-  # The same real Persona test host and all of PersonaTests, but no second
-  # compilation of the embedded Watch/Share targets already covered by the
-  # device build. Resolve the ordinary project once, then remove only targets
-  # the offline test host cannot reach. The default/UI/About projects are whole.
+  OFFLINE_PROFILE=full
+  if [ "$LANE" = ios-focused ]; then
+    OFFLINE_PROFILE=focused
+  elif [ "$LANE" = ios-ipad-diagnostic ]; then
+    OFFLINE_PROFILE=ipad-diagnostic
+  fi
+  # -only-testing selects execution, not target membership. Resolve the ordinary
+  # project once, then remove targets the test host cannot reach. Focused lanes
+  # additionally compile their explicit executed suites, probes and shared
+  # helpers; ordinary/ios18/regression lanes retain every PersonaTests source.
+  # The default/UI/About projects and device/simulator DerivedData stay separate.
   ci_run 'Generate iPhone-only offline unit-test project' 120 bash -c '
     set -euo pipefail
-    spec="$1"; output="$2"
+    spec="$1"; output="$2"; profile="$4"; tests="$5"
     xcodegen dump --spec "$spec" --type json > "$output/Persona.whole.json"
-    python3 "$3" "$output/Persona.whole.json" "$output/PersonaOfflineUnitTests.json"
-  ' -- "$SOURCE/apple/project.yml" "$OUTPUT" "$CI_ROOT/scripts/ci/apple_offline_project.py"
+    python3 "$3" "$output/Persona.whole.json" "$output/PersonaOfflineUnitTests.json" \
+      --profile "$profile" --source-root "$tests"
+  ' -- "$SOURCE/apple/project.yml" "$OUTPUT" "$CI_ROOT/scripts/ci/apple_offline_project.py" \
+    "$OFFLINE_PROFILE" "$SOURCE/apple/PersonaTests"
   ci_run 'Generate offline unit-test Xcode project' 120 xcodegen generate \
     --spec "$OUTPUT/PersonaOfflineUnitTests.json" --project-root "$SOURCE/apple" \
     --project "$SOURCE/apple"
@@ -436,6 +445,10 @@ fi
         sleep 0.1
       done
       : > "$watch_log/observer.stop"
+      # This observer has its own process group, so the readiness timeout does
+      # not kill its evidence. Send the stop to that group explicitly: waiting
+      # without it would leave the observer collecting until the full horizon.
+      kill -TERM "-$watcher" 2>/dev/null || kill -TERM "$watcher" 2>/dev/null || true
       # The observer stops polling after its bounded product phase, then
       # completes final evidence. The outer 900-second deadline still owns a
       # stuck watcher; never kill it before that final collection.
@@ -546,14 +559,17 @@ fi
         printf "%s\n" "unavailable: bundle signature collection incomplete" > "$watch_log/product-$product-bundle-signature.pending"
         mv "$watch_log/product-$product-bundle-signature.pending" "$watch_log/product-$product-bundle-signature.txt"
       done
-      # Give the observer its own group so a probe deadline cannot leave its
-      # detached collectors behind. Both steps use the unchanged budget.
+      # Noninteractive Bash gives the observer a separate process group only
+      # with job control enabled. The bounded readiness runner must never kill
+      # this group while it finishes its bounded final evidence.
+      set -m
       bash -c "exec python3 \"\$@\"" -- "$ci_root/scripts/ci/apple_readiness_watch.py" \
         --udid "$udid" --bundle-id "$bundle_id" --scope-root "$output" \
         --app "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/Persona" \
         --test-bundle "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/PlugIns/PersonaTests.xctest/PersonaTests" \
         --output "$watch_log" --seconds 900 &
       watcher=$!
+      set +m
       stop_watcher() {
         local code=$?
         trap - EXIT TERM INT
@@ -563,6 +579,9 @@ fi
           sleep 0.1
         done
         : > "$watch_log/observer.stop"
+        # Signal the independent observer group explicitly; otherwise the
+        # stop-file cannot end its polling after the readiness shell is gone.
+        kill -TERM "-$watcher" 2>/dev/null || kill -TERM "$watcher" 2>/dev/null || true
         # Let the stop-aware observer finish bounded final evidence. The
         # existing readiness deadline remains the hard outer bound.
         wait "$watcher" || true

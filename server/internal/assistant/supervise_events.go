@@ -283,7 +283,7 @@ func (s *Service) supervisedWorking(ctx context.Context, t Todo) {
 	}
 	b := &s.supervise
 	b.mu.Lock()
-	keys := []string{t.ID + "|" + sigReview, t.ID + "|" + sigTimedOut, t.ID + "|" + sigParkedDue, t.ID + "|" + sigEstimateDue}
+	keys := []string{t.ID + "|" + sigReview, t.ID + "|" + sigReviewNudge, t.ID + "|" + sigTimedOut, t.ID + "|" + sigParkedDue, t.ID + "|" + sigEstimateDue}
 	for _, key := range keys {
 		delete(b.pending, key)
 	}

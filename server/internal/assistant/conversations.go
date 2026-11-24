@@ -796,6 +796,9 @@ func (s *Service) queueRelay(to string, msg relayMsg) int {
 // signal is accepted only after its queued message and outbox acknowledgment are saved together. A failed write rolls
 // both in-memory forms back so the durable failed-start outbox and ordinary pending scheduler retry the same generation.
 func (s *Service) queueRelayDurable(to string, msg relayMsg) (int, error) {
+	if msg.Tool == superviseTool && !s.autoSupervisionOn(context.Background()) {
+		return 0, errSupervisionSuppressed // nothing new waits in a queue while automatic supervision messages are off
+	}
 	b := &s.relays
 	b.mu.Lock()
 	if !s.relayLocked(context.Background()) {
@@ -899,6 +902,9 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 // sendRelay performs the assistant.send RPC for a relayed message without marking supervision delivery complete.
 // Supervision callers confirm the user item in the destination transcript before completing delivery (#12567).
 func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMsg) (superviseRoundReply, bool, error) {
+	if msg.Tool == superviseTool && !s.autoSupervisionOn(ctx) {
+		return superviseRoundReply{}, false, errSupervisionSuppressed // the last look before the send: a timer or a drain that was already running
+	}
 	if msg.Tool == superviseTool && s.runtimeWithoutSupervisionPolicy(ctx, machine, to) {
 		return superviseRoundReply{}, false, s.supervisionRuntimeRefusal(ctx, machine)
 	}
@@ -1091,6 +1097,11 @@ func (s *Service) takeRelayHeadLocked(id string, msg relayMsg, replayOK bool) (r
 // where the message going in is. A conversation whose messages are all held is drained again when the first hold
 // ends.
 func (s *Service) drainRelays(machine string, list []proto.Session) {
+	if !s.autoSupervisionOn(context.Background()) {
+		// A node that reconnects may still hold supervision input in its conversations' queues from before the switch was
+		// turned off (supervise_switch.go); the switch applies to them as soon as they are listed again.
+		go s.cancelNodeSupervision(context.Background(), machine, slices.Clone(list))
+	}
 	leads := s.queueLeads(context.Background())
 	b := &s.relays
 	b.mu.Lock()
@@ -1191,6 +1202,7 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 					keep, retry = true, relayLookGap
 				}
 			}
+			suppressed := false // it was not sent because automatic supervision messages are off (supervise_switch.go)
 			if !stale && !keep && !landed && msg.Tool == superviseTool {
 				var checked relayMsg
 				checked, stale, keep = s.recheckQueuedDigest(ctx, id, original)
@@ -1201,6 +1213,9 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			if !stale && !keep && !landed {
 				msg, retry, err = s.tryQueuedRelay(ctx, machine, id, &original)
 				keep = retry > 0
+				if relaySuppressed(err) { // restored after a restart or a reconnect, or left by a withdrawal that did not reach it
+					stale, suppressed, keep, retry, err = true, true, false, 0, nil // leaves unsent: nothing replayed, nobody pushed
+				}
 			}
 			cancel()
 			// Withdrawing the text does not erase an earlier send's outcome. If its in-doubt line has since landed, the
@@ -1251,7 +1266,7 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			var replay []superviseSignal
 			if leaves {
 				queuedBefore := len(b.st.Queue[id])
-				replay = s.takeRelayHeadLocked(id, msg, !landed && !refused)
+				replay = s.takeRelayHeadLocked(id, msg, !landed && !refused && !suppressed)
 				taken = len(b.st.Queue[id]) < queuedBefore
 				if taken {
 					s.saveRelayLocked()
@@ -1279,6 +1294,9 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			}
 			if taken {
 				s.publish(context.Background()) // it no longer shows waiting
+			}
+			if suppressed {
+				s.logf("relay to %s: supervision message suppressed, automatic supervision messages are off", short(id))
 			}
 			if then != nil {
 				then(context.Background())
@@ -1708,6 +1726,11 @@ func (s *Service) toolConversationSend(ctx context.Context, self string, args js
 	}
 	if c.SessionID == self {
 		return "", errors.New("that is this conversation: you can't send a message to yourself")
+	}
+	if c.LogicalPlaceholder {
+		// Its active physical segment is gone. Keep the durable conversation readable, but never manufacture a new
+		// execution segment or queue a message for an identity that no longer exists.
+		return "", logicalRefusal(ctx, "unavailable")
 	}
 	// The dispatch policy runs after the target is known and before relayAllowed, whose rate-limit bookkeeping a
 	// refused send must not consume.

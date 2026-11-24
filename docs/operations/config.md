@@ -472,6 +472,14 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
   }
   ```
 
+- `agents.file_transfer` (#14683): the Agents' and the assistant's `file_transfer` tool, which copies a file or a folder between the caller's computer and another of your confirmed personal computers ([file-transfer.md](../protocol/file-transfer.md) "Agents and the assistant"). **On by default**; `enabled: false` stops listing it and refuses its calls. Work computers and guest conversations never get it. Hand edits take effect as described in **Edits** above. Example turning it off:
+
+  ```json
+  "agents": {
+    "file_transfer": { "enabled": false }
+  }
+  ```
+
 - `agents.a2a` defaults to the manager's confirmed personal computers. `machines` limits participation in A2A and new dispatches. An empty list disables both.
   Set `public_url` to expose Agent Cards and A2A JSON-RPC endpoints with Persona credentials. [Agent-to-Agent communication](../integrations/a2a.md)
 

@@ -49,6 +49,8 @@
   "change_close_ended_terminals": "「Agent 结束后关掉它的终端」：{before} → {after}",
   "title_inbox_signals": "收件箱有新消息说到受督办的任务时，告诉它的督办方",
   "change_inbox_signals": "「收件箱有新消息说到受督办的任务时，告诉它的督办方」：{before} → {after}",
+  "title_auto_supervision_messages": "自动督办消息",
+  "change_auto_supervision_messages": "「自动督办消息」：{before} → {after}",
   "title_inbox_todo_forward": "将收件箱中的 PR/Issue 事件自动转发给绑定待办的 Agent",
   "change_inbox_todo_forward": "「将收件箱中的 PR/Issue 事件自动转发给绑定待办的 Agent」：{before} → {after}",
   "title_pr_events_route_to_agent": "将 PR 事件直接路由到绑定的待办 Agent",
@@ -80,6 +82,8 @@
   "minutes_applied": "会议纪要保留已设为 {saved}，当前生效为 {after}。转写仍按录音保留时间清理。",
   "title_main_background_folded": "后台轮次默认折叠",
   "change_main_background_folded": "「后台轮次默认折叠」：{before} → {after}",
+  "title_fold_routine_relay_replies": "折叠普通转发回复",
+  "change_fold_routine_relay_replies": "“折叠普通转发回复”：{before} → {after}",
   "title_main_compact_window": "主对话压缩窗口",
   "change_main_compact_window": "「主对话压缩窗口」：{before} → {after}",
   "main_compact_window_launcher": "跟随启动器",
@@ -122,5 +126,10 @@
   "change_supervision_batch_minutes": "普通督办按接收方攒批：{before} → {after} 分钟（0 保持现有节奏）",
   "bad_supervision_batch_minutes": "请输入 0 至 1440 的整数分钟。",
   "supervision_batch_minutes_unchanged": "普通督办攒批间隔未变化。",
-  "supervision_batch_minutes_saved": "普通督办攒批间隔已保存为 {value} 分钟。"
+  "supervision_batch_minutes_saved": "普通督办攒批间隔已保存为 {value} 分钟。",
+  "title_limit_fallbacks": "额度用完时的备用启动器",
+  "change_limit_fallbacks": "对话被用量额度卡住时换用的备用启动器：{before} → {after}",
+  "bad_limit_fallbacks": "请给出最多 8 个启动器名称的列表，首选在前；空列表表示关闭。",
+  "limit_fallbacks_unchanged": "备用启动器没有变化。",
+  "limit_fallbacks_saved": "备用启动器已保存：{value}。从下一次额度用完时起生效。"
 }

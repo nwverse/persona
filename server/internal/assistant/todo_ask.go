@@ -2,11 +2,13 @@ package assistant
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/todo/projection"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/deeplink"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -21,7 +23,8 @@ import (
 // todoAsk is a to-do's open ask, as GET /api/v1/todos carries it: the verdict line in the words of its Lark card; outcome a
 // conclusion's verdict (done, cannot or decide; none for a deployed task's "Please verify"); recommend a decision's
 // recommended option, which OK takes; asked_at the round, which the accept route takes; risk how risky answering it is
-// (askRisk), which the view's decision reads.
+// (askRisk), which the view's decision reads; link the direct evidence/PR/MR URL when present and not merely the
+// to-do's own /todos/<id> page.
 //
 // A decision also carries what makes it answerable where it is listed (#3804, decision.go): question, what is to be
 // decided; why_owner, why only the owner can decide; options, the recommended first, each with what it leads to;
@@ -33,6 +36,7 @@ type todoAsk struct {
 	Outcome   string    `json:"outcome,omitempty"`
 	Verdict   string    `json:"verdict"`
 	Recommend string    `json:"recommend,omitempty"`
+	Link      string    `json:"link,omitempty"`
 	AskedAt   time.Time `json:"asked_at"`
 	Risk      string    `json:"risk,omitempty"`
 
@@ -77,13 +81,38 @@ type listedTodo struct {
 	View                 *assistantwire.TodoSummary `json:"view,omitempty"`
 }
 
+// askEvidenceLink returns raw when it is a valid http(s) URL and not merely the to-do's own /todos/<id> page.
+func askEvidenceLink(raw, web, todoID string) string {
+	u := validWebURL(raw)
+	if u == "" || isSelfTodoLink(u, web, todoID) {
+		return ""
+	}
+	return u
+}
+
+// isSelfTodoLink reports whether u points solely to todoID's own /todos/<id> page.
+func isSelfTodoLink(u, web, todoID string) bool {
+	if todoID == "" {
+		return false
+	}
+	if self := todoLink(web, todoID); self != "" && strings.TrimRight(u, "/") == strings.TrimRight(self, "/") {
+		return true
+	}
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	selfPath := deeplink.Todo(todoID)
+	return strings.TrimRight(parsed.EscapedPath(), "/") == selfPath || strings.TrimRight(parsed.Path, "/") == "/todos/"+todoID
+}
+
 // todoAsks are the open asks by to-do id, in the request's language: the ones the briefing lists (not passed, not ended,
 // not from before the to-do's latest reopen).
 func (s *Service) todoAsks(ctx context.Context) map[string]todoAsk {
-	l, loc := s.botLang(ctx), s.location(ctx)
+	l, loc, web := s.botLang(ctx), s.location(ctx), s.webBase(ctx)
 	out := map[string]todoAsk{}
 	for _, w := range s.awaitingAcceptance(ctx) {
-		a := todoAsk{Outcome: w.ask.Outcome, Verdict: verdictText(l, &w.ask), AskedAt: w.ask.AskedAt, Risk: askRisk(&w.ask)}
+		a := todoAsk{Outcome: w.ask.Outcome, Verdict: verdictText(l, &w.ask, w.delivery), Link: askEvidenceLink(w.ask.Link, web, w.todo), AskedAt: w.ask.AskedAt, Risk: askRisk(&w.ask)}
 		if decideAsk(&w.ask) {
 			a.Recommend = w.ask.Recommend
 			if w.ask.OutsideID == "" {
@@ -181,7 +210,7 @@ func (s *Service) pushDecisionAbout(ctx context.Context, id, reason string) (boo
 	l := s.lang(ctx)
 	n := Notification{ID: "ntf_" + randomHex(8), Kind: assistantwire.NotifyDecide, Subtitle: "Persona", DeviceID: here, SessionID: sessionID,
 		Title: i18n.T(l, "assistant-reports.verdict_title", i18n.Args{"task": clip(oneLine(t.Title), 30)}),
-		Body:  verdictText(l, &a) + "\n" + recommendText(l, &a),
+		Body:  verdictText(l, &a, nil) + "\n" + recommendText(l, &a),
 		// The level goes by why it is the owner's (decisionPushLevel): one that cannot wait interrupts even with the
 		// hub's push tiering on, every time it is pushed (its reminders too); the hub keys it by to-do and round.
 		Level: decisionPushLevel(a.WhyOwner),

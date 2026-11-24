@@ -7,7 +7,7 @@ import { parse } from "../lib/router";
 import { getState, reset, subscribe } from "../lib/store";
 
 const setState = (patch: Partial<ReturnType<typeof getState>>) => Object.assign(getState(), patch);
-import { cardRendererOf, CHAT_SLOTS, chatSlotFillers, connectModuleHub, CORE_CARD_KINDS, enabledSettingsTabs, hubServes, loadedModule, MODULE_API, MODULES_FEATURE, moduleFeature, enabledNavItems, moduleExtensionAt, moduleKBKindAt, loadModule, moduleNavKey, moduleRouteAt, moduleState, moduleTitle, registeredModules, registerModule, resetModulesForTest, subscribeModules, type ModuleDescriptor } from "./module-host";
+import { cardRendererOf, CHAT_SLOTS, chatSlotFillers, connectModuleHub, CORE_CARD_KINDS, enabledSettingsTabs, hubServes, loadedModule, MODULE_API, MODULES_FEATURE, moduleFeature, enabledNavItems, moduleExtensionAt, moduleKBKindAt, loadModule, moduleNavKey, moduleRouteAt, moduleState, moduleTitle, registeredModules, registerModule, resetModulesForTest, standaloneAt, standaloneOn, subscribeModules, type ModuleDescriptor } from "./module-host";
 import { forgetModuleSwitches, moduleSwitchedOff, setModuleSwitchedOff } from "./module-switch";
 
 const code = vi.fn(async () => ({ Page: () => null }));
@@ -105,6 +105,31 @@ describe("registering", () => {
     // the list of a kind stays the Knowledge page's own
     expect(parse("/kb/plants")).toEqual({ name: "kb", kind: "plants", id: undefined });
     expect(parse("/kb/projects/persona")).toEqual({ name: "kb", kind: "projects", id: "persona" });
+  });
+
+  it("draws a page of its own while on, answers it as absent while off, and refuses a core, taken or routed address", () => {
+    expect(() => registerModule(garden({ routes: [], standalonePages: ["kb"] }))).toThrow(/claims \/kb as a page of its own, a core address/);
+    expect(() => registerModule(garden({ routes: [], standalonePages: ["two/parts"] }))).toThrow(/not one address segment/);
+    expect(() => registerModule(garden({ standalonePages: ["garden"] }))).toThrow(/which "garden" routes in the app/);
+    registerModule(garden({ routes: [], navItems: [], standalonePages: ["live"] }));
+    expect(() => registerModule(garden({ id: "yard", routes: [], navItems: [], standalonePages: ["live"] }))).toThrow(/\/live as a page of its own, which "garden" has/);
+    expect(() => registerModule(garden({ id: "yard", navItems: [], routes: [{ base: "live", title: () => "" }] }))).toThrow(/which "garden" draws as a page of its own/);
+    expect(standaloneAt(["live", "mac"])).toMatchObject({ id: "garden" });
+    expect(standaloneAt(["live"])).toMatchObject({ id: "garden" });
+    expect(standaloneAt(["kb", "notes"])).toBeNull();
+    expect(standaloneAt([])).toBeNull();
+    expect(standaloneOn("live")).toBe(true);
+    expect(standaloneOn("kb")).toBe(false);
+    // the hub flag rule: before the hello it is on; a publishing hub without the flag takes the core's links to it away
+    setState({ features: [MODULES_FEATURE], loaded: true });
+    expect(standaloneOn("live")).toBe(false);
+    setState({ features: [MODULES_FEATURE, "module.garden"], loaded: true });
+    expect(standaloneOn("live")).toBe(true);
+    setModuleSwitchedOff("garden", true);
+    expect(standaloneAt(["live", "mac"])).toBe("absent");
+    expect(standaloneOn("live")).toBe(false);
+    // and the app routes it as an unknown address, as it does any address no page has
+    expect(parse("/live/mac")).toEqual({ name: "not-found", path: "/live/mac" });
   });
 
   it("tells subscribers about a registration", () => {
@@ -289,7 +314,10 @@ describe("chat slots, Settings categories and card renderers", () => {
     resetModulesForTest();
     code.mockImplementationOnce(async () => ({}) as never);
     registerModule(garden({ feature: undefined, cardRenderers: ["garden-card"] }));
-    await expect(loadModule("garden")).rejects.toThrow(/the card kind "garden-card", which its code does not draw/);
+    await expect(loadModule("garden")).rejects.toThrow(/the card kind "garden-card", which its code does not draw/);    resetModulesForTest();
+    code.mockImplementationOnce(async () => ({}) as never);
+    registerModule(garden({ feature: undefined, routes: [], navItems: [], standalonePages: ["live"] }));
+    await expect(loadModule("garden")).rejects.toThrow(/the page of its own \/live, which its code does not draw/);
   });
 
   it("lists Settings categories and card renderers of enabled modules only", () => {

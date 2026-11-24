@@ -692,6 +692,8 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
     var agentType: String? = nil
     /// An agent runtime's launcher that can run the Persona assistant (DSH's, docs/integrations/runtimes.md「Assistant」).
     var assistant: Bool? = nil
+    /// The runtime accepts manager-owned supervision instructions on a dedicated, per-session policy channel.
+    var supervisionPolicy: Bool? = nil
     /// How its last check or start went on the computer the list is for (`GET …/machines/{id}/launchers`,
     /// docs/server/launcher-health.md); nil: never checked, a failure too old to count, or an older hub.
     var health: LauncherHealth? = nil
@@ -755,7 +757,7 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case name, model, agent, assistant, health, source
-        case displayName = "display_name", agentType = "agent_type"
+        case displayName = "display_name", agentType = "agent_type", supervisionPolicy = "supervision_policy"
         case baseURL = "base_url"
         case promptOptional = "prompt_optional"
         case runHere = "run_here"
@@ -775,6 +777,7 @@ nonisolated extension Launcher {
         agent = try c.decodeIfPresent(String.self, forKey: .agent)
         agentType = (try? c.decodeIfPresent(String.self, forKey: .agentType)).flatMap { $0 }
         assistant = try c.decodeIfPresent(Bool.self, forKey: .assistant)
+        supervisionPolicy = try c.decodeIfPresent(Bool.self, forKey: .supervisionPolicy)
         health = (try? c.decodeIfPresent(LauncherHealth.self, forKey: .health)) ?? nil
         promptOptional = try c.decodeIfPresent(Bool.self, forKey: .promptOptional)
         source = try c.decodeIfPresent(String.self, forKey: .source)

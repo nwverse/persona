@@ -81165,6 +81165,28 @@
         }
       }
     },
+    "Fold routine replies from other chats" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fold routine replies from other chats"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ほかの会話からの通常の返信を折りたたむ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "折叠其他对话的常规回复"
+          }
+        }
+      }
+    },
     "Folded [Inbox Now]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -162882,6 +162904,28 @@
         }
       }
     },
+    "Show empty workspaces" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show empty workspaces"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "空のワークスペースを表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示空工作区"
+          }
+        }
+      }
+    },
     "Show fewer actions" : {
       "comment" : "BeautifulUI looks this up in the app's catalog (#5574)",
       "localizations" : {
@@ -210961,6 +211005,28 @@
         }
       }
     },
+    "When background rounds are folded, routine replies from other chats stay in an expandable row in the main chat and skip the finished notification. Questions and replies marked for you still appear." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When background rounds are folded, routine replies from other chats stay in an expandable row in the main chat and skip the finished notification. Questions and replies marked for you still appear."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックグラウンドのラウンドを折りたたむと、ほかの会話からの通常の返信はメインチャットで開ける行にまとまり、完了通知は届きません。質問やあなた宛てに指定された返信は引き続き表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启后台轮次折叠后，其他对话的常规回复会收在主对话的一条可展开记录里，也不发送完成通知。需要你回答的问题和明确发给你的消息仍会显示。"
+          }
+        }
+      }
+    },
     "When Done, Put It in the Inbox" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -229522,6 +229588,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "接続を切り替えられません。チャットを更新して再試行してください。"
+          }
+        }
+      }
+    },
+    "This connection cannot receive separate task follow-up instructions." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This connection cannot receive separate task follow-up instructions."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此连接无法接收独立的任务跟进指令。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この接続は独立したタスクのフォローアップ指示を受け取れません。"
           }
         }
       }
