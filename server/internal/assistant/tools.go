@@ -41,7 +41,7 @@ var toolNames = []string{"resource_status", "ask_user", "notify_user", "supervis
 	"inbox_folders", "inbox_move", "inbox_post", "kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run", "skill_import",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"repositories_list", "repository_get", "repository_add", "view_show", "view_update", "view_get",
-	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
+	"conversations_list", "conversations_switch", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
 	"conversation_tags_set",
 	"conversation_new", "conversation_send", "task_plan", "task_plan_withdraw", "task_review", "task_scope", "task_decided", "task_start_screen", "task_start_keys", "task_retry",
 	"todo_workspace", "todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add", "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
@@ -58,6 +58,7 @@ func (s *Service) Tools(ctx context.Context) []proto.Tool {
 	if s.urgentOn(ctx) {
 		tools = append(tools, toolsNamed([]string{"urgent_call"})...)
 	}
+	tools = append(tools, s.moduleTools()...)
 	return localizedMCPTools(append(tools, s.knowledgeFolderTools(ctx)...), s.toolLanguage(ctx))
 }
 
@@ -193,10 +194,19 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		res, err := s.toolTaskReview(ctx, self, args) // supervise_review.go
 		if err == nil {
 			var a struct {
-				Verdict string `json:"verdict"`
+				TodoID    string `json:"todo_id"`
+				Verdict   string `json:"verdict"`
+				UserCheck bool   `json:"user_check"`
 			}
-			if json.Unmarshal(args, &a) == nil && (a.Verdict == reviewAccepted || a.Verdict == reviewNeedsUser) {
-				s.promoteSupervision(self)
+			if json.Unmarshal(args, &a) == nil {
+				if a.Verdict == reviewAccepted && s.quietInternalAcceptedReview(ctx, a.TodoID, a.UserCheck) {
+					message := res + ` This internal accepted conclusion stays in Background activity. Finish this supervision wake-up with supervision_finish visibility="silent".`
+					body, marshalErr := json.Marshal(map[string]any{"background": true, "message": message})
+					return string(body), marshalErr
+				}
+				if a.Verdict == reviewAccepted || a.Verdict == reviewNeedsUser {
+					s.promoteSupervision(self)
+				}
 			}
 		}
 		return res, err
@@ -308,6 +318,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolUrgentCall(ctx, machine, self, args) // urgent_call_tool.go
 	case "conversations_list":
 		return s.toolConversationsList(ctx, self, args)
+	case "conversations_switch":
+		return s.toolConversationsSwitch(ctx, machine, self, args)
 	case "conversation_read":
 		return s.toolConversationRead(ctx, self, args)
 	case "conversation_rename":
@@ -662,7 +674,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if assistantWorkspace(am, a.Cwd) {
 			return "", i18n.Err("rpc-errors.agent_assistant_workspace")
 		}
-		own := startPick{launcher: strings.TrimSpace(a.Launcher), effort: strings.TrimSpace(a.Effort), speed: strings.TrimSpace(a.Speed), permission: a.PermissionMode} // before the tier
+		own := startPick{launcher: strings.TrimSpace(a.Launcher), model: a.Model, effort: strings.TrimSpace(a.Effort), speed: strings.TrimSpace(a.Speed), permission: a.PermissionMode} // before the tier
 		// The tier is resolved first (an unknown one asks and starts nothing), then Model Settings' Agents laid over it as
 		// the start lays it: what runs is said on the card (a hand-off from a space that confirms what leaves it asks) and in the answer.
 		tier := strings.TrimSpace(a.Tier)
@@ -694,8 +706,14 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if err := s.applyModel(ctx, "agent.new", run); err != nil {
 			return "", err
 		}
+		decision := newPlacement(am.ID, "enforce")
+		ctx = context.WithValue(ctx, placementKey{}, decision)
 		swapped, fit, err := s.fitNewLauncher(ctx, am, own, run)
 		if err != nil {
+			if len(decision.candidate(am.ID).Hits) > 0 {
+				decision.ReasonKey = "launcher_missing"
+				s.savePlacement(ctx, decision)
+			}
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		a.Speed, _ = run["speed"].(string)
@@ -727,6 +745,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// The admission gate refuses a too-busy computer before the user is asked to approve anything.
 		gated, _ := run["launcher"].(string)
 		if err := s.checkAgentStart(ctx, am.ID, s.startLauncher(ctx, gated)); err != nil {
+			s.savePlacement(ctx, decision)
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		branch := strings.TrimSpace(a.Worktree.Branch)
@@ -787,7 +806,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		picked, _ := params["launcher"].(string)
 		launcher := s.startLauncher(ctx, picked)
 		alt, note, moved := s.healthDetour(ctx, am, launcher)
+		decision.Reason = note
 		if moved {
+			decision.Choice = alt.ID
 			a.Cwd = rehome(a.Cwd, am, alt)
 			params["cwd"], am = a.Cwd, alt
 			// The same launcher name may mean a different agent on the destination. Reuse its list before choosing permissions.
@@ -880,6 +901,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if !tracked {
 			return "", fmt.Errorf("the task could not be recorded; no agent was started")
 		}
+		decision.TaskID = task.ID
 		params["creation_id"], params["incarnation"] = task.ID, "start_"+randomHex(8)
 		// The to-do is there before the start, so the Agent's model requests name it from their first one: the headers are
 		// fixed when the Agent starts, and linking it to the to-do afterwards does not reach them.
@@ -905,6 +927,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		final, _ := params["launcher"].(string)
 		release, err := s.admitAgentStart(sctx, am.ID, s.startLauncher(ctx, final))
 		if err != nil {
+			s.savePlacement(ctx, decision)
 			failBeforeStart(err.Error())
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
@@ -934,11 +957,15 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			inputID = "wait_" + randomHex(16)
 			params["client_msg_id"] = inputID
 		}
-		err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
+		sctx = context.WithValue(sctx, placementBindKey{}, decision)
+		start := func() error {
+			return s.startWithCodexRouteNotice(sctx, task.ID, fit.agent, params, func() error { return s.call(sctx, am.ID, DeviceSessionStart, params, &res) })
+		}
+		err = start()
 		if reason, refused := s.ultracodeRefusal(ctx, err, params); refused {
 			delete(params, "ultracode")                                  // an extra the agent it landed on cannot have: it starts without it (#3596)
 			note += " Note: started without ultracode (" + reason + ")." // an answer lost on the way still says so
-			err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
+			err = start()
 			// Refused before the node took the ticket, the same ticket starts it; one the refused start took and
 			// dropped is gone, and the values are staged once more for this start.
 			if values != nil && refusedWith(err, proto.CodeSecretEnvGone) {
@@ -947,7 +974,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 					failBeforeStart(err.Error())
 					return "", err
 				}
-				err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
+				err = start()
 			}
 		}
 		values.wipe()
@@ -956,7 +983,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			if startResultUnknown(err) {
 				// The node may already have the session and a running agent although the answer never came back:
 				// do not report failure (the model would start it again, duplicating the run).
-				return s.startedWithoutAnswer(ctx, am, picked, fit.snapshot, a.Cwd, note, expectID, knownIDs, task, told), nil
+				return s.startedWithoutAnswer(ctx, decision, am, picked, fit.snapshot, a.Cwd, note, expectID, knownIDs, task, told), nil
 			}
 			if ferr := s.failAgentStartTodo(ctx, task.ID, clip(oneLine(err.Error()), 200)); ferr != nil {
 				s.logf("task %s: fail: %v", task.ID, ferr)
@@ -976,6 +1003,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		warning := agentStartTaskWarning(closedDuringStart, linkErr)
 		return finish(fmt.Sprintf("Started on %s in %s: session %s, a task of this conversation (its card is in the conversation; "+
 			"%s).%s", am.Name, a.Cwd, res.Session.SessionID, told, note) + warning), nil
+	}
+	if out, err, ok := s.runModuleTool(ctx, machine, self, name, args); ok {
+		return out, err
 	}
 	return "", fmt.Errorf("unknown tool %s", name)
 }
@@ -1131,26 +1161,25 @@ var liveSendWait = 90 * time.Second
 // and by the older bounded adoption heuristic otherwise. A failed pre-start list disables only the heuristic, not an
 // exact expectID match. Otherwise the pending task stays visible for a later sessions.changed to complete the link.
 // The confirmed session's Agent kind wins, with the explicitly resolved launcher kind as fallback (#11545).
-func (s *Service) startedWithoutAnswer(ctx context.Context, m Device, launcher, launcherKind, cwd, note, expectID string, knownIDs map[string]bool, task Todo, told string) string {
+func (s *Service) startedWithoutAnswer(ctx context.Context, decision *placement, m Device, launcher, launcherKind, cwd, note, expectID string, knownIDs map[string]bool, task Todo, told string) string {
+	confirmed := func(sess proto.Session, source string) string {
+		// The machine confirmed this identity even if linking its task fails.
+		decision.SessionID = sess.SessionID
+		s.savePlacement(ctx, decision)
+		closed, linkErr := s.linkStartedAgentTask(ctx, task, m, cwd, sess.SessionID, cmp.Or(sess.Agent, launcherKind))
+		return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
+			"confirmed %s), a task of this conversation (its card is in the conversation; %s).%s",
+			m.Name, cwd, sess.SessionID, source, told, note) + agentStartTaskWarning(closed, linkErr)
+	}
 	if list, err := s.sessions(ctx, m.ID); err == nil {
 		for _, sess := range list {
 			if sess.CreationID() == task.ID {
-				closed, linkErr := s.linkStartedAgentTask(ctx, task, m, cwd, sess.SessionID, cmp.Or(sess.Agent, launcherKind))
-				// The creation id proves which Agent this start made. Even when its link write fails, never turn that
-				// failure into permission to heuristically bind a different session (#5732).
-				return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
-					"confirmed by its creation id), a task of this conversation (its card is in the conversation; %s).%s",
-					m.Name, cwd, sess.SessionID, told, note) + agentStartTaskWarning(closed, linkErr)
+				return confirmed(sess, "by its creation id")
 			}
 		}
 	}
 	if sess, ok := s.adoptStartedSession(ctx, m, launcher, cwd, expectID, knownIDs); ok {
-		closed, linkErr := s.linkStartedAgentTask(ctx, task, m, cwd, sess.SessionID, cmp.Or(sess.Agent, launcherKind))
-		// Adoption has already confirmed this session. A task-link write failure is a warning about that link, never
-		// evidence that the start's identity is unknown; keep the session id and prevent a duplicate start (#5732).
-		return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
-			"confirmed from the machine's own list), a task of this conversation (its card is in the conversation; "+
-			"%s).%s", m.Name, cwd, sess.SessionID, told, note) + agentStartTaskWarning(closed, linkErr)
+		return confirmed(sess, "from the machine's own list")
 	}
 	result := fmt.Sprintf("The agent may already be starting on %s in %s, but the machine did not answer within the wait, "+
 		"so the result is unknown. ", m.Name, cwd)
@@ -1599,12 +1628,16 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		}
 		session := ix.SessionID
 		source := [2]string{ix.MachineID, session}
-		isFolded := ix.FoldedUnder != "" && ix.FoldedUnder != session
+		targetMachine := ix.MachineID
+		isFolded := ix.FoldedUnder != "" && (ix.FoldedUnder != session || (ix.FoldedUnderMachineID != "" && ix.FoldedUnderMachineID != ix.MachineID))
 		if isFolded {
 			folded[source] = false // include a folded card only after checking its own session
 			session = ix.FoldedUnder
+			if ix.FoldedUnderMachineID != "" {
+				targetMachine = ix.FoldedUnderMachineID
+			}
 		}
-		k := [2]string{ix.MachineID, session}
+		k := [2]string{targetMachine, session}
 		// The id goes after the clip: a long request must not cut it off, or interaction_answer has nothing to answer.
 		id := " (interaction_id=" + ix.ID + ")"
 		pending[k] = append(pending[k], pendingCard{clip(what, max(400-utf8.RuneCountInString(id), 1)) + id, isFolded, source})
@@ -1642,7 +1675,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 					folded[source] = true
 				}
 			}
-			if c.Assistant || c.FoldedUnder() != "" || s.isBackgroundSession(ctx, c.SessionID) {
+			if c.Assistant || c.FoldedUnder() != "" || c.IsSubagent || c.IsCodexSubagent() || s.isBackgroundSession(ctx, c.SessionID) {
 				continue
 			}
 			c.State = c.FoldedState()
@@ -1680,6 +1713,31 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 				}
 			}
 			rows = append(rows, row{m, c})
+		}
+	}
+	// When machine filtering skipped a cross-machine child's machine, verify folded approvals
+	// belonging to included parent rows so agents_list(machine=<parent>) keeps their interaction_ids.
+	if machine != "" && wanted && len(folded) > 0 {
+		needMachines := map[string]bool{}
+		for _, r := range rows {
+			for _, p := range pending[[2]string{r.m.ID, r.c.SessionID}] {
+				if p.folded && !folded[p.source] && p.source[0] != want.ID {
+					needMachines[p.source[0]] = true
+				}
+			}
+		}
+		for childMid := range needMachines {
+			list, _, _ := s.sessionsMuted(ctx, childMid)
+			for _, c := range list {
+				if c.HiddenByDirectory() || c.IsDeleted() || runSpace(c) != space {
+					continue
+				}
+				if source := [2]string{childMid, c.SessionID}; c.FoldedUnder() != "" {
+					if _, tracked := folded[source]; tracked {
+						folded[source] = true
+					}
+				}
+			}
 		}
 	}
 	order := map[string]int{proto.StateNeedsYou: 0, proto.StateWorking: 1, proto.StateUnread: 2, proto.StateIdle: 3}

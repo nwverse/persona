@@ -49,8 +49,8 @@ type Settings struct {
 	WorkspaceRules workspacenaming.Rules `json:"workspace_rules,omitempty"`
 	MachineID      string                `json:"machine_id"`
 	Launcher       string                `json:"launcher"`
-	// DefaultPermissionMode applies only to new non-guest conversations without an explicit mode.
-	// Empty keeps the runtime's existing default; it never changes an existing conversation.
+	// DefaultPermissionMode applies to new non-guest conversations and stopped Claude Code resumes without an explicit mode.
+	// Empty selects the built-in bypassPermissions default; other agents keep legacy resume precedence, and live/explicit modes are unchanged.
 	DefaultPermissionMode string `json:"default_permission_mode,omitempty"`
 	// Timezone is the phone's (IANA name): routines and the snapshot read times in it, and the hub its own.
 	Timezone string `json:"timezone,omitempty"`
@@ -718,7 +718,6 @@ func (s *Service) leadSessions(ctx context.Context, v Settings) []SessionRef {
 func (s *Service) settingsChanged(ctx context.Context) {
 	s.transcriptionSettingsChanged(ctx) // only another contribution chosen drops the readiness answer
 	s.ProfileChanged(ctx)
-	s.retryOwnerWaits(ctx) // a restored main/conversation can deliver an explicitly pending owner push
 	s.revalidateFailedStartDeferrals(ctx)
 	s.publish(ctx)
 }

@@ -5868,8 +5868,8 @@ type BrowserMachinesResult struct {
 	Machines []BrowserMachine `json:"machines"`
 }
 
-// BrowserRunParams: browser.run (browser.run): run a script inside an extension-isolated browser task space
-// (ext-<extensionID>-<slot>) on machine_id.
+// BrowserRunParams: browser.run (browser.run): run a script inside an extension-isolated browser task space on
+// machine_id.
 type BrowserRunParams struct {
 	MachineID string `json:"machine_id"`
 	// Browser backend to use (default: ego).

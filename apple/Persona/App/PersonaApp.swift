@@ -127,6 +127,8 @@ struct PersonaApp: App {
                 // Refresh the health summary snapshot while unlocked, so a locked-phone phone_health_summary
                 // call later can serve it instead of HealthKit's inaccessible-database error.
                 Task { await HealthTool.refreshSnapshot() }
+                // And the watched health types' sample snapshots (phone_health_watch, #13740); throttled.
+                Task { await HealthSampleWatcher.shared.foreground() }
                 Task { await HealthIntakeSync.shared.refresh(model: model) }
                 SiriCalls.askOnce(paired: model.hub != nil) // a build with app.siri_calls only (#9290)
                 BackgroundLocation.shared.cameToFront() // offers Always once after a read refused in the background
@@ -186,12 +188,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         _ = KeyboardState.shared // watches the keyboard from the start: a card may come while it is already up
         UNUserNotificationCenter.current().delegate = self
         Task { await ExtensionNotificationActions.preserveAndRegister { NotificationActions.categories } }
-        Modules.registry.launch() // the active modules' launch hooks, as the Meta glasses' set-up (docs/apple/ios.md, "Modules")
+        ModuleState.shared.launch() // the active modules' launch hooks, as the Meta glasses' set-up (docs/apple/ios.md, "Modules")
         #if os(iOS)
         QuickAction.publish()
         // Here, for HealthKit to wake the app after a workout (#2526); only a build with background delivery reads the
         // reports' small state file this early.
         if WorkoutReports.deliversInBackground { WorkoutReports.shared.observe() }
+        // The observers of the types phone_health_watch keeps current (#13740), for the same reason; a small defaults list.
+        HealthSampleWatcher.shared.start()
         // Here too, for a launch iOS made for a significant location change: the Always session and the service are kept
         // only a few seconds after a relaunch (#13200). Asks nothing; one manager whose level arrives in a callback.
         BackgroundLocation.shared.launch()
@@ -303,21 +307,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             model.composerContexts = [:]
             model.composerComments = [:]
         }
-        // `-openScreenFresh YES`: no Mac's Screen Sharing sign-in remembered, One-Tap Unlock off (ScreenPasswordTests, #1322).
-        if d.bool(forKey: "openScreenFresh") {
-            ScreenCredentials.forgetAll()
-            ScreenUnlock.forgetAll()
-        }
-        #if DEBUG
-        // `-openScreenDemo YES`: open the live-screen page on a placeholder Mac (no hub needed) for screenshots of the
-        // picture switcher and the connection-stats overlay; pair with -showScreenStatsDemo / -showScreenFallbackDemo (#3954).
-        if d.bool(forKey: "openScreenDemo") {
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(600))
-                AppModel.shared.screenOpen = ScreenOpen(machine: MachineRef(id: "Studio"))
-            }
-        }
-        #endif
+        // `-openScreenFresh` and `-openScreenDemo` belong to the screen-share module (its launch hook).
         // `-showLarkSendFresh YES`: no Feishu draft and no outbox (unsent, failed messages) from an earlier run:
         // LarkSendTests found earlier runs' failed messages and drafts in the chat (#1627).
         if d.bool(forKey: "showLarkSendFresh") {
@@ -518,6 +508,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let group = AppModel.shared.pushGroup(info)
         AppModel.shared.wakeLinks(group)
         #if os(iOS)
+        Task {
+            await HomeWidgetData.shared.restore()
+            HomeWidgetWriter.shared.tellHub(forceRefresh: true) // a cold wake obtains the installed widget kinds
+        }
         HomeWidgetData.shared.refresh() // the calendar, Health and the usage the widgets show, when due
         let intakeSync = Task { await HealthIntakeSync.shared.refresh(model: .shared) }
         #endif
