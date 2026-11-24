@@ -112,6 +112,8 @@ type Node struct {
 	fileReadDeps *fileReadDependencies
 	// repoMirrors coordinates opt-in managed bare mirrors under ~/.persona/repos/ (repo_mirror.go).
 	repoMirrors repoMirrorManager
+	// usageMap is the disk usage map's scans, cache and trash record (machine_storage_usage.go), made on first use.
+	usageMap usageMapState
 
 	home         string
 	sessionScope *nodeSessionScope
@@ -2443,7 +2445,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			if err := n.refreshExport(p.SessionID, f); err != nil {
 				return nil, err
 			}
-		} else if err := n.refresh(p.SessionID, f); err != nil && proto.PositionalItemID(a.ItemID) {
+		} else if err := n.refreshForPage(p.SessionID, f); err != nil && proto.PositionalItemID(a.ItemID) {
 			if errors.Is(err, os.ErrNotExist) {
 				return nil, n.readErr(p.SessionID, noTranscript{p.SessionID})
 			}

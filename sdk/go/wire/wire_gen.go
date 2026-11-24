@@ -296,6 +296,7 @@ type Contributes struct {
 	SecretProviders     []SecretProviderItem     `json:"secret_providers,omitempty"`
 	RepositoryProviders []RepositoryProviderItem `json:"repository_providers,omitempty"`
 	MemorySources       []MemorySourceItem       `json:"memory_sources,omitempty"`
+	DiskOffload         []DiskOffloadItem        `json:"disk_offload,omitempty"`
 	Messaging           []MessagingItem          `json:"messaging,omitempty"`
 	// Extra keys stay at this object's level on the wire; they cannot replace declared fields.
 	AdditionalProperties map[string]json.RawMessage `json:"-"`
@@ -307,7 +308,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -339,7 +340,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "messaging":
+		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -596,6 +597,31 @@ type RepositoryProviderItem struct {
 	// (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.
 	Capabilities []string `json:"capabilities,omitempty"`
 }
+
+// DiskOffloadItem: A provider that moves items from a computer to storage elsewhere, lists what it already holds and
+// brings items back (docs/server/machine-usage-map.md "Extension point disk_offload"): the disk usage map draws its
+// inventory beside the computer's disk and offers Offload; the manager asks the program (offload.inventory,
+// offload.run, offload.job, offload.cancel; offload.schema.json) after the user confirmed. Needs the program to speak
+// the protocol.
+type DiskOffloadItem struct {
+	ID string `json:"id"`
+	// What the map and its menus call the provider (Offload to Example Cloud). Not only spaces, no control characters.
+	Name string `json:"name"`
+	// What it takes from the map; without it, files and folders.
+	Kinds []string `json:"kinds,omitempty"`
+	// Items it holds can be brought back (Restore on the map's cloud side).
+	Restore bool `json:"restore,omitempty"`
+}
+
+// DiskOffloadKind: what a disk_offload provider takes: file, dir (a folder) or app (a macOS app bundle).
+const (
+	DiskOffloadKindFile = "file"
+	DiskOffloadKindDir  = "dir"
+	DiskOffloadKindApp  = "app"
+)
+
+// DiskOffloadKinds are the values of DiskOffloadKind, in order.
+var DiskOffloadKinds = []string{"file", "dir", "app"}
 
 // MemorySourceItem: the extension's memory, read by the manager one entry at a time (memory.entries;
 // memory.schema.json) so the hub decides which entries reach which scene (a conversation's standing context, a
@@ -6887,6 +6913,261 @@ type MemoryEntry struct {
 	Subjects []string `json:"subjects,omitempty"`
 }
 
+// OffloadState: whether the provider can work on this computer: ready; needs_install (its tool is not on the
+// computer: the first offload asks to install it, OffloadTool); needs_setup (the user has to set it up first, in the
+// extension's settings: detail says what); unavailable (detail says why).
+const (
+	OffloadStateReady        = "ready"
+	OffloadStateNeedsInstall = "needs_install"
+	OffloadStateNeedsSetup   = "needs_setup"
+	OffloadStateUnavailable  = "unavailable"
+)
+
+// OffloadStates are the values of OffloadState, in order.
+var OffloadStates = []string{"ready", "needs_install", "needs_setup", "unavailable"}
+
+// OffloadItemKind: what an offloaded item was: a file, a dir (folder), an app, an app's data (app_data), a bundle of
+// items moved together, a session archive, or other.
+const (
+	OffloadItemKindFile    = "file"
+	OffloadItemKindDir     = "dir"
+	OffloadItemKindApp     = "app"
+	OffloadItemKindAppData = "app_data"
+	OffloadItemKindBundle  = "bundle"
+	OffloadItemKindSession = "session"
+	OffloadItemKindOther   = "other"
+)
+
+// OffloadItemKinds are the values of OffloadItemKind, in order.
+var OffloadItemKinds = []string{"file", "dir", "app", "app_data", "bundle", "session", "other"}
+
+// OffloadAction: what offload.run does: offload (move paths away) or restore (bring items back by id).
+const (
+	OffloadActionOffload = "offload"
+	OffloadActionRestore = "restore"
+)
+
+// OffloadActions are the values of OffloadAction, in order.
+var OffloadActions = []string{"offload", "restore"}
+
+// OffloadRunStatus: offload.run's answer: started (a job runs: job), needs_install (the tool is missing and install
+// was not given: nothing happened; tool), refused (nothing happened; items say why), ok (a dry run's answer: items).
+const (
+	OffloadRunStatusStarted      = "started"
+	OffloadRunStatusNeedsInstall = "needs_install"
+	OffloadRunStatusRefused      = "refused"
+	OffloadRunStatusOk           = "ok"
+)
+
+// OffloadRunStatuses are the values of OffloadRunStatus, in order.
+var OffloadRunStatuses = []string{"started", "needs_install", "refused", "ok"}
+
+// OffloadJobState: A job: running, done, failed (error says why) or canceled.
+const (
+	OffloadJobStateRunning  = "running"
+	OffloadJobStateDone     = "done"
+	OffloadJobStateFailed   = "failed"
+	OffloadJobStateCanceled = "canceled"
+)
+
+// OffloadJobStates are the values of OffloadJobState, in order.
+var OffloadJobStates = []string{"running", "done", "failed", "canceled"}
+
+// OffloadPhase: what a running job does now: install (its tool), check, upload, verify, cleanup (removing the
+// originals), download (a restore).
+const (
+	OffloadPhaseInstall  = "install"
+	OffloadPhaseCheck    = "check"
+	OffloadPhaseUpload   = "upload"
+	OffloadPhaseVerify   = "verify"
+	OffloadPhaseCleanup  = "cleanup"
+	OffloadPhaseDownload = "download"
+)
+
+// OffloadPhases are the values of OffloadPhase, in order.
+var OffloadPhases = []string{"install", "check", "upload", "verify", "cleanup", "download"}
+
+// OffloadJobItemStatus: one item of a job: pending, running, done, failed or skipped.
+const (
+	OffloadJobItemStatusPending = "pending"
+	OffloadJobItemStatusRunning = "running"
+	OffloadJobItemStatusDone    = "done"
+	OffloadJobItemStatusFailed  = "failed"
+	OffloadJobItemStatusSkipped = "skipped"
+)
+
+// OffloadJobItemStatuses are the values of OffloadJobItemStatus, in order.
+var OffloadJobItemStatuses = []string{"pending", "running", "done", "failed", "skipped"}
+
+// OffloadTool: the program the provider needs on the computer. source is one sentence in the caller's language saying
+// where it comes from and where it is installed; the install confirmation shows it.
+type OffloadTool struct {
+	Name      string `json:"name"`
+	Title     string `json:"title,omitempty"`
+	Version   string `json:"version,omitempty"`
+	Installed bool   `json:"installed"`
+	Source    string `json:"source,omitempty"`
+	Detail    string `json:"detail,omitempty"`
+}
+
+// OffloadItem: one item the provider holds of this computer. bytes is the size it had on disk, what the map draws so
+// both sides share one scale; stored_bytes what it takes where it is stored; origin_path where it was and where a
+// restore puts it; stub_path the placeholder left behind, if any; local_bytes what of it is still on the computer (a
+// cache). Times are Unix seconds.
+type OffloadItem struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	Bytes       int64  `json:"bytes"`
+	StoredBytes int64  `json:"stored_bytes,omitempty"`
+	OriginPath  string `json:"origin_path,omitempty"`
+	StubPath    string `json:"stub_path,omitempty"`
+	LocalBytes  int64  `json:"local_bytes,omitempty"`
+	OffloadedAt int64  `json:"offloaded_at,omitempty"`
+	UsedAt      int64  `json:"used_at,omitempty"`
+	// Items moved together share a group (an app and its data).
+	Group      string `json:"group,omitempty"`
+	Restorable bool   `json:"restorable"`
+}
+
+// OffloadMore: what the inventory left out past its 500 largest items.
+type OffloadMore struct {
+	Count int   `json:"count"`
+	Bytes int64 `json:"bytes"`
+}
+
+// OffloadInventoryParams: offload.inventory: what the provider holds of machine. refresh asks it not to answer from
+// its own cache.
+type OffloadInventoryParams struct {
+	Contribution string    `json:"contribution"`
+	Locale       string    `json:"locale"`
+	Machine      UIMachine `json:"machine"`
+	Refresh      bool      `json:"refresh,omitempty"`
+}
+
+// OffloadInventory: what the provider holds of the computer, largest first, at most 500 items (the rest summed in
+// more). at is when it was read (Unix seconds); total_bytes the items' bytes together, stored_bytes what they take
+// where they are stored; partial when the list may be incomplete. items may be left out when there are none; the
+// manager's answer to the apps always has it.
+type OffloadInventory struct {
+	State       string        `json:"state"`
+	Detail      string        `json:"detail,omitempty"`
+	Tool        *OffloadTool  `json:"tool,omitempty"`
+	At          int64         `json:"at"`
+	TotalBytes  int64         `json:"total_bytes"`
+	StoredBytes int64         `json:"stored_bytes,omitempty"`
+	Partial     bool          `json:"partial,omitempty"`
+	Items       []OffloadItem `json:"items,omitempty"`
+	More        *OffloadMore  `json:"more,omitempty"`
+}
+
+// OffloadRunParams: offload.run: offload paths (absolute, on machine, each already agreed by the node's protection
+// rules) or restore items (ids of the inventory), at most 50. dry_run only checks and answers status ok with each
+// item; install lets the job install the tool first (the user agreed to that too). request_id is the same for a retry
+// of the same request.
+type OffloadRunParams struct {
+	Contribution string    `json:"contribution"`
+	Locale       string    `json:"locale"`
+	Machine      UIMachine `json:"machine"`
+	Action       string    `json:"action"`
+	Paths        []string  `json:"paths,omitempty"`
+	Items        []string  `json:"items,omitempty"`
+	DryRun       bool      `json:"dry_run,omitempty"`
+	Install      bool      `json:"install,omitempty"`
+	RequestID    string    `json:"request_id"`
+}
+
+// OffloadRunItem: one path or item of a run's answer: why it is refused (reason, in the caller's language), or a dry
+// run's verdict (ok, bytes). refusal is set only by the manager, when the computer's own protection rules refused the
+// path before the program was asked (a machine.storage.check refusal code: credentials, app_managed, ...).
+type OffloadRunItem struct {
+	Path    string `json:"path,omitempty"`
+	ID      string `json:"id,omitempty"`
+	Ok      bool   `json:"ok,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Refusal string `json:"refusal,omitempty"`
+	Bytes   int64  `json:"bytes,omitempty"`
+}
+
+// OffloadRunResult: offload.run's answer (OffloadRunStatus).
+type OffloadRunResult struct {
+	Status string           `json:"status"`
+	Job    string           `json:"job,omitempty"`
+	Tool   *OffloadTool     `json:"tool,omitempty"`
+	Items  []OffloadRunItem `json:"items,omitempty"`
+}
+
+// OffloadJobParams: offload.job and offload.cancel: the job offload.run started.
+type OffloadJobParams struct {
+	Contribution string    `json:"contribution"`
+	Locale       string    `json:"locale"`
+	Machine      UIMachine `json:"machine"`
+	Job          string    `json:"job"`
+}
+
+// OffloadJobItem: one path (offload) or item (restore) of a job.
+type OffloadJobItem struct {
+	Path   string `json:"path,omitempty"`
+	ID     string `json:"id,omitempty"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+	Bytes  int64  `json:"bytes,omitempty"`
+}
+
+// OffloadJob: how a job goes. A job belongs to the extension: a client that lost track asks the inventory again.
+// items may be left out; the manager's answer to the apps always has it.
+type OffloadJob struct {
+	State      string           `json:"state"`
+	Phase      string           `json:"phase,omitempty"`
+	DoneBytes  int64            `json:"done_bytes"`
+	TotalBytes int64            `json:"total_bytes"`
+	FreedBytes int64            `json:"freed_bytes,omitempty"`
+	Error      string           `json:"error,omitempty"`
+	Items      []OffloadJobItem `json:"items,omitempty"`
+}
+
+// OffloadProvider: one enabled disk_offload contribution, as GET /api/v1/extensions/-/offload lists it for the apps.
+type OffloadProvider struct {
+	Extension string   `json:"extension"`
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Kinds     []string `json:"kinds"`
+	Restore   bool     `json:"restore"`
+}
+
+// OffloadProviders: GET /api/v1/extensions/-/offload?machine=: the providers the map can offer on that computer.
+type OffloadProviders struct {
+	Providers []OffloadProvider `json:"providers"`
+}
+
+// OffloadRunRequest: POST /api/v1/extensions/{id}/-/offload/{cid}/run, an app's request: without dry_run or confirm
+// it is refused (confirmation_required); install only after the user agreed to the tool's install confirmation.
+type OffloadRunRequest struct {
+	Machine string   `json:"machine"`
+	Action  string   `json:"action"`
+	Paths   []string `json:"paths,omitempty"`
+	Items   []string `json:"items,omitempty"`
+	DryRun  bool     `json:"dry_run,omitempty"`
+	Confirm bool     `json:"confirm,omitempty"`
+	Install bool     `json:"install,omitempty"`
+}
+
+// OffloadStarted: the run route's 202 answer: the job to follow with GET …/jobs/{job}.
+type OffloadStarted struct {
+	Job string `json:"job"`
+}
+
+// OffloadError: an offload route's error: error in the reader's language and a code (bad_request,
+// confirmation_required, read_only, not_found, machine_offline, node_outdated, tool_install_required with tool,
+// offload_refused with items, plugin_failed (detail: the provider's own words, one line), usage_failed, deadline).
+type OffloadError struct {
+	Error  string           `json:"error"`
+	Code   string           `json:"code"`
+	Tool   *OffloadTool     `json:"tool,omitempty"`
+	Detail string           `json:"detail,omitempty"`
+	Items  []OffloadRunItem `json:"items,omitempty"`
+}
+
 // requiredJSONComponent preserves required fields only inside stream payloads.
 type requiredJSONComponent Component
 
@@ -7507,6 +7788,7 @@ var newDef = map[string]func() any{
 	"AuthRelayItem":                 func() any { return new(AuthRelayItem) },
 	"SecretProviderItem":            func() any { return new(SecretProviderItem) },
 	"RepositoryProviderItem":        func() any { return new(RepositoryProviderItem) },
+	"DiskOffloadItem":               func() any { return new(DiskOffloadItem) },
 	"MemorySourceItem":              func() any { return new(MemorySourceItem) },
 	"RepositoryLinkLabel":           func() any { return new(RepositoryLinkLabel) },
 	"ErrorReportsItem":              func() any { return new(ErrorReportsItem) },
@@ -7976,6 +8258,22 @@ var newDef = map[string]func() any{
 	"MemoryEntriesParams":           func() any { return new(MemoryEntriesParams) },
 	"MemoryEntriesResult":           func() any { return new(MemoryEntriesResult) },
 	"MemoryEntry":                   func() any { return new(MemoryEntry) },
+	"OffloadTool":                   func() any { return new(OffloadTool) },
+	"OffloadItem":                   func() any { return new(OffloadItem) },
+	"OffloadMore":                   func() any { return new(OffloadMore) },
+	"OffloadInventoryParams":        func() any { return new(OffloadInventoryParams) },
+	"OffloadInventory":              func() any { return new(OffloadInventory) },
+	"OffloadRunParams":              func() any { return new(OffloadRunParams) },
+	"OffloadRunItem":                func() any { return new(OffloadRunItem) },
+	"OffloadRunResult":              func() any { return new(OffloadRunResult) },
+	"OffloadJobParams":              func() any { return new(OffloadJobParams) },
+	"OffloadJobItem":                func() any { return new(OffloadJobItem) },
+	"OffloadJob":                    func() any { return new(OffloadJob) },
+	"OffloadProvider":               func() any { return new(OffloadProvider) },
+	"OffloadProviders":              func() any { return new(OffloadProviders) },
+	"OffloadRunRequest":             func() any { return new(OffloadRunRequest) },
+	"OffloadStarted":                func() any { return new(OffloadStarted) },
+	"OffloadError":                  func() any { return new(OffloadError) },
 }
 
 // Call is one call or event of an extension point's protocol (the schemas' x-methods and x-events): who
@@ -8088,4 +8386,8 @@ var Calls = map[string]Call{
 	"repo.describe":                   {Name: "repo.describe", From: "hub", Params: "RepoDescribeParams", Result: "RepoDescribeResult"},
 	"repo.pr_status":                  {Name: "repo.pr_status", From: "hub", Params: "RepoPRStatusParams", Result: "RepoPRStatusResult"},
 	"memory.entries":                  {Name: "memory.entries", From: "hub", Params: "MemoryEntriesParams", Result: "MemoryEntriesResult"},
+	"offload.inventory":               {Name: "offload.inventory", From: "hub", Params: "OffloadInventoryParams", Result: "OffloadInventory"},
+	"offload.run":                     {Name: "offload.run", From: "hub", Params: "OffloadRunParams", Result: "OffloadRunResult"},
+	"offload.job":                     {Name: "offload.job", From: "hub", Params: "OffloadJobParams", Result: "OffloadJob"},
+	"offload.cancel":                  {Name: "offload.cancel", From: "hub", Params: "OffloadJobParams", Result: "Empty"},
 }
