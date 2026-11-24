@@ -42,9 +42,9 @@ export function followSubagentLink(mid: string, sid: string, parent?: string): s
 }
 
 /** The id to open for a child session's link: its parent's, which is then asked to show the child's card (the call the
- *  card is known by, beside the subagents' ids; lib/child-cards.ts childOfCall reads it back). */
-export function followChildSession(mid: string, child: string, parent: string): string {
-  pending.set(key(mid, parent), childCall(child));
+ *  card is known by, beside the subagents' ids; lib/child-cards.ts childRefOfCall reads it back). */
+export function followChildSession(mid: string, child: string, parent: string, childMid?: string): string {
+  pending.set(key(mid, parent), childCall(child, childMid && childMid !== mid ? childMid : undefined));
   tell();
   return parent;
 }

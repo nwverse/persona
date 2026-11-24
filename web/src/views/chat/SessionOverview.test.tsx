@@ -211,7 +211,7 @@ describe("SessionOverview Subagents section", () => {
     expect(failedRow.textContent).toContain("失败");
     expect(chipOf("remote-failed")).toBe("Workstation");
 
-    // Clicking a cross-machine row opens kind:"subagent" panel with from:"overview"
+    // Clicking a cross-machine row opens kind:"subagent" panel with from:"overview" (no synthetic child: launching call)
     act(() => host.querySelector<HTMLButtonElement>('[data-subagent-row="remote-a2a"]')!.click());
     expect(getPanel()).toEqual({
       kind: "subagent",
@@ -219,7 +219,7 @@ describe("SessionOverview Subagents section", () => {
       sid: "remote-a2a",
       parentMid: "laptop",
       parentSid: "p1",
-      call: "child:remote-a2a",
+      call: undefined,
       from: "overview",
     });
 
@@ -268,5 +268,76 @@ describe("SessionOverview Subagents section", () => {
       ["p1@d2", 2],
       ["p1@d3", 2],
     ]);
+  });
+
+  it("excludes ordinary side sessions (folded_as=side) and supervisor-held cards from Needs you", () => {
+    const sideRow = childSession({ session_id: "btw-1", title: "Side chat", folded_as: "side", state: "working", status: "working" });
+    const heldChild = childSession({ session_id: "supervised", title: "Supervised child", state: "needs_you", status: "blocked" });
+    upsertSession(sideRow);
+    const heldIx: Interaction = {
+      id: "ix-held",
+      machine_id: "laptop",
+      session_id: "supervised",
+      folded_under: "p1",
+      kind: "permission",
+      delegating: true,
+      tool_name: "Bash",
+    };
+    const embHeldIx: Interaction = {
+      id: "ix-emb-held",
+      machine_id: "laptop",
+      session_id: "p1",
+      agent_id: "emb-run",
+      kind: "permission",
+      delegating: true,
+      tool_name: "Bash",
+    };
+    Object.assign(getState(), { interactions: [heldIx, embHeldIx] });
+
+    act(() =>
+      root.render(
+        <SessionOverview
+          id="ov"
+          session={parent}
+          machineName="Laptop"
+          items={[]}
+          tasks={emptyTaskIndex()}
+          children={[sideRow, heldChild]}
+        />,
+      ),
+    );
+
+    // Side session never appears in Subagents
+    expect(host.querySelector('[data-subagent-row="btw-1"]')).toBeNull();
+    // Supervisor-held cards do NOT turn embedded or standalone subagents into needs_you
+    expect(host.querySelector('[data-subagent-row="supervised"]')?.getAttribute("data-subagent-status")).toBe("running");
+    expect(host.querySelector('[data-subagent-row="p1@emb-run"]')?.getAttribute("data-subagent-status")).toBe("running");
+  });
+
+  it("keeps a pending focusSubagents request until late-arriving paged children mount the section", () => {
+    const bareParent: Session = { ...parent, subagents: undefined };
+    upsertSession(bareParent);
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    // Initial render: paged children have not arrived yet -> Subagents section is not mounted yet
+    act(() =>
+      root.render(
+        <SessionOverview id="ov" session={bareParent} machineName="Laptop" items={[]} tasks={emptyTaskIndex()} children={[]} focusSubagents={1} />,
+      ),
+    );
+    expect(host.querySelector("[data-overview-subagents]")).toBeNull();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    // Paged child arrives -> section mounts and consumes the pending focus request
+    const lateChild = childSession({ session_id: "late-1", title: "Late paged child", state: "working", status: "working" });
+    act(() =>
+      root.render(
+        <SessionOverview id="ov" session={bareParent} machineName="Laptop" items={[]} tasks={emptyTaskIndex()} children={[lateChild]} focusSubagents={1} />,
+      ),
+    );
+    expect(host.querySelector("[data-overview-subagents]")).not.toBeNull();
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(host.querySelector('[data-subagent-row="late-1"]'));
   });
 });

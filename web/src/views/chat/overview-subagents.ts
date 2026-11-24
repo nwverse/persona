@@ -1,11 +1,11 @@
 // Pure helpers for Session Overview's Subagents section and SubagentPanel (lazy-loaded: never imported on first screen).
 import { agentName, isMarked, markId, sessionAgent, type AgentSurface } from "../../lib/agent-kind";
-import { childCall } from "../../lib/child-cards";
 import { rowKey } from "../../lib/child-sessions";
 import { sessionTitle, stateOf } from "../../lib/format";
 import { machineWithHub } from "../../lib/mesh";
 import { splitSubagentLink } from "../../lib/subagent-link";
-import { subagentCall, subagentTitle, taskFailed, type TaskIndex } from "../../lib/tasks";
+import { supervisorHeld } from "../../lib/supervisor-held";
+import { subagentTitle, taskFailed, type TaskIndex } from "../../lib/tasks";
 import type { Interaction, Item, Machine, Session, Subagent } from "../../lib/types";
 
 export type OverviewSubagentStatus = "needs_you" | "running" | "failed" | "ended";
@@ -63,8 +63,10 @@ export function subagentProvenance(
 }
 
 /** Whether a standalone row in `allSessions` belongs to `parent` (same-machine folded, cross-machine folded,
- *  cross-machine A2A/parent_machine_id, or Codex parent_thread_id). */
+ *  cross-machine A2A/parent_machine_id, or Codex parent_thread_id). Ordinary side chats (`folded_as === "side"`,
+ *  e.g. `/btw`) belong to the Side sessions panel rather than Subagents. */
 function rowBelongsToParent(parent: Session, row: Session): boolean {
+  if (row.folded_as === "side") return false;
   if (row.machine_id === parent.machine_id && row.session_id === parent.session_id) return false;
   if (row.folded_under === parent.session_id && (row.folded_under_machine_id || row.machine_id) === parent.machine_id) {
     return true;
@@ -83,7 +85,8 @@ function rowBelongsToParent(parent: Session, row: Session): boolean {
   );
 }
 
-/** Status of an embedded `Session.subagents` entry, incorporating pending interactions and failed tool outcomes. */
+/** Status of an embedded `Session.subagents` entry, incorporating user-facing pending interactions (excluding
+ *  supervisor-held cards) and failed launching tool outcomes. */
 export function embeddedSubagentStatus(
   mid: string,
   sid: string,
@@ -93,7 +96,7 @@ export function embeddedSubagentStatus(
   tasks: TaskIndex,
 ): OverviewSubagentStatus {
   const entrySid = entry.session_id || `${sid}@${entry.id}`;
-  if (interactions.some((ix) => ix.machine_id === mid && (ix.agent_id === entry.id || ix.session_id === entrySid))) {
+  if (interactions.some((ix) => !supervisorHeld(ix) && ix.machine_id === mid && (ix.agent_id === entry.id || ix.session_id === entrySid))) {
     return "needs_you";
   }
   if (entry.running) return "running";
@@ -107,13 +110,17 @@ export function embeddedSubagentStatus(
   return "ended";
 }
 
-/** Status of a standalone child session row (same-machine folded or cross-machine A2A). */
+/** Status of a standalone child session row (same-machine folded or cross-machine A2A). Cards held by a task supervisor
+ *  are never user-facing "Needs you": a child waiting solely on supervisor-held cards reads as Running. */
 export function standaloneSubagentStatus(child: Session, interactions: readonly Interaction[]): OverviewSubagentStatus {
+  const cards = interactions.filter((ix) => ix.machine_id === child.machine_id && ix.session_id === child.session_id);
+  const hasUserCard = cards.some((ix) => !supervisorHeld(ix));
+  const heldOnly = cards.length > 0 && !hasUserCard;
   const st = stateOf(child);
-  if (st === "needs_you" || interactions.some((ix) => ix.machine_id === child.machine_id && ix.session_id === child.session_id)) {
+  if (hasUserCard || (st === "needs_you" && !heldOnly)) {
     return "needs_you";
   }
-  if (st === "working" || Boolean(child.background_working)) return "running";
+  if (st === "working" || (st === "needs_you" && heldOnly) || Boolean(child.background_working)) return "running";
   if (child.turn_error) return "failed";
   return "ended";
 }
@@ -165,7 +172,7 @@ export function collectOverviewSubagents(params: {
       startedAt: entry.started_at,
       updatedAt: entry.updated_at ?? entry.started_at,
       doing,
-      call: entry.tool_use_id || subagentCall(entry),
+      call: entry.tool_use_id,
       embedded: true,
       subagent: entry,
     });
@@ -176,6 +183,7 @@ export function collectOverviewSubagents(params: {
     if (rowBelongsToParent(session, row)) standalone.set(rowKey(row.machine_id, row.session_id), row);
   }
   for (const child of children) {
+    if (child.folded_as === "side") continue;
     if (child.machine_id === mid && child.session_id === sid) continue;
     standalone.set(rowKey(child.machine_id, child.session_id), child);
   }
@@ -206,7 +214,6 @@ export function collectOverviewSubagents(params: {
       startedAt: child.started_at ?? child.updated_at,
       updatedAt: child.updated_at ?? child.started_at,
       doing,
-      call: childCall(child.session_id),
       embedded: false,
       session: child,
     });

@@ -1,20 +1,21 @@
 // Full subagent detail panel (#14323, revising #5030): renders an embedded ChatView for any subagent
 // (embedded `<parent>@<agent>`, same-machine folded child, or cross-machine A2A child) in the right side panel
 // (full-screen overlay on narrow viewports) while leaving the parent chat column untouched.
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { sessionAgent } from "../../lib/agent-kind";
 import { errorText, pastHub, sessionPath } from "../../lib/api";
 import { apiOp } from "../../lib/ops";
 import { useBackgroundChat } from "../../lib/background-panel";
-import { childCall, childCardKey } from "../../lib/child-cards";
 import { sessionCan, sessionTitle } from "../../lib/format";
 import { openFromPage } from "../../lib/handoff";
 import { stopMessageFeedback } from "../../lib/message-send";
 import { useSidePanelBack } from "../../lib/panel";
 import { getSession, useStore } from "../../lib/store";
 import { splitSubagentLink } from "../../lib/subagent-link";
-import { subagentCall, subagentCardKey, subagentTitle } from "../../lib/tasks";
+import { supervisorHeld } from "../../lib/supervisor-held";
+import { buildTaskIndex, subagentCardKey, subagentTitle } from "../../lib/tasks";
+import type { Item } from "../../lib/types";
 import { useChildRow } from "../../lib/use-child-sessions";
 import { mediaMatches, NARROW } from "../../lib/viewport";
 import { AgentMark } from "../../ui/AgentMark";
@@ -23,7 +24,15 @@ import { Icon } from "../../ui/icons";
 import { StatusMark } from "../../ui/StatusMark";
 import { ChatView } from "./ChatView";
 import { openExpanded } from "./expanded";
-import { standaloneSubagentStatus, subagentProvenance, type OverviewSubagentStatus } from "./overview-subagents";
+import {
+  embeddedSubagentStatus,
+  standaloneSubagentStatus,
+  subagentProvenance,
+  type OverviewSubagentStatus,
+} from "./overview-subagents";
+import { useSharedTranscript } from "./transcript-share";
+
+const EMPTY_ITEMS: Item[] = [];
 
 export function SubagentPanel({
   mid,
@@ -58,6 +67,9 @@ export function SubagentPanel({
   const embeddedMeta = parsed
     ? parent?.subagents?.find((a) => a.id === parsed.agent || a.session_id === sid)
     : undefined;
+  const parentTr = useSharedTranscript(resolvedParentMid, resolvedParentSid ?? "");
+  const parentItems = parentTr?.items ?? EMPTY_ITEMS;
+  const parentTasks = useMemo(() => buildTaskIndex(parentItems), [parentItems]);
 
   const title = child
     ? sessionTitle(child)
@@ -70,10 +82,10 @@ export function SubagentPanel({
 
   const status: OverviewSubagentStatus = child
     ? standaloneSubagentStatus(child, interactions)
-    : interactions.some((ix) => ix.machine_id === mid && (ix.session_id === sid || (parsed && ix.agent_id === parsed.agent)))
-      ? "needs_you"
-      : embeddedMeta?.running
-        ? "running"
+    : embeddedMeta && resolvedParentSid
+      ? embeddedSubagentStatus(mid, resolvedParentSid, embeddedMeta, interactions, parentItems, parentTasks)
+      : interactions.some((ix) => !supervisorHeld(ix) && ix.machine_id === mid && (ix.session_id === sid || (parsed && ix.agent_id === parsed.agent)))
+        ? "needs_you"
         : "ended";
 
   const active = status === "running" || status === "needs_you";
@@ -102,7 +114,7 @@ export function SubagentPanel({
   }, [child, mid, sid]);
 
   const parentChat = useBackgroundChat(resolvedParentMid, resolvedParentSid ?? "");
-  const resolvedCall = call ?? (embeddedMeta ? subagentCall(embeddedMeta) : child ? childCall(sid) : undefined);
+  const resolvedCall = call ?? embeddedMeta?.tool_use_id;
   const canJumpToCall = Boolean(
     resolvedParentSid &&
     resolvedCall &&
@@ -119,8 +131,7 @@ export function SubagentPanel({
           onSelect: () => {
             if (!resolvedParentSid || !resolvedCall) return;
             const scope = `${resolvedParentMid}/${resolvedParentSid}:`;
-            if (embeddedMeta) openExpanded([subagentCardKey(scope, resolvedCall)]);
-            else if (child) openExpanded([childCardKey(scope, sid)]);
+            openExpanded([subagentCardKey(scope, resolvedCall)]);
             parentChat?.jumpToCall?.(resolvedCall);
             if (mediaMatches(NARROW)) onClose();
           },

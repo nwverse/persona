@@ -24,9 +24,11 @@ vi.mock("./ChatView", () => ({
 const { setToken } = await import("../../lib/api");
 const { provideBackgroundChat } = await import("../../lib/background-panel");
 const { getState, reset, upsertSession } = await import("../../lib/store");
+const { publishTranscript, unpublishTranscript } = await import("./transcript-share");
 const { SubagentPanel } = await import("./SubagentPanel");
 
-import type { Machine, Session } from "../../lib/types";
+import type { Interaction, Machine, Session } from "../../lib/types";
+import type { Transcript } from "./useTranscript";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -176,6 +178,53 @@ describe("SubagentPanel", () => {
       expect(onClose).toHaveBeenCalledTimes(1);
     } finally {
       unregister();
+    }
+  });
+
+  it("preserves failed status for embedded subagents from shared parent transcript and ignores supervisor-held cards", () => {
+    const failedParent: Session = {
+      ...parent,
+      subagents: [{ id: "a-fail", session_id: "p1@a-fail", description: "Failing check", running: false, tool_use_id: "tool-fail" }],
+    };
+    upsertSession(failedParent);
+    const owner = {};
+    publishTranscript(owner, "laptop", "p1", {
+      items: [{ id: "r1#0", seq: 2, role: "user", kind: "tool_result", tool_use_id: "tool-fail", is_error: true, text: "boom" }],
+    } as Transcript);
+
+    try {
+      act(() =>
+        root.render(
+          <SubagentPanel mid="laptop" sid="p1@a-fail" parentMid="laptop" parentSid="p1" call="tool-fail" from="overview" onClose={() => {}} />,
+        ),
+      );
+      const statusEl = host.querySelector("[data-subagent-panel-status]")!;
+      expect(statusEl.getAttribute("data-subagent-panel-status")).toBe("failed");
+      expect(statusEl.textContent).toContain("失败");
+      expect(statusEl.innerHTML).toContain("text-red");
+
+      // Supervisor-held card on standalone child should read as running, not needs_you
+      const heldChild: Session = { ...remoteChild, state: "needs_you", status: "blocked" };
+      upsertSession(heldChild);
+      const heldIx: Interaction = {
+        id: "ix-sup",
+        machine_id: "workstation",
+        session_id: "c-remote",
+        folded_under: "p1",
+        folded_under_machine_id: "laptop",
+        kind: "permission",
+        delegating: true,
+        tool_name: "Bash",
+      };
+      Object.assign(getState(), { interactions: [heldIx] });
+      act(() =>
+        root.render(
+          <SubagentPanel mid="workstation" sid="c-remote" parentMid="laptop" parentSid="p1" from="overview" onClose={() => {}} />,
+        ),
+      );
+      expect(host.querySelector("[data-subagent-panel-status]")?.getAttribute("data-subagent-panel-status")).toBe("running");
+    } finally {
+      unpublishTranscript(owner, "laptop", "p1");
     }
   });
 });

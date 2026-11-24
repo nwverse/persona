@@ -223,10 +223,11 @@ describe("ChildSessionCard: opened in place", () => {
     expect(host.querySelector("[data-subagent-view-full]")).toBeNull();
     act(() => head().click());
     await flush();
+    expect(host.querySelector("[data-child-card]")?.getAttribute("data-tool-use")).toBe("child:box/remote-kid");
     const btn = host.querySelector<HTMLButtonElement>("[data-subagent-view-full]");
     expect(btn?.textContent).toBe("查看完整");
     act(() => btn!.click());
-    expect(getPanel()).toEqual({ kind: "subagent", mid: "box", sid: "remote-kid", parentMid: "mac", parentSid: "p", call: "child:remote-kid", from: "card" });
+    expect(getPanel()).toEqual({ kind: "subagent", mid: "box", sid: "remote-kid", parentMid: "mac", parentSid: "p", from: "card" });
     closePanel();
   });
 });

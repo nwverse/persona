@@ -92,7 +92,7 @@ import { addFreshWords, resetFreshWords } from "./fresh-words";
 import { backgroundCount, backgroundLine, backgroundWaitLine, workflowAgentFor, workflowCalls, workflowCallsKey } from "../../lib/workflows";
 import { backgroundTurn, waitingOnSubagents } from "../../lib/background-work";
 import { doneOverviewSubagentsAsk, doneSubagentLink, doneSubagentPanelAsk, splitSubagentLink, useOverviewSubagentsAsk, useSubagentLink, useSubagentPanelAsk } from "../../lib/subagent-link";
-import { childCall, childCardKey, childOfCall, childPlaces, exchangeStarts, placeChildren, type ChildPlace } from "../../lib/child-cards";
+import { childCall, childCardKey, childOfCall, childPlaces, childRefOfCall, exchangeStarts, placeChildren, type ChildPlace } from "../../lib/child-cards";
 import { useChildRow, useChildSessions } from "../../lib/use-child-sessions";
 import { openExpanded } from "./expanded";
 import { seekCall } from "./jump";
@@ -1872,7 +1872,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // the exchange during which it started (lib/child-cards.ts). The placement is kept while nothing moves it, so a push
   // for a child redraws only its card, and a streamed item none of the exchanges.
   // read while the row says it has some, or a link to one waits (its parent's rollup may not be in yet)
-  const linkedChild = linkedAgent ? childOfCall(linkedAgent) : undefined;
+  const linkedChildRef = linkedAgent ? childRefOfCall(linkedAgent) : undefined;
+  const linkedChild = linkedChildRef?.sid;
   // a side's chat reads its own children among its parent's folded rows, while that parent has some besides its sides
   const sideKids = useStore(() => {
     const c = sideParent ? getSession(mid, sideParent)?.children : undefined;
@@ -1894,8 +1895,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const seenAt = useRef(new Map<string, string>());
   const lastPlaces = useRef<Map<string, ChildPlace[]> | undefined>(undefined);
   const places = useMemo(
-    () => stableValue(lastPlaces.current, childRows.length ? placeChildren(exchangeStarts(lines), childPlaces(childRows, seenAt.current), !tr.hasMore) : NO_PLACES),
-    [lines, childRows, tr.hasMore],
+    () => stableValue(lastPlaces.current, childRows.length ? placeChildren(exchangeStarts(lines), childPlaces(childRows, seenAt.current, mid), !tr.hasMore) : NO_PLACES),
+    [lines, childRows, tr.hasMore, mid],
   );
   lastPlaces.current = places;
   // A link to a child's own conversation (lib/subagent-link.ts): its card opened, in view, once its row is in. A child
@@ -1904,24 +1905,27 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const childLinkPages = useRef({ child: "", pages: 0 });
   useEffect(() => {
     // a link followed to its end gives the next one, the same child's again too, its whole budget of earlier pages
-    if (!linkedChild) childLinkPages.current.child = "";
-    if (!linkedChild || !session || tr.loading || detail.loading || tr.loadingEarlier) return;
-    if (!childRows.some((c) => c.session_id === linkedChild)) {
+    if (!linkedChildRef) childLinkPages.current.child = "";
+    if (!linkedChildRef || !session || tr.loading || detail.loading || tr.loadingEarlier) return;
+    const matchRow = (c: Session) => c.session_id === linkedChildRef.sid && (!linkedChildRef.mid || c.machine_id === linkedChildRef.mid);
+    const matchPlace = (p: ChildPlace) => p.sid === linkedChildRef.sid && (linkedChildRef.mid ? p.mid === linkedChildRef.mid : !p.mid);
+    const linkKey = `${linkedChildRef.mid ?? mid}\u0000${linkedChildRef.sid}`;
+    if (!childRows.some(matchRow)) {
       if (kids.loaded) doneSubagentLink(mid, sid);
       return;
     }
-    if (![...places.values()].some((ps) => ps.some((p) => p.sid === linkedChild))) {
+    if (![...places.values()].some((ps) => ps.some(matchPlace))) {
       const pages = childLinkPages.current;
-      if (pages.child !== linkedChild) Object.assign(pages, { child: linkedChild, pages: 0 });
+      if (pages.child !== linkKey) Object.assign(pages, { child: linkKey, pages: 0 });
       if (tr.hasMore && pages.pages++ < CHILD_LINK_PAGES) void tr.loadEarlier();
       else doneSubagentLink(mid, sid);
       return;
     }
     doneSubagentLink(mid, sid);
-    openExpanded([childCardKey(`${mid}/${sid}:`, linkedChild)]);
-    jump(childCall(linkedChild));
+    openExpanded([childCardKey(`${mid}/${sid}:`, linkedChildRef.sid, linkedChildRef.mid)]);
+    jump(childCall(linkedChildRef.sid, linkedChildRef.mid));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [linkedChild, session, tr.loading, tr.loadingEarlier, tr.hasMore, detail.loading, kids.loaded, childRows, places, mid, sid, jump]);
+  }, [linkedAgent, session, tr.loading, tr.loadingEarlier, tr.hasMore, detail.loading, kids.loaded, childRows, places, mid, sid, jump]);
   // what runs its subagents: its own agent (a Paseo provider's subagent cards say "Grok", #8142)
   const harness = session && !assistant ? sessionAgentName(session) : undefined;
   // Streaming makes the turn live again, but an Agent's existing wait / subagent bar stays as it was while the answer
@@ -2257,18 +2261,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // the header and the composer are memoized (a transcript push changes neither): what they get stays the same object
   // until it changes. The assistant's face reads only the last item's role and kind (lib/persona.ts personaState).
   const stopLoop = useCallback(() => void deliver({ text: STOP_LOOP_MESSAGE, images: [] }, uuid()), [deliver]);
-  const placesNow = useRef(places);
-  placesNow.current = places;
-  const hasCall = useCallback((call: string) => {
-    if (itemsNow.current.some((it) => it.tool_use_id === call)) return true;
-    const kidSid = childOfCall(call);
-    if (kidSid) {
-      for (const list of placesNow.current.values()) {
-        if (list.some((p) => p.sid === kidSid)) return true;
-      }
-    }
-    return false;
-  }, []);
+  // Only report real launching tool_use calls in the parent transcript (exclude synthetic timestamp-placed child cards).
+  const hasCall = useCallback((call: string) => itemsNow.current.some((it) => it.kind === "tool_use" && it.tool_use_id === call), []);
   // the Background tasks panel stops the /loop and shows a workflow's or subagent's call through the page showing the chat (#5421, #14323)
   useEffect(() => (assistant || embedded ? undefined : provideBackgroundChat(mid, sid, { stopLoop, jumpToCall: jump, hasCall })), [assistant, embedded, mid, sid, stopLoop, jump, hasCall]);
   // cached content stays up when a read fails: the pill says so, the error page is for an empty chat
@@ -2359,7 +2353,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   }, [overviewSubagentsAsk, showOverview, mid, sid]);
   const subagentPanelAsk = useSubagentPanelAsk(mid, sid);
   useEffect(() => {
-    if (!subagentPanelAsk || assistant || embedded) return;
+    if (!subagentPanelAsk || embedded) return;
     doneSubagentPanelAsk(mid, sid);
     // Open after useSessionPanels runs on route arrival so the panel is not closed by arrival cleanup.
     queueMicrotask(() => {
@@ -2373,7 +2367,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         from: subagentPanelAsk.from,
       }, { push: false });
     });
-  }, [subagentPanelAsk, assistant, embedded, mid, sid]);
+  }, [subagentPanelAsk, embedded, mid, sid]);
   useEffect(() => {
     if (!showOverview || !overviewOpen) return;
     // The origin owns both the visible dependent detail and the one Cmd+B remembers. Its closure, including leaving

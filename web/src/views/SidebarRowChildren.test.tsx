@@ -49,10 +49,13 @@ describe("a parent's sidebar row (#5120, #14323)", () => {
     expect(childLine(html)).toBe("2 个运行中");
   });
 
-  it("counts a parent's own background agents and its children once", () => {
-    // a Paseo parent that lists its running children as its own background agents too
-    const html = render({ ...parent, waiting: false, running_subagents: 3, children: { total: 3, working: 2 } });
-    expect(childLine(html)).toBe("3 个运行中");
+  it("counts Paseo runtime background agents once and sums disjoint embedded + cross-machine children", () => {
+    // a Paseo runtime parent that lists its running children as its own background agents too
+    const paseo = render({ ...parent, source_kind: "runtime", waiting: false, running_subagents: 3, children: { total: 3, working: 2 } });
+    expect(childLine(paseo)).toBe("3 个运行中");
+    // a Claude parent with 1 embedded subagent + 1 cross-machine A2A child
+    const mixed = render({ ...parent, agent: "claude", subagents: [{ id: "a1", session_id: "lead@a1", running: true }], children: { total: 1, working: 1 } });
+    expect(childLine(mixed)).toBe("2 个运行中");
   });
 
   it("needs you when a child asks: attention subtitle takes precedence over running, and count holds it", () => {

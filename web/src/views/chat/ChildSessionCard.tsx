@@ -75,7 +75,8 @@ export const ChildSessionCard = memo(function ChildSessionCard({ mid, sid, paren
   const stored = useStore(() => (held ? undefined : getSession(mid, sid)));
   const child = held ?? stored;
   const { lineStyle } = useChatContext();
-  const [open, setOpen] = useExpanded(childCardKey(scope, sid));
+  const cardMid = parentMid && parentMid !== mid ? mid : undefined;
+  const [open, setOpen] = useExpanded(childCardKey(scope, sid, cardMid));
   if (!child) return null;
   const status = childStatus(child);
   const title = compactText(child.title, 96) || t("chat-subagentcard.untitled_task");
@@ -96,7 +97,7 @@ export const ChildSessionCard = memo(function ChildSessionCard({ mid, sid, paren
       onClick={() => setOpen((o) => !o)}
       expanded={open}
       ariaLabel={open ? t("chat-subagentcard.collapse_details") : t("chat-subagentcard.expand_details")}
-      data={{ "data-child-card": status, "data-tool-use": childCall(sid) }}
+      data={{ "data-child-card": status, "data-tool-use": childCall(sid, cardMid) }}
     >
       <Collapse open={open} lazy>
         <ChildDetails mid={mid} child={child} parentMid={parentMid} parentSid={parentSid} running={status === "running"} />
@@ -125,9 +126,8 @@ function ChildDetails({ mid, child, parentMid, parentSid, running }: { mid: stri
             kind: "subagent",
             mid,
             sid,
-            parentMid: parentMid ?? child.folded_under_machine_id ?? mid,
-            parentSid: parentSid ?? child.folded_under,
-            call: childCall(sid),
+            parentMid: parentMid ?? child.folded_under_machine_id ?? child.parent_machine_id ?? mid,
+            parentSid: parentSid ?? child.folded_under ?? child.parent_session_id,
             from: "card",
           })}
           className="whitespace-nowrap text-xs font-medium text-accent-ink hover:underline"

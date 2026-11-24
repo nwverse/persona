@@ -52,13 +52,30 @@ describe("helpers", () => {
     expect(runningChildren(row("p", { children: { total: 3, working: 2 } }))).toBe(2);
     expect(runningChildren(row("p"))).toBe(0);
   });
-  it("childRollup prioritizes needs_you > running > null and excludes side sessions", () => {
+  it("childRollup prioritizes needs_you > running > null, sums disjoint embedded+standalone counts, and deduplicates overlaps", () => {
     expect(childRollup(row("p"))).toBeNull();
     expect(childRollup(row("p", { children: { total: 4, working: 0, needs_you: 0 } }))).toBeNull();
     expect(childRollup(row("p", { children: { total: 3, working: 2, needs_you: 1 } }))).toEqual({ kind: "needs_you", count: 1 });
     expect(childRollup(row("p", { children: { total: 3, working: 2 } }))).toEqual({ kind: "running", count: 2 });
     expect(childRollup(row("p", { subagents: [{ id: "a", session_id: "p@a", running: true }, { id: "b", session_id: "p@b", running: false }] }))).toEqual({ kind: "running", count: 1 });
-    expect(childRollup(row("p", { waiting: false, running_subagents: 3, children: { total: 2, working: 2 } }))).toEqual({ kind: "running", count: 3 });
+    // 1 embedded running + 1 cross-machine A2A child running -> 2 (not Math.max = 1)
+    expect(childRollup(row("p", {
+      subagents: [{ id: "a", session_id: "p@a", running: true }],
+      children: { total: 1, working: 1 },
+    }))).toEqual({ kind: "running", count: 2 });
+    // Non-runtime paged summary row sums embedded running_subagents + standalone children.working
+    expect(childRollup(row("p", { waiting: false, agent: "claude", running_subagents: 1, children: { total: 1, working: 1 } }))).toEqual({ kind: "running", count: 2 });
+    // Paseo runtime summary row deduplicates overlapping background agents via Math.max
+    expect(childRollup(row("p", { waiting: false, source_kind: "runtime", running_subagents: 3, children: { total: 3, working: 2 } }))).toEqual({ kind: "running", count: 3 });
+    // Explicit childrenRows deduplicates overlapping IDs and ignores side sessions
+    expect(childRollup(
+      row("p", { subagents: [{ id: "a", session_id: "p@a", running: true }] }),
+      [
+        row("p@a", { state: "working" }),
+        row("remote", { machine_id: "box", state: "working" }),
+        row("side1", { folded_as: "side", state: "working" }),
+      ],
+    )).toEqual({ kind: "running", count: 2 });
     setSideFold(true);
     try {
       expect(childRollup(row("p", { children: { total: 1, needs_you: 1, sides: 1, sides_needs_you: 1 } }))).toBeNull();

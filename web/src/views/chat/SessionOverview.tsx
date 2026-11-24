@@ -52,13 +52,15 @@ export function SessionOverview({ id, session, machineName, items, tasks, childr
   );
   const grouped = useMemo(() => groupOverviewSubagents(subagents), [subagents]);
 
+  const handledFocus = useRef(0);
   useEffect(() => {
-    if (!focusSubagents || hidden) return;
+    if (!focusSubagents || handledFocus.current === focusSubagents || hidden) return;
     const el = subagentsSection.current;
     if (!el) return;
+    handledFocus.current = focusSubagents;
     el.scrollIntoView?.({ block: "nearest" });
     el.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
-  }, [focusSubagents, hidden]);
+  }, [focusSubagents, hidden, subagents.length]);
 
   const mid = session.machine_id;
   const sid = session.session_id;

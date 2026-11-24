@@ -3,6 +3,7 @@
 // folds under (`folded_under`) and gives that session a rollup of their states (`children`, docs/protocol/protocol.md
 // "Session hierarchy"). The web leaves the children out of every list and count, shows the parent in its folded state,
 // and draws each child as a card in the parent's chat, where its requests are answered too.
+import { stateOf } from "./format";
 import { foldedStateWith, foldHome, foldsUnder, hubSides } from "./side-fold";
 import type { AgentState, Interaction, Session } from "./types";
 
@@ -92,16 +93,43 @@ export function runningChildren(s: Session): number {
  *  waiting children (`needs_you`) take precedence over running subagents (`running`); quiet (`null`) when all ended. */
 export type ChildRollup = { kind: "needs_you" | "running"; count: number };
 
-export function childRollup(s: Session | undefined, embeddedRunning?: number): ChildRollup | null {
+export function childRollup(s: Session | undefined, childrenRows?: readonly Session[]): ChildRollup | null {
   if (!s) return null;
   const c = s.children;
   const side = hubSides(s);
-  const childNeeds = Math.max(0, (c?.needs_you ?? 0) - (side?.needs_you ?? 0));
+  const hubNeeds = Math.max(0, (c?.needs_you ?? 0) - (side?.needs_you ?? 0));
+  const rowNeeds = childrenRows
+    ? childrenRows.filter((child) => child.folded_as !== "side" && stateOf(child) === "needs_you").length
+    : 0;
+  const childNeeds = Math.max(hubNeeds, rowNeeds);
   if (childNeeds > 0) return { kind: "needs_you", count: childNeeds };
+
   const childWorking = Math.max(0, (c?.working ?? 0) - (side?.working ?? 0));
-  const ownRunning = embeddedRunning ?? (typeof s.waiting === "boolean"
-    ? (s.running_subagents ?? 0)
-    : (s.subagents?.filter((a) => a.running).length ?? 0));
-  const running = Math.max(ownRunning, childWorking);
+  const embeddedIds = new Set<string>();
+  if (s.subagents?.length) {
+    for (const a of s.subagents) {
+      if (a.running) embeddedIds.add(rowKey(s.machine_id, a.session_id || `${s.session_id}@${a.id}`));
+    }
+  }
+  if (childrenRows) {
+    const runningIds = new Set(embeddedIds);
+    for (const child of childrenRows) {
+      if (child.folded_as === "side") continue;
+      const st = stateOf(child);
+      if (st === "working" || Boolean(child.background_working)) {
+        runningIds.add(rowKey(child.machine_id, child.session_id));
+      }
+    }
+    const running = Math.max(runningIds.size, embeddedIds.size + childWorking);
+    return running > 0 ? { kind: "running", count: running } : null;
+  }
+  if (s.subagents) {
+    const running = embeddedIds.size + childWorking;
+    return running > 0 ? { kind: "running", count: running } : null;
+  }
+  const summaryRunning = typeof s.waiting === "boolean" ? (s.running_subagents ?? 0) : 0;
+  // Paseo runtime summaries mirror child sessions into background[kind=agent] -> running_subagents; avoid double-counting them.
+  const overlaps = s.source_kind === "runtime" || s.agent === "paseo";
+  const running = overlaps ? Math.max(summaryRunning, childWorking) : summaryRunning + childWorking;
   return running > 0 ? { kind: "running", count: running } : null;
 }

@@ -316,9 +316,12 @@ function pageTarget(s: State, route: Route): PageTarget | undefined {
   // Deep link to an embedded subagent (`<parent>@<agent>`): open its parent session + subagent detail panel (#14323).
   const sub = splitSubagentLink(route.sid);
   if (sub) {
-    return route.at || route.standalone
-      ? exact()
-      : { link: undefined, to: routePath({ ...route, sid: sub.parent }), mid: route.mid, sid: undefined, parent: sub.parent, subagent: { mid: route.mid, sid: route.sid } };
+    if (route.at || route.standalone) return exact();
+    const parentRow = pageRows(s, route.mid).find((r) => r.session_id === sub.parent);
+    const dest = parentRow?.assistant
+      ? conversationRoute(route.mid, sub.parent, s.sessions, s.assistant, parentRow.manager)
+      : { ...route, sid: sub.parent };
+    return { link: undefined, to: routePath(dest), mid: route.mid, sid: undefined, parent: sub.parent, subagent: { mid: route.mid, sid: route.sid } };
   }
   const rows = pageRows(s, route.mid);
   const row = rows.find((r) => r.session_id === route.sid);
@@ -335,9 +338,12 @@ function pageTarget(s: State, route: Route): PageTarget | undefined {
   const parent = row ? foldsUnder(row) : undefined;
   const parentMid = row ? foldsUnderMachine(row) : route.mid;
   if (parent && !(parentMid === route.mid && parent === route.sid)) {
-    return route.at || route.standalone
-      ? exact()
-      : { link: undefined, to: routePath(withWorkView({ name: "session", mid: parentMid, sid: parent }, inWorkView(route))), mid: parentMid, sid: undefined, parent, subagent: { mid: route.mid, sid: route.sid } };
+    if (route.at || route.standalone) return exact();
+    const parentRow = pageRows(s, parentMid).find((r) => r.session_id === parent);
+    const dest = parentRow?.assistant
+      ? conversationRoute(parentMid, parent, s.sessions, s.assistant, parentRow.manager)
+      : withWorkView({ name: "session", mid: parentMid, sid: parent }, inWorkView(route));
+    return { link: undefined, to: routePath(dest), mid: parentMid, sid: undefined, parent, subagent: { mid: route.mid, sid: route.sid } };
   }
   // an earlier session of a conversation that moved between Claude Code and Codex (#5054): the conversation's own row,
   // whose chat reads that session's stretch in its place

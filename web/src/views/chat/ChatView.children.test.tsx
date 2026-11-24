@@ -23,7 +23,9 @@ vi.mock("../../lib/panel", async (importOriginal) => ({ ...await importOriginal<
 
 const { ChatView } = await import("./ChatView");
 const { getState, reset, upsertSession } = await import("../../lib/store");
-const { followChildSession, useSubagentLink } = await import("../../lib/subagent-link");
+const { askSubagentPanel, followChildSession, useSubagentLink } = await import("../../lib/subagent-link");
+const { backgroundChat } = await import("../../lib/background-panel");
+const { closePanel, getPanel } = await import("../../lib/panel");
 const { forgetExpanded } = await import("./expanded");
 // The cards' chunks are loaded before the first synchronous render.
 await loadPages();
@@ -235,5 +237,31 @@ describe("embedded subagent ChatView read-only vs interactive gate (#14323)", ()
     await flush();
     expect(host.querySelector("[data-subagent-readonly-line]")).toBeNull();
     expect(host.querySelector("textarea")).not.toBeNull();
+  });
+
+  it("opens queued subagent panel on assistant parent conversations and limits hasCall to real launching tool calls", async () => {
+    // 1. Assistant conversation consumes queued subagent panel ask
+    upsertSession({ ...parent, session_id: "asst-1", assistant: true });
+    act(() => askSubagentPanel("m", "asst-1", { mid: "box", sid: "remote-kid", from: "link" }));
+    act(() => root.render(<ChatView mid="m" sid="asst-1" assistant onToggleSidebar={() => {}} />));
+    await flush();
+    expect(getPanel()).toEqual({
+      kind: "subagent",
+      mid: "box",
+      sid: "remote-kid",
+      parentMid: "m",
+      parentSid: "asst-1",
+      call: undefined,
+      from: "link",
+    });
+    closePanel();
+
+    // 2. Agent chat hasCall returns true only for real tool_use calls, never synthetic child: cards
+    upsertSession(child("k1", 10));
+    act(() => root.render(<ChatView mid="m" sid="p" onToggleSidebar={() => {}} />));
+    await flush();
+    const bg = backgroundChat("m", "p");
+    expect(bg?.hasCall?.("c2")).toBe(true);
+    expect(bg?.hasCall?.("child:k1")).toBe(false);
   });
 });

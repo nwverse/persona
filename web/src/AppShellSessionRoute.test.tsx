@@ -61,6 +61,8 @@ const sessions: Session[] = [
   // a child session folded under s1 (#5120, #14323): opens parent + subagent panel unless opened standalone
   row("kid1", { folded_under: "s1", is_subagent: true, parent_session_id: "s1" }),
   row("remote-kid", { machine_id: "box", folded_under: "s1", folded_under_machine_id: "mac", is_subagent: true, parent_machine_id: "mac", parent_session_id: "s1" }),
+  row("asst-parent", { assistant: true }),
+  row("asst-kid", { machine_id: "box", folded_under: "asst-parent", folded_under_machine_id: "mac", is_subagent: true, parent_machine_id: "mac", parent_session_id: "asst-parent" }),
   row("side1", { folded_under: "s1", folded_as: "side" }),
   row("side-kid", { folded_under: "s1", folded_side: "side1", is_subagent: true, parent_session_id: "side1" }),
   // a herdr tab's lead and its worker (#5180): the worker is in the lead's Team panel, never a page of its own
@@ -181,6 +183,20 @@ describe("the shell's session links", () => {
     expect(asked).toEqual({ mid: "box", sid: "remote-kid", from: "link" });
     act(() => doneSubagentPanelAsk("mac", "s1"));
     act(() => probe.unmount());
+
+    // Deep link to a subagent under an Assistant conversation redirects to /persona/<parent> + queues subagent panel
+    let asstAsked: SubagentPanelAsk | undefined;
+    function AsstProbe() {
+      asstAsked = useSubagentPanelAsk("mac", "asst-parent");
+      return null;
+    }
+    const asstProbe = createRoot(document.createElement("div"));
+    act(() => asstProbe.render(<AsstProbe />));
+    await open("/s/box/asst-kid");
+    expect(location.pathname).toBe("/persona/asst-parent");
+    expect(asstAsked).toEqual({ mid: "box", sid: "asst-kid", from: "link" });
+    act(() => doneSubagentPanelAsk("mac", "asst-parent"));
+    act(() => asstProbe.unmount());
   });
 
   it("keeps standalone=1 subagent pages open without redirecting back to the parent", async () => {
