@@ -345,6 +345,7 @@ export interface Contributes {
   secret_providers?: SecretProviderItem[];
   repository_providers?: RepositoryProviderItem[];
   memory_sources?: MemorySourceItem[];
+  disk_offload?: DiskOffloadItem[];
   messaging?: MessagingItem[];
   /** Extra keys are opaque JSON; declared properties keep their own types. */
   [key: string]: unknown;
@@ -584,6 +585,30 @@ export interface RepositoryProviderItem {
    */
   capabilities?: RepositoryCapability[];
 }
+
+/**
+ * A provider that moves items from a computer to storage elsewhere, lists what it already holds and brings items back
+ * (docs/server/machine-usage-map.md "Extension point disk_offload"): the disk usage map draws its inventory beside
+ * the computer's disk and offers Offload; the manager asks the program (offload.inventory, offload.run, offload.job,
+ * offload.cancel; offload.schema.json) after the user confirmed. Needs the program to speak the protocol.
+ */
+export interface DiskOffloadItem {
+  id: string;
+  /**
+   * What the map and its menus call the provider (Offload to Example Cloud). Not only spaces, no control characters.
+   */
+  name: string;
+  /** What it takes from the map; without it, files and folders. */
+  kinds?: DiskOffloadKind[];
+  /** Items it holds can be brought back (Restore on the map's cloud side). */
+  restore?: boolean;
+}
+
+/**
+ * What a disk_offload provider takes: file, dir (a folder) or app (a macOS app bundle).
+ */
+export type DiskOffloadKind = "file" | "dir" | "app" | (string & {});
+export const DISK_OFFLOAD_KINDS = ["file", "dir", "app"] as const;
 
 /**
  * The extension's memory, read by the manager one entry at a time (memory.entries; memory.schema.json) so the hub
@@ -4138,4 +4163,251 @@ export interface UIPageSnapshot {
   version: number;
   rootKey: string;
   view: View;
+}
+
+/**
+ * Whether the provider can work on this computer: ready; needs_install (its tool is not on the computer: the first
+ * offload asks to install it, OffloadTool); needs_setup (the user has to set it up first, in the extension's
+ * settings: detail says what); unavailable (detail says why).
+ */
+export type OffloadState = "ready" | "needs_install" | "needs_setup" | "unavailable" | (string & {});
+export const OFFLOAD_STATES = ["ready", "needs_install", "needs_setup", "unavailable"] as const;
+
+/**
+ * What an offloaded item was: a file, a dir (folder), an app, an app's data (app_data), a bundle of items moved
+ * together, a session archive, or other.
+ */
+export type OffloadItemKind = "file" | "dir" | "app" | "app_data" | "bundle" | "session" | "other" | (string & {});
+export const OFFLOAD_ITEM_KINDS = ["file", "dir", "app", "app_data", "bundle", "session", "other"] as const;
+
+/**
+ * What offload.run does: offload (move paths away) or restore (bring items back by id).
+ */
+export type OffloadAction = "offload" | "restore" | (string & {});
+export const OFFLOAD_ACTIONS = ["offload", "restore"] as const;
+
+/**
+ * offload.run's answer: started (a job runs: job), needs_install (the tool is missing and install was not given:
+ * nothing happened; tool), refused (nothing happened; items say why), ok (a dry run's answer: items).
+ */
+export type OffloadRunStatus = "started" | "needs_install" | "refused" | "ok" | (string & {});
+export const OFFLOAD_RUN_STATUSES = ["started", "needs_install", "refused", "ok"] as const;
+
+/**
+ * A job: running, done, failed (error says why) or canceled.
+ */
+export type OffloadJobState = "running" | "done" | "failed" | "canceled" | (string & {});
+export const OFFLOAD_JOB_STATES = ["running", "done", "failed", "canceled"] as const;
+
+/**
+ * What a running job does now: install (its tool), check, upload, verify, cleanup (removing the originals), download
+ * (a restore).
+ */
+export type OffloadPhase = "install" | "check" | "upload" | "verify" | "cleanup" | "download" | (string & {});
+export const OFFLOAD_PHASES = ["install", "check", "upload", "verify", "cleanup", "download"] as const;
+
+/**
+ * One item of a job: pending, running, done, failed or skipped.
+ */
+export type OffloadJobItemStatus = "pending" | "running" | "done" | "failed" | "skipped" | (string & {});
+export const OFFLOAD_JOB_ITEM_STATUSES = ["pending", "running", "done", "failed", "skipped"] as const;
+
+/**
+ * The program the provider needs on the computer. source is one sentence in the caller's language saying where it
+ * comes from and where it is installed; the install confirmation shows it.
+ */
+export interface OffloadTool {
+  name: string;
+  title?: string;
+  version?: string;
+  installed: boolean;
+  source?: string;
+  detail?: string;
+}
+
+/**
+ * One item the provider holds of this computer. bytes is the size it had on disk, what the map draws so both sides
+ * share one scale; stored_bytes what it takes where it is stored; origin_path where it was and where a restore puts
+ * it; stub_path the placeholder left behind, if any; local_bytes what of it is still on the computer (a cache). Times
+ * are Unix seconds.
+ */
+export interface OffloadItem {
+  id: string;
+  name: string;
+  kind: OffloadItemKind;
+  bytes: number;
+  stored_bytes?: number;
+  origin_path?: string;
+  stub_path?: string;
+  local_bytes?: number;
+  offloaded_at?: number;
+  used_at?: number;
+  /** Items moved together share a group (an app and its data). */
+  group?: string;
+  restorable: boolean;
+}
+
+/**
+ * What the inventory left out past its 500 largest items.
+ */
+export interface OffloadMore {
+  count: number;
+  bytes: number;
+}
+
+/**
+ * offload.inventory: what the provider holds of machine. refresh asks it not to answer from its own cache.
+ */
+export interface OffloadInventoryParams {
+  contribution: string;
+  locale: string;
+  machine: UIMachine;
+  refresh?: boolean;
+}
+
+/**
+ * What the provider holds of the computer, largest first, at most 500 items (the rest summed in more). at is when it
+ * was read (Unix seconds); total_bytes the items' bytes together, stored_bytes what they take where they are stored;
+ * partial when the list may be incomplete. items may be left out when there are none; the manager's answer to the
+ * apps always has it.
+ */
+export interface OffloadInventory {
+  state: OffloadState;
+  detail?: string;
+  tool?: OffloadTool;
+  at: number;
+  total_bytes: number;
+  stored_bytes?: number;
+  partial?: boolean;
+  items?: OffloadItem[];
+  more?: OffloadMore;
+}
+
+/**
+ * offload.run: offload paths (absolute, on machine, each already agreed by the node's protection rules) or restore
+ * items (ids of the inventory), at most 50. dry_run only checks and answers status ok with each item; install lets
+ * the job install the tool first (the user agreed to that too). request_id is the same for a retry of the same
+ * request.
+ */
+export interface OffloadRunParams {
+  contribution: string;
+  locale: string;
+  machine: UIMachine;
+  action: OffloadAction;
+  paths?: string[];
+  items?: string[];
+  dry_run?: boolean;
+  install?: boolean;
+  request_id: string;
+}
+
+/**
+ * One path or item of a run's answer: why it is refused (reason, in the caller's language), or a dry run's verdict
+ * (ok, bytes). refusal is set only by the manager, when the computer's own protection rules refused the path before
+ * the program was asked (a machine.storage.check refusal code: credentials, app_managed, ...).
+ */
+export interface OffloadRunItem {
+  path?: string;
+  id?: string;
+  ok?: boolean;
+  reason?: string;
+  refusal?: string;
+  bytes?: number;
+}
+
+/**
+ * offload.run's answer (OffloadRunStatus).
+ */
+export interface OffloadRunResult {
+  status: OffloadRunStatus;
+  job?: string;
+  tool?: OffloadTool;
+  items?: OffloadRunItem[];
+}
+
+/**
+ * offload.job and offload.cancel: the job offload.run started.
+ */
+export interface OffloadJobParams {
+  contribution: string;
+  locale: string;
+  machine: UIMachine;
+  job: string;
+}
+
+/**
+ * One path (offload) or item (restore) of a job.
+ */
+export interface OffloadJobItem {
+  path?: string;
+  id?: string;
+  status: OffloadJobItemStatus;
+  error?: string;
+  bytes?: number;
+}
+
+/**
+ * How a job goes. A job belongs to the extension: a client that lost track asks the inventory again. items may be
+ * left out; the manager's answer to the apps always has it.
+ */
+export interface OffloadJob {
+  state: OffloadJobState;
+  phase?: OffloadPhase;
+  done_bytes: number;
+  total_bytes: number;
+  freed_bytes?: number;
+  error?: string;
+  items?: OffloadJobItem[];
+}
+
+/**
+ * One enabled disk_offload contribution, as GET /api/v1/extensions/-/offload lists it for the apps.
+ */
+export interface OffloadProvider {
+  extension: string;
+  id: string;
+  name: string;
+  kinds: DiskOffloadKind[];
+  restore: boolean;
+}
+
+/**
+ * GET /api/v1/extensions/-/offload?machine=: the providers the map can offer on that computer.
+ */
+export interface OffloadProviders {
+  providers: OffloadProvider[];
+}
+
+/**
+ * POST /api/v1/extensions/{id}/-/offload/{cid}/run, an app's request: without dry_run or confirm it is refused
+ * (confirmation_required); install only after the user agreed to the tool's install confirmation.
+ */
+export interface OffloadRunRequest {
+  machine: string;
+  action: OffloadAction;
+  paths?: string[];
+  items?: string[];
+  dry_run?: boolean;
+  confirm?: boolean;
+  install?: boolean;
+}
+
+/**
+ * The run route's 202 answer: the job to follow with GET …/jobs/{job}.
+ */
+export interface OffloadStarted {
+  job: string;
+}
+
+/**
+ * An offload route's error: error in the reader's language and a code (bad_request, confirmation_required, read_only,
+ * not_found, machine_offline, node_outdated, tool_install_required with tool, offload_refused with items,
+ * plugin_failed (detail: the provider's own words, one line), usage_failed, deadline).
+ */
+export interface OffloadError {
+  error: string;
+  code: string;
+  tool?: OffloadTool;
+  detail?: string;
+  items?: OffloadRunItem[];
 }

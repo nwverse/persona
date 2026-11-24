@@ -814,11 +814,12 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
     public var secretProviders: [ExtensionSecretProviderItem]?
     public var repositoryProviders: [ExtensionRepositoryProviderItem]?
     public var memorySources: [ExtensionMemorySourceItem]?
+    public var diskOffload: [ExtensionDiskOffloadItem]?
     public var messaging: [ExtensionMessagingItem]?
     /// Extra keys stay at this object's level on the wire; declared fields always win.
     public var additionalProperties: [String: JSONValue]
 
-    public init(connectors: [ExtensionConnectorItem]? = nil, voice: [ExtensionNamedItem]? = nil, transcription: [ExtensionNamedItem]? = nil, speech: [ExtensionNamedItem]? = nil, computer: [ExtensionNamedItem]? = nil, browser: [ExtensionNamedItem]? = nil, iphone: [ExtensionNamedItem]? = nil, quota: [ExtensionQuotaItem]? = nil, usage: [ExtensionUsageItem]? = nil, providers: [ExtensionProviderItem]? = nil, api: [ExtensionAPIItem]? = nil, assistant: [ExtensionAssistantItem]? = nil, mcpServers: [ExtensionMCPServerItem]? = nil, ui: [ExtensionUIItem]? = nil, trackKinds: [ExtensionTrackKindItem]? = nil, agentSources: [ExtensionAgentSourceItem]? = nil, channel: [ExtensionChannelItem]? = nil, events: [ExtensionEventsItem]? = nil, shortcuts: [ExtensionShortcutItem]? = nil, skills: [ExtensionSkillItem]? = nil, prompts: [ExtensionPromptItem]? = nil, themes: [ExtensionThemeItem]? = nil, looks: [ExtensionLookItem]? = nil, triageTemplates: [ExtensionTriageTemplateItem]? = nil, agentFilters: [ExtensionAgentFilterItem]? = nil, tunnels: [ExtensionTunnelItem]? = nil, errorReports: [ExtensionErrorReportsItem]? = nil, authRelay: [ExtensionAuthRelayItem]? = nil, secretProviders: [ExtensionSecretProviderItem]? = nil, repositoryProviders: [ExtensionRepositoryProviderItem]? = nil, memorySources: [ExtensionMemorySourceItem]? = nil, messaging: [ExtensionMessagingItem]? = nil, additionalProperties: [String: JSONValue] = [:]) {
+    public init(connectors: [ExtensionConnectorItem]? = nil, voice: [ExtensionNamedItem]? = nil, transcription: [ExtensionNamedItem]? = nil, speech: [ExtensionNamedItem]? = nil, computer: [ExtensionNamedItem]? = nil, browser: [ExtensionNamedItem]? = nil, iphone: [ExtensionNamedItem]? = nil, quota: [ExtensionQuotaItem]? = nil, usage: [ExtensionUsageItem]? = nil, providers: [ExtensionProviderItem]? = nil, api: [ExtensionAPIItem]? = nil, assistant: [ExtensionAssistantItem]? = nil, mcpServers: [ExtensionMCPServerItem]? = nil, ui: [ExtensionUIItem]? = nil, trackKinds: [ExtensionTrackKindItem]? = nil, agentSources: [ExtensionAgentSourceItem]? = nil, channel: [ExtensionChannelItem]? = nil, events: [ExtensionEventsItem]? = nil, shortcuts: [ExtensionShortcutItem]? = nil, skills: [ExtensionSkillItem]? = nil, prompts: [ExtensionPromptItem]? = nil, themes: [ExtensionThemeItem]? = nil, looks: [ExtensionLookItem]? = nil, triageTemplates: [ExtensionTriageTemplateItem]? = nil, agentFilters: [ExtensionAgentFilterItem]? = nil, tunnels: [ExtensionTunnelItem]? = nil, errorReports: [ExtensionErrorReportsItem]? = nil, authRelay: [ExtensionAuthRelayItem]? = nil, secretProviders: [ExtensionSecretProviderItem]? = nil, repositoryProviders: [ExtensionRepositoryProviderItem]? = nil, memorySources: [ExtensionMemorySourceItem]? = nil, diskOffload: [ExtensionDiskOffloadItem]? = nil, messaging: [ExtensionMessagingItem]? = nil, additionalProperties: [String: JSONValue] = [:]) {
         self.connectors = connectors
         self.voice = voice
         self.transcription = transcription
@@ -850,6 +851,7 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         self.secretProviders = secretProviders
         self.repositoryProviders = repositoryProviders
         self.memorySources = memorySources
+        self.diskOffload = diskOffload
         self.messaging = messaging
         self.additionalProperties = additionalProperties
     }
@@ -886,6 +888,7 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         case secretProviders = "secret_providers"
         case repositoryProviders = "repository_providers"
         case memorySources = "memory_sources"
+        case diskOffload = "disk_offload"
         case messaging
     }
 
@@ -922,13 +925,14 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         self.secretProviders = ExtensionWireJSON.decode([ExtensionSecretProviderItem].self, from: raw["secret_providers"])
         self.repositoryProviders = ExtensionWireJSON.decode([ExtensionRepositoryProviderItem].self, from: raw["repository_providers"])
         self.memorySources = ExtensionWireJSON.decode([ExtensionMemorySourceItem].self, from: raw["memory_sources"])
+        self.diskOffload = ExtensionWireJSON.decode([ExtensionDiskOffloadItem].self, from: raw["disk_offload"])
         self.messaging = ExtensionWireJSON.decode([ExtensionMessagingItem].self, from: raw["messaging"])
-        let known: Set<String> = ["connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "messaging"]
+        let known: Set<String> = ["connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging"]
         additionalProperties = raw.filter { !known.contains($0.key) }
     }
 
     public func encode(to encoder: Encoder) throws {
-        let known: Set<String> = ["connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "messaging"]
+        let known: Set<String> = ["connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging"]
         var fields = additionalProperties.filter { !known.contains($0.key) }
         if let value = connectors { fields["connectors"] = try ExtensionWireJSON.encode(value) }
         if let value = voice { fields["voice"] = try ExtensionWireJSON.encode(value) }
@@ -961,6 +965,7 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         if let value = secretProviders { fields["secret_providers"] = try ExtensionWireJSON.encode(value) }
         if let value = repositoryProviders { fields["repository_providers"] = try ExtensionWireJSON.encode(value) }
         if let value = memorySources { fields["memory_sources"] = try ExtensionWireJSON.encode(value) }
+        if let value = diskOffload { fields["disk_offload"] = try ExtensionWireJSON.encode(value) }
         if let value = messaging { fields["messaging"] = try ExtensionWireJSON.encode(value) }
         var container = encoder.singleValueContainer()
         try container.encode(fields)
@@ -1536,6 +1541,52 @@ public nonisolated struct ExtensionRepositoryProviderItem: Codable, Hashable, Se
         self.linkKinds = try? c.decodeIfPresent([ExtensionRepositoryLinkLabel].self, forKey: .linkKinds)
         self.capabilities = try? c.decodeIfPresent([String].self, forKey: .capabilities)
     }
+}
+
+/// A provider that moves items from a computer to storage elsewhere, lists what it already holds and brings items
+/// back (docs/server/machine-usage-map.md "Extension point disk_offload"): the disk usage map draws its inventory
+/// beside the computer's disk and offers Offload; the manager asks the program (offload.inventory, offload.run,
+/// offload.job, offload.cancel; offload.schema.json) after the user confirmed. Needs the program to speak the
+/// protocol.
+public nonisolated struct ExtensionDiskOffloadItem: Codable, Hashable, Sendable {
+    public var id: String
+    /// What the map and its menus call the provider (Offload to Example Cloud). Not only spaces, no control
+    /// characters.
+    public var name: String
+    /// What it takes from the map; without it, files and folders.
+    public var kinds: [String]?
+    /// Items it holds can be brought back (Restore on the map's cloud side).
+    public var restore: Bool?
+
+    public init(id: String = "", name: String = "", kinds: [String]? = nil, restore: Bool? = nil) {
+        self.id = id
+        self.name = name
+        self.kinds = kinds
+        self.restore = restore
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case kinds
+        case restore
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = (try? c.decodeIfPresent(String.self, forKey: .id)) ?? ""
+        self.name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? ""
+        self.kinds = try? c.decodeIfPresent([String].self, forKey: .kinds)
+        self.restore = try? c.decodeIfPresent(Bool.self, forKey: .restore)
+    }
+}
+
+/// What a disk_offload provider takes: file, dir (a folder) or app (a macOS app bundle).
+public nonisolated enum ExtensionDiskOffloadKind {
+    public static let file = "file"
+    public static let dir = "dir"
+    public static let app = "app"
+    public static let all = ["file", "dir", "app"]
 }
 
 /// The extension's memory, read by the manager one entry at a time (memory.entries; memory.schema.json) so the hub
@@ -12078,6 +12129,667 @@ public nonisolated struct ExtensionUIPageSnapshot: Codable, Hashable, Sendable {
         self.version = try c.decode(Int64.self, forKey: .version)
         self.rootKey = try c.decode(String.self, forKey: .rootKey)
         self.view = try c.decode(ExtensionView.self, forKey: .view)
+    }
+}
+
+/// Whether the provider can work on this computer: ready; needs_install (its tool is not on the computer: the first
+/// offload asks to install it, OffloadTool); needs_setup (the user has to set it up first, in the extension's
+/// settings: detail says what); unavailable (detail says why).
+public nonisolated enum ExtensionOffloadState {
+    public static let ready = "ready"
+    public static let needsInstall = "needs_install"
+    public static let needsSetup = "needs_setup"
+    public static let unavailable = "unavailable"
+    public static let all = ["ready", "needs_install", "needs_setup", "unavailable"]
+}
+
+/// What an offloaded item was: a file, a dir (folder), an app, an app's data (app_data), a bundle of items moved
+/// together, a session archive, or other.
+public nonisolated enum ExtensionOffloadItemKind {
+    public static let file = "file"
+    public static let dir = "dir"
+    public static let app = "app"
+    public static let appData = "app_data"
+    public static let bundle = "bundle"
+    public static let session = "session"
+    public static let other = "other"
+    public static let all = ["file", "dir", "app", "app_data", "bundle", "session", "other"]
+}
+
+/// What offload.run does: offload (move paths away) or restore (bring items back by id).
+public nonisolated enum ExtensionOffloadAction {
+    public static let offload = "offload"
+    public static let restore = "restore"
+    public static let all = ["offload", "restore"]
+}
+
+/// offload.run's answer: started (a job runs: job), needs_install (the tool is missing and install was not given:
+/// nothing happened; tool), refused (nothing happened; items say why), ok (a dry run's answer: items).
+public nonisolated enum ExtensionOffloadRunStatus {
+    public static let started = "started"
+    public static let needsInstall = "needs_install"
+    public static let refused = "refused"
+    public static let ok = "ok"
+    public static let all = ["started", "needs_install", "refused", "ok"]
+}
+
+/// A job: running, done, failed (error says why) or canceled.
+public nonisolated enum ExtensionOffloadJobState {
+    public static let running = "running"
+    public static let done = "done"
+    public static let failed = "failed"
+    public static let canceled = "canceled"
+    public static let all = ["running", "done", "failed", "canceled"]
+}
+
+/// What a running job does now: install (its tool), check, upload, verify, cleanup (removing the originals), download
+/// (a restore).
+public nonisolated enum ExtensionOffloadPhase {
+    public static let install = "install"
+    public static let check = "check"
+    public static let upload = "upload"
+    public static let verify = "verify"
+    public static let cleanup = "cleanup"
+    public static let download = "download"
+    public static let all = ["install", "check", "upload", "verify", "cleanup", "download"]
+}
+
+/// One item of a job: pending, running, done, failed or skipped.
+public nonisolated enum ExtensionOffloadJobItemStatus {
+    public static let pending = "pending"
+    public static let running = "running"
+    public static let done = "done"
+    public static let failed = "failed"
+    public static let skipped = "skipped"
+    public static let all = ["pending", "running", "done", "failed", "skipped"]
+}
+
+/// The program the provider needs on the computer. source is one sentence in the caller's language saying where it
+/// comes from and where it is installed; the install confirmation shows it.
+public nonisolated struct ExtensionOffloadTool: Codable, Hashable, Sendable {
+    public var name: String
+    public var title: String?
+    public var version: String?
+    public var installed: Bool
+    public var source: String?
+    public var detail: String?
+
+    public init(name: String = "", title: String? = nil, version: String? = nil, installed: Bool = false, source: String? = nil, detail: String? = nil) {
+        self.name = name
+        self.title = title
+        self.version = version
+        self.installed = installed
+        self.source = source
+        self.detail = detail
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case title
+        case version
+        case installed
+        case source
+        case detail
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? ""
+        self.title = try? c.decodeIfPresent(String.self, forKey: .title)
+        self.version = try? c.decodeIfPresent(String.self, forKey: .version)
+        self.installed = (try? c.decodeIfPresent(Bool.self, forKey: .installed)) ?? false
+        self.source = try? c.decodeIfPresent(String.self, forKey: .source)
+        self.detail = try? c.decodeIfPresent(String.self, forKey: .detail)
+    }
+}
+
+/// One item the provider holds of this computer. bytes is the size it had on disk, what the map draws so both sides
+/// share one scale; stored_bytes what it takes where it is stored; origin_path where it was and where a restore puts
+/// it; stub_path the placeholder left behind, if any; local_bytes what of it is still on the computer (a cache).
+/// Times are Unix seconds.
+public nonisolated struct ExtensionOffloadItem: Codable, Hashable, Sendable {
+    public var id: String
+    public var name: String
+    public var kind: String
+    public var bytes: Int64
+    public var storedBytes: Int64?
+    public var originPath: String?
+    public var stubPath: String?
+    public var localBytes: Int64?
+    public var offloadedAt: Int64?
+    public var usedAt: Int64?
+    /// Items moved together share a group (an app and its data).
+    public var group: String?
+    public var restorable: Bool
+
+    public init(id: String = "", name: String = "", kind: String = "", bytes: Int64 = 0, storedBytes: Int64? = nil, originPath: String? = nil, stubPath: String? = nil, localBytes: Int64? = nil, offloadedAt: Int64? = nil, usedAt: Int64? = nil, group: String? = nil, restorable: Bool = false) {
+        self.id = id
+        self.name = name
+        self.kind = kind
+        self.bytes = bytes
+        self.storedBytes = storedBytes
+        self.originPath = originPath
+        self.stubPath = stubPath
+        self.localBytes = localBytes
+        self.offloadedAt = offloadedAt
+        self.usedAt = usedAt
+        self.group = group
+        self.restorable = restorable
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case kind
+        case bytes
+        case storedBytes = "stored_bytes"
+        case originPath = "origin_path"
+        case stubPath = "stub_path"
+        case localBytes = "local_bytes"
+        case offloadedAt = "offloaded_at"
+        case usedAt = "used_at"
+        case group
+        case restorable
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = (try? c.decodeIfPresent(String.self, forKey: .id)) ?? ""
+        self.name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? ""
+        self.kind = (try? c.decodeIfPresent(String.self, forKey: .kind)) ?? ""
+        self.bytes = (try? c.decodeIfPresent(Int64.self, forKey: .bytes)) ?? 0
+        self.storedBytes = try? c.decodeIfPresent(Int64.self, forKey: .storedBytes)
+        self.originPath = try? c.decodeIfPresent(String.self, forKey: .originPath)
+        self.stubPath = try? c.decodeIfPresent(String.self, forKey: .stubPath)
+        self.localBytes = try? c.decodeIfPresent(Int64.self, forKey: .localBytes)
+        self.offloadedAt = try? c.decodeIfPresent(Int64.self, forKey: .offloadedAt)
+        self.usedAt = try? c.decodeIfPresent(Int64.self, forKey: .usedAt)
+        self.group = try? c.decodeIfPresent(String.self, forKey: .group)
+        self.restorable = (try? c.decodeIfPresent(Bool.self, forKey: .restorable)) ?? false
+    }
+}
+
+/// What the inventory left out past its 500 largest items.
+public nonisolated struct ExtensionOffloadMore: Codable, Hashable, Sendable {
+    public var count: Int
+    public var bytes: Int64
+
+    public init(count: Int = 0, bytes: Int64 = 0) {
+        self.count = count
+        self.bytes = bytes
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case count
+        case bytes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.count = (try? c.decodeIfPresent(Int.self, forKey: .count)) ?? 0
+        self.bytes = (try? c.decodeIfPresent(Int64.self, forKey: .bytes)) ?? 0
+    }
+}
+
+/// offload.inventory: what the provider holds of machine. refresh asks it not to answer from its own cache.
+public nonisolated struct ExtensionOffloadInventoryParams: Codable, Hashable, Sendable {
+    public var contribution: String
+    public var locale: String
+    public var machine: ExtensionUIMachine
+    public var refresh: Bool?
+
+    public init(contribution: String = "", locale: String = "", machine: ExtensionUIMachine = ExtensionUIMachine(), refresh: Bool? = nil) {
+        self.contribution = contribution
+        self.locale = locale
+        self.machine = machine
+        self.refresh = refresh
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case contribution
+        case locale
+        case machine
+        case refresh
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.contribution = (try? c.decodeIfPresent(String.self, forKey: .contribution)) ?? ""
+        self.locale = (try? c.decodeIfPresent(String.self, forKey: .locale)) ?? ""
+        self.machine = (try? c.decodeIfPresent(ExtensionUIMachine.self, forKey: .machine)) ?? ExtensionUIMachine()
+        self.refresh = try? c.decodeIfPresent(Bool.self, forKey: .refresh)
+    }
+}
+
+/// What the provider holds of the computer, largest first, at most 500 items (the rest summed in more). at is when it
+/// was read (Unix seconds); total_bytes the items' bytes together, stored_bytes what they take where they are stored;
+/// partial when the list may be incomplete. items may be left out when there are none; the manager's answer to the
+/// apps always has it.
+public nonisolated struct ExtensionOffloadInventory: Codable, Hashable, Sendable {
+    public var state: String
+    public var detail: String?
+    public var tool: ExtensionOffloadTool?
+    public var at: Int64
+    public var totalBytes: Int64
+    public var storedBytes: Int64?
+    public var partial: Bool?
+    public var items: [ExtensionOffloadItem]?
+    public var more: ExtensionOffloadMore?
+
+    public init(state: String = "", detail: String? = nil, tool: ExtensionOffloadTool? = nil, at: Int64 = 0, totalBytes: Int64 = 0, storedBytes: Int64? = nil, partial: Bool? = nil, items: [ExtensionOffloadItem]? = nil, more: ExtensionOffloadMore? = nil) {
+        self.state = state
+        self.detail = detail
+        self.tool = tool
+        self.at = at
+        self.totalBytes = totalBytes
+        self.storedBytes = storedBytes
+        self.partial = partial
+        self.items = items
+        self.more = more
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case detail
+        case tool
+        case at
+        case totalBytes = "total_bytes"
+        case storedBytes = "stored_bytes"
+        case partial
+        case items
+        case more
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.state = (try? c.decodeIfPresent(String.self, forKey: .state)) ?? ""
+        self.detail = try? c.decodeIfPresent(String.self, forKey: .detail)
+        self.tool = try? c.decodeIfPresent(ExtensionOffloadTool.self, forKey: .tool)
+        self.at = (try? c.decodeIfPresent(Int64.self, forKey: .at)) ?? 0
+        self.totalBytes = (try? c.decodeIfPresent(Int64.self, forKey: .totalBytes)) ?? 0
+        self.storedBytes = try? c.decodeIfPresent(Int64.self, forKey: .storedBytes)
+        self.partial = try? c.decodeIfPresent(Bool.self, forKey: .partial)
+        self.items = try? c.decodeIfPresent([ExtensionOffloadItem].self, forKey: .items)
+        self.more = try? c.decodeIfPresent(ExtensionOffloadMore.self, forKey: .more)
+    }
+}
+
+/// offload.run: offload paths (absolute, on machine, each already agreed by the node's protection rules) or restore
+/// items (ids of the inventory), at most 50. dry_run only checks and answers status ok with each item; install lets
+/// the job install the tool first (the user agreed to that too). request_id is the same for a retry of the same
+/// request.
+public nonisolated struct ExtensionOffloadRunParams: Codable, Hashable, Sendable {
+    public var contribution: String
+    public var locale: String
+    public var machine: ExtensionUIMachine
+    public var action: String
+    public var paths: [String]?
+    public var items: [String]?
+    public var dryRun: Bool?
+    public var install: Bool?
+    public var requestId: String
+
+    public init(contribution: String = "", locale: String = "", machine: ExtensionUIMachine = ExtensionUIMachine(), action: String = "", paths: [String]? = nil, items: [String]? = nil, dryRun: Bool? = nil, install: Bool? = nil, requestId: String = "") {
+        self.contribution = contribution
+        self.locale = locale
+        self.machine = machine
+        self.action = action
+        self.paths = paths
+        self.items = items
+        self.dryRun = dryRun
+        self.install = install
+        self.requestId = requestId
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case contribution
+        case locale
+        case machine
+        case action
+        case paths
+        case items
+        case dryRun = "dry_run"
+        case install
+        case requestId = "request_id"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.contribution = (try? c.decodeIfPresent(String.self, forKey: .contribution)) ?? ""
+        self.locale = (try? c.decodeIfPresent(String.self, forKey: .locale)) ?? ""
+        self.machine = (try? c.decodeIfPresent(ExtensionUIMachine.self, forKey: .machine)) ?? ExtensionUIMachine()
+        self.action = (try? c.decodeIfPresent(String.self, forKey: .action)) ?? ""
+        self.paths = try? c.decodeIfPresent([String].self, forKey: .paths)
+        self.items = try? c.decodeIfPresent([String].self, forKey: .items)
+        self.dryRun = try? c.decodeIfPresent(Bool.self, forKey: .dryRun)
+        self.install = try? c.decodeIfPresent(Bool.self, forKey: .install)
+        self.requestId = (try? c.decodeIfPresent(String.self, forKey: .requestId)) ?? ""
+    }
+}
+
+/// One path or item of a run's answer: why it is refused (reason, in the caller's language), or a dry run's verdict
+/// (ok, bytes). refusal is set only by the manager, when the computer's own protection rules refused the path before
+/// the program was asked (a machine.storage.check refusal code: credentials, app_managed, ...).
+public nonisolated struct ExtensionOffloadRunItem: Codable, Hashable, Sendable {
+    public var path: String?
+    public var id: String?
+    public var ok: Bool?
+    public var reason: String?
+    public var refusal: String?
+    public var bytes: Int64?
+
+    public init(path: String? = nil, id: String? = nil, ok: Bool? = nil, reason: String? = nil, refusal: String? = nil, bytes: Int64? = nil) {
+        self.path = path
+        self.id = id
+        self.ok = ok
+        self.reason = reason
+        self.refusal = refusal
+        self.bytes = bytes
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case path
+        case id
+        case ok
+        case reason
+        case refusal
+        case bytes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.path = try? c.decodeIfPresent(String.self, forKey: .path)
+        self.id = try? c.decodeIfPresent(String.self, forKey: .id)
+        self.ok = try? c.decodeIfPresent(Bool.self, forKey: .ok)
+        self.reason = try? c.decodeIfPresent(String.self, forKey: .reason)
+        self.refusal = try? c.decodeIfPresent(String.self, forKey: .refusal)
+        self.bytes = try? c.decodeIfPresent(Int64.self, forKey: .bytes)
+    }
+}
+
+/// offload.run's answer (OffloadRunStatus).
+public nonisolated struct ExtensionOffloadRunResult: Codable, Hashable, Sendable {
+    public var status: String
+    public var job: String?
+    public var tool: ExtensionOffloadTool?
+    public var items: [ExtensionOffloadRunItem]?
+
+    public init(status: String = "", job: String? = nil, tool: ExtensionOffloadTool? = nil, items: [ExtensionOffloadRunItem]? = nil) {
+        self.status = status
+        self.job = job
+        self.tool = tool
+        self.items = items
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case job
+        case tool
+        case items
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.status = (try? c.decodeIfPresent(String.self, forKey: .status)) ?? ""
+        self.job = try? c.decodeIfPresent(String.self, forKey: .job)
+        self.tool = try? c.decodeIfPresent(ExtensionOffloadTool.self, forKey: .tool)
+        self.items = try? c.decodeIfPresent([ExtensionOffloadRunItem].self, forKey: .items)
+    }
+}
+
+/// offload.job and offload.cancel: the job offload.run started.
+public nonisolated struct ExtensionOffloadJobParams: Codable, Hashable, Sendable {
+    public var contribution: String
+    public var locale: String
+    public var machine: ExtensionUIMachine
+    public var job: String
+
+    public init(contribution: String = "", locale: String = "", machine: ExtensionUIMachine = ExtensionUIMachine(), job: String = "") {
+        self.contribution = contribution
+        self.locale = locale
+        self.machine = machine
+        self.job = job
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case contribution
+        case locale
+        case machine
+        case job
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.contribution = (try? c.decodeIfPresent(String.self, forKey: .contribution)) ?? ""
+        self.locale = (try? c.decodeIfPresent(String.self, forKey: .locale)) ?? ""
+        self.machine = (try? c.decodeIfPresent(ExtensionUIMachine.self, forKey: .machine)) ?? ExtensionUIMachine()
+        self.job = (try? c.decodeIfPresent(String.self, forKey: .job)) ?? ""
+    }
+}
+
+/// One path (offload) or item (restore) of a job.
+public nonisolated struct ExtensionOffloadJobItem: Codable, Hashable, Sendable {
+    public var path: String?
+    public var id: String?
+    public var status: String
+    public var error: String?
+    public var bytes: Int64?
+
+    public init(path: String? = nil, id: String? = nil, status: String = "", error: String? = nil, bytes: Int64? = nil) {
+        self.path = path
+        self.id = id
+        self.status = status
+        self.error = error
+        self.bytes = bytes
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case path
+        case id
+        case status
+        case error
+        case bytes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.path = try? c.decodeIfPresent(String.self, forKey: .path)
+        self.id = try? c.decodeIfPresent(String.self, forKey: .id)
+        self.status = (try? c.decodeIfPresent(String.self, forKey: .status)) ?? ""
+        self.error = try? c.decodeIfPresent(String.self, forKey: .error)
+        self.bytes = try? c.decodeIfPresent(Int64.self, forKey: .bytes)
+    }
+}
+
+/// How a job goes. A job belongs to the extension: a client that lost track asks the inventory again. items may be
+/// left out; the manager's answer to the apps always has it.
+public nonisolated struct ExtensionOffloadJob: Codable, Hashable, Sendable {
+    public var state: String
+    public var phase: String?
+    public var doneBytes: Int64
+    public var totalBytes: Int64
+    public var freedBytes: Int64?
+    public var error: String?
+    public var items: [ExtensionOffloadJobItem]?
+
+    public init(state: String = "", phase: String? = nil, doneBytes: Int64 = 0, totalBytes: Int64 = 0, freedBytes: Int64? = nil, error: String? = nil, items: [ExtensionOffloadJobItem]? = nil) {
+        self.state = state
+        self.phase = phase
+        self.doneBytes = doneBytes
+        self.totalBytes = totalBytes
+        self.freedBytes = freedBytes
+        self.error = error
+        self.items = items
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case phase
+        case doneBytes = "done_bytes"
+        case totalBytes = "total_bytes"
+        case freedBytes = "freed_bytes"
+        case error
+        case items
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.state = (try? c.decodeIfPresent(String.self, forKey: .state)) ?? ""
+        self.phase = try? c.decodeIfPresent(String.self, forKey: .phase)
+        self.doneBytes = (try? c.decodeIfPresent(Int64.self, forKey: .doneBytes)) ?? 0
+        self.totalBytes = (try? c.decodeIfPresent(Int64.self, forKey: .totalBytes)) ?? 0
+        self.freedBytes = try? c.decodeIfPresent(Int64.self, forKey: .freedBytes)
+        self.error = try? c.decodeIfPresent(String.self, forKey: .error)
+        self.items = try? c.decodeIfPresent([ExtensionOffloadJobItem].self, forKey: .items)
+    }
+}
+
+/// One enabled disk_offload contribution, as GET /api/v1/extensions/-/offload lists it for the apps.
+public nonisolated struct ExtensionOffloadProvider: Codable, Hashable, Sendable {
+    public var `extension`: String
+    public var id: String
+    public var name: String
+    public var kinds: [String]
+    public var restore: Bool
+
+    public init(`extension`: String = "", id: String = "", name: String = "", kinds: [String] = [], restore: Bool = false) {
+        self.extension = `extension`
+        self.id = id
+        self.name = name
+        self.kinds = kinds
+        self.restore = restore
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case `extension`
+        case id
+        case name
+        case kinds
+        case restore
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.extension = (try? c.decodeIfPresent(String.self, forKey: .`extension`)) ?? ""
+        self.id = (try? c.decodeIfPresent(String.self, forKey: .id)) ?? ""
+        self.name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? ""
+        self.kinds = (try? c.decodeIfPresent([String].self, forKey: .kinds)) ?? []
+        self.restore = (try? c.decodeIfPresent(Bool.self, forKey: .restore)) ?? false
+    }
+}
+
+/// GET /api/v1/extensions/-/offload?machine=: the providers the map can offer on that computer.
+public nonisolated struct ExtensionOffloadProviders: Codable, Hashable, Sendable {
+    public var providers: [ExtensionOffloadProvider]
+
+    public init(providers: [ExtensionOffloadProvider] = []) {
+        self.providers = providers
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case providers
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.providers = (try? c.decodeIfPresent([ExtensionOffloadProvider].self, forKey: .providers)) ?? []
+    }
+}
+
+/// POST /api/v1/extensions/{id}/-/offload/{cid}/run, an app's request: without dry_run or confirm it is refused
+/// (confirmation_required); install only after the user agreed to the tool's install confirmation.
+public nonisolated struct ExtensionOffloadRunRequest: Codable, Hashable, Sendable {
+    public var machine: String
+    public var action: String
+    public var paths: [String]?
+    public var items: [String]?
+    public var dryRun: Bool?
+    public var confirm: Bool?
+    public var install: Bool?
+
+    public init(machine: String = "", action: String = "", paths: [String]? = nil, items: [String]? = nil, dryRun: Bool? = nil, confirm: Bool? = nil, install: Bool? = nil) {
+        self.machine = machine
+        self.action = action
+        self.paths = paths
+        self.items = items
+        self.dryRun = dryRun
+        self.confirm = confirm
+        self.install = install
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case machine
+        case action
+        case paths
+        case items
+        case dryRun = "dry_run"
+        case confirm
+        case install
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.machine = (try? c.decodeIfPresent(String.self, forKey: .machine)) ?? ""
+        self.action = (try? c.decodeIfPresent(String.self, forKey: .action)) ?? ""
+        self.paths = try? c.decodeIfPresent([String].self, forKey: .paths)
+        self.items = try? c.decodeIfPresent([String].self, forKey: .items)
+        self.dryRun = try? c.decodeIfPresent(Bool.self, forKey: .dryRun)
+        self.confirm = try? c.decodeIfPresent(Bool.self, forKey: .confirm)
+        self.install = try? c.decodeIfPresent(Bool.self, forKey: .install)
+    }
+}
+
+/// The run route's 202 answer: the job to follow with GET …/jobs/{job}.
+public nonisolated struct ExtensionOffloadStarted: Codable, Hashable, Sendable {
+    public var job: String
+
+    public init(job: String = "") {
+        self.job = job
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case job
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.job = (try? c.decodeIfPresent(String.self, forKey: .job)) ?? ""
+    }
+}
+
+/// An offload route's error: error in the reader's language and a code (bad_request, confirmation_required,
+/// read_only, not_found, machine_offline, node_outdated, tool_install_required with tool, offload_refused with items,
+/// plugin_failed (detail: the provider's own words, one line), usage_failed, deadline).
+public nonisolated struct ExtensionOffloadError: Codable, Hashable, Sendable {
+    public var error: String
+    public var code: String
+    public var tool: ExtensionOffloadTool?
+    public var detail: String?
+    public var items: [ExtensionOffloadRunItem]?
+
+    public init(error: String = "", code: String = "", tool: ExtensionOffloadTool? = nil, detail: String? = nil, items: [ExtensionOffloadRunItem]? = nil) {
+        self.error = error
+        self.code = code
+        self.tool = tool
+        self.detail = detail
+        self.items = items
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case error
+        case code
+        case tool
+        case detail
+        case items
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.error = (try? c.decodeIfPresent(String.self, forKey: .error)) ?? ""
+        self.code = (try? c.decodeIfPresent(String.self, forKey: .code)) ?? ""
+        self.tool = try? c.decodeIfPresent(ExtensionOffloadTool.self, forKey: .tool)
+        self.detail = try? c.decodeIfPresent(String.self, forKey: .detail)
+        self.items = try? c.decodeIfPresent([ExtensionOffloadRunItem].self, forKey: .items)
     }
 }
 
