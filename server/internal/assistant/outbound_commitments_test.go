@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/connector"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -295,6 +295,7 @@ func testOutwardInboxSend(t *testing.T, mode string) {
 }
 
 func TestOutboundPromiseOriginalSourceIsNotTheWorkTopic(t *testing.T) {
+	needsLarkLayer(t)
 	ctx := context.Background()
 	st := &memStore{}
 	s, f, run, _ := outwardBot(t, st)
@@ -543,7 +544,7 @@ func TestOutboundPromiseDefiniteRejectionDoesNotRequireReadback(t *testing.T) {
 			text := "I'll share the results later."
 			if source == "bot" {
 				f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) {
-					return nil, &feishubot.APIError{Op: "reply", Code: 230002, Msg: "bot is not in the chat"}
+					return nil, &botcard.APIError{Op: "reply", Code: 230002, Msg: "bot is not in the chat"}
 				})
 				sendOutwardBot(t, s, run, text)
 			} else {

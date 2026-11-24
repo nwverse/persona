@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -220,7 +220,7 @@ func outboundDefinitelyRejected(err error) bool {
 			return false
 		}
 	}
-	return feishubot.Refused(err) || feishubot.ChatRefused(err) || feishubot.MessageGone(err) || feishubot.RateLimited(err)
+	return botcard.Refused(err) || botcard.ChatRefused(err) || botcard.MessageGone(err) || botcard.RateLimited(err)
 }
 
 // Remove only the fresh intent belonging to this rejected attempt. If the

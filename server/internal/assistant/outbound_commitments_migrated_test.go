@@ -53,6 +53,9 @@ func outwardMigratedInboxOn(t *testing.T, store Store) (*inboxHub, *InboxItem) {
 func TestOutboundPromiseMigratedFeishuCrossPathFulfillment(t *testing.T) {
 	for _, path := range []string{"bot answer", "source report", "legacy source report", "reverse Inbox reply"} {
 		t.Run(path, func(t *testing.T) {
+			if path == "source report" || path == "legacy source report" {
+				needsLarkLayer(t)
+			}
 			h, it := outwardMigratedInbox(t)
 			ctx := context.Background()
 			r := &channel.Run{ID: "native-example", Channel: channel.Feishu, ReplyTo: "om_request",
@@ -148,6 +151,9 @@ func TestOutboundPromiseMigratedFeishuIdentityBoundaries(t *testing.T) {
 func TestOutboundPromiseMigratedFeishuFallbackUsesSourceIdentity(t *testing.T) {
 	for _, scope := range []string{"same message source report", "opaque source report", "same conversation new Inbox item", "another account", "another topic anchor", "missing topic anchor"} {
 		t.Run(scope, func(t *testing.T) {
+			if scope == "same message source report" || scope == "opaque source report" {
+				needsLarkLayer(t)
+			}
 			h, it := outwardMigratedInbox(t)
 			h.f.answerApp(AppFeishu, FeishuMessages, func(json.RawMessage) (any, error) {
 				return nil, errors.New("source cannot be read by the bot")

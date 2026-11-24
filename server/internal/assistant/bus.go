@@ -54,6 +54,8 @@ type BusOptions struct {
 	// Outbox keeps the pushes and the apps' live updates made while the hub is away, for when it is back
 	// (outbox.go); nil: they are lost then (tests).
 	Outbox OutboxStore
+	// Features is the built-in modules' wire feature flags to announce in manager.hello; nil: no module features.
+	Features func() []string
 	// ConfigFile is the manager's manager.json: its sections go over the hub's hello (ownconfig.go); "": the
 	// hello as it is (tests).
 	ConfigFile string
@@ -147,14 +149,23 @@ func NewBusHub(o BusOptions) *BusHub {
 		Uncompressed: o.Deploy == "child" || o.Deploy == DeployService && id == assistantwire.AssistantID && loopbackHub(o.Hub),
 		HelloMethod:  assistantwire.MethodHello,
 		HelloParams: func() any {
-			return map[string]any{"id": id, "host": host, "os": runtime.GOOS, "arch": runtime.GOARCH,
-				"deploy": o.Deploy, "version": o.Version, "capabilities": []string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityAgentSessionArchives,
+			b.mu.Lock()
+			svc := b.svc
+			b.mu.Unlock()
+			params := map[string]any{"id": id, "host": host, "os": runtime.GOOS, "arch": runtime.GOARCH,
+				"deploy": o.Deploy, "version": o.Version, "capabilities": withRecording([]string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityAgentSessionArchives,
 					assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityAgentNaming, assistantwire.CapabilityAgentAutoname, assistantwire.CapabilityMachinesOwn,
 					assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityMeetingLiveView,
 					assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
 					assistantwire.CapabilityTaskInput, assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityAssistantSegments, assistantwire.CapabilityDirectionSessions, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
 					assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityRemoteImages, assistantwire.CapabilityTodoView,
-					assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, assistantwire.CapabilityTodoImages, devicewire.SharingCapability, devicewire.DevelopmentPackagesCapability}}
+					assistantwire.CapabilityTodoRevision, assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, assistantwire.CapabilityTodoImages, devicewire.SharingCapability, devicewire.DevelopmentPackagesCapability}, svc)}
+			if o.Features != nil {
+				if features := o.Features(); len(features) > 0 {
+					params["features"] = features
+				}
+			}
+			return params
 		},
 		OnHello: b.onHello,
 		// A node's tool call that its caller stopped waiting for ends at the hub too (fleet_tools.go).
