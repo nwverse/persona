@@ -26,7 +26,7 @@ The prototype is the UI and interaction standard; compare screen by screen durin
 ### Dispatch: express intent, do not choose a project
 
 - Persona splits multiple requests in one sentence into tasks and passes them to hub through `task_plan`. Each task includes its inferred computer, directory (project), launcher / model, permissions,
-  and a one-line rationale. Inference uses knowledge-base project-to-directory mappings, the computer recently working in that directory (`agents_list`), the default launcher, and your past choices.
+  an optional host (`agy` for the Antigravity companion, which an agy launcher gets by default where the companion runs it, or an engine host; `docs/integrations/launchers.md`, "Work agents") and a one-line rationale. Inference uses knowledge-base project-to-directory mappings, the computer recently working in that directory (`agents_list`), the default launcher, and your past choices.
 - Three cost tiers determine whether to show a plan first:
 
   | Tier | Examples | Behavior |

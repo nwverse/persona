@@ -250,6 +250,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	// A self-planning constraint applies only while a policy rule asks for it on this try.
 	t.planFirst = false
 	params := map[string]any{"model_source": planModelSource(*t), "launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "speed": t.Speed, "tier": t.Tier}
+	if t.Host != "" {
+		params["host"] = t.Host // before the fit: an engine host's runtime runs its own launchers (#8140)
+	}
 	// The start-defaults policy: its preset goes in before the start is resolved, as if the task had named that tier;
 	// its effort and ultracode after the launcher fit, and the goal (a rule's or the Codex default) after that.
 	defaults, withDefaults := s.taskStartDefaults(ctx, t)
@@ -287,6 +290,12 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err != nil {
 		return "", "", err
 	}
+	if err := checkHostLauncher(params, fit); err != nil {
+		return "", "", err
+	}
+	// An agy task that names no host starts on the computer's Antigravity companion where that runs its launcher
+	// (start_host.go, #13447); a retry in a pane an earlier try opened, or a prepared backend workspace, stays as it was.
+	companion := t.inPane == "" && !t.backendWorkspace() && s.companionStartHost(ctx, m, fit, params)
 	if t.CallerPermission != nil && !t.preservePermission {
 		keepSettled := false
 		if retry && settledPermission != "" && *t.CallerPermission == "" && t.RetryFromAgent != "" {
@@ -573,7 +582,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	// once, in whatever order the node refuses them; both refusals come before anything starts.
 	var skipped string
 	var refused bool
-	for range 2 {
+	for range 3 {
 		if reason, no := s.goalRefusal(err, params); no {
 			delete(params, "goal")
 			s.logf("task %s: start: %s; starting without a goal", t.TodoID, reason)
@@ -587,6 +596,21 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			skipped, refused = reason, true
 			delete(params, "ultracode")
 			s.logf("task %s: start: %s; starting without ultracode", t.TodoID, skipped)
+			err = start()
+			continue
+		}
+		// The companion the hub picked went away before the start reached it: nothing ran, and the start goes to the
+		// computer's default host instead (a pane), never for a read-only task, which only the companion holds read-only.
+		if companionAway(err, companion) && !t.Readonly {
+			companion = false
+			delete(params, "host")
+			s.logf("task %s: start: the Antigravity companion is not connected on %s; starting in its default host", t.TodoID, m.ID)
+			if err := s.checkContinuationScope(t); err != nil {
+				return "", "", err
+			}
+			if err := s.checkRequestStart(ctx, *t); err != nil {
+				return "", "", err
+			}
 			err = start()
 			continue
 		}
