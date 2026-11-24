@@ -1,4 +1,5 @@
 {
+  "title_dashboards": "Let Persona make dashboards",
   "title_modules": "Built-in modules",
   "change_modules": "Built-in modules: {before} → {after}. Applies at the next manager start; the running process is unchanged.",
   "modules_unchanged": "The built-in module switch is unchanged.",
