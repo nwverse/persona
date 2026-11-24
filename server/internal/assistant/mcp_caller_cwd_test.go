@@ -89,7 +89,7 @@ func TestSpaceFirstToolsBeforeSessionPublication(t *testing.T) {
 					if denied != (space != SpaceHealth) {
 						t.Fatalf("Health call boundary for %q: %+v", space, call)
 					}
-					if space == SpaceHealth && (!call.IsError || len(call.Content) == 0 || call.Content[0].Text != "action must be log, list or delete") {
+					if space == SpaceHealth && (!call.IsError || len(call.Content) == 0 || call.Content[0].Text != "action must be log, list, delete or add_item") {
 						t.Fatalf("Health call did not reach intake argument validation: %+v", call)
 					}
 					legacy := privacyRequest(t, s, "server", "mcp.call", map[string]any{"session_id": sid, "assistant": true, "name": "health_intake", "args": map[string]any{}}).(proto.ToolResult)
