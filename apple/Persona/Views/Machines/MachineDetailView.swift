@@ -258,7 +258,7 @@ struct MachineDetailView: View {
                         if i > 0 { Divider().padding(.leading, Theme.Space.l) }
                         NavigationLink(value: s.key) {
                             HStack(spacing: Theme.Space.s) {
-                                SessionRow(session: s, machine: machine, showMachine: false)
+                                SessionRow(session: s, machine: machine, showMachine: false, preferHerdrTabName: model.prefersHerdrTabName(for: s))
                                 ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                             }
                             .padding(.horizontal, Theme.Space.l)

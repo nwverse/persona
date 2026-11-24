@@ -1,7 +1,7 @@
-// Dual-template classification & action resolution for Web TodoDetail under todos_v2 (#14777).
+// Dual-template classification & action resolution for Web TodoDetail under todos_v2 (#14777, #14851).
 // Pure logic module: decides whether a to-do uses the lightweight "personal" template or the
-// action-driven "work_goal" template, resolves the primary CTA when an active Agent is running,
-// and decides whether empty personal schedule/reminder fields or long notes should start collapsed.
+// action-driven "work_goal" template and resolves the primary CTA when an active Agent is running.
+// All right-pane sections remain expanded by default under todos_v2 (#14851).
 
 import { foldedState } from "./child-sessions";
 import { makeSessionLookup, responsibleOf, type SessionLookup, type Todo } from "./todos";
@@ -29,9 +29,6 @@ export interface WorkGoalActions {
   handOverTone: "accent" | "secondary";
   handOverMode: "hand_over" | "add_agent";
 }
-
-const LONG_NOTES_CHAR_THRESHOLD = 240;
-const LONG_NOTES_LINE_THRESHOLD = 5;
 
 /** Returns a trimmed http(s) URL string, or undefined for missing or unsafe URLs. */
 export function safeDetailHttpUrl(raw: unknown): string | undefined {
@@ -175,26 +172,4 @@ export function resolveWorkGoalActions(
     handOverTone: "accent",
     handOverMode: "hand_over",
   };
-}
-
-/**
- * In the `work_goal` template, collapse the personal schedule/reminder row by default only when
- * `due_at`, `due_date`, and `remind_at` are all empty so existing deadlines/reminders are never hidden.
- */
-export function shouldCollapsePersonalFields(todo: Pick<Todo, "due_at" | "due_date" | "remind_at">): boolean {
-  const hasDueAt = typeof todo.due_at === "string" && todo.due_at.trim().length > 0;
-  const hasDueDate = typeof todo.due_date === "string" && todo.due_date.trim().length > 0;
-  const hasRemindAt = typeof todo.remind_at === "string" && todo.remind_at.trim().length > 0;
-  return !hasDueAt && !hasDueDate && !hasRemindAt;
-}
-
-/**
- * In the `work_goal` template, collapse long notes/prompts by default so the first screen
- * highlights ownership, repository bindings, and subtasks.
- */
-export function shouldCollapseLongNotes(todo: Pick<Todo, "notes">): boolean {
-  const raw = todo.notes?.trim() ?? "";
-  if (!raw) return false;
-  if (raw.length > LONG_NOTES_CHAR_THRESHOLD) return true;
-  return raw.split(/\r?\n/).length > LONG_NOTES_LINE_THRESHOLD;
 }

@@ -4760,6 +4760,17 @@ const (
 // ChannelSendKinds are the values of ChannelSendKind, in order.
 var ChannelSendKinds = []string{"answer", "note", "ask", "push"}
 
+// ChannelChatKind: what kind of chat a channel message came from: direct (private chat), group (regular group chat),
+// or topic (a topic or thread inside a group).
+const (
+	ChannelChatKindDirect = "direct"
+	ChannelChatKindGroup  = "group"
+	ChannelChatKindTopic  = "topic"
+)
+
+// ChannelChatKinds are the values of ChannelChatKind, in order.
+var ChannelChatKinds = []string{"direct", "group", "topic"}
+
 // ChannelReceiveParams: channel.receive: one of the owner's messages (only the owner's). Answered once the hub has
 // it, deduplicated by id and queued, not after the turn.
 type ChannelReceiveParams struct {
@@ -4779,6 +4790,12 @@ type ChannelMessage struct {
 	Chat string `json:"chat,omitempty"`
 	// The topic or thread within chat, when the request came from one.
 	Topic string `json:"topic,omitempty"`
+	// Opaque chat or group identifier for conversation routing when integrations_v2 is enabled.
+	ChatID string `json:"chat_id,omitempty"`
+	// Kind of chat the message came from (direct, group, or topic), when known.
+	ChatKind string `json:"chat_kind,omitempty"`
+	// Opaque topic or thread identifier within chat_id for conversation routing when integrations_v2 is enabled.
+	TopicID string `json:"topic_id,omitempty"`
 	// Context the extension gathered for this request, such as nearby chat history. It is data, not owner-authored
 	// instructions.
 	Context string `json:"context,omitempty"`

@@ -35,7 +35,7 @@ func (s *Service) ChannelReceive(ctx context.Context, p ChannelReceive) error {
 	if m.Owner != nil && !*m.Owner {
 		return badRequest(errors.New(i18n.T(s.botLang(ctx), "assistant-channels_plugin.mention_owner_required")))
 	}
-	admission, err := s.admitChannelMessage(p.Channel, m)
+	admission, err := s.admitChannelMessage(ctx, p.Channel, m)
 	if err != nil {
 		return &rpc.Error{Code: CodeTryAgain, Message: err.Error()} // the hub hands it over again
 	}
