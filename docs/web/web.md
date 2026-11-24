@@ -2252,12 +2252,20 @@ The server contract, legacy preservation, egress/consent and fixed-slot migratio
 
 ## Labs
 
-Settings › Labs (#9877; `web/src/views/settings/Labs.tsx`) is the one place for trial features and for choosing between a
-stable and a new implementation of the same thing. It is a sidebar group of its own, after the hub's, without a title:
-each module says in its own document whose setting it holds. The page explains Labs and says that each item states its
-own scope (the terminal one is this browser only), then draws each module's source with the configuration form. Modules
-inject their source in `Labs.tsx`; the page and the form know nothing else of them. Only real features: never a demo
-entry. Features (the optional feature modules' switches, "Modules" below) is one of them.
+Settings › Labs (#9877, #14468, `web/src/views/settings/Labs.tsx`) holds temporary experiments. It has its own untitled
+sidebar group after the hub's. The page explains Labs and renders each experiment's injected configuration source,
+which explains where the choice applies and when it takes effect.
+
+Each entry must meet all three admission criteria.
+
+1. It trials a real feature to validate stability or usability, or lets the user try a new implementation of the same
+   capability alongside the stable one. The WebGL renderer and the on-demand work management guide are examples.
+2. The stable path remains the default during the trial. Switching back is lossless and requires no irreversible migration.
+3. A linked tracking issue defines how the trial will graduate or be removed. The issue stays open until that exit.
+
+Put permanent switches for shipped optional modules such as Health, Voice chat and Meeting recordings in Settings ›
+General ("Modules" below). Put lasting preferences, including advanced or per-browser options, in their owning
+Settings category. Keep irreversible changes, internal debug controls and placeholder demos out of Labs.
 
 A registration pairs the source with optional Web `guidance`. Supply the experiment's localized `notes` and any
 `fields[id].notes` as ordered lists of `{ kind: "info" | "warning", text }`. Keep each note in one place and omit empty
@@ -2311,16 +2319,13 @@ leaves the page.
 
 ### Adding, graduating and removing an entry
 
-1. **Add** an entry only for a real feature with both paths in the code, where going back is safe: no irreversible data
-   migration, no restored removed implementation, no bypassed security fix. The module adds a source (its document, with
-   details for scope, activation and rollback, its words in `en`, `zh-Hans` and `ja`) to `Labs.tsx`, a search index entry,
-   and tests for both paths and the fallback. Keep the old path the default until the new one has been used for a while.
+1. **Add** an entry that meets the admission criteria and link its tracking issue. Register a source in `Labs.tsx`
+   with scope, activation and rollback in `en`, `zh-Hans` and `ja`. Add a search entry and test both paths and the
+   fallback. Preserve security fixes and keep the stable path available throughout the trial.
 2. **Graduate** when the new path is ready for everyone: make it the default in a PR linked to the entry's issue, say so
    in the release notes, and keep the entry for at least one release so people can still go back.
 3. **Remove** after that release: delete the module's source, its words and the old path. Stop reading its key; leave
    stored values alone (they are ignored). An entry whose new path is abandoned is removed the same way with the old path kept.
-
-An entry should not stay in Labs indefinitely; each one's issue stays open until it graduates or is removed.
 
 ## Modules
 
@@ -2382,8 +2387,9 @@ when the pointer, the focus or a finger reaches a link to it (its sidebar entry)
 an off module. Never at idle: that would make every browser fetch every module, outside `IDLE_TIER_BUDGET`. Otherwise it loads on its first render: its strings first (`i18n` `addCatalogs`; its code may call `t()` at module
 scope), then its code. A module's namespaces (`<id>.json`, `<id>-*.json` under `src/i18n/locales/<lang>/`) stay beside the
 others, so every catalog check covers them, but the build leaves them out of `client-startup` and `client-rest` and makes
-them the module's own catalog (`?catalog=module-<id>`, `web/i18n-catalogs.ts`). A module's sidebar label, page title and Labs description
-are read before its strings load, so their keys live in the shell's namespaces (`sidebar.json`, `app.json`).
+them the module's own catalog (`?catalog=module-<id>`, `web/i18n-catalogs.ts`). A module's sidebar label, page title and feature description
+are read before its strings load, so their keys live in shell namespaces such as `sidebar.json`, `app.json` and
+`settings-features.json`.
 
 **Chat slots, Settings categories and cards** (#13846, `web/src/core/ChatSlots.tsx`, `core/ModuleSettingsPage.tsx`).
 A module's code (`ModuleCode`) fills what its descriptor names: `chat` for its chat slots, `settings` for its categories
@@ -2404,14 +2410,14 @@ A module's Settings category is listed after its group's own (`views/settings/na
 kind a module renders is drawn by that module (`InteractionCard`), before the generic fallback. A slot loads its
 module's code when a page first reaches it and draws nothing until it is in, and nothing at all while the module is
 off, so with no module filling a slot every screen is as it was; a module's part that throws is left out, not the page.
-The search box also finds each module's switch in Labs › Features, from the module list.
+Settings search opens the Optional features group in General or jumps to an individual module's switch.
 
-**The switch.** Settings › Labs › Features lists every registered module with a switch (`web/src/core/module-labs.ts`,
-drawn by the configuration form like any Labs entry). Every module is on by default, so nothing changes for anyone who
-never opens it. Off is kept in this browser only (`localStorage` `persona.modules.off`, a JSON array of ids;
-`web/src/core/module-switch.ts`), takes effect at once in every tab, grants nothing and reaches neither the hub nor
-another device. A module the hub does not offer shows read-only, saying so. Labs is where it lives because it is an
-advanced, per-browser choice: the everyday sidebar and Settings stay as they were (principles 1 and 2).
+**The switch.** Settings › General › Optional features uses `ConfigurationForm` with the registry-backed source in
+`web/src/core/module-features.ts`. It lists every registered module, including modules switched off, and is omitted
+from a core-only build. These are lasting browser preferences for shipped features. Each defaults to on. The browser
+stores the ids switched off as a JSON array in `localStorage` under `persona.modules.off`
+(`web/src/core/module-switch.ts`). Changes take effect in every tab of this browser. Hub availability still applies,
+and a module the hub does not serve has a read-only switch with the reason.
 
 **The guard.** `npm run lint` runs a second pass over all of `src` with `web/eslint.modules.config.mjs`:
 `no-restricted-imports` and `no-restricted-syntax` (for `import()`) catch the spelled paths, and the config's own
@@ -2447,8 +2453,8 @@ lists and searches that would show it leave it out.
 Agent, the latest hand-off, its facts, the private mark, the minutes or an all-day recording's recap, the live view, the
 conversation, the questions, the photos and the transcript, with their strings (`recording.json`,
 `recording-handoff.json`) and the recording's view of its entry (`recording-view.ts`: its transcript lines, an all-day
-recording's parts of the day, its meeting's room, follow-up and photos). Its Labs name and line are `sidebar.json`'s. It names the `recordings` kind; switched off, the Meetings list reads only the imported
-meetings and recordings are absent. Its hub flag is `module.recording`: off on a hub that publishes module flags
+recording's parts of the day, its meeting's room, follow-up and photos). Its switch's name and description come from
+`sidebar.json`. It names the `recordings` kind. When switched off, the Meetings list reads only the imported meetings. Its hub flag is `module.recording`: off on a hub that publishes module flags
 without it, or where a browser switches it off. The
 recording settings (how long recordings and minutes are kept, Settings › Persona) stay in core for now.
 
@@ -2463,7 +2469,7 @@ unknown while the module is off.
 ### Adding a module
 
 1. Create `web/src/modules/<id>/` with `module.ts` exporting its `ModuleDescriptor`: the id (from #13430 section 2), its
-   hub `feature` if the hub has one, `title` and `description` for the Labs switch, its `routes` and `navItems`, its
+   hub `feature` if the hub has one, `title` and `description` for the General switch, its `routes` and `navItems`, its
    `i18nNamespaces` with `locales: byLanguage(import.meta.glob("../../i18n/locales/*/_meta.json", { query: "?catalog=module-<id>" }))`,
    and `load: () => import("./Page").then((m) => ({ Page: m.Page }))`.
 2. Move the feature's files into the directory and fix their imports; the shared helpers they use stay in core.
@@ -3139,7 +3145,7 @@ Talking to the conversation you are in, as on iOS ([voice.md](../assistant/voice
 the hub's voice extension (`kind: voice`, protocol 2) runs the fast realtime model, the conversation (an agent's chat or a Persona conversation, the main one included) does the work. Code: the voice module, `src/modules/voice/` (#13431; its pure parts unit-tested, its page parts in `chat/`), which
 reaches the chat only through the chat slots ("Modules"): the composer's button (`composer.trailingAction`), the captions
 (`chat.tail`), the bar and the ended row (`chat.bar`) and the card's mark (`interaction.asked`), in `chat/slots.tsx`. Its
-hub flag is `module.voice`; switched off (Settings › Labs › Features, or a hub that publishes module flags without it)
+hub flag is `module.voice`; switched off (Settings › General › Optional features, or a hub that publishes module flags without it)
 there is no button, no bar and no mark, and nothing of it loads. The web composer has no dictation, so nothing of the
 composer moved with it.
 

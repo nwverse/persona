@@ -177,6 +177,10 @@ type Settings struct {
 	// Leaders are the side conversations the user made leaders (#3133, supervise_leader.go): a task one hands out with
 	// task_plan is supervised by it instead of the main conversation. Empty (the default): only the main one supervises.
 	Leaders []string `json:"leaders,omitempty"`
+	// LimitFallbacks are the launchers, first choice first, that a conversation the owner relies on goes on with when a
+	// subscription's usage limit stops it, until that limit resets (#14435, limit_fallback.go). Empty (the default):
+	// it waits for the reset as before. The assistant writes it through persona_settings; PUT /api/v1/assistant does not.
+	LimitFallbacks []string `json:"limit_fallbacks,omitempty"`
 	// BriefingWaits tunes only the deterministic wait rows in morning/evening facts: the briefing module's setting
 	// (internal/modules/briefing, Waits), kept here as stored, also while the module is off. Nil uses the module's
 	// defaults (the supervision thresholds); changes go through persona_settings' ordinary owner approval (modules.go),
