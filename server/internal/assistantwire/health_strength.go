@@ -44,6 +44,7 @@ type StrengthSet struct {
 type StrengthSetFilter struct {
 	Exercise, Workout string
 	From, Until       time.Time
+	Limit             int
 }
 type StrengthWorkout struct {
 	ID         string

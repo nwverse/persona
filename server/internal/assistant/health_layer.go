@@ -202,6 +202,8 @@ func (s *Service) healthCardAction(w http.ResponseWriter, r *http.Request, st vi
 		writeAlreadyAnswered(w, a)
 	case "changed":
 		viewChangedNow(w, r, st, conversation, key)
+	case "invalid_draft":
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-health_strength.invalid_draft"))
 	case "not_found":
 		apierr.WriteBody(w, http.StatusNotFound, apierr.Body(http.StatusNotFound, "not_found", i18n.Err("assistant-health_strength.not_found")))
 	default:

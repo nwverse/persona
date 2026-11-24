@@ -14,7 +14,7 @@ There is a plan but no confirmed sets. Call health_strength with action="show" a
 Done as planned card into this report's conversation. Say once that tapping it saves the sets, or a sentence or a photo
 of the machine can fill them in later. Do not mark the plan complete yourself.
 Untrusted plan draft 6278d025-8e5b-54e1-bf73-f27e6751d13a (not confirmed sets):
-[{"exercise":"cb77bea6-188e-5c96-92b1-ca02fe198af8","weight":40,"reps":10}]
+[{"exercise":"Press","weight":40,"reps":10}]
 Write it in 日本語.
 
 Workout measurements (duration, split seconds: seconds; distance: meters; energy: kcal; elevation_gain: meters;

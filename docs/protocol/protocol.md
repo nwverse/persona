@@ -2682,28 +2682,37 @@ next discovery heartbeat adds the tools within 30 seconds after the snapshot arr
 effective space. Creating, updating or logging requires the added `strength` item; existing pages and stored data remain
 available after the item is removed. See docs/assistant/health.md "Strength training" for storage and workout linking.
 
+`history` accepts optional `id` and `days` (default 30, 1–366): it groups records by owner-local day. Without `id` it
+returns the latest 500 sets across all exercises; with `id`, the existing per-exercise range behavior is retained.
+
 `-health-intake` is the Health module's reserved page id for water, protein **and strength training**. All use
 `POST /api/v1/assistant/health/intake/ui`, a full-device route, with the existing `UIRequest` / `ActionResult` contract.
 The extension-style entry is `/extension/-health-intake/pages?state=<JSON>`. Strength state selects:
 
 | `page` | Additional state | Result |
 | --- | --- | --- |
-| `strength.overview` | `manage`, `exercises_offset`, `drafts_offset`, `muscles_offset`, optional `exercise` and `field` (`rename`, `setting`, `rule`) | Pending drafts, exercises with last/best, weekly primary-muscle working sets, latest session, next open plan and exercise management |
+| `strength.overview` | `manage`, `exercises_offset`, `drafts_offset`, `muscles_offset`, optional `exercise`, `field` (`rename`, `setting`, `rule`) and `edit_value` (a rejected name retained for correction) | Pending drafts, exercises with last/best, weekly primary-muscle working sets, latest session, next open plan and exercise management |
 | `strength.exercise` | `exercise` UUID, `metric` (`weight` or `e1rm`), `days` (30/90/365), `offset` | Daily best chart, individual sets and Undo; only currently listed sets may be undone |
-| `strength.edit` | `draft` UUID, `rev`, optional `work` (at most 40 sets) | Working copy; Save updates the draft and card in one transaction, Cancel writes nothing, stale revisions reload |
+| `strength.edit` | `draft` UUID, `rev`, optional `work` (at most 40 sets) | Working copy; Save updates the draft and card in one transaction, Cancel writes nothing, stale revisions reload; actions after settlement redraw the read-only result |
 | `strength.home` | None | Latest session, seven days of training and up to three recent personal records; opens the overview |
 
 Omitted `days` / `metric` default to 30 / `weight`. The client returns state opaquely. Page rendering negotiates
 `min(context.ui_version, hub UI version)` and uses the normal page fitting; clients below UI version 6 get a read-only
 draft with an update hint. Locale comes from page context before the request and owner defaults. Invalid strength state
-returns 400. A missing Health module leaves the shared page route at 404 and announces no `health_strength` capability.
+returns 400 with strength-specific copy. Duplicate exercise names return the page with a toast and retain the input.
+For UI version 6 or later, a Save/stepper/add/remove action on an already saved or discarded draft returns 200 with
+a read-only page and its status; UI versions below 6 retain their existing invalid-edit response. A missing Health
+module leaves the shared page route at 404 and announces no `health_strength` capability.
 `health_strength` events have no measurements or identifiers: open strength pages and home cards reload themselves.
 
 Managed cards keep the existing assistant-view schema. Keys beginning `health-strength-` belong to the module, with a
 draft UUID and an optional move revision suffix. `POST /api/v1/assistant/conversations/{id}/views/{key}/actions` dispatches
 those keys to the module before the generic action outbox. It checks conversation, Health space, declared action,
 card version and durable draft revision. Save confirms all sets once; Don't save writes no sets. The draft and card
-commit together, followed by `assistant_view` and `health_strength`; no model turn or push is required. The response
+commit together, followed by `assistant_view` and `health_strength`; no model turn or push is required. A plan uses
+the latest-starting workout on its owner-local `plan_day` as its sets' timestamp, then the normal window matching;
+with no workout on that day it uses the confirmation time. If an exercise on a card has been deleted, Save returns
+400 (`bad_request`, `retryable: false`) with guidance to discard or adjust; it writes no sets. The response
 contains the existing synthetic action receipt with `status: sent`. Retrying the same click with its original version
 returns the receipt; another click returns `already_answered`, and an open stale card returns `view_changed`.
 Adjust opens `strength.edit`; without a public URL the card points the owner to the Health overview. Moving a draft

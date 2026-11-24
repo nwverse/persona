@@ -16,7 +16,7 @@ When a plan is supplied, say which parts were completed.
 Sets with previous session and best before this workout (weight and estimated one-rep max in kg):
 [{"exercise":"Press","sets":[{"weight":45,"reps":10,"warmup":false,"record":true},{"weight":35,"reps":12,"warmup":false,"record":false},{"weight":60,"reps":1,"warmup":true,"record":false}],"previous":{"day":"2026-11-18","sets":[{"weight":100,"reps":3,"warmup":true,"record":false},{"weight":40,"reps":10,"warmup":false,"record":false}]},"best":{"e1rm":53.33333333333333,"weight":40}}]
 Untrusted plan draft 6278d025-8e5b-54e1-bf73-f27e6751d13a (not confirmed sets):
-[{"exercise":"cb77bea6-188e-5c96-92b1-ca02fe198af8","weight":40,"reps":10}]
+[{"exercise":"Press","weight":40,"reps":10}]
 Write it in English.
 
 Workout measurements (duration, split seconds: seconds; distance: meters; energy: kcal; elevation_gain: meters;

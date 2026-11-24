@@ -265,3 +265,46 @@ func TestHealthStrengthCapabilityFollowsModule(t *testing.T) {
 		}
 	}
 }
+
+func TestHealthStrengthDeletedExerciseCardReturnsBadRequest(t *testing.T) {
+	s, _, d, conv, key := strengthCardHarness(t)
+	ctx := context.Background()
+	draft, err := d.HealthStrengthDraftByCard(ctx, key)
+	if err != nil || draft == nil {
+		t.Fatal(draft, err)
+	}
+	var body struct {
+		Sets []struct {
+			Exercise string `json:"exercise"`
+		} `json:"sets"`
+	}
+	if err := json.Unmarshal(draft.Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.HealthStrengthExerciseDelete(ctx, body.Sets[0].Exercise); err != nil {
+		t.Fatal(err)
+	}
+	for _, lang := range []string{"en", "zh-Hans", "ja"} {
+		input, _ := json.Marshal(wire.ViewActionInput{Action: "save", ClientMsgID: "deleted-save", ExpectedVersion: 1})
+		r := httptest.NewRequest("POST", "/api/v1/assistant/conversations/"+conv+"/views/"+key+"/actions", strings.NewReader(string(input)))
+		r.Header.Set(RoleHeader, "full")
+		r.Header.Set("Accept-Language", lang)
+		w := httptest.NewRecorder()
+		// The manager's bus recorder carries the request language in production.
+		s.ServeHTTP(guardLangWriter{ResponseRecorder: w, lang: i18n.Lang(lang)}, r)
+		var got struct {
+			Error     string `json:"error"`
+			Retryable bool   `json:"retryable"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		want := i18n.T(i18n.Lang(lang), "assistant-health_strength.invalid_draft")
+		if w.Code != 400 || got.Retryable || got.Error != want {
+			t.Fatalf("%s: %d %s; want %s", lang, w.Code, w.Body, want)
+		}
+	}
+	if w := strengthActionHTTP(s, conv, key, "discard", "discard-deleted", 1); w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+}

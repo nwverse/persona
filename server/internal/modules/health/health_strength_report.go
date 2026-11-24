@@ -60,6 +60,7 @@ func strengthReportInputs(rows, prior []assistantwire.StrengthSet, es []assistan
 		slices.Reverse(current)
 		history := strengthExerciseSets(prior, e.ID)
 		best := strengthBest(history)
+		hasBaseline := slices.ContainsFunc(history, func(v assistantwire.StrengthSet) bool { return !v.Warmup })
 		item := strengthReportExercise{Exercise: e.Name, Sets: []strengthReportSet{}, Best: best}
 		if len(history) > 0 {
 			day := history[0].At.In(loc).Format("2006-01-02")
@@ -72,7 +73,7 @@ func strengthReportInputs(rows, prior []assistantwire.StrengthSet, es []assistan
 			slices.Reverse(item.Previous.Sets)
 		}
 		for _, v := range current {
-			record := !v.Warmup && (v.Weight > best["weight"] || v.Weight*(1+float64(v.Reps)/30) > best["e1rm"])
+			record := hasBaseline && !v.Warmup && (v.Weight > best["weight"] || v.Weight*(1+float64(v.Reps)/30) > best["e1rm"])
 			item.Sets = append(item.Sets, strengthReportSet{Weight: v.Weight, Reps: v.Reps, Warmup: v.Warmup, Record: record})
 		}
 		out = append(out, item)
@@ -127,7 +128,11 @@ func (s *Service) WorkoutReport(ctx context.Context, id, language string) (strin
 			if err = json.Unmarshal(d.Body, &body); err != nil {
 				return "", false, err
 			}
-			raw, err := json.Marshal(body.Sets)
+			plan, err := strengthReportPlan(body.Sets, es)
+			if err != nil {
+				return "", false, err
+			}
+			raw, err := json.Marshal(plan)
 			if err != nil {
 				return "", false, err
 			}
@@ -136,4 +141,27 @@ func (s *Service) WorkoutReport(ctx context.Context, id, language string) (strin
 		}
 	}
 	return prompts.RenderWorkoutReport(prompts.WorkoutReport{Data: string(w.Report), Language: language, Strength: strength}), true, nil
+}
+
+type strengthReportPlanSet struct {
+	Exercise string  `json:"exercise"`
+	Weight   float64 `json:"weight"`
+	Reps     int     `json:"reps"`
+	Warmup   bool    `json:"warmup,omitempty"`
+}
+
+func strengthReportPlan(sets []draftSet, es []assistantwire.StrengthExercise) ([]strengthReportPlanSet, error) {
+	names := map[string]string{}
+	for _, e := range es {
+		names[e.ID] = e.Name
+	}
+	out := make([]strengthReportPlanSet, 0, len(sets))
+	for _, v := range sets {
+		name := names[v.Exercise]
+		if name == "" || v.Weight == nil {
+			return nil, errors.New("plan exercise or weight is missing")
+		}
+		out = append(out, strengthReportPlanSet{Exercise: name, Weight: *v.Weight, Reps: v.Reps, Warmup: v.Warmup})
+	}
+	return out, nil
 }

@@ -256,6 +256,10 @@ counted, and never invents weights or reps. A machine photo is conversation inpu
 Both Health tools are listed only in known Health conversations, including a new conversation's first list when
 the node supplies attested directory evidence (#14855). Execution independently enforces the same caller boundary.
 
+`health_strength history` groups sets by owner-local day over `days` (default 30, range 1–366). With an exercise `id`,
+it retains that exercise's full history in the range. Without `id`, it returns up to the 500 most recent sets across
+all exercises. Use `history` to check an uncertain log before retrying it.
+
 The manager stores four tables in Postgres:
 
 | Table | Meaning |
@@ -268,13 +272,21 @@ The manager stores four tables in Postgres:
 When a strength workout arrives, unassigned sets from 30 minutes before its start to three hours after its end join
 it; existing assignments remain. Sets logged later use the latest matching strength window, so locker-room logging
 can still count. Upload and logging both use the same inclusive boundaries and serialized transaction. Duplicate
-uploads use the persisted window. Undo advances the set's sequence; a repeated undo does not.
+uploads use the persisted window. Confirming a plan uses the latest-starting strength workout on its `plan_day`
+in the owner's time zone, even if confirmation arrives hours later or the next day. Its sets use that workout's start
+time and the usual window matching; with no workout on that day they use the confirmation time. Undo advances the
+set's sequence; a repeated undo does not.
 
 A multi-set interpretation or plan creates a managed conversation card: **Save**, **Don't save**, **Adjust**, or
 **Done as planned** for a plan. Only Save confirms the sets, in one transaction with the card. A repeated click adds
 nothing twice. These buttons are handled by Health without a model round or notification. Models cannot rewrite
 the reserved `health-strength-` cards. Adjust opens the working copy; saving that page updates the draft and card,
-not the set table. A stale edit reloads the newer draft; Cancel keeps the stored draft. A settled draft is read-only.
+not the set table. A stale edit reloads the newer draft; Cancel keeps the stored draft. If a card settles while its
+editor is open, Save, stepper and add/remove actions redraw a read-only page and explain whether it was saved or
+discarded. Below UI version 6 these edit actions retain the existing 400 response. Other invalid strength page
+actions use strength-specific copy. A duplicate exercise name shows a toast and keeps the entered name for correction.
+If an exercise on an open card was deleted, Save returns a definite 400 with guidance to discard or edit the draft;
+no sets are written and Don't save remains available.
 Deleting an exercise confirms its name and active set count, then tombstones it and undoes all its sets atomically.
 
 The server draws the following pages with existing declarative components, under Health's shared reserved
@@ -287,7 +299,8 @@ The server draws the following pages with existing declarative components, under
 - Adjust has kg steppers (2.5 per tap), reps steppers, an exercise choice, warm-up switch and add/remove controls for
   up to 40 sets. Below UI version 6 it displays a read-only list and an update hint.
 - Home shows today's or the latest session, seven days of training, and up to three records in the last 30 days.
-  A record exceeds the earlier non-warm-up best weight or estimated one-rep max (`weight × (1 + reps / 30)`).
+  A record requires an earlier non-warm-up set and exceeds its best weight or estimated one-rep max
+  (`weight × (1 + reps / 30)`).
 
 `health_strength` broadcasts contain no health data and make open pages refresh. Removing the item retains its data
 and pages and permits existing cards to settle; new tool writes ask to add the item again. Workout reports fall back
@@ -296,7 +309,9 @@ pages and tool handler, disables card buttons, and leaves stored data intact.
 
 Strength reports assemble **when the task runs**, including sets logged after upload: this workout's sets grouped by
 exercise, the previous day's sets before the workout, previous non-warm-up best weight/estimated max, explicit record
-flags, the latest open plan for the workout's local day, measurements and the owner's language. They do not request
+flags, the latest open plan for the workout's local day, measurements and the owner's language. A report record
+requires a non-warm-up baseline before this workout. Plan sets carry exercise names (including deleted exercises),
+weight, reps and warm-up flags, without draft timestamps or exercise UUIDs. They do not request
 other Health data. With sets, the report lists and compares them; with a plan but no sets it asks `health_strength show`
 to place the Done as planned card in the report's actual conversation. With neither it gives one line about logging
 with a sentence or a machine photo. A failed assembly uses the stored prompt. Other activities retain the exact

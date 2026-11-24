@@ -66,5 +66,8 @@
   "not_found": "未找到健康卡片。",
   "html_forbidden": "健康卡片不接受 HTML 操作。",
   "saved_one": "已记下 {count} 组",
-  "saved_other": "已记下 {count} 组"
+  "saved_other": "已记下 {count} 组",
+  "invalid_draft": "卡片中的部分组已无效，可能有动作已被删除。请选择「不记」，或到编辑页修改。",
+  "invalid_page": "请选择力量训练页面上可用的操作。",
+  "name_exists": "已有同名动作。"
 }

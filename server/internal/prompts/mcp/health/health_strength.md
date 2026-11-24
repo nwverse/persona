@@ -1,4 +1,4 @@
-Health only: strength training. find exercises (name/alias, last/best); create/update (rename, aliases, muscles, equipment, weight rule, seat); log stated sets; undo a set id; history; draft sets/a plan for confirmation; show a waiting draft here. List before retrying an uncertain log.{{template "shared/mcp_language" .}}
+Health only: strength training. find exercises (name/alias, last/best); create/update (rename, aliases, muscles, equipment, weight rule, seat); log stated sets; undo a set id; history (days, optional exercise id; without id, up to 500 recent sets grouped by day); draft sets/a plan for confirmation; show a waiting draft here. Use history before retrying an uncertain log.{{template "shared/mcp_language" .}}
 
 ```json
 {

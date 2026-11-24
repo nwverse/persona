@@ -201,7 +201,7 @@ func (d *DB) HealthStrengthSets(ctx context.Context, f StrengthSetFilter) ([]Str
 	if !f.Until.IsZero() {
 		until = &f.Until
 	}
-	return d.strengthSets(ctx, `SELECT `+strengthSetColumns+` FROM health_strength_sets WHERE deleted_at IS NULL AND ($1='' OR exercise_id::text=$1) AND ($2='' OR workout_id::text=$2) AND ($3::timestamptz IS NULL OR at >= $3) AND ($4::timestamptz IS NULL OR at < $4) ORDER BY at DESC,id`, f.Exercise, f.Workout, from, until)
+	return d.strengthSets(ctx, `SELECT `+strengthSetColumns+` FROM health_strength_sets WHERE deleted_at IS NULL AND ($1='' OR exercise_id::text=$1) AND ($2='' OR workout_id::text=$2) AND ($3::timestamptz IS NULL OR at >= $3) AND ($4::timestamptz IS NULL OR at < $4) ORDER BY at DESC,id LIMIT NULLIF($5::integer,0)`, f.Exercise, f.Workout, from, until, max(f.Limit, 0))
 }
 func (d *DB) HealthStrengthSetChanges(ctx context.Context, after int64, limit int) ([]StrengthSet, error) {
 	return d.strengthSets(ctx, `SELECT `+strengthSetColumns+` FROM health_strength_sets WHERE seq>$1 ORDER BY seq LIMIT $2`, after, limit)
@@ -229,6 +229,17 @@ func (d *DB) HealthStrengthWorkout(ctx context.Context, id string) (*StrengthWor
 	}
 	return &v, err
 }
+
+// HealthStrengthWorkoutLatest selects the latest start in an owner-local day's half-open range.
+func (d *DB) HealthStrengthWorkoutLatest(ctx context.Context, from, until time.Time) (*StrengthWorkout, error) {
+	var v StrengthWorkout
+	err := d.pool.QueryRow(ctx, `SELECT id::text,start_at,end_at,report FROM health_strength_workouts WHERE start_at >= $1 AND start_at < $2 ORDER BY start_at DESC,id LIMIT 1`, from, until).Scan(&v.ID, &v.Start, &v.End, &v.Report)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return &v, err
+}
+
 func strengthCreateCard(ctx context.Context, tx pgx.Tx, c StrengthCard) error {
 	return createAssistantViewTx(ctx, tx, AssistantViewRow{ID: c.ID, Conversation: c.Conversation, MachineID: c.MachineID, View: c.View, Version: c.Version, CreatedAt: c.At, UpdatedAt: c.At}, FeedRow{ID: c.FeedID, Conversation: c.Conversation, At: c.At, Kind: "view", Ref: c.ID})
 }

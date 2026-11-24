@@ -66,5 +66,8 @@
   "not_found": "Health card not found.",
   "html_forbidden": "Health cards do not accept HTML actions.",
   "saved_one": "Saved {count} set",
-  "saved_other": "Saved {count} sets"
+  "saved_other": "Saved {count} sets",
+  "invalid_draft": "Some sets on this card are no longer valid. An exercise may have been deleted. Choose Don’t save, or open Adjust to edit them.",
+  "invalid_page": "Choose an available action on this strength training page.",
+  "name_exists": "An exercise with this name already exists."
 }

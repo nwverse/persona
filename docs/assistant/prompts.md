@@ -27,8 +27,8 @@ Strength workout reports (#14713) carry `WorkoutReport.Language` from the owner 
 `Strength` input assembled by the Health module. Sets, comparisons and plans are explicitly untrusted data. The three
 scenarios (sets, plan without sets, neither) have en / zh-Hans / ja caller-level goldens in the module's `testdata`.
 The nil-Strength report keeps the original bytes, including the existing `workout_report.golden`; the language hint
-is inside the strength-only branch. Health tool discovery stays unchanged here pending #14855; no legacy MCP bytes
-or prompt-size baselines are raised for this work.
+is inside the strength-only branch. Health tools are listed only in Health conversations, as described in "MCP tools"
+below; prompt-size baselines only go down for this work.
 
 ### Compatibility and wake messages
 

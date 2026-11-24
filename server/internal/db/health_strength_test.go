@@ -269,3 +269,21 @@ func TestHealthStrengthCommitOrder(t *testing.T) {
 		t.Fatal(changes, err)
 	}
 }
+
+func TestHealthStrengthWorkoutLatestUsesHalfOpenDay(t *testing.T) {
+	d, ctx, _, _ := strengthFixture(t)
+	day := time.Date(2026, 11, 20, 0, 0, 0, 0, time.FixedZone("owner", 9*3600))
+	if got, err := d.HealthStrengthWorkoutLatest(ctx, day, day.AddDate(0, 0, 1)); err != nil || got != nil {
+		t.Fatal(got, err)
+	}
+	for i, offset := range []time.Duration{-time.Second, 0, 10 * time.Hour, 20 * time.Hour, 24 * time.Hour} {
+		start := day.Add(offset)
+		if _, err := d.HealthStrengthWorkoutAdd(ctx, StrengthWorkout{ID: strengthID(90 + i), Start: start, End: start.Add(time.Minute), Report: json.RawMessage(`{}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := d.HealthStrengthWorkoutLatest(ctx, day, day.AddDate(0, 0, 1))
+	if err != nil || got == nil || got.ID != strengthID(93) || !got.Start.Equal(day.Add(20*time.Hour)) {
+		t.Fatal(got, err)
+	}
+}

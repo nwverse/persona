@@ -114,6 +114,9 @@ func drawStrengthPage(p strengthPageState, es []assistantwire.StrengthExercise, 
 					}
 				}
 			}
+			if p.EditValue != nil {
+				value = *p.EditValue
+			}
 			field := wire.Component{Type: "field", Name: "value", Label: tr(p.Field), Kind: "text", Value: value}
 			if p.Field == "rule" {
 				field.Kind = "choice"
@@ -359,13 +362,15 @@ func strengthRecentRecords(rows []assistantwire.StrengthSet, es []assistantwire.
 		sets := strengthExerciseSets(rows, e.ID)
 		slices.Reverse(sets)
 		best := map[string]float64{"weight": 0, "e1rm": 0}
+		hasBaseline := false
 		for _, v := range sets {
 			if v.Warmup {
 				continue
 			}
 			b := strengthBest([]assistantwire.StrengthSet{v})
-			record := b["weight"] > best["weight"] || b["e1rm"] > best["e1rm"]
+			record := hasBaseline && (b["weight"] > best["weight"] || b["e1rm"] > best["e1rm"])
 			best["weight"], best["e1rm"] = max(best["weight"], b["weight"]), max(best["e1rm"], b["e1rm"])
+			hasBaseline = true
 			if record && !v.At.Before(from) && !v.At.After(now) {
 				out = append(out, wire.Component{Type: "row", Title: e.Name, Subtitle: v.At.In(loc).Format("2006-01-02"), Value: strengthSetLabel(v.Weight, v.Reps)})
 			}

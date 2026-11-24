@@ -28,6 +28,7 @@ type strengthPageState struct {
 	MusclesOffset   int        `json:"muscles_offset,omitempty"`
 	Manage          bool       `json:"manage,omitempty"`
 	Field           string     `json:"field,omitempty"`
+	EditValue       *string    `json:"edit_value,omitempty"`
 	Draft           string     `json:"draft,omitempty"`
 	Rev             int64      `json:"rev,omitempty"`
 	Work            []draftSet `json:"work,omitempty"`
@@ -47,6 +48,9 @@ func readStrengthPage(raw string) (strengthPageState, bool) {
 	if p.Field != "" && (!p.Manage || !intakeUUIDPattern.MatchString(p.Exercise) || !slices.Contains([]string{"rename", "setting", "rule"}, p.Field)) {
 		return p, false
 	}
+	if p.EditValue != nil && (p.Field == "" || utf8.RuneCountInString(*p.EditValue) > 500) {
+		return p, false
+	}
 	p.Exercise, p.Draft = strings.ToLower(p.Exercise), strings.ToLower(p.Draft)
 	return p, true
 }
@@ -57,7 +61,7 @@ func strengthText(l i18n.Lang, key string, args ...i18n.Args) string {
 
 func (s *Service) healthStrengthUI(w http.ResponseWriter, r *http.Request, req wire.UIRequest) {
 	p, ok := readStrengthPage(req.State)
-	bad := func() { apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-health_intake.invalid_page")) }
+	bad := func() { apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-health_strength.invalid_page")) }
 	if !ok {
 		bad()
 		return
@@ -151,7 +155,7 @@ func (s *Service) healthStrengthUI(w http.ResponseWriter, r *http.Request, req w
 			return
 		}
 		p.Manage = action == "manage"
-		p.Field = ""
+		p.Field, p.EditValue = "", nil
 	case "more_exercises", "first_exercises", "more_drafts", "first_drafts", "more_muscles", "first_muscles":
 		if p.Page != "strength.overview" {
 			bad()
@@ -172,6 +176,7 @@ func (s *Service) healthStrengthUI(w http.ResponseWriter, r *http.Request, req w
 			p.MusclesOffset = 0
 		}
 	case "rename", "setting", "rule", "delete":
+		p.EditValue = nil
 		i := findExercise(id)
 		if p.Page != "strength.overview" || !p.Manage || i < 0 {
 			bad()
@@ -212,7 +217,14 @@ func (s *Service) healthStrengthUI(w http.ResponseWriter, r *http.Request, req w
 			e.WeightRule = v
 		}
 		_, _, err = st.HealthStrengthExerciseSave(ctx, e)
-		p.Field = ""
+		if errors.Is(err, assistantwire.ErrHealthStrengthName) {
+			err = nil
+			submitted := v
+			p.EditValue = &submitted
+			res.Toast = strengthText(l, "name_exists")
+		} else if err == nil {
+			p.Field, p.EditValue = "", nil
+		}
 	case "metric", "range":
 		if p.Page != "strength.exercise" {
 			bad()
@@ -262,9 +274,14 @@ func (s *Service) healthStrengthUI(w http.ResponseWriter, r *http.Request, req w
 			res.Pop = true
 			break
 		}
-		if version < 6 || d.Status != "open" {
+		if version < 6 {
 			bad()
 			return
+		}
+		if d.Status != "open" {
+			p.Work = nil
+			res.Toast = strengthText(l, "status_"+d.Status)
+			break
 		}
 		if stale {
 			res.Toast = strengthText(l, "changed")

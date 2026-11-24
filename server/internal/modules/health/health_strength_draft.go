@@ -275,6 +275,15 @@ func (s *Service) CardAction(ctx context.Context, a assistantwire.HealthCardActi
 	if err := json.Unmarshal(d.Body, &body); err != nil {
 		return assistantwire.HealthCardResult{}, err
 	}
+	if a.Action == "save" {
+		es, err := st.HealthStrengthExercises(ctx, false)
+		if err != nil {
+			return assistantwire.HealthCardResult{}, err
+		}
+		if err := checkDraftSets(body.Sets, es); err != nil {
+			return assistantwire.HealthCardResult{Outcome: "invalid_draft"}, nil
+		}
+	}
 	now := time.Now().UTC()
 	body.Settled = &strengthSettlement{Action: a.Action, ClientMsgID: a.ClientMsgID, Version: a.Version, At: now}
 	raw, err := json.Marshal(body)
@@ -291,16 +300,21 @@ func (s *Service) CardAction(ctx context.Context, a assistantwire.HealthCardActi
 	}
 	var card assistantwire.StrengthCard
 	if a.Action == "save" {
-		es, err := st.HealthStrengthExercises(ctx, false)
-		if err != nil {
-			return assistantwire.HealthCardResult{}, err
-		}
-		if err := checkDraftSets(body.Sets, es); err != nil {
-			return assistantwire.HealthCardResult{}, err
+		planAt := now
+		if d.Kind == "plan" && d.PlanDay != nil {
+			loc := s.h.Location(ctx)
+			day := time.Date(d.PlanDay.Year(), d.PlanDay.Month(), d.PlanDay.Day(), 0, 0, 0, 0, loc)
+			workout, err := st.HealthStrengthWorkoutLatest(ctx, day, day.AddDate(0, 0, 1))
+			if err != nil {
+				return assistantwire.HealthCardResult{}, err
+			}
+			if workout != nil {
+				planAt = workout.Start
+			}
 		}
 		sets := make([]assistantwire.StrengthSet, len(body.Sets))
 		for i, v := range body.Sets {
-			at := now
+			at := planAt
 			if v.At != nil && d.Kind != "plan" {
 				at = *v.At
 			}

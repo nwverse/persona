@@ -66,7 +66,8 @@ func (s *Service) toolHealthStrength(ctx context.Context, call assistantwire.Hea
 			return "", fmt.Errorf("%s is not valid for %s", key, a.Action)
 		}
 	}
-	if slices.Contains([]string{"update", "undo", "history", "show"}, a.Action) && !intakeUUIDPattern.MatchString(a.ID) {
+	_, hasID := object["id"]
+	if (slices.Contains([]string{"update", "undo", "show"}, a.Action) || a.Action == "history" && hasID) && !intakeUUIDPattern.MatchString(a.ID) {
 		return "", errors.New("a valid id is required")
 	}
 	a.ID = strings.ToLower(a.ID)
@@ -215,7 +216,11 @@ func (s *Service) toolHealthStrength(ctx context.Context, call assistantwire.Hea
 		}
 		now := time.Now().In(s.h.Location(ctx))
 		start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).AddDate(0, 0, 1-days)
-		rows, err := st.HealthStrengthSets(ctx, assistantwire.StrengthSetFilter{Exercise: a.ID, From: start, Until: now})
+		limit := 0
+		if a.ID == "" {
+			limit = 500
+		}
+		rows, err := st.HealthStrengthSets(ctx, assistantwire.StrengthSetFilter{Exercise: a.ID, From: start, Until: now, Limit: limit})
 		if err != nil {
 			return "", err
 		}

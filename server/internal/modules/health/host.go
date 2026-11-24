@@ -124,6 +124,7 @@ type strengthStore = interface {
 	HealthStrengthSets(context.Context, assistantwire.StrengthSetFilter) ([]assistantwire.StrengthSet, error)
 	HealthStrengthWorkoutAdd(context.Context, assistantwire.StrengthWorkout) (int, error)
 	HealthStrengthWorkout(context.Context, string) (*assistantwire.StrengthWorkout, error)
+	HealthStrengthWorkoutLatest(context.Context, time.Time, time.Time) (*assistantwire.StrengthWorkout, error)
 	HealthStrengthDraftCreate(context.Context, assistantwire.StrengthDraft, assistantwire.StrengthCard) error
 	HealthStrengthDraft(context.Context, string) (*assistantwire.StrengthDraft, error)
 	HealthStrengthDraftByCard(context.Context, string) (*assistantwire.StrengthDraft, error)
