@@ -93,9 +93,9 @@ func (s *Service) sessionLinks() sessionLinks {
 //
 // The status does not say so. A closed session often reads `interrupted`, not `offline`: when a node restarts, it
 // marks the offline rows Persona had started in a pane before that boot as interrupted, so the apps offer "Continue"
-// (node interrupted.go), and the mark stays until a message resumes the session. The unified state has no case for
-// that status, so those rows read `unknown` (agentState, fleet.go). A row can also keep the `idle` or `unknown` its
-// host last said after the pane went. So `unknown` means "the host cannot tell" only while there is a host or a pane.
+// (node interrupted.go), and the mark stays until a message resumes the session; their state is `offline` (agentState,
+// fleet.go). A row can also keep the `idle` or `unknown` its host last said after the pane went. So `unknown` means
+// "the host cannot tell" only while there is a host or a pane.
 //
 // A session another tool lists (SourceKind) never has a pane of ours: it is closed only when that tool says offline.
 func sessionClosed(c proto.Session) bool {

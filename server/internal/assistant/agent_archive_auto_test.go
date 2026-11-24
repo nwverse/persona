@@ -37,10 +37,10 @@ func TestAutoArchivable(t *testing.T) {
 		{"work done", func(s *proto.Session) { s.Work = &proto.WorkState{Phase: proto.WorkDone} }, none, idle, true},
 		// The shapes closed sessions have in a real list: no host and no pane, whatever the status says.
 		{"hostless, offline / offline", func(s *proto.Session) { s.Status, s.State = proto.StatusOffline, proto.StateOffline }, doneLong, idle, true},
-		{"hostless, interrupted / unknown (cut off by a node restart)", func(s *proto.Session) { s.Status, s.State = proto.StatusInterrupted, proto.StateUnknown }, doneLong, idle, true},
+		{"hostless, interrupted / offline (cut off by a node restart)", func(s *proto.Session) { s.Status, s.State = proto.StatusInterrupted, proto.StateOffline }, doneLong, idle, true},
 		{"hostless, idle / idle", func(s *proto.Session) { s.Status, s.State = proto.StatusIdle, proto.StateIdle }, doneLong, idle, true},
 		{"hostless, unknown / unknown", func(s *proto.Session) { s.Status, s.State = proto.StatusUnknown, proto.StateUnknown }, doneLong, idle, true},
-		{"hostless, interrupted, on no to-do", func(s *proto.Session) { s.Status, s.State = proto.StatusInterrupted, proto.StateUnknown }, none, idle, true},
+		{"hostless, interrupted, on no to-do", func(s *proto.Session) { s.Status, s.State = proto.StatusInterrupted, proto.StateOffline }, none, idle, true},
 
 		{"switched off", func(*proto.Session) {}, none, 0, false},
 		{"active two days ago", func(s *proto.Session) { s.UpdatedAt = now.Add(-2 * 24 * time.Hour) }, none, idle, false},
@@ -71,7 +71,7 @@ func TestAutoArchivable(t *testing.T) {
 		{"hostless, interrupted, a card waits", func(s *proto.Session) {
 			s.Status, s.State, s.PendingInteractions = proto.StatusInterrupted, proto.StateNeedsYou, 1
 		}, doneLong, idle, false},
-		{"hostless, interrupted, linked to an open to-do", func(s *proto.Session) { s.Status, s.State = proto.StatusInterrupted, proto.StateUnknown },
+		{"hostless, interrupted, linked to an open to-do", func(s *proto.Session) { s.Status, s.State = proto.StatusInterrupted, proto.StateOffline },
 			link{open: true, onTodo: true}, idle, false},
 		{"hostless, blocked", func(s *proto.Session) { s.Status = proto.StatusBlocked }, none, idle, false},
 		{"another tool's, idle without a pane", func(s *proto.Session) {
@@ -189,7 +189,7 @@ func TestClosedSessionArchivesItself(t *testing.T) {
 	open.Status, open.State, open.PaneID = proto.StatusIdle, proto.StateIdle, "w1:p1"
 	asked := row("asked", old)
 	asked.Queued = []string{"next"} // input waits to go in
-	cut := row("cut-off", old)      // closed, as a node restart leaves it: interrupted, which the list reads as unknown
+	cut := row("cut-off", old)      // closed, as a node restart leaves it: interrupted, which the list reads as offline
 	cut.Status, cut.State = proto.StatusInterrupted, ""
 	list := []proto.Session{row("closed-old", old), row("closed-new", time.Now().Add(-time.Hour).UTC()), open, asked, cut}
 	ft.d.setSessions("mac", slices.Clone(list))
@@ -201,8 +201,8 @@ func TestClosedSessionArchivesItself(t *testing.T) {
 	}
 	setSettings(t, ft.s, func(v *Settings) { v.ArchiveClosedDays = &days })
 	for _, c := range ft.s.decorated("mac") {
-		if c.SessionID == "cut-off" && c.State != proto.StateUnknown {
-			t.Fatalf("an interrupted row reads %q in the list, not unknown: the case this test is for", c.State)
+		if c.SessionID == "cut-off" && (c.Status != proto.StatusInterrupted || c.State != proto.StateOffline) {
+			t.Fatalf("an interrupted row reads %q / %q in the list, not interrupted / offline: the case this test is for", c.Status, c.State)
 		}
 	}
 	if n := ft.s.archiveClosedSessions(ctx, time.Now()); n != 2 {

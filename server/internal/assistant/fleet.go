@@ -310,6 +310,7 @@ func (s *Service) fleetStart(ctx context.Context) {
 //	herdr working                                              → working
 //	herdr done (finished, unseen in herdr) and not seen in the app since it finished → unread (green)
 //	herdr idle (seen in herdr), or done but seen in the app    → idle (gray)
+//	offline, or interrupted (an offline row a node restart cut off, which keeps its status for Continue) → offline
 func agentState(sess proto.Session, seenAt time.Time) string {
 	if sess.PendingInteractions > 0 || sess.Status == proto.StatusBlocked {
 		return proto.StateNeedsYou
@@ -325,7 +326,7 @@ func agentState(sess proto.Session, seenAt time.Time) string {
 		return proto.StateUnread
 	case proto.StatusIdle:
 		return proto.StateIdle
-	case proto.StatusOffline:
+	case proto.StatusOffline, proto.StatusInterrupted:
 		return proto.StateOffline
 	}
 	return proto.StateUnknown

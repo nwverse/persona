@@ -198,6 +198,9 @@ func TestAgentState(t *testing.T) {
 		{proto.Session{Status: proto.StatusDone, UpdatedAt: now}, now.Add(time.Second), proto.StateIdle},
 		{proto.Session{Status: proto.StatusIdle, UpdatedAt: now}, time.Time{}, proto.StateIdle},
 		{proto.Session{Status: proto.StatusOffline}, time.Time{}, proto.StateOffline},
+		// a node restart cut its pane off (node interrupted.go): Not running, its status still offering Continue (#14447)
+		{proto.Session{Status: proto.StatusInterrupted, UpdatedAt: now}, time.Time{}, proto.StateOffline},
+		{proto.Session{Status: proto.StatusInterrupted, PendingInteractions: 1}, time.Time{}, proto.StateNeedsYou},
 		{proto.Session{Status: proto.StatusUnknown}, time.Time{}, proto.StateUnknown},
 	}
 	for i, c := range cases {
