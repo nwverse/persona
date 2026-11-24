@@ -39,7 +39,7 @@ func TestSpaceFirstToolsBeforeSessionPublication(t *testing.T) {
 					if err := json.Unmarshal(p.Params, &in); err != nil {
 						return nil, err
 					}
-					return json.Marshal(map[string]any{"cwd": "/home/u/" + in.Dir})
+					return json.Marshal(map[string]any{"cwd": hub.devices[0].Home + "/" + in.Dir})
 				}
 				if p.Method != DeviceAssistantSend {
 					return hub.DeviceCall(ctx, p)
