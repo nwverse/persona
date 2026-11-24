@@ -146,6 +146,15 @@ dropped when its pane no longer runs agy. A pane is only readable under an engin
 `personad node agy-hooks [status|install|uninstall]` manages the entries; `uninstall` also tells the node not to put
 them back.
 
+A conversation's row changes ID with the pane that shows it (#14395). While a live pane shows it, the row is the pane's,
+`agy-<workspace>-<pane>`, and the companion's own row for the conversation, `agy-<conversation id>`, is left out. With no
+such pane (it closed, agy quit in it, the engine gave the conversation another pane) the companion's row is listed
+instead. The row listed names the conversation's other IDs in its `aliases`: a pane's row names `agy-<conversation id>`,
+and whichever row lists the conversation names the pane rows that showed it before, most recent first (up to eight).
+The node remembers which conversation the last 256 pane rows it listed showed, in memory only, so a pane that closed
+while the node was not running is not named. A pane that runs another conversation now names that one: its ID is its
+own row's again. Agents' A2A addresses are resolved through these IDs (`docs/integrations/a2a.md`).
+
 Orca's native Claude chats (structured, no terminal) connect through node's bridge: list, state, send text / images, interrupt, close,
 answer approvals / questions, change permission / thinking (no plan mode); no screen reads, keys, or live terminal. Chats appear only after their first message;
 Codex chats not listed in this version. See `docs/plans/plan-orca-support.md` ("Structured sessions").
