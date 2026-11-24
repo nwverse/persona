@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -33,6 +34,7 @@ type agyInputFixture struct {
 	f     *fakeHerdr
 	brain string // <agy data>/brain/<conversation>/.system_generated
 	log   string
+	logs  *syncBuffer // the node's log
 }
 
 func newAgyInputFixture(t *testing.T, out string) *agyInputFixture {
@@ -48,7 +50,8 @@ func newAgyInputFixture(t *testing.T, out string) *agyInputFixture {
 			"Task logs are available at: file:///tmp/task-7.log\nLog output:\n"})
 	agyTestFile(t, n.agyDataRoot(), agyTestID, `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"sign in"}`+"\n"+
 		string(step)+"\n")
-	fx := &agyInputFixture{n: n, f: f, brain: filepath.Join(n.agyDataRoot(), "brain", agyTestID, ".system_generated")}
+	fx := &agyInputFixture{n: n, f: f, brain: filepath.Join(n.agyDataRoot(), "brain", agyTestID, ".system_generated"), logs: &syncBuffer{}}
+	n.logger = log.New(fx.logs, "", 0)
 	for _, d := range []string{"tasks", "messages"} {
 		if err := os.MkdirAll(filepath.Join(fx.brain, d), 0o700); err != nil {
 			t.Fatal(err)
@@ -274,6 +277,21 @@ func TestAgyInputAnswerTypesTheLineIntoTheTask(t *testing.T) {
 	if !fx.dismissed(ix.ID) {
 		t.Fatal("the prompt just answered would be asked again")
 	}
+	if !strings.Contains(fx.logs.String(), "typed a line into task-7") {
+		t.Fatalf("log: %s", fx.logs.String())
+	}
+	fx.logsKeep(t, "test-code-123", "csrf-test-token")
+}
+
+// logsKeep fails when the node's log holds any of secrets.
+func (fx *agyInputFixture) logsKeep(t *testing.T, secrets ...string) {
+	t.Helper()
+	logs := fx.logs.String()
+	for _, s := range secrets {
+		if strings.Contains(logs, s) {
+			t.Fatalf("the node's log holds %q: %s", s, logs)
+		}
+	}
 }
 
 // Not now and a hand-back type nothing, and the same prompt is not asked again.
@@ -352,6 +370,7 @@ func TestAgyInputAnswerRefusals(t *testing.T) {
 		if strings.Contains(re.Message, "test-code-123") || strings.Contains(re.Message, "csrf-test-token") || fx.dismissed(ix.ID) {
 			t.Fatalf("the refusal repeats the line or the token, or the card went: %q", re.Message)
 		}
+		fx.logsKeep(t, "test-code-123", "csrf-test-token")
 	})
 	t.Run("no answer", func(t *testing.T) {
 		fx := newAgyInputFixture(t, agyTestSignIn)
@@ -378,6 +397,7 @@ func TestAgyInputAnswerRefusals(t *testing.T) {
 			!strings.Contains(string(re.Data), `"delivered":"unknown"`) {
 			t.Fatalf("err %v (%s)", err, re.Data)
 		}
+		fx.logsKeep(t, "test-code-123", "csrf-test-token")
 	})
 }
 

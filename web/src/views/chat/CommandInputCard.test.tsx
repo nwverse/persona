@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // A command waiting for a line (`command_input`, #14527) on the web: the prompt over the field, the command and the lines
 // it printed (a web address in them a link), Not now and Send. Send sends the typed line once, inside the answer, and
-// empties the field; Enter never sends; the line is hidden while typed when the prompt reads as secret, with Show; no
-// quick path (a row's answers, a notification's Allow) answers it. The hub is faked (apiOp).
+// empties the field, as Not now and the card going do; Enter never sends; the line is hidden while typed when the prompt
+// reads as secret, with Show; no quick path (a row's answers, a notification's Allow) answers it. The hub is faked (apiOp).
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -45,7 +45,7 @@ const card = (input: Record<string, unknown> = {}): Interaction => ({
   tool_input: { command: "example-cli login", task: "task-7", prompt: PROMPT, masked: true,
     output: "To sign in, visit this URL in any browser:\n\n  https://auth.example.com/authorize?client=demo.\n\nAfter approving, the page shows a code.", ...input },
   summary: `A command is waiting for your input: ${PROMPT}`,
-  fields: [{ key: "input", label: PROMPT, placeholder: "Type what the command asks for", secret: true }],
+  fields: [{ key: "input", label: PROMPT, secret: true }],
 });
 
 beforeEach(() => {
@@ -118,6 +118,15 @@ describe("CommandInputCard", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].body).toMatchObject({ allow: false });
     expect(JSON.stringify(calls[0].body)).not.toContain("test-code-123");
+    expect(field().value).toBe("");
+  });
+
+  it("empties its field when the card goes", () => {
+    act(() => root.render(<CommandInputCard ix={card()} />));
+    type("test-code-123");
+    const input = field();
+    act(() => root.render(<></>));
+    expect(input.value).toBe("");
   });
 
   it("is the card a command-input interaction gets, and no quick path answers it", async () => {

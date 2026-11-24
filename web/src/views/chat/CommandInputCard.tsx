@@ -109,7 +109,7 @@ export function CommandInputCard({ ix }: { ix: Interaction }) {
                 e.preventDefault();
                 e.currentTarget.blur();
               }}
-              placeholder={field?.placeholder?.trim() || t("chat-command-input.placeholder")}
+              placeholder={t("chat-command-input.placeholder")}
               disabled={busy !== null}
               {...SECRET_INPUT}
               autoComplete="one-time-code"

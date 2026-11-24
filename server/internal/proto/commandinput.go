@@ -1,11 +1,11 @@
 package proto
 
 import (
+	"regexp"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
-
-	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Commands waiting for input (#14527, docs/protocol/protocol.md "Commands waiting for input"): a command an Agent runs
@@ -71,21 +71,24 @@ func CommandInputLineProblem(line string) string {
 }
 
 // commandPromptEnd is how a prompt ends: a colon or a question mark (either width), a REPL's angle bracket, a closing
-// bracket or parenthesis ("[y/N]", "(yes/no)"), each maybe followed by spaces.
-var commandPromptEnd = lazyre.New(`[:?>\])：？]\s*$`)
+// bracket or parenthesis ("[y/N]", "(yes/no)"), each maybe followed by spaces. Compiled on first use with the standard
+// library: a contract imports no internal/lazyre (#11793).
+var commandPromptEnd = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`[:?>\])：？]\s*$`) })
 
 // commandPromptSecret are the words that make a prompt read as secret (masked by default), in English and in the
 // prompts' own words in Chinese and Japanese (data matched as written).
-var commandPromptSecret = lazyre.New(`(?i)\b(?:pass(?:word|phrase|code)?|pin|otp|token|secret|key|code|credentials?|api[ _-]?key|2fa|mfa|verification)\b|` +
-	`密码|口令|验证码|令牌|密钥|パスワード|暗証|認証コード|確認コード|トークン`)
+var commandPromptSecret = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`(?i)\b(?:pass(?:word|phrase|code)?|pin|otp|token|secret|key|code|credentials?|api[ _-]?key|2fa|mfa|verification)\b|` +
+		`密码|口令|验证码|令牌|密钥|パスワード|暗証|認証コード|確認コード|トークン`)
+})
 
 // CommandPrompt says whether line, a command's last output line that no newline ended, reads as a prompt waiting
 // for input, and whether it reads as secret. line has its escapes removed already. A prompt is at most
 // CommandInputMaxPrompt characters and ends like one (commandPromptEnd); progress output does not stop on such a line.
 func CommandPrompt(line string) (prompt string, secret, ok bool) {
 	prompt = strings.TrimSpace(line)
-	if prompt == "" || utf8.RuneCountInString(prompt) > CommandInputMaxPrompt || !commandPromptEnd.MatchString(prompt) {
+	if prompt == "" || utf8.RuneCountInString(prompt) > CommandInputMaxPrompt || !commandPromptEnd().MatchString(prompt) {
 		return "", false, false
 	}
-	return prompt, commandPromptSecret.MatchString(prompt), true
+	return prompt, commandPromptSecret().MatchString(prompt), true
 }
