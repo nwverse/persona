@@ -19,9 +19,11 @@ if [ "$lane" = all ] || [ "$lane" = build ]; then
   ci_run 'Server programs with build-tags.txt' 600 bash -c 'cd server && t="$(cat build-tags.txt)" && go build -tags "$t" ./cmd/... && GOOS=darwin GOARCH=arm64 go build -tags "$t" ./cmd/...'
   ci_run 'Tunnel tests with build-tags.txt' 300 bash -c 'cd server && go test -tags "$(cat build-tags.txt)" -count=1 -timeout=4m ./internal/buildtags/... ./internal/tunnel/...'
   # The node's modules (docs/architecture/core-and-modules.md "The node's modules"): their node halves reach the node
-  # through internal/nodecmd/commandport from internal/modules/all/node. Left out, every binary builds, Windows' node too,
-  # the device command is unknown, and the node's list, the seam and the guards pass.
-  ci_run 'Builds without the node modules' 900 bash -c 'cd server && for t in persona_core_only persona_without_office persona_without_screen_share; do go build -tags "$t" ./... && GOOS=windows go build -tags "$t" ./cmd/persona-node ./cmd/personad && go test -tags "$t" -count=1 -timeout=6m ./internal/modules/all/... ./internal/nodecmd/commandport/... ./internal/archguard/... ./cmd/persona-node/... || exit 1; done'
+  # through the node's ports (internal/nodecmd/commandport, internal/node/screenport, internal/node/iphoneport) from
+  # internal/modules/all/node. Left out, every binary builds, Windows' node too, the device commands are unknown, the
+  # node offers no screen session or iphone program, and the node's list, the ports, the guards and the node's tests of
+  # where it meets them pass.
+  ci_run 'Builds without the node modules' 900 bash -c 'cd server && for t in persona_core_only persona_without_office persona_without_screen_share persona_without_phone_extra; do go build -tags "$t" ./... && GOOS=windows go build -tags "$t" ./cmd/persona-node ./cmd/personad && go test -tags "$t" -count=1 -timeout=6m ./internal/modules/all/... ./internal/nodecmd/commandport/... ./internal/node/screenport/... ./internal/node/iphoneport/... ./internal/archguard/... ./cmd/persona-node/... && go test -tags "$t" -count=1 -timeout=8m -run "Builtin|IPhone|PortDial|Link" ./internal/node/ || exit 1; done'
   # Persona Core without its feature modules (docs/architecture/core-and-modules.md "The switch"): the core builds, and
   # the module list, the kernel and the assistant's tests of the briefing's paths (they skip what needs the module and
   # check the core without it) pass, with every module left out and with the pilot left out. The assistant runs a -run
@@ -34,7 +36,7 @@ if [ "$lane" = all ] || [ "$lane" = build ]; then
   # The Feishu / Lark module (#13404, docs/architecture/core-and-modules.md "Provider seams"): left out, the binaries
   # build, the extension host has no bot client (internal/botport) and no lark-cli adapter or connector
   # (internal/cliport), and their tests skip; the rest of the extension host and the assistant's Feishu paths still pass.
-  ci_run 'Builds without the Lark module' 900 bash -c 'cd server && for t in persona_core_only persona_without_lark; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/botport/... ./internal/botcard/... ./internal/cliport/... ./internal/cliwire/... ./internal/modules/all/... ./internal/archguard/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=8m -run "Lark|Feishu|Bot|Card|Connector|Inbox|Builtin|SelfSettings|Golden" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "Feishu|Bot|Card|Golden" ./internal/assistant/ || exit 1; done'
+  ci_run 'Builds without the Lark module' 900 bash -c 'cd server && for t in persona_core_only persona_without_lark; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/botport/... ./internal/botcard/... ./internal/larkhost/... ./internal/cliport/... ./internal/cliwire/... ./internal/modules/all/... ./internal/archguard/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=8m -run "Lark|Feishu|Bot|Card|Connector|Inbox|Builtin|SelfSettings|Golden" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "Feishu|Bot|Card|Golden" ./internal/assistant/ || exit 1; done'
   # Mail (docs/architecture/core-and-modules.md "Provider seams"): the extension manager reaches it through its port, so
   # the core without it builds and the manager's mail, inbox, connector and settings tests pass (those of mail itself
   # skip; TestManagerWithoutMail checks it is absent).

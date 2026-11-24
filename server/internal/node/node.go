@@ -3061,7 +3061,7 @@ func (n *Node) info(ctx context.Context) proto.NodeInfo {
 		Engines:            n.engines(ctx, hv),
 		EngineHosts:        &choice, // this node takes sets in engine.use (the hub then sends it hosts and default)
 		MachineUID:         n.uid,
-		BuiltinPrograms:    builtinProgramIDs,
+		BuiltinPrograms:    builtinProgramsInfo(),
 		Clipboard:          clipshare.Support(),
 		ClaudePlugin:       n.claudePluginStatus(),
 	}

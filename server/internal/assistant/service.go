@@ -321,6 +321,7 @@ type Service struct {
 	chans            channelsBook      // channels.go
 	fbot             feishuBook        // feishu.go
 	tposts           threadPoster      // feishu_thread_posts.go: what a todo tells its chat thread
+	lark             larkLayer         // lark.go: the lark module's layer, the outbound channel port (s.chat())
 	tevents          todoEvents        // todo_events.go: what the extensions are told of the todos
 	tpush            todosPush         // todos.go: the {"type":"todos"} waiting for the rest of its write
 	directions       directionBook     // directions.go: the leaders' records and what the extensions were told of them

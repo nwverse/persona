@@ -1,4 +1,4 @@
-package iphone
+package nodeiphone
 
 // The iphone program's host on a real computer: the pairing records and the bridge's sessions of internal/iphone
 // (docs/extensions/iphone.md), seen through iphoneHost.
@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/iphone"
+	"github.com/nwverse/persona/server/internal/modules/phone-extra/iphone"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )

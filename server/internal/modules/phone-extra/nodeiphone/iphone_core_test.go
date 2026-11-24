@@ -1,4 +1,4 @@
-package iphone
+package nodeiphone
 
 import (
 	"cmp"
@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nwverse/persona/server/internal/iphonectl"
+	"github.com/nwverse/persona/server/internal/modules/phone-extra/iphonectl"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
