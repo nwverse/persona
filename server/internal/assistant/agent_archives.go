@@ -370,7 +370,8 @@ func archiveRow(rec agentArchive) proto.Session {
 	return s
 }
 
-// markAgentArchives puts the archive's marks on list's rows. It returns the keys of list's rows that have a record,
+// markAgentArchives puts the archive's marks on list's rows, each row's from the newest record among its own id and its
+// aliases (#14395). It returns the keys of list's rows that have a record,
 // and of the ids their conversations went by that have one (proto.Session.Aliases, #8131), in list order, one per
 // line: what the rows only the archive has depend on (tailKeys) besides the records. Paseo's conversations were
 // listed under their transcripts once, and an archive record kept then repeated the row listed under its own id
@@ -378,27 +379,37 @@ func archiveRow(rec agentArchive) proto.Session {
 func markAgentArchives(machine string, list []proto.Session, records map[string]agentArchive, pending map[string]bool, mark uint64) string {
 	var listed strings.Builder
 	for i := range list {
+		// The newest of the row's own record and its aliases' says whether it is archived (#14395): an archive made
+		// under an id the conversation went by holds for the row listed now (an Antigravity CLI pane's row, closed
+		// since), rather than being hidden behind a row it does not apply to. Only the row's own record is restored by
+		// its activity (applyArchives); a record under an alias stays as it was, as Paseo's do (#8131).
+		key, rec, ok := "", agentArchive{}, false
 		for _, alias := range list[i].Aliases() {
-			key := runtimeListID(machine, alias)
-			if _, ok := records[key]; ok {
-				listed.WriteString(key)
+			k := runtimeListID(machine, alias)
+			if r, found := records[k]; found {
+				listed.WriteString(k)
 				listed.WriteByte('\n')
+				if !ok || r.ChangedAt.After(rec.ChangedAt) {
+					key, rec, ok = k, r, true
+				}
 			}
 		}
-		key := runtimeListID(machine, list[i].SessionID)
-		rec, ok := records[key]
-		if !ok {
+		own := runtimeListID(machine, list[i].SessionID)
+		if r, found := records[own]; found {
+			listed.WriteString(own)
+			listed.WriteByte('\n')
+			if !ok || !rec.ChangedAt.After(r.ChangedAt) {
+				key, rec, ok = own, r, true
+			}
+		}
+		if !ok || list[i].Assistant {
 			continue
 		}
-		listed.WriteString(key)
-		listed.WriteByte('\n')
-		if !list[i].Assistant {
-			// A storage timeout must neither reveal unrelated archived rows nor hide
-			// new work. The durable restore remains pending until its write succeeds.
-			active := rec.active(list[i], mark)
-			list[i].Archived = rec.Archived && !pending[key] && !active
-			list[i].ArchiveChangedAt = archiveChangedAt(rec.ChangedAt)
-		}
+		// A storage timeout must neither reveal unrelated archived rows nor hide
+		// new work. The durable restore remains pending until its write succeeds.
+		active := rec.active(list[i], mark)
+		list[i].Archived = rec.Archived && !pending[key] && !active
+		list[i].ArchiveChangedAt = archiveChangedAt(rec.ChangedAt)
 	}
 	return listed.String()
 }

@@ -153,7 +153,9 @@ instead. The row listed names the conversation's other IDs in its `aliases`: a p
 and whichever row lists the conversation names the pane rows that showed it before, most recent first (up to eight).
 The node remembers which conversation the last 256 pane rows it listed showed, in memory only, so a pane that closed
 while the node was not running is not named. A pane that runs another conversation now names that one: its ID is its
-own row's again. Agents' A2A addresses are resolved through these IDs (`docs/integrations/a2a.md`).
+own row's again. Agents' A2A addresses are resolved through these IDs (`docs/integrations/a2a.md`), and an archive made
+under one of them, such as a Close on a pane's row, holds for the row that names it (`docs/protocol/protocol.md`,
+"Agent session archives").
 
 Orca's native Claude chats (structured, no terminal) connect through node's bridge: list, state, send text / images, interrupt, close,
 answer approvals / questions, change permission / thinking (no plan mode); no screen reads, keys, or live terminal. Chats appear only after their first message;
