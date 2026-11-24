@@ -60,6 +60,13 @@ type pageStore interface {
 	AssistantPageTurnTargets(context.Context) ([]db.AssistantPageTurnTarget, error)
 	AssistantPageTapDays(context.Context, time.Time, string) ([]db.AssistantPageTapDay, error)
 	ExpireAssistantDrafts(context.Context, time.Time) ([]db.AssistantPageRow, error)
+	// the page tool's and the preview card's (pages_tool.go)
+	CreateAssistantPage(context.Context, db.NewAssistantPage) (*db.AssistantPageRow, error)
+	UpdateAssistantPage(context.Context, db.AssistantPageUpdate) (*db.AssistantPageRow, error)
+	AssistantPageByOffer(context.Context, string) (*db.AssistantPageRow, error)
+	KeepAssistantPage(context.Context, db.AssistantPageKeep) (*db.AssistantPageRow, bool, error)
+	DeclineAssistantPage(context.Context, string, time.Time) (*db.AssistantPageRow, bool, error)
+	RemoveAssistantPageWithReason(context.Context, string, string, string, time.Time) (*db.AssistantPageRow, bool, error)
 	PurgeAssistantPages(context.Context, time.Time) (int64, error)
 	TrimAssistantPageActions(context.Context, time.Time) (int64, error)
 }
@@ -72,6 +79,20 @@ func (s *Service) pageStore() (pageStore, bool) {
 // pagesManager: this manager is the one with pages, the built-in one (docs/assistant/managers.md): the hub relays the
 // extensions' routes to the default manager, and only the built-in manager wires the hook (main.go).
 func (s *Service) pagesManager() bool { return s.id == "" || s.id == assistantwire.AssistantID }
+
+// withPages adds the pages' capability to the hello of manager id when it has pages: the built-in one, with a store
+// that keeps them, the switch on or off (the apps show the switch only while the hub lists the feature).
+func withPages(caps []string, id string, svc *Service) []string {
+	if id != assistantwire.AssistantID {
+		return caps
+	}
+	if svc != nil {
+		if _, ok := svc.pageStore(); !ok {
+			return caps
+		}
+	}
+	return append(caps, assistantwire.CapabilityAssistantPages)
+}
 
 // dashboardsOn: the owner turned Dashboards on (Settings › Assistant, `dashboards`; off until then).
 func (s *Service) dashboardsOn(ctx context.Context) bool {
@@ -508,8 +529,12 @@ func drawPagesIndex(kept, removed []db.AssistantPageRow, undo *db.AssistantPageR
 	if len(removed) > 0 {
 		items := make([]wire.Component, 0, len(removed))
 		for _, p := range removed {
+			subtitle := i18n.T(l, "assistant-pages.removed_on", i18n.Args{"date": pageDate(l, p.RemovedAt.In(loc))})
+			if p.RemovedBy == db.AssistantPageRemovedByAgent && p.RemovedReason != "" { // page remove's reason (pages_tool.go)
+				subtitle = i18n.T(l, "assistant-pages.removed_by_agent", i18n.Args{"date": pageDate(l, p.RemovedAt.In(loc)), "reason": p.RemovedReason})
+			}
 			items = append(items, wire.Component{Type: wire.ComponentRow, Key: "removed:" + p.ID, Title: p.Title, Icon: p.Icon,
-				Subtitle: i18n.T(l, "assistant-pages.removed_on", i18n.Args{"date": pageDate(l, p.RemovedAt.In(loc))}),
+				Subtitle: subtitle,
 				Actions: []wire.RowAction{
 					{Title: pageWord(l, "restore"), Icon: "refresh", Swipe: true, Action: wire.Action{ID: "persona.restore:" + p.ID}},
 					{Title: pageWord(l, "delete"), Icon: "trash", Role: wire.ButtonRoleDestructive,
