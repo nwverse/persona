@@ -449,7 +449,7 @@ func (s *Service) confirmSuggestionReplyLocked(ctx context.Context, it *InboxIte
 		}
 	}
 	var policySnap *InboxReplyPolicySnapshot
-	if policy.enabled {
+	if policy.appliesToItem(it) {
 		// Gate 3a: verify the suggestion's reply-policy snapshot is present, fresh for the live content version
 		// and policy revision, and still resolves to owner_draft.
 		if err := verifyReplyPolicySuggestionLocked(it, g, a, policy); err != nil {

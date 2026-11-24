@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/prompts"
 )
 
 func legacyUnionSetClassification(it *InboxItem, category, route string) {
@@ -672,8 +671,8 @@ func TestInboxReplyPolicyReviewRequirementChangeReclassifies(t *testing.T) {
 	}
 	got := calls()
 	classifierSystem := replyPolicyTestClassifierSystem(h, cfg)
-	if len(got) != 2 || got[0].System != classifierSystem || got[1].System != prompts.RenderJSONOnly(replyPolicyIndependentReviewPrompt) {
-		t.Fatalf("review requirement did not run primary plus independent review: %+v", got)
+	if len(got) != 2 || got[0].System != classifierSystem || got[1].System != classifierSystem {
+		t.Fatalf("review requirement did not run primary plus fully instructed independent review: %+v", got)
 	}
 }
 

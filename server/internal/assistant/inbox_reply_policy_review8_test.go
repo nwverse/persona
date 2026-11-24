@@ -229,8 +229,12 @@ func TestInboxReplyPolicyReportedProgressCannotEvictRewriteAuthorization(t *test
 	if g := currentSuggestion(it); g == nil || g.Text != ordinary {
 		t.Fatalf("unclassified post-eviction replacement displaced the authorized draft: %+v", g)
 	}
-	if got := len(calls()); got > 2 {
-		t.Fatalf("post-eviction replacement made unexpected model calls: %d", got)
+	got := calls()
+	if len(got) != 2 {
+		t.Fatalf("post-eviction replacement made %d model calls, want the initial replacement classification and the denied changed replacement classification", len(got))
+	}
+	if !strings.Contains(got[1].User, "Changed replacement after rewrite instruction eviction") || !strings.Contains(got[1].User, instruction) {
+		t.Fatalf("changed replacement classifier did not receive both its text and the original rewrite instruction: %+v", got[1])
 	}
 	if len(lark.got) != 0 {
 		t.Fatalf("post-eviction replacement reached the physical sender: %+v", lark.got)

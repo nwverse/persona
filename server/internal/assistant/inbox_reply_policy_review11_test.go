@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -12,6 +13,92 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
+
+func TestInboxReplyPolicyIndependentReviewReceivesClassificationInstructions(t *testing.T) {
+	h := agentHub(t)
+	cfg := replyPolicyTestConfig()
+	cfg.Categories = map[string]string{
+		" Custom_Owner_Action ": ReplyRouteOwnerDraft,
+		"custom_denied":         ReplyRouteOwnerOnly,
+		"unknown":               ReplyRouteOwnerOnly,
+	}
+	cfg.Rules = "Synthetic custom rule: custom owner actions still require an independent classification"
+	cfg.RequireIndependentReview = true
+	h.setConfig(func(c *assistantwire.InboxConfig) { c.ReplyPolicy = cfg })
+	classifierSystem := replyPolicyTestClassifierSystem(h, cfg)
+	var mu sync.Mutex
+	var requests []capturedCall
+	model, _ := replyPolicyClassifierModel(t, func(call int, system, user string, _ *http.Request) (int, string) {
+		mu.Lock()
+		requests = append(requests, capturedCall{System: system, User: user})
+		mu.Unlock()
+		if call == 1 {
+			return http.StatusOK, `{"category":"custom_owner_action","reason":"primary-response-sentinel"}`
+		}
+		complete := system == classifierSystem
+		for _, marker := range []string{"custom_owner_action", "custom_denied", cfg.Rules} {
+			complete = complete && strings.Contains(system, marker)
+		}
+		if !complete {
+			return http.StatusOK, `{"category":"custom_denied","reason":"reviewer did not receive the classifier instructions"}`
+		}
+		return http.StatusOK, `{"category":"custom_owner_action","reason":"independent agreement"}`
+	})
+	h.in.model = model
+	it := actionItem("lark:independent-review-instructions", time.Now())
+	it.Source = "lark"
+	it.Agent = &InboxAgent{State: AgentQueued}
+	h.inbox.items[it.ID] = it
+	h.classifyInboxReplyPolicies(t.Context(), cfg)
+
+	mu.Lock()
+	got := append([]capturedCall(nil), requests...)
+	mu.Unlock()
+	if len(got) != 2 {
+		t.Fatalf("independent review made %d model calls, want primary plus reviewer", len(got))
+	}
+	snap := it.ReplyPolicy
+	if snap == nil || snap.Category != "custom_owner_action" || snap.Route != ReplyRouteOwnerDraft || !snap.Reviewed || snap.ContentVersion == "" || snap.PolicyRevision != compileReplyPolicy(cfg).revision || snap.Error != "" || !replyPolicyClassificationCurrent(it, cfg) {
+		t.Fatalf("fully instructed agreeing review did not produce a current reviewed snapshot: %+v", snap)
+	}
+	if got[0].System != classifierSystem || got[1].System != classifierSystem {
+		t.Fatalf("reviewer did not receive the complete classifier instructions: primary=%q reviewer=%q want=%q", got[0].System, got[1].System, classifierSystem)
+	}
+	for _, marker := range []string{"custom_owner_action", "custom_denied", "unknown", cfg.Rules} {
+		if !strings.Contains(got[1].System, marker) {
+			t.Errorf("reviewer instructions omit %q: %q", marker, got[1].System)
+		}
+	}
+	if got[1].User != got[0].User || strings.Contains(got[1].System+got[1].User, "primary-response-sentinel") {
+		t.Fatalf("independent reviewer received the primary answer instead of only the original input: primary=%+v reviewer=%+v", got[0], got[1])
+	}
+}
+
+func TestInboxReplyPolicyOutOfScopeSuggestionConfirmationSkipsClassifier(t *testing.T) {
+	h, lark, it := handledHub(t)
+	cfg := replyPolicyTestConfig()
+	cfg.Sources = []string{"mail"}
+	h.setConfig(func(c *assistantwire.InboxConfig) { c.ReplyPolicy = cfg })
+	model, calls := replyPolicyClassifierModel(t, func(_ int, _, _ string, _ *http.Request) (int, string) {
+		return http.StatusOK, `{"category":"approval_permission","reason":"would deny an in-scope send"}`
+	})
+	h.in.setModel(model)
+	const text = "Synthetic Lark reply outside the mail-only policy"
+	if _, err := suggestTool(t, h, `{"kind":"reply","text":"`+text+`"}`); err != nil {
+		t.Fatalf("publishing the out-of-scope suggestion failed: %v", err)
+	}
+	g := currentSuggestion(it)
+	if g == nil || g.ReplyPolicy != nil || it.ReplyPolicy != nil {
+		t.Fatalf("test setup did not publish a Lark suggestion without a policy snapshot: suggestion=%+v item_policy=%+v", g, it.ReplyPolicy)
+	}
+	if got := calls(); got != 0 {
+		t.Fatalf("publishing the out-of-scope suggestion made %d policy classifier calls", got)
+	}
+	code, out := suggestionCall(t, h, it.ID, `{"version":1,"action":"confirm"}`)
+	if code != http.StatusOK || len(lark.got) != 1 || lark.got[0].Text != text || calls() != 0 {
+		t.Fatalf("out-of-scope confirmation did not retain legacy send behavior: code=%d out=%+v sends=%+v classifier_calls=%d", code, out, lark.got, calls())
+	}
+}
 
 func TestInboxReplyPolicyCompletedReceiptPrecedesReplacementMirror(t *testing.T) {
 	c := &recoveryReplier{}

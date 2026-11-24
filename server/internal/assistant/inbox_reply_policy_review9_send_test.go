@@ -44,7 +44,10 @@ func TestInboxReplyPolicyLegacyMirrorRetryAfterLostSuccessUsesCompletedReceipt(t
 	}
 
 	// The caller never received the successful response above, so it repeats the identical legacy request without a client ID.
-	inboxCall(t, h.routes(), http.MethodPost, "/api/v1/inbox/"+it.ID+"/reply", body)
+	code, out = inboxCall(t, h.routes(), http.MethodPost, "/api/v1/inbox/"+it.ID+"/reply", body)
+	if code != http.StatusOK || out["id"] != it.ID {
+		t.Fatalf("completed-receipt retry did not return the successful item response: code=%d out=%+v", code, out)
+	}
 	if calls := c.calls(); len(calls) != 1 {
 		t.Fatalf("legacy retry after a lost success response made %d physical sends, want the one completed send: %+v", len(calls), calls)
 	}

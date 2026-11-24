@@ -578,7 +578,7 @@ func (s *Service) classifyReplyPolicy(ctx context.Context, policy replyPolicySpe
 	if policy.requireIndependentReview {
 		reviewCtx, reviewCancel := context.WithTimeout(ctx, policy.timeout)
 		reviewRaw, reviewErr := s.inboxModelComplete(reviewCtx, purposeTriage,
-			prompts.RenderJSONOnly(independentReplyPolicyReviewPrompt), input, 1024)
+			prompts.RenderJSONOnly(system), input, 1024)
 		reviewCancel()
 		if reviewErr != nil {
 			return fail("independent review failed", nil)

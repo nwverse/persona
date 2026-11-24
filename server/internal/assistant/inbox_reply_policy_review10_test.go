@@ -120,6 +120,14 @@ func TestInboxReplyPolicyEveryRejectedOnDemandDraftStaysRejected(t *testing.T) {
 		}
 	})
 
+	t.Run("second rejected text", func(t *testing.T) {
+		h, lark, it := newRejectedPair(t)
+		code, out := inboxCall(t, h.routes(), http.MethodPost, "/api/v1/inbox/"+it.ID+"/reply", fmt.Sprintf(`{"text":%q}`, second))
+		if code == http.StatusOK || len(lark.got) != 0 {
+			t.Fatalf("second rejected draft became sendable after its rejection: code=%d out=%+v sends=%+v", code, out, lark.got)
+		}
+	})
+
 	t.Run("different direct owner text", func(t *testing.T) {
 		h, lark, it := newRejectedPair(t)
 		const ownerText = "Different direct owner text after two rejected drafts"
@@ -131,7 +139,7 @@ func TestInboxReplyPolicyEveryRejectedOnDemandDraftStaysRejected(t *testing.T) {
 }
 
 func TestInboxReplyPolicyPublicationCommitCannotReturnReplacedDraft(t *testing.T) {
-	h, _, it := handledHub(t)
+	h, lark, it := handledHub(t)
 	replyPolicyReview8OrdinaryItem(h, it)
 	const generated = "Synthetic on-demand draft replaced during its commit"
 	replyPolicyOrdinaryDraftModel(t, h, generated)
@@ -189,6 +197,34 @@ func TestInboxReplyPolicyPublicationCommitCannotReturnReplacedDraft(t *testing.T
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("concurrent rejection did not finish")
+	}
+
+	restarted := New(Options{Hub: h.f, Store: func() Store { return h.st }, Logf: testLogf(t)})
+	if err := restarted.inboxReady(t.Context()); err != nil {
+		t.Fatalf("reloading the concurrently rejected publication failed: %v", err)
+	}
+	restarted.inbox.mu.Lock()
+	loaded := restarted.inbox.items[it.ID]
+	var current, legacy *InboxSuggestion
+	agentDraft := ""
+	pending := false
+	if loaded != nil {
+		current = currentSuggestion(loaded)
+		legacy = mirroredLegacyReply(loaded)
+		pending = loaded.Suggestion != nil && loaded.Suggestion.ReplyPublicationPending
+		if loaded.Agent != nil {
+			agentDraft = loaded.Agent.Draft
+		}
+	}
+	restarted.inbox.mu.Unlock()
+	if loaded == nil || current != nil || legacy != nil || agentDraft != "" || pending {
+		t.Fatalf("concurrent rejection left a durable generated reply or publication marker: loaded=%+v current=%+v legacy=%+v agent_draft=%q pending=%t", loaded, current, legacy, agentDraft, pending)
+	}
+	if _, err := restarted.replyInboxChecked(t.Context(), it.ID, generated, recoveryFreshID, false, nil, nil); err == nil {
+		t.Fatal("replaced generated text became sendable after reloading its rejection")
+	}
+	if len(lark.got) != 0 {
+		t.Fatalf("replaced generated text reached the physical sender after reload: %+v", lark.got)
 	}
 }
 
