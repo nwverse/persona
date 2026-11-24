@@ -1,4 +1,4 @@
-package assistant
+package lark
 
 import (
 	"context"
@@ -29,75 +29,62 @@ type cotWorker struct {
 	usable                  bool
 	cancel                  context.CancelFunc
 	run                     channel.Run
-	live                    chanLive // worker-owned native cursor, never the card's chanLive
+	live                    runLive // worker-owned native cursor, never the card's runLive
 }
 
 // topicCotQueue runs under the progress mutex, but never waits for native I/O.
 // Its return value is the last confirmed native availability, for card fallback.
 func (f feishuSink) topicCotQueue(r *channel.Run, finish bool) (bool, *cotWorker) {
 	s := f.s
-	c := &s.chans
-	c.mu.Lock()
-	owner := c.live[r.ID]
-	if owner == nil {
-		c.mu.Unlock()
+	st, ownerDone, ok := s.h.RunState(r.ID, false, func() any { return &runLive{} })
+	owner, _ := st.(*runLive)
+	if !ok || owner == nil {
 		return false, nil
 	}
+	owner.mu.Lock()
 	w := owner.native
 	if w == nil {
 		snap := *r
 		snap.Ext = cloneExt(r.Ext)
-		w = &cotWorker{answer: make(chan *cotFallback, 1), ownerDone: owner.done, wake: make(chan struct{}, 1), done: make(chan struct{}), run: snap}
+		w = &cotWorker{answer: make(chan *cotFallback, 1), ownerDone: ownerDone, wake: make(chan struct{}, 1), done: make(chan struct{}), run: snap}
 		w.live.cot = owner.cot
 		w.usable = snap.Ext["cot"] != "" && snap.Ext["cot_msg"] != "" && snap.Ext["cot_off"] == ""
 		owner.native = w
 		w.live.cot.persist = func(snap *channel.Run, key, value string) {
 			w.mu.Lock()
-			c.mu.Lock()
-			defer c.mu.Unlock()
 			if snap.Ext == nil {
 				snap.Ext = map[string]string{}
 			}
 			snap.Ext[key] = value
+			ext := map[string]string{key: value}
 			if key == "cot" {
 				snap.Ext["cot_msg"] = w.live.cot.msg
+				ext["cot_msg"] = w.live.cot.msg
 			}
 			w.usable = snap.Ext["cot"] != "" && snap.Ext["cot_msg"] != "" && snap.Ext["cot_off"] == ""
-			var real *channel.Run
-			if !w.aborted && c.live[r.ID] == owner && owner.native == w {
-				for _, candidate := range c.st.Runs {
-					if candidate.ID == r.ID {
-						real = candidate
-						break
-					}
-				}
+			// The run's own values are kept (and the channels' state saved) only while this worker is still the run's,
+			// under the channels' lock; removed durable membership never falls back to r.
+			live, kept := false, false
+			if !w.aborted {
+				live, kept = s.h.PersistRunExt(r.ID, owner, func() bool { return owner.nativeIs(w) }, ext)
 			}
-			if real == nil && !w.ending && !w.aborted && c.live[r.ID] == owner && owner.native == w {
+			if live && !kept && !w.ending {
 				w.aborted, w.pending, w.queued = true, nil, false
 				if w.cancel != nil {
 					w.cancel()
 				}
 			}
-			if real != nil {
-				if real.Ext == nil {
-					real.Ext = map[string]string{}
-				}
-				real.Ext[key] = value
-				if key == "cot" {
-					real.Ext["cot_msg"] = w.live.cot.msg
-				}
-			}
-			// Reuse the existing channel checkpoint, without holding the worker mutex
-			// over its store I/O. Removed durable membership never falls back to r.
+			// The channels' checkpoint is saved without holding the worker's lock over its I/O.
 			w.mu.Unlock()
-			if real != nil {
-				s.saveChannelStateLocked()
+			if kept {
+				s.h.SaveRuns()
 			}
 		}
-		go w.work(f)
+		s.t.workers.Add(1)
+		go func() { defer s.t.workers.Done(); w.work(f) }()
 		go func() {
 			select {
-			case <-owner.done:
+			case <-ownerDone:
 				w.abort()
 			case <-s.runCtx().Done():
 				w.abort()
@@ -105,8 +92,8 @@ func (f feishuSink) topicCotQueue(r *channel.Run, finish bool) (bool, *cotWorker
 			}
 		}()
 	}
-	items := append([]proto.Item(nil), owner.items...)
-	c.mu.Unlock()
+	owner.mu.Unlock()
+	items, _ := s.h.RunItems(r.ID)
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	usable := w.usable
@@ -125,6 +112,13 @@ func (f feishuSink) topicCotQueue(r *channel.Run, finish bool) (bool, *cotWorker
 	default:
 	}
 	return usable, w
+}
+
+// nativeIs: w is the run's worker.
+func (p *runLive) nativeIs(w *cotWorker) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.native == w
 }
 
 func (w *cotWorker) abort() {
@@ -171,7 +165,7 @@ func (w *cotWorker) work(f feishuSink) {
 		ctx, cancel := context.WithTimeout(f.s.runCtx(), 15*time.Second)
 		w.cancel = cancel
 		w.mu.Unlock()
-		ctx = feishuSendAs(ctx, "progress", w.run.MachineID, w.run.SessionID)
+		ctx = f.s.sendAs(ctx, "progress", w.run.MachineID, w.run.SessionID)
 		native := true
 		if finish {
 			native = f.cotFinishNowItems(ctx, &w.run, &w.live, items)

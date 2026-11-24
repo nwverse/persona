@@ -307,6 +307,7 @@ func TestTopicWithoutAnOpenTodoIsToldOnce(t *testing.T) {
 // A run asked in a topic puts its progress, its answer and its notes into that topic (chat_id, in_thread); one asked in
 // the private chat sends neither field, as ever.
 func TestRunAnswersGoBackIntoTheTopic(t *testing.T) {
+	needsLarkLayer(t)
 	e := newThreadEnv(t, nil)
 	ctx := context.Background()
 	sink := feishuSink{e.s}
@@ -353,12 +354,9 @@ func TestRunAnswersGoBackIntoTheTopic(t *testing.T) {
 		t.Fatalf("posts for the topic %d, for the private chat %d: %v", inTopic, inPrivate, posts)
 	}
 	// Loading either run permits an existing agent message; creation for a new topic run is gated by topic_cot and
-	// the first process item (covered in feishu_topic_cot_test.go).
-	var tp, pp cotProgress
-	e.s.loadCot(&tp, &topicRun)
-	e.s.loadCot(&pp, &privateRun)
-	if tp.off || pp.off {
-		t.Fatalf("agent messages: off for the topic's run %v, for the private run %v; want both usable", tp.off, pp.off)
+	// the first process item (covered in internal/modules/lark/topic_cot_test.go).
+	if tp, pp := e.s.runExt(&topicRun, "cot_off") != "", e.s.runExt(&privateRun, "cot_off") != ""; tp || pp {
+		t.Fatalf("agent messages: off for the topic's run %v, for the private run %v; want both usable", tp, pp)
 	}
 	e.s.fbot.mu.Lock()
 	_, remembered := e.s.fbot.st.Threads["om_post"]
@@ -732,6 +730,7 @@ func TestCardOfATopicsRunFallsBackToTheDMOnlyWhenRefused(t *testing.T) {
 // The progress card of a topic's run has its Stop button, and a press (the hub lets the owner's from the group through)
 // stops that run's conversation.
 func TestStopButtonOnATopicsProgressCard(t *testing.T) {
+	needsLarkLayer(t)
 	e := newThreadEnv(t, nil)
 	e.topicTodo("发版")
 	e.deliver(topicEvent("om_t1", "开始"))
