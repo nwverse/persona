@@ -2301,14 +2301,18 @@ request; switching it off restores the standard experience with zero data migrat
 not expose boolean `todos_v2` degrade gracefully to a read-only row with an update hint. Graduation (making the new
 experience the default for at least one release with rollback kept) or removal is tracked in #14538.
 
-**Unified Integrations & Extensions** (#14802, #14805, `web/src/lib/labs-integrations-v2.ts`). This single assistant-scoped
+**Unified Integrations & Extensions** (#14802, #14805, #14868, #14874, `web/src/lib/labs-integrations-v2.ts`,
+`web/src/views/settings/Integrations.tsx`, `web/src/views/settings/IntegrationDetail.tsx`). This single assistant-scoped
 switch applies to the selected Assistant across devices and defaults to off (`integrations_v2` on `GET`/`PUT /api/v1/assistant`,
-guarded by `expected_integrations_v2` optimistic locking and explicit manager targeting). It provides one opt-in entry point
-for experimental Integrations & Extensions capabilities (unified settings views and channel group/topic routing) without flag
-sprawl. Changes take effect immediately on the next view or request; switching it off restores the standard Connectors,
-Channels, and Extensions tabs and legacy routing with zero data migration or data loss. Older hubs that do not expose boolean
-`integrations_v2` degrade gracefully to a read-only row with an update hint. Graduation (making the new experience the default
-for at least one release with rollback kept) or removal is tracked in #14802.
+guarded by `expected_integrations_v2` optimistic locking and explicit manager targeting). When enabled, Settings collapses the
+three legacy tabs (`Channels`, `Connectors`, and `Extensions`) into one lazy-loaded **Integrations & Extensions** entry that
+deduplicates built-in services and multi-capability extensions, provides capability filter chips (`All`, `Chat channels`,
+`Data sources`, `Tools & appearance`), preserves Extension Market access, and mounts `IntegrationDetail` in desktop split-pane
+or mobile drill-down layouts. Legacy deep links (`/settings/connectors/...`, `/settings/channels/...`, `/settings/extensions/...`,
+including `@manager` targets) redirect cleanly into the unified view when enabled, and `/settings/integrations/...` links fall
+back cleanly to the corresponding legacy tab when disabled, with zero data migration or data loss. Older hubs that do not expose
+boolean `integrations_v2` degrade gracefully to a read-only row with an update hint. Graduation (making the new experience the
+default for at least one release with rollback kept) or removal is tracked in #14802.
 
 **Terminal renderer** (`web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals
 (`views/session/terminal/feed.ts`) draw with xterm's DOM renderer (Standard, the default) or WebGL (`@xterm/addon-webgl`,

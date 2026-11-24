@@ -171,6 +171,7 @@ assistant.entries.read GET /api/v1/assistant/entries
 leaders.read         GET /api/v1/assistant/leaders
 -                    GET /api/v1/assistant/memory
 -                    GET /api/v1/assistant/north-star
+-                    GET /api/v1/assistant/organization/snapshot
 -                    GET /api/v1/assistant/places
 -                    GET /api/v1/assistant/readiness
 assistant.ask        GET /api/v1/assistant/reporters

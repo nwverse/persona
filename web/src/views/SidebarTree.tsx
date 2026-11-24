@@ -362,8 +362,9 @@ function RepoSection({ tree, reg, hover, activeKey, go, onRowMenu, selected, ...
   );
 }
 
-/** One working tree's agents under its own folding row: the main checkout wears a home mark, and a tree with nothing
- *  running says so. Orca child worktrees have their own remembered, initially expanded chip after the parent's agents. */
+/** One working tree's agents under its own folding row: the main checkout wears a home mark, and only a known non-main
+ *  worktree names its kind. Catalog folders and unknown `is_main` stay unmarked; legacy paths keep their inference.
+ *  Orca child worktrees have their own remembered, initially expanded chip after the parent's agents. */
 function RepoWorktreeRows({ w, repo, row, activeKey, go, selected, ...actions }: { w: RepoWorktree; repo: string; row: (s: Session) => React.ReactElement; activeKey: string; go: GoFn; selected?: string } & WorkspaceTreeActions) {
   const [folded, toggle] = useFolded(w.key, w.sessions.length === 0 && w.children.length === 0, { follow: true, holds: holdsRow(w.navigationTree ?? w.tree, activeKey) || w.children.some((child) => holdsWorkspace(child, selected)) });
   const descendants = w.navigationTree ? w.children.flatMap((c) => c.navigationTree ?? c.tree) : w.tree.slice(w.sessions.length);
@@ -378,13 +379,19 @@ function RepoWorktreeRows({ w, repo, row, activeKey, go, selected, ...actions }:
   const running = w.sessions.filter((s) => !isQuiet(s, mutes)).length;
   const title = [w.workspace?.project_name, w.name, w.branch, w.path, w.workspace?.source].filter(Boolean).join(" · ");
   const label = <><span className="min-w-0 truncate">{w.name}</span>{w.workspace?.project_name && w.workspace.project_name !== repo && <span className="min-w-0 max-w-24 truncate text-ink-3">{w.workspace.project_name}</span>}</>;
+  const showWorktreeKind = !w.main && (!w.workspace || (w.workspace.is_main === false && w.workspace.workspace_kind !== "folder"));
   return (
     <div ref={selectedRow} className="mt-px" data-workspace-key={w.workspace ? w.key : undefined}>
       <div className={cx("group/sec relative z-10 flex w-full min-w-0 items-center gap-1.5 whitespace-nowrap rounded-control py-1 pl-3 pr-2 text-left text-[11.5px] text-ink-2 hover:bg-hover", selected === w.key && "bg-hover")} {...(w.target && actions.onWorkspaceMenu ? contextMenuProps((at, anchor) => actions.onWorkspaceMenu!(w.target!, anchor, at)) : {})}>
         <button type="button" aria-label={t("workspace-tree.disclosure", { name: w.name })} aria-expanded={!folded} onClick={toggle} className="touch-hit relative flex min-h-7 shrink-0 items-center [@media(pointer:coarse)]:min-h-11">
           <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 opacity-60 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
         </button>
-        {w.main && <Icon name="home" size={11} stroke={2} className="shrink-0 text-ink-3" />}
+        {w.main ? <Icon name="home" size={11} stroke={2} className="shrink-0 text-ink-3" /> : showWorktreeKind ? (
+          <span className="flex shrink-0 items-center gap-1 text-ink-3">
+            <Icon name="branch" size={11} stroke={2} className="shrink-0" />
+            <span>{t("workspace-tree.worktree_kind")}</span>
+          </span>
+        ) : null}
         <SpaceMarks pinned={workspacePinTime(w.workspace) !== undefined} muted={false} />
         <button type="button" title={title} aria-pressed={selected === w.key} aria-expanded={!folded} onClick={() => { if (w.target) actions.onSelectWorkspace?.(w.target); toggle(); }} className="flex min-h-7 min-w-0 flex-1 items-center gap-1.5 text-left hover:text-ink [@media(pointer:coarse)]:min-h-11">{label}</button>
         {w.workspace?.available === false && <Icon name="warning" size={11} className="shrink-0 text-ink-3" aria-label={t("workspace-tree.unavailable")} />}
