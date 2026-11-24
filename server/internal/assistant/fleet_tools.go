@@ -138,7 +138,7 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 		if s.isWorkMachine(machine) {
 			return []proto.Tool{}, nil
 		}
-		return guestTools(meetingRoomTools(), allowed), nil
+		return guestTools(s.meetingRoomTools(), allowed), nil
 	}
 	if !guest {
 		if guestHint {

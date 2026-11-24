@@ -253,7 +253,7 @@ struct RootView: View {
         .overlay(alignment: .bottomTrailing) { PerfCountProbe() }
         // UI tests see the small window (VNC in picture in picture, #1343), which is the system's.
         .overlay(alignment: .topLeading) {
-            if model.vncPiP != nil {
+            if model.liveScreen?.smallWindow != nil {
                 Color.clear.frame(width: Theme.Size.hairline, height: Theme.Size.hairline)
                     .accessibilityElement().accessibilityLabel("VNC 小窗开着").accessibilityIdentifier("vnc-pip-on") // i18n-ignore
             }
@@ -267,7 +267,7 @@ struct RootView: View {
         .htmlCardSample()
         .voiceOrbSample()
         .closeoutSample()
-        .healthTrendsSample()
+        .modifier(ModuleDebugSamples())
         #endif
         .alert("Claude Wants to Act on Your iPhone", isPresented: Binding(
             get: { model.pendingConfirmation != nil },

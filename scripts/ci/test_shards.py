@@ -217,7 +217,7 @@ class ShardTests(unittest.TestCase):
     def test_source_server_shard_installs_the_pinned_bundler(self):
         workflow = (ROOT / ".github/workflows/server-test.yml").read_text()
         setup = """      - uses: oven-sh/setup-bun@v2
-        if: matrix.shard == 'other'
+        if: matrix.shard == 'other' || matrix.shard == 'core-other'
         with:
           bun-version: '1.4.2'
 """
@@ -235,7 +235,7 @@ class ShardTests(unittest.TestCase):
 
     def test_server_workflow_covers_build_and_every_test_shard(self):
         workflow = (ROOT / ".github/workflows/server-test.yml").read_text()
-        self.assertIn("shard: [node, managers, other, build]", workflow)
+        self.assertIn("shard: [node, managers, other, build, core-node, core-managers, core-other]", workflow)
         self.assertIn("fail-fast: false", workflow)
         self.assertIn('scripts/ci/server.sh "$CI_SERVER_SHARD"', workflow)
         script = (ROOT / "scripts/ci/server.sh").read_text()
@@ -244,6 +244,17 @@ class ShardTests(unittest.TestCase):
                       "Builds without each module", "Server $shard tests with Postgres, core only"):
             self.assertIn(label, script)
         self.assertIn('lane="${1:-all}"', script)
+
+    def test_managers_outer_budget_lets_the_inner_go_timeout_report(self):
+        script = (ROOT / "scripts/ci/server.sh").read_text()
+        self.assertIn("shard_budget=600", script)
+        self.assertIn('if [ "$shard" = managers ]; then shard_budget=900; fi', script)
+        self.assertIn('ci_run "Server $shard tests with Postgres" "$shard_budget"', script)
+        workflow = (ROOT / ".github/workflows/server-test.yml").read_text()
+        self.assertIn("timeout-minutes: 20", workflow)
+        # The inner Go timeout, test selection and assertions stay unchanged: a genuinely stuck test still gets 10m.
+        shards = (ROOT / "scripts/ci/server-shards.py").read_text()
+        self.assertIn('"--", "go", "test", "-json", "-p", str(workers), "-count=1", "-timeout=10m"]', shards)
 
     def test_server_go_cache_is_saved_only_by_main_dispatches(self):
         # actions/cache saves on every ref; branch entries pushed main's out of the 10 GB repository cache.
