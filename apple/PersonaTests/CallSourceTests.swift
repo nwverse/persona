@@ -107,6 +107,7 @@ struct CallSourceTests {
     /// cannot be (a recording, which is refused during one). A new place fails here until it is given one.
     @Test func everyAudioSessionChangeHasAVerdictForALiveCall() throws {
         let audited: [String: (verdict: String, gate: String?)] = [
+            "Shared/AudioSessionBroker.swift": ("the core audio-session broker: every call site below routes through it with its own live-call verdict", nil),
             "Persona/Calls/CallRoute.swift": ("the call's own Speaker", nil),
             "Persona/Calls/CallSystem.swift": ("the call's own: the watchdog's one activation, the Simulator's stand-in", nil),
             "Persona/Calls/PersonaCalls.swift": ("the call's own category, before its Start or as it rings", nil),
@@ -114,7 +115,7 @@ struct CallSourceTests {
             "Persona/Views/Chat/PromptComposer.swift": ("dictation: refused", "callGate"),
             "Shared/Recording/RecordingCapture.swift": ("a recording: refused, a paused one stays paused", "callGate"),
             "Persona/Recording/MeetingReplay.swift": ("meeting replay: refused, audio-session changes skipped", "LiveCallGate.liveNow"),
-            "Persona/Screen/VNCPiP.swift": ("picture in picture: the session left alone", "LiveCallGate.callIsLive"),
+            "Modules/ScreenShare/VNCPiP.swift": ("picture in picture: the session left alone", "LiveCallGate.callIsLive"),
             "Persona/Recording/MeetingSpeaker.swift": ("a meeting recording's answers: a recording a call paused leaves the call's route alone", "LiveCallGate.callIsLive"),
         ]
         let calls = ["setCategory(", "setActive(", "overrideOutputAudioPort(", "setPreferredInput(", "setMode("]
@@ -139,7 +140,7 @@ struct CallSourceTests {
             #expect(gate.lowerBound < (body.range(of: "configureSession(")?.lowerBound ?? body.endIndex), "\(name)")
             #expect(gate.lowerBound < (body.range(of: "askPermission()")?.lowerBound ?? body.endIndex), "\(name)")
         }
-        let pip = try #require(Self.body(try Self.lines("Persona/Screen/VNCPiP.swift"), "if !LiveCallGate.callIsLive {"))
+        let pip = try #require(Self.body(try Self.lines("Modules/ScreenShare/VNCPiP.swift"), "if !LiveCallGate.callIsLive {"))
         #expect(pip.contains("setCategory(") && pip.contains("setActive("), "picture in picture sets the session only with no call")
         // A replay asks on the main actor before its tape opens, then again on the session queue before every session
         // change: a call that went live while its audio file opened or ended keeps its own session (#10693).

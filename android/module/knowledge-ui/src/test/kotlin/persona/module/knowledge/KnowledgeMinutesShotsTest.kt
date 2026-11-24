@@ -119,7 +119,7 @@ class KnowledgeMinutesShotsTest {
             points = listOf(MinutesItem("The widgets are ready; Monday works for the release.", 95.5, "Sam")), markdown = "# Weekly sync")
         val facts = RecordingFacts.of(buildJsonObject { put("started_at", "2026-11-10T14:00:00+08:00") })
         val idle = MinutesActions(busy = false, message = null, make = {}, add = {}, copy = {}, jump = {})
-        val stale = MinutesActions(busy = false, message = UiText.Res(R.string.knowledge_minutes_stale), make = {}, add = {}, copy = {}, jump = {})
+        val stale = MinutesActions(busy = false, message = UiText.Res(R.string.knowledge_ui_minutes_stale), make = {}, add = {}, copy = {}, jump = {})
         val scenes = listOf(
             MinutesView(MinutesPhase.Writing) to idle,
             MinutesView(MinutesPhase.Failed, canMake = true) to idle,

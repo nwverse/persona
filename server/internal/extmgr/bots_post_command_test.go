@@ -168,21 +168,36 @@ func TestPostCommandUnknownBotIdentityIsDenied(t *testing.T) {
 			w.pair(t)
 			w.topicsOn(t, topicChat)
 			w.readOn(t)
-			// The bot's start-up read of its own identity is done before the test forgets it: a late one could put the id
-			// back, or be the bot-info call the check below finds in place of the message's own (#14219).
-			w.botInfoRead(t)
+			const within = 30 * time.Second
+			// Wait for restartBotLocked's lookup to fill the cache. Clearing
+			// it earlier lets the in-flight response restore the identity.
+			eventually(t, within, "the startup bot identity", func() bool {
+				w.h.bots.mu.Lock()
+				defer w.h.bots.mu.Unlock()
+				return w.h.bots.info.OpenID == "ou_bot"
+			})
 			w.api.mu.Lock()
 			w.api.botInfoFail = true
 			w.api.mu.Unlock()
 			w.h.bots.mu.Lock()
 			w.h.bots.info.OpenID = ""
+			previous := w.h.bots.line
 			w.h.bots.mu.Unlock()
 			before := w.api.total()
 			content := `{"content":[[{"tag":"at","user_id":"@_user_1"},{"tag":"text","text":"` + command + ` summarize"}]]}`
 			w.send(t, botMessageEvent("om_unknown_post", "ou_me", "post", content, map[string]any{"chat_type": "group", "chat_id": askChat, "mentions": atBot}))
-			w.send(t, groupEvent("om_unknown_barrier", "ou_me", "marker", topicChat, "omt_marker"))
-			eventually(t, 5*time.Second, "barrier handed", func() bool { got := w.handed(); return len(got) > 0 && got[len(got)-1] == "om_unknown_barrier" })
-			if got := w.handed(); len(got) != 1 || len(w.settings().AISources) != 0 {
+			w.h.bots.mu.Lock()
+			done := w.h.bots.line
+			w.h.bots.mu.Unlock()
+			if done == previous {
+				t.Fatal("post was not queued for processing")
+			}
+			select {
+			case <-done:
+			case <-time.After(within):
+				t.Fatal("post processing did not finish")
+			}
+			if got := w.handed(); len(got) != 0 || len(w.settings().AISources) != 0 {
 				t.Fatalf("unknown identity acted: %v", got)
 			}
 			calls := w.api.since(before)

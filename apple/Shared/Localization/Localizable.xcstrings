@@ -1,6 +1,116 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Move the water extension's records and settings into Health and turn off the extension. Its water page on Android will disappear." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move the water extension's records and settings into Health and turn off the extension. Its water page on Android will disappear."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "把喝水扩展的记录和设置搬进健康，并停用扩展；安卓上扩展的喝水页会消失。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "水分補給拡張機能の記録と設定をヘルスケアに移し、拡張機能を停止します。Androidの拡張機能の水分補給ページは表示されなくなります。"
+          }
+        }
+      }
+    },
+    "Move into Health" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move into Health"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搬进健康"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアに移す"
+          }
+        }
+      }
+    },
+    "Moving into Health…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moving into Health…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在搬进健康…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアに移動中…"
+          }
+        }
+      }
+    },
+    "Couldn't move the water extension into Health" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't move the water extension into Health"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法把喝水扩展搬进健康"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "水分補給拡張機能をヘルスケアに移せませんでした"
+          }
+        }
+      }
+    },
+    "Moved %lld records; water extension disabled. Replace widgets, watch faces and shortcuts." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moved %lld records; water extension disabled. Replace widgets, watch faces and shortcuts."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已搬进 %lld 条，喝水扩展已停用。请更换小组件、表盘和快捷指令。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld件を移し、水分補給拡張機能を停止しました。ウィジェット、文字盤、ショートカットを置き換えてください。"
+          }
+        }
+      }
+    },
     "Book [Space Icon]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -3027,44 +3137,119 @@
         }
       }
     },
-    "Cancelled: %@ [Todo Detail]": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {"stringUnit": {"state": "translated", "value": "Cancelled: %@"}},
-        "zh-Hans": {"stringUnit": {"state": "translated", "value": "已取消：%@"}},
-        "ja": {"stringUnit": {"state": "translated", "value": "キャンセル理由：%@"}}
+    "Cancelled: %@ [Todo Detail]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelled: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已取消：%@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "キャンセル理由：%@"
+          }
+        }
       }
     },
-    "Continued By %@ [Todo Detail]": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {"stringUnit": {"state": "translated", "value": "Continued by: %@"}},
-        "zh-Hans": {"stringUnit": {"state": "translated", "value": "由新卡接手：%@"}},
-        "ja": {"stringUnit": {"state": "translated", "value": "新しいカードが引き継ぎ：%@"}}
+    "Continued By %@ [Todo Detail]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continued by: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "由新卡接手：%@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいカードが引き継ぎ：%@"
+          }
+        }
       }
     },
-    "Continues From %@ [Todo Detail]": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {"stringUnit": {"state": "translated", "value": "Continues from: %@"}},
-        "zh-Hans": {"stringUnit": {"state": "translated", "value": "接手自：%@"}},
-        "ja": {"stringUnit": {"state": "translated", "value": "引き継ぎ元：%@"}}
+    "Continues From %@ [Todo Detail]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continues from: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接手自：%@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "引き継ぎ元：%@"
+          }
+        }
       }
     },
-    "Current Task [Todo Detail]": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {"stringUnit": {"state": "translated", "value": "Current task"}},
-        "zh-Hans": {"stringUnit": {"state": "translated", "value": "当前任务"}},
-        "ja": {"stringUnit": {"state": "translated", "value": "このタスク"}}
+    "Current Task [Todo Detail]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Current task"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前任务"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このタスク"
+          }
+        }
       }
     },
-    "Delivered · Awaiting Review [To-do Sections]": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {"stringUnit": {"state": "translated", "value": "Delivered · awaiting review"}},
-        "zh-Hans": {"stringUnit": {"state": "translated", "value": "已交付·待看"}},
-        "ja": {"stringUnit": {"state": "translated", "value": "交付済み・レビュー待ち"}}
+    "Delivered · Awaiting Review [To-do Sections]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delivered · awaiting review"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已交付·待看"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "交付済み・レビュー待ち"
+          }
+        }
       }
     },
     "Waiting for Wi-Fi to send the audio to the hub." : {
@@ -3113,32 +3298,47 @@
         }
       }
     },
-    "Who Worked on It [Todo Detail]": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {"stringUnit": {"state": "translated", "value": "Who worked on it"}},
-        "zh-Hans": {"stringUnit": {"state": "translated", "value": "谁做过"}},
-        "ja": {"stringUnit": {"state": "translated", "value": "担当の履歴"}}
+    "Who Worked on It [Todo Detail]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Who worked on it"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "谁做过"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "担当の履歴"
+          }
+        }
       }
     },
     "<user>" : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "<user>"
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "<user>"
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "<ユーザー名>"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "<ユーザー名>"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "<用户名>"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "<用户名>"
           }
         }
       }
@@ -3419,45 +3619,45 @@
       }
     },
     "Check Status" : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Check Status"
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Check Status"
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "状態を確認"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "状態を確認"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "检查状态"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检查状态"
           }
         }
       }
     },
     "Checking the computer" : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Checking the computer"
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checking the computer"
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "コンピューターを確認"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピューターを確認"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "检查电脑"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检查电脑"
           }
         }
       }
@@ -3532,45 +3732,45 @@
       }
     },
     "Confirm that this computer is yours first." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Confirm that this computer is yours first."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirm that this computer is yours first."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "先に、このコンピューターがご自身のものであることを確認してください。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先に、このコンピューターがご自身のものであることを確認してください。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "请先确认这台电脑是你的。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先确认这台电脑是你的。"
           }
         }
       }
     },
     "Connected over SSH. With Persona Link, this computer connects to the hub by itself, also from other networks." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Connected over SSH. With Persona Link, this computer connects to the hub by itself, also from other networks."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connected over SSH. With Persona Link, this computer connects to the hub by itself, also from other networks."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SSHで接続しています。Persona Linkにすると、このコンピューターはほかのネットワークからでも自分でハブに接続します。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSHで接続しています。Persona Linkにすると、このコンピューターはほかのネットワークからでも自分でハブに接続します。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "当前通过 SSH 连接。改用 Persona Link 后，这台电脑会自己连上 hub，换了网络也能连。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前通过 SSH 连接。改用 Persona Link 后，这台电脑会自己连上 hub，换了网络也能连。"
           }
         }
       }
@@ -3599,23 +3799,23 @@
       }
     },
     "Couldn't confirm that the switch started. If nothing changes here, try again." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn't confirm that the switch started. If nothing changes here, try again."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't confirm that the switch started. If nothing changes here, try again."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "切り替えが始まったか確認できませんでした。ここに変化がなければ、もう一度お試しください。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切り替えが始まったか確認できませんでした。ここに変化がなければ、もう一度お試しください。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无法确认切换是否已开始。如果这里一直没有变化，请再试一次。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确认切换是否已开始。如果这里一直没有变化，请再试一次。"
           }
         }
       }
@@ -3690,89 +3890,89 @@
       }
     },
     "Couldn't send Persona Link to the computer over SSH." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn't send Persona Link to the computer over SSH."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't send Persona Link to the computer over SSH."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SSHでPersona Linkをコンピューターに送れませんでした。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSHでPersona Linkをコンピューターに送れませんでした。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "未能通过 SSH 把 Persona Link 发送到电脑上。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未能通过 SSH 把 Persona Link 发送到电脑上。"
           }
         }
       }
     },
     "Couldn't switch to Persona Link. %@ It's back on SSH." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn't switch to Persona Link. %@ It's back on SSH."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't switch to Persona Link. %@ It's back on SSH."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona Linkに切り替えられませんでした。%@SSH接続に戻っています。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona Linkに切り替えられませんでした。%@SSH接続に戻っています。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "未能切换到 Persona Link。%@电脑已回到 SSH 连接。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未能切换到 Persona Link。%@电脑已回到 SSH 连接。"
           }
         }
       }
     },
     "Couldn't switch to Persona Link. %@ Persona couldn't confirm that the switch was undone. Check that the computer is reachable; if it isn't, reconnect it from the computer itself." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn't switch to Persona Link. %@ Persona couldn't confirm that the switch was undone. Check that the computer is reachable; if it isn't, reconnect it from the computer itself."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't switch to Persona Link. %@ Persona couldn't confirm that the switch was undone. Check that the computer is reachable; if it isn't, reconnect it from the computer itself."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona Linkに切り替えられませんでした。%@切り替えを元に戻せたか確認できませんでした。コンピューターに接続できるか確認し、できない場合はそのコンピューター上で接続し直してください。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona Linkに切り替えられませんでした。%@切り替えを元に戻せたか確認できませんでした。コンピューターに接続できるか確認し、できない場合はそのコンピューター上で接続し直してください。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "未能切换到 Persona Link。%@Persona 无法确认切换已撤销。请检查能否连上这台电脑；如果连不上，请在这台电脑上重新连接。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未能切换到 Persona Link。%@Persona 无法确认切换已撤销。请检查能否连上这台电脑；如果连不上，请在这台电脑上重新连接。"
           }
         }
       }
     },
     "Current step" : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Current step"
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Current step"
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "現在のステップ"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在のステップ"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "当前步骤"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前步骤"
           }
         }
       }
@@ -4169,45 +4369,45 @@
       }
     },
     "Installing Persona Link" : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Installing Persona Link"
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installing Persona Link"
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona Linkをインストール"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona Linkをインストール"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "安装 Persona Link"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "安装 Persona Link"
           }
         }
       }
     },
     "Its services would stop whenever you sign out. An administrator of that computer must run %@ first." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Its services would stop whenever you sign out. An administrator of that computer must run %@ first."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Its services would stop whenever you sign out. An administrator of that computer must run %@ first."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "サインアウトするとサービスが止まります。先にこのコンピューターの管理者が%@を実行する必要があります。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サインアウトするとサービスが止まります。先にこのコンピューターの管理者が%@を実行する必要があります。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "退出登录后，它的服务就会停止。需要这台电脑的管理员先运行 %@。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "退出登录后，它的服务就会停止。需要这台电脑的管理员先运行 %@。"
           }
         }
       }
@@ -4512,177 +4712,177 @@
       }
     },
     "Persona Link couldn't be installed or paired on the computer." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona Link couldn't be installed or paired on the computer."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona Link couldn't be installed or paired on the computer."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "コンピューターにPersona Linkをインストールまたはペアリングできませんでした。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピューターにPersona Linkをインストールまたはペアリングできませんでした。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "未能在电脑上安装或配对 Persona Link。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未能在电脑上安装或配对 Persona Link。"
           }
         }
       }
     },
     "Persona Link is already installed or paired on this computer. Finish setting it up there, or remove it first." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona Link is already installed or paired on this computer. Finish setting it up there, or remove it first."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona Link is already installed or paired on this computer. Finish setting it up there, or remove it first."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "このコンピューターにはすでにPersona Linkがインストールまたはペアリングされています。そちらで設定を完了するか、先に削除してください。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このコンピューターにはすでにPersona Linkがインストールまたはペアリングされています。そちらで設定を完了するか、先に削除してください。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "这台电脑上已经安装或配对了 Persona Link。请在那台电脑上完成设置，或先把它移除。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台电脑上已经安装或配对了 Persona Link。请在那台电脑上完成设置，或先把它移除。"
           }
         }
       }
     },
     "Persona couldn't find its program on this computer in the usual place." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona couldn't find its program on this computer in the usual place."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona couldn't find its program on this computer in the usual place."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "このコンピューターの通常の場所にPersonaのプログラムが見つかりませんでした。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このコンピューターの通常の場所にPersonaのプログラムが見つかりませんでした。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona 在这台电脑的常用位置找不到它的程序。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 在这台电脑的常用位置找不到它的程序。"
           }
         }
       }
     },
     "Persona installs Persona Link over the current SSH connection. The computer then connects to the hub by itself, from any network.\n\nIt disconnects once. Agents in a terminal keep running; an assistant reply being written stops. Its name, settings and history stay.\n\nIf it fails, Persona tries to put it back on SSH." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona installs Persona Link over the current SSH connection. The computer then connects to the hub by itself, from any network.\n\nIt disconnects once. Agents in a terminal keep running; an assistant reply being written stops. Its name, settings and history stay.\n\nIf it fails, Persona tries to put it back on SSH."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona installs Persona Link over the current SSH connection. The computer then connects to the hub by itself, from any network.\n\nIt disconnects once. Agents in a terminal keep running; an assistant reply being written stops. Its name, settings and history stay.\n\nIf it fails, Persona tries to put it back on SSH."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Personaが現在のSSH接続を使ってPersona Linkをインストールします。以後、このコンピューターはどのネットワークからでも自分でハブに接続します。\n\n一度切断されます。ターミナルのエージェントはそのまま動きますが、アシスタントが書いている返信は止まります。名前、設定、履歴は残ります。\n\n失敗した場合、PersonaはSSH接続への復旧を試みます。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personaが現在のSSH接続を使ってPersona Linkをインストールします。以後、このコンピューターはどのネットワークからでも自分でハブに接続します。\n\n一度切断されます。ターミナルのエージェントはそのまま動きますが、アシスタントが書いている返信は止まります。名前、設定、履歴は残ります。\n\n失敗した場合、PersonaはSSH接続への復旧を試みます。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona 会通过现在的 SSH 连接安装 Persona Link，之后电脑会自己连上 hub，在任何网络里都能连。\n\n电脑会断开一次。终端里的 Agent 会继续运行，但助手正在写的回复会中断。名称、设置和历史记录都会保留。\n\n如果失败，Persona 会尝试恢复 SSH 连接。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 会通过现在的 SSH 连接安装 Persona Link，之后电脑会自己连上 hub，在任何网络里都能连。\n\n电脑会断开一次。终端里的 Agent 会继续运行，但助手正在写的回复会中断。名称、设置和历史记录都会保留。\n\n如果失败，Persona 会尝试恢复 SSH 连接。"
           }
         }
       }
     },
     "Persona is updating this computer. Try again once that's done." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona is updating this computer. Try again once that's done."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona is updating this computer. Try again once that's done."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Personaがこのコンピューターを更新しています。完了してからもう一度お試しください。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personaがこのコンピューターを更新しています。完了してからもう一度お試しください。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona 正在更新这台电脑，完成后再试。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 正在更新这台电脑，完成后再试。"
           }
         }
       }
     },
     "Persona restarted during the switch." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona restarted during the switch."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona restarted during the switch."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "切り替え中にPersonaが再起動しました。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切り替え中にPersonaが再起動しました。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "切换过程中 Persona 重启了。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换过程中 Persona 重启了。"
           }
         }
       }
     },
     "Persona runs from a custom location on this computer, so it can't be switched from here." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona runs from a custom location on this computer, so it can't be switched from here."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona runs from a custom location on this computer, so it can't be switched from here."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "このコンピューターのPersonaはカスタムの場所で動いているため、ここからは切り替えられません。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このコンピューターのPersonaはカスタムの場所で動いているため、ここからは切り替えられません。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "这台电脑上的 Persona 装在自定义位置，不能在这里切换。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台电脑上的 Persona 装在自定义位置，不能在这里切换。"
           }
         }
       }
     },
     "Persona's folders on this computer aren't safe to switch from here: the home folder, ~/.persona or ~/.persona/bin belongs to another user or can be changed by other users. On that computer, make them yours and writable only by you (for example: chmod go-w ~ ~/.persona ~/.persona/bin), then try again." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona's folders on this computer aren't safe to switch from here: the home folder, ~/.persona or ~/.persona/bin belongs to another user or can be changed by other users. On that computer, make them yours and writable only by you (for example: chmod go-w ~ ~/.persona ~/.persona/bin), then try again."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona's folders on this computer aren't safe to switch from here: the home folder, ~/.persona or ~/.persona/bin belongs to another user or can be changed by other users. On that computer, make them yours and writable only by you (for example: chmod go-w ~ ~/.persona ~/.persona/bin), then try again."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "このコンピューターのPersonaのフォルダーは安全ではないため、ここからは切り替えられません。ホームフォルダー、~/.persona、~/.persona/bin のいずれかが別のユーザーのものか、他のユーザーが変更できます。そのコンピューターで、自分が所有し自分だけが書き込めるようにしてから（例：chmod go-w ~ ~/.persona ~/.persona/bin）、もう一度お試しください。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このコンピューターのPersonaのフォルダーは安全ではないため、ここからは切り替えられません。ホームフォルダー、~/.persona、~/.persona/bin のいずれかが別のユーザーのものか、他のユーザーが変更できます。そのコンピューターで、自分が所有し自分だけが書き込めるようにしてから（例：chmod go-w ~ ~/.persona ~/.persona/bin）、もう一度お試しください。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "这台电脑上 Persona 的文件夹不安全，不能在这里切换：主文件夹、~/.persona 或 ~/.persona/bin 属于别的用户，或者其他用户可以改动。请在那台电脑上把它们改成属于你、只有你能写入（例如：chmod go-w ~ ~/.persona ~/.persona/bin），然后再试。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台电脑上 Persona 的文件夹不安全，不能在这里切换：主文件夹、~/.persona 或 ~/.persona/bin 属于别的用户，或者其他用户可以改动。请在那台电脑上把它们改成属于你、只有你能写入（例如：chmod go-w ~ ~/.persona ~/.persona/bin），然后再试。"
           }
         }
       }
@@ -4964,23 +5164,23 @@
       }
     },
     "Something went wrong." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Something went wrong."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Something went wrong."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "問題が発生しました。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "問題が発生しました。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "出了点问题。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "出了点问题。"
           }
         }
       }
@@ -5032,111 +5232,111 @@
       }
     },
     "Switch to Persona Link…" : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Switch to Persona Link…"
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch to Persona Link…"
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona Linkに切り替え…"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona Linkに切り替え…"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "切换到 Persona Link…"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换到 Persona Link…"
           }
         }
       }
     },
     "Switch “%@” to Persona Link?" : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Switch “%@” to Persona Link?"
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch “%@” to Persona Link?"
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "「%@」をPersona Linkに切り替えますか？"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」をPersona Linkに切り替えますか？"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "将「%@」切换到 Persona Link？"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将「%@」切换到 Persona Link？"
           }
         }
       }
     },
     "Switched to Persona Link. This computer now connects to the hub by itself." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Switched to Persona Link. This computer now connects to the hub by itself."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switched to Persona Link. This computer now connects to the hub by itself."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona Linkに切り替えました。このコンピューターは自分でハブに接続するようになりました。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona Linkに切り替えました。このコンピューターは自分でハブに接続するようになりました。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已切换到 Persona Link。这台电脑现在会自己连上 hub。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已切换到 Persona Link。这台电脑现在会自己连上 hub。"
           }
         }
       }
     },
     "Switching from here works for Linux computers. On a Mac or Windows computer, install Persona Link on it yourself." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Switching from here works for Linux computers. On a Mac or Windows computer, install Persona Link on it yourself."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switching from here works for Linux computers. On a Mac or Windows computer, install Persona Link on it yourself."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ここから切り替えられるのはLinuxのコンピューターだけです。MacやWindowsのコンピューターでは、そのコンピューターにPersona Linkをご自身でインストールしてください。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ここから切り替えられるのはLinuxのコンピューターだけです。MacやWindowsのコンピューターでは、そのコンピューターにPersona Linkをご自身でインストールしてください。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "只有 Linux 电脑可以在这里切换。Mac 或 Windows 电脑请在电脑上自行安装 Persona Link。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只有 Linux 电脑可以在这里切换。Mac 或 Windows 电脑请在电脑上自行安装 Persona Link。"
           }
         }
       }
     },
     "Switching to Persona Link…" : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Switching to Persona Link…"
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switching to Persona Link…"
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona Linkに切り替えています…"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona Linkに切り替えています…"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在切换到 Persona Link…"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在切换到 Persona Link…"
           }
         }
       }
@@ -5188,177 +5388,177 @@
       }
     },
     "That didn't work. Putting the computer back on SSH…" : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "That didn't work. Putting the computer back on SSH…"
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That didn't work. Putting the computer back on SSH…"
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "うまくいかなかったため、SSH接続に戻しています…"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "うまくいかなかったため、SSH接続に戻しています…"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "没有成功，正在把电脑改回 SSH 连接…"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有成功，正在把电脑改回 SSH 连接…"
           }
         }
       }
     },
     "The computer didn't connect through Persona Link in time." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The computer didn't connect through Persona Link in time."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The computer didn't connect through Persona Link in time."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "コンピューターが時間内にPersona Linkで接続しませんでした。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピューターが時間内にPersona Linkで接続しませんでした。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "电脑没有及时通过 Persona Link 连上。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑没有及时通过 Persona Link 连上。"
           }
         }
       }
     },
     "The computer needs to be online to switch." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The computer needs to be online to switch."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The computer needs to be online to switch."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "切り替えるには、コンピューターがオンラインである必要があります。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切り替えるには、コンピューターがオンラインである必要があります。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "电脑要在线才能切换。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑要在线才能切换。"
           }
         }
       }
     },
     "The computer's settings changed during the switch." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The computer's settings changed during the switch."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The computer's settings changed during the switch."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "切り替え中にコンピューターの設定が変更されました。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切り替え中にコンピューターの設定が変更されました。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "切换过程中这台电脑的设置被改动了。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换过程中这台电脑的设置被改动了。"
           }
         }
       }
     },
     "The hub didn't answer for an hour, so the switch couldn't be undone." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The hub didn't answer for an hour, so the switch couldn't be undone."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub didn't answer for an hour, so the switch couldn't be undone."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ハブが1時間応答しなかったため、切り替えを元に戻せませんでした。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブが1時間応答しなかったため、切り替えを元に戻せませんでした。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "hub 一小时内都没有应答，所以没能撤销这次切换。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 一小时内都没有应答，所以没能撤销这次切换。"
           }
         }
       }
     },
     "The hub doesn't take Persona Link connections yet. Turn on its TLS port or give it an https address first, under Network & access on the hub's admin page." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The hub doesn't take Persona Link connections yet. Turn on its TLS port or give it an https address first, under Network & access on the hub's admin page."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub doesn't take Persona Link connections yet. Turn on its TLS port or give it an https address first, under Network & access on the hub's admin page."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ハブはまだPersona Linkの接続を受け付けていません。先にハブの管理ページの「ネットワークとアクセス」で、TLSポートを有効にするかhttpsのアドレスを設定してください。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブはまだPersona Linkの接続を受け付けていません。先にハブの管理ページの「ネットワークとアクセス」で、TLSポートを有効にするかhttpsのアドレスを設定してください。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "hub 还不接受 Persona Link 连接。请先在 hub 管理页面的「网络与访问」里开启 TLS 端口，或设置 https 地址。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 还不接受 Persona Link 连接。请先在 hub 管理页面的「网络与访问」里开启 TLS 端口，或设置 https 地址。"
           }
         }
       }
     },
     "The hub has no Persona Link build for this computer's system." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The hub has no Persona Link build for this computer's system."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub has no Persona Link build for this computer's system."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "このコンピューターのシステム向けのPersona Linkがハブにありません。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このコンピューターのシステム向けのPersona Linkがハブにありません。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "hub 没有适合这台电脑系统的 Persona Link 版本。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 没有适合这台电脑系统的 Persona Link 版本。"
           }
         }
       }
     },
     "The hub needs an update before it can switch computers." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The hub needs an update before it can switch computers."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub needs an update before it can switch computers."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "コンピューターを切り替えるには、ハブを更新する必要があります。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピューターを切り替えるには、ハブを更新する必要があります。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "hub 需要更新后才能切换电脑。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 需要更新后才能切换电脑。"
           }
         }
       }
@@ -5422,89 +5622,89 @@
       "extractionState" : "manual"
     },
     "This computer can't switch to Persona Link right now." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This computer can't switch to Persona Link right now."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This computer can't switch to Persona Link right now."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "このコンピューターは今はPersona Linkに切り替えられません。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このコンピューターは今はPersona Linkに切り替えられません。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "这台电脑暂时不能切换到 Persona Link。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台电脑暂时不能切换到 Persona Link。"
           }
         }
       }
     },
     "This computer has no systemd user services, which Persona Link needs to keep running." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This computer has no systemd user services, which Persona Link needs to keep running."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This computer has no systemd user services, which Persona Link needs to keep running."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "このコンピューターにはsystemdのユーザーサービスがありません。Persona Linkを動かし続けるために必要です。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このコンピューターにはsystemdのユーザーサービスがありません。Persona Linkを動かし続けるために必要です。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "这台电脑没有 systemd 用户服务，Persona Link 需要它来保持运行。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台电脑没有 systemd 用户服务，Persona Link 需要它来保持运行。"
           }
         }
       }
     },
     "This computer is already switching to Persona Link." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This computer is already switching to Persona Link."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This computer is already switching to Persona Link."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "このコンピューターはすでにPersona Linkへの切り替え中です。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このコンピューターはすでにPersona Linkへの切り替え中です。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "这台电脑正在切换到 Persona Link。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台电脑正在切换到 Persona Link。"
           }
         }
       }
     },
     "This device can't switch computers. Use a device with full access." : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This device can't switch computers. Use a device with full access."
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device can't switch computers. Use a device with full access."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "このデバイスではコンピューターを切り替えられません。フルアクセスのデバイスを使ってください。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスではコンピューターを切り替えられません。フルアクセスのデバイスを使ってください。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "这台设备不能切换电脑。请用有完全访问权限的设备。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台设备不能切换电脑。请用有完全访问权限的设备。"
           }
         }
       }
@@ -5671,23 +5871,23 @@
       }
     },
     "Waiting for it to connect" : {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Waiting for it to connect"
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for it to connect"
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "接続を待機"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続を待機"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "等待电脑连上"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待电脑连上"
           }
         }
       }
@@ -20225,6 +20425,7 @@
       }
     },
     "%lld subagents running ·" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -20241,13 +20442,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld 个子 Agent 在跑 ·"
+            "value" : "%1$lld 个子智能体运行中 ·"
           }
         }
-      },
-      "extractionState" : "manual"
+      }
     },
     "%lld subagents running, the newest is %@" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -20264,11 +20465,10 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld 个子 Agent 在跑，最新的是 %2$@"
+            "value" : "%1$lld 个子智能体运行中，最新的是 %2$@"
           }
         }
-      },
-      "extractionState" : "manual"
+      }
     },
     "%lld subagents working [Work Line]" : {
       "localizations" : {
@@ -30364,6 +30564,7 @@
       }
     },
     "All Subagents" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -30380,13 +30581,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "全部子 Agent"
+            "value" : "全部子智能体"
           }
         }
-      },
-      "extractionState" : "manual"
+      }
     },
     "All Subagents (%lld)" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -30403,11 +30604,10 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "全部子 Agent（%1$lld）"
+            "value" : "全部子智能体（%1$lld）"
           }
         }
-      },
-      "extractionState" : "manual"
+      }
     },
     "All [Source Relationships]" : {
       "extractionState" : "manual",
@@ -80961,6 +81161,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "バックグラウンドのラウンドを折りたたむ"
+          }
+        }
+      }
+    },
+    "Fold routine replies from other chats" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fold routine replies from other chats"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ほかの会話からの通常の返信を折りたたむ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "折叠其他对话的常规回复"
           }
         }
       }
@@ -162682,6 +162904,28 @@
         }
       }
     },
+    "Show empty workspaces" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show empty workspaces"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "空のワークスペースを表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示空工作区"
+          }
+        }
+      }
+    },
     "Show fewer actions" : {
       "comment" : "BeautifulUI looks this up in the app's catalog (#5574)",
       "localizations" : {
@@ -170707,6 +170951,7 @@
       "extractionState" : "manual"
     },
     "Subagent [Session Panes 4b81d0]" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -170723,13 +170968,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "子 Agent"
+            "value" : "子智能体"
           }
         }
-      },
-      "extractionState" : "manual"
+      }
     },
     "Subagent [Task Note Row 70da69]" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -170746,11 +170991,10 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "子 Agent"
+            "value" : "子智能体"
           }
         }
-      },
-      "extractionState" : "manual"
+      }
     },
     "Subagent model (optional, defaults to the above)" : {
       "localizations" : {
@@ -170776,6 +171020,7 @@
       "extractionState" : "manual"
     },
     "Subagent running: %@" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -170792,11 +171037,10 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "子 Agent 运行中：%1$@"
+            "value" : "子智能体运行中：%1$@"
           }
         }
-      },
-      "extractionState" : "manual"
+      }
     },
     "Subagent task [Child Session]" : {
       "extractionState" : "manual",
@@ -170816,12 +171060,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "子 Agent 任务"
+            "value" : "子智能体任务"
           }
         }
       }
     },
     "Subagent · %@" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -170838,11 +171083,10 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "子 Agent · %1$@"
+            "value" : "子智能体 · %1$@"
           }
         }
-      },
-      "extractionState" : "manual"
+      }
     },
     "Subagents of %@" : {
       "extractionState" : "manual",
@@ -194007,7 +194251,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "会结束终端里正在跑的这一轮"
+            "value" : "会结束终端里正在跑的这一轮。"
           }
         }
       }
@@ -210761,6 +211005,28 @@
         }
       }
     },
+    "When background rounds are folded, routine replies from other chats stay in an expandable row in the main chat and skip the finished notification. Questions and replies marked for you still appear." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When background rounds are folded, routine replies from other chats stay in an expandable row in the main chat and skip the finished notification. Questions and replies marked for you still appear."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックグラウンドのラウンドを折りたたむと、ほかの会話からの通常の返信はメインチャットで開ける行にまとまり、完了通知は届きません。質問やあなた宛てに指定された返信は引き続き表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启后台轮次折叠后，其他对话的常规回复会收在主对话的一条可展开记录里，也不发送完成通知。需要你回答的问题和明确发给你的消息仍会显示。"
+          }
+        }
+      }
+    },
     "When Done, Put It in the Inbox" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -220813,25 +221079,117 @@
         }
       }
     },
+    "Saving session naming preference…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saving session naming preference…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッション名の設定を保存中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在保存会话命名设置…"
+          }
+        }
+      }
+    },
+    "Shows the tab name first and syncs this preference across devices on this hub." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shows the tab name first and syncs this preference across devices on this hub."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タブ名を優先して表示します。この設定は同じハブのデバイス間で同期されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "优先显示标签名。此设置会在连接同一 Hub 的设备间同步。"
+          }
+        }
+      }
+    },
+    "Updates the herdr tab and, where supported, the CLI session name." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Updates the herdr tab and, where supported, the CLI session name."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "herdr のタブ名を変更します。CLI がセッション名の変更に対応している場合は、そちらも変更します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新 herdr 标签名。如果 CLI 支持改名，也会更新 CLI 会话名。"
+          }
+        }
+      }
+    },
+    "Use the herdr tab name as the session name" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use the herdr tab name as the session name"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "herdr のタブ名をセッション名として使う"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用 herdr 标签名作为会话名"
+          }
+        }
+      }
+    },
     "settings.search.agents" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agent Claude Code Codex Antigravity agy session triage runtime"
+            "value" : "Agent Claude Code Codex Antigravity agy session triage runtime herdr tab name"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agent Claude Code Codex Antigravity agy 会话 分诊 运行时"
+            "value" : "Agent Claude Code Codex Antigravity agy 会话 分诊 运行时 herdr 标签名 会话名"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agent Claude Code Codex Antigravity agy セッション トリアージ ランタイム"
+            "value" : "Agent Claude Code Codex Antigravity agy セッション トリアージ ランタイム herdr タブ名"
           }
         }
       }
@@ -229230,6 +229588,2366 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "分"
+          }
+        }
+      }
+    },
+    "Switch this conversation?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch this conversation?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换此对话的连接？"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このチャットの接続を切り替えますか？"
+          }
+        }
+      }
+    },
+    "Switch connection" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch connection"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换连接"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続を切り替える"
+          }
+        }
+      }
+    },
+    "Continue with %@ using recent messages and a summary. The conversation and its tasks stay here. Some details may be summarized. The new connection will take over with your next message." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continue with %1$@ using recent messages and a summary. The conversation and its tasks stay here. Some details may be summarized. The new connection will take over with your next message."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用最近的消息和摘要，在 %1$@ 上继续。对话及其任务仍留在这里，部分细节会被概括。新连接将在你发送下一条消息时接手。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近のメッセージと要約を使い、%1$@ で続けます。チャットとタスクはここに残ります。一部の詳細は要約されます。次のメッセージを送ると新しい接続が引き継ぎます。"
+          }
+        }
+      }
+    },
+    "Switching connections is unavailable. Refresh the conversation and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switching connections is unavailable. Refresh the conversation and try again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法切换连接，请刷新对话后重试。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続を切り替えられません。チャットを更新して再試行してください。"
+          }
+        }
+      }
+    },
+    "This connection cannot receive separate task follow-up instructions." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This connection cannot receive separate task follow-up instructions."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此连接无法接收独立的任务跟进指令。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この接続は独立したタスクのフォローアップ指示を受け取れません。"
+          }
+        }
+      }
+    },
+    "The switch result is unconfirmed. Retrying uses the same request; it will not start another switch. %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The switch result is unconfirmed. Retrying uses the same request; it will not start another switch. %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未确认切换结果。重试会使用同一请求，不会再次发起切换。%1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切り替え結果を確認できません。再試行では同じリクエストを使い、新たな切り替えは開始しません。%1$@"
+          }
+        }
+      }
+    },
+    "%lld ended [Session Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld ended"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 件が終了"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个已结束"
+          }
+        }
+      }
+    },
+    "%lld need you [Child Rollup]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld need you"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 件が確認待ち"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个等你确认"
+          }
+        }
+      }
+    },
+    "%lld running [Child Rollup]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld running"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 件が実行中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个运行中"
+          }
+        }
+      }
+    },
+    "Background Activity [Session Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Background Activity"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックグラウンドの活動"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "后台活动"
+          }
+        }
+      }
+    },
+    "Background tasks [Session Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Background tasks"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックグラウンドタスク"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "后台任务"
+          }
+        }
+      }
+    },
+    "Computer offline · Showing cached transcript [Session Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Computer offline · Showing cached transcript"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピュータがオフライン · キャッシュ済み履歴を表示中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑离线 · 显示缓存记录"
+          }
+        }
+      }
+    },
+    "Context [Session Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Context"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンテキスト"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上下文"
+          }
+        }
+      }
+    },
+    "Ended · %lld [Session Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ended · %lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "終了 · %lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已结束 · %lld"
+          }
+        }
+      }
+    },
+    "Environment [Session Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Environment"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "環境"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "环境"
+          }
+        }
+      }
+    },
+    "Failed [Session Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "失敗"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "失败"
+          }
+        }
+      }
+    },
+    "Loading subagents… [Session Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loading subagents…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サブエージェントを読み込み中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载子智能体…"
+          }
+        }
+      }
+    },
+    "Needs you [Session Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Needs you"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確認待ち"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等你确认"
+          }
+        }
+      }
+    },
+    "Open as page [Session Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open as page"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ページで開く"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在独立页面打开"
+          }
+        }
+      }
+    },
+    "Running · %lld [Session Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Running · %lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "実行中 · %lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进行中 · %lld"
+          }
+        }
+      }
+    },
+    "Session overview [Session Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Session overview"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッションの概要"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话概览"
+          }
+        }
+      }
+    },
+    "Show in chat [Session Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show in chat"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "呼び出し元へ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "定位到调用处"
+          }
+        }
+      }
+    },
+    "Subagent [Session Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subagent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サブエージェント"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子智能体"
+          }
+        }
+      }
+    },
+    "Subagents (%lld) [Session Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subagents (%lld)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サブエージェント（%lld）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子智能体（%lld）"
+          }
+        }
+      }
+    },
+    "Subagents [Session Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subagents"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サブエージェント"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子智能体"
+          }
+        }
+      }
+    },
+    "Subagents: %lld need you [Child Rollup]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subagents: %lld need you"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サブエージェント：%lld 件が確認待ち"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子智能体：%lld 个等你确认"
+          }
+        }
+      }
+    },
+    "Subagents: %lld running [Child Rollup]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subagents: %lld running"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サブエージェント：%lld 件が実行中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子智能体：%lld 个运行中"
+          }
+        }
+      }
+    },
+    "View full [Session Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "View full"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべて表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看完整"
+          }
+        }
+      }
+    },
+    "%@ %@ is invalid or too long." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ is invalid or too long."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 的 %2$@ 无效或过长。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ の %2$@ が無効か長すぎます。"
+          }
+        }
+      }
+    },
+    "%@ launcher is invalid or too long." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ launcher is invalid or too long."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 的启动器无效或过长。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ のランチャーが無効か長すぎます。"
+          }
+        }
+      }
+    },
+    "%@ permission mode is invalid." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ permission mode is invalid."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 的权限模式无效。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ の権限モードが無効です。"
+          }
+        }
+      }
+    },
+    "%@ thinking effort “%@” is not supported." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ thinking effort “%2$@” is not supported."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 不支持思考强度「%2$@」。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ の思考の強さ「%2$@」には対応していません。"
+          }
+        }
+      }
+    },
+    "%lld changes on switch [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld changes on switch"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换将更新 %lld 项配置"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切り替え時に %lld 件を変更"
+          }
+        }
+      }
+    },
+    "Active [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Active"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用中"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用中"
+          }
+        }
+      }
+    },
+    "Add Agent Preset [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add Agent Preset"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加 Agent 预设"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent プリセットを追加"
+          }
+        }
+      }
+    },
+    "Agent Presets (%lld/%lld) [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent Presets (%1$lld/%2$lld)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 预设（%1$lld/%2$lld）"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent プリセット（%1$lld/%2$lld）"
+          }
+        }
+      }
+    },
+    "Agent Presets [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent Presets"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 预设"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent プリセット"
+          }
+        }
+      }
+    },
+    "Answering Agents' Questions [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Answering Agents' Questions"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "替你回答 Agent 问题"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent の質問に回答"
+          }
+        }
+      }
+    },
+    "Applied %@ [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Applied %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已切换到「%@」"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」を適用しました"
+          }
+        }
+      }
+    },
+    "Apply %@? [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apply %@?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换到「%@」？"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」を適用しますか？"
+          }
+        }
+      }
+    },
+    "Apply Profile [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apply Profile"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用档位"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロファイルを適用"
+          }
+        }
+      }
+    },
+    "Apply directly [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apply directly"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直接切换"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "そのまま適用"
+          }
+        }
+      }
+    },
+    "Applying %@ again will overwrite your current live changes for these fields:" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Applying %@ again will overwrite your current live changes for these fields:"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再次切换到「%@」将用已保存的快照覆盖以下当前配置改动："
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」を再度適用すると、次の項目の現在の変更が保存済みの内容で上書きされます："
+          }
+        }
+      }
+    },
+    "Applying %@ will update these fields in your current configuration:" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Applying %@ will update these fields in your current configuration:"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换到「%@」将修改当前配置中的以下字段："
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」を適用すると、現在の設定の次の項目が変更されます："
+          }
+        }
+      }
+    },
+    "At most %lld Agent presets are allowed." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "At most %lld Agent presets are allowed."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最多允许设置 %lld 个 Agent 预设。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent プリセットは最大 %lld 件までです。"
+          }
+        }
+      }
+    },
+    "Capture current into %@ first" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Capture current into %@ first"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先捕获当前配置到「%@」并切换"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先に「%@」へ保存して適用"
+          }
+        }
+      }
+    },
+    "Captured current into %@ and applied %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Captured current into %1$@ and applied %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已将当前配置捕获到「%1$@」并切换到「%2$@」"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在の設定を「%1$@」に保存し、「%2$@」を適用しました"
+          }
+        }
+      }
+    },
+    "Clear (use default) [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear (use default)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除（使用默认）"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "クリア（デフォルトを使用）"
+          }
+        }
+      }
+    },
+    "Current settings differ from this active profile. Update this profile from current configuration to keep them, or apply it again to restore it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Current settings differ from this active profile. Update this profile from current configuration to keep them, or apply it again to restore it."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前配置已偏离此使用中的档位。可从当前配置更新此档位以保留改动，或再次应用以恢复。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在の設定はこの使用中プロファイルから変更されています。現在の設定から更新して反映するか、再度適用して元に戻せます。"
+          }
+        }
+      }
+    },
+    "Default Model [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default Model"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认模型"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デフォルトモデル"
+          }
+        }
+      }
+    },
+    "Description [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Description"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说明"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "説明"
+          }
+        }
+      }
+    },
+    "Description must be at most %lld characters." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Description must be at most %lld characters."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说明最多 %lld 个字符。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "説明は %lld 文字以内で入力してください。"
+          }
+        }
+      }
+    },
+    "Duplicate preset name “%@”." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Duplicate preset name “%@”."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预设名称「%@」重复。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセット名「%@」が重複しています。"
+          }
+        }
+      }
+    },
+    "Edit %@ [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑「%@」"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」を編集"
+          }
+        }
+      }
+    },
+    "Enabled categories are written when switching to this profile; disabled ones stay untouched." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enabled categories are written when switching to this profile; disabled ones stay untouched."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用的用途会在切换档位时写入；未启用的保持不变。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有効にした用途のみ切り替え時に更新され、無効な用途は変更されません。"
+          }
+        }
+      }
+    },
+    "Fable Alias [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fable Alias"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fable 别名"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fable エイリアス"
+          }
+        }
+      }
+    },
+    "Follow default [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Follow default"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跟随默认"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デフォルトに従う"
+          }
+        }
+      }
+    },
+    "Haiku Alias [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Haiku Alias"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Haiku 别名"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Haiku エイリアス"
+          }
+        }
+      }
+    },
+    "Inbox Screening [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inbox Screening"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "信息筛选"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受信トレイ仕分け"
+          }
+        }
+      }
+    },
+    "Information Processing [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Information Processing"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "信息处理"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "情報処理"
+          }
+        }
+      }
+    },
+    "Launcher Overrides [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Launcher Overrides"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启动器覆盖"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ランチャー上書き"
+          }
+        }
+      }
+    },
+    "Launcher [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Launcher"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启动器"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ランチャー"
+          }
+        }
+      }
+    },
+    "Left unchanged [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Left unchanged"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换时保持不变"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更しない"
+          }
+        }
+      }
+    },
+    "Matches current settings [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Matches current settings"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "与当前配置一致"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在の設定と一致しています"
+          }
+        }
+      }
+    },
+    "Model Profiles" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Model Profiles"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型档位"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデルプロファイル"
+          }
+        }
+      }
+    },
+    "Named launch presets for Agents. Only the active profile's presets are used." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Named launch presets for Agents. Only the active profile's presets are used."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于启动 Agent 的命名预设，仅使用当前启用档位中的预设。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 起動用の名前付きプリセットです。使用中プロファイルのプリセットのみ適用されます。"
+          }
+        }
+      }
+    },
+    "No Agent presets defined in this profile." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Agent presets defined in this profile."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此档位尚未配置 Agent 预设。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このプロファイルには Agent プリセットがありません。"
+          }
+        }
+      }
+    },
+    "No managed launcher overrides in this profile." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No managed launcher overrides in this profile."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此档位未包含启动器覆盖。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このプロファイルにはランチャー上書きがありません。"
+          }
+        }
+      }
+    },
+    "No profile is active yet; Agent presets are off until you apply one." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No profile is active yet; Agent presets are off until you apply one."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前尚未启用任何档位；应用档位前不会启用 Agent 预设。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用中のプロファイルはありません。適用するまで Agent プリセットは無効です。"
+          }
+        }
+      }
+    },
+    "No purpose bindings saved in this profile." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No purpose bindings saved in this profile."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此档位未保存用途绑定。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このプロファイルには用途設定がありません。"
+          }
+        }
+      }
+    },
+    "Opus Alias [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opus Alias"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opus 别名"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opus エイリアス"
+          }
+        }
+      }
+    },
+    "Preset name (e.g. strong, fast) [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preset name (e.g. strong, fast)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预设名称（如 strong、fast）"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセット名（例: strong, fast）"
+          }
+        }
+      }
+    },
+    "Preset name “%@” must start with a lowercase letter and use only a-z, 0-9, _ or - (max 24 chars)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preset name “%@” must start with a lowercase letter and use only a-z, 0-9, _ or - (max 24 chars)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预设名称「%@」必须以小写字母开头，仅含 a-z、0-9、_ 或 -（最多 24 位）。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセット名「%@」は英小文字で始まり、a-z・0-9・_・- のみ（最大24文字）で入力してください。"
+          }
+        }
+      }
+    },
+    "Preset “%@” description must be one line of at most %lld characters." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preset “%1$@” description must be one line of at most %2$lld characters."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预设「%1$@」的说明必须为单行且最多 %2$lld 个字符。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセット「%1$@」の説明は1行で %2$lld 文字以内にしてください。"
+          }
+        }
+      }
+    },
+    "Preset “%@” has an invalid model ID “%@”." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preset “%1$@” has an invalid model ID “%2$@”."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预设「%1$@」的模型 ID「%2$@」无效。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセット「%1$@」のモデル ID「%2$@」が無効です。"
+          }
+        }
+      }
+    },
+    "Preset “%@” has an unsupported speed “%@”." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preset “%1$@” has an unsupported speed “%2$@”."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预设「%1$@」的速度设置「%2$@」不受支持。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセット「%1$@」の速度「%2$@」には対応していません。"
+          }
+        }
+      }
+    },
+    "Preset “%@” needs a launcher." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preset “%@” needs a launcher."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预设「%@」需要指定启动器。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセット「%@」にはランチャーが必要です。"
+          }
+        }
+      }
+    },
+    "Profile Details [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profile Details"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "档位详情"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロファイル詳細"
+          }
+        }
+      }
+    },
+    "Profile Not Found [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profile Not Found"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未找到该档位"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロファイルが見つかりません"
+          }
+        }
+      }
+    },
+    "Profile name is required and must be at most %lld single-line characters." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profile name is required and must be at most %lld single-line characters."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "档位名称必填，且为单行最多 %lld 个字符。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロファイル名は必須で、1行 %lld 文字以内にしてください。"
+          }
+        }
+      }
+    },
+    "Profile saved [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profile saved"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "档位已保存"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロファイルを保存しました"
+          }
+        }
+      }
+    },
+    "Profile updated from current configuration" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profile updated from current configuration"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已用当前配置更新档位"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在の設定でプロファイルを更新しました"
+          }
+        }
+      }
+    },
+    "Profiles group purpose bindings, launcher overrides, and Agent presets so you can switch together. Credentials are never stored in profiles." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profiles group purpose bindings, launcher overrides, and Agent presets so you can switch together. Credentials are never stored in profiles."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "档位用于组合用途绑定、启动器覆盖与 Agent 预设，方便一键切换；凭据不会保存在档位中。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロファイルは用途設定・ランチャー上書き・Agent プリセットをまとめて切り替えられます。認証情報は保存されません。"
+          }
+        }
+      }
+    },
+    "Profiles were changed elsewhere. Reload to get the latest version before capturing." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profiles were changed elsewhere. Reload to get the latest version before capturing."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其他设备已修改模型档位，请重新加载最新版本后再更新。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "他のデバイスでモデルプロファイルが更新されました。最新版を再読み込みしてから更新してください。"
+          }
+        }
+      }
+    },
+    "Profiles were changed elsewhere. Your edits are kept; reload to review the latest version before saving." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profiles were changed elsewhere. Your edits are kept; reload to review the latest version before saving."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "档位已在别处修改。你的编辑已保留；请重新加载查看最新版本后再保存。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロファイルがほかの場所で変更されました。編集内容は保持されています。再読み込みして最新版を確認してから保存してください。"
+          }
+        }
+      }
+    },
+    "Purpose Bindings [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Purpose Bindings"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用途绑定"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用途設定"
+          }
+        }
+      }
+    },
+    "Reload (discard edits) [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reload (discard edits)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新加载（放弃编辑）"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再読み込み（編集を破棄）"
+          }
+        }
+      }
+    },
+    "Reload Model Profiles to see the latest list." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reload Model Profiles to see the latest list."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新加载模型档位以查看最新列表。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデルプロファイルを再読み込みして最新の一覧を確認してください。"
+          }
+        }
+      }
+    },
+    "Remove Preset [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove Preset"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除预设"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセットを削除"
+          }
+        }
+      }
+    },
+    "Replace this profile's purpose bindings and launcher overrides with your current configuration. Agent presets stay unchanged." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Replace this profile's purpose bindings and launcher overrides with your current configuration. Agent presets stay unchanged."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用当前的用途绑定和启动器设置覆盖此档位，现有 Agent 预设保持不变。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在の用途設定とランチャー上書きでこのプロファイルを更新します。Agent プリセットはそのまま残ります。"
+          }
+        }
+      }
+    },
+    "Roll Back [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Roll Back"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回滚"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ロールバック"
+          }
+        }
+      }
+    },
+    "Rolled back to previous configuration [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rolled back to previous configuration"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已回滚到之前的配置"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以前の設定にロールバックしました"
+          }
+        }
+      }
+    },
+    "Saved current configuration into %@, but applying failed: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved current configuration into %1$@, but applying failed: %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已将当前配置保存到「%1$@」，但切换失败：%2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在の設定を「%1$@」に保存しましたが、適用に失敗しました：%2$@"
+          }
+        }
+      }
+    },
+    "Saving updates this active profile. Agent presets apply on the next Agent start; purpose and launcher changes take effect when you apply this profile again. Credentials are never shown or modified here." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saving updates this active profile. Agent presets apply on the next Agent start; purpose and launcher changes take effect when you apply this profile again. Credentials are never shown or modified here."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存会更新这个使用中的档位。Agent 预设会在下次启动 Agent 时生效；用途和启动器修改需再次应用档位后生效。这里不会展示或修改任何凭据。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存するとこの使用中プロファイルが更新されます。Agent プリセットは次の Agent 起動時に反映され、用途とランチャーの変更は再度適用すると反映されます。認証情報は表示・変更されません。"
+          }
+        }
+      }
+    },
+    "Saving updates this profile template without changing your active models. Apply the profile afterwards to switch. Credentials are never shown or modified here." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saving updates this profile template without changing your active models. Apply the profile afterwards to switch. Credentials are never shown or modified here."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存只会更新此档位模板，不会改变当前运行中的模型；需要切换时请再点击应用。这里不会展示或修改任何凭据。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存するとこのプロファイルのテンプレートだけが更新され、使用中のモデルは変わりません。切り替えるには保存後に適用してください。認証情報は表示・変更されません。"
+          }
+        }
+      }
+    },
+    "Small Model [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Small Model"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "小模型"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "小型モデル"
+          }
+        }
+      }
+    },
+    "Sonnet Alias [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sonnet Alias"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sonnet 别名"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sonnet エイリアス"
+          }
+        }
+      }
+    },
+    "Speed [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Speed"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "速度"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "速度"
+          }
+        }
+      }
+    },
+    "Subagent Model [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subagent Model"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子 Agent 模型"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サブ Agent モデル"
+          }
+        }
+      }
+    },
+    "Switching to %@ matches your current settings, but %@ still has unsaved changes:" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switching to %1$@ matches your current settings, but %2$@ still has unsaved changes:"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换到「%1$@」与当前设置一致，但「%2$@」仍有未保存的配置改动："
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」は現在の設定と一致していますが、「%2$@」に未保存の変更があります："
+          }
+        }
+      }
+    },
+    "Ultra Fast [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ultra Fast"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "极速"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "超高速"
+          }
+        }
+      }
+    },
+    "Update from current configuration" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update from current configuration"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从当前配置更新此档位"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在の設定から更新"
+          }
+        }
+      }
+    },
+    "Updated on switch [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Updated on switch"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换时更新"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切り替え時に更新"
+          }
+        }
+      }
+    },
+    "When to use this preset [Model Profiles]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When to use this preset"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说明何时使用此预设"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このプリセットを使う場面の説明"
+          }
+        }
+      }
+    },
+    "You can also capture the current configuration into %@ before switching." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You can also capture the current configuration into %@ before switching."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "也可以在切换前先将当前配置捕获到「%@」。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切り替える前に、現在の設定を「%@」に保存することもできます。"
+          }
+        }
+      }
+    },
+    "Your current configuration differs from the active profile (%@). Capture it first so switching back does not overwrite these fields:" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your current configuration differs from the active profile (%@). Capture it first so switching back does not overwrite these fields:"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前配置与当前启用的档位（%@）存在差异。建议先捕获当前配置，避免日后切回时覆盖以下字段："
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在の設定は使用中プロファイル（%@）と異なっています。あとで戻したときに次の項目が上書きされないよう、先に現在の設定を保存できます："
           }
         }
       }

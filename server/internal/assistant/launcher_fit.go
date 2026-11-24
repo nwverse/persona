@@ -293,6 +293,7 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 	if slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == name }) {
 		return "", agentOf(name), nil
 	}
+	placementOf(ctx).hit(m.ID, "launcher_missing", i18n.Args{"launcher": name})
 	if own.explicitLauncher() {
 		return "", startAgent{}, i18n.Err("assistant-tasks.launcher_not_on_machine", i18n.Args{
 			"machine": firstNonEmpty(m.Name, m.ID), "launcher": name, "launchers": strings.Join(launcherNamesOn(m, list), ", "),

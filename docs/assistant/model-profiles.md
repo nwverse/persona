@@ -6,10 +6,10 @@ A model profile is an editable, named configuration. It holds default bindings f
 
 Ask Persona to “switch to economy” or “switch to performance”. Persona uses:
 
-- `model_profiles_list`: current profile, configurations, drift, rollback preview, and recent history.
+- `model_profiles_list`: current profile, configurations, drift, rollback previews (latest and bounded history), and recent history.
 - `model_profile_get` with `id`: inspect one profile.
 - `model_profile_switch` with `id`: apply it atomically.
-- `model_profile_rollback`: undo the last switch; another rollback redoes it.
+- `model_profile_rollback`: undo the most recent switch (stepping back through earlier switches across quick round trips such as `performance` → `economy` → `performance`; rolling back the last remaining point redoes on the next rollback).
 
 The live `persona-context` snapshot identifies the current profile and its tiers (with what each runs on and is for) on every turn, without waiting for the ordinary snapshot cache. Model calls use the changed configuration on their next invocation. Existing Agent sessions and running turns are not interrupted.
 
@@ -28,7 +28,7 @@ Each template gets two tiers, `strong` (the main chat's model then) and `standar
 | fast / bulk | Fast or strong model as appropriate | Fast model for mechanical work |
 | longread | Long-context model | Economical long-context model |
 
-Every purpose binding has `provider`, `model`, optional `effort`, and (for launcher-backed purposes only) optional `permission_mode`. Empty provider inherits the existing default source; empty model or permission mode uses its inherited/launcher default. Profiles cover `assistant`, `agent.new`, `kb`, `inbox.triage`, and `agent.delegate`; independent extension overrides such as `lark.agent` are not changed.
+Every purpose binding has `provider`, `model`, optional `effort`, and (for launcher-backed purposes only) optional `permission_mode`. Empty provider with empty model inherits the existing default source; empty model or permission mode uses its inherited/launcher default. Legacy model-only category bindings (non-empty `model` with empty `provider`) are normalized to their resolved provider on read, capture, save, apply, and rollback when a configured provider exists, so they display and apply predictably without drifting when defaults change (empty `{}` bindings and effort-only bindings keep inheriting). Profiles cover `assistant`, `agent.new`, `kb`, `inbox.triage`, `agent.delegate`, and `translate`; independent extension overrides such as `lark.agent` are not changed.
 
 ## Agent presets (tiers)
 
@@ -52,15 +52,19 @@ A tier is Persona's equivalent of a Paseo Agent profile: a named launch preset (
 
 ## Edit and add profiles
 
-The web app adds **Settings › Models › Model profiles**: inspect a profile (its Agent presets, purpose bindings, and launcher model overrides), edit it interactively using the same provider/launcher/model/effort/permission-mode pickers as Model Configuration, apply it, or roll back; with no profile in use it says presets are off. You can also ask Persona to edit Agent presets (above) or use the hub API (authenticated as usual) to automate edits and create/delete profiles. Native settings controls require an app release and are deferred in v1.
+The web app adds **Settings › Models › Model profiles**: inspect a profile (its Agent presets, purpose bindings, launcher model overrides, and live drift), update any profile from the current configuration (`capture: true`, preserving its Agent presets), edit it interactively using the same provider/launcher/model/effort/permission-mode pickers as Model Configuration, review drifted purposes/launcher fields before applying (with an option to capture current settings into the active profile first), apply it, or roll back; with no profile in use it says presets are off. You can also ask Persona to edit Agent presets (above) or use the hub API (authenticated as usual) to automate edits and create/delete profiles. Native settings controls require an app release and are deferred in v1.
+
+A managed launcher's folded model and effort pick sets the variant ID and clears its saved standalone effort on
+switch. When the model is left unchanged, the effort can still be left unchanged or cleared separately. Additional
+launcher model fields expose concrete variant IDs because they each have their own model choice.
 
 | Method | Path | Operation |
 | --- | --- | --- |
-| GET | `/api/v1/model-profiles` | Catalog, revision, active profile, rollback preview, history |
-| PUT | `/api/v1/model-profiles/{id}` | Create or replace a profile; include catalog `revision` |
+| GET | `/api/v1/model-profiles` | Catalog, revision, active profile, rollback preview (`rollback`) and bounded history (`rollbacks`), audit history |
+| PUT | `/api/v1/model-profiles/{id}` | Create or replace a profile; include catalog `revision` (ignores unknown optional fields from newer clients; rejects credentials/endpoints and invalid known fields) |
 | DELETE | `/api/v1/model-profiles/{id}?revision=N` | Delete an inactive profile |
 | POST | `/api/v1/model-profiles/{id}/apply` | Apply the profile |
-| POST | `/api/v1/model-profiles/rollback` | Restore the saved before-image |
+| POST | `/api/v1/model-profiles/rollback` | Restore the latest saved before-image, or a specific point with optional `{"id"}` |
 
 A PUT body looks like this (use your actual provider and launcher names):
 
@@ -84,7 +88,7 @@ A PUT body looks like this (use your actual provider and launcher names):
 }
 ```
 
-PUT replaces the profile; omitted purposes and launcher fields are not touched on application. A tier's description is one line of at most 100 characters, and a tier added or changed must have a model ID as its model; one saved before that was checked is left as it is, so it never blocks a switch or another edit (a start on it says why it fails). The templates leave such a model out of their tiers. A launcher field containing `""` clears that field (except the main model); omitted or null fields leave it unchanged. Saving a profile does **not** apply purpose or launcher settings. Tiers are looked up from the saved active profile when a new Agent actually starts, so editing its tiers affects subsequent dispatches directly. Use `capture: true` with `name` and `revision` to capture today's bindings/launcher settings; existing tiers are retained when recapturing a profile.
+PUT replaces the profile; omitted purposes and launcher fields are not touched on application. For cross-version compatibility, `PUT /api/v1/model-profiles/{id}` ignores unknown optional fields sent by newer clients while strictly validating all known fields and rejecting malformed JSON, trailing tokens, non-object bodies, and credential/endpoint keys (`api_key`, `key`, `key_sealed`, `headers`, `headers_sealed`, `env`, `env_sealed`, `base_url`, `token`, `secret`, `password`, `auth`, `proxy`, `no_proxy`) with 400. A tier's description is one line of at most 100 characters, and a tier added or changed must have a model ID as its model; one saved before that was checked is left as it is, so it never blocks a switch or another edit (a start on it says why it fails). The templates leave such a model out of their tiers. A launcher field containing `""` clears that field (except the main model); omitted or null fields leave it unchanged. Saving a profile does **not** apply purpose or launcher settings. Tiers are looked up from the saved active profile when a new Agent actually starts, so editing its tiers affects subsequent dispatches directly. Use `capture: true` with `name` and `revision` to capture today's bindings/launcher settings; existing tiers are retained when recapturing a profile.
 
 `agent_start` and individual `task_plan` tasks accept `tier`, `model`, `effort` and `speed`. Explicit choices win over the tier. A different explicit launcher does not inherit the tier's model, effort or speed; a different explicit model does not inherit the tier's effort or speed. `speed` is `standard`, `fast` or `ultrafast`; omitted or `standard` requests no override. Faster choices apply only to new terminal Codex or Claude Code starts, and an unsupported launcher, runtime or resume refuses rather than starting at the default speed. A delayed plan resolves its tier when dispatched, using the profile active then. Unknown tiers fail rather than falling back silently. See [Launchers](../integrations/launchers.md) "Speed" for the native mappings, catalog check, old-node gate and known Claude Code fallback.
 
@@ -100,6 +104,6 @@ A launcher's custom environment or arguments can override its model fields. Revi
 
 ## Atomicity, rollback, and audit
 
-Switches commit the purpose records, managed launcher model fields, active profile, before-image, and audit event in one Postgres transaction. A validation or storage failure leaves the switch unapplied. Rollback restores only the purposes and launcher model fields changed by the switch, preserving the current runtime, credentials, endpoints, and unrelated launcher settings. If a required launcher has been deleted, restore it before rollback. Manual edits to those touched model fields after a switch are replaced by rollback; inspect the preview first.
+Switches commit the purpose records, managed launcher model fields, active profile, bounded rollback history (up to 10 before-images, keeping `previous` synced to the latest entry for backward compatibility), and audit event in one Postgres transaction. A validation or storage failure leaves the switch unapplied. Keeping up to 10 rollback points means a quick round trip such as `performance` → `economy` → `performance` preserves the original pre-switch configuration: repeated `POST /api/v1/model-profiles/rollback` calls step back through each switch, or `{"id"}` jumps directly to a specific point from `rollbacks` in one atomic transaction by folding intermediate before-images. Rolling back the last remaining rollback point stores a single redo entry (`redo: true`), which a subsequent forward switch clears. Rollback restores only the purposes and launcher model fields changed by the unwound switches, preserving the current runtime, credentials, endpoints, and unrelated launcher settings. If a required launcher has been deleted, restore it before rollback. Manual edits to those touched model fields after a switch are replaced by rollback; inspect the preview first.
 
 The history retains the last 50 seed/switch/edit/delete/rollback events and exposes the most recent 20, including actor kind (`device`, `hub`, `assistant`, `system`), device name where available, time, source/target profile, and changed fields (a tier edit through `persona_settings` is one event, `<profile>.tiers.<name>` for each profile it changed). Saves and deletes send the `model_profile` event too, so open settings pages read the profiles again. Reapplying the already-active unchanged profile retains the previous rollback. In-memory serialization protects model-profile operations within the manager; this is not a distributed multi-manager configuration coordinator.

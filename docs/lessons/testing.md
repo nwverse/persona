@@ -469,7 +469,7 @@ What a hit would save, measured the same day with the build already cached (110 
 guard packages check-fast runs on every server change took 12 s uncached and 1 s cached, and its guard tests 10 to
 14 s uncached. Only packages the change did not reach can hit at all: the edited package and every package that imports
 it get a new test binary and run again. Caching also changes the run itself: `go test` passes `-test.testlogfile` only
-when the result may be cached, and `internal/office` failed only in that mode, because a test that lowered the file size
+when the result may be cached, and `internal/modules/office/office` failed only in that mode, because a test that lowered the file size
 limit also cut off that log (#8962, fixed by #8968).
 
 - Keep `-count=1` in every command whose result is reported as verification, and in any new entry point. A plain
@@ -516,7 +516,7 @@ The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer m
   `kbEnd` closes for good, and test fixtures register `t.Cleanup(s.kbEnd)`, not `kbClose` (which stays reopenable,
   for the disconnected case and restart tests). A timer that already holds the engine still writes: the meeting
   fixture runs the attending feed on real timers, so its cleanup waits for the looks already running and lets none
-  start after (`trackAttendFeed` in `server/internal/assistant/meeting_live_test.go`).
+  start after (`trackAttendFeed` in `server/internal/modules/recording/fixtures_test.go`).
 - It shows only under load (one in four shuffled package runs on a busy Mac; six processes of `-run '^TestMeeting'
   -count=20 -cpu=1` reproduce it every time). To find such a writer, give the fixture a directory whose cleanup, when
   `os.RemoveAll` fails, lists what is left (with modification times against the cleanup's start) and dumps every
@@ -599,6 +599,14 @@ Ordinary `go test` and CI do not include `//go:build herdrlive`, so a node helpe
 ## A shell proxy sends the mock suites' loopback calls away (2026-11-18, #10465)
 
 - With `http_proxy` (or `HTTPS_PROXY`, `ALL_PROXY`) set in the shell, about 30 suites under `scripts/mock/` run by hand failed with socket timeouts: their `urlopen` calls to the mock on `127.0.0.1` went to the proxy. CI never sees it, since `scripts/ci/python-tests.py` starts every suite with the environment `server_test_env.clean_environment` cleans. By hand, unset the proxy variables or go through `python3 scripts/ci/python-tests.py`; a new suite opens loopback URLs with `build_opener(ProxyHandler({}))` (as `scripts/mock/test_todo_view_mock.py` does) and needs neither.
+
+## A test's premise must hold before the event it races with (2026-11-23, #14007)
+
+- `TestSayWaitsForTheUserToStop` (voice) ended the bound turn before the call began and then started talking. The hub
+link's first event can read that finished turn before the call has heard the first frame of the user's voice, and the
+answer is then rightly said at once: nobody was talking yet. It failed about one run in 25 on two loaded cores, and on
+the gate. Make the premise true first and wait on something observable (here: the service got the user's audio, which
+the call weighs before it sends it on), then trigger what it races with. A longer sleep only makes the race rarer.
 
 ## A moved file or block needs a test that fails when the old copy comes back (2026-11-20, #11476, #11543)
 
@@ -816,7 +824,7 @@ Retain strict checks for the complete target set, existing modules, artifact pat
 ## Go tests requiring macOS built-in commands (2026-11-02)
 
 - The Messages connector reads `chat.db` with macOS `/usr/bin/sqlite3` (personad has no cgo). The Linux hub lacks `sqlite3`, so these tests skip there.
-  If the development Mac has no Go, cross-compile on hub: `GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go test -c -o x.test ./internal/connector/imessage`,
+  If the development Mac has no Go, cross-compile on hub: `GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go test -c -o x.test ./internal/modules/imessage`,
   copy to Mac, and run **in the package directory** (`testdata` is relative). Use the same approach for macOS-dependent `node` tests.
 - `sqlite3 -json` prints nothing for no rows, not `[]`; check empty before parsing.
 
@@ -1281,7 +1289,7 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 - A result from a loaded machine can reverse once it is quiet: at a load of ~400, asking for VNC updates early looked
   239 ms faster for typing (3 of 6 pairs); at 25–80 it was slower in all 5 pairs (median +81 ms). Decide on runs made at
   a low load, interleaved (ABBA), and say the load next to the numbers.
-- Driving the real desktop (`server/cmd/vncbench run`): other lanes' windows and dialogs open on top of yours at any
+- Driving the real desktop (`server/internal/modules/screen-share/vncbench run`): other lanes' windows and dialogs open on top of yours at any
   time. Send a click, a wheel notch or a drag only where your own page is seen on the screen (vncbench's target
   checker), type only while your page says it has the keyboard, and bring your browser forward with `open -a`, never
   by clicking. A window's rounded corner clips a marker drawn in it: keep markers inset.

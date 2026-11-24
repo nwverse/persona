@@ -241,6 +241,15 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		if !public {
 			live, commit = n.turnContext(id, n.assistantContext(id))
 		}
+		// Antigravity loads .agents/rules on every turn. Other generic runtimes have no verified native
+		// rule-directory contract, so carry the exact split remainder alongside their bounded AGENTS.md.
+		if h.agent() != "agy" {
+			remainder, err := assistantInstructionRemainder(cwd)
+			if err != nil {
+				return "", err
+			}
+			live = joinInstructionRemainderAndPolicy(remainder, live)
+		}
 		if st.AwaitingFirstMessage {
 			memoryTools := h.remoteAgent() && n.guestOf(id) == nil && cwd != "" && identity.IsAssistantDir(filepath.Clean(cwd))
 			live = strings.TrimSpace(n.runtimeInstructionsWithTools(cwd, memDir, memoryTools) + "\n" + live)
@@ -284,7 +293,10 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	if !command {
 		n.ttft.arm(id, sentAt, "")
 	}
-	if err := h.peer.Call(cctx, "session.send", params, &said); err != nil {
+	finishAgy := n.runtimes.agyWorkBegin(h, "session.send", id)
+	err := h.peer.Call(cctx, "session.send", params, &said)
+	finishAgy(err, false)
+	if err != nil {
 		if !command && !maybeDelivered(err) {
 			n.ttft.disarm(id, sentAt)
 		}
@@ -370,7 +382,11 @@ func (n *Node) assistantInterruptRuntime(ctx context.Context, id string) error {
 	}
 	cctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
 	defer cancel()
-	return h.peer.Call(cctx, "session.interrupt", map[string]any{"session_id": id}, nil)
+	var out json.RawMessage
+	finishAgy := n.runtimes.agyWorkBegin(h, "session.interrupt", id)
+	err := h.peer.Call(cctx, "session.interrupt", map[string]any{"session_id": id}, &out)
+	finishAgy(err, runtimeAnswerFlag(out, "settled"))
+	return err
 }
 
 // runtimeStartWith starts a session on h with params (cwd and the rest) and lists it right away (runtimeStart).
