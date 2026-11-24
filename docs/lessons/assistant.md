@@ -1003,3 +1003,7 @@ A rule that runs before the closeout is read must give way when the closeout nam
 holding a decision open must not silence the task's later turns. The supervisor decides whether the news replaces the
 decision. A `done` closeout that still names the owner as the one to unblock it (`unblock: user` with a `waiting`
 line and no delivery) is a question, not finished work.
+
+Settling such a turn right after triage must not read the work state from the session lists: they pick up the
+triage's state only on the next publish, so the settle saw the previous turn's state and put the turn off again, with
+nothing left to wake it. The settle takes the triage's own entry for that turn (`withPersonWait`).

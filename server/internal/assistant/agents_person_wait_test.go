@@ -159,3 +159,74 @@ func TestAgentTurnDuringNeedsUserWakesSupervisor(t *testing.T) {
 		t.Fatal("the open decision left Needs you")
 	}
 }
+
+// The triage settles a task turn that stopped on a person while background work it left still runs: no other event
+// settles it, for the session does not change again until that work ends (#14899).
+func TestPersonWaitWithBackgroundGetsItsReceipt(t *testing.T) {
+	s, f := newQuietService(t)
+	s.work.switches = &TriageSwitches{Enabled: true, AutoContinue: true, Wake: true, Decide: true}
+	f.judge = `{"verdict":"waiting","reason":"Someone must fill in the web form."}`
+	f.triage = `{"phase":"blocked","on":"external","line":"Waits for someone to fill in the form"}`
+	startedTask(t, s, f)
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	c := proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusDone,
+		State: proto.StateUnread, LastText: personWaitCloseout, UpdatedAt: time.Now(),
+		Background: []proto.BackgroundTask{{ID: "b1", Kind: "shell"}}}
+	f.setSessions("box", c)
+	s.taskTurnEnded(context.Background(), "box", "s1")
+	if strings.Contains(feedKinds(s, "conv1"), "receipt") {
+		t.Fatal("background work did not hold the turn before its triage")
+	}
+	triage(t, s, "s1")
+	waitFor(t, "the receipt", func() bool { return strings.Contains(feedKinds(s, "conv1"), "receipt") })
+	if got := f.sessions["box"][0].Background; len(got) == 0 {
+		t.Fatal("the background work ended under the test")
+	}
+}
+
+// A turn judged needs_user while its task already waits on an owner decision is an owner wait (noteOwnerWait), not
+// news for the open decision: no needs_user_external_info for it (#14899).
+func TestNeedsUserTurnDuringNeedsUserIsNoExternalInfo(t *testing.T) {
+	s, f, _, _, _ := setupNeedsUserTaskWithLark(t, nil)
+	before := len(f.notices())
+	f.judge = `{"verdict":"needs_user","reason":"Only the owner can approve the driver upgrade."}`
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	agentTurn(s, f, proto.StatusDone, "Please approve the driver upgrade?", 0)
+	waitFor(t, "the owner wait", func() bool {
+		for _, n := range f.notices()[before:] {
+			if strings.Contains(n, "Only the owner can approve") {
+				return true
+			}
+		}
+		return false
+	})
+	for _, n := range f.notices()[before:] {
+		if strings.Contains(n, "agent turn box/s1") {
+			t.Fatalf("a needs_user turn also went out as news for the open decision:\n%s", n)
+		}
+	}
+}
+
+// The turn that raised the open decision, judged again, is no news for it: only a turn after the decision's review
+// wakes the supervisor (#14899).
+func TestTurnThatRaisedTheDecisionIsNoNews(t *testing.T) {
+	s, f, todo, _, _ := setupNeedsUserTaskWithLark(t, nil)
+	before := len(f.notices())
+	s.needsUserAgentTurn(context.Background(), todo, taskDoneCheck{Verdict: verdictNotDone, Reason: "The raising turn, judged again."}, nil)
+	f.judge = `{"verdict":"not_done","reason":"A later turn found another route."}`
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	agentTurn(s, f, proto.StatusDone, "Found another route.", 0)
+	waitFor(t, "the later turn's news", func() bool {
+		for _, n := range f.notices()[before:] {
+			if strings.Contains(n, "A later turn found another route") {
+				return true
+			}
+		}
+		return false
+	})
+	for _, n := range f.notices()[before:] {
+		if strings.Contains(n, "The raising turn") {
+			t.Fatalf("the turn that raised the decision went out as news:\n%s", n)
+		}
+	}
+}

@@ -300,19 +300,6 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	if skip {
 		return // the agent asks itself (or its terminal does): the list shows that
 	}
-	personWait := false // its closeout says it stopped on a person, background work or not
-	if w != nil && backgroundRule(c) {
-		// Background work it left running is no word that it goes on by itself when its own closeout says it stopped on
-		// a person: that closeout is read (the model's triage) and its turn settles (taskAgentSettled), so the
-		// supervisor or the owner hears of it rather than a wait that "wakes itself" (#14899).
-		_, reply := s.triageRead(ctx, machine, c)
-		if reply == "" {
-			reply = turnReplyText(c.LastText, false) // as triageTurnModel reads it
-		}
-		if co, _, ok := closeout.Parse(reply); ok && closeoutWaitsOnPerson(co) {
-			w, by, personWait = nil, "", true
-		}
-	}
 	if !s.workOn(ctx) && (w == nil || w.On != proto.WaitTransient && !(quotaWait && w.On == proto.WaitExternal)) {
 		// The triage is off and only transient errors are continued (transient_retry): no model call, nothing else
 		// decided. A turn that ended otherwise ends the run of transient errors: the next one counts from 1 again.
@@ -324,6 +311,20 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	}
 	if c.Assistant && (w == nil || w.On != proto.WaitTransient && !(quotaWait && w.On == proto.WaitExternal)) {
 		return // Assistant participates only in mechanical model recovery and quota waits.
+	}
+	personWait := false // its closeout says it stopped on a person, background work or not
+	if w != nil && backgroundRule(c) {
+		// Background work it left running is no word that it goes on by itself when its own closeout says it stopped on
+		// a person: that closeout is read (the model's triage) and its turn settles (taskAgentSettled), so the
+		// supervisor or the owner hears of it rather than a wait that "wakes itself" (#14899). Read only with the triage
+		// on (above); triageTurnModel then takes the same read (triageRead keeps it for the turn).
+		_, reply := s.triageRead(ctx, machine, c)
+		if reply == "" {
+			reply = turnReplyText(c.LastText, false) // as triageTurnModel reads it
+		}
+		if co, _, ok := closeout.Parse(reply); ok && closeoutWaitsOnPerson(co) {
+			w, by, personWait = nil, "", true
+		}
 	}
 	if w == nil {
 		mctx, cancel := context.WithTimeout(ctx, 90*time.Second)

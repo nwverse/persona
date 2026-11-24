@@ -117,7 +117,7 @@ func (s *Service) taskAgentsReached(ctx context.Context, t Todo) (agents []proto
 			}
 		}
 	}
-	return agents, reached
+	return s.withPersonWait(agents), reached
 }
 
 // taskNeedsRecheck freshly asks t's agents' machines whether one still waits for the user. known is false when an

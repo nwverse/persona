@@ -178,6 +178,28 @@ func stoppedOnPerson(c proto.Session) bool {
 	return w != nil && w.Closeout != nil && !w.TurnAt.IsZero() && sameTurn(c, w.TurnAt) && closeoutWaitsOnPerson(*w.Closeout)
 }
 
+// withPersonWait is agents with the work state the triage put for an agent's current turn when that turn, left with
+// background work, stopped on a person (stoppedOnPerson) and its listed row does not carry that state yet: the lists
+// take the triage's state only with the next publish (publishSoon), and the triage settles such a turn at once
+// (triageTurn, #14899). Every other row stays as listed.
+func (s *Service) withPersonWait(agents []proto.Session) []proto.Session {
+	for i, c := range agents {
+		if !backgroundRunning(c) || stoppedOnPerson(c) {
+			continue
+		}
+		if e, ok := s.workEntry([2]string{c.MachineID, c.SessionID}); ok && sameTurn(c, e.TurnAt) {
+			w := e.Work
+			if w.TurnAt.IsZero() {
+				w.TurnAt = e.TurnAt
+			}
+			if c.Work = &w; stoppedOnPerson(c) {
+				agents[i] = c
+			}
+		}
+	}
+	return agents
+}
+
 // supersededAgents are the links of t another agent took over from (#6483): an unreleased link whose session is
 // offline or no longer listed in agents, while a link made after it is listed and not offline. A takeover that did not
 // release the earlier link (made before takeovers released it, or by a path that does not) would otherwise keep the
