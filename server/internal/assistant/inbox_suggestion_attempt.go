@@ -534,14 +534,17 @@ func (s *Service) confirmSuggestionReplyLocked(ctx context.Context, it *InboxIte
 			}
 			return out, targetErr
 		}
-		if configErr != nil || vetoErr != nil || !livePolicy.enabled || livePolicy.revision != policy.revision ||
+		rev := policy.revision
+		if livePolicy.enabled {
+			rev = livePolicy.revision
+		}
+		if configErr != nil {
+			return s.failReplyPolicyConfigReadLocked(ctx, it, g, a, in.ClientID, text, finalSnap, replyPolicyContentVersion(it), rev)
+		}
+		if vetoErr != nil || !livePolicy.enabled || livePolicy.revision != policy.revision ||
 			replyPolicyContentVersion(it) != itemData.contentVersion ||
 			verifyReplyPolicySuggestionLocked(it, g, a, livePolicy) != nil ||
 			livePolicy.allowsOwnerDraft(finalSnap, itemData.contentVersion) != nil {
-			rev := policy.revision
-			if livePolicy.enabled {
-				rev = livePolicy.revision
-			}
 			return s.rejectReplyPolicySendLocked(ctx, it, g, a, in.ClientID, text, finalSnap, replyPolicyContentVersion(it), rev)
 		}
 		policySnap = finalSnap
@@ -620,6 +623,23 @@ func (s *Service) confirmSuggestionReplyLocked(ctx context.Context, it *InboxIte
 // zero sender calls. Called with b.mu held; returns without it.
 func (s *Service) rejectReplyPolicySendLocked(ctx context.Context, it *InboxItem, g *InboxSuggestion, a *InboxSuggestionAttempt,
 	clientID, text string, snap *InboxReplyPolicySnapshot, contentVersion, policyRevision string) (InboxItem, error) {
+	out := s.recordReplyPolicySendFailureLocked(ctx, it, g, a, clientID, text, snap, contentVersion, policyRevision,
+		assistantwire.CodeInboxReplyPolicyBlocked, false, "assistant-inbox.reply_policy_blocked")
+	return out, errReplyPolicyBlocked
+}
+
+// failReplyPolicyConfigReadLocked records a retryable known-none failure when authorization could not be refreshed.
+// No reservation or sender call exists yet, so this is distinct from a definitive policy veto.
+func (s *Service) failReplyPolicyConfigReadLocked(ctx context.Context, it *InboxItem, g *InboxSuggestion, a *InboxSuggestionAttempt,
+	clientID, text string, snap *InboxReplyPolicySnapshot, contentVersion, policyRevision string) (InboxItem, error) {
+	out := s.recordReplyPolicySendFailureLocked(ctx, it, g, a, clientID, text, snap, contentVersion, policyRevision,
+		assistantwire.CodeInboxSendFailed, true, "assistant-inbox_chain.failed_send")
+	return out, &rpc.Error{Code: assistantwire.CodeInboxSendFailed, Message: "reply policy configuration unavailable"}
+}
+
+// recordReplyPolicySendFailureLocked persists the common known-none attempt and proposal state for policy and config failures.
+func (s *Service) recordReplyPolicySendFailureLocked(ctx context.Context, it *InboxItem, g *InboxSuggestion, a *InboxSuggestionAttempt,
+	clientID, text string, snap *InboxReplyPolicySnapshot, contentVersion, policyRevision, code string, retryable bool, reasonKey string) InboxItem {
 	b := &s.inbox
 	now := time.Now().UTC()
 	if a == nil {
@@ -647,10 +667,10 @@ func (s *Service) rejectReplyPolicySendLocked(ctx context.Context, it *InboxItem
 	a.ContentVersion = contentVersion
 	a.PolicyRevision = policyRevision
 	a.Reviewed = snap != nil && snap.Reviewed
-	a.Status, a.Retryable, a.Code, a.RetryAfter, a.At, a.active = suggestionFailed, false, assistantwire.CodeInboxReplyPolicyBlocked, 0, now, false
+	a.Status, a.Retryable, a.Code, a.RetryAfter, a.At, a.active = suggestionFailed, retryable, code, 0, now, false
 	hideReplyDraft(it)
 	b.settleReplyAliases(it, a)
-	reason := i18n.T(b.userLang(), "assistant-inbox.reply_policy_blocked")
+	reason := i18n.T(b.userLang(), reasonKey)
 	if a.Conversation == nil {
 		if it.Agent != nil {
 			it.Agent.Wake = false
@@ -663,7 +683,7 @@ func (s *Service) rejectReplyPolicySendLocked(ctx context.Context, it *InboxItem
 	out := it.listed()
 	b.mu.Unlock()
 	s.saveInbox(context.WithoutCancel(ctx), []*InboxItem{it})
-	return out, errReplyPolicyBlocked
+	return out
 }
 
 func (s *Service) finishSuggestionReply(ctx context.Context, it *InboxItem, a *InboxSuggestionAttempt, err error) (InboxItem, error) {
