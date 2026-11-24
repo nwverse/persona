@@ -196,8 +196,8 @@ export const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon
 // The list's one-line notes (loading, no match), as each writes it.
 const NOTE = "px-2 py-1 text-label text-ink-3";
 
-// two shapes as well as two colors, so they tell apart without color: a bare prompt (no frame) and a window with a title bar
-const SOURCE_ICON = { terminal: { name: "run", tone: "text-source-terminal" }, desktop: { name: "appWindow", tone: "text-source-desktop" } } as const;
+// two shapes as well as two tones, so they tell apart without color: a framed terminal prompt and a window with a title bar
+const SOURCE_ICON = { terminal: { name: "terminal", tone: "text-ink-3" }, desktop: { name: "appWindow", tone: "text-source-desktop" } } as const;
 
 /** Where the agent was opened (#2526), as a mark: a terminal or a desktop app's window in its own color, Lark's mark for a
  *  Lark group (a click opens its Feishu topic). Nothing for other sources. Its name is the tooltip and what a screen reader
