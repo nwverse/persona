@@ -5041,6 +5041,142 @@
       "value": "取り消したデバイスはありません。"
     },
     {
+      "name": "machine_detail",
+      "value": "マシンの詳細"
+    },
+    {
+      "name": "machine_rx",
+      "value": "受信"
+    },
+    {
+      "name": "machine_tx",
+      "value": "送信"
+    },
+    {
+      "name": "machine_loading_list",
+      "value": "コンピュータを読み込み中…"
+    },
+    {
+      "name": "machine_loading_detail",
+      "value": "コンピュータの詳細を読み込み中…"
+    },
+    {
+      "name": "machine_memory",
+      "value": "メモリ"
+    },
+    {
+      "name": "machine_pending",
+      "value": "確認待ち"
+    },
+    {
+      "name": "machine_online",
+      "value": "オンライン"
+    },
+    {
+      "name": "machine_agent_count",
+      "value": "エージェント {count} 件"
+    },
+    {
+      "name": "machine_overview",
+      "value": "コンピュータ {total} 台 · オンライン {online} 台"
+    },
+    {
+      "name": "machine_empty",
+      "value": "コンピュータがありません"
+    },
+    {
+      "name": "machine_empty_add",
+      "value": "コンピュータを追加すると、その上でエージェントを実行できます。"
+    },
+    {
+      "name": "machine_empty_admin",
+      "value": "Hub が接続中のコンピュータを報告すると、ここに表示されます。"
+    },
+    {
+      "name": "machine_partial",
+      "value": "一部の Hub またはマネージャーに接続できないため、取得できたコンピュータを表示しています。"
+    },
+    {
+      "name": "machine_name_hint",
+      "value": "コンピュータ名"
+    },
+    {
+      "name": "machine_add_hint",
+      "value": "コンピュータ名と OS を指定して、ペアリングコードを発行します。"
+    },
+    {
+      "name": "machine_pair_instructions",
+      "value": "追加するコンピュータにリンクをコピーします。ターミナルを使う場合は、そのコンピュータで表示されたコマンドを実行します。"
+    },
+    {
+      "name": "machine_trust_hint",
+      "value": "このコンピュータで自分が接続を開始した場合にのみ承認してください。"
+    },
+    {
+      "name": "machine_no_agents",
+      "value": "実行中のエージェントはありません"
+    },
+    {
+      "name": "machine_offline_agents",
+      "value": "コンピュータがオンラインになるとエージェントが表示されます。"
+    },
+    {
+      "name": "machine_gone",
+      "value": "このコンピュータは Hub の一覧から削除されました。"
+    },
+    {
+      "name": "machine_copy_link",
+      "value": "ペアリングリンクをコピー"
+    },
+    {
+      "name": "machine_copy_command",
+      "value": "コマンドをコピー"
+    },
+    {
+      "name": "machine_copied",
+      "value": "コピーしました"
+    },
+    {
+      "name": "machine_copy_failed",
+      "value": "コピーできませんでした。もう一度お試しください。"
+    },
+    {
+      "name": "machine_view_pair",
+      "value": "ペアリング情報を表示"
+    },
+    {
+      "name": "machine_rename",
+      "value": "コンピュータ名を変更"
+    },
+    {
+      "name": "machine_rename_hint",
+      "value": "この Hub の全端末に表示されます。空欄でコンピュータ ID に戻ります。"
+    },
+    {
+      "name": "machine_name_invalid",
+      "value": "制御文字を含まない40文字以内の名前を入力してください。"
+    },
+    {
+      "name": "machine_rename_forbidden",
+      "value": "この端末にはコンピュータの名前を変更する権限がありません。"
+    },
+    {
+      "name": "machine_admin_remove",
+      "value": "Hub 管理画面で削除…"
+    },
+    {
+      "name": "machine_admin_unavailable",
+      "value": "Hub 管理画面を開けませんでした。"
+    },
+    {
+      "name": "machine_remove_pending",
+      "value": "削除"
+    },
+    {
+      "name": "machine_admin_root",
+      "value": "Hub の直接アドレスで管理画面を開き、このコンピュータを削除してください。"
+    },
+    {
       "name": "devices_no_match",
       "value": "一致するデバイスがありません。"
     },

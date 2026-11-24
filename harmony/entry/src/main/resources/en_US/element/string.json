@@ -5041,6 +5041,142 @@
       "value": "No revoked devices."
     },
     {
+      "name": "machine_detail",
+      "value": "Machine details"
+    },
+    {
+      "name": "machine_rx",
+      "value": "Received"
+    },
+    {
+      "name": "machine_tx",
+      "value": "Sent"
+    },
+    {
+      "name": "machine_loading_list",
+      "value": "Loading computers…"
+    },
+    {
+      "name": "machine_loading_detail",
+      "value": "Loading computer details…"
+    },
+    {
+      "name": "machine_memory",
+      "value": "Memory"
+    },
+    {
+      "name": "machine_pending",
+      "value": "Awaiting confirmation"
+    },
+    {
+      "name": "machine_online",
+      "value": "Online"
+    },
+    {
+      "name": "machine_agent_count",
+      "value": "Agents · {count}"
+    },
+    {
+      "name": "machine_overview",
+      "value": "Computers · {total}   Online · {online}"
+    },
+    {
+      "name": "machine_empty",
+      "value": "No computers yet"
+    },
+    {
+      "name": "machine_empty_add",
+      "value": "Add a computer to run agents on it."
+    },
+    {
+      "name": "machine_empty_admin",
+      "value": "Connected computers appear here when the Hub reports them."
+    },
+    {
+      "name": "machine_partial",
+      "value": "Some Hubs or managers are unavailable. Showing the computers that could be loaded."
+    },
+    {
+      "name": "machine_name_hint",
+      "value": "Computer name"
+    },
+    {
+      "name": "machine_add_hint",
+      "value": "Name this computer and choose its system to generate a pairing code."
+    },
+    {
+      "name": "machine_pair_instructions",
+      "value": "Copy the pairing link to the computer you are adding. If using a terminal, run the supplied command on that computer."
+    },
+    {
+      "name": "machine_trust_hint",
+      "value": "Confirm this connection only if you initiated it on this computer."
+    },
+    {
+      "name": "machine_no_agents",
+      "value": "No agents running"
+    },
+    {
+      "name": "machine_offline_agents",
+      "value": "Agents appear when the computer is online."
+    },
+    {
+      "name": "machine_gone",
+      "value": "This computer is no longer listed by the Hub."
+    },
+    {
+      "name": "machine_copy_link",
+      "value": "Copy pairing link"
+    },
+    {
+      "name": "machine_copy_command",
+      "value": "Copy terminal command"
+    },
+    {
+      "name": "machine_copied",
+      "value": "Copied"
+    },
+    {
+      "name": "machine_copy_failed",
+      "value": "Couldn’t copy. Please try again."
+    },
+    {
+      "name": "machine_view_pair",
+      "value": "View pairing information"
+    },
+    {
+      "name": "machine_rename",
+      "value": "Rename Computer"
+    },
+    {
+      "name": "machine_rename_hint",
+      "value": "Visible to devices on this Hub. Leave blank to use the computer ID."
+    },
+    {
+      "name": "machine_name_invalid",
+      "value": "Use up to 40 characters without control characters."
+    },
+    {
+      "name": "machine_rename_forbidden",
+      "value": "This device does not have permission to rename computers."
+    },
+    {
+      "name": "machine_admin_remove",
+      "value": "Remove in Hub Admin…"
+    },
+    {
+      "name": "machine_admin_unavailable",
+      "value": "Could not open the Hub admin page."
+    },
+    {
+      "name": "machine_remove_pending",
+      "value": "Remove"
+    },
+    {
+      "name": "machine_admin_root",
+      "value": "Open the admin page at the Hub’s direct address to remove this computer."
+    },
+    {
       "name": "devices_no_match",
       "value": "No matching devices."
     },

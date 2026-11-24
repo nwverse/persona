@@ -58,6 +58,11 @@ export class ResourceRow {
   raw: string = '{}';
   constructor(id: string = '', title: string = '', kind: string = '') { this.id = id; this.title = title; this.kind = kind; }
   data(): Record<string, Object> { return Wire.parse(this.raw); }
+  supportsScreen(): boolean {
+    const data = this.data(), os = Wire.text(data, 'os', Wire.text(Wire.object(data, 'system'), 'os'));
+    return this.kind === 'machine' && ['', 'mac', 'macos', 'darwin'].includes(os.toLowerCase()) && Wire.bool(data, 'online') &&
+      !Wire.bool(data, 'pending') && !Wire.bool(data, 'pending_confirm') && ['', 'confirmed', 'personal', 'work'].includes(Wire.text(data, 'trust'));
+  }
   static from(data: Record<string, Object>, kind: string): ResourceRow {
     const row = new ResourceRow(Wire.text(data, 'id', Wire.text(data, 'session_id')),
       Wire.text(data, 'title', Wire.text(data, 'name', Wire.text(data, 'subject', Wire.text(data, 'label')))), kind);

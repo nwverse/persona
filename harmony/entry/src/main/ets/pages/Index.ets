@@ -394,7 +394,7 @@ struct Index {
   }
   private openResources(kind: string): void { this.resourceKind = kind; this.model.listResources(kind); this.stack.pushPath({ name: 'resources', param: kind }); this.savePath(); }
   private openSettings(page: string, contextual: boolean = false): void { if (page === 'appearance') this.ensureAgentWorkspace(); this.settingsPage = page; this.stack.pushPath({ name: 'settings', param: NavigationContext.settings(page, contextual ? this.detailModel.selected : undefined) }); this.savePath(); }
-  private settingsFamily(page: string): string { return ['extension_detail', 'extension_catalog'].includes(page) ? 'extensions' : page === 'connector_detail' ? 'connectors' : page === 'channel_detail' ? 'channels' : page; }
+  private settingsFamily(page: string): string { if (page === 'machine_detail') return 'machines'; return ['extension_detail', 'extension_catalog'].includes(page) ? 'extensions' : page === 'connector_detail' ? 'connectors' : page === 'channel_detail' ? 'channels' : page; }
   private isAdminPage(page: string): boolean { return ['assistant', 'memory', 'managers', 'launchers', 'engine', 'hub_update', 'node_update'].includes(page); }
   private settingsLabel(page: string): string { return page === 'ssh' ? 'ssh_settings' : page === 'assistant' ? 'admin_identity' : page === 'memory' ? 'admin_memory' : page === 'managers' ? 'admin_managers' : page === 'launchers' ? 'admin_launchers' : page === 'engine' ? 'admin_machine_engine' : page === 'hub_update' ? 'admin_hub_update' : page === 'node_update' ? 'admin_node_update' : page; }
   private adminMenus(name: string, param: Object): NavigationMenuItem[] { return [{ value: tr('refresh'), symbolIcon: new SymbolGlyphModifier($r('sys.symbol.arrow_clockwise')), action: () => { if (this.activeChild === this.childKey(name, param)) this.adminRefreshRevision++; } }]; }
@@ -830,6 +830,7 @@ struct Index {
     const descriptor = NavigationContext.from(name, param as string);
     if (!descriptor.scoped) return;
     const key = this.childKey(name, param), revision = ++this.routeRevision, generation = this.model.connectionGeneration(), scope = this.model.scope();
+    if (name === 'settings' && descriptor.page === 'machine_detail') return;
     const keepContent = this.targetReady(name, param);
     if (!keepContent) { this.chatReady = false; this.detailRoute = ''; }
     try {
@@ -877,7 +878,7 @@ struct Index {
   private deviceTitleGap(name: string, param: Object): number {
     if (name !== 'settings' || this.destinationBackHidden(name, param)) return 0;
     const page = this.settingsKind(param);
-    return page === 'devices' || page === 'machines' ? Tokens.inset : 0;
+    return page === 'devices' || page === 'machines' || page === 'machine_detail' ? Tokens.inset : 0;
   }
   private immersiveComputer(name: string, param: Object): boolean {
     return name === 'computer' && this.fullscreenComputer === this.childKey(name, param);
@@ -995,6 +996,10 @@ struct Index {
       } else if (name === 'settings' && this.settingsKind(param) === 'ssh') {
         SshSettingsPage({ tunnel: this.settingsModel(param).ssh, active: this.activeChild === this.childKey(name, param),
           onSaved: (): void => { const owner = this.settingsModel(param); if (this.activeChild === this.childKey(name, param)) owner.selectProfile(owner.profile, true); } })
+      } else if (name === 'settings' && this.settingsKind(param) === 'machine_detail') {
+        SettingsPage({ model: this.model, page: 'machine_detail', machineRoute: param as string,
+          active: this.activeChild === this.childKey(name, param), onChat: (row: ResourceRow) => this.openFrom(name, param, row),
+          onComputer: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openComputer(row); } })
       } else if (name === 'settings') {
         if (!NavigationContext.from(name, param as string).scoped || this.targetReady(name, param)) SettingsPage({ model: this.settingsKind(param) === 'appearance' ? this.model : this.settingsModel(param), agentWorkspace: this.agentWorkspace, onChat: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openLinkedResource(row); }, active: this.activeChild === this.childKey(name, param), page: this.settingsKind(param), onDetail: (page: string, row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openSettingsDetail(page, row); }, onExtension: (extensionId: string, uiId: string, title: string) => { if (this.activeChild === this.childKey(name, param)) this.openExtension(this.settingsModel(param), extensionId, uiId, title); }, onBack: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } }, onComputer: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openComputer(row); }, onOpen: (page: string) => this.openSettings(page, NavigationContext.from(name, param as string).scoped) })
         else this.targetLoading(name, param)
@@ -1003,7 +1008,8 @@ struct Index {
       .hideTitleBar(this.immersiveComputer(name, param) || this.hideChatTitle(name, param))
       .preferredOrientation(this.screenOrientation(name, param))
       .hideBackButton(this.destinationBackHidden(name, param))
-      .backgroundColor(name === 'resources' && param === 'inbox' ? Colors.grouped : Colors.canvas)
+      .backgroundColor((name === 'resources' && param === 'inbox') ||
+        (name === 'settings' && ['machines', 'machine_detail'].includes(this.settingsKind(param))) ? Colors.grouped : Colors.canvas)
       .menus(this.destinationMenus(name, param))
       .onShown(() => this.routeShown(name, param))
       .onHidden(() => { if (name === 'computer' && (this.activeChild === this.childKey(name, param) || this.immersiveComputer(name, param))) {

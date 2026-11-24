@@ -5041,6 +5041,142 @@
       "value": "暂无已撤销设备。"
     },
     {
+      "name": "machine_detail",
+      "value": "机器详情"
+    },
+    {
+      "name": "machine_rx",
+      "value": "接收"
+    },
+    {
+      "name": "machine_tx",
+      "value": "发送"
+    },
+    {
+      "name": "machine_loading_list",
+      "value": "正在读取电脑列表…"
+    },
+    {
+      "name": "machine_loading_detail",
+      "value": "正在读取电脑详情…"
+    },
+    {
+      "name": "machine_memory",
+      "value": "内存"
+    },
+    {
+      "name": "machine_pending",
+      "value": "待确认"
+    },
+    {
+      "name": "machine_online",
+      "value": "在线"
+    },
+    {
+      "name": "machine_agent_count",
+      "value": "Agent {count} 个"
+    },
+    {
+      "name": "machine_overview",
+      "value": "{total} 台电脑 · {online} 台在线"
+    },
+    {
+      "name": "machine_empty",
+      "value": "还没有电脑"
+    },
+    {
+      "name": "machine_empty_add",
+      "value": "添加一台电脑，就可以在上面运行 Agent。"
+    },
+    {
+      "name": "machine_empty_admin",
+      "value": "Hub 报告的已连接电脑会显示在这里。"
+    },
+    {
+      "name": "machine_partial",
+      "value": "部分 Hub 或管理器暂时无法访问，当前显示已获取的电脑。"
+    },
+    {
+      "name": "machine_name_hint",
+      "value": "电脑名称"
+    },
+    {
+      "name": "machine_add_hint",
+      "value": "填写电脑名称并选择操作系统，生成这台电脑的配对码。"
+    },
+    {
+      "name": "machine_pair_instructions",
+      "value": "把配对链接复制到要添加的电脑。如果使用终端，请在那台电脑上执行提供的命令。"
+    },
+    {
+      "name": "machine_trust_hint",
+      "value": "请确认是你在这台电脑上发起了连接，再批准配对。"
+    },
+    {
+      "name": "machine_no_agents",
+      "value": "当前没有运行中的 Agent"
+    },
+    {
+      "name": "machine_offline_agents",
+      "value": "电脑上线后会显示运行中的 Agent。"
+    },
+    {
+      "name": "machine_gone",
+      "value": "Hub 的机器列表中已找不到这台电脑。"
+    },
+    {
+      "name": "machine_copy_link",
+      "value": "复制配对链接"
+    },
+    {
+      "name": "machine_copy_command",
+      "value": "复制终端命令"
+    },
+    {
+      "name": "machine_copied",
+      "value": "已复制"
+    },
+    {
+      "name": "machine_copy_failed",
+      "value": "复制失败，请重试。"
+    },
+    {
+      "name": "machine_view_pair",
+      "value": "查看配对信息"
+    },
+    {
+      "name": "machine_rename",
+      "value": "修改电脑名称"
+    },
+    {
+      "name": "machine_rename_hint",
+      "value": "此 Hub 的所有设备都能看到新名称。留空可恢复电脑 ID。"
+    },
+    {
+      "name": "machine_name_invalid",
+      "value": "名称最多 40 个字符，不能包含控制字符。"
+    },
+    {
+      "name": "machine_rename_forbidden",
+      "value": "当前设备没有修改电脑名称的权限。"
+    },
+    {
+      "name": "machine_admin_remove",
+      "value": "前往 Hub 管理页移除…"
+    },
+    {
+      "name": "machine_admin_unavailable",
+      "value": "无法打开 Hub 管理页。"
+    },
+    {
+      "name": "machine_remove_pending",
+      "value": "移除"
+    },
+    {
+      "name": "machine_admin_root",
+      "value": "请在 Hub 的直连地址打开管理页，移除这台电脑。"
+    },
+    {
       "name": "devices_no_match",
       "value": "没有匹配的设备。"
     },

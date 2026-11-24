@@ -1,14 +1,15 @@
-import { DeviceMark } from '../design/DeviceMark';
-import type { MachinePlatform } from '../models/DeviceIdentity';
-import { machinePlatform } from '../models/DeviceIdentity';
+import { pasteboard } from '@kit.BasicServicesKit';
+import { AddComputerFields } from './AddComputerFields';
+import { MachineDirectoryView, MachineFactsCard, MachineLoadingCard, MachineRefresh } from './MachineDirectoryView';
+import { MachineCard, MachineReadings, machineCards } from '../models/MachineDirectory';
 import { Symbols } from '../design/Symbols';
 import { IconActions } from '../design/IconActions';
-import { ButtonStyles } from '../design/Controls';
-import { SelectStyles } from '../design/Controls';
+import { ButtonStyles, ScrollStyles, SelectStyles } from '../design/Controls';
 import { ComposeListItemV2, ContentItemV2, LengthMetrics } from '@kit.ArkUI';
 import { ClientModel } from '../models/ClientModel';
 import { ManagementModel, ManagementRow, ManagementInput } from '../models/ManagementModel';
 import { ResourceRow, Wire } from '../models/Wire';
+import { NavigationContext } from '../models/NavigationContext';
 import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
@@ -26,12 +27,20 @@ import { common } from '@kit.AbilityKit';
 export struct SettingsPage {
   @Require @Param model: ClientModel;
   @Param page: string = '';
+  @Param machineRoute: string = '';
   @Param active: boolean = true;
   @Param agentWorkspace: AgentWorkspace = new AgentWorkspace();
   @Local machineOwner: ClientModel | undefined;
   @Local machineDirectoryKey: string = '';
+  @Local namingMachine: string = '';
+  @Local nameDraft: string = '';
+  private namingOwner?: ClientModel;
+  private namingGeneration: number = -1;
+  @Local machineReadings: MachineReadings = new MachineReadings();
   private machineRevision: number = 0;
-  private pairingOwnerScope: string = '';
+  private machineBinding: string = '';
+  @Local pairingOwnerScope: string = '';
+  @Local pairingOwnerEpoch: number = -1;
   private mounted: boolean = false;
   @Local appearanceRevision: number = 0;
   @Event onOpen: (page: string) => void = () => {};
@@ -59,6 +68,7 @@ export struct SettingsPage {
   private catalogBindingScope: string = '';
   @Local notifications: NativeNotifications = nativeNotifications;
   @Local addComputerOpen: boolean = false;
+  @Local showComputerReceipt: boolean = false;
   @Local computerName: string = '';
   @Local computerOs: string = 'mac';
   @Local purposeIndex: number = 0;
@@ -124,7 +134,7 @@ export struct SettingsPage {
   private basePage(): string { return this.page === 'extension_detail' || this.page === 'extension_catalog' ? 'extensions' : this.page === 'connector_detail' ? 'connectors' : this.page === 'channel_detail' ? 'channels' : this.page; }
   private async loadSettingsPage(): Promise<void> {
     if (!this.mounted || !this.active) return;
-    if (this.page === 'machines') { await this.loadMachineDirectory(); return; }
+    if (this.page === 'machines' || this.page === 'machine_detail') { await this.loadMachineDirectory(); return; }
     const page = this.page, owner = this.model, generation = owner.connectionGeneration(), scope = owner.scope(), revision = ++this.machineRevision, target = owner.selected;
     const current = (): boolean => this.mounted && this.active && this.page === page && this.model === owner && revision === this.machineRevision && owner.owns(generation, scope);
     this.management.setAdmission(current);
@@ -144,10 +154,23 @@ export struct SettingsPage {
     row.group = this.model.profile.id; row.manager = this.model.profile.manager; row.detail = item?.detail || ''; row.raw = JSON.stringify(item?.raw || Wire.payload([], [])); this.onDetail(page, row);
   }
 
-  aboutToDisappear(): void { this.mounted = false; this.appearanceRevision++; this.machineRevision++; if (this.page === 'appearance') this.look.bind(undefined); }
+  aboutToDisappear(): void { this.machineReadings.stop(); this.mounted = false; this.appearanceRevision++; this.machineRevision++; if (this.page === 'appearance') this.look.bind(undefined); }
   @Monitor('management.extensionDetailMissing') extensionRemoved(): void { if (this.mounted && this.active && this.page === 'extension_detail' && this.management.extensionDetailMissing) this.onBack(); }
-  @Monitor('active') machineVisibilityChanged(): void { this.appearanceRevision++; if (!this.active) { this.machineRevision++; if (this.page === 'appearance') this.look.bind(undefined); } else if (this.mounted) { this.loadSettingsPage(); this.loadLook(); } }
-  @Monitor('model.connected') settingsConnectionChanged(): void { if (this.mounted && this.active) { if (this.model.connected) this.loadSettingsPage(); this.loadLook(); } }
+  @Monitor('active') machineVisibilityChanged(): void {
+    this.appearanceRevision++;
+    if (!this.active) {
+      this.machineReadings.pause(); this.machineRevision++;
+      if (this.page === 'appearance') this.look.bind(undefined);
+    } else if (this.mounted) {
+      if (this.page === 'machine_detail') this.loadMachineDirectory(true);
+      else this.loadSettingsPage();
+      this.loadLook();
+    }
+  }
+  @Monitor('machineRoute') machineRouteChanged(): void {
+    if (this.mounted && this.active && this.page === 'machine_detail') this.loadMachineDirectory();
+  }
+  @Monitor('model.connected') settingsConnectionChanged(): void { if (!this.model.connected) this.machineReadings.stop(); if (this.mounted && this.active) { if (this.model.connected) this.loadSettingsPage(); this.loadLook(); } }
   @Monitor('model.profile', 'model.forgottenEpoch', 'model.connected') scheduleOwnerChanged(): void { this.appearanceRevision++; this.syncCatalogRows(); this.syncManagementRows(); this.management.scheduleReceiptChat(this.model); this.loadLook(); }
   @Monitor('page') settingsPageChanged(): void { this.appearanceRevision++; }
   @Monitor('management.catalogRows') catalogRowsChanged(): void { this.syncCatalogRows(); }
@@ -196,17 +219,80 @@ export struct SettingsPage {
     this.catalogBindingOwner = this.model; this.catalogBindingScope = scope;
   }
   private machineOptions(): ResourceRow[] { return this.model.directoryReady ? this.model.directoryMachines : this.model.machines; }
-  private machineLabel(row: ResourceRow): string { return [this.model.groupName(row), row.manager, row.title || row.id].filter((value: string) => !!value).join(' · '); }
-  private async loadMachineDirectory(): Promise<void> {
-    const generation = this.model.connectionGeneration(), scope = this.model.scope(), revision = ++this.machineRevision;
-    await this.model.refreshDirectory();
-    if (!this.mounted || !this.active || revision !== this.machineRevision || !this.model.owns(generation, scope)) return;
-    const selected = this.machineOptions().find((row: ResourceRow) => row.key() === this.machineDirectoryKey || row.key() === this.model.selected.key()) || this.machineOptions()[0];
-    if (selected) await this.chooseMachine(selected);
-    else { this.machineOwner = this.model; this.machineDirectoryKey = ''; this.management.setAdmission((): boolean => this.mounted && this.active && this.machineOwner === this.model); await this.management.load('machines', this.model); }
+  private machineSessions(): ResourceRow[] {
+    return this.model.directoryReady ? this.model.directorySessions : this.model.sessions;
   }
-  private async chooseMachine(row: ResourceRow): Promise<void> {
+  @Computed get overviewCards(): MachineCard[] {
+    return machineCards(this.machineOptions(), this.machineSessions(), this.model.profile.id, this.model.profile.manager);
+  }
+  @Computed get detailTarget(): ResourceRow { return NavigationContext.from('settings', this.machineRoute).row; }
+  @Computed get detailOwner(): ClientModel | undefined {
+    const row = this.detailTarget, group = row.group || this.model.profile.id;
+    const profile = group === this.model.profile.id ? this.model.profile : this.model.profiles.find(p => p.id === group);
+    if (!profile || !row.id || row.kind !== 'machine') return undefined;
+    const manager = row.manager || profile.manager, owners = this.model.directoryOwners();
+    const bound = this.machineOwner;
+    if (bound && bound.profile.id === group && bound.profile.manager === manager && owners.includes(bound)) return bound;
+    return owners.find((view: ClientModel) => view.profile.id === group && view.profile.manager === manager);
+  }
+  @Computed get detailCard(): MachineCard | undefined {
+    const target = this.detailTarget, owner = this.detailOwner;
+    if (!owner) return undefined;
+    const item = this.machineRow();
+    const confirmed = this.machineOwner === owner && this.machineDirectoryKey === target.key() && item?.id === target.id ? item : undefined;
+    const readingDirectory = !this.machineOwner || this.management.loading;
+    if (!confirmed && !readingDirectory) return undefined;
+    // The route's own live directory can already paint the card while management verifies its actions.
+    const cached = owner.machines.find((row: ResourceRow) => row.id === target.id &&
+      (!row.group || row.group === owner.profile.id) && (!row.manager || row.manager === owner.profile.manager));
+    const data = cached?.data() || confirmed?.raw;
+    if (!data) return undefined;
+    const row = ResourceRow.from(data, 'machine');
+    row.group = owner.profile.id; row.manager = owner.profile.manager;
+    if (!owner.connected) row.state = 'offline';
+    return machineCards([row], owner.sessions, row.group, row.manager)[0];
+  }
+  private openMachine(row: ResourceRow): void {
+    if (!this.mounted || !this.active) return;
+    const target = new ResourceRow(row.id, row.title, 'machine');
+    target.group = row.group || this.model.profile.id; target.manager = row.manager; target.machine = row.machine;
+    this.onDetail('machine_detail', target);
+  }
+  private async loadMachineDirectory(resuming: boolean = false): Promise<void> {
+    const owner = this.model;
+    if (this.page === 'machine_detail') {
+      const selected = this.detailTarget;
+      if (selected.kind !== 'machine' || !selected.id) { this.management.error = 'request_updated'; return; }
+      const revision = this.machineRevision + 1;
+      await this.chooseMachine(selected, resuming);
+      const view = this.machineOwner;
+      if (this.machineRevision === revision && this.mounted && this.active && view && view === this.detailOwner && this.machineDirectoryKey === selected.key()) {
+        await this.machineReadings.start(view, () => this.detailCard ? [this.detailCard.row] : []);
+      }
+      return;
+    }
+    const generation = owner.connectionGeneration(), scope = owner.scope(), revision = ++this.machineRevision;
+    const current = (): boolean => this.mounted && this.active && this.model === owner && this.machineRevision === revision && owner.owns(generation, scope);
+    if (this.machineOwner !== owner || this.machineDirectoryKey) {
+      this.management.pairing = {}; this.pairingOwnerScope = ''; this.addComputerOpen = false; this.computerName = '';
+    }
+    this.machineOwner = owner; this.machineDirectoryKey = '';
+    this.management.setAdmission(current);
+    await Promise.all([owner.refreshDirectory(), this.management.load('machines', owner)]);
+    if (current()) await this.machineReadings.start(owner, () => this.machineOptions());
+  }
+  private async chooseMachine(row: ResourceRow, resuming: boolean = false): Promise<void> {
     const generation = this.model.connectionGeneration(), scope = this.model.scope(), revision = ++this.machineRevision;
+    const current = (): boolean => this.mounted && this.active && revision === this.machineRevision && this.model.owns(generation, scope);
+    const binding = (view: ClientModel): string => JSON.stringify([generation, scope, view.connectionGeneration(), view.scope(), view.pairingRevision()]);
+    const previous = this.machineOwner;
+    if (resuming && previous && previous === this.detailOwner && previous.connected && this.machineDirectoryKey === row.key() &&
+      this.machineBinding === binding(previous) && !this.management.loading && !this.management.saving && !this.management.error && this.machineRow()) {
+      this.management.setAdmission((): boolean => current() && this.machineOwner === previous && this.detailOwner === previous &&
+        this.machineDirectoryKey === row.key() && this.machineBinding === binding(previous));
+      return;
+    }
+    this.machineBinding = '';
     if (this.machineDirectoryKey !== row.key()) { this.management.pairing = {}; this.pairingOwnerScope = ''; this.computerName = ''; this.computerOs = 'mac'; this.addComputerOpen = false; }
     this.machineDirectoryKey = row.key(); this.machineOwner = undefined; this.management.rows = []; this.management.selectedId = ''; this.management.error = ''; this.management.loading = true;
     this.management.setAdmission((): boolean => false);
@@ -218,6 +304,7 @@ export struct SettingsPage {
       await this.management.load('machines', owner);
       if (!this.mounted || !this.active || revision !== this.machineRevision || !this.model.owns(generation, scope)) return;
       this.management.selectedId = row.id;
+      if (!this.management.error) this.machineBinding = binding(owner);
     } catch (_) { if (this.mounted && this.active && revision === this.machineRevision && this.model.owns(generation, scope)) this.management.error = 'offline'; }
     finally { if (revision === this.machineRevision) this.management.loading = false; }
   }
@@ -297,24 +384,38 @@ export struct SettingsPage {
   private machineRow(): ManagementRow | undefined {
     return this.management.rows.find((item: ManagementRow) => item.id === this.management.selectedId);
   }
-  @Computed get selectedPlatform(): MachinePlatform { return machinePlatform(this.machineRow()?.raw || {}); }
   private screenMachine(): ResourceRow | undefined {
-    const selected = this.machineRow();
-    if (!selected || !this.machineOwner) return undefined;
-    return this.machineOwner.machines.find((row: ResourceRow) => row.id === selected.id && row.key() === this.machineDirectoryKey);
+    const selected = this.machineRow(), owner = this.machineOwner;
+    if (!selected || !owner) return undefined;
+    for (const row of owner.machines) {
+      if (row.id !== selected.id) continue;
+      if (row.key() === this.machineDirectoryKey) return row;
+      if (row.group) continue;
+      const qualified = ResourceRow.from(row.data(), 'machine');
+      qualified.group = owner.profile.id; qualified.manager = row.manager || owner.profile.manager;
+      if (qualified.key() === this.machineDirectoryKey) return qualified;
+    }
+    return undefined;
+  }
+  private supportsScreen(row: ResourceRow): boolean {
+    return row.supportsScreen();
   }
   private canOpenScreen(): boolean {
-    const row = this.screenMachine(); if (!this.mounted || !this.active || !row || !this.machineOwner?.connected || this.model.demo || this.management.loading) return false;
-    const data = row.data(), os = Wire.text(data, 'os', Wire.text(Wire.object(data, 'system'), 'os'));
-    return ['', 'mac', 'darwin'].includes(os) && Wire.bool(data, 'online') && !Wire.bool(data, 'pending') && !Wire.bool(data, 'pending_confirm') && ['', 'confirmed', 'personal', 'work'].includes(Wire.text(data, 'trust'));
+    const row = this.screenMachine();
+    return !!row && this.mounted && this.active && !!this.machineOwner?.connected && !this.model.demo &&
+      !this.management.loading && this.supportsScreen(row);
   }
   private rowEnabled(row: ManagementRow): boolean { return Wire.bool(row.raw, 'enabled'); }
-  private canPairComputer(): boolean { return this.mounted && this.active && !!this.machineOwner?.connected && !this.management.loading && (!this.machineDirectoryKey || !!this.screenMachine()); }
+  private canOpenComputerForm(): boolean {
+    return this.mounted && this.active && !!this.machineOwner?.connected && this.machineOwner.features.includes('machines_add') &&
+      (!this.machineDirectoryKey || !!this.screenMachine());
+  }
+  private canPairComputer(): boolean { return this.canOpenComputerForm() && !this.management.loading && !this.management.saving; }
   private async createComputerPairing(): Promise<void> {
     const owner = this.machineOwner; if (!owner || !this.canPairComputer()) return;
     const generation = owner.connectionGeneration(), scope = owner.scope(), revision = this.machineRevision;
     const ok = await this.management.createPairing(owner, this.computerName, this.computerOs);
-    if (ok && this.mounted && this.active && this.machineOwner === owner && revision === this.machineRevision && owner.owns(generation, scope)) { const selected = owner.machines.find((row: ResourceRow) => row.key() === this.machineDirectoryKey); if (selected) this.management.selectedId = selected.id; this.pairingOwnerScope = scope; this.computerName = ''; this.addComputerOpen = false; }
+    if (ok && this.mounted && this.active && this.machineOwner === owner && revision === this.machineRevision && owner.owns(generation, scope)) { const selected = owner.machines.find((row: ResourceRow) => row.key() === this.machineDirectoryKey); if (selected) this.management.selectedId = selected.id; this.pairingOwnerScope = scope; this.pairingOwnerEpoch = owner.pairingRevision(); this.computerName = ''; this.showComputerReceipt = true; if (this.page === 'machines') await this.model.refreshDirectory(); }
   }
   private canRenew(): boolean {
     return this.canPairComputer() && this.pairingOwnerScope === this.machineOwner?.scope() && this.management.canRenewPairing();
@@ -581,59 +682,178 @@ export struct SettingsPage {
     }.width('100%').height('100%')
   }
 
+  @Computed get receiptAvailable(): boolean {
+    return !!this.machineOwner && this.pairingOwnerScope === this.machineOwner.scope() &&
+      this.pairingOwnerEpoch === this.machineOwner.pairingRevision() && !!Wire.text(this.management.pairing, 'pair_url');
+  }
+  private openComputerForm(receipt: boolean = false): void {
+    if (!this.canOpenComputerForm()) return;
+    this.showComputerReceipt = receipt && this.receiptAvailable;
+    this.computerName = ''; this.computerOs = 'mac'; this.addComputerOpen = true;
+  }
+
+  private async copyComputerPairing(key: string): Promise<void> {
+    if (!this.mounted || !this.active || !this.addComputerOpen || !this.showComputerReceipt || !this.receiptAvailable) return;
+    const value = Wire.text(this.management.pairing, key);
+    if (!value) return;
+    try {
+      const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, value);
+      const property = data.getProperty(); property.shareOption = pasteboard.ShareOption.LOCALDEVICE;
+      data.setProperty(property); await pasteboard.getSystemPasteboard().setData(data);
+      this.getUIContext().getPromptAction().showToast({ message: tr('machine_copied') });
+    } catch (_) {
+      this.getUIContext().getPromptAction().showToast({ message: tr('machine_copy_failed') });
+    }
+  }
+
   @Builder computerForm() {
-    Column({ space: Tokens.page }) {
-      TextInput({ text: this.computerName, placeholder: tr('name') }).onChange((value: string) => this.computerName = value)
-      Select(this.selectOptions(['Mac', 'Linux', 'Windows'])).attributeModifier(SelectStyles.inline).selected(this.computerOs === 'mac' ? 0 : this.computerOs === 'linux' ? 1 : 2).value(this.computerOs === 'mac' ? 'Mac' : this.computerOs === 'linux' ? 'Linux' : 'Windows')
-        .onSelect((index: number) => this.computerOs = ['mac', 'linux', 'windows'][index])
-      Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('generate_code')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('generate_code', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('generate_code')).bindTips(tr('generate_code')).enabled(this.canPairComputer() && this.computerName.trim().length > 0 && !this.management.saving)
-        .onClick(() => this.createComputerPairing())
-      if (this.management.error) Text(tr(this.management.error)).fontColor($r('app.color.persona_danger'))
-    }.padding(Tokens.page).width('100%')
+    Scroll() {
+      Column({ space: Tokens.section }) {
+        if (this.showComputerReceipt && this.receiptAvailable) {
+          Text(Wire.text(this.management.pairing, 'name')).fontSize(Tokens.title).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
+          Text(tr('machine_pair_instructions')).fontSize(Tokens.body).fontColor(Colors.secondary)
+          Button(tr('machine_copy_link')).attributeModifier(ButtonStyles.primary).width('100%')
+            .onClick(() => this.copyComputerPairing('pair_url')).id('machines.add.copy')
+          if (Wire.text(this.management.pairing, 'command')) {
+            Button(tr('machine_copy_command')).attributeModifier(ButtonStyles.secondary).width('100%').onClick(() => this.copyComputerPairing('command'))
+          }
+          if (Wire.text(this.management.pairing, 'expires_at')) {
+            Text(tr('expires_at') + ' ' + new Date(Wire.text(this.management.pairing, 'expires_at')).toLocaleString())
+              .fontSize(Tokens.meta).fontColor(Colors.secondary)
+          }
+          if (this.canRenew()) Button(tr('new_pairing_code')).attributeModifier(ButtonStyles.secondary)
+            .onClick(() => this.management.renewPairing(this.machineOwner || this.model))
+          Button(tr('close')).attributeModifier(ButtonStyles.secondary).width('100%').onClick(() => this.addComputerOpen = false)
+        } else {
+          Text(tr('machine_add_hint')).fontSize(Tokens.body).fontColor(Colors.secondary).id('machines.add.hint')
+          if (this.model.profiles.length > 1) Text(this.machineOwner?.profile.name || this.model.profile.name).fontSize(Tokens.meta).fontColor(Colors.secondary)
+          AddComputerFields({ name: this.computerName, system: this.computerOs,
+            onName: (value: string) => this.computerName = value, onSystem: (value: string) => this.computerOs = value })
+          Button(tr('generate_code')).attributeModifier(ButtonStyles.primary).width('100%')
+            .enabled(this.canPairComputer() && !!this.computerName.trim() && !this.management.saving)
+            .onClick(() => this.createComputerPairing()).id('machines.add.generate')
+        }
+        if (this.management.error) Text(tr(this.management.error)).fontSize(Tokens.meta).fontColor(Colors.danger)
+      }.width('100%').constraintSize({ maxWidth: Tokens.masterMax }).alignItems(HorizontalAlign.Start)
+        .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.page, bottom: Tokens.section })
+    }.width('100%').height('100%').attributeModifier(ScrollStyles.form).id('machines.add.form')
+  }
+
+  private async saveMachineName(): Promise<void> {
+    const owner = this.machineOwner, row = this.machineRow();
+    if (!owner || !row || owner !== this.namingOwner || owner.connectionGeneration() !== this.namingGeneration ||
+      this.namingMachine !== this.machineDirectoryKey || !this.mounted || !this.active) return;
+    if (await this.management.renameMachine(owner, row, this.nameDraft)) this.namingMachine = '';
+  }
+
+  private async openMachineAdmin(): Promise<void> {
+    const owner = this.detailOwner, row = this.detailCard?.row;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    if (!context || !owner || !row || owner.demo || !this.active || !this.mounted) return;
+    if (!/^https?:\/\/[^/?#]+\/?$/.test(owner.profile.baseUrl)) {
+      this.management.error = 'machine_admin_root'; return;
+    }
+    try { await context.openLink(owner.profile.baseUrl.replace(/\/+$/, '') + '/admin/machines'); }
+    catch (_) { if (this.active && this.detailOwner === owner) this.management.error = 'machine_admin_unavailable'; }
+  }
+
+  @Builder machineManagement() {
+    Column({ space: Tokens.gap }) {
+      if (this.machineOwner && this.machineRow() && this.management.canRenameMachine(this.machineOwner, this.machineRow()!)) {
+        if (this.namingMachine === this.machineDirectoryKey && this.namingOwner === this.machineOwner &&
+          this.namingGeneration === this.machineOwner.connectionGeneration()) {
+          TextInput({ text: this.nameDraft, placeholder: this.detailTarget.id }).accessibilityText(tr('machine_rename'))
+            .onChange((value: string) => this.nameDraft = value).onSubmit(() => this.saveMachineName()).enabled(!this.management.saving)
+          if (this.management.error) { Text(tr(this.management.error)).fontSize(Tokens.meta).fontColor(Colors.danger) }
+          Text(tr('machine_rename_hint')).fontSize(Tokens.caption).fontColor(Colors.secondary)
+          Row({ space: Tokens.gap }) {
+            Button(tr('cancel')).attributeModifier(ButtonStyles.secondary).enabled(!this.management.saving).onClick(() => this.namingMachine = '')
+            Button(tr('save')).attributeModifier(ButtonStyles.primary).enabled(!this.management.saving).onClick(() => this.saveMachineName())
+          }
+        } else {
+          Button(tr('machine_rename')).attributeModifier(ButtonStyles.secondary).width('100%').id('machines.rename')
+            .onClick(() => {
+              this.nameDraft = this.detailCard?.row.title || this.detailTarget.id;
+              this.namingOwner = this.machineOwner; this.namingGeneration = this.machineOwner?.connectionGeneration() ?? -1;
+              this.namingMachine = this.machineDirectoryKey;
+            })
+        }
+      }
+      Button(tr('machine_admin_remove')).attributeModifier(ButtonStyles.quiet).fontColor(Colors.danger)
+        .width('100%').id('machines.remove.admin').onClick(() => this.openMachineAdmin())
+    }.width('100%').padding(Tokens.inset).alignItems(HorizontalAlign.Start).backgroundColor(Colors.canvas).borderRadius(Tokens.card)
+  }
+
+  @Builder machineDetail() {
+    List({ space: Tokens.inset }) {
+      if (this.detailCard) {
+        ListItem() { MachineFactsCard({ card: this.detailCard, sample: this.detailOwner ? this.machineReadings.sample(this.detailOwner, this.detailCard.row) : undefined, showAgents: false }) }
+        if (this.detailCard.pending) {
+          ListItem() {
+            Column({ space: Tokens.inset }) {
+              Text(tr('machine_trust_hint')).fontSize(Tokens.meta).fontColor(Colors.secondary)
+              Row({ space: Tokens.gap }) {
+                Button(tr('machine_remove_pending')).attributeModifier(ButtonStyles.secondary).fontColor(Colors.danger).layoutWeight(1)
+                  .enabled(!!this.screenMachine() && !this.management.loading && !this.management.saving)
+                  .onClick(() => { const row = this.machineRow(); if (row) this.confirmMachine(row, false); })
+                Button(tr('confirm_computer')).attributeModifier(ButtonStyles.primary).layoutWeight(1)
+                  .enabled(!!this.screenMachine() && !this.management.loading && !this.management.saving)
+                  .onClick(() => { const row = this.machineRow(); if (row) this.confirmMachine(row, true); }).id('machines.confirm')
+              }.width('100%')
+            }.width('100%').padding(Tokens.page).backgroundColor(Colors.canvas).borderRadius(Tokens.card)
+          }
+        } else {
+          if (!this.model.demo && this.detailCard.online && this.supportsScreen(this.detailCard.row)) ListItem() {
+            Button(tr('computer_screen_open')).attributeModifier(ButtonStyles.secondary).width('100%')
+              .enabled(this.canOpenScreen())
+              .onClick(() => { const row = this.screenMachine(); if (row && this.canOpenScreen()) this.onComputer(row); }).id('machines.screen')
+          }
+          if (this.detailOwner && !this.detailOwner.demo && Wire.text(this.detailCard.row.data(), 'kind') !== 'hub') {
+            ListItem() { this.machineManagement() }
+          }
+          ListItem() {
+            Text(tr('agents')).fontSize(Tokens.body).fontColor(Colors.ink).fontWeight(FontWeight.Medium)
+          }
+          if (!this.detailCard.online || !this.detailCard.agents.length) ListItem() {
+            Text(tr(this.detailCard.online ? 'machine_no_agents' : 'machine_offline_agents')).fontSize(Tokens.meta).fontColor(Colors.secondary)
+              .width('100%').padding(Tokens.page).backgroundColor(Colors.canvas).borderRadius(Tokens.card)
+          }
+          if (this.detailCard.online) Repeat<ResourceRow>(this.detailCard.agents).each((entry: RepeatItem<ResourceRow>) => {
+            ListItem() {
+              Row({ space: Tokens.inset }) {
+                Text(entry.item.title || entry.item.id).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
+                SymbolGlyph(Symbols.expand).fontSize(Tokens.symbolFont).fontColor([Colors.secondary])
+              }.width('100%').padding(Tokens.page).backgroundColor(Colors.canvas).borderRadius(Tokens.card)
+            }.onClick(() => this.onChat(entry.item)).id('machines.agent.' + entry.item.id)
+          }).key((agent: ResourceRow) => agent.key()).virtualScroll({ totalCount: this.detailCard.agents.length, reusable: false })
+        }
+      } else if (this.management.loading || !this.machineOwner && !this.management.error) {
+        ListItem() { MachineLoadingCard() }.id('machines.detail.loading')
+        ListItem() { Text(tr('machine_loading_detail')).fontSize(Tokens.meta).fontColor(Colors.secondary) }
+      } else if (!this.management.error) {
+        ListItem() { Text(tr('machine_gone')).fontSize(Tokens.meta).fontColor(Colors.secondary).padding(Tokens.page) }
+      }
+      if (this.management.error && (!this.namingMachine || this.namingMachine !== this.machineDirectoryKey)) ListItem() { Text(tr(this.management.error)).fontSize(Tokens.meta).fontColor(Colors.danger) }
+      if (this.detailOwner?.features.includes('machines_add') && this.model.profiles.length > 1) ListItem() {
+        Button(tr('add_computer')).attributeModifier(ButtonStyles.secondary).enabled(this.canPairComputer()).onClick(() => this.openComputerForm())
+      }
+    }.height('100%').width('100%').padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap, bottom: Tokens.page })
+      .edgeEffect(EdgeEffect.None).backgroundColor(Colors.grouped).id('machines.detail')
   }
 
   @Builder machinesPage() {
     Column() {
-      List() {
-        if ((this.machineOwner || this.model).features.includes('machines_add')) ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('add_computer')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('add_computer', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('add_computer')).bindTips(tr('add_computer')).enabled(this.canPairComputer()).onClick(() => this.addComputerOpen = true) }.padding({ left: Tokens.page, right: Tokens.page })
-        if (this.machineOptions().length > 0) ListItem() {
-          Select(this.selectOptions(this.machineOptions().map((row: ResourceRow) => this.machineLabel(row)))).attributeModifier(SelectStyles.inline)
-            .selected(Math.max(0, this.machineOptions().findIndex((row: ResourceRow) => row.key() === this.machineDirectoryKey)))
-            .value(this.machineOptions().find((row: ResourceRow) => row.key() === this.machineDirectoryKey) ? this.machineLabel(this.machineOptions().find((row: ResourceRow) => row.key() === this.machineDirectoryKey) as ResourceRow) : tr('machine'))
-            .onSelect((index: number) => { const row = this.machineOptions()[index]; if (row) this.chooseMachine(row); }).enabled(!this.management.loading && !this.addComputerOpen).width('100%')
-        }.padding({ left: Tokens.page, right: Tokens.page })
-        if (this.machineRow()) {
-          ListItem() {
-            Row({ space: Tokens.inset }) {
-              DeviceMark({ family: this.selectedPlatform.family, fallback: Symbols.machine })
-                .id('machines.os.' + (this.selectedPlatform.family || 'unknown'))
-              Column({ space: Tokens.fine }) {
-                Text(tr('platform')).fontSize(Tokens.body).fontColor(Colors.ink)
-                if (this.selectedPlatform.detail) Text(this.selectedPlatform.detail).fontSize(Tokens.meta).fontColor(Colors.secondary)
-              }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-            }.width('100%').padding(Tokens.page)
-          }
-          ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('status'),
-            secondaryText: Wire.text(this.machineRow()?.raw || {}, 'error', Wire.text(this.machineRow()?.raw || {}, 'state', tr(Wire.bool(this.machineRow()?.raw || {}, 'online') ? 'online' : 'offline'))) }) }) }
-          ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('computer_screen_open')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('computer_screen_open', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('computer_screen_open')).bindTips(tr('computer_screen_open')).enabled(this.canOpenScreen()).onClick(() => { const row = this.screenMachine(); if (row && this.canOpenScreen()) this.onComputer(row); }).id('machines.screen') }.padding({ left: Tokens.page, right: Tokens.page })
-          if (Wire.text(this.machineRow()?.raw || {}, 'trust') === 'pending') {
-            ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('confirm_computer')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('confirm_computer', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('confirm_computer')).bindTips(tr('confirm_computer')).enabled(!!this.screenMachine() && !this.management.loading).onClick(() => this.confirmMachine(this.machineRow() as ManagementRow, true)) }
-            ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('reject')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('reject', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('reject')).bindTips(tr('reject')).enabled(!!this.screenMachine() && !this.management.loading).onClick(() => this.confirmMachine(this.machineRow() as ManagementRow, false)) }
-          }
-        }
-        if (this.machineOwner && this.pairingOwnerScope === this.machineOwner.scope() && this.management.pairing['pair_url']) {
-          ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: Wire.text(this.management.pairing, 'name'),
-            secondaryText: Wire.text(this.management.pairing, 'machine') }) }) }
-          ListItem() { Text(Wire.text(this.management.pairing, 'pair_url')).copyOption(CopyOptions.LocalDevice).padding(Tokens.page) }
-          ListItem() { Text(tr('expires_at') + ': ' + Wire.text(this.management.pairing, 'expires_at')).padding(Tokens.page) }
-          if (this.canRenew()) ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('new_pairing_code')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('new_pairing_code', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('new_pairing_code')).bindTips(tr('new_pairing_code')).onClick(() => this.management.renewPairing(this.machineOwner || this.model)) }
-          if (Wire.text(this.management.pairing, 'command')) ListItem() { Text(Wire.text(this.management.pairing, 'command')).copyOption(CopyOptions.LocalDevice).padding(Tokens.page) }
-        }
-        if (!this.management.rows.length && !this.management.loading) ListItem() { Text(tr('no_computer')).padding(Tokens.page) }
-        if (this.management.error) ListItem() { Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
-      }.width('100%').layoutWeight(1)
+      if (this.page === 'machine_detail') {
+        MachineRefresh({ controlId: 'machines.detail.pull', available: !!this.detailOwner?.connected, loading: this.management.loading,
+          onRefresh: () => this.loadMachineDirectory() }) { this.machineDetail() }
+      } else MachineDirectoryView({ model: this.model, cards: this.overviewCards, readings: this.machineReadings,
+        loading: this.model.directoryLoading || this.management.loading, error: this.management.error,
+        addVisible: this.model.features.includes('machines_add'), addEnabled: this.canOpenComputerForm(),
+        receiptAvailable: this.receiptAvailable, onReceipt: () => this.openComputerForm(true),
+        onAdd: () => this.openComputerForm(), onMachine: (row: ResourceRow) => this.openMachine(row), onRefresh: () => this.loadMachineDirectory() })
     }.width('100%').height('100%')
-      .bindSheet($$this.addComputerOpen, this.computerForm(), { title: { title: tr('add_computer') }, height: SheetSize.MEDIUM, showClose: true })
+      .bindSheet($$this.addComputerOpen, this.computerForm(), { title: { title: tr('add_computer') }, height: SheetSize.LARGE,
+        keyboardAvoidMode: SheetKeyboardAvoidMode.RESIZE_ONLY, showClose: true })
   }
 
   @Builder scheduleForm() {
@@ -1243,11 +1463,13 @@ export struct SettingsPage {
 
   build() {
     Column() {
-      if (this.management.loading) LoadingProgress().height(Tokens.touch).width(Tokens.touch)
+      if (this.management.loading && this.page !== 'machines' && this.page !== 'machine_detail') {
+        LoadingProgress().height(Tokens.touch).width(Tokens.touch)
+      }
       if (this.page === 'models' || this.page === 'translation') this.modelsPage()
       else if (this.page === 'session_permissions') this.sessionModePage('permission_mode')
       else if (this.page === 'session_effort') this.sessionModePage('effort')
-      else if (this.page === 'machines') this.machinesPage()
+      else if (this.page === 'machines' || this.page === 'machine_detail') this.machinesPage()
       else if (this.page === 'schedules') this.schedulesPage()
       else if (this.page === 'triage') this.triagePage()
       else if (this.page === 'extension_detail') this.extensionDetailPage()
@@ -1262,7 +1484,7 @@ export struct SettingsPage {
       else if (this.page === 'privacy') this.privacyPage()
       else if (this.page === 'diagnostics') this.diagnosticsPage()
       else this.delegatedPage()
-      if (this.management.error && !['models', 'session_permissions', 'session_effort', 'machines', 'schedules', 'triage', 'extensions', 'connectors', 'channels', 'ledger', 'extension_detail', 'connector_detail', 'channel_detail', 'extension_catalog'].includes(this.page))
+      if (this.management.error && !['models', 'session_permissions', 'session_effort', 'machines', 'machine_detail', 'schedules', 'triage', 'extensions', 'connectors', 'channels', 'ledger', 'extension_detail', 'connector_detail', 'channel_detail', 'extension_catalog'].includes(this.page))
         Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
     }.width('100%').height('100%')
       .bindSheet($$this.extensionPreviewOpen, this.extensionPreviewForm(), { title: { title: tr(Wire.bool(this.management.preview, 'upgrade') ? 'upgrade' : 'install') + ' · ' + tr('permissions') }, height: SheetSize.LARGE, showClose: true })
