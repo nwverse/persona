@@ -370,6 +370,7 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/items/{iid}/full
 agents.read          GET /api/v1/sessions/{mid}/{sid}/items/{iid}/image
 agents.read          GET /api/v1/sessions/{mid}/{sid}/items/{iid}/visualization
 -                    GET /api/v1/sessions/{mid}/{sid}/mode-changes
+-                    GET /api/v1/sessions/{mid}/{sid}/question-reads
 -                    GET /api/v1/sessions/{mid}/{sid}/review
 agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
 -                    GET /api/v1/sessions/{mid}/{sid}/share-catalog
@@ -688,6 +689,7 @@ agents.control       POST /api/v1/sessions/{mid}/{sid}/interrupt
 -                    POST /api/v1/sessions/{mid}/{sid}/keys
 agents.control       POST /api/v1/sessions/{mid}/{sid}/messages
 agents.permission_mode POST /api/v1/sessions/{mid}/{sid}/modes
+-                    POST /api/v1/sessions/{mid}/{sid}/question-reads
 agents.control       POST /api/v1/sessions/{mid}/{sid}/queue
 agents.control       POST /api/v1/sessions/{mid}/{sid}/queue/send-now
 agents.control       POST /api/v1/sessions/{mid}/{sid}/rename

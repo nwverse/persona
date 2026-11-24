@@ -96,9 +96,7 @@ type channelsBook struct {
 	// list is the hub's list of the channels, kept a moment (the runs look at it every second).
 	list   []channel.View
 	listAt time.Time
-	// kitDown: CardKit would not make a progress card (feishu_stream.go); until then they are sent as messages.
-	kitDown time.Time
-	now     func() time.Time // tests
+	now    func() time.Time // tests
 }
 
 func (c *channelsBook) clock() time.Time {

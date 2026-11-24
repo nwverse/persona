@@ -171,7 +171,8 @@ only the prompt and the answer travel.
   day, purpose, route, provider and model (calls, failures, the four token sums); a write drops the days older than 60.
   `GET /api/v1/model-config` gives each listed purpose its last 7 UTC days as `usage` (its own calls and those of the
   unlisted uses under it: Information processing's titles, translation and the rest), and the web's Settings › Models
-  shows "Last 7 days: N calls · M tokens" under a purpose with calls (#10498). Its tokens are input + output + cache
+  shows "Last 7 days: N calls · M tokens" under a purpose with calls (#10498), then "· K failed" in red when any of
+  them failed, so a purpose whose every call fails does not read as merely busy. Its tokens are input + output + cache
   writes; cache reads are left out of that number, since they cost a fraction and would swamp it, and the line's
   tooltip lists all four. The Apple and Android apps do not show it yet.
 - **How it runs and isolation guarantees**: the node runs the launcher in a fresh `persona-check-*` temporary directory

@@ -1,71 +1,41 @@
-package assistant
+package lark
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
-	"slices"
 	"strconv"
-	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
-	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // ---- the turn, as it looks in Feishu ----
 
-// botTargetOf is what a run's conversation is to the chat: replies to the bot's messages about it go there.
-func botTargetOf(r *channel.Run) botTarget {
-	kind := r.TargetKind
-	if kind == "" || kind == targetMain {
-		kind = targetPersona
-	}
-	return botTarget{Kind: kind, MachineID: r.MachineID, SessionID: r.SessionID}
-}
-
 // feishuSink is the Feishu bot as the pipeline's sink: a progress card replying to the message after a few seconds,
 // rewritten every few, the answer written into it (or cards of their own when long), and the message's reaction going
 // from OnIt to DONE.
-type feishuSink struct{ s *Service }
+type feishuSink struct{ s core }
 
-// The Feishu card comes a second or two after the message and its elapsed time moves every few seconds, new steps
-// or not: a long turn must not look stuck.
-const (
-	feishuProgressAfter = time.Second
-	feishuProgressIdle  = 3 * time.Second
-)
-
-func (feishuSink) progressIdle() time.Duration { return feishuProgressIdle }
+// progressIdle: the card's elapsed time moves every few seconds, new steps or not: a long turn must not look stuck.
+func (f feishuSink) progressIdle() time.Duration { return f.s.timing("progress_idle") }
 
 // When Feishu says the card is updated too often, updates stop for 5 s, then 10, 20, at most 30; the answer is not
-// held back by the pause, except that its own last write into the card waits the first window out once (answerCardWait).
+// held back by the pause, except that its own last write into the card waits the first window out once
+// (answer_card_wait, timings.go).
 const (
 	cardBackoffFirst = 5 * time.Second
 	cardBackoffMost  = 30 * time.Second
 )
 
-// answerCardWait is how long the answer waits out a refused update of the progress card before giving up on the card:
-// the run is over, so no later update writes it again.
-var answerCardWait = cardBackoffFirst
-
-// chansNow is the channels' clock.
-func (s *Service) chansNow() time.Time {
-	c := &s.chans
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.clock()
-}
-
 func (f feishuSink) progress(ctx context.Context, r *channel.Run, took time.Duration, steps []string, live string) {
-	ctx = feishuSendAs(ctx, "progress", r.MachineID, r.SessionID)
 	s := f.s
+	ctx = s.sendAs(ctx, "progress", r.MachineID, r.SessionID)
 	if s.runExt(r, readChatKey) != "" {
-		return // a /read shows no progress in its group: the reaction says it is being worked on (feishu_read.go)
+		return // a /read shows no progress in its group: the reaction says it is being worked on (the core's feishu_read.go)
 	}
 	if s.runExt(r, "chat") != "" {
 		// The topic's card keeps its own immediate lifecycle; the native API must not hold it back.
@@ -73,10 +43,10 @@ func (f feishuSink) progress(ctx context.Context, r *channel.Run, took time.Dura
 	} else if f.cotProgressNow(ctx, r) {
 		return
 	}
-	c := progressCard(s.botLang(ctx), r.Label, took, steps, live, s.runWaiting(r), s.runLiveView(r.ID), botTargetOf(r))
-	_, prog := s.channelRunByID(r.ID)
+	c := s.h.ProgressCard(s.botLang(ctx), r, took, steps, live)
+	prog := s.live(r.ID)
 	if prog == nil {
-		prog = &chanLive{} // a run not followed any more: nothing to remember
+		prog = &runLive{} // a run not followed any more: nothing to remember
 	}
 	sum := sha256.Sum256([]byte(c.JSON()))
 	if card := s.runExt(r, "card"); card != "" {
@@ -89,7 +59,7 @@ func (f feishuSink) progress(ctx context.Context, r *channel.Run, took time.Dura
 		if sum == prog.sentCard {
 			return // nothing new
 		}
-		if f.kitProgress(ctx, r, prog, c) { // a card entity: written into, its words streamed (feishu_stream.go)
+		if f.kitProgress(ctx, r, prog, c) { // a card entity: written into, its words streamed (stream.go)
 			prog.sentCard = sum
 			return
 		}
@@ -113,7 +83,7 @@ func (f feishuSink) progress(ctx context.Context, r *channel.Run, took time.Dura
 		}
 		return
 	}
-	to := runTo(s.runExts(r, "chat", "thread"))
+	to := s.runTo(s.runExts(r, "chat", "thread"))
 	mid, err, kit := f.kitPost(ctx, r, prog, c, to)
 	if !kit {
 		// A card sent as a message has no entity, even one an earlier card of the run had (forgetProgressCard).
@@ -128,53 +98,16 @@ func (f feishuSink) progress(ctx context.Context, r *channel.Run, took time.Dura
 	prog.sentCard, prog.backoff, prog.quietUntil = sum, 0, time.Time{}
 	s.setRunExt(r, "card", mid)
 	if to.ChatID == "" { // a topic's messages never reach the private chat's routing
-		s.rememberBotThread(mid, botTargetOf(r), r.Label)
+		s.rememberRun(mid, r)
 	}
 }
 
-// liveView is what the progress card shows besides the steps (a copy of chanLive's notes) and the time now.
-type liveView struct {
-	open                []openCall
-	calls, read, edited int
-	subs                []subtask
-	subsMore            int
-	now                 time.Time
-}
-
-// runLiveView is run id's liveView now.
-func (s *Service) runLiveView(id string) liveView {
-	c := &s.chans
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	v := liveView{now: c.clock()}
-	if p := c.live[id]; p != nil {
-		v.open, v.subs = slices.Clone(p.open), slices.Clone(p.subs)
-		v.calls, v.read, v.edited, v.subsMore = p.calls, len(p.read), len(p.edited), p.subsMore
-	}
-	return v
-}
-
-// runWaiting says why a run's message is not found in its conversation yet: queued behind a turn that works
-// ("queued"), or not in yet ("preparing"); "" once it is.
-func (s *Service) runWaiting(r *channel.Run) string {
-	c := &s.chans
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	switch p := c.live[r.ID]; {
-	case p == nil || p.from != 0:
-		return ""
-	case r.Seen:
-		return "queued"
-	}
-	return "preparing"
-}
-
-func (f feishuSink) folded(ctx context.Context, o *channel.Run, owner *chanLive) {
+func (f feishuSink) folded(ctx context.Context, o *channel.Run, owner *runLive) {
 	var native *cotWorker
 	if owner != nil {
-		f.s.chans.mu.Lock()
+		owner.mu.Lock()
 		native = owner.native
-		f.s.chans.mu.Unlock()
+		owner.mu.Unlock()
 	}
 	if native != nil {
 		native.abort()
@@ -184,7 +117,7 @@ func (f feishuSink) folded(ctx context.Context, o *channel.Run, owner *chanLive)
 		_ = f.s.botUpdateCard(ctx, o.Ext["card"], botcard.NewCard("", "", "").Note(i18n.T(f.s.botLang(ctx), "assistant-feishu.folded")))
 	}
 	if cot := o.Ext["cot"]; cot != "" && native == nil {
-		_ = f.s.cotCall(ctx, FeishuCotComplete, map[string]any{"cot_id": cot, "message_id": o.Ext["cot_msg"], "reason": "done"})
+		_ = f.s.cotCall(ctx, assistantwire.FeishuCotComplete, map[string]any{"cot_id": cot, "message_id": o.Ext["cot_msg"], "reason": "done"})
 	}
 }
 
@@ -213,8 +146,8 @@ func (f feishuSink) recalled(ctx context.Context, m channel.Folded) {
 // wait, posts it as a card of its own under a key (so a retry lands once) — so the chat never stays on "Working" and
 // is never left silent.
 func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note string, took time.Duration, final, quiet bool, end channel.End) (answerErr error) {
-	ctx = feishuSendAs(ctx, "answer", r.MachineID, r.SessionID)
 	s := f.s
+	ctx = s.sendAs(ctx, "answer", r.MachineID, r.SessionID)
 	l := s.botLang(ctx)
 	all := f.s.runSteps(r.ID)
 	foot := endFoot(l, r.Label, took, len(all), final, end)
@@ -242,16 +175,16 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 		steps = append([]string{}, all...)
 	}
 	// A /read's answer is read by the whole group: the process (commands, paths on the computer) and the web link to
-	// the conversation stay out of it (feishu_read.go).
+	// the conversation stay out of it (the core's feishu_read.go).
 	read := readRun(r.Ext)
 	if read {
 		steps = nil
 	}
 	card := r.Ext["card"]
 	if card != "" {
-		// Its last write is as a message: the card stops streaming first (the run's lock is held, feishu_stream.go).
+		// Its last write is as a message: the card stops streaming first (the run's lock is held, stream.go).
 		var k *cardKit
-		if _, prog := s.channelRunByID(r.ID); prog != nil {
+		if prog := s.live(r.ID); prog != nil {
 			k = prog.kit
 		}
 		s.kitEnd(ctx, k, r.Ext)
@@ -266,27 +199,27 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 	if newCard {
 		answerSteps = nil // they go into the folded progress card
 	}
-	cards := answerCards(l, s.linkNamer(ctx), answer, quiet, answerSteps, foot)
+	cards := s.answerCards(l, s.linkNamer(ctx), answer, quiet, answerSteps, foot)
 	var fallbackCards []botAnswerCard
 	if worker != nil && native && !read {
-		fallbackCards = answerCards(l, s.linkNamer(ctx), answer, quiet, all, foot)
+		fallbackCards = s.answerCards(l, s.linkNamer(ctx), answer, quiet, all, foot)
 	}
 	if quiet {
 		c := botcard.NewCard("", "", foot)
-		processPanel(l, c, steps)
+		s.processPanel(l, c, steps)
 		cards = []botAnswerCard{{card: c.Note(foot)}}
 		if worker != nil && native && !read {
 			fallback := botcard.NewCard("", "", foot)
-			processPanel(l, fallback, all)
+			s.processPanel(l, fallback, all)
 			fallbackCards = []botAnswerCard{{card: fallback.Note(foot)}}
 		}
 	}
 	// r is a copy of the run (channels_answer.go): its Ext is read without the lock.
-	to := runTo(r.Ext)
+	to := s.runTo(r.Ext)
 	var missing []int // the pieces that did not get out (1-based): said at the end, not sent again
 	defer func() {
 		if len(missing) > 0 {
-			s.botNoteTo(ctx, to, r.ReplyTo, missingPiecesNote(l, missing))
+			s.botNoteTo(ctx, to, r.ReplyTo, s.h.MissingPiecesNote(l, missing))
 		}
 	}()
 	for i, ac := range cards {
@@ -332,11 +265,11 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 					quietMessage = mid
 				}
 				if err == nil && to.ChatID == "" {
-					s.rememberBotThread(mid, botTargetOf(r), r.Label)
+					s.rememberRun(mid, r)
 				}
 			}
 			if err != nil {
-				if unreachable(err) {
+				if s.unreachable(err) {
 					return err // nothing went out: the ending is tried again later, under the same key
 				}
 				s.logf("bots: the run's quiet ending: %v", err)
@@ -354,12 +287,12 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 			if mid, err = s.botPostTo(ctx, to, r.ReplyTo, c, piece, answerKey(r.ID, card)); err == nil {
 				answerPostedNew = true
 				if worker != nil && native && !read {
-					repair = &cotFallback{message: card, card: foldedProgressCard(l, all)}
+					repair = &cotFallback{message: card, card: s.foldedProgressCard(l, all)}
 				}
-				if ferr := s.botUpdateAnswerCard(ctx, card, foldedProgressCard(l, steps)); ferr != nil {
+				if ferr := s.botUpdateAnswerCard(ctx, card, s.foldedProgressCard(l, steps)); ferr != nil {
 					s.logf("bots: fold the progress card: %v", ferr)
 				}
-			} else if unreachable(err) {
+			} else if s.unreachable(err) {
 				return err // nothing went out: the whole answer is tried again later, under the same key
 			} else {
 				s.logf("bots: answer as a new card: %v; writing it into the progress card", err)
@@ -383,7 +316,7 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 			mid, err = s.botPostTo(ctx, to, r.ReplyTo, c, piece, key)
 		}
 		if err != nil {
-			if i == 0 && unreachable(err) {
+			if i == 0 && s.unreachable(err) {
 				return err // nothing went out: the whole answer is tried again later
 			}
 			s.logf("bots: answer: %v", err)
@@ -394,7 +327,7 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 			repair = &cotFallback{message: mid, card: fallback}
 		}
 		if to.ChatID == "" {
-			s.rememberBotThread(mid, botTargetOf(r), r.Label)
+			s.rememberRun(mid, r)
 		}
 	}
 	if !final {
@@ -434,10 +367,10 @@ func readAnswerKey(id string, turn time.Time, i int) string {
 
 // foldedProgressCard is what a progress card becomes once its answer went out as a new card: the process, folded,
 // and a line pointing to the answer below it.
-func foldedProgressCard(l i18n.Lang, steps []string) *botcard.Card {
+func (s core) foldedProgressCard(l i18n.Lang, steps []string) *botcard.Card {
 	below := i18n.T(l, "assistant-feishu.answer_below")
 	c := botcard.NewCard("", "", below)
-	processPanel(l, c, steps)
+	s.processPanel(l, c, steps)
 	return c.Note("↓ " + below)
 }
 
@@ -451,13 +384,14 @@ func endKey(id string) string {
 // botUpdateAnswerCard writes the answer into the progress card. Feishu refusing the update for being too often is
 // waited out once: the run is over, so no later update writes that card again, and the owner would keep a card that
 // says it is still working. Any other refusal, and a second one, is left to the caller (a card of the answer's own).
-func (s *Service) botUpdateAnswerCard(ctx context.Context, messageID string, card *botcard.Card) error {
+func (s core) botUpdateAnswerCard(ctx context.Context, messageID string, card *botcard.Card) error {
 	err := s.botUpdateCard(ctx, messageID, card)
 	if err == nil || !botcard.RateLimited(err) {
 		return err
 	}
-	s.logf("bots: the progress card's answer: %v; waiting %s", err, answerCardWait)
-	t := time.NewTimer(answerCardWait)
+	wait := s.timing("answer_card_wait")
+	s.logf("bots: the progress card's answer: %v; waiting %s", err, wait)
+	t := time.NewTimer(wait)
 	defer t.Stop()
 	select {
 	case <-t.C:
@@ -465,23 +399,6 @@ func (s *Service) botUpdateAnswerCard(ctx context.Context, messageID string, car
 		return ctx.Err()
 	}
 	return s.botUpdateCard(ctx, messageID, card)
-}
-
-// missingPiecesNote says, in l, which pieces of an answer did not get to Feishu (1-based) and where the whole is.
-func missingPiecesNote(l i18n.Lang, missing []int) string {
-	nums := make([]string, len(missing))
-	for i, n := range missing {
-		nums[i] = strconv.Itoa(n)
-	}
-	return i18n.T(l, "assistant-feishu.missing_pieces", i18n.Args{"count": len(missing), "pieces": strings.Join(nums, listSep(l))})
-}
-
-// listSep joins the items of a list in l: Chinese and Japanese use an enumeration comma, English ", ".
-func listSep(l i18n.Lang) string {
-	if strings.HasPrefix(string(l), "en") {
-		return ", "
-	}
-	return "、"
 }
 
 // endFoot is an answer's last line: how it ended, the label and time it took, and how many tools it called (one
@@ -511,106 +428,4 @@ func endHeader(l i18n.Lang, c *botcard.Card, end channel.End) {
 		color = botcard.Orange
 	}
 	c.Header = botcard.NewCard(i18n.T(l, "assistant-feishu.end_"+string(end)), color, "").Header
-}
-
-// unreachable: the call did not reach the hub, or did not come back (worth trying again).
-func unreachable(err error) bool {
-	return errors.Is(err, bus.ErrOffline) || errors.Is(err, rpc.ErrClosed) || errors.Is(err, context.DeadlineExceeded)
-}
-
-// progressCard is a run's card while it goes on; waiting: the note while its message is not found in the
-// conversation yet (runWaiting), "" once it is. A zero t means no live run: the card carries no Stop button.
-func progressCard(l i18n.Lang, label string, took time.Duration, steps []string, live, waiting string, v liveView, t botTarget) *botcard.Card {
-	summary := i18n.T(l, "assistant-feishu.working_summary_took", i18n.Args{"took": channel.Duration(l, took)})
-	state, color := i18n.T(l, "assistant-feishu.state_working"), botcard.Blue
-	switch waiting {
-	case "":
-	case "queued":
-		summary, state, color = i18n.T(l, "assistant-feishu.queued_summary"), i18n.T(l, "assistant-feishu.state_queued"), botcard.Neutral
-	default:
-		summary, state, color = i18n.T(l, "assistant-feishu.preparing_summary"), i18n.T(l, "assistant-feishu.state_preparing"), botcard.Neutral
-	}
-	c := botcard.NewCard("", "", summary)
-	// Its state as a coloured tag first, then who works and for how long.
-	c.Markdown(botcard.InlineTag(state, color) + " <font color='grey'>" + botcard.EscapeMarkdown(label+" · "+channel.Duration(l, took)) + "</font>")
-	for _, md := range progressLines(l, steps, v) {
-		c.Markdown(md)
-	}
-	if n := v.calls; n > 0 {
-		parts := []string{i18n.T(l, "assistant-feishu.count_calls", i18n.Args{"count": n})}
-		for _, f := range []struct {
-			key string
-			n   int
-		}{{"assistant-feishu.count_read", v.read}, {"assistant-feishu.count_edited", v.edited}} {
-			if f.n == 0 {
-				continue
-			}
-			shown := strconv.Itoa(f.n)
-			if f.n >= liveFilesMost {
-				shown += "+" // noteFile stops counting there
-			}
-			parts = append(parts, i18n.T(l, f.key, i18n.Args{"count": f.n, "n": shown}))
-		}
-		c.Note(strings.Join(parts, " · "))
-	}
-	// What the conversation is writing now, in an element of its own: a card entity streams it (feishu_stream.go).
-	c.MarkdownID(progressLiveID, progressLive(live))
-	// The button is the /stop command on this run's conversation; it is only on the card of a run still in flight.
-	if t.Kind != "" {
-		c.Buttons(botcard.Btn(i18n.T(l, "assistant-feishu_cards.stop"), botcard.Danger,
-			map[string]any{"a": "stop", "k": t.Kind, "m": t.MachineID, "s": t.SessionID}))
-	}
-	return c
-}
-
-// progressLines are the progress card's Markdown blocks: the newest call still running and for how long, the last
-// steps, the subagents.
-func progressLines(l i18n.Lang, steps []string, v liveView) []string {
-	var out []string
-	if n := len(v.open); n > 0 {
-		o := v.open[n-1]
-		now := i18n.T(l, "assistant-feishu.now_running", i18n.Args{"step": o.step, "took": channel.Duration(l, max(v.now.Sub(o.since), 0))})
-		if n > 1 {
-			now += " " + i18n.T(l, "assistant-feishu.and_more", i18n.Args{"count": n - 1})
-		}
-		out = append(out, now)
-	}
-	if n := len(steps); n > 0 {
-		var b strings.Builder
-		if n > 5 {
-			b.WriteString(i18n.T(l, "assistant-feishu.earlier_steps", i18n.Args{"count": n - 5}))
-			steps = steps[n-5:]
-		}
-		for _, st := range steps {
-			b.WriteString("- " + st + "\n")
-		}
-		out = append(out, strings.TrimSpace(b.String()))
-	}
-	if n := len(v.subs); n > 0 {
-		var b strings.Builder
-		b.WriteString(i18n.T(l, "assistant-feishu.subtasks") + "\n")
-		subs := v.subs
-		if n > 6 {
-			subs = subs[n-6:]
-		}
-		for _, st := range subs {
-			line := botcard.EscapeMarkdown(st.desc)
-			if line == "" {
-				line = i18n.T(l, "assistant-feishu.step_subtask")
-			}
-			if st.kind != "" {
-				line += " " + botcard.Code(st.kind)
-			}
-			state := "assistant-feishu.subtask_running"
-			if st.done {
-				state = "assistant-feishu.subtask_done"
-			}
-			b.WriteString("- " + line + " · " + i18n.T(l, state) + "\n")
-		}
-		if more := n - len(subs) + v.subsMore; more > 0 {
-			b.WriteString(i18n.T(l, "assistant-feishu.and_more", i18n.Args{"count": more}))
-		}
-		out = append(out, strings.TrimSpace(b.String()))
-	}
-	return out
 }
