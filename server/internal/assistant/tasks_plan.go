@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
-	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -111,6 +110,9 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		t.Model = strings.TrimSpace(t.Model)
 		t.Speed = strings.TrimSpace(t.Speed)
 		t.Permission = strings.TrimSpace(t.Permission)
+		if t.Host = strings.TrimSpace(t.Host); checkStartHostName(t.Host) != nil {
+			return "", fmt.Errorf("task %d: %w", i+1, checkStartHostName(t.Host))
+		}
 		if t.OwnerStep = strings.TrimSpace(t.OwnerStep); !validOwnerStep(t.OwnerStep) {
 			return "", fmt.Errorf("task %d: owner_step must be empty, %q, %q or %q", i+1, ownerStepMoney, ownerStepOutward, ownerStepIrreversible)
 		}
@@ -580,12 +582,6 @@ func (t *PlanTask) checkRole(byLeader bool) error {
 	return nil
 }
 
-// planPushOver takes a plan card's push back once the card is decided anywhere (Start, Don't start, a withdrawal):
-// the hub withdraws the push it sent with the plan's id as its card (Notification.CardID) from the devices it went to,
-// as it does an answered interaction's (#4349), and the apps drop the card. A plan that was never pushed costs a no-op.
-func (s *Service) planPushOver(id string) {
-	if s.hub == nil {
-		return
-	}
-	s.hub.Tell(assistantwire.EventFleetResolved, assistantwire.FleetResolved{ID: id})
-}
+// planPushOver: a plan card is decided anywhere (Start, Don't start, a withdrawal). Its push carried the plan's id as
+// its card (Notification.CardID), so the card is over everywhere at once (resolveCard).
+func (s *Service) planPushOver(id string) { s.resolveCard(id) }

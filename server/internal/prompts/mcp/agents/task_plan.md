@@ -90,7 +90,11 @@ Workspace policy: "new" isolates a checkout; {"new":{"branch":"task/my-change"}}
           },
           "launcher": {
             "type": "string",
-            "description": "listed launcher (Claude Code, pi, cursor or agy in herdr); unknown names refused with choices; empty: default/fallback, claude first, why says which"
+            "description": "listed launcher; unknown names refused with choices; empty: default/fallback, claude first, why says which"
+          },
+          "host": {
+            "type": "string",
+            "description": "agy (Antigravity companion) or an enabled engine"
           },
           "model": {
             "type": "string",
