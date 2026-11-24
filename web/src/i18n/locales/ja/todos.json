@@ -313,5 +313,11 @@
   "responsible_clear_label": "担当「{name}」を解除",
   "responsible_cleared": "担当を解除しました",
   "responsible_clear_failed": "担当を解除できませんでした：{error}",
-  "no_agents_responsible": "{name} が担当しています。Persona に実行を任せる場合は下のボタンからエージェントに渡してください。"
+  "no_agents_responsible": "{name} が担当しています。Persona に実行を任せる場合は下のボタンからエージェントに渡してください。",
+  "kind_filter_label": "種類で絞り込む",
+  "kind_filter_all": "すべて",
+  "kind_filter_todos": "ToDoのみ",
+  "kind_filter_tasks": "タスクのみ",
+  "kind_empty_todos": "個人のToDoはありません",
+  "kind_empty_tasks": "タスクはありません"
 }
