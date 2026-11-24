@@ -216,10 +216,10 @@ func TestHealthItemsRemovalKeepsRecordsAndLegacyWrites(t *testing.T) {
 		t.Fatalf("sync followed items: %d %s", w.Code, w.Body)
 	}
 	// Listing and deletion still work when the item is absent.
-	if out, err := s.Tool(context.Background(), json.RawMessage(`{"action":"list"}`)); err != nil || !strings.Contains(out, intakeTestID) {
+	if out, err := s.intakeTool(context.Background(), json.RawMessage(`{"action":"list"}`)); err != nil || !strings.Contains(out, intakeTestID) {
 		t.Fatalf("list: %s %v", out, err)
 	}
-	if _, err := s.Tool(context.Background(), json.RawMessage(`{"action":"delete","id":"`+intakeTestID+`"}`)); err != nil {
+	if _, err := s.intakeTool(context.Background(), json.RawMessage(`{"action":"delete","id":"`+intakeTestID+`"}`)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -229,18 +229,18 @@ func TestHealthItemsToolGateAndAdd(t *testing.T) {
 	st, f := &intakeTestStore{}, newFakeHub()
 	s := newServiceOn(t, f, st)
 	for _, id := range []string{"water", "protein"} {
-		out, err := s.Tool(ctx, json.RawMessage(fmt.Sprintf(`{"action":"log","kind":%q,"amount":20}`, id)))
+		out, err := s.intakeTool(ctx, json.RawMessage(fmt.Sprintf(`{"action":"log","kind":%q,"amount":20}`, id)))
 		if err != nil || !strings.Contains(out, "Ask the user") || len(st.rows) != 0 || st.puts != 0 {
 			t.Fatalf("missing item: %s %v", out, err)
 		}
 	}
 	for _, args := range []string{`{"action":"add_item"}`, `{"action":"add_item","item":"unknown"}`, `{"action":"add_item","item":"water","amount":20}`, `{"action":"list","item":"water"}`} {
-		if _, err := s.Tool(ctx, json.RawMessage(args)); err == nil {
+		if _, err := s.intakeTool(ctx, json.RawMessage(args)); err == nil {
 			t.Fatalf("accepted %s", args)
 		}
 	}
 	for i, id := range []string{"protein", "water"} {
-		if _, err := s.Tool(ctx, json.RawMessage(fmt.Sprintf(`{"action":"add_item","item":%q}`, id))); err != nil {
+		if _, err := s.intakeTool(ctx, json.RawMessage(fmt.Sprintf(`{"action":"add_item","item":%q}`, id))); err != nil {
 			t.Fatal(err)
 		}
 		v := itemsReply(t, intakeHTTP(s, "GET", itemsPath, "", "full"), 200)
@@ -248,10 +248,10 @@ func TestHealthItemsToolGateAndAdd(t *testing.T) {
 			t.Fatalf("add: %+v, events %v", v, f.events)
 		}
 	}
-	if _, err := s.Tool(ctx, json.RawMessage(`{"action":"add_item","item":"water"}`)); err != nil || len(f.events) != 2 {
+	if _, err := s.intakeTool(ctx, json.RawMessage(`{"action":"add_item","item":"water"}`)); err != nil || len(f.events) != 2 {
 		t.Fatalf("idempotent add: %v %v", err, f.events)
 	}
-	if out, err := s.Tool(ctx, json.RawMessage(`{"action":"log","kind":"water","amount":300}`)); err != nil || !strings.Contains(out, "Recorded water") || len(st.rows) != 1 {
+	if out, err := s.intakeTool(ctx, json.RawMessage(`{"action":"log","kind":"water","amount":300}`)); err != nil || !strings.Contains(out, "Recorded water") || len(st.rows) != 1 {
 		t.Fatalf("added item log: %s %v", out, err)
 	}
 }
@@ -347,7 +347,7 @@ func TestHealthItemsStoredFutureIDs(t *testing.T) {
 			}
 			putItems(t, s, []string{"trends", "water"}, 7)
 			checkStored([]string{"trends", "water", "future-one", "future-two", "future-one"}, 8)
-			if _, err := s.Tool(ctx, json.RawMessage(`{"action":"add_item","item":"protein"}`)); err != nil {
+			if _, err := s.intakeTool(ctx, json.RawMessage(`{"action":"add_item","item":"protein"}`)); err != nil {
 				t.Fatal(err)
 			}
 			checkStored([]string{"trends", "water", "protein", "future-one", "future-two", "future-one"}, 9)

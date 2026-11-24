@@ -194,7 +194,7 @@ func TestHealthFollowsItsModule(t *testing.T) {
 				if got := s.healthClaudeMD(context.Background(), "server"); strings.Contains(got, "`health_intake`") {
 					t.Error("intake instructions remained without the module")
 				}
-				if _, err := s.healthTool(context.Background(), json.RawMessage(`{"action":"list"}`)); err == nil {
+				if _, err := s.healthTool(context.Background(), healthhost.ToolCall{Name: healthhost.Tool, Args: json.RawMessage(`{"action":"list"}`)}); err == nil {
 					t.Error("health_intake ran without the module")
 				}
 				ctx, cancel := context.WithCancel(context.Background())

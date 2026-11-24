@@ -66,3 +66,17 @@ type StrengthCard struct {
 	Version                             int64
 	At                                  time.Time
 }
+
+type HealthToolCall struct {
+	Name, Machine, Session string
+	Args                   json.RawMessage
+}
+type HealthCardAction struct {
+	Conversation, Key, Action, ClientMsgID string
+	Version                                int64
+}
+type HealthCardResult struct {
+	Outcome, Action, ClientMsgID string
+	At                           time.Time
+	Version                      int64
+}

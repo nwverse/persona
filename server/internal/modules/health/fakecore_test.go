@@ -266,3 +266,19 @@ func (m *memStore) PutSetting(_ context.Context, key string, v any) error {
 	m.puts++
 	return nil
 }
+
+func (c *fakeCore) StrengthStore() strengthStore {
+	st, _ := c.store().(strengthStore)
+	return st
+}
+func (c *fakeCore) CardShown(ctx context.Context, card assistantwire.StrengthCard) {
+	c.Event(ctx, map[string]any{"type": "assistant_feed"})
+}
+func (c *fakeCore) CardChanged(ctx context.Context, card assistantwire.StrengthCard) {
+	c.Event(ctx, map[string]any{"type": "assistant_view"})
+}
+func (c *fakeCore) PageLink(context.Context, string, string) string { return "" }
+
+func (s *Service) intakeTool(ctx context.Context, args json.RawMessage) (string, error) {
+	return s.Tool(ctx, assistantwire.HealthToolCall{Name: assistantwire.CapabilityHealthIntake, Args: args})
+}

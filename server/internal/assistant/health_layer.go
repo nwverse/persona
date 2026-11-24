@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/deeplink"
 	"slices"
 	"time"
 
@@ -42,11 +44,11 @@ func (s *Service) healthReminders(ctx context.Context) {
 }
 
 // healthTool runs the health_intake tool.
-func (s *Service) healthTool(ctx context.Context, args json.RawMessage) (string, error) {
+func (s *Service) healthTool(ctx context.Context, call healthhost.ToolCall) (string, error) {
 	if s.healthMod == nil {
 		return "", errors.New("unknown tool " + healthhost.Tool)
 	}
-	return s.healthMod.Tool(ctx, args)
+	return s.healthMod.Tool(ctx, call)
 }
 
 // withHealth removes the intake and items capabilities when svc has no Health layer (or, before construction,
@@ -60,7 +62,7 @@ func withHealth(caps []string, svc *Service) []string {
 		return caps
 	}
 	return slices.DeleteFunc(caps, func(c string) bool {
-		return c == assistantwire.CapabilityHealthIntake || c == assistantwire.CapabilityHealthItems
+		return c == assistantwire.CapabilityHealthIntake || c == assistantwire.CapabilityHealthItems || c == assistantwire.CapabilityHealthStrength
 	})
 }
 
@@ -115,3 +117,37 @@ func (h healthHost) FitPage(view *wire.View, version int, l i18n.Lang) error {
 }
 
 func (h healthHost) UIVersion() int { return extension.UIVersion }
+
+func (h healthHost) StrengthStore() healthhost.StrengthStore {
+	st, _ := h.s.store().(healthhost.StrengthStore)
+	return st
+}
+func (h healthHost) CardShown(ctx context.Context, c assistantwire.StrengthCard) {
+	row := db.AssistantViewRow{ID: c.ID, Conversation: c.Conversation, MachineID: c.MachineID, View: c.View, Version: c.Version, CreatedAt: c.At, UpdatedAt: c.At}
+	out, err := storedView(row)
+	if err != nil {
+		h.s.logf("Health card: %v", err)
+		return
+	}
+	body, err := json.Marshal(map[string]any{"view": out})
+	if err != nil {
+		h.s.logf("Health card: %v", err)
+		return
+	}
+	h.s.event(ctx, map[string]any{"type": "assistant_feed", "conversation": c.Conversation, "item": FeedItem{ID: c.FeedID, Conversation: c.Conversation, At: c.At, Kind: feedView, Ref: c.ID, Body: body}})
+}
+func (h healthHost) CardChanged(ctx context.Context, c assistantwire.StrengthCard) {
+	v, err := wire.ParseAssistantView(c.View)
+	if err != nil {
+		h.s.logf("Health card: %v", err)
+		return
+	}
+	h.s.event(ctx, map[string]any{"type": "assistant_view", "conversation": c.Conversation, "view": wire.AssistantView{ID: c.ID, Conversation: c.Conversation, Version: c.Version, View: *v, UpdatedAt: c.At}})
+}
+func (h healthHost) PageLink(ctx context.Context, ui, state string) string {
+	base := h.s.webBase(ctx)
+	if base == "" {
+		return ""
+	}
+	return deeplink.Web(base, deeplink.Extension("-health-intake", ui, state))
+}
