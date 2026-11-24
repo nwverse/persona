@@ -92,8 +92,9 @@ type superviseSignal struct {
 	// An ACK removes exactly its own Key; a still-present predecessor's dedup reservation is not delivery proof.
 	PendingPredecessors []string
 	PRURL               string // draft_pr: the current or earlier followed PR, revalidated before delivery
-	// Unreachable: this decision exists because the task leader's agent could not be reached, not because the worker
-	// waits for the user. It stays a decision even though the worker's ledger is not needs_user (task_leader.go).
+	// Unreachable: this decision exists because its assigned task leader Agent or Assistant supervisor could not be
+	// reached, not because the worker waits for the user. It stays a decision even when the worker is not needs_user.
+	// Recipient distinguishes an unreachable Assistant supervisor from the existing task-leader-Agent escalation.
 	Unreachable      bool
 	At               time.Time
 	Machine, Session string

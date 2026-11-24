@@ -1119,7 +1119,8 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 	}
 	if g.Kind == sigDecide {
 		e.Recommend = g.Ask // the task leader's recommendation
-		e.LeaderGone = g.Unreachable
+		e.LeaderGone = g.Unreachable && g.Recipient == ""
+		e.SupervisorGone = g.Unreachable && g.Recipient != ""
 	}
 	if g.Kind == sigAsk {
 		e.Asks, e.Decisions = asks, s.todoDecisionsContext(ctx, t.ID) // what was settled already, not to be gone against
