@@ -20,7 +20,7 @@ import (
 // assistant.limit_fallbacks that can take it, and comes back once the limit resets. Both moves are conversation-switch
 // batches (conversations_switch.go) like any other: durable before-image, epoch fence, busy queue and the logical
 // segment switch with its summary of what went before. What this adds is when they start, that they are FirstTurn
-// batches (the summary always travels with the target's first input, never dropped by an idle acceptance), the one
+// batches (each switch is done only when the target took its first input, which carries the summary), the one
 // message it sends (the hub's own continuation, the auto-continue source, queued behind the forward switch) and the
 // restore at the reset. Nothing here interrupts a turn, and a switch made in between is never overwritten: the
 // restore's fence leaves a conversation someone changed alone.

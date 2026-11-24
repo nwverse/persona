@@ -218,7 +218,9 @@ The list carries only recent sessions (`rt.recent`). A caller reading an older p
   if two runtimes' launchers clash, only the one that connected first provides it.
   A local `agy` launcher supplies the model catalog and starts in a pane when the selected host is herdr (#10237),
   including when herdr is the default and the node detects the local CLI. The connected companion serves Assistant
-  and terminal-less Agent requests (the node RPC can target `host: "agy"`). A shell alias, function or helper definition
+  and terminal-less Agent requests (the node RPC can target `host: "agy"`); the assistant's `task_plan` and `agent_start`
+  target it for an agy launcher it runs when they name no host, and a start targeting it while it is not connected is
+  refused with `agy_companion_offline` (#13447). A shell alias, function or helper definition
   named `agy` still has precedence over automatic companion selection (#9181).
 
 ## Minimal example
