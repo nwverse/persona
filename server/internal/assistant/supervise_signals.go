@@ -124,7 +124,7 @@ type superviseSignal struct {
 	// OriginOnly records that this signal reached its dispatcher through the no-main fallback. The queue preserves
 	// that delivery provenance so restoring it after main returns cannot turn it into a legacy closeout grant.
 	OriginOnly bool `json:",omitempty"`
-	// Cards: an escalated signal's cards the user was given (ask_escalate).
+	// Cards: the exact rendered cards in an ask delivery, or the cards handed to the owner by ask_escalate.
 	Cards []prompts.SuperviseAsk
 	// Decision: the decision a recheck or an owner_cannot_answer signal is about, as it was asked (decision.go); for
 	// owner_cannot_answer Detail is the owner's answer (decide_yourself, not_what_i_asked, explain_first).
@@ -144,6 +144,9 @@ type superviseSignal struct {
 	BreakerNote string `json:"breaker_note,omitempty"`
 	// ExternalSource names the source of external information arriving during reviewNeedsUser (#13112).
 	ExternalSource string `json:"external_source,omitempty"`
+	// JudgeDown: an unjudged stop because the judge itself failed (no model set up, or the service kept failing), not
+	// because it read the turn and could not tell. It is not urgent (urgent): such stops are told together.
+	JudgeDown bool `json:"judge_down,omitempty"`
 }
 
 // breakerFallback is what a circuit-breaker fallback note says (prompts.BreakerNote): its kind and their facts.
@@ -215,7 +218,12 @@ func (g superviseSignal) id() string {
 // urgent: a signal that waits on a decision goes out sooner than the rest.
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
-	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
+	case sigUnjudged:
+		// A stop the judge could not look at because it is down (no model set up, or it kept failing) is not news
+		// that needs the supervisor soon: every stopped task says the same until the model is back, and each used to
+		// wake the main conversation on its own. They go out together, on the ordinary schedule.
+		return !g.JudgeDown
+	case sigNeedsYou, sigIdle, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigDeliveryHold, sigOwnerCannot, sigEstimateDue, sigTimedOut, // the owner, an automatic deadline or a stopped task waits
 		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigCardlessWait, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo:
 		return true
@@ -232,13 +240,12 @@ func (g superviseSignal) urgent() bool {
 func (g superviseSignal) immediate() bool { return supervisionBatchImmediate(g) }
 
 type superviseBook struct {
+	routingMu   sync.RWMutex // moves and card creation exclude routing/delivery; ordinary deliveries may run concurrently
 	mu          sync.Mutex
-	writeMu     sync.Mutex          // one ledger write at a time (updateSupervision)
-	roundEpochs map[string]uint64   // by todo, protected by writeMu; distinguishes a new round from a scope's state reset
-	ownerPushMu sync.Mutex          // ownerPushes only; never held across RPC, todo or database calls
-	ownerPushes map[string]struct{} // todo + work currently being pushed and receipted
-	digestMu    sync.Mutex          // one whole digest, including todo and durable-pending restoration; teardown drains it
-	dedupMu     sync.Mutex          // serializes digest reservations and delivery
+	writeMu     sync.Mutex        // one ledger write at a time (updateSupervision)
+	roundEpochs map[string]uint64 // by todo, protected by writeMu; distinguishes a new round from a scope's state reset
+	digestMu    sync.Mutex        // one whole digest, including todo and durable-pending restoration; teardown drains it
+	dedupMu     sync.Mutex        // serializes digest reservations and delivery
 	dedup       map[string]superviseFingerprint
 	// failedBatchMu serializes the durable leader-failure cooldown document. failedBatches is its memory-only
 	// fallback when this manager has no store; failedBatchesLoaded says whether deferred members were restored.
@@ -929,8 +936,44 @@ func (s *Service) queueSignal(g superviseSignal) {
 	s.queueSignalReplacing(nil, g)
 }
 
+// preserveIdleHandoff lets a newer turn idle replace the handoff's key without erasing the undelivered decision.
+func preserveIdleHandoff(cur, next superviseSignal) superviseSignal {
+	if cur.Kind == sigIdle && next.Kind == sigIdle && cur.Handoff && !next.Handoff {
+		next.Handoff = true
+		next.Detail = cur.Detail
+	}
+	return next
+}
+
+// reportStopHold is how long a report its Agent makes before it stops (report_to_supervisor: done, blocked, a
+// question) waits for that stop: the turn's end signal (idle, unjudged, review, interrupted) of the same task comes
+// seconds later, and the two then go out as one entry of one supervision message (joinTurnReports) instead of two
+// messages a couple of minutes apart. An Agent that goes on working past it has its report told on its own.
+var reportStopHold = 2 * time.Minute
+
+// releaseReportsLocked: g ends its task's turn, so the reports of that task held for it (reportStopHold) are due now
+// and go out with it. It returns their ids for the durable outbox; s.supervise.mu is held.
+func (s *Service) releaseReportsLocked(g superviseSignal) []string {
+	if !turnSignalKind(g) || g.Todo == "" {
+		return nil
+	}
+	b := &s.supervise
+	var ids []string
+	for id, cur := range b.pending {
+		if cur.Kind == sigReport && cur.Todo == g.Todo && !cur.NotBefore.IsZero() {
+			cur.NotBefore = time.Time{}
+			b.pending[id] = cur
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 // queueSignalReplacing also removes the older stretch it supersedes from the durable outbox.
 func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) {
+	if g.Kind != sigAsk {
+		g = s.currentSupervisorSignal(g)
+	}
 	if g.At.IsZero() {
 		g.At = time.Now()
 	}
@@ -968,6 +1011,7 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 		if g.Detail == "" && cur.Key == g.Key {
 			g.Detail = cur.Detail // the watch's sight of what an event told already
 		}
+		g = preserveIdleHandoff(cur, g)
 		if g.Kind == sigReport && cur.Key != g.Key {
 			g = joinReports(cur, g) // two questions before the message went: both are asked
 		}
@@ -978,9 +1022,19 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 				g.Inbox = cur.Inbox // the same message again: counted once
 			}
 		}
+		if g.Kind == sigReport && !cur.NotBefore.IsZero() && (g.NotBefore.IsZero() || cur.NotBefore.Before(g.NotBefore)) {
+			g.NotBefore = cur.NotBefore // a second report does not hold the first one longer (reportStopHold)
+		}
 		g.batchTo, g.batchUntil = cur.batchTo, cur.batchUntil
 	}
+	held := s.releaseReportsLocked(g)
 	s.updateSupervisePending(func(pending map[string]superviseSignal) {
+		for _, id := range held {
+			if cur, ok := pending[id]; ok {
+				cur.NotBefore = time.Time{}
+				pending[id] = cur
+			}
+		}
 		// sendDigest may already have taken the older stretch out of b.pending. Its durable outbox entry remains until
 		// real delivery or queue admission, so it is the reliable evidence that this different Key replaces an unACKed one.
 		if cur, ok := pending[g.id()]; ok {
@@ -1174,6 +1228,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.recoverTaskInboxEvents(ctx)
 	// Only the open tasks: everything below passes the finished ones by, and there can be thousands of them.
 	tasks := s.todosWhere(ctx, "*", func(t *Todo) bool { return t.DoneAt == nil })
+	s.recoverOutsideDirectionDigests(ctx)
 	s.pruneAllStoppedDedup(ctx)
 	s.prunePRMergeWakes(ctx)
 	s.sweepTodoAfterReady(ctx)
@@ -1258,9 +1313,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 			if g, ok := s.undecidableSignal(ctx, t, now); ok {
 				s.signal(g)
 			}
-			if g, ok := s.cardlessWaitSignal(ctx, t, agents, lists, now); ok { // a review the owner cannot answer (#12648)
-				s.signal(g)
-			}
+			s.signalCardlessWait(ctx, t, agents, lists, now) // a review the owner cannot answer (#12648)
 		}
 		if g, ok := s.deliveryHoldSignal(ctx, t, now); ok { // an owner hold with no card goes to its supervisor first
 			s.signal(g)

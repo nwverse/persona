@@ -290,7 +290,7 @@ func TestMainTaskStartRemediesRejectAnotherLeader(t *testing.T) {
 func TestFailedStartSettingsWordingKeepsWordBoundaries(t *testing.T) {
 	s, _ := newQuietService(t)
 	want := map[string]string{
-		"assistant.leaders":                   "needs_user still comes to the main conversation",
+		"assistant.leaders":                   "Only needs_user escalations go to the main conversation",
 		"assistant.main_supervises_own_tasks": "failed starts with no current leader and of what",
 	}
 	for _, setting := range s.ownSettings() {

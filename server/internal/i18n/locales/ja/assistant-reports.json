@@ -1,4 +1,5 @@
 {
+  "manual_terminal_resume": "エージェントのターミナルを開いて「再開」を選んでください。決定は保留中です。",
   "title": "タスクの進捗：{n} 件",
   "title_needs": "{n} 件があなたの判断待ち",
   "tag_report": "レポート",

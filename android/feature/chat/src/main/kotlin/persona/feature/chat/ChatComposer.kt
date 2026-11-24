@@ -1,5 +1,6 @@
 package persona.feature.chat
 
+import persona.core.moduleapi.asMenuActions
 import android.Manifest
 import android.content.ActivityNotFoundException
 import android.graphics.Bitmap
@@ -553,25 +554,29 @@ fun ChatComposer(
             hint?.let { Text(it.text, style = PersonaTheme.type.caption, color = if (it.missing) PersonaTheme.palette.cautionText else PersonaTheme.palette.ink2) }
         },
     ) {
-        BasicTextField(state.value, { state.beginEdit(); state.value = it },
-            modifier = Modifier.fillMaxWidth().then(if (AdaptiveProbe.enabled) Modifier.semantics { testTagsAsResourceId = true }
-                .testTag("chat-composer-field") else Modifier)
-                .then(if (offersExpand) Modifier.padding(end = ComposerExpandInset) else Modifier)
-                .focusRequester(focusRequester).onFocusChanged {
-                    state.focused = it.isFocused
-                    if (AdaptiveProbe.enabled) AdaptiveProbe.publishComposerFocus(adaptiveProbePage, it.isFocused)
-                },
-            maxLines = growLines, onTextLayout = { lineCount = it.lineCount },
-            enabled = enabled, textStyle = PersonaTheme.type.body.copy(color = PersonaTheme.palette.ink),
-            cursorBrush = SolidColor(PersonaTheme.palette.ink),
-            decorationBox = { field ->
-                Box {
-                    if (state.value.text.isEmpty()) Text(if (working && enabled && !homeAssistant) stringResource(R.string.chat_composer_placeholder_working) else composerPlaceholder,
-                        style = PersonaTheme.type.body, color = PersonaTheme.palette.ink3, maxLines = if (wrapPlaceholder) growLines else if (compactShell) 1 else 2,
-                        overflow = TextOverflow.Ellipsis)
-                    field()
-                }
-            })
+        ReadingContent {
+            BasicTextField(state.value, { state.beginEdit(); state.value = it },
+                modifier = Modifier.fillMaxWidth().then(if (AdaptiveProbe.enabled) Modifier.semantics { testTagsAsResourceId = true }
+                    .testTag("chat-composer-field") else Modifier)
+                    .then(if (offersExpand) Modifier.padding(end = ComposerExpandInset) else Modifier)
+                    .focusRequester(focusRequester).onFocusChanged {
+                        state.focused = it.isFocused
+                        if (AdaptiveProbe.enabled) AdaptiveProbe.publishComposerFocus(adaptiveProbePage, it.isFocused)
+                    },
+                maxLines = growLines, onTextLayout = { lineCount = it.lineCount },
+                enabled = enabled, textStyle = PersonaTheme.type.body.copy(color = PersonaTheme.palette.ink),
+                cursorBrush = SolidColor(PersonaTheme.palette.ink),
+                decorationBox = { field ->
+                    Box {
+                        if (state.value.text.isEmpty()) InterfaceContent {
+                            Text(if (working && enabled && !homeAssistant) stringResource(R.string.chat_composer_placeholder_working) else composerPlaceholder,
+                                style = PersonaTheme.type.body, color = PersonaTheme.palette.ink3, maxLines = if (wrapPlaceholder) growLines else if (compactShell) 1 else 2,
+                                overflow = TextOverflow.Ellipsis)
+                        }
+                        field()
+                    }
+                })
+        }
         if (offersExpand) ComposerExpandButton(expanded = false, onClick = { expandedEditor = true }, modifier = Modifier.align(Alignment.TopEnd))
     }
     // Same draft and caret as the field; collapsing puts the caret back in the field. Sending closes it.
@@ -579,6 +584,9 @@ fun ChatComposer(
         onCollapse = { expandedEditor = false; state.focusRequest++ }, enabled = enabled) {
         SendButton(onClick = { expandedEditor = false; send() }, enabled = canSend && hasContent && blockedLabel == null, loading = sending)
     }
+    // The modules' composer actions (#13847), asked only while the menu is open.
+    val moduleActions = if (menu) persona.core.moduleapi.LocalModuleActions.current.actions(persona.core.moduleapi.MenuSlot.ComposerActions,
+        persona.core.moduleapi.ModuleActionTarget(session.machineId, session.sessionId)) else emptyList()
     if (menu) ChatActionsSheet(onDismiss = { menu = false }, title = stringResource(R.string.chat_composer_menu_title), actions = buildList {
         // Photos picks pictures and videos (iOS mediaPicker), four together at most.
         val roomForMedia = state.attachments.count { it.media } < MAX_COMPOSER_MEDIA
@@ -595,6 +603,7 @@ fun ChatComposer(
             SlashCommand.all(resources).forEach { command -> add(JAction(command.title) { menu = false; onCommand(command.text) }) }
             if (canClear && !working) add(JAction(SlashCommand.clearCommand(resources).title, destructive = true) { menu = false; confirmClear = true })
         } else if (mainClear != null) add(JAction(SlashCommand.mainClearCommand(resources).title) { menu = false; clearMain(mainClear) })
+        addAll(moduleActions.asMenuActions { menu = false })
     })
     if (confirmClear) JDialog(onDismiss = { confirmClear = false }, title = stringResource(R.string.chat_composer_clear_title),
         text = stringResource(R.string.chat_composer_clear_text, agentName),

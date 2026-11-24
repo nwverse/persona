@@ -206,7 +206,7 @@ var roundPassingMentions = map[string][]string{
 	"kb_search":          {"kb_list"},
 	"schedule_followup":  {"inbox_post"},
 	"supervision_finish": {"ask_user"},
-	"task_plan":          {"kb_list", "repositories_list", "repository_get", "task_retry"},
+	"task_plan":          {"kb_list", "repositories_list", "repository_get", "task_retry", "agent_transfer"},
 	"task_review":        {"agent_start"},
 	"task_scope":         {"agent_supervise", "ask_user"},
 	"todo_get":           {"todo_repository_links_add"},
@@ -438,6 +438,9 @@ func TestBackgroundRoundAsksTheOwnerWithNeedsUser(t *testing.T) {
 			name = "the bot on"
 		}
 		t.Run(name, func(t *testing.T) {
+			if bot {
+				needsLarkLayer(t)
+			}
 			var s *Service
 			var f *fakeHub
 			var todo Todo

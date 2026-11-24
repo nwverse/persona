@@ -188,10 +188,48 @@ func (d *DB) A2ACount(ctx context.Context, owner, machine, session, contextID, s
 	return n, err
 }
 
+// A2AReady makes an undelivered active request due at the recipient's idle
+// edge. Merely waking the poller would leave its previous eight-second lease
+// in place. Sending/uncertain inputs and FIFO tails keep their leases/state.
+func (d *DB) A2AReady(ctx context.Context, machine, session string) error {
+	_, err := d.pool.Exec(ctx, `UPDATE a2a_tasks SET next_check=now()
+		WHERE target_machine=$1 AND target_session=$2 AND state='submitted'
+		  AND next_check > now()
+		  AND body->'events' @> '[{"kind":"message","delivery":"queued"}]'::jsonb`, machine, session)
+	return err
+}
+
 func (d *DB) A2AClaim(ctx context.Context, limit int) ([]A2ARow, error) {
 	rows, err := d.pool.Query(ctx, `UPDATE a2a_tasks SET next_check=now()+interval '8 seconds'
 		WHERE id IN (SELECT id FROM a2a_tasks WHERE next_check<=now() ORDER BY next_check LIMIT $1 FOR UPDATE SKIP LOCKED)
 		RETURNING `+a2aColumns, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []A2ARow
+	for rows.Next() {
+		r, err := scanA2A(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *r)
+	}
+	return out, rows.Err()
+}
+
+// A2ALaunchesForTargets resolves durable A2A/dispatch launch rows for the exact set of
+// visible target sessions on machine, with no age or global row-count truncation.
+func (d *DB) A2ALaunchesForTargets(ctx context.Context, machine string, sessions []string) ([]A2ARow, error) {
+	if machine == "" || len(sessions) == 0 {
+		return nil, nil
+	}
+	rows, err := d.pool.Query(ctx, `SELECT `+a2aColumns+` FROM a2a_tasks
+		WHERE target_machine = $1
+		  AND target_session = ANY($2::text[])
+		  AND body ? 'launch'
+		  AND source_session <> ''
+		ORDER BY created_at DESC,id DESC`, machine, sessions)
 	if err != nil {
 		return nil, err
 	}

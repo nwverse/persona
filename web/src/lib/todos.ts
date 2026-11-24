@@ -83,7 +83,7 @@ export interface TodoCreateOptions {
 }
 
 /** What the hub last read of a PR on GitHub (pr_status.go). */
-export interface PRFacts { url: string; state: "open" | "merged" | "closed"; draft: boolean; review: "required" | "approved" | "changes_requested" | "pending"; checks: "failure" | "pending" | "success" | "none"; conflicts: boolean; checked_at: string }
+export interface PRFacts { url: string; title?: string; state: "open" | "merged" | "closed"; draft: boolean; review: "required" | "approved" | "changes_requested" | "pending"; checks: "failure" | "pending" | "success" | "none"; conflicts: boolean; checked_at: string }
 
 export interface Todo {
   id: string;
@@ -210,6 +210,9 @@ export interface TodoAsk {
   verdict: string;
   recommend?: string;
   asked_at: string;
+  /** An owner-only terminal action on this task. Older decision cards can still name it as an option. */
+  resume_terminal?: { machine_id: string; session_id: string };
+  terminal_option?: string;
   /** A decision's own fields (#3804), absent from an older hub and from an ask that is no decision: what is to be
    *  decided in one sentence, why only the owner can, the options (2 to 4, the recommended one first) with what each
    *  leads to, and what waiting costs. */

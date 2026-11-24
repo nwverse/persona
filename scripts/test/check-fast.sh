@@ -18,6 +18,9 @@
 #   scripts/check-fast.sh --compare-main  # after the run, rerun only what failed at the merge base and say, for each
 #                                         # failure, whether the base fails it too (scripts/ci/check_fast_compare.py)
 #   scripts/check-fast.sh --compare-tip   # --compare-main, and the failures the base has too also at the base ref's tip
+#   scripts/check-fast.sh --no-server-go  # plan as usual, but leave the server module's go test, go build, repo-wide guard
+#                                         # and go vet steps to the caller (scripts/ci/affected.sh tests the affected
+#                                         # packages against Postgres itself); gofmt, sdk/go and the rest still run
 #   scripts/check-fast.sh -h|--help
 #
 # Path mapping (diff mode): the table in scripts/ci/check_fast_map.py maps each changed path to its checks, and a new
@@ -66,7 +69,7 @@
 # It also runs go vet, in a job of its own (job_go_vet, #12894): go vet -ldflags= ./... over the whole server module,
 # then GOOS=windows GOARCH=amd64 go vet -ldflags= on each changed package group, or on ./... for a change outside every
 # group (go.mod, a file directly in server/plugins/, sdk/go), as CI's server lane vets for Linux and Windows. A group
-# with no package that builds for Windows (internal/fleetsoak, cmd/password-wasm) is left out of the Windows step, as
+# with no package that builds for Windows (scripts/fleetsoak, cmd/password-wasm) is left out of the Windows step, as
 # CI's ./... passes over it, and the PASS line names it. Being its own job, a vet that runs past its timeout on a cold
 # build cache is that job's TIMEOUT and cannot hide a FAIL of the guard job's contract tests. A changed .go file under server/ or sdk/go/ runs scripts/ci/gofmt.py on the changed .go
 # files (job_go_fmt; --all checks both trees whole, as CI's Go formatting step does), a job that takes no go slot: it
@@ -135,6 +138,7 @@ COMPARE=0  # 1: --compare-main, 2: --compare-tip
 DRY_RUN=0
 CHANGED_FROM=""
 EACH=0
+NO_SERVER_GO=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --all) ALL=1 ;;
@@ -153,6 +157,7 @@ while [ $# -gt 0 ]; do
       CHANGED_FROM=${1#*=}
       [ -n "$CHANGED_FROM" ] || { echo "check-fast: --changed-from needs a file (- for stdin)" >&2; exit 2; } ;;
     --each) EACH=1 ;;
+    --no-server-go) NO_SERVER_GO=1 ;;
     --compare-main) [ "$COMPARE" -eq 2 ] || COMPARE=1 ;;
     --compare-tip) COMPARE=2 ;;
     -h|--help) usage; exit 0 ;;
@@ -488,6 +493,7 @@ job_web() {  # $1 = ci when npm ci must run first; WEB_MODE (full or related) an
     local _files=() _f
     while IFS= read -r _f; do [ -n "$_f" ] && _files+=("$_f"); done < <(tail -n +2 "$WEB_PLAN")
     in_dir web step "$TIMEOUT_WEB_TEST" "web: vitest related ($WEB_REASON)" \
+      node scripts/process-group.mjs --timeout-ms "$((TIMEOUT_WEB_TEST * 1000))" -- \
       npx --no -- vitest related --run --passWithNoTests ${_files[@]+"${_files[@]}"}
   else
     in_dir web step "$TIMEOUT_WEB_TEST" "web: vitest run" npm test
@@ -599,7 +605,7 @@ job_go_fmt() {  # $1 = ALL for the whole of server/ and sdk/go/, else GO_FMT_FIL
 # . for the whole module; --all: the whole module), the second step also when the first failed, so one run names every
 # finding (#12894). -ldflags= clears a link flag GOFLAGS may carry and keeps the rest, as scripts/ci/server.sh does. The
 # Windows step names its environment through env, so its rerun line and --compare-main's rerun at the base keep it.
-# A group with no package that builds for Windows (every file of internal/fleetsoak is //go:build unix, of
+# A group with no package that builds for Windows (every file of scripts/fleetsoak is //go:build unix, of
 # cmd/password-wasm js && wasm), or whose directory is gone, is left out of the Windows step: given only such groups,
 # go vet says "no packages to vet" (or that the directory does not exist) and exits 1, where CI's ./... passes over
 # them. With no group left, the step does not run. The PASS line names each group left out (JOB_NOTE).
@@ -984,7 +990,12 @@ else
         integration:*) _p=${_c#integration:}; arr_has "$_p" "${INTEG[@]:-}" || INTEG+=("$_p") ;;
         sdk-ts) SDKTS=1 ;;
         deno-adapter) DENO_ADAPTER=1 ;;
-        go-package:*) _g=${_c#go-package:}; arr_has "$_g" "${GO_GROUPS[@]:-}" || GO_GROUPS+=("$_g") ;;
+        go-package:*)
+          _g=${_c#go-package:}
+          # A diff includes the old path of a moved or deleted package. --changed-from also plans hypothetical paths.
+          if [ -d "server/$_g" ] || [ -n "$CHANGED_FROM" ]; then
+            arr_has "$_g" "${GO_GROUPS[@]:-}" || GO_GROUPS+=("$_g")
+          fi ;;
         server-build) SERVER_BUILD=1 ;;
         go-guards) GO_GUARDS=1 ;;
         go-vet:*) _g=${_c#go-vet:}; arr_has "$_g" "${GO_VET_GROUPS[@]:-}" || GO_VET_GROUPS+=("$_g") ;;
@@ -1321,6 +1332,11 @@ if [ "$ALL" -eq 1 ]; then
   else core_missing "go not found; server and sdk/go checks skipped"; fi
   # gofmt does not depend on go being found: without gofmt (or python3) the job is a SKIP line naming it.
   schedule "gofmt (server, sdk/go)" job_go_fmt ALL
+elif [ "$NO_SERVER_GO" -eq 1 ]; then
+  if [ "${#GO_GROUPS[@]}" -gt 0 ] || [ "$SERVER_BUILD" -eq 1 ] || [ "$GO_GUARDS" -eq 1 ] || [ "${#GO_VET_GROUPS[@]}" -gt 0 ]; then
+    INFO+=("INFO  server go test, build, guards and vet: left to the caller (--no-server-go)")
+  fi
+  if [ "${#GO_FMT_FILES[@]}" -gt 0 ]; then schedule "gofmt (changed files)" job_go_fmt ""; fi
 else
   if [ "${#GO_GROUPS[@]}" -gt 0 ]; then
     if [ "$HAVE_GO" -eq 1 ]; then

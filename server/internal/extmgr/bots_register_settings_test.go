@@ -56,6 +56,7 @@ func (s *registrationSettingsStore) PutSetting(ctx context.Context, key string, 
 }
 
 func TestBotRegistrationSettingsPUTRetiresOnlyChangedCredentials(t *testing.T) {
+	needsLarkModule(t)
 	for _, kind := range []string{"app", "secret", "domain", "unchanged", "features", "enabled"} {
 		t.Run(kind, func(t *testing.T) {
 			w, acc, old := confirmedRegistrationWorld(t)
@@ -125,6 +126,7 @@ func TestBotRegistrationSettingsPUTRetiresOnlyChangedCredentials(t *testing.T) {
 }
 
 func TestBotRegistrationSettingsPUTFailureKeepsConfirmedSession(t *testing.T) {
+	needsLarkModule(t)
 	for _, failure := range []string{"validation", "save"} {
 		t.Run(failure, func(t *testing.T) {
 			w, _, old := confirmedRegistrationWorld(t)
@@ -159,6 +161,7 @@ func TestBotRegistrationSettingsPUTFailureKeepsConfirmedSession(t *testing.T) {
 }
 
 func TestBotRegistrationSettingsPUTWaitsForPollAndFinish(t *testing.T) {
+	needsLarkModule(t)
 	w, _, _ := registerWorld(t)
 	entered, release := make(chan struct{}), make(chan struct{})
 	controlledRegistration(t, w, func(action, code string, n int, stop <-chan struct{}) string {
@@ -197,13 +200,16 @@ func TestBotRegistrationSettingsPUTWaitsForPollAndFinish(t *testing.T) {
 }
 
 func TestBotRegistrationSettingsPUTValidationOrdersOldBind(t *testing.T) {
+	needsLarkModule(t)
 	w, _, _ := confirmedRegistrationWorld(t)
 	entered, release, stop := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	t.Cleanup(func() { close(stop) })
 	var calls atomic.Int32
 	w.api.mu.Lock()
-	w.api.beforeBotInfo = func() {
-		if calls.Add(1) == 1 {
+	// Only the PUT's validation asks as cli_new (the new app runs only once validated). The bot's own start-up asks
+	// as cli_old in the background and, on a loaded machine, can reach the fake after this is set (#13688).
+	w.api.beforeBotInfo = func(app string) {
+		if app == "cli_new" && calls.Add(1) == 1 {
 			close(entered)
 			select {
 			case <-release:
@@ -241,6 +247,7 @@ func TestBotRegistrationSettingsPUTValidationOrdersOldBind(t *testing.T) {
 }
 
 func TestBotRegistrationRetiredPollKeepsDisabledBotOff(t *testing.T) {
+	needsLarkModule(t)
 	for _, resume := range []string{"bind", "settings"} {
 		t.Run(resume, func(t *testing.T) {
 			w, acc, _ := confirmedRegistrationWorld(t)

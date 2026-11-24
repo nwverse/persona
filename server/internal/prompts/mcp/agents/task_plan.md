@@ -1,16 +1,16 @@
-Use task_plan for code, repo research and multi-step work (one task per independent piece). Check machines_list, KB, agents_list and preferences for editable choices and one-line reasons. Read-only, user_requested and preapproved kinds start at once; others wait for 开始. Queued receipt means dispatched; check the to-do outcome and use agent_send. Tool reminders/events are separate.
+Use task_plan for code, repo research and multi-step work (one task per independent piece). Check machines_list, KB, agents_list and preferences for editable choices and one-line reasons. Main/lead plans start at once; elsewhere read-only, user_requested and preapproved kinds do; others and owner_step wait for 开始. Queued receipt means dispatched; check the to-do outcome and use agent_send.
 
-Fixed machine_policy stays on that machine and refuses unavailable launchers; flexible moves portable work on failed health checks (explain why). Main supervises/accepts every new task_plan even with supervisor=leader; side chats supply evidence and get a completion link. Only assigned manual leaders or runtimes with supervision_policy keep their route; old background work finishes there. If caller cannot receive 督办, compatible follow-up takes over. Check returned supervisor and similar work. Pass todo_id for caller's unassigned to-do (Lark topic, split, failed start).
+Fixed machine_policy stays on that machine and refuses unavailable launchers; flexible moves portable work on failed health checks (explain why). Planning leads own their tasks: signals, cards, start remedies, review and cancellation. Main owns its tasks and receives needs_user escalations. Main may select a lead; agent_transfer persists ownership. An incompatible lead must gain supervision_policy before starting work. Check returned supervisor and similar work. Pass todo_id for caller's unassigned to-do (Lark topic, split, failed start).
 
-Started tasks keep a hub brief (owner request or started_why; supplied brief dropped) confirmed by the card. Give goal, done_when, out_of_bounds: writable needs done_when (PR/Issue defaults to merged+closed unless PR/draft-only); read-only needs goal. Omit expect_minutes for auto estimate; positive overrides (manual Agents lack estimate_due). Use continues+continues_why to continue, task_retry for failed starts, task_scope+scope_revision for approved changes.
+Started tasks keep a hub brief (owner request or started_why). Give goal, done_when, out_of_bounds: writable needs done_when (PR/Issue defaults to merged+closed unless PR/draft-only); read-only needs goal. Omit expect_minutes for auto estimate; positive overrides (manual Agents lack estimate_due). Use continues+continues_why to continue, task_retry for failed starts, task_scope+scope_revision for approved changes.
 
 Edits need readonly=false and authorized write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds the read-only constraint. Claude-family uses bypassPermissions for both; Codex uses plan unless assistant.readonly_mode=prompt; pi/cursor/agy refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review (workers cannot delegate).
 
-When repository identity needs resolving, consult repositories_list, and repository_get only when useful. The user's explicit repository URL or path takes precedence. A saved binding is a reference, not authorization or an allowlist; never infer a machine or checkout path from it. Non-repository tasks need no lookup; retrieval is not a mandatory dispatch preflight. Closing the terminal on acceptance is the owner's Start choice; this tool cannot set it.
+Resolve repository identity via repositories_list (repository_get only when useful). The user's explicit repository URL or path takes precedence. A saved binding is a reference, not authorization; never infer a machine or checkout path from it. Non-repository tasks need no lookup; retrieval is not a mandatory dispatch preflight. Closing the terminal on acceptance is the owner's choice; this tool cannot set it.
 
 For a saved workspace naming plan on an existing todo, select {"backend":{"operation_id":"<id>"}}. For a multi-repo container workspace, select {"container":{"selected_repo_ids":["<repo_id>",...]}} (or {"container":{"operation_id":"<id>"}} with todo_id for a prepared container). Optional host picks an enabled engine. All selected repos must be ready before start.
 
-Workspace policy: "new" isolates a checkout; {"new":{"branch":"task/my-change"}} names its branch; {"existing":"<cwd or workspace_id>","queue":true} picks one (queue:true or owner in after queues FIFO and auto-starts when free; else busy refuses with owner); "none" creates nothing. Omitted: readonly uses none; writable Git follows assistant.task_workspace_preference (prefer-existing default, prefer-new to isolate), busy cwd uses new. Explicit existing never switches silently. Reusing explicit new branch needs clean checkout, no live Agent and no open owner, else refuse with path/owner. Engine owns creation/registration; never run git worktree add. Card previews editable path before Start. Default branch: task/<todo id>. Failed creation starts no Agent; workspaces stay after acceptance. Follow org read-only refusals; never retry unchanged.
+Workspace policy: "new" isolates a checkout; {"new":{"branch":"task/my-change"}} names its branch; {"existing":"<cwd or workspace_id>","queue":true} picks one (queue:true or owner in after queues FIFO and auto-starts when free; else busy refuses with owner); "none" creates nothing. Omitted: readonly uses none; writable Git follows assistant.task_workspace_preference (prefer-existing default, prefer-new to isolate), busy cwd uses new. Explicit existing never switches silently. Reusing explicit new branch needs clean checkout, no live Agent and no open owner, else refuse with path/owner. Engine owns creation/registration; never run git worktree add. Default branch: task/<todo id>. Failed creation starts no Agent; workspaces stay after acceptance. Follow org read-only refusals; never retry unchanged.
 
 `wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single-task plan waits; approval cards and multi-task plans return immediately.{{template "shared/mcp_language" .}}
 
@@ -28,7 +28,7 @@ Workspace policy: "new" isolates a checkout; {"new":{"branch":"task/my-change"}}
     },
     "supervisor": {
       "type": "string",
-      "description": "main only: legacy leader id (assistant.leaders); new tasks stay main-supervised"
+      "description": "optional current leader id (assistant.leaders), selected by main; omitted: the planning lead, otherwise main"
     },
     "tasks": {
       "type": "array",
@@ -55,10 +55,14 @@ Workspace policy: "new" isolates a checkout; {"new":{"branch":"task/my-change"}}
             "type": "string",
             "description": "{{if eq .Lang "en"}}Card title in English, under 20 characters.{{else if eq .Lang "ja"}}カードに表示する日本語のタイトル（20文字未満）。{{else}}Card title in Chinese, under 20 characters.{{end}}"
           },
-          "context": {"type": "string", "description": "facts the manager cannot resolve; omit project background"},
+          "context": {"type": "string", "description": "extra facts; no project background"},
           "prompt": {
             "type": "string",
-            "description": "goal, authorization bounds and new facts; the manager adds project context, criteria and framework rules once"
+            "description": "goal, bounds and facts; manager adds context, criteria and rules"
+          },
+          "skip_project_memory": {
+            "type": "boolean",
+            "description": "default false; true skips project/direction memory; prompt unchanged"
           },
           "machine": {
             "type": "string",
@@ -118,8 +122,9 @@ Workspace policy: "new" isolates a checkout; {"new":{"branch":"task/my-change"}}
           },
           "user_requested": {
             "type": "boolean",
-            "description": "True only for this task/start requested in the user's latest message; false for inferred work/your own idea."
+            "description": "True only if the user's latest message asked for it; else false."
           },
+          "owner_step": {"type": "string", "enum": ["money", "outward", "irreversible"], "description": "money, speaking as the user, or an unagreed irreversible step"},
           "why": {
             "type": "string",
             "description": "{{if eq .Lang "en"}}One-line reason in English for the machine, directory and model.{{else if eq .Lang "ja"}}コンピュータ、ディレクトリ、モデルを選ぶ理由を日本語で一行に記述します。{{else}}Chinese one-line reason for machine, directory and model.{{end}}"

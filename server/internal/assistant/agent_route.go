@@ -115,8 +115,13 @@ func (s *Service) assignAgentUnder(ctx context.Context, mid, sid, lead, title st
 	if lead == "" {
 		return Todo{}, false, errors.New("there is no main conversation to supervise it")
 	}
-	if lead != cfg.Main && !s.isLeader(ctx, lead) {
-		return Todo{}, false, fmt.Errorf("%s is not a leader conversation (GET /api/v1/assistant/leaders lists them)", lead)
+	if lead != cfg.Main {
+		if err := s.validateSupervisorLead(ctx, lead); err != nil {
+			return Todo{}, false, err
+		}
+		if s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, lead) {
+			return Todo{}, false, errors.New("the target lead's runtime cannot receive supervision policy")
+		}
 	}
 	am, ok := s.device(ctx, mid)
 	if !ok {
@@ -132,6 +137,9 @@ func (s *Service) assignAgentUnder(ctx context.Context, mid, sid, lead, title st
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return Todo{}, false, err
 	}
+	// Serialize a move with digest delivery and queued supervision reconciliation.
+	s.supervise.routingMu.Lock()
+	defer s.supervise.routingMu.Unlock()
 	if t, ok := s.openTodoOfAgent(am.ID, c.SessionID); ok {
 		if t.Origin == "" {
 			return Todo{}, false, fmt.Errorf("%s is on the owner's own to-do %q: it stays theirs", agentLabel(c), t.Title)
@@ -145,10 +153,10 @@ func (s *Service) assignAgentUnder(ctx context.Context, mid, sid, lead, title st
 					return false
 				}
 			}
-			if v.Supervisor == lead {
+			if v.Supervisor == lead && v.SupervisorSource == "explicit" {
 				return false
 			}
-			v.Supervisor = lead
+			v.Supervisor, v.SupervisorSource = lead, "explicit"
 			return true
 		})
 		if err != nil {
@@ -161,6 +169,9 @@ func (s *Service) assignAgentUnder(ctx context.Context, mid, sid, lead, title st
 			s.taskCard(ctx, lead, t.ID, wakeActive) // its card follows it (the old conversation keeps its history)
 		}
 		t.Supervision = &v
+		if err := s.transferPendingAsks(ctx, t); err != nil {
+			return Todo{}, false, err
+		}
 		return t, false, nil
 	}
 	if !allowAdoption {
@@ -275,7 +286,14 @@ func (s *Service) agentRouteRoutes() {
 		}
 		todo, made, err := s.putAgentUnder(r.Context(), r.PathValue("mid"), r.PathValue("sid"), strings.TrimSpace(in.Supervisor), in.Title)
 		if err != nil {
-			apierr.Write(w, cond(errors.Is(err, errAgentNotFound), http.StatusNotFound, http.StatusConflict), err)
+			status := http.StatusConflict
+			switch {
+			case errors.Is(err, errAgentNotFound):
+				status = http.StatusNotFound
+			case errors.Is(err, errDirectionUnavailable):
+				status = http.StatusServiceUnavailable
+			}
+			apierr.Write(w, status, err)
 			return
 		}
 		apierr.WriteJSON(w, map[string]any{"todo": todo, "made": made})
