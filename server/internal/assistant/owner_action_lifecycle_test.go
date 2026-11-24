@@ -23,6 +23,7 @@ import (
 // acceptance run sets PERSONA_OWNER_APPROVAL_WALL_CLOCK=1 to wait two real
 // minutes instead; only the clock changes, not the assertions or production path.
 func TestPersistentOwnerActionSurvivesFormerDeadlineCallerAndRestart(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, finalAllow := range []bool{true, false} {
 		name := "Deny executes nothing"
 		if finalAllow {

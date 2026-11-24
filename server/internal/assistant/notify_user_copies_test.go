@@ -156,6 +156,7 @@ func TestNotifyUserCopyNotConfirmedInTime(t *testing.T) {
 // A Feishu copy that fails, with no device taking the push either: the answer says both, and that the user was not
 // alerted.
 func TestNotifyUserCopyFailedSaysTheUserWasNotAlerted(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	synctest.Test(t, func(t *testing.T) {
 		s, _, release := feishuPushHub(t, errors.New("feishu down"))
 		close(release)

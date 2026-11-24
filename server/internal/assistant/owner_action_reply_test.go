@@ -88,6 +88,7 @@ func answerOwnerProof(f *fakeHub, action, interaction string, calls *int, mutate
 }
 
 func TestOwnerActionFeishuBatchReplyAfterRestartConsumesOnce(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f, st, book := ownerReplyTestService(t)
 	batch := createOwnerTestBatch(t, book, `{"body":"one","to":"a@example.test"}`, `{"body":"two","to":"b@example.test"}`, `{"body":"three","to":"c@example.test"}`)
 	batchIX := ownerReplyBatchIX(batch)
@@ -135,6 +136,7 @@ func TestOwnerActionFeishuBatchReplyAfterRestartConsumesOnce(t *testing.T) {
 }
 
 func TestOwnerActionFeishuItemReplyApprovesOnlyThatItem(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f, _, book := ownerReplyTestService(t)
 	batch := createOwnerTestBatch(t, book, `{"body":"one"}`, `{"body":"two"}`)
 	ix := ownerReplyItemIX(batch, batch.Items[0])
@@ -280,6 +282,7 @@ func TestOwnerActionAppReplyRetryAfterDecisionHasNoNewEffect(t *testing.T) {
 }
 
 func TestOwnerActionFeishuReplyFailuresGrantNothing(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, tc := range []struct {
 		name          string
 		text          string
