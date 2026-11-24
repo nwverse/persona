@@ -84,7 +84,7 @@ func (schedulePromptHub) Tell(string, any) error                                
 func TestScheduledPromptDeliveryThroughNode(t *testing.T) {
 	f := cliTestBash(t)
 	f.n.machineID = "fixture"
-	cwd := t.TempDir()
+	cwd := resolved(t, t.TempDir()) // a picked file carries the cwd the node reported, resolved (macOS: /var -> /private/var)
 	name := "Q&A [review] 資料.txt"
 	file := filepath.Join(cwd, name)
 	selection := fmt.Sprintf(`<persona-context kind="file" path="%s" machine="%s" cwd="%s" launcher="claude">Notes</persona-context>`,
