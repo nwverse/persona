@@ -834,8 +834,8 @@ struct SessionOverviewPresentation: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .inspector(isPresented: Binding(get: { on && usesInspector && ui.showOverview },
-                                            set: { ui.showOverview = $0 })) {
+            .overviewInspector(isPresented: Binding(get: { on && usesInspector && ui.showOverview },
+                                                    set: { ui.showOverview = $0 })) {
                 SessionOverviewInspectorContent(
                     parent: parent,
                     assistant: assistant,
@@ -980,5 +980,18 @@ private struct SessionOverviewFullDetailContent: View {
             onExpand: nil,
             onShowInChat: showInChat
         )
+    }
+}
+
+private extension View {
+    /// `.inspector` where the SDK has one; visionOS has none (#14484), and there the overview is always the sheet
+    /// (`usesInspector` is false). Decided at compile time, so the view's identity never changes on a device.
+    @ViewBuilder func overviewInspector<Inspector: View>(isPresented: Binding<Bool>,
+                                                         @ViewBuilder content: () -> Inspector) -> some View {
+        #if os(visionOS)
+        self
+        #else
+        inspector(isPresented: isPresented, content: content)
+        #endif
     }
 }
