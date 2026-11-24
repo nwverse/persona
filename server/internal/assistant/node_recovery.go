@@ -456,7 +456,7 @@ func (s *Service) runNodeRecoverySweep(ctx context.Context, ev nodeRecoveryEvent
 		for _, a := range plan.active {
 			am := s.canonical(a.MachineID)
 			c, listed := plan.byKey[[2]string{am, a.SessionID}]
-			if listed && sessionResumableAfterOutage(c) {
+			if listed && !sessionClosed(c) && c.Status != proto.StatusOffline && c.Status != proto.StatusInterrupted {
 				allGone = false
 			}
 		}
