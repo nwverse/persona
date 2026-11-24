@@ -202,7 +202,7 @@ nonisolated struct RepoTree {
     }
 
     static func build(_ sessions: [Session], machines: [MachineRef], workspaces: [HostWorkspace] = [],
-                      includeEmpty: Bool = true, search: String = "") -> [Host] {
+                      includeEmpty: Bool = true, showEmptyWorkspaces: Bool = false, search: String = "") -> [Host] {
         var nodes: [String: Node] = [:]
         var loose: [Session] = []
         let paseoWorkspaces = Dictionary(workspaces.filter { $0.source == "paseo" }.map { ($0.key, $0) },
@@ -260,8 +260,10 @@ nonisolated struct RepoTree {
             let below = nested.filter { $0.latestPinnedAt != nil }.sorted {
                 pinPrecedes($0.latestPinnedAt, $1.latestPinnedAt, $0.id, $1.id) == true
             } + nested.filter { $0.latestPinnedAt == nil }
-            let matches = includeEmpty && !search.isEmpty && (n.name + " " + n.path).localizedStandardContains(search)
-            guard includeEmpty && search.isEmpty || matches || !n.sessions.isEmpty || !below.isEmpty else { return nil }
+            let usableEmpty = n.workspace.map { $0.available && $0.online && !$0.hiddenByDirectory } ?? true
+            let allowEmpty = includeEmpty && usableEmpty && (n.workspace?.pinnedAt != nil || showEmptyWorkspaces)
+            let matches = allowEmpty && !search.isEmpty && (n.name + " " + n.path).localizedStandardContains(search)
+            guard (allowEmpty && search.isEmpty) || matches || !n.sessions.isEmpty || !below.isEmpty else { return nil }
             let name = n.name.isEmpty ? n.path.split(separator: "/").last.map(String.init) ?? unnamed : n.name
             return Worktree(id: "tree/space/" + key, name: name, path: n.path, main: n.workspace?.isMain ?? false,
                             sessions: n.sessions, children: below, catalog: n.catalog, workspace: n.workspace,

@@ -170,5 +170,6 @@
   "subagents_running": "{count} 个运行中",
   "subagents_need_you": "{count} 个等你确认",
   "sort_activity": "按最近更新排序",
-  "show_list_filter": "显示筛选"
+  "show_list_filter": "显示筛选",
+  "show_empty_workspaces": "显示空工作区"
 }
