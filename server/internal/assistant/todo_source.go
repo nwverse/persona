@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/larkhost"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -336,7 +337,7 @@ func (s *Service) sourceReportStep(id string, finalOnly bool) {
 	}
 	// The bot must be there: with it away nothing is planned or claimed, so a later sweep still can.
 	// Read the current setting when planning; a saved plan keeps its announced deadline.
-	st, err := s.feishuStatus(ctx)
+	st, err := s.chat().Status(ctx)
 	if err != nil || !st.Ready {
 		s.logf("todo %s: not reporting back yet: the bot is not ready (%v)", id, err)
 		return
@@ -474,7 +475,7 @@ func (s *Service) prepareSourceReport(ctx context.Context, t Todo, st FeishuStat
 }
 
 // tellOwner writes a line of the language file where todo t is worked on: into the topic it is bound to, as a reply under the
-// latest message known there (the bot's lines to a topic, feishu_thread_posts.go), or, for a todo that has no topic (its
+// latest message known there (the bot's lines to a topic, the lark module's thread_posts.go), or, for a todo that has no topic (its
 // source has an anchor), into the owner's private chat as a reply under the anchor. key makes the same line, sent again,
 // land once. false when it could not be written.
 func (s *Service) tellOwner(ctx context.Context, t Todo, st FeishuStatus, key string, args i18n.Args, uuid string, fullReply bool) bool {
@@ -482,7 +483,7 @@ func (s *Service) tellOwner(ctx context.Context, t Todo, st FeishuStatus, key st
 		text := i18n.T(s.botLang(ctx), "assistant-feishu."+key, args)
 		// no_detour: with the anchor gone the line is lost rather than posted as a message of its own, which could not be
 		// replied to with "/noreply" (as in a topic, where nothing is planned then).
-		if err := s.appCall(ctx, AppFeishu, FeishuText, map[string]any{"reply_to": t.Source.Anchor, "text": text, "no_detour": true, "uuid": reportKey(uuid, t.ID), "full_answer": fullReply}, nil); err != nil {
+		if err := s.chat().Reply(ctx, larkhost.Target{NoDetour: true}, t.Source.Anchor, text, reportKey(uuid, t.ID), fullReply); err != nil {
 			s.logf("todo %s: tell the private chat: %v", t.ID, err)
 			return false
 		}
@@ -492,14 +493,14 @@ func (s *Service) tellOwner(ctx context.Context, t Todo, st FeishuStatus, key st
 	if th == nil || th.Channel != channel.Feishu || !slices.Contains(st.Chats, th.ChatID) {
 		return false
 	}
-	anchor := s.topicMessage(ctx, th.ChatID, th.ThreadID)
+	anchor := s.larkModule().TopicAnchor(ctx, th.ChatID, th.ThreadID)
 	if anchor == "" {
 		s.logf("todo %s: no message of its topic is known to reply under", t.ID)
 		return false
 	}
 	text := i18n.T(s.botLang(ctx), "assistant-feishu."+key, args)
-	to := feishuTarget{ChatID: th.ChatID, InThread: true, NoDetour: true}
-	if err := s.appCall(ctx, AppFeishu, FeishuText, to.params(map[string]any{"reply_to": anchor, "text": text, "uuid": reportKey(uuid, t.ID), "full_answer": fullReply}), nil); err != nil {
+	to := larkhost.Target{ChatID: th.ChatID, InThread: true, NoDetour: true}
+	if err := s.chat().Reply(ctx, to, anchor, text, reportKey(uuid, t.ID), fullReply); err != nil {
 		s.logf("todo %s: tell its topic: %v", t.ID, err)
 		return false
 	}
@@ -511,10 +512,8 @@ func (s *Service) tellOwner(ctx context.Context, t Todo, st FeishuStatus, key st
 func (s *Service) sendSourceReport(ctx context.Context, src TodoSource, todoID string) error {
 	switch src.Channel {
 	case channel.Feishu:
-		return s.appCall(ctx, AppFeishu, FeishuText, map[string]any{
-			"chat_id": src.ChatID, "reply_to": src.MessageID, "text": src.ReportText, "uuid": reportKey(todoID, src.MessageID),
-			"full_answer": src.ReportFullReply, "no_detour": true,
-		}, nil)
+		return s.chat().Reply(ctx, larkhost.Target{ChatID: src.ChatID, NoDetour: true}, src.MessageID, src.ReportText,
+			reportKey(todoID, src.MessageID), src.ReportFullReply)
 	}
 	return fmt.Errorf("no way back to channel %q", src.Channel)
 }
@@ -622,7 +621,7 @@ func (s *Service) chatNoReply(ctx context.Context, ev botcard.MessageEvent) bool
 	if !ok {
 		return false
 	}
-	s.stopReportOf(ctx, msg.MessageID, t, feishuTarget{}, "chat_question", db.DecisionManual)
+	s.stopReportOf(ctx, msg.MessageID, t, larkhost.Target{}, "chat_question", db.DecisionManual)
 	return true
 }
 
@@ -645,10 +644,10 @@ func (s *Service) todoOfAnchor(ids ...string) (Todo, bool) {
 
 // stopReportOf is "don't report back" for todo t, said in message messageID: the answer goes to `to`, and the decision
 // that records it is the user's, of the kind source, with the question the language file calls questionKey.
-func (s *Service) stopReportOf(ctx context.Context, messageID string, t Todo, to feishuTarget, questionKey, source string) {
+func (s *Service) stopReportOf(ctx context.Context, messageID string, t Todo, to larkhost.Target, questionKey, source string) {
 	l := s.botLang(ctx)
 	say := func(key string, args ...i18n.Args) {
-		s.botNoteTo(ctx, to, messageID, i18n.T(l, "assistant-feishu."+key, args...))
+		s.chat().Note(ctx, to, messageID, i18n.T(l, "assistant-feishu."+key, args...))
 	}
 	switch {
 	case t.Source == nil:

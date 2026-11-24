@@ -91,7 +91,7 @@
     <string name="chat_chrome_conn_details">Diagnostics</string>
     <string name="chat_chrome_got_it">Got it</string>
     <string name="chat_composer_placeholder">Message</string>
-    <string name="chat_composer_photo_limit">You can add up to 4 photos</string>
+    <string name="chat_composer_photo_limit">Up to %1$d photos at a time</string>
     <string name="chat_composer_attachment_unreadable">Can\'t read the attachment. Pick it again; your text is kept</string>
     <string name="chat_composer_no_camera_app">No app on this phone can take photos</string>
     <string name="chat_composer_camera_failed">Can\'t open the camera. Try again later</string>

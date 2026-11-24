@@ -93,7 +93,7 @@ import type { TaskWorkspace } from "../../lib/feed";
 import { machineStartBlocked, ULTRACODE_FEATURE } from "../../lib/ultracode";
 import { UltracodeChip } from "../chat/Ultracode";
 import { byTime } from "../../lib/times";
-import { requestHome } from "../../lib/child-sessions";
+import { requestHome, requestHomeMachine } from "../../lib/child-sessions";
 import { stateName, type WaitReason } from "../../lib/state-labels";
 import { statusWord, waitOf } from "../../lib/todo-wait-reason";
 import { EDITABLE } from "../../lib/shortcuts";
@@ -221,9 +221,9 @@ export function progressOf(lead: Session | undefined) {
 /** The card a task's agents wait on: its lead agent's first, else any of its other active agents'. */
 export function taskInteraction(todo: Todo, interactions: Interaction[], lead?: Session): Interaction | undefined {
   // a card of a child session one of its agents started is that agent's (#5120)
-  const mine = (ix: Interaction) => (todo.agents ?? []).some((a) => !a.released_at && a.machine_id === ix.machine_id && a.session_id === requestHome(ix));
+  const mine = (ix: Interaction) => (todo.agents ?? []).some((a) => !a.released_at && a.machine_id === requestHomeMachine(ix) && a.session_id === requestHome(ix));
   return (lead && (interactions.find((ix) => ix.machine_id === lead.machine_id && ix.session_id === lead.session_id)
-    ?? interactions.find((ix) => ix.machine_id === lead.machine_id && requestHome(ix) === lead.session_id))) ?? interactions.find(mine);
+    ?? interactions.find((ix) => requestHomeMachine(ix) === lead.machine_id && requestHome(ix) === lead.session_id))) ?? interactions.find(mine);
 }
 
 /** What a waiting task needs, in a line (#3301): "Has a question: which framework?", "Waiting for your approval: swift test", "Plan awaiting approval", the words
@@ -382,6 +382,46 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
   );
 }
 
+function planDispatchReason(dispatch: PlanTask["dispatch"]): string {
+  if (!dispatch || !dispatch.reason || dispatch.reason === "only") return "";
+  const rawArgs = dispatch.args ?? {};
+  const args: Record<string, string | number> = {};
+  for (const [k, v] of Object.entries(rawArgs)) {
+    if (typeof v === "string" || typeof v === "number") args[k] = v;
+  }
+  // dispatch.candidate is the 0-based index into the tier's candidates (the same index as /candidates); people count from 1
+  const candidate = typeof dispatch.candidate === "number" && dispatch.candidate >= 0 ? dispatch.candidate + 1 : 1;
+  const tier = args.tier ?? dispatch.tier ?? "";
+  const base: Record<string, string | number> = { ...args, tier, candidate };
+  const detail = args.detail ?? args.cause ?? args.provider ?? "";
+
+  switch (dispatch.reason) {
+    case "first":
+      return t("assistant-tasks.dispatch_reason_first", base);
+    case "score":
+      if (args.minutes !== undefined && args.first_pass !== undefined && args.headroom !== undefined) {
+        return t("assistant-tasks.dispatch_reason_score", base);
+      }
+      return t("assistant-tasks.dispatch_reason_score_short", base);
+    case "quota":
+      return detail
+        ? t("assistant-tasks.dispatch_reason_quota_detail", { ...base, detail })
+        : t("assistant-tasks.dispatch_reason_quota", base);
+    case "unavailable":
+      return t("assistant-tasks.dispatch_reason_unavailable", base);
+    case "kept":
+      return t("assistant-tasks.dispatch_reason_kept", base);
+    case "switched":
+      return detail
+        ? t("assistant-tasks.dispatch_reason_switched_detail", { ...base, detail })
+        : t("assistant-tasks.dispatch_reason_switched", base);
+    case "over_pace":
+      return t("assistant-tasks.dispatch_reason_over_pace", base);
+    default:
+      return t("assistant-tasks.dispatch_reason_fallback", { ...base, reason: dispatch.reason });
+  }
+}
+
 function PlanTaskRow({ n, task, numbered, ultra, busy, onUltra }: { n: number; task: PlanTask; numbered: boolean; ultra?: { on: boolean; blocked: string }; busy?: boolean; onUltra: (on: boolean) => void }) {
   const machines = useStore((s) => s.machines);
   const machine = machines.find((m) => m.id === task.machine)?.name ?? task.machine;
@@ -419,6 +459,10 @@ function PlanTaskRow({ n, task, numbered, ultra, busy, onUltra }: { n: number; t
       {/* it is asked for where it can't run: say it starts without */}
       {ultra?.blocked && ultra.on && <div className="text-label text-orange">{t("ultracode.plan_blocked", { reason: ultra.blocked })}</div>}
       {task.why && <div className="text-label text-ink-2">{task.why}</div>}
+      {(() => {
+        const dispatchLine = planDispatchReason(task.dispatch);
+        return dispatchLine ? <div data-testid="plan-task-dispatch" className="text-label text-ink-3">{dispatchLine}</div> : null;
+      })()}
       {/* what the task will be held to, shown before "Start" confirms it (#3822) */}
       {task.brief && (
         <Suspense fallback={null}>
@@ -1170,8 +1214,9 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
     const row = conversations?.find((c) => c.session_id === id);
     return row ? conversationTitle(row) : t("assistant-tasks.needs_group_another");
   };
-  // The badge and the rows it opens share directUserWaiting: current direct questions, owner-only decisions and
-  // explicit acceptance. Unstarted/failed work, Agent permissions, terminal dialogs and generic retries stay out.
+  // The badge and the rows it opens share directUserWaiting: current direct questions, owner-only decisions,
+  // explicit acceptance, and escalated or hub-projected task cards. Unstarted/failed work, unescalated Agent
+  // permissions/terminal dialogs, delegating cards and generic retries stay out.
   // Other trays keep the existing To-dos open-work rule (#3331).
   const badgeOf = (items: { kind: string; countsOpen?: boolean }[]) =>
     items.reduce((n, item) => n + (item.kind === "task" ? (item.countsOpen ? 1 : 0) : 1), 0);

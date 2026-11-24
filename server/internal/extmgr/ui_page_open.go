@@ -66,6 +66,7 @@ func (h *Manager) pageOpen(ctx context.Context, who extwire.UIPrincipal, req wir
 		defer close(s.openDone)
 		s.manifest = p.Manifest
 		s.item = item
+		s.unsupported = sanitizeUnsupported(in.Context.Unsupported)
 		s.components = map[string]bool{}
 		for _, tag := range req.Context.Stream.Components {
 			s.components[tag] = true

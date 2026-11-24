@@ -50,6 +50,10 @@ func TestPersonaNodeDoesNotLinkTheHubOrTheManager(t *testing.T) {
 			if !ok {
 				continue
 			}
+			if rel == "internal/modules/all" { // the manager's list; the node's is internal/modules/all/node
+				t.Errorf("persona-node (%s) links the manager's modules (%s): a node-side module goes into "+
+					"internal/modules/all/node (docs/architecture/core-and-modules.md \"The node's modules\")", target, dep)
+			}
 			for _, f := range forbidden {
 				if rel == f || strings.HasPrefix(rel, f+"/") {
 					t.Errorf("persona-node (%s) depends on %s: the device's program reaches the manager only over the node "+

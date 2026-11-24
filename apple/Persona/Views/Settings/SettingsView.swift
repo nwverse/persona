@@ -210,6 +210,11 @@ struct SettingsView: View {
         if d.bool(forKey: "openMachines") {
             p.append(MachineListRoute())
             if let id = d.string(forKey: "openMachineDetail") { p.append(MachineDetailRoute(id: id)) }
+            // `-openUsageMap <machine>` (`reclaim:<machine>`: the disk alert's reclaim mode): its disk usage map (#14576).
+            if let id = d.string(forKey: "openUsageMap") {
+                let reclaim = id.hasPrefix("reclaim:")
+                p.append(MachineUsageMapRoute(ref: MachineRef(path: reclaim ? String(id.dropFirst("reclaim:".count)) : id), reclaim: reclaim))
+            }
         }
         else if d.bool(forKey: "openAdvancedSettings") { p.append(SettingsPage.advanced) } // Settings › Advanced (#13395)
         else if d.bool(forKey: "openStorage") { p.append(SettingsPage.storage) }
@@ -279,10 +284,8 @@ struct SettingsView: View {
         else if d.bool(forKey: "openConnectorDevice") { p.append(SettingsPage.phoneData) }
         else if d.bool(forKey: "openIPhoneSetup") { p = SettingsPage.iphoneSetupPath } // the guided setup (#8199)
         else if d.bool(forKey: "openTranslationSettings") { p.append(SettingsPage.translation) }
-        else if d.bool(forKey: "openLiveScreenSettings") { // Settings › Live Screen (#6396)
-            #if os(iOS)
-            p.append(SettingsPage.liveScreen)
-            #endif
+        else if d.bool(forKey: "openLiveScreenSettings") { // Settings › Live Screen (#6396), the screen-share module's
+            if Modules.registry.settingsEntry(id: "live-screen") != nil { p.append(SettingsPage.module("live-screen")) }
         }
         else if d.string(forKey: "openAlarms") != nil { // Settings › Alarms and Timers on made-up data (#12805)
             #if os(iOS)
@@ -338,8 +341,6 @@ enum SettingsPage: Hashable {
     case health
     /// Settings › Meetings (#2981): Persona's default role in a recorded meeting.
     case meetings
-    /// Settings › Live Screen (#6396, #6398): the live screen's route and its quality on mobile data.
-    case liveScreen
     /// Settings › Alarms and Timers (#12805): the alarms and timers Persona set through AlarmKit.
     case alarms
     #endif
@@ -352,6 +353,8 @@ enum SettingsPage: Hashable {
     case models, agents, appearance, about, pairing, computers
     /// Settings › Advanced (#13395): the rows Settings home leaves out (`SettingsCatalog.advanced`).
     case advanced
+    /// A module's page, by its settings entry's id (`ModuleSlot.settings`): Live Screen is the screen-share module's.
+    case module(String)
     /// Settings › About › Export Diagnostics (Developing Persona, #9460).
     case devExport
     /// Settings › About › Replay a Meeting Tape (Developing Persona, #10589).
@@ -434,6 +437,7 @@ private struct SettingsDestinations: ViewModifier {
             .navigationDestination(for: ModelPurposeRoute.self) { r in ModelPurposeEditorView(purposeID: r.id).splitDetailPage() }
             .navigationDestination(for: ModelLauncherRoute.self) { r in ModelLauncherDetailView(name: r.name).splitDetailPage() }
             .navigationDestination(for: MachineDetailRoute.self) { r in MachineDetailView(ref: r.ref).splitDetailPage() }
+            .navigationDestination(for: MachineUsageMapRoute.self) { r in UsageMapView(route: r).splitDetailPage() }
             .navigationDestination(for: TerminalsRoute.self) { r in TerminalsView(only: r.machine).splitDetailPage() }
             .navigationDestination(for: MessagesChatsRoute.self) { r in MessagesChatListView(manager: r.manager).splitDetailPage() }
             .navigationDestination(for: MessagesThreadRoute.self) { r in MessagesThreadView(id: r.id, name: r.name, manager: r.manager).splitDetailPage() }
@@ -503,9 +507,9 @@ private struct SettingsDestinations: ViewModifier {
         #if os(iOS)
         case .health: WorkoutReportSettingsView()
         case .meetings: MeetingSettingsView()
-        case .liveScreen: LiveScreenSettingsView()
         case .alarms: AlarmsPage()
         #endif
+        case .module(let id): Modules.registry.settingsEntry(id: id)?.page()
         case .notifications: NotificationSettingsView()
         case .storage: StorageView()
         case .translation: TranslationSettingsView()
