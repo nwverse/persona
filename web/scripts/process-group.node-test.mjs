@@ -191,15 +191,15 @@ test("real Vitest forks respect the cap and supervised parent death reaps only t
   const vitest = join(web, "node_modules", "vitest", "vitest.mjs");
   const dir = await mkdtemp(join(tmpdir(), "persona-web-real-vitest-"));
   const fixtures = join(dir, "fixtures");
+  const ownGroup = groupPid(process.pid);
   const control = await controlProcess();
   const owned = new Set();
-  const ownGroup = groupPid(process.pid);
   const fileCount = 12;
   const cap = 8;
 
   function liveGroup(pgid) {
     if (!pgid) return [];
-    const output = execFileSync("ps", ["-eo", "pgid=,stat=,args="], { encoding: "utf8" });
+    const output = execFileSync("ps", ["-eo", "pgid=,stat=,args="], { encoding: "utf8", timeout: 1_000, maxBuffer: 8 * 1024 * 1024 });
     return output.split("\n").flatMap((line) => {
       const match = line.trim().match(/^(\d+)\s+(\S+)\s+(.*)$/);
       if (!match || Number(match[1]) !== pgid || match[2].startsWith("Z")) return [];
@@ -241,6 +241,8 @@ test("real Vitest forks respect the cap and supervised parent death reaps only t
     let peakActive = 0;
     let peakForks = 0;
     let triggered = false;
+    let previousActive = 0;
+    let stableSince = Date.now();
     const deadline = Date.now() + 30_000;
     child.stdout.on("data", (chunk) => { output = (output + chunk).slice(-20_000); });
     child.stderr.on("data", (chunk) => { output = (output + chunk).slice(-20_000); });
@@ -259,7 +261,14 @@ test("real Vitest forks respect the cap and supervised parent death reaps only t
           const forks = liveGroup(pgid).filter((row) => row.args.includes("forks.js")).length;
           peakForks = Math.max(peakForks, forks);
         }
-        if (!triggered && current.length >= expected) {
+        if (current.length !== previousActive) {
+          previousActive = current.length;
+          stableSince = Date.now();
+        }
+        // Do not release or abort at the first glimpse of the expected count:
+        // a broken cap may still be starting additional workers. Keep sampling
+        // through a stable window so that excess workers make the test fail.
+        if (!triggered && current.length >= expected && Date.now() - stableSince >= 250) {
           if (abrupt) process.kill(child.pid, "SIGKILL");
           else await writeFile(release, "release the real Vitest fixtures");
           triggered = true;
@@ -287,9 +296,9 @@ test("real Vitest forks respect the cap and supervised parent death reaps only t
       if (!closed) { try { process.kill(child.pid, "SIGKILL"); } catch {} }
       for (const id of groups) {
         if (id <= 1 || id === ownGroup || id === control.pid) continue;
-        if (liveGroup(id).length) {
-          try { process.kill(-id, "SIGKILL"); } catch {}
-        }
+        // Ownership was established before recording the PGID. A process-table
+        // failure must not prevent the cleanup signal for a known owned group.
+        try { process.kill(-id, "SIGKILL"); } catch {}
       }
       await delay(100);
       for (const id of groups) if (!liveGroup(id).length) owned.delete(id);
@@ -338,7 +347,7 @@ test("hold a real fork until the parent observer releases it", async () => {
   } finally {
     for (const id of owned) {
       if (id <= 1 || id === ownGroup || id === control.pid) continue;
-      try { if (liveGroup(id).length) process.kill(-id, "SIGKILL"); } catch {}
+      try { process.kill(-id, "SIGKILL"); } catch {}
     }
     try { process.kill(-control.pid, "SIGKILL"); } catch {}
     if (control.connected) control.disconnect();

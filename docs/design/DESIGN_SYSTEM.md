@@ -2263,6 +2263,8 @@ for VoiceOver, as section 4.8.1 keeps red for what is still wrong; one that time
 page cut, the result shows the output's end (End of output), where a build or test run says why it failed, before View
 full text. Without an outcome (an older node) a row draws as before.
 
+**Tool views (`tool_views`) and Map component (UI version 12, #14730)**. Out-of-band declarative views returned by connector tools (`Item.tool_views` / `Fold.tool_views`) render **outside** the collapsed tool work summary, beside "Images viewed this turn" and above the final reply, so visual routes and locations are immediately visible without opening raw tool calls (while Super Rule 2 keeps them out of model context). `map` components follow platform map styling matching the shell's current light/dark scheme, preserve semantic `tone` or the 11 named `Hue` colors (never both) alongside plain text labels/metrics rather than conveying meaning by color alone, keep `wide` (16:9) / `square` (1:1) / `tall` aspect frames bounded in chat cards, and use standard `>= 44 pt` / `48 dp` tap targets for expanding interactive map detail sheets (with route/marker inspection and verified `https://` map links). UI copy ships in English, Simplified Chinese and Japanese.
+
 ### 4.7.1 Opening and closing in a chat keeps the tapped row in place
 
 Anything that opens or closes inside a chat, in Persona's conversations and Agent chats alike (work lines, tool steps,
@@ -4245,3 +4247,46 @@ a menu with one destructive Remove, never a bare x that removes on touch: a chip
 nothing. iOS draws the close mark before the words, where every `Chip` draws its symbol (#6578; the web puts its
 button after them), and the menu's label is a finger's height (`tapTargetHeight`). A chip the user may not take away carries the lock mark and is read as set by its owner. What was removed comes
 back from a + menu at the end of the row. The change shows at once and rolls back with a toast when the hub refuses it.
+
+## Usage treemap (#14576)
+
+A computer's disk usage map (`docs/server/machine-usage-map.md`, "The map") is a squarified treemap: every box's area is
+its bytes, and the local disk and the cloud are drawn on one scale. iOS draws it natively (`TreemapLayout.swift`,
+`UsageTreemapView.swift`, `UsageMapView.swift` under `apple/Persona/Views/Machines/`); the web draws the same map
+with the same values as `--umap-*` in `web/src/views/machines/usage-map.css` (loaded with the map, not the token
+sheet), labels in `--ink` on every fill.
+
+| Token (`Theme.UsageMap`, `apple/Shared/Design/UsageMapTokens.swift`) | Light | Dark | Meaning |
+|---|---|---|---|
+| `apps` | `#A9C8F5` | `#234B82` | Applications |
+| `personal` | `#A6DBB3` | `#1F5C35` | The user's own folders |
+| `appdata` | `#CDB9F2` | `#4A3685` | App data and containers |
+| `cache` | `#F6C78F` | `#7A4411` | Caches the hub can clean |
+| `system` | `#C5CAD3` | `#404753` | The system and what it keeps |
+| `free` | `#EEF0F3` | `#1C1F23` | Free space (the strip at the right or bottom edge) |
+| `other` | `#DADADF` | `#35353A` | Not measured / anything else |
+| `Age.recent` | `#E6EEF7` | `#262B32` | Last used within 30 days |
+| `Age.months` | `#BFD5EE` | `#22405F` | 30 to 180 days |
+| `Age.halfYear` | `#8DB5E0` | `#1F5187` | 180 to 365 days |
+| `Age.year` | `#5D93D0` | `#1D62B0` | More than a year |
+
+- Labels use `Theme.UsageMap.ink` on every fill; StyleSpecTests keeps it at 4.5:1 or more on all eleven fills in both
+  modes. Color is never the only signal: the detail line, the selection rows and VoiceOver say the kind and the age.
+- Nesting: three levels on a wide map, two on a phone. A box draws its children only when it is at least 72 × 50 pt
+  (96 wide on a wide map) after its 22 pt title strip; labels draw only where they fit, never truncated mid-box.
+- One `Canvas` draws all boxes; a custom `Layout` places at most 200 hit targets, each at least 24 pt, over the largest
+  boxes. Tap opens a box (or selects a leaf); touch and hold opens its menu, where an action that cannot apply stays
+  visible, disabled, with the reason. Drag a box onto the cloud side to offload it. The keyboard moves between
+  neighbors with the arrows, opens with Return, selects with Space and goes up with Escape. VoiceOver reads each target
+  with its custom actions.
+- Zooming animates one progress value (`Theme.UsageMap.zoom`); with Reduce Motion it cross-fades.
+- Local | channel | cloud: the cloud side keeps at least 120 pt, and when the shared scale would make it wider than
+  45 % it is compressed and says so ("Cloud 1 : N"). On a phone the sides are stacked. Ribbons in the channel join an
+  offloaded item's ghost on the local side to its box in the cloud.
+- The tray under the map holds the "what if" (free space after the selection), the selection as rows (the map's
+  accessible list), its actions, the free-up goal slider and an offload's progress. Every change goes through a
+  confirmation that names what it touches; installing an offload tool is a separate confirmation.
+
+Development: `MOCK_USAGE_MAP=1 python3 scripts/mock/mock_hub.py` serves a 93 % full Mac Studio, two folder levels that
+measure for a moment first, and one neutral offload provider; `-tab settings -openMachines YES -openUsageMap studio`
+(or `reclaim:studio`) opens the map at launch in Debug builds.

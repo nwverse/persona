@@ -1548,6 +1548,8 @@ struct ChatView: View {
             RecapCard(items: items).chatPinned("recap-" + line.id) // where the open recap folds to (`dismissRecap`)
         case .viewed(_, let images):
             ViewedImagesRow(images: images).equatable()
+        case .toolViews(_, let views):
+            ToolViewAttachmentsRow(views: views, link: $link).equatable()
         }
     }
 
@@ -7481,6 +7483,8 @@ struct ChatLine: Identifiable {
         case day(Date)
         /// The images an exchange's work looked at, between it and the answer (`ViewedImages`, docs/protocol/protocol.md「Images viewed this turn」).
         case viewed(id: String, images: [ViewedImage])
+        /// Declarative extension views emitted out-of-band by a turn's tool calls (`ToolViews`).
+        case toolViews(id: String, views: [ExtensionView])
         /// A part of a long finished answer, a row of its own (#4970, `AnswerParts`): the first has the answer's id.
         case answerPart(item: Item, part: AnswerParts.Part, index: Int, count: Int)
         /// A permission mode change the hub recorded, at the end of the exchange it happened in (#10297,
@@ -7508,6 +7512,7 @@ struct ChatLine: Identifiable {
             case .placeMap(let m): "map-" + m.callID
             case .day(let d): "day-\(Int(d.timeIntervalSince1970))"
             case .viewed(let id, _): id
+            case .toolViews(let id, _): id
             case .answerPart(let item, _, let index, _): index == 0 ? item.id : item.id + "/part-\(index)"
             case .modeChange(let id, _): id
             case .modelChange(let id, _, _): id
@@ -7560,6 +7565,7 @@ struct ChatLine: Identifiable {
         return line
     }
     static func viewed(id: String, images: [ViewedImage]) -> Self { Self(.viewed(id: id, images: images)) }
+    static func toolViews(id: String, views: [ExtensionView]) -> Self { Self(.toolViews(id: id, views: views)) }
     static func answerPart(item: Item, part: AnswerParts.Part, index: Int, count: Int) -> Self {
         Self(.answerPart(item: item, part: part, index: index, count: count))
     }

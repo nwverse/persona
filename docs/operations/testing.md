@@ -1088,6 +1088,17 @@ legacy 404 intact. `python3 -I scripts/mock/test_direction_tree_mock.py` checks 
 `OutsideDirectionsUITests` uses it through `PERSONA_OUTSIDE_DIRECTIONS_HUB` for the mixed sidebar's interactions and for
 sidebar / To-dos / Agents captures in light and dark, at default and AX5 text (`PERSONA_SHOTS` saves them).
 
+`MOCK_DASHBOARDS=1|off|empty|removed|pinned` (`scripts/mock/dashboards_mock.py`, #15017) plays the default manager's
+Dashboards for the clients: the `assistant_pages` feature, the `dashboards` switch in `GET`/`PUT /api/v1/assistant`, the
+`-pages` places appended to `GET /api/v1/extensions/-/ui` (the index while a page is kept or one waits in Recently
+removed, then up to three pinned pages) and their pages over `POST /api/v1/extensions/-pages/-/ui/{index|pg_…}`. A tap on
+the running page's Done today answers the toast and a footer line "Received"; `GET /mock/dashboards?advance=1` moves it
+on to delivered, working and the page's update. Pinning, removing and the switch push `assistant_pages` and
+`extension_ui {invalidate}`. `off` keeps the pages with the switch off and `empty` has the switch on with nothing kept:
+both list nothing, for before / after captures; `removed` lists the index alone; `pinned` three pinned pages. Without
+`MOCK_EXTENSIONS=1` it also announces UI slots and lists only its own places. `python3 scripts/mock/test_dashboards_mock.py`
+checks it.
+
 **No new switch in `mock_hub.py` (#12737).** Most of what `mock_hub.py` gains comes with a new `MOCK_*` switch (89 of the 195
 commits that changed it from 2026-11-14 to 2026-11-22 added one, with 72% of its net added lines), so its switch names are
 frozen. It may read only the names in `scripts/mock/mock_hub_switches.txt`: the ones it read when the freeze landed, then the
