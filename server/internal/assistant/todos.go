@@ -130,6 +130,9 @@ type Todo struct {
 	// SeenAt: when the owner last looked at it in Just finished, by Got it or by opening it (#5707, todo_seen.go); a to-do
 	// seen since it got there is filed under Done (todo_triage.go). Absent when never seen.
 	SeenAt *time.Time `json:"seen_at,omitempty"`
+	// AutoSeenUndone: internal undo guard set when the owner explicitly calls DELETE /api/v1/todos/{id}/seen (#14639).
+	// Never emitted on the wire.
+	AutoSeenUndone bool `json:"-"`
 	// RestoredAt: when the owner last brought it back from Inactive; SomedayUntil: when a to-do the owner put off to
 	// Someday comes back, the year 9999 for no date (#10226, todo_marks.go). Absent when never restored, and while not
 	// put off. Clients that do not know them show the to-do as ever.
@@ -163,6 +166,7 @@ type todoStore interface {
 	UpdateTodo(ctx context.Context, id string, title *string, notes *string, done *bool, updatedAt time.Time) (*db.TodoRow, error)
 	EditTodo(ctx context.Context, id string, e db.TodoEdit, updatedAt time.Time) (*db.TodoRow, error)
 	SeeTodo(ctx context.Context, id string, at *time.Time) (*db.TodoRow, error)
+	AutoSeeTodo(ctx context.Context, id string, at time.Time) (*db.TodoRow, bool, error)
 	RestoreTodo(ctx context.Context, id string, at time.Time) (*db.TodoRow, error)
 	SetTodoSomeday(ctx context.Context, id string, until *time.Time) (*db.TodoRow, error)
 	ClaimTodoReminder(ctx context.Context, id string, remindAt, now time.Time) (bool, error)

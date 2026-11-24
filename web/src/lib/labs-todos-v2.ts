@@ -1,7 +1,8 @@
 // Adapt the selected Assistant's todos_v2 Labs setting to the Labs form (#14538, #14584).
 import { t } from "../i18n";
 import { api, ApiError } from "./api";
-import { MANAGER_HEADER } from "./manager-choice";
+import { MANAGER_HEADER, sameManager, shownManager } from "./manager-choice";
+import { patchAssistant } from "./store";
 import { checkUpdate, CONFIGURATION_VERSION, ConfigurationError, type ConfigurationDocument, type ConfigurationSource } from "./configuration/contract";
 
 const field = "todos_v2";
@@ -44,6 +45,7 @@ export function todosV2LabsSource(manager: string): ConfigurationSource {
         const state = await api<Settings>("/assistant", { method: "PUT", headers, signal,
           json: { todos_v2: value, expected_todos_v2: expected } });
         if (state.todos_v2 !== value) throw new ConfigurationError("configuration_unavailable");
+        if (sameManager(manager, shownManager())) patchAssistant({ todos_v2: state.todos_v2 === true });
         return document(manager, state, true);
       } catch (e) {
         if (e instanceof ApiError) throw ConfigurationError.fromBody(e.body, e.status);
