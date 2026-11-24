@@ -185,19 +185,41 @@ func TestLauncherRunFloorIsPerModelAndEffort(t *testing.T) {
 // records runs there as taking an hour, so every naming call is held back before it is sent (runFloorBook).
 func holdBackSorting(t *testing.T, s *Service) {
 	t.Helper()
-	if r := modelRequest(s, "PATCH", "inbox.triage", `{"revision":0,"provider":"launcher.claude"}`); r.Code != 200 {
-		t.Fatalf("sorting on claude: %d %s", r.Code, r.Body.String())
+	holdBack(t, s, "inbox.triage", "inbox.triage")
+}
+
+// holdBack puts the purposes of category (purpose among them) on the computer's claude launcher and records runs of
+// purpose there as taking an hour, so every call of it is held back before it is sent (runFloorBook).
+func holdBack(t *testing.T, s *Service, category, purpose string) {
+	t.Helper()
+	if r := modelRequest(s, "PATCH", category, `{"revision":0,"provider":"launcher.claude"}`); r.Code != 200 {
+		t.Fatalf("%s on claude: %d %s", category, r.Code, r.Body.String())
 	}
 	ctx := context.Background()
-	b, err := s.resolveModel(ctx, "inbox.triage")
+	b, err := s.resolveModel(ctx, purpose)
 	if err != nil {
 		t.Fatal(err)
 	}
 	c, err := s.apiConfig(ctx, b)
 	if err != nil || c.RunLauncher == "" {
-		t.Fatalf("sorting runs on %+v: %v", c, err)
+		t.Fatalf("%s runs on %+v: %v", purpose, c, err)
 	}
 	s.runFloors.note(runFloorKey(c), time.Hour, true, time.Now())
+}
+
+// A conversation's title held back because its model's launcher answers slower than a title waits was never asked
+// (runFloorBook): no run starts, it is not asked again at once, and it is no final answer either. The conversation
+// keeps a stand-in, which a later turn names again, as after a call that ran out of time (#13443).
+func TestHeldBackTitleIsAStandIn(t *testing.T) {
+	s, _, _ := modelService(t)
+	devs := &slowRunDevs{}
+	s.devs = devs
+	holdBack(t, s, "kb", "assistant.title")
+	started := time.Date(2026, 11, 1, 16, 30, 0, 0, time.UTC)
+	got, final := s.makeTitle(context.Background(), started, searchAsk, searchReply, "")
+	if final || !strings.Contains(got, " | "+titleFallback+" | ") || devs.runs() != 0 {
+		t.Fatalf("held-back title: %q (final %t) after %d runs", got, final, devs.runs())
+	}
 }
 
 // What a launcher's runs showed counts per computer, launcher, model and effort, for runFloorTTL after the last run.

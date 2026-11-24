@@ -214,7 +214,8 @@ only the prompt and the answer travel.
   longer holds every start up for 8 s and wastes the run; the tab keeps the name the computer gives it, which the
   background Agent naming can replace. Agent naming that is held back this way is no naming failure (no count, no
   cooldown), and **Auto Rename** answers `launcher_too_slow`, not a retryable model failure ("Naming an Agent on
-  request" in `docs/protocol/protocol.md`). A to-do's title is made in the background and waits 50 s on a launcher
+  request" in `docs/protocol/protocol.md`). A conversation's title keeps its stand-in and is named again after a later
+  turn, as when its call runs out of time. A to-do's title is made in the background and waits 50 s on a launcher
   (15 s on an API connection), long enough for a cold CLI.
 - **Purposes that call tools**: no API purpose uses the provider's native tool calling. Inbox event grouping
   (`inbox_group.go`) asks for its tools in its JSON answer and the manager runs them, so it works unchanged, each step

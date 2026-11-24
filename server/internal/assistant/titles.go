@@ -376,8 +376,9 @@ func (s *Service) firstExchange(ctx context.Context, machine, id string) (first,
 // a gateway error: ai.Transient), a reply stopped at max_tokens (half a title even when it has the format: the
 // thinking used the room, so twice the room) and an answer that breaks the format (told what was wrong). final is
 // false when the naming ended for want of an answer rather than because of one (also when there was no first message
-// to read): the title is a stand-in then, and a later turn names the conversation again. hint is the title the
-// extension that opened it gave ("" for none): the model reads it too, and the stand-in's topic falls back on it.
+// to read, or the call was held back unasked because its launcher's runs take longer than a title waits: runHeldBack):
+// the title is a stand-in then, and a later turn names the conversation again. hint is the title the extension that
+// opened it gave ("" for none): the model reads it too, and the stand-in's topic falls back on it.
 func (s *Service) makeTitle(ctx context.Context, started time.Time, first, reply, hint string) (title string, final bool) {
 	reply = wire.AssistantCardText(reply)
 	hint = cutRunes(oneLine(hint), maxTitleHint)
@@ -407,6 +408,9 @@ func (s *Service) makeTitle(ctx context.Context, started time.Time, first, reply
 		r, err := model.Chat(cctx, ai.Request{System: system, Messages: []ai.Message{{Role: ai.RoleUser, Content: input}}, MaxTokens: room})
 		cancel()
 		switch {
+		case runHeldBack(err): // not asked, and asking again now ends the same way (models_run.go): a stand-in for now
+			s.logf("title: %v", err)
+			return fallback(false)
 		case err != nil && ai.Transient(err) && !failed && ctx.Err() == nil:
 			s.logf("title: %v (asking once more)", err)
 			failed = true
