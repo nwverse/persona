@@ -200,13 +200,21 @@ func TestStrengthPageManageChoiceCancelAndPagination(t *testing.T) {
 	if draft.Revision != 1 {
 		t.Fatal("cancel wrote draft")
 	}
-	res = strengthPageHTTP(t, s, p, "save", map[string]string{"exercise_0": other.ID}, 11)
+	// Save includes the latest local control values even before their debounce fires.
+	res = strengthPageHTTP(t, s, p, "save", map[string]string{"exercise_0": other.ID, "weight_0": "52.5", "reps_0": "8", "warmup_0": "true"}, 11)
 	if !res.Pop {
 		t.Fatal("choice save did not pop")
 	}
 	draft, _ = d.HealthStrengthDraft(ctx, ids.Draft)
 	if !strings.Contains(string(draft.Body), other.ID) {
 		t.Fatal("exercise choice not saved")
+	}
+	var body strengthDraftBody
+	if err = json.Unmarshal(draft.Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if *body.Sets[0].Weight != 52.5 || body.Sets[0].Reps != 8 || !body.Sets[0].Warmup {
+		t.Fatal("save lost pending control values", string(draft.Body))
 	}
 	// More than one page of managed exercises must still fit the shared 300-item protocol bound.
 	es = nil

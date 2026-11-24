@@ -270,12 +270,9 @@ func (s *Service) healthStrengthUI(w http.ResponseWriter, r *http.Request, req w
 			res.Toast = strengthText(l, "changed")
 			break
 		}
-		for i := range p.Work {
-			if v, ok := req.Values["exercise_"+strconv.Itoa(i)]; ok {
-				p.Work[i].Exercise = strings.ToLower(v)
-			}
-		}
-		if checkDraftSets(p.Work, es) != nil {
+		// A submit can overtake a debounced control action. Reconcile every submitted
+		// value before saving or changing the working copy's row indexes.
+		if applyStrengthWorkValues(p.Work, req.Values) != nil || checkDraftSets(p.Work, es) != nil {
 			bad()
 			return
 		}
@@ -317,37 +314,6 @@ func (s *Service) healthStrengthUI(w http.ResponseWriter, r *http.Request, req w
 			p.Work = slices.Delete(p.Work, index, index+1)
 			break
 		}
-		v := &p.Work[index]
-		if value, yes := req.Values["weight_"+id]; yes {
-			n, e := strconv.ParseFloat(value, 64)
-			if e != nil {
-				bad()
-				return
-			}
-			v.Weight = &n
-		}
-		if value, yes := req.Values["reps_"+id]; yes {
-			n, e := strconv.Atoi(value)
-			if e != nil {
-				bad()
-				return
-			}
-			v.Reps = n
-		}
-		if value, yes := req.Values["exercise_"+id]; yes {
-			v.Exercise = strings.ToLower(value)
-		}
-		if value, yes := req.Values["warmup_"+id]; yes {
-			if value != "true" && value != "false" {
-				bad()
-				return
-			}
-			v.Warmup = value == "true"
-		}
-		if checkDraftSets(p.Work, es) != nil {
-			bad()
-			return
-		}
 	default:
 		bad()
 		return
@@ -375,6 +341,37 @@ func (s *Service) healthStrengthUI(w http.ResponseWriter, r *http.Request, req w
 	}
 	res.View = &view
 	intakeJSON(w, res)
+}
+
+func applyStrengthWorkValues(work []draftSet, values map[string]string) error {
+	for i := range work {
+		v := &work[i]
+		suffix := "_" + strconv.Itoa(i)
+		if value, ok := values["exercise"+suffix]; ok {
+			v.Exercise = strings.ToLower(value)
+		}
+		if value, ok := values["weight"+suffix]; ok {
+			n, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				return err
+			}
+			v.Weight = &n
+		}
+		if value, ok := values["reps"+suffix]; ok {
+			n, err := strconv.Atoi(value)
+			if err != nil {
+				return err
+			}
+			v.Reps = n
+		}
+		if value, ok := values["warmup"+suffix]; ok {
+			if value != "true" && value != "false" {
+				return errors.New("invalid warmup value")
+			}
+			v.Warmup = value == "true"
+		}
+	}
+	return nil
 }
 
 func strengthPageSets(rows []assistantwire.StrengthSet, p strengthPageState, now time.Time, loc *time.Location) []assistantwire.StrengthSet {
