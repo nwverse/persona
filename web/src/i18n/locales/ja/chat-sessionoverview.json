@@ -4,7 +4,6 @@
   "subagents": "サブエージェント",
   "swarm": "Swarm",
   "swarm_workers": "{count} 件のワーカー",
-  "swarm_working": "実行中",
   "swarm_waiting": "待機中",
   "swarm_stopped": "停止済み",
   "swarm_unknown": "状態不明",

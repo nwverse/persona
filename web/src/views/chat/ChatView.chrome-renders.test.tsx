@@ -402,7 +402,7 @@ it("shows the native Antigravity Swarm status in the session overview", async ()
   act(() => roster.querySelector("summary")!.click());
   expect(roster.open).toBe(true);
   expect([...roster.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
-    "Build" + t("chat-sessionoverview.swarm_working"),
+    "Build" + t("lib-state-labels.working"),
     "Review" + t("chat-sessionoverview.swarm_waiting"),
   ]);
   info = { swarm_workers: [{ name: "Review", state: "stopped" }] };

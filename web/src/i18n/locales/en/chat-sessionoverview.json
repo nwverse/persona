@@ -5,7 +5,6 @@
   "swarm": "Swarm",
   "swarm_workers_one": "{count} worker",
   "swarm_workers_other": "{count} workers",
-  "swarm_working": "Working",
   "swarm_waiting": "Waiting",
   "swarm_stopped": "Stopped",
   "swarm_unknown": "Status unknown",

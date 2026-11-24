@@ -8,6 +8,7 @@ import { ago, shortPath } from "../../lib/format";
 import { api, credentialOwner, sessionPath } from "../../lib/api";
 import { openPanel } from "../../lib/panel";
 import { getSession, useStore } from "../../lib/store";
+import { stateName } from "../../lib/state-labels";
 import { taskLabel, taskPill, type TaskIndex } from "../../lib/tasks";
 import { finishedBackgroundTasks, type FinishedTask } from "../../lib/finished-tasks";
 import { tsMs, workDuration } from "../../lib/work-groups";
@@ -135,7 +136,7 @@ function SwarmRoster({ mid, sid }: { mid: string; sid: string }) {
   }, [mid, sid]);
   if (!workers.length) return null;
   const labels = {
-    working: t("chat-sessionoverview.swarm_working"),
+    working: stateName("working"), // one name for Working everywhere (lib/state-labels.ts, #3415)
     waiting: t("chat-sessionoverview.swarm_waiting"),
     stopped: t("chat-sessionoverview.swarm_stopped"),
     unknown: t("chat-sessionoverview.swarm_unknown"),
