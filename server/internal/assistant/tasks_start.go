@@ -164,6 +164,13 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 					todo = moved
 				}
 			}
+			if t.Audience != "" && todo.Audience != t.Audience {
+				if updated, err := s.editTodo(ctx, todo.ID, db.TodoEdit{Audience: &t.Audience}); err != nil {
+					s.logf("task %s: audience: %v", todo.ID, err)
+				} else {
+					todo = updated
+				}
+			}
 		} else {
 			title, retitle := s.taskTitle(ctx, t.Title, t.Prompt) // the assistant's own title stays when it is a real one
 			if t.InboxItem != "" {
@@ -172,9 +179,9 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 				s.tasks.mu.Unlock()
 			}
 			if t.containerWorkspace() && len(t.Workspace.Container.SelectedRepoIDs) > 0 {
-				todo, err = s.createTaskTodoWithRepositories(ctx, t.ReservedTodoID, title, t.Prompt, p.Conversation, p.ID, t.Project, t.InboxItem, t.Workspace.Container.SelectedRepoIDs)
+				todo, err = s.createTaskTodoWithRepositoriesAndAudience(ctx, t.ReservedTodoID, title, t.Prompt, p.Conversation, p.ID, t.Project, t.InboxItem, t.Audience, t.Workspace.Container.SelectedRepoIDs)
 			} else {
-				todo, err = s.createTaskTodoAs(ctx, t.ReservedTodoID, title, t.Prompt, p.Conversation, p.ID, t.Project, t.InboxItem)
+				todo, err = s.createTaskTodoAs(ctx, t.ReservedTodoID, title, t.Prompt, p.Conversation, p.ID, t.Project, t.InboxItem, t.Audience)
 			}
 			if err != nil {
 				if t.InboxItem != "" {
