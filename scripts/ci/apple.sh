@@ -550,14 +550,17 @@ fi
         printf "%s\n" "unavailable: bundle signature collection incomplete" > "$watch_log/product-$product-bundle-signature.pending"
         mv "$watch_log/product-$product-bundle-signature.pending" "$watch_log/product-$product-bundle-signature.txt"
       done
-      # Give the observer its own group so a probe deadline cannot leave its
-      # detached collectors behind. Both steps use the unchanged budget.
+      # Noninteractive Bash gives the observer a separate process group only
+      # with job control enabled. The bounded readiness runner must never kill
+      # this group while it finishes its bounded final evidence.
+      set -m
       bash -c "exec python3 \"\$@\"" -- "$ci_root/scripts/ci/apple_readiness_watch.py" \
         --udid "$udid" --bundle-id "$bundle_id" --scope-root "$output" \
         --app "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/Persona" \
         --test-bundle "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/PlugIns/PersonaTests.xctest/PersonaTests" \
         --output "$watch_log" --seconds 900 &
       watcher=$!
+      set +m
       stop_watcher() {
         local code=$?
         trap - EXIT TERM INT
