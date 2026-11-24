@@ -80,6 +80,7 @@ struct ModulesTests {
         for place in [PersonaHostApp.Place.chatMenu, .chatFooter, .toolCall] { #expect(off.views(at: place).isEmpty) }
         #expect(off.settingsEntry(id: "live-screen") == nil)
         #expect(off.capability((any LiveScreen).self) == nil)
+        #expect(off.audioLease(id: "screen-share.pip") == nil)
     }
 
     @Test func screenShareOnServesItsPlaces() {
@@ -90,6 +91,7 @@ struct ModulesTests {
         }
         #expect(on.settingsEntry(id: "live-screen")?.module == "screen-share")
         #expect(on.capability((any LiveScreen).self) != nil)
+        #expect(on.audioLease(id: "screen-share.pip") == ModuleAudioLease(id: "screen-share.pip", module: "screen-share", kind: .playback))
     }
 
     @Test func screenShareFollowsItsHubFlag() {

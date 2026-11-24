@@ -107,6 +107,7 @@ struct CallSourceTests {
     /// cannot be (a recording, which is refused during one). A new place fails here until it is given one.
     @Test func everyAudioSessionChangeHasAVerdictForALiveCall() throws {
         let audited: [String: (verdict: String, gate: String?)] = [
+            "Shared/AudioSessionBroker.swift": ("the core audio-session broker: every call site below routes through it with its own live-call verdict", nil),
             "Persona/Calls/CallRoute.swift": ("the call's own Speaker", nil),
             "Persona/Calls/CallSystem.swift": ("the call's own: the watchdog's one activation, the Simulator's stand-in", nil),
             "Persona/Calls/PersonaCalls.swift": ("the call's own category, before its Start or as it rings", nil),

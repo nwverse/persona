@@ -125,6 +125,8 @@ struct InteractionPreviewCard: View {
     var inCell = false
     /// Under its session's first card in the Agents list (`AgentsNeedsYou`), a card does not repeat the session's place.
     var showsPlace = true
+    /// Optional promoted herdr tab name override when `use_herdr_tab_name` is on (#13899).
+    var sessionTitleOverride: String? = nil
     var open: () -> Void
 
     var body: some View {
@@ -136,7 +138,7 @@ struct InteractionPreviewCard: View {
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(title).font(Theme.Font.heading).lineLimit(2) // a row title may wrap; the buttons below never do
                     if showsPlace {
-                        Text(interaction.placeLine(machine: machine))
+                        Text(interaction.placeLine(machine: machine, sessionTitleOverride: sessionTitleOverride))
                             .font(Theme.Font.label)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -2860,7 +2862,7 @@ struct SessionlessCardSheet: View {
 extension Interaction {
     /// The line under a card's title in a list: its session's title; a sessionless card says where it comes from, and
     /// Script when its title does not already name who asks (`personad ask` labels its cards Script, docs/integrations/script-cli.md).
-    func placeLine(machine: String?) -> String {
+    func placeLine(machine: String?, sessionTitleOverride: String? = nil) -> String {
         if requestHomeKey != sessionKey {
             let title = sessionTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             // A side session's card says so (#7944), in the words its parent's chat uses.
@@ -2871,7 +2873,7 @@ extension Interaction {
             return String(localized: "From subagent · \(name)")
         }
         let mark = (agentLabelHint ?? "").isEmpty ? String(localized: "Script") : nil
-        let parts: [String?] = isSessionless ? [mark, sessionlessPlace, machine] : [sessionTitle, machine]
+        let parts: [String?] = isSessionless ? [mark, sessionlessPlace, machine] : [sessionTitleOverride ?? sessionTitle, machine]
         return parts.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 }

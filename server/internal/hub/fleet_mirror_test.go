@@ -152,6 +152,9 @@ func (d *mirrorDevices) HeldMessages(string, i18n.Lang) map[string][]proto.Undel
 }
 func (d *mirrorDevices) HeldRetry(context.Context, string, string) (bool, error)  { return false, nil }
 func (d *mirrorDevices) HeldDelete(context.Context, string, string) (bool, error) { return false, nil }
+func (d *mirrorDevices) AgentTransfer(context.Context, devices.AgentTransfer) (devices.AgentTransferResult, error) {
+	return devices.AgentTransferResult{}, &devices.AgentTransferError{Code: "offline", Message: "no transfers on the mirror"}
+}
 
 // mirrors are the tests' hubs' mirror devices.
 var mirrors sync.Map // *Hub → *mirrorDevices

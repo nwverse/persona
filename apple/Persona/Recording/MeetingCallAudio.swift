@@ -225,7 +225,7 @@ nonisolated final class MeetingTalkTap: @unchecked Sendable {
         playout = VoicePlayout(rate: format.outputRate)
         clock.restart()
         tap.connect(uplink)
-        Self.log.notice("meeting call: the voice plays on the recorder's player (\(PhoneVoiceAudio.describe(AVAudioSession.sharedInstance()), privacy: .public), echo cancellation \(self.cancelsEcho, privacy: .public))")
+        Self.log.notice("meeting call: the voice plays on the recorder's player (\(PhoneVoiceAudio.describe(), privacy: .public), echo cancellation \(self.cancelsEcho, privacy: .public))")
     }
 
     func reconfigure(_ format: VoiceAudioFormat) throws {
@@ -356,7 +356,7 @@ nonisolated final class MeetingTalkTap: @unchecked Sendable {
         let left = max(0, measured ?? 0)
         guard left > 0 || playout.isHolding || (measured == nil && !queued.isEmpty) else { return }
         let amount = measured == nil ? "an unknown amount" : "\(Int((left * 1000).rounded())) ms"
-        let route = PhoneVoiceAudio.describe(AVAudioSession.sharedInstance().currentRoute)
+        let route = PhoneVoiceAudio.describe(AudioSessionBroker.shared.currentRoute)
         Self.log.notice("meeting call: cut off with \(amount, privacy: .public) still in the player\(self.playout.isHolding ? " and more held" : "", privacy: .public) (\(route, privacy: .public), echo cancellation \(self.cancelsEcho, privacy: .public))")
     }
 

@@ -75,6 +75,10 @@ type PlanTask struct {
 	Speed              string `json:"speed,omitempty"`
 	Tier               string `json:"tier,omitempty"`
 	Permission         string `json:"permission,omitempty"`
+	// Host: where the task's Agent starts, as task_plan named it: agy (the computer's Antigravity companion, which has
+	// no terminal) or one of the computer's engine hosts. "" lets the hub choose: the companion for an agy launcher it
+	// runs, else the computer's default host (start_host.go, #13447).
+	Host string `json:"host,omitempty"`
 	// StartPermission is the effective mode of the last started assignment, not a caller choice. It lets task_spawn
 	// recover that mode when an older node omits the live parent permission.
 	StartPermission string `json:"start_permission,omitempty"`
@@ -165,6 +169,10 @@ type PlanTask struct {
 	// Project: the knowledge-base project the task's todo goes in (#2581, todo_project.go), checked and kept as its slug
 	// when the plan is made; "" for none.
 	Project string `json:"project,omitempty"`
+	// Audience: optional to-do audience ("human" or "autonomous"); "" for unset/legacy (#14619).
+	Audience string `json:"audience,omitempty"`
+	// DirectionID: optional organizational direction membership, decoupled from runtime supervision (#14660).
+	DirectionID string `json:"direction_id,omitempty"`
 	// SkipProjectMemory omits the automatic project/direction handoff for this start only. It is persisted so queued
 	// starts, retries and reloads keep the caller's choice; the assignment and to-do decisions are unaffected (#13538).
 	SkipProjectMemory bool `json:"skip_project_memory,omitempty"`

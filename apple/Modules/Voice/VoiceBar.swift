@@ -86,13 +86,24 @@ struct VoiceBar: View {
         .accessibilityIdentifier("voice-bar")
     }
 
-    /// The bound conversation's pending cards (with `-showVoiceSample`'s made-up one in DEBUG, as the page shows it).
+    /// The bound conversation's pending cards that the user may answer (leaving out cards a task's supervisor holds;
+    /// with `-showVoiceSample`'s made-up one in DEBUG, as the page shows it).
     private var pendingCards: [Interaction] {
         var cards = model.interactions(for: key)
         #if DEBUG
         cards += VoiceSample.cards(key)
         #endif
-        return cards
+        return Self.answerableCards(cards)
+    }
+
+    /// Pending cards the voice bar may announce, count, or offer to answer: excludes cards a task's supervisor holds.
+    nonisolated static func answerableCards(_ cards: [Interaction]) -> [Interaction] {
+        cards.filter(\.answerableHere)
+    }
+
+    /// The plan card `Send Back as Feedback` resolves: nil when absent or held by its task's supervisor.
+    nonisolated static func returnablePlan(id: String, in cards: [Interaction]) -> Interaction? {
+        cards.first { $0.id == id && $0.answerableHere }
     }
 
     // MARK: The top row
@@ -435,7 +446,7 @@ struct VoiceBar: View {
         case .returnPlan(let card, _, let run):
             // The app's own answer to the card (decision 5: the user tapped it), with the refused words as the feedback.
             call.dismiss(run: run)
-            guard let plan = cards.first(where: { $0.id == card }), let answer = action.resolution else { return }
+            guard let plan = Self.returnablePlan(id: card, in: cards), let answer = action.resolution else { return }
             Task { await model.resolve(plan, answer) }
         case .dismiss(let run):
             call.dismiss(run: run)
