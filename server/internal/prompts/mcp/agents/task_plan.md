@@ -180,11 +180,19 @@ Workspace policy: "new" isolates a checkout; {"new":{"branch":"task/my-change"}}
           "expect_minutes": {
             "type": "integer",
             "minimum": 0,
-            "description": "Optional minutes override. Omit/0: comparable history, or the 60-minute system_default; positive: override. Review at 1×; stuck at 1.5× (min 20m); overdue at 3× (min 24h)."
+            "description": "Optional minutes override (omit/0: history or 60m default). Review 1×; stuck 1.5× (min 20m); overdue 3× (min 24h)."
           },
           "project": {
             "type": "string",
             "description": "Existing kb_list projects slug/name for a clear long-term area; no near-duplicates."
+          },
+          "audience": {
+            "type": "string",
+            "enum": [
+              "human",
+              "autonomous"
+            ],
+            "description": "Optional: human or autonomous."
           },
           "part_of": {
             "type": "string",
@@ -203,7 +211,7 @@ Workspace policy: "new" isolates a checkout; {"new":{"branch":"task/my-change"}}
           },
           "inbox_item": {
             "type": "string",
-            "description": "Handed-off Inbox ID, or 'none' for unrelated work. Checks the conversation and manager; links without filing or replying."
+            "description": "Handed-off Inbox ID or 'none'; links without filing/replying."
           },
           "tier": {
             "type": "string",
