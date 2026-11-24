@@ -991,3 +991,14 @@ Cache keepalive revoked every role this way and never mounted a proxy, while its
 inventory with `Assistant: true`. Judge a raw row with `fleetMachine.isAssistant` (its directory), and build test
 inventories the way a node sends them. The same feature also needed Claude Code's `ENABLE_PROMPT_CACHING_1H`: without
 it the CLI declares only five-minute markers on an API key or a gateway, whatever TTL the gateway applies later.
+
+## A start path of its own skips what the shared start decides (#14887)
+
+`a2a_send`'s new Agent and `dispatch_start` built their own `session.start`, so they never got two things `agent_start`
+and `task_plan` decide before a start goes out: the start host (an agy launcher on the computer's Antigravity companion,
+`companionStartHost`, #13447) and the read-only refusal (`readonlyLauncherRefusal`, #8316). An agy launch, in `plan` by
+default, went to a pane, where the node refused it after its A2A task was recorded. The failed task then said "Persona
+could not confirm the Agent started.", the words for an unknown outcome, about a definite refusal with a reason. A path
+that starts an Agent readies its start with the same steps as the others (`agentStartedHost`,
+`server/internal/assistant/start_host.go`), refuses what it can before anything is recorded, and keeps a definite
+refusal's reason; only an outcome that is really unknown says it is unknown.
