@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -360,6 +361,24 @@ class VoiceMockTests(unittest.TestCase):
             self.assertEqual(caption["text"], "今天下午")
         finally:
             ws.close()
+
+
+class VoiceCallRegistrationTests(unittest.TestCase):
+    def test_ready_is_sent_after_the_call_can_accept_unprompted(self):
+        import voice_mock
+
+        hub = mock.Mock(VOICE_MODELS={"default": "voice-fast"}, SESSIONS=[], ASSISTANT=[], LOG=mock.Mock())
+        handler = mock.Mock()
+        call = voice_mock.Call(hub, handler, {"type": "start", "protocol": 2, "target": TARGET})
+        seen = []
+        with mock.patch.object(voice_mock, "CALLS", []), \
+             mock.patch.object(call, "say", side_effect=lambda frame: seen.append((frame, list(voice_mock.CALLS)))), \
+             mock.patch.object(voice_mock, "_read_frame", return_value=None), \
+             mock.patch.object(call, "script"):
+            call.run()
+        self.assertEqual(seen[0][0]["type"], "ready")
+        self.assertEqual(seen[0][1], [call])
+        self.assertEqual(voice_mock.CALLS, [])
 
 
 if __name__ == "__main__":
