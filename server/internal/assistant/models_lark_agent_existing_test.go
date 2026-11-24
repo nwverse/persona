@@ -140,6 +140,12 @@ func TestLarkAgentExistingConversationSwitchesExecutionBeforeSending(t *testing.
 	if first[0]["client_msg_id"] != "lark-next-input" || first[0]["model"] != "new-model" || first[0]["effort"] != "high" || !strings.Contains(text, "continue in the existing topic") || !strings.Contains(text, "<persona-context") {
 		t.Fatalf("original input or context handoff missing: %v", first[0])
 	}
+	waitFor(t, "Lark model switch to accept its delivered input", func() bool {
+		r.s.wakeConversationSwitches()
+		r.s.logicalSweep(ctx)
+		active, err := r.d.LogicalConversation(ctx, "server", sid)
+		return err == nil && active != nil && active.Switch == nil && active.Epoch == 2
+	})
 	active, err := r.d.LogicalConversation(ctx, "server", sid)
 	if err != nil || active.Switch != nil || active.Epoch != 2 {
 		t.Fatalf("switch not accepted after its first input: %+v %v", active, err)

@@ -26,8 +26,7 @@ func (s *Service) larkAgentFollowsCurrentModel(ctx context.Context, machine, sid
 	if model, _ := params["model"].(string); strings.TrimSpace(model) != "" {
 		return false, nil
 	}
-	origins, ok := s.conversationOrigins()
-	if !ok || origins[sid].origin != OriginLarkAgent {
+	if !s.larkAgentConversation(ctx, machine, sid) {
 		return false, nil
 	}
 	binding, err := s.resolveModel(ctx, purposeLarkAgent)
@@ -79,6 +78,17 @@ func (s *Service) larkAgentFollowsCurrentModel(ctx context.Context, machine, sid
 	defer delete(params, larkAgentInheritedModelKey)
 	_, err = s.logicalSendModel(ctx, machine, sid, params)
 	return true, err
+}
+
+func (s *Service) larkAgentConversation(ctx context.Context, machine, sid string) bool {
+	b := &s.origins
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.originsLocked(ctx) {
+		return false
+	}
+	o := b.m[sid]
+	return o != nil && o.Origin == OriginLarkAgent && (o.MachineID == "" || o.MachineID == machine)
 }
 
 func (s *Service) larkAgentApplyCurrentModel(ctx context.Context, params map[string]any, binding ModelBinding, launcher string, lang i18n.Lang) error {
