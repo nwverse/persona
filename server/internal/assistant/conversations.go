@@ -1649,12 +1649,15 @@ func (s *Service) toolConversationNew(ctx context.Context, self string, args jso
 		return "", err
 	}
 	var preset ModelTier
+	var tierChoice tierPick
 	a.Tier = strings.TrimSpace(a.Tier)
 	if a.Tier != "" {
-		preset, err = s.tierModel(ctx, a.Tier)
+		// the conversation starts on the main chat's computer: the tier's candidate is picked for that one
+		tierChoice, err = s.pickTierCandidate(ctx, a.Tier, tierFacts{Machine: s.settings(ctx).MachineID})
 		if err != nil {
 			return "", err
 		}
+		preset = tierChoice.Tier
 	}
 	counted := time.Now()
 	hop, _, err := s.relayAllowedOn(s.relayRouteFor(ctx, self), self, relayNewKey, counted) // an opening message is a request, never an answer
@@ -1703,6 +1706,9 @@ func (s *Service) toolConversationNew(ctx context.Context, self string, args jso
 	if a.Tier != "" {
 		run := ModelTier{Launcher: c.Launcher, Model: c.Model, Effort: c.Effort}
 		note += " " + i18n.T(lang, "assistant-conversations.started_on", i18n.Args{"run": run.runs()})
+		row := modelRoutingOf(tierChoice, c.MachineID)
+		row.SessionID = c.SessionID
+		s.recordModelRouting(ctx, row)
 		pick := modelPick{MachineID: c.MachineID, Launcher: preset.Launcher, Model: preset.Model, Effort: preset.Effort, At: time.Now().UTC()}
 		if err := s.setModelPick(sctx, c.SessionID, &pick); err != nil {
 			note += " " + i18n.T(lang, "assistant-conversations.pick_save_failed", i18n.Args{"error": err.Error()})
