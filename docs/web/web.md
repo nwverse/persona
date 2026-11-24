@@ -1401,8 +1401,9 @@ so the sidebar entry, the full page (`/extension/-pages/<id>`), the deep link, t
   the switch turned) asks for the list again (`lib/extension-slots.ts`). A page's content change is the ordinary
   `extension_ui {extension: "-pages", id, invalidate: true}`.
 - **Sidebar**: the index and pinned pages are extension pages in `useNavPages`. The hub puts their keys in the navigation
-  record's `shown` on the first Keep and on a pin, so `EXTENSION_CAP` never sends them under More; with three extension
-  nav pages installed, the third waits there instead.
+  record's `shown` on the first Keep and on a pin, so `EXTENSION_CAP` never sends them under More: they count toward the
+  cap first, and with three extension nav pages installed the extensions' pages past it wait there instead (two of the
+  three beside the index and one pinned page).
 - **Top bar** (`views/extensions/ExtensionSlots.tsx`): titled by the drawn View's `title` (the page's title, written by the
   hub), then the place's, then **Dashboards**, never the `pg_…` id, so an unpinned page opened by a deep link reads right.
   Every page but the index has the ownership line under its title at every width (`docs/design/DESIGN_SYSTEM.md`
