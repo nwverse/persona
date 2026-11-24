@@ -66,7 +66,7 @@ func TestRelayFailureClassification(t *testing.T) {
 	}
 	for _, code := range []string{proto.CodeClaudeMissing, proto.CodeLauncherMissing, proto.CodeNodeOutdated, "no_device",
 		"adapter_credentials_missing", "adapter_disabled", "adapter_config_conflict", "launcher_out_of_scope", "launcher_own_service",
-		"launcher_other_kind", "assistant_launcher_profile_switch"} {
+		"launcher_other_kind", "assistant_launcher_profile_switch", "assistant_model_unresolved"} {
 		cases = append(cases, row{code, coded(code), relayFailedSetup})
 	}
 	for _, code := range relayBusyCodes {

@@ -117,7 +117,21 @@ type Layer interface {
 // (internal/assistant's feishu*.go), the host serves it under the same names, and the module's layer forwards to it;
 // each later move takes code into the module and drops the host methods it no longer needs.
 type Host interface {
-	Outbound
+	Status(ctx context.Context) (assistantwire.FeishuStatus, error)
+	Features(ctx context.Context) (f assistantwire.FeishuFeatures, ready bool)
+	Post(ctx context.Context, to Target, replyTo string, card *botcard.Card, fallback, key string) (messageID string, err error)
+	Note(ctx context.Context, to Target, replyTo, text string)
+	Reply(ctx context.Context, to Target, replyTo, text, key string, full bool) error
+	UpdateCard(ctx context.Context, messageID string, card *botcard.Card) error
+
+	// What a to-do's topic lines read of the core.
+	ThreadOf(todoID string) (chatID, threadID string, ok bool)
+	StatusKept(ctx context.Context) (assistantwire.FeishuStatus, error)
+	TopicMessage(ctx context.Context, chatID, threadID string) string
+	ForgetTopicMessage(ctx context.Context, chatID, threadID, messageID string)
+	TodoLink(web, todoID string) string
+	PostNow() time.Time
+	PostLater(d time.Duration, f func())
 
 	// What the turn rendering needs of the core.
 	Logf(format string, args ...any)

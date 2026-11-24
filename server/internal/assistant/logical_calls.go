@@ -401,7 +401,8 @@ func (s *Service) logicalSendModel(ctx context.Context, machine, session string,
 	}
 	c, err := st.LogicalConversation(ctx, machine, session)
 	if err != nil {
-		return true, err
+		s.logf("load logical conversation model (%s/%s): %v", machine, short(session), err)
+		return true, i18n.Err("assistant-model_pick.err_unreadable")
 	}
 	if c == nil || c.Epoch == 1 {
 		return false, nil
