@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"sort"
@@ -169,8 +170,13 @@ func (h *Hub) mergedAsk(w http.ResponseWriter, r *http.Request) ([]string, []byt
 // mergeList answers a list request: a request for a manager (one it names, an extension's: its own, impliedManager) gets
 // that manager's answer, else every manager is asked (ask, one after the other: the managers are few) and the lists under key merged, the default's first. Every
 // item is stamped with its manager. A manager that does not answer is left out; when none does, the default's
-// answer is given as it is.
+// answer is given as it is. A paginated to-dos read is one manager's (pagedTodoList): its cursor cannot name rows of
+// another manager's list.
 func (h *Hub) mergeList(w http.ResponseWriter, r *http.Request, key string, ask func(w http.ResponseWriter, r *http.Request, id string)) {
+	if key == "todos" && (r.URL.Query().Has("limit") || r.URL.Query().Has("cursor")) {
+		h.pagedTodoList(w, r, key, ask)
+		return
+	}
 	ids, body, ok := h.mergedAsk(w, r)
 	if !ok {
 		return
@@ -270,6 +276,36 @@ func decodedTodoIDs(body []byte) []string {
 // pagedList answers a request on one of pagedLists: the one manager's answer (the one it names, an extension's own,
 // else the default), each item under key stamped with it; the rest of the answer (the cursor) as it is.
 func (h *Hub) pagedList(w http.ResponseWriter, r *http.Request, key string, ask func(w http.ResponseWriter, r *http.Request, id string)) {
+	id, ok := h.owner(w, r, h.byRequest)
+	if !ok {
+		return
+	}
+	bw := newBufferedWriter()
+	ask(bw, r, id)
+	writeMerged(w, key, []listAnswer{{id: id, status: cmp.Or(bw.status, http.StatusOK), header: bw.header, body: bw.body.Bytes(), localize: bw.localize}})
+}
+
+// pagedTodoList answers a paginated to-dos read from one manager. A cursor belongs to one manager's list, so merging
+// pages would silently drop the other managers' rows. The request names its manager (X-Persona-Manager or ?manager=),
+// an extension's token implies its own, and a hub with exactly one manager answers from it; otherwise the read is
+// refused rather than answered from part of the list.
+func (h *Hub) pagedTodoList(w http.ResponseWriter, r *http.Request, key string, ask func(http.ResponseWriter, *http.Request, string)) {
+	named, err := impliedManager(r)
+	if err != nil {
+		writeErrCode(w, http.StatusForbidden, codeOtherManager, err)
+		return
+	}
+	if named == "" {
+		ids := h.listManagers(r.Context())
+		if len(ids) != 1 {
+			writeErrCode(w, http.StatusBadRequest, "todos_pagination_manager_required",
+				errors.New("a paginated to-do list is one manager's: name it with X-Persona-Manager or the manager query parameter"))
+			return
+		}
+		named = ids[0]
+		r = r.Clone(r.Context())
+		r.Header.Set(assistantwire.ManagerHeader, named)
+	}
 	id, ok := h.owner(w, r, h.byRequest)
 	if !ok {
 		return
