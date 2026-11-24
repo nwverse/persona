@@ -5108,6 +5108,7 @@ private struct AgentsDestinations: ViewModifier {
             .navigationDestination(for: MachineListRoute.self) { _ in MachinesView().splitDetailPage() }
             .navigationDestination(for: TerminalsRoute.self) { r in TerminalsView(only: r.machine).splitDetailPage() }
             .navigationDestination(for: MachineDetailRoute.self) { r in MachineDetailView(ref: r.ref).splitDetailPage() }
+            .navigationDestination(for: MachineUsageMapRoute.self) { r in UsageMapView(route: r).splitDetailPage() }
             .navigationDestination(for: PersonalAgentsRoute.self) { _ in PersonalAgentListView().splitDetailPage() }
             .navigationDestination(for: PersonalAgentSession.self) { s in PersonalAgentSessionView(session: s).id(s.id).splitDetailPage() }
             .navigationDestination(for: TodoDetailRoute.self) { r in

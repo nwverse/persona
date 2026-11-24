@@ -3605,6 +3605,30 @@ Right-click a worktree title, branch or direct Agent row on Mac, or long-press i
 
 New Session also offers a searchable workspace picker, with full ancestor paths and an explicit Choose by Folder fallback. A chosen workspace sends its source ID and directory to the existing session-start route. New Child Worktree separates Code Source (the repository and base commit) from Parent Worktree (any Orca workspace on the same computer, including empty folders and other projects). On a phone, the selected parent's name has its own line above the ancestor path so a deep breadcrumb cannot hide the selected destination. The node advertises `choose_parent` before the client enables independent parent selection. With `automatic_name`, Create Worktree is ready without entering a branch or path on every supported engine. The native form keeps those overrides in Advanced, collapsed initially. An unnamed create sends `auto_name: true`. Orca receives a generated creature seed without a branch override and owns its prefix, retired-name/collision policy and first-work rename. Other supported hosts use a unique node-generated branch and directory through their existing creation route; subsequent naming follows the host’s capabilities. Explicit branch/path inputs retain their existing validation; older nodes keep the manual form. A created worktree appears through discovery even if the New Session form is cancelled before an Agent starts. Stale explicit launch targets and missing parents are refused rather than silently redirected.
 
+## Disk usage map (#14576)
+
+The contract is `docs/server/machine-usage-map.md`; the look and the interactions are `docs/design/DESIGN_SYSTEM.md`
+"Usage treemap".
+
+- Ways in: the Disk almost full chip on a computer's card and the Disk tile in its details open the map in reclaim mode
+  when the disk level is raised (the biggest reclaimable items are marked and listed as chips under a headline); a
+  banner in the details, shown while the disk is above normal, offers "See What's Using Space". The route is
+  `MachineUsageMapRoute` (registered next to `MachineDetailRoute`; on iPad it opens in the right column).
+- Wire models: `PersonaWire/MachineUsageMap.swift` (unknown enum values decode to a fallback). Calls:
+  `APIClient` "Disk usage map" (usage, trash / untrash / purge, the existing `POST /cleanup`, offload providers,
+  inventory, run, jobs).
+- `UsageMapModel` (`@Observable`, `Deps` for tests with `FakeHub`) polls while the hub is still measuring and only
+  while the page is visible (`.tabActiveTask(id:)`), keeps a zoom trail per side, the selection, the tint (kind or last
+  used), the providers and the inventory. Layout runs off the main thread (`TreemapLayout`, cached by node id, size and
+  depth). An offload that answers 409 `tool_install_required` asks a second, separate confirmation to install the tool;
+  the job is polled until it ends, then the map refreshes in place. Trash shows an Undo notice; Delete Permanently
+  is its own confirmation.
+- No provider: the cloud side's empty state links to Settings › Extensions. An older hub without the usage route shows
+  "Can't Show the Disk" with what to update.
+- Debug: `-tab settings -openMachines YES -openUsageMap <machine>` (or `reclaim:<machine>`). Mock: `MOCK_USAGE_MAP=1`
+  (`old` answers as a hub without the route). UI test: `UsageMapUITests` with
+  `TEST_RUNNER_PERSONA_USAGE_MAP_HUB=http://127.0.0.1:<port>`.
+
 ## Model profiles
 
 Settings › Models (`ModelConfigurationView`, `ModelProfilesViews.swift`, `ModelProfilesModel.swift`, `apple/Shared/ModelProfiles.swift`) adds **Model Profiles** backed by `/api/v1/model-profiles` (hidden cleanly when an older hub returns 404). Each profile row opens a sheet (`ModelProfileSheet`) to inspect its Agent presets, purpose bindings, managed launcher overrides, and any fields that differ from the current live configuration (`changes`). Both profile detail (`ModelProfileDetailView`) and the interactive editor (`ModelProfileEditorView`) expose **Update from current configuration** (`PUT /api/v1/model-profiles/{id}` with minimal `{ revision, name, description?, capture: true }`, preserving Agent presets and handling 409 Conflict reload recovery).

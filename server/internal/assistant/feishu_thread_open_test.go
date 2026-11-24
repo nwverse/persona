@@ -533,7 +533,7 @@ func withMentions(ev botcard.MessageEvent) botcard.MessageEvent {
 // looked for and before the words become the title and the notes; an @ further in is the person's name, or stays as it
 // stands when the mentions do not give one. Text and rich-text messages alike.
 func TestOpeningTakesOffTheBotsMention(t *testing.T) {
-	needsLarkLayer(t) // the chat is the lark module's
+	needsLarkLayer(t)                                // the chat is the lark module's
 	post := func(parts ...string) (string, string) { // a rich-text message: an @ of the bot, then text
 		body, _ := json.Marshal(map[string]any{"title": "", "content": [][]map[string]string{{
 			{"tag": "at", "user_id": "ou_bot", "user_name": "示例机器人"}, {"tag": "text", "text": " " + strings.Join(parts, "")}}}})
