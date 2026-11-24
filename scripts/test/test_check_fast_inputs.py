@@ -344,7 +344,7 @@ class CheckFastServerInputsTests(unittest.TestCase):
                                  self.vet_calls(), out)
 
     def test_a_group_with_no_windows_package_is_left_out_of_the_windows_vet(self):
-        # Every file of server/internal/fleetsoak is //go:build unix and server/cmd/password-wasm is js && wasm: given
+        # Every file of server/scripts/fleetsoak is //go:build unix and server/cmd/password-wasm is js && wasm: given
         # only such groups, GOOS=windows go vet says "no packages to vet" and exits 1, where CI's ./... passes over them.
         # This go says so too, and its go list answers as the real one does for such a group. A group is left out only
         # on that answer: a go list that fails, or lists nothing without the warning, leaves the group in.
@@ -373,16 +373,16 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.assertIn(left_out, out)
         self.assertEqual(["server|vet -ldflags= ./..."], self.vet_calls())
 
-    def test_a_removed_group_is_left_out_of_the_windows_vet(self):
-        # The group's directory is gone: go vet of ./internal/bar/... fails on the missing directory alone. The other
-        # changed group is still vetted for Windows.
-        (self.repo / "server/internal/bar/bar_test.go").unlink()
-        (self.repo / "server/internal/bar").rmdir()
-        self.write("server/internal/foo/x.go", "package foo\n")
-        out, _ = self.check_fast()
+    def test_a_moved_tool_runs_tests_and_windows_vet_at_its_new_path(self):
+        (self.repo / "server/scripts").mkdir()
+        self.git("mv", "server/internal/bar", "server/scripts/bar")
+        out, packages = self.check_fast()
+        self.assertIn("./scripts/bar/...", packages, out)
+        self.assertNotIn("./internal/bar/...", packages, out)
+        self.assertNotIn("server|build ./...", self.go_calls(), out)
         self.assertIn("PASS     server go vet (", out)
         self.assertIn("; windows vet left out ./internal/bar/...: no package there builds for windows)", out)
-        self.assertEqual(["server|vet -ldflags= ./...", "server|GOOS=windows vet -ldflags= ./internal/foo/..."],
+        self.assertEqual(["server|vet -ldflags= ./...", "server|GOOS=windows vet -ldflags= ./scripts/bar/..."],
                          self.vet_calls())
         self.assertNotIn("server|GOOS=windows list ./internal/bar/...", self.go_calls())
 

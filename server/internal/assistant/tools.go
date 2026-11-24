@@ -1614,12 +1614,16 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		}
 		session := ix.SessionID
 		source := [2]string{ix.MachineID, session}
-		isFolded := ix.FoldedUnder != "" && ix.FoldedUnder != session
+		targetMachine := ix.MachineID
+		isFolded := ix.FoldedUnder != "" && (ix.FoldedUnder != session || (ix.FoldedUnderMachineID != "" && ix.FoldedUnderMachineID != ix.MachineID))
 		if isFolded {
 			folded[source] = false // include a folded card only after checking its own session
 			session = ix.FoldedUnder
+			if ix.FoldedUnderMachineID != "" {
+				targetMachine = ix.FoldedUnderMachineID
+			}
 		}
-		k := [2]string{ix.MachineID, session}
+		k := [2]string{targetMachine, session}
 		// The id goes after the clip: a long request must not cut it off, or interaction_answer has nothing to answer.
 		id := " (interaction_id=" + ix.ID + ")"
 		pending[k] = append(pending[k], pendingCard{clip(what, max(400-utf8.RuneCountInString(id), 1)) + id, isFolded, source})
@@ -1657,7 +1661,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 					folded[source] = true
 				}
 			}
-			if c.Assistant || c.FoldedUnder() != "" || s.isBackgroundSession(ctx, c.SessionID) {
+			if c.Assistant || c.FoldedUnder() != "" || c.IsSubagent || c.IsCodexSubagent() || s.isBackgroundSession(ctx, c.SessionID) {
 				continue
 			}
 			c.State = c.FoldedState()
@@ -1695,6 +1699,31 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 				}
 			}
 			rows = append(rows, row{m, c})
+		}
+	}
+	// When machine filtering skipped a cross-machine child's machine, verify folded approvals
+	// belonging to included parent rows so agents_list(machine=<parent>) keeps their interaction_ids.
+	if machine != "" && wanted && len(folded) > 0 {
+		needMachines := map[string]bool{}
+		for _, r := range rows {
+			for _, p := range pending[[2]string{r.m.ID, r.c.SessionID}] {
+				if p.folded && !folded[p.source] && p.source[0] != want.ID {
+					needMachines[p.source[0]] = true
+				}
+			}
+		}
+		for childMid := range needMachines {
+			list, _, _ := s.sessionsMuted(ctx, childMid)
+			for _, c := range list {
+				if c.HiddenByDirectory() || c.IsDeleted() || runSpace(c) != space {
+					continue
+				}
+				if source := [2]string{childMid, c.SessionID}; c.FoldedUnder() != "" {
+					if _, tracked := folded[source]; tracked {
+						folded[source] = true
+					}
+				}
+			}
 		}
 	}
 	order := map[string]int{proto.StateNeedsYou: 0, proto.StateWorking: 1, proto.StateUnread: 2, proto.StateIdle: 3}
