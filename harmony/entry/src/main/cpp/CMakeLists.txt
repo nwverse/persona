@@ -36,3 +36,7 @@ add_custom_target(persona_core_package ALL
   COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PERSONA_CORE_LIBRARY}" "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/libpersona_core_ohos.so"
   DEPENDS "${PERSONA_CORE_LIBRARY}")
+
+add_library(persona_screen SHARED screen_video.cpp)
+target_link_libraries(persona_screen PRIVATE libace_napi.z.so libnative_media_vdec.so libnative_media_codecbase.so
+  libnative_media_core.so libnative_window.so)

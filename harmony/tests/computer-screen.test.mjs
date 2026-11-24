@@ -27,7 +27,7 @@ registerHooks({
 });
 
 const { RFBClient } = await import('../entry/src/main/ets/core/RFBClient.ts');
-const { RFBFramebuffer } = await import('../entry/src/main/ets/core/RFBFramebuffer.ts');
+const { RFBFramebuffer, RFBRegion } = await import('../entry/src/main/ets/core/RFBFramebuffer.ts');
 const { RFBOwnerLease } = await import('../entry/src/main/ets/core/RFBOwnerLease.ts');
 
 class ScriptedTransport {
@@ -123,7 +123,7 @@ test('RFB 3.8 handshake, raw BGRA frame, refresh request, and gated native input
 
 test('invalid RFB dimensions and rectangles end in a bounded unsupported state', async () => {
   const dimensions = clientHarness();
-  dimensions.client.receive(serverHandshake(16385, 1));
+  dimensions.client.receive(serverHandshake(0, 1));
   await waitFor(() => dimensions.state.some(([phase, code]) => phase === 'failed' && code === 'unsupported'));
   await dimensions.work;
 
@@ -135,8 +135,8 @@ test('invalid RFB dimensions and rectangles end in a bounded unsupported state',
   await rectangle.work;
 
   assert.equal(RFBFramebuffer.validSize(0, 1), false);
-  assert.equal(RFBFramebuffer.validSize(16385, 1), false);
-  assert.throws(() => new RFBFramebuffer(16385, 1), /rfb_size_limit/);
+  assert.equal(RFBFramebuffer.validSize(65536, 1), false);
+  assert.throws(() => new RFBFramebuffer(65536, 1), /rfb_size_limit/);
 });
 
 test('control lease is off by default and permanently revoked when its owner generation changes', () => {
@@ -152,6 +152,23 @@ test('control lease is off by default and permanently revoked when its owner gen
   lease.revoke();
   ownerGeneration = capturedGeneration;
   assert.equal(lease.allowsInput(), false);
+});
+
+test('packed palettes and RLE paint identical pixels across scan lines and cropped monitor edges', () => {
+  const a = [12, 34, 56], b = [70, 80, 90], cols = 5, rows = 3;
+  const expected = Array.from({ length: 15 }, (_, i) => [...(i < 8 ? a : b), 255]);
+  const encoded = [
+    [128, ...a, 7, ...b, 6],
+    [130, ...a, ...b, 128, 7, 129, 6],
+    [2, ...a, ...b, 0, 0b00011000, 0b11111000]
+  ];
+  for (const cropped of [false, true]) for (const bytes of encoded) {
+    const fb = new RFBFramebuffer(cols, rows);
+    if (cropped) fb.resize(cols, rows, new RFBRegion(1, 0, 3, rows));
+    fb.drawZRLE(Uint8Array.from(bytes), 0, 0, cols, rows);
+    for (let y = 0; y < rows; y++) for (let x = fb.view.x; x < fb.view.x + fb.view.width; x++)
+      assert.deepEqual(fb.pixel(x, y), expected[y * cols + x]);
+  }
 });
 
 test('LastRect terminates an unknown-count framebuffer update within the rectangle budget', async () => {

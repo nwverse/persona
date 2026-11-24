@@ -9,7 +9,13 @@ import { extensionIcon } from '../design/ExtensionIcons';
 import type { ExtensionUINavigationEffect } from '../models/ExtensionUI';
 import { ComputerScreenPage } from '../components/ComputerScreenPage';
 import { isPairingAddress } from '../core/WireCompatibility';
-import { scanBarcode, scanCore } from '@kit.ScanKit';
+import { detectBarcode, scanBarcode, scanCore } from '@kit.ScanKit';
+import { photoAccessHelper } from '@kit.MediaLibraryKit';
+import { HubDemoVideo } from '../components/HubDemoVideo';
+import { WorkspaceConnections } from '../components/WorkspaceConnections';
+import { HubWelcome } from '../components/HubWelcome';
+import { HubPairingForm } from '../components/HubPairingForm';
+import { HttpFailure } from '../platform/HubTransport';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { RemoteDocumentPage } from '../components/RemoteDocumentPage';
 import { TodoWorkspacePage } from '../components/TodoWorkspacePage';
@@ -24,7 +30,7 @@ import { deviceFeatures } from '../models/DeviceFeatures';
 import { SessionTools } from '../components/SessionTools';
 import { SessionWorkspace } from '../models/SessionWorkspace';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { ComposeListItemV2, ContentItemV2, KeyboardAvoidMode, TextModifier, SymbolGlyphModifier, CapsuleSegmentButtonV2, SegmentButtonV2Items, ColorMetrics, LengthMetrics, uiMaterial } from '@kit.ArkUI';
+import { ComposeListItemV2, ContentItemV2, KeyboardAvoidMode, TextModifier, SymbolGlyphModifier, CapsuleSegmentButtonV2, SegmentButtonV2Items, ColorMetrics, LengthMetrics, uiMaterial, window } from '@kit.ArkUI';
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { ClientModel, client } from '../models/ClientModel';
 import { ResourceRow, HubProfile, Wire } from '../models/Wire';
@@ -35,6 +41,7 @@ import { AgentListPage } from '../components/AgentListPage';
 import { InteractionHistoryPage } from '../components/InteractionHistoryPage';
 import { InboxWorkspacePage } from '../components/InboxWorkspacePage';
 import { ResourcePage } from '../components/ResourcePage';
+import { SignedInDevicesPage } from '../components/SignedInDevicesPage';
 import { SettingsPage } from '../components/SettingsPage';
 import { SshSettingsPage } from '../components/SshSettingsPage';
 import { DeviceLook, deviceLook } from '../models/DeviceLook';
@@ -93,8 +100,15 @@ struct Index {
   @Local address: string = '';
   @Local pairCode: string = '';
   private pairingRevision: number = 0;
-  @Local scanning: boolean = false;
-  private scanRevision: number = 0;
+  @Local pairMode: string = 'scan';
+  @Local pairBusy: boolean = false;
+  @Local pairError: string = '';
+  @Local pairTarget?: PairingTarget;
+  private pendingPair?: Pairing;
+  private pairOwner?: ClientModel;
+  private pairGeneration: number = -1;
+  private pairScope: string = '';
+  private launchPairCamera: boolean = false;
   @Local resourceKind: string = 'todo';
   @Local newTask: string = '';
   @Local selectedMachine: number = 0;
@@ -106,6 +120,10 @@ struct Index {
   @Local directory: string = '';
   @Local settingsPage: string = '';
   @Local activeChild: string = '';
+  @Local fullscreenComputer: string = '';
+  @Local computerOrientation: window.Orientation = window.Orientation.AUTO_ROTATION_RESTRICTED;
+  @Local computerReturnOrientation: window.Orientation | undefined = undefined;
+  private computerExitTimer: number = -1;
   @Local tool: number = 0;
   private titleMaterial: uiMaterial.Material = uiMaterial.isImmersiveMaterialSupported() ? new uiMaterial.ImmersiveMaterial({ style: uiMaterial.ImmersiveStyle.THIN }) : uiMaterial.Material.empty;
   @Local agentWorkspace: AgentWorkspace = new AgentWorkspace();
@@ -218,10 +236,37 @@ struct Index {
   }
   private openReader(address: string): void { const safe = readerLink(address); if (safe) { this.readerAddress = safe; this.readerTitle = readerHost(safe); this.readerShown = true; } }
   @Builder readerContent() { LinkReader({ address: this.readerAddress, onHost: (host: string) => this.readerTitle = host }) }
-  private openSheet(kind: string): void { this.navigationIntent++; if (kind === 'connect') this.pairingRevision++; this.readerShown = false; if (kind === 'newagent') { this.prepareAgent(); return; } this.sheetKind = kind; this.showSheet = true; }
-  private sheetTitle(): string { return tr(this.sheetKind === 'hub' ? 'hub' : this.sheetKind === 'newagent' ? 'new_agent' : 'welcome'); }
+  private openSheet(kind: string): void {
+    if (kind === 'connect') { this.openPairing('scan'); return; }
+    this.navigationIntent++; this.readerShown = false;
+    if (kind === 'newagent') { this.prepareAgent(); return; }
+    this.sheetKind = kind; this.showSheet = true;
+  }
+  private openPairing(mode: string, scan: boolean = false, link: string = ''): void {
+    this.navigationIntent++; this.readerShown = false;
+    this.resetPairing(mode); this.address = link;
+    this.launchPairCamera = scan && this.pairMode === 'scan';
+    this.sheetKind = 'connect'; this.showSheet = true;
+  }
+  private resetPairing(mode: string): void {
+    this.pairingRevision++;
+    this.pairMode = mode === 'scan' && !canIUse('SystemCapability.Multimedia.Scan.ScanBarcode') ? 'link' : mode;
+    this.pairTarget = undefined; this.pendingPair = undefined; this.pairOwner = undefined;
+    this.address = ''; this.pairCode = ''; this.pairBusy = false; this.pairError = ''; this.launchPairCamera = false;
+  }
+  @Monitor('showSheet') pairingSheetChanged(): void {
+    if (!this.showSheet && this.sheetKind === 'connect') this.resetPairing('scan');
+  }
+  private sheetAppeared(): void {
+    if (this.sheetKind === 'connect' && this.showSheet && this.launchPairCamera) {
+      this.launchPairCamera = false; this.scanPairing(false);
+    }
+  }
+  private sheetTitle(): string { return tr(this.sheetKind === 'tour' ? 'hub_tour_title' : this.sheetKind === 'hub' ? 'hub' : this.sheetKind === 'newagent' ? 'new_agent' : 'welcome'); }
   @Builder sheetContent() {
-    if (this.sheetKind === 'hub') this.workspaceSheet()
+    if (this.sheetKind === 'tour') {
+      HubDemoVideo({ onDemo: () => { this.showSheet = false; this.model.useDemo(); } })
+    } else if (this.sheetKind === 'hub') this.workspaceSheet()
     else if (this.sheetKind === 'newagent') this.newAgentForm()
     else this.pairingForm()
   }
@@ -245,7 +290,7 @@ struct Index {
     this.bindDeviceOwner(this.model);
     this.applications.bind(this.model); this.applications.refresh();
   }
-  aboutToDisappear(): void { this.agentWorkspace.hide(); this.applications.dispose(); this.dismissChatActions(); }
+  aboutToDisappear(): void { this.finishComputerFullscreen(); this.resetPairing('scan'); this.agentWorkspace.hide(); this.applications.dispose(); this.dismissChatActions(); }
   @Monitor('model.profile', 'model.connected', 'model.features') applicationOwnerChanged(): void {
     this.applications.bind(this.model); this.applications.connectionChanged();
   }
@@ -296,7 +341,8 @@ struct Index {
     this.changeSection(row.kind === 'conversation' ? 0 : 1); this.openRow(row, false);
   }
   private consumePairingLink(): void {
-    if (!this.model.pairingLink) return; this.address = this.model.pairingLink; this.pairCode = ''; this.model.pairingLink = ''; this.openSheet('connect');
+    if (!this.model.pairingLink) return;
+    const link = this.model.pairingLink; this.model.pairingLink = ''; this.openPairing('link', false, link);
   }
   private savePath(): void {
     if (this.activeScope !== this.model.scope()) this.restoreScope();
@@ -389,7 +435,7 @@ struct Index {
   }
   private openResources(kind: string): void { this.resourceKind = kind; this.model.listResources(kind); this.stack.pushPath({ name: 'resources', param: kind }); this.savePath(); }
   private openSettings(page: string, contextual: boolean = false): void { if (page === 'appearance') this.ensureAgentWorkspace(); this.settingsPage = page; this.stack.pushPath({ name: 'settings', param: NavigationContext.settings(page, contextual ? this.detailModel.selected : undefined) }); this.savePath(); }
-  private settingsFamily(page: string): string { return ['extension_detail', 'extension_catalog'].includes(page) ? 'extensions' : page === 'connector_detail' ? 'connectors' : page === 'channel_detail' ? 'channels' : page; }
+  private settingsFamily(page: string): string { if (page === 'machine_detail') return 'machines'; return ['extension_detail', 'extension_catalog'].includes(page) ? 'extensions' : page === 'connector_detail' ? 'connectors' : page === 'channel_detail' ? 'channels' : page; }
   private isAdminPage(page: string): boolean { return ['assistant', 'memory', 'managers', 'launchers', 'engine', 'hub_update', 'node_update'].includes(page); }
   private settingsLabel(page: string): string { return page === 'ssh' ? 'ssh_settings' : page === 'assistant' ? 'admin_identity' : page === 'memory' ? 'admin_memory' : page === 'managers' ? 'admin_managers' : page === 'launchers' ? 'admin_launchers' : page === 'engine' ? 'admin_machine_engine' : page === 'hub_update' ? 'admin_hub_update' : page === 'node_update' ? 'admin_node_update' : page; }
   private adminMenus(name: string, param: Object): NavigationMenuItem[] { return [{ value: tr('refresh'), symbolIcon: new SymbolGlyphModifier($r('sys.symbol.arrow_clockwise')), action: () => { if (this.activeChild === this.childKey(name, param)) this.adminRefreshRevision++; } }]; }
@@ -439,30 +485,51 @@ struct Index {
     this.detailRoute = key; this.chatReady = true;
   }
   private settingsModel(param: Object): ClientModel { return NavigationContext.from('settings', param as string).scoped ? this.detailModel : this.model; }
-  private async connect(): Promise<void> {
-    const generation = this.model.connectionGeneration(), scope = this.model.scope(), address = this.address, code = this.pairCode, revision = this.pairingRevision;
-    const current = (): boolean => this.showSheet && this.sheetKind === 'connect' && revision === this.pairingRevision && this.model.owns(generation, scope) && this.address === address && this.pairCode === code;
-    this.model.busy = true; this.model.error = '';
-    try {
-      const pairing = isPairingAddress(this.address.trim()) ? Pairing.parse(this.address.trim()) : Pairing.manual(this.address.trim(), this.pairCode.trim());
-      const target = await pairing.inspect(); if (!current()) return; this.model.busy = false;
-      this.getUIContext().showAlertDialog({ title: tr('verify'), message: target.name + '\n' + target.baseUrl + '\n' + target.hubId,
-        primaryButton: { value: tr('cancel'), action: () => {} },
-        secondaryButton: { value: tr('trust'), action: () => { if (current()) this.redeem(pairing, target, current); } } });
-    } catch (error) {
-      if (!current()) return;
-      const detail = error as Error as Object as Record<string, Object>; const code = detail['code'];
-      this.model.diagnosticCode = error instanceof Error && /^[a-z_0-9]{1,64}$/.test(error.message) ? error.message : typeof code === 'number' ? String(code) : 'pairing_failed';
-      hilog.error(0x0000, 'PersonaPair', '%{public}s', this.model.diagnosticCode);
-      this.model.error = 'connection_failed';
-    } finally { if (this.model.owns(generation, scope)) this.model.busy = false; }
+  private pairingCurrent(revision: number): boolean {
+    return this.showSheet && this.sheetKind === 'connect' && this.pairingRevision === revision;
   }
-  private async redeem(pairing: Pairing, target: PairingTarget, admit: () => boolean): Promise<void> {
-    const revision = this.pairingRevision, address = this.address, code = this.pairCode;
+
+  private pairingError(error: Error, redeeming: boolean): string {
+    const failure = error as HttpFailure;
+    if (redeeming && (failure.status === 410 || (failure.status === 401 && failure.code === 'invalid_token'))) return 'hub_code_expired';
+    if (['hub_identity_mismatch', 'hub_identity_changed', 'hub_pin_mismatch', 'pairing_target_changed'].includes(error.message)) return 'hub_identity_error';
+    if (['invalid_pairing', 'invalid_endpoint', 'invalid_pin', 'pin_requires_https'].includes(error.message)) return 'hub_invalid_input';
+    return 'hub_unreachable';
+  }
+
+  private async connect(): Promise<void> {
+    if (this.pairBusy || !this.showSheet || this.sheetKind !== 'connect') return;
+    const revision = ++this.pairingRevision, owner = this.model, generation = owner.connectionGeneration(), scope = owner.scope();
+    this.pairBusy = true; this.pairError = '';
     try {
-      await this.model.pair(pairing, target, admit);
-      if (this.sheetKind === 'connect' && revision === this.pairingRevision && this.address === address && this.pairCode === code && this.model.profile.id === target.hubId) { this.pairCode = ''; this.address = ''; this.showSheet = false; }
-    } catch (_) { if (admit()) this.model.error = 'connection_failed'; }
+      const pairing = this.pairMode === 'manual' ? Pairing.manual(this.address.trim(), this.pairCode.trim()) : Pairing.parse(this.address.trim());
+      const target = await pairing.inspect();
+      if (!this.pairingCurrent(revision)) return;
+      if (owner !== this.model || !owner.owns(generation, scope)) { this.pairError = 'request_updated'; return; }
+      this.pairGeneration = generation; this.pairScope = scope; this.pairOwner = owner;
+      this.pendingPair = pairing; this.pairTarget = target;
+    } catch (error) {
+      if (this.pairingCurrent(revision)) this.pairError = this.pairingError(error as Error, false);
+    } finally { if (this.pairingRevision === revision) this.pairBusy = false; }
+  }
+
+  private async trustPairing(): Promise<void> {
+    const owner = this.pairOwner, target = this.pairTarget, pairing = this.pendingPair, revision = this.pairingRevision;
+    if (!owner || !target || !pairing || this.pairBusy || !this.pairingCurrent(revision)) return;
+    const current = (): boolean => this.pairingCurrent(revision) && this.model === owner && this.pairTarget === target &&
+      owner.owns(this.pairGeneration, this.pairScope);
+    if (!current()) { this.resetPairing(this.pairMode); this.pairError = 'request_updated'; return; }
+    this.pairBusy = true;
+    try {
+      await owner.pair(pairing, target, current);
+      if (this.pairingCurrent(revision) && this.model === owner && owner.profile.id === target.hubId) this.showSheet = false;
+    } catch (error) {
+      if (this.pairingCurrent(revision)) {
+        this.pendingPair = undefined; this.pairTarget = undefined;
+        this.pairError = this.pairingError(error as Error, true);
+        if (this.pairError === 'hub_code_expired') { this.pairCode = ''; if (this.pairMode !== 'manual') this.address = ''; }
+      }
+    } finally { if (this.pairingRevision === revision) this.pairBusy = false; }
   }
   private menus(): NavigationMenuItem[] {
     if (this.rail()) return [];
@@ -497,7 +564,7 @@ struct Index {
     this.spacesShown = false;
     if (kind === 'persona') { this.selectPeer(0); this.openMain(); }
     else if (kind === 'settings') this.openSettingsRoot();
-    else if (kind === 'devices') this.openSettings('machines');
+    else if (kind === 'machines' || kind === 'devices') this.openSettings(kind);
     else if (kind === 'applications') this.openApplications();
     else if (kind === 'hub') this.openSheet('hub');
     else if (kind === 'collapse') this.collapsed = true;
@@ -508,6 +575,7 @@ struct Index {
     if (kind === 'todo') return Symbols.check;
     if (kind === 'knowledge') return Symbols.document;
     if (kind === 'health') return Symbols.health;
+    if (kind === 'machines') return Symbols.machine;
     if (kind === 'devices') return Symbols.device;
     if (kind === 'settings') return Symbols.gear;
     if (kind === 'applications') return Symbols.apps;
@@ -519,15 +587,14 @@ struct Index {
     if (kind === 'todo') return Colors.positive;
     if (kind === 'knowledge') return Colors.ai;
     if (kind === 'health') return Colors.teal;
-    if (kind === 'devices') return Colors.working;
+    if (kind === 'machines') return Colors.working;
     return Colors.secondary;
   }
   private spaceTitle(kind: string): string {
-    if (kind === 'hub') return this.model.profile.name || tr('hub');
+    if (kind === 'hub') return tr('hub') + ' · ' + this.model.workspaceName(this.model.profile);
     if (kind === 'persona') return tr('main_chat');
     if (kind === 'todo') return tr('todos');
     if (kind === 'health') return tr('health_home_title');
-    if (kind === 'devices') return tr('machines');
     return tr(kind);
   }
   @Builder spaceRow(kind: string) {
@@ -550,6 +617,7 @@ struct Index {
         this.spaceRow('knowledge')
         this.spaceRow('health')
         if (this.applications.visible) this.spaceRow('applications')
+        this.spaceRow('machines')
         this.spaceRow('devices')
         this.spaceRow('settings')
         this.spaceRow('hub')
@@ -669,6 +737,7 @@ struct Index {
       this.spaceRow('knowledge')
       this.spaceRow('health')
       if (this.applications.visible) this.spaceRow('applications')
+      this.spaceRow('machines')
       this.spaceRow('devices')
       this.spaceRow('settings')
       }.backgroundColor(Colors.canvas)
@@ -684,7 +753,10 @@ struct Index {
       if (name === 'resources') return param;
       if (['todo', 'knowledge', 'inbox'].includes(name)) return name;
       if (name === 'settings_root') return 'settings';
-      if (name === 'settings') return this.settingsKind(param) === 'machines' ? 'devices' : 'settings';
+      if (name === 'settings') {
+        const page = this.settingsKind(param);
+        return page === 'machines' || page === 'devices' ? page : 'settings';
+      }
       if (name === 'applications' || name === 'extension' && !!Wire.text(this.routeRow(param).data(), 'navigation_extension')) return 'applications';
       if (['conversation', 'session', 'assistant', 'tools', 'history'].includes(name)) return 'chat';
     }
@@ -709,8 +781,8 @@ struct Index {
   }
   @Builder settingsList() {
     List() {
-      ForEach(['assistant', 'memory', 'machines', 'managers', 'launchers', 'engine', 'models', 'schedules', 'extensions', 'connectors', 'channels', 'translation', 'triage', 'ledger', 'phone', 'ssh', 'appearance', 'notifications', 'hub_update', 'node_update', 'privacy', 'diagnostics'], (page: string) => {
-        ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr(this.settingsLabel(page)) }) }) }.selectable(true).selected(!!this.activeChild && (this.shownName === 'extension' ? page === 'extensions' : this.shownName === 'settings' && this.settingsFamily(this.settingsKind(this.shownParam)) === page)).onClick(() => this.openSettings(page)).id('settings.' + page)
+      ForEach(['assistant', 'memory', 'machines', 'devices', 'hub', 'managers', 'launchers', 'engine', 'models', 'schedules', 'extensions', 'connectors', 'channels', 'translation', 'triage', 'ledger', 'phone', 'ssh', 'appearance', 'notifications', 'hub_update', 'node_update', 'privacy', 'diagnostics'], (page: string) => {
+        ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr(this.settingsLabel(page)) }) }) }.selectable(true).selected(!!this.activeChild && (this.shownName === 'extension' ? page === 'extensions' : this.shownName === 'settings' && this.settingsFamily(this.settingsKind(this.shownParam)) === page)).onClick(() => { if (page === 'hub') this.openSheet('hub'); else this.openSettings(page); }).id('settings.' + page)
       }, (page: string) => page)
     }.width('100%').height('100%').padding({ bottom: Tokens.listTail })
   }
@@ -719,36 +791,45 @@ struct Index {
     else this.personaList()
   }
   @Builder workspaceSheet() {
-    List() {
-      ForEach(this.model.profiles, (profile: HubProfile) => { ListItem() { Text(profile.name).padding(Tokens.page) }
-        .onClick(() => { this.model.selectProfile(profile); this.showSheet = false; }) }, (profile: HubProfile) => profile.id)
-      ForEach(this.model.managers, (manager: ResourceRow) => { ListItem() { Text(manager.title).padding(Tokens.page) }
-        .onClick(() => { this.model.selectManager(manager.id); this.showSheet = false; }) }, (manager: ResourceRow) => manager.id)
-      ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('connect')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('connect', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('connect')).bindTips(tr('connect')).onClick(() => { this.showSheet = false; this.openSheet('connect'); }) }
-    }.width('100%')
+    WorkspaceConnections({ model: this.model, onClose: () => this.showSheet = false,
+      onAdd: () => this.openPairing('scan') })
   }
-  private async scanPairing(): Promise<void> {
-    const host = this.getUIContext().getHostContext(); if (!host || this.scanning) return;
-    const revision = ++this.scanRevision, generation = this.model.connectionGeneration(), scope = this.model.scope(); this.scanning = true;
+  private async scanPairing(photo: boolean): Promise<void> {
+    const host = this.getUIContext().getHostContext();
+    if (!host || this.pairBusy || !this.showSheet || this.sheetKind !== 'connect') return;
+    const revision = ++this.pairingRevision, owner = this.model, scope = owner.scope(), epoch = owner.pairingRevision();
+    const current = (): boolean => this.pairingCurrent(revision) && this.model === owner && owner.scope() === scope && owner.pairingRevision() === epoch;
+    this.pairBusy = true; this.pairError = '';
     try {
-      const result = await scanBarcode.startScanForResult(host, { scanTypes: [scanCore.ScanType.QR_CODE], enableAlbum: true, enableMultiMode: false });
-      if (revision !== this.scanRevision || !this.showSheet || this.sheetKind !== 'connect' || !this.model.owns(generation, scope)) return;
-      Pairing.parse(result.originalValue); this.address = result.originalValue; this.pairCode = ''; this.model.error = '';
-    } catch (error) { if (revision === this.scanRevision && (error as BusinessError).code !== 1000500002) this.model.error = 'connection_failed'; }
-    finally { if (revision === this.scanRevision) this.scanning = false; }
+      let value = '';
+      const options: scanBarcode.ScanOptions = { scanTypes: [scanCore.ScanType.QR_CODE], enableAlbum: true, enableMultiMode: false };
+      if (photo) {
+        const optionsPhoto = new photoAccessHelper.PhotoSelectOptions();
+        optionsPhoto.MIMEType = photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE; optionsPhoto.maxSelectNumber = 1;
+        const selected = await new photoAccessHelper.PhotoViewPicker().select(optionsPhoto);
+        if (!selected.photoUris.length || !current()) return;
+        const matches = (await detectBarcode.decode({ uri: selected.photoUris[0] }, options))
+          .filter((item: scanBarcode.ScanResult) => isPairingAddress(item.originalValue.trim()));
+        if (matches.length === 1) value = matches[0].originalValue;
+      } else {
+        value = (await scanBarcode.startScanForResult(host, options)).originalValue;
+      }
+      if (!current()) return;
+      try { Pairing.parse(value.trim()); } catch (_) { this.pairError = 'hub_wrong_qr'; return; }
+      this.address = value.trim(); this.pairCode = ''; this.pairBusy = false;
+      await this.connect();
+    } catch (error) {
+      if (current() && (error as BusinessError).code !== 1000500002) this.pairError = photo ? 'hub_photo_failed' : 'hub_camera_failed';
+    } finally { if (this.pairingRevision === revision) this.pairBusy = false; }
   }
+
   @Builder pairingForm() {
-    Column({ space: Tokens.page }) {
-      Row({ space: Tokens.gap }) {
-        TextInput({ text: this.address, placeholder: tr('hub_address') }).onChange((value: string) => this.address = value).id('pair.address').layoutWeight(1)
-        if (canIUse('SystemCapability.Multimedia.Scan.ScanBarcode')) Button({ type: ButtonType.Circle }) {
-          SymbolGlyph($r('sys.symbol.qrcode')).fontSize(Tokens.symbolFont).fontColor([Colors.link])
-        }.attributeModifier(ButtonStyles.chrome).accessibilityText(tr('scan_qr')).enabled(!this.scanning && !this.model.busy).onClick(() => this.scanPairing()).id('pair.scan')
-      }.width('100%')
-      TextInput({ text: this.pairCode, placeholder: tr('pair_code') }).type(InputType.Password).onChange((value: string) => this.pairCode = value).id('pair.code')
-      if (this.model.error) Text(tr(this.model.error)).fontColor($r('app.color.persona_danger'))
-      Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('verify')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('verify', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('verify')).bindTips(tr('verify')).enabled(!!this.address.trim() && (!!this.pairCode.trim() || isPairingAddress(this.address.trim())) && !this.model.busy).onClick(() => this.connect()).id('pair.verify').alignSelf(ItemAlign.End)
-    }.padding(Tokens.page).width('100%')
+    HubPairingForm({ mode: this.pairMode, address: this.address, code: this.pairCode, busy: this.pairBusy,
+      error: this.pairError, targetName: this.pairTarget?.name || '', targetAddress: this.pairTarget?.baseUrl || '',
+      alreadyPaired: !!this.pairTarget && this.model.profiles.some((p: HubProfile) => p.hubId === this.pairTarget?.hubId || p.id === this.pairTarget?.hubId),
+      onMode: (mode: string) => this.resetPairing(mode), onAddress: (value: string) => { this.address = value; this.pairError = ''; },
+      onCode: (value: string) => { this.pairCode = value; this.pairError = ''; }, onScan: (photo: boolean) => this.scanPairing(photo),
+      onVerify: () => this.connect(), onTrust: () => this.trustPairing(), onCancel: () => this.resetPairing(this.pairMode) })
   }
   private createAgentKey(): string {
     if (this.creatingAgent) return 'sending';
@@ -820,6 +901,7 @@ struct Index {
     const descriptor = NavigationContext.from(name, param as string);
     if (!descriptor.scoped) return;
     const key = this.childKey(name, param), revision = ++this.routeRevision, generation = this.model.connectionGeneration(), scope = this.model.scope();
+    if (name === 'settings' && descriptor.page === 'machine_detail') return;
     const keepContent = this.targetReady(name, param);
     if (!keepContent) { this.chatReady = false; this.detailRoute = ''; }
     try {
@@ -862,12 +944,48 @@ struct Index {
     if (this.mainDestination(name, param) && !this.wide()) this.peerTitle(true)
     else Text(this.destinationTitleText(name, param)).height(this.headerHeight()).fontSize(Tokens.title).fontWeight(FontWeight.Medium).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
       .padding({ left: this.destinationBackHidden(name, param) ? Tokens.page : 0 })
+      .margin({ start: LengthMetrics.vp(this.deviceTitleGap(name, param)) })
   }
+  private deviceTitleGap(name: string, param: Object): number {
+    if (name !== 'settings' || this.destinationBackHidden(name, param)) return 0;
+    const page = this.settingsKind(param);
+    return page === 'devices' || page === 'machines' || page === 'machine_detail' ? Tokens.inset : 0;
+  }
+  private immersiveComputer(name: string, param: Object): boolean {
+    return name === 'computer' && this.fullscreenComputer === this.childKey(name, param);
+  }
+
+  private screenOrientation(name: string, param: Object): window.Orientation | undefined {
+    if (name !== 'computer') return undefined;
+    return this.immersiveComputer(name, param) ? this.computerOrientation : this.computerReturnOrientation;
+  }
+
+  private finishComputerFullscreen(): void {
+    if (this.computerExitTimer !== -1) clearTimeout(this.computerExitTimer);
+    this.computerExitTimer = -1;
+    this.fullscreenComputer = '';
+    this.environment.setComputerImmersive(false);
+  }
+
+  @Monitor('environment.windowWidthPx')
+  computerWindowChanged(): void {
+    if (this.computerExitTimer !== -1 && this.environment.viewingOrientation() === this.computerReturnOrientation) this.finishComputerFullscreen();
+  }
+
+  private exitComputerFullscreen(): void {
+    if (this.computerExitTimer !== -1 || this.computerReturnOrientation === undefined ||
+      this.environment.viewingOrientation() === this.computerReturnOrientation) { this.finishComputerFullscreen(); return; }
+    // Rotate back while Navigation still owns the whole window. A split destination cannot request orientation.
+    this.computerOrientation = this.computerReturnOrientation;
+    this.computerExitTimer = setTimeout((): void => this.finishComputerFullscreen(), 1000);
+  }
+
   private destinationBackHidden(name: string, param: Object): boolean {
     if (this.mainDestination(name, param) || name === 'session' && Wire.bool(this.routeRow(param).data(), 'navigation_root') && this.wide() && this.model.section === 1) return true;
     return this.wide() && this.stack.size() === 1 && this.stack.getAllPathName()[0] === name && this.stack.getParamByIndex(0) === param;
   }
   private destinationTitleText(name: string, param: Object): string {
+    if (name === 'computer') return tr('computer_screen_open');
     if (name === 'settings_root') return tr('settings');
     if (name === 'assistant') return tr(Wire.text(this.routeRow(param).data(), 'assistant_item_kind') === 'plan' ? 'assistant_feed_plan' : 'assistant_feed_receipt');
     return name === 'session' || name === 'conversation' ? this.chatTitle(param) : name === 'resources' ? tr(param === 'todo' ? 'todos' : param === 'inbox' ? 'inbox' : param === 'health' ? 'health_home_title' : 'knowledge') : name === 'applications' ? tr('applications') : name === 'extension' ? this.extensionTitle : name === 'todo' ? this.todoTitle || this.routeRow(param).title || this.routeRow(param).id : name === 'settings' ? this.settingsTitle(param) : name === 'tools' ? tr('workspace') : name === 'history' ? tr('interaction_history') : this.routeRow(param).title || this.routeRow(param).id;
@@ -897,7 +1015,19 @@ struct Index {
           }.width('100%').layoutWeight(1).visibility(this.applicationAllowed(param) ? Visibility.Visible : Visibility.None)
         }.width('100%').height('100%')
       } else if (name === 'computer') {
-        if (this.targetReady(name, param)) ComputerScreenPage({ model: this.detailModel, row: this.routeRow(param), active: this.activeChild === this.childKey(name, param), onClose: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } } })
+        if (this.targetReady(name, param)) ComputerScreenPage({ model: this.detailModel, row: this.routeRow(param), active: this.activeChild === this.childKey(name, param),
+          fullscreen: this.immersiveComputer(name, param), onFullscreen: (shown: boolean) => {
+            if (this.activeChild === this.childKey(name, param)) {
+              if (shown) {
+                this.computerReturnOrientation = this.environment.viewingOrientation();
+                this.environment.setComputerImmersive(true);
+                this.computerOrientation = window.Orientation.AUTO_ROTATION_RESTRICTED;
+                this.fullscreenComputer = this.childKey(name, param);
+              } else this.exitComputerFullscreen();
+            }
+          }, onRotate: (landscape: boolean) => {
+            if (this.immersiveComputer(name, param)) this.computerOrientation = landscape ? window.Orientation.LANDSCAPE : window.Orientation.PORTRAIT;
+          }, onClose: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } } })
         else this.targetLoading(name, param)
       } else if (name === 'file') {
         if (this.targetReady(name, param)) RemoteDocumentPage({ model: this.detailModel, row: this.routeRow(param), active: this.activeChild === this.childKey(name, param), onLink: (address: string) => this.openReader(address) })
@@ -932,46 +1062,58 @@ struct Index {
         if (!NavigationContext.from(name, param as string).scoped || this.targetReady(name, param)) AdminWorkspacePage({ model: this.settingsModel(param), page: this.settingsKind(param), row: NavigationContext.from(name, param as string).scoped ? NavigationContext.from(name, param as string).row : undefined, active: this.activeChild === this.childKey(name, param), refreshRevision: this.adminRefreshRevision,
           onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onOpenMachine: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openSettingsDetail('machines', row); } })
         else this.targetLoading(name, param)
+      } else if (name === 'settings' && this.settingsKind(param) === 'devices') {
+        SignedInDevicesPage({ model: this.model, active: this.activeChild === this.childKey(name, param) })
       } else if (name === 'settings' && this.settingsKind(param) === 'ssh') {
         SshSettingsPage({ tunnel: this.settingsModel(param).ssh, active: this.activeChild === this.childKey(name, param),
           onSaved: (): void => { const owner = this.settingsModel(param); if (this.activeChild === this.childKey(name, param)) owner.selectProfile(owner.profile, true); } })
+      } else if (name === 'settings' && this.settingsKind(param) === 'machine_detail') {
+        SettingsPage({ model: this.model, page: 'machine_detail', machineRoute: param as string,
+          active: this.activeChild === this.childKey(name, param), onChat: (row: ResourceRow) => this.openFrom(name, param, row),
+          onComputer: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openComputer(row); } })
       } else if (name === 'settings') {
         if (!NavigationContext.from(name, param as string).scoped || this.targetReady(name, param)) SettingsPage({ model: this.settingsKind(param) === 'appearance' ? this.model : this.settingsModel(param), agentWorkspace: this.agentWorkspace, onChat: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openLinkedResource(row); }, active: this.activeChild === this.childKey(name, param), page: this.settingsKind(param), onDetail: (page: string, row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openSettingsDetail(page, row); }, onExtension: (extensionId: string, uiId: string, title: string) => { if (this.activeChild === this.childKey(name, param)) this.openExtension(this.settingsModel(param), extensionId, uiId, title); }, onBack: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } }, onComputer: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openComputer(row); }, onOpen: (page: string) => this.openSettings(page, NavigationContext.from(name, param as string).scoped) })
         else this.targetLoading(name, param)
       }
     }.title({ builder: () => this.destinationTitle(name, param), height: this.headerHeight() }, { systemMaterial: this.titleMaterial })
-      .hideTitleBar(this.hideChatTitle(name, param)).hideBackButton(this.destinationBackHidden(name, param))
-      .backgroundColor(name === 'resources' && param === 'inbox' ? Colors.grouped : Colors.canvas)
+      .hideTitleBar(this.immersiveComputer(name, param) || this.hideChatTitle(name, param))
+      .preferredOrientation(this.screenOrientation(name, param))
+      .hideBackButton(this.destinationBackHidden(name, param))
+      .backgroundColor((name === 'resources' && param === 'inbox') ||
+        (name === 'settings' && ['machines', 'machine_detail'].includes(this.settingsKind(param))) ? Colors.grouped : Colors.canvas)
       .menus(this.destinationMenus(name, param))
       .onShown(() => this.routeShown(name, param))
-      .onHidden(() => { if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; if (this.activeChild === this.childKey(name, param)) { this.activeChild = ''; this.dismissChatActions(); } if ((name === 'session' || name === 'conversation') && this.routeRow(param).key() === this.detailModel.selected.key()) this.detailModel.hideConversation(false); if (name === 'assistant') this.detailModel.watchDecisions(false); if (name === 'tools') this.detailModel.releaseTerminal(); })
-      .onBackPressed((): boolean => { if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; this.detailModel.releaseTerminal(); this.stack.pop(); this.savePath(); return true; })
+      .onHidden(() => { if (name === 'computer' && (this.activeChild === this.childKey(name, param) || this.immersiveComputer(name, param))) {
+        this.finishComputerFullscreen(); this.computerReturnOrientation = undefined;
+      } if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; if (this.activeChild === this.childKey(name, param)) { this.activeChild = ''; this.dismissChatActions(); } if ((name === 'session' || name === 'conversation') && this.routeRow(param).key() === this.detailModel.selected.key()) this.detailModel.hideConversation(false); if (name === 'assistant') this.detailModel.watchDecisions(false); if (name === 'tools') this.detailModel.releaseTerminal(); })
+      .onBackPressed((): boolean => { if (this.immersiveComputer(name, param)) { this.exitComputerFullscreen(); return true; } if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; this.detailModel.releaseTerminal(); this.stack.pop(); this.savePath(); return true; })
   }
   build() {
     Stack() {
     WithTheme({ theme: nativeLookTheme(this.look, this.model.style, this.environment.dark), colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT }) {
     ThemeScope() {
     Column() {
-      if (!this.model.profile.id) {
-        Column({ space: Tokens.section }) {
-          Text(tr('welcome')).fontSize(Tokens.title).fontWeight(FontWeight.Bold)
-          if (this.model.error) Text(tr(this.model.error)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
-          Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('connect')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('connect', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('connect')).bindTips(tr('connect')).onClick(() => this.openSheet('connect')).id('welcome.connect')
-          Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('experience')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('experience', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('experience')).bindTips(tr('experience')).onClick(() => this.model.useDemo()).id('welcome.demo')
-          if (this.model.pendingCleanupCount > 0) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry_cleanup')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry_cleanup', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry_cleanup')).bindTips(tr('retry_cleanup')).onClick(() => this.model.retryCleanup())
-        }.justifyContent(FlexAlign.Center).width('100%').height('100%')
-          .bindSheet($$this.showSheet, this.sheetContent(), { title: { title: this.sheetTitle() }, height: SheetSize.LARGE, showClose: true })
+      if (!this.model.ready && !this.model.profile.id) {
+        Column() { LoadingProgress().width(Tokens.avatar).height(Tokens.avatar).color(Colors.link) }
+          .justifyContent(FlexAlign.Center).width('100%').height('100%')
+      } else if (!this.model.profile.id) {
+        HubWelcome({ error: this.model.error, cleanup: this.model.pendingCleanupCount > 0,
+          onScan: () => this.openPairing('scan', true), onOther: () => this.openPairing('link'), onGuide: () => this.openPairing('guide'),
+          onDemo: () => this.model.useDemo(), onVideo: () => this.openSheet('tour'), onCleanup: () => this.model.retryCleanup() })
+          .bindSheet($$this.showSheet, this.sheetContent(), { title: { title: this.sheetTitle() }, height: SheetSize.LARGE, showClose: true,
+            keyboardAvoidMode: this.sheetKind === 'connect' ? SheetKeyboardAvoidMode.RESIZE_ONLY : undefined, onAppear: () => this.sheetAppeared() })
       } else {
         Navigation(this.stack) { this.primaryContent() }.title({ builder: this.peerTitle, height: this.headerHeight() }, { systemMaterial: this.titleMaterial }).titleMode(NavigationTitleMode.Mini)
           .hideBackButton(true).hideTitleBar(this.rail()).menus([])
           .backgroundColor(Colors.canvas)
           .toolbarConfiguration(this.rail() ? [{ value: tr('expand'), icon: $r('sys.media.ohos_ic_public_arrow_right'), action: () => this.collapsed = false }] : [])
-          .mode(this.wide() ? NavigationMode.Split : NavigationMode.Stack)
+          .hideNavBar(!!this.fullscreenComputer).mode(this.wide() && !this.fullscreenComputer ? NavigationMode.Split : NavigationMode.Stack)
           .navBarWidth(this.rail() ? Tokens.collapsed : Tokens.master).navBarWidthRange(this.rail() ? [Tokens.collapsed, Tokens.collapsed] : [Tokens.masterMin, Tokens.masterMax])
           .minContentWidth(Tokens.detailMin).enableDragBar(!this.rail()).navDestination(this.destination)
           .onAreaChange(() => this.updateBreakpoint()).width('100%').height('100%')
 
-          .bindSheet($$this.showSheet, this.sheetContent(), { title: { title: this.sheetTitle() }, height: SheetSize.LARGE, showClose: true })
+          .bindSheet($$this.showSheet, this.sheetContent(), { title: { title: this.sheetTitle() }, height: SheetSize.LARGE, showClose: true,
+            keyboardAvoidMode: this.sheetKind === 'connect' ? SheetKeyboardAvoidMode.RESIZE_ONLY : undefined, onAppear: () => this.sheetAppeared() })
       }
     }.width('100%').height('100%')
       .bindSheet($$this.spacesShown, this.spacesContent(), { title: { title: tr('conversation_spaces') }, height: SheetSize.LARGE, showClose: true, onAppear: () => { this.spacesLayoutReady = true; this.measureSpaces(); }, onDisappear: () => this.spacesLayoutReady = false })

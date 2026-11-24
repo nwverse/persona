@@ -2809,6 +2809,50 @@
       "value": "Refresh"
     },
     {
+      "name": "computer_screen_show_keys",
+      "value": "Open Mac keyboard"
+    },
+    {
+      "name": "computer_screen_hide_keys",
+      "value": "Hide Mac keyboard"
+    },
+    {
+      "name": "computer_screen_landscape",
+      "value": "View in landscape"
+    },
+    {
+      "name": "computer_screen_portrait",
+      "value": "View in portrait"
+    },
+    {
+      "name": "computer_screen_fullscreen",
+      "value": "Full screen"
+    },
+    {
+      "name": "computer_screen_exit_fullscreen",
+      "value": "Exit full screen"
+    },
+    {
+      "name": "computer_screen_fit",
+      "value": "Fit to screen"
+    },
+    {
+      "name": "computer_screen_control_short",
+      "value": "Control"
+    },
+    {
+      "name": "computer_screen_stop_short",
+      "value": "Stop"
+    },
+    {
+      "name": "computer_screen_main_display",
+      "value": "Main display"
+    },
+    {
+      "name": "computer_screen_display",
+      "value": "Display"
+    },
+    {
       "name": "computer_screen_control",
       "value": "Take control"
     },
@@ -2837,6 +2881,50 @@
       "value": "Enter account and password"
     },
     {
+      "name": "computer_screen_mac_sign_in",
+      "value": "Sign in with your macOS account"
+    },
+    {
+      "name": "computer_screen_controlling",
+      "value": "Controlling"
+    },
+    {
+      "name": "computer_screen_account_hint",
+      "value": "Account name on this Mac"
+    },
+    {
+      "name": "computer_screen_password_hint",
+      "value": "Password for this account"
+    },
+    {
+      "name": "computer_screen_remember",
+      "value": "Remember on this phone"
+    },
+    {
+      "name": "computer_screen_remember_hint",
+      "value": "Connect automatically next time you view this Mac."
+    },
+    {
+      "name": "computer_screen_forget_login",
+      "value": "Forget login"
+    },
+    {
+      "name": "computer_screen_saved_rejected",
+      "value": "The Mac declined the saved login. Enter your current account and password."
+    },
+    {
+      "name": "computer_screen_store_unavailable",
+      "value": "Saved login is unavailable. You can still sign in."
+    },
+    {
+      "name": "computer_screen_save_failed",
+      "value": "Connected. The login could not be saved on this phone."
+    },
+    {
+      "name": "computer_screen_forget_failed",
+      "value": "Couldn’t remove the saved login. Try again."
+    },
+    {
       "name": "computer_screen_account",
       "value": "Account"
     },
@@ -2855,6 +2943,26 @@
     {
       "name": "computer_screen_waiting",
       "value": "Waiting for the computer…"
+    },
+    {
+      "name": "computer_screen_authenticating",
+      "value": "Verifying your Mac account…"
+    },
+    {
+      "name": "computer_screen_waiting_frame",
+      "value": "Waiting for the first screen image…"
+    },
+    {
+      "name": "computer_screen_auth_timeout",
+      "value": "The Mac didn’t finish signing you in. Connect again to retry."
+    },
+    {
+      "name": "computer_screen_frame_failed",
+      "value": "The screen image could not be displayed. Connect again to retry."
+    },
+    {
+      "name": "computer_screen_frame_timeout",
+      "value": "The Mac didn’t send a screen image. Connect again to retry."
     },
     {
       "name": "computer_screen_sharing_off",
@@ -2879,6 +2987,46 @@
     {
       "name": "computer_screen_screen_unavailable",
       "value": "Computer screen is unavailable"
+    },
+    {
+      "name": "computer_screen_shortcut_keys",
+      "value": "Mac shortcut keys"
+    },
+    {
+      "name": "computer_screen_key_escape",
+      "value": "Esc, cancel or dismiss"
+    },
+    {
+      "name": "computer_screen_key_tab",
+      "value": "Tab, move to the next field"
+    },
+    {
+      "name": "computer_screen_key_left",
+      "value": "Left arrow, move left"
+    },
+    {
+      "name": "computer_screen_key_up",
+      "value": "Up arrow, move up"
+    },
+    {
+      "name": "computer_screen_key_down",
+      "value": "Down arrow, move down"
+    },
+    {
+      "name": "computer_screen_key_right",
+      "value": "Right arrow, move right"
+    },
+    {
+      "name": "computer_screen_key_return",
+      "value": "Return, confirm or start a new line"
+    },
+    {
+      "name": "computer_screen_keyboard_unavailable",
+      "value": "Couldn’t open the keyboard. Tap the keyboard button to try again."
+    },
+    {
+      "name": "computer_screen_input_failed",
+      "value": "Some input didn’t reach the Mac. Check the remote field before typing it again."
     },
     {
       "name": "computer_screen_type_text",
@@ -3031,6 +3179,30 @@
     {
       "name": "directory_partly_unavailable",
       "value": "Some workspaces are unavailable"
+    },
+    {
+      "name": "computer_screen_video_start",
+      "value": "Use and remember video for this Mac"
+    },
+    {
+      "name": "computer_screen_video_stop",
+      "value": "Use and remember standard screen sharing for this Mac"
+    },
+    {
+      "name": "computer_screen_video_fallback",
+      "value": "Video is unavailable. Standard screen sharing resumed."
+    },
+    {
+      "name": "computer_screen_video_retry",
+      "value": "Retry video"
+    },
+    {
+      "name": "computer_screen_picture_options",
+      "value": "Screen sharing mode"
+    },
+    {
+      "name": "computer_screen_picture_save_failed",
+      "value": "Could not save the picture mode for this Mac."
     },
     {
       "name": "computer_screen_open",
@@ -4739,6 +4911,514 @@
     {
       "name": "agent_delivery_waiting",
       "value": "Waiting for {computer}."
+    },
+    {
+      "name": "browser_qr_access",
+      "value": "This browser will have full access to your Hub. Continue only if you started this sign-in."
+    },
+    {
+      "name": "browser_qr_ask",
+      "value": "Allow this browser to sign in?"
+    },
+    {
+      "name": "browser_qr_cancel",
+      "value": "Cancel sign-in"
+    },
+    {
+      "name": "browser_qr_checking",
+      "value": "Checking the sign-in request…"
+    },
+    {
+      "name": "browser_qr_denied",
+      "value": "Sign-in declined"
+    },
+    {
+      "name": "browser_qr_done",
+      "value": "Done"
+    },
+    {
+      "name": "browser_qr_ended",
+      "value": "This request has ended."
+    },
+    {
+      "name": "browser_qr_enter",
+      "value": "Enter this number in your browser"
+    },
+    {
+      "name": "browser_qr_expired",
+      "value": "This code has expired"
+    },
+    {
+      "name": "browser_qr_failed",
+      "value": "Couldn’t verify this sign-in"
+    },
+    {
+      "name": "browser_qr_internet",
+      "value": "Internet"
+    },
+    {
+      "name": "browser_qr_invalid",
+      "value": "Unrecognized sign-in code"
+    },
+    {
+      "name": "browser_qr_lan",
+      "value": "Local network"
+    },
+    {
+      "name": "browser_qr_manage",
+      "value": "You can revoke this browser’s access at any time in Devices."
+    },
+    {
+      "name": "browser_qr_number",
+      "value": "Keep this number to yourself. An incorrect entry cancels this sign-in."
+    },
+    {
+      "name": "browser_qr_other_hub",
+      "value": "This code belongs to another Hub"
+    },
+    {
+      "name": "browser_qr_refresh",
+      "value": "Refresh the QR code in your browser and scan again."
+    },
+    {
+      "name": "browser_qr_remote_access",
+      "value": "This request came from the internet. Allow full access to your Hub only if you started this sign-in."
+    },
+    {
+      "name": "browser_qr_scan",
+      "value": "Scan browser sign-in code"
+    },
+    {
+      "name": "browser_qr_scan_web",
+      "value": "Open the Persona sign-in page in your browser and scan its QR code."
+    },
+    {
+      "name": "browser_qr_success",
+      "value": "Browser signed in"
+    },
+    {
+      "name": "browser_qr_switch",
+      "value": "Switch to the Hub shown in your browser, then scan again."
+    },
+    {
+      "name": "browser_qr_title",
+      "value": "Browser sign-in"
+    },
+    {
+      "name": "browser_qr_unknown",
+      "value": "Unknown network"
+    },
+    {
+      "name": "browser_qr_voided",
+      "value": "The number didn’t match"
+    },
+    {
+      "name": "browser_qr_waiting",
+      "value": "Waiting for the browser…"
+    },
+    {
+      "name": "device_kind_browser",
+      "value": "Browser"
+    },
+    {
+      "name": "device_kind_link",
+      "value": "Computer link"
+    },
+    {
+      "name": "device_kind_other",
+      "value": "Other device"
+    },
+    {
+      "name": "device_kind_phone",
+      "value": "Phone"
+    },
+    {
+      "name": "device_kind_watch",
+      "value": "Watch"
+    },
+    {
+      "name": "devices",
+      "value": "Devices"
+    },
+    {
+      "name": "devices_added",
+      "value": "Added"
+    },
+    {
+      "name": "devices_demo",
+      "value": "Pair with a Hub to see signed-in devices."
+    },
+    {
+      "name": "devices_empty",
+      "value": "No signed-in devices."
+    },
+    {
+      "name": "devices_last_used",
+      "value": "Last used"
+    },
+    {
+      "name": "devices_load_failed",
+      "value": "Could not load the device list. Refresh to try again."
+    },
+    {
+      "name": "devices_no_history",
+      "value": "No revoked devices."
+    },
+    {
+      "name": "hub_welcome_summary",
+      "value": "Connect your phone to your Persona Hub to see your computers and work with their agents."
+    },
+    {
+      "name": "hub_scan_connect",
+      "value": "Scan to connect a Hub"
+    },
+    {
+      "name": "hub_where_code",
+      "value": "Scan the phone pairing code shown when you set up your Hub, or get one from a connected device in Settings › Devices › Connect a new device."
+    },
+    {
+      "name": "hub_other_ways",
+      "value": "Other ways to connect"
+    },
+    {
+      "name": "hub_guide_first",
+      "value": "Hub setup shows a phone pairing code. To make a new one, run this command in a terminal on that computer."
+    },
+    {
+      "name": "hub_guide_existing",
+      "value": "Open Settings › Devices › Connect a new device and choose a phone to generate a link or QR code."
+    },
+    {
+      "name": "hub_have_link",
+      "value": "Use a pairing link"
+    },
+    {
+      "name": "hub_open_camera",
+      "value": "Open camera"
+    },
+    {
+      "name": "hub_choose_photo",
+      "value": "Choose QR code from photos"
+    },
+    {
+      "name": "hub_manual",
+      "value": "Enter address and code"
+    },
+    {
+      "name": "hub_paste_link",
+      "value": "Paste a pairing link"
+    },
+    {
+      "name": "hub_manual_hint",
+      "value": "Use the Hub address and one-time code from the same pairing request."
+    },
+    {
+      "name": "hub_link_hint",
+      "value": "Paste the full link copied from the Hub or a connected device."
+    },
+    {
+      "name": "hub_pairing_link",
+      "value": "Pairing link"
+    },
+    {
+      "name": "hub_confirm_title",
+      "value": "Connect to this Hub?"
+    },
+    {
+      "name": "hub_confirm_hint",
+      "value": "Check the name and address. Connect only if you recognize this Hub."
+    },
+    {
+      "name": "hub_refresh_pairing",
+      "value": "This Hub is already paired. Connecting again refreshes this phone’s credentials."
+    },
+    {
+      "name": "hub_code_expired",
+      "value": "This code expired or was already used. Generate a new phone pairing code."
+    },
+    {
+      "name": "hub_identity_error",
+      "value": "The Hub identity has changed. Check the address and generate a fresh pairing code."
+    },
+    {
+      "name": "hub_invalid_input",
+      "value": "Check the Hub address and pairing information."
+    },
+    {
+      "name": "hub_unreachable",
+      "value": "Couldn’t reach the Hub. Check that it is running and that this phone can reach its address."
+    },
+    {
+      "name": "hub_wrong_qr",
+      "value": "Scan a phone pairing code. Browser sign-in codes belong in Devices."
+    },
+    {
+      "name": "hub_photo_failed",
+      "value": "Couldn’t read a pairing code from this image. Choose a clear photo of one code."
+    },
+    {
+      "name": "hub_camera_failed",
+      "value": "Couldn’t open the scanner. Try a photo or a pairing link."
+    },
+    {
+      "name": "machine_detail",
+      "value": "Machine details"
+    },
+    {
+      "name": "machine_rx",
+      "value": "Received"
+    },
+    {
+      "name": "machine_tx",
+      "value": "Sent"
+    },
+    {
+      "name": "machine_loading_list",
+      "value": "Loading computers…"
+    },
+    {
+      "name": "machine_loading_detail",
+      "value": "Loading computer details…"
+    },
+    {
+      "name": "machine_memory",
+      "value": "Memory"
+    },
+    {
+      "name": "machine_pending",
+      "value": "Awaiting confirmation"
+    },
+    {
+      "name": "machine_online",
+      "value": "Online"
+    },
+    {
+      "name": "machine_agent_count",
+      "value": "Agents · {count}"
+    },
+    {
+      "name": "machine_overview",
+      "value": "Computers · {total}   Online · {online}"
+    },
+    {
+      "name": "machine_empty",
+      "value": "No computers yet"
+    },
+    {
+      "name": "machine_empty_add",
+      "value": "Add a computer to run agents on it."
+    },
+    {
+      "name": "machine_empty_admin",
+      "value": "Connected computers appear here when the Hub reports them."
+    },
+    {
+      "name": "machine_partial",
+      "value": "Some Hubs or managers are unavailable. Showing the computers that could be loaded."
+    },
+    {
+      "name": "machine_name_hint",
+      "value": "Computer name"
+    },
+    {
+      "name": "machine_add_hint",
+      "value": "Name this computer and choose its system to generate a pairing code."
+    },
+    {
+      "name": "machine_pair_instructions",
+      "value": "Copy the pairing link to the computer you are adding. If using a terminal, run the supplied command on that computer."
+    },
+    {
+      "name": "machine_trust_hint",
+      "value": "Confirm this connection only if you initiated it on this computer."
+    },
+    {
+      "name": "machine_no_agents",
+      "value": "No agents running"
+    },
+    {
+      "name": "machine_offline_agents",
+      "value": "Agents appear when the computer is online."
+    },
+    {
+      "name": "machine_gone",
+      "value": "This computer is no longer listed by the Hub."
+    },
+    {
+      "name": "hub_welcome_code_hint",
+      "value": "Find the phone pairing code on your Hub’s setup page."
+    },
+    {
+      "name": "machine_copy_link",
+      "value": "Copy pairing link"
+    },
+    {
+      "name": "machine_copy_command",
+      "value": "Copy terminal command"
+    },
+    {
+      "name": "machine_copied",
+      "value": "Copied"
+    },
+    {
+      "name": "machine_copy_failed",
+      "value": "Couldn’t copy. Please try again."
+    },
+    {
+      "name": "machine_view_pair",
+      "value": "View pairing information"
+    },
+    {
+      "name": "hub_demo_title",
+      "value": "Explore a demo"
+    },
+    {
+      "name": "hub_demo_note",
+      "value": "Try sample data before pairing."
+    },
+    {
+      "name": "hub_get_code",
+      "value": "Get a pairing code"
+    },
+    {
+      "name": "hub_get_code_note",
+      "value": "Get a code from a computer or connected device."
+    },
+    {
+      "name": "hub_code_computer",
+      "value": "On the Hub computer"
+    },
+    {
+      "name": "hub_code_device",
+      "value": "On a connected device"
+    },
+    {
+      "name": "hub_tour_title",
+      "value": "Persona walkthrough"
+    },
+    {
+      "name": "hub_tour_short",
+      "value": "Video"
+    },
+    {
+      "name": "hub_tour_play",
+      "value": "Play walkthrough"
+    },
+    {
+      "name": "hub_tour_pause",
+      "value": "Pause"
+    },
+    {
+      "name": "hub_tour_try",
+      "value": "Try the interactive demo"
+    },
+    {
+      "name": "hub_tour_note",
+      "value": "12-second silent tour of the machine list, agent details and pairing approval."
+    },
+    {
+      "name": "hub_tour_error",
+      "value": "The video could not play. You can still explore the interactive demo."
+    },
+    {
+      "name": "workspace_current",
+      "value": "Current"
+    },
+    {
+      "name": "workspace_local_name",
+      "value": "Name on this phone. Leave blank to use the Hub name."
+    },
+    {
+      "name": "workspace_add",
+      "value": "Add Hub"
+    },
+    {
+      "name": "machine_rename",
+      "value": "Rename Computer"
+    },
+    {
+      "name": "machine_rename_hint",
+      "value": "Visible to devices on this Hub. Leave blank to use the computer ID."
+    },
+    {
+      "name": "machine_name_invalid",
+      "value": "Use up to 40 characters without control characters."
+    },
+    {
+      "name": "machine_rename_forbidden",
+      "value": "This device does not have permission to rename computers."
+    },
+    {
+      "name": "machine_admin_remove",
+      "value": "Remove in Hub Admin…"
+    },
+    {
+      "name": "machine_admin_unavailable",
+      "value": "Could not open the Hub admin page."
+    },
+    {
+      "name": "machine_remove_pending",
+      "value": "Remove"
+    },
+    {
+      "name": "workspace_disconnected",
+      "value": "Not connected"
+    },
+    {
+      "name": "machine_admin_root",
+      "value": "Open the admin page at the Hub’s direct address to remove this computer."
+    },
+    {
+      "name": "workspace_pair_again",
+      "value": "Pairing required"
+    },
+    {
+      "name": "workspace_pair_action",
+      "value": "Pair Again"
+    },
+    {
+      "name": "devices_no_match",
+      "value": "No matching devices."
+    },
+    {
+      "name": "devices_revoke",
+      "value": "Revoke"
+    },
+    {
+      "name": "devices_revoke_failed",
+      "value": "The device still has access. Refresh and try again."
+    },
+    {
+      "name": "devices_revoke_note",
+      "value": "This device will lose access to the Hub. Pair it again to reconnect."
+    },
+    {
+      "name": "devices_revoke_self",
+      "value": "This phone will disconnect from the Hub and must be paired again."
+    },
+    {
+      "name": "devices_revoke_unpair",
+      "value": "Revoke and unpair"
+    },
+    {
+      "name": "devices_revoked",
+      "value": "Revoked"
+    },
+    {
+      "name": "devices_revoked_at",
+      "value": "Revoked"
+    },
+    {
+      "name": "devices_search",
+      "value": "Search by name or device type"
+    },
+    {
+      "name": "devices_signed_in",
+      "value": "Signed in"
+    },
+    {
+      "name": "devices_this",
+      "value": "This device"
     }
   ]
 }

@@ -532,8 +532,9 @@ A hardware video channel next to RFB, so the phone shows a Mac's screen at a fra
 picture (from #3067's frames: 0.27–0.31 Mbit/s as HEVC at SSIM ≥ 0.98, against 2.1–2.6 as ZRLE). RFB stays open for
 input, the clipboard and as the fallback; only the picture moves to video. The iPhone offers it for a Mac whose node
 advertises `screen_video`, which a node does once it has the helper (the picture switcher in ⋯ stays hidden
-otherwise). The web plays it too (Chrome, Edge and Safari as HEVC, Firefox as H.264; "Browser" below). The Mac app and
-Android don't decode video yet: they keep RFB and show no switcher.
+otherwise). The web plays it too (Chrome, Edge and Safari as HEVC, Firefox as H.264; "Browser" below). HarmonyOS plays it
+with its hardware decoder (`docs/harmony/harmony.md`). The Mac app and Android don't decode video yet: they keep RFB
+and show no switcher.
 
 - **Persona Screen** (`apple/PersonaLink/Sources/PersonaScreen`, `apple/Packages/PersonaScreenCore`): a Swift helper app inside
   Persona Link.app (`Contents/Helpers/Persona Screen.app`, bundle id `<link id>.screen`) that captures one display
