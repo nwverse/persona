@@ -244,7 +244,7 @@ export const TreeTodoRows = memo(function TreeTodoRows({ td, top, ...p }: { td: 
       toggleLabel={t("sidebar.task_agents", { name: td.name })}
       icon={td.todoId ? "todo" : undefined}
       title={title}
-      end={<>{(td.sessions.length > 0 || !td.taskState) && <GroupCount n={td.sessions.length} label={t("sidebar.agent_count", { count: td.sessions.length })} className="shrink-0" />}{state}</>}
+      end={<>{td.goalProgress && <GroupCount n={`${td.goalProgress.done}/${td.goalProgress.total}`} label={`${td.goalProgress.done}/${td.goalProgress.total}`} dataGoalProgress={`${td.goalProgress.done}/${td.goalProgress.total}`} className="shrink-0" />}{(td.sessions.length > 0 || !td.taskState) && <GroupCount n={td.sessions.length} label={t("sidebar.agent_count", { count: td.sessions.length })} className="shrink-0" />}{state}</>}
     >
       <WindowedRows items={td.agents} holds={(a) => withinAgent(a, p.activeKey) !== ""} render={(a) => <TreeAgentRows key={a.key} a={a} depth={0} {...p} activeKey={withinAgent(a, p.activeKey)} />} />
     </TreeBranch>
