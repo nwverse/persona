@@ -1,7 +1,7 @@
-// Settings › Labs (#9877, docs/web/web.md "Labs"): trial features and choices between a stable and a new implementation.
-// Each module that has one injects a configuration source (lib/configuration/contract.ts); this page draws each with the
-// generic form (configuration/ConfigurationForm.tsx), which knows none of them. Today: the terminal renderer
-// (lib/labs-terminal.ts), kept by this browser.
+// Settings › Labs (#9877, docs/web/web.md "Labs") admits a temporary trial or a stable/new implementation choice.
+// Keep the stable default and a lossless rollback. Link a tracking issue with a plan to graduate or remove the trial.
+// Put permanent module switches in General and other lasting preferences in their owning category. Keep irreversible
+// changes, internal debug controls and placeholder demos out of Labs. ConfigurationForm draws each trial's source.
 import { t } from "../../i18n";
 import type { ConfigurationSource } from "../../lib/configuration/contract";
 import type { ConfigurationGuidance } from "../../lib/configuration/guidance";
@@ -17,8 +17,7 @@ export interface LabsModule {
   guidance?: ConfigurationGuidance;
 }
 
-/** Modules in display order. Each registers its source and optional localized guidance. */
-const MODULES: readonly LabsModule[] = [{ source: terminalLabsSource() }];
+const defaultModules: readonly LabsModule[] = [{ source: terminalLabsSource() }];
 
 // This field follows the selected manager. The browser-local experiments below render
 // immediately, even while the roster is resolving the default manager.
@@ -36,7 +35,7 @@ export function LabsSettings({ modules }: { modules?: readonly LabsModule[] } = 
         <SettingsHint>{t("settings-labs.intro")}</SettingsHint>
       </Group>
       {!modules && <WorkGuideSettings />}
-      {(modules ?? MODULES).map(({ source, guidance }) => (
+      {(modules ?? defaultModules).map(({ source, guidance }) => (
         <div key={source.key} className="mb-6">
           <ConfigurationForm source={source} guidance={guidance} />
         </div>

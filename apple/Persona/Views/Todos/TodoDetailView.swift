@@ -16,6 +16,7 @@ struct TodoDetailView: View {
     var onOpenAgent: ((SessionKey) -> Void)? = nil
 
     @State private var store = TodoStore.shared
+    @State private var tasks = TasksStore.shared
     @State private var text = TodoEditorText()
     @FocusState private var titleFocused: Bool
     @State private var isEditingNotes = false
@@ -102,13 +103,13 @@ struct TodoDetailView: View {
             #endif
             await decisions.load()
         }
-        #if os(macOS)
-        .macLinkPanel($link)
-        #else
+        .tabActiveTask(id: "start-remedy-\(todoID)-\(currentTodo?.origin ?? "")") {
+            guard let todo = currentTodo else { return }
+            await tasks.loadStartRemedy(todo)
+        }
         .sheet(item: $link) { target in
             LinkSheet(target: target, key: model.assistantMain ?? model.assistantCurrent)
         }
-        #endif
         .alert("Delete To-Do", isPresented: $showDeleteConfirm) {
             Button("Delete", role: .destructive) {
                 Task { await deleteTodo() }
@@ -130,11 +131,9 @@ struct TodoDetailView: View {
             if !focused { commitTitle() }
         }
         .onDisappear { commitTitle() }
-        #if !os(macOS)
         // Opening a Just finished to-do is seeing it (#5707): it is filed under Done, where the list has it on the way
-        // back. Nothing is said: the user did not ask for it. Not on the Mac, whose list stays beside the page.
+        // back. Nothing is said: the user did not ask for it.
         .task(id: currentTodo != nil) { await seeIfJustFinished() }
-        #endif
         // A tab switch hides the page without onDisappear: the mic must not go on listening behind it.
         .onTabVisibility(appear: {}, disappear: stopDictation)
         .onAppear {
@@ -271,6 +270,15 @@ struct TodoDetailView: View {
 
             stageSection(todo)
 
+            if let failure = tasks.startFailure(todo) {
+                Section {
+                    let summary = tasks.startFailureSummary(todo) ?? failure
+                    ReadinessCard(title: String(localized: "The agent didn't start"), detail: summary, tone: .danger,
+                                  details: summary == failure ? [] : [failure])
+                    if let task = tasks.planTask(todo) { TaskShellQuestion(todo: todo, task: task) }
+                }
+            }
+
             Section {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
                     HStack {
@@ -378,7 +386,7 @@ struct TodoDetailView: View {
         // The buttons float over the notes, which scroll on behind them and blur under them, with no band of page
         // color (on one they sat on a white strip, #9008).
         .floatingFooter(over: Theme.groupedPage) {
-            bottomBar(todo)
+            bottomBar(todo, lookup: lookup)
         }
         #if DEBUG
         // `-showDecisionHistory YES` also scrolls the notes to the top once the decisions are read, so the whole
@@ -511,25 +519,9 @@ struct TodoDetailView: View {
                 Label(isFailed ? String(localized: "Remove [Task Sheets 6135d4]") : String(localized: "Unlink"), systemImage: isFailed ? Theme.Icon.delete : Theme.Icon.link)
             }
         }
-        #if os(macOS)
-        // A Mac list only swipes with a two-finger trackpad gesture: the row's menu unlinks too (#3891).
-        .contextMenu {
-            Button(role: .destructive) {
-                Task {
-                    do {
-                        try await store.unlinkAgent(todoID: todo.id, machineID: a.machineID, sessionID: a.sessionID)
-                    } catch {
-                        model.show(error)
-                    }
-                }
-            } label: {
-                Label(isFailed ? String(localized: "Remove [Task Sheets 6135d4]") : String(localized: "Unlink"), systemImage: isFailed ? Theme.Icon.delete : Theme.Icon.link)
-            }
-        }
-        #endif
     }
 
-    private func bottomBar(_ todo: TodoItem) -> some View {
+    private func bottomBar(_ todo: TodoItem, lookup: @escaping TodosLogic.SessionLookup) -> some View {
         // Side by side while both labels fit whole, else one above the other, Hand to Agent first (#6151): side by side
         // they were cut to "Hand to A…" from xxLarge.
         // Two pills floating over the notes, the Sidebar layout's foot's (`floatingPill`, #4206): 46 pt as its New
@@ -537,7 +529,7 @@ struct TodoDetailView: View {
         // is no wider than a readable page, centered, as the Inbox's hand-off bar. At the large control size across
         // the whole page they were 61 pt tall and on an iPad 380 pt wide each, on a white strip (#9008).
         StackingButtonRow(spacing: Theme.Space.m, stackedSpacing: Theme.Space.s) {
-            bottomButtons(todo)
+            bottomButtons(todo, lookup: lookup)
         }
         .frame(maxWidth: Theme.Size.readable)
         .frame(maxWidth: .infinity)
@@ -548,9 +540,43 @@ struct TodoDetailView: View {
     /// Hand to Agent the Theme Color's pill, the one solid button; Done / Reopen the glass one. Each label is measured
     /// at its full size (`minimumScale: 1`): with the row's 0.8 allowance "Hand to Agent" stayed beside Done at
     /// xxxLarge, cut to "Hand to Age…" instead of shrunk (#9008).
-    @ViewBuilder private func bottomButtons(_ todo: TodoItem) -> some View {
+    @ViewBuilder private func bottomButtons(_ todo: TodoItem, lookup: @escaping TodosLogic.SessionLookup) -> some View {
+        // A failed start can carry done_at while it still checks open and waits for its owner (#3713). The page's own
+        // lookup (`content`), not a second read of every Agent (AllSessionsReadersTests).
+        let open = TodoTriageLogic.checksAsOpen(todo, among: { store.todos }, lookup: { lookup }, now: .now)
+        let canRetry = open && tasks.state(todo) == .failed && !(todo.origin ?? "").isEmpty
+        let instead = canRetry ? tasks.retryLauncher(todo, features: model.hubFeatures) : nil
+        let busy = tasks.busyRetries.contains(todo.id)
+        if let instead {
+            Button { Task { await tasks.retry(todo, launcher: instead, features: model.hubFeatures) } } label: {
+                HStack(spacing: Theme.Space.xs) {
+                    ThemedIcon(Theme.Icon.retry)
+                    Text("Use \(instead) instead").buttonLabelLine(minimumScale: 1)
+                }
+                .opacity(busy ? 0 : 1).overlay { if busy { ProgressView().controlSize(.small) } }
+                .floatingPill(prominent: true)
+            }
+            .buttonStyle(.plain)
+            .disabled(busy)
+            .accessibilityShowsLargeContentViewer()
+            .accessibilityIdentifier("todo.retry-launcher")
+        }
+        if canRetry {
+            Button { Task { await tasks.retry(todo, features: model.hubFeatures) } } label: {
+                HStack(spacing: Theme.Space.xs) {
+                    ThemedIcon(Theme.Icon.retry)
+                    Text("Retry [Components b8784c]").buttonLabelLine(minimumScale: 1)
+                }
+                .opacity(busy ? 0 : 1).overlay { if busy { ProgressView().controlSize(.small) } }
+                .floatingPill(prominent: instead == nil)
+            }
+            .buttonStyle(.plain)
+            .disabled(busy)
+            .accessibilityShowsLargeContentViewer()
+            .accessibilityIdentifier("todo.retry")
+        }
         // A done to-do can't be handed over (the hub refuses, #1856): Reopen comes first.
-        if !todo.isDone {
+        if open {
             Button {
                 showHandoff = true
             } label: {
@@ -559,7 +585,7 @@ struct TodoDetailView: View {
                     // Its own string (#6151): the sheet's title keeps the longer Japanese, which the half-width button cut off.
                     Text("Hand to Agent [To-do Page Button]").buttonLabelLine(minimumScale: 1)
                 }
-                .floatingPill(prominent: true)
+                .floatingPill(prominent: !canRetry)
             }
             .buttonStyle(.plain)
             .accessibilityShowsLargeContentViewer()
@@ -570,8 +596,8 @@ struct TodoDetailView: View {
             store.toggleDone(todo)
         } label: {
             HStack(spacing: Theme.Space.xs) {
-                ThemedIcon(todo.isDone ? Theme.Icon.undo : Theme.Icon.done)
-                Text(todo.isDone ? String(localized: "Reopen") : String(localized: "Done [Extension System Presentation c0b3fb]")).buttonLabelLine(minimumScale: 1)
+                ThemedIcon(open ? Theme.Icon.done : Theme.Icon.undo)
+                Text(open ? String(localized: "Done [Extension System Presentation c0b3fb]") : String(localized: "Reopen")).buttonLabelLine(minimumScale: 1)
             }
             .floatingPill(prominent: false)
         }
@@ -670,8 +696,5 @@ extension TodoDetailView {
 /// chat (`MacShellState.willOpen`); the hand-off sheet and the todo's Agent rows share this. `push`: the stack of the page
 /// it is opened from, which it goes on top of (`AppModel.openInPage`); nil from the sidebar.
 @MainActor func openTodoAgentChat(_ key: SessionKey, in model: AppModel, push: ((SessionKey) -> Void)? = nil) {
-    #if os(macOS)
-    MacShellState.shared.willOpen()
-    #endif
     model.openInPage(key, push: push)
 }

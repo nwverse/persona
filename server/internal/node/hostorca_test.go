@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -22,12 +23,21 @@ import (
 	"github.com/nwverse/persona/server/internal/rexcli"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/terncli"
+	"github.com/nwverse/persona/server/internal/testhome"
 )
 
 // Orca as the machine's engine (hostorca.go, engine.go), driven through the node's requests against a fake Orca
 // runtime socket (orcarttest) and a fake process table. No test here talks to a real Orca.
 
 func TestMain(m *testing.M) {
+	// The tests make, commit to and add worktrees to repositories of their own: none of that may reach the repository
+	// this run was started from (`git bisect run` exports GIT_DIR; #13610).
+	testhome.ClearGit()
+	if os.Getenv("NODE_TEST_TASK_TERMINAL_IDLE") == "1" {
+		fmt.Println("ready")
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		os.Exit(0)
+	}
 	if os.Getenv("NODE_TEST_LAUNCH") == "1" { // the real managed-launch path, before the test harness clears its environment
 		if err := Launch(context.Background(), os.Args[2], os.Args[3:], ""); err != nil {
 			panic(err)
@@ -60,6 +70,9 @@ func TestMain(m *testing.M) {
 		return []string{self}, []string{"NODE_TEST_PREFLIGHT=1"}
 	}
 	preflightStart = 30 * time.Second
+	// A Codex the fake herdr starts or resumes never draws its input box, so each start would watch the full 8 s for
+	// the update offer; the tests that show the offer show it at once, and a second still reads the screen a few times.
+	codexStartupLook = time.Second
 	// No test may reach the user's running Orca: the default metadata path points nowhere.
 	os.Setenv("ORCA_USER_DATA_PATH", "/tmp/persona-test-no-orca")
 	// Nor the user's botmux: a node registers no botmux host unless a test gives it one.
@@ -95,6 +108,15 @@ func TestMain(m *testing.M) {
 	for _, k := range []string{"PERSONA_HOME", legacyEnv("PERSONA_HOME")} {
 		os.Unsetenv(k)
 	}
+	// Nor the user's herdr or herdr-core: their sockets point nowhere, and no session named in the environment picks
+	// another. These tests run from inside a herdr pane, whose HERDR_SOCKET_PATH names the user's running server, and
+	// the tests that build a node's default hosts (engineHostsFor) pinged it, listed its Agents and subscribed to its
+	// events (#13549); without it the default socket is the one under the real home. A test that wants a herdr gives its
+	// client the fake's socket.
+	os.Setenv("HERDR_SOCKET_PATH", noHerdrSocket)
+	os.Unsetenv("HERDR_SESSION")
+	os.Setenv("HC_SOCKET", noHerdrCoreSocket)
+	os.Unsetenv("HC_SESSION")
 	// Nor the user's login shell: herdr's panes run zsh, whatever the machine's is (a test that wants another sets it).
 	herdrPaneShell = func() string { return "/bin/zsh" }
 	// A send looks at the box once after typing and confirms nothing: most fakes never write what was typed into the
@@ -104,6 +126,13 @@ func TestMain(m *testing.M) {
 }
 
 const orcaCwd = "/tmp/orcaproj"
+
+// noHerdrSocket and noHerdrCoreSocket are where the package's tests find the user's herdr and herdr-core: nowhere
+// (TestMain).
+const (
+	noHerdrSocket     = "/tmp/persona-test-no-herdr/herdr.sock"
+	noHerdrCoreSocket = "/tmp/persona-test-no-herdr-core/default.sock"
+)
 
 // fakeProcs is the process table the Orca host scans: agent processes by pane key.
 type fakeProcs struct {

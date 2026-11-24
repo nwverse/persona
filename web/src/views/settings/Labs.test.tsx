@@ -5,6 +5,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerModule, resetModulesForTest } from "../../core/module-host";
 import { t } from "../../i18n";
 import { allTypes } from "../../lib/configuration/fixtures/shared";
 import type { ConfigurationUpdate } from "../../lib/configuration/contract";
@@ -46,6 +47,19 @@ const click = async (el: HTMLElement) => {
 };
 
 describe("Settings › Labs", () => {
+  it("keeps shipped module switches out of Labs and its dialog", async () => {
+    registerModule({ id: "garden", title: () => "Garden", description: () => "A synthetic module", load: async () => ({}) });
+    try {
+      await render();
+      expect(host.querySelector('[data-configuration="features"]')).toBeNull();
+      await act(async () => root.render(<LabsDialog open onClose={() => {}} />));
+      expect(document.querySelector('[data-labs-dialog] [data-configuration="terminal"]')).not.toBeNull();
+      expect(document.querySelector('[data-labs-dialog] [data-configuration="features"]')).toBeNull();
+    } finally {
+      resetModulesForTest();
+    }
+  });
+
   it("explains Labs and that each item states its own scope, and shows the terminal renderer under Agents", async () => {
     await render();
     expect(host.textContent).toContain(t("settings-labs.intro"));

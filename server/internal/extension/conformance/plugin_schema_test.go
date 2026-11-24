@@ -166,6 +166,11 @@ var goTypes = map[string]any{
 	"RepoPRStatusParams": wire.RepoPRStatusParams{},
 	"RepoPRStatusResult": wire.RepoPRStatusResult{},
 
+	"MachinesPairLinkParams": wire.MachinesPairLinkParams{},
+	"MachinesPairLinkResult": wire.MachinesPairLinkResult{},
+	"MachinesStatusParams":   wire.MachinesStatusParams{},
+	"MachinesStatusResult":   wire.MachinesStatusResult{},
+
 	// The manager decodes an extension's browser calls into the generated wire types and answers with them
 	// (extmgr/extension_browser.go).
 	"BrowserMachinesParams": wire.BrowserMachinesParams{},

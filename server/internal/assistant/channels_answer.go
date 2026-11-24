@@ -87,6 +87,13 @@ func (s *Service) checkChannelRun(id string) (unrelated bool) {
 		c.mu.Unlock()
 		return
 	case channel.Finish:
+		if step.End == channel.EndGone {
+			// The run ends without reading the conversation: its answer, and those of the messages folded into it, never
+			// go out. Said in the log, so a conversation its node does not list (a session scope it runs outside of) can
+			// be told from one that was really closed.
+			s.logf("channels: %s: %s/%s is not listed while its machine is online, %s after it was asked: ending the run (%d messages) as gone",
+				snap.ID, snap.MachineID, snap.SessionID, look.Now.Sub(snap.WaitFrom()).Round(time.Second), max(len(snap.MsgIDs), 1))
+		}
 		s.finishChannelRun(r, &channel.Result{Note: step.Note, Quiet: step.Note == "", End: step.End})
 		return
 	}
@@ -313,7 +320,10 @@ func (s *Service) finishChannelRun(r *channel.Run, res *channel.Result) (unrelat
 		prog.steps, prog.live, prog.dirty = nil, "", false
 		prog.from, prog.upTo = 0, 0
 		prog.open, prog.calls, prog.read, prog.edited, prog.subs, prog.subsMore = nil, 0, nil, nil, nil, 0
-		prog.items, prog.cot, prog.native = nil, cotProgress{}, nil
+		prog.items = nil
+		if n, ok := prog.sink.(interface{ NextTurn() }); ok {
+			n.NextTurn() // the sink's agent message of the turn goes with it
+		}
 	} else {
 		prog.finished = true
 		delete(c.live, r.ID)
