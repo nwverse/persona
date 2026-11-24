@@ -265,6 +265,7 @@ type Service struct {
 	captures             captureWork            // capture_sort.go: wakes the loop that sorts quick captures
 	spaceFill            spaceBackfill          // conversation_space_backfill.go
 	outcomeLines         outcomeLines           // todo_outcome.go
+	workerOutcomes       workerOutcomes         // worker_memory.go
 	conversationWrites   sync.RWMutex
 
 	modelPicks modelPickBook // model_pick.go

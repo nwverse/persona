@@ -156,6 +156,10 @@ tracked in #1214; cache-based test substitution is not allowed.
 
 To check the iOS deployment floor (#10261), dispatch **Apple CI** with lane **ios18**
 (`gh workflow run apple-test.yml -f lane=ios18`). The regular CI workflow continues to select `ios`.
+Selecting `lane=ios` runs both the main `apple` job (`scripts/ci/apple.sh ios`, 120-minute limit) and the parallel
+`ios-core-only` job (`scripts/ci/apple.sh ios-core-only`, 60-minute limit, building `PERSONA_CORE_ONLY=YES` without
+feature modules) under the same `apple` workflow call, so a failure in either blocks **CI required** (#14496);
+`gh workflow run apple-test.yml -f lane=ios-core-only` runs the core-only build on its own.
 The compatibility job uses the runner's installed iOS 18.6 image, or requests that exact version from Xcode.
 Each dispatch resolves packages, builds the ad-hoc test host, and runs the offline suites with the regular iOS fixture exclusions.
 The About version comparisons use their English visual configuration and disposable screenshot directories. The compact suite

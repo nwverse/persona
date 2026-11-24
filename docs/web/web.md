@@ -3009,8 +3009,9 @@ and Android follow in #5117.
   before never lands on the one picked since.
 - **What the pill says**: what this start runs: the mark of the Agent the launcher runs, the model (the one picked; else Model
   settings' model on their launcher; else the model the launcher's default entry stands for, by its list's name; a
-  launcher that fixes its own `--model`, that model) and, for Claude Code and Antigravity, the effort
-  (the one picked, else Model settings'). Codex shows no effort: a start doesn't set it. The workflow mark while ultracode
+  launcher that fixes its own `--model`, that model) and the effort: for Claude Code and Antigravity, the one picked
+  (else Model settings'); for Codex, only an explicit level reported by the selected model (unset follows Codex's
+  configured default, keeping existing launch settings; #13764). The workflow mark while ultracode
   is on.
 - **Providers** (`lib/new-agent-panel.ts`): the chosen computer's launchers in the hub's order (`GET
   /machines/{mid}/launchers`), by display name, the startup ID small and monospace beside the group's name and in the
@@ -3590,3 +3591,9 @@ in herdr appears at the next inventory refresh. The **Rename** dialog offers
 one **Name** field, which updates the tab and the CLI title where supported.
 Even with the setting off, an empty or shell-prompt title falls back to the
 herdr tab name. Sessions without a named herdr tab use their session title.
+
+### Model profiles
+
+Settings › Model configuration › **Model profiles** shows each saved profile's Agent presets, purpose bindings, launcher model overrides, and any fields that differ from the current live configuration (`changes`). Both the profile detail dialog and interactive editor expose **Update from current configuration**, backed by `PUT /api/v1/model-profiles/{id}` with `capture: true` (preserving the profile's name, description, and existing Agent presets, and refreshing the catalog on completion).
+
+When applying a profile with no drift (`changes` empty and no unsaved drift on the active profile), **Apply profile** applies immediately. When drift exists, **Apply profile** opens an inline confirmation step listing each affected purpose or launcher field and offering **Capture current into `<active>` first** (which captures the active profile via `capture: true` before applying the target), **Apply directly**, or **Cancel**. Editor saves omit empty optional fields and default (`standard`) tier speed for cross-version hub compatibility, and pin validation and save errors directly beside the Save button.
