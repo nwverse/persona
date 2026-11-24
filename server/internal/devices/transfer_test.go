@@ -142,10 +142,17 @@ func (f *targetNode) state() (calls []string, data []byte, aborted bool) {
 // itself); the returned func cuts the connection for good (the machine cannot dial it again).
 func fakeMachine(t *testing.T, d *Devices, id, name string, handle func(context.Context, string, json.RawMessage) (any, error)) (*Machine, func()) {
 	t.Helper()
+	return fakeMachineWith(t, d, MachineConfig{ID: id, Name: name, Kind: "ssh"}, handle)
+}
+
+// fakeMachineWith is fakeMachine with the machine's whole entry (its trust, its receive folder).
+func fakeMachineWith(t *testing.T, d *Devices, cfg MachineConfig, handle func(context.Context, string, json.RawMessage) (any, error)) (*Machine, func()) {
+	t.Helper()
+	id := cfg.ID
 	var mu sync.Mutex
 	var conns []net.Conn
 	gone := false
-	m := newMachine(d, MachineConfig{ID: id, Name: name, Kind: "ssh"})
+	m := newMachine(d, cfg)
 	m.dialNode = func(context.Context) (net.Conn, error) {
 		mu.Lock()
 		defer mu.Unlock()

@@ -89,8 +89,8 @@ const SubscriptionsPage = lazyPage(() => import("./views/subscriptions/Subscript
 const MachineDetail = lazyPage(() => import("./views/machines/MachineDetail").then((m) => m.MachineDetail), { routes: ["machine"] });
 const SpacePage = lazyPage(() => import("./views/SpacePage").then((m) => m.SpacePage), { routes: ["space"] });
 const Settings = lazyPage(() => import("./views/Settings").then((m) => m.Settings), { routes: ["settings"] });
+const SpaceExtensionEntry = lazyPage(() => import("./views/spaces/SpaceExtensionEntry").then((m) => m.SpaceExtensionEntry), { routes: ["track", "track-new"] });
 const Space = lazyPage(() => import("./views/spaces/Space").then((m) => m.Space), { routes: ["track"] });
-const NewSpace = lazyPage(() => import("./views/spaces/NewSpace").then((m) => m.NewSpace), { routes: ["track-new"] });
 const History = lazyPage(() => import("./views/assistant/History").then((m) => m.History), { routes: ["history"] });
 const Profile = lazyPage(() => import("./views/assistant/Profile").then((m) => m.Profile), { routes: ["profile"] });
 const Routines = lazyPage(() => import("./views/assistant/Routines").then((m) => m.Routines), { routes: ["routines"] });
@@ -570,10 +570,10 @@ function Shell() {
       main = <ModulePage key={route.module} route={route} onToggleSidebar={toggle} />;
       break;
     case "track":
-      main = <Space key={`${route.slug}/${route.sid ?? (route.fresh ? "new" : "")}`} slug={route.slug} sid={route.sid} fresh={route.fresh} onToggleSidebar={toggle} />;
+      main = route.sid ? <Space key={`${route.slug}/${route.sid}`} slug={route.slug} sid={route.sid} onToggleSidebar={toggle} /> : <SpaceExtensionEntry slug={route.slug} />;
       break;
     case "track-new":
-      main = <NewSpace onToggleSidebar={toggle} />;
+      main = <SpaceExtensionEntry fresh />;
       break;
     case "profile":
       main = <Profile onToggleSidebar={toggle} />;

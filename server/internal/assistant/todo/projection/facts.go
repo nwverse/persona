@@ -141,9 +141,11 @@ type Parked struct {
 	Evidence  *ParkEvidence `json:"evidence,omitempty"`
 }
 
-// ParkEvidence carries only the owner-request link the projection reads; the other evidence stays on the listed to-do.
+// ParkEvidence carries the fields of parked evidence the projection reads (owner-request link and shared-blocker root cause).
 type ParkEvidence struct {
 	Kind          string `json:"kind,omitempty"`
+	Target        string `json:"target,omitempty"`
+	URL           string `json:"url,omitempty"`
 	InteractionID string `json:"interaction_id,omitempty"`
 }
 

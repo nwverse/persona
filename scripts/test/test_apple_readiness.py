@@ -348,7 +348,7 @@ class AppleReadinessTests(unittest.TestCase):
         if regression_only:
             helpers += source[source.index("test_batch() {"):source.index('\nif [ "$LANE" = all ]')]
         settings = source.index('  if [ "$LANE" = ios18 ]; then',
-                                source.index('if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then'))
+                                source.index('if [ "$LANE" != packages ] && [ "$LANE" != ios-build ] && [ "$LANE" != ios-core-only ]; then'))
         helpers += source[settings:source.index('  IOS_COMMON=(', settings)]
         helpers += source[source.index('  IOS_COMMON=(', settings):source.index('  # Explicit fixture-only exclusions', settings)]
         if regression_only:
@@ -598,7 +598,7 @@ IOS_TESTS=(xcodebuild -destination "platform=iOS Simulator,id=$SIM" -destination
         self.assertIn("native.pixels == shared.pixels", support)
         self.assertIn("try FileManager.default.createDirectory(at: root", support)
         self.assertNotIn('IOS_UNIT_SELECTION+=(-skip-testing:PersonaTests/AboutVersionCompactVisualTests)',
-                         SCRIPT.read_text()[SCRIPT.read_text().index('if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then'):SCRIPT.read_text().index('if [ "$LANE" = ios18 ]; then', SCRIPT.read_text().index('IOS_FAILED=0'))])
+                         SCRIPT.read_text()[SCRIPT.read_text().index('if [ "$LANE" != packages ] && [ "$LANE" != ios-build ] && [ "$LANE" != ios-core-only ]; then'):SCRIPT.read_text().index('if [ "$LANE" = ios18 ]; then', SCRIPT.read_text().index('IOS_FAILED=0'))])
 
     def test_callkit_in_the_built_app_stops_before_creating_any_device(self):
         result, calls = self.run_preparation(OTOOL_CALLKIT="1")

@@ -56,9 +56,20 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	}
 	n.mu.Lock()
 	agents := make(map[string]host.Agent, len(n.agents))
+	curTraexLive := map[string]bool{}
 	for id, agent := range n.agents {
 		agents[id] = agent
+		if agent.Agent == traexAgent {
+			curTraexLive[id] = true
+		}
 	}
+	var stoppedTraex []string
+	for id := range n.traexLive {
+		if !curTraexLive[id] {
+			stoppedTraex = append(stoppedTraex, id)
+		}
+	}
+	n.traexLive = curTraexLive
 	onList := n.onAgentsList // replaced whole with n.agents (setAgentsAt), never changed in place
 	n.mu.Unlock()
 
@@ -164,6 +175,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		var textAt, promptAt time.Time
 		var rollout quickMeta
 		var rolloutPath string
+		if a.Agent == traexAgent && s.Status != proto.StatusWorking {
+			n.traexRefreshHistory(id)
+		}
 		if p := n.transcriptPath(id); p != "" {
 			if st, err := os.Stat(p); err == nil {
 				m := n.meta(p, st)
@@ -200,6 +214,24 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				n.setBackgroundWait(&s) // bgwait.go (#6045, #13744)
 				s.Loop, s.Goal, s.Plan = m.loop, m.goal, m.plan
 				s.Subagents = n.subagents(id)
+			}
+		}
+		if a.Agent == traexAgent {
+			if t, ok := n.traexThread(id); ok {
+				if s.Title == "" && t.Title != "" {
+					s.Title = t.Title
+				}
+				if s.Model == "" {
+					s.Model = t.Model
+				}
+				if updated := t.updated(); !updated.IsZero() {
+					if rollout.activity.IsZero() && (s.UpdatedAt.IsZero() || rolloutPath != "") {
+						// Projected history with no turns yet has a synthetic file mtime; keep the database timestamp.
+						s.UpdatedAt = updated
+					} else if s.UpdatedAt.IsZero() || updated.After(s.UpdatedAt) {
+						s.UpdatedAt = updated
+					}
+				}
 			}
 		}
 		if a.Agent != "codex" && a.Agent != traexAgent {
@@ -352,6 +384,11 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	for _, s := range n.claudeSessions(n.liveClaudes(), seen, livePanes) { // claudes outside Persona's panes (claudebg.go)
 		out = append(out, s)
 		seen[s.SessionID] = true
+	}
+	for _, id := range stoppedTraex {
+		if !seen[id] {
+			n.traexRefreshHistory(id)
+		}
 	}
 	for _, s := range n.traexSessions(seen) {
 		out = append(out, s)

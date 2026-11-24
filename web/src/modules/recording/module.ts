@@ -6,7 +6,8 @@
 // flags without it, so an older hub keeps it on as before. Settings › General › Optional features can turn it off
 // per browser. While off, recordings are absent from Knowledge (the Meetings list, searches, their addresses).
 import { byLanguage, t, type CatalogModule } from "../../i18n";
-import { moduleFeature, type ModuleDescriptor } from "../../core/module-host";
+import { moduleFeature } from "../../core/module-flags";
+import type { ModuleDescriptor } from "../../core/module-host";
 
 export const recording: ModuleDescriptor = {
   id: "recording",
