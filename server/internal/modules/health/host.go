@@ -88,16 +88,6 @@ func (s *Service) Tool(ctx context.Context, call assistantwire.HealthToolCall) (
 	}
 	return "", errors.New("unknown Health tool")
 }
-func (s *Service) WorkoutReceived(ctx context.Context, w assistantwire.StrengthWorkout) error {
-	if st := s.h.StrengthStore(); st != nil {
-		_, err := st.HealthStrengthWorkoutAdd(ctx, w)
-		return err
-	}
-	return nil
-}
-func (s *Service) WorkoutReport(context.Context, string, string) (string, bool, error) {
-	return "", false, nil
-}
 
 // ReminderLoop sends the water reminders until ctx ends.
 func (s *Service) ReminderLoop(ctx context.Context) { s.waterReminderLoop(ctx) }
