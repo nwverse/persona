@@ -17,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/healthhost"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/kbwire"
@@ -50,6 +51,9 @@ var toolNames = []string{"resource_status", "ask_user", "notify_user", "supervis
 // Tools are the assistant's tools (assistant.tools).
 func (s *Service) Tools(ctx context.Context) []proto.Tool {
 	tools := toolsNamed(toolNames)
+	if !s.healthOn() { // the Health module's tool (health_layer.go)
+		tools = slices.DeleteFunc(tools, func(t proto.Tool) bool { return t.Name == healthhost.Tool })
+	}
 	// A bare Service has no settings store and is used by registry tests. With no
 	// store the opt-in is false; do not call the nil store function just to hide it.
 	if s.store != nil && ownerReplyApprovalOn(s.settings(ctx)) {
@@ -161,7 +165,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 	case spaceStateTool: // a space track's conversations only (track_space_md.go)
 		return s.toolSpaceStateUpdate(ctx, machine, self, args)
 	case "health_intake":
-		return s.toolHealthIntake(ctx, args)
+		return s.healthTool(ctx, args)
 	case "repository_add":
 		return s.toolRepositoryAdd(ctx, machine, self, args)
 	case "repositories_list", "repository_get":
@@ -638,6 +642,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			Speed             string `json:"speed"`
 			PermissionMode    string `json:"permission_mode"`
 			Tier              string `json:"tier"`
+			Host              string `json:"host"` // agy (the Antigravity companion) or an engine host; "": the hub's choice (start_host.go)
 			Worktree          struct {
 				Branch string `json:"branch"`
 			} `json:"worktree"`
@@ -654,6 +659,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		if a.PermissionMode = strings.TrimSpace(a.PermissionMode); a.PermissionMode != "" && !slices.Contains(proto.PermissionModes, a.PermissionMode) {
 			return "", fmt.Errorf("invalid permission_mode %q; no agent was started", a.PermissionMode)
+		}
+		if a.Host = strings.TrimSpace(a.Host); checkStartHostName(a.Host) != nil {
+			return "", fmt.Errorf("%w; no agent was started", checkStartHostName(a.Host))
 		}
 		am, ok := s.machineByName(ctx, a.Machine)
 		if !ok {
@@ -703,6 +711,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// What it runs on this computer, before the user is asked (#2640, launcher_fit.go): a launcher named here that
 		// the computer lacks starts nothing; a default it lacks gives way to one it has, and the card and answer say so.
 		run := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed, "permission_mode": a.PermissionMode}
+		if a.Host != "" {
+			run["host"] = a.Host // an engine host's runtime runs its own launchers (#8140)
+		}
 		if err := s.applyModel(ctx, "agent.new", run); err != nil {
 			return "", err
 		}
@@ -714,6 +725,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				decision.ReasonKey = "launcher_missing"
 				s.savePlacement(ctx, decision)
 			}
+			return "", fmt.Errorf("%w; no agent was started", err)
+		}
+		if err := checkHostLauncher(run, fit); err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		a.Speed, _ = run["speed"].(string)
@@ -792,6 +806,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// The tab is named from the prompt as written; unless this start opts out, its project's background goes before it (#2820).
 		title := s.tabName(sctx, a.Prompt)
 		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed, "permission_mode": a.PermissionMode, "tab_name": title, "title": title}
+		if a.Host != "" {
+			params["host"] = a.Host
+		}
 		prompt := a.Prompt
 		if !a.SkipProjectMemory {
 			prompt = s.withProjectContext(sctx, am.ID, a.Cwd, self, a.Prompt)
@@ -812,10 +829,16 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			a.Cwd = rehome(a.Cwd, am, alt)
 			params["cwd"], am = a.Cwd, alt
 			// The same launcher name may mean a different agent on the destination. Reuse its list before choosing permissions.
-			if _, fit, err = s.fitLauncher(ctx, am, own, params); err != nil {
+			if _, fit, err = s.fitLauncher(ctx, am, own, params); err == nil {
+				err = checkHostLauncher(params, fit)
+			}
+			if err != nil {
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
 		}
+		// An agy Agent that names no host starts on the computer's Antigravity companion where that runs its launcher
+		// (start_host.go, #13447), on the computer it really starts on.
+		companion := s.companionStartHost(sctx, am, fit, params)
 		if err := s.applyOmpStartDefaults(sctx, am, own, fit, params); err != nil {
 			return "", err
 		}
@@ -976,6 +999,12 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				}
 				err = start()
 			}
+		}
+		if companionAway(err, companion) {
+			// The companion went away before the start reached it: nothing ran, and it starts in the default host instead.
+			delete(params, "host")
+			s.logf("agent_start: the Antigravity companion is not connected on %s; starting in its default host", am.ID)
+			err = start()
 		}
 		values.wipe()
 		if err != nil {

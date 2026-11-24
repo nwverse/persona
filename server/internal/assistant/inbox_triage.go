@@ -472,6 +472,10 @@ func (s *Service) draftReplyVersionMode(ctx context.Context, id, instruction str
 				currentPolicy := compileReplyPolicy(currentCfg.ReplyPolicy)
 				b.mu.Lock()
 				live := b.items[id]
+				if live == nil {
+					b.mu.Unlock()
+					return "", errNoInboxItem
+				}
 				unchanged := live != nil && bytes.Equal(authorization.before, itemState(live))
 				currentApplies := live != nil && currentPolicy.appliesToItem(live)
 				liveCV := ""

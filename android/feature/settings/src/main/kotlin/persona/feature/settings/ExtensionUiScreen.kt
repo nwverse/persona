@@ -117,6 +117,7 @@ internal suspend fun extensionNotificationLockedAfterUnlockSettles(
 fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId: String, title: String, onBack: () -> Unit,
                     initialState: String? = null, depth: Int = 0, shown: Boolean = true, availableAdapter: NativeExtensionStreamAdapter? = null,
                     onPush: (ExtensionUiRoute) -> Unit = {}, manager: String? = null, onAsk: ((String) -> Unit)? = null,
+                    onConversation: ((String, String) -> Unit)? = null,
                     notificationActionToken: String? = null,
                     notificationIntent: Intent? = null,
                     notificationStore: ExtensionNotificationActionStore = ExtensionNotificationActionStore.shared,
@@ -212,12 +213,18 @@ fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId:
     val scope = rememberCoroutineScope()
     val ask = onAsk
     val handle = rememberExtensionView(model, appLink = { url ->
+        val conversation = if (extensionId == "space-conversations") ExtensionViewText.spaceConversation(url) else null
+        if (conversation != null && onConversation != null) {
+            onConversation(conversation.first, conversation.second)
+            true
+        } else {
         // Set Up with … is only answered here, and only from these pages. Close the page, then hand the text on.
         val text = ExtensionViewText.askFrom(extensionId, url) ?: return@rememberExtensionView false
         val send = ask ?: return@rememberExtensionView false
         onBack()
         send(text)
         true
+        }
     }, onPush = { push ->
         ExtensionViewText.pushed(extensionId, uiId, title, depth, push, pageManager)?.let { model.covered(); onPush(it) }
     }, onPop = onBack)

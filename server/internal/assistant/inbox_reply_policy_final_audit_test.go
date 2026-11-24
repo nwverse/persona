@@ -10,9 +10,20 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/modules/lark/feishubot"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
+
+// These forwarding adapters keep the integrated assistant regressions on the real Lark-module Workbench after #13404
+// moved its rendering and dispatch out of the assistant package.
+func (s *Service) workbenchInboxAction(ctx context.Context, a *botcard.CardAction) *botcard.CardResponse {
+	return s.larkModule().WorkbenchInboxAction(ctx, a)
+}
+
+func (s *Service) draftCard(ctx context.Context, it InboxItem, text string, err error, list string) *botcard.Card {
+	return s.larkModule().WorkbenchDraftCard(ctx, workbenchItemOf(it), text, err, list)
+}
 
 func TestInboxReplyPolicyReplacementReclassifiesChangedText(t *testing.T) {
 	h, lark, it := handledHub(t)
