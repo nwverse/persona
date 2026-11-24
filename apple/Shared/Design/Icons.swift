@@ -864,6 +864,11 @@ extension Theme {
         static let fileOther = "doc.fill"
         /// A Feishu Base (bitable) as a file.
         static let baseFilled = "square.grid.3x2.fill"
+        /// Interactive extension maps and travel modes (UI version 12).
+        static let map = knowledgeMap
+        static let travelWalk = "figure.walk"
+        static let travelTransit = "tram"
+        static let travelCycle = "bicycle"
     }
 
     /// Other products' own marks, in the asset catalog's Brands folder (sources and terms in THIRD_PARTY_NOTICES.md).

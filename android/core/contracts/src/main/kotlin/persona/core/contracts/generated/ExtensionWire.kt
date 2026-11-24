@@ -1451,7 +1451,8 @@ object ExtensionHubCapability {
     const val INBOX_GROUP = "inbox_group"
     const val INBOX_GROUP_STATE = "inbox_group_state"
     const val TOOL_IMAGES = "tool_images"
-    val ALL = listOf("inbox_group", "inbox_group_state", "tool_images")
+    const val TOOL_VIEWS = "tool_views"
+    val ALL = listOf("inbox_group", "inbox_group_state", "tool_images", "tool_views")
 }
 
 /**
@@ -1647,6 +1648,11 @@ data class ExtensionUIContext(
     val locale: String? = null,
     val platform: String? = null,
     @SerialName("ui_version") val uiVersion: Int? = null,
+    /**
+     * Component types this client cannot draw even within ui_version (such as ["scene"] while rendering v12 "map").
+     * The hub downgrades each listed type in place.
+     */
+    val unsupported: List<String>? = null,
     /**
      * Explicit stream opt-in, independent of ui_version. Absent means snapshot-only. Contract only: no current client
      * or hub advertises it.
@@ -2457,8 +2463,8 @@ sealed interface ExtensionComponent {
     data class Unknown(override val type: String, val raw: JsonObject = JsonObject(emptyMap())) : ExtensionComponent
 
     companion object {
-        val TYPES = listOf("text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph", "scene")
-        val SINCE = mapOf("text" to 1, "metric" to 1, "progress" to 1, "row" to 1, "button" to 1, "link" to 1, "field" to 1, "divider" to 1, "chart" to 2, "stat_grid" to 2, "segmented" to 2, "markdown" to 3, "table" to 3, "empty" to 3, "loading" to 3, "html" to 4, "header" to 4, "breadcrumb" to 4, "file_tree" to 4, "code" to 4, "diff" to 4, "comment_thread" to 4, "composer" to 4, "image" to 6, "grid" to 6, "carousel" to 6, "graph" to 10, "scene" to 11)
+        val TYPES = listOf("text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph", "scene", "map")
+        val SINCE = mapOf("text" to 1, "metric" to 1, "progress" to 1, "row" to 1, "button" to 1, "link" to 1, "field" to 1, "divider" to 1, "chart" to 2, "stat_grid" to 2, "segmented" to 2, "markdown" to 3, "table" to 3, "empty" to 3, "loading" to 3, "html" to 4, "header" to 4, "breadcrumb" to 4, "file_tree" to 4, "code" to 4, "diff" to 4, "comment_thread" to 4, "composer" to 4, "image" to 6, "grid" to 6, "carousel" to 6, "graph" to 10, "scene" to 11, "map" to 12)
     }
 }
 
@@ -2500,6 +2506,7 @@ object ExtensionComponentSerializer : KSerializer<ExtensionComponent> {
                 "carousel" -> input.json.decodeFromJsonElement(ExtensionCarouselComponent.serializer(), obj)
                 "graph" -> input.json.decodeFromJsonElement(ExtensionGraphComponent.serializer(), obj)
                 "scene" -> input.json.decodeFromJsonElement(ExtensionSceneComponent.serializer(), obj)
+                "map" -> input.json.decodeFromJsonElement(ExtensionMapComponent.serializer(), obj)
                 else -> ExtensionComponent.Unknown(tag, obj)
             }
         } catch (_: SerializationException) {
@@ -2540,6 +2547,7 @@ object ExtensionComponentSerializer : KSerializer<ExtensionComponent> {
             is ExtensionCarouselComponent -> output.json.encodeToJsonElement(ExtensionCarouselComponent.serializer(), value) as JsonObject
             is ExtensionGraphComponent -> output.json.encodeToJsonElement(ExtensionGraphComponent.serializer(), value) as JsonObject
             is ExtensionSceneComponent -> output.json.encodeToJsonElement(ExtensionSceneComponent.serializer(), value) as JsonObject
+            is ExtensionMapComponent -> output.json.encodeToJsonElement(ExtensionMapComponent.serializer(), value) as JsonObject
             is ExtensionComponent.Unknown -> value.raw
         }
         output.encodeJsonElement(JsonObject(obj + ("type" to JsonPrimitive(value.type))))
@@ -3326,6 +3334,127 @@ object ExtensionSceneWarmth {
     const val COOL = "cool"
     val ALL = listOf("warm", "cool")
 }
+
+/**
+ * An interactive native map (UI version 12): route polylines and markers (waypoints, origin, destination, pins) with
+ * distance/duration metadata and external https map links. Drawn as a snapshot preview in cards and inline tool
+ * views; tapping opens an interactive sheet unless static is true. An older app gets the caption, route summaries,
+ * marker rows and links.
+ */
+@Serializable
+data class ExtensionMapComponent(
+    override val type: String = "map",
+    /**
+     * Keeps camera state across redraws of the page.
+     */
+    val key: String? = null,
+    val title: String? = null,
+    /**
+     * Read out by screen readers and shown as fallback text when the map cannot be drawn.
+     */
+    val alt: String = "",
+    val caption: String? = null,
+    val aspect: String? = null,
+    val viewport: ExtensionMapViewport? = null,
+    val markers: List<ExtensionMapMarker>? = null,
+    val routes: List<ExtensionMapRoute>? = null,
+    val links: List<ExtensionMapLink>? = null,
+    /**
+     * When true, stays a non-interactive snapshot and does not open an interactive sheet.
+     */
+    val static: Boolean? = null,
+    /**
+     * When true (or when multiple routes/stops exist without a compact override), shows a companion route/stop list
+     * beneath the map.
+     */
+    @SerialName("show_list") val showList: Boolean? = null,
+) : ExtensionComponent
+
+/**
+ * Travel mode of a route polyline (UI version 12).
+ */
+object ExtensionMapTravelMode {
+    const val DRIVING = "driving"
+    const val WALKING = "walking"
+    const val TRANSIT = "transit"
+    const val CYCLING = "cycling"
+    val ALL = listOf("driving", "walking", "transit", "cycling")
+}
+
+/**
+ * Semantic role of a marker on a map (UI version 12).
+ */
+object ExtensionMapMarkerKind {
+    const val ORIGIN = "origin"
+    const val DESTINATION = "destination"
+    const val WAYPOINT = "waypoint"
+    const val PIN = "pin"
+    const val USER = "user"
+    val ALL = listOf("origin", "destination", "waypoint", "pin", "user")
+}
+
+/**
+ * A geographic point in WGS-84 (UI version 12).
+ */
+@Serializable
+data class ExtensionMapCoordinate(
+    val lat: Double = 0.0,
+    val lon: Double = 0.0,
+)
+
+/**
+ * Initial map framing in WGS-84 when not auto-fitted to markers and routes (UI version 12).
+ */
+@Serializable
+data class ExtensionMapViewport(
+    val center: ExtensionMapCoordinate = ExtensionMapCoordinate(),
+    @SerialName("span_lat") val spanLat: Double? = null,
+    @SerialName("span_lon") val spanLon: Double? = null,
+)
+
+/**
+ * One location pin on a map (UI version 12), in tone's role color or color's named color (never both).
+ */
+@Serializable
+data class ExtensionMapMarker(
+    val id: String = "",
+    val lat: Double = 0.0,
+    val lon: Double = 0.0,
+    val kind: String? = null,
+    val label: String = "",
+    val subtitle: String? = null,
+    val detail: String? = null,
+    val icon: String? = null,
+    val tone: String? = null,
+    val color: String? = null,
+    val action: ExtensionAction? = null,
+)
+
+/**
+ * One route polyline on a map (UI version 12), in WGS-84 coordinates.
+ */
+@Serializable
+data class ExtensionMapRoute(
+    val id: String = "",
+    val label: String? = null,
+    val mode: String? = null,
+    @SerialName("distance_meters") val distanceMeters: Int? = null,
+    @SerialName("duration_seconds") val durationSeconds: Int? = null,
+    val summary: String? = null,
+    val selected: Boolean? = null,
+    val tone: String? = null,
+    val color: String? = null,
+    val points: List<ExtensionMapCoordinate> = emptyList(),
+)
+
+/**
+ * An https link shown beside or inside a map component (UI version 12).
+ */
+@Serializable
+data class ExtensionMapLink(
+    val title: String = "",
+    val url: String = "",
+)
 
 /**
  * Where a picture comes from (UI version 6): an https url the app loads without credentials, or a ref the extension

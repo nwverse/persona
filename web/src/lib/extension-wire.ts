@@ -1030,8 +1030,8 @@ export interface SettingsCheckResult {
 export type HubRole = "center" | "member" | (string & {});
 export const HUB_ROLES = ["center", "member"] as const;
 
-export type HubCapability = "inbox_group" | "inbox_group_state" | "tool_images" | (string & {});
-export const HUB_CAPABILITIES = ["inbox_group", "inbox_group_state", "tool_images"] as const;
+export type HubCapability = "inbox_group" | "inbox_group_state" | "tool_images" | "tool_views" | (string & {});
+export const HUB_CAPABILITIES = ["inbox_group", "inbox_group_state", "tool_images", "tool_views"] as const;
 
 /**
  * What the hub sends first. The extension is under extension; hubs before the rename (#1844) send it as plugin, newer
@@ -1192,6 +1192,11 @@ export interface UIContext {
   locale?: string;
   platform?: Platform;
   ui_version?: number;
+  /**
+   * Component types this client cannot draw even within ui_version (such as ["scene"] while rendering v12 "map"). The
+   * hub downgrades each listed type in place.
+   */
+  unsupported?: string[];
   /**
    * Explicit stream opt-in, independent of ui_version. Absent means snapshot-only. Contract only: no current client
    * or hub advertises it.
@@ -1752,9 +1757,10 @@ export type Component =
   | GridComponent
   | CarouselComponent
   | GraphComponent
-  | SceneComponent;
-export const COMPONENT_TYPES = ["text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph", "scene"] as const;
-export const COMPONENT_SINCE: Record<string, number> = { text: 1, metric: 1, progress: 1, row: 1, button: 1, link: 1, field: 1, divider: 1, chart: 2, stat_grid: 2, segmented: 2, markdown: 3, table: 3, empty: 3, loading: 3, html: 4, header: 4, breadcrumb: 4, file_tree: 4, code: 4, diff: 4, comment_thread: 4, composer: 4, image: 6, grid: 6, carousel: 6, graph: 10, scene: 11 };
+  | SceneComponent
+  | MapComponent;
+export const COMPONENT_TYPES = ["text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph", "scene", "map"] as const;
+export const COMPONENT_SINCE: Record<string, number> = { text: 1, metric: 1, progress: 1, row: 1, button: 1, link: 1, field: 1, divider: 1, chart: 2, stat_grid: 2, segmented: 2, markdown: 3, table: 3, empty: 3, loading: 3, html: 4, header: 4, breadcrumb: 4, file_tree: 4, code: 4, diff: 4, comment_thread: 4, composer: 4, image: 6, grid: 6, carousel: 6, graph: 10, scene: 11, map: 12 };
 
 /**
  * A paragraph.
@@ -2384,6 +2390,104 @@ export interface SceneLight {
  */
 export type SceneWarmth = "warm" | "cool" | (string & {});
 export const SCENE_WARMTHS = ["warm", "cool"] as const;
+
+/**
+ * An interactive native map (UI version 12): route polylines and markers (waypoints, origin, destination, pins) with
+ * distance/duration metadata and external https map links. Drawn as a snapshot preview in cards and inline tool
+ * views; tapping opens an interactive sheet unless static is true. An older app gets the caption, route summaries,
+ * marker rows and links.
+ */
+export interface MapComponent {
+  type: "map";
+  /** Keeps camera state across redraws of the page. */
+  key?: string;
+  title?: string;
+  /** Read out by screen readers and shown as fallback text when the map cannot be drawn. */
+  alt: string;
+  caption?: string;
+  aspect?: ImageAspect;
+  viewport?: MapViewport;
+  markers?: MapMarker[];
+  routes?: MapRoute[];
+  links?: MapLink[];
+  /** When true, stays a non-interactive snapshot and does not open an interactive sheet. */
+  static?: boolean;
+  /**
+   * When true (or when multiple routes/stops exist without a compact override), shows a companion route/stop list
+   * beneath the map.
+   */
+  show_list?: boolean;
+}
+
+/**
+ * Travel mode of a route polyline (UI version 12).
+ */
+export type MapTravelMode = "driving" | "walking" | "transit" | "cycling" | (string & {});
+export const MAP_TRAVEL_MODES = ["driving", "walking", "transit", "cycling"] as const;
+
+/**
+ * Semantic role of a marker on a map (UI version 12).
+ */
+export type MapMarkerKind = "origin" | "destination" | "waypoint" | "pin" | "user" | (string & {});
+export const MAP_MARKER_KINDS = ["origin", "destination", "waypoint", "pin", "user"] as const;
+
+/**
+ * A geographic point in WGS-84 (UI version 12).
+ */
+export interface MapCoordinate {
+  lat: number;
+  lon: number;
+}
+
+/**
+ * Initial map framing in WGS-84 when not auto-fitted to markers and routes (UI version 12).
+ */
+export interface MapViewport {
+  center: MapCoordinate;
+  span_lat?: number;
+  span_lon?: number;
+}
+
+/**
+ * One location pin on a map (UI version 12), in tone's role color or color's named color (never both).
+ */
+export interface MapMarker {
+  id: string;
+  lat: number;
+  lon: number;
+  kind?: MapMarkerKind;
+  label: string;
+  subtitle?: string;
+  detail?: string;
+  icon?: NavIcon;
+  tone?: Tone;
+  color?: Color;
+  action?: Action;
+}
+
+/**
+ * One route polyline on a map (UI version 12), in WGS-84 coordinates.
+ */
+export interface MapRoute {
+  id: string;
+  label?: string;
+  mode?: MapTravelMode;
+  distance_meters?: number;
+  duration_seconds?: number;
+  summary?: string;
+  selected?: boolean;
+  tone?: Tone;
+  color?: Color;
+  points: MapCoordinate[];
+}
+
+/**
+ * An https link shown beside or inside a map component (UI version 12).
+ */
+export interface MapLink {
+  title: string;
+  url: string;
+}
 
 /**
  * Where a picture comes from (UI version 6): an https url the app loads without credentials, or a ref the extension

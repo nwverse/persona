@@ -1036,10 +1036,11 @@ const (
 	HubCapabilityInboxGroup      = "inbox_group"
 	HubCapabilityInboxGroupState = "inbox_group_state"
 	HubCapabilityToolImages      = "tool_images"
+	HubCapabilityToolViews       = "tool_views"
 )
 
 // HubCapabilities are the values of HubCapability, in order.
-var HubCapabilities = []string{"inbox_group", "inbox_group_state", "tool_images"}
+var HubCapabilities = []string{"inbox_group", "inbox_group_state", "tool_images", "tool_views"}
 
 // InitializeParams: what the hub sends first. The extension is under extension; hubs before the rename (#1844) send
 // it as plugin, newer hubs send both.
@@ -1185,6 +1186,9 @@ type UIContext struct {
 	Locale    string `json:"locale,omitempty"`
 	Platform  string `json:"platform,omitempty"`
 	UIVersion int    `json:"ui_version,omitempty"`
+	// Component types this client cannot draw even within ui_version (such as ["scene"] while rendering v12 "map"). The
+	// hub downgrades each listed type in place.
+	Unsupported []string `json:"unsupported,omitempty"`
 	// Explicit stream opt-in, independent of ui_version. Absent means snapshot-only. Contract only: no current client or
 	// hub advertises it.
 	Stream *UIStreamCapability `json:"stream,omitempty"`
@@ -1966,11 +1970,20 @@ type Component struct {
 	Folded []string `json:"folded,omitempty"`
 	// A picture of the model for an older app (an image in its place) and for share as image. Without it an older app
 	// gets a row per pin.
-	Poster *ImageSource `json:"poster,omitempty"`
-	Camera *SceneCamera `json:"camera,omitempty"`
-	Shapes []SceneShape `json:"shapes,omitempty"`
-	Labels []SceneLabel `json:"labels,omitempty"`
-	Pins   []ScenePin   `json:"pins,omitempty"`
+	Poster   *ImageSource `json:"poster,omitempty"`
+	Camera   *SceneCamera `json:"camera,omitempty"`
+	Shapes   []SceneShape `json:"shapes,omitempty"`
+	Labels   []SceneLabel `json:"labels,omitempty"`
+	Pins     []ScenePin   `json:"pins,omitempty"`
+	Viewport *MapViewport `json:"viewport,omitempty"`
+	Markers  []MapMarker  `json:"markers,omitempty"`
+	Routes   []MapRoute   `json:"routes,omitempty"`
+	Links    []MapLink    `json:"links,omitempty"`
+	// When true, stays a non-interactive snapshot and does not open an interactive sheet.
+	Static bool `json:"static,omitempty"`
+	// When true (or when multiple routes/stops exist without a compact override), shows a companion route/stop list
+	// beneath the map.
+	ShowList bool `json:"show_list,omitempty"`
 }
 
 // Component types.
@@ -2003,13 +2016,14 @@ const (
 	ComponentCarousel      = "carousel"
 	ComponentGraph         = "graph"
 	ComponentScene         = "scene"
+	ComponentMap           = "map"
 )
 
 // ComponentTypes are the types of Component, in order.
-var ComponentTypes = []string{"text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph", "scene"}
+var ComponentTypes = []string{"text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph", "scene", "map"}
 
 // ComponentSince is the UI version that brought each type.
-var ComponentSince = map[string]int{"text": 1, "metric": 1, "progress": 1, "row": 1, "button": 1, "link": 1, "field": 1, "divider": 1, "chart": 2, "stat_grid": 2, "segmented": 2, "markdown": 3, "table": 3, "empty": 3, "loading": 3, "html": 4, "header": 4, "breadcrumb": 4, "file_tree": 4, "code": 4, "diff": 4, "comment_thread": 4, "composer": 4, "image": 6, "grid": 6, "carousel": 6, "graph": 10, "scene": 11}
+var ComponentSince = map[string]int{"text": 1, "metric": 1, "progress": 1, "row": 1, "button": 1, "link": 1, "field": 1, "divider": 1, "chart": 2, "stat_grid": 2, "segmented": 2, "markdown": 3, "table": 3, "empty": 3, "loading": 3, "html": 4, "header": 4, "breadcrumb": 4, "file_tree": 4, "code": 4, "diff": 4, "comment_thread": 4, "composer": 4, "image": 6, "grid": 6, "carousel": 6, "graph": 10, "scene": 11, "map": 12}
 
 // GraphNode: one node of a graph (UI version 10): a box with a title, a state line, a badge, an icon and a progress
 // bar, in tone's role color or color's named color (never both), with optional timing and inspector details.
@@ -2168,6 +2182,77 @@ const (
 
 // SceneWarmths are the values of SceneWarmth, in order.
 var SceneWarmths = []string{"warm", "cool"}
+
+// MapTravelMode: travel mode of a route polyline (UI version 12).
+const (
+	MapTravelModeDriving = "driving"
+	MapTravelModeWalking = "walking"
+	MapTravelModeTransit = "transit"
+	MapTravelModeCycling = "cycling"
+)
+
+// MapTravelModes are the values of MapTravelMode, in order.
+var MapTravelModes = []string{"driving", "walking", "transit", "cycling"}
+
+// MapMarkerKind: semantic role of a marker on a map (UI version 12).
+const (
+	MapMarkerKindOrigin      = "origin"
+	MapMarkerKindDestination = "destination"
+	MapMarkerKindWaypoint    = "waypoint"
+	MapMarkerKindPin         = "pin"
+	MapMarkerKindUser        = "user"
+)
+
+// MapMarkerKinds are the values of MapMarkerKind, in order.
+var MapMarkerKinds = []string{"origin", "destination", "waypoint", "pin", "user"}
+
+// MapCoordinate: A geographic point in WGS-84 (UI version 12).
+type MapCoordinate struct {
+	Lat *float64 `json:"lat"`
+	Lon *float64 `json:"lon"`
+}
+
+// MapViewport: initial map framing in WGS-84 when not auto-fitted to markers and routes (UI version 12).
+type MapViewport struct {
+	Center  MapCoordinate `json:"center"`
+	SpanLat *float64      `json:"span_lat,omitempty"`
+	SpanLon *float64      `json:"span_lon,omitempty"`
+}
+
+// MapMarker: one location pin on a map (UI version 12), in tone's role color or color's named color (never both).
+type MapMarker struct {
+	ID       string   `json:"id"`
+	Lat      *float64 `json:"lat"`
+	Lon      *float64 `json:"lon"`
+	Kind     string   `json:"kind,omitempty"`
+	Label    string   `json:"label"`
+	Subtitle string   `json:"subtitle,omitempty"`
+	Detail   string   `json:"detail,omitempty"`
+	Icon     string   `json:"icon,omitempty"`
+	Tone     string   `json:"tone,omitempty"`
+	Color    string   `json:"color,omitempty"`
+	Action   *Action  `json:"action,omitempty"`
+}
+
+// MapRoute: one route polyline on a map (UI version 12), in WGS-84 coordinates.
+type MapRoute struct {
+	ID              string          `json:"id"`
+	Label           string          `json:"label,omitempty"`
+	Mode            string          `json:"mode,omitempty"`
+	DistanceMeters  *int            `json:"distance_meters,omitempty"`
+	DurationSeconds *int            `json:"duration_seconds,omitempty"`
+	Summary         string          `json:"summary,omitempty"`
+	Selected        bool            `json:"selected,omitempty"`
+	Tone            string          `json:"tone,omitempty"`
+	Color           string          `json:"color,omitempty"`
+	Points          []MapCoordinate `json:"points"`
+}
+
+// MapLink: an https link shown beside or inside a map component (UI version 12).
+type MapLink struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
+}
 
 // ImageSource: where a picture comes from (UI version 6): an https url the app loads without credentials, or a ref
 // the extension serves itself (ui.image) through the hub; exactly one. path is written by the hub only, for a ref:
@@ -3801,6 +3886,10 @@ type ConnectorCallResult struct {
 	// 16, each a whole JPEG, PNG or WebP of at most 1 MiB and 2000 pixels a side, together at most 4 MiB and 8 million
 	// pixels; the hub leaves out any over a limit and says so after the text.
 	Images []ConnectorToolImage `json:"images,omitempty"`
+	// tools.call only (actions.do and catalog.call ignore it): declarative Views rendered out-of-band inline on the tool
+	// call item in chat (never added to the model's context), on a hub whose initialize lists the capability tool_views.
+	// At most 4 views and 128 KiB JSON total; the text must still stand on its own.
+	Views []View `json:"views,omitempty"`
 	// actions.do only (tools.call ignores it): the id, on the other side, of the message the write made, when the
 	// service gave one (a comment's id, a mail's Message-ID, a chat message's id). The hub trims it and keeps it as the
 	// sent-as-user ledger row's message_ref; one longer than 200 characters is dropped (the row has none), not cut.
@@ -7246,6 +7335,25 @@ func (v requiredJSONComponent) MarshalJSON() ([]byte, error) {
 				return out
 			}(),
 		})
+	case "map":
+		return json.Marshal(struct {
+			plain
+			Alt    string                   `json:"alt"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
+		}{
+			plain: plain(v),
+			Alt:   v.Alt,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
+		})
 	default:
 		return json.Marshal(plain(v))
 	}
@@ -7494,6 +7602,11 @@ var newDef = map[string]func() any{
 	"SceneLabel":                    func() any { return new(SceneLabel) },
 	"ScenePin":                      func() any { return new(ScenePin) },
 	"SceneLight":                    func() any { return new(SceneLight) },
+	"MapCoordinate":                 func() any { return new(MapCoordinate) },
+	"MapViewport":                   func() any { return new(MapViewport) },
+	"MapMarker":                     func() any { return new(MapMarker) },
+	"MapRoute":                      func() any { return new(MapRoute) },
+	"MapLink":                       func() any { return new(MapLink) },
 	"ImageSource":                   func() any { return new(ImageSource) },
 	"RowControl":                    func() any { return new(RowControl) },
 	"RowAction":                     func() any { return new(RowAction) },

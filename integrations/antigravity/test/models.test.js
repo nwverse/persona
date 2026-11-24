@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -25,7 +25,12 @@ test('native catalog preserves new IDs, defaults and only advertised thinking va
 
 async function fixture(t, options = {}) {
   const home = mkdtempSync(join(tmpdir(), 'agy-models-'))
-  const catalog = (value) => writeFileSync(join(home, 'catalog.json'), JSON.stringify(value))
+  const catalog = (value) => {
+    // The fake agy reads this from its fallback timer, in another process. Never expose a truncated document.
+    const file = join(home, 'catalog.json')
+    writeFileSync(`${file}.next`, JSON.stringify(value))
+    renameSync(`${file}.next`, file)
+  }
   catalog({ models: entries })
   const agyDir = join(home, 'settings')
   mkdirSync(agyDir)
