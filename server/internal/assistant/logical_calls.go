@@ -191,7 +191,8 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 			}
 			// Queues are used throughout a switch, including its first target turn.
 			pending := false
-			if queue, ok := s.store().(logicalSwitchStore); ok {
+			queue, queued := s.store().(logicalSwitchStore)
+			if queued {
 				var err error
 				pending, err = queue.ConversationInputPending(ctx, machine, id)
 				if err != nil {
@@ -207,6 +208,15 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 				}
 			}
 			needsQueue := current.Switch != nil || pending
+			if _, external := ctx.Value(logicalTransportKey{}).(devicewire.NodeCall); !needsQueue && queued && current.Epoch > 1 && (client != "" || !external) {
+				// The handoff an idle acceptance kept goes with this input (#14488): the queue attaches it once. A node's
+				// own send without a message id cannot be queued, and goes on without it as before.
+				handoff, err := queue.ConversationPendingHandoff(ctx, machine, id, active.ID)
+				if err != nil {
+					return err
+				}
+				needsQueue = len(handoff) > 0
+			}
 			if client == "" && needsQueue {
 				if _, external := ctx.Value(logicalTransportKey{}).(devicewire.NodeCall); external {
 					return logicalRefusal(ctx, "message_id_required")

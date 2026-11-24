@@ -154,6 +154,8 @@
   "idle_close_unit": "時間",
   "main_supervises": "メインチャットが自分のタスクを監督する",
   "main_supervises_hint": "既定はオフ：Persona が任せたタスクは内蔵のバックグラウンド監督がフォローして検収するので、メインチャットはいつでも返信できます。オンにすると、以前のようにメインチャット自身が行います",
+  "auto_supervision_messages": "自動の進捗確認メッセージ",
+  "auto_supervision_messages_hint": "オフにすると、Persona はタスクについてのフォローアップメッセージを自動では送らなくなります。タスク、あなた自身の質問、承認は通常どおり使えます。再びオンにしても、対象は新しい出来事だけです。",
   "delivery_gate": "PR/Issue 完了ゲート",
   "delivery_gate_hint": "既定：PR マージと関連 Issue クローズまで保留。「リリース確認」は Hub 反映も必須、「オフ」は完了条件のみ。",
   "delivery_gate_off": "オフ（完了条件のみ）",
