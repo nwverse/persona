@@ -3608,6 +3608,17 @@ one **Name** field, which updates the tab and the CLI title where supported.
 Even with the setting off, an empty or shell-prompt title falls back to the
 herdr tab name. Sessions without a named herdr tab use their session title.
 
+### Named herdr sessions in Settings › Agents (#14898)
+
+**Named herdr sessions** (`web/src/views/settings/HerdrSessions.tsx`), directly
+below **Agent folders** in Settings › Agents, lets the user pick a computer,
+view detected named herdr sessions (`GET /api/v1/machines/{mid}/herdr/sessions`),
+block or unblock individual sessions, or type a session name to block
+(`PUT /api/v1/machines/{mid}/herdr/sessions/blocked`). Empty by default; works
+for offline computers (showing saved blocked sessions). Also searchable from
+Settings search and manageable through `persona_settings`
+(`agents.blocked_herdr_sessions`).
+
 ### Model profiles
 
 Settings › Model configuration › **Model profiles** shows each saved profile's Agent presets, purpose bindings, launcher model overrides, and any fields that differ from the current live configuration (`changes`). Both the profile detail dialog and interactive editor expose **Update from current configuration**, backed by `PUT /api/v1/model-profiles/{id}` with `capture: true` (preserving the profile's name, description, and existing Agent presets, and refreshing the catalog on completion).
