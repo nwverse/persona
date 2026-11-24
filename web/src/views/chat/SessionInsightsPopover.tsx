@@ -4,10 +4,11 @@
 // (turn duration, tok/s, TTFT), and one-click /compact.
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { t } from "../../i18n";
+import { formatNumber, t } from "../../i18n";
 import { api, errorText } from "../../lib/api";
 import { COMPACT_FEATURE, compactBody, compactPath, formatTokens } from "../../lib/compaction";
-import { contextHint, contextTier, contextTooltip, type ContextTier } from "../../lib/context-usage";
+import { contextHint } from "../../lib/context-notes";
+import { contextTier, contextTooltip, currentContextTokens, type ContextTier } from "../../lib/context-usage";
 import { useFeed } from "../../lib/feed";
 import {
   buildSessionInsights,
@@ -23,13 +24,13 @@ import { compactTokens, USAGE_COLOR } from "../../lib/tokens";
 import type { ContextBreakdown, Item, Session } from "../../lib/types";
 import { workDuration } from "../../lib/work-groups";
 import { cx, EASE, toast } from "../../ui/atoms";
+import { ContextUsageBar } from "../../ui/ContextUsageBar";
 import { Icon } from "../../ui/icons";
 import { placeMenu, useEscapeClose, useModalFocus } from "../../ui/overlay";
 
 const COMPACT_REQUESTED = "persona:compact-requested";
 const POPOVER_WIDTH = 340;
 const EMPTY_ITEMS: readonly Item[] = [];
-const TIER_BAR: Record<ContextTier, string> = { ok: "bg-accent", warn: "bg-orange", danger: "bg-orange" };
 const TIER_TEXT: Record<ContextTier, string> = { ok: "text-ink", warn: "text-orange", danger: "text-orange" };
 
 /** Color-blind-validated categorical tokens from styles.css (--usage-*), paired for light & dark modes. */
@@ -318,7 +319,8 @@ export function SessionInsightsPopover({
   const { context, tokens, performance, breakdown: normalizedBreakdown } = insights;
   const hitText = tokens ? formatHitRate(tokens.cacheHitRate) : null;
   const compactBusy = compact.running || compactingNow;
-  const hasContextSection = Boolean(context || normalizedBreakdown);
+  const current = currentContextTokens(session);
+  const hasContextSection = Boolean(current || normalizedBreakdown);
   const style: CSSProperties = place
     ? { left: place.left, top: place.top, width: place.width, animation: `pop-in 160ms ${EASE} both`, transformOrigin: "bottom right" }
     : { left: 0, top: 0, width: POPOVER_WIDTH, visibility: "hidden" };
@@ -350,23 +352,20 @@ export function SessionInsightsPopover({
       <div className="mt-3 flex flex-col gap-3">
         {hasContextSection && (
           <section className="flex flex-col gap-2" data-insights-context>
-            {context && (
+            {context ? (
               <div className="flex items-center justify-between gap-2">
                 <span className="font-medium text-ink-2">{t("chat-sessioninsights.context_section")}</span>
                 <span className="tabular-nums text-ink-3">
                   {t("context.tokens", { used: formatTokens(context.tokens), window: formatTokens(context.window) })}
                 </span>
               </div>
+            ) : current > 0 && (
+              <span className="font-medium tabular-nums text-ink-2">{t("context.current_tokens", { tokens: formatNumber(current) })}</span>
             )}
             {normalizedBreakdown && normalizedBreakdown.totalTokens > 0 ? (
               <StackedBreakdownBar breakdown={normalizedBreakdown} />
             ) : context ? (
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-hover-2">
-                <div
-                  className={cx("h-full rounded-full", TIER_BAR[contextTier(context)])}
-                  style={{ width: `${context.used}%` }}
-                />
-              </div>
+              <ContextUsageBar usage={context} className="h-1.5 w-full" />
             ) : null}
             {context && (
               <div className="flex flex-col gap-1">

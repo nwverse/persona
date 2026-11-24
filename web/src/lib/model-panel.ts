@@ -2,7 +2,7 @@
 // the providers a chat can run on and their models, the setup that runs now, and what the panel keeps in this browser
 // (favorites, recent setups, per-model customizations). The panel (ui/model-panel/ModelPanel.tsx) draws them; each chat
 // kind builds them from its own sources (an Agent: its computer's launchers; a Persona chat: the assistant's list).
-import { matches } from "./launcher-models";
+import { effortVariantBase, matches, withoutEffortQualifier } from "./launcher-models";
 import { cleanModelId, validModelId } from "./model-id";
 import { isCurrentModel } from "./model-switch";
 import { familyBlocks, type PanelBlock } from "./model-families";
@@ -280,9 +280,8 @@ export function matchesQuery(provider: Pick<PanelProvider, "name">, model: Pick<
 /** The ID a model would have without its level, when it is one level of a model listed per level (Antigravity's
  *  `gemini-4-neon-high`: its default effort is the ID's last word); undefined for any other model. */
 function variantBase(m: PanelModel): string | undefined {
-  const level = m.defaultEffort;
-  if (!level || m.custom || m.providerDefault || m.variants || !m.id.endsWith(`-${level}`)) return undefined;
-  return m.id.slice(0, -(level.length + 1)) || undefined;
+  if (m.custom || m.providerDefault || m.variants) return undefined;
+  return effortVariantBase(m.id, m.defaultEffort);
 }
 
 /** A list's models in groups, in list order: the levels of one model together (where its first level is listed), every
@@ -322,7 +321,7 @@ const defaultLevel = (levels: PanelModel[]) => (levels.some((m) => m.defaultEffo
  *  as its efforts, and `chosen`'s level as its own. */
 export function foldVariants(levels: PanelModel[], chosen: PanelModel): PanelModel {
   const base = variantBase(levels[0]) ?? chosen.id;
-  const names = new Set(levels.map((m) => m.name.replace(/\s*\([^()]*\)\s*$/, "")));
+  const names = new Set(levels.map((m) => withoutEffortQualifier(m.name)));
   const name = names.size === 1 ? [...names][0] || base : base;
   const sorted = levels.map((m) => ({ effort: m.defaultEffort ?? "", id: m.id })).sort((a, b) => levelRank(a.effort) - levelRank(b.effort));
   return { ...chosen, name, efforts: sorted.map((l) => l.effort), variants: { base, levels: sorted, first: defaultLevel(levels) } };

@@ -178,7 +178,7 @@ export function normalizeContextBreakdown(
 
   if (rawSegments.length === 0 && freeTokens === null && autoCompactThreshold === null) return null;
 
-  const totalTokens = Math.max(win, occupiedTokens + (freeTokens ?? 0));
+  const totalTokens = win > 0 ? Math.max(win, occupiedTokens + (freeTokens ?? 0)) : 0;
   const segments: ContextBreakdownCategory[] = rawSegments.map((s) => ({
     key: s.key,
     tokens: s.tokens,
