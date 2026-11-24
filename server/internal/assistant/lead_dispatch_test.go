@@ -29,7 +29,7 @@ func TestSupervisorsHandOffWithoutAPhoneCard(t *testing.T) {
 		for _, tool := range []string{"agent_start", "agent_send", "agent_interrupt", "a2a_send", "todo_create"} {
 			done := make(chan bool, 1)
 			go func() {
-				ok, err := s.confirmOutbound(ctx, "qa-machine", self, tool, "qa: a placeholder passport number", "summary", nil)
+				ok, _, err := s.confirmOutbound(ctx, "qa-machine", self, tool, "qa: a placeholder passport number", "summary", nil)
 				done <- ok && err == nil
 			}()
 			select {
@@ -46,7 +46,7 @@ func TestSupervisorsHandOffWithoutAPhoneCard(t *testing.T) {
 		}
 	}
 	answerOutboundIn(t, s, "qa-side", "agent_send", "summary", "", false)
-	if ok, err := s.confirmOutbound(ctx, "qa-machine", "qa-side", "agent_send", "qa: a placeholder passport number", "summary", nil); err != nil || ok {
+	if ok, _, err := s.confirmOutbound(ctx, "qa-machine", "qa-side", "agent_send", "qa: a placeholder passport number", "summary", nil); err != nil || ok {
 		t.Fatalf("an ordinary conversation's hand-off was not asked about: %v %v", ok, err)
 	}
 }
@@ -64,6 +64,9 @@ func TestLeadPlanStartsAtOnce(t *testing.T) {
 	}
 	if !strings.Contains(res, "without asking") {
 		t.Fatalf("the lead's plan waits on a card: %s", res)
+	}
+	if !strings.Contains(res, "automatic start initiated (delegated by the direction lead)") {
+		t.Fatalf("the lead's plan does not say why it started: %s", res)
 	}
 	waitFor(t, "the lead's task to start", func() bool { return len(onlyTodo(s).Agents) == 1 })
 	if got := f.pushed(); len(got) != 0 {

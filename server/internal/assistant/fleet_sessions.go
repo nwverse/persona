@@ -604,6 +604,9 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		}
 		list[i].State, list[i].BackgroundWorking = stateWithBackground(agentState(list[i], list[i].SeenAt), list[i])
 		list[i].BackgroundWaiting = backgroundWaiting(list[i])
+		if !list[i].BackgroundWorking || backgroundIsWork(list[i]) {
+			list[i].BackgroundStalledSince = 0 // only background commands that are all there is to the work can have stalled
+		}
 		list[i].TurnError, list[i].TurnErrorKind = turnError(list[i])
 		// A task Agent's turn with no output: interrupted or stopped, not done (silent_turns.go, #10187).
 		putQuietTurn(&list[i], quiet, lang)
@@ -630,6 +633,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		}
 		decorateSuggestion(&list[i], suggested)
 	}
+	s.decorateSubagents(context.Background(), machine, list)
 	s.decorateTodos(machine, list)
 	for i := range list {
 		// The todos' alone, stripped before push to client (#762).
@@ -662,6 +666,7 @@ func (s *Service) decoratedSession(machine, sid string) (proto.Session, bool) {
 	}
 	row.SetHiddenByDirectory(s.hiddenByDirectory(machine, row))
 	one := []proto.Session{row}
+	s.decorateSubagents(context.Background(), machine, one)
 	s.foldSubset(machine, one) // what the last complete list folded it as, as for a row the node lists
 	return one[0], true
 }

@@ -100,9 +100,21 @@ type fleetBook struct {
 	// asks: what each session's last words ask, while they stay the same (fleet_asks.go).
 	asks asksMemo
 	// folds: what each machine's last complete list folded its children under (fleet_fold.go), for the rows and
-	// cards sent without the rest of the list.
-	foldMu sync.Mutex
-	folds  map[string]sessionFold
+	// cards sent without the rest of the list. foldMeta / crossParents / crossChildren track only machines
+	// participating in cross-machine subagent hierarchies so unrelated machines stay on the local fast path.
+	foldMu        sync.Mutex
+	folds         map[string]sessionFold
+	foldMeta      map[string][]foldEntry
+	crossParents  map[string]map[string]bool // childMachine -> referenced parentMachines
+	crossChildren map[string]map[string]bool // parentMachine -> referencing childMachines
+
+	// subagents: durable child (machine, session) -> parent/task provenance restored on demand by visible
+	// target identity from a2a_tasks, legacy dispatches, and task_spawn todo agents (subagent_index.go).
+	subagentsMu           sync.RWMutex
+	subagentsLegacyLoaded bool
+	subagents             map[[2]string]subagentLink
+	subagentsChecked      map[string]map[string]struct{} // machine -> checked sessionIDs
+	subagentsByTask       map[string][2]string
 
 	// rep is the last snapshot's parts the session lists show (fleetTakeSnapshot).
 	rep fleetReport
@@ -182,6 +194,31 @@ func guard(err *error) {
 func (g guardedStore) InsertInteraction(ctx context.Context, ix proto.Interaction) (err error) {
 	defer guard(&err)
 	return g.st.InsertInteraction(ctx, ix)
+}
+
+// resolvedInteractionInserter is the atomic history write and final outcome update used by reversible-setting
+// auto-approval. A store without both fails closed: the setting is not changed without its queryable decision record.
+type resolvedInteractionInserter interface {
+	InsertResolvedInteraction(ctx context.Context, ix proto.Interaction, res *proto.Resolution) error
+	MarkResolvedInteractionOutcome(ctx context.Context, id string, created time.Time, outcome string, at time.Time) error
+}
+
+func (g guardedStore) InsertResolvedInteraction(ctx context.Context, ix proto.Interaction, res *proto.Resolution) (err error) {
+	defer guard(&err)
+	st, ok := g.st.(resolvedInteractionInserter)
+	if !ok {
+		return errNoTable
+	}
+	return st.InsertResolvedInteraction(ctx, ix, res)
+}
+
+func (g guardedStore) MarkResolvedInteractionOutcome(ctx context.Context, id string, created time.Time, outcome string, at time.Time) (err error) {
+	defer guard(&err)
+	st, ok := g.st.(resolvedInteractionInserter)
+	if !ok {
+		return errNoTable
+	}
+	return st.MarkResolvedInteractionOutcome(ctx, id, created, outcome, at)
 }
 
 func (g guardedStore) FinishInteraction(ctx context.Context, id, status string, res *proto.Resolution) (err error) {
@@ -475,20 +512,22 @@ func (s *Service) fillStateMarks(machine string, list []proto.Session, now time.
 // backgroundWaiting (Session.BackgroundWaiting, #6045): working only because of background work, and that work only
 // waits: the node found its background commands waiting, and no subagent or workflow runs (those are work).
 func backgroundWaiting(sess proto.Session) bool {
-	if !sess.BackgroundWorking || !sess.BackgroundWaiting {
-		return false
-	}
+	return sess.BackgroundWorking && sess.BackgroundWaiting && !backgroundIsWork(sess)
+}
+
+// backgroundIsWork: a subagent or workflow runs, which is work whatever its background commands do.
+func backgroundIsWork(sess proto.Session) bool {
 	for _, a := range sess.Subagents {
 		if a.Running {
-			return false
+			return true
 		}
 	}
 	for _, w := range sess.Workflows {
 		if w.Running {
-			return false
+			return true
 		}
 	}
-	return !slices.ContainsFunc(sess.Background, func(t proto.BackgroundTask) bool { return t.Kind == "agent" || t.Kind == "workflow" })
+	return slices.ContainsFunc(sess.Background, func(t proto.BackgroundTask) bool { return t.Kind == "agent" || t.Kind == "workflow" })
 }
 
 func backgroundRunning(sess proto.Session) bool {
