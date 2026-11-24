@@ -24,7 +24,7 @@ export default function BotmuxModeChip({ mode, disabled }: { mode: BotmuxMode | 
       onClick={handleClick}
       disabled={disabled}
       data-botmux-mode={mode}
-      className="touch-hit relative z-10 flex h-6 items-center gap-1 whitespace-nowrap rounded-full px-[7px] text-[11.5px] text-ink-2 hover:bg-hover hover:text-ink"
+      className="touch-hit relative z-10 flex h-6 items-center gap-1 whitespace-nowrap rounded-full px-[7px] text-submeta text-ink-2 hover:bg-hover hover:text-ink"
     >
       <Icon name={state.icon} size={10} stroke={2.4} />
       {mode === "decode" ? "botmux" : t(mode === "hide" ? "chat-botmux.hidden" : "chat-botmux.raw")}
