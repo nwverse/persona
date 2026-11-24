@@ -833,3 +833,27 @@ test('one legal full-screen update can arrive as a burst above the pre-login que
   await waitFor(() => screen.hasFrame);
   assert.equal(screen.presentationSource().pixels.at(-4),123);
 });
+
+test('a screen opened from the Computers directory stays open when its owner refreshes an ungrouped roster', () => {
+  const Subject = new Function('Wire', 'return ' + stripTypeScriptTypes('class Subject {' +
+    ['machinesChanged', 'sameMachine'].map(pageMethod).join('\n') + '}'))({ bool: (data, key) => data[key] === true });
+  const machine = (group, manager, id = 'mac', online = true) => ({ kind: 'machine', id, group, manager,
+    data: () => ({ online }), key() { return JSON.stringify(group ? [group, 'machine', manager, '', id] : ['machine', manager, '', id]); } });
+  const page = new Subject();
+  let dismissed = 0;
+  page.dismissForOwnerChange = () => dismissed++;
+  page.screen = { validateOwner: () => true };
+  page.row = machine('hub-a', 'owner');
+  page.model = { profile: { id: 'hub-a', manager: 'owner' }, machines: [machine('', 'owner')] };
+  page.machinesChanged();
+  assert.equal(dismissed, 0, 'the same computer without a Hub group still matches');
+  page.model.machines = [machine('', 'owner', 'mac', false)];
+  page.machinesChanged();
+  assert.equal(dismissed, 1, 'going offline still closes the screen');
+  page.model = { profile: { id: 'hub-b', manager: 'owner' }, machines: [machine('', 'owner')] };
+  page.machinesChanged();
+  assert.equal(dismissed, 2, 'the same id on another Hub is not this computer');
+  page.model = { profile: { id: 'hub-a', manager: 'owner' }, machines: [machine('', 'other')] };
+  page.machinesChanged();
+  assert.equal(dismissed, 3, 'the same id under another manager is not this computer');
+});

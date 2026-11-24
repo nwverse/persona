@@ -85,8 +85,16 @@ export struct ComputerScreenPage {
   @Monitor('model.connected') connectionChanged(): void { if (!this.model.connected) this.dismissForOwnerChange(); }
 
   @Monitor('model.machines') machinesChanged(): void {
-    const machine: ResourceRow | undefined = this.model.machines.find((candidate: ResourceRow) => candidate.key() === this.row.key());
+    const machine: ResourceRow | undefined = this.model.machines.find((candidate: ResourceRow) => this.sameMachine(candidate));
     if (!machine || !Wire.bool(machine.data(), 'online') || !this.screen.validateOwner()) this.dismissForOwnerChange();
+  }
+
+  /** Rows opened from the Computers directory carry their Hub; the owner's own roster may not. */
+  private sameMachine(candidate: ResourceRow): boolean {
+    if (candidate.key() === this.row.key()) return true;
+    if (candidate.group || candidate.kind !== this.row.kind || candidate.id !== this.row.id) return false;
+    return (candidate.manager || this.model.profile.manager) === this.row.manager &&
+      (!this.row.group || this.row.group === this.model.profile.id);
   }
 
   @Monitor('screen.frameRevision') frameChanged(): void { this.decodeFrame(); }
