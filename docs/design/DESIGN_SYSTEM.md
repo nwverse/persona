@@ -3021,7 +3021,13 @@ item states its own scope, then one configuration form per module. Where a featu
 the page (never navigating away, so nothing open behind it, such as a chat's unsent draft, is unmounted) instead of a
 second switch, so there is one place to change it.
 
-An experiment can supply a permanent note under its introduction or beside a field, using the existing info and warning
+Admit a temporary trial of a real feature or a choice between the stable and new implementations of one capability.
+Keep the stable default and a lossless rollback, with a linked tracking issue for graduation or removal. Put shipped
+module switches in General › Optional features using the same configuration form. Keep other lasting preferences,
+including per-browser and advanced settings, in their owning category. Keep irreversible changes, internal debug
+controls and placeholder demos out of Labs.
+
+An experiment can supply a note under its introduction or beside a field, using the existing info and warning
 hint styles. A choice with consequences can request confirmation for a specific change. Use the shared Dialog, with the
 affected scope, impact, timing and an action-specific button. All dismissal paths preserve the edit. On success the
 field’s polite save status can explain when the choice takes effect. Show this receipt once, in the field footer.

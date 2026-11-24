@@ -1,7 +1,7 @@
 import { t } from "../../i18n";
 import { LOCAL_SHORTCUTS, SHORTCUTS } from "../../lib/shortcuts";
 import { enabledSettingsTabs, registeredModules } from "../../core/module-host";
-import { MODULES_LABS_ID } from "../../core/module-labs";
+import { MODULE_FEATURES_ID } from "../../core/module-features";
 import { tabInfo, TABS, type Tab } from "./nav";
 
 // ── search ──────────────────────────────────────────────
@@ -189,10 +189,14 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "devices", group: t("settings-connectdevice.add"), anchor: "devices" },
 ];
 
-/** Labs › Features: one entry per module's switch, from the module list (core/module-labs.ts draws each as a row of
- *  the configuration form, `configuration-<document>-<field>`). */
+/** General › Optional features follows the registry, including modules switched off on this browser. */
 function moduleSwitchEntries(): SearchGroup[] {
-  return registeredModules().map((d) => ({ tab: "labs", group: path(t("settings-labs.area_features"), d.title()), hint: d.description(), anchor: `configuration-${MODULES_LABS_ID}-${d.id}` }));
+  const modules = registeredModules();
+  if (!modules.length) return [];
+  return [
+    { tab: "general", group: t("settings-features.features_group"), hint: t("settings-features.area_features"), anchor: `configuration-${MODULE_FEATURES_ID}-modules` },
+    ...modules.map((d): SearchGroup => ({ tab: "general", group: d.title(), hint: d.description(), anchor: `configuration-${MODULE_FEATURES_ID}-${d.id}` })),
+  ];
 }
 
 // What is typed and what is matched, compared without case or spaces: "timezone" finds "Time zone", "apikey" "API Key".
