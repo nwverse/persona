@@ -221,7 +221,9 @@ func completedWorkerSets(todos map[string]*Todo) map[string]workerCompletion {
 		if t.DoneAt == nil || t.StartError != "" || t.Supervision.state(*t) != reviewAccepted {
 			group.incomplete = true
 		} else {
-			group.accepted = append(group.accepted, t.ID+"@"+t.DoneAt.UTC().Format(time.RFC3339Nano))
+			// To the microsecond Postgres keeps: memory can hold the nanoseconds of the write that closed it (an owner's
+			// PATCH), and a restart must not make the same set a new generation.
+			group.accepted = append(group.accepted, t.ID+"@"+t.DoneAt.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano))
 		}
 		groups[parent] = group
 	}

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -522,5 +523,39 @@ func TestQueuedOrphanWakeYieldsToANewWorker(t *testing.T) {
 	f.setSessions("box", leader) // the leader is still interrupted: only the worker set changed
 	if _, ok := s.digestEntry(ctx, queued, ""); ok {
 		t.Fatal("a wake queued for the earlier worker set reached the supervisor after a new worker joined")
+	}
+}
+
+// A worker the owner closes after its review asked them to check it is accepted (user_check). Its PATCH
+// (db.EditTodo) puts the row it wrote into memory, DoneAt with the nanoseconds of the moment, while Postgres keeps
+// microseconds. After a restart the same accepted worker must give the same generation and orphan key, or the
+// orphaned leader's supervisor is woken again (#13084).
+func TestAcceptedWorkerGenerationSurvivesAReload(t *testing.T) {
+	s, f := newQuietServiceOn(t, todoTestDB(t))
+	root := startTaskLeader(t, s, f)
+	child := planWorker(t, s, f, nil)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	leader := proto.Session{SessionID: root.Agents[0].SessionID, MachineID: "box", Host: "herdr", Agent: "claude",
+		Status: proto.StatusInterrupted, UpdatedAt: now.Add(-time.Hour),
+		Capabilities: &proto.SessionCapabilities{Read: true, Terminal: true}}
+	f.setSessions("box", leader)
+	if _, _, err := s.updateSupervision(ctx, child.ID, func(v *Supervision) bool { v.State = reviewUserCheck; return true }); err != nil {
+		t.Fatal(err)
+	}
+	done := true
+	if _, err := s.editTodo(ctx, child.ID, db.TodoEdit{Done: &done}); err != nil {
+		t.Fatal(err)
+	}
+	s.orphanWatch(ctx, now)
+	before, ok := s.orphanSignal(root)
+	if !ok || before.WorkerSet == "" {
+		t.Fatalf("the accepted worker gave the orphaned leader no generation: %+v", before)
+	}
+	reloadTodos(t, s) // a restart: every DoneAt as Postgres keeps it
+	s.orphanWatch(ctx, now.Add(time.Minute))
+	after, ok := s.orphanSignal(root)
+	if !ok || after.WorkerSet != before.WorkerSet || after.Key != before.Key {
+		t.Fatalf("the same accepted worker gave another generation after a reload:\n%s\n%s", before.Key, after.Key)
 	}
 }
