@@ -9,12 +9,16 @@ import type { SessionLookup, Todo } from "../../../lib/todos";
 import { stateOf } from "../../../lib/format";
 import { usageLimitAgent } from "../../../lib/usage-limit";
 
+/** lib/todo-view-wire.ts TODO_PHASES, kept local so the shared first-screen todo-view-wire chunk stays unchanged
+ *  (view-legacy.test.ts keeps the two equal). */
+export const KNOWN_PHASES: readonly string[] = ["needs_you", "working", "waiting", "ready", "todo", "someday", "done"];
+const PHASES: ReadonlySet<string> = new Set(KNOWN_PHASES);
 const SECTIONS: ReadonlySet<string> = new Set(TODO_LIST_SECTIONS);
 const REASONS: ReadonlySet<string> = new Set(TODO_REASONS);
 
-/** A view this web can read: a row with a newer hub's section or reason is drawn as if it had none, and counted apart. */
+/** A view this web can read: a row with a newer hub's phase, section or reason is drawn as if it had none, and counted apart. */
 export function knownView(view: TodoSummary | undefined): view is TodoSummary {
-  return !!view && SECTIONS.has(view.section) && REASONS.has(view.reason);
+  return !!view && PHASES.has(view.phase) && SECTIONS.has(view.section) && REASONS.has(view.reason);
 }
 
 /** Today's section for each of the view's: Waiting is the web's Parked (a parked hold and an open PR wait there, 6.3
@@ -132,7 +136,8 @@ export type ByDesign =
   | "finished_recent"
   | "finished_seen"
   | "someday"
-  | "inactive";
+  | "inactive"
+  | "supervisor_holds";
 
 const FINISHED_DONE: ReadonlySet<TriageRule> = new Set(["seen", "accepted"]);
 const AT_REST: ReadonlySet<TriageRule> = new Set(["rest", "stale"]);
@@ -190,6 +195,10 @@ export const BY_DESIGN: readonly { why: ByDesign; holds: (local: Triage, view: T
   // hub's restores), so the Inactive mark differs from Shelved only where the hub knows otherwise: a computer that does
   // not answer (whose runs the web lacks too), a due day in the owner's zone, and a restore of this browser's own
   { why: "inactive", holds: (l, v, f) => v.section === "todo" && AT_REST.has(l.rule) && (f.missing || f.due || f.restoredHere) },
+  // rows 1, 2: a supervised task's failed start, and a run's card its supervisor holds (delegating), are the supervising
+  // conversation's until it passes them up: Working, said as Persona's. The web's triage reads the session's state and
+  // the start error alone and files both as waiting on the owner
+  { why: "supervisor_holds", holds: (l, v) => (l.rule === "failed_start" || l.rule === "agent_asks") && v.section === "working" && v.reason === "persona_working" },
 ];
 
 /** How a row's view compares with today's triage of the same row. */

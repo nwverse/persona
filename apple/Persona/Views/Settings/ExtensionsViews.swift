@@ -168,6 +168,8 @@ struct ExtensionDetailView: View {
     /// Its updates and the managers: the page's, not a row's (`ExtensionSettingsPageWork`, #2988).
     @State private var lifecycle: ExtensionSettingsLifecycle
     @State private var roster: ManagerRoster?
+    /// What it may read of the user's personal information (#13500): the default manager's page only.
+    @State private var trust: ExtensionTrustModel
 
     /// `manager`: another manager's copy (docs/assistant/managers.md "Grouping"): everything the page reads and changes is
     /// that manager's, and so are the pages and connectors it opens. nil: the default manager's.
@@ -177,6 +179,7 @@ struct ExtensionDetailView: View {
         _signIn = State(initialValue: ExtensionSignInModel(id: id, manager: manager))
         _connectorInbox = State(initialValue: ExtensionConnectorsModel(manager: manager))
         _lifecycle = State(initialValue: ExtensionSettingsLifecycle(id: id, manager: manager))
+        _trust = State(initialValue: ExtensionTrustModel(extensionID: id))
     }
 
     /// Its sign-in, with a hub that has them (#4507): the latest of the page's and the pushes'.
@@ -220,6 +223,10 @@ struct ExtensionDetailView: View {
                                       hasConfiguration: hasConfiguration(d)) {
                     configuration(d)
                 } advancedInformation: {
+                    // Grants are the default manager's (docs/apple/ios.md "Domain spaces"): another manager's copy leaves it out.
+                    if page.manager == nil {
+                        ExtensionInfoAccessSection(page: trust, editable: ExtensionInfoAccessSection.editable(d))
+                    }
                     contributions(d)
                     dependencies(d)
                     permissions(d)
@@ -227,6 +234,7 @@ struct ExtensionDetailView: View {
             }
         }
         .modifier(ExtensionSettingsPageWork(page: page, lifecycle: lifecycle, roster: $roster))
+        .task(id: page.manager == nil) { if page.manager == nil { await trust.load() } }
         .themedPage()
         .detailTitle(page.detail?.plugin.name ?? String(localized: "Extensions"))
         .navigationBarTitleDisplayMode(.inline)
@@ -364,7 +372,7 @@ struct ExtensionDetailView: View {
 
     private func hasConfiguration(_ d: HubExtensionDetail) -> Bool {
         auth != nil || !d.ui.isEmpty || !connectorInbox.connectors.isEmpty || d.readOnly || !d.form.isEmpty || !d.secrets.isEmpty
-            || VoiceTimbreSection.shows(d.plugin, manager: page.manager)
+            || (AppModel.shared.voice?.showsExtensionSettings(d.plugin, manager: page.manager) ?? false)
     }
 
     @ViewBuilder private func configuration(_ d: HubExtensionDetail) -> some View {
@@ -372,8 +380,8 @@ struct ExtensionDetailView: View {
             ExtensionAuthSection(auth: auth, enabled: d.plugin.enabled ?? true, model: signIn)
         }
         // The voice extension: the voice this device's calls speak with (#2411), whoever's settings the rest are.
-        if VoiceTimbreSection.shows(d.plugin, manager: page.manager) {
-            VoiceTimbreSection(extensionID: d.plugin.id, group: AppModel.shared.api?.group ?? "")
+        if let voice = AppModel.shared.voice, voice.showsExtensionSettings(d.plugin, manager: page.manager) {
+            voice.extensionSettings(extensionID: d.plugin.id, group: AppModel.shared.api?.group ?? "")
         }
         if d.readOnly {
             Section {

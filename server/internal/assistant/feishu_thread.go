@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -55,7 +55,7 @@ const threadHintEvery = 10 * time.Minute
 const threadHintsKeep = 200
 
 // threadMessage takes a message from a group chat: the to-do bound to its topic records it and its agent gets it.
-func (s *Service) threadMessage(ctx context.Context, ev feishubot.MessageEvent, st FeishuStatus, content feishubot.Content) {
+func (s *Service) threadMessage(ctx context.Context, ev botcard.MessageEvent, st FeishuStatus, content botcard.Content) {
 	msg := ev.Message
 	// Only the owner's own words count here, whatever reaches this far: the hub checks it too (a later step), and the
 	// words go to an agent that acts on them.
@@ -67,7 +67,7 @@ func (s *Service) threadMessage(ctx context.Context, ev feishubot.MessageEvent, 
 		s.logf("bots: a message outside a topic of a group chat was left alone")
 		return // nowhere to answer in, and not a topic of a to-do
 	}
-	// Where the bot's own lines into this topic reply to (a todo's posts, feishu_thread_posts.go): any message of it will do.
+	// Where the bot's own lines into this topic reply to (a todo's posts, the lark module's thread_posts.go): any message of it will do.
 	s.rememberTopicMessage(ctx, msg.ChatID, msg.ThreadID, msg.MessageID)
 	l := s.botLang(ctx)
 	topic := &feishuTopic{Chat: msg.ChatID, Thread: msg.ThreadID}

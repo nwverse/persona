@@ -5,12 +5,14 @@ import android.content.res.Resources
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
+import persona.core.contracts.ImageLimits
 import persona.core.contracts.Session
 import persona.core.contracts.api.ChatActions
 import persona.core.contracts.api.hubCodedFailure
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.JAction
 import persona.core.designsystem.JActionSheet
+import persona.core.designsystem.LocalHubImageLimits
 import persona.core.designsystem.LocalPersonaName
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.rememberCopy
@@ -106,9 +108,11 @@ internal fun ChatQueueStrip(
     onNotice: (String) -> Unit,
     refresh: suspend () -> Unit,
     initiallyExpanded: Boolean = false,
+    imageLimits: ImageLimits = LocalHubImageLimits.current.forAgent(session?.agent),
 ) {
     val queued = session?.queued.orEmpty()
     if (session == null || queued.isEmpty()) return
+    val currentImageLimits by rememberUpdatedState(imageLimits)
     val scope = rememberCoroutineScope()
     val copy = rememberCopy()
     val resources = LocalResources.current
@@ -149,7 +153,9 @@ internal fun ChatQueueStrip(
             // A Persona conversation's photos come beside the queue as base64 (the words carry no paths for them): they
             // go back into the draft as photos, and what could not is said (iOS `restoreQueued`).
             val photos = pulled.imagesOf(index)
-            val restored = if (photos.isEmpty()) null else withContext(Dispatchers.IO) { restoredPhotos(context, photos) }
+            val restored = if (photos.isEmpty()) null else withContext(Dispatchers.IO) {
+                restoredPhotos(context, photos, limits = currentImageLimits)
+            }
             restored?.let { composer.restorePhotos(it.attachments) }
             onNotice(if (restored != null && restored.lost > 0) resources.getQuantityString(R.plurals.chat_queue_photos_lost, restored.lost, restored.lost)
                 else resources.getString(R.string.chat_queue_restored))

@@ -4,7 +4,7 @@ import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef } from "reac
 import { t } from "../i18n";
 import { isSpaceMuted } from "../lib/agent-filter";
 import { isQuiet, sessionHost, type AgentMutes, type Space } from "../lib/agent-groups";
-import { showsWorktreeLevel, type RepoMachine, type RepoTree, type RepoWorktree } from "../lib/agent-repos";
+import { showsWorktreeLevel, type RepoMachine, type RepoTree, type RepoWorktree } from "../lib/agent-repos-core";
 import { paneRoute, tabRowKeys, type ChildStates, type HerdrMachine, type HerdrSpace, type HerdrTab } from "../lib/herdr-tree";
 import { machineWithHub } from "../lib/mesh";
 import { agentLabel } from "../lib/mentions";
@@ -244,7 +244,7 @@ export const TreeTodoRows = memo(function TreeTodoRows({ td, top, ...p }: { td: 
       toggleLabel={t("sidebar.task_agents", { name: td.name })}
       icon={td.todoId ? "todo" : undefined}
       title={title}
-      end={<>{(td.sessions.length > 0 || !td.taskState) && <GroupCount n={td.sessions.length} label={t("sidebar.agent_count", { count: td.sessions.length })} className="shrink-0" />}{state}</>}
+      end={<>{td.goalProgress && <GroupCount n={`${td.goalProgress.done}/${td.goalProgress.total}`} label={`${td.goalProgress.done}/${td.goalProgress.total}`} dataGoalProgress={`${td.goalProgress.done}/${td.goalProgress.total}`} className="shrink-0" />}{(td.sessions.length > 0 || !td.taskState) && <GroupCount n={td.sessions.length} label={t("sidebar.agent_count", { count: td.sessions.length })} className="shrink-0" />}{state}</>}
     >
       <WindowedRows items={td.agents} holds={(a) => withinAgent(a, p.activeKey) !== ""} render={(a) => <TreeAgentRows key={a.key} a={a} depth={0} {...p} activeKey={withinAgent(a, p.activeKey)} />} />
     </TreeBranch>
@@ -328,31 +328,45 @@ export function RepoMachineSection({ m, flat, machines, reg, hover, activeKey, g
   );
 }
 
-/** One repository on one machine ("By repo"): its working trees under it, the main checkout marked and first. */
+/** One repository on one machine ("By repo"): its working trees under it, the main checkout marked and first. Its Agent
+ *  rows name neither the repository nor the tree: the headings above them do (DESIGN_SYSTEM 3.4, #13454). */
 function RepoSection({ tree, reg, hover, activeKey, go, onRowMenu, selected, ...actions }: { tree: RepoTree; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu: RowMenuFn; selected?: string } & WorkspaceTreeActions) {
   const [folded, toggle] = useFolded(tree.key, false, { holds: tree.worktrees.some((w) => holdsRow(w.navigationTree ?? w.tree, activeKey) || holdsWorkspace(w, selected)) });
-  const row = (s: Session, hint: string) => {
+  const row = (s: Session) => {
     const key = `s:${s.machine_id}/${s.session_id}`;
-    return <SessionRow key={key} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} hint={hint} onMenu={onRowMenu} />;
+    return <SessionRow key={key} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} onMenu={onRowMenu} />;
   };
-  // A lone main checkout, or an Orca worktree whose folder names its project, needs no extra level.
+  // A lone main checkout, or a lone tree named like its repository, needs no extra level. A host's workspace drawn so
+  // gives the heading its marks and its menu, as a space's heading has them By project.
   const flat = !showsWorktreeLevel(tree);
+  const lone = flat ? tree.worktrees[0]! : undefined;
+  const target = lone?.target && actions.onWorkspaceMenu ? lone.target : undefined;
+  const count = <GroupCount n={tree.count} label={t("sidebar.agent_count", { count: tree.count })} />;
   return (
     <Section
-      title={<span className="flex min-w-0 items-center gap-1.5"><Icon name="folder" size={12} stroke={2} className="shrink-0 text-ink-3" /><span className="truncate">{tree.name}</span></span>}
+      title={
+        <span className="flex min-w-0 items-center gap-1.5">
+          <Icon name="folder" size={12} stroke={2} className="shrink-0 text-ink-3" />
+          <span className="truncate">{tree.name}</span>
+          {lone?.workspace && <SpaceMarks pinned={workspacePinTime(lone.workspace) !== undefined} muted={false} />}
+          {lone?.workspace?.available === false && <span title={t("workspace-tree.unavailable")} className="shrink-0 text-ink-3"><Icon name="warning" size={11} /><span className="sr-only">{t("workspace-tree.unavailable")}</span></span>}
+        </span>
+      }
       folded={folded}
       onToggle={toggle}
-      right={<GroupCount n={tree.count} label={t("sidebar.agent_count", { count: tree.count })} />}
+      onMenu={target && ((at, el) => actions.onWorkspaceMenu!(target, el, at))}
+      right={target ? <><span className={cx(MENU_HIDES, MENU_TOUCH_ROOM)}>{count}</span><HeadingMenuButton label={t("workspace-tree.actions", { name: tree.name })} onOpen={(el) => actions.onWorkspaceMenu!(target, el)} /></> : count}
     >
-      {flat ? <WindowedRows items={tree.worktrees[0]!.sessions} holds={(s) => rowKey(s) === activeKey} render={(s) => row(s, tree.name)} /> : tree.worktrees.map((w) => <RepoWorktreeRows key={w.key} w={w} repo={tree.name} row={row} activeKey={activeKey} go={go} selected={selected} {...actions} />)}
+      {flat ? <WindowedRows items={lone!.sessions} holds={(s) => rowKey(s) === activeKey} render={row} /> : tree.worktrees.map((w) => <RepoWorktreeRows key={w.key} w={w} repo={tree.name} row={row} activeKey={activeKey} go={go} selected={selected} {...actions} />)}
     </Section>
   );
 }
 
-/** One working tree's agents under its own folding row: the main checkout wears a home mark, and a tree with nothing
- *  running says so. Orca child worktrees have their own remembered, initially expanded chip after the parent's agents. */
-function RepoWorktreeRows({ w, repo, row, activeKey, go, selected, ...actions }: { w: RepoWorktree; repo: string; row: (s: Session, hint: string) => React.ReactElement; activeKey: string; go: GoFn; selected?: string } & WorkspaceTreeActions) {
-  const [folded, toggle] = useFolded(w.key, !w.workspace && w.sessions.length === 0, { holds: holdsRow(w.navigationTree ?? w.tree, activeKey) || w.children.some((child) => holdsWorkspace(child, selected)) });
+/** One working tree's agents under its own folding row: the main checkout wears a home mark, and only a known non-main
+ *  worktree names its kind. Catalog folders and unknown `is_main` stay unmarked; legacy paths keep their inference.
+ *  Orca child worktrees have their own remembered, initially expanded chip after the parent's agents. */
+function RepoWorktreeRows({ w, repo, row, activeKey, go, selected, ...actions }: { w: RepoWorktree; repo: string; row: (s: Session) => React.ReactElement; activeKey: string; go: GoFn; selected?: string } & WorkspaceTreeActions) {
+  const [folded, toggle] = useFolded(w.key, w.sessions.length === 0 && w.children.length === 0, { follow: true, holds: holdsRow(w.navigationTree ?? w.tree, activeKey) || w.children.some((child) => holdsWorkspace(child, selected)) });
   const descendants = w.navigationTree ? w.children.flatMap((c) => c.navigationTree ?? c.tree) : w.tree.slice(w.sessions.length);
   const [childrenFolded, toggleChildren] = useFolded(`${w.key}/children`, false, { holds: holdsRow(descendants, activeKey) || w.children.some((child) => holdsWorkspace(child, selected)) });
   const selectedRow = useRef<HTMLDivElement>(null);
@@ -365,13 +379,19 @@ function RepoWorktreeRows({ w, repo, row, activeKey, go, selected, ...actions }:
   const running = w.sessions.filter((s) => !isQuiet(s, mutes)).length;
   const title = [w.workspace?.project_name, w.name, w.branch, w.path, w.workspace?.source].filter(Boolean).join(" · ");
   const label = <><span className="min-w-0 truncate">{w.name}</span>{w.workspace?.project_name && w.workspace.project_name !== repo && <span className="min-w-0 max-w-24 truncate text-ink-3">{w.workspace.project_name}</span>}</>;
+  const showWorktreeKind = !w.main && (!w.workspace || (w.workspace.is_main === false && w.workspace.workspace_kind !== "folder"));
   return (
     <div ref={selectedRow} className="mt-px" data-workspace-key={w.workspace ? w.key : undefined}>
       <div className={cx("group/sec relative z-10 flex w-full min-w-0 items-center gap-1.5 whitespace-nowrap rounded-control py-1 pl-3 pr-2 text-left text-[11.5px] text-ink-2 hover:bg-hover", selected === w.key && "bg-hover")} {...(w.target && actions.onWorkspaceMenu ? contextMenuProps((at, anchor) => actions.onWorkspaceMenu!(w.target!, anchor, at)) : {})}>
         <button type="button" aria-label={t("workspace-tree.disclosure", { name: w.name })} aria-expanded={!folded} onClick={toggle} className="touch-hit relative flex min-h-7 shrink-0 items-center [@media(pointer:coarse)]:min-h-11">
           <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 opacity-60 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
         </button>
-        {w.main && <Icon name="home" size={11} stroke={2} className="shrink-0 text-ink-3" />}
+        {w.main ? <Icon name="home" size={11} stroke={2} className="shrink-0 text-ink-3" /> : showWorktreeKind ? (
+          <span className="flex shrink-0 items-center gap-1 text-ink-3">
+            <Icon name="branch" size={11} stroke={2} className="shrink-0" />
+            <span>{t("workspace-tree.worktree_kind")}</span>
+          </span>
+        ) : null}
         <SpaceMarks pinned={workspacePinTime(w.workspace) !== undefined} muted={false} />
         <button type="button" title={title} aria-pressed={selected === w.key} aria-expanded={!folded} onClick={() => { if (w.target) actions.onSelectWorkspace?.(w.target); toggle(); }} className="flex min-h-7 min-w-0 flex-1 items-center gap-1.5 text-left hover:text-ink [@media(pointer:coarse)]:min-h-11">{label}</button>
         {w.workspace?.available === false && <Icon name="warning" size={11} className="shrink-0 text-ink-3" aria-label={t("workspace-tree.unavailable")} />}
@@ -380,7 +400,7 @@ function RepoWorktreeRows({ w, repo, row, activeKey, go, selected, ...actions }:
       </div>
       <Collapse open={!folded} sidebarFold>
         <div inert={folded || undefined}>
-          <div className="flex flex-col gap-px pl-2"><WindowedRows items={w.sessions} holds={(s) => rowKey(s) === activeKey} render={(s) => row(s, `${repo} › ${w.name}`)} /></div>
+          <div className="flex flex-col gap-px pl-2"><WindowedRows items={w.sessions} holds={(s) => rowKey(s) === activeKey} render={row} /></div>
           {w.children.length > 0 && (
             <>
               <RepoChildToggle count={w.children.length} counts={w.childStates} folded={childrenFolded} onToggle={toggleChildren} />
@@ -521,23 +541,29 @@ const MENU_HIDES = "group-hover/sec:invisible group-has-[[data-row-menu]:focus-v
 const MENU_STEP_ASIDE = "group-hover/sec:-translate-x-5 group-has-[[data-row-menu]:focus-visible]/sec:-translate-x-5";
 const MENU_TOUCH_ROOM = "[@media(hover:none)]:mr-9";
 
-// A space's ⋯ (rename, pin, mute, mark seen, link a todo): on hover with a pointer, always on a touch screen.
-function SpaceMenuButton({ sp, onMenu }: { sp: Space; onMenu: (sp: Space, anchor: HTMLElement) => void }) {
+// A heading's ⋯ for what the heading stands for (a space By project, a lone workspace By repo): on hover with a pointer,
+// always on a touch screen.
+function HeadingMenuButton({ label, title = label, onOpen }: { label: string; title?: string; onOpen: (anchor: HTMLElement) => void }) {
   return (
     <span className="absolute top-1/2 right-2 z-10 -translate-y-1/2">
       <button
         type="button"
         data-row-menu
-        aria-label={t("sidebar.space_actions_named", { name: sp.name })}
+        aria-label={label}
         aria-haspopup="menu"
-        title={t("sidebar.space_actions")}
-        onClick={(e) => onMenu(sp, e.currentTarget)}
+        title={title}
+        onClick={(e) => onOpen(e.currentTarget)}
         className="touch-hit relative flex size-5 items-center justify-center rounded-[5px] text-ink-3 opacity-0 transition-opacity duration-150 group-hover/sec:opacity-100 hover:bg-hover-2 hover:text-ink focus-visible:opacity-100 [@media(hover:none)]:size-8 [@media(hover:none)]:opacity-100"
       >
         <Icon name="more" size={12} />
       </button>
     </span>
   );
+}
+
+// A space's ⋯ (rename, pin, mute, mark seen, link a todo).
+function SpaceMenuButton({ sp, onMenu }: { sp: Space; onMenu: (sp: Space, anchor: HTMLElement) => void }) {
+  return <HeadingMenuButton label={t("sidebar.space_actions_named", { name: sp.name })} title={t("sidebar.space_actions")} onOpen={(el) => onMenu(sp, el)} />;
 }
 
 export type SpaceMenuFn = (sp: Space, anchor: HTMLElement, at?: MenuAt, fold?: MenuNode["fold"]) => void;

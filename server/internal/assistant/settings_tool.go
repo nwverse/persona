@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,7 +22,8 @@ import (
 // "Control Persona itself" row). The assistant's own ("About me", its launcher, "notify tasks the main chat starts only
 // in the main chat") are its to read and change; the hub's (the inbox's rules, the blocked Claude config directories,
 // mail accounts…) are the hub's settings app's, which asks the user itself (app.tool persona_settings). Reads are free;
-// every change is a card on the phone that says what changes (before → after) and is applied only when approved.
+// every change is a card on the phone that says what changes (before → after) and is applied only when approved, except
+// the exact reversible-setting allowlist when the administrator's manager.json switch is on.
 
 // ownSetting is one of the assistant's own settings persona_settings offers.
 type ownSetting struct {
@@ -43,6 +45,35 @@ type ownChange struct {
 	// atomically checks the exact card revision itself. Rebuilding such an
 	// operation would move its revision baseline forward and hide a conflict.
 	applyChecksProposal bool
+	// reversible is present only on the audited, exactly restorable settings. Its raw before-image distinguishes an
+	// unset pointer from an explicitly saved default; applyAutomatic checks it again under the settings write lock.
+	reversible *reversibleSetting
+}
+
+const autoApproveReversibleSettingsKey = "assistant.auto_approve_reversible_settings"
+
+// reversibleSettingAutoApproved is the complete allowlist. Adding a setter descriptor alone cannot bypass a card.
+func reversibleSettingAutoApproved(key string) bool {
+	switch key {
+	case "assistant.main_background_folded", "assistant.recent_task_chats", "assistant.briefing_waits":
+		return true
+	default:
+		return false
+	}
+}
+
+type reversibleSetting struct {
+	before  json.RawMessage
+	after   json.RawMessage
+	current func(Settings) json.RawMessage
+	assign  func(*Settings)
+	applied string
+}
+
+// reversibleSettingJSON cannot fail for the Boolean pointers and raw module values in the allowlist.
+func reversibleSettingJSON(v any) json.RawMessage {
+	raw, _ := json.Marshal(v)
+	return raw
 }
 
 // card is what the approval card says in l.
@@ -68,6 +99,11 @@ func (s *Service) allOwnSettings() []ownSetting {
 	getSet := []string{"get", "set"}
 	return []ownSetting{
 		s.hiddenDirSetting(),
+		s.blockedHerdrSessionsSetting(),
+		{Setting: Setting{Key: modulesKey, Title: "Built-in modules", Actions: getSet,
+			About: "built-in feature modules switched off; a change applies when the manager next starts, not to the running process",
+			Value: `{"disabled": ["<module id>", …]}; null or an empty list restores every compiled-in module`},
+			get: s.getModuleSwitch, set: s.setModuleSwitch},
 		{Setting: Setting{Key: standingAuthorizationsKey, Title: "Standing authorizations", Actions: getSet,
 			About: "user-confirmed actions for one computer and absolute directory tree; only the main conversation may set them, and every change requires the user’s own permission approval",
 			Value: "{revision, authorizations: [{id?, machine_id, directory, actions, conditions, quote, source, reversible}]}; get first; retain existing entries unchanged or remove them; omit id for new grants; granted_at is set by the server"},
@@ -160,6 +196,13 @@ func (s *Service) allOwnSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.mainBackgroundFolded(ctx)), nil },
 			set: s.setMainBackgroundFolded},
+		{Setting: Setting{Key: "assistant.fold_routine_relay_replies", Title: "Fold routine relay replies", Actions: getSet,
+			About: "off by default. When background rounds are folded in the main chat, keep routine replies from other conversations in their expandable round and skip their ordinary finished notification. Explicit owner notifications and errors retain their normal behavior.",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) {
+				return fmt.Sprint(s.settings(ctx).foldRoutineRelayReplies()), nil
+			},
+			set: s.setFoldRoutineRelayReplies},
 		{Setting: Setting{Key: "assistant.main_compact_window", Title: "Main chat compaction window", Actions: getSet,
 			About: "400000 (the default): the main conversation is compacted at about this many tokens (and sent /compact when " +
 				"idle at 75% of it) instead of its model's whole window, when it runs on a launcher Persona manages that declares " +
@@ -302,6 +345,15 @@ func (s *Service) allOwnSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.inboxSignalsOn(ctx)), nil },
 			set: s.setInboxSignals},
+		{Setting: Setting{Key: "assistant.auto_supervision_messages", Title: "Automatic supervision messages", Actions: getSet,
+			About: "on (the default): the assistant sends its follow-up messages about supervised tasks on its own (they wake the main " +
+				"conversation, a leader or the background supervisor, and each costs a model turn). off: it sends none, queues none and " +
+				"schedules none, and what was waiting is withdrawn once. Not affected: the task ledger and states, the user's own " +
+				"questions and task_review, approval and permission cards, and the safety checks. Turning it back on takes only what " +
+				"happens afterwards. Applies at once",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.autoSupervisionOn(ctx)), nil },
+			set: s.setAutoSupervisionMessages},
 		{Setting: Setting{Key: "inbox.todo_forward.enabled", Title: "Auto-forward PR/Issue Inbox events to the bound to-do's Agent", Actions: getSet,
 			About: "off (the default): Inbox ingestion performs zero automatic forwards to task Agents. on: incoming Inbox items " +
 				"with an exact canonical GitHub PR or Issue URL bound to an open to-do's pr_url or todo_repositories are " +
@@ -349,11 +401,34 @@ func (s *Service) allOwnSettings() []ownSetting {
 				return fmt.Sprint(backgroundKeepsContext(s.settings(ctx))), nil
 			},
 			set: s.setBackgroundSupervisorKeepsContext},
+		{Setting: Setting{Key: "assistant.chat_reply_relay", Title: "Tell chats where it wrote as me about new replies", Actions: getSet,
+			About: "off (the default): nothing is passed on. on: after a conversation wrote into a Lark chat as the user, other " +
+				"people's new messages in that chat are told to that conversation (once, at most every 10 minutes per chat), for all " +
+				"chats, not one by one. Turning it off drops those still waiting in a conversation's queue",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) {
+				return fmt.Sprint(chatReplyRelayOn(s.settings(ctx))), nil
+			},
+			set: s.setChatReplyRelay},
 		{Setting: Setting{Key: "assistant.launcher", Title: "Persona 的启动器", Actions: getSet,
 			About: "which launcher (model) new Persona conversations start with by default",
 			Value: "a launcher name from this setting's get"},
 			get: s.getLauncher,
 			set: s.setLauncher},
+		{Setting: Setting{Key: "assistant.limit_fallbacks", Title: "Backup launchers for a usage limit", Actions: getSet,
+			About: "[] (the default): a conversation a subscription's usage limit stops waits for the reset, and the main chat, the " +
+				"leaders and the background supervisor are continued a minute after it, as before. A list of the assistant's " +
+				"launchers, first choice first: when the limit stops the main chat, a leader, the background supervisor or a " +
+				"side chat answering the owner, and it resets 10 minutes or more later, the conversation moves to the first " +
+				"listed launcher it is not on that is not itself failing (launcher health) and that its role can run on, with " +
+				"the usual summary of what went before, and goes on with the work there; a minute after the reset it moves " +
+				"back to the launcher it was on, unless someone switched it meanwhile. Coding Agents and spaces are never " +
+				"moved; a backup that meets its own limit waits for its reset. Once moved, a conversation keeps the launcher " +
+				"and model it was moved to, as after any switch: a later change of the main chat's model setting applies to " +
+				"the next new main chat, and the chat's own model menu still changes it",
+			Value: "a JSON list of launcher names from this setting's get, at most 8; [] turns it off"},
+			get: s.getLimitFallbacks,
+			set: s.setLimitFallbacks},
 		{Setting: Setting{Key: "model_profiles.tiers", Title: "Agent presets (the model profiles' tiers)", Actions: getSet,
 			About: "the Agent presets: each model profile's named tiers, what agent_start / task_plan's tier and the New Agent " +
 				"form's presets run on (launcher, model, effort) and when to use each; get lists every profile's, set adds, " +
@@ -480,6 +555,9 @@ func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSett
 	shown, _ := json.Marshal(map[string]string{"setting": title, "action": action})
 	now := time.Now().UTC()
 	proposal := change.card(l)
+	if action == "set" && s.hello(ctx).Assistant.AutoApproveReversibleSettings && reversibleSettingAutoApproved(o.Key) && change.reversible != nil {
+		return s.applyAutomaticReversibleSetting(ctx, call, o.Key, proposal, change.reversible)
+	}
 	outcome, err := s.waitPreparedCard(ctx, proto.Interaction{ID: "ix_" + randomHex(6), MachineID: call.MachineID, SessionID: call.SessionID,
 		Kind: proto.IxPermission, ToolName: "persona_settings", Summary: proposal, ToolInput: shown, SessionTitle: "Persona",
 		CreatedAt: now, ExpiresAt: now.Add(settingCardWait)}, approvalops.Operation{
@@ -518,6 +596,64 @@ func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSett
 	return outcome.Text, err
 }
 
+// applyAutomaticReversibleSetting records the assistant's decision before attempting the write, then updates the same
+// row with saved or not_saved. If the history row cannot be written, the setting is left alone. If the outcome update
+// fails, attempted remains as an explicit unknown rather than a false result. The raw before-image is checked again
+// under the same lock as the settings write.
+func (s *Service) applyAutomaticReversibleSetting(ctx context.Context, call ToolCall, key, proposal string, r *reversibleSetting) (string, error) {
+	st := s.fleetStore()
+	writer, ok := st.(resolvedInteractionInserter)
+	if !ok {
+		return "", fmt.Errorf("%w: this store cannot record a reversible-setting decision and outcome", approvalops.ErrNotApplied)
+	}
+	restoreArguments, _ := json.Marshal(map[string]any{"action": "set", "key": key, "value": r.before})
+	restore, _ := json.Marshal(map[string]any{"tool": "persona_settings", "arguments": json.RawMessage(restoreArguments), "while_switch_enabled": autoApproveReversibleSettingsKey})
+	audit, _ := json.Marshal(struct {
+		Actor       string          `json:"actor"`
+		Operation   string          `json:"operation"`
+		Setting     string          `json:"setting"`
+		Before      json.RawMessage `json:"before"`
+		After       json.RawMessage `json:"after"`
+		Proposal    string          `json:"proposal"`
+		Outcome     string          `json:"outcome"`
+		CardSkipped bool            `json:"card_skipped"`
+		Switch      string          `json:"switch"`
+		Restore     json.RawMessage `json:"restore"`
+	}{Actor: proto.AnsweredByAssistant, Operation: "persona_settings.set", Setting: key, Before: r.before, After: r.after,
+		Proposal: proposal, Outcome: "attempted", CardSkipped: true, Switch: autoApproveReversibleSettingsKey, Restore: restore})
+	allow := true
+	now := time.Now().UTC()
+	resolution := &proto.Resolution{Allow: &allow, AnsweredBy: proto.AnsweredByAssistant,
+		Reason: autoApproveReversibleSettingsKey + "; exactly reversible; restore with persona_settings " + string(restoreArguments)}
+	ix := proto.Interaction{ID: "ix_" + randomHex(6), MachineID: call.MachineID, SessionID: call.SessionID,
+		Kind: proto.IxPermission, ToolName: "persona_settings", SessionTitle: "Persona", CreatedAt: now, ToolInput: audit,
+		Private: s.justMeNow(call.MachineID, call.SessionID), Summary: proposal}
+	if err := writer.InsertResolvedInteraction(ctx, ix, resolution); err != nil {
+		return "", fmt.Errorf("%w: write the reversible-setting history record: %v", approvalops.ErrNotApplied, err)
+	}
+	_, saveErr := s.updateSettingsChecked(ctx, func(v *Settings) error {
+		r.assign(v)
+		return nil
+	}, func(v Settings) error {
+		if !bytes.Equal(r.current(v), r.before) {
+			return fmt.Errorf("%w: %s changed concurrently", approvalops.ErrStale, key)
+		}
+		return nil
+	})
+	outcome := "not_saved"
+	if saveErr == nil {
+		outcome = "saved"
+	}
+	if err := writer.MarkResolvedInteractionOutcome(ctx, ix.ID, ix.CreatedAt, outcome, time.Now().UTC()); err != nil {
+		s.logf("reversible setting %s: record %s outcome for %s: %v", key, outcome, ix.ID, err)
+	}
+	if saveErr != nil {
+		return "", saveErr
+	}
+	s.settingsChanged(ctx)
+	return r.applied, nil
+}
+
 func orNone(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return "（无）"
@@ -527,21 +663,22 @@ func orNone(s string) string {
 
 // settingTitles are the settings' titles for the card the user approves on, in this file's namespace (Title stays
 // what the assistant reads).
-var settingTitles = map[string]string{standingAuthorizationsKey: "title_standing_authorizations", "assistant.notes": "title_notes", "assistant.main_tasks_quiet": "title_main_tasks_quiet",
+var settingTitles = map[string]string{modulesKey: "title_modules", standingAuthorizationsKey: "title_standing_authorizations", "assistant.notes": "title_notes", "assistant.main_tasks_quiet": "title_main_tasks_quiet",
 	"assistant.idle_auto_compact": "title_idle_auto_compact", "assistant.idle_auto_compact_minutes": "title_idle_auto_compact_minutes", "assistant.idle_auto_compact_tokens": "title_idle_auto_compact_tokens",
 	"assistant.idle_release_minutes":      "title_idle_release_minutes",
 	readonlyModeKey:                       "title_readonly_mode",
 	"assistant.task_workspace_preference": "title_task_workspace_preference",
-	"assistant.start_requested_tasks":     "title_start_requested_tasks", "assistant.launcher": "title_launcher",
+	"assistant.start_requested_tasks":     "title_start_requested_tasks", "assistant.launcher": "title_launcher", "assistant.limit_fallbacks": "title_limit_fallbacks",
 	"assistant.recording_days": "title_recording_days", "assistant.delivery_gate": "title_delivery_gate", "assistant.done_needs_delivery": "title_done_needs_delivery",
-	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders", "assistant.briefing_waits": "title_briefing_waits", "assistant.background_supervisor_keeps_context": "title_background_supervisor_keeps_context",
-	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.task_lessons": "title_task_lessons", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "inbox.todo_forward.enabled": "title_inbox_todo_forward", "assistant.pr_events_route_to_agent": "title_pr_events_route_to_agent", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", "model_profiles.tiers": "title_model_tiers",
+	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders", "assistant.briefing_waits": "title_briefing_waits", "assistant.background_supervisor_keeps_context": "title_background_supervisor_keeps_context", "assistant.chat_reply_relay": "title_chat_reply_relay",
+	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.task_lessons": "title_task_lessons", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "assistant.auto_supervision_messages": "title_auto_supervision_messages", "inbox.todo_forward.enabled": "title_inbox_todo_forward", "assistant.pr_events_route_to_agent": "title_pr_events_route_to_agent", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", "model_profiles.tiers": "title_model_tiers",
 	"assistant.load_all_tools":                "title_load_all_tools",
 	"assistant.meeting_transcription_default": "title_meeting_transcription_default",
 	"assistant.meeting_attendance_default":    "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days",
 	"assistant.kb_topics": "title_kb_topics", "assistant.main_background_folded": "title_main_background_folded",
-	"assistant.main_compact_window": "title_main_compact_window",
-	"assistant.recent_task_chats":   "title_recent_task_chats", admissionSettingsKey: "title_admission", trustSetting: "title_task_trust"}
+	"assistant.fold_routine_relay_replies": "title_fold_routine_relay_replies",
+	"assistant.main_compact_window":        "title_main_compact_window",
+	"assistant.recent_task_chats":          "title_recent_task_chats", admissionSettingsKey: "title_admission", trustSetting: "title_task_trust"}
 
 // clipped is a value as the card shows it, in l.
 func clipped(l i18n.Lang, s string) string {
@@ -684,6 +821,60 @@ func (s *Service) setBoolSetting(ctx context.Context, v json.RawMessage, current
 		}}, nil
 }
 
+// setReversibleBoolSetting is deliberately separate from setBoolSetting: only the two display-only candidates accept
+// null as raw unset, and only while the administrator switch is on. Switch-on changes compare raw state so an explicit
+// default and unset remain exactly restorable even when their effective values match. Switch-off keeps the legacy
+// decoder (including null as false) and effective-value no-op.
+func (s *Service) setReversibleBoolSetting(ctx context.Context, v json.RawMessage, defaultValue bool,
+	current func(context.Context) bool, unchanged string, card func(l i18n.Lang, before, after string) string,
+	field func(*Settings) **bool, applied string) (*ownChange, error) {
+	auto := s.hello(ctx).Assistant.AutoApproveReversibleSettings
+	var next *bool
+	if err := json.Unmarshal(v, &next); err != nil {
+		return nil, errors.New("value must be true or false")
+	}
+	if next == nil && !auto {
+		next = new(bool) // encoding/json historically decoded null into a non-pointer false for these two settings.
+	}
+	before := current(ctx)
+	after := defaultValue
+	if next != nil {
+		after = *next
+	}
+	saved := s.settings(ctx)
+	beforeRaw := reversibleSettingJSON(*field(&saved))
+	if auto {
+		if bytes.Equal(beforeRaw, reversibleSettingJSON(next)) {
+			return &ownChange{summary: unchanged}, nil
+		}
+	} else if after == before {
+		return &ownChange{summary: unchanged}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	word := map[bool]string{true: "assistant-settings_tool.on", false: "assistant-settings_tool.off"}
+	return &ownChange{
+		cardText: func(l i18n.Lang) string { return card(l, i18n.T(l, word[before]), i18n.T(l, word[after])) },
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { *field(v) = next; return nil }); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			return fmt.Sprintf(applied, after), nil
+		},
+		reversible: &reversibleSetting{
+			before: beforeRaw,
+			after:  reversibleSettingJSON(next),
+			current: func(v Settings) json.RawMessage {
+				return reversibleSettingJSON(*field(&v))
+			},
+			assign:  func(v *Settings) { *field(v) = next },
+			applied: fmt.Sprintf(applied, after),
+		},
+	}, nil
+}
+
 func (s *Service) setMainTasksQuiet(ctx context.Context, v json.RawMessage) (*ownChange, error) {
 	return s.setBoolSetting(ctx, v, s.mainTasksQuiet, "「主对话派的任务只在主对话里通知」没有变化", func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_main_tasks_quiet", i18n.Args{"before": before, "after": after})
@@ -725,14 +916,20 @@ func (s *Service) setTaskWorkspacePreference(ctx context.Context, raw json.RawMe
 }
 
 func (s *Service) setMainBackgroundFolded(ctx context.Context, v json.RawMessage) (*ownChange, error) {
-	return s.setBoolSetting(ctx, v, s.mainBackgroundFolded, "assistant.main_background_folded is unchanged", func(l i18n.Lang, before, after string) string {
+	return s.setReversibleBoolSetting(ctx, v, true, s.mainBackgroundFolded, "assistant.main_background_folded is unchanged", func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_main_background_folded", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.MainBackgroundFolded },
 		"assistant.main_background_folded is %v; the apps redraw the main conversation with it.")
 }
 
+func (s *Service) setFoldRoutineRelayReplies(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, func(ctx context.Context) bool { return s.settings(ctx).foldRoutineRelayReplies() }, "assistant.fold_routine_relay_replies is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_fold_routine_relay_replies", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.FoldRoutineRelayReplies }, "assistant.fold_routine_relay_replies is %v for routine reports in the main conversation.")
+}
+
 func (s *Service) setRecentTaskChats(ctx context.Context, v json.RawMessage) (*ownChange, error) {
-	return s.setBoolSetting(ctx, v, s.recentTaskChats, "assistant.recent_task_chats is unchanged", func(l i18n.Lang, before, after string) string {
+	return s.setReversibleBoolSetting(ctx, v, false, s.recentTaskChats, "assistant.recent_task_chats is unchanged", func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_recent_task_chats", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.RecentTaskChats },
 		"assistant.recent_task_chats is %v; the apps' sidebar Recent follows it on every device.")
@@ -983,6 +1180,13 @@ func (s *Service) setInboxSignals(ctx context.Context, v json.RawMessage) (*ownC
 		"assistant.inbox_signals is %v from the next new Inbox message on (signals already waiting go out only while it is on).")
 }
 
+func (s *Service) setAutoSupervisionMessages(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.autoSupervisionOn, "assistant.auto_supervision_messages is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_auto_supervision_messages", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.AutoSupervisionMessages },
+		"assistant.auto_supervision_messages is %v now (settingsChanged applies the switch at once; turning it off withdraws what waited, turning it on replays nothing).")
+}
+
 func (s *Service) setInboxTodoForward(ctx context.Context, v json.RawMessage) (*ownChange, error) {
 	return s.setBoolSetting(ctx, v, s.inboxTodoForwardOn, "inbox.todo_forward.enabled is unchanged", func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_inbox_todo_forward", i18n.Args{"before": before, "after": after})
@@ -1012,6 +1216,26 @@ func (s *Service) setBackgroundSupervisorKeepsContext(ctx context.Context, v jso
 		}, func(v *Settings) **bool { return &v.BackgroundSupervisorKeepsContext },
 		"assistant.background_supervisor_keeps_context is %v from the background supervisor's next round (one running now "+
 			"finishes as it is).")
+}
+
+func (s *Service) setChatReplyRelay(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	ch, err := s.setBoolSetting(ctx, v, func(ctx context.Context) bool { return chatReplyRelayOn(s.settings(ctx)) },
+		"assistant.chat_reply_relay is unchanged", func(l i18n.Lang, before, after string) string {
+			return i18n.T(l, "assistant-settings_tool.change_chat_reply_relay", i18n.Args{"before": before, "after": after})
+		}, func(v *Settings) **bool { return &v.ChatReplyRelay },
+		"assistant.chat_reply_relay is %v from now on.")
+	if err != nil || ch == nil || ch.apply == nil {
+		return ch, err
+	}
+	apply := ch.apply
+	ch.apply = func(ctx context.Context) (string, error) {
+		out, err := apply(ctx)
+		if err == nil && !chatReplyRelayOn(s.settings(ctx)) {
+			s.dropQueuedChatReplies(ctx)
+		}
+		return out, err
+	}
+	return ch, nil
 }
 
 // launchers are the launchers of the assistant's machine, as the apps list them.

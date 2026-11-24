@@ -281,6 +281,8 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 		Priority           string          `json:"priority"`
 		Project            string          `json:"project"`
 		Kind               string          `json:"kind"`
+		Audience           string          `json:"audience"`
+		DirectionID        string          `json:"direction_id"`
 		PartOf             json.RawMessage `json:"part_of"`
 		After              json.RawMessage `json:"after"`
 		RepositoryBindings json.RawMessage `json:"repository_bindings"`
@@ -319,6 +321,14 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 		return "", err
 	}
 	plan.Priority = &pr
+	aud, err := todoAudience(a.Audience)
+	if err != nil {
+		return "", err
+	}
+	plan.Audience = &aud
+	if dir := strings.TrimSpace(a.DirectionID); dir != "" {
+		plan.DirectionID = &dir
+	}
 	if err := s.setTodoProject(ctx, &a.Project, &plan); err != nil {
 		return "", err
 	}
@@ -347,8 +357,8 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 		}
 		return "Concern recorded (it stays open until you report its outcome with concern_report): " + todoLine(t, now, loc), nil
 	}
-	if ok, err := s.confirmOutbound(ctx, machine, self, "todo_create", "", title, args); err != nil || !ok {
-		return todoNotAllowed(err)
+	if ok, outcome, err := s.confirmOutbound(ctx, machine, self, "todo_create", "", title, args); err != nil || !ok {
+		return todoNotAllowed(outcome, err)
 	}
 	if s.isLeader(ctx, self) {
 		t, err := s.createDirectionTodo(ctx, self, title, strings.TrimSpace(a.Notes), plan, bindings)
@@ -376,15 +386,17 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 
 func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args json.RawMessage) (string, error) {
 	var a struct {
-		ID       string          `json:"id"`
-		Title    json.RawMessage `json:"title"`
-		Notes    json.RawMessage `json:"notes"`
-		Due      json.RawMessage `json:"due"`
-		Remind   json.RawMessage `json:"remind"`
-		Priority json.RawMessage `json:"priority"`
-		Project  json.RawMessage `json:"project"`
-		PartOf   json.RawMessage `json:"part_of"`
-		After    json.RawMessage `json:"after"`
+		ID          string          `json:"id"`
+		Title       json.RawMessage `json:"title"`
+		Notes       json.RawMessage `json:"notes"`
+		Due         json.RawMessage `json:"due"`
+		Remind      json.RawMessage `json:"remind"`
+		Priority    json.RawMessage `json:"priority"`
+		Project     json.RawMessage `json:"project"`
+		Audience    json.RawMessage `json:"audience"`
+		DirectionID json.RawMessage `json:"direction_id"`
+		PartOf      json.RawMessage `json:"part_of"`
+		After       json.RawMessage `json:"after"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %w", err)
@@ -418,6 +430,16 @@ func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args
 			return err
 		}},
 		{"project", a.Project, func(v string) error { return s.setTodoProject(ctx, &v, &e) }},
+		{"audience", a.Audience, func(v string) error {
+			aud, err := todoAudience(v)
+			e.Audience = &aud
+			return err
+		}},
+		{"direction_id", a.DirectionID, func(v string) error {
+			dir := strings.TrimSpace(v)
+			e.DirectionID = &dir
+			return nil
+		}},
 	} {
 		v, set, err := optionalText(f.raw, f.name)
 		if err == nil && set {
@@ -442,10 +464,10 @@ func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args
 	e.PartOf, e.After = links.PartOf, links.After
 	changed = changed || !pieces.empty()
 	if !changed {
-		return "", errors.New("nothing to change: give title, notes, due, remind, priority, project, part_of or after")
+		return "", errors.New("nothing to change: give title, notes, due, remind, priority, project, audience, direction_id, part_of or after")
 	}
-	if ok, err := s.confirmOutbound(ctx, machine, self, "todo_update", "", t.Title, args); err != nil || !ok {
-		return todoNotAllowed(err)
+	if ok, outcome, err := s.confirmOutbound(ctx, machine, self, "todo_update", "", t.Title, args); err != nil || !ok {
+		return todoNotAllowed(outcome, err)
 	}
 	out, err := s.editTodo(ctx, t.ID, e)
 	if err != nil {
@@ -479,8 +501,8 @@ func (s *Service) toolTodoDone(ctx context.Context, machine, self, name string, 
 		if err != nil || said != "" {
 			return said, err
 		}
-	} else if ok, err := s.confirmOutbound(ctx, machine, self, name, "", t.Title, args); err != nil || !ok {
-		return todoNotAllowed(err)
+	} else if ok, outcome, err := s.confirmOutbound(ctx, machine, self, name, "", t.Title, args); err != nil || !ok {
+		return todoNotAllowed(outcome, err)
 	}
 	out, err := s.editTodo(ctx, t.ID, db.TodoEdit{Done: &complete})
 	if err != nil {
@@ -528,17 +550,18 @@ func (s *Service) confirmTodoCard(ctx context.Context, machine, self, tool, summ
 		return "", err
 	}
 	if r.Allow == nil || !*r.Allow {
-		return "The user declined on the phone (or did not answer): nothing changed.", nil
+		return outboundNotDone(r.Outcome(), "The user declined on the phone: nothing changed.", "nothing changed"), nil
 	}
 	return "", nil
 }
 
-// todoNotAllowed is what a health conversation is told when the user did not let a change out of the space.
-func todoNotAllowed(err error) (string, error) {
+// todoNotAllowed is what a health conversation is told when a change did not get out of the space (outcome: how the
+// card ended, confirmOutbound): the user's decline only when they declined it themselves, else nobody answered.
+func todoNotAllowed(outcome string, err error) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "The user did not allow it on the phone: nothing changed.", nil
+	return outboundNotDone(outcome, "The user did not allow it on the phone: nothing changed.", "nothing changed"), nil
 }
 
 // ---- helpers ----

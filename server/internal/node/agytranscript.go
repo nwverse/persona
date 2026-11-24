@@ -36,6 +36,11 @@ type agyStepUsage struct {
 	ModelContextWindow       int   `json:"model_context_window"`
 }
 
+type agyToolCall struct {
+	Name string          `json:"name"`
+	Args json.RawMessage `json:"args"`
+}
+
 type agyStep struct {
 	Index                    *int            `json:"step_index"`
 	Type                     string          `json:"type"`
@@ -59,15 +64,12 @@ type agyStep struct {
 	Usage                    *agyStepUsage   `json:"usage"`
 	TruncatedFields          []string        `json:"truncated_fields"`
 	Media                    json.RawMessage `json:"media"`
-	ToolCalls                []*struct {
-		Name string          `json:"name"`
-		Args json.RawMessage `json:"args"`
-	} `json:"tool_calls"`
-	seq      int
-	key      string
-	branch   string
-	record   [32]byte
-	rendered [32]byte
+	ToolCalls                []*agyToolCall  `json:"tool_calls"`
+	seq                      int
+	key                      string
+	branch                   string
+	record                   [32]byte
+	rendered                 [32]byte
 }
 
 type agyStepMemo struct {
@@ -86,6 +88,8 @@ type agyTranscriptUsage struct {
 	turns         int
 	compacted     bool
 	hasUsage      bool
+	contextStats  transcript.ContextStats
+	first         string // the first message the user typed, as shown (agyUserText): an untitled pane's title (agytitle.go)
 }
 
 type agyHistory struct {
@@ -231,8 +235,24 @@ func agyReadFile(brain *os.Root, path string) ([]byte, error) {
 // A same-step completion replaces its earlier record. A rewind invalidates the
 // abandoned tail and gives replacement steps a new identity.
 func parseAgySteps(raw []byte, conversation string) ([]agyStep, agyRevision) {
-	var steps []agyStep
-	rev := agyRevision{length: len(raw), hash: sha256.Sum256(raw)}
+	f := agyFold{conversation: conversation}
+	f.add(raw)
+	return f.steps, f.revision(len(raw), sha256.Sum256(raw))
+}
+
+// agyFold is parseAgySteps' state after the complete lines it has read: the steps kept and the branch and native
+// revisions so far. Each line folds in on its own, so lines appended later go on from it (agyParse, agypane.go).
+type agyFold struct {
+	conversation   string
+	steps          []agyStep
+	branch, native string
+}
+
+// add folds raw's lines in, raw starting at a line.
+func (f *agyFold) add(raw []byte) {
+	steps, rev := f.steps, agyRevision{branch: f.branch, native: f.native}
+	conversation := f.conversation
+	defer func() { f.steps, f.branch, f.native = steps, rev.branch, rev.native }()
 	for line := range bytes.SplitSeq(raw, []byte{'\n'}) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 || line[0] != '{' {
@@ -291,8 +311,12 @@ func parseAgySteps(raw []byte, conversation string) ([]agyStep, agyRevision) {
 		step.key = strconv.Itoa(step.seq) + "@" + agyDigest(conversation+"\n"+step.CreatedAt+"\n"+rev.branch)
 		steps = slices.Insert(steps, at, step)
 	}
-	rev.steps = make([]agyStepMemo, len(steps))
-	for i, s := range steps {
+}
+
+// revision is the fold's agyRevision for the length bytes it read, whose SHA-256 is hash.
+func (f *agyFold) revision(length int, hash [32]byte) agyRevision {
+	rev := agyRevision{length: length, hash: hash, branch: f.branch, native: f.native, steps: make([]agyStepMemo, len(f.steps))}
+	for i, s := range f.steps {
 		rev.steps[i] = agyStepMemo{
 			seq:      s.seq,
 			key:      s.key,
@@ -300,7 +324,7 @@ func parseAgySteps(raw []byte, conversation string) ([]agyStep, agyRevision) {
 			running:  isAgyStepRunning(s.Status),
 		}
 	}
-	return steps, rev
+	return rev
 }
 
 // Match the whitespace used by JavaScript's \s and String.trim in cleanUserText.
@@ -724,11 +748,12 @@ func mapAgySteps(steps []agyStep, fallback time.Time, receipts map[string]bool) 
 					it.Model = stepModel
 				}
 			}
+			truncatedCalls := slices.Contains(step.TruncatedFields, "tool_calls")
 			for k, call := range step.ToolCalls {
 				if call == nil {
 					continue
 				}
-				name, input := agyTool(call.Name, call.Args)
+				name, input := agyToolInput(call.Name, call.Args, truncatedCalls)
 				callID := fmt.Sprintf("call_%s_%d", step.key, k)
 				it := add("tool"+strconv.Itoa(k), "assistant", proto.KindToolUse, "")
 				it.Model = stepModel
@@ -810,7 +835,99 @@ var agyToolNames = map[string]string{
 	"web_fetch": "WebFetch", "web_search": "WebSearch", "todo_write": "TodoWrite",
 }
 
+// agyArgPreview splits a clipped argument at the exporter's marker. A zero
+// omitted count means the value has no valid marker.
+func agyArgPreview(value string) (head, tail string, omitted int) {
+	match := agyTailTruncation.FindStringSubmatchIndex(value)
+	if match == nil {
+		match = agyTruncation.FindStringSubmatchIndex(value)
+	}
+	if match != nil {
+		if n, err := strconv.Atoi(value[match[2]:match[3]]); err == nil && n > 0 {
+			return value[:match[0]], value[match[1]:], n
+		}
+	}
+	return value, "", 0
+}
+
+// agyDecodeArgString decodes one JSON string, closing a clipped prefix after
+// dropping any escape the exporter cut in half.
+func agyDecodeArgString(value string, clipped bool) (string, bool) {
+	if !strings.HasPrefix(value, `"`) {
+		return "", false
+	}
+	if clipped {
+		if slash := strings.LastIndexByte(value, '\\'); slash >= 0 {
+			escape := value[slash+1:]
+			if escape == "" || strings.HasPrefix(escape, "u") && len(escape) < 5 {
+				start := slash
+				for start > 0 && value[start-1] == '\\' {
+					start--
+				}
+				if (slash-start)%2 == 0 {
+					value = value[:slash]
+				}
+			}
+		}
+		value += `"`
+	}
+	var decoded string
+	err := json.Unmarshal([]byte(value), &decoded)
+	return decoded, err == nil
+}
+
+// agyNormalizeArgValue copies the arguments so a failed decode leaves the original
+// call available. Older exports can contain literal quotes in plain arguments.
+func agyNormalizeArgValue(v any, truncated, encoded bool) (any, bool) {
+	switch v := v.(type) {
+	case string:
+		head, tail, omitted := v, "", 0
+		if truncated {
+			head, tail, omitted = agyArgPreview(v)
+		}
+		if encoded {
+			decoded, ok := agyDecodeArgString(head, omitted > 0)
+			if !ok {
+				return nil, false
+			}
+			if omitted > 0 {
+				// The missing text and any retained suffix are counted in encoded bytes.
+				return decoded + transcript.ApproximateClipNote(len(decoded)+omitted+len(tail)), true
+			}
+			return decoded, true
+		}
+		if omitted > 0 {
+			return head + transcript.ClipNote(len(head)+omitted+len(tail)), true
+		}
+	case []any:
+		out := make([]any, len(v))
+		for i, elem := range v {
+			normalized, ok := agyNormalizeArgValue(elem, truncated, encoded)
+			if !ok {
+				return nil, false
+			}
+			out[i] = normalized
+		}
+		return out, true
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, elem := range v {
+			normalized, ok := agyNormalizeArgValue(elem, truncated, encoded)
+			if !ok {
+				return nil, false
+			}
+			out[k] = normalized
+		}
+		return out, true
+	}
+	return v, true
+}
+
 func agyTool(name string, raw json.RawMessage) (string, json.RawMessage) {
+	return agyToolInput(name, raw, false)
+}
+
+func agyToolInput(name string, raw json.RawMessage, truncated bool) (string, json.RawMessage) {
 	if name == "" {
 		name = "tool"
 	}
@@ -826,11 +943,17 @@ func agyTool(name string, raw json.RawMessage) (string, json.RawMessage) {
 		}
 		return appName, raw
 	}
-	var args map[string]any
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	if dec.Decode(&args) != nil || args == nil {
+	args, ok := agyDecodeToolArgs(raw)
+	if !ok {
 		return appName, json.RawMessage("{}")
+	}
+	// The compact export wraps every string argument in a JSON string literal.
+	// Decode only when the whole call fits that format.
+	if decoded, ok := agyNormalizeArgValue(args, truncated, true); ok {
+		args = decoded.(map[string]any)
+	} else if truncated {
+		preview, _ := agyNormalizeArgValue(args, true, false)
+		args = preview.(map[string]any)
 	}
 	first := func(keys ...string) any {
 		for _, key := range keys {

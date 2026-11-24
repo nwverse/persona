@@ -27,6 +27,7 @@ import { toolDisplayName } from "../../lib/turns";
 import type { SessionLive } from "../../lib/types";
 import { TICKING_DURATION, workDuration } from "../../lib/work-groups";
 import { workflowCounts, type BackgroundLine, type WaitLine } from "../../lib/workflows";
+import { stalledText } from "../../lib/background-work";
 import { stateName } from "../../lib/state-labels";
 import { useNow } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
@@ -121,6 +122,7 @@ export interface RunningStatusProps {
   subtasks?: boolean;
   /** A real background command after the turn, with its own optional start (#7341). */
   command?: WaitLine | null;
+  onStop?: () => void;
 }
 
 export function RunningStatusBar({ mid, sid, wait, ...props }: RunningStatusProps & { mid: string; sid: string; wait?: WaitLine | null }) {
@@ -179,7 +181,8 @@ function BackgroundWords({ line }: { line: BackgroundLine }) {
   );
 }
 
-function BackgroundCommandWords({ line }: { line: WaitLine }) {
+function BackgroundCommandWords({ line, now }: { line: WaitLine; now: number }) {
+  const stalled = stalledText(line.stalled, now);
   return (
     <span className="flex min-w-0 items-center whitespace-pre" data-running-verb>
       <span className="shrink-0">{t("chat-runningstatusbar.background_task")}</span>
@@ -190,6 +193,7 @@ function BackgroundCommandWords({ line }: { line: WaitLine }) {
         </>
       )}
       {line.more > 0 && <span className="shrink-0">{` · ${t("chat-runningstatusbar.more_waits", { count: line.more })}`}</span>}
+      {stalled && <span className="min-w-0 truncate font-normal text-ink-3" data-running-stalled title={t("lib-state-labels.bg_stalled_hint")}>{` · ${stalled}`}</span>}
     </span>
   );
 }
@@ -198,7 +202,7 @@ type Phase = "on" | "linger" | "fading" | "off";
 
 /** The bar for a given status line (RunningStatusBar subscribes; tests render this). `speedKey`: the conversation its
  *  speed history is kept for while the page is open. */
-export function RunningStatusView({ live, working, done: finished, startedAt, clock = true, plain, step, background, subtasks, command, offline, speedKey = "" }: RunningStatusProps & { live: SessionLive | null; offline?: boolean; speedKey?: string }) {
+export function RunningStatusView({ live, working, done: finished, startedAt, clock = true, plain, step, background, subtasks, command, onStop, offline, speedKey = "" }: RunningStatusProps & { live: SessionLive | null; offline?: boolean; speedKey?: string }) {
   const phase = usePhase(working);
   const [pinned, setPinned] = useState(false);
   // after the turn: what it last said, while it lingers and fades. Its status line goes a moment before the turn ends,
@@ -224,7 +228,7 @@ export function RunningStatusView({ live, working, done: finished, startedAt, cl
   const commandTimed = Number.isFinite(commandStart) && commandStart > 0;
   // the turn's own work, measured: an Agent's, not the Persona conversation's, not background work's
   const own = !plain && !behind && !usage && !task;
-  const now = useNow(1000, phase === "on" && !offline && !usage && (!task || commandTimed));
+  const now = useNow(task?.stalled && !commandTimed ? 60_000 : 1000, phase === "on" && !offline && !usage && (!task || commandTimed || Boolean(task.stalled)));
   // from the run's start; a run that does not say when it started, from the turn's (not from when the bar appeared).
   // After the turn it stays as it last was (cindy): the turn's start and its status line are gone by then.
   const counted = useElapsed(behind || task ? null : shown, behind ? (bg.since ?? startedAt) : task ? undefined : startedAt, now);
@@ -270,12 +274,12 @@ export function RunningStatusView({ live, working, done: finished, startedAt, cl
       >
         <Icon name={icon} size={14} stroke={done ? 2.5 : undefined} className={`shrink-0 ${done ? "" : "-translate-y-px"}`} />
         {offline && <Disconnected />}
-        {behind ? <BackgroundWords line={bg} /> : task ? <BackgroundCommandWords line={task} /> : retry ? (
+        {behind ? <BackgroundWords line={bg} /> : task ? <BackgroundCommandWords line={task} now={now} /> : retry ? (
           <span className="flex min-w-0 flex-col" data-running-verb>
             <span className="truncate">{words}</span>
             <span className="truncate text-ink-3 font-normal" data-running-retry-detail>{retry.error}</span>
           </span>
-        ) : <span className="truncate" data-running-verb>{words}</span>}
+        ) : <span className={phase === "on" && !done ? "chat-shimmer truncate" : "truncate"} data-running-verb>{words}</span>}
       </div>
       <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-ink-3 tabular-nums" style={pinned ? undefined : fade}>
         {usage || (task && !commandTimed) ? null : own && SpeedView ? (
@@ -286,6 +290,18 @@ export function RunningStatusView({ live, working, done: finished, startedAt, cl
             {count && <span aria-hidden>·</span>}
             {count}
           </>
+        )}
+        {working && onStop && (
+          <button
+            type="button"
+            onClick={onStop}
+            aria-label={t("chat-runningstatusbar.interrupt")}
+            title={t("chat-runningstatusbar.interrupt_hint")}
+            className="ml-1 hidden items-center gap-1 rounded-[6px] border border-line bg-surface/80 px-1.5 py-0.5 text-label font-medium text-ink-2 transition-colors hover:border-line-strong hover:bg-hover hover:text-ink sm:inline-flex"
+          >
+            <span>{t("chat-runningstatusbar.interrupt")}</span>
+            <kbd className="rounded-[4px] bg-inset px-1 py-px font-mono text-submeta leading-tight text-ink-3">Esc</kbd>
+          </button>
         )}
       </div>
     </div>
