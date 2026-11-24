@@ -19,7 +19,7 @@ import (
 // reminders, the intake page, the legacy water import and the health_intake tool. The core reaches it only through
 // internal/healthhost; s.healthMod is nil when the module is left out of the build (persona_without_health,
 // persona_core_only) or switched off (the modules row), and then the core serves no intake route, announces no
-// health_intake capability, offers no health_intake tool and sends no water reminder. The Health space (health.go)
+// health_intake or health_items capability, offers no health_intake tool and sends no water reminder. The Health space (health.go)
 // stays in the core.
 
 // healthRoutes makes the module's layer, unless the build has no module or the modules row switches it off (the port
@@ -49,17 +49,19 @@ func (s *Service) healthTool(ctx context.Context, args json.RawMessage) (string,
 	return s.healthMod.Tool(ctx, args)
 }
 
-// withHealth is caps without the health_intake capability when svc has no Health layer (none yet: when the build has
-// no Health module), so the hub announces no health_intake feature.
+// withHealth removes the intake and items capabilities when svc has no Health layer (or, before construction,
+// when the build has no Health module), so the hub announces neither feature.
 func withHealth(caps []string, svc *Service) []string {
-	on := healthhost.InBuild(moduleswitch.Set{}) // no service yet: as the build has it
+	on := healthhost.InBuild(moduleswitch.Set{})
 	if svc != nil {
 		on = svc.healthOn()
 	}
 	if on {
 		return caps
 	}
-	return slices.DeleteFunc(caps, func(c string) bool { return c == assistantwire.CapabilityHealthIntake })
+	return slices.DeleteFunc(caps, func(c string) bool {
+		return c == assistantwire.CapabilityHealthIntake || c == assistantwire.CapabilityHealthItems
+	})
 }
 
 // healthHost is the core as the Health module reaches it (healthhost.Host).

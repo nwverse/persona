@@ -561,6 +561,13 @@ input clears the previous reply preview, including input with no visible text. T
 until the assistant writes response text. This keeps user-authored questions out of awaiting-reply detection while
 preserving genuine assistant questions. User messages and tool records remain available in the conversation items.
 
+agy leaves print-mode (`agy -p`) conversations untitled. Before falling back to the folder name, the session title uses
+the first non-empty line of the cached metadata `summary.Preview`, with agy's request wrapper and Persona's context
+removed, cut to 60 characters (#14629). Several one-shot runs in one folder then show their own prompts. Such a title
+carries `title_source: "prompt"`, so the node keeps that provenance for the agy pane and Persona's naming may replace it.
+A preview whose first line is Persona's context (`Content of persona-context:…`, `<persona-context …>`) gives no title:
+agy keeps only that line, so the block cannot be removed whole.
+
 A session is listed `unknown` when the evidence cannot say working, idle or done (`transcriptState` in
 `integrations/antigravity/lib/map.js`). It is never guessed as idle: an idle native summary closes a turn only when its
 step count covers the last exported step. The companion logs why, as reason counts, each time the tally across listed
@@ -617,6 +624,11 @@ generic `Agent execution terminated due to error.`, the text is the native short
 as it is (a picture in the history it cannot decode, an invalid argument): a Continue sends it again, so it is published
 as `turn_error_kind: "user"` (#11742). New input clears the session's `turn_error` while the error stays in the
 history; a rewind drops recovered errors past its cut. Rejected ACP prompts also publish their failure through the session's error state.
+agy can also stream a failed model request as the turn's only message text, `⚠ FAILED_PRECONDITION (code 400): …`, end
+the prompt normally, leave the error out of the export and leave its summary behind (#14628). When a turn with no thinking
+or tool activity streams exactly that one-line shape (`streamedErrorInfo` in `integrations/antigravity/lib/errors.js`), it
+is the turn's error, classified by its code like a native error, not a reply. It is kept as an `API Error:` notice on the
+turn's input, so it stays in history after later steps export, and that input settles the session `idle`.
 The history token includes the error format so connected clients refresh items cached before this representation.
 
 **Gemini API key provider** (#13762). agy can run on a Gemini API key (`"modelProvider": "gemini"` in agy's `settings.json`, with

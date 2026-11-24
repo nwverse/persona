@@ -80,6 +80,7 @@ func TestLogicalAdoptedConversationRowIsReadFromTheFleet(t *testing.T) {
 func TestLogicalPreparationCarriesTheSupervisorPolicy(t *testing.T) {
 	s, f, d, _ := logicalPair(t, "codex")
 	ctx := t.Context()
+	f.setSessions("server", proto.Session{SessionID: "side-chat", Assistant: true, Agent: "claude", Title: "Project notes", Rev: 100})
 	setSettings(t, s, func(cfg *Settings) { cfg.Leaders = append(cfg.Leaders, "side-chat") })
 	if err := d.ResolveConversationSwitch(ctx, "server", "side-chat", "operation", "rejected", ""); err != nil {
 		t.Fatal(err)
@@ -110,6 +111,9 @@ func TestLogicalPreparationCarriesTheSupervisorPolicy(t *testing.T) {
 	}
 	if prepared["supervision_instructions"] != want {
 		t.Fatalf("preparation policy: %v", prepared["supervision_instructions"])
+	}
+	if prepared["title"] != "Project notes" {
+		t.Fatalf("preparation title: %v", prepared["title"])
 	}
 	for _, key := range []string{"text", "prompt", "images", "client_msg_id"} {
 		if _, ok := prepared[key]; ok {

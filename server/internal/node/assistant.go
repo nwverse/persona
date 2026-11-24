@@ -969,6 +969,14 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return "", err
 		}
 	}
+	if title, preparing := ctx.Value(segmentTitleKey{}).(string); preparing && p.cx != nil {
+		// Codex writes the empty rollout when named. The receipt must remain resumable after idle release.
+		if err := p.cx.call(ctx, "thread/name/set", map[string]any{"threadId": id, "name": title}, nil); err != nil {
+			n.logf("assistant %s: could not persist prepared Codex thread: %v", short(id), err)
+			n.stopAssistantProcess(id)
+			return "", refusal("missing_generation", i18n.T(i18n.From(ctx), "assistant-conversation_segments.missing_generation"), nil)
+		}
+	}
 	if startTier != "" {
 		// Acknowledge the native setting before persisting or exposing the new conversation. This process is either a
 		// cold start or an adopted spare, so a refusal must stop it rather than leave an unused conversation behind.
