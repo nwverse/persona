@@ -409,6 +409,8 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertIn('"$OUTPUT/diagnostics/live-regular-visual" "$REGULAR_SIM" "$CI_BUNDLE_ID"', visual)
         self.assertIn('-only-testing:PersonaTests/AboutVersionRegularVisualTests', visual)
         self.assertIn('test-without-building', visual)
+        self.assertIn('"$@" 2>&1 | tee "$output/ios-about-regular.log" || command_status=$?', visual)
+        self.assertIn('exit "$command_status"', visual)
         self.assertNotIn('simctl boot', visual)
         self.assertNotIn('simctl shutdown', visual)
         self.assertNotIn('parallel-testing', visual)
@@ -863,6 +865,34 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
             self.assertEqual((destination / 'ios-unit.xcresult/summary.json').read_text(), 'test results')
             self.assertEqual((destination / 'native-ssh-trace.log').read_text(), 'diagnostic fixture')
             self.assertFalse((destination / 'ios-unit.xcresult/external-key').exists())
+
+    def test_visual_console_log_is_required_when_its_result_was_attempted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'output'
+            destination = Path(directory) / 'artifacts'
+            output.mkdir()
+            (output / 'regular-visual-context.json').write_text('{"scope":"visual"}')
+            runner = lambda command, **kwargs: subprocess.CompletedProcess(command, 0, '', '')
+            with self.assertRaisesRegex(RuntimeError, 'required visual console log is missing'):
+                apple_diagnostics.collect(output, destination, runner)
+            self.assertIn('not published', (destination / 'ios-about-regular.log.status.txt').read_text())
+            (output / 'ios-about-regular.log').write_text('actual xcodebuild stdout and stderr')
+            apple_diagnostics.collect(output, destination, runner)
+            self.assertEqual((destination / 'ios-about-regular.log').read_text(),
+                             'actual xcodebuild stdout and stderr')
+            self.assertIn('included', (destination / 'ios-about-regular.log.status.txt').read_text())
+
+    def test_visual_console_log_copy_failure_is_not_reported_as_included(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'output'
+            destination = Path(directory) / 'artifacts'
+            output.mkdir()
+            (output / 'regular-visual-context.json').write_text('{"scope":"visual"}')
+            (output / 'ios-about-regular.log').write_text('actual xcodebuild stdout and stderr')
+            runner = lambda command, **kwargs: subprocess.CompletedProcess(command, 0, '', '')
+            with patch('apple_diagnostics.shutil.copyfile', side_effect=OSError('write failed')):
+                with self.assertRaisesRegex(RuntimeError, 'could not be included'):
+                    apple_diagnostics.collect(output, destination, runner)
 
     def test_regular_diagnostic_scope_excludes_other_suite_artifacts(self):
         with tempfile.TemporaryDirectory() as directory:

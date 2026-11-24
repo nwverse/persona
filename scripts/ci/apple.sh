@@ -626,7 +626,9 @@ fi
           exit "$code"
         }
         trap stop_watcher EXIT TERM INT
-        "$@"
+        command_status=0
+        "$@" 2>&1 | tee "$output/ios-about-regular.log" || command_status=$?
+        exit "$command_status"
       ' -- "$CI_ROOT" "$OUTPUT" "$OUTPUT/diagnostics/live-regular-visual" "$REGULAR_SIM" "$CI_BUNDLE_ID" \
         "${IOS_COMMON[@]}" -destination "platform=iOS Simulator,id=$REGULAR_SIM" -destination-timeout 120 \
         -only-testing:PersonaTests/AboutVersionRegularVisualTests \

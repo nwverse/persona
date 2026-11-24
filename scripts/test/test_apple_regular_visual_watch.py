@@ -24,7 +24,7 @@ class ProcessScopeTests(unittest.TestCase):
             f" 41 1 Ss {owned}", " 42 41 S /usr/libexec/debugserver",
             f" 43 999 S /usr/libexec/debugserver", f" 44 1 Ss {foreign}",
             f" 45 1 S /private/path/Persona --private-argument",
-            f" 46 1 Ss /Library/Developer/CoreSimulator/Devices/{UDID}/launchd_sim",
+            f" 46 1 Ss /Library/Developer/CoreSimulator/Devices/{UDID}/ --some-launchd-argument launchd_sim",
         ]), "")
         observation = visual.scoped_processes(UDID, lambda *args, **kwargs: result)
         self.assertEqual(observation, {"query_status": "completed", "processes": [
@@ -33,6 +33,29 @@ class ProcessScopeTests(unittest.TestCase):
         ]})
         self.assertNotIn("/private", str(observation))
         self.assertNotIn(OTHER, str(observation))
+
+    def test_owned_launchd_debugger_before_host_is_retained_across_samples(self):
+        owned = f"/Library/Developer/CoreSimulator/Devices/{UDID}/Application/X/Persona.app/Persona"
+        launcher = f"/Library/Developer/CoreSimulator/Devices/{UDID}/ --launchd /usr/sbin/launchd_sim"
+        foreign_launcher = launcher.replace(UDID, OTHER)
+        snapshots = iter([
+            "\n".join([f"46 1 Ss {launcher}", "42 46 S /usr/libexec/debugserver",
+                       f"47 1 Ss {foreign_launcher}", "43 47 S /usr/libexec/debugserver"]),
+            f"41 46 Ss {owned}",
+            f"41 1 Ss {owned}\n42 1 S /usr/libexec/debugserver",
+        ])
+        def runner(*args, **kwargs):
+            return subprocess.CompletedProcess([], 0, next(snapshots), "")
+        owned_debuggers = set()
+        first = visual.scoped_processes(UDID, runner, owned_debuggers)
+        second = visual.scoped_processes(UDID, runner, owned_debuggers)
+        third = visual.scoped_processes(UDID, runner, owned_debuggers)
+        self.assertEqual(first["processes"], [{"pid": 42, "ppid": 46, "state": "S", "name": "debugserver"}])
+        self.assertEqual(second["processes"], [{"pid": 41, "ppid": 46, "state": "Ss", "name": "Persona"},
+                                               {"pid": 42, "state": "not-present", "name": "debugserver"}])
+        self.assertIn({"pid": 42, "ppid": 1, "state": "S", "name": "debugserver"}, third["processes"])
+        self.assertEqual(owned_debuggers, {42})
+        self.assertNotIn("43", str(first) + str(second) + str(third))
 
     def test_process_query_failures_remain_distinct(self):
         for error, status in [(subprocess.TimeoutExpired("ps", 5), "query-timeout"),
@@ -71,7 +94,7 @@ class VisualObserverTests(unittest.TestCase):
     def test_samples_at_zero_and_fifteen_seconds_and_queries_system_once_at_sixty(self):
         events = []
         clock = mock.Mock(side_effect=[0, 0, 0, 14, 15, 15, 59, 60, 60, 1000, 1000, 1000])
-        def record_sample(_udid, _destination, index):
+        def record_sample(_udid, _destination, index, **_kwargs):
             events.append(("sample", index))
             return {"query_status": "completed", "processes": []}
         with mock.patch.object(visual.watch, "start_live_log", return_value=self.live), \
@@ -120,12 +143,43 @@ class VisualObserverTests(unittest.TestCase):
             self.assertEqual(command[:4], ["xcrun", "simctl", "spawn", UDID])
             return real_popen([
                 sys.executable, "-c",
-                "print('org.example.persona.ci'); print('  environment = SECRET'); "
-                "print('token=private'); print('unrelated.example')"
+                "print('system'); "
+                "print('  program = /unrelated/tool --private-system-argument'); "
+                "print('unrelated.example'); print('  state = running'); "
+                "print('org.example.persona.ci'); print('  state = waiting'); print('  pid = 41'); "
+                "print('  runs = 1'); print('  last exit code = 0'); "
+                "print('  path = /private/container/Persona.app'); "
+                "print('  program = /path/tool org.example.persona.ci --unsafe-private-argument'); "
+                "print('  arguments = {'); print('    --credential-without-keyword'); print('  }'); "
+                "print('  environment = {'); print('    ORG_EXAMPLE_PERSONA_CI=unsafe-private-value'); print('  }'); "
+                "print('other.example'); print('  state = running'); "
+                "print('  program = other.example --other-private-argument')"
             ], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         with mock.patch.object(visual.subprocess, "Popen", side_effect=fake_popen):
             self.assertEqual(visual.launch_system(UDID, self.destination), 0)
-        self.assertEqual((self.destination / "launch-system-after-60s.txt").read_text(), "org.example.persona.ci\n")
+        exported = (self.destination / "launch-system-after-60s.txt").read_text()
+        self.assertEqual(exported, "org.example.persona.ci\nstate = waiting\npid = 41\nruns = 1\nlast exit code = 0\n")
+        for private in ("unsafe-private", "credential-without-keyword", "/private/container", "other-private", "environment"):
+            self.assertNotIn(private, exported)
+
+    def test_launchctl_rejects_arbitrary_values_in_allowlisted_fields(self):
+        for raw in (f"{visual.launch.BUNDLE}\n state = running --private-argument\n",
+                    f"{visual.launch.BUNDLE}\n pid = 41;unsafe-private-value\n",
+                    f"{visual.launch.BUNDLE}\n program = {visual.launch.BUNDLE} --unsafe-private-argument\n"):
+            self.assertEqual(visual.launch_system_projection(raw.encode(), visual.launch.BUNDLE),
+                             [visual.launch.BUNDLE + "\n"])
+        raw = f"{visual.launch.BUNDLE}\n state = running\nother.example\n state = running\n"
+        self.assertEqual(visual.launch_system_projection(raw.encode(), visual.launch.BUNDLE),
+                         [visual.launch.BUNDLE + "\n", "state = running\n"])
+        self.assertEqual(visual.launch_system_projection(b"\xff", visual.launch.BUNDLE), [])
+
+    def test_cli_converts_the_output_to_a_path_before_observing(self):
+        with mock.patch.object(sys, "argv", ["apple_regular_visual_watch.py", "--udid", UDID,
+                                             "--bundle-id", visual.launch.BUNDLE, "--scope-root", str(self.output),
+                                             "--output", str(self.destination), "--seconds", "600"]), \
+                mock.patch.object(visual, "observe") as observe:
+            visual.main()
+        self.assertEqual(observe.call_args.args[2], self.destination)
 
     def test_silent_launchctl_is_bounded_without_changing_shared_readiness_reader(self):
         self.destination.mkdir(parents=True)

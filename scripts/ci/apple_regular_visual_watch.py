@@ -7,6 +7,7 @@ import re
 import selectors
 import signal
 import subprocess
+from pathlib import Path
 
 import apple_launch_diagnostics as launch
 import apple_readiness_watch as watch
@@ -15,14 +16,19 @@ VISUAL_SECONDS = launch.VISUAL_SECONDS
 SAMPLE_SECONDS = 15
 SYSTEM_AFTER = 60
 FINISH_BEFORE = 35
-VISUAL_PROCESSES = ("Persona", "debugserver")
+VISUAL_PROCESSES = ("Persona", "debugserver", "launchd_sim")
 
 
-def scoped_processes(udid, runner=None):
-    """Return owned host/debugger metadata, never arguments or environment."""
+def scoped_processes(udid, runner=None, owned_debuggers=None):
+    """Return owned host/debugger metadata, never command arguments or environment.
+
+    A debugger can precede its Persona target under this simulator's launchd. Keep
+    that validated PID for this invocation when the short-lived parent disappears.
+    """
     runner = runner or watch.subprocess.run
+    owned_debuggers = set() if owned_debuggers is None else owned_debuggers
     try:
-        result = runner(["ps", "-axo", "pid=,ppid=,stat=,comm="],
+        result = runner(["ps", "-axo", "pid=,ppid=,stat=,command="],
                         capture_output=True, text=True, timeout=5)
     except watch.subprocess.TimeoutExpired:
         return {"query_status": "query-timeout", "processes": []}
@@ -30,45 +36,87 @@ def scoped_processes(udid, runner=None):
         return {"query_status": "query-failed", "processes": []}
     if result.returncode:
         return {"query_status": "query-failed", "processes": []}
-    process_pattern = re.compile(r"^\s*(\d+)\s+(\d+)\s+(\S+)\s+([^\n]*?/([^/\s]+))\s*$")
+    process_pattern = re.compile(r"^\s*(\d+)\s+(\d+)\s+(\S+)\s+([^\n]*?)\s*$")
     host_pattern = re.compile(r".*/CoreSimulator/Devices/" + re.escape(udid) +
                               r"/[^\n]*/Persona\.app/Persona$")
     records = []
     for line in result.stdout.splitlines():
         match = process_pattern.match(line)
-        if match and match.group(5) in VISUAL_PROCESSES:
-            records.append(match.groups())
-    hosts = {int(pid) for pid, _ppid, _state, path, name in records
+        if not match:
+            continue
+        pid, ppid, state, command = match.groups()
+        executable = command.split(None, 1)[0] if command else ""
+        name = executable.rsplit("/", 1)[-1]
+        # launchd_sim records the simulator data directory as its first command
+        # token. Match that directory separately from its executable token.
+        launcher = re.search(r"(?:^|\s)(\S*launchd_sim)(?:\s|$)", command)
+        if launcher:
+            executable = launcher.group(1)
+            name = "launchd_sim"
+        if name in VISUAL_PROCESSES:
+            records.append((int(pid), int(ppid), state, name, executable, command))
+    hosts = {pid for pid, _ppid, _state, name, path, _command in records
              if name == "Persona" and host_pattern.fullmatch(path)}
-    processes = [{"pid": int(pid), "ppid": int(ppid), "state": state, "name": name}
-                 for pid, ppid, state, path, name in records
-                 if (name == "Persona" and int(pid) in hosts) or
-                 (name == "debugserver" and int(ppid) in hosts)]
+    launchers = {pid for pid, _ppid, _state, name, _path, command in records
+                 if name == "launchd_sim" and re.match(
+                     r"^/Library/Developer/CoreSimulator/Devices/" + re.escape(udid) + r"/(?:\s|$)", command)}
+    processes = []
+    for pid, ppid, state, name, _path, _command in records:
+        if name == "Persona" and pid in hosts:
+            processes.append({"pid": pid, "ppid": ppid, "state": state, "name": name})
+        elif name == "debugserver":
+            if ppid in hosts or ppid in launchers:
+                owned_debuggers.add(pid)
+            if pid in owned_debuggers:
+                processes.append({"pid": pid, "ppid": ppid, "state": state, "name": name})
+    present_debuggers = {process["pid"] for process in processes if process["name"] == "debugserver"}
+    processes.extend({"pid": pid, "state": "not-present", "name": "debugserver"}
+                     for pid in owned_debuggers - present_debuggers)
     return {"query_status": "completed", "processes": sorted(processes, key=lambda item: (item["name"], item["pid"]))}
 
 
-def sample_processes(udid, destination, index, runner=watch.subprocess.run):
-    observation = scoped_processes(udid, runner)
+def sample_processes(udid, destination, index, runner=watch.subprocess.run, owned_debuggers=None):
+    observation = scoped_processes(udid, runner, owned_debuggers)
     label = f"process-{index:03d}"
     launch.publish(destination / (label + ".json"), json.dumps({
         "captured_at": datetime.now(timezone.utc).isoformat(), **observation,
         "note": "Process presence is not a launch, test-bundle or readiness verdict."}, indent=2) + "\n")
     for process in observation["processes"]:
+        if "pid" not in process:
+            continue
         watch.bounded_file(["ps", "-M", str(process["pid"])],
                            destination / (label + f"-{process['name']}-{process['pid']}-threads.txt"), timeout=5)
     return observation
 
 
-def launch_system_line(raw):
-    """Retain service identity and launch state, never launchd environment or arguments."""
+def launch_system_lines(text, bundle):
+    kept = []
+    selected = False
+    for line in text.splitlines():
+        if re.fullmatch(r"[A-Za-z0-9_.-]+", line):
+            selected = line == bundle
+            if selected:
+                kept.append(bundle + "\n")
+        elif selected and (match := re.fullmatch(
+                r"\s*(state|pid|runs|last exit code)\s*=\s*([A-Za-z0-9_.:-]+)\s*", line, re.I)):
+            kept.append(f"{match.group(1).lower()} = {match.group(2)}\n")
+    return kept
+
+
+def launch_system_projection(raw, bundle):
+    """Project only fixed state fields from a matching service block.
+
+    Never return arbitrary launchctl lines: program, path, arguments and environment
+    values can carry credentials without using a secret-like keyword.
+    """
     try:
         text = raw.decode()
     except UnicodeDecodeError:
-        return False
-    return launch.BUNDLE in text and not launch.SECRET.search(text)
+        return []
+    return launch_system_lines(text, bundle)
 
 
-def launch_system(udid, destination):
+def launch_system(udid, destination, bundle=launch.BUNDLE):
     """Filter while reading; even a silent or noisy launchctl cannot outlive its bound."""
     path = destination / "launch-system-after-60s.txt"
     status = path.with_suffix(path.suffix + ".status.txt")
@@ -82,6 +130,16 @@ def launch_system(udid, destination):
             deadline = watch.time.monotonic() + 10
             kept = 0
             partial = bytearray()
+
+            def export(raw):
+                nonlocal kept
+                for line in launch_system_lines(raw, bundle):
+                    piece = line.encode()
+                    if kept + len(piece) > watch.MAX_SAMPLE_BYTES:
+                        raise launch.OutputLimitError("launch system output exceeded byte limit")
+                    output.write(piece)
+                    kept += len(piece)
+
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
                 while selector.get_map():
@@ -94,20 +152,13 @@ def launch_system(udid, destination):
                             selector.unregister(key.fileobj)
                             continue
                         partial.extend(chunk)
-                        while True:
-                            try:
-                                newline = partial.index(10)
-                            except ValueError:
-                                break
-                            line, partial = partial[:newline + 1], partial[newline + 1:]
-                            if launch_system_line(line) and kept < watch.MAX_SAMPLE_BYTES:
-                                piece = bytes(line[:watch.MAX_SAMPLE_BYTES + 1 - kept])
-                                output.write(piece)
-                                kept += len(piece)
-                        if kept > watch.MAX_SAMPLE_BYTES or len(partial) > watch.MAX_SAMPLE_BYTES:
+                        if len(partial) > watch.MAX_SAMPLE_BYTES:
                             raise launch.OutputLimitError("launch system output exceeded byte limit")
             if process.wait(timeout=max(0, deadline - watch.time.monotonic())):
                 raise subprocess.CalledProcessError(process.returncode, process.args)
+            export(partial.decode())
+        if not path.with_suffix(path.suffix + ".command").stat().st_size:
+            raise launch.OutputLimitError("no matching bounded launch service state")
         path.with_suffix(path.suffix + ".command").replace(path)
         launch.publish(status, "0\n")
         return 0
@@ -146,6 +197,7 @@ def observe(udid, bundle, destination, seconds=VISUAL_SECONDS, scope_root=None,
     live = None
     index = 0
     system_captured = False
+    owned_debuggers = set()
     try:
         try:
             if not stopped:
@@ -157,7 +209,7 @@ def observe(udid, bundle, destination, seconds=VISUAL_SECONDS, scope_root=None,
                     break
                 now = monotonic()
                 if now - started >= index * SAMPLE_SECONDS:
-                    observation = sample_processes(udid, destination, index)
+                    observation = sample_processes(udid, destination, index, owned_debuggers=owned_debuggers)
                     watch.correlate_live(live, {"host_pids": [p["pid"] for p in observation["processes"]
                                                                if p["name"] == "Persona"]})
                     index += 1
@@ -182,7 +234,7 @@ def main():
     parser.add_argument("--udid", required=True)
     parser.add_argument("--bundle-id", required=True)
     parser.add_argument("--scope-root", required=True)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seconds", type=float, default=VISUAL_SECONDS)
     args = parser.parse_args()
     if not 0 < args.seconds <= VISUAL_SECONDS:
