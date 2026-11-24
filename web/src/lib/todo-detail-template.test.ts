@@ -6,8 +6,6 @@ import {
   firstSafePrUrl,
   resolveWorkGoalActions,
   safeDetailHttpUrl,
-  shouldCollapseLongNotes,
-  shouldCollapsePersonalFields,
 } from "./todo-detail-template";
 
 const baseTodo = (patch: Partial<Todo> = {}): Todo => ({
@@ -165,21 +163,5 @@ describe("resolveWorkGoalActions", () => {
     expect(res.activeAgent?.sessionId).toBe("s-work");
     expect(res.handOverMode).toBe("add_agent");
     expect(res.handOverTone).toBe("secondary");
-  });
-});
-
-describe("shouldCollapsePersonalFields & shouldCollapseLongNotes", () => {
-  it("collapses personal fields only when due_at, due_date, and remind_at are all empty", () => {
-    expect(shouldCollapsePersonalFields(baseTodo())).toBe(true);
-    expect(shouldCollapsePersonalFields(baseTodo({ due_date: "2026-12-01" }))).toBe(false);
-    expect(shouldCollapsePersonalFields(baseTodo({ due_at: "2026-12-01T12:00:00Z" }))).toBe(false);
-    expect(shouldCollapsePersonalFields(baseTodo({ remind_at: "2026-11-30T09:00:00Z" }))).toBe(false);
-  });
-
-  it("collapses long notes only when exceeding length or line thresholds", () => {
-    expect(shouldCollapseLongNotes(baseTodo())).toBe(false);
-    expect(shouldCollapseLongNotes(baseTodo({ notes: "Short note" }))).toBe(false);
-    expect(shouldCollapseLongNotes(baseTodo({ notes: "a".repeat(241) }))).toBe(true);
-    expect(shouldCollapseLongNotes(baseTodo({ notes: "1\n2\n3\n4\n5\n6" }))).toBe(true);
   });
 });

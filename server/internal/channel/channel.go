@@ -233,24 +233,24 @@ var DefaultFeatures = map[string]bool{FeatureAsks: true}
 
 // View is a channel as the app sees it (GET /api/v1/channels).
 type View struct {
-	ID           string       `json:"id"`
-	Name         string       `json:"name"`
-	Kind         Kind         `json:"kind"`
-	Source       Source       `json:"source"`
-	Plugin       string       `json:"plugin,omitempty"`
-	Market       string       `json:"market,omitempty"` // for a market's: the market's id
-	Installed    bool         `json:"installed"`
-	Enabled      bool         `json:"enabled"`
-	State        State        `json:"state"`
-	Error        string       `json:"error,omitempty"`
-	Account      *Account     `json:"account,omitempty"`
-	Description  string       `json:"description,omitempty"`
+	ID              string       `json:"id"`
+	Name            string       `json:"name"`
+	Kind            Kind         `json:"kind"`
+	Source          Source       `json:"source"`
+	Plugin          string       `json:"plugin,omitempty"`
+	Market          string       `json:"market,omitempty"` // for a market's: the market's id
+	Installed       bool         `json:"installed"`
+	Enabled         bool         `json:"enabled"`
+	State           State        `json:"state"`
+	Error           string       `json:"error,omitempty"`
+	Account         *Account     `json:"account,omitempty"`
+	Description     string       `json:"description,omitempty"`
 	Capabilities    Capabilities `json:"capabilities"`
 	Target          *Target      `json:"target,omitempty"`
 	ThreadMode      ThreadMode   `json:"thread_mode,omitempty"`
 	ThreadIdleHours int          `json:"thread_idle_hours,omitempty"`
 	Features        []Feature    `json:"features,omitempty"`
-	Bind         Bind         `json:"bind"`
+	Bind            Bind         `json:"bind"`
 	// Surfaces are the app channel's ends (iOS, Mac, …), for people.
 	Surfaces    []string  `json:"surfaces,omitempty"`
 	LastEventAt time.Time `json:"last_event_at,omitzero"`
