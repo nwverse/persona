@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -258,8 +259,8 @@ func TestMemoryExtensionStandingOnlyStanding(t *testing.T) {
 	named.Standing = false
 	src.batch.Entries = []memoryExtensionEntry{named, extQAMain}
 	a, err := s.standingMemory(ctx, "qa-main")
-	if err != nil || entryIDs(a.Entries) != extID(extQAMain) {
-		t.Errorf("standing = %s (%v), want only the standing entry", entryIDs(a.Entries), err)
+	if err != nil || !slices.Equal(entryIDList(a.Entries), []string{extID(extQAMain)}) {
+		t.Errorf("standing = %s (%v), want only the standing entry", entryIDList(a.Entries), err)
 	}
 	if got := s.standingMemorySection(ctx, "qa-machine", "qa-main"); strings.Contains(got, named.Text) || !strings.Contains(got, extQAMain.Text) {
 		t.Errorf("standing section = %q", got)
@@ -383,10 +384,10 @@ func TestInboxMemoryContext(t *testing.T) {
 func TestMostImportantWithin(t *testing.T) {
 	entries := memoryExtensionBatch{Entries: extQAEntries()}.assistantEntries()
 	got := mostImportantWithin(entries, len(extQAMain.Text)+len(extQAUnknown.Text))
-	if entryIDs(got) != extID(extQAMain)+","+extID(extQAUnknown) {
-		t.Errorf("%s", entryIDs(got))
+	if !slices.Equal(entryIDList(got), []string{extID(extQAMain), extID(extQAUnknown)}) {
+		t.Errorf("%s", entryIDList(got))
 	}
 	if got := mostImportantWithin(entries, 1); len(got) != 0 {
-		t.Errorf("%s", entryIDs(got))
+		t.Errorf("%s", entryIDList(got))
 	}
 }

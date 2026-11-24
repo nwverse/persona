@@ -21,6 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/nodeclient"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/toolschema"
 )
 
 type request struct {
@@ -337,6 +338,9 @@ func handle(ctx context.Context, version string, req request) (any, *rpcError) {
 				return catalog.search(ctx, p.Arguments), nil
 			}
 		}
+		if p.Name == fileTransferTool { // a path on this computer relative to the agent's directory (file_transfer.go)
+			p.Arguments = fileTransferArgs(p.Arguments, workingDir())
+		}
 		var copied *clipboardCopy // phone_clipboard_set with file: read here, on the agent's machine (clipboard_file.go)
 		if p.Name == clipboardSetTool {
 			args, c, err := clipboardFileArgs(p.Arguments)
@@ -497,6 +501,9 @@ func listToolsOnce(ctx context.Context, previous toolSnapshot) (toolSnapshot, er
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
+		// Gemini (Agy) refuses every request of a session if one tool's schema has an empty string in an enum, so
+		// what it rejects leaves the schema here, whoever declared the tool (internal/toolschema).
+		schema = toolschema.Portable(schema)
 		if t.Name == clipboardSetTool && !isGuest() { // its file argument is read here (clipboard_file.go)
 			schema, description = withClipboardFile(schema, description)
 		}

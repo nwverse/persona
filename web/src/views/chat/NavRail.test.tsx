@@ -4,6 +4,8 @@ import { act, Profiler, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NAV_RAIL_MIN_TICKS, type NavRailTick } from "../../lib/nav-rail";
+import { t } from "../../i18n";
+import type { QuestionMark } from "../../lib/question-states";
 import { NAV_RAIL_METRICS as M } from "../../ui/nav-rail-metrics";
 
 // `matches` is read live and `set` notifies subscribers: viewport.ts caches the MediaQueryList, so a later test (or a
@@ -490,6 +492,57 @@ describe("NavRail", () => {
     expect(host.querySelector('[aria-current="true"]')?.getAttribute("data-tick")).toBe("5");
     expect(query).not.toHaveBeenCalled();
     for (const child of boxes) expect(child.getBoundingClientRect).not.toHaveBeenCalled();
+  });
+
+  describe("question states (#13021)", () => {
+    const marks = new Map<string, QuestionMark>([
+      ["seg:1", { state: "read", key: "u1" }],
+      ["seg:2", { state: "unread", key: "u2" }],
+      ["seg:3", { state: "unread", key: "u3", follows: "seg:2" }],
+      ["seg:4", { state: "running", key: "u4" }],
+      ["seg:5", { state: "pending", key: "u5" }],
+    ]);
+    const five = () => Array.from({ length: 5 }, (_, i) => tick(i + 1));
+
+    it("says each tick's state in its label, marks unread with a dot and draws a follow-up shorter", async () => {
+      act(() => root.render(<NavRail ticks={five()} scroller={scrollerWith(1200, 600)} onJump={() => {}} reset="example/states" marks={marks} />));
+      await settle();
+      const buttons = [...host.querySelectorAll<HTMLElement>("button[data-tick]")];
+      expect(buttons.map((b) => b.dataset.questionState)).toEqual(["read", "unread", "unread", "running", "pending"]);
+      expect(buttons[0].getAttribute("aria-label")).toContain(t("chat-navrail.state_read"));
+      expect(buttons[1].getAttribute("aria-label")).toContain(t("chat-navrail.state_unread"));
+      expect(buttons[2].getAttribute("aria-label")).toBe(t("chat-navrail.jump_follow_state", { label: t("chat-navrail.jump", { index: 3, preview: "question 3" }), state: t("chat-navrail.state_unread") }));
+      expect(buttons[3].getAttribute("aria-label")).toContain(t("chat-navrail.state_running"));
+      expect(buttons[4].getAttribute("aria-label")).toContain(t("chat-navrail.state_pending"));
+      expect(buttons.map((b) => Boolean(b.querySelector("[data-question-dot]")))).toEqual([false, true, true, false, false]);
+      const width = (b: HTMLElement) => parseFloat(b.querySelector<HTMLElement>("[data-nav-mark]")!.style.width);
+      expect(width(buttons[2])).toBeCloseTo(width(buttons[1]) * M.followWidth);
+      // something in progress or unread keeps the rail shown
+      expect(host.querySelector("[data-nav-rail]")!.className).toContain("opacity-100");
+    });
+
+    it("announces the state with a keyboard selection", async () => {
+      act(() => root.render(<NavRail ticks={five()} scroller={scrollerWith(1200, 600)} onJump={() => {}} reset="example/states-keys" marks={marks} />));
+      await settle();
+      const rail = host.querySelector<HTMLElement>("[data-nav-rail]")!;
+      act(() => rail.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
+      expect(host.querySelector('[aria-live="polite"]')?.textContent).toContain(t("chat-navrail.state_pending"));
+    });
+
+    it("works on a touch screen only with states: a tap jumps", async () => {
+      finePointer.matches = false;
+      const jumps: string[] = [];
+      act(() => root.render(<NavRail ticks={five()} scroller={scrollerWith(390, 700)} onJump={(id) => { jumps.push(id); }} reset="example/touch" />));
+      await settle();
+      expect(host.querySelector("[data-nav-rail]")).toBeNull();
+      act(() => root.render(<NavRail ticks={five()} scroller={scrollerWith(390, 700)} onJump={(id) => { jumps.push(id); }} reset="example/touch" marks={marks} />));
+      await settle();
+      const rail = host.querySelector<HTMLElement>("[data-nav-rail]")!;
+      expect(rail.dataset.navTouch).toBe("true");
+      expect(rail.style.touchAction).toBe("none");
+      act(() => host.querySelectorAll<HTMLElement>("button[data-tick]")[1].click());
+      expect(jumps).toEqual(["seg:2"]);
+    });
   });
 
   it("skips full layout reads and redundant clearance writes during streaming tail mutations while keeping scroll, hover and jump intact", async () => {
