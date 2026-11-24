@@ -478,6 +478,7 @@ func TestInboxReplyPolicyWorkbenchPublishedCardSend(t *testing.T) {
 }
 
 func TestInboxReplyPolicyWorkbenchFeishuActionDispatch(t *testing.T) {
+	needsLarkLayer(t) // the Workbench action arrives through the lark module's real card handler
 	c := &recoveryReplier{}
 	h, _, it := handledHub(t)
 	h.in.mu.Lock()
