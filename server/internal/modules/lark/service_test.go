@@ -842,15 +842,15 @@ func (s *Service) InboxMute(_ context.Context, source, tag, value, name string) 
 	return nil
 }
 
-func (s *Service) DraftReply(_ context.Context, id, instruction string) (string, error) {
+func (s *Service) DraftReply(_ context.Context, id, instruction string, _ int, _ bool) (assistantwire.WorkbenchItem, string, error) {
 	d := s.wb()
 	s.tmu.Lock()
 	defer s.tmu.Unlock()
 	d.drafts = append(d.drafts, id+": "+instruction)
-	return d.draft, nil
+	return assistantwire.WorkbenchItem{ID: id}, d.draft, nil
 }
 
-func (s *Service) ReplyInbox(_ context.Context, id, text, clientID string) (bool, error) {
+func (s *Service) ReplyInbox(_ context.Context, id, text, clientID string, _ int) (bool, error) {
 	d := s.wb()
 	s.tmu.Lock()
 	defer s.tmu.Unlock()

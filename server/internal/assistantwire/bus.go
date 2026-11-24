@@ -81,6 +81,12 @@ const (
 	// (#6282, docs/protocol/protocol.md "Assistant chat search"). The hub lists the assistant_search feature only while
 	// the default manager names it; the apps keep filtering titles and last messages without it.
 	CapabilityAssistantSearch = "assistant_search"
+	// CapabilityAssistantPages: the manager keeps the assistant's pages (Dashboards, #15017,
+	// docs/assistant/dashboards.md): the reserved extension -pages in GET /api/v1/extensions/-/ui and its pages, the
+	// dashboards switch in GET/PUT /api/v1/assistant and the assistant_pages event. Only the built-in manager names
+	// it, the switch on or off; the hub lists the assistant_pages feature only while the default manager names it, and
+	// the apps show the switch only then.
+	CapabilityAssistantPages = "assistant_pages"
 	// CapabilityTaskInput: the manager validates and saves structured scheduled prompts.
 	CapabilityTaskInput = "task_input"
 	// CapabilityAssistantSegments promises persistent logical routing and explicit switches.
