@@ -1582,12 +1582,13 @@ func (s *Service) machineIDs(ctx context.Context) string {
 }
 
 // agentCallerSpace uses the calling conversation on its own machine. Calls without
-// a known session can reach only the ordinary space, as with knownSpace.
+// a snapshot use only the node-attested launch directory, if available.
 func (s *Service) agentCallerSpace(ctx context.Context, machine, self string) string {
 	if self != "" && machine != "" {
-		if c, ok := s.session(ctx, machine, self); ok {
+		if c, ok := s.callerSpaceSession(ctx, machine, self); ok {
 			return runSpace(c) // a space's subdirectories count for the tools' access boundary
 		}
+		return runSpace(proto.Session{Cwd: s.callerCwd(ctx, machine, self)})
 	}
 	return ""
 }
