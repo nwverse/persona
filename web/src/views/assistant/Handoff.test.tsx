@@ -63,7 +63,7 @@ async function show(item: FeedItem, todos: Todo[], sessions: Session[]) {
     applyCompleteSessions(sessions);
     await refreshTodos();
   });
-  act(() => root.render(<StrictMode><AssistantActionBar conversation={conversation} /><div data-chat-scroll><FeedLineView item={item} simplified /></div></StrictMode>));
+  await act(async () => root.render(<StrictMode><AssistantActionBar conversation={conversation} /><div data-chat-scroll><FeedLineView item={item} simplified /></div></StrictMode>));
   await settle();
   await act(async () => { await vi.dynamicImportSettled(); });
 }
@@ -183,6 +183,17 @@ describe("hand-off cards", () => {
       getFeedState().plans[plan.id] = plan;
       await show({ id: "recovery-event", conversation, at, kind: "plan", ref: plan.id }, todos, sessions);
     };
+
+    it("uses the current task row when an older open-chat snapshot is still cached", async () => {
+      const idle: Session = { ...agent, state: "idle", status: "idle", rev: 1 };
+      await showPlan(makePlan(recovery), [original()], [idle]);
+      const working: Session = { ...agent, rev: 2 };
+      await act(async () => applyCompleteSessions([idle], [], { sessionSummaries: [working] }));
+      expect(cards()[0]!.querySelector('[data-handoff-state="working"]')).not.toBeNull();
+      expect(cards()[0]!.querySelector('[data-handoff-state="idle"]')).toBeNull();
+      expect(host.querySelector('[data-handoff-history]')?.textContent).toContain(reason);
+      expect(cards()).toHaveLength(1);
+    });
 
     it("keeps delivery, the original session's live state and the failed attempt distinct; duplicate updates create no extra card or send", async () => {
       await showPlan(makePlan(undefined));

@@ -1,4 +1,4 @@
-// Historical details load only for a failed continuation; the card's title and current state stay immediate.
+// Historical details load only for a failed continuation; its title and original failure stay immediate.
 import { t } from "../../i18n";
 import { openTask } from "../../lib/handoff";
 

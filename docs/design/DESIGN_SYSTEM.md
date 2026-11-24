@@ -2493,7 +2493,8 @@ For a failed continuation (#13495, web), separate the failed attempt, the confir
 original session's current state. A confirmed send uses neutral delivery text; its original error remains in a
 collapsed dispatch-history disclosure. Receipt validation, history details and the current-task link load only for a
 failed continuation. While they load, keep its title and the failed attempt visible; show delivery and live state only
-after validating the receipt. Ordinary hand-off cards stay immediate. The card opens that original session.
+after validating the receipt. Ordinary hand-off cards stay immediate. Current state follows the shared task-session
+lookup so an older open-chat snapshot cannot hide a newer task row. The card opens that original session.
 When membership ends, retain the delivery history without showing later work as this task's state. An uncorrelated
 legacy failure stays an attempt failure, never an inferred running task. Sending and unknown delivery remain visible;
 unknown delivery does not offer a blind retry. This serves everyday Assistant users without exposing executor details

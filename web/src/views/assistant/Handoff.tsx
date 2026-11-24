@@ -11,7 +11,7 @@ import { startFailureCardLine } from "../../lib/start-failure";
 import { interruption, TODO_STATUS_INFO, type Todo, type TodoAgent } from "../../lib/todos";
 import { ago, stateOf } from "../../lib/format";
 import { stateName } from "../../lib/state-labels";
-import { useStore, type State } from "../../lib/store";
+import { taskSessionLookup, useStore } from "../../lib/store";
 import { PHONE, useMedia } from "../../lib/viewport";
 import type { Session } from "../../lib/types";
 import { cx, useNow } from "../../ui/atoms";
@@ -92,12 +92,8 @@ export interface Handoff {
   /** Delivery to the original session, separately from its live state and the failed dispatch's history. */
   recovery?: "sent" | "queued";
   recoveryCurrent?: boolean;
-  historyFailure?: string;
   continuationTask?: PlanTask;
-  deliveryLine?: ReactNode;
-  historicalLine?: ReactNode;
-  currentLabel?: ReactNode;
-  failureLabel?: string;
+  detail?: (state: ReactNode) => ReactNode;
   /** An explicit way to inspect the current task without claiming this failed attempt started its Agent. */
   currentTodo?: string;
   delivery?: "sending" | "unknown";
@@ -129,9 +125,9 @@ export function shortSessionId(id: string): string {
   return id.length <= 13 ? id : `${id.slice(0, 8)}…${id.slice(-4)}`;
 }
 
-/** The Agent's session as the store has it now. */
-function sessionIn(s: State, mid: string, sid: string): Session | undefined {
-  return (s.sessions[mid] ?? []).find((x) => x.session_id === sid) ?? s.sessionSummaries.find((x) => x.machine_id === mid && x.session_id === sid);
+/** Both plan layouts identify the same failed attempt before its receipt module loads. */
+export function failedContinuation(task: PlanTask, key: string): Handoff | undefined {
+  if (task.error && (task.continues || task.reuse_todo) && !task.todo_id) return { key, title: task.title, wake: "continuation", failure: task.error, continuationTask: task };
 }
 
 /** "last active 3 minutes ago", from the Agent's latest step or update; undefined without either. `compact`: a phone's
@@ -148,15 +144,15 @@ export function lastActive(session: Pick<Session, "activity_at" | "updated_at"> 
 
 const ContinuationCard = lazyPage(() => import("./ContinuationCard").then((m) => m.default), { listed: false });
 
-export function HandoffCard({ handoff }: { handoff: Handoff }) {
-  if (handoff.continuationTask) return <Suspense fallback={<LiveHandoffCard handoff={{ key: handoff.key, title: handoff.title, wake: "continuation", failure: handoff.continuationTask.error }} />}><ContinuationCard task={handoff.continuationTask} cardKey={handoff.key} /></Suspense>;
-  return <LiveHandoffCard handoff={handoff} />;
+export function HandoffCard(props: { handoff: Handoff }) {
+  const card = <LiveHandoffCard {...props} />;
+  return props.handoff.continuationTask ? <Suspense fallback={card}><ContinuationCard {...props} /></Suspense> : card;
 }
 
 export function LiveHandoffCard({ handoff }: { handoff: Handoff }) {
   const { mid, sid, todo, failure, wake } = handoff;
   const agent = mid && sid ? { mid, sid } : undefined;
-  const session = useStore((s) => (agent && (!handoff.recovery || handoff.recoveryCurrent) ? sessionIn(s, agent.mid, agent.sid) : undefined));
+  const session = useStore((s) => (agent && (!handoff.recovery || handoff.recoveryCurrent) ? taskSessionLookup(s)(agent.mid, agent.sid) : undefined));
   const closed = useStore((s) => Boolean(todo && s.todos.find((x) => x.id === todo)?.done_at));
   useNow(60_000, Boolean(agent)); // "last active" moves on by the minute
   const title = (handoff.recovery ? handoff.title : session?.title?.trim() || handoff.agentTitle?.trim() || handoff.title) || t("assistant-tasks.task_fallback");
@@ -171,7 +167,7 @@ export function LiveHandoffCard({ handoff }: { handoff: Handoff }) {
   const cut = !closed ? interruption(session) : undefined;
   const phone = useMedia(PHONE);
   const active = lastActive(session, Date.now(), phone);
-  const meta = handoff.historicalLine ?? (agent ? (
+  const meta = agent ? (
     <>
       {active ? (
         <>
@@ -196,13 +192,13 @@ export function LiveHandoffCard({ handoff }: { handoff: Handoff }) {
     </>
   ) : failure ? (
     <span data-handoff-failure className="min-w-0 break-words text-[12px] leading-4 text-red">
-      {handoff.failureLabel ?? startFailureCardLine(failure, interactive)}
+      {startFailureCardLine(failure, interactive)}
     </span>
   ) : handoff.ended ? (
     <span className="truncate text-[12px] leading-4 text-ink-3">{todo ? t("assistant-tasks.handoff_closed") : t("assistant-tasks.handoff_gone")}</span>
   ) : (
     <span className="truncate text-[12px] leading-4 text-ink-3">{t("assistant-tasks.starting_agent")}</span>
-  ));
+  );
   const body = (
     <>
       <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-field sm:size-9 transition-colors duration-150 group-hover:bg-ink">
@@ -222,11 +218,7 @@ export function LiveHandoffCard({ handoff }: { handoff: Handoff }) {
             {badge}
           </span>
         </span>
-        {handoff.deliveryLine}
-        <span className={cx("flex min-w-0 items-center gap-1.5", handoff.recovery && "flex-wrap")}>
-          {handoff.currentLabel}
-          {meta}
-        </span>
+        {handoff.detail ? handoff.detail(meta) : <span className="flex min-w-0 items-center gap-1.5">{meta}</span>}
       </span>
       {interactive && (
         <span className="flex size-6 shrink-0 items-center justify-center">
