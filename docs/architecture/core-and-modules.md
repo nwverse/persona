@@ -184,7 +184,10 @@ Persona Core is a product on its own: a hub built without any module starts, ser
   about 5.5 minutes, managers about 6, other about 3.5.
   The per-module steps ('Builds without the … module(s)', 'Core-only and module-less builds') run in the `node`,
   `managers`, `core-node` and `core-other` lanes, one or two each, not in `build`: together they outgrow a hosted job's
-  20 minutes.
+  20 minutes. Each runs only its own `persona_without_<id>` tests (#14412): the module's `go build ./...` and the module
+  list and guard tests are 'Builds without each module', and every package's tests with `persona_core_only` are the
+  core lanes' (the node step keeps the one `persona_core_only` build, Windows' node included). Where a module section
+  below names `persona_core_only` among a step's tags, the core lanes run those tests.
 - **Size**: `python3 scripts/diag/core_size.py [--no-build] [--json] <ref> …` prints the core's non-test Go lines (every
   `*.go` under `server/` that is not `_test.go`, `server/internal/modules/` left out), each module's lines, and the
   stripped sizes of `personad`, `persona-hub` and `persona-manager` built by default and with `persona_core_only`
