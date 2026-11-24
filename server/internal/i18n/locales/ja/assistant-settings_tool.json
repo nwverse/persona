@@ -122,5 +122,10 @@
   "change_supervision_batch_minutes": "通常の監督通知を受信者ごとにまとめる間隔：{before} → {after} 分（0 は既存の間隔を維持）",
   "bad_supervision_batch_minutes": "0〜1440の整数分で指定してください。",
   "supervision_batch_minutes_unchanged": "通常の監督通知をまとめる間隔は変更されていません。",
-  "supervision_batch_minutes_saved": "通常の監督通知をまとめる間隔を{value}分に保存しました。"
+  "supervision_batch_minutes_saved": "通常の監督通知をまとめる間隔を{value}分に保存しました。",
+  "title_limit_fallbacks": "利用上限に達したときの予備ランチャー",
+  "change_limit_fallbacks": "利用上限で会話が止まったときに使う予備ランチャー：{before} → {after}",
+  "bad_limit_fallbacks": "ランチャー名を第一候補から順に最大 8 個までリストで指定してください。空のリストでオフになります。",
+  "limit_fallbacks_unchanged": "予備ランチャーは変更されていません。",
+  "limit_fallbacks_saved": "予備ランチャーを保存しました：{value}。次に利用上限に達したときから適用されます。"
 }
