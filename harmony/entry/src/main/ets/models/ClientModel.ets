@@ -1271,7 +1271,14 @@ export class ClientModel {
   prefetchOlder(): void {
     if (this.connected && this.hasMoreMessages) this.transcript?.prefetchOlder(this.oldestTranscriptSeq);
   }
-  async loadOlder(): Promise<boolean> { try { if (!this.transcript) return false; await this.transcript.older(); return true; } catch (error) { this.failure(error as Error); return false; } }
+  /** An earlier page that cannot be read is reported by the Load more row with its Retry, not as a page notice. */
+  async loadOlder(): Promise<boolean> {
+    try { if (!this.transcript) return false; await this.transcript.older(); return true; }
+    catch (error) {
+      if (error instanceof HttpFailure && (error.status === 401 || error.status === 403)) this.failure(error as Error);
+      return false;
+    }
+  }
   async readFullUserText(message: ChatMessage): Promise<string> {
     const repo = this.repository, owner = this.transcript;
     const target = this.target(), row = this.selected;

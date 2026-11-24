@@ -123,3 +123,13 @@ The shared core's `counts` keep a muted unread or working row in the total, matc
 (`sort/mod.rs` `counts`). The Unread and Working filters themselves leave muted rows out, as iOS's `filterCounts` does.
 Showing the core's number on a chip then promises rows its filter never lists, and Mark all as read cannot empty it.
 Subtract the muted rows the search admits, and test a chip's number against the rows its filter shows.
+
+## Keep the reader's row yourself in a Repeat list
+
+`List.maintainVisibleContentPosition(true)` did not hold the visible content when rows were inserted above it through
+`Repeat` with `virtualScroll` (API 26, on a phone): the list kept its first visible index, so a page of earlier turns
+replaced the rows under the reader, and a session that opened at its latest rows could show an earlier window. Record
+the first visible row and its offset before changing the rows and put it back with `scrollToIndex` in the same pass when
+its index moved. Keep leading rows (notices, Load more) in the list even when empty, so their coming and going never
+shifts indices, and hold a change that arrives during a gesture until the gesture settles. On a device, check the row
+ID and its offset before and after an insert, not only that the list still scrolls.
