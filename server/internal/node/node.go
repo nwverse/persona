@@ -902,6 +902,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		SessionID               string        `json:"session_id"`
 		CreationID              string        `json:"creation_id"`
 		Incarnation             string        `json:"incarnation"`
+		CodexEffortFallback     string        `json:"codex_effort_fallback"`
 		TaskTerminalToken       string        `json:"task_terminal_token"`
 		Cwd                     string        `json:"cwd"`
 		Launcher                string        `json:"launcher"`
@@ -1222,6 +1223,15 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	// mode go with each message: assistant_runtime.go); the rest (pages, watch, images) is the runtime's.
 	if assistantCall[method] && n.runtimeAssistant(p.SessionID) {
 		// falls through to the assistant's branches below
+	} else if pane, a, held := n.agyOpenCall(method, p.SessionID); held {
+		// The companion's agy-<conversation> while an agy in a terminal has it open (agypresence.go, #13603): a message
+		// or an interrupt goes to the pane running it; nothing else may drive it from the companion.
+		if pane != "" && (method == "session.send" || method == "session.interrupt") {
+			if res, err, handled := n.workAgentCalls(ctx, method, pane, a, params, paneMessage{Text: p.Text, Images: p.Images}); handled {
+				return res, err
+			}
+		}
+		return nil, refusal(codeAgyInTerminal, i18n.T(i18n.Default, "rpc-errors.agy_in_terminal"), nil)
 	} else if h, err := n.runtimeFor(ctx, method, p.SessionID); err != nil {
 		return nil, err
 	} else if h != nil {
@@ -1241,7 +1251,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	} else if a, ok := n.agent(p.SessionID); ok && (a.Agent == cursorAgent || a.Agent == agyAgent) {
 		// Herdr drives the pane (workagent.go). Messages go through agent.prompt, and Persona sends Esc through
 		// herdr to interrupt. Agy reads the verified pane conversation when available. Cursor shows a terminal notice.
-		if res, err, handled := n.workAgentCalls(ctx, method, p.SessionID, a, params); handled {
+		if res, err, handled := n.workAgentCalls(ctx, method, p.SessionID, a, params, paneMessage{Text: p.Text, Images: p.Images}); handled {
 			return res, err
 		}
 	} else if r, ok := n.terminalOnly(p.SessionID); ok { // a pi or opencode without its extension, any other agent (opencode.go)
@@ -1799,12 +1809,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		asyncAgent := n.startAgentType(p.Launcher, p.AgentType)
 		if p.Async && p.ResumeSessionID == "" && (p.AgentType == "" || p.AgentType == "claude") &&
 			asyncAgent != traexAgent && asyncAgent != ompAgent && asyncAgent != agyAgent {
-			s, err := n.startAsyncIn(p.Host, p.SessionID, p.Cwd, p.Launcher, p.Prompt, p.WorkspaceID, p.PermissionMode, p.Effort, tab, modelExecution{Source: p.ModelSource, InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments, taskSpace: taskSpace})
+			s, err := n.startAsyncIn(p.Host, p.SessionID, p.Cwd, p.Launcher, p.Prompt, p.WorkspaceID, p.PermissionMode, p.Effort, tab, modelExecution{CodexEffortFallback: p.CodexEffortFallback, Source: p.ModelSource, InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments, taskSpace: taskSpace})
 			return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)
 		}
 		r := resumed{cwd: p.Cwd, launcher: p.Launcher, mode: p.PermissionMode, effort: p.Effort, tab: tab,
 			taskID: p.TaskID, workspaceID: p.WorkspaceID, workspaceLabel: p.WorkspaceLabel,
-			execution: modelExecution{Source: p.ModelSource, InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments, taskSpace: taskSpace}}
+			execution: modelExecution{CodexEffortFallback: p.CodexEffortFallback, Source: p.ModelSource, InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments, taskSpace: taskSpace}}
 		if p.ResumeSessionID != "" {
 			// A message carrying out a launcher switch quits the agent and starts it again in its terminal
 			// (launcher_switch.go): the Resume waits for it, then finds the agent running, or resumes it as it is.
@@ -2850,11 +2860,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			}
 			return map[string]any{"cwd": dir, "plugin_skills_need": need, "space_md_digest": digestOf(spaceMD)}, nil
 		}
-		// The same instructions for both agents: Claude reads CLAUDE.md, Codex AGENTS.md.
-		for _, name := range []string{"CLAUDE.md", "AGENTS.md"} {
-			if err := os.WriteFile(filepath.Join(dir, name), []byte(a.ClaudeMD), 0o600); err != nil {
-				return nil, err
-			}
+		// Bounded entry files and native rules preserve the same complete instructions for every launcher.
+		if err := writeAssistantInstructionFiles(dir, a.ClaudeMD); err != nil {
+			return nil, err
 		}
 		return map[string]any{"cwd": dir, "plugin_skills_need": need}, nil
 	case "session.info":

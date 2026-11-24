@@ -2140,6 +2140,7 @@ func (s *Service) reopenFailedTodo(ctx context.Context, id string) (Todo, bool, 
 	}
 	s.resetTodoReadyWake(ctx, id)
 	s.resetParentCloseoutWake(ctx, id)
+	s.resolveCard(taskFailedCardID(id)) // started again: the failure's push is over
 	return out, true, nil
 }
 

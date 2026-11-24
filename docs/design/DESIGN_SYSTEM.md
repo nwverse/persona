@@ -1520,9 +1520,8 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   (`ink`), no frame at rest; hover and open draw a 1 px `--line-strong` border on `--hover`. Contents in order: the
   mark of the Agent the launcher runs (#5497: `AgentMark` at 15 px, `ink-2` for the one-colour marks, 4 px before the
   name; an Agent with no mark of its own gets the generic `agent` icon, never a letter, unless its runtime names it
-  (#8142), when it is drawn as the Agents list draws it), the model name (truncates), the
-  effort label 4 px after it without a
-  tier colour (English "Extra" for "Very high"; the full name on hover), a filled bolt for Fast and the workflow
+  (#8142), when it is drawn as the Agents list draws it), the model name (truncates), the canonical effort label in the
+  text colour 4 px after it, a filled bolt for Fast and the workflow
   `UltraMark` (`ink-2`), a 14 px chevron (`ink-2`). Widths by the composer card (`@container/composer`): ≥ 600 px 72–320 px;
   < 600 px the width its words need (name ≤ 108 px without a trailing bracketed qualifier, a context size kept as a short
   mark, "Opus 5.5 1M"; the whole name in the tooltip;
@@ -1532,7 +1531,7 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   the target engine's mark and the launcher's name in `ink-3` up to 96 px, hidden under 600 px, before the target's model and
   effort; the engine's name in its place when the engine changes; the tooltip "Current: …" over "Next message: …"),
   disabled (50% opacity, no pointer), and a label (not a button) where nothing can be switched. The click keeps the caret
-  in the message box.
+  in the message box. The name omits a parenthetical effort already shown by the pill and retains context sizes.
 - Agent launcher label (#10248): when the session reports its launcher, the existing pill says **launcher · model**,
   using the same launcher name as its model-panel row. Both the launcher and abbreviated model stay visible at phone
   width, truncating within the existing capsule; the full names remain in its tooltip and spoken label. The existing
@@ -1606,7 +1605,9 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   Rows outside any family (the Default entry, unknown models) have no header. Why: one family's versions read as one
   choice and the newest is the one most people want, while older ones stay one tap (or a search) away (2026-11-17).
 - Usage placement (#5056): the Agent's context meter is a separate, right-aligned row below the composer card, not part of
-  the header or the model-pill container. Unknown context mounts no row. Quota bars use the established accent / orange /
+  the header or the model-pill container. The composer, Session Insights and enabled sidebar details use the same
+  context share and progress bar. When only the current context size is available, the composer and Session Insights
+  show that token count. Cumulative usage from loaded messages has its own total. Quota bars use the established accent / orange /
   red quota tones (≤ 30% left warning, ≤ 10% or exhausted critical); price marks use neutral `ink-2`, one to three `$` by
   standard output price, and the flyout's values use tabular numerals. Unknown data never creates placeholder marks.
 - Header strip (Persona chats, #5033, `PickStrip` in `web/src/views/chat/AssistantModelPanel.tsx`): one line above the
@@ -2962,6 +2963,7 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 
 **Rules**
 
+- [ ] Web sidebar page arrangement: Settings remains the fixed recovery entry; when More is explicitly hidden, its pages keep their arrangement and stay in quick search, but their badges are not promoted into the shell (principles 2, 3 and 7; `docs/web/web.md` "The sidebar's pages", #13798).
 - [ ] Only tokens and design-system components: no literal sizes, colors, fonts, SF Symbol names, `glassEffect` or lookalike components. The token ratchets did not go up (sections 1.2, 1.3).
 - [ ] Existing styles and theme colors look pixel-identical, except for a change that brings a screen in line with this document (section 1.2).
 - [ ] Hit areas at least 44 x 44 pt (Android 48 dp); every control has a spoken label; gesture-only actions also have a visible control or an accessibility action (section 6.3).
@@ -4090,6 +4092,8 @@ Launcher discovery failure or a missing saved launcher keeps the saved choice vi
 Assistant inheritance option remains selectable. Selecting it explicitly clears launcher, model and effort together;
 discovery alone never changes saved choices. Computer-scoped defaults come from that computer's launcher response.
 A saved model alias uses its folded catalog row's capabilities and default thinking effort without rewriting the saved ID.
+When the catalog lists a model by effort level, the model picker shows one base name. The effort selector shows
+the available levels and chooses the concrete variant ID, including when the task starts by following Assistant.
 Defaults, model and launcher catalogs are keyed to the current assistant and their exact execution context; stale
 responses cannot replace the current catalog. Discovery reads and the task save target the same assistant. Task
 inheritance is requested explicitly, leaving ordinary Assistant picker defaults unchanged.
