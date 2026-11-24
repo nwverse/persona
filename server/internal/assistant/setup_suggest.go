@@ -163,7 +163,7 @@ type setupEvidence struct {
 // setupCount counts, per mechanism, what it would have removed in [since, now). Each definition takes only what the
 // mechanism certainly covers:
 //
-//   - leaders and review_sample are retired recommendations: main still supervises and accepts every new task_plan
+//   - leaders and review_sample are retired recommendations: current ownership follows the planning lead or main
 //     task, so neither main-supervision rounds nor first-pass acceptances are work those settings would remove.
 //   - delegate: question cards a supervisor passed up with a recommendation (ask_escalated) that the owner answered
 //     once, with exactly that recommendation. Only a leader conversation's supervisor passes a question up

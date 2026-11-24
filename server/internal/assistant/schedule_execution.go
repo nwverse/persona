@@ -78,6 +78,9 @@ func (s *Service) checkTaskSourceRestore(ctx context.Context, previous, next Tas
 // Check both edited candidates and stored tasks; validation in the editor alone cannot protect old records.
 func checkTaskExecutionSpace(t Task) error {
 	if t.Space != "" && t.Cwd != "" {
+		if t.Space != SpaceHealth {
+			return i18n.Err("assistant-schedule.execution_space_directory")
+		}
 		return i18n.Err("assistant-schedule.execution_health_directory")
 	}
 	return nil
@@ -120,7 +123,7 @@ func (s *Service) taskExecution(ctx context.Context, t Task, validate bool, bind
 		ex.Agent = s.launcherAgent(withUnhidden(ctx, ex.Launcher), machine, ex.Launcher)
 		if ex.Cwd == "" {
 			if d, ok := s.device(ctx, machine); ok {
-				ex.Cwd = s.spaceCwd(d, t.Space) // "" for a space without a directory, never the assistant's
+				ex.Cwd = s.spaceCwd(ctx, d, t.Space) // "" for a space without a directory, never the assistant's
 			}
 		}
 		return ex, nil

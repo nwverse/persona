@@ -2,6 +2,7 @@ package hub
 
 import (
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
@@ -31,10 +32,24 @@ func restrictedAgentData(r *http.Request) bool {
 	return role == roleExtension || role == roleScoped
 }
 
+// ownerExtension: r carries the token of an extension the user marked as their own (#13246,
+// assistantwire.Profile.ExtensionOwners, such as their memory extension), which reads the tracks' conversations too.
+// The hub cannot see the categories: any other extension stays shown none of a track's.
+func (h *Hub) ownerExtension(r *http.Request) bool {
+	p := principalOf(r.Context())
+	return p.Role == roleExtension && p.Extension != "" && slices.Contains(h.assistantProfileOf(p.Manager).ExtensionOwners, p.Extension)
+}
+
+// spacesHidden: r's token is shown none of the tracks' conversations on the read routes: an extension's other than
+// the user's own (ownerExtension), or a scoped device's. Controls stay closed to every extension (extensionControllable).
+func (h *Hub) spacesHidden(r *http.Request) bool {
+	return restrictedAgentData(r) && !h.ownerExtension(r)
+}
+
 // withoutSpaceSessions drops the spaces' conversations from list for an extension's token (list itself
 // otherwise, and when none is dropped). list is never changed.
-func withoutSpaceSessions(r *http.Request, list []proto.Session) []proto.Session {
-	if !restrictedAgentData(r) {
+func (h *Hub) withoutSpaceSessions(r *http.Request, list []proto.Session) []proto.Session {
+	if !h.spacesHidden(r) {
 		return list
 	}
 	for i := range list {
@@ -161,7 +176,7 @@ const codeSessionsNotListed = "sessions_not_listed"
 // unknown machine (the route's own 404), go on to next.
 func (h *Hub) extensionReadable(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if restrictedAgentData(r) {
+		if h.spacesHidden(r) {
 			if m := h.localMachine(r.PathValue("mid")); m != nil {
 				s, ok := m.session(r.PathValue("sid"))
 				if !ok && h.historyReads.readable(m.cfg.ID, r.PathValue("sid"), time.Now()) {
