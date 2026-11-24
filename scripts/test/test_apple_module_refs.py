@@ -20,6 +20,7 @@ import json
 from pathlib import Path
 import re
 import sys
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -119,9 +120,18 @@ def swift_files(root=ROOT):
             yield rel
 
 
-def owner(rel):
-    """The module whose directory holds this file, or None for the core."""
+def owner(rel, root=ROOT):
+    """The module whose directory holds this source. A compatibility symlink's shared target owns its declarations."""
+    path = Path(root) / rel
+    if path.is_symlink():
+        resolved = path.resolve()
+        try:
+            rel = resolved.relative_to(Path(root).resolve())
+        except ValueError:
+            return None
     s = rel.as_posix()
+    if s == "apple/PersonaLink/App" or s.startswith("apple/PersonaLink/App/"):
+        return None
     for module, dirs in MODULES.items():
         if any(s == d or s.startswith(d + "/") for d in dirs):
             return module
@@ -231,6 +241,14 @@ class AppleModuleRefsTests(unittest.TestCase):
         src = ("nonisolated struct GlassesError: Error {}\n@Observable\n@MainActor\nfinal class MetaGlasses {\n"
                "    enum Inner {}\n}\nprivate struct Helper {}\n// struct Commented {}\n")
         self.assertEqual(declared(blank(src)), ["GlassesError", "MetaGlasses"])  # a private type is the file's own
+
+    def test_compatibility_symlink_keeps_the_shared_declaration_in_core(self):
+        # Persona Link shares the core's migration source, not a second ScreenShare declaration.
+        self.assertIsNone(owner(Path("apple/PersonaLink/App/Sources/PersonaLink/NativeCompatibility.swift")))
+
+    def test_core_declarations_disambiguate_the_link_app(self):
+        self.assertIsNone(owner(Path("apple/PersonaLink/App/Sources/PersonaLink/AppDelegate.swift")))
+        self.assertEqual(owner(Path("apple/PersonaLink/Sources/PersonaScreen/main.swift")), "screen-share")
 
     def test_guarded_dirs(self):
         # Before a home: every classified directory counts as the module's (glasses).
