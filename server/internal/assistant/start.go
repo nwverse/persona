@@ -679,8 +679,10 @@ type mainHandoff struct {
 	Until     time.Time `json:"until"`
 	// For: the new main conversation it waits in, started without a message (Android starts it empty, then sends).
 	// A cleared external choice reserves this ID before its start, so retries cannot create another conversation.
-	For     string `json:"for,omitempty"`
-	Summary string `json:"summary,omitempty"`
+	For          string `json:"for,omitempty"`
+	FromLauncher string `json:"from_launcher,omitempty"`
+	FromModel    string `json:"from_model,omitempty"`
+	Summary      string `json:"summary,omitempty"`
 	Partial bool   `json:"partial,omitempty"`
 	Recent  []struct {
 		Role string `json:"role"`
