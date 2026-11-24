@@ -145,8 +145,8 @@ func (s *Service) appTool(ctx context.Context, app string, call ToolCall, args j
 }
 
 func (s *Service) runTool(ctx context.Context, machine, self, name string, args json.RawMessage) (string, error) {
-	if name == "health_intake" && s.agentCallerSpace(ctx, machine, self) != SpaceHealth {
-		return "", errors.New("health_intake is only available in a known Health conversation")
+	if slices.Contains(healthToolNames, name) && s.agentCallerSpace(ctx, machine, self) != SpaceHealth {
+		return "", errors.New(name + " is only available in a known Health conversation")
 	}
 	// What is said in a space stays there (docs/assistant/health.md "How directories and memory are isolated"): a space
 	// whose policy says so writes nothing to the knowledge base, nor changes or starts what is imported into it
@@ -164,7 +164,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolEntries(ctx, machine, self, name, args)
 	case spaceStateTool: // a space track's conversations only (track_space_md.go)
 		return s.toolSpaceStateUpdate(ctx, machine, self, args)
-	case "health_intake":
+	case "health_intake", "health_strength":
 		return s.healthTool(ctx, healthhost.ToolCall{Name: name, Machine: machine, Session: self, Args: args})
 	case "repository_add":
 		return s.toolRepositoryAdd(ctx, machine, self, args)
@@ -1994,3 +1994,5 @@ func kbWriteCheckOf(ctx context.Context) func(text string) error {
 	check, _ := ctx.Value(kbWriteCheckKey{}).(func(text string) error)
 	return check
 }
+
+var healthToolNames = []string{healthhost.Tool, healthhost.StrengthTool}

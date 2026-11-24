@@ -84,12 +84,9 @@ func (s *Service) Tool(ctx context.Context, call assistantwire.HealthToolCall) (
 	case assistantwire.CapabilityHealthIntake:
 		return s.toolHealthIntake(ctx, call.Args)
 	case assistantwire.CapabilityHealthStrength:
-		return "", errors.New("strength tool is not ready")
+		return s.toolHealthStrength(ctx, call)
 	}
 	return "", errors.New("unknown Health tool")
-}
-func (s *Service) CardAction(context.Context, assistantwire.HealthCardAction) (assistantwire.HealthCardResult, error) {
-	return assistantwire.HealthCardResult{Outcome: "not_found"}, nil
 }
 func (s *Service) WorkoutReceived(ctx context.Context, w assistantwire.StrengthWorkout) error {
 	if st := s.h.StrengthStore(); st != nil {

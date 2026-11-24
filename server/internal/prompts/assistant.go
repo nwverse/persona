@@ -115,6 +115,7 @@ type AssistantHealthClaudeMD struct {
 	HealthDir      string
 	Language       string
 	Water          bool // The owner's added intake items; false when the Health module is absent or unavailable.
+	Strength       bool
 	Protein        bool
 	ItemsAvailable bool // The module can add items, including when neither intake item is added yet.
 }

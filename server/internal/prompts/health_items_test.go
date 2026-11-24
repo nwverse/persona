@@ -38,3 +38,24 @@ func TestHealthItemsPromptConsentAndSections(t *testing.T) {
 		}
 	}
 }
+
+func TestHealthStrengthPromptSection(t *testing.T) {
+	for _, lang := range []string{"", "English", "日本語"} {
+		for _, strength := range []bool{false, true} {
+			got := RenderAssistantHealthClaudeMD(AssistantHealthClaudeMD{Language: lang, Strength: strength, ItemsAvailable: true})
+			if strings.Contains(got, "**力量训练**") != strength {
+				t.Fatalf("strength section=%v for %q", strength, lang)
+			}
+			if strings.Contains(got, "\n\n- **力量训练**") || strings.Contains(got, "\n\n- **添加健康项**") || strings.Contains(got, "\n\n- **其他数据**") || strings.Contains(got, "\n\n  ") {
+				t.Fatalf("extra blank line in list for %q", lang)
+			}
+			if strength {
+				for _, rule := range []string{"`find`", "`draft`", "不编重量或次数", "不另存", "`undo`"} {
+					if !strings.Contains(got, rule) {
+						t.Errorf("missing strength rule %s", rule)
+					}
+				}
+			}
+		}
+	}
+}

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/deeplink"
+	"net/http"
 	"slices"
 	"time"
 
@@ -46,7 +48,7 @@ func (s *Service) healthReminders(ctx context.Context) {
 // healthTool runs the health_intake tool.
 func (s *Service) healthTool(ctx context.Context, call healthhost.ToolCall) (string, error) {
 	if s.healthMod == nil {
-		return "", errors.New("unknown tool " + healthhost.Tool)
+		return "", errors.New("unknown tool " + call.Name)
 	}
 	return s.healthMod.Tool(ctx, call)
 }
@@ -137,12 +139,22 @@ func (h healthHost) CardShown(ctx context.Context, c assistantwire.StrengthCard)
 	h.s.event(ctx, map[string]any{"type": "assistant_feed", "conversation": c.Conversation, "item": FeedItem{ID: c.FeedID, Conversation: c.Conversation, At: c.At, Kind: feedView, Ref: c.ID, Body: body}})
 }
 func (h healthHost) CardChanged(ctx context.Context, c assistantwire.StrengthCard) {
+	if c.CreatedAt.IsZero() {
+		if st, ok := h.s.store().(viewStore); ok {
+			if row, err := st.AssistantView(ctx, c.Conversation, c.ID); err == nil {
+				c.CreatedAt = row.CreatedAt
+			} else {
+				h.s.logf("Health card timestamp: %v", err)
+			}
+		}
+	}
+
 	v, err := wire.ParseAssistantView(c.View)
 	if err != nil {
 		h.s.logf("Health card: %v", err)
 		return
 	}
-	h.s.event(ctx, map[string]any{"type": "assistant_view", "conversation": c.Conversation, "view": wire.AssistantView{ID: c.ID, Conversation: c.Conversation, Version: c.Version, View: *v, UpdatedAt: c.At}})
+	h.s.event(ctx, map[string]any{"type": "assistant_view", "conversation": c.Conversation, "view": wire.AssistantView{ID: c.ID, Conversation: c.Conversation, Version: c.Version, View: *v, CreatedAt: c.CreatedAt, UpdatedAt: c.At}})
 }
 func (h healthHost) PageLink(ctx context.Context, ui, state string) string {
 	base := h.s.webBase(ctx)
@@ -150,4 +162,49 @@ func (h healthHost) PageLink(ctx context.Context, ui, state string) string {
 		return ""
 	}
 	return deeplink.Web(base, deeplink.Extension("-health-intake", ui, state))
+}
+
+// healthCardAction never enters the generic action outbox or starts an assistant turn.
+func (s *Service) healthCardAction(w http.ResponseWriter, r *http.Request, st viewActionStore, conversation, key string, in viewActionInput) {
+	if s.healthMod == nil {
+		apierr.WriteBody(w, http.StatusNotFound, apierr.Body(http.StatusNotFound, "not_found", i18n.Err("assistant-health_strength.unavailable")))
+		return
+	}
+	if in.ExpectedVersion < 1 || in.Page != "" || len(in.Values) > 0 || (in.Action != "save" && in.Action != "discard") {
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-health_strength.invalid_action"))
+		return
+	}
+	// Settlement receipts must be checked before rejecting the old version carried by a retry.
+	row, v, ok := storedCard(w, r, st, conversation, key, 0)
+	if !ok {
+		return
+	}
+	if c, known := s.session(r.Context(), row.MachineID, conversation); known && runSpace(c) != SpaceHealth {
+		apierr.WriteBody(w, http.StatusForbidden, apierr.Body(http.StatusForbidden, "permission_denied", i18n.Err("assistant-health_strength.not_health")))
+		return
+	}
+	declared := false
+	for _, a := range wire.Actions(v) {
+		if a.ID == in.Action && a.Reply != "" {
+			declared = true
+		}
+	}
+	res, err := s.healthMod.CardAction(r.Context(), healthhost.CardAction{Conversation: conversation, Key: key, Action: in.Action, ClientMsgID: in.ClientMsgID, Version: in.ExpectedVersion, Declared: declared})
+	if err != nil {
+		apierr.Write(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	a := db.AssistantViewActionRow{Conversation: conversation, Key: key, Action: res.Action, ClientMsgID: res.ClientMsgID, Values: json.RawMessage(`{}`), Status: "sent", At: res.At, UpdatedAt: res.At, Version: res.Version}
+	switch res.Outcome {
+	case "done":
+		apierr.WriteJSON(w, map[string]any{"action": wireViewAction(a)})
+	case "answered":
+		writeAlreadyAnswered(w, a)
+	case "changed":
+		viewChangedNow(w, r, st, conversation, key)
+	case "not_found":
+		apierr.WriteBody(w, http.StatusNotFound, apierr.Body(http.StatusNotFound, "not_found", i18n.Err("assistant-health_strength.not_found")))
+	default:
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-health_strength.invalid_action"))
+	}
 }

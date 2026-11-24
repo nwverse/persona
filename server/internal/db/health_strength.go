@@ -315,7 +315,7 @@ func (d *DB) strengthDraftChange(ctx context.Context, id string, rev int64, body
 			}
 			return err
 		}
-		c = StrengthCard{ID: row.ID, Conversation: row.Conversation, MachineID: row.MachineID, View: row.View, Version: row.Version, At: row.UpdatedAt}
+		c = StrengthCard{ID: row.ID, Conversation: row.Conversation, MachineID: row.MachineID, View: row.View, Version: row.Version, At: row.UpdatedAt, CreatedAt: row.CreatedAt}
 		if status == "saved" {
 			saved, err = strengthSetAddTx(ctx, tx, sets)
 			if err != nil {

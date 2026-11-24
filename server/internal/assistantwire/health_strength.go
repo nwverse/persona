@@ -65,6 +65,7 @@ type StrengthCard struct {
 	View                                json.RawMessage
 	Version                             int64
 	At                                  time.Time
+	CreatedAt                           time.Time
 }
 
 type HealthToolCall struct {
@@ -74,6 +75,7 @@ type HealthToolCall struct {
 type HealthCardAction struct {
 	Conversation, Key, Action, ClientMsgID string
 	Version                                int64
+	Declared                               bool
 }
 type HealthCardResult struct {
 	Outcome, Action, ClientMsgID string

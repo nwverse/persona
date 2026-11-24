@@ -1,0 +1,21 @@
+{
+  "pending": "Strength training · Confirm sets",
+  "plan": "Today’s plan",
+  "discarded": "Nothing recorded",
+  "moved": "This draft moved to a newer conversation",
+  "warmup": "Warm-up",
+  "save": "Save",
+  "discard": "Don’t save",
+  "done_plan": "Done as planned",
+  "adjust": "Adjust",
+  "adjust_hint": "To adjust these sets, open this draft in Health › Strength training.",
+  "undo_hint": "You can undo saved sets on the exercise page.",
+  "view": "View",
+  "invalid_action": "Choose a declared action on the current Health card.",
+  "unavailable": "Health is temporarily unavailable.",
+  "not_health": "This card is not in Health.",
+  "not_found": "Health card not found.",
+  "html_forbidden": "Health cards do not accept HTML actions.",
+  "saved_one": "Saved {count} set",
+  "saved_other": "Saved {count} sets"
+}

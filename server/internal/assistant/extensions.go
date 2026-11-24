@@ -10,6 +10,7 @@ import (
 	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/healthhost"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -202,4 +203,6 @@ func (s *Service) mainMachine(ctx context.Context) string { return s.settings(ct
 func (s *Service) userTZ() string { return s.settings(context.Background()).Timezone }
 
 // toolsNow are the assistant's tools (a connector's may not shadow one).
-func (s *Service) toolsNow() []proto.Tool { return s.Tools(context.Background()) }
+func (s *Service) toolsNow() []proto.Tool {
+	return append(s.Tools(context.Background()), toolsNamed([]string{healthhost.StrengthTool})...)
+}

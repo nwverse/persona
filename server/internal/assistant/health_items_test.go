@@ -47,3 +47,10 @@ func TestGoldenHealthClaudeMDItems(t *testing.T) {
 		golden(t, "health_claude_md.items."+lang, prompts.RenderAssistantHealthClaudeMD(d))
 	}
 }
+
+func TestGoldenHealthClaudeMDStrength(t *testing.T) {
+	for _, lang := range []string{"zh-Hans", "en", "ja"} {
+		d := prompts.AssistantHealthClaudeMD{Owner: "Example user", Language: answerLanguage(lang), Water: true, Protein: true, Strength: true, ItemsAvailable: true}
+		golden(t, "health_claude_md.strength."+lang, prompts.RenderAssistantHealthClaudeMD(d))
+	}
+}

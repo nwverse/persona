@@ -1,0 +1,21 @@
+{
+  "pending": "力量训练 · 待确认",
+  "plan": "今天的计划",
+  "discarded": "没有记录",
+  "moved": "这份草稿已移到更新的对话里",
+  "warmup": "热身",
+  "save": "记下",
+  "discard": "不记",
+  "done_plan": "都照计划做完了",
+  "adjust": "调整",
+  "adjust_hint": "要改的话，到健康 › 力量训练里打开这份草稿。",
+  "undo_hint": "可在动作页撤销。",
+  "view": "查看",
+  "invalid_action": "请选择当前健康卡片上的操作。",
+  "unavailable": "健康暂时不可用。",
+  "not_health": "这张卡片不在健康对话中。",
+  "not_found": "未找到健康卡片。",
+  "html_forbidden": "健康卡片不接受 HTML 操作。",
+  "saved_one": "已记下 {count} 组",
+  "saved_other": "已记下 {count} 组"
+}
