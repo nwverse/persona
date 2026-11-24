@@ -50,6 +50,7 @@ import persona.core.domain.sort.READ_ONLY
 import persona.core.domain.sort.canApprove
 import persona.core.domain.sort.canChangeEffortOnly
 import persona.core.domain.sort.canChangeModes
+import persona.core.domain.sort.canContinueCodex
 import persona.core.domain.sort.canSwitchListedModes
 import persona.core.domain.sort.canInterrupt
 import persona.core.domain.sort.canSend
@@ -321,6 +322,17 @@ private fun ChatPage(
         rememberUpdatedState(readOnly), statusSheetState,
         deliveryActions, clearingPaneState, pageCloseout.drawnSwitch, switchSession, tasks, timelineFollow, submittedContextState)
     var notice by interactionController.notice
+    val takeoverClient = remember(chrome.takeoverActions, chrome.hubScope) {
+        chrome.takeoverActions?.let { CodexTakeoverClient.of(it, chrome.hubScope) }
+    }
+    val takeoverCoordinator = rememberCodexTakeoverCoordinator(
+        client = takeoverClient,
+        sessions = sessions,
+        onOpenSession = if (historyOnly) null else chrome.onOpenSession,
+        onFallbackNotice = { notice = it },
+        onCompleted = if (historyOnly) ({ _, adopted -> chrome.onOpenSession?.invoke(adopted.key) }) else null,
+    )
+    val pageTakeover = takeoverCoordinator.takeIf { takeoverClient != null && renderStyle != ChatRenderStyle.Assistant && child == null && workflowAgent == null }
     var submittedDraft by interactionController.submittedDraft
     var submittedContexts by submittedContextState
     var sending by interactionController.sending
@@ -439,7 +451,9 @@ private fun ChatPage(
     }).collectAsStateWithLifecycle()
     // The chat jumps to a task's notice through the task host's navigation.
     // The message a hub link named (`?at=`, #2194) while it is being landed on: like a search hit, its drawer opens.
-    val childCards = rememberChatChildren(key, session, sessionList, chrome, repository)
+    var overviewOpen by remember(key) { mutableStateOf(false) }
+    var openSubagentsPending by rememberSaveable(key.path, chrome.openSubagents) { mutableStateOf(chrome.openSubagents) }
+    val childCards = rememberChatChildren(key, session, sessionList, chrome, repository, forceRead = overviewOpen)
     val modeChangeStore = remember(key, repository, scope) { ModeChangeStore(scope) { repository.modeChanges(it) } }
     DisposableEffect(modeChangeStore) { onDispose(modeChangeStore::close) }
     LaunchedEffect(key, repository, renderStyle, session != null, session?.permissionMode, session?.bypassPending) {
@@ -447,7 +461,7 @@ private fun ChatPage(
     }
     val modeChangesUntil = remember(timelineVersion, projection) { modeChangesCutoff(timeline.isFrozen(), projection.lines) }
     val pageLines = rememberChatPageLines(key, renderStyle, snapshot, session, foldsBackground, supervisingConversation, tasks, taskTodos, search,
-        openWork, projection, feed, taskPlans, taskCardProjection, childCards.rows.values.toList(), modeChanges = modeChangeStore.changes,
+        openWork, projection, feed, taskPlans, taskCardProjection, childCards.list, modeChanges = modeChangeStore.changes,
         modeChangesUntil = modeChangesUntil)
     var jumpItem by pageLines.jumpItem
     val assistantPresentation = pageLines.assistantPresentation
@@ -800,7 +814,10 @@ private fun ChatPage(
     }
     val turnModelActions = if (turnFix != TurnErrorFix.ModelRoute) null else when {
         ownModelPicker -> TurnErrorModelActions(openPicker = { openModelRoutePicker = true }, clearPick = clearModelAction,
-            clearLabel = if (session?.sessionId == chrome.mainConversation) R.string.chat_modelpill_follow_default else R.string.chat_modelpill_undo_pick)
+            clearLabel = if (session != null && (session.sessionId == chrome.mainConversation ||
+                session.sessionId in chrome.leaderConversations || session.origin == "task")) {
+                R.string.chat_modelpill_follow_default
+            } else R.string.chat_modelpill_undo_pick)
         fixModel != null -> TurnErrorModelActions(
             openPicker = { fixModel(persona.core.designsystem.ReadinessActionId.PickModel) }, clearPick = clearModelAction)
         else -> null
@@ -977,6 +994,7 @@ private fun ChatPage(
                         }, terminal, { if (task) taskOverlay = it else stackOverlay = it }, linkVisible = linkVisible,
                             folds = requestFolds,
                             blockedReason = if (canApprove) null else approvalBlockedReason(res, session),
+                            answerSession = session,
                             terminalHelp = canTerminal, onDiscardLocal = interactionController::discard, keyboard = keyboard,
                             labels = if (task) taskAsk?.let { mapOf(it.card.id to it.label) }.orEmpty() else emptyMap(),
                             first = if (task) null else chrome.requestId, counted = !task, suggestion = ruleLine,
@@ -1014,7 +1032,18 @@ private fun ChatPage(
                                         sides = childCards.sides, sideRollup = childCards.sideRollup, onOpenSide = chrome.onOpenSide,
                                         onForkSession = if (onFork != null && session?.canFork == true) ({ onFork("") }) else null,
                                         forking = forking,
-                                        menuOpen = headerMenuOpen)
+                                        takeover = pageTakeover,
+                                        menuOpen = headerMenuOpen,
+                                        machines = machines,
+                                        childRows = childCards.list,
+                                        onOpenSubagent = chrome.onOpenSubagent ?: chrome.onOpenSession,
+                                        onOpenBackgroundDestination = openBackground,
+                                        onStopLoop = if (readOnly || !canSend) null else ({ send(ChatActivity.STOP_LOOP) }),
+                                        overviewActions = chrome.actions,
+                                        overviewConnection = chrome.connection,
+                                        openSubagentsRequested = openSubagentsPending,
+                                        onOpenSubagentsHandled = { openSubagentsPending = false },
+                                        onOverviewVisible = { overviewOpen = it })
                                     // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
                                     if (tabs && session != null && onOpenSibling != null) {
                                         ChatSiblingTabs(session, siblingSessions, onOpenSibling, trailing = activityPill)
@@ -1094,9 +1123,25 @@ private fun ChatPage(
                             if (!historyOnly && !readOnly && session != null) ModelFallbackCard(session, chrome.actions)
                             if (historyOnly) footer?.invoke()
                             else if (readOnly) Text(stringResource(R.string.chat_screen_subagent_read_only), Modifier.padding(Tokens.Space.m), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
-                            else if (session?.isStoppedAgent == true && machine?.online != false) ChatStoppedNote(agentTerminal,
-                                resumeInTerminal?.takeIf { terminalResume(session, machine) == TerminalResume.Available })
-                            else {
+                            else if (session?.isStoppedAgent == true && machine?.online != false) {
+                                if (session.canContinueCodex && pageTakeover != null) {
+                                    ChatSourceNote(
+                                        session = session,
+                                        takeover = pageTakeover,
+                                        takeoverEnabled = (connection == null || connection == ConnectionState.Online) && machine?.online != false,
+                                    )
+                                }
+                                ChatStoppedNote(agentTerminal,
+                                    resumeInTerminal?.takeIf { terminalResume(session, machine) == TerminalResume.Available })
+                            }
+                            else if (!canSend && session != null && session.canContinueCodex && pageTakeover != null) {
+                                // Replace the disabled read-only composer with a single actionable bar (no duplicate notice).
+                                ChatSourceNote(
+                                    session = session,
+                                    takeover = pageTakeover,
+                                    takeoverEnabled = (connection == null || connection == ConnectionState.Online) && machine?.online != false,
+                                )
+                            } else {
                                 // What waits in the agent's queue sits right above the composer, while the composer shows (Persona's further down).
                                 // Not while a "/" quick message is being picked: the list opens above the field, and with the
                                 // keyboard up the queue, the list and the status line together climbed over the top bar.
@@ -1196,6 +1241,16 @@ private fun ChatPage(
                                         else -> null
                                     },
                                     modeHint = if (glass) null else chatModeHint(session, includeModes = modeSheet),
+                                    // Brief and Board share one wrapping row for the launcher and mode chips; Glass's pill does its work (#5055).
+                                    hintChips = if (!glass && renderStyle == ChatRenderStyle.Assistant && chrome.assistantManagement != null &&
+                                        !readOnly && (canSend || turnFix == TurnErrorFix.ModelRoute)) ({
+                                        ConversationLauncherChip(chrome.assistantManagement, key.machineId, key.sessionId, session?.launcher,
+                                            conversationLauncher, conversationModel, openRequested = openModes || openModelRoutePicker,
+                                            onOpenHandled = { openModes = false; openModelRoutePicker = false }) { launcher, model ->
+                                            conversationLauncher = launcher
+                                            conversationModel = model
+                                        }
+                                    }) else null,
                                     // The model pill (#5055, the web's ModelPill): Glass's, in an Agent's chat and a Persona chat.
                                     modelPill = if (!glass || switchSession == null) null else ({ width ->
                                         val online = connection == null || connection == ConnectionState.Online
@@ -1220,19 +1275,17 @@ private fun ChatPage(
                                             onEffort = { effort -> controls.run(switchSession, ChatAction.Modes(effort = effort)) },
                                             openRequested = openModes || openModelRoutePicker,
                                             onOpenHandled = { openModes = false; openModelRoutePicker = false },
-                                            clearRequested = clearModelPick, onClearHandled = { clearModelPick = false })
+                                            clearRequested = clearModelPick, onClearHandled = { clearModelPick = false },
+                                            leaderConversations = chrome.leaderConversations,
+                                            onSwitched = {
+                                                scope.launch {
+                                                    try { sessions.refresh() }
+                                                    catch (cancelled: CancellationException) { throw cancelled }
+                                                    catch (_: Exception) { }
+                                                }
+                                            })
                                     }),
                                     accessory = {
-                                        // Brief and Board keep the launcher chip; Glass's pill does its work (#5055).
-                                        if (!glass && renderStyle == ChatRenderStyle.Assistant && chrome.assistantManagement != null &&
-                                            !readOnly && (canSend || turnFix == TurnErrorFix.ModelRoute)) {
-                                            ConversationLauncherChip(chrome.assistantManagement, key.machineId, key.sessionId, session?.launcher,
-                                                conversationLauncher, conversationModel, openRequested = openModes || openModelRoutePicker,
-                                                onOpenHandled = { openModes = false; openModelRoutePicker = false }) { launcher, model ->
-                                                conversationLauncher = launcher
-                                                conversationModel = model
-                                            }
-                                        }
                                         if (linkContexts.isEmpty()) ComposerSuggestion(session, composer, onSend = { text -> send(text) })
                                         // One line each while the link card peeks: the whole cards left no room for the composer.
                                         if (linkContexts.isNotEmpty()) ComposerContextCards(linkContexts, compact = linkInset.value > 0f) { removed ->
@@ -1292,6 +1345,7 @@ private fun ChatPage(
                     deliveryAction(message, if (message.state.allows(DeliveryAction.Cancel)) DeliveryAction.Cancel else DeliveryAction.Delete)
                 } }, viewerState, chatList, backgroundActions = chrome.actions,
                 backgroundConnection = chrome.connection, backgroundFiles = chrome.files)
+            pageTakeover?.let { CodexTakeoverDialogs(it) }
         }
     }
 }

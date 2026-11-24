@@ -796,6 +796,9 @@ Inspired by dot and ChatGPT App (user-provided screenshots). Code in `Persona/Vi
   with a right-side state mark only for Needs you / Unread / Working (`RowStateMark`: a blue dot, a green dot, the amber spinner; the same mark on the main chat's row, the Directions rows and in All Chats, #4538); the last message appears only in long-press preview. Current chat has a rounded gray background. Bottom row: avatar + name + Online / Offline and machine
   (tap for profile), Settings on the right (drawer only; split mode has the tab bar beside it). Search lists only results (N chats). Long-press also copies session ID or ends the chat.
   **All Chats** (#3264, `AutoConversationsView`): every conversation, filtered along the top by All, Mine and each origin the hub reports (`conversation_origin`, session `origin`, `docs/protocol/protocol.md` ("Origin of assistant chats")): Inbox AI twin, scheduled tasks, Lark /agent, derived chats and extension-created chats. It opens on All every time (the last pick is not kept), and its rows carry the same source mark as the sidebar's (#5195): for a chat an extension opened, that extension's own icon once it is drawn, with "From <its name>" for VoiceOver and under the first message (#10358, `ConversationOpener.swift`; `docs/design/DESIGN_SYSTEM.md`). Same view in iPhone drawer, iPad split and Mac sidebar. Search still searches all. Old hubs without origins omit the source filters.
+- **Health home**: on iPhone and iPad, the water-extension migration notice appears above Today only when intake reports
+  `water_extension:"pending"`, outside demo mode. Its explicit import button disables during the request; success refreshes
+  Today and removes the card, while failure shows the reason and permits retry (`docs/assistant/health.md`, "Moving from the water extension").
 - **Gestures** (2026-10-31, rebuilt to match ChatGPT after build 49 feedback "not smooth, not following the finger, small area, swipes do nothing"): right-drag anywhere on the page opens the sidebar,
   using the same state as the button. UIKit pan (`DrawerPan`) decides after roughly ten points, from **actual displacement since touch-down**; within 45° of horizontal belongs to the sidebar
   (`AssistantDrawer.takes`; thumb diagonals typically 30°–40°, vertical scrolling steeper); when closed only rightward motion counts. Previous pan translation / velocity logic
@@ -1342,7 +1345,7 @@ A preset with a model or effort waits for its own launcher's model-list request:
 
 ## Launcher health in New Agent (#1643)
 
-`Launcher.health` (`apple/Shared/Models.swift`) is the hub's record for the computer the list is for (`docs/server/launcher-health.md` "In the App"); a record it can't read is dropped, never the launcher. Since #4437 the hub leaves out a launcher whose latest check failed, so the list the app reads carries `blocked` only for `not_in_terminal` and for the configured default; the rest are gone until a check passes.
+`Launcher.health` (`apple/Shared/Models.swift`) is the hub's record for the computer the list is for (`docs/server/launcher-health.md` "In the App"); a record it can't read is dropped, never the launcher. Since #4437 the hub leaves out a launcher whose latest check failed, so the list the app reads carries `blocked` only for `not_in_terminal` and for the configured default; since #14535 the rest come in `unavailable` (code `launcher_unhealthy`, the hub's reason) and are drawn under "Unavailable here" as below, until a check passes.
 `Launcher.block` / `LauncherChoices` (`Views/NewChat/LauncherAvailability.swift`, `LauncherHealthTests`) decide what is grayed out: only `blocked`, one line per failure class.
 In `LauncherPicker` a blocked row is gray with the line (`LauncherBlockLine`) and an info mark; a tap opens `LauncherBlockedHelp` (why, How to Fix, the record under Details, Add Provider → `ProviderWizard`, Try Anyway picks it once the sheet has closed),
 never picks it. The form says the line under the launcher row when the launcher that will run is blocked (Model Settings' default, or picked anyway); Start stays enabled. Run Agent Here picks a usable launcher first, lists blocked ones last in its menu under a section titled with the line (a picker menu drops an option's second line), and says it in its footer once picked.
@@ -1700,7 +1703,7 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
     (`Theme.Motion.layout`). Nothing moves on the first draw or with Reduce Motion; at rest every value is exactly the extension's text. Mock: `MOCK_EXTENSIONS=1`,
     `-openExtension showcase -openExtensionPage motion`; `GET /mock/motion/next` draws its other step (`ExtensionMotionUITests`).
 - Voice orb (`DesignSystem/VoiceOrb.swift`, #3506, voice design #3489): centered call-bar ball; pages pass only phase (`VoiceOrb.Phase`: not started/connecting/listening/hearing you/speaking/listening with Agent working/paused/muted/ended) and volume 0…1, no style decisions.
-  - Motion: listening slow breath (`Theme.Motion.voiceBreath`, 1.6 s one-way), speaking audio beat (`voiceBeat`, 0.42 s one-way), matches Android `Voice.kt` (`VoiceOrbTests` reads/checks); hearing scales by volume, connecting/Agent working arcs (`voiceSpin` / `voiceLap`). `TimelineView` clock ≤30fps (`voiceFrame`, like Needs you dots/avatar glow), static phases paused; Reduce Motion or Low Power one static frame per phase (like avatar dot), Reduce Motion switches phase without scaling. One of few continuous animations, only during calls.
+  - Motion: listening slow breath (`Theme.Motion.voiceBreath`, 1.6 s one-way), speaking audio beat (`voiceBeat`, 0.42 s one-way), matches Android `VoiceComponents.kt` in `:module:voice` (`VoiceOrbTests` reads/checks); hearing scales by volume, connecting/Agent working arcs (`voiceSpin` / `voiceLap`). `TimelineView` clock ≤30fps (`voiceFrame`, like Needs you dots/avatar glow), static phases paused; Reduce Motion or Low Power one static frame per phase (like avatar dot), Reduce Motion switches phase without scaling. One of few continuous animations, only during calls.
   - Rendering: Liquid Glass/solid styles highlight sphere, pale avatar accent (`Theme.persona`) listening, accent speaking; BeautifulUI flat disc + five volume bars like dictation, filled accent speaking, white bars (near-black on pale/yellow accent). Connecting arc accent, working arc amber `Theme.busy`; paused/muted/ended gray, `pause` / `voiceMute` icons on nonhighlight gray with white contrast ≥3:1 (`VoiceOrbTests` light/dark).
   - Size `Theme.Size.voiceOrb` 52 including glow/enlargement, sphere 0.7, text-scaled; everything inside frame, glow never enlarges with ball, gradient sphere edge to frame edge, not covering neighboring text/buttons. `voiceLevelBar` / `voiceLevelGap` / `voiceLevelHeight` scale proportionally; `Shared/Design/VoiceTokens.swift` also watch-compiled, no watch voice UI.
   - Speaking with `interrupt` is a button labeled Interrupt voice: stops speech only, not Agent (separate Stop Claude call-bar button); otherwise decorative, `disabled`/no keyboard activation, VoiceOver skipped, status in adjacent text.
@@ -1759,13 +1762,21 @@ every platform are described from #13430; this section is the Apple side.
   extensions never link it. It sets no build settings of its own, so a Release build keeps the project's
   `SWIFT_REFLECTION_METADATA_LEVEL = all`.
 - **Slots** (`ModuleSlot`, raw values are the contract's field names): served today are `launch_hooks` (after the core's
-  launch work, `application(_:didFinishLaunchingWithOptions:)`), `deep_links` (`onOpenURL`, before the core's routes)
-  and `composer_actions` (the composer's +: the panel's More tab, the + menus and the prompt bar's sources; a row
+  launch work, `application(_:didFinishLaunchingWithOptions:)`), `deep_links` (`onOpenURL`, before the core's routes),
+  `composer_actions` (the composer's +: the panel's More tab, the + menus and the prompt bar's sources; a row
   `attach-<id>` opens the action's sheet, whose picture goes into the composer like a camera photo; #13400's
-  `composer_source`). Declared but **not yet served**, with no API until a module needs one: `shell_places`, `settings`,
-  `chat_card_kinds`, `chat_accessories`, `toolbar_items`, `hello_hooks`, `frame_handlers`, `hub_session_lifecycle`,
-  `phone_tools`, `intents`, `push_categories` and `audio_leases` (the core's `AudioSessionBroker` does not exist yet).
-  Each gets its registrar method and registry reader with the first module that needs it (#13849).
+  `composer_source`), and, since #14017, the place slots `toolbar_items`, `chat_accessories` and `chat_card_kinds`
+  (`ModuleRegistrar.view(at:when:)`: a view at one of the host's `Place`s — a chat's ··· menu and the assistant's
+  top-bar menu, a chat's footer and the task dock, under a tool call — drawn by `ModuleViews`; `when` says whether it
+  has anything to draw so the host leaves its spacing out), `settings` (`settingsEntry(id:info:row:page:)`: an entry
+  listed, searched and routed as the core's own through `SettingsPage.module(<id>)`) and the client-side
+  `capabilities` (`provide(_:_:)`: an interface the core declares and asks for, such as `LiveScreen`; nil when no
+  active module provides it, and the core then offers none of it), and, since #14278, `shell_places`
+  (`shellPage(id:_:)`: a page the core routes to by id, handed `PersonaHostApp.ShellContext`; the core lists its row and
+  opens its route only while a module provides it). Declared but **not yet served**, with no API until a module needs
+  one: `hello_hooks`, `frame_handlers`, `hub_session_lifecycle`, `phone_tools`, `intents`,
+  `push_categories` and `audio_leases` (the core's `AudioSessionBroker` does not exist yet). Each gets its registrar
+  method and registry reader with the first module that needs it (#13849).
 - **The module list** (`apple/Persona/App/Modules.swift`) is the seed of the `PersonaHostApp` layer (#13430 decision 4;
   `apple/Packages/PersonaCore` stays the Rust binding). `PersonaHostApp` is the `ModuleHost` (a composer action hands
   back a `UIImage`), `Modules.builtIn` lists the modules in the order their entries appear, and `Modules.registry` is
@@ -1802,6 +1813,29 @@ every platform are described from #13430; this section is the Apple side.
   without a composer action, into PersonaVision (which compiles all of `Persona/`); the watch and widgets do not include
   it. It is on only in a build with the Meta Wearables SDK (`apple/meta-wearables.yml`). Before the pilot the core named
   its types 8 times in 4 files; now 0.
+- **Module homes and the core-only build** (#14017). A module that has left `apple/Persona/` lives in
+  `apple/Modules/<Name>/`. `apple/modules.yml` (included by `project.yml`) compiles each home into the iPhone and Vision
+  apps and sets its condition (`PERSONA_MODULE_SCREEN_SHARE`, `PERSONA_MODULE_HEALTH`), under which `Modules.builtIn`
+  lists it;
+  `apple/modules-core-only.yml`, enabled by `PERSONA_CORE_ONLY=YES` at `xcodegen generate`, leaves every home out, as
+  the server's `persona_core_only` tag does. `scripts/ci/apple.sh` builds that core-only app ("Core-only iOS build").
+  The watch, widgets and extensions never compile a module home. Source-scanning PersonaTests (token, icon, motion,
+  sheet and dialog rules) walk `apple/Modules` as well as `apple/Persona`.
+- **`screen-share`** (`apple/Modules/ScreenShare/`, #14017, `feature` = `module.screen-share`): a Mac's live screen over
+  VNC or video, its small window, the screen menus, the computer-activity pill, VNC under a computer tool, Settings ›
+  Live Screen and the kept sign-ins. It adds views at `chatMenu`, `chatFooter` and `toolCall`, the `live-screen`
+  settings entry, and provides `LiveScreen`, which the machine pages ask for (`AppModel.liveScreen`): without the
+  module they offer no VNC, One-Tap Unlock or kept sign-in, and the lock line stands alone. Its DEBUG switches
+  (`-openScreenFresh`, `-openScreenDemo`) and runtime-CLI state run from its launch hook. Its wire and capture packages
+  (`PersonaScreenCore`, `PersonaScreenKit`) stay where they are.
+- **`health`** (`apple/Modules/Health/`, #14278, `feature` = `module.health`): the Health home (Today, Activity, trends,
+  the space's conversations, memory, sources). It provides the shell page `health` (`SidebarRoute.healthPage`), which
+  the drawer, the sidebar and the iPad and Sidebar layouts open; without it there is no Health row, `enterHealth()` and
+  `-openShellPage health` open nothing, and New in a health conversation starts Persona's. Its DEBUG sample
+  (`-showHealthTrends`) is applied through `ModuleDebugSamples` in `Modules.swift`. The health space's conversations
+  (`AppModel`, `Session.isHealth`), the phone's Health tools, the widgets and Health's settings stay in the core until
+  their slots (`phone_tools`, widgets, `settings`) are served. The ratchet counts type names only: a core call to a
+  module's method (a `View` extension) is caught by the core-only build, not by the ratchet.
 - **Adding a module.** Give its sources a directory of their own, classify that directory with the module id in
   `schema/module-classification.txt` (`docs/architecture/core-and-modules.md`, "Classification") and add the id to
   `GUARDED` in the ratchet; write a type
@@ -2425,6 +2459,10 @@ Who it serves: everyday people who keep one part of their life (family, money, a
 health space does. The iOS / iPadOS app follows the web (`docs/web/web.md`, "Domain spaces"); the server side is in
 `docs/assistant/health.md` ("Tracks and kinds").
 
+- **Optional extension (#14574)**: the domain-space product surface belongs to `space-conversations`, not the schema-driven `spaces` extension. Core has no default Spaces entry. `ExtensionSlots.spaceConversationsEnabled` is true only while that extension's `home` navigation contribution is enabled; the sidebar shows its Spaces section only then. A hub with no spaces or no extension installs nothing automatically. Existing tracks and conversations are retained when the extension is off.
+- **Upgrade**: an installation with existing non-health tracks gets the extension once from the signed official marketplace and starts it. An installed or disabled extension is never replaced by migration. The health space's own entry and pages are unchanged.
+- **Extension handoff** (`ExtensionConversationLink`): the extension page can open only a bounded `persona://tracks/<machine>/<space>/<session>` link. It resolves to the existing `openAssistantConversation` host, with no WebView or general internal-link grant; Health and arbitrary app links are refused.
+
 - **Model**: `apple/Shared/Tracks.swift` decodes tracks, kinds, `SPACE.md`, a conversation's categories and the extension
   grants; every field is optional and unknown ones are ignored. Every call goes to the default manager (no
   `X-Persona-Manager`), as spaces are the default manager's. A hub without `GET /api/v1/assistant/tracks` (404 / 405, or an
@@ -2503,7 +2541,7 @@ visible one; its block shows only the one-line `injected.line` (`ChatLine.hidesP
 the supervision rule (`Supervision.visible`): a successful `ask_user` / `notify_user`, a pending live `ask_user`, an
 accepted / needs-user `task_review`, a `supervision_finish` receipt with user visibility, or `fold.supervision_user`.
 A completed round with a nonblank final reply also stays visible unless it successfully finished silent, except for a
-routine cross-conversation report to the main conversation: that reply stays inside the expandable background record,
+routine cross-conversation report when the main conversation has opted into folding these replies. It then stays inside the expandable background record,
 just as on the web. Explicit owner-visibility actions above still open and notify. The reply uses the usual bubble and
 the work stays collapsed. See `docs/assistant/assistant.md` "Background rounds".
 
@@ -2525,7 +2563,14 @@ and the count are unchanged (`ActionTrayContent.grouped`); with one group the tr
 
 The hub's `main_background_folded` (`GET` / `PUT /api/v1/assistant`, on unless changed; an older hub that omits it
 counts as on and hides the switch) is Settings › Assistant › **Fold background rounds**. Off, the main conversation
-and Needs You look exactly as before. Tests: `ChatBackgroundRoundsTests`.
+and leader conversations show their background rounds, and Needs You uses its usual grouping.
+
+The separate **Fold routine replies from other chats** preference (`fold_routine_relay_replies`, #11899) starts off.
+Ordinary completed replies from another conversation appear in the main chat and receive their finished notification.
+When both switches are on, the main chat keeps these replies in the expandable source record and the Hub quiets that
+notification. Explicit requests for the user’s attention and completed replies in leader conversations still appear.
+An older Hub that omits the opt-in keeps the default and hides the new switch. Each change writes only its own field.
+`ChatBackgroundRoundsTests` covers the wire values and transcript projection.
 
 ## Agent follow-up settings (#7005)
 

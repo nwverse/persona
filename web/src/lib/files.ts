@@ -375,7 +375,8 @@ export function splitDiff(diff: string): Record<string, string> {
     } else if (hdr) {
       if (line.startsWith("@@")) hdr = false;
       else if (/^(rename|copy) to /.test(line)) path = unq(line.replace(/^(rename|copy) to /, ""));
-      else if (/^\+\+\+ "?b\//.test(line)) path = unq(line.slice(4))?.slice(2) ?? null;
+      // git ends a ---/+++ line with a tab when the name has a space (for GNU patch); the tab is not part of the name.
+      else if (/^\+\+\+ "?b\//.test(line)) path = unq(line.slice(4).replace(/\t$/, ""))?.slice(2) ?? null;
     }
     buf.push(line);
   }

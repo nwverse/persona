@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/apierr"
 	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -21,6 +23,7 @@ import (
 
 // Extensions is the manager's extensions, connectors and bots (internal/extmgr.Manager).
 type Extensions interface {
+	waterExtensions
 	Hello(res json.RawMessage)
 	BusUp() // returns once its report went: the outbox goes after it (outbox.go)
 	Request(ctx context.Context, method string, params json.RawMessage) (any, bool, error)
@@ -30,6 +33,27 @@ type Extensions interface {
 	// AssistantSaid takes the assistant's events that are its (handled false: they go to the hub).
 	AssistantSaid(event string, params json.RawMessage) bool
 	http.Handler
+}
+
+// waterExtensions exposes only the legacy water migration, never arbitrary extension files.
+type waterExtensions interface {
+	WaterExtension(ctx context.Context, readState bool) (*assistantwire.WaterExtension, error)
+	DisableWaterExtension(w http.ResponseWriter, r *http.Request, storageKey string) bool
+}
+
+func (b *BusHub) WaterExtension(ctx context.Context, readState bool) (*assistantwire.WaterExtension, error) {
+	if e := b.opts.Extensions; e != nil {
+		return e.WaterExtension(ctx, readState)
+	}
+	return nil, nil
+}
+
+func (b *BusHub) DisableWaterExtension(w http.ResponseWriter, r *http.Request, storageKey string) bool {
+	if e := b.opts.Extensions; e != nil {
+		return e.DisableWaterExtension(w, r, storageKey)
+	}
+	apierr.Write(w, http.StatusServiceUnavailable, i18n.Err("assistant-health_intake.unavailable")) // as the Health module answers
+	return false
 }
 
 // localAppCall is an app.call the manager's extensions answer.
@@ -109,9 +133,15 @@ func (s *Service) ownerHeard(session string) {
 	}
 }
 
+// domainTrackKinds is the in-process source of extension-owned track kinds.
+type domainTrackKinds interface {
+	DomainTrackKindsJSON(context.Context) (json.RawMessage, error)
+}
+
 // SetExtensions gives the service the extensions' tools (before Run).
 func (s *Service) SetExtensions(e ExtensionTools) {
 	s.ext = e
+	s.trackKindsExt, _ = e.(domainTrackKinds)
 	s.heard, _ = e.(ownerHeard)
 	if r, ok := e.(launcherSecrets); ok {
 		s.refs = r

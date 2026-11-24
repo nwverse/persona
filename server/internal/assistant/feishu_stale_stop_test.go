@@ -22,6 +22,7 @@ import (
 // A refused final edit leaves the progress card's original Stop button visible.
 // Its callback must not stop a later turn in the same conversation.
 func TestFeishuStaleStopAfterRefusedFinalEdit(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, r, posts := endHub(t)
 	ctx := context.Background()
 	f.setSessions("server", proto.Session{MachineID: "server", SessionID: "c1", Assistant: true, State: proto.StateWorking, Status: proto.StatusWorking})
@@ -250,6 +251,7 @@ func (h *stopWatcherHub) DeviceCall(ctx context.Context, p DeviceCall) (json.Raw
 // ordering: the unregistered card cannot interrupt; after registration the same current card acts once. Production's
 // progress tick already requires the watcher, so this preserves its ownership guard rather than adding a bypass.
 func TestFeishuStopBeforeTheRunWatcher(t *testing.T) {
+	needsLarkLayer(t)
 	delivered := make(chan struct{})
 	testFeishuStopBeforeTheRunWatcher(t, delivered, nil)
 	<-delivered
@@ -417,6 +419,7 @@ func TestFeishuStaleStopRestoredOwnership(t *testing.T) {
 // Hold keeps the same run object but gives its answered card back. A later
 // continuation gets a new message and its own one-use Stop control.
 func TestFeishuStaleStopAcrossHeldContinuation(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, r, _ := endHub(t)
 	ctx := context.Background()
 	f.setSessions("server", proto.Session{MachineID: "server", SessionID: r.SessionID, Assistant: true, State: proto.StateWorking, Status: proto.StatusWorking})

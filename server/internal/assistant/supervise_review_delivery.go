@@ -85,7 +85,7 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 		}
 	}
 
-	repoPRs, repoIssues, err := s.todoLinkedDeliveryRefs(ctx, t.ID)
+	repoPRs, repoIssues, referencePRs, err := s.todoLinkedDeliveryRefs(ctx, t.ID)
 	if err != nil {
 		s.logf("task %s: linked repository delivery status temporarily unverifiable: %v", t.ID, err)
 		return "", fmt.Errorf("%s", i18n.T(s.lang(ctx), "assistant-reports.delivery_verification_unavailable",
@@ -95,7 +95,7 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 	seenPR := map[string]bool{}
 	addPR := func(u string) {
 		u = strings.TrimSpace(u)
-		if u == "" {
+		if u == "" || referencePRs[normalizePRKey(u)] {
 			return
 		}
 		key := u
@@ -321,17 +321,19 @@ func (s *Service) otherHostIssueDelivery(ctx context.Context, t Todo, issueURL s
 }
 
 // todoLinkedDeliveryRefs reads saved repository pull_request and issue links for task id. Only delivery-role links are
-// returned for gate verification; reference links are display-only. A pull_request still stored with the default
+// returned for gate verification; reference links are display-only. referencePRs carries their normalized keys too, so
+// acceptance cannot re-add a reference PR from legacy stage tracking. A pull_request still stored with the default
 // delivery role that the forge can prove was opened by someone else is downgraded to reference first, so a merely
 // referenced foreign PR no longer blocks acceptance.
-func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, issues []string, err error) {
+func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, issues []string, referencePRs map[string]bool, err error) {
 	if _, ok := s.store().(todoRepositoryStore); !ok {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	set, err := s.savedTodoRepositories(ctx, id)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
+	referencePRs = map[string]bool{}
 	seenIssue := map[string]bool{}
 	for _, row := range set.Repositories {
 		for _, l := range row.Links {
@@ -352,10 +354,15 @@ func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, i
 						role = repository.LinkRoleReference
 					}
 				}
-				if role == repository.LinkRoleDelivery {
+				if role == repository.LinkRoleReference {
+					referencePRs[normalizePRKey(u)] = true
+				} else if role == repository.LinkRoleDelivery {
 					prs = append(prs, u)
 				}
 			case "issue":
+				if l.Role == repository.LinkRoleReference {
+					continue
+				}
 				key := strings.ToLower(u)
 				if !seenIssue[key] {
 					seenIssue[key] = true
@@ -364,7 +371,7 @@ func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, i
 			}
 		}
 	}
-	return prs, issues, nil
+	return prs, issues, referencePRs, nil
 }
 
 // provenForeignPR reports whether u is a GitHub PR the forge can prove was opened by someone other than the

@@ -21,9 +21,13 @@ import (
 // top-level oldText/newText (#14092, 11 B) and paseo's WebSocket RSV-bit and Close-payload checks (#14095, 98 B).
 // OpenCode live ACP tool-call normalization (#14130) adds 383 B on main (254,092 B).
 // The dedicated-Assistant environment handoff (#14068) adds 114 B (254,206 B).
+// Claude Code plugin 0.3.0 permission / question / plan approval bridging (#14214) adds 6,363 B (260,569 B).
+// Antigravity multi-instance companion flags and --agy-dir env propagation (#14483) add 373 B (260,942 B).
+// An Antigravity CLI without session/set_mode: checks skip the switch and starts say to update agy (#14533), 149 B (261,091 B).
+// Antigravity Gemini API-key gateway model discovery routes through HTTP(S)_PROXY and honors NO_PROXY (#14552), 1,497 B (262,588 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 254_206
+	const budget = 262_588
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
