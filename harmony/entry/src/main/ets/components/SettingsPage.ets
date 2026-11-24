@@ -1,3 +1,4 @@
+import { screenConnectionInfo } from '../models/ScreenConnectionInfo';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { AddComputerFields } from './AddComputerFields';
 import { MachineDirectoryView, MachineFactsCard, MachineLoadingCard, MachineRefresh } from './MachineDirectoryView';
@@ -300,6 +301,10 @@ export struct SettingsPage {
       const owner = await this.model.viewFor(row);
       if (!this.mounted || !this.active || revision !== this.machineRevision || !this.model.owns(generation, scope)) return;
       this.machineOwner = owner;
+      const machine = owner.machines.find((item: ResourceRow) => item.id === row.id);
+      if (machine && !owner.demo && owner.connected && this.supportsScreen(machine)) {
+        screenConnectionInfo(owner, machine).catch((): void => {});
+      }
       this.management.setAdmission((): boolean => this.mounted && this.active && revision === this.machineRevision && this.machineOwner === owner && this.machineDirectoryKey === row.key() && this.model.owns(generation, scope));
       await this.management.load('machines', owner);
       if (!this.mounted || !this.active || revision !== this.machineRevision || !this.model.owns(generation, scope)) return;

@@ -43,6 +43,14 @@ export class ScreenPresenter {
   private source: RFBFramebuffer | undefined = undefined;
   private revision: number = -1;
 
+  takeFront(map: image.PixelMap): boolean {
+    if (!this.shown || this.shown.front < 0) return false;
+    const slot = this.shown.buffers[this.shown.front];
+    if (slot.busy || slot.map !== map) return false;
+    slot.map = undefined;
+    return true;
+  }
+
   clear(): void {
     for (const res of this.resolutions) for (const slot of res.buffers) { slot.retired = true; slot.release(); }
     this.resolutions = [];

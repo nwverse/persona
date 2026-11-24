@@ -1,6 +1,7 @@
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import type { Configuration } from '@kit.AbilityKit';
 import { display, window } from '@kit.ArkUI';
+import { accessibility } from '@kit.AccessibilityKit';
 
 class ViewerSystemBars {
   layoutFull: boolean;
@@ -17,6 +18,9 @@ class ViewerSystemBars {
 /** Native application configuration, shared by workspace and detached views. */
 @ObservedV2
 export class NativeEnvironment {
+  @Trace reduceMotion: boolean = false;
+  private watchingMotion: boolean = false;
+  private motionChanged: (value: boolean) => void = (value: boolean): void => { this.reduceMotion = value; };
   @Trace dark: boolean = false;
   @Trace fontScale: number = 1;
   @Trace safeBottomPx: number = 0;
@@ -60,6 +64,11 @@ export class NativeEnvironment {
 
   bindWindow(value: window.Window): void {
     this.unbindWindow(); this.windowRef = value;
+    try {
+      this.reduceMotion = accessibility.isAnimationReduceEnabledSync();
+      accessibility.onAnimationReduceStateChange(this.motionChanged);
+      this.watchingMotion = true;
+    } catch (_) { /* Older system versions use the native animation scale. */ }
     value.on('windowSizeChange', this.sizeChanged);
     value.on('windowRectChange', this.rectChanged);
     value.on('avoidAreaChange', this.avoidChanged);
@@ -68,6 +77,10 @@ export class NativeEnvironment {
     this.refreshWindow();
   }
   unbindWindow(): void {
+    if (this.watchingMotion) {
+      try { accessibility.offAnimationReduceStateChange(this.motionChanged); } catch (_) {}
+      this.watchingMotion = false;
+    }
     this.viewerRevision++;
     this.viewerBars = undefined;
     const value = this.windowRef, keyboard = this.keyboardChanged; this.windowRef = undefined; this.keyboardChanged = undefined;

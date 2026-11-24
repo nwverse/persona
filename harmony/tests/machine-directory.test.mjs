@@ -3,8 +3,13 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {registerHooks,stripTypeScriptTypes} from 'node:module';
 registerHooks({
+  resolve(specifier, context, next) {
+    if (specifier === './Wire' && context.parentURL?.endsWith('/ScreenConnectionInfo.ets'))
+      return { url: new URL('Wire.ets', context.parentURL).href, shortCircuit: true };
+    return next(specifier, context);
+  },
   load(url, context, next) {
-    if (url.endsWith('/Wire.ets')) {
+    if (url.endsWith('/Wire.ets') || url.endsWith('/ScreenConnectionInfo.ets')) {
       const source = readFileSync(new URL(url), 'utf8').replace(/@ObservedV2\s*/g, '').replace(/@Trace\s+/g, '');
       return { format: 'module', shortCircuit: true, source: stripTypeScriptTypes(source) };
     }
@@ -12,9 +17,10 @@ registerHooks({
   }
 });
 const { ResourceRow, Wire } = await import('../entry/src/main/ets/models/Wire.ets');
+const { screenConnectionInfo } = await import('../entry/src/main/ets/models/ScreenConnectionInfo.ets');
 const source=readFileSync(new URL('../entry/src/main/ets/components/SettingsPage.ets',import.meta.url),'utf8');
 function method(name){const start=source.search(new RegExp('^  private (?:async )?'+name+'\\(','m'));assert.ok(start>=0,name);const body=source.indexOf('{',start);let depth=1,quote='',escape=false,index=body+1;for(;index<source.length&&depth;index++){const c=source[index];if(quote){if(escape)escape=false;else if(c==='\\')escape=true;else if(c===quote)quote='';}else if(c==='"'||c==="'"||c==='`')quote=c;else if(c==='{')depth++;else if(c==='}')depth--;}return source.slice(start,index);}
-const Page=new Function('Wire','ResourceRow','return '+stripTypeScriptTypes('class Page{'+['chooseMachine','machineRow','screenMachine','supportsScreen','canOpenScreen'].map(method).join('\n')+'}'))(Wire,ResourceRow);
+const Page=new Function('Wire','ResourceRow','screenConnectionInfo','return '+stripTypeScriptTypes('class Page{'+['chooseMachine','machineRow','screenMachine','supportsScreen','canOpenScreen'].map(method).join('\n')+'}'))(Wire,ResourceRow,screenConnectionInfo);
 function deferred(){let resolve;return{promise:new Promise(r=>resolve=r),resolve:value=>resolve(value)};}
 function fixture(){const page=new Page(),calls=[];let generation=1;
  const machine=(group)=>{const row=ResourceRow.from({id:'same-mac',manager:'work',online:true,trust:'confirmed',os:'mac'},'machine');row.group=group;return row;};
@@ -54,4 +60,14 @@ test('returning from a conversation reuses the same confirmed machine and renews
   assert.equal(page.management.admit(), false);
   await page.chooseMachine(b, true);
   assert.equal(calls.length, 2, 'a new connection must verify management actions again');
+});
+
+test('an unavailable screen status lookup does not block loading the machine detail', async () => {
+  const f = fixture();
+  let attempted = 0;
+  f.owners.b.repo = () => { attempted++; throw new Error('connection changed'); };
+  await f.page.chooseMachine(f.b);
+  assert.equal(attempted, 1);
+  assert.deepEqual(f.calls, [f.owners.b]);
+  assert.equal(f.page.management.selectedId, f.b.id);
 });

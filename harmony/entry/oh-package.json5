@@ -6,6 +6,7 @@
   "author": "",
   "license": "",
   "dependencies": {
+    "libpersona_screen.so": "file:./src/main/cpp/types/libpersona_screen",
     "libpersona_ssh.so": "file:./src/main/cpp/types/libpersona_ssh",
     "libpersona_core_ohos.so": "file:./src/main/cpp/types/libpersona_core"
   }

@@ -3181,6 +3181,30 @@
       "value": "部分工作空间不可用"
     },
     {
+      "name": "computer_screen_video_start",
+      "value": "为这台 Mac 启用并记住视频模式"
+    },
+    {
+      "name": "computer_screen_video_stop",
+      "value": "为这台 Mac 使用并记住标准画面"
+    },
+    {
+      "name": "computer_screen_video_fallback",
+      "value": "视频暂不可用，已切回标准画面"
+    },
+    {
+      "name": "computer_screen_video_retry",
+      "value": "重试视频"
+    },
+    {
+      "name": "computer_screen_picture_options",
+      "value": "画面模式"
+    },
+    {
+      "name": "computer_screen_picture_save_failed",
+      "value": "未能保存这台 Mac 的画面模式。"
+    },
+    {
       "name": "computer_screen_open",
       "value": "查看屏幕"
     },

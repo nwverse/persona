@@ -6,6 +6,8 @@ import { deflateSync, inflateSync } from 'node:zlib';
 
 registerHooks({
   resolve(specifier, context, next) {
+    if (specifier === '@kit.PerformanceAnalysisKit') return { url: 'persona-screen-lifecycle:hilog', shortCircuit: true };
+    if (specifier === 'libpersona_screen.so') return { url: 'persona-screen-lifecycle:video', shortCircuit: true };
     if (specifier === '@kit.AssetStoreKit') return { url: 'persona-screen-lifecycle:asset', shortCircuit: true };
     if (specifier === '@kit.ImageKit') return { url: 'persona-screen-lifecycle:image', shortCircuit: true };
     if (specifier === '@kit.IMEKit') return { url: 'persona-screen-lifecycle:ime', shortCircuit: true };
@@ -29,6 +31,8 @@ registerHooks({
     return next(specifier, context);
   },
   load(url, context, next) {
+    if (url === 'persona-screen-lifecycle:hilog') return {format: 'module', shortCircuit: true, source: 'export const hilog={info(){}};'};
+    if (url === 'persona-screen-lifecycle:video') return {format: 'module', shortCircuit: true, source: 'export default { supports: () => true, create: (...v) => globalThis.videoDriver.create(...v), submit: (...v) => globalThis.videoDriver.submit(...v), render: (...v) => globalThis.videoDriver.render(...v), close: (...v) => globalThis.videoDriver.close(...v) };'};
     if (url === 'persona-screen-lifecycle:asset') return { format: 'module', shortCircuit: true, source: `
       export const asset = { Tag: { ALIAS:1, SECRET:2, DATA_LABEL_CRITICAL_1:3, DATA_LABEL_NORMAL_1:4,
         RETURN_TYPE:5, ACCESSIBILITY:6, SYNC_TYPE:7, CONFLICT_RESOLUTION:8, RETURN_LIMIT:9 },
@@ -52,10 +56,11 @@ registerHooks({
         Task: class { constructor(fn, ...args) { this.fn = fn; this.args = args; } setTransferList() {} },
         execute: async task => task.fn(...task.args)
       };
-      export const util = { TextEncoder: Encoder, TextDecoder: { create(_encoding, options = {}) { return new Decoder(options); } } };
+      export const util = { generateRandomUUID:()=>crypto.randomUUID(), TextEncoder: Encoder, TextDecoder: { create(_encoding, options = {}) { return new Decoder(options); } } };
     ` };
     if (url === 'persona-screen-lifecycle:crypto') return { format: 'module', shortCircuit: true, source: `import { createHash } from 'node:crypto'; export const cryptoFramework = { createMd() { const hash = createHash('sha256'); return { updateSync({ data }) { hash.update(data); }, digestSync() { return {data: new Uint8Array(hash.digest())}; } }; } };` };
     if (url === 'persona-screen-lifecycle:zlib') return { format: 'module', shortCircuit: true, source: `
+      export const systemDateTime = {getUptime:()=>performance.now(),TimeType:{STARTUP:1}};
       export const zlib = { createZipSync() { return { getZStream: async () => ({}), inflateInit2: async () => 0,
         inflate: async () => 0, inflateEnd: async () => 0 }; }, ReturnStatus: { OK: 0, BUF_ERROR: -5 }, CompressFlushMode: { NO_FLUSH: 0 } };
     ` };
@@ -130,7 +135,13 @@ function screenFixture(stream) {
     transport: { stream: () => stream, request: async () => ({}) },
     async call() { return { screen_sharing: true }; }
   };
+  const preferences = new Map();
   const parent = {
+    captureView(key) {
+      const path = this.scope() + ':' + key;
+      return { valid: () => true, read: async () => preferences.get(path) || '',
+        write: async value => { preferences.set(path, value); } };
+    },
     demo: false,
     connected: true,
     profile: { manager: 'work' },
@@ -277,6 +288,10 @@ function solidDisplayFrame(view, blue) {
 }
 
 const layouts = [
+  { name: 'offset main screen below two adjoining Retina displays', width: 7680, height: 4394, displays: [
+    { id: 1, main: true, x: 0, y: 0, width: 1728, height: 1117, scale: 2 },
+    { id: 2, x: 870, y: -1080, width: 1920, height: 1080, scale: 2 },
+    { id: 3, x: -1050, y: -1080, width: 1920, height: 1080, scale: 2 }], expectedOrigins: [[2970, 2160], [0, 0], [3840, 0]] },
   { name: 'offset Retina pair', width: 3840, height: 4394, displays: [
     { id: 1, main: true, x: 0, y: 0, width: 1728, height: 1117 },
     { id: 2, x: -87, y: -1080, width: 1920, height: 1080 }], expectedOrigins: [[87, 2160], [0, 0]] },
@@ -493,6 +508,63 @@ function componentMethod(source, name) {
   return source.slice(start,at);
 }
 const pageMethod = name => componentMethod(pageSource, name);
+
+test('a brief screen wait stays quiet; a longer wait animates until the frame arrives or motion is reduced', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const src = pageSource.slice(pageSource.indexOf('struct ScreenLoadingStatus'), pageSource.indexOf('export struct ComputerScreenPage'));
+  const methods = ['aboutToAppear', 'aboutToDisappear', 'updateMotion', 'stopMotion'].map(name => componentMethod(src, name));
+  const Status = new Function('return ' + stripTypeScriptTypes('class Status {' + methods.join('\n') + '}'))();
+  const status = new Status(), waves = [];
+  status.environment = { reduceMotion: false }; status.revealed = false;
+  status.getUIContext = () => ({ createAnimator: () => {
+    const wave = { setExpectedFrameRateRange() {}, play() {}, cancel() { this.cancelled = true; } };
+    waves.push(wave); return wave;
+  } });
+  status.aboutToAppear(); t.mock.timers.tick(100); status.aboutToDisappear(); t.mock.timers.tick(300);
+  assert.equal(status.revealed, false); assert.equal(waves.length, 0);
+  status.aboutToAppear(); t.mock.timers.tick(180);
+  assert.equal(status.revealed, true); assert.equal(waves.length, 1);
+  waves[0].onFrame(0.3); assert.equal(status.phase, 0.3);
+  status.environment.reduceMotion = true; status.updateMotion();
+  assert.equal(waves[0].cancelled, true); assert.equal(status.revealed, true);
+  waves[0].onFrame(0.9); assert.equal(status.phase, 0.3);
+  status.environment.reduceMotion = false; status.updateMotion(); status.aboutToDisappear();
+  assert.equal(waves[1].cancelled, true); assert.equal(status.revealed, false);
+  status.environment.reduceMotion = true; status.aboutToAppear(); t.mock.timers.tick(200);
+  assert.equal(status.revealed, true); assert.equal(waves.length, 2); status.aboutToDisappear();
+});
+
+test('switching or waiting for a monitor keeps the same inline viewer and fits the new picture inside it', () => {
+  const Viewer = new Function('Tokens', 'return ' + stripTypeScriptTypes(
+    'class Viewer {' + pageMethod('inlineFrameHeight') + '}'))({ page: 16 });
+  const page = new Viewer();
+  page.viewingWidth = 432; page.viewingHeight = 700; page.toolbarHeight = 64;
+  const main = { width: 1600, height: 1000, main: true };
+  page.screen = { displays: [main, { width: 1920, height: 1080 }], displayAspect: () => page.frameRatio };
+  const viewport = new ScreenViewport();
+  for (const ratio of [1.6, 16 / 9, 0.75, 1.6]) {
+    page.frameRatio = ratio;
+    for (const pixels of [undefined, {}]) {
+      page.framePixels = pixels;
+      assert.equal(page.inlineFrameHeight(), 250);
+    }
+    viewport.layout(400, page.inlineFrameHeight(), ratio);
+    const r = viewport.displayed;
+    assert.ok(r.width <= 400 && r.height <= 250);
+    assert.ok(Math.abs(r.width / r.height - ratio) < 0.00001);
+    assert.equal(r.x, (400 - r.width) / 2);
+    assert.equal(r.y, (250 - r.height) / 2);
+  }
+  page.viewingHeight = 180;
+  assert.equal(page.inlineFrameHeight(), 116);
+  page.viewingHeight = 700;
+  page.screen.displays = [];
+  page.screen.remoteWidth = 1920; page.screen.remoteHeight = 1080;
+  assert.equal(page.inlineFrameHeight(), 225);
+  page.screen.remoteWidth = 0; page.screen.remoteHeight = 0;
+  assert.equal(page.inlineFrameHeight(), 250);
+});
+
 test('stalled WebSocket writes replace waiting mouse motion while preserving every button and keyboard transition', async () => {
   const src = readFileSync(new URL('../entry/src/main/ets/platform/HubTransport.ets', import.meta.url), 'utf8');
   const methods = ['sendBinary', 'enqueueFrame'].map(name => componentMethod(src, name));
@@ -532,7 +604,7 @@ test('a system touch cancellation with no remaining fingers releases the pointer
 });
 
 const PageBehavior = new Function('tr','return '+stripTypeScriptTypes('class PageBehavior {'+
- ['phaseChanged','clearFrame','clearFields','closeKeyboard','confirmControl','isVisible'].map(pageMethod).join('\n')+'}'))(key=>key);
+ ['phaseChanged','clearPreviews','clearFrame','clearFields','closeKeyboard','confirmControl','isVisible'].map(pageMethod).join('\n')+'}'))(key=>key);
 
 test('leaving a sideways fullscreen computer restores orientation before releasing the full window', (t) => {
   const source = readFileSync(new URL('../entry/src/main/ets/pages/Index.ets', import.meta.url), 'utf8').replace(/@Monitor\([^)]*\)\s*/g, '');
@@ -562,7 +634,7 @@ test('leaving a sideways fullscreen computer restores orientation before releasi
 test('the screen publishes the latest pending change and rejects a stale buffer after switching displays', async () => {
   const jobs = [];
   const RenderPage = new Function('return ' + stripTypeScriptTypes('class RenderPage {' +
-    ['decodeFrame', 'renderFrames', 'clearFrame'].map(pageMethod).join('\n') + '}'))();
+    ['decodeFrame', 'renderFrames', 'clearFrame', 'firstPictureReady'].map(pageMethod).join('\n') + '}'))();
   const page = new RenderPage();
   let width = 1;
   page.screen = { isLive: () => true, hasFrame: true, connectionRevision: () => 1, displayAspect: () => width,
@@ -631,7 +703,7 @@ test('alternating native screen buffers erase old window positions and carry ove
 });
 
 function pageFixture(){
- const page=new PageBehavior();let revision=1;let grants=0;let dialog;
+ const page=new PageBehavior();page.previews=new Map();let revision=1;let grants=0;let dialog;
  page.active=true;page.mounted=true;page.frameEpoch=0;page.row={id:'mac',title:'Mac',key:()=> 'mac'};
  page.screen={phase:'live',isLive:()=>page.screen.phase==='live',controlAllowed:()=>false,connectionRevision:()=>revision,releasePointer:()=>{page.remoteReleaseCount=(page.remoteReleaseCount||0)+1;},grantControl:()=>grants++};
  page.getUIContext=()=>({showAlertDialog:value=>dialog=value});
@@ -817,6 +889,69 @@ test('an outstanding local password read cannot answer a hidden connection', asy
   assert.equal(screen.credentialsRequested,false);
 });
 
+test('machine detail overlaps the viewer status check, including an in-flight request; owner changes invalidate it', async () => {
+  const { screenConnectionInfo } = await import('../entry/src/main/ets/models/ScreenConnectionInfo.ets');
+  const { parent, repository } = screenFixture(new TestStream());
+  const machine = parent.machines[0];
+  const gate = deferred();
+  let calls = 0;
+  repository.call = () => { calls++; return gate.promise; };
+  const warm = screenConnectionInfo(parent, machine);
+  const opening = screenConnectionInfo(parent, machine);
+  assert.equal(calls, 1);
+  gate.resolve({ screen_sharing: true });
+  assert.equal(await warm, await opening);
+  assert.equal(await screenConnectionInfo(parent, machine), await warm);
+  parent.connectionGeneration = () => 8;
+  screenConnectionInfo(parent, machine);
+  assert.equal(calls, 2);
+});
+
+test('the native video channel reads shared wire fixtures across fragmented and coalesced socket messages', async () => {
+  const { ScreenVideoReader, videoAccessUnit } = await import('../entry/src/main/ets/core/ScreenVideoWire.ts');
+  const corpus = JSON.parse(readFileSync(new URL('../../spec/fixtures/screen-video/messages.json', import.meta.url)));
+  const cases = (corpus.cases || corpus.messages || corpus).filter(c => ['format_hevc','format_h264','frame_keyframe'].includes(c.name));
+  assert.equal(cases.length, 3);
+  const bytes = Buffer.concat(cases.map(c => Buffer.from(c.input.frame_hex, 'hex')));
+  for (const chunk of [1, 7, bytes.length]) {
+    const actual = [];
+    const reader = new ScreenVideoReader();
+    for (let start = 0; start < bytes.length; start += chunk) reader.push(bytes.subarray(start, start+chunk), (type, body) => {
+      const nal = Buffer.from(videoAccessUnit(type === 2 ? body : body.subarray(13), type === 2));
+      actual.push(nal.toString('hex'));
+    });
+    assert.deepEqual(actual, cases.map(c => (c.expected.parameter_sets_hex || [c.expected.sample_hex.slice(8)])
+      .map(unit => '00000001'+unit).join('')));
+  }
+  assert.throws(() => new ScreenVideoReader().push(new Uint8Array([255,255,255,255]), () => {}));
+  assert.throws(() => videoAccessUnit(new Uint8Array([0,0,0,32,1]), false));
+});
+
+test('video presentation waits for decoder output and a paused stream closes before returning to RFB', async t => {
+  const { ScreenVideo } = await import('../entry/src/main/ets/platform/ScreenVideo.ets');
+  const { videoPacket } = await import('../entry/src/main/ets/core/ScreenVideoWire.ts');
+  const stream = new TestStream(), rendered = [], packets = [];
+  let outputs = 0, closed = 0, ended = 0;
+  globalThis.videoDriver = {create: () => ({}), submit: (_d, bytes, _pts, flags) => { packets.push(flags); return 1; },
+    render: () => { const n = outputs; outputs = 0; return n; }, close: () => closed++};
+  const video = new ScreenVideo(stream,'1',7,2,()=>true,codec=>rendered.push(codec),()=>ended++);
+  t.after(() => { video.close(); delete globalThis.videoDriver; });
+  await video.start();
+  const send = (type, payload) => stream.onBinary(videoPacket(type, Uint8Array.from(payload)));
+  send(1, new TextEncoder().encode(JSON.stringify({version:1,display:7,width:800,height:400,codec:'h264'})));
+  send(2, [2,0,1,103,0,1,104]);
+  const sample = [0,0,0,1,0,0,0,0,0,0,0,1,1,0,0,0,1,101];
+  send(3, sample);
+  assert.deepEqual(packets,[8,2]);
+  assert.deepEqual(rendered,[]);
+  outputs = 1; send(3, sample);
+  assert.deepEqual(rendered,['h264']);
+  send(5,[]);
+  assert.equal(closed,1);
+  assert.equal(ended,1);
+  assert.equal(stream.closed,true);
+});
+
 test('one legal full-screen update can arrive as a burst above the pre-login queue limit', async t => {
   const stream = new TestStream();
   const {screen, parent, row} = screenFixture(stream);
@@ -832,4 +967,194 @@ test('one legal full-screen update can arrive as a burst above the pre-login que
   for (let i = 0; i < bytes.length; i += 256 * 1024) stream.onBinary(bytes.buffer.slice(i, i + 256 * 1024));
   await waitFor(() => screen.hasFrame);
   assert.equal(screen.presentationSource().pixels.at(-4),123);
+});
+
+test('screen sessions open in RFB and video on a supported display starts only on request', async () => {
+  for (const [permission, displays, canSelectVideo] of [
+    ['granted', [{ id: 7, x: 0, y: 0, width: 2, height: 1, main: true }], true],
+    ['denied', [{ id: 7, x: 0, y: 0, width: 2, height: 1, main: true }], false],
+    ['granted', [], false]
+  ]) {
+    const stream = new TestStream();
+    const { screen, parent, row, repository } = screenFixture(stream);
+    repository.call = async () => ({ screen_sharing: true, screen_video: { version: 1, permission }, displays });
+    const opening = screen.open(parent, row);
+    try {
+      await waitFor(() => !!stream.onBinary);
+      stream.receive(serverHandshake());
+      await waitFor(() => screen.isLive());
+      assert.equal(screen.videoAvailable, permission === 'granted');
+      assert.equal(screen.videoRequested, false);
+      assert.equal(screen.videoCodec, '');
+      if (canSelectVideo) {
+        screen.toggleVideo();
+        assert.equal(screen.videoRequested, true);
+        screen.toggleVideo();
+        assert.equal(screen.videoRequested, false);
+      }
+    } finally { screen.close(); await opening; }
+  }
+});
+
+const { ScreenVideo } = await import('../entry/src/main/ets/platform/ScreenVideo.ets');
+const { videoPacket } = await import('../entry/src/main/ets/core/ScreenVideoWire.ts');
+function videoMessage(stream, type, data) { stream.onBinary(videoPacket(type, Uint8Array.from(data))); }
+function videoHeader(stream) {
+  videoMessage(stream, 1, new TextEncoder().encode(JSON.stringify({ version: 1, display: 7, width: 800, height: 400, codec: 'h264' })));
+  videoMessage(stream, 2, [2, 0, 1, 103, 0, 1, 104]);
+}
+function sendSample(stream, key = false) {
+  videoMessage(stream, 3, [...be32(1), ...be32(0), ...be32(1), Number(key), ...be32(1), key ? 101 : 65]);
+}
+function rates(stream) {
+  return stream.sent.filter(bytes => bytes[4] === 19).map(bytes => JSON.parse(Buffer.from(bytes.slice(5)).toString()).fps);
+}
+
+test('backpressure requests a new key and holds the surface through recovery, then raises the rate only after steady playback', async t => {
+  const stream = new TestStream(), shown = [], submitted = [];
+  let blocked = false, outputs = 0, closed = 0, ended = 0;
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
+  globalThis.videoDriver = { create: () => ({}), close: () => closed++,
+    submit: (_d, _bytes, _pts, flags) => { if (blocked) return 0; submitted.push(flags); return 1; },
+    render: () => { const n = outputs; outputs = 0; return n; } };
+  const video = new ScreenVideo(stream, '1', 7, 2, () => true, c => shown.push(c), () => ended++);
+  t.after(() => { video.close(); delete globalThis.videoDriver; });
+  await video.start();
+  videoHeader(stream);
+  outputs = 1; sendSample(stream, true);
+  sendSample(stream); // Already submitted when the subsequent queue fills.
+  blocked = true;
+  for (let i = 0; i < 9; i++) sendSample(stream);
+  assert.deepEqual(rates(stream), [30]);
+  assert.equal(stream.sent.filter(b => b[4] === 18).length, 1);
+  const reports = stream.sent.filter(b => b[4] === 17).length;
+  blocked = false;
+  const before = submitted.length;
+  sendSample(stream);
+  assert.equal(submitted.length, before);
+  assert.equal(stream.sent.filter(b => b[4] === 17).length, reports + 1);
+  outputs = 1; sendSample(stream, true);
+  assert.ok(video.recoveryDeadline, 'an older decoded picture did not confirm the recovery key');
+  outputs = 1; t.mock.timers.tick(8);
+  assert.equal(video.recoveryDeadline, 0);
+  assert.deepEqual(submitted.slice(before), [8, 2]);
+  assert.deepEqual(shown, ['h264']);
+  assert.deepEqual([closed, ended], [0, 0]);
+  // The helper emits heartbeats while an unmoving desktop has no frames.
+  for (let i = 0; i < 32; i++) { videoMessage(stream, 4, []); t.mock.timers.tick(1000); }
+  assert.deepEqual(rates(stream), [30]);
+  for (let i = 0; i < 315; i++) { outputs = 1; sendSample(stream); t.mock.timers.tick(100); }
+  assert.deepEqual(rates(stream), [30, 60]);
+});
+
+test('a stuck input buffer gets bounded retries even when the decoder has no outstanding output', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
+  const stream = new TestStream();
+  let blocked = false, output = 0, ended = 0, closed = 0;
+  globalThis.videoDriver = { create: () => ({}), submit: () => blocked ? 0 : 1,
+    render: () => { const n = output; output = 0; return n; }, close: () => closed++ };
+  const video = new ScreenVideo(stream, '1', 7, 2, () => true, () => {}, () => ended++);
+  t.after(() => { video.close(); delete globalThis.videoDriver; });
+  await video.start(); videoHeader(stream);
+  output = 1; sendSample(stream, true);
+  blocked = true; sendSample(stream);
+  for (let i = 0; i < 4; i++) {
+    videoMessage(stream, 4, []); t.mock.timers.tick(2600);
+  }
+  assert.deepEqual(rates(stream), [30, 20]);
+  assert.equal(stream.sent.filter(b => b[4] === 18).length, 3);
+  assert.equal(stream.closed, true);
+  assert.equal(ended, 1);
+  assert.equal(closed, 4);
+});
+
+test('remembered video starts after RFB authentication, controls its selected display, and keeps the preference across a fallback', async t => {
+  const { screen, parent, row, repository } = screenFixture(new TestStream());
+  const openings = [], streams = [], videos = [];
+  const display = { id: 7, x: 0, y: 0, width: 2, height: 1, main: true };
+  repository.call = async () => ({ screen_sharing: true, screen_video: { version: 1, permission: 'granted' }, displays: [display] });
+  repository.transport.stream = path => {
+    const socket = new TestStream();
+    (path.includes('/screen/video/') ? videos : streams).push(socket);
+    return socket;
+  };
+  let available = 0;
+  globalThis.videoDriver = { create: () => ({}), close() {}, submit: (_d, _buf, _pts, flags) => {
+    if (flags !== 8) available++; return 1;
+  }, render: () => { const count = available; available = 0; return count; } };
+  t.after(async () => { screen.close(); await Promise.all(openings); delete globalThis.videoDriver; });
+  async function connect() {
+    const count = streams.length, videoCount = videos.length;
+    openings.push(screen.open(parent, row));
+    await waitFor(() => streams.length > count && !!streams.at(-1).onBinary);
+    screen.setVideoSurface('1');
+    assert.equal(videos.length, videoCount, 'video must wait for this RFB authentication');
+    streams.at(-1).receive(serverHandshake());
+    await waitFor(() => screen.isLive());
+    return streams.at(-1);
+  }
+  const requests = stream => stream.sent.filter(b => b[0] === 3);
+  assert.equal(requests(await connect()).length, 1);
+  assert.equal(videos.length, 0);
+  assert.equal(await screen.setVideoPreferred(true), true);
+  assert.equal(videos.length, 1);
+  screen.close();
+  let rfb = await connect();
+  assert.equal(videos.length, 2);
+  assert.equal(requests(rfb).length, 0);
+  videoHeader(videos.at(-1)); sendSample(videos.at(-1), true);
+  assert.equal(screen.videoCodec, 'h264');
+  assert.equal(screen.hasFrame, false);
+  assert.equal(screen.pointerAt(.75, .5, 0), false);
+  assert.equal(screen.grantControl(), true);
+  assert.equal(screen.pointerAt(.75, .5, 0), true);
+  videos.at(-1).state('closed');
+  assert.equal(screen.videoFailed, true);
+  assert.equal(screen.videoPreferred, true);
+  assert.equal(requests(rfb).length, 1);
+  assert.equal(requests(rfb)[0][1], 0);
+  rfb.receive(rawUpdate()); await waitFor(() => screen.hasFrame);
+  screen.close(); rfb = await connect();
+  assert.equal(videos.length, 3);
+  videos.at(-1).state('offline'); // Before any video picture.
+  assert.equal(requests(rfb).length, 1);
+  assert.equal(await screen.setVideoPreferred(false), true);
+  screen.close(); assert.equal(requests(await connect()).length, 1);
+  assert.equal(videos.length, 3);
+});
+
+test('a slow video surface releases the initial RFB request and a second Mac still starts in standard mode', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
+  const { screen, parent, row, repository } = screenFixture(new TestStream());
+  const other = ResourceRow.from({ id: 'mac-2', manager: 'work', name: 'Second Mac', os: 'mac', online: true, trust: 'confirmed' }, 'machine');
+  parent.machines.push(other);
+  const sockets = [], openings = [];
+  repository.transport.stream = () => { const s = new TestStream(); sockets.push(s); return s; };
+  repository.call = async () => ({ screen_sharing: true, screen_video: { version: 1, permission: 'granted' },
+    displays: [{ id: 7, x: 0, y: 0, width: 2, height: 1, main: true }] });
+  t.after(async () => { screen.close(); await Promise.all(openings); });
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  async function connect(machine) {
+    openings.push(screen.open(parent, machine));
+    await flush();
+    const socket = sockets.at(-1);
+    socket.receive(serverHandshake());
+    await flush();
+    assert.equal(screen.isLive(), true);
+    return socket;
+  }
+  await connect(row);
+  await screen.setVideoPreferred(true);
+  screen.close();
+  const slow = await connect(row);
+  const requests = socket => socket.sent.filter(b => b[0] === 3).map(b => b[1]);
+  assert.deepEqual(requests(slow), []);
+  t.mock.timers.tick(2999);
+  assert.deepEqual(requests(slow), []);
+  t.mock.timers.tick(1);
+  assert.deepEqual(requests(slow), [0]);
+  assert.equal(screen.videoPreferred, true);
+  screen.close();
+  assert.deepEqual(requests(await connect(other)), [0]);
+  assert.equal(screen.videoPreferred, false);
 });

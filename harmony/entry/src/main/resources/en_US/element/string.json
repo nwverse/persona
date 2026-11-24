@@ -3181,6 +3181,30 @@
       "value": "Some workspaces are unavailable"
     },
     {
+      "name": "computer_screen_video_start",
+      "value": "Use and remember video for this Mac"
+    },
+    {
+      "name": "computer_screen_video_stop",
+      "value": "Use and remember standard screen sharing for this Mac"
+    },
+    {
+      "name": "computer_screen_video_fallback",
+      "value": "Video is unavailable. Standard screen sharing resumed."
+    },
+    {
+      "name": "computer_screen_video_retry",
+      "value": "Retry video"
+    },
+    {
+      "name": "computer_screen_picture_options",
+      "value": "Screen sharing mode"
+    },
+    {
+      "name": "computer_screen_picture_save_failed",
+      "value": "Could not save the picture mode for this Mac."
+    },
+    {
       "name": "computer_screen_open",
       "value": "View screen"
     },

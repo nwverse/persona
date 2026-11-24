@@ -1,4 +1,8 @@
+import { util } from '@kit.ArkTS';
+import { ScreenVideo } from '../platform/ScreenVideo';
+import { screenConnectionInfo } from './ScreenConnectionInfo';
 import { ClientModel } from './ClientModel';
+import type { ClientViewLease } from './ClientModel';
 import { ResourceRow, Wire } from './Wire';
 import { HubRepository, segment } from './HubRepository';
 import { HubTransport, HttpFailure } from '../platform/HubTransport';
@@ -17,6 +21,7 @@ const KEYBOARD_SETTLE_MS: number = 3500;
 const MAX_PRELUDE_BYTES: number = 2 * 1024 * 1024;
 const SCREEN_RESPONSE_TIMEOUT_MS: number = 20000;
 const FRAME_INTERVAL_MS: number = 16;
+const VIDEO_HEAD_START_MS: number = 3000;
 
 class ComputerScreenRelay implements RFBTransport {
   private readonly stream: HubTransport;
@@ -38,6 +43,18 @@ export class ComputerScreen {
   @Trace remoteHeight: number = 0;
   @Trace displays: ScreenDisplay[] = [];
   @Trace selectedDisplay: string = '';
+  @Trace videoAvailable: boolean = false;
+  @Trace videoPreferred: boolean = false;
+  @Trace videoRequested: boolean = false;
+  @Trace videoCodec: string = '';
+  @Trace videoFailed: boolean = false;
+  private picturePreference?: ClientViewLease;
+  private static preferenceWrite: Promise<void> = Promise.resolve();
+  private videoLeadTimer: number = -1;
+  private videoPair: string = '';
+  private videoSurface: string = '';
+  private video?: ScreenVideo;
+  private viewingGesture: boolean = false;
   @Trace hasFrame: boolean = false;
   @Trace failureDetail: string = '';
   @Trace cursor: RFBCursor | undefined = undefined;
@@ -72,6 +89,7 @@ export class ComputerScreen {
   private rememberOnSuccess: RFBCredentials | undefined;
   private manualLogin: boolean = false;
   private machineUID: string = '';
+  private checkedMachineRaw: string | undefined;
   private machineManager: string = '';
   private skipSaved: boolean = false;
 
@@ -125,14 +143,23 @@ export class ComputerScreen {
       const lease: RFBOwnerLease = new RFBOwnerLease((): boolean => this.isCurrent(attempt));
       this.lease = lease;
 
-      const response: Record<string, Object> = await repository.call('/api/v1/machines/' + segment(row.id) + '/computer');
+      const preference = owner.captureView('screen-picture:' + JSON.stringify([machine.id, this.machineUID]));
+      this.picturePreference = preference;
+      const preferred = ComputerScreen.preferenceWrite.then(() => preference.read()).catch(() => '');
+      const response: Record<string, Object> = await screenConnectionInfo(owner, machine);
+      const useVideo = await preferred;
       if (!this.isCurrent(attempt)) return;
       if (!Wire.bool(response, 'screen_sharing')) {
         this.fail(attempt, 'computer_screen_sharing_off');
         return;
       }
 
-      const streamPath: string = '/api/v1/machines/' + segment(row.id) + '/ports/5900/connect';
+      this.videoPreferred = useVideo === 'video';
+      const videoInfo = Wire.object(response, 'screen_video');
+      this.videoAvailable = Wire.number(videoInfo, 'version') === 1 && Wire.text(videoInfo, 'permission') === 'granted';
+      this.videoPair = this.videoAvailable ? util.generateRandomUUID().replace(/-/g, '') : '';
+      const streamPath: string = '/api/v1/machines/' + segment(row.id) + '/ports/5900/connect' +
+        (this.videoPair ? '?pair=' + this.videoPair : '');
       const stream: HubTransport = repository.transport.stream(streamPath);
       this.stream = stream;
       const pendingRFB: ArrayBuffer[] = [];
@@ -152,15 +179,17 @@ export class ComputerScreen {
         const selected = available.find((d: ScreenDisplay) => d.key === this.selectedDisplay) || available[0];
         this.displays = available;
         this.selectedDisplay = selected?.key || '';
+        this.videoRequested = this.videoPreferred && !this.videoFailed && this.canUseVideo();
         return selected;
       };
       client.onState = (phase: string, code: string, detail: string): void => this.protocolState(attempt, phase, code, detail);
       client.onFrame = (_framebuffer: RFBFramebuffer): void => this.frameArrived(attempt);
       client.onResize = (width: number, height: number): void => {
         if (!this.isCurrent(attempt)) return;
+        this.stopVideo(false);
         this.remoteWidth = width;
         this.remoteHeight = height;
-        this.waitForFrame(attempt);
+        this.beginPicture(attempt);
       };
       client.onCursor = (next: RFBCursor): void => {
         if (this.isCurrent(attempt)) this.cursor = next;
@@ -214,6 +243,7 @@ export class ComputerScreen {
   close(): void {
     this.visible = false;
     this.attempt++;
+    this.clearVideo();
     this.keysReadyAt = 0;
     this.keyboardInputFailed = false;
     this.loginStore = undefined;
@@ -221,6 +251,7 @@ export class ComputerScreen {
     this.rememberOnSuccess = undefined;
     this.manualLogin = false;
     this.machineUID = '';
+    this.checkedMachineRaw = undefined;
     this.machineManager = '';
     this.loginRemembered = false;
     this.loginNotice = '';
@@ -297,7 +328,123 @@ export class ComputerScreen {
     else this.retry();
   }
 
-  setViewingGesture(active: boolean): void { this.client?.holdUpdates(active); }
+  setViewingGesture(active: boolean): void {
+    this.viewingGesture = active;
+    this.updateRfbFlow();
+  }
+
+  private updateRfbFlow(): void {
+    this.client?.holdUpdates(this.viewingGesture || this.videoLeadTimer !== -1 || !!this.videoCodec);
+  }
+
+  canUseVideo(): boolean {
+    return this.videoAvailable && /^[0-9]+$/.test(this.selectedDisplay);
+  }
+
+  private beginPicture(attempt: number): void {
+    this.viewingGesture = false;
+    this.waitForFrame(attempt);
+    this.clearVideoLead();
+    if (this.videoRequested && this.canUseVideo()) {
+      // The live callback runs before RFB sends its first request. Give the selected video surface
+      // the link first, but let RFB fetch a picture if the surface or the helper is slow to start.
+      this.videoLeadTimer = setTimeout((): void => {
+        this.videoLeadTimer = -1;
+        if (this.isCurrent(attempt)) this.updateRfbFlow();
+      }, VIDEO_HEAD_START_MS);
+    }
+    this.updateRfbFlow();
+    this.startVideo();
+  }
+
+  private clearVideoLead(): void {
+    if (this.videoLeadTimer !== -1) clearTimeout(this.videoLeadTimer);
+    this.videoLeadTimer = -1;
+  }
+
+  setVideoSurface(id: string): void {
+    if (this.videoSurface === id) return;
+    if (this.videoSurface) this.stopVideo(true);
+    this.videoSurface = id;
+    this.startVideo();
+  }
+
+  toggleVideo(): Promise<boolean> {
+    return this.setVideoPreferred(!this.videoPreferred);
+  }
+
+  async setVideoPreferred(enabled: boolean): Promise<boolean> {
+    const preference = this.picturePreference;
+    if (!this.isLive() || !preference || !preference.valid() || (enabled && !this.canUseVideo())) return false;
+    this.videoPreferred = enabled;
+    this.videoRequested = enabled;
+    this.videoFailed = false;
+    if (enabled) this.startVideo();
+    else this.stopVideo(true);
+    const write = preference.write(enabled ? 'video' : 'rfb');
+    ComputerScreen.preferenceWrite = write.catch((): void => {});
+    try { await write; return true; } catch (_) { return false; }
+  }
+
+  private startVideo(): void {
+    if (this.video || !this.videoRequested || !this.videoSurface || !this.repository ||
+      !this.row || !this.videoPair || !this.isLive()) return;
+    const display = this.displays.find((d: ScreenDisplay) => d.key === this.selectedDisplay);
+    if (!display || !this.canUseVideo()) return;
+    const attempt = this.attempt;
+    const path = '/api/v1/machines/' + segment(this.row.id) + '/screen/video/connect?pair=' + this.videoPair;
+    try {
+      const session: ScreenVideo = new ScreenVideo(this.repository.transport.stream(path), this.videoSurface,
+        Number(display.key), display.width / display.height,
+        (): boolean => this.video === session && this.isCurrent(attempt) && this.selectedDisplay === display.key,
+        (codec: string): void => {
+          if (this.video !== session || !this.isCurrent(attempt)) return;
+          this.videoCodec = codec;
+          this.clearResponseTimer();
+          this.clearVideoLead();
+          this.updateRfbFlow();
+        }, (): void => {
+          if (this.video === session && this.isCurrent(attempt)) this.fallbackToRfb();
+        });
+      this.video = session;
+      session.start();
+    } catch (_) { this.fallbackToRfb(); }
+  }
+
+  private fallbackToRfb(): void {
+    this.videoRequested = false;
+    this.videoFailed = true;
+    this.stopVideo(true);
+  }
+
+  private stopVideo(refresh: boolean): void {
+    const session = this.video;
+    this.video = undefined;
+    session?.close();
+    this.clearVideoLead();
+    const wasShowing = !!this.videoCodec;
+    this.videoCodec = '';
+    if (refresh && this.isLive()) {
+      if (wasShowing) {
+        this.viewingGesture = false;
+        this.waitForFrame(this.attempt);
+        this.client?.refresh();
+      }
+      this.updateRfbFlow();
+    }
+  }
+
+  private clearVideo(): void {
+    this.stopVideo(false);
+    this.picturePreference = undefined;
+    this.videoPreferred = false;
+    this.videoRequested = false;
+    this.videoAvailable = false;
+    this.videoFailed = false;
+    this.videoPair = '';
+    this.videoSurface = '';
+    this.viewingGesture = false;
+  }
 
   displayAspect(): number {
     const view = this.client?.framebuffer.view;
@@ -307,15 +454,19 @@ export class ComputerScreen {
   selectDisplay(index: number): void {
     const next: ScreenDisplay | undefined = this.displays[index];
     if (!next || next.key === this.selectedDisplay || !this.isLive()) return;
+    this.client?.holdUpdates(true);
+    this.stopVideo(false);
     this.releasePointer();
     if (!this.client?.selectView(next)) { this.fail(this.attempt, 'computer_screen_connection_lost'); return; }
     this.selectedDisplay = next.key;
-    this.waitForFrame(this.attempt);
+    this.videoFailed = false;
+    this.videoRequested = this.videoPreferred && this.canUseVideo();
+    this.beginPicture(this.attempt);
   }
 
   pointerFromView(x: number, y: number, viewWidth: number, viewHeight: number, buttons: number): boolean {
     const view = this.client?.framebuffer.view;
-    if (!this.hasFrame || !this.controlAllowed() || !view || viewWidth <= 0 || viewHeight <= 0) return false;
+    if ((!this.hasFrame && !this.videoCodec) || !this.controlAllowed() || !view || viewWidth <= 0 || viewHeight <= 0) return false;
     const scale: number = Math.min(viewWidth / view.width, viewHeight / view.height);
     if (!Number.isFinite(scale) || scale <= 0) return false;
     const contentWidth: number = view.width * scale;
@@ -330,7 +481,7 @@ export class ComputerScreen {
 
   pointerAt(x: number, y: number, buttons: number): boolean {
     const view = this.client?.framebuffer.view;
-    if (!view || !this.hasFrame || !this.controlAllowed() || !(x >= 0 && x < 1 && y >= 0 && y < 1)) return false;
+    if (!view || (!this.hasFrame && !this.videoCodec) || !this.controlAllowed() || !(x >= 0 && x < 1 && y >= 0 && y < 1)) return false;
     return this.client?.pointer(view.x + Math.floor(x * view.width), view.y + Math.floor(y * view.height), buttons) || false;
   }
 
@@ -466,9 +617,9 @@ export class ComputerScreen {
         this.acceptedLogin(attempt);
       }
       this.phase = 'live';
-      this.waitForFrame(attempt);
       this.remoteWidth = this.client?.framebuffer.width || 0;
       this.remoteHeight = this.client?.framebuffer.height || 0;
+      this.beginPicture(attempt);
       return;
     }
     if (phase === 'credentials') {
@@ -501,6 +652,7 @@ export class ComputerScreen {
     if (!this.isCurrent(attempt)) { if (attempt === this.attempt) this.close(); return; }
     this.clearResponseTimer();
     this.hasFrame = true;
+    if (this.videoCodec) return;
     if (this.frameTimer !== -1) return;
     const wait = FRAME_INTERVAL_MS - (Date.now() - this.lastFrameAt);
     if (wait <= 0) { this.lastFrameAt = Date.now(); this.frameRevision++; return; }
@@ -528,6 +680,7 @@ export class ComputerScreen {
   private fail(attempt: number, messageKey: string): void {
     if (attempt !== this.attempt) return;
     this.attempt++;
+    this.clearVideo();
     this.rememberOnSuccess = undefined;
     this.savedAttempt = undefined;
     this.clearResponseTimer();
@@ -574,9 +727,13 @@ export class ComputerScreen {
       if (owner.repo() !== repository) return false;
     } catch (_) { return false; }
     const machine: ResourceRow | undefined = owner.machines.find((candidate: ResourceRow) => candidate.id === row.id);
-    return !!machine && (!row.manager || machine.manager === row.manager) &&
-      (machine.manager || owner.profile.manager) === this.machineManager &&
-      Wire.text(machine.data(), 'machine_uid') === this.machineUID && this.machineCanConnect(machine);
+    if (!machine || (row.manager && machine.manager !== row.manager) ||
+      (machine.manager || owner.profile.manager) !== this.machineManager) return false;
+    // The directory payload is immutable until replaced. Avoid parsing it for each socket chunk and touch.
+    if (machine.raw === this.checkedMachineRaw) return true;
+    if (Wire.text(machine.data(), 'machine_uid') !== this.machineUID || !this.machineCanConnect(machine)) return false;
+    this.checkedMachineRaw = machine.raw;
+    return true;
   }
 
   private machineCanConnect(machine: ResourceRow): boolean {
@@ -590,6 +747,6 @@ export class ComputerScreen {
     const data: Record<string, Object> = machine.data();
     const system: Record<string, Object> = Wire.object(data, 'system');
     const os: string = Wire.text(data, 'os', Wire.text(system, 'os'));
-    return !os || os === 'mac' || os === 'darwin';
+    return ['', 'mac', 'macos', 'darwin'].includes(os.toLowerCase());
   }
 }

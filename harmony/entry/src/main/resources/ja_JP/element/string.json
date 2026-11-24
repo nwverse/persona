@@ -3181,6 +3181,30 @@
       "value": "一部のワークスペースを利用できません"
     },
     {
+      "name": "computer_screen_video_start",
+      "value": "この Mac にビデオを使用して記憶"
+    },
+    {
+      "name": "computer_screen_video_stop",
+      "value": "この Mac に標準の画面共有を使用して記憶"
+    },
+    {
+      "name": "computer_screen_video_fallback",
+      "value": "映像を利用できないため、標準の画面共有に戻りました。"
+    },
+    {
+      "name": "computer_screen_video_retry",
+      "value": "ビデオを再試行"
+    },
+    {
+      "name": "computer_screen_picture_options",
+      "value": "画面共有モード"
+    },
+    {
+      "name": "computer_screen_picture_save_failed",
+      "value": "この Mac の画面共有モードを保存できませんでした。"
+    },
+    {
       "name": "computer_screen_open",
       "value": "画面を表示"
     },
