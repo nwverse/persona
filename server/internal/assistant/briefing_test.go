@@ -44,6 +44,7 @@ func (e *briefEnv) nudge(ix proto.Interaction) {
 // The two sections of what waits are the standing board's rows, in the board's order: the cards that hold an Agent up
 // first, the tasks to verify after them; a card the bot nudged under is marked as on the board.
 func TestBriefSectionsAreTheBoardsRows(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefEnv(t)
 	old := e.card("ix_old", "box", "ag1", "旧的问题", 90*time.Minute)
 	e.card("ix_new", "server", "asm", "新的问题", 5*time.Minute)

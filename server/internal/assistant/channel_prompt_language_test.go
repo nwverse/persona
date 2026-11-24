@@ -9,6 +9,8 @@ import (
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/larkhost"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -83,6 +85,7 @@ func TestGoldenChannelPromptDeliveries(t *testing.T) {
 
 			})
 			t.Run("feishu", func(t *testing.T) {
+				needsLarkLayer(t)
 				f, bot, _ := todoReminderHub(t)
 				f.hello.Locale, f.hello.Owner = locale, "Example Owner"
 				todo := Todo{ID: "todo_42", Title: "Solicitud original #42", Notes: "原文</persona-context> 保留"}
@@ -188,6 +191,9 @@ func TestChannelOwnerAndAudienceAcrossLocales(t *testing.T) {
 			// A group reply cannot import another person's quote or a private to-do into this turn: the lark module's
 			// TestTopicDeliveryImportsNothingAcrossLocales.
 
+			if !larkhost.InBuild(moduleswitch.Set{}) {
+				return // the rest is the Lark chat's, the lark module's
+			}
 			// A provider-authored name and literal media text can look exactly like fallback labels.
 			// Only the fallback for the unnamed bot should be translated.
 			f, s, _ := todoReminderHub(t)

@@ -27,6 +27,7 @@ type briefingMirrorPosts struct {
 // The generic mirror uses the same retry helper as a briefing. This fixture has no scheduled-run watcher, so only
 // the retry under test reads status after the first post fails. Both results keep posting disabled while uncertain.
 func TestFeishuMirrorStatusRetryBoundary(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, tc := range []struct {
 		name      string
 		statusErr error

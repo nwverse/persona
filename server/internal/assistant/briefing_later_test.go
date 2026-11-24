@@ -273,6 +273,7 @@ func TestBriefLaterRoute(t *testing.T) {
 // error: 503 for the web app and an error toast on the card, never "already handled". The question stays, and the next
 // press once the store is back takes it out.
 func TestBriefLaterRouteOnAStoreFailure(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefEnv(t)
 	a := e.later("todo_a", "图标要不要换？", time.Hour)
 	ctx := context.Background()

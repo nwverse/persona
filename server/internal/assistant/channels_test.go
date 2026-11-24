@@ -14,6 +14,8 @@ import (
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/larkhost"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -125,6 +127,7 @@ func TestBotStepAndStripContext(t *testing.T) {
 // Commands run before the normal message's feature gate, so /stop and /status must check botAllowed against the
 // target they resolve: a feature that is off can neither be interrupted nor shown in a status (#3903).
 func TestBotCommandFeatureGate(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f := newFakeHub().withMachine()
 	f.setSessions("box", proto.Session{SessionID: "agent01", MachineID: "box", Agent: "claude"})
 	var notes []string
@@ -193,6 +196,7 @@ func TestBotCommandFeatureGate(t *testing.T) {
 // "/stop" in an agent's thread (or replying to one of its cards) stops that agent, not the chat's current target;
 // without a bound thread it stops the current target, as before (#3844).
 func TestBotStopFollowsTheRepliedThread(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f := newFakeHub().withMachine()
 	f.setSessions("box", proto.Session{SessionID: "cur0001", MachineID: "box", Agent: "claude"},
 		proto.Session{SessionID: "agent01", MachineID: "box", Agent: "claude"})
@@ -243,6 +247,7 @@ func TestChannelsReportMarksAndTurns(t *testing.T) {
 
 // The turns an older hub kept in the Feishu bot's state come over to the channels' runs once.
 func TestFeishuLegacyRunsMove(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	st := &memStore{}
 	ctx := context.Background()
 	_ = st.PutSetting(ctx, botStateKey, map[string]any{"current": map[string]any{"kind": "main"}, "seen": []string{"om_1"},
@@ -328,6 +333,7 @@ func feishuHub(owner string, pairedAt time.Time) (*fakeHub, *[]map[string]any) {
 // the next look at the bot starts the chat afresh — the main conversation, no threads, nothing waiting. A state from
 // before pairings were recorded keeps what it has.
 func TestFeishuChatStartsAfreshWithANewPairing(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	st := &memStore{}
 	ctx := context.Background()
 	old := "ou_a@100"
@@ -364,6 +370,7 @@ func TestFeishuChatStartsAfreshWithANewPairing(t *testing.T) {
 // A card posted before the assistant restarted is still closed when it is answered elsewhere afterwards: where it is
 // was kept in the chat's state (ids and routing only, nothing it says).
 func TestFeishuCardIsClosedAfterARestart(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	st := &memStore{}
 	f, posts := feishuHub("ou_a", time.Unix(100, 0))
 	f.settings = &Settings{MachineID: "server", Main: "m1"}
@@ -403,6 +410,7 @@ func TestFeishuCardIsClosedAfterARestart(t *testing.T) {
 // A card closed some other way than feishuInteractionDone (here its node went away) forgets its record too: kept, a
 // restart would close it again and write "Ended" over what it said.
 func TestFeishuDetachedCardIsNotKept(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	st := &memStore{}
 	f, _ := feishuHub("ou_a", time.Unix(100, 0))
 	f.settings = &Settings{MachineID: "server", Main: "m1"}
@@ -422,6 +430,7 @@ func TestFeishuDetachedCardIsNotKept(t *testing.T) {
 // A press on a card whose interaction is over (answered elsewhere, maybe while the assistant was away) closes that
 // card the way an ended one looks, with no buttons left.
 func TestFeishuStalePressClosesTheCard(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	st := &memStore{}
 	f, _ := feishuHub("ou_a", time.Unix(100, 0))
 	status := "pending" // in the history, not restored yet; then "" (no record, or the history could not be read)
@@ -462,6 +471,7 @@ func TestFeishuStalePressClosesTheCard(t *testing.T) {
 // Right after a restart the manager may not have its interactions back yet: the catch-up closes a kept card only once
 // the history says it ended for good, never because it is missing from the cards up now.
 func TestFeishuCatchUpClosesOnlyCardsThatEnded(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	st := &memStore{}
 	f, posts := feishuHub("ou_a", time.Unix(100, 0))
 	statuses := map[string]string{"ix_live": "pending", "ix_lost": "", "ix_done": "resolved", "ix_gone": "expired"}
@@ -511,6 +521,7 @@ const botCardsKeep = 100
 
 // Records are kept small when read too: none older than a week, at most the newest hundred.
 func TestFeishuCardRecordsAreTrimmedOnLoad(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	st := &memStore{}
 	cards := map[string]*botCardRef{"old": {MessageID: "om_old", At: time.Now().Add(-8 * 24 * time.Hour)}}
 	for i := 0; i < botCardsKeep+5; i++ {
@@ -528,6 +539,7 @@ func TestFeishuCardRecordsAreTrimmedOnLoad(t *testing.T) {
 
 // A card that ends before (or while) it is sent to Feishu does not stay there with live buttons.
 func TestFeishuCardOfAnEndedQuestionIsNotLeftOpen(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, posts := feishuHub("ou_a", time.Unix(100, 0))
 	f.settings = &Settings{MachineID: "server", Main: "m1"}
 	s := newTestService(t, f)
@@ -706,6 +718,7 @@ func TestChannelsReadFailureNeverOverwrites(t *testing.T) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_example", PairedAt: time.Unix(100, 0)}, nil
 	})
 	h := newServiceOn(t, f, store)
+	lark := larkhost.InBuild(moduleswitch.Set{}) // the chat's parts need the lark module
 
 	func() {
 		defer func() {
@@ -719,7 +732,7 @@ func TestChannelsReadFailureNeverOverwrites(t *testing.T) {
 			t.Fatalf("channels.receive while unreadable: %v, want %s", err, CodeTryAgain)
 		}
 		// A Feishu message is handed back to the hub to try again (it is not taken: nothing is written).
-		if err := h.FeishuMessage(ctx, feishuEvent("om_new", "示例")); !errors.As(err, &re) || re.Code != CodeTryAgain {
+		if err := h.FeishuMessage(ctx, feishuEvent("om_new", "示例")); lark && (!errors.As(err, &re) || re.Code != CodeTryAgain) {
 			t.Fatalf("a Feishu message while unreadable: %v, want %s", err, CodeTryAgain)
 		}
 		h.larkModule().RememberThread("om_bot", botTarget{Kind: targetMain}, "示例")
@@ -765,6 +778,9 @@ func TestChannelsReadFailureNeverOverwrites(t *testing.T) {
 	_, _ = store.Setting(ctx, channelsKey, &prefs)
 	if prefs["telegram"] == nil {
 		t.Fatalf("the channels' settings: %s", store.stored()[channelsKey])
+	}
+	if !lark {
+		return // the chat's state is the lark module's
 	}
 	if err := h.FeishuMessage(ctx, feishuEvent("om_new", "示例")); err != nil {
 		t.Fatalf("a Feishu message once readable: %v", err)
@@ -855,6 +871,7 @@ func TestFeishuElicitationCardSaysWhatItAsks(t *testing.T) {
 // A synced turn goes to Feishu whole, laid out like the bot's answers (more cards when long), where it came from and
 // the open button under the last card only; a reply to any card goes back to that conversation.
 func TestFeishuMirrorSendsTheWholeAnswer(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, posts := feishuHub("ou_a", time.Unix(100, 0))
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_a", PairedAt: time.Unix(100, 0), PublicURL: "https://hub.example.com", Features: FeishuFeatures{Main: true, Sync: true}}, nil
@@ -887,6 +904,7 @@ func TestFeishuMirrorSendsTheWholeAnswer(t *testing.T) {
 // Without the hub's web address (no public_url) a card carries no "Open web version" button with an empty link, which does
 // nothing and may get the whole card refused; a question card keeps its answer buttons. With one, the button is there.
 func TestFeishuOpenButtonNeedsAWebAddress(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, web := range []string{"", "persona://x", "https://hub.example.com/"} {
 		f, posts := feishuHub("ou_a", time.Unix(100, 0))
 		f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
@@ -932,6 +950,7 @@ func TestEmptyAnswerSaysWhyItStopped(t *testing.T) {
 // A notify_user push goes to Feishu laid out like the bot's answers and whole: its title heads the first card, the
 // open button is under the last only, and a long body is more cards instead of one Feishu refuses.
 func TestFeishuPushIsLaidOutAndWhole(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, posts := feishuHub("ou_a", time.Unix(100, 0))
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_a", PairedAt: time.Unix(100, 0), PublicURL: "https://hub.example.com", Features: FeishuFeatures{Main: true, Pushes: true}}, nil
@@ -1093,6 +1112,7 @@ func (h slowReactHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, 
 // a picture to download, a quote to read) was overtaken by the next, the conversation read them the wrong way round,
 // and the answer for all of them went under the first message, the others folded into it.
 func TestFeishuMessagesGoInInTheOrderTheyCame(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, _ := feishuHub("ou_a", time.Unix(100, 0))
 	f.settings = &Settings{MachineID: "server", Main: "m1"}
 	f.answerApp(AppFeishu, FeishuReact, func(p json.RawMessage) (any, error) {
@@ -1204,6 +1224,7 @@ func sentOnce(f *fakeHub) []string {
 // A message that is not handled still passes the turn on: one redelivered, one taken when the bot's status could not
 // be read (the hub hands it again), a command, one the chat may not send. The message after each goes in.
 func TestFeishuMessageNotHandledPassesTheTurnOn(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, _ := feishuHub("ou_a", time.Unix(100, 0))
 	f.settings = &Settings{MachineID: "server", Main: "m1"}
 	f.answerApp(AppFeishu, FeishuReact, func(json.RawMessage) (any, error) { return map[string]any{"reaction_id": "rx"}, nil })
@@ -1281,6 +1302,7 @@ func (h stuckHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, erro
 // A message stuck before it goes into the conversation (a picture slow to download) holds the next one up only so
 // long: the next goes in without it.
 func TestFeishuStuckMessageHoldsTheNextOnlySoLong(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, _ := feishuHub("ou_a", time.Unix(100, 0))
 	f.settings = &Settings{MachineID: "server", Main: "m1"}
 	f.answerApp(AppFeishu, FeishuReact, func(json.RawMessage) (any, error) { return map[string]any{"reaction_id": "rx"}, nil })
