@@ -182,8 +182,9 @@ Persona Core is a product on its own: a hub built without any module starts, ser
   tests, so a module that moves is covered with no edit); the `core-node`, `core-managers` and `core-other` lanes (and
   `all`) run 'Server <shard> tests with Postgres, core only'. Measured on the hub machine (64 cores, shared): node
   about 5.5 minutes, managers about 6, other about 3.5.
-  The per-module steps ('Builds without the … module(s)', 'Core-only and module-less builds') run in the `node` and
-  `core-node` lanes, not in `build`: together they outgrow a hosted job's 20 minutes, and those two are the shortest shards.
+  The per-module steps ('Builds without the … module(s)', 'Core-only and module-less builds') run in the `node`,
+  `managers`, `core-node` and `core-other` lanes, one or two each, not in `build`: together they outgrow a hosted job's
+  20 minutes.
 - **Size**: `python3 scripts/diag/core_size.py [--no-build] [--json] <ref> …` prints the core's non-test Go lines (every
   `*.go` under `server/` that is not `_test.go`, `server/internal/modules/` left out), each module's lines, and the
   stripped sizes of `personad`, `persona-hub` and `persona-manager` built by default and with `persona_core_only`
