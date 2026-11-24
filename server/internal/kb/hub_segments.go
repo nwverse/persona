@@ -7,6 +7,8 @@ import (
 	"slices"
 	"time"
 	"unicode/utf8"
+
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // The hub's own transcript of a hub-mode meeting (docs/assistant/meeting-minutes.md "The transcript of record"):
@@ -21,12 +23,8 @@ import (
 
 const hubSegmentsFile = "hub_segments.json"
 
-// HubTranscript is hub_segments.json: the hub's own sentences, with their own revision.
-type HubTranscript struct {
-	Rev      int64              `json:"rev"`
-	Pass     string             `json:"pass"` // HubPassLive | HubPassFinal
-	Segments []RecordingSegment `json:"segments"`
-}
+// HubTranscript is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type HubTranscript = recordingwire.HubTranscript
 
 // readHubLocked is recording id's hub_segments.json (an empty one when there is none). The caller holds recFilesMu.
 func (s *Store) readHubLocked(id string) (HubTranscript, error) {
