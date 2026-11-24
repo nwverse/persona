@@ -321,5 +321,11 @@
   "kind_filter_todos": "To-dos",
   "kind_filter_tasks": "Tasks",
   "kind_empty_todos": "No personal to-dos",
-  "kind_empty_tasks": "No tasks"
+  "kind_empty_tasks": "No tasks",
+  "goal_progress": "{done}/{total}",
+  "goal_expand": "Show subtasks for “{title}” ({done}/{total} done)",
+  "goal_collapse": "Hide subtasks for “{title}” ({done}/{total} done)",
+  "goal_blocked_one": "{count} needs you",
+  "goal_blocked_other": "{count} need you",
+  "goal_parent_hint": "Part of {title}"
 }

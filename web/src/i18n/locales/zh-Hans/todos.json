@@ -319,5 +319,10 @@
   "kind_filter_todos": "仅待办",
   "kind_filter_tasks": "仅任务",
   "kind_empty_todos": "暂无个人待办",
-  "kind_empty_tasks": "暂无任务"
+  "kind_empty_tasks": "暂无任务",
+  "goal_progress": "{done}/{total}",
+  "goal_expand": "展开「{title}」的子任务（已完成 {done}/{total}）",
+  "goal_collapse": "收起「{title}」的子任务（已完成 {done}/{total}）",
+  "goal_blocked": "{count} 项需要你",
+  "goal_parent_hint": "属于：{title}"
 }
