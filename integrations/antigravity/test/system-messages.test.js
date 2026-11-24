@@ -36,14 +36,15 @@ describe('agy SYSTEM_MESSAGE steps', () => {
     assert.doesNotMatch(JSON.stringify(items), /Reminder|SYSTEM_MESSAGE/)
   })
 
-  it('lets the report that woke the idle agent open the new exchange instead of the generic notice', () => {
+  it('keeps the generic wake notice on the resumed step, so an append after the report still carries it', () => {
     const report = message('system', `Subagent ${CHILD} has gone idle. This was the subagent's most recent response: Done.`)
-    const base = [step(0, 'USER_INPUT', { content: 'Start a worker.' }), step(1, 'PLANNER_RESPONSE', { content: 'Started; waiting for it.' })]
-    const woken = stepsToItems([...base, system(2, reminder), system(3, report), system(4, message(CHILD, 'Extra note.')), step(5, 'PLANNER_RESPONSE', { content: 'The worker finished.' })])
-    assert.deepEqual(notices(woken.items).map((item) => [item.id.split('#')[0].split('@')[0], item.task?.title, item.wake]), [['4', 'Done.', true], ['5', 'Extra note.', undefined]])
+    const base = [step(0, 'USER_INPUT', { content: 'Start a worker.' }), step(1, 'PLANNER_RESPONSE', { content: 'Started; waiting for it.' }), system(2, reminder), system(3, report), system(4, message(CHILD, 'Extra note.'))]
+    const before = stepsToItems(base).items
+    assert.deepEqual(notices(before).map((item) => [item.task?.title, item.wake]), [['Done.', undefined], ['Extra note.', undefined]])
+    const pushed = Math.max(...before.map((item) => item.seq))
+    const woken = stepsToItems([...base, step(5, 'PLANNER_RESPONSE', { content: 'The worker finished.' })])
+    assert.deepEqual(woken.items.filter((item) => item.seq > pushed).map(({ kind, text, wake }) => [kind, text, wake]), [['notice', '后台任务有更新', true], ['text', 'The worker finished.', undefined]])
     assert.equal(woken.lastText, 'The worker finished.')
-    const generic = stepsToItems([...base, system(2, reminder), step(3, 'PLANNER_RESPONSE', { content: 'Back again.' })])
-    assert.deepEqual(notices(generic.items).map((item) => [item.text, item.wake]), [['后台任务有更新', true]])
   })
 
   it('cuts a long report on the page and keeps it whole for session.item', () => {

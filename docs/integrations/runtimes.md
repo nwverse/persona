@@ -577,11 +577,11 @@ as a `SYSTEM_MESSAGE` step whose body is `[Message] … sender=<id> … content=
 response is `kind: "agent"` with the report as `detail`, a background task's result (`sender=<conversation>/task-N`)
 is `kind: "task"` titled `task-N` with its status and exit code, and agy's own notices (stopped by a server restart)
 are `kind: "task"` too. A page cuts a `detail` longer than 24 KiB and sets `full_size`; `session.item` returns it
-whole. `SYSTEM_MESSAGE` steps without that header, such as agy's injected "Reminder" prompts, stay hidden. When such
-a message wakes the agent after its reply, that notice carries `wake` and replaces the generic "background task
-updated" notice, which remains for wakes with nothing to show. `invoke_subagent` cards take their description from
-`toolSummary`, else `Role`, else `TypeName`, and their prompt from `Subagents`, else `Prompt`. Panes read by the node
-(`server/internal/node/agytranscript.go`) do not map these yet.
+whole. `SYSTEM_MESSAGE` steps without that header, such as agy's injected "Reminder" prompts, stay hidden. These
+notices never carry `wake`: when one wakes the agent after its reply, the generic `wake` notice described below still
+opens the new exchange with the resumed step, because a client may already hold the earlier notice. `invoke_subagent`
+cards take their description from `toolSummary`, else `Role`, else `TypeName`, and their prompt from `Subagents`,
+else `Prompt`. Panes read by the node (`server/internal/node/agytranscript.go`) do not map these yet.
 
 CLI companion sessions and herdr panes show images from exported tool results. Conversation pages carry only image
 references; Persona loads the bytes when an image is shown. It accepts PNG, JPEG, GIF and WebP up to 1,152 KiB from
