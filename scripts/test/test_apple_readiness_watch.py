@@ -262,6 +262,20 @@ class BoundedCommandTests(unittest.TestCase):
             self.assertEqual(path.read_text(), "unavailable: command timed out\n")
             self.assertEqual(path.with_suffix(".txt.status.txt").read_text(), "124\n")
 
+    def test_bounded_file_preserves_an_interrupt_during_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "output.txt"
+            process = mock.Mock()
+            process.returncode = None
+            process.wait.side_effect = KeyboardInterrupt
+            process.poll.side_effect = lambda: process.returncode
+            process.kill.side_effect = lambda: setattr(process, "returncode", -9)
+            with mock.patch.object(watch.subprocess, "Popen", return_value=process):
+                with self.assertRaises(KeyboardInterrupt):
+                    watch.bounded_file(["synthetic-command"], path)
+            process.kill.assert_called_once()
+            self.assertGreaterEqual(process.wait.call_count, 2)
+
     def test_interrupted_collection_has_explicit_atomic_incomplete_status(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

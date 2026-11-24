@@ -52,11 +52,18 @@ def bounded_file(command, path, timeout=COMMAND_TIMEOUT, limit=MAX_SAMPLE_BYTES)
                               "unavailable: " + type(error).__name__ + "\n")
         return 127
     finally:
-        if process is not None and process.poll() is None:
-            # Reap an interrupted child here; an outer SIGKILL remains bounded
-            # by the shell's kill of the whole observer process group.
-            process.kill()
-            process.wait()
+        try:
+            if process is not None and process.poll() is None:
+                # Reap an interrupted child here. A signal may arrive during
+                # this cleanup too; finish the bounded kill/wait, then preserve
+                # that interruption for observe()'s final collector.
+                process.kill()
+                process.wait()
+        except KeyboardInterrupt:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
+            raise
 
 
 def host_pids(udid, runner=subprocess.run):
