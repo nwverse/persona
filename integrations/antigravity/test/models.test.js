@@ -8,16 +8,19 @@ import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { createAgyRuntime } from '../lib/runtime.js'
 import { mapModels } from '../lib/models.js'
 
-const entries = ['medium', 'high', 'low'].map((level) => ({ modelId: `gemini-future-${level}`, name: `Gemini Future (${level})` }))
+const entries = ['medium', 'high', 'low', 'xhigh', 'max'].map((level) => ({ modelId: `gemini-future-${level}`, name: `Gemini Future (${level})` }))
 const AUTO_REFUSAL_NOTICE = 'agy 拒绝了 Auto 模式，已改由 Persona 自动批准权限请求'
 
 test('native catalog preserves new IDs, defaults and only advertised thinking variants', () => {
   const models = mapModels([...entries, entries[0], { modelId: 'single', name: 'Single' }], entries[1].name)
-  assert.equal(models.length, 4)
+  assert.equal(models.length, 6)
   assert.equal(models[1].default, true)
-  assert.deepEqual(models[0].efforts, ['low', 'medium', 'high'])
-  assert.deepEqual(models[3].efforts, [])
-  assert.equal(models[0].default_effort, 'medium')
+  for (const model of models.slice(0, -1)) {
+    assert.deepEqual(model.efforts, ['low', 'medium', 'high', 'xhigh', 'max'])
+    assert.equal(model.default_effort, model.id.split('-').at(-1))
+  }
+  assert.deepEqual(models.at(-1).efforts, [])
+  assert.equal(models.at(-1).default_effort, undefined)
 })
 
 async function fixture(t, options = {}) {
@@ -94,10 +97,26 @@ test('session controls confirm native state and preserve acknowledged fields on 
   assert.equal(row().model, entries[1].modelId)
   await n.peer.call('session.modes', { session_id: sessionId, effort: 'low' })
   await until('native configuration', () => row()?.model === entries[2].modelId && row()?.effort === 'low')
-  await assert.rejects(n.peer.call('session.modes', { session_id: sessionId, model: entries[1].modelId, effort: 'max' }), /Thinking level unavailable/)
+  await assert.rejects(n.peer.call('session.modes', { session_id: sessionId, model: entries[1].modelId, effort: 'ultra' }), /Thinking level unavailable/)
   await until('native configuration', () => row()?.model === entries[1].modelId && row()?.effort === 'high')
   await n.peer.call('session.modes', { session_id: sessionId, permission_mode: 'bypassPermissions' })
   await until('native configuration', () => row()?.permission_mode === 'bypassPermissions')
+})
+
+test('a model pick or a thought-level switch applies the advertised native variant', async (t) => {
+  const { n, sessionId, row, calls } = await fixture(t)
+  const advertised = await n.peer.call('launchers.models', {})
+  assert.deepEqual(advertised.models.find((model) => model.id === 'gemini-future-xhigh')?.efforts, ['low', 'medium', 'high', 'xhigh', 'max'])
+  for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
+    const model = `gemini-future-${effort}`
+    await n.peer.call('session.modes', { session_id: sessionId, model })
+    await until(`ACP selected ${model}`, () => row()?.model === model && row()?.effort === effort)
+    assert.equal(calls().filter((call) => call.method === 'session/set_model').at(-1)?.params.modelId, model)
+  }
+  for (const effort of ['xhigh', 'max', 'medium']) {
+    await n.peer.call('session.modes', { session_id: sessionId, effort })
+    await until(`ACP selected ${effort}`, () => row()?.model === `gemini-future-${effort}` && row()?.effort === effort)
+  }
 })
 
 test('uses the ACP session window until the transcript reports its own', async (t) => {

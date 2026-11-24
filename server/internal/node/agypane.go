@@ -62,7 +62,7 @@ var agyEmbeddedUUIDRe = lazyre.New(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 // hooks report too (agyhooks.go): agyReportedLocked is the two together.
 func reportedAgyConversation(a host.Agent) string {
 	s := a.AgentSession
-	if a.Agent == agyAgent && s != nil && s.Source == "herdr:antigravity_cli" &&
+	if a.Agent == agyAgent && s != nil && (s.Source == "herdr:antigravity_cli" || s.Source == agyPresenceSource) &&
 		s.Agent == agyAgent && s.Kind == "id" && uuidRe.MatchString(s.Value) {
 		return s.Value
 	}

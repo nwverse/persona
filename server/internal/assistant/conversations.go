@@ -885,8 +885,22 @@ func (msg relayMsg) source() *proto.MessageSource {
 // deliverRelay sends one message into an assistant conversation and notes the hop it is working on. A quiet task's
 // notice (quiet.go) is its own text, and the work it starts is not a hop of any chain.
 func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg relayMsg) error {
+	res, round, err := s.sendRelay(ctx, machine, to, msg)
+	if err != nil {
+		return err
+	}
+	if round {
+		s.superviseRoundAnswered(to, res)
+	}
+	s.relayDelivered(ctx, to, msg)
+	return nil
+}
+
+// sendRelay performs the assistant.send RPC for a relayed message without marking supervision delivery complete.
+// Supervision callers confirm the user item in the destination transcript before completing delivery (#12567).
+func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMsg) (superviseRoundReply, bool, error) {
 	if msg.Tool == superviseTool && s.runtimeWithoutSupervisionPolicy(ctx, machine, to) {
-		return s.supervisionRuntimeRefusal(ctx, machine)
+		return superviseRoundReply{}, false, s.supervisionRuntimeRefusal(ctx, machine)
 	}
 	text := relayDeliveryText(msg)
 	source, onceID := msg.source(), relayMsgID(to, msg)
@@ -900,14 +914,14 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 	}
 	pick, kept, err := s.readModelPick(ctx, machine, to)
 	if err != nil {
-		return err // unknown is not permission to use a process that still has an older ordinary connection
+		return superviseRoundReply{}, false, err // unknown is not permission to use a process that still has an older ordinary connection
 	}
 	if !kept && proto.IsExternalLauncher(pick.Launcher) {
-		return i18n.Err("external-adapter.scope_required") // a kept choice on another machine is not a fallback on this one
+		return superviseRoundReply{}, false, i18n.Err("external-adapter.scope_required") // a kept choice on another machine is not a fallback on this one
 	}
 	if kept {
 		if err := s.relayOnPick(ctx, machine, to, params, pick); err != nil {
-			return err
+			return superviseRoundReply{}, false, err
 		}
 	} else if s.isBackground(ctx, to) {
 		s.backgroundModel(ctx, params) // its own model purpose, on every message as the main chat's is (supervise_background.go)
@@ -937,19 +951,12 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 			s.releasePushes(ctx, to)
 		}
 		handed(err)
-		return err
+		return superviseRoundReply{}, round, err
 	}
 	if s.isBackground(ctx, to) && res.SessionID != "" && res.SessionID != to {
 		s.registerBackgroundRoundFork(ctx, machine, res.SessionID, to)
 	}
-	if round {
-		s.superviseRoundAnswered(to, res)
-	}
-	if msg.Tool == superviseTool {
-		s.backgroundRoundDelivered(ctx, to, msg, time.Now())
-	}
-	s.relayDelivered(ctx, to, msg)
-	return nil
+	return res, round, nil
 }
 
 // relayDeliveryText is what a relayed message says in the conversation: a notice, a supervision message and an answer
@@ -966,6 +973,7 @@ func relayDeliveryText(msg relayMsg) string {
 // notice starts.
 func (s *Service) relayDelivered(ctx context.Context, to string, msg relayMsg) {
 	if msg.Tool == superviseTool {
+		s.backgroundRoundDelivered(ctx, to, msg, time.Now())
 		s.askRelayDelivered(to, msg)
 		return
 	}
@@ -1174,7 +1182,10 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			var err error
 			var retry time.Duration
 			landed := false
-			if !stale && !keep && !msg.TriedAt.IsZero() {
+			if !stale && !keep && (!msg.TriedAt.IsZero() || !msg.DoubtedAt.IsZero()) {
+				if msg.TriedAt.IsZero() {
+					msg.TriedAt = msg.DoubtedAt
+				}
 				landed = s.lookForRelay(machine, id, &msg)
 				if !landed && msg.Looks < relayLookLimit {
 					keep, retry = true, relayLookGap
