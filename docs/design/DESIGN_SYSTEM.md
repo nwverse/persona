@@ -4092,6 +4092,8 @@ Launcher discovery failure or a missing saved launcher keeps the saved choice vi
 Assistant inheritance option remains selectable. Selecting it explicitly clears launcher, model and effort together;
 discovery alone never changes saved choices. Computer-scoped defaults come from that computer's launcher response.
 A saved model alias uses its folded catalog row's capabilities and default thinking effort without rewriting the saved ID.
+When the catalog lists a model by effort level, the model picker shows one base name. The effort selector shows
+the available levels and chooses the concrete variant ID, including when the task starts by following Assistant.
 Defaults, model and launcher catalogs are keyed to the current assistant and their exact execution context; stale
 responses cannot replace the current catalog. Discovery reads and the task save target the same assistant. Task
 inheritance is requested explicitly, leaving ordinary Assistant picker defaults unchanged.
