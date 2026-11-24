@@ -46,14 +46,11 @@ var toolNames = []string{"resource_status", "ask_user", "notify_user", "supervis
 	"conversation_tags_set",
 	"conversation_new", "conversation_send", "task_plan", "task_plan_withdraw", "task_review", "task_scope", "task_decided", "task_start_screen", "task_start_keys", "task_retry",
 	"todo_workspace", "todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add", "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
-	"direction_name", "leader_progress", "decision_record", "decisions_query", "health_intake"}
+	"direction_name", "leader_progress", "decision_record", "decisions_query"}
 
 // Tools are the assistant's tools (assistant.tools).
 func (s *Service) Tools(ctx context.Context) []proto.Tool {
 	tools := toolsNamed(withKnowledgeUI(toolNames, s))
-	if !s.healthOn() { // the Health module's tool (health_layer.go)
-		tools = slices.DeleteFunc(tools, func(t proto.Tool) bool { return t.Name == healthhost.Tool })
-	}
 	// A bare Service has no settings store and is used by registry tests. With no
 	// store the opt-in is false; do not call the nil store function just to hide it.
 	if s.store != nil && ownerReplyApprovalOn(s.settings(ctx)) {
@@ -2006,3 +2003,12 @@ func kbWriteCheckOf(ctx context.Context) func(text string) error {
 }
 
 var healthToolNames = []string{healthhost.Tool, healthhost.StrengthTool}
+
+// healthTools are advertised only to callers whose Health space is known from
+// the session snapshot or the node's attested caller directory.
+func (s *Service) healthTools(ctx context.Context, machine, session string) []proto.Tool {
+	if !s.healthOn() || s.agentCallerSpace(ctx, machine, session) != SpaceHealth {
+		return nil
+	}
+	return localizedMCPTools(toolsNamed(healthToolNames), s.toolLanguage(ctx))
+}
