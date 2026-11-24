@@ -167,11 +167,11 @@ const start = () => act(() => button("启动").click());
 describe("New agent's model panel (#5104)", () => {
   it("left alone, follows Model settings: nothing of the model is sent, the pill names what they run with the engine's mark", async () => {
     await open();
-    expect(pill().title).toBe("Claude Code · Opus 5.5 · claude · 高");
+    expect(pill().title).toBe("Claude Code · Opus 5.5 · claude · High");
     expect(pill().querySelector("[data-pill-engine]")!.getAttribute("data-pill-engine")).toBe("claude");
     await openPanel();
     expect(follow().getAttribute("aria-pressed")).toBe("true");
-    expect(follow().textContent).toBe("跟随模型配置claude · Opus 5.5 · 高");
+    expect(follow().textContent).toBe("跟随模型配置claude · Opus 5.5 · High");
     // the row lit is the launcher's Default row, named after the model the settings run
     const lit = row("model:claude\ndefault");
     expect(lit.getAttribute("aria-pressed")).toBe("true");
@@ -193,7 +193,7 @@ describe("New agent's model panel (#5104)", () => {
     await flush();
     expect(panel()).toBeNull();
     // nothing sent for the effort: the pill says the one Model settings starts it with
-    expect(pill().title).toBe("Claude Code · Sonnet 5 · claude · 高");
+    expect(pill().title).toBe("Claude Code · Sonnet 5 · claude · High");
     await openPanel();
     expect(follow().getAttribute("aria-pressed")).toBe("false");
     expect(row("model:claude\nsonnet").getAttribute("aria-pressed")).toBe("true");
@@ -212,7 +212,7 @@ describe("New agent's model panel (#5104)", () => {
     act(() => follow().click());
     await flush();
     expect(panel()).toBeNull();
-    expect(pill().title).toBe("Claude Code · Opus 5.5 · claude · 高");
+    expect(pill().title).toBe("Claude Code · Opus 5.5 · claude · High");
     start();
     expect(launched[0]?.launcher).toBe("");
     expect(launched[0]?.model).toBeUndefined();
@@ -227,7 +227,7 @@ describe("New agent's model panel (#5104)", () => {
     expect(flyout()!.querySelector('[role="slider"]')!.getAttribute("aria-valuetext")).toBe("模型默认");
     // from none, ← lands on the lowest
     await slide("ArrowLeft");
-    expect(pill().title).toBe("Claude Code · GLM 5 · relay · 低");
+    expect(pill().title).toBe("Claude Code · GLM 5 · relay · Low");
     expect(flyout()!.textContent).toContain("已自定义");
     act(() => pill().click());
     start();
@@ -378,7 +378,7 @@ describe("New agent's model panel (#5104)", () => {
     act(() => machineChip("Studio").click());
     await flush();
     expect(q("[data-testid=new-agent-dropped]")!.textContent).toBe("Studio 上用不了 only-mac，已换回这台电脑的默认设置。");
-    expect(pill().title).toBe("Claude Code · Opus 5.5 · claude · 高");
+    expect(pill().title).toBe("Claude Code · Opus 5.5 · claude · High");
     // a pick on this computer takes the note away
     await pick("model:claude\nsonnet");
     expect(q("[data-testid=new-agent-dropped]")).toBeNull();
