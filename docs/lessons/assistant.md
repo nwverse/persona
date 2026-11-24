@@ -991,3 +991,15 @@ Cache keepalive revoked every role this way and never mounted a proxy, while its
 inventory with `Assistant: true`. Judge a raw row with `fleetMachine.isAssistant` (its directory), and build test
 inventories the way a node sends them. The same feature also needed Claude Code's `ENABLE_PROMPT_CACHING_1H`: without
 it the CLI declares only five-minute markers on an API key or a gateway, whatever TTL the gateway applies later.
+
+## A wait the Agent names outranks the state the hub guessed (#14899)
+
+A supervised Agent reported `blocked` / `unblock: other` ("someone has to fill in the web form") while two of its old
+polling shells were still running. Triage's background rule read the turn as "N background tasks running, it wakes
+itself" before it looked at the closeout, and the same background work kept the task's turn from settling, so no
+receipt, judgment or supervision signal went out. The task also sat in `needs_user` from an earlier decision the owner
+had dismissed, and `superviseJudged` returned early in that state. Nobody heard of the wait for three and a half hours.
+A rule that runs before the closeout is read must give way when the closeout names a person to wait for, and
+holding a decision open must not silence the task's later turns. The supervisor decides whether the news replaces the
+decision. A `done` closeout that still names the owner as the one to unblock it (`unblock: user` with a `waiting`
+line and no delivery) is a question, not finished work.

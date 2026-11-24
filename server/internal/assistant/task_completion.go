@@ -163,11 +163,19 @@ func taskAgentsSettled(t Todo, agents []proto.Session) bool {
 func taskAgentSettled(c proto.Session) bool {
 	if c.Status != proto.StatusDone && c.Status != proto.StatusIdle ||
 		c.State == proto.StateWorking || c.State == proto.StateNeedsYou ||
-		c.PendingInteractions > 0 || backgroundRunning(c) {
+		c.PendingInteractions > 0 || backgroundRunning(c) && !stoppedOnPerson(c) {
 		return false
 	}
 	w := c.Work
 	return w == nil || w.Phase != proto.WorkBlocked || w.On != proto.WaitTransient || w.WakeAt == nil
+}
+
+// stoppedOnPerson: c's current turn, as its work state has it, ended with a closeout that says it stopped on a person.
+// Background work it left running then does not keep that turn from settling: its end is no stretch still going on but
+// a wait its task's supervisor or owner must hear of (#14899).
+func stoppedOnPerson(c proto.Session) bool {
+	w := c.Work
+	return w != nil && w.Closeout != nil && !w.TurnAt.IsZero() && sameTurn(c, w.TurnAt) && closeoutWaitsOnPerson(*w.Closeout)
 }
 
 // supersededAgents are the links of t another agent took over from (#6483): an unreleased link whose session is
