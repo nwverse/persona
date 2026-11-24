@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/assistant/saved"
 	"math"
 	"reflect"
 	"slices"
@@ -13,8 +14,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/nwverse/persona/server/internal/assistant/saved"
 )
 
 const savedSearchPath = "/api/v1/saved-agent-searches"

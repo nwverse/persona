@@ -3,11 +3,10 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"strings"
 	"testing"
 	"time"
-
-	approvalops "github.com/nwverse/persona/server/internal/approval"
 
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"

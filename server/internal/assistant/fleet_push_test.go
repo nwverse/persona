@@ -3,11 +3,10 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/nwverse/persona/server/internal/i18n"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"

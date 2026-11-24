@@ -5,15 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
-	"slices"
-	"strconv"
-	"time"
-
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/workspacenaming"
+	"net/http"
+	"slices"
+	"strconv"
+	"time"
 )
 
 // putSettings is PUT /api/v1/assistant: what the body sets changes ("-" as main clears it); a launcher is checked

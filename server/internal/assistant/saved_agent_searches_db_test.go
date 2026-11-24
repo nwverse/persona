@@ -3,13 +3,12 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"github.com/nwverse/persona/server/internal/assistant/saved"
 	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/nwverse/persona/server/internal/assistant/saved"
 
 	"github.com/nwverse/persona/server/internal/db"
 )

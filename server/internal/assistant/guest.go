@@ -5,12 +5,11 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"slices"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/nwverse/persona/server/internal/compat"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"

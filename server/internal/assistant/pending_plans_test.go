@@ -3,10 +3,9 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"github.com/nwverse/persona/server/internal/db"
 	"net/http"
 	"testing"
-
-	"github.com/nwverse/persona/server/internal/db"
 )
 
 func TestMainFeedHydratesPendingPlansAcrossConversations(t *testing.T) {

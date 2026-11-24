@@ -2,10 +2,9 @@ package assistant
 
 import (
 	"context"
+	"github.com/nwverse/persona/server/internal/compat"
 	"strings"
 	"testing"
-
-	"github.com/nwverse/persona/server/internal/compat"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )

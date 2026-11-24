@@ -4,14 +4,13 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"github.com/nwverse/persona/server/internal/db"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/nwverse/persona/server/internal/db"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
