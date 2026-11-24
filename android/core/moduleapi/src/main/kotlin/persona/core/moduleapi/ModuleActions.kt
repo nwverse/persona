@@ -45,3 +45,13 @@ fun List<ModuleMenuAction>.asMenuActions(onPick: () -> Unit = {}): List<persona.
     mapIndexed { index, action ->
         persona.core.designsystem.JAction(action.label, action.icon, separatorBefore = index == 0) { onPick(); action.onClick() }
     }
+
+/**
+ * The places the active modules serve ([PersonaModule.places]), as the shell provides them; null where no shell says
+ * (previews, tests), which shows every way in as before.
+ */
+val LocalModulePlaces = staticCompositionLocalOf<Set<kotlin.reflect.KClass<out androidx.navigation3.runtime.NavKey>>?> { null }
+
+/** Whether a way into [place] should show: some active module serves it, or no shell says (null). */
+fun Set<kotlin.reflect.KClass<out androidx.navigation3.runtime.NavKey>>?.serves(place: kotlin.reflect.KClass<out androidx.navigation3.runtime.NavKey>): Boolean =
+    this == null || place in this

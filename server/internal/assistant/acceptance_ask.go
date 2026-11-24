@@ -8,6 +8,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/larkhost"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -131,7 +132,7 @@ func (s *Service) postAsk(ctx context.Context, t Todo, a acceptAsk) bool {
 	var st FeishuStatus
 	var stErr error
 	if !a.ForBriefing {
-		st, stErr = s.feishuStatus(ctx)
+		st, stErr = s.chat().Status(ctx)
 	}
 	switch {
 	case a.ForBriefing:
@@ -142,7 +143,7 @@ func (s *Service) postAsk(ctx context.Context, t Todo, a acceptAsk) bool {
 	case stErr != nil:
 		s.logf("task %s: acceptance: %v (its card is tried again later)", t.ID, stErr)
 	case st.Ready && st.Features.Reports:
-		mid, err := s.botPostKeyed(ctx, "", s.acceptCard(ctx, t, a, false), askSummary(s.botLang(ctx), &a), acceptCardKey(t.ID, a.AskedAt))
+		mid, err := s.chat().Post(ctx, larkhost.Target{}, "", s.acceptCard(ctx, t, a, false), askSummary(s.botLang(ctx), &a), acceptCardKey(t.ID, a.AskedAt))
 		if err != nil {
 			s.logf("task %s: acceptance: %v (its card is tried again later)", t.ID, err)
 			break

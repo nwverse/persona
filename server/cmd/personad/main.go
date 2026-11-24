@@ -53,7 +53,7 @@ func buildInfo() update.Build {
 	return b
 }
 
-const usage = `usage:
+var usage = `usage:
 ` + nodecmd.LaunchUsage + `
 ` + hubcli.Usage + `
   personad hub tailcat-key  print the built-in manager's tailcat key (created the first time), for "node tailcat init --hub"
@@ -69,7 +69,7 @@ const usage = `usage:
                            another manager made in the app: trade its install code, run it, install it as a service
                            (docs/assistant/managers.md; personad manager for the details)
 ` + nodecmd.NodeUsage + `
-` + nodecmd.Usage + `
+` + nodecmd.Usage() + `
   personad share-http --listen <address> --upstream <loopback HTTP origin> --public-origin <HTTP sharing origin> --hub-config <private configuration>
                            isolated anonymous sharing ingress on a separate unprivileged port (docs/server/agent-sharing.md)
   personad relay [config]   run the push relay (config ~/.persona/relay.json): pushes for hubs without the app's APNs

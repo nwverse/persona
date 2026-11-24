@@ -1,6 +1,6 @@
 // Package modapi is the module contract of Persona Core (docs/architecture/core-and-modules.md): what a built-in
 // feature module declares about itself (Info, the manifest of schema/module.schema.json), what it is (Module), and the
-// one way it reaches the core (Host). It holds types and constants only, imports nothing but the standard library,
+// one way it reaches the core (Host). It holds types, constants and the list of client-only module ids, imports nothing but the standard library,
 // and is a contract package (internal/archguard/testdata/contracts.txt): the core (internal/assistant/kernel serves
 // Host) and the modules (internal/modules/<id>) both import it, never each other.
 package modapi
@@ -154,4 +154,14 @@ type WaitRow struct {
 	Kind  string
 	Since time.Time
 	Key   string
+}
+
+// ClientModules are the ids of the feature modules that live only in the clients (web, iOS, Android): the server has
+// no module of that id, so no manifest announces their flag. The manager announces module.<id> for each of them beside
+// the built-in modules' flags unless the modules setting switches it off, so a client that gates one on the hello
+// (docs/architecture/core-and-modules.md "Hub flags") keeps it on by default and the owner can turn it off from the
+// hub. An id leaves this list in the PR that gives the module a server half with its own feature
+// (internal/modules/all checks that no built-in module is listed).
+func ClientModules() []string {
+	return []string{"glasses", "health", "knowledge-ui"}
 }

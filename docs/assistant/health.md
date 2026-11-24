@@ -232,6 +232,7 @@ The hub forwards the manager's routes under `/api/v1/assistant/health/`:
 | `GET intake/changes` | Current row states after a change number, including undo markers, in sequence order |
 | `POST intake/ui` | Draw a detail page or handle its actions with the extension-page UI envelope |
 | `POST water/reminder` | Handle a water notification's buttons and return a localized toast |
+| `POST intake/import` | Import the legacy water extension and switch it off; full-access devices only |
 
 Omit the selected manager header and `manager` query so the hub uses the default manager.
 `space=health` may be sent for context, but the hub does not use it to select a manager.
@@ -296,6 +297,58 @@ Request and response fields, reserved page state, category action identifiers an
 are in [protocol.md](../protocol/protocol.md) ("Health intake"). No language model is involved
 in the pages, settings or scheduling, and none of these routes grants an extension access to
 Health chats or memory.
+
+### Moving from the water extension
+
+A full-access device can request `POST /api/v1/assistant/health/intake/import` (#13636).
+Nothing moves merely by opening Health. Before import, Today counts only Health's built-in
+records; the extension continues to record and remind independently. GET intake includes
+`water_extension:"pending"` while the extension is enabled, or installed without a receipt,
+including one manually disabled before import. After a successful import it is omitted;
+re-enabling the extension makes it pending again. An uninstalled extension never shows pending.
+
+Import validates the complete extension file first, including old records. A corrupt file
+returns its reason without changing records, settings, reminders or the source file. It then
+commits the records in one transaction, switches the extension off using its normal dependent
+checks, and reads the file again after shutdown to catch a drink recorded just before the
+switch. UUIDv5 identities include the extension's storage key, record ID and UTC timestamp,
+so a reset's repeated IDs remain distinct and retrying never duplicates or revives an undone
+entry. A failed switch leaves Health settings and reminder timing unchanged; already imported
+records remain and the same request can be retried.
+
+After stopping the extension, import copies its saved water settings over built-in defaults.
+The built-in reminder turns on only if both the extension and its reminder switch were on;
+an untouched extension reminder switch means on. Last-reminder and snooze timing carry over,
+with a later drink or existing Health reminder time retained to avoid an immediate reminder.
+Protein uses its built-in default. The resulting settings, timing and migration receipt commit
+together. The receipt is `settings` key `health.intake.water_import`, containing migration time,
+newly imported count and extension version. The response returns that request's new-record
+count, whether the extension is disabled, and the resulting settings. A completed import
+retried while the extension remains off retains current Health settings and timing.
+
+The extension remains installed with its data directory. **Migrate before uninstalling**:
+uninstall deletes that directory. Afterwards, replace extension water widgets and watch-face
+rings with the built-in ones; the old surfaces show their empty choose-an-extension state.
+Rebuild shortcuts that used Run Extension Action with the built-in Log Water action. The
+extension's Android water page disappears when it is off. The iPhone/iPad migration card
+warns about these changes before the user requests import; web and Android do not offer the card.
+
+On iPhone and iPad, a notice card above **Today** offers **Move into Health** only when the
+intake response includes `water_extension:"pending"`. Demo mode and responses without that
+field show no card. It explains that records and settings move into Health, the extension
+is turned off, and its Android water page disappears. Nothing imports automatically.
+Tapping the single-line button sends `POST /api/v1/assistant/health/intake/import?space=health`
+through the default manager. Intake actions are disabled while it runs. Success refreshes
+Today, removes the card and shows the imported count and extension-disabled confirmation,
+with a reminder to replace widgets, watch faces and shortcuts. A failed import shows the
+reason in a toast and keeps the card available for a safe retry.
+
+The mock hub's intake domain starts with `water_extension:"pending"`. POST import adds two
+synthetic drinks (200 ml and 250 ml) once, alongside its seeded intake records, and removes the
+flag. `MOCK_WATER_EXTENSION=none` or `migrated` starts without it; `none` returns 404 on import,
+while `migrated` returns zero new records. `MOCK_HEALTH_INTAKE=off` still disables the feature.
+Both `/mock/reset` and `/mock/health-intake?reset=1` restore the seeded records, default settings
+and initial migration state. This fixture contains no real records.
 
 ## Activity rings
 
@@ -376,7 +429,7 @@ Verification image removed; see the associated PR.
 
 ## iOS and Mac entry points (#2901)
 
-- Entry on iPhone and iPad: the sidebar's **Health** opens the Health home immediately, with its open conversations listed newest first ("Entering Health" above). `AssistantView.enterHealth()` synchronously calls `backToRoot(); present(.health)`; the embedded Sidebar layout selects Health as its page root. Opening the home does not wait for the conversation list. **New Chat** in a health conversation still returns to the home, and the first message in its composer starts a new health conversation (`apple/Persona/Views/Assistant/HealthView.swift`).
+- Entry on iPhone and iPad: the sidebar's **Health** opens the Health home immediately, with its open conversations listed newest first ("Entering Health" above). `AssistantView.enterHealth()` synchronously calls `backToRoot(); present(.health)`; the embedded Sidebar layout selects Health as its page root. Opening the home does not wait for the conversation list. **New Chat** in a health conversation still returns to the home, and the first message in its composer starts a new health conversation (`apple/Modules/Health/HealthView.swift`).
 - Health page: a one-line note; **Works with Apple Health** (#13118), the Health app's icon and what is read and saved, which on an iPhone or iPad opens Settings › Connectors › This iPhone (App Review 2.5.1 wants HealthKit named Apple Health where it is used; the phone data row is **Apple Health** too); suggested questions (tap one to start a health chat with it), health chats (`GET /api/v1/assistant?space=health`, merged with pushed ones carrying `space: "health"`; swipe / right-click to archive),
   health memory (pushes the memory page `AssistantMemoryView(space: "health")`; view, edit and delete all carry `?space=health`), data sources, privacy. At the bottom is an input box; sending does `POST /api/v1/assistant/conversations` with `"space":"health"`, never set as the main chat.
 - iOS input box (#3825): Persona's new conversation's composer in every style (`StarterComposer` in the shell's composer): + opens the attach panel on the iPhone (touch and hold, or the iPad's tap: the + menu), and the model button picks the launcher and one of its models (#11472; Health's, the default manager's, until one is picked), the effort and, a level down, the permission mode. The effort and mode are the ones Persona's new conversation picks (a health conversation already started with them). Files still go to `reports/`. The Mac keeps its input line (BeautifulUI: the prompt bar with its launcher menu).
@@ -448,7 +501,7 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
 
 ## Health trends on iOS (#3272)
 
-- `apple/Persona/Views/Health/HealthTrendsSection.swift`: **Health Trends**, steps (`bar`), sleep and weight (`line`; `stat` when there is only one day) over the last 7 / 30 days, drawn as `persona-card` with the same renderer as cards in health answers (`AssistantViewCard`).
+- `apple/Modules/Health/HealthTrendsSection.swift`: **Health Trends**, steps (`bar`), sleep and weight (`line`; `stat` when there is only one day) over the last 7 / 30 days, drawn as `persona-card` with the same renderer as cards in health answers (`AssistantViewCard`).
 - Data is read directly from Apple Health on the iPhone or iPad (`HealthTool.daily`, the same queries as `phone_health_summary`), not via the hub. The reusable section can offer **Allow Access** before permission has been requested, or explain how to allow reading when it has no data; the home hides these empty states as described below.
 - On the Health home, trends follow Today and, on iPhone, Activity rings. iPhone and iPad show the section only when at least one metric has data; unavailable, unreadable or not-yet-authorized data leaves it hidden. Home reads do not request access. Vision Pro and the web do not include this section.
 - Screenshots: `-showHealthTrends sample` (the simulator has no health data, so sample data is used), `empty`, `ask`, `YES` (reads the device).
@@ -464,7 +517,7 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
 
 - Server (inside `server/`): `go test ./internal/assistant -run Health` (`server/internal/assistant/health_test.go`: starting health chats, separate lists, `main` and unknown `space` rejected, tools do not cross spaces, outbound, golden),
   `go test ./internal/hub -run Health` (push without body), `go test ./internal/connector -run ConfirmEach`, `go test ./internal/node -run LarkGateHealth`, `go test ./internal/identity` (health directory, `SpaceOf`, `IsAssistantDir`).
-  After changing `health_claude_md.md`, update the golden and review the diff (`docs/assistant/prompts.md`). Charts: `go test ./internal/assistant -run HealthClaudeMDTeachesCharts`, `go test ./internal/feishubot -run PersonaCards`.
+  After changing `health_claude_md.md`, update the golden and review the diff (`docs/assistant/prompts.md`). Charts: `go test ./internal/assistant -run HealthClaudeMDTeachesCharts`, `go test ./internal/modules/lark/feishubot -run PersonaCards`.
 - Web: `cd web && npm test && npm run build`.
 - iOS / Mac: `PersonaTests/HealthModelTests` (lists and memory carry `space`, merging pushes, sidebar does not list health chats, new chats carry `space`); build `Persona` and `PersonaMac`.
 - iPhone dietary intake acceptance (real device; not covered by server or simulator tests):

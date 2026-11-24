@@ -16,7 +16,8 @@
 //   settings → settingsTabs · chat_card_kinds → cardRenderers · composer_actions + chat_accessories → chatSlots
 //   i18n_namespaces → i18nNamespaces (+ locales)
 // Served: id, api (checked against MODULE_API), needs (the ESLint boundary), feature, routes, navItems, extensionPages
-// (reserved `/extension/<id>/…` pages, also shell_places), i18nNamespaces / locales, chatSlots (#13846: ChatView,
+// (reserved `/extension/<id>/…` pages, also shell_places), kbKinds (the knowledge detail's `kb.detail` slot, also
+// shell_places), i18nNamespaces / locales, chatSlots (#13846: ChatView,
 // Composer and Interactions draw what a module's code fills, ChatSlotOutlet), settingsTabs (Settings draws the module's
 // page under its own category) and cardRenderers (a pending card of a kind the core has no card for). Declared but not
 // yet served: wants. registerModule refuses a descriptor that fills it, or that names a slot, a tab or a card kind the
@@ -28,12 +29,13 @@
 // that publishes module flags also announces the marker MODULES_FEATURE. A module with a `feature` is off only when the
 // hello has the marker and lacks the module's flag: no hello yet, or a hello without the marker (an older hub), leaves
 // it on, so defaults never change on an older hub and nothing waits on the hello to draw.
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode, RefObject } from "react";
 import { useSyncExternalStore } from "react";
 import { addCatalogs, type CatalogLoaders } from "../i18n";
 import type { IconName } from "../ui/icons";
 import type { UIColor } from "../lib/extension-ui-v6";
 import type { Route } from "../lib/router";
+import type { KBDetail, KBEntry } from "../lib/kb";
 import type { State } from "../lib/store";
 import type { Interaction, Item, Session } from "../lib/types";
 import { moduleSwitchedOff, subscribeModuleSwitches } from "./module-switch";
@@ -169,12 +171,55 @@ export interface ModuleExtensionPageProps {
   onToggleSidebar?: () => void;
 }
 
+/** The parts of a knowledge entry's page that a module draws for an entry of a kind it names (`kbKinds`, the
+ *  `kb.detail` slot): the core lays the page out and puts each part where it goes. All optional. */
+export interface ModuleKBDetailParts {
+  /** Buttons after "Ask Persona". */
+  actions?: ReactNode;
+  /** Sections first in the page's body. */
+  lead?: ReactNode;
+  /** Sections after the entry's own facts and imported notes. */
+  sections?: ReactNode;
+  /** Sections after the code directories. */
+  tail?: ReactNode;
+  /** Dialogs the parts open. */
+  dialogs?: ReactNode;
+  /** The module shows the entry's summary itself: the page leaves its profile out. */
+  hideProfile?: boolean;
+}
+
+/** What the `kb.detail` slot's component receives: the entry and its page's means, and `children`, the page laid out
+ *  around the parts it gives. It renders `children(parts)`; before its code is in, the page draws with no parts. */
+export interface ModuleKBDetailProps {
+  kind: string;
+  id: string;
+  /** Opened from a search. */
+  query?: string;
+  /** The entry's detail; undefined until read. */
+  detail?: KBDetail;
+  entry: KBEntry;
+  /** The credentials and assistant the page reads and writes with. */
+  auth: { token: string; tokenOwner: string; headers: Record<string, string> };
+  /** Whether the page still belongs to the same owner and assistant. */
+  current: () => boolean;
+  manager: string;
+  /** Reads the detail again. */
+  reload: (signal?: AbortSignal) => Promise<boolean>;
+  onSaved: () => void;
+  onOpen: (e: KBEntry) => void;
+  /** The page's scroller. */
+  scroller: RefObject<HTMLDivElement | null>;
+  children: (parts: ModuleKBDetailParts) => ReactNode;
+}
+
 /** A module's code, loaded on first use. */
 export interface ModuleCode {
   /** The page its routes open. */
   Page?: ComponentType<ModulePageProps>;
   /** The page its `extensionPages` ids open. */
   ExtensionPage?: ComponentType<ModuleExtensionPageProps>;
+  /** The parts of a knowledge entry's page for the `kbKinds` it names. */
+  KBDetail?: ComponentType<ModuleKBDetailProps>;
   /** What it draws in the chat slots its descriptor names (`chatSlots`). */
   chat?: ChatSlotComponents;
   /** Its Settings pages, by `settingsTabs` key. */
@@ -204,6 +249,9 @@ export interface ModuleDescriptor {
    *  declarative extension page of its own, under an id no extension can have (ids starting with "-"). */
   extensionPages?: readonly string[];
   navItems?: readonly ModuleNavItem[];
+  /** Knowledge entry kinds whose page it adds parts to (`kb.detail`, #13430 `shell_places`): `ModuleCode.KBDetail`.
+   *  One module per kind. */
+  kbKinds?: readonly string[];
   /** Its Settings categories; its code's `settings` draws each. */
   settingsTabs?: readonly ModuleSettingsTab[];
   /** The chat slots it fills; its code's `chat` draws each. */
@@ -305,6 +353,10 @@ export function registerModule(d: ModuleDescriptor): void {
     const other = [...registry.values()].find((m) => m.extensionPages?.includes(id));
     if (other) throw new Error(`module "${d.id}" claims the extension page id "${id}", which "${other.id}" has`);
   }
+  for (const kind of d.kbKinds ?? []) {
+    const other = [...registry.values()].find((m) => m.kbKinds?.includes(kind));
+    if (other) throw new Error(`module "${d.id}" claims the knowledge kind "${kind}", which "${other.id}" has`);
+  }
   registry.set(d.id, d);
   changed();
 }
@@ -360,6 +412,16 @@ export function moduleRouteAt(segments: readonly string[]): Extract<Route, { nam
 export function moduleExtensionAt(extension: string): ModuleDescriptor | "absent" | null {
   for (const d of registry.values()) {
     if (!d.extensionPages?.includes(extension)) continue;
+    return moduleState(d) === "off" ? "absent" : d;
+  }
+  return null;
+}
+
+/** The module that adds parts to a knowledge entry's page of this kind: its descriptor while it is on (or pending),
+ *  "absent" while it is off, null for a kind no module names. */
+export function moduleKBKindAt(kind: string): ModuleDescriptor | "absent" | null {
+  for (const d of registry.values()) {
+    if (!d.kbKinds?.includes(kind)) continue;
     return moduleState(d) === "off" ? "absent" : d;
   }
   return null;
@@ -427,6 +489,7 @@ function checkCode(d: ModuleDescriptor, code: ModuleCode): ModuleCode {
     ...(d.chatSlots ?? []).filter((x) => !code.chat?.[x]).map((x) => `the chat slot "${x}"`),
     ...(d.settingsTabs ?? []).filter((x) => !code.settings?.[x.key]).map((x) => `the Settings category "${x.key}"`),
     ...(d.cardRenderers ?? []).filter((x) => !code.cards?.[x]).map((x) => `the card kind "${x}"`),
+    ...(d.kbKinds?.length && !code.KBDetail ? [`the knowledge kind "${d.kbKinds[0]}"`] : []),
   ];
   if (missing.length) throw new Error(`module "${d.id}" names ${missing.join(", ")}, which its code does not draw`);
   return code;

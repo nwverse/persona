@@ -24,6 +24,7 @@ const modules = import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { q
 const moduleCatalogs: Record<string, Record<string, () => Promise<Catalog>>> = {
   health: import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=module-health" }),
   voice: import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=module-voice" }),
+  recording: import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=module-recording" }),
 };
 /** flatten() over a language's namespace files of one kind, keyed like the import form's entries. The files are read
  *  from disk, not through an eager import.meta.glob: that made ~900 JSON modules, the slowest import of the suite. */
@@ -86,7 +87,8 @@ describe("i18n catalogs under Vitest", () => {
       expect(fallbacks).toEqual(whole.fallbacks);
     });
 
-    it(`${lang}: each module's catalog holds its namespaces only, and together they are all the modules' strings`, async () => {
+    // The core-only lane (web/core-only.ts, #13932) has an empty module list, while the modules' catalogs stay on disk.
+    it.skipIf(process.env.PERSONA_WEB_MODULES === "none")(`${lang}: each module's catalog holds its namespaces only, and together they are all the modules' strings`, async () => {
       const { MODULES } = await import("./src/modules");
       expect(Object.keys(moduleCatalogs).sort()).toEqual(MODULES.map((m) => m.id).sort());
       const all = await modules[key]();
