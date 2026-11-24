@@ -9,12 +9,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 )
 
 // TodoPRStatus keeps forge observations beside the existing stage/delivery. A ready,
 // open PR with no working Agent is a view of that state, not another task lifecycle.
 type TodoPRStatus struct {
 	URL                string     `json:"url"`
+	Title              string     `json:"title,omitempty"`
 	HeadOID            string     `json:"head_oid,omitempty"`
 	State              string     `json:"state"`
 	Draft              bool       `json:"draft"`
@@ -25,6 +28,7 @@ type TodoPRStatus struct {
 	Conflicts          bool       `json:"conflicts"`
 	CheckedAt          time.Time  `json:"checked_at"`
 
+	terminalAt       time.Time          // forge time for a merge or close, when known
 	submittedReview  prSubmittedReview  // consumed by the park in the same pass, separate from the stage's review summary
 	actionableReview prActionableReview // current-head changes_requested / actionable review for opt-in Agent routing
 	failingCheck     prFailingCheck     // current-head failing CI summary for opt-in Agent routing
@@ -61,11 +65,14 @@ type prStatusForge interface {
 func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (TodoPRStatus, error) {
 	path := fmt.Sprintf("/repos/%s/pulls/%d", repo, number)
 	var pr struct {
-		State          string `json:"state"`
-		Draft          bool   `json:"draft"`
-		Merged         bool   `json:"merged"`
-		Mergeable      *bool  `json:"mergeable"`
-		MergeableState string `json:"mergeable_state"`
+		Title          string    `json:"title"`
+		State          string    `json:"state"`
+		Draft          bool      `json:"draft"`
+		Merged         bool      `json:"merged"`
+		MergedAt       time.Time `json:"merged_at"`
+		ClosedAt       time.Time `json:"closed_at"`
+		Mergeable      *bool     `json:"mergeable"`
+		MergeableState string    `json:"mergeable_state"`
 		Head           struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
@@ -78,10 +85,13 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 	if err := g.get(ctx, path, &pr); err != nil {
 		return TodoPRStatus{}, err
 	}
-	out := TodoPRStatus{HeadOID: pr.Head.SHA, State: pr.State, Draft: pr.Draft, Review: "pending", Checks: "none",
+	out := TodoPRStatus{Title: pr.Title, HeadOID: pr.Head.SHA, State: pr.State, Draft: pr.Draft, Review: "pending", Checks: "none",
 		Conflicts: pr.MergeableState == "dirty" || pr.Mergeable != nil && !*pr.Mergeable}
 	if pr.Merged {
 		out.State = "merged"
+		out.terminalAt = pr.MergedAt
+	} else if pr.State == "closed" {
+		out.terminalAt = pr.ClosedAt
 	}
 	if out.State != "open" {
 		return out, nil
@@ -531,6 +541,7 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus) error {
 	// The wait belongs to the snapshot taken before the forge request, not a park created while it was in flight.
 	held := t.Supervision.parking()
+	status.Title = repository.ObservedLinkTitle(status.Title)
 	if source := externalParkPRURL(held); source != "" && source == triageNormalizePRURL(status.URL) {
 		if err := s.applyExternalParkPRStatus(ctx, t, status); err != nil {
 			return err
@@ -591,7 +602,8 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		b.stageWriting.Unlock()
 		return nil // a new Agent reply replaced the PR while the request was in flight
 	}
-	if store := s.store(); store != nil {
+	store := s.store()
+	if store != nil {
 		stages := make(map[string]todoStage, len(b.stages))
 		for id, stage := range b.stages {
 			stages[id] = stage
@@ -610,6 +622,13 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		todo.PRStatus, todo.OtherPRs = cur.PRStatus, cur.otherPRFacts()
 	}
 	s.todos.mu.Unlock()
+	// Keep title writes in observation order, even if two polls for the same PR finish together.
+	if st, ok := store.(todoPRLinkTitleStore); ok && status.Title != "" {
+		if err := st.SetTodoPRLinkTitle(ctx, t.ID, triageNormalizePRURL(status.URL), status.Title); err != nil {
+			// A link metadata error can retry on the next poll without delaying delivery or supervision.
+			s.logf("task %s: save PR link title: %v", t.ID, err)
+		}
+	}
 	b.stageWriting.Unlock()
 	s.todosChanged(ctx)
 	parkWoke := false
@@ -788,5 +807,5 @@ func otherPRStatus(ctx context.Context, h codeHost, url string) (TodoPRStatus, e
 	if err != nil {
 		return TodoPRStatus{}, fmt.Errorf("%s: %w", h.Name(), err)
 	}
-	return TodoPRStatus{State: st.State, Review: "pending", Checks: "none"}, nil
+	return TodoPRStatus{State: st.State, Review: "pending", Checks: "none", terminalAt: st.TerminalAt}, nil
 }

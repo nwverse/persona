@@ -12,6 +12,8 @@ import type { Item, ItemsPage } from "../../lib/types";
 import { createTextThrottle, type TextThrottle } from "../../ui/stream/throttle";
 import { unlandedLive } from "../../lib/live-text";
 import { clearLive } from "../../lib/live";
+import { endPull, pullKey as gateKeyOf, resetPullGatesForTests, startPull } from "../../lib/pull-gate";
+import { archivedNow } from "../../lib/agent-archives";
 
 const PAGE = "turns=2&fold_work=1&lazy_images=1";
 /** How often a page checks whether it is behind (a pure comparison; nothing is asked unless it is, lib/stale-page.ts). */
@@ -50,6 +52,7 @@ const isNotLoaded = (e: unknown) => e instanceof ApiError && e.code === "not_loa
 /** Tests only: forget the asks, as a fresh page load does (each sync case starts its clock at the same moment again). */
 export function resetStalePullsForTests() {
   lastPulls.clear();
+  resetPullGatesForTests();
 }
 
 export interface Transcript {
@@ -101,7 +104,7 @@ function cachedPage(mid: string, sid: string, cache?: TranscriptCache): FeedCach
  *  it has no rev), what the stale-page check compares; the hub's `revs` event moves the rev too.
  *  `assistant`: a Persona conversation, whose live text is the headless assistant's whole reply so far (any reply item
  *  ends it); otherwise it is an agent's message as Claude shows it, which the transcript replaces by its start. */
-export function useTranscript(mid: string, sid: string, opts: { starting?: boolean; updatedAt?: string; rev?: number; cache?: TranscriptCache; assistant?: boolean } = {}): Transcript {
+export function useTranscript(mid: string, sid: string, opts: { starting?: boolean; updatedAt?: string; rev?: number; cache?: TranscriptCache; assistant?: boolean; readOnly?: boolean } = {}): Transcript {
   const [initial] = useState(() => cachedPage(mid, sid, opts.cache));
   const [items, setItems] = useState<Item[]>(initial?.items ?? []);
   const [loading, setLoading] = useState(!initial);
@@ -155,6 +158,8 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
   const deltas = useRef<TextThrottle>(null!);
   deltas.current ??= createTextThrottle(setStreaming);
   const assistant = Boolean(opts.assistant);
+  // Read-only audit views page over HTTP but never subscribe/unsubscribe or otherwise act as the visible chat.
+  const readOnly = opts.readOnly === true;
   // an agent's last delta as it came, and what of it the page shows (lib/live-text.ts)
   const liveRaw = useRef("");
   const liveShown = useRef("");
@@ -220,7 +225,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       setItems([]);
       setStreaming("");
       deltas.current.cancel();
-      send({ type: "unsubscribe", machine_id: mid, session_id: sid });
+      if (!readOnly) send({ type: "unsubscribe", machine_id: mid, session_id: sid });
     });
     disownReads();
     const kept = snapshot.current;
@@ -387,7 +392,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     };
 
     const subscribe = () => {
-      if (dead || conversationDeleted(mid, sid)) return;
+      if (readOnly || dead || conversationDeleted(mid, sid)) return;
       send({ type: "subscribe", machine_id: mid, session_id: sid, since_seq: covered.current || undefined, lazy_images: true, fold_work: true });
       subscribed = true;
     };
@@ -420,11 +425,21 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       if (!dead && version === pageRequest) rewritten(history.current);
       return fresh;
     };
+    // Every automatic read of what came after goes through the session's gate (lib/pull-gate.ts): one at a time across
+    // this tab's views of the session, and after a failure the next waits longer (#13677).
+    const gateKey = gateKeyOf("after", mid, sid);
+    const gatedPull = (): Promise<number> | undefined => {
+      if (startPull(gateKey, Date.now()) > 0) return undefined;
+      return pull().then(
+        (fresh) => { endPull(gateKey, "ok", Date.now()); return fresh; },
+        (e: unknown) => { endPull(gateKey, isAbort(e) ? "aborted" : "failed", Date.now()); throw e; },
+      );
+    };
     const queueGapFill = () => {
       // Schedule once per gap so frequent pushes cannot postpone the fill.
       gapTimer.current ??= window.setTimeout(() => {
         gapTimer.current = undefined;
-        void pull().catch(() => {});
+        void gatedPull()?.catch(() => {});
       }, 1500);
     };
     const keepExpanded = (batch: Item[]) => batch.filter(i => {
@@ -442,9 +457,13 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         updatedAt: asked, lastItemAt: newestItemAt(itemsRef.current), revUnread: revs.unread, revMovedAt: revs.movedAt, lastArrival,
         lastPull: lastPulls.get(pullKey) ?? 0, checkedFor, now, visible: document.visibilityState === "visible", pulling,
       })) return;
+      // An archived session gets no new lines: nothing to catch up on, and on a slow link every ask costs (#13677).
+      if (archivedNow(mid, sid)) return;
+      const asking = gatedPull();
+      if (!asking) return; // another view of it is asking, or the last ask failed and the wait is not over
       lastPulls.set(pullKey, now);
       pulling = true;
-      pull()
+      asking
         .then((fresh) => {
           checkedFor = asked;
           tally = afterPull(tally, fresh > 0 ? "found" : "empty");
@@ -454,6 +473,8 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         })
         .finally(() => {
           pulling = false;
+          // The next ask is timed from when this one ended: a slow ask (29.5 s) no longer lets the next go at once.
+          lastPulls.set(pullKey, Date.now());
           if (!dead) setNotLive(tallyNotLive(tally));
         });
     };
@@ -629,10 +650,10 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("pagehide", flushSave);
       clearLive(mid, sid);
-      send({ type: "unsubscribe", machine_id: mid, session_id: sid });
+      if (!readOnly) send({ type: "unsubscribe", machine_id: mid, session_id: sid });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mid, sid, cacheScope, memoryScope, cacheManager, assistant, invalidateHistoryReads, updateHasMore]);
+  }, [mid, sid, cacheScope, memoryScope, cacheManager, assistant, readOnly, invalidateHistoryReads, updateHasMore]);
 
   // After the effect above, which starts each conversation's watch from the rev it has then.
   useEffect(() => {

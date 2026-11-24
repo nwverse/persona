@@ -343,6 +343,8 @@ var rpcFailureKeys = map[string]string{
 	"resume_not_allowed": "rpc-errors.resume_not_allowed",
 	"stop_not_saved":     "rpc-errors.stop_not_saved",
 	"omp_options":        "rpc-errors.omp_options",
+	// a call that would drive an agy conversation an agy in a terminal has open (node/agypresence.go, #13603)
+	"agy_in_terminal": "rpc-errors.agy_in_terminal",
 	// a message to an omp session the node cannot resume: no usable session file (node/ompresume.go)
 	"omp_resume_unknown": "rpc-errors.omp_resume_unknown",
 	// a resume of a conversation the computer has nothing of (node/control.go resumeKnown, #10941)

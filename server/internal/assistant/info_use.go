@@ -13,8 +13,9 @@ import (
 //   - A text leaving Persona (handed to an agent, a push, sent to other people, written to the knowledge base: scenes
 //     3, 4, 5 and 7) carries its own categories, tagged on the spot within infoTagExitTimeout, and its track's default
 //     categories (exitUse). Never the conversation's accumulated ones: a long conversation such as the main chat
-//     would soon carry every category and have everything confirmed. When the text cannot be tagged in time, the
-//     conversation's categories are taken instead, and a conversation never tagged is taken for sensitive.
+//     would soon carry every category and have everything confirmed. When the text cannot be tagged in time, a text
+//     from the main space is taken for general; in any other track the conversation's categories are taken instead,
+//     and a conversation never tagged is taken for sensitive.
 //   - A conversation itself (read by an extension, recalled elsewhere: scenes 6 and 2) carries its categories
 //     (conversationUse); while a turn of it waits to be tagged they are not known.
 //
@@ -22,7 +23,7 @@ import (
 // categories, as before tagging (the health space's every switch stays on, the main space's off).
 
 // infoTagExitTimeout bounds tagging a text on its way out.
-const infoTagExitTimeout = 800 * time.Millisecond
+const infoTagExitTimeout = 3 * time.Second
 
 // infoTagPending are the conversations with a turn ended and not tagged yet (or whose tagging failed), by session id.
 // Kept in memory: a restart forgets them, and they read as tagged by what was kept.
@@ -89,7 +90,7 @@ func (s *Service) trackFloor(ctx context.Context, space string) ([]string, bool)
 func (s *Service) conversationUse(ctx context.Context, sid string) infoUse {
 	space, _ := s.conversationSpace(ctx, sid)
 	cats, _, ok := s.conversationCategoryState(ctx, sid)
-	return infoUse{Categories: cats, Known: ok && !s.infoTagWaiting.has(sid), SourceTrack: space}
+	return infoUse{Categories: cats, Known: ok && !s.infoTagWaiting.has(sid), SourceTrack: space, Rules: s.trackRules(ctx, space)}
 }
 
 // exitUse is text's information on its way out of conversation sid of track space (scenes 3, 4, 5 and 7): the
@@ -99,17 +100,25 @@ func (s *Service) conversationUse(ctx context.Context, sid string) infoUse {
 // else it is taken for sensitive.
 func (s *Service) exitUse(ctx context.Context, text, sid, space string) infoUse {
 	floor, known := s.trackFloor(ctx, space)
-	info := infoUse{Categories: floor, Known: known, SourceTrack: space}
+	info := infoUse{Categories: floor, Known: known, SourceTrack: space, Rules: s.trackRules(ctx, space)}
 	text = strings.TrimSpace(text)
 	if !known || len(floor) > 0 || text == "" || !s.infoTagConfigured(ctx) {
 		return info
 	}
-	cats, err := s.infoTag(ctx, infoTagClip(text), floor, infoTagExitTimeout)
+	cats, err := s.infoTag(ctx, infoTagClip(text), s.infoTagFocus(ctx, space), infoTagExitTimeout)
 	if err == nil || modelUnconfigured(err) {
 		info.Categories, _ = normalCategories(append(cats, floor...))
 		return info
 	}
 	s.logf("info tag: a text leaving %q: %v", sid, infoTagFailure(err))
+	if space == "" && sid != "" {
+		// The main space is general by default: a text from one of its conversations that could not be tagged in
+		// time is used as general, not as sensitive. Taking it for sensitive asked the phone about nearly every
+		// hand-off (the model rarely answers within the timeout, and a busy conversation always has a turn waiting
+		// to be tagged), redacted its pushes and refused its knowledge-base writes. A text tagged sensitive in time
+		// is still confirmed; tracks other than the main one stay strict.
+		return info
+	}
 	c, tagged, ok := s.conversationCategoryState(ctx, sid)
 	info.Categories = c
 	info.Known = sid != "" && ok && tagged && !s.infoTagWaiting.has(sid)

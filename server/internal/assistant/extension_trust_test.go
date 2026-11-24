@@ -193,3 +193,31 @@ func TestInfoAccessRoutesAreTheUsers(t *testing.T) {
 		t.Fatalf("after a model tag: %v", cats)
 	}
 }
+
+// The profile's owners (Profile.ExtensionOwners) are read once and kept until the user sets trust or an extension is
+// forgotten: a publish does not read the store each time.
+func TestExtensionOwnersAreKeptBetweenTrustChanges(t *testing.T) {
+	ctx := context.Background()
+	s, st := trustService(t)
+	if got := s.extensionOwners(ctx); len(got) != 0 {
+		t.Fatalf("no trust set: %v", got)
+	}
+	if w := serve(s, http.MethodPut, "/api/v1/assistant/extension-trust/qa-memory", `{"trust":"owner"}`); w.Code != http.StatusOK {
+		t.Fatalf("set owner: %d %s", w.Code, w.Body)
+	}
+	if got := s.extensionOwners(ctx); !slices.Equal(got, []string{"qa-memory"}) {
+		t.Fatalf("after the user's change: %v", got)
+	}
+	// A row written behind the assistant's back is not read on the next publish: the owners are kept.
+	_ = st.SetExtensionTrust(ctx, "qa-other", assistantwire.ExtensionTrustOwner, nil, "test")
+	if got := s.extensionOwners(ctx); !slices.Equal(got, []string{"qa-memory"}) {
+		t.Fatalf("kept owners: %v", got)
+	}
+	var none map[string]any
+	if err := askConversations(t, s, assistantwire.MethodExtensionTrustForget, `{"extension":"qa-memory"}`, &none); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.extensionOwners(ctx); !slices.Equal(got, []string{"qa-other"}) {
+		t.Fatalf("after a forget, read again: %v", got)
+	}
+}
