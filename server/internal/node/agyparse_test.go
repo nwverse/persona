@@ -146,6 +146,49 @@ func TestAgyParseGoesOnFromTheLastFold(t *testing.T) {
 	}
 }
 
+// agyParse hands out steps of the caller's own (#13470): agyRead restoring a truncated reply from the full export
+// changes its copy, not the fold the next read goes on from, and the next read replacing a step in place leaves the
+// steps an earlier read was given as they were.
+func TestAgyParseHandsOutItsOwnSteps(t *testing.T) {
+	n, _ := testNode(t)
+	dir := t.TempDir()
+	middle := strings.Repeat("words ", 40)
+	reply := "Start\n" + middle + "\nEnd"
+	preview := fmt.Sprintf("Start\n<truncated %d bytes>\nEnd", len(middle)+2)
+	const record = `{"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-01-01T00:00:01Z","content":%q%s}` + "\n"
+	user := agyParseLine(0, "USER_INPUT", "DONE", "2026-01-01T00:00:00Z", "Hello")
+	file := agyTestFile(t, dir, agyTestID, user+fmt.Sprintf(record, preview, `,"truncated_fields":["content"]`))
+	agyTestWrite(t, filepath.Join(dir, "brain", agyTestID, agyFullTranscriptPath), user+fmt.Sprintf(record, reply, ""))
+	if h := agyReadNow(t, n, dir); len(h.items) != 2 || h.items[1].Text != reply {
+		t.Fatalf("history %+v, want the reply restored from the full export", h.items)
+	}
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := parseAgySteps(raw, agyTestID)
+	n.mu.Lock()
+	kept, ok := n.agyParses.peek(filepath.Join(dir, agyTestID))
+	n.mu.Unlock()
+	if !ok || kept == nil || !reflect.DeepEqual(kept.fold.steps, want) {
+		t.Fatal("restoring the reply changed the parse kept to go on from")
+	}
+
+	// A tool call still running when a later step is logged, then its finished record: the next parse replaces it in
+	// place in the fold.
+	agyTestAppend(t, file, agyParseLine(2, "GENERIC", "RUNNING", "2026-01-01T00:00:02Z", "")+
+		agyParseLine(3, "PLANNER_RESPONSE", "DONE", "2026-01-01T00:00:03Z", "Meanwhile"))
+	first, _, _ := agyParseNow(t, n, dir)
+	agyTestAppend(t, file, agyParseLine(2, "GENERIC", "DONE", "2026-01-01T00:00:02Z", "finished"))
+	second, _, _ := agyParseNow(t, n, dir)
+	if len(first) != 4 || len(second) != 4 {
+		t.Fatalf("parsed %d steps, then %d, want 4", len(first), len(second))
+	}
+	if first[2].Status != "RUNNING" || second[2].Status != "DONE" {
+		t.Fatalf("the first parse's steps changed under it: %q, then %q", first[2].Status, second[2].Status)
+	}
+}
+
 // An item or image a pane does not have is not_found (404), not an uncoded error the hub serves as 502 (#13470).
 func TestAgyPaneMissingItemIsNotFound(t *testing.T) {
 	n, f, home := herdrNode(t)

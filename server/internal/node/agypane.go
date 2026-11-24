@@ -634,7 +634,19 @@ func (n *Node) agyParse(key, conversation string, info os.FileInfo, raw []byte) 
 	n.mu.Lock()
 	n.agyParses.put(key, &agyParsed{file: info, length: len(raw), hash: sum, fold: fold})
 	n.mu.Unlock()
-	return fold.steps, fold.revision(len(raw), sum)
+	return agyOwnSteps(fold.steps), fold.revision(len(raw), sum)
+}
+
+// agyOwnSteps copies a fold's steps for the caller to keep and change: the fold stays the transcript's parse, for the
+// next read to go on from, which can replace steps in place (a late arrival, a rewind, a running step that finished).
+// agyRead restores a truncated reply's full text into its copy (restoreAgyFullText), dropping restored fields from
+// TruncatedFields in place, so each step's list is copied too.
+func agyOwnSteps(steps []agyStep) []agyStep {
+	own := slices.Clone(steps)
+	for i := range own {
+		own[i].TruncatedFields = slices.Clone(own[i].TruncatedFields)
+	}
+	return own
 }
 
 type agyPageParams struct {
