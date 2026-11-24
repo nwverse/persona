@@ -20,7 +20,7 @@ import { Icon, type IconName } from "../../ui/icons";
 import { Count, LarkAvatar } from "../inbox/InboxParts";
 import { ConnectorDetail, ConnectorList } from "./HubConnector";
 import { LarkDisplaySettings } from "./LarkDisplaySettings";
-import { LarkHomeSwitch } from "./LarkHomeSwitch";
+import { SettingsRows } from "../../core/SettingsRows";
 import { Group, Pill, Row, RowConfirm, Switch } from "./SettingsParts";
 import { SentSettings } from "./SentSettings";
 import { SENT_SUB } from "./nav";
@@ -561,7 +561,8 @@ function Feishu() {
           <p className="px-4 pt-1 pb-2.5 text-[11.5px] leading-snug text-ink-3">{t("settings-connectors.accounts_note")}</p>
         </>
       )}
-      <LarkHomeSwitch />
+      {/* the lark module's rows (Show messages on home, #13404): core/module-host.ts `settingsRows` */}
+      <SettingsRows place="connectors.lark" />
       {!absent && <LarkDisplaySettings />}
       <div className="px-4 pt-2.5 pb-1 text-[11.5px] font-medium text-ink-3">{t("settings-connectors.lark_uses")}</div>
       {USES.map((u) => (
