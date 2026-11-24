@@ -2341,7 +2341,7 @@ code. Its fields use the names of the module contract in #13430 section 4, in ca
 | `feature` | `feature` (its hello feature flag, `module.<id>`; see "When a module is there") | yes |
 | `needs` | `needs` (other modules it may import; ESLint holds it to them) | yes (guard) |
 | `wants` | `wants` (modules it uses when they are there) | declared, not yet served |
-| `shell_places` | `routes` (a page: a base segment, its aliases, its title), `extensionPages` (reserved `/extension/-<id>/…` pages the module draws, such as the health module's water and protein pages, #13176), `navItems` (a sidebar entry and the page it follows), `kbKinds` (knowledge entry kinds whose page it adds parts to: the `kb.detail` slot) and `standalonePages` (pages it draws on their own, without the app shell: see "Pages of their own") | yes |
+| `shell_places` | `routes` (a page: a base segment, its aliases, its title), `extensionPages` (reserved `/extension/-<id>/…` pages the module draws, such as the health module's water and protein pages, #13176), `navItems` (a sidebar entry and the page it follows), `kbKinds` (knowledge entry kinds whose page it adds parts to: the `kb.detail` slot) and `standalonePages` (pages it draws on their own, without the app shell: see **Pages of their own** below) | yes |
 | `i18n_namespaces` | `i18nNamespaces` and `locales` (its catalog loaders) | yes |
 | `settings` | `settingsTabs` (a Settings category in one of its groups) | yes (#13846) |
 | `chat_card_kinds` | `cardRenderers` (pending-card kinds the core has no card for) | yes (#13846) |
@@ -2443,21 +2443,27 @@ off, an entry of its kind is absent: its address routes as an unknown one, an op
 lists and searches that would show it leave it out.
 
 **Pages of their own** (#14404, `standalonePages`). A module may draw a page with no app shell (no sign-in flow, no
-sidebar), named by its address' first segment: the screen-share module's `/screen/<machine>`. `main.tsx` imports the
-module list before anything else and asks `standaloneAt(segments)` before App loads. While the module is on it loads the
-module (`loadModule`: strings, then code) and draws what `ModuleCode.Standalone(address)` returns as the whole page; the
-function takes from the address what must not stay (the app's token in the fragment) before App could read it, and
-returns null for an address that is not its page after all, which then opens the app. While the module is off the
-address is absent: `main.tsx` drops its fragment, so a token meant for the page is never taken for a sign-in, and the
-app routes it as an unknown address; its chunk and strings are never requested. Such a page draws before any hello, so
-there only this browser's switch can turn the module off (the hub's own module answers its API); the core's links to
-it ask `standaloneOn(base)`, which follows the hub flag like any module entry (the machine page's **View screen**). The
-code is the module's `standalone.tsx`: the build (`vite.config.ts`, `src/startup-preload.ts` `standalonePages`) reads
+sidebar), named by its address' first segment: the screen-share module's `/screen/<machine>`. The modules that have
+one are also listed in `web/src/modules/standalone.ts`, the part of the module list `main.tsx` loads before App
+(`index.ts` takes them in). Its `standalonePage(address)` finds the module for the address: while it is on, it loads
+the module's strings, then its code, and returns what `ModuleCode.Standalone(address)` draws, which `main.tsx` renders
+as the whole page; that function takes from the address what must not stay there (the app's token in the fragment)
+before App could read it, and returns null for an address that is not its page after all, which then opens the app.
+While the module is off the address is absent: its fragment is dropped, so a token meant for the page is never taken
+for a sign-in, the app routes it as an unknown address, and the module's chunk and strings are never requested. Such a
+page draws before any hello, so there only this browser's switch can turn the module off (the hub's own module answers
+the page's API). That file reaches the descriptors, the switch and the strings loader, never the host or the whole
+list: what `main.tsx` reaches is split out of App's chunks, and the whole list made the first screen about 30 KB
+heavier (so `moduleFeature` and `MODULES_FEATURE` live in `web/src/core/module-flags.ts`, which the host re-exports).
+Inside the app the host serves the field like the others: `registerModule` refuses a segment that is a core address,
+another module's page of its own, or a route of any module; `loadModule` refuses code without `Standalone`;
+`standaloneAt(segments)` answers absent while the module is off; and the core's links to the page ask
+`standaloneOn(base)`, which follows the hub flag like any module entry (the machine page's **View screen**). The code is
+the module's `standalone.tsx`: the build (`vite.config.ts`, `src/startup-preload.ts` `standalonePages`) reads
 `standalonePages` from each `module.ts`, preloads that file's chunks on its addresses (not while this browser switched
 the module off), and lets its import run without waiting for the rest of the catalog, as `main.tsx`'s own imports do;
 so that file and what it imports statically may read only the first screen's core strings and the module's own (the
-build checks it). `registerModule` refuses a segment that is a core address, another module's page of its own, or a
-route of any module; `loadModule` refuses code without `Standalone`.
+build checks it).
 
 **The screen-share module** (#14404). The live screen of a computer (`web/src/modules/screen-share/`,
 `docs/extensions/computer-use.md` "Live view"): the noVNC view, the video picture and its tiers, the Displays menu, the

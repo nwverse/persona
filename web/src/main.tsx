@@ -1,4 +1,5 @@
-import { stripBase } from "./lib/base";
+// The modules with a page of their own (the live screen, /screen/<machine>): never the whole list (it says why).
+import { standalonePage } from "./modules/standalone";
 import { takeImportLinkOnStart } from "./lib/import-link";
 import { initI18n, startI18n } from "./i18n";
 import "./styles.css";
@@ -16,27 +17,20 @@ applyLook();
 // The build waits only for the first screen's part of it, as its lazy imports wait for the rest; the dev server's do not.
 // React and the PWA helper say no t(), so they load alongside it rather than after it.
 // An overlay's history entry a reload left behind goes before the app reads the address (lib/back-close.ts, #5134).
-// The modules with a page of their own (the live screen, /screen/<machine>; core/module-host.ts `standalonePages`), so
-// such a page is known before App's module takes any token out of the address bar: src/modules/standalone.ts, never
-// the whole list (it says why).
-const [, { StrictMode, createElement }, { createRoot }, { startPWA }, , [{ STANDALONE_MODULES }, { loadModule, moduleById, registerModule, standaloneAt }]] = await Promise.all([
+const [, { StrictMode, createElement }, { createRoot }, { startPWA }] = await Promise.all([
   import.meta.env.DEV ? initI18n() : startI18n(),
   import("react"),
   import("react-dom/client"),
   import("./lib/pwa"),
   import("./lib/back-close").then((m) => m.settleOverlayEntry()),
-  Promise.all([import("./modules/standalone"), import("./core/module-host")]),
 ]);
 
 startPWA();
 
 // A module's page of its own (the live screen): no sign-in flow, no sidebar, and its code loads only there. While its
 // module is off the address is an unknown one, and its fragment (a token the app meant for that page) goes before App
-// could take it for a sign-in.
-const standalone = standaloneAt(stripBase(window.location.pathname).split("/").filter(Boolean), STANDALONE_MODULES);
-if (standalone === "absent" && window.location.hash) window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
-if (standalone && standalone !== "absent" && !moduleById(standalone.id)) registerModule(standalone);
-const page = standalone && standalone !== "absent" ? ((await loadModule(standalone.id)).Standalone?.(window.location.href) ?? null) : null;
+// could take it for a sign-in (modules/standalone.ts).
+const page = await standalonePage(window.location.href);
 // a crash a boundary catches is logged with its component stack (lib/caught-error.ts)
 const root = createRoot(document.getElementById("root")!, { onCaughtError: logCaughtError });
 if (page) {

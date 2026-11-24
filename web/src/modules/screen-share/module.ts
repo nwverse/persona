@@ -8,7 +8,8 @@
 // The page itself draws before any hello, so there only Settings › Labs › Features turns it off; off, /screen/<machine>
 // is an unknown address and its chunk is never requested.
 import { byLanguage, t, type CatalogModule } from "../../i18n";
-import { moduleFeature, type ModuleDescriptor } from "../../core/module-host";
+import { moduleFeature } from "../../core/module-flags";
+import type { ModuleDescriptor } from "../../core/module-host";
 
 export const screenShare: ModuleDescriptor = {
   id: "screen-share",

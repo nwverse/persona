@@ -7,11 +7,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isValidElement } from "react";
 import { forgetModuleSwitches, setModuleSwitchedOff } from "../../core/module-switch";
-import { connectModuleHub, loadModule, MODULES_FEATURE, registerModule, resetModulesForTest, standaloneAt, standaloneOn, type ModuleDescriptor } from "../../core/module-host";
+import { connectModuleHub, loadModule, MODULES_FEATURE, registeredModules, registerModule, resetModulesForTest, standaloneAt, standaloneOn, type ModuleDescriptor } from "../../core/module-host";
 import { parse } from "../../lib/router";
 import { getState, reset, subscribe } from "../../lib/store";
 import { SCREEN_PAGE } from "../../lib/computer";
 import { screenShare } from "./module";
+import { STANDALONE_MODULES, standalonePage } from "../standalone";
 import { ScreenView } from "./ScreenView";
 
 vi.mock("../../views/theme", () => ({})); // follows the system theme through matchMedia, which jsdom has none of
@@ -76,6 +77,34 @@ describe("the screen-share module", () => {
     expect(standaloneOn(SCREEN_PAGE)).toBe(false);
     expect(parse("/screen/mac").name).toBe("not-found");
     await expect(loadModule("screen-share")).rejects.toThrow(/not enabled/);
+    expect(chunk).not.toHaveBeenCalled();
+    expect(catalog).not.toHaveBeenCalled();
+  });
+
+  it("is what main.tsx draws in place of the app on its addresses, before anything is registered", async () => {
+    expect(STANDALONE_MODULES).toContain(screenShare);
+    const list = [counted()];
+    // another address is the app's: nothing registered, loaded or taken
+    window.history.replaceState(null, "", "/kb/notes#token=t1");
+    expect(await standalonePage(window.location.href, list)).toBeNull();
+    expect(window.location.hash).toBe("#token=t1");
+    expect(chunk).not.toHaveBeenCalled();
+    window.history.replaceState(null, "", "/screen/mac#token=t1");
+    const page = await standalonePage(window.location.href, list);
+    expect(isValidElement(page) && page.type).toBe(ScreenView);
+    expect(window.location.hash).toBe("");
+    expect(catalog).toHaveBeenCalledTimes(1);
+    expect(chunk).toHaveBeenCalledTimes(1);
+    // the host's registry is App's: the page needed none of it
+    expect(registeredModules()).toEqual([]);
+  });
+
+  it("switched off, leaves its address to the app with the fragment dropped, loading nothing", async () => {
+    setModuleSwitchedOff("screen-share", true);
+    window.history.replaceState(null, "", "/screen/mac#token=t1&embed=1");
+    expect(await standalonePage(window.location.href, [counted()])).toBeNull();
+    expect(window.location.hash).toBe("");
+    expect(window.location.pathname).toBe("/screen/mac");
     expect(chunk).not.toHaveBeenCalled();
     expect(catalog).not.toHaveBeenCalled();
   });

@@ -250,6 +250,13 @@ const holdLazyImports: Plugin = {
   },
 };
 
+const src = (path: string) => fileURLToPath(new URL(`./src/${path}`, import.meta.url));
+/** The files of the "modules-standalone" chunk (manualChunks below); none in the core-only lane, which builds no module. */
+const STANDALONE_CHUNK: ReadonlySet<string> = new Set(CORE_ONLY ? [] : [
+  src("modules/standalone.ts"), src("core/module-switch.ts"), src("core/module-flags.ts"),
+  ...[...new Set(standalonePages().map((p) => p.module))].map((id) => src(`modules/${id}/module.ts`)),
+]);
+
 export default defineConfig({
   plugins: [coreOnly(), testWorkerLimit(), katexFonts, i18nCatalogs, pageTokensPlugin, react(), tailwindcss(), adminFallback, showcaseImages, startupPreload(), holdLazyImports, classicWorker, buildStamp, thirdPartyLicenses,
     compatBootstrap(fileURLToPath(new URL("./public/compatibility-bootstrap.js", import.meta.url)))],
@@ -285,6 +292,11 @@ export default defineConfig({
       output: {
         entryFileNames: (chunk) => (chunk.name === "sw" ? "sw.js" : chunk.name === "admin" ? "admin/assets/[name]-[hash].js" : "assets/[name]-[hash].js"),
         chunkFileNames: (chunk) => (adminOnly(chunk.moduleIds) ? "admin/assets/[name]-[hash].js" : "assets/[name]-[hash].js"),
+        // What main.tsx reads before App of the modules with a page of their own (src/modules/standalone.ts, the
+        // descriptors it lists, this browser's switch, the flag names) goes in one chunk: App shares all of it, and
+        // main.tsx's top-level await keeps shared code out of main's own chunk, so it would be four chunks under 1 KB,
+        // which the first screen counts uncompressed (src/startup-preload.ts firstScreenBytes).
+        manualChunks: (id) => (STANDALONE_CHUNK.has(id) ? "modules-standalone" : undefined),
         assetFileNames: (asset) => ((asset.names ?? []).some((n) => n.startsWith("admin")) ? "admin/assets/[name]-[hash][extname]" : "assets/[name]-[hash][extname]"),
       },
     },

@@ -59,6 +59,7 @@ export function coreOnly(enabled = CORE_ONLY): Plugin {
         `// The module list in the core-only lane (web/core-only.ts): empty.`,
         `export const MODULES = [];`,
         `export const STANDALONE_MODULES = [];`,
+        `export async function standalonePage() { return null; }`,
         `export function registerModules() {}`,
       ].join("\n");
     },

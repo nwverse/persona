@@ -5,7 +5,8 @@
 // by leaving the flag out; every older hub, which publishes none, keeps it on, as the page always was. Settings › Labs ›
 // Features turns it off in a browser.
 import { byLanguage, t, type CatalogModule } from "../../i18n";
-import { moduleFeature, type ModuleDescriptor } from "../../core/module-host";
+import { moduleFeature } from "../../core/module-flags";
+import type { ModuleDescriptor } from "../../core/module-host";
 import { HEALTH_INTAKE_UI } from "../../lib/health-intake-ui";
 
 export const health: ModuleDescriptor = {

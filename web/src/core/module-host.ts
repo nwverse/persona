@@ -41,10 +41,10 @@ import type { State } from "../lib/store";
 import type { Interaction, Item, Session } from "../lib/types";
 import { moduleSwitchedOff, subscribeModuleSwitches } from "./module-switch";
 
-/** The hello feature a hub that publishes module flags announces (the hub flag rule above). */
-export const MODULES_FEATURE = "modules";
-/** The hello feature that says the hub serves module `id`: what its descriptor names as `feature`. */
-export const moduleFeature = (id: string) => `module.${id}`;
+import { MODULES_FEATURE } from "./module-flags";
+
+// The hub flag names (the rule above) live in module-flags.ts, so a descriptor can name its flag without the host.
+export { MODULES_FEATURE, moduleFeature } from "./module-flags";
 
 /** The typed chat slots a module may fill (#13430 `composer_actions`, `chat_accessories`), each drawn by the chat page
  *  where the comment on ChatSlotComponents says. */
@@ -255,9 +255,9 @@ export interface ModuleDescriptor {
   extensionPages?: readonly string[];
   navItems?: readonly ModuleNavItem[];
   /** Pages it draws on their own, without the app shell: no sign-in flow, no sidebar (#14404, #13430 `shell_places`),
-   *  each the first segment of its addresses (`screen` for `/screen/<machine>`). main.tsx asks the host before App
-   *  loads (standaloneAt) and draws `ModuleCode.Standalone`. They are read before any hello, so there only this
-   *  browser's switch can turn the module off. The code comes from the module's `standalone.tsx`, which the build
+   *  each the first segment of its addresses (`screen` for `/screen/<machine>`). Before App loads, main.tsx asks
+   *  src/modules/standalone.ts (the modules that have one) and draws `ModuleCode.Standalone`; that is read before any
+   *  hello, so there only this browser's switch can turn the module off. Inside the app, standaloneAt / standaloneOn. The code comes from the module's `standalone.tsx`, which the build
    *  preloads on these addresses and lets load without waiting for the rest of the catalog (vite.config.ts): that file
    *  and what it imports statically read only the first screen's core strings, and the module's own. Not a core
    *  address, nor another module's page. */
@@ -453,12 +453,12 @@ export function moduleKBKindAt(kind: string): ModuleDescriptor | "absent" | null
 
 /** The module that draws the page at these address segments on its own (`standalonePages`): its descriptor while it
  *  is on, "absent" while it is off (main.tsx drops the address' fragment, so a token meant for the page is not taken
- *  for a sign-in, and the app answers the address as an unknown one), null for an address no module has. Among the
- *  registered modules, or among `list` (main.tsx asks src/modules/standalone.ts's before anything is registered). */
-export function standaloneAt(segments: readonly string[], list: Iterable<ModuleDescriptor> = registry.values()): ModuleDescriptor | "absent" | null {
+ *  for a sign-in, and the app answers the address as an unknown one), null for an address no module has. Inside the
+ *  app; before App, main.tsx asks src/modules/standalone.ts, which does the same with this browser's switch. */
+export function standaloneAt(segments: readonly string[]): ModuleDescriptor | "absent" | null {
   const base = segments[0];
   if (!base) return null;
-  for (const d of list) {
+  for (const d of registry.values()) {
     if (!d.standalonePages?.includes(base)) continue;
     return moduleState(d) === "off" ? "absent" : d;
   }
