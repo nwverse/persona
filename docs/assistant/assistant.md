@@ -2778,7 +2778,8 @@ The manager pulls unfolded pages after a durable source cursor, woken by session
 without subscribing to every chat or requiring an open app. Each sweep reads at most eight pages of a conversation;
 the next sweep continues a long import. A periodic source probe also detects rewrites with unchanged byte counts.
 Notifications are only hints: replaying an old notification cannot restore an abandoned generation. Covered ranges,
-the known source end and item completeness are distinct. Missing older ranges fall back to the runtime; a cached
+the known source end and item completeness are distinct; a page answering a cursor past the source's end records
+that end, never the cursor. Missing older ranges fall back to the runtime; a cached
 offline page says `partial` when coverage or freshness is uncertain. Source failures never manufacture complete
 empty history. The disposable text-search index can be rebuilt without deleting durable messages.
 Legacy conversations on current nodes are imported lazily using the same source IDs. A node/runtime that omits
@@ -2814,6 +2815,11 @@ moves between engines. The manager stores physical segments, source generations 
 Postgres. Integer transcript cursors compose those ranges; only later segments namespace item IDs. Reads, full/image
 references, live events, subscriptions, reconnect backlog, inventory and the derived search index use that same
 logical projection. Retired tails remain physical history and never shift later offsets.
+A source that renumbers its lines under a new history (agy, when a turn's export replaces its live steps) can leave
+a reader's cursor past its end. The projection reads the source's answer to that cursor as an empty span at the
+source's end, so the page, live event or reconnect backlog still reaches the reader with the conversation's new
+history, and readers, the search index included, start over instead of failing. The search index also starts over
+after a read that the history moved under on every try (#14354).
 
 When configured device entries for one computer are absorbed into another entry, authenticated callbacks resolve
 through the current physical fleet aliases. Durable segment/history keys and the public conversation identity stay
