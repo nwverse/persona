@@ -13,18 +13,22 @@ vi.hoisted(() => {
 vi.mock("../lib/error-reports", () => ({
   reportBoundary: (_error: unknown, boundary: string, chunk: boolean) => void reports.list.push({ boundary, chunk }),
 }));
-vi.mock("../lib/agent-repos", () => {
-  throw new TypeError("Failed to fetch dynamically imported module: /assets/agent-repos-stale.js");
+vi.mock("./PageBoundary", async (load) => {
+  const real = await load<typeof import("./PageBoundary")>();
+  return {
+    ...real,
+    reloadPage: () => { reloads.calls++; },
+    reloadForStaleChunk: (error: unknown) => real.reloadForStaleChunk(error, () => { reloads.calls++; }),
+  };
 });
 
 import { refresh, reset } from "../lib/store";
 import { setToken } from "../lib/api";
 import { t } from "../i18n";
-import { Sidebar } from "./Sidebar";
+import { setAgentReposLoaderForTest, Sidebar } from "./Sidebar";
 
 let host: HTMLDivElement, root: Root;
 const flush = async () => {
-  await act(async () => { await vi.dynamicImportSettled(); });
   for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
 };
 
@@ -44,23 +48,15 @@ beforeEach(() => {
       : {};
     return Promise.resolve(new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } }));
   }));
-  const realLocation = window.location;
-  vi.stubGlobal("location", Object.assign(Object.create(realLocation), {
-    pathname: "/",
-    search: "",
-    hash: "",
-    href: "http://fixture/",
-    origin: "http://fixture",
-    reload: () => { reloads.calls++; },
-  }));
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
 });
 
 afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
+  act(() => root?.unmount());
+  host?.remove();
+  setAgentReposLoaderForTest(null);
   reset();
   setToken("");
   vi.unstubAllGlobals();
@@ -68,6 +64,7 @@ afterEach(() => {
 
 describe("By repo lazy chunk stale-hash recovery", () => {
   it("reloads once on first stale chunk failure and offers a Reload button on repeat failure", async () => {
+    setAgentReposLoaderForTest(() => Promise.reject(new TypeError("Failed to fetch dynamically imported module: /assets/agent-repos-stale.js")));
     await act(() => refresh());
     act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();

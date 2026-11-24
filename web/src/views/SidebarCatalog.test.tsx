@@ -14,7 +14,7 @@ vi.mock("../lib/format", async (load) => {
     return real.sessionPreview(s);
   } };
 });
-import { getState, refresh, reset } from "../lib/store";
+import { getState, refresh, reset, upsertSession } from "../lib/store";
 import { credentialOwner, setToken } from "../lib/api";
 import { refreshWorkspaceCatalog, workspaceTarget, type HostWorkspace } from "../lib/workspace-catalog";
 import type { Machine, Session } from "../lib/types";
@@ -296,8 +296,10 @@ describe("By repo catalog integration", () => {
     click(disclosure("explicitly-folded"));
     expect(disclosure("explicitly-folded").getAttribute("aria-expanded")).toBe("false");
     // A new Agent starts in both workspaces from another device.
-    sessions = [agent("Fresh A", "untouched"), agent("Fresh B", "explicitly-folded")];
-    await act(() => refresh());
+    act(() => {
+      upsertSession(agent("Fresh A", "untouched"));
+      upsertSession(agent("Fresh B", "explicitly-folded"));
+    });
     await flush();
     expect(disclosure("untouched").getAttribute("aria-expanded")).toBe("true");
     expect(disclosure("explicitly-folded").getAttribute("aria-expanded")).toBe("false");

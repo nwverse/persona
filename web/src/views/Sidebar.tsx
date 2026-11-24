@@ -20,7 +20,7 @@ import { pagedFilterOf, resetAgentListFilters, setAgentListFilters, useAgentList
 import { AgentChatListRow, AgentFilterButton, AgentFilterChips } from "./agents/AgentChatListControls";
 import { agentGrouping, AGENT_GROUPINGS, type AgentGrouping, buildAgentGroups, buildSpaces, hostsOf, isQuiet, sessionHost, splitAgentSessions, type AgentGroup, type Space } from "../lib/agent-groups";
 import { reportBoundary } from "../lib/error-reports";
-import { isChunkError, reloadForStaleChunk } from "./PageBoundary";
+import { isChunkError, reloadForStaleChunk, reloadPage } from "./PageBoundary";
 import { useWorkspaceCatalog } from "../lib/workspace-catalog";
 import { keyedRefs } from "../lib/keyed-refs";
 import { buildMachineTree, machineSessionOrder, machineSessionPresentation } from "../lib/herdr-tree";
@@ -973,8 +973,15 @@ function useShowEmptyWorkspaces(): boolean {
 // it. Loaded once on demand without Suspense; stale-hash chunk failures reload once via PageBoundary's recovery and offer
 // Reload on repeat failure instead of retrying a deleted hash forever.
 type AgentReposMod = typeof import("../lib/agent-repos");
+let agentReposLoader: () => Promise<AgentReposMod> = () => import("../lib/agent-repos");
 let loadedAgentRepos: AgentReposMod | null = null;
 let loadingAgentRepos: Promise<AgentReposMod> | null = null;
+/** Tests: override the dynamic chunk loader and reset its cache. */
+export function setAgentReposLoaderForTest(loader: (() => Promise<AgentReposMod>) | null) {
+  agentReposLoader = loader ?? (() => import("../lib/agent-repos"));
+  loadedAgentRepos = null;
+  loadingAgentRepos = null;
+}
 function useAgentReposModule(enabled: boolean): { mod: AgentReposMod | null; error: { message: string; chunk: boolean } | null; retry: () => void } {
   const [mod, setMod] = useState<AgentReposMod | null>(() => loadedAgentRepos);
   const [error, setError] = useState<{ message: string; chunk: boolean } | null>(null);
@@ -982,7 +989,7 @@ function useAgentReposModule(enabled: boolean): { mod: AgentReposMod | null; err
   useEffect(() => {
     if (!enabled || mod) return;
     let live = true;
-    const req = (loadingAgentRepos ??= import("../lib/agent-repos").then((m) => { loadedAgentRepos = m; return m; }));
+    const req = (loadingAgentRepos ??= agentReposLoader().then((m) => { loadedAgentRepos = m; return m; }));
     req.then(
       (m) => { if (live) { setError(null); setMod(m); } },
       (err: unknown) => {
@@ -1145,7 +1152,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     : !loaded && listError ? <ListError text={agentsReadFailed(listError)} onRetry={retryFullAgentSessions} />
     : shownGrouping === "repo" && !chatList && agentRepos.error ? (
       agentRepos.error.chunk
-        ? <ListError text={t("pageboundary.chunk_title")} action={t("pageboundary.reload")} onRetry={() => location.reload()} />
+        ? <ListError text={t("pageboundary.chunk_title")} action={t("pageboundary.reload")} onRetry={reloadPage} />
         : <ListError text={agentsReadFailed(agentRepos.error.message)} onRetry={agentRepos.retry} />
     )
     : todosPending || (shownGrouping === "repo" && !chatList && !agentRepos.mod) || (!loaded && every.length === 0) ? <p className="px-2 py-1 text-[12px] text-ink-3">{t("sidebar.loading")}</p>
