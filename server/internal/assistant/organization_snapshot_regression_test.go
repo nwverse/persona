@@ -221,6 +221,98 @@ func TestOrganizationSnapshotMachineUnknownAndKnownZero(t *testing.T) {
 	})
 }
 
+func TestOrganizationSnapshotSupervisorUnknownOwnStateSurvivesStoppedWorker(t *testing.T) {
+	cases := []struct {
+		name        string
+		ownMachine  string
+		ownSession  string
+		supervisor  string
+		nodeID      string
+		workerState string
+	}{
+		{name: "main", ownMachine: "server", ownSession: "conv_main", supervisor: "conv_main", nodeID: "main:conv_main"},
+		{name: "direction", ownMachine: "m", ownSession: "conv_lead_a", supervisor: "conv_lead_a", nodeID: "direction:conv_lead_a"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := orgRegressionEnv(t, &memStore{})
+			e.f.devices = []Device{
+				{ID: "mac", Name: "mac", Online: true, Reachable: true},
+				{ID: "server", Name: "server", Online: true, Reachable: true},
+				{ID: "m", Name: "m", Online: true, Reachable: true},
+			}
+			e.f.sessionsFail = map[string]int{tc.ownMachine: 1}
+			e.f.setSessions(tc.ownMachine, orgWorkingSession(tc.ownMachine, tc.ownSession))
+			e.f.setSessions("mac")
+			orgPutTask(e, "todo_failed", tc.supervisor, TodoAgent{
+				MachineID: "mac", SessionID: "failed-worker", Title: "Failed worker", StartError: "boom",
+			})
+
+			snapshot := orgSnapshotNow(t, e)
+			nodes := orgNodesByID(snapshot)
+			supervisorNode, ok := nodes[tc.nodeID]
+			if !ok {
+				t.Fatalf("missing supervisor node %s", tc.nodeID)
+			}
+			if supervisorNode.State != nil {
+				t.Fatalf("unknown own state was replaced by %q: %+v", *supervisorNode.State, supervisorNode.StateAvailability)
+			}
+			if supervisorNode.StateAvailability.Status != orgUnknown ||
+				supervisorNode.StateAvailability.Reason != "session_list_unavailable" ||
+				supervisorNode.StateAvailability.Source != "agents_list_session_list" {
+				t.Fatalf("supervisor did not retain own unknown source: %+v", supervisorNode.StateAvailability)
+			}
+			worker, workerOK := nodes["agent:mac/failed-worker"]
+			if !workerOK || worker.State == nil || *worker.State != "stopped" ||
+				worker.StateAvailability.Status != orgAvailable || worker.Activity != "start_failed" {
+				t.Fatalf("known worker failure was not retained: %+v", worker)
+			}
+			if tc.name == "main" {
+				owner, ownerOK := nodes["owner"]
+				if !ownerOK || owner.State != nil || owner.StateAvailability.Status != orgUnknown ||
+					owner.StateAvailability.Reason != "session_list_unavailable" ||
+					owner.StateAvailability.Source != "agents_list_session_list" {
+					t.Fatalf("owner did not inherit the completed main unknown: %+v", owner)
+				}
+			}
+		})
+	}
+}
+
+func TestOrganizationSnapshotOwnerUsesFinishedMainState(t *testing.T) {
+	cases := []struct {
+		name     string
+		state    string
+		status   string
+		activity string
+	}{
+		{name: "working", state: proto.StateWorking, status: proto.StatusWorking, activity: "working"},
+		{name: "needs_you", state: proto.StateNeedsYou, status: proto.StatusBlocked, activity: "owner_decision"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := orgRegressionEnv(t, &memStore{})
+			mainSession := orgWorkingSession("server", "conv_main")
+			mainSession.State = tc.state
+			mainSession.Status = tc.status
+			e.f.setSessions("server", mainSession)
+
+			snapshot := orgSnapshotNow(t, e)
+			nodes := orgNodesByID(snapshot)
+			main, mainOK := nodes["main:conv_main"]
+			owner, ownerOK := nodes["owner"]
+			if !mainOK || main.State == nil || *main.State != tc.state || main.Activity != tc.activity ||
+				main.StateAvailability.Status != orgAvailable || main.StateAvailability.Source != "runtime_session" {
+				t.Fatalf("main did not establish its own state: %+v", main)
+			}
+			if !ownerOK || owner.State == nil || *owner.State != tc.state || owner.Activity != tc.activity ||
+				owner.StateAvailability.Status != orgAvailable || owner.StateAvailability.Source != "runtime_session" {
+				t.Fatalf("owner did not use the finished main state: %+v", owner)
+			}
+		})
+	}
+}
+
 func TestOrganizationSnapshotOwnerOnlyMethodsAndRepeatedReads(t *testing.T) {
 	store := &memStore{}
 	e := orgRegressionEnv(t, store)

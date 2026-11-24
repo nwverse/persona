@@ -929,12 +929,7 @@ func (b *organizationBuild) directionConcurrency(scope, raw string) *orgConcurre
 
 func (b *organizationBuild) finishSupervisorNodes() {
 	for _, node := range b.nodeOrder {
-		if node.Kind != "main" && node.Kind != "direction" && node.Kind != "owner" {
-			continue
-		}
-		if node.Kind == "owner" {
-			main := b.nodeByID[orgMainNodeID(b.cfg)]
-			node.State, node.Activity, node.StateAvailability = orgMergeState([]*orgNode{main}, orgAvailability{})
+		if node.Kind != "main" && node.Kind != "direction" {
 			continue
 		}
 		raw := b.cfg.Main
@@ -948,20 +943,17 @@ func (b *organizationBuild) finishSupervisorNodes() {
 		node.Launcher, node.Model, node.RequestedModel, node.Effort, _ = b.runtimeFields(work)
 		b.applyLatestModel(node)
 		node.Preset = orgNoValue[string](orgNotApplicable, "not_applicable_to_supervisor", "task_plan")
-		var ownState *orgNode
-		if session != nil {
-			ownState = &orgNode{}
-			ownState.State, ownState.Activity, ownState.StateAvailability = orgRuntimeState(session, nil, nil, work.key, fresh, b.acceptLoaded)
-		}
+		// Build an own-state node even when the session is absent from the current list.
+		// Its explicit unknown must participate in the same merge as known descendants.
+		ownState := &orgNode{}
+		ownState.State, ownState.Activity, ownState.StateAvailability = orgRuntimeState(session, nil, nil, work.key, fresh, b.acceptLoaded)
 		var descendants []*orgNode
 		for _, candidate := range b.work {
 			if candidate.scope == node.ID {
 				descendants = append(descendants, candidate.node)
 			}
 		}
-		if ownState != nil {
-			descendants = append(descendants, ownState)
-		}
+		descendants = append(descendants, ownState)
 		node.State, node.Activity, node.StateAvailability = orgMergeState(descendants, fresh)
 		node.Review = b.reviewSummary(node.ID, raw)
 		node.Concurrency = b.directionConcurrency(node.ID, raw)
@@ -992,6 +984,13 @@ func (b *organizationBuild) finishSupervisorNodes() {
 		} else {
 			node.UpdatedAtAvailability = orgObserved(orgUnknown, "updated_at_not_reported", "direction_and_task_records", nil)
 		}
+	}
+
+	// The owner is a view of the completed main node, so it must be synthesized
+	// after every main/direction node has established its own state and subtree.
+	if owner := b.nodeByID["owner"]; owner != nil {
+		main := b.nodeByID[orgMainNodeID(b.cfg)]
+		owner.State, owner.Activity, owner.StateAvailability = orgMergeState([]*orgNode{main}, orgAvailability{})
 	}
 }
 
