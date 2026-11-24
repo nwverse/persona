@@ -242,3 +242,33 @@ func TestADecisionsPushIsTakenBackOnceItIsOver(t *testing.T) {
 		t.Fatalf("withdrawal %+v %v", got[1], p)
 	}
 }
+
+// deliverPushFrom reports push reachability for NotifyInput cards too, so callers (such as secret_handoff) can tell
+// whether any device was reachable to receive the card's push.
+func TestNotifyInputReportsPushOutcome(t *testing.T) {
+	h := New(Options{Token: "tok", Version: "test"})
+	ix := proto.Interaction{ID: "ix_handoff_outcome", MachineID: "m1", SessionID: "s1", Kind: proto.IxPermission,
+		ToolName: proto.SecretHandoffTool, Summary: "needs approval"}
+	h.setPending(assistantwire.AssistantID, []proto.Interaction{ix})
+	out, err := h.deliverPushFrom(assistantwire.AssistantID, assistantwire.Notification{
+		Kind: assistantwire.NotifyInput, DeviceID: "m1", SessionID: "s1", Subtitle: "Mac", Interaction: &ix,
+	})
+	if err != nil {
+		t.Fatalf("deliverPushFrom: %v", err)
+	}
+	if out == nil || out.devices != 0 || out.reason() != "no_device" {
+		t.Fatalf("outcome with no devices = %+v, want devices=0 reason=no_device", out)
+	}
+
+	h2, _, _ := withdrawHub(t, "withdraw")
+	h2.setPending(assistantwire.AssistantID, []proto.Interaction{ix})
+	out2, err := h2.deliverPushFrom(assistantwire.AssistantID, assistantwire.Notification{
+		Kind: assistantwire.NotifyInput, DeviceID: "m1", SessionID: "s1", Subtitle: "Mac", Interaction: &ix,
+	})
+	if err != nil {
+		t.Fatalf("deliverPushFrom with device: %v", err)
+	}
+	if out2 == nil || out2.devices != 1 || out2.reason() != "" {
+		t.Fatalf("outcome with 1 device = %+v, want devices=1 reason=\"\"", out2)
+	}
+}

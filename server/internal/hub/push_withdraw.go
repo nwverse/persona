@@ -76,10 +76,10 @@ func newWithdrawals() withdrawals {
 
 // sendCard pushes manager's card id (sendLocalizedQuiet) under cardCollapseID and notes which devices that understand
 // withdrawals it went to. only, when not nil, is the devices that can take it at all (an MCP form or link: those that
-// registered for one).
-func (p *Pusher) sendCard(manager string, policy pushPolicy, build localized, id string, wants func(NotifyPrefs) bool, rule quietRule, only func(Device) bool) string {
+// registered for one). Returns the selected/reachable push device counts and any grading heldReason.
+func (p *Pusher) sendCard(manager string, policy pushPolicy, build localized, id string, wants func(NotifyPrefs) bool, rule quietRule, only func(Device) bool) (selected, reachable int, heldReason string) {
 	if p == nil {
-		return ""
+		return 0, 0, ""
 	}
 	policy.manager = manager
 	if policy.level != assistantwire.LevelP0 || p.attentionNow().Active() {
@@ -88,15 +88,15 @@ func (p *Pusher) sendCard(manager string, policy pushPolicy, build localized, id
 		policy = pushPolicyWithSource(policy, build(i18n.Default))
 	}
 	if allow, reason := p.applyPushGrading(policy); !allow {
-		return reason
+		return 0, 0, reason
 	}
 	rule = p.hushRule(rule) // quiet mode: without a sound on every device (push_attention.go)
-	p.sendFromTo(manager, build, cardCollapseID(manager, id), wants, rule, only, func(d Device) {
+	selected, reachable = p.sendFromTo(manager, build, cardCollapseID(manager, id), wants, rule, only, func(d Device) {
 		if hasFeature(d, featureWithdraw) {
 			p.cardPushedTo(id, d.DeviceID)
 		}
 	})
-	return ""
+	return selected, reachable, ""
 }
 
 // cardCollapseID is the apns-collapse-id of manager's card id: the card id for the assistant the hub starts (and a card

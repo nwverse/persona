@@ -199,7 +199,7 @@ func (h *Hub) notifyInteractionAt(owner string, ix proto.Interaction, machine st
 
 // notifyInteractionHinted is notifyInteractionAt with what an attention mode reads of the card (push_attention.go): its
 // depth (assistantwire.DepthDeep for a plan or a long review) and the track it comes from ("" for none).
-func (h *Hub) notifyInteractionHinted(owner string, ix proto.Interaction, machine string, linkCovered bool, level, key, depth, track string) {
+func (h *Hub) notifyInteractionHinted(owner string, ix proto.Interaction, machine string, linkCovered bool, level, key, depth, track string) pushOutcome {
 	switch level {
 	case assistantwire.LevelP0, assistantwire.LevelP1, assistantwire.LevelP2:
 	default:
@@ -218,12 +218,18 @@ func (h *Hub) notifyInteractionHinted(owner string, ix proto.Interaction, machin
 			"interaction_id": ix.ID, "kind": ix.Kind, "summary": summary})
 	}
 	wants := pushWants{Kind: "input"}
+	var (
+		pushSelected, pushReachable int
+		heldReason                  string
+		ws                          wsReach
+	)
 	if ix.Kind == proto.IxElicitation {
 		// Only what can show an MCP form or link: the phones that registered for one (#2433; a tap opens the card,
 		// the push has no buttons) and the connections that declared it.
 		policy := pushPolicy{level: level, relatedKey: key, title: summary, depth: depth, track: track}
-		if heldReason := h.push.sendCard(owner, policy, build, ix.ID, wants.fn(), wants.quiet(), takesElicitation); heldReason == "" {
-			h.notifyWSFrom(owner, "interaction", build, wants.fn(), wants.quiet(), "elicitation")
+		pushSelected, pushReachable, heldReason = h.push.sendCard(owner, policy, build, ix.ID, wants.fn(), wants.quiet(), takesElicitation)
+		if heldReason == "" {
+			ws = h.notifyWSFrom(owner, "interaction", build, wants.fn(), wants.quiet(), "elicitation")
 		}
 	} else {
 		// A card owner's Persona Link summary rings for: "Phone Muted" holds it back while one of owner's Persona Link
@@ -231,10 +237,12 @@ func (h *Hub) notifyInteractionHinted(owner string, ix proto.Interaction, machin
 		// follows in sendCard and notifyWSFrom.
 		fn := alertWanted(wants.fn(), linkCovered && h.linkDesktopOnline(owner))
 		policy := pushPolicy{level: level, relatedKey: key, title: summary, depth: depth, track: track}
-		if heldReason := h.push.sendCard(owner, policy, build, ix.ID, fn, wants.quiet(), nil); heldReason == "" {
-			h.notifyWSFrom(owner, "interaction", build, fn, wants.quiet())
+		pushSelected, pushReachable, heldReason = h.push.sendCard(owner, policy, build, ix.ID, fn, wants.quiet(), nil)
+		if heldReason == "" {
+			ws = h.notifyWSFrom(owner, "interaction", build, fn, wants.quiet())
 		}
 	}
+	return pushOutcome{devices: pushSelected + ws.selected, reachable: pushReachable + ws.reachable, kept: ws.kept, held: heldReason}
 }
 
 // notifyWSFrom projects a push onto the opt-in WebSocket notification event, written in each connection's language

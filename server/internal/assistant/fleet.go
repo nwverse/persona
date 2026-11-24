@@ -60,6 +60,9 @@ type fleetBook struct {
 	// handoffBy: hand-off card id -> the approval that claimed it, with the device the hub vouched for (secret_handoff.go:
 	// only such an approval counts).
 	handoffBy map[string]handoffClaim
+	// handoffPush: hand-off card id -> the hub's push delivery outcome (secret_handoff.go), used to explain why an
+	// expired hand-off card may not have reached the user's phone.
+	handoffPush map[string]handoffPushOutcome
 	// upgradeEvery / upgradeFor override screenUpgradeEvery / screenUpgradeFor (0: those; upgradeScreenCard). Tests
 	// shorten them on their own Service before any session list comes, so an upgrade loop another test left running
 	// never reads what this one writes (#4554).

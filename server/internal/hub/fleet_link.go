@@ -798,7 +798,7 @@ func relatedTodoID(key string, allowAsk bool) string {
 // own, or none. What the extensions are told of it (agent.finished, agent.needs_you) goes to from's only, and the
 // devices that muted from (NotifyPrefs.MutedManagers) get none of it.
 //
-// It returns where an assistant's push or a finished turn went (nil for a card, a reply reminder or a decision, whose
+// It returns where an assistant's push, a finished turn or a card went (nil for a reply reminder or a decision, whose
 // delivery is not reported): the devices it was handed to, the offline ones that keep it, and the ln-mode reason it was
 // held. The assistant's notify_user tool tells the model from it whether the notice reached a device, the briefing or
 // nothing, and counts it as an interruption only when a device took it.
@@ -812,8 +812,8 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) (out *p
 		if !ok || cmp.Or(ix.Manager, assistantwire.AssistantID) != from {
 			return nil, &rpc.Error{Code: devicewire.CodeNoDevice, Message: "an input push is for a pending card the manager reported"}
 		}
-		h.notifyInteractionHinted(from, ix, n.Subtitle, n.LinkCovered, n.Level, n.RelatedKey, n.Depth, n.Track)
-		return nil, nil
+		o := h.notifyInteractionHinted(from, ix, n.Subtitle, n.LinkCovered, n.Level, n.RelatedKey, n.Depth, n.Track)
+		return &o, nil
 	case assistantwire.NotifyPush, assistantwire.NotifyDone, assistantwire.NotifyReply, assistantwire.NotifyDecide:
 		if !h.ownsRef(from, n.DeviceID, n.SessionID) {
 			return nil, &rpc.Error{Code: devicewire.CodeNoDevice, Message: fmt.Sprintf("a push about machine %q, session %q: another manager's",

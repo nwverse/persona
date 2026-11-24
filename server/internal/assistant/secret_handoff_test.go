@@ -392,6 +392,67 @@ func TestHandoffNotApprovedStartsNothing(t *testing.T) {
 	}
 }
 
+// When a hand-off card expires unanswered, agent_start says how long it waited and why the user may not have seen it
+// (such as no reachable push device while the app was in the background).
+func TestHandoffExpiredExplainsWaitAndPushOutcome(t *testing.T) {
+	zero := 0
+	one := 1
+	for _, c := range []struct {
+		name      string
+		res       NotifyResult
+		err       error
+		wantParts []string
+	}{
+		{
+			name:      "no reachable push device",
+			res:       NotifyResult{OK: true, Devices: &zero, Reason: "no_device"},
+			wantParts: []string{"expired unanswered after", "No device was reachable to receive the push notification"},
+		},
+		{
+			name:      "filtered by device settings",
+			res:       NotifyResult{OK: true, Devices: &zero, Reason: "filtered"},
+			wantParts: []string{"expired unanswered after", "filtered out by device notification settings"},
+		},
+		{
+			name:      "held by grading",
+			res:       NotifyResult{OK: true, Held: true, Reason: "quiet_mode"},
+			wantParts: []string{"expired unanswered after", "held back (quiet_mode)"},
+		},
+		{
+			name:      "push request failed",
+			err:       errors.New("hub push unavailable"),
+			wantParts: []string{"expired unanswered after", "Push notification delivery failed"},
+		},
+		{
+			name:      "delivered to device but unanswered",
+			res:       NotifyResult{OK: true, Devices: &one},
+			wantParts: []string{"expired unanswered after", "did not respond on iPhone or the web before the timeout"},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newHandoffRig(t)
+			old := handoffCardWait
+			handoffCardWait = 300 * time.Millisecond
+			t.Cleanup(func() { handoffCardWait = old })
+			r.f.mu.Lock()
+			r.f.notifyResult = c.res
+			r.f.refuseNotify = c.err
+			r.f.mu.Unlock()
+			done := r.start(handoffArgs)
+			_ = r.card()
+			answer, errText := r.answer(done)
+			if errText != "" || !strings.Contains(answer, `"status":"expired"`) {
+				t.Fatalf("answer %q, error %q", answer, errText)
+			}
+			for _, want := range c.wantParts {
+				if !strings.Contains(answer, want) {
+					t.Errorf("answer %q missing %q", answer, want)
+				}
+			}
+		})
+	}
+}
+
 // What cannot take the values is refused before the card: no card, nothing resolved, nothing started.
 func TestHandoffRefusedBeforeTheCard(t *testing.T) {
 	for _, c := range []struct {

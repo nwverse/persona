@@ -203,6 +203,7 @@ func (s *Service) handoffApprove(ctx context.Context, convMachine, self string, 
 		CreatedAt:   now, ExpiresAt: expires}
 	r, err := s.ask(withCard(ctx, cardSecretForm), ix)
 	claim, vouched := s.takeHandoffClaim(ix.ID)
+	push, hasPush := s.takeHandoffPush(ix.ID)
 	if err != nil {
 		return "", "", err
 	}
@@ -218,7 +219,7 @@ func (s *Service) handoffApprove(ctx context.Context, convMachine, self string, 
 	switch {
 	case vouched:
 	case r.Dismiss && !time.Now().Before(expires.Add(-time.Second)):
-		return "", handoffAnswer(results(handoffExpired), "The hand-off card expired unanswered."), nil
+		return "", handoffAnswer(results(handoffExpired), handoffExpiredMessage(time.Since(now), push, hasPush)), nil
 	case proto.SecretHandoffApproves(r): // not through the hub's gate: refused, as the hub would
 		return "", handoffAnswer(results(handoffDeclined), "The hand-off was not approved on iPhone or the web."), nil
 	default:
@@ -578,6 +579,86 @@ func (s *Service) takeHandoffClaim(id string) (handoffClaim, bool) {
 	c, ok := s.fleet.handoffBy[id]
 	delete(s.fleet.handoffBy, id)
 	return c, ok
+}
+
+// handoffPushOutcome is what the hub reported when pushing a hand-off card: kept briefly so an expired hand-off
+// can say whether the user's devices were reachable to receive the push.
+type handoffPushOutcome struct {
+	res NotifyResult
+	err error
+	at  time.Time
+}
+
+// noteHandoffPush records the hub's push outcome for hand-off card id. Entries left behind by cards that never
+// reached takeHandoffPush are pruned after an hour.
+func (s *Service) noteHandoffPush(id string, res NotifyResult, err error) {
+	if id == "" {
+		return
+	}
+	now := time.Now()
+	s.fleet.mu.Lock()
+	defer s.fleet.mu.Unlock()
+	if s.fleet.handoffPush == nil {
+		s.fleet.handoffPush = map[string]handoffPushOutcome{}
+	}
+	for k, v := range s.fleet.handoffPush {
+		if now.Sub(v.at) > time.Hour {
+			delete(s.fleet.handoffPush, k)
+		}
+	}
+	s.fleet.handoffPush[id] = handoffPushOutcome{res: res, err: err, at: now}
+}
+
+// takeHandoffPush returns and forgets the recorded push outcome for hand-off card id.
+func (s *Service) takeHandoffPush(id string) (handoffPushOutcome, bool) {
+	s.fleet.mu.Lock()
+	defer s.fleet.mu.Unlock()
+	o, ok := s.fleet.handoffPush[id]
+	delete(s.fleet.handoffPush, id)
+	return o, ok
+}
+
+// handoffWaitText formats how long a hand-off card waited before expiring.
+func handoffWaitText(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	if d >= time.Second {
+		r := d.Round(time.Second)
+		if r >= time.Minute && r%time.Minute == 0 {
+			return strings.TrimSuffix(r.String(), "0s")
+		}
+		return r.String()
+	}
+	return d.Round(time.Millisecond).String()
+}
+
+// handoffExpiredMessage explains how long the hand-off card waited and why it may not have been answered.
+func handoffExpiredMessage(waited time.Duration, push handoffPushOutcome, hasPush bool) string {
+	head := fmt.Sprintf("The hand-off card expired unanswered after %s.", handoffWaitText(waited))
+	if !hasPush {
+		return head + " The user did not respond on iPhone or the web before the timeout."
+	}
+	switch {
+	case push.err != nil:
+		return head + " Push notification delivery failed; the card stayed pending in the app until timeout."
+	case push.res.Held:
+		if push.res.Reason != "" {
+			return head + fmt.Sprintf(" Push notification was held back (%s); the card stayed pending in the app until timeout.", push.res.Reason)
+		}
+		return head + " Push notification was held back; the card stayed pending in the app until timeout."
+	case push.res.Devices != nil && *push.res.Devices == 0:
+		switch push.res.Reason {
+		case "no_device":
+			return head + " No device was reachable to receive the push notification, so the user was not alerted while the app was in the background."
+		case "filtered":
+			return head + " Push notifications were filtered out by device notification settings, so the user was not alerted while the app was in the background."
+		default:
+			return head + " No device received the push notification, so the user may not have been alerted while the app was in the background."
+		}
+	default:
+		return head + " The user did not respond on iPhone or the web before the timeout."
+	}
 }
 
 // handoffValues are a hand-off's resolved values, in memory until the start is sent: stage seals them for one start,

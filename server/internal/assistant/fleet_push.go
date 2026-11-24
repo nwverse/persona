@@ -565,7 +565,11 @@ func (s *Service) deliverCard(source string, n Notification) {
 		// Off the caller's way, no lock of theirs is held: the owner may be read from the to-dos.
 		s.noteCardOwner(ctx, source, s.supervisingOwner(ctx, n))
 		s.capTrackPush(ctx, &n) // a track's push_cap (track_attention.go); never a card's
-		if _, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
+		res, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
+		if n.Interaction != nil && n.Interaction.ToolName == proto.SecretHandoffTool {
+			s.noteHandoffPush(n.Interaction.ID, res, err)
+		}
+		if err != nil {
 			s.logf("assistant: push: %v", err)
 		}
 	}()
