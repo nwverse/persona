@@ -64,7 +64,7 @@ func TestOtherAgentStartCommandLineBreaks(t *testing.T) {
 func TestOtherAgentStartTypesForThePaneShell(t *testing.T) {
 	for shell, tc := range map[string]struct{ model, want string }{
 		"/bin/zsh":  {"", "traex 'a b\nc'"},
-		"/bin/tcsh": {"example-fast", "traex --model 'example-fast' -- 'a b c'"},
+		"/bin/tcsh": {"example-fast", "traex --model example-fast -- 'a b c'"},
 	} {
 		t.Run(shell, func(t *testing.T) {
 			withPaneShell(t, shell)
