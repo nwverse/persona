@@ -154,10 +154,34 @@ export function samePlanSummary(done: number, total: number, current: string, st
 }
 
 interface PlanLocation { message?: { role: string; work?: ToolTurnProjection }; }
-/** Keep the card beside its recorded update. A session-wide summary can precede its history page. */
-export function planPosition(lines: readonly PlanLocation[], sourceId: string): number {
+
+function planOwner(lines: readonly PlanLocation[], sourceId: string): number {
+  return sourceId ? lines.findIndex(line => line.message?.work?.inspectionSteps.some(step => step.id === sourceId)) : -1;
+}
+
+/**
+ * The Agent still works through this plan, but the owner has written since it was last updated (a message sent mid-turn,
+ * or a new request it has not planned yet). As in the Claude desktop app, the card then leaves its update and stays under
+ * the newest content, saying it is the plan from before that message.
+ */
+export function planPinned(lines: readonly PlanLocation[], plan: { sourceId: string; done: number; total: number }, working: boolean): boolean {
+  if (!working || plan.total <= 0 || plan.done >= plan.total) return false;
+  const owner = planOwner(lines, plan.sourceId);
+  return owner >= 0 && lines.slice(owner + 1).some(line => line.message?.role === 'user');
+}
+
+/**
+ * Keep the card beside its recorded update. A session-wide summary can precede its history page. A pinned plan goes
+ * below everything written so far and above the rows still running, as the working indicator stays last on desktop.
+ */
+export function planPosition(lines: readonly PlanLocation[], sourceId: string, pinned: boolean = false): number {
+  if (pinned) {
+    let pos = lines.length;
+    while (pos > 0 && (lines[pos - 1].message?.role === 'live_activity' || lines[pos - 1].message?.work?.running === true)) pos--;
+    return pos;
+  }
   if (sourceId) {
-    const owner = lines.findIndex(line => line.message?.work?.inspectionSteps.some(step => step.id === sourceId));
+    const owner = planOwner(lines, sourceId);
     if (owner >= 0) {
       const work = lines[owner].message?.work;
       if (work?.agent === 'claude' && work.running && work.latestExchange) {

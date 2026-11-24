@@ -25,7 +25,7 @@ import type { JsonObject, ToolInspectionStep, TranscriptItem } from '../core/Dom
 import { SessionLinks } from './SessionLinks';
 import { NextStepCard } from './NextStepCard';
 import { ConversationPlanCard } from './ConversationPlanCard';
-import { onlyPlanUpdates, planPosition } from '../core/ConversationPlan';
+import { onlyPlanUpdates, planPinned, planPosition } from '../core/ConversationPlan';
 import type { ConversationPlan } from '../core/ConversationPlan';
 import type { ToolTurnProjection, WorkInspectionStep } from '../core/Domain';
 import { ConversationWork } from './ConversationWork';
@@ -135,9 +135,11 @@ class ConversationLine {
   card: Record<string, Object> | undefined;
   decision: Decision | undefined;
   plan?: ConversationPlan;
+  /** The plan stays under the newest content because the owner wrote after it (planPinned). */
+  planPinned: boolean = false;
   processReply?: ChatMessage;
   static same(a: ConversationLine, b: ConversationLine): boolean {
-    return a.workBatch === b.workBatch && a.joinsNext === b.joinsNext && a.message === b.message && a.card === b.card && a.decision === b.decision && a.plan === b.plan &&
+    return a.workBatch === b.workBatch && a.joinsNext === b.joinsNext && a.message === b.message && a.card === b.card && a.decision === b.decision && a.plan === b.plan && a.planPinned === b.planPinned &&
       a.processReply === b.processReply && a.hasProcess === b.hasProcess && a.soleProcessGroup === b.soleProcessGroup;
   }
   hasProcess: boolean = false;
@@ -926,9 +928,9 @@ export struct Conversation {
     const plan = this.model.executionPlan(report);
     if (plan) {
       const card = new ConversationLine('plan:' + this.model.target());
-      card.plan = plan;
+      card.plan = plan; card.planPinned = planPinned(lines, plan, this.model.turnWorking());
       const anchor = this.readingPlan === card.id ? lines.findIndex((line: ConversationLine) => line.id === this.beforePlan) : -1;
-      lines.splice(anchor >= 0 ? anchor + 1 : planPosition(lines, plan.sourceId), 0, card);
+      lines.splice(anchor >= 0 ? anchor + 1 : planPosition(lines, plan.sourceId, card.planPinned), 0, card);
     }
     this.model.personaQuestions.forEach((request: Decision) => lines.push(new ConversationLine('persona-question:' + request.id, undefined, undefined, request)));
     if ((!plan || this.readingPlan !== 'plan:' + this.model.target()) && this.readingPlan) this.setPlanReading(this.readingPlan, false);
@@ -996,7 +998,8 @@ export struct Conversation {
     for (const line of lines) {
       const lead = line.message && leads.get(line.message.id);
       if (lead && visibleProcess.has(lead.itemId)) addHeader(lead);
-      const owner = owners.get(line.message?.id || (line.plan ? planOwner?.id || '' : ''));
+      // A pinned plan has left its update, so it neither folds nor hides with the process of that turn.
+      const owner = owners.get(line.message?.id || (line.plan && !line.planPinned ? planOwner?.id || '' : ''));
       if (owner) {
         const key = owner.itemId;
         if (line.plan && !visibleProcess.has(key) && !(owner.partialProcess && this.model.hasMoreMessages)) continue;
@@ -1045,9 +1048,9 @@ export struct Conversation {
       }));
     });
   }
-  private planRunning(plan: ConversationPlan): boolean {
+  private planRunning(plan: ConversationPlan, pinned: boolean = false): boolean {
     if (!this.model.turnWorking()) return false;
-    if (!plan.sourceId) return true;
+    if (!plan.sourceId || pinned) return true;
     const origin = this.model.messages.find(message => message.work?.inspectionSteps.some(step => step.id === plan.sourceId));
     return origin?.work?.latestExchange === true && origin.work.running;
   }
@@ -1520,7 +1523,8 @@ export struct Conversation {
                   choose: (label: string): void => { void this.useNextStep(entry.item.message!, label); },
                   dismiss: (): void => this.dismissNextStep(entry.item.message!) })
               } else if (entry.item.plan) {
-                ConversationPlanCard({ plan: entry.item.plan!, scope: entry.item.id, active: this.active, running: this.planRunning(entry.item.plan!),
+                ConversationPlanCard({ plan: entry.item.plan!, scope: entry.item.id, active: this.active, running: this.planRunning(entry.item.plan!, entry.item.planPinned),
+                  note: entry.item.planPinned ? tr('plan_before_last_message') : '',
                   onExpansion: (open: boolean): void => this.setPlanReading(entry.item.id, open),
                   hold: (change: () => void): void => this.holdWorkReading(change),
                   read: (plan: ConversationPlan, valid: () => boolean): Promise<ConversationPlan | undefined> => this.model.readPlanDetails(plan, valid) })

@@ -6379,6 +6379,10 @@
     {
       "name": "agent_expand_all",
       "value": "Expand all"
+    },
+    {
+      "name": "plan_before_last_message",
+      "value": "Plan from before your last message"
     }
   ]
 }
