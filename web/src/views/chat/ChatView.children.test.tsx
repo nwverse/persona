@@ -209,3 +209,31 @@ describe("a link to a child's own conversation", () => {
     expect(host.querySelectorAll("[data-child-card]").length).toBe(0);
   });
 });
+
+describe("embedded subagent ChatView read-only vs interactive gate (#14323)", () => {
+  it("renders a read-only bar (no composer) for embedded <parent>@<agent> without showing Not found", async () => {
+    upsertSession({
+      ...parent,
+      subagents: [{ id: "sa1", session_id: "p@sa1", description: "Check auth", running: false }],
+    });
+    act(() => root.render(<ChatView mid="m" sid="p@sa1" embedded />));
+    await flush();
+    expect(host.querySelector("[data-subagent-readonly-line]")).not.toBeNull();
+    expect(host.querySelector("textarea")).toBeNull();
+    expect(host.textContent).not.toContain("找不到这条对话");
+  });
+
+  it("gates embedded child composer strictly on sessionCan(child, 'send')", async () => {
+    upsertSession(child("ro-kid", 20, { capabilities: { read: true, send: false } }));
+    act(() => root.render(<ChatView mid="m" sid="ro-kid" embedded />));
+    await flush();
+    expect(host.querySelector("[data-subagent-readonly-line]")).not.toBeNull();
+    expect(host.querySelector("textarea")).toBeNull();
+
+    upsertSession(child("rw-kid", 25, { capabilities: { read: true, send: true } }));
+    act(() => root.render(<ChatView mid="m" sid="rw-kid" embedded />));
+    await flush();
+    expect(host.querySelector("[data-subagent-readonly-line]")).toBeNull();
+    expect(host.querySelector("textarea")).not.toBeNull();
+  });
+});

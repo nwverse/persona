@@ -33,7 +33,7 @@ vi.mock("./views/SidePanel", () => ({ SidePanel: () => null }));
 vi.mock("./views/ShortcutHelp", () => ({ ShortcutHelp: () => null }));
 vi.mock("./lib/store", async (load) => ({ ...(await load<typeof import("./lib/store")>()), connect: () => {}, disconnect: () => {} }));
 import { getState, refresh, reset, upsertSession } from "./lib/store";
-import { doneSubagentLink, useSubagentLink } from "./lib/subagent-link";
+import { doneSubagentPanelAsk, useSubagentPanelAsk, type SubagentPanelAsk } from "./lib/subagent-link";
 import { doneTeamAsk, useTeamAsk } from "./lib/team";
 import { doneSideAsk, useSideAsk } from "./lib/side-panel";
 import { setSideFold } from "./lib/side-fold";
@@ -58,8 +58,9 @@ const sessions: Session[] = [
   row(PREFIX_ID),
   row(TWIN_A, { activity_at: "2026-11-01T10:00:00Z" }),
   row(TWIN_B, { activity_at: "2026-11-02T10:00:00Z" }),
-  // a child session folded under s1 (#5120): a card in s1's chat, never a page of its own
+  // a child session folded under s1 (#5120, #14323): opens parent + subagent panel unless opened standalone
   row("kid1", { folded_under: "s1", is_subagent: true, parent_session_id: "s1" }),
+  row("remote-kid", { machine_id: "box", folded_under: "s1", folded_under_machine_id: "mac", is_subagent: true, parent_machine_id: "mac", parent_session_id: "s1" }),
   row("side1", { folded_under: "s1", folded_as: "side" }),
   row("side-kid", { folded_under: "s1", folded_side: "side1", is_subagent: true, parent_session_id: "side1" }),
   // a herdr tab's lead and its worker (#5180): the worker is in the lead's Team panel, never a page of its own
@@ -154,10 +155,10 @@ describe("the shell's session links", () => {
     expect(host.textContent).toContain(`Task ${TWIN_A} (0)`);
   });
 
-  it("opens a child session's /s link as its parent's chat, which is asked for the child's card", async () => {
-    let asked: string | undefined;
+  it("opens embedded <parent>@<agent> and child session deep links as parent chat + subagent panel", async () => {
+    let asked: SubagentPanelAsk | undefined;
     function Probe() {
-      asked = useSubagentLink("mac", "s1");
+      asked = useSubagentPanelAsk("mac", "s1");
       return null;
     }
     const probe = createRoot(document.createElement("div"));
@@ -165,9 +166,36 @@ describe("the shell's session links", () => {
     await open("/s/mac/kid1");
     expect(location.pathname).toBe("/s/mac/s1");
     expect(drawn.chatSid).toBe("s1");
-    expect(asked).toBe("child:kid1");
-    act(() => doneSubagentLink("mac", "s1"));
+    expect(asked).toEqual({ mid: "mac", sid: "kid1", from: "link" });
+    act(() => doneSubagentPanelAsk("mac", "s1"));
+
+    await open("/s/mac/s1@agent42");
+    expect(location.pathname).toBe("/s/mac/s1");
+    expect(drawn.chatSid).toBe("s1");
+    expect(asked).toEqual({ mid: "mac", sid: "s1@agent42", from: "link" });
+    act(() => doneSubagentPanelAsk("mac", "s1"));
+
+    await open("/s/box/remote-kid");
+    expect(location.pathname).toBe("/s/mac/s1");
+    expect(drawn.chatSid).toBe("s1");
+    expect(asked).toEqual({ mid: "box", sid: "remote-kid", from: "link" });
+    act(() => doneSubagentPanelAsk("mac", "s1"));
     act(() => probe.unmount());
+  });
+
+  it("keeps standalone=1 subagent pages open without redirecting back to the parent", async () => {
+    await open("/s/mac/s1@agent42?standalone=1");
+    expect(location.pathname).toBe("/s/mac/s1@agent42");
+    expect(location.search).toBe("?standalone=1");
+    expect(drawn.chatSid).toBe("s1@agent42");
+
+    await open("/s/mac/kid1?standalone=1");
+    expect(location.pathname).toBe("/s/mac/kid1");
+    expect(drawn.chatSid).toBe("kid1");
+
+    await open("/s/box/remote-kid?standalone=1");
+    expect(location.pathname).toBe("/s/box/remote-kid");
+    expect(drawn.chatSid).toBe("remote-kid");
   });
 
   it("an unlisted child opens as itself until its row says whose it is", async () => {
@@ -177,7 +205,7 @@ describe("the shell's session links", () => {
     await flush();
     expect(location.pathname).toBe("/s/mac/s2");
     expect(drawn.chatSid).toBe("s2");
-    act(() => doneSubagentLink("mac", "s2"));
+    act(() => doneSubagentPanelAsk("mac", "s2"));
   });
 
   it("opens a worker's /s and /t links as its lead's page, which is asked to show the worker in its Team panel", async () => {

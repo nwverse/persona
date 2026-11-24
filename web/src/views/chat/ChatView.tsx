@@ -28,7 +28,7 @@ import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, sav
 import { codexThreadOf, waitsForFirstMessage } from "../../lib/codex-waiting";
 import { foldRows } from "../../lib/folded-rows";
 import { PREVIEW_FEATURE } from "../../lib/preview";
-import { buildTaskIndex, loopCadence, loopNext, stableSubagents, STOP_LOOP_MESSAGE, subagentCall, subagentCardKey, terminalCalls, type TaskIndex } from "../../lib/tasks";
+import { buildTaskIndex, loopCadence, loopNext, stableSubagents, STOP_LOOP_MESSAGE, subagentCall, subagentCardKey, subagentTitle, terminalCalls, type TaskIndex } from "../../lib/tasks";
 import { runStep, sameStep, turnDone, type RunStep } from "../../lib/run-step";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress, workLineStyle } from "../../lib/work-groups";
@@ -91,9 +91,9 @@ import { ChatContext, LiveClockContext, type ChatContextValue } from "./chat-con
 import { addFreshWords, resetFreshWords } from "./fresh-words";
 import { backgroundCount, backgroundLine, backgroundWaitLine, workflowAgentFor, workflowCalls, workflowCallsKey } from "../../lib/workflows";
 import { backgroundTurn, waitingOnSubagents } from "../../lib/background-work";
-import { doneSubagentLink, useSubagentLink } from "../../lib/subagent-link";
+import { doneOverviewSubagentsAsk, doneSubagentLink, doneSubagentPanelAsk, splitSubagentLink, useOverviewSubagentsAsk, useSubagentLink, useSubagentPanelAsk } from "../../lib/subagent-link";
 import { childCall, childCardKey, childOfCall, childPlaces, exchangeStarts, placeChildren, type ChildPlace } from "../../lib/child-cards";
-import { useChildSessions } from "../../lib/use-child-sessions";
+import { useChildRow, useChildSessions } from "../../lib/use-child-sessions";
 import { openExpanded } from "./expanded";
 import { seekCall } from "./jump";
 import { navRailTicks, type NavRailSource, type NavRailTick } from "../../lib/nav-rail";
@@ -199,7 +199,7 @@ const ownCopies = new WeakMap<Interaction, Interaction>();
 function asOwnCard(ix: Interaction): Interaction {
   let c = ownCopies.get(ix);
   if (!c) {
-    c = { ...ix, folded_under: undefined, folded_as: undefined, folded_side: undefined };
+    c = { ...ix, folded_under: undefined, folded_under_machine_id: undefined, folded_as: undefined, folded_side: undefined };
     ownCopies.set(ix, c);
   }
   return c;
@@ -353,7 +353,34 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
    *  The box's other states (offline, queued, unavailable…) say theirs as before. */
   placeholder?: string;
 }) {
-  const { session, detail, retry: retryDetail, known } = useRuntimeSession(mid, sid);
+  const embeddedSub = splitSubagentLink(sid);
+  const { session: runtimeSession, detail, retry: retryDetail, known: runtimeKnown } = useRuntimeSession(mid, sid, !embeddedSub);
+  const heldSubRow = useChildRow(mid, sid);
+  const embeddedParent = useStore((s) => (embeddedSub ? (s.sessions[mid] ?? []).find((x) => x.session_id === embeddedSub.parent) : undefined));
+  const syntheticEmbedded = useMemo<Session | undefined>(() => {
+    if (!embeddedSub) return undefined;
+    const entry = embeddedParent?.subagents?.find((a) => a.id === embeddedSub.agent || a.session_id === sid);
+    return {
+      machine_id: mid,
+      session_id: sid,
+      title: entry ? subagentTitle(entry) : embeddedSub.agent,
+      cwd: embeddedParent?.cwd ?? "",
+      agent: embeddedParent?.agent,
+      agent_label: embeddedParent?.agent_label,
+      agent_surface: embeddedParent?.agent_surface,
+      launcher: embeddedParent?.launcher,
+      model: entry?.model,
+      status: entry?.running ? "working" : "idle",
+      state: entry?.running ? "working" : "idle",
+      started_at: entry?.started_at,
+      updated_at: entry?.updated_at ?? entry?.started_at,
+      is_subagent: true,
+      parent_session_id: embeddedSub.parent,
+      capabilities: { read: true, send: false, interrupt: false },
+    };
+  }, [embeddedSub, embeddedParent, mid, sid]);
+  const session = syntheticEmbedded ?? (detail.missing && heldSubRow ? heldSubRow : runtimeSession ?? heldSubRow);
+  const known = Boolean(syntheticEmbedded) || runtimeKnown || Boolean(heldSubRow);
   // The main conversation is always Persona (#1313): not its first message, the node's title for it.
   const mainConversation = useStore((s) => s.assistant?.main);
   const isMain = Boolean(assistant && (mainCache || sid === mainConversation));
@@ -419,9 +446,12 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const sideParent = session && isSide(session) ? session.folded_under : undefined;
   // the space's other agents, its child sessions folded into their parents (#5120: a child is never one of them)
   const siblings = useStore((s) => (session?.space_id ? foldRows(s.sessions[mid] ?? []).filter((x) => x.space_id === session.space_id && stateOf(x) !== "offline") : []));
-  // its own requests and those of the child sessions folded under it (#5120): a child's are answered here, in the order
-  // they came, each saying which child asks; a side session's chat (#7944) takes the cards of the rows that belong to it
-  const ownCard = (ix: Interaction) => ix.machine_id === mid && (ix.session_id === sid || ix.folded_under === sid || ix.folded_side === sid);
+  // its own requests and those of the child sessions folded under it (#5120, including cross-machine children via
+  // folded_under_machine_id): a child's are answered here, in the order they came, each saying which child asks; a
+  // side session's chat (#7944) takes the cards of the rows that belong to it
+  const ownCard = (ix: Interaction) =>
+    (ix.machine_id === mid && (ix.session_id === sid || ix.folded_side === sid)) ||
+    ((ix.folded_under_machine_id || ix.machine_id) === mid && ix.folded_under === sid);
   const interactions = useStore((s) => s.interactions.filter(ownCard));
   const answered = useStore((s) => Object.values(s.answered).filter((a) => ownCard(a.ix)));
   const delegated = useStore((s) => Object.values(s.delegated).filter((d) => ownCard(d.ix)));
@@ -608,17 +638,18 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // answered that the session is gone, says that instead. Only the main conversation may already send; every other chat
   // waits for its row, because the node would start an Agent for an id nobody has. A lookup that found nothing leaves
   // `session` a stand-in (useRuntimeSession), which is no row either. Retries are refused along with sends.
-  const noRow = !session || detail.missing;
+  const detailMissing = detail.missing && !syntheticEmbedded && !heldSubRow;
+  const noRow = !session || detailMissing;
   // A runtime's list row can be here before its full detail: without `capabilities.send` yet it says nothing about sending, so
   // the box keeps taking words and Send waits until the detail answers (#11237), as it does with no row at all
-  const hydrating = Boolean(session?.source_kind && session.capabilities?.send === undefined && !detail.ready && !detail.legacy && !detail.missing);
+  const hydrating = Boolean(session?.source_kind && session.capabilities?.send === undefined && !detail.ready && !detail.legacy && !detailMissing);
   // the hub could not say what this chat is (an older hub without the cached row, or a session it no longer has): the
   // notice above the chat says so, and an opening line under it would claim the chat started
-  const noDetails = Boolean(detail.error) && (detail.missing || !session);
-  const gone = detail.missing && !isMain;
+  const noDetails = Boolean(detail.error) && (detailMissing || !session);
+  const gone = detailMissing && !isMain;
   const refusedNoRow = (noRow && !isMain) || hydrating;
-  const unknownGate = useRef({ isMain, gone: detail.missing });
-  unknownGate.current = { isMain, gone: detail.missing };
+  const unknownGate = useRef({ isMain, gone: detailMissing });
+  unknownGate.current = { isMain, gone: detailMissing };
   // A gone chat is read again a few times by itself (runtime-session.ts), and the notice above it keeps a Retry for after
   const noRowBlock = useMemo(() => (refusedNoRow ? { label: t(gone ? "chat-chatview.session_gone" : "chat-chatview.connecting") } : undefined), [refusedNoRow, gone]);
   // A Persona conversation without a title yet is "New chat", as All chats and the sidebar call it, not its folder's name (#1697)
@@ -1847,7 +1878,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     const c = sideParent ? getSession(mid, sideParent)?.children : undefined;
     return Boolean(c && c.total > (c.sides ?? 0));
   });
-  const kids = useChildSessions(mid, sid, (sideParent ? sideKids : Boolean(session?.children?.total)) || Boolean(linkedChild), true, sideParent);
+  const [overviewOpen, setOverviewOpen] = useState(false);
+  const [focusSubagents, setFocusSubagents] = useState(0);
+  const kids = useChildSessions(mid, sid, (sideParent ? sideKids : Boolean(session?.children?.total) || Boolean(session?.archived) || overviewOpen) || Boolean(linkedChild), true, sideParent);
   // a lead's workers (#5180) are in its Team panel, not cards in its chat, and so are a parent's side sessions in its Side
   // sessions panel (#7944); the rest of what folds under it are child cards
   const childRows = useMemo(() => (kids.rows.some((c) => isWorker(c) || isSide(c)) ? kids.rows.filter((c) => !isWorker(c) && !isSide(c)) : kids.rows), [kids.rows]);
@@ -2224,8 +2257,20 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // the header and the composer are memoized (a transcript push changes neither): what they get stays the same object
   // until it changes. The assistant's face reads only the last item's role and kind (lib/persona.ts personaState).
   const stopLoop = useCallback(() => void deliver({ text: STOP_LOOP_MESSAGE, images: [] }, uuid()), [deliver]);
-  // the Background tasks panel stops the /loop and shows a workflow's call through the page showing the chat (#5421)
-  useEffect(() => (assistant || embedded ? undefined : provideBackgroundChat(mid, sid, { stopLoop, jumpToCall: jump })), [assistant, embedded, mid, sid, stopLoop, jump]);
+  const placesNow = useRef(places);
+  placesNow.current = places;
+  const hasCall = useCallback((call: string) => {
+    if (itemsNow.current.some((it) => it.tool_use_id === call)) return true;
+    const kidSid = childOfCall(call);
+    if (kidSid) {
+      for (const list of placesNow.current.values()) {
+        if (list.some((p) => p.sid === kidSid)) return true;
+      }
+    }
+    return false;
+  }, []);
+  // the Background tasks panel stops the /loop and shows a workflow's or subagent's call through the page showing the chat (#5421, #14323)
+  useEffect(() => (assistant || embedded ? undefined : provideBackgroundChat(mid, sid, { stopLoop, jumpToCall: jump, hasCall })), [assistant, embedded, mid, sid, stopLoop, jump, hasCall]);
   // cached content stays up when a read fails: the pill says so, the error page is for an empty chat
   const refreshFailed = tr.items.length > 0 ? tr.error || refreshError : undefined;
   const lastItem = assistant ? tr.items[tr.items.length - 1] : undefined;
@@ -2270,13 +2315,18 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const sideNeeds = sides.some((w) => stateOf(w) === "needs_you") || (!kids.loaded && (hubSide?.needs_you ?? 0) > 0);
   const toggleSide = useCallback(() => toggleSides(mid, sid, Boolean(sidesPanelOf(getPanel(), mid, sid))), [mid, sid]);
   const sideControl = useMemo(() => (sideCount > 0 ? { count: sideCount, open: sidesOpen, needs: sideNeeds, onToggle: toggleSide } : undefined), [sideCount, sidesOpen, sideNeeds, toggleSide]);
-  const elsewhere = (ix: Interaction) => (Boolean(teamShown) && ix.session_id === teamShown) || (Boolean(sideShown) && (ix.session_id === sideShown || ix.folded_side === sideShown));
-  // a worker's own cards in its conversation (the Team panel, embedded) are its own there, not "From worker"
+  const subagentPanel = panel?.kind === "subagent" && (panel.parentMid ?? panel.mid) === mid && (panel.parentSid ?? splitSubagentLink(panel.sid)?.parent) === sid ? panel : undefined;
+  const subagentShown = panelDrawn && subagentPanel ? { mid: subagentPanel.mid, sid: subagentPanel.sid } : undefined;
+  const elsewhere = (ix: Interaction) =>
+    (Boolean(teamShown) && ix.session_id === teamShown) ||
+    (Boolean(sideShown) && (ix.session_id === sideShown || ix.folded_side === sideShown)) ||
+    Boolean(subagentShown && ix.machine_id === subagentShown.mid && ix.session_id === subagentShown.sid);
+  // a worker's or subagent's own cards in its conversation (embedded) are its own there, not "From subagent"
   const docked = useMemo(() => {
-    const mine = teamShown || sideShown ? interactions.filter((ix) => !elsewhere(ix)) : interactions;
-    return embedded ? mine.map((ix) => (ix.session_id === sid && ix.folded_under ? asOwnCard(ix) : ix)) : mine;
+    const mine = teamShown || sideShown || subagentShown ? interactions.filter((ix) => !elsewhere(ix)) : interactions;
+    return embedded ? mine.map((ix) => (ix.machine_id === mid && ix.session_id === sid && ix.folded_under ? asOwnCard(ix) : ix)) : mine;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [interactions, teamShown, sideShown, embedded, sid]);
+  }, [interactions, teamShown, sideShown, subagentShown, embedded, mid, sid]);
   // a Persona chat's own requests hold its turn: open above the capsules (TurnCards), out of the stack and of Needs you's
   // count; the rest (a worker's, a side session's) stay in the stack and the tray as before (lib/turn-asks.ts)
   const turnSplit = useMemo(() => (assistant ? splitTurnAsks(docked, mid, sid) : { turn: [], rest: docked }), [assistant, docked, mid, sid]);
@@ -2284,8 +2334,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const pendingCards = (
     <PendingCards
       interactions={focusedFirst(turnSplit.rest, focusedCard())}
-      answered={teamShown || sideShown ? answered.filter((a) => !elsewhere(a.ix)) : answered}
-      delegated={teamShown || sideShown ? delegated.filter((d) => !elsewhere(d.ix)) : delegated}
+      answered={teamShown || sideShown || subagentShown ? answered.filter((a) => !elsewhere(a.ix)) : answered}
+      delegated={teamShown || sideShown || subagentShown ? delegated.filter((d) => !elsewhere(d.ix)) : delegated}
       offerNext={inPage && !assistant ? { mid, sid } : undefined}
       narrow={compactDock}
       short={short && !cardField}
@@ -2295,8 +2345,35 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   );
 
   const overviewId = useId();
-  const [overviewOpen, setOverviewOpen] = useState(false);
   const showOverview = !assistant && !embedded && Boolean(session);
+  const overviewSubagentsAsk = useOverviewSubagentsAsk(mid, sid);
+  useEffect(() => {
+    if (!overviewSubagentsAsk || !showOverview) return;
+    doneOverviewSubagentsAsk(mid, sid);
+    const activePanel = getPanel();
+    if (activePanel && (activePanel.kind === "background" || activePanel.kind === "subagent") && activePanel.from === "overview") {
+      openPanel(null);
+    }
+    setOverviewOpen(true);
+    setFocusSubagents((n) => n + 1);
+  }, [overviewSubagentsAsk, showOverview, mid, sid]);
+  const subagentPanelAsk = useSubagentPanelAsk(mid, sid);
+  useEffect(() => {
+    if (!subagentPanelAsk || assistant || embedded) return;
+    doneSubagentPanelAsk(mid, sid);
+    // Open after useSessionPanels runs on route arrival so the panel is not closed by arrival cleanup.
+    queueMicrotask(() => {
+      openPanel({
+        kind: "subagent",
+        mid: subagentPanelAsk.mid,
+        sid: subagentPanelAsk.sid,
+        parentMid: mid,
+        parentSid: sid,
+        call: subagentPanelAsk.call,
+        from: subagentPanelAsk.from,
+      }, { push: false });
+    });
+  }, [subagentPanelAsk, assistant, embedded, mid, sid]);
   useEffect(() => {
     if (!showOverview || !overviewOpen) return;
     // The origin owns both the visible dependent detail and the one Cmd+B remembers. Its closure, including leaving
@@ -2306,8 +2383,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const overview = useMemo(() => showOverview
     ? { id: overviewId, open: overviewOpen, toggle: () => setOverviewOpen((open) => !open) }
     : undefined, [overviewId, overviewOpen, showOverview]);
-  // Its background detail takes the side panel's space, rather than squeezing the mounted overview and losing its place.
-  const overviewDetail = panelDrawn && backgroundPanelOf(panel, mid, sid)?.from === "overview";
+  // Its background or subagent detail takes the side panel's space, rather than squeezing the mounted overview and losing its place.
+  const overviewDetail = panelDrawn && (backgroundPanelOf(panel, mid, sid)?.from === "overview" || subagentPanel?.from === "overview");
   const isAssistant = Boolean(assistant || session?.assistant);
   const composerDisabled = Boolean(offlineLine) || (!noRow && !hydrating && !sessionCan(session, "send"));
   const composerBlocked = gate.blocked ?? noRowBlock;
@@ -2713,6 +2790,10 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         )}
         {stoppedLine && !codexStoppedTakeover ? (
           <StoppedAgentLine mid={mid} sid={sid} onTerminal={openTerminal} />
+        ) : !codexFooterTakeover && !assistant && !offlineLine && !refusedNoRow && session && !canCompose && (embedded || session.is_subagent || Boolean(embeddedSub)) ? (
+          <div role="status" data-subagent-readonly-line className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-card bg-inset px-3 py-2 text-xs text-ink-2">
+            <span className="min-w-0 flex-1 break-words">{sourceSubtitle(session) || session.read_only_reason || t("chat-chatview.view_only")}</span>
+          </div>
         ) : !codexFooterTakeover && (
         <Composer
           draftKey={draftKey}
@@ -2777,7 +2858,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         <PageBoundary page={`overview:${mid}/${sid}`}>
           <Suspense fallback={<div className="p-3"><Loading /></div>}>
             <SessionOverview id={overviewId} session={session} machineName={machineName} items={tr.items} tasks={tasks}
-              children={kids.rows} onJumpToCall={jump} hidden={overviewDetail} />
+              children={kids.rows} onJumpToCall={jump} focusSubagents={focusSubagents} hidden={overviewDetail} />
           </Suspense>
         </PageBoundary>
       )}

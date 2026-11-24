@@ -10,8 +10,9 @@ import type { Item, Session } from "./types";
  *  the chat's jump to it). */
 const CHILD = "child:";
 
-/** Where a child's card goes: the session, and the time it is placed by. */
+/** Where a child's card goes: the session (and optional cross-machine `mid`), and the time it is placed by. */
 export interface ChildPlace {
+  mid?: string;
   sid: string;
   at: string;
 }
@@ -21,6 +22,12 @@ export const isChildSessionStep = (s: Step): boolean => s.kind === "tool" && s.u
 
 /** The session a child card stands for. */
 export const childSessionOf = (s: Step & { kind: "tool" }): string => s.use.id.slice(CHILD.length);
+
+/** The machine a child card's session runs on (`fallbackMid` when same-machine). */
+export const childMachineOf = (s: Step & { kind: "tool" }, fallbackMid: string): string => {
+  const mid = (s.use.tool_input as { child_mid?: unknown } | undefined)?.child_mid;
+  return typeof mid === "string" && mid ? mid : fallbackMid;
+};
 
 /** The call a child's card is known by: what a link to the child brings into view. */
 export const childCall = (sid: string): string => `${CHILD}${sid}`;
@@ -35,13 +42,14 @@ export const childCardKey = (scope: string, sid: string): string => `${scope}${C
  *  keeps that first time (`seen`, the chat's own), so a working one does not move to the latest exchange with every push. */
 export function childPlaces(rows: readonly Session[], seen: Map<string, string>): ChildPlace[] {
   return rows.map((s) => {
-    if (s.started_at) return { sid: s.session_id, at: s.started_at };
+    const mid = s.folded_under_machine_id && s.folded_under_machine_id !== s.machine_id ? s.machine_id : undefined;
+    if (s.started_at) return { ...(mid ? { mid } : {}), sid: s.session_id, at: s.started_at };
     let at = seen.get(s.session_id);
     if (at === undefined) {
       at = s.updated_at ?? "";
       seen.set(s.session_id, at);
     }
-    return { sid: s.session_id, at };
+    return { ...(mid ? { mid } : {}), sid: s.session_id, at };
   });
 }
 
@@ -118,7 +126,7 @@ export function withChildSessions(steps: Step[], places: readonly ChildPlace[] |
     }
     const near = out[i - 1] ?? out[i];
     const id = childCall(c.sid);
-    const use: Item = { id, seq: near ? stepSeq(near) : 0, ts: near ? stepTs(near) : c.at || undefined, role: "assistant", kind: "tool_use", tool_name: "Agent", tool_use_id: id, tool_input: {} };
+    const use: Item = { id, seq: near ? stepSeq(near) : 0, ts: near ? stepTs(near) : c.at || undefined, role: "assistant", kind: "tool_use", tool_name: "Agent", tool_use_id: id, tool_input: c.mid ? { child_mid: c.mid } : {} };
     out.splice(i, 0, { kind: "tool", id, use, images: [] });
   }
   return out;

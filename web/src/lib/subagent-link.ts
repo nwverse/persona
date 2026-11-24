@@ -15,6 +15,17 @@ export function splitSubagentLink(sid: string): { parent: string; agent: string 
 
 /** The subagent each parent chat is asked to show, by "<machine>/<parent>". */
 const pending = new Map<string, string>();
+/** Requests to open Session Overview focused on Subagents for "<machine>/<parent>". */
+const overviewAsks = new Map<string, number>();
+let overviewSeq = 0;
+/** Requests to open a subagent detail panel inside "<parentMid>/<parentSid>". */
+export interface SubagentPanelAsk {
+  mid: string;
+  sid: string;
+  call?: string;
+  from?: "overview" | "card" | "link";
+}
+const panelAsks = new Map<string, SubagentPanelAsk>();
 const listeners = new Set<() => void>();
 const key = (mid: string, sid: string) => `${mid}/${sid}`;
 const tell = () => listeners.forEach((l) => l());
@@ -42,6 +53,36 @@ export function followChildSession(mid: string, child: string, parent: string): 
 export function useSubagentLink(mid: string, sid: string): string | undefined {
   const read = () => pending.get(key(mid, sid));
   return useSyncExternalStore(subscribe, read, read);
+}
+
+/** Ask the parent chat to open Session Overview and focus the Subagents section (parent-row subtitle click). */
+export function askOverviewSubagents(mid: string, sid: string) {
+  overviewAsks.set(key(mid, sid), ++overviewSeq);
+  tell();
+}
+
+export function useOverviewSubagentsAsk(mid: string, sid: string): number {
+  const read = () => overviewAsks.get(key(mid, sid)) ?? 0;
+  return useSyncExternalStore(subscribe, read, read);
+}
+
+export function doneOverviewSubagentsAsk(mid: string, sid: string) {
+  if (overviewAsks.delete(key(mid, sid))) tell();
+}
+
+/** Ask the parent chat to open a subagent's full detail panel (deep link or explicit open). */
+export function askSubagentPanel(parentMid: string, parentSid: string, ask: SubagentPanelAsk) {
+  panelAsks.set(key(parentMid, parentSid), ask);
+  tell();
+}
+
+export function useSubagentPanelAsk(parentMid: string, parentSid: string): SubagentPanelAsk | undefined {
+  const read = () => panelAsks.get(key(parentMid, parentSid));
+  return useSyncExternalStore(subscribe, read, read);
+}
+
+export function doneSubagentPanelAsk(parentMid: string, parentSid: string) {
+  if (panelAsks.delete(key(parentMid, parentSid))) tell();
 }
 
 function subscribe(l: () => void) {
