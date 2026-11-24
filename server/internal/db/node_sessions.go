@@ -70,6 +70,9 @@ type NodeSession struct {
 	// the model: after a node restart too, an extension's resume of such an Agent its computer no longer lists is
 	// checked against the record's directory (#10941).
 	EngineRuntime string `json:"engine_runtime,omitempty"`
+	// StartOpID is the X-Persona-Op-Id that started this session, persisted so reconnect reconciliation after a
+	// mid-flight disconnect or node restart can prove the start already ran (#10674).
+	StartOpID string `json:"start_op_id,omitempty"`
 }
 
 func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSession) error {
@@ -109,7 +112,7 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 			'awaiting_first_message', $27::boolean, 'idle_compaction', $28::jsonb, 'origin', $29::text,
 			'origin_known', $30::boolean, 'engine_runtime', $31::text, 'model_source', $32::jsonb,
 			'desktop_pending_model', $33::text, 'desktop_pending_effort', $34::text,
-			'app_mode_explicit', $35::boolean, 'ran_at', $36::bigint), now() FROM saved
+			'app_mode_explicit', $35::boolean, 'ran_at', $36::bigint, 'start_op_id', $37::text), now() FROM saved
 		ON CONFLICT (key) DO UPDATE SET value = (CASE
 			WHEN COALESCE((settings.value->>'stop_cause_at')::bigint, 0) > $26
 				OR (COALESCE((settings.value->>'stop_cause_at')::bigint, 0) = $26
@@ -118,12 +121,16 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 				'stop_cause_at', settings.value->'stop_cause_at')
 			ELSE EXCLUDED.value END)
 			-- ran_at only moves forward: a put that carries none (or an older one) keeps the last sighting.
-			|| jsonb_build_object('ran_at', GREATEST(COALESCE((settings.value->>'ran_at')::bigint, 0), $36::bigint)),
+			|| jsonb_build_object('ran_at', GREATEST(COALESCE((settings.value->>'ran_at')::bigint, 0), $36::bigint))
+			-- start_op_id is immutable once recorded: a later update carrying "" keeps the original op id.
+			|| CASE WHEN COALESCE(settings.value->>'start_op_id', '') <> '' AND $37::text = ''
+				THEN jsonb_build_object('start_op_id', settings.value->'start_op_id')
+				ELSE '{}'::jsonb END,
 			updated_at = now()`,
 		machine, id, s.Pane, s.Launcher, s.Cwd, s.StartedAt, tasks, s.Model, s.ModelFingerprint, s.ModelEffort, s.AppMode, s.AppEffort,
 		s.UltracodeProcess, unknownStart, s.CreationID, s.Incarnation, guest, s.GuestKind, s.ConfigDir, pendingSwitch, engineHistory, pendingHandoff,
 		modelRecovery, s.FollowsSetting, string(s.StopCause), s.StopCauseAt, s.AwaitingFirstMessage, jsonOrNil(s.IdleCompaction), s.Origin, s.OriginKnown,
-		s.EngineRuntime, jsonOrNil(s.ModelSource), s.DesktopPendingModel, s.DesktopPendingEffort, s.AppModeExplicit, s.RanAt)
+		s.EngineRuntime, jsonOrNil(s.ModelSource), s.DesktopPendingModel, s.DesktopPendingEffort, s.AppModeExplicit, s.RanAt, s.StartOpID)
 	return err
 }
 
@@ -172,6 +179,7 @@ type nodeModel struct {
 	// EngineRuntime: the engine runtime whose start wrote the record ("" for a terminal's, and for a row written before
 	// it was kept).
 	EngineRuntime string `json:"engine_runtime"`
+	StartOpID     string `json:"start_op_id"`
 }
 
 // jsonOrNil is raw, or nil when it holds nothing (empty, or a JSON null).
@@ -212,6 +220,7 @@ func (d *DB) NodeSessions(ctx context.Context, machine string) (map[string]NodeS
 		s.FollowsSetting = m.FollowsSetting
 		s.AwaitingFirstMessage = m.AwaitingFirstMessage
 		s.EngineRuntime = m.EngineRuntime
+		s.StartOpID = m.StartOpID
 		s.StopCause, s.StopCauseAt = m.StopCause, m.StopCauseAt
 		s.RanAt = m.RanAt
 		if m.StartedAtUnknown {

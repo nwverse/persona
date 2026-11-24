@@ -29,7 +29,7 @@ const imessageAIKey = "imessage.ai"
 var errNoIMessageModule = errors.New("this build has no iMessage module")
 
 func (h *Manager) addIMessage(cfg imessagewire.Config) error {
-	newRemote := imessageport.Factory()
+	newRemote := imessageport.Factory(h.modules())
 	if newRemote == nil {
 		return errNoIMessageModule
 	}

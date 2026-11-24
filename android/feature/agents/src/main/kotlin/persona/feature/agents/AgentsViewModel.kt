@@ -360,12 +360,15 @@ internal class AgentsViewModel(
         else {
             val counts = status.counts
             val machineCounts = status.machineCounts
+            // A parent marked seen locally stays counted Unread while a side is unread; once held sides are seen, drop immediately (#13524).
+            val clearedUnread = unreadClearedBySeen(projected.sessions, projected.sessions.map { it.listSession(projected.preferences).session })
             val quickCounts = AgentQuickFilter.entries.associateWith { filter ->
                 when (filter) {
                     // The hub counts them among working and apart too (#6045): Working leaves them out, as iOS.
                     AgentQuickFilter.Feishu -> counts.larkGroups(projected.list.counts)
                     AgentQuickFilter.BackgroundWaiting -> counts.backgroundWaiting
                     AgentQuickFilter.Working -> ((counts.state[AgentState.Working.wire] ?: 0) - counts.backgroundWaiting).coerceAtLeast(0)
+                    AgentQuickFilter.Unread -> ((counts.state[AgentState.Unread.wire] ?: 0) - clearedUnread).coerceAtLeast(0)
                     else -> filter.state?.let { counts.state[it.wire] ?: 0 }
                         ?: if (filter == AgentQuickFilter.All) counts.total else projected.list.counts[filter] ?: 0
                 }

@@ -402,6 +402,7 @@ data class ExtensionContributes(
     val assistant: List<ExtensionAssistantItem>? = null,
     @SerialName("mcp_servers") val mcpServers: List<ExtensionMCPServerItem>? = null,
     val ui: List<ExtensionUIItem>? = null,
+    @SerialName("track_kinds") val trackKinds: List<ExtensionTrackKindItem>? = null,
     @SerialName("agent_sources") val agentSources: List<ExtensionAgentSourceItem>? = null,
     val channel: List<ExtensionChannelItem>? = null,
     val events: List<ExtensionEventsItem>? = null,
@@ -439,6 +440,7 @@ private data class ExtensionContributesKnown(
     val assistant: List<ExtensionAssistantItem>? = null,
     @SerialName("mcp_servers") val mcpServers: List<ExtensionMCPServerItem>? = null,
     val ui: List<ExtensionUIItem>? = null,
+    @SerialName("track_kinds") val trackKinds: List<ExtensionTrackKindItem>? = null,
     @SerialName("agent_sources") val agentSources: List<ExtensionAgentSourceItem>? = null,
     val channel: List<ExtensionChannelItem>? = null,
     val events: List<ExtensionEventsItem>? = null,
@@ -460,7 +462,7 @@ private data class ExtensionContributesKnown(
 
 object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
     private val known = ExtensionContributesKnown.serializer()
-    private val keys = setOf<String>("connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "messaging")
+    private val keys = setOf<String>("connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "messaging")
     override val descriptor: SerialDescriptor = known.descriptor
 
     override fun deserialize(decoder: Decoder): ExtensionContributes {
@@ -483,6 +485,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             assistant = fields.assistant,
             mcpServers = fields.mcpServers,
             ui = fields.ui,
+            trackKinds = fields.trackKinds,
             agentSources = fields.agentSources,
             channel = fields.channel,
             events = fields.events,
@@ -521,6 +524,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             assistant = value.assistant,
             mcpServers = value.mcpServers,
             ui = value.ui,
+            trackKinds = value.trackKinds,
             agentSources = value.agentSources,
             channel = value.channel,
             events = value.events,
@@ -997,6 +1001,45 @@ data class ExtensionConnectorItem(
      * install preview says so.
      */
     @SerialName("sends_as_user") val sendsAsUser: Boolean? = null,
+)
+
+@Serializable
+data class ExtensionTrackAttention(
+    @SerialName("push_cap") val pushCap: String? = null,
+    @SerialName("deep_default") val deepDefault: String? = null,
+    @SerialName("enter_mode") val enterMode: String? = null,
+)
+
+@Serializable
+data class ExtensionTrackSidebar(
+    val group: String? = null,
+    val order: Int? = null,
+    val icon: String? = null,
+)
+
+@Serializable
+data class ExtensionTrackKindConfig(
+    val schema: Int = 0,
+    val template: String = "",
+    @SerialName("user_instructions") val userInstructions: String? = null,
+    val context: String = "",
+    @SerialName("default_categories") val defaultCategories: List<String> = emptyList(),
+    @SerialName("tag_focus") val tagFocus: List<String> = emptyList(),
+    val rhythms: List<Map<String, JsonElement>> = emptyList(),
+    val attention: ExtensionTrackAttention = ExtensionTrackAttention(),
+    val supervision: String = "",
+    val usage: List<Map<String, JsonElement>> = emptyList(),
+    val assembly: String = "",
+    @SerialName("capture_target") val captureTarget: Boolean? = null,
+    val channels: List<String> = emptyList(),
+    val sidebar: ExtensionTrackSidebar = ExtensionTrackSidebar(),
+)
+
+@Serializable
+data class ExtensionTrackKindItem(
+    val id: String = "",
+    val title: String = "",
+    val config: ExtensionTrackKindConfig = ExtensionTrackKindConfig(),
 )
 
 /**

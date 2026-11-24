@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -981,6 +982,36 @@ func TestInboxReplyPolicyDraftAndRetryGates(t *testing.T) {
 		}
 		if draftCalls() != 1 || classifierCalls() != 2 {
 			t.Fatalf("expected 1 draft call and 2 classifier calls (pre + generated text), got draft=%d classifier=%d", draftCalls(), classifierCalls())
+		}
+	})
+
+	t.Run("draftReply_returns_errNoInboxItem_when_removed_during_generation", func(t *testing.T) {
+		classifier, classifierCalls := replyPolicyClassifierModel(t, func(_ int, _, _ string, _ *http.Request) (int, string) {
+			return http.StatusOK, `{"category":"routine_reply","reason":"initial question"}`
+		})
+		var h *inboxHub
+		var itemID string
+		draftModel, draftCalls := replyPolicyClassifierModel(t, func(_ int, _, _ string, _ *http.Request) (int, string) {
+			// Remove the inbox item while draftReply has released b.mu to generate text.
+			h.inbox.mu.Lock()
+			delete(h.inbox.items, itemID)
+			h.inbox.mu.Unlock()
+			return http.StatusOK, "Sounds good, will share shortly."
+		})
+		h, _ = newReplyPolicyHub(t, assistantwire.InboxReplyPolicyConfig{Enabled: true, Revision: "draft-v1"}, classifier)
+		h.in.models[purposeDraft] = draftModel
+		it := replyPolicyTestItem("lark:draft-removed:1", "1", "Can you share the update?")
+		itemID = it.ID
+		h.inbox.mu.Lock()
+		h.inbox.items[it.ID] = it
+		h.inbox.mu.Unlock()
+
+		got, err := h.draftReply(context.Background(), it.ID, "")
+		if !errors.Is(err, errNoInboxItem) || got != "" {
+			t.Fatalf("expected errNoInboxItem when item removed mid-draft, got text=%q err=%v", got, err)
+		}
+		if draftCalls() != 1 || classifierCalls() != 1 {
+			t.Fatalf("expected 1 draft call and 1 pre-generation classifier call, got draft=%d classifier=%d", draftCalls(), classifierCalls())
 		}
 	})
 
