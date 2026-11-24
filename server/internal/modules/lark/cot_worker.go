@@ -37,10 +37,10 @@ type cotWorker struct {
 func (f feishuSink) topicCotQueue(r *channel.Run, finish bool) (bool, *cotWorker) {
 	s := f.s
 	st, ownerDone, ok := s.h.RunState(r.ID, false, func() any { return &runLive{} })
-	if !ok {
+	owner, _ := st.(*runLive)
+	if !ok || owner == nil {
 		return false, nil
 	}
-	owner := st.(*runLive)
 	owner.mu.Lock()
 	w := owner.native
 	if w == nil {

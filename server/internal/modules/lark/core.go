@@ -207,5 +207,6 @@ func (s core) live(id string) *runLive {
 	if !ok {
 		return nil
 	}
-	return st.(*runLive)
+	p, _ := st.(*runLive) // nil for a state the module did not make
+	return p
 }
