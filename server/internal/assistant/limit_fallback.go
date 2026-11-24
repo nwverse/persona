@@ -260,7 +260,7 @@ func (s *Service) conversationSwitchResolver(machine string) conversationSwitchR
 
 // limitFallbacksLocked moves the fallback batches on, after runConversationSwitchesLocked ran their items (with
 // book.mu held; true when state changed): a continuation once its switch has started, a restore once its time came,
-// a fallback whose limit reset before its switch could start called off, and finished ones forgotten after
+// and finished ones forgotten after
 // limitFallbackKeep. A restore batch made here starts on a later pass, after state was saved: the durability
 // boundary of every batch.
 func (s *Service) limitFallbacksLocked(ctx context.Context, state *conversationSwitchState, now time.Time) bool {
@@ -281,10 +281,6 @@ func (s *Service) limitFallbacksLocked(ctx context.Context, state *conversationS
 			continue
 		case conversationSwitchSwitching, conversationSwitchSwitched:
 		default:
-			// Queued behind its conversation's work. Once the limit is over there is nothing to fall back for.
-			if !now.Before(fb.ResetsAt) && s.limitFallbackCallOff(ctx, item) {
-				fb.Done, changed = true, true
-			}
 			continue
 		}
 		if !fb.Continued {
@@ -302,19 +298,17 @@ func (s *Service) limitFallbacksLocked(ctx context.Context, state *conversationS
 	return changed
 }
 
-// limitFallbackCallOff refuses a queued fallback item whose limit reset before its switch could start, when no
-// switch operation was begun for it (a crash after the begin and before the save turns into reconciliation instead).
-func (s *Service) limitFallbackCallOff(ctx context.Context, item *conversationSwitchItem) bool {
-	st, ok := s.store().(logicalSwitchStore)
-	if !ok {
-		return false
+// The forward operation activated the backup at its persisted expected epoch plus one. An explicit switch
+// away and back can select identical settings, but it cannot recreate that epoch. Check at dispatch, including
+// for a restore batch a previous manager version already queued.
+func limitFallbackOwnsEpoch(state *conversationSwitchState, forwardID string, epoch int64) bool {
+	for i := range state.Batches {
+		b := &state.Batches[i]
+		if b.ID == forwardID {
+			return b.Fallback != nil && len(b.Items) == 1 && b.Items[0].Outcome == conversationSwitchSwitched && epoch == b.Items[0].ExpectedEpoch+1
+		}
 	}
-	if op, err := st.ConversationSwitch(ctx, item.Machine, item.ConversationID, item.OperationID); err != nil || op != nil {
-		return false
-	}
-	item.Outcome, item.Reason = conversationSwitchRefused, "the usage limit reset before the switch could start"
-	s.logf("limit fallback %s/%s: %s", item.Machine, short(item.ConversationID), item.Reason)
-	return true
+	return false
 }
 
 // limitFallbackContinueText is the continuation in the owner's language.

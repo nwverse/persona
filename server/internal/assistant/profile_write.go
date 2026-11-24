@@ -420,6 +420,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.SupervisionBatchMinutes != nil {
 			v.SupervisionBatchMinutes = in.SupervisionBatchMinutes
 		}
+		if in.AutoSupervisionMessages != nil {
+			v.AutoSupervisionMessages = in.AutoSupervisionMessages
+		}
 		if in.DefaultPermissionMode != "" {
 			v.DefaultPermissionMode = in.DefaultPermissionMode
 		}

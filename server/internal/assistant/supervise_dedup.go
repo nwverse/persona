@@ -417,6 +417,9 @@ func (s *Service) clearTaskBoundSignalDedup(ctx context.Context, todoID, kind st
 }
 
 func (s *Service) restoreDigest(signals []superviseSignal, at, prev time.Time) {
+	if !s.autoSupervisionOn(context.Background()) {
+		return // withdrawn, not retried: they would otherwise come back once the switch is on again
+	}
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()
