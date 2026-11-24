@@ -131,6 +131,9 @@ func (s *Service) announce(ix proto.Interaction) {
 		s.delegate(ix, forget)
 		return
 	}
+	if s.handNonOwnerCard(ix) {
+		return
+	}
 	s.tell(ix)
 }
 
