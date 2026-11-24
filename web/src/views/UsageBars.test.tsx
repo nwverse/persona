@@ -9,7 +9,7 @@ import { initI18n } from "../i18n";
 import { onDraftEvent, type DraftEvent } from "../lib/drafts";
 import { PINNED_USAGE_ACCOUNTS_KEY, remainingTone, resetPinnedUsageAccounts, timelinePosition, type UsageAccount } from "../lib/usage-windows";
 import { UsageBars } from "./UsageBars";
-import { compactResetText, computeUsagePopoverLayout, POPOVER_HYSTERESIS_PX, providerHue, UsagePopover, visibleTimelineTickHours } from "./UsagePopover";
+import { compactResetText, computeUsagePopoverLayout, packedColumnHeight, POPOVER_HYSTERESIS_PX, providerHue, UsagePopover, visibleTimelineTickHours } from "./UsagePopover";
 import { unconnectedUsageProviders } from "./UsageUnconnected";
 
 const NOW = new Date(2026, 10, 5, 10, 0, 0).getTime();
@@ -654,10 +654,17 @@ describe("provider cards and single unified reset timeline (V2)", () => {
     expect(rows[2].getAttribute("title")).toContain("Gemini Pro");
     expect(rows[2].getAttribute("title")).toContain("Claude");
 
-    // Paused account row uses orange endpoint dot
-    const pausedDots = [...rows[0].querySelectorAll<HTMLElement>('[data-timeline-dot="paused"]')];
-    expect(pausedDots.length).toBeGreaterThan(0);
-    expect(pausedDots[0].style.borderColor).toBe("var(--orange)");
+    // Paused end dot is per lane: account "2" has its 7d at the protection line, its 5h is healthy (teal)
+    const lanes0 = [...rows[0].querySelectorAll<HTMLElement>("[data-timeline-lane]")];
+    expect(lanes0.map((l) => l.getAttribute("data-timeline-lane"))).toEqual(["5h", "7d"]);
+    const dot5 = lanes0[0].querySelector<HTMLElement>("[data-timeline-dot]")!;
+    const dot7 = lanes0[1].querySelector<HTMLElement>("[data-timeline-dot]")!;
+    expect(dot5.getAttribute("data-timeline-dot")).toBe("active");
+    expect(dot5.style.borderColor).toBe("var(--hue-teal)");
+    expect(dot7.getAttribute("data-timeline-dot")).toBe("paused");
+    expect(dot7.style.borderColor).toBe("var(--orange)");
+    expect(rows[0].getAttribute("aria-label")).toContain("7d · 已暂停");
+    expect(rows[0].getAttribute("aria-label")).not.toContain("5h · 已暂停");
     expect(rows[1].querySelector('[data-timeline-dot="paused"]')).toBeNull();
   });
 
@@ -1117,6 +1124,31 @@ describe("height-first adaptive multi-column layout, hysteresis, scroll fallback
     }
   });
 
+  it("counts full-width blocks and unsplittable cards when choosing columns, picking 3 where whole-height math says 2", () => {
+    expect(packedColumnHeight([400, 380, 360], 1)).toBe(1164);
+    expect(packedColumnHeight([400, 380, 360], 2)).toBe(752);
+    expect(packedColumnHeight([400, 380, 360], 3)).toBe(400);
+    expect(packedColumnHeight([400, 380], 3)).toBe(400); // never more columns than cards
+    expect(packedColumnHeight([], 2)).toBe(0);
+
+    // 1440x990, trigger at y=900: availH = 876. Cards 400/380/360 plus a 400px full-width timeline.
+    const base = { viewportWidth: 1440, viewportHeight: 990, anchorRect: { left: 10, top: 900 }, prevCols: null };
+    const natural = 24 + 400 + 1164; // 1588: ceil(1588 / 876) = 2, but 2 columns are 24 + 400 + 752 = 1176 > 876
+    expect(computeUsagePopoverLayout({ ...base, naturalHeight: natural, providerCount: 3 }).cols).toBe(2);
+    const packed = computeUsagePopoverLayout({ ...base, naturalHeight: natural, cardHeights: [400, 380, 360], spanHeight: 400 });
+    expect(packed.availH).toBe(876);
+    expect(packed.cols).toBe(3); // 24 + 400 + 400 = 824 fits without a scrollbar
+
+    // Fits in one column: stays one column
+    expect(computeUsagePopoverLayout({ ...base, cardHeights: [200, 180], spanHeight: 300 }).cols).toBe(1);
+    // Nothing fits even in 3 columns: widest the viewport allows, scroll fallback
+    expect(computeUsagePopoverLayout({ ...base, cardHeights: [900, 900, 900], spanHeight: 100 }).cols).toBe(3);
+    // Hysteresis with packing: at 3 columns, 2 would fit by only 10px (< 24px): stay at 3
+    const twoFitsBarely = { ...base, cardHeights: [500, 300, 180], spanHeight: 342 }; // 2 cols: 24 + 342 + 500 = 866 <= 876
+    expect(computeUsagePopoverLayout({ ...twoFitsBarely, prevCols: 3 }).cols).toBe(3);
+    expect(computeUsagePopoverLayout({ ...twoFitsBarely, prevCols: null }).cols).toBe(2);
+  });
+
   it("keeps pure CSS transitions in the lazy stylesheet and honors prefers-reduced-motion with 120ms opacity-only fade", () => {
     const css = readFileSync(join(__dirname, "usage-popover.css"), "utf8");
     expect(css).toContain("translateY(6px) scale(0.98)");
@@ -1130,5 +1162,77 @@ describe("height-first adaptive multi-column layout, hysteresis, scroll fallback
     expect(css).toContain("prefers-reduced-motion: reduce");
     expect(css).toContain("120ms !important");
     expect(css).not.toMatch(/font-size\s*:\s*\d+(?:\.\d+)?px/);
+  });
+});
+
+describe("popover keyboard focus, Back on narrow screens, and a fresh clock on reopen", () => {
+  it("moves keyboard focus into the popover on open and back to the trigger on Escape", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<UsageBars accounts={[account("a", 10, 20)]} now={NOW} />));
+      const trigger = host.querySelector<HTMLButtonElement>("[data-usage-bars] > button")!;
+      trigger.focus();
+      await act(async () => trigger.click());
+      await vi.waitFor(() => expect(document.querySelector("[role=dialog]")).not.toBeNull());
+      const dialog = document.querySelector<HTMLElement>("[role=dialog]")!;
+      expect(dialog.getAttribute("tabindex")).toBe("-1");
+      expect(dialog.contains(document.activeElement)).toBe(true);
+      await act(async () => {
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      });
+      expect(document.querySelector("[data-usage-popover]")?.getAttribute("data-state")).toBe("closing");
+      expect(document.activeElement).toBe(trigger);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("closes the popover on Back before anything under it on a narrow screen", async () => {
+    const narrow = { matches: true, media: "(max-width: 1023px)", addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} };
+    vi.stubGlobal("matchMedia", (q: string) => (q === narrow.media ? narrow : { ...narrow, matches: false, media: q }));
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<UsageBars accounts={[account("a", 10, 20)]} now={NOW} />));
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-usage-bars] > button")!.click());
+      await vi.waitFor(() => expect(document.querySelector("[role=dialog]")).not.toBeNull());
+      expect((history.state as Record<string, unknown> | null)?.personaOverlay).toEqual(expect.any(String));
+      await act(async () => {
+        history.back();
+      });
+      await vi.waitFor(() => expect(document.querySelector("[data-usage-popover]")?.getAttribute("data-state") ?? "closed").not.toBe("open"));
+      expect(host.querySelector("[data-usage-bars] > button")?.getAttribute("aria-expanded")).toBe("false");
+    } finally {
+      narrow.matches = false;
+      await act(async () => root.unmount());
+      host.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("draws countdowns and sample ages from the moment it reopens, not from when it last closed", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const accounts = [account("a", 10, 20)];
+    try {
+      await act(async () => root.render(<UsagePopover open accounts={accounts} onClose={() => {}} />));
+      expect(host.textContent).toContain("12秒钟前");
+      await act(async () => root.render(<UsagePopover open={false} accounts={accounts} onClose={() => {}} />));
+      vi.setSystemTime(NOW + 60_000);
+      await act(async () => root.render(<UsagePopover open accounts={accounts} onClose={() => {}} />));
+      expect(host.textContent).toContain("1分钟前");
+      expect(host.textContent).not.toContain("12秒钟前");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      vi.useRealTimers();
+    }
   });
 });

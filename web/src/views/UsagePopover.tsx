@@ -10,9 +10,11 @@ import { balanceEmpty, balanceText } from "../lib/usage-balance";
 import { canonicalUsageProvider, groupByProvider, isBalanceAccount, isPinnableUsageAccount, planNote, protectReserve, providerTitle, remainingPercent, remainingText, remainingTone, resetLabel, resetPinnedUsageAccounts, sampleAge, sortedWindows, sourceNames, TIMELINE_CAP_MS, TIMELINE_TICKS_HOURS, timelinePosition, togglePinnedUsageAccount, usePinnedUsageAccounts, windowKey, type ProviderGroup, type UnconnectedProvider, type UsageAccount, type UsageWindow } from "../lib/usage-windows";
 import { isWindowPaused, unifiedTimeline, type TimelineLane, type UnifiedTimelineRow } from "../lib/usage-timeline";
 import { accountPace } from "../lib/usage-pace";
+import { useCloseOnBack } from "../lib/back-close";
 import { Collapse, cx } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { reducedMotion } from "../ui/motion";
+import { NARROW_QUERY, returnFocus, useMedia } from "../ui/overlay";
 import { TONE_BG, TONE_TEXT } from "./UsageBars";
 import "./usage-popover.css";
 
@@ -85,9 +87,34 @@ export const POPOVER_HYSTERESIS_PX = 24;
 const CLOSE_MS = 160;
 const REDUCED_CLOSE_MS = 120;
 
+/** The least height a run of cards takes in `cols` CSS columns: cards keep their order (`break-inside: avoid`), so this
+ *  is the smallest possible tallest column over every split of the sequence into at most `cols` contiguous runs. */
+export function packedColumnHeight(cards: readonly number[], cols: number, gap = POPOVER_COL_GAP): number {
+  const hs = cards.filter((h) => h > 0);
+  const n = hs.length;
+  if (!n) return 0;
+  const c = Math.max(1, Math.min(cols, n));
+  const prefix = [0];
+  for (const h of hs) prefix.push(prefix[prefix.length - 1] + h);
+  const run = (i: number, j: number) => prefix[j] - prefix[i] + (j - i - 1) * gap;
+  let best = hs.map((_, j) => run(0, j + 1));
+  for (let k = 2; k <= c; k++) {
+    const next = best.slice();
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < j; i++) next[j] = Math.min(next[j], Math.max(best[i], run(i + 1, j + 1)));
+    }
+    best = next;
+  }
+  return best[n - 1];
+}
+
 export interface UsagePopoverLayoutInput {
-  /** Natural height when laid out in a single 320px column (including vertical padding). */
-  naturalHeight: number;
+  /** Natural height when laid out in a single 320px column (including vertical padding); used when `cardHeights` is absent. */
+  naturalHeight?: number;
+  /** Measured height of each provider card (unsplittable, flowed in order into the columns). */
+  cardHeights?: readonly number[];
+  /** Total height of the full-width blocks (`column-span: all`: pinned bar, unified timeline, unconnected rows) with their gaps. */
+  spanHeight?: number;
   viewportWidth: number;
   viewportHeight: number;
   anchorRect?: { left: number; top: number; right?: number; bottom?: number } | null;
@@ -107,9 +134,10 @@ export interface UsagePopoverLayout {
   availW: number;
 }
 
-/** Pure height-first layout calculator: stays single-column (320px) whenever naturalHeight fits in availH, expands to
- *  `min(3, ceil(H / availH), floor(availW / 332))` on wide viewports when height overflows, and applies 24px hysteresis
- *  on subsequent resizes to prevent column-count flicker. */
+/** Pure height-first layout calculator: stays single-column (320px) whenever the content fits in availH; otherwise picks
+ *  the fewest columns (at most 3 and `floor(availW / 332)`) whose height fits without a scrollbar: the full-width blocks
+ *  plus the provider cards packed in order into the columns (`packedColumnHeight`). Without measured cards it falls back
+ *  to `ceil(naturalHeight / availH)`. 24px hysteresis on later resizes keeps the column count from flickering. */
 export function computeUsagePopoverLayout(input: UsagePopoverLayoutInput): UsagePopoverLayout {
   const vw = Math.max(240, input.viewportWidth);
   const vh = Math.max(160, input.viewportHeight);
@@ -128,12 +156,22 @@ export function computeUsagePopoverLayout(input: UsagePopoverLayoutInput): Usage
     }
   }
 
-  const maxPossibleCols = input.providerCount !== undefined
-    ? Math.max(1, Math.min(POPOVER_MAX_COLS, input.providerCount))
-    : POPOVER_MAX_COLS;
+  const cards = input.cardHeights?.filter((h) => h > 0);
+  const cardCap = cards ? Math.max(1, cards.length) : input.providerCount;
+  const maxPossibleCols = cardCap !== undefined ? Math.max(1, Math.min(POPOVER_MAX_COLS, cardCap)) : POPOVER_MAX_COLS;
   const rawMaxByWidth = Math.max(1, Math.min(maxPossibleCols, Math.floor(availW / POPOVER_COL_STEP)));
-  const H = Math.max(0, input.naturalHeight);
-  const rawNeeded = H <= availH ? 1 : Math.min(maxPossibleCols, Math.ceil(H / availH));
+  const H = Math.max(0, input.naturalHeight ?? 0);
+  const spans = Math.max(0, input.spanHeight ?? 0);
+  /** Whether `c` columns hold everything within availH, less `slack`. */
+  const fits = (c: number, slack = 0) =>
+    cards ? POPOVER_PAD_Y + spans + packedColumnHeight(cards, c) <= availH - slack : H <= c * availH - slack;
+  let rawNeeded = maxPossibleCols;
+  for (let c = 1; c <= maxPossibleCols; c++) {
+    if (fits(c)) {
+      rawNeeded = c;
+      break;
+    }
+  }
   const rawCols = Math.max(1, Math.min(rawNeeded, rawMaxByWidth));
 
   let cols = rawCols;
@@ -149,7 +187,7 @@ export function computeUsagePopoverLayout(input: UsagePopoverLayoutInput): Usage
         // Height decreased / availH grew: require 24px headroom before collapsing to fewer columns.
         cols = prev;
         for (let c = rawCols; c < prev; c++) {
-          if (H <= c * availH - POPOVER_HYSTERESIS_PX) {
+          if (fits(c, POPOVER_HYSTERESIS_PX)) {
             cols = c;
             break;
           }
@@ -159,7 +197,7 @@ export function computeUsagePopoverLayout(input: UsagePopoverLayoutInput): Usage
       // Wants more columns: require 24px width hysteresis past the column step to avoid width-edge bounce.
       cols = prev;
       for (let c = rawCols; c > prev; c--) {
-        if (H > (c - 1) * availH && availW >= c * POPOVER_COL_STEP + POPOVER_HYSTERESIS_PX) {
+        if (!fits(c - 1) && availW >= c * POPOVER_COL_STEP + POPOVER_HYSTERESIS_PX) {
           cols = c;
           break;
         }
@@ -310,19 +348,21 @@ function connectPrompt(p: UnconnectedProvider): string {
   return tr("usage.connect_prompt_other", { name: p.title, id: p.id });
 }
 
-function measureNaturalSingleColumnHeight(bodyEl: HTMLElement | null, scrollEl: HTMLElement | null): number {
-  if (!bodyEl) return 0;
-  let total = 0;
-  let count = 0;
-  for (const child of Array.from(bodyEl.children)) {
-    const h = (child as HTMLElement).offsetHeight;
-    if (h > 0) {
-      total += h;
-      count++;
+/** The body's blocks as the column choice needs them: each provider card's height (unsplittable) and the full-width
+ *  blocks' total with the 12px gap each keeps. `natural`: the single-column height, the fallback without any card. */
+function measureBody(bodyEl: HTMLElement | null, scrollEl: HTMLElement | null): { cards: number[]; spans: number; natural: number } {
+  const cards: number[] = [];
+  let spans = 0;
+  if (bodyEl) {
+    for (const child of Array.from(bodyEl.children) as HTMLElement[]) {
+      const h = child.offsetHeight;
+      if (h <= 0) continue;
+      if (child.classList.contains("usage-popover-card")) cards.push(h);
+      else spans += h + POPOVER_COL_GAP;
     }
   }
-  if (count > 0) return total + Math.max(0, count - 1) * POPOVER_COL_GAP + POPOVER_PAD_Y;
-  return scrollEl?.scrollHeight ?? 0;
+  const natural = cards.length || spans ? POPOVER_PAD_Y + spans + packedColumnHeight(cards, 1) : (scrollEl?.scrollHeight ?? 0);
+  return { cards, spans, natural };
 }
 
 function sameLayout(a: UsagePopoverLayout, b: UsagePopoverLayout): boolean {
@@ -356,11 +396,31 @@ export function UsagePopover({
 }) {
   const [phase, setPhase] = useState<"open" | "closing" | "closed">(open ? "open" : "closed");
   const [prevOpen, setPrevOpen] = useState(open);
+  const [tick, setTick] = useState(() => Date.now());
   if (open !== prevOpen) {
     setPrevOpen(open);
-    if (open) setPhase("open");
-    else if (phase === "open") setPhase("closing");
+    if (open) {
+      setPhase("open");
+      // Reopened: draw the countdowns from now, not from when it last closed.
+      setTick(Date.now());
+    } else if (phase === "open") setPhase("closing");
   }
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const narrow = useMedia(NARROW_QUERY);
+  const close = useCallback(() => onClose?.(), [onClose]);
+  // On a narrow screen Back closes the popover before the drawer under it (lib/back-close.ts).
+  useCloseOnBack(open, close, narrow);
+  // Opened: the keyboard focus moves into the popover. Closed (Escape, Back, its trigger): it goes back to the trigger,
+  // unless the close moved it elsewhere on purpose (a click on another control).
+  useLayoutEffect(() => {
+    const el = dialogRef.current;
+    if (!el) return;
+    if (open) {
+      if (!el.contains(document.activeElement)) el.focus({ preventScroll: true });
+    } else {
+      returnFocus(el, anchor ?? null);
+    }
+  }, [open, anchor]);
 
   useEffect(() => {
     if (phase !== "closing") return;
@@ -373,7 +433,6 @@ export function UsagePopover({
   const pinnedIds = usePinnedUsageAccounts();
   const pinnedSet = new Set(pinnedIds);
   const livePinnedCount = accounts.reduce((n, a) => n + (isPinnableUsageAccount(a) && pinnedSet.has(a.id) ? 1 : 0), 0);
-  const [tick, setTick] = useState(() => Date.now());
   useEffect(() => {
     if (fixed !== undefined || phase !== "open") return;
     const t = setInterval(() => setTick(Date.now()), 1000);
@@ -412,9 +471,10 @@ export function UsagePopover({
   const recompute = useCallback(() => {
     const vp = readViewport();
     const rect = anchor?.getBoundingClientRect();
-    const naturalHeight = measureNaturalSingleColumnHeight(bodyRef.current, scrollRef.current);
+    const measured = measureBody(bodyRef.current, scrollRef.current);
     const next = computeUsagePopoverLayout({
-      naturalHeight,
+      naturalHeight: measured.natural,
+      ...(measured.cards.length ? { cardHeights: measured.cards, spanHeight: measured.spans } : {}),
       viewportWidth: vp.width,
       viewportHeight: vp.height,
       anchorRect: rect,
@@ -474,7 +534,9 @@ export function UsagePopover({
 
   const dialog = (
     <div
+      ref={dialogRef}
       role="dialog"
+      tabIndex={-1}
       aria-label={tr("usage.title")}
       aria-hidden={phase === "closing" || undefined}
       inert={phase === "closing" || undefined}
@@ -482,7 +544,7 @@ export function UsagePopover({
       data-state={phase}
       data-ready={ready ? "true" : undefined}
       data-cols={layout.cols}
-      className="usage-popover fixed z-50 rounded-card bg-surface shadow-overlay"
+      className="usage-popover fixed z-50 rounded-card bg-surface shadow-overlay outline-none"
       style={{ left: `${layout.left}px`, bottom: `${layout.bottom}px`, width: `${layout.width}px` }}
       onAnimationEnd={(e) => {
         if (e.target === e.currentTarget && phase === "closing") setPhase("closed");
@@ -663,13 +725,14 @@ function uniqueLaneLabels(rows: readonly UnifiedTimelineRow[], long: boolean): s
 }
 
 function formatLaneSummary(l: TimelineLane, now: number): string {
+  const paused = l.paused ? ` · ${tr("usage.paused")}` : "";
   if (l.models.length > 0) {
     const entries: string[] = [];
     if (l.planResetsAt) entries.push(`${l.label} · ${resetLabel(l.planResetsAt, now)}`);
     for (const m of l.models) entries.push(`${m.model} · ${resetLabel(m.resetsAt, now)}`);
-    return `${l.label} (${entries.join(", ")})`;
+    return `${l.label}${paused} (${entries.join(", ")})`;
   }
-  return `${l.label} · ${resetLabel(l.resetsAt, now)}`;
+  return `${l.label}${paused} · ${resetLabel(l.resetsAt, now)}`;
 }
 
 /** Single aggregated reset timeline at the bottom of the popover (spanning all columns in multi-column layouts).
@@ -708,7 +771,6 @@ export function UnifiedTimeline({ groups, now }: { groups: readonly ProviderGrou
         {rows.map((r, i) => {
           const providerBreak = i > 0 && rows[i - 1].provider !== r.provider;
           const parts = r.lanes.map((l) => formatLaneSummary(l, now));
-          const prefix = r.paused ? `${tr("usage.paused")} · ` : "";
           const plan = planNote(r.account).split(" ")[0];
           const shaded = i % 2 === 0;
           return (
@@ -718,8 +780,8 @@ export function UnifiedTimeline({ groups, now }: { groups: readonly ProviderGrou
               data-timeline-provider={r.provider}
               data-timeline-paused={r.paused ? "true" : undefined}
               role="img"
-              aria-label={`${r.account.name}: ${prefix}${parts.join("; ")}`}
-              title={`${prefix}${parts.join("\n")}`}
+              aria-label={`${r.account.name}: ${parts.join("; ")}`}
+              title={parts.join("\n")}
               className="relative flex min-h-8 flex-col justify-center gap-0.5 py-1"
             >
               {providerBreak && (
@@ -746,9 +808,9 @@ export function UnifiedTimeline({ groups, now }: { groups: readonly ProviderGrou
                     <span className={cx("relative block h-2.5", r.account.stale && "opacity-60")}>
                       <span className={cx("absolute left-0 top-1/2 -translate-y-1/2 rounded", l.long ? "h-2" : "h-1.5")} style={{ width: end, backgroundImage: `linear-gradient(90deg, transparent, ${color})` }} />
                       <span
-                        data-timeline-dot={r.paused ? "paused" : "active"}
+                        data-timeline-dot={l.paused ? "paused" : "active"}
                         className="absolute top-0 size-2.5 -translate-x-1/2 rounded-full border-2 bg-surface"
-                        style={r.paused ? { left: end, borderColor: "var(--orange)", background: "var(--orange)" } : { left: end, borderColor: color }}
+                        style={l.paused ? { left: end, borderColor: "var(--orange)", background: "var(--orange)" } : { left: end, borderColor: color }}
                       />
                     </span>
                   </span>

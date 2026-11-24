@@ -76,6 +76,9 @@ export interface TimelineLane {
   planResetsAt?: string;
   /** Per-model entries merged into this window-type lane (sorted soonest first). Empty for plan-only windows. */
   models: TimelineLaneModel[];
+  /** A window in this lane has reached its protection reserve (`isWindowPaused`): its end dot is orange. Judged per
+   *  lane, so a healthy 5h lane keeps its own colour while the 7d one is paused. */
+  paused: boolean;
 }
 export interface TimelineRow {
   account: UsageAccount;
@@ -104,6 +107,7 @@ export function accountTimelineLanes(account: UsageAccount, now: number): Timeli
     planAt?: number;
     planResetsAt?: string;
     models: TimelineLaneModel[];
+    paused: boolean;
   }
   const byKind = new Map<string, Bucket>();
   for (const w of sortedWindows(account)) {
@@ -123,6 +127,7 @@ export function accountTimelineLanes(account: UsageAccount, now: number): Timeli
         earliestAt: at,
         resetsAt: w.resets_at as string,
         models: [],
+        paused: false,
       };
       byKind.set(kindKey, bucket);
     } else {
@@ -135,6 +140,7 @@ export function accountTimelineLanes(account: UsageAccount, now: number): Timeli
         bucket.hasPlanLabel = true;
       }
     }
+    if (isWindowPaused(w)) bucket.paused = true;
     if (w.model) {
       bucket.models.push({ model: w.model, resetsAt: w.resets_at as string, remainingMs: at - now });
     } else if (bucket.planAt === undefined || at < bucket.planAt) {
@@ -156,6 +162,7 @@ export function accountTimelineLanes(account: UsageAccount, now: number): Timeli
         resetsAt: b.resetsAt,
         ...(b.planResetsAt && models.length ? { planResetsAt: b.planResetsAt } : {}),
         models,
+        paused: b.paused,
       };
     });
 }

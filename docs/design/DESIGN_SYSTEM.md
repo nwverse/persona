@@ -1251,15 +1251,27 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
   one home of those requests, not a second home, and counts what the switch and tabs count (`agentsWaiting`). **The usage
   strip** (`SidebarUsageStrip`): the two fullest subscription accounts as name, percent and `UsageMeter`, the web
   sidebar's foot (#2432); a tap opens Machines. Separate stays the default and pixel-identical.
-  **Usage details** (#13173, web `UsagePopover`): one card per provider (`border-line`, `rounded-control`, 10 px padding) with the
-  provider's name (13 px semibold `--ink`), the account count and the newest sample age (11 px `--ink-3`); every account inside,
-  soonest 7d reset first, each with a `5h` and a `7d` row (bar with pace tick, percent, reset text). Under the accounts, **one
-  reset timeline per card**: a shared axis (45% of the width for the first day, 55% for days 1-7), a row per account in the
-  same order, a teal (`--hue-teal`) 5h capsule over a blue (`--hue-blue`) 7d capsule from the `--ink` now line to the reset, a
-  hollow end dot (`--surface` fill) and the time left (9.5 px semibold, white inside the capsule past 80% of the width). A
-  window's `protect_percent`, when the hub sends it, adds a 2 px `--orange` notch on its bar, a 9 px "protect N%" flag and a
-  hatched `--orange` zone to 100%. Colors and sizes are existing tokens; iOS and Android follow the same rule with their own
-  tokens (`docs/server/usage-windows.md`, "Provider cards and the reset timeline").
+  **Usage details** (#13173, #14690, web `UsagePopover`): every number is what is left (`r = 100 − used`), never what is
+  used. One card per provider (`border-line`, `rounded-control`, 10 px padding) with the provider's dot, name (13 px
+  semibold `--ink`), account count and newest sample age (11 px `--ink-3`); every account inside, soonest 7d reset first,
+  each with a `5h` and a `7d` row: a bar filled left to right to `r%`, `r%` in the bar's colour, and the reset text. The
+  colour comes from the headroom over the protection reserve, `h = r − R` (`R = 100 − protect_percent`, 0 without one;
+  `remainingTone`): `--green` from 20, `--orange` from 5, `--red` under 5. A protected window draws a hatched `--orange`
+  zone on the left `[0, R]`, a 2 px `--orange` line at `R` and a "Keep R%" flag; at `r ≤ R` scheduling is paused: the
+  bar is red and the reset reads "Paused · …". The pace tick sits at `100 − expected used`; a bar shorter than it is
+  "Ahead of pace". The collapsed strip shows the two accounts with the least headroom as "N% left". Under the cards,
+  **one reset timeline for the whole popover** (across every column, hidden when nothing has a reset): a row per account
+  in card order, then account order, a hairline between providers; the name column (22 spacing units) has the provider's
+  6 px dot, the name without its provider prefix and the plan in `--ink-3`; a teal (`--hue-teal`) 5h capsule over a blue
+  (`--hue-blue`) 7d capsule runs from the `--ink` now line to the reset (one lane per window length: per-model windows
+  merge at the soonest reset and are listed in the tooltip), and a lane whose own window is paused ends in an `--orange`
+  dot. **Layout**: fixed above its trigger, one 320 px column while everything fits the window's height; otherwise the
+  fewest columns (at most 3, as the width allows) in which the provider cards, kept whole, plus the full-width timeline
+  fit without scrolling, with 24 px hysteresis; only when 3 still overflow does it scroll, with faded edges. It opens over
+  240 ms (fade, 6 px rise, scale from 0.98), closes over 160 ms and moves to a new column count over 300 ms; reduced
+  motion keeps a 120 ms fade. The focus moves into it on open and back to its trigger on Escape; on a narrow screen Back
+  closes it before the drawer. Colors and sizes are existing tokens; iOS and Android keep the earlier used-percent cards
+  until they follow (`docs/server/usage-windows.md`, "Provider cards and the reset timeline").
 - Android (#6378) offers the same **Separate** and **Merged** values under **Settings › Appearance › Sidebar**.
   Separate is the Android default at every width. Merged uses the current left drawer and the regular window's
   existing beside or overlay policy. Main conversation stays above the scrollable Pages, Persona Chats and Agents.

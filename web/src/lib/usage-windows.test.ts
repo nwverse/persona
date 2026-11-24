@@ -362,6 +362,9 @@ describe("provider cards and the reset timeline (#13173)", () => {
       ["codex", "c2", "#beta", false],
       ["claude", "cl1", "#gamma", false],
     ]);
+    // Paused is judged per lane: c1's 5h reached its reserve, its healthy 7d lane did not
+    expect(rows[0].lanes.map((l) => [l.label, l.paused])).toEqual([["5h", true], ["7d", false]]);
+    expect(rows[1].lanes.map((l) => l.paused)).toEqual([false]);
   });
   it("strips redundant leading provider prefixes cleanly without emptying exact matches or partial words", () => {
     expect(stripProviderPrefix("Codex #alpha", "codex")).toBe("#alpha");
