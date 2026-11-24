@@ -455,6 +455,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	parents, origins := n.offlineDesktop()
 	linkSideSessions(out, parents)           // the desktop app's side sessions under the sessions that started them (#5935)
 	linkHerdrChildren(out, agents)           // herdr's sub-agent terminals under the session of the terminal that started them
+	linkAgyChildren(out, agyConversations)   // agy's subagents under the pane row that lists their parent (agychildren.go)
 	placeClaudeDesktop(out, origins, n.home) // and in their projects (#8521)
 	sortNewestFirst(out)
 	return out
