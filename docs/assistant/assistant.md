@@ -2808,9 +2808,10 @@ Postgres. Integer transcript cursors compose those ranges; only later segments n
 references, live events, subscriptions, reconnect backlog, inventory and the derived search index use that same
 logical projection. Retired tails remain physical history and never shift later offsets.
 A source that renumbers its lines under a new history (agy, when a turn's export replaces its live steps) can leave
-a reader's cursor past its end. The projection answers that cursor with an empty batch at the source's end and the
-conversation's new history, so pages, live events, reconnect backlog and the search index start over instead of
-failing; the search index also starts over after a read that the history moved under on every try (#14354).
+a reader's cursor past its end. The projection reads the source's answer to that cursor as an empty span at the
+source's end, so the page, live event or reconnect backlog still reaches the reader with the conversation's new
+history, and readers, the search index included, start over instead of failing. The search index also starts over
+after a read that the history moved under on every try (#14354).
 
 When configured device entries for one computer are absorbed into another entry, authenticated callbacks resolve
 through the current physical fleet aliases. Durable segment/history keys and the public conversation identity stay
