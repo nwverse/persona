@@ -689,7 +689,6 @@ func TestDecisionAnsweredInWordsStaysDecidedWhenTheSendFails(t *testing.T) {
 func TestFeishuConclusionQuestionGoesToSupervisorWithoutAnswering(t *testing.T) {
 	needsLarkLayer(t)
 	s, f, todo, _, _ := conclusionService(t, false)
-	ctx := t.Context()
 	waitsForReview(t, s, f, todo.ID, "Two options: start with ten percent or defer the rollout.")
 	reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "Which rollout do you want?", "recommend": "Start with ten percent"})
 	a := askOf(s, todo.ID)

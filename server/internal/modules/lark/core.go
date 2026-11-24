@@ -155,7 +155,7 @@ type botAnswerCard struct {
 // feishuTarget is where a post goes (the outbound port's target).
 type feishuTarget = assistantwire.ChannelTarget
 
-// readChatKey is the run's channel value a "/read" in a group is answered by (the core's feishu_read.go).
+// readChatKey is the run's channel value a "/read" in a group is answered by (the core's feishu_route.go).
 const readChatKey = "read_chat"
 
 // readRun: the run answers a "/read" in a group.

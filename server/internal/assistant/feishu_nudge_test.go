@@ -16,7 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// The nudge under a card nobody answered (feishu_nudge.go, #6084). All ids are placeholders.
+// The nudge under a card nobody answered (the lark module's nudge.go, #6084). All ids are placeholders.
 
 // nudgeRig is a manager with the Lark bot paired, one computer "mac" with the agent "s1", and a clock the tests move.
 // service() makes another manager on the same hub, database and computer: a restart.

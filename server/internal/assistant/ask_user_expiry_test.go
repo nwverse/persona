@@ -18,7 +18,7 @@ import (
 )
 
 // The main conversation's ask_user card against the Lark nudge (#6084, #9): the nudge waits nudge_after, 60 minutes
-// unless set (assistantwire.NudgeAfterDefault), and a card that is gone is never nudged (feishu_nudge.go), so the card
+// unless set (assistantwire.NudgeAfterDefault), and a card that is gone is never nudged (the lark module's nudge.go), so the card
 // has to outlive the default wait. The user writing in the conversation takes a waiting question back.
 // All ids are placeholders.
 

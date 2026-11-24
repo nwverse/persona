@@ -20,7 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Asking from any group (feishu_elsewhere.go, todo_source.go, #6146): the owner's "@bot /ai …" in a group that is not
+// Asking from any group (the lark module's elsewhere.go, todo_source.go, #6146): the owner's "@bot /ai …" in a group that is not
 // opted in opens a topic in the home topic group and a to-do bound to it, records where it came from, and when the to-do
 // is done or accepted tells that group once. All ids are placeholders.
 

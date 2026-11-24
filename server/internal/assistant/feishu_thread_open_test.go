@@ -15,7 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// Opening a to-do from a topic (feishu_thread_open.go, #5279): a topic the owner starts, or "/ai …" in one bound to
+// Opening a to-do from a topic (the lark module's thread_open.go, #5279): a topic the owner starts, or "/ai …" in one bound to
 // nothing, opens a to-do bound to it and hands the first words to the main conversation. All ids are placeholders.
 
 // said is the bot's own text for key, in the language its notes are in.

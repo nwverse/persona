@@ -18,13 +18,13 @@ import (
 // and later edits that same card in place. All ids are placeholders; the clock and the timer are fake.
 
 type boardEnv struct {
-	t   *testing.T
-	s   *Service
-	f   *fakeHub
-	st  *memStore
-	clk *fakeClock
-	d   *fleetDevs
-	said int // the /tasks messages the owner sent (each a message of its own)
+	t       *testing.T
+	s       *Service
+	f       *fakeHub
+	st      *memStore
+	clk     *fakeClock
+	d       *fleetDevs
+	lastCmd string // the message id of the owner's last /tasks
 
 	mu        sync.Mutex
 	pairedAt  time.Time
@@ -111,12 +111,10 @@ func (e *boardEnv) failUpdates(err error) {
 func (e *boardEnv) tasks(cmd string) {
 	e.t.Helper()
 	e.s.larkModule().ForgetStatus()
-	e.mu.Lock()
-	f := e.features
-	e.mu.Unlock()
-	e.said++
 	before := len(sendOnces(e.f))
-	botSay(e.t, e.s, e.f, f, fmt.Sprintf("om_cmd_%d", e.said), cmd, "", "") // its status read first: the pairing is kept
+	e.lastCmd = nextMessageID("om_cmd")
+	// With the bot's status as the env answers it (e.features): read first, as for any message, so the pairing is kept.
+	feishuSay(e.t, e.s, e.f, nil, p2pText(e.lastCmd, cmd, "", ""), "")
 	if sent := len(sendOnces(e.f)) - before; sent != 0 { // handled: nothing sent on into a conversation
 		e.t.Fatalf("%q went on into a conversation", cmd)
 	}
@@ -810,7 +808,7 @@ func TestBoardOffTasksIsTheSnapshotByteForByte(t *testing.T) {
 	}
 	for i, oc := range want {
 		got := e.posts[i]
-		if got["card"] != oc.card.JSON() || got["fallback"] != oc.fallback || got["reply_to"] != "om_cmd" {
+		if got["card"] != oc.card.JSON() || got["fallback"] != oc.fallback || got["reply_to"] != e.lastCmd {
 			t.Fatalf("post %d differs from the snapshot:\n%v\nwant card %s", i, got, oc.card.JSON())
 		}
 		for k := range got {

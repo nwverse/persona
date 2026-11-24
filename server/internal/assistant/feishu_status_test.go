@@ -38,7 +38,7 @@ func statusCard(t *testing.T, s *Service, t2 botTarget) (card, fallback string) 
 	t.Helper()
 	s.larkModule().SetTarget(t2)
 	f := s.hub.(*fakeHub)
-	return botCommandCard(t, s, f, FeishuFeatures{Main: true, Agents: true, Cards: true},
+	return botCommandCard(t, s, f, &FeishuFeatures{Main: true, Agents: true, Cards: true},
 		fmt.Sprintf("om_status_%d", statusSaid.Add(1)), "/status")
 }
 

@@ -736,7 +736,7 @@ func TestThreadPostsGoIntoTheTopicByItsLatestMessage(t *testing.T) {
 	}
 }
 
-// A topic's first message opens a to-do (feishu_thread_open.go); that message is where the to-do's first line replies
+// A topic's first message opens a to-do (the lark module's thread_open.go); that message is where the to-do's first line replies
 // to: it is remembered before the opening path takes the message, so the first progress hangs under the topic's root.
 func TestThreadPostsFirstProgressRepliesUnderTheRootMessage(t *testing.T) {
 	needsLarkLayer(t)

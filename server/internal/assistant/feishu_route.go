@@ -156,7 +156,7 @@ func (t *feishuTopic) target() feishuTarget {
 }
 
 // runTo is where a run's messages go, from its channel values (Ext): under the owner's "/read" in its group
-// (feishu_read.go), the topic it was asked in, else the private chat.
+// (the lark module's read.go), the topic it was asked in, else the private chat.
 func runTo(ext map[string]string) feishuTarget {
 	if readRun(ext) {
 		return feishuTarget{ChatID: ext[readChatKey], InThread: ext[readThreadKey] != "", NoDetour: true, Read: true}

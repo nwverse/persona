@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// A message from a group chat's topic (feishu_thread.go, #5279): the todo bound to the topic records it as a decision
+// A message from a group chat's topic (the lark module's thread.go, #5279): the todo bound to the topic records it as a decision
 // and its agent gets it; the answer goes back into the topic. All ids are placeholders.
 
 const (
@@ -622,7 +622,7 @@ func TestCardsOfATopicsRunGoIntoTheTopic(t *testing.T) {
 		if found != len(asks) {
 			t.Fatalf("%s: %d interaction cards posted, want %d", c.name, found, len(asks))
 		}
-		// The card's record keeps the group it is in, which a nudge under it needs (feishu_nudge.go); a card in the DM none.
+		// The card's record keeps the group it is in, which a nudge under it needs (the lark module's nudge.go); a card in the DM none.
 		for _, ix := range asks {
 			card, _ := chatCard(e.s, ix.ID)
 			got := card.ChatID

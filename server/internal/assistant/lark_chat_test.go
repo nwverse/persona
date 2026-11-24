@@ -3,7 +3,9 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -170,12 +172,16 @@ func seedTopicAnchor(t testing.TB, s *Service, f *fakeHub, chat, thread, id stri
 	})
 }
 
-// botCommandCard is the card a command (text, message mid) posts in the private chat with the bot's switches ff: its
-// JSON and the text it goes as when refused.
-func botCommandCard(t testing.TB, s *Service, f *fakeHub, ff FeishuFeatures, mid, text string) (card, fallback string) {
+// botCommandCard is the card a command (text, message mid) posts in the private chat with the bot's switches ff (nil:
+// the status the fake answers, as it is): its JSON and the text it goes as when refused.
+func botCommandCard(t testing.TB, s *Service, f *fakeHub, ff *FeishuFeatures, mid, text string) (card, fallback string) {
 	t.Helper()
 	before := len(f.appParams(AppFeishu, FeishuPost))
-	botSay(t, s, f, ff, mid, text, "", "")
+	if ff != nil {
+		botSay(t, s, f, *ff, mid, text, "", "")
+	} else {
+		feishuSay(t, s, f, nil, p2pText(mid, text, "", ""), "")
+	}
 	posts := f.appParams(AppFeishu, FeishuPost)
 	if len(posts) != before+1 {
 		t.Fatalf("%s posted %d cards, want 1", text, len(posts)-before)
@@ -202,3 +208,10 @@ func feishuHand(t testing.TB, s *Service, f *fakeHub, ev botcard.MessageEvent, f
 		t.Fatalf("the chat did not handle %s: %v", ev.Message.MessageID, err)
 	}
 }
+
+// messagesSaid numbers the messages the tests hand the chat (nextMessageID): each is a message of its own, also for a
+// chat that restarted on the same store (it remembers the messages it took).
+var messagesSaid atomic.Int64
+
+// nextMessageID is a new message id starting with prefix.
+func nextMessageID(prefix string) string { return fmt.Sprintf("%s_%d", prefix, messagesSaid.Add(1)) }

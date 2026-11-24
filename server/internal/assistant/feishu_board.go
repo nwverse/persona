@@ -247,7 +247,7 @@ type boardRow struct {
 	summary  string
 	from     string
 	link     string
-	nudged   bool // the bot nudged under its card in the chat (feishu_nudge.go, #6084)
+	nudged   bool // the bot nudged under its card in the chat (the lark module's nudge.go, #6084)
 	// machine and session are the chat a card or a question that can wait came from, empty when it came from none; the
 	// apps open it from the brief item (briefing_feed.go).
 	machine, session string

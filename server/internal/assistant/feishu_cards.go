@@ -27,8 +27,8 @@ import (
 // dialog shows in the chat as a card with the same choices as the app's card; answering it in either place answers it
 // (interactions.resolve), and the card in Feishu then says how it was answered (interaction.ended). Cards go out for
 // what the chat drives (its target, and the conversations of its runs), or for everything with all_cards. The card
-// buttons, the chat's commands, and the pushes and sync mirror are in feishu_card_actions.go, feishu_commands.go and
-// feishu_push.go.
+// buttons and the chat's commands are the lark module's (card_actions.go, commands.go); the pushes and sync mirror are
+// in feishu_push.go.
 
 const (
 	maxFormQuestions     = 6     // more questions than this are answered in the app (keeps the form under ~200 components)

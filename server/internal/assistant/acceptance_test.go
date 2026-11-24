@@ -415,7 +415,7 @@ func TestAcceptanceReplyWithMedia(t *testing.T) {
 
 // A reply "Pass" to a "Please verify" card whose round was already handled is answered, as its button is: the reply is
 // taken as an answer (it is not sent on to the Agent either), so one that gets nothing back reads as the bot ignoring
-// the owner while the same press on the card says "already handled" (feishu_card_actions.go).
+// the owner while the same press on the card says "already handled" (the lark module's card_actions.go).
 func TestAcceptancePassReplyWhenAlreadyHandled(t *testing.T) {
 	needsLarkLayer(t)
 	ctx := context.Background()

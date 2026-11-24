@@ -16,7 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Reading a group with /read (feishu_read.go, #11803): the owner's "@bot /read …" goes to the main conversation with
+// Reading a group with /read (the lark module's read.go, #11803): the owner's "@bot /read …" goes to the main conversation with
 // what to read and where to put the downloads; the run shows nothing in the group but the reaction, and its answer
 // goes under the message, without the process or a web link. All ids are placeholders.
 

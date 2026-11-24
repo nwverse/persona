@@ -65,11 +65,11 @@ func (s core) FeishuMessage(ctx context.Context, p FeishuMessage) error {
 		defer turn.pass()
 		turn.waitTurn()
 		if p.From == FeishuFromElsewhere {
-			s.feishuElsewhere(ev, st) // the owner's "@bot /ai …" from a group that is not opted in (feishu_elsewhere.go)
+			s.feishuElsewhere(ev, st) // the owner's "@bot /ai …" from a group that is not opted in (elsewhere.go)
 			return
 		}
 		if p.From == FeishuFromRead {
-			s.feishuRead(ev, st) // the owner's "@bot /read …" from a group (feishu_read.go)
+			s.feishuRead(ev, st) // the owner's "@bot /read …" from a group (read.go)
 			return
 		}
 		s.feishuMessage(ev, st, p.Action)
@@ -93,7 +93,7 @@ func (s core) feishuMessage(ev botcard.MessageEvent, st FeishuStatus, action str
 	}
 	if msg.ChatType != "p2p" {
 		// A group chat's message never takes the private chat's road (its commands, its replies, the current target):
-		// the hub does not hand any over yet, and this is the second line when it does (feishu_thread.go).
+		// the hub does not hand any over yet, and this is the second line when it does (thread.go).
 		s.threadMessage(ctx, ev, st, content)
 		return
 	}
@@ -124,7 +124,7 @@ func (s core) feishuMessage(ev botcard.MessageEvent, st FeishuStatus, action str
 			return // an exact direct reply to an owner-action proposal (the core's owner_action_reply.go)
 		}
 		if !content.Forward && len(content.Media) == 0 && s.botAnswerQuestion(ctx, msg.MessageID, content.Text, action, msg.RootID, msg.ParentID) {
-			return // the answer to the card waiting in this topic (feishu_text_answer.go)
+			return // the answer to the card waiting in this topic (text_answer.go)
 		}
 		target = s.botTargetFor(msg.RootID, msg.ParentID)
 	}
@@ -148,7 +148,7 @@ func (s core) botSend(ctx context.Context, ev *botcard.MessageEvent, content bot
 }
 
 // botSendIn is botSend for a message said in a topic (topic given: the chat and thread of the todo it is bound to,
-// feishu_thread.go): the message quotes and forwards nothing in (what others said there is not the owner's words),
+// thread.go): the message quotes and forwards nothing in (what others said there is not the owner's words),
 // and the run's progress, answer and notes go back into that thread (runTo).
 func (s core) botSendIn(ctx context.Context, ev *botcard.MessageEvent, content botcard.Content, t botTarget, topic *feishuTopic) error {
 	rt, err := s.resolveBotTarget(ctx, t)

@@ -58,24 +58,24 @@ func newWorkbenchEnv(t *testing.T, f FeishuFeatures) *workbenchEnv {
 // conversation), else the words that went on.
 func (e *workbenchEnv) command(cmd string) (bool, string) {
 	e.t.Helper()
-	f, _ := e.s.chat().Features(context.Background())
-	e.said++
-	before := len(sendOnces(e.f))
-	botSay(e.t, e.s, e.f, f, fmt.Sprintf("om_cmd_%d", e.said), cmd, "", "")
-	sent := sendOnces(e.f)
-	if len(sent) == before {
+	before, started := len(sendOnces(e.f)), e.f.sent()
+	feishuSay(e.t, e.s, e.f, nil, p2pText(nextMessageID("om_cmd"), cmd, "", ""), "") // the env's status
+	var text string
+	switch sent := sendOnces(e.f); {
+	case len(sent) > before: // into the conversation it goes to
+		text, _ = sent[len(sent)-1]["text"].(string)
+	case e.f.sent() > started: // the first message of a new one
+		text, _ = e.f.lastSend(e.t)["text"].(string)
+	default:
 		return true, ""
 	}
-	text, _ := sent[len(sent)-1]["text"].(string)
 	return false, stripContext(text)
 }
 
 // startCard is the /start form the bot posts.
 func (e *workbenchEnv) startCard() string {
 	e.t.Helper()
-	f, _ := e.s.chat().Features(context.Background())
-	e.said++
-	js, _ := botCommandCard(e.t, e.s, e.f, f, fmt.Sprintf("om_cmd_%d", e.said), "/start")
+	js, _ := botCommandCard(e.t, e.s, e.f, nil, nextMessageID("om_cmd"), "/start")
 	return js
 }
 
@@ -117,7 +117,7 @@ func TestWorkbenchOffChangesNothing(t *testing.T) {
 	if js := e.postJSON(-1); strings.Contains(js, `"to":"home"`) {
 		t.Fatalf("a card got the workbench button with the workbench off: %s", js)
 	}
-	if help, _ := botCommandCard(t, e.s, e.f, FeishuFeatures{Main: true, Agents: true}, "om_help", "/help"); strings.Contains(help, "/home") {
+	if help, _ := botCommandCard(t, e.s, e.f, nil, "om_help", "/help"); strings.Contains(help, "/home") {
 		t.Fatal("/help mentions /home with the workbench off")
 	}
 	if _, pins, recalls, _ := e.counts(); pins+recalls != 0 {
