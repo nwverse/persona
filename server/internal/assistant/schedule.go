@@ -1588,6 +1588,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.sourceReportLoop(ctx)             // the reports back to where a todo was asked (todo_source.go)
 	go s.remindLoop(ctx)                   // the todos' reminders (todo_plan.go)
 	go s.urgentLoop(ctx)                   // urgent calls' retries and reminders (urgent_call_loop.go)
+	go s.attentionLoop(ctx)                // the attention mode's end (attention.go)
 	go s.channelLoop(ctx)                  // the channels' runs that lost their watcher (channels.go)
 	go s.kbLoop(ctx)                       // the knowledge base (kb.go)
 	go s.kbHistoryLoop(ctx)                // importing chats' older history into it, off by default (kbhistory/history.go)
@@ -1603,6 +1604,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.searchLoop(ctx)       // the chat search index (search_index.go)
 	go s.historyLoop(ctx)      // durable assistant history, on by default
 	go s.undeliveredLoop(ctx)  // the owner's messages that could not go in (undelivered.go)
+	go s.captureLoop(ctx)      // sorting and filing quick captures (capture_sort.go)
 	s.scheduleLoop(ctx)
 	s.todoViewsStop() // the To-dos view's timers (todo_view_push.go)
 }
@@ -3141,6 +3143,10 @@ func (s *Service) scheduleRoutes() {
 			writeTaskStateError(w, err)
 			return
 		}
+		if err := s.applyTaskSpace(r, &t, raw); err != nil { // a track of its own (schedule_space.go)
+			writeTaskSpaceError(w, err)
+			return
+		}
 		applyUntil(&t, end, hasUntil, clearUntil)
 		dropStaleUntil(&t, hasUntil, now)
 		if err := checkTask(&t, now); err != nil {
@@ -3226,6 +3232,10 @@ func (s *Service) scheduleRoutes() {
 		}
 		if err := editTaskState(&t, in, raw, now); err != nil {
 			writeTaskStateError(w, err)
+			return
+		}
+		if err := s.applyTaskSpace(r, &t, raw); err != nil { // moved to another track (schedule_space.go)
+			writeTaskSpaceError(w, err)
 			return
 		}
 		push, has, err := pushIn(raw)

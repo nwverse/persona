@@ -521,6 +521,14 @@ pushing on that stack. Mac also needs an attached presenter for `detailTask`, no
 full task cards with compact dispatch links, stop filtering hand-offs as though the removed card still drew its
 instruction list, or Persona's messages silently disappear. Keep those messages as folded feed lines.
 
+## A fallback response can arrive after the authoritative one (#8236)
+
+Two endpoints that describe the same object need an arrival-order rule, not last-response-wins for the merged object. The
+flat `/assistant/leaders` answer supplies outside-direction names and targets but no counts; a slower flat answer landing
+after `/assistant/directions/tree` replaced the tree entry and intermittently removed the row's counts and running mark.
+Merge newly announced fallback rows with the held tree rows, and let the tree win per direction. Test the inverted order
+with a gated FakeHub response: a fixed sleep makes this race look random and misses the actual state transition.
+
 ## Example-domain labels must be generic too (#3593)
 
 An `example.com` suffix does not make its hostname label anonymous: the label can still match a configured private machine value and block both app and web prebuild privacy scans. Use neutral fixture labels and change the expected route together, preserving trimming, encoding and forwarding assertions. Do not exempt a private value just because it appears in test data.
@@ -3274,3 +3282,16 @@ The lens then jumped on by 33–50 ms of its 0.65 s glide in one frame, by up to
   its first row to the foot of what is in sight (`anchor: .bottom`): the list cannot go that far up and stops at its top.
 - **Under an inline title, iOS 18's search drawer starts hidden** until a pull (the placement `pageSearchable` picks),
   so a calm list showed no way to search. `.navigationBarDrawer(displayMode: .always)` keeps it shown.
+
+## Deleting a never-compiled branch moves the source-reading tests (2026-11-23, #13399)
+
+- The tests and scripts that read Swift source as text count lines inside every `#if` branch, compiled or not:
+  `TokenRatchetTests` (literal design values), `ContinuousMotionTests` (its loop registry) and the perf and isolation
+  baselines. So deleting dead `os(macOS)` branches lowered a file's `rawSymbol` count and left a registry entry whose
+  only loop was the Mac's: both tests fail until the baseline or registry is lowered in the same PR. `SheetCloseTests`
+  is the one that already skipped Mac-only branches (`iPhoneSource`).
+- A mechanical deletion can still leave a compiler warning behind: a `var` that only the removed branch mutated
+  (`ExtensionPageView.updateVisibility`). Read the build's warnings for the changed files, not only its errors.
+- `scripts/test/test_apple_no_macos_branches.py` keeps new `os(macOS)` branches out of the app targets, `Shared/` and
+  the tests. Packages whose `Package.swift` declares a macOS platform are left out: the Persona Link helper builds
+  `PersonaScreenCore` for macOS, so a branch there is live.

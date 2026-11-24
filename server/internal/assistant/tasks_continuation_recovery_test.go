@@ -115,6 +115,44 @@ func TestPlanContinuationRecoveryDelivery(t *testing.T) {
 	}
 }
 
+func TestPlanContinuationRecoveryFollowsSupervisorTransfer(t *testing.T) {
+	e, p, todoID := failedAppContinuation(t, nil)
+	setSettings(t, e.s, func(v *Settings) { v.Leaders = []string{"lead0001", "lead0002"} })
+	e.f.mu.Lock()
+	e.f.known["lead0001"], e.f.known["lead0002"] = true, true
+	e.f.mu.Unlock()
+	e.sessions("server", proto.Session{SessionID: "m1", Assistant: true},
+		proto.Session{SessionID: "lead0001", Assistant: true}, proto.Session{SessionID: "lead0002", Assistant: true})
+	if _, err := e.s.toolAgentTransfer(t.Context(), "m1", transferArgs("box", "agent01", "lead0001")); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.s.continuationOffer(t.Context(), "lead0001", p.Tasks[0]); r == nil {
+		t.Fatal("current supervisor could not obtain the original recovery action")
+	}
+	if _, err := e.s.toolAgentTransfer(t.Context(), "lead0001", transferArgs("box", "agent01", "lead0002")); err != nil {
+		t.Fatal(err)
+	}
+	args := continuationSendArgs(p)
+	if _, err := runJSON(t, e.s, "lead0001", "agent_send", args); err == nil {
+		t.Fatal("former non-origin supervisor used a stale action after transfer")
+	}
+	if sessionSends(e.f) != 0 || len(e.f.starts) != 0 {
+		t.Fatal("refused former supervisor dispatched work")
+	}
+	e.f.answerNode(DeviceSessionSend, func(_ string, _ json.RawMessage) (any, error) { return agentSendReply{OK: true}, nil })
+	if _, err := runJSON(t, e.s, "lead0002", "agent_send", args); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.s.loadPlan(t.Context(), p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Tasks[0].ContinuationRecovery.State != "sent" || got.Tasks[0].Error != p.Tasks[0].Error ||
+		todoNow(e.s, todoID).Supervision.Supervisor != "lead0002" || sessionSends(e.f) != 1 || len(e.f.starts) != 0 || todoCount(e.s) != 1 {
+		t.Fatal("recovery changed supervision, lost failure history or duplicated work")
+	}
+}
+
 func TestPlanContinuationRecoveryRefusals(t *testing.T) {
 	for _, kind := range []string{"other conversation", "other task", "other session", "scope changed", "user stopped", "unknown stopped", "exit stopped", "user cause on stale live row", "future stop cause", "unavailable", "instance changed", "permission changed", "new task", "exit message"} {
 		t.Run(kind, func(t *testing.T) {

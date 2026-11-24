@@ -70,8 +70,7 @@ func TestSideConversationTaskIsSupervisedByMain(t *testing.T) {
 	waitFor(t, "the origin's end notice", func() bool { return len(endNotices(f, "side1")) == 1 })
 }
 
-// Every conversation's plan defaults to the main conversation's supervision. Only a task leader's worker keeps its
-// Agent supervisor; without a main conversation there is no conversation supervisor to assign (#5732).
+// A direction lead owns its plans. Ordinary side conversations use main; task-leader workers keep their Agent.
 func TestPlanSupervisorDefaults(t *testing.T) {
 	s, f := newQuietService(t)
 	ctx := context.Background()
@@ -87,13 +86,16 @@ func TestPlanSupervisorDefaults(t *testing.T) {
 		{"conv1", "", "conv1", true},
 		{"side1", "box/s1", "", false},
 		{"", "", "", false},
-		{"lead1", "", "conv1", true},
+		{"lead1", "", "lead1", true},
 	} {
 		if got, ok := s.defaultPlanSupervisor(ctx, c.conv, c.parent); got != c.want && ok || ok != c.ok {
 			t.Errorf("defaultPlanSupervisor(%q, %q) = %q %v, want %q %v", c.conv, c.parent, got, ok, c.want, c.ok)
 		}
 	}
 	setSettings(t, s, func(v *Settings) { v.Main = "" })
+	if got, ok := s.defaultPlanSupervisor(ctx, "lead1", ""); !ok || got != "lead1" {
+		t.Fatalf("lead without main: %q %v", got, ok)
+	}
 	if got, ok := s.defaultPlanSupervisor(ctx, "side1", ""); ok || got != "" {
 		t.Fatalf("no main conversation: %q %v, want no supervisor", got, ok)
 	}

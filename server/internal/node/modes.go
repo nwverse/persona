@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/screen"
@@ -568,9 +569,10 @@ func (n *Node) promptHasDraft(ctx context.Context, pane string) (bool, error) {
 	return !tuiPromptEmpty(plain), nil
 }
 
-// tuiSetEffort opens the /effort picker, moves to the level and confirms it for this session. Two pickers exist: the
-// older list ("for this session only", "s" picks it for the session) and, from Claude Code 2.1.2xx, a slider
-// ("←/→ to adjust · Enter to confirm") whose leftmost stop is low and that confirms with Enter.
+// tuiSetEffort opens the /effort picker, moves to the level and confirms it for this session. Three pickers exist: the
+// older list ("for this session only", "s" picks it for the session); from Claude Code 2.1.2xx a slider
+// ("←/→ to adjust · Enter to confirm") whose leftmost stop is low and that confirms with Enter; and from 2.1.330 the
+// slider whose Enter saves the level as the default for new sessions, where "s" keeps it to this session (#13534).
 func (n *Node) tuiSetEffort(ctx context.Context, pane, effort string) error {
 	draft, err := n.promptHasDraft(ctx, pane)
 	if err != nil {
@@ -667,16 +669,31 @@ func (n *Node) tuiPickDefaultEffort(ctx context.Context, pane string) error {
 	return fmt.Errorf("思考强度的选择器里没找到模型的默认档位（可能被组织设置覆盖了），已取消")
 }
 
-// effortPicker says which /effort picker is on screen: "list", "slider" or "" (none).
+// effortPicker says which /effort picker is on screen: "list" and "session-slider" confirm for this session with "s",
+// "slider" with Enter; "" is none. Claude Code 2.1.330's slider footer says "s to use this session only" where Enter
+// would save the level as the default, and Enter itself says "use this session only" when that is all it does (no
+// "s" then). A narrow pane wraps the footer, so it is read with the lines joined.
 func effortPicker(screen string) string {
+	flat := strings.Join(strings.Fields(screen), " ")
 	switch {
-	case strings.Contains(screen, "for this session only"):
+	case strings.Contains(flat, "for this session only"):
 		return "list"
-	case strings.Contains(screen, "to adjust") && strings.Contains(screen, "Enter to confirm") && strings.Contains(screen, "Effort"):
+	case !strings.Contains(flat, "Effort") || !strings.Contains(flat, "adjust"):
+		return ""
+	case effortSessionKey.MatchString(flat):
+		return "session-slider"
+	case strings.Contains(flat, "Enter to confirm") || strings.Contains(flat, "use this session only") || effortSaveKey.MatchString(flat):
 		return "slider"
 	}
 	return ""
 }
+
+// effortSessionKey: the 2.1.330+ slider's footer hint that "s" keeps the level to this session ("s to use this session
+// only", with or without the "to"). effortSaveKey: its Enter hint when Enter saves the level as the default.
+var (
+	effortSessionKey = lazyre.New(`(?i)(?:^|[\s·(])s (?:to )?use this session only`)
+	effortSaveKey    = lazyre.New(`(?i)\benter (?:to )?save\b`)
+)
 
 // effortOutcome reads what Claude Code printed once the picker closed. An effort set in the environment
 // (CLAUDE_CODE_EFFORT_LEVEL: the env block of Claude's settings.json, or a launcher) wins over the session's: say so
