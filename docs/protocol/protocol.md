@@ -6560,8 +6560,10 @@ existing outbound confirmation for the whole actionable batch; `batch_id` reads 
 
 A busy item remains in the persisted queue until its turn, background work, queued input and pending interactions have
 settled. The coordinator neither interrupts work nor sends a synthetic message. If activation completed with no durable
-input pending, it resolves that batch operation accepted; with pending input, the ordinary first-input acceptance or
-rollback protocol remains authoritative. Stored operation IDs make a manager restart replay-safe.
+input pending, it resolves that batch operation accepted and keeps its handoff for the conversation's next input, which
+is queued and carries the handoff once (#14488; a node's own send without `client_msg_id` goes on without it); with
+pending input, the ordinary first-input acceptance or rollback protocol remains authoritative. Stored operation IDs make
+a manager restart replay-safe.
 
 `POST /api/v1/assistant/conversation-switches` with `{restore_batch_id, preview?}` plans a new batch back to each
 completed item's exact saved machine, launcher, requested model, effort and permission mode. Empty model/effort retain
