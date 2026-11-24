@@ -6,7 +6,7 @@
 import { t } from "../i18n";
 import { agentId, providerAgent } from "./agent-kind";
 import {
-  ALL_EFFORTS, defaultModel, effortChoices, effortRule, effortVariantBase, followedBinding, launcherAgent, modelName, nativeOmpStart, takesEffort, terminalOmp, typedModelOffered, type AgentModel, type LauncherModels, type PickerTier,
+  ALL_EFFORTS, defaultModel, effortChoices, effortRule, effortVariantBase, followedBinding, launcherAgent, modelName, nativeOmpStart, terminalOmp, typedModelOffered, type AgentModel, type LauncherModels, type PickerTier,
   type UnavailableLauncher,
 } from "./launcher-models";
 import { launcherBlock } from "./launcher-health";
@@ -122,7 +122,7 @@ export function newAgentPanel({ launchers, listOf, choice, configured, runs, tie
     // launcher that lists its permission modes (Paseo's other providers, #8261), which takes only what its model lists
     const terminal = terminalOmp(agent, l);
     const rule = terminal ? "none" : effortRule(agent, l);
-    const effortsOf = (m: AgentModel | undefined): string[] => (rule === "none" ? [] : m && !m.custom ? (m.efforts ?? []) : rule === "listed" ? [] : ALL_EFFORTS);
+    const effortsOf = (m: AgentModel | undefined): string[] => (rule === "none" ? [] : m && !m.custom ? effortChoices(list, m.id, undefined, rule) : rule === "listed" ? [] : ALL_EFFORTS);
     const all = list?.models ?? [];
     const d = defaultModel(all);
     // Claude Code's `default` entry is folded into the Default row; a real model marked default stays a row of its own
@@ -140,7 +140,7 @@ export function newAgentPanel({ launchers, listOf, choice, configured, runs, tie
     };
     const note = locked || folded?.description || (nativeOmp ? t("newagent.follow_launcher") : undefined);
     if (note) first.description = note;
-    const defaultEffort = settingsEffort(agent, choice, followed, l) || d?.default_effort;
+    const defaultEffort = settingsEffort(agent, choice, followed, l) || (agent === "codex" ? undefined : d?.default_effort);
     if (defaultEffort) first.defaultEffort = defaultEffort;
     if (folded?.resolved) first.resolved = folded.resolved;
     const models: PanelModel[] = [first];
@@ -153,7 +153,7 @@ export function newAgentPanel({ launchers, listOf, choice, configured, runs, tie
         if (m.description) row.description = m.description;
         if (m.resolved) row.resolved = m.resolved;
         if (m.aliases?.length) row.aliases = m.aliases;
-        if (m.default_effort) row.defaultEffort = m.default_effort;
+        if (m.default_effort && agent !== "codex") row.defaultEffort = m.default_effort;
         if (m.custom) row.custom = true;
         models.push(row);
       }
@@ -232,7 +232,9 @@ export function newAgentPill(o: { launchers: Launcher[]; runs: string; list: Mod
   if (model) out.model = model;
   const native = agent === "agy" ? listed(list, picked || followed.model || d?.id || l?.model || "") : undefined;
   const encodedEffort = native && effortVariantBase(native.id, native.default_effort) ? native.default_effort : undefined;
-  const effort = (takesEffort(agent, l) && (choice.effort || settingsEffort(agent, choice, followed, l))) || encodedEffort;
+  const rule = terminalOmp(agent, l) ? "none" : effortRule(agent, l);
+  const pickedEffort = choice.effort || settingsEffort(agent, choice, followed, l);
+  const effort = (rule !== "none" && pickedEffort && (rule === "any" || effortChoices(list, picked, followed, rule).includes(pickedEffort)) ? pickedEffort : undefined) || encodedEffort;
   if (effort) out.effort = effort;
   return out;
 }

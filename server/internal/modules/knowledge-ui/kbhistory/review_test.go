@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
@@ -195,14 +194,14 @@ func TestHistoryImageCutShortIsNotLost(t *testing.T) {
 	asked := map[string]int{}
 	src := &fakeHistory{info: assistantwire.ArchiveSource{ID: testSource, History: true, Media: true},
 		chats: []connectorwire.HistoryChat{{ID: "a", Kind: "dm"}}, convs: map[string][]kb.SourceMessage{"a": msgs},
-		media: func(ref string) (connector.Media, error) {
+		media: func(ref string) (connectorwire.Media, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			asked[ref]++
 			if ref == "img-27" && asked[ref] == 1 {
-				return connector.Media{}, &rpc.Error{Code: "MAIN_QUEUE_TIMEOUT"}
+				return connectorwire.Media{}, &rpc.Error{Code: "MAIN_QUEUE_TIMEOUT"}
 			}
-			return connector.Media{Mime: "image/png", Data: []byte("png")}, nil
+			return connectorwire.Media{Mime: "image/png", Data: []byte("png")}, nil
 		}}
 	ht := newHistoryTest(t, src)
 	ht.e.AttachmentDaysBySource = map[string]int{testSource: 3650}
@@ -241,11 +240,11 @@ func TestHistoryImageTransientRetries(t *testing.T) {
 	n := 0
 	src := &fakeHistory{info: assistantwire.ArchiveSource{ID: testSource, History: true, Media: true},
 		chats: []connectorwire.HistoryChat{{ID: "a", Kind: "dm"}}, convs: map[string][]kb.SourceMessage{"a": msgs},
-		media: func(ref string) (connector.Media, error) {
+		media: func(ref string) (connectorwire.Media, error) {
 			if n++; n == 1 {
-				return connector.Media{}, &rpc.Error{Code: "busy"}
+				return connectorwire.Media{}, &rpc.Error{Code: "busy"}
 			}
-			return connector.Media{Mime: "image/png", Data: []byte("png")}, nil
+			return connectorwire.Media{Mime: "image/png", Data: []byte("png")}, nil
 		}}
 	ht := newHistoryTest(t, src)
 	ht.e.AttachmentDaysBySource = map[string]int{testSource: 3650}

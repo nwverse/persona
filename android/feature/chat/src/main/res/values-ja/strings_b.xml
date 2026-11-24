@@ -87,7 +87,7 @@
     <string name="chat_chrome_conn_details">接続診断</string>
     <string name="chat_chrome_got_it">OK</string>
     <string name="chat_composer_placeholder">メッセージを入力</string>
-    <string name="chat_composer_photo_limit">写真は4枚まで追加できます</string>
+    <string name="chat_composer_photo_limit">一度に%1$d枚まで</string>
     <string name="chat_composer_attachment_unreadable">添付ファイルを読み込めません。もう一度選んでください。入力内容は残っています</string>
     <string name="chat_composer_no_camera_app">このスマートフォンには写真を撮れるアプリがありません</string>
     <string name="chat_composer_camera_failed">カメラを開けません。しばらくしてからもう一度お試しください</string>

@@ -28,6 +28,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		ConversationTagFilters json.RawMessage `json:"conversation_tag_filters"`
 		ExpectedWorkGuide      *bool           `json:"expected_work_guide"`
 		ExpectedTodosV2        *bool           `json:"expected_todos_v2"`
+		ExpectedIntegrationsV2 *bool           `json:"expected_integrations_v2"`
 		WorkspaceRulesPatch    json.RawMessage `json:"workspace_rules"`
 		Permission             json.RawMessage `json:"default_permission_mode"`
 		Readonly               json.RawMessage `json:"readonly_mode"`
@@ -50,7 +51,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-schedule.bad_permission_mode", i18n.Args{"mode": strconv.Quote(in.DefaultPermissionMode)}))
 		return
 	}
-	if (in.Permission != nil || in.WorkGuide != nil || in.TodosV2 != nil) && !s.explicitSettingsTarget(w, r) {
+	if (in.Permission != nil || in.WorkGuide != nil || in.TodosV2 != nil || in.IntegrationsV2 != nil) && !s.explicitSettingsTarget(w, r) {
 		return
 	}
 	if in.Readonly != nil {
@@ -237,12 +238,16 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	guideChanged := false
 	errGuideChanged := errors.New("work guide setting changed")
 	errTodosV2Changed := errors.New("todos_v2 setting changed")
+	errIntegrationsV2Changed := errors.New("integrations_v2 setting changed")
 	if _, err := s.updateSettings(ctx, func(v *Settings) error {
 		if in.WorkGuide != nil && in.ExpectedWorkGuide != nil && *in.ExpectedWorkGuide != v.workGuideOn() {
 			return errGuideChanged
 		}
 		if in.TodosV2 != nil && in.ExpectedTodosV2 != nil && *in.ExpectedTodosV2 != v.todosV2On() {
 			return errTodosV2Changed
+		}
+		if in.IntegrationsV2 != nil && in.ExpectedIntegrationsV2 != nil && *in.ExpectedIntegrationsV2 != v.integrationsV2On() {
+			return errIntegrationsV2Changed
 		}
 		if len(in.WorkspaceRulesPatch) > 0 {
 			rules, err := workspacenaming.Patch(v.WorkspaceRules, in.WorkspaceRulesPatch)
@@ -330,6 +335,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.TodosV2 != nil {
 			v.TodosV2 = in.TodosV2
+		}
+		if in.IntegrationsV2 != nil {
+			v.IntegrationsV2 = in.IntegrationsV2
 		}
 		if in.RecentTaskChats != nil {
 			v.RecentTaskChats = in.RecentTaskChats
@@ -446,7 +454,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	}); err != nil {
-		if errors.Is(err, errGuideChanged) || errors.Is(err, errTodosV2Changed) {
+		if errors.Is(err, errGuideChanged) || errors.Is(err, errTodosV2Changed) || errors.Is(err, errIntegrationsV2Changed) {
 			apierr.WriteCode(w, http.StatusConflict, "configuration_conflict", err)
 			return
 		}
