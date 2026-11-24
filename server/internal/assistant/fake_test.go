@@ -233,9 +233,11 @@ type fakeHub struct {
 	doctor      map[string]string
 	doctorState map[string]string // each machine's claude-version state ("unanswered": no version came this time)
 	// auth is claude.auth_status's answer by "machine/launcher" (nil: the node has no such method), and the
-	// questions it got.
-	auth      map[string]proto.ClaudeAuthStatus
-	authAsked []string
+	// questions it got. authBy, when set, answers claude.auth_status from the full RPC params.
+	auth       map[string]proto.ClaudeAuthStatus
+	authBy     func(device string, params map[string]any) proto.ClaudeAuthStatus
+	authAsked  []string
+	authParams []map[string]any
 	// authHold, when set, holds claude.auth_status's answer until it is closed (a node running a slow launcher).
 	authHold chan struct{}
 	// nodes answer node methods on any machine, by method, before the answers below (answerNode).
@@ -655,6 +657,7 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	case assistantwire.DeviceClaudeAuthStatus:
 		name, _ := a["name"].(string)
 		f.authAsked = append(f.authAsked, p.Device+"/"+name)
+		f.authParams = append(f.authParams, maps.Clone(a))
 		if hold := f.authHold; hold != nil {
 			f.mu.Unlock()
 			select {
@@ -662,6 +665,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			case <-ctx.Done():
 			}
 			f.mu.Lock()
+		}
+		if f.authBy != nil {
+			return json.Marshal(f.authBy(p.Device, a))
 		}
 		if f.auth == nil {
 			return nil, errors.New("unknown method claude.auth_status")
@@ -1450,6 +1456,7 @@ func newServiceOn(t testing.TB, f *fakeHub, st Store) *Service {
 // withSettings saves f.settings as s's own (none: s keeps what it has), and gives the hub's hello the fake model.
 func withSettings(t testing.TB, f *fakeHub, s *Service) *Service {
 	t.Helper()
+	installTestTrackKinds(s)
 	f.fakeModel(t)
 	// These tests are about what a plan does once it exists; what task_plan requires of a brief is task_brief_test.go's,
 	// which turns this off.

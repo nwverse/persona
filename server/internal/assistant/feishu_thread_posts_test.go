@@ -15,7 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// A todo bound to a chat topic tells it what happens (feishu_thread_posts.go, #5279): a decision, an Agent's turn
+// A todo bound to a chat topic tells it what happens (the lark module's thread_posts.go, #5279): a decision, an Agent's turn
 // ending or needing the user, the todo accepted or closed, in one short line a minute at most. All ids are placeholders.
 
 // fakeClock is the poster's clock and timer: nothing fires until advance runs it, in order.
@@ -161,6 +161,26 @@ func TestThreadPostsANewDecision(t *testing.T) {
 	mustContain(t, "line", text, "新决策", "先发安卓", testWeb+"/todos/"+id)
 	if strings.Contains(text, "\n") {
 		t.Fatalf("not one line: %q", text)
+	}
+}
+
+func TestThreadPostsRecordsDeliveredPromise(t *testing.T) {
+	needsLarkLayer(t)
+	e := newPostEnv(t)
+	id := e.bound("Release", testThread)
+	e.decide(id, "I'll share the results in 2 hours.")
+	e.clk.advance(threadPostSettle)
+
+	post := e.onlyPost(t)
+	receipts := outwardReceipts(t, e.s.store())
+	if len(receipts) != 1 {
+		t.Fatalf("commitment receipts = %+v", receipts)
+	}
+	receipt := receipts[0]
+	if receipt.SentAt.IsZero() || receipt.Reply.TodoID != id || receipt.Reply.ID != post["uuid"] ||
+		receipt.Reply.Topic != "lark-bot/"+testChat+"/"+testThread ||
+		receipt.DueAt.Sub(receipt.SentAt) != 2*time.Hour {
+		t.Fatalf("topic line's delivery receipt = %+v", receipt)
 	}
 }
 
@@ -325,6 +345,7 @@ func (p *fleetPost) askKind(t *testing.T, id, kind, summary string) {
 
 // 4. The agent's turn ends: a line; it needs the user: a line.
 func TestThreadPostsAgentFinishedAndNeedsYou(t *testing.T) {
+	needsLarkLayer(t)
 	p := newFleetPost(t)
 	driveAgentDone(p.ft, agentSession())
 	p.clk.waitPending(t, 1)
@@ -355,6 +376,7 @@ func TestThreadPostsAgentFinishedAndNeedsYou(t *testing.T) {
 
 // With the cards switch off there is no card anywhere: the line is the notice, and carries what is asked.
 func TestThreadPostsNeedsYouWithNoCardCarriesTheAsk(t *testing.T) {
+	needsLarkLayer(t)
 	p := newFleetPost(t)
 	p.ft.f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_a", PairedAt: time.Unix(100, 0), PublicURL: testWeb, Chats: []string{testChat},
@@ -372,6 +394,7 @@ func TestThreadPostsNeedsYouWithNoCardCarriesTheAsk(t *testing.T) {
 
 // ... but what a permission asks (a command, a path) is not for a group: the line only says the Agent needs the user.
 func TestThreadPostsNeedsYouWithNoCardNeverQuotesAPermission(t *testing.T) {
+	needsLarkLayer(t)
 	p := newFleetPost(t)
 	p.ft.f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_a", PairedAt: time.Unix(100, 0), PublicURL: testWeb, Chats: []string{testChat},
@@ -393,6 +416,7 @@ func TestThreadPostsNeedsYouWithNoCardNeverQuotesAPermission(t *testing.T) {
 // The card is where the run was asked, and the topic is compared by chat and thread: a topic run of another thread of the
 // same chat does not hide the line of this one.
 func TestThreadPostsNeedsYouNotHiddenByAnotherTopicsRun(t *testing.T) {
+	needsLarkLayer(t)
 	p := newFleetPost(t)
 	c := &p.ft.s.chans
 	c.mu.Lock()
@@ -414,25 +438,12 @@ func TestThreadPostsNeedsYouNotHiddenByAnotherTopicsRun(t *testing.T) {
 	}
 }
 
-// An agent with no name is "an agent", not two spaces; a bare directory mark is no name.
-func TestThreadPostTextWithoutAnAgentName(t *testing.T) {
+// An agent with no name is "an agent", not two spaces: a bare directory mark is no name (the line's wording is the lark
+// module's, TestThreadPostTextWithoutAnAgentName there).
+func TestThreadNameOfAnAgentWithoutOne(t *testing.T) {
 	for _, name := range []string{"", ".", "/", "  "} {
 		if got := threadName(name); got != "" {
 			t.Fatalf("threadName(%q) = %q", name, got)
-		}
-	}
-	for _, c := range []struct {
-		ev   threadEvent
-		want string
-	}{
-		{threadEvent{kind: threadAgentNeeds, dm: true}, "有个 Agent 需要你，已发到私聊"},
-		{threadEvent{kind: threadAgentNeeds}, "有个 Agent 需要你"},
-		{threadEvent{kind: threadAgentNeeds, text: "删缓存吗"}, "有个 Agent 需要你：删缓存吗"},
-		{threadEvent{kind: threadAgentFinished}, "有个 Agent 这一轮结束了"},
-	} {
-		got := threadPostText("", []threadEvent{c.ev}, "")
-		if got != c.want || strings.Contains(got, "  ") {
-			t.Errorf("%+v: %q, want %q", c.ev, got, c.want)
 		}
 	}
 }
@@ -785,3 +796,10 @@ func TestThreadPostsFirstProgressRepliesUnderTheRootMessage(t *testing.T) {
 	}
 	mustContain(t, "line", textOf(p), "先发安卓", testWeb+"/todos/"+todo.ID)
 }
+
+// The lark module's topic-line pacing these tests run against (its thread_posts.go): a line a minute at most, quoting
+// three decisions.
+const (
+	threadPostEvery = time.Minute
+	threadPostShown = 3
+)

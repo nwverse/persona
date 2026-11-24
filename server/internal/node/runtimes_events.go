@@ -98,7 +98,11 @@ func (n *Node) runtimeEvent(h *runtimeConn, event string, params json.RawMessage
 			SessionID string `json:"session_id"`
 			Text      string `json:"text"`
 		}
-		if json.Unmarshal(params, &p) != nil || !n.runtimes.owns(h, p.SessionID) || n.peer == nil {
+		if json.Unmarshal(params, &p) != nil || !n.runtimes.owns(h, p.SessionID) {
+			return
+		}
+		n.runtimes.agyWorkDelta(h, p.SessionID)
+		if n.peer == nil {
 			return
 		}
 		if p.Text != "" {

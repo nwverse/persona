@@ -328,6 +328,7 @@ export interface Contributes {
   assistant?: AssistantItem[];
   mcp_servers?: MCPServerItem[];
   ui?: UIItem[];
+  track_kinds?: TrackKindItem[];
   agent_sources?: AgentSourceItem[];
   channel?: ChannelItem[];
   events?: EventsItem[];
@@ -690,6 +691,41 @@ export interface ConnectorItem {
    * install preview says so.
    */
   sends_as_user?: boolean;
+}
+
+export interface TrackAttention {
+  push_cap?: string;
+  deep_default?: string;
+  enter_mode?: string;
+}
+
+export interface TrackSidebar {
+  group?: string;
+  order?: number;
+  icon?: string;
+}
+
+export interface TrackKindConfig {
+  schema: 1;
+  template: string;
+  user_instructions?: string;
+  context: string;
+  default_categories: string[];
+  tag_focus: string[];
+  rhythms: (Record<string, unknown>)[];
+  attention: TrackAttention;
+  supervision: string;
+  usage: (Record<string, unknown>)[];
+  assembly: string;
+  capture_target?: boolean;
+  channels: string[];
+  sidebar: TrackSidebar;
+}
+
+export interface TrackKindItem {
+  id: string;
+  title: string;
+  config: TrackKindConfig;
 }
 
 /**
