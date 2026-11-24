@@ -1902,7 +1902,7 @@ Real folding-feature evidence and fake-posture layout evidence are reported sepa
 
 ### 4.1 Navigation hierarchy (super rule 3)
 
-`docs/SUPER_RULES.md` rule 3: Assistant and Agents are the only primary home destinations on iOS, Android and web. Settings opens from the sidebar. Everything else (Recordings, Inbox, To-dos, Scheduled Tasks, Knowledge, Machines, Health, extension pages) is pushed from the drawer. Push by value for new pages; mixing view-based and value-based pushes in one stack is a known trap. An optional Messages page can be switched on and becomes a third primary destination; whether that fits rule 3 needs the rule owner (DS-26).
+`docs/SUPER_RULES.md` rule 3: Assistant and Agents are the only primary home destinations on iOS, Android and web. Settings opens from the sidebar. Everything else (Recordings, Inbox, To-dos, Scheduled Tasks, Knowledge, Machines, Health, Dashboards, extension pages) is pushed from the drawer. Dashboards (#15017) is one place, listed only once a page is kept or one waits in Recently removed, with at most three pinned pages as rows of their own; it is never a primary tab, and with its switch off, or on with nothing kept, the drawer and sidebar look exactly as before. Its pages carry the ownership line (below). Push by value for new pages; mixing view-based and value-based pushes in one stack is a known trap. An optional Messages page can be switched on and becomes a third primary destination; whether that fits rule 3 needs the rule owner (DS-26).
 
 On Android, a Merged sidebar pick replaces the visible root and closes the compact drawer or regular overlay.
 A beside column stays open. Navigation inside the visible root keeps its Back path, and external entries retain their
@@ -3057,6 +3057,25 @@ A declared list of extension accounts, gateways or similar entries (#9504) belon
 - **Add entry** appends one empty entry and is disabled at the manifest's maximum. All field edits and additions remain drafts until the page's existing **Save**. The host owns saved entry identity; an unsaved browser key must survive immutable field edits without becoming a visible value or part of the JSON payload.
 - Removal uses the shared confirmation `Dialog`, names the entry, and says that the entry and its saved secret are deleted **when Save succeeds**. Cancel leaves the draft untouched. A required list keeps only its declared minimum; an optional list can always return to its valid absent state even when a present array would have a positive minimum. If an address participates in configured-network permission, a nearby hint says that saving a changed address clears that entry's secret. These are consequences of the pending configuration write, not claims that merely opening or dismissing the dialog changed hub state.
 - Text and explanations wrap at phone width and the largest accessibility text size; buttons stay on one line using the existing button behavior. Destructive actions remain reachable without horizontal scrolling. Dark and light themes use the same semantic roles as every other settings card.
+
+## Dashboards (#15017)
+
+Dashboards are pages a conversation drafts and the owner keeps with one tap on Keep; where they live is 4.1, the line under
+a page's title is "Ownership line (#15017)" below. What the iPhone and iPad do of their own:
+
+- **No new host.** The hub lists Dashboards as ordinary extension places under the reserved id `-pages` (the index, then up
+  to three pinned pages); the drawer and the iPad sidebar draw them with the extension rows they have, and a page opens in
+  `ExtensionNavPage` / `ExtensionPageView` like any extension page. Settings › Extensions leaves them out: they are the
+  assistant's, not an extension's.
+- **The switch.** "Let Persona make dashboards" in Settings › Assistant, with its footnote, only when the hub's hello lists
+  `assistant_pages` and the default assistant is shown. Its label wraps rather than truncating (it is a label, not a
+  button).
+- **The ownership line.** The bar's subtitle on iOS 26 and later (`navigationSubtitle`, as other pages say where a thing is).
+  iOS 18 has no bar subtitle: there the title and the line together are the bar's title (`Theme.Font.heading` over
+  `Theme.Font.label`, secondary), as Knowledge's day page draws its chat.
+- **Over HTTP only.** Every extension id that starts with "-" is a manager's and is drawn over HTTP, never the native page
+  stream. `assistant_pages` (no payload) reads the places again, coalesced, and a reconnect reads them once more.
+
 ## Sidebar icon colors (#10822)
 
 Who it serves: anyone whose sidebar lists many pages and who finds it quicker to scan when each page has a color. It is
@@ -3111,6 +3130,27 @@ until it's back**). Choosing anything else in the same menu replaces it. Reason:
 back (principle 3), and a toast at every opening would be noise for something they can read where they would change it.
 The same rule as a chosen look whose extension is switched off ("the choice stays: the default only shows meanwhile",
 `server/internal/hub/looks.go` `looksGone`). It reuses Settings' `Row`, its hint line and a native select; no new component.
+
+## Ownership line (#15017)
+
+A page whose content the model writes, but which lives among the app's own places, says under its title, in the app's
+words, who keeps it, so a title the model chose can never pass for one of the app's screens. Today that is every
+Dashboards page (`-pages`) except the Dashboards index, which the app writes itself: **Kept up to date by Persona**
+(zh-Hans **由 Persona 维护**, ja **Persona が更新しています**).
+
+- **Where**: in the page's top bar, one line right under the title, at every width. It is never hidden from a breakpoint
+  up or down, as an extension's name beside a title is (web `sm:` and up), and never inside the page's own content,
+  which the model writes and could imitate.
+- **Look**: the secondary caption role, one line, truncated, no icon, no tint: web `text-label` in `--ink-3` under the
+  title's `h1` (`views/extensions/ExtensionSlots.tsx`, marked `data-ownership-line`); iOS and Android their secondary
+  caption token under the navigation title. Only design-system tokens; no new token or component.
+- **Words**: client-localized strings in the three catalogs, never text from the hub or the page, so the model cannot
+  change, shorten or translate them. The extension's name ("Persona") is not written beside the title as well.
+- **Title**: the page's header takes the title from the page's drawn View (the hub writes the page's title there), then
+  the place's, then the place's product name (**Dashboards**), never the raw page id (`pg_…`), even for a page opened
+  by a deep link that is not pinned.
+- Reuses the extension page's top bar and the type and color roles above; it is a rule for where trust information goes,
+  not a new visual style, so no existing screen changes.
 
 ## Arranging cards in place (#9745)
 

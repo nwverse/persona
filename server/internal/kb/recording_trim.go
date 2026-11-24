@@ -100,8 +100,8 @@ func (s *Store) putTrimmedMeta(r *Recording, now time.Time) error {
 	at := now.UTC().Truncate(time.Second)
 	r.TrimmedAt = &at
 	r.Attendance, r.AttendingSession = "", nil
-	r.planMinutes()
-	r.planRecap()
+	planMinutes(r)
+	planRecap(r)
 	raw, err := json.MarshalIndent(protectedEntity(r, &r.Tagging, current, false), "", "  ")
 	if err != nil {
 		return err

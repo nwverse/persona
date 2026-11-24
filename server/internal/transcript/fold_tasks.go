@@ -50,7 +50,7 @@ func foldTaskSnapshots(run []proto.Item, uses map[string]proto.Item) []proto.Fol
 		default:
 			continue
 		}
-		input, output := taskObject(use.ToolInput), strings.TrimSpace(result.Text)
+		input, output := taskObject(use.ToolInput), strings.TrimSpace(StripToolResultTimestampHeaders(result.Text))
 		obj := taskObject([]byte(output))
 		if string(obj["success"]) == "false" || (obj["error"] != nil && string(obj["error"]) != "null") {
 			continue

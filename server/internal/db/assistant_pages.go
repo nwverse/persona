@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -18,6 +17,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Dashboards (#15017): pages an assistant conversation drafts and the owner keeps in the sidebar. A page starts as a
@@ -116,8 +117,8 @@ func AssistantPageTitleKey(title string) string {
 }
 
 var (
-	assistantPageID       = regexp.MustCompile(`^pg_[0-9a-f]{16}$`)
-	assistantPageActionID = regexp.MustCompile(`^pa_[0-9a-f]{16}$`)
+	assistantPageID       = lazyre.New(`^pg_[0-9a-f]{16}$`)
+	assistantPageActionID = lazyre.New(`^pa_[0-9a-f]{16}$`)
 )
 
 // NewAssistantPageID is a new page id: pg_ and 16 lowercase hex digits.

@@ -77,6 +77,8 @@ type ModelProfileView struct {
 	Active bool `json:"active,omitempty"`
 	// Changes: what switching to it would change now (for the one in use: where the configuration moved away from it).
 	Changes []string `json:"changes"`
+	// Trial: the last 7 days' dry-run counts for a profile not in use (#14702); omitted on the active profile.
+	Trial *ModelProfileTrial `json:"trial,omitempty"`
 }
 
 // ModelProfilesView is GET /api/v1/model-profiles.
@@ -160,12 +162,19 @@ func (s *Service) modelProfilesView(ctx context.Context) (ModelProfilesView, err
 		at, by := state.At, state.By
 		v.At, v.By = &at, &by
 	}
+	trials, trialsKnown := s.modelProfileTrialSummaries(ctx, time.Now().UTC())
 	for _, p := range ps.Profiles {
 		p.Purposes, err = s.normalizeProfilePurposes(ctx, p.Purposes, records, stored)
 		if err != nil {
 			return ModelProfilesView{}, err
 		}
-		v.Profiles = append(v.Profiles, ModelProfileView{ModelProfile: p, Active: p.ID == state.Active, Changes: modelProfileChanges(p, normalizedRecords, stored)})
+		active := p.ID == state.Active
+		pv := ModelProfileView{ModelProfile: p, Active: active, Changes: modelProfileChanges(p, normalizedRecords, stored)}
+		if !active && trialsKnown {
+			t := trials[p.ID]
+			pv.Trial = &ModelProfileTrial{Days: modelProfileTrialDays, Dispatches: t.Dispatches, WouldSwitch: t.WouldSwitch}
+		}
+		v.Profiles = append(v.Profiles, pv)
 	}
 	if stack := state.rollbackStack(); len(stack) > 0 {
 		v.Rollbacks = make([]ModelProfileUndo, 0, len(stack))
@@ -359,6 +368,14 @@ func (s *Service) modelProfileRoutes() {
 		}
 	}
 	s.handle("GET /api/v1/model-profiles", view)
+	s.handle("GET /api/v1/model-profiles/{id}/candidates", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.modelProfileCandidates(r.Context(), r.PathValue("id"))
+		if err != nil {
+			apierr.Write(w, modelProfileStatus(err), err)
+			return
+		}
+		apierr.WriteJSON(w, v)
+	})
 	s.handle("PUT /api/v1/model-profiles/{id}", full(func(w http.ResponseWriter, r *http.Request) {
 		var in modelProfileInput
 		if err := decodeSingleJSONObject(w, r, &in, 64<<10, false, checkForbiddenProfilePayload); err != nil {

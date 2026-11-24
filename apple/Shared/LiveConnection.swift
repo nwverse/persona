@@ -89,6 +89,10 @@ nonisolated enum ServerEvent: Sendable {
     case directions
     /// Intake changed; values and notes are read through the health route, never broadcast.
     case healthIntake
+    /// The kept Dashboards pages changed (#15017): one kept, pinned, unpinned, renamed, removed or restored, or the switch
+    /// turned. No payload: the places (`GET /api/v1/extensions/-/ui`) are read again. A page's content comes as
+    /// `extension_ui` with extension `-pages`.
+    case assistantPages
     case assistantFeed(FeedItem)
     case assistantView(ExtensionAssistantView)
     case assistantViewAction(conversation: String, action: ExtensionViewAction)
@@ -321,6 +325,7 @@ nonisolated enum ServerEvent: Sendable {
         case "directions": return .directions
         // The app refreshes the home totals and any open reserved intake page for this hub.
         case "health_intake": return .healthIntake
+        case "assistant_pages": return .assistantPages
         case "assistant_feed": return e.item.map { .assistantFeed($0) }
         case "assistant_view":
             guard let view = e.view, !view.id.isEmpty, view.version > 0,
@@ -394,7 +399,7 @@ nonisolated extension ServerEvent {
             return .sessionsDelta(machineID: machine, upsert: upsert.map { var s = $0; s.group = group; return s }, remove: remove)
         case .sendReceipt(let receipt): var receipt = receipt; receipt.key.group = group; return .sendReceipt(receipt)
         case .sessionsList, .hello, .interactionResolved, .interactionReanswered, .toolCall, .revs, .lark, .messaging, .agents, .inbox, .fleet, .hubUpdate, .desktops, .todos,
-             .personas, .look, .managers, .directions, .healthIntake, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
+             .personas, .look, .managers, .directions, .healthIntake, .assistantPages, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
              .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth, .meetingLive, .urgentCall, .savedPrompts, .starredMessages: return self
         }
     }

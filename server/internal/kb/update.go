@@ -557,7 +557,7 @@ func (e *Engine) apply(kind, id string, uu UserUpdate, le linkEdit, writer strin
 			if ok {
 				p.Chats = addUnique(p.Chats, c.ID)
 				le.linked(&p.Tagging, "chats", c.ID)
-				p.People = addUnique(p.People, p.kept("people", c.People)...) // not the people the user took off it
+				p.People = addUnique(p.People, taggingKept(&p.Tagging, "people", c.People)...) // not the people the user took off it
 			}
 		}
 		if u.Log != "" {

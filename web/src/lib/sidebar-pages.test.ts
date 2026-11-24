@@ -30,6 +30,20 @@ describe("ordered", () => {
 });
 
 describe("inList", () => {
+  it("keeps Dashboards in the list beside three extension pages: the hub put its key in shown on the first Keep (#15017)", () => {
+    const ext = ["p:example-today/today", "p:example-quota/quota", "p:example-gateway/usage"];
+    const ks = ["home", "inbox", ...ext, "p:-pages/index", "p:-pages/pg_3f9a1c0d5e7b2a41", "settings"];
+    // nothing chosen by anyone: the fourth and fifth extension pages wait under More, as any extension's would
+    expect(arrangePages(pages(...ks), NONE).more.map((p) => p.k)).toEqual(["p:-pages/index", "p:-pages/pg_3f9a1c0d5e7b2a41"]);
+    // the navigation record's shown, as the hub writes it on the first Keep and on a pin: those stay in the list, and the
+    // cap counts them first, so the extensions' later pages wait under More instead
+    const kept = { ...NONE, shown: ["p:-pages/index", "p:-pages/pg_3f9a1c0d5e7b2a41"] };
+    const { shown, more } = arrangePages(pages(...ks), kept);
+    expect(keys(shown)).toEqual(["home", "inbox", ext[0], "p:-pages/index", "p:-pages/pg_3f9a1c0d5e7b2a41", "settings"]);
+    expect(keys(more)).toEqual([ext[1], ext[2]]);
+    // only the index kept: it and two of the three extension pages
+    expect(keys(arrangePages(pages(...ks.filter((k) => !k.includes("pg_"))), { ...NONE, shown: ["p:-pages/index"] }).shown)).toEqual(["home", "inbox", ext[0], ext[1], "p:-pages/index", "settings"]);
+  });
   it("lists the built-in pages and the first extension pages, the rest wait under 更多", () => {
     const ext = Array.from({ length: EXTENSION_CAP + 2 }, (_, i) => `p:e${i}/page`);
     const listed = inList(["home", ...ext, "settings"], NONE);

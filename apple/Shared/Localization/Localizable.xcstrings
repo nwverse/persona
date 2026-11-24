@@ -1583,6 +1583,29 @@
         }
       }
     },
+    "Kept up to date by Persona [Dashboards]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kept up to date by Persona"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が更新しています"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "由 Persona 维护"
+          }
+        }
+      }
+    },
     "A space keeps one part of your life together, like health keeps yours: its own conversations, its own notes, and its own memory." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -65269,6 +65292,29 @@
       },
       "extractionState" : "manual"
     },
+    "Dashboards" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dashboards"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ダッシュボード"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仪表盘"
+          }
+        }
+      }
+    },
     "Data Saver" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -99626,6 +99672,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Let Persona make dashboards" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Let Persona make dashboards"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona にダッシュボードを作らせる"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "让 Persona 做仪表盘"
+          }
+        }
+      }
     },
     "Let Persona run the shortcut “%@”?" : {
       "extractionState" : "manual",
@@ -211758,6 +211827,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "开着时，Persona 在这台电脑上启动的 Claude Code 会话会边写边把回复发出来，App 和网页上更早看到文字；代价是这台电脑终端里的回复会按行显示（一次几行），而不是逐字出现。这个开关存在 hub 上，不改 ~/.claude/settings.json；打开上面的「同时改所有在线机器」时，其他在线的电脑也一起改。改动对之后启动的会话生效，已经开着的会话要等 Claude 重启后才变。"
+          }
+        }
+      }
+    },
+    "When on, the assistant can draft pages you come back to; tap Keep in the chat and they appear in the sidebar." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When on, the assistant can draft pages you come back to; tap Keep in the chat and they appear in the sidebar."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オンにすると、アシスタントが何度も見返すページを下書きします。チャットで「保存」をタップするとサイドバーに表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启后，助手可以起草你会常回来看的页面，你在聊天里点「保留」后它出现在侧边栏。"
           }
         }
       }
