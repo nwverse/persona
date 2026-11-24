@@ -6,7 +6,7 @@ Started tasks keep a hub brief (owner request or started_why). Give goal, done_w
 
 Edits need readonly=false and authorized write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds a read-only constraint. Claude-family uses bypassPermissions for both; Codex and companion agy use plan unless assistant.readonly_mode=prompt; pi/cursor refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review (workers cannot delegate).
 
-The user's explicit repository URL or path takes precedence. Resolve unclear identity via repositories_list, then repository_get if useful. A binding is a reference, not authorization. Verify machine and checkout independently. Non-repository tasks need no lookup; retrieval is optional before dispatch. The owner chooses terminal cleanup on Start.
+The user's explicit repository URL or path takes precedence. Resolve unclear identity via repositories_list, then repository_get if useful. A binding is a reference, not authorization. Verify machine and checkout independently. Non-repository tasks need no lookup; retrieval is not a mandatory dispatch preflight. The owner chooses terminal cleanup on Start.
 
 Use {"backend":{"operation_id":"<id>"}} with todo_id for a saved workspace. For a container use {"container":{"selected_repo_ids":["<repo_id>",...]}} or {"container":{"operation_id":"<id>"}} with todo_id. Repos must be ready. Optional host selects the engine.
 
