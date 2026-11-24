@@ -9,6 +9,8 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+func init() { nodeRPC("assistant.cancel_supervision", (*Node).assistantCancelSupervisionRPC) }
+
 // A Persona conversation's queue (#4342). A message to a headless claude that is busy waits in Claude Code's own
 // queue until its next step takes it in (mid-turn) or its turn ends. Its transcript notes the wait with no words
 // (queue-operation enqueue without content, unlike a terminal's), so the node follows its stdout instead: every user
@@ -237,6 +239,15 @@ func (n *Node) writeQueuedAgain(p *assistantProc, w assistantInput) error {
 	p.lastActive = time.Now()
 	p.mu.Unlock()
 	return p.writeInput(w)
+}
+
+type cancelSupervisionParams struct {
+	SessionID string `json:"session_id"`
+}
+
+func (n *Node) assistantCancelSupervisionRPC(ctx context.Context, p cancelSupervisionParams) (map[string]any, error) {
+	cancelled, err := n.assistantCancelSupervision(ctx, p.SessionID)
+	return map[string]any{"cancelled": cancelled}, err
 }
 
 // assistantCancelSupervision takes back the supervision messages written to conversation id that have not started

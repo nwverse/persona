@@ -57,15 +57,28 @@ Failed, TimedOut, http, run = smoke.Failed, smoke.TimedOut, smoke.http, smoke.ru
 # What the hub has of a module, checked against the test hub. Every path is fetched with the hub's token.
 #   extensions: ids in /api/v1/extensions while on, absent off
 #   connectors: ids in /api/v1/connectors?all=1 while on, absent off
-#   routes: paths that answer (anything but 404) while on and 404 off
+#   routes: paths that answer (anything but 404) while on and 404 off; a [method, path, body] entry is sent so
+#   (the hub registers every relayed route with its method, so another method answers 405 whether or not it is served)
+#   features: flags of the hub's hello (/api/v1/health) the module's server half makes the hub announce, absent off
+#   (the module's own module.<id> flag is always checked). The assistant tools a module adds reach the computers'
+#   MCP only through a node, which this hub has none of: their absence is checked by the module's Go tests.
 #   seed: requests made once while the module is first on, so the web app has something of it to show: [method, path, body]
 # A client-only module (modapi.ClientModules) has an empty row: only its hello flag.
 RECORDING_ID = "6f1c2a3b-0000-4000-8000-00000000e2e1"
 SERVER = {
     "voice": {"extensions": ["voice"], "routes": ["/api/v1/extensions/voice/-/assistant-data"]},
     "volc": {"extensions": ["volc"], "routes": ["/api/v1/extensions/volc/-/assistant-data"]},
-    "health": {},
+    "health": {
+        "features": ["health_intake"],
+        # The POSTs change nothing: the page's first draw, and a reminder action the manager refuses (400).
+        "routes": ["/api/v1/assistant/health/intake", "/api/v1/assistant/health/intake/changes",
+                   ["POST", "/api/v1/assistant/health/intake/ui", {}],
+                   ["POST", "/api/v1/assistant/health/water/reminder", {}]],
+    },
     "glasses": {},
+    # Its server half (the history import, the sent marks) shows nothing over HTTP on a hub with no connector: its tools
+    # reach the MCP through a node, and the selection page's chat list answers 404 for a source without history either
+    # way. Its absence is TestKnowledgeUIFollowsItsModule's; here, its flag and the manager's line.
     "knowledge-ui": {},
     "recording": {
         "routes": ["/api/v1/recordings"],
@@ -148,6 +161,17 @@ WEB = {
         "chunks": [r"/assets/(standalone|ScreenView|ScreenMenu|DisplayMenu|StatsOverlay|VideoPicture)-[\w-]+\.js",
                    r"/src/modules/screen-share/"],
         "chunk_when_on": [],  # the button is a link that opens a new tab: nothing of it loads on the machine page
+    },
+    "lark": {
+        "entries": [
+            # the "Show messages on home" row in the Lark section (a hub with feature `lark`: the mock hub); the Messages
+            # page's own address answers like a removed page while off
+            {"name": "Settings › Connectors › Lark row", "hubs": ["mock"], "page": "/settings?tab=connectors",
+             "ready": {"selector": "main"}, "text": r"^Show messages on home$",
+             "off_page": {"path": "/messages", "text": NOT_FOUND}},
+        ],
+        "chunks": [r"/assets/(lark-code|Messages|LarkHomeSwitch|lark-chats)-[\w-]+\.js", r"/src/modules/lark/"],
+        "chunk_when_on": ["mock"],  # the row is the module's code, loaded when the section draws
     },
     "recording": {
         "entries": [
@@ -309,9 +333,12 @@ def server_checks(rep, phase, hub, ids, on, loaded):
             rep.add(phase, id, f"extension {ext} {'listed' if want else 'absent'}", (ext in extensions) == want, sorted(extensions))
         for con in row.get("connectors", []):
             rep.add(phase, id, f"connector {con} {'registered' if want else 'absent'}", (con in connectors) == want, sorted(connectors))
-        for path in row.get("routes", []):
-            status, _ = hub.request("GET", path)
-            rep.add(phase, id, f"{path} {'answers' if want else 'is 404'}", (status != 404) == want, f"status {status}")
+        for flag in row.get("features", []):
+            rep.add(phase, id, f"hello {'has' if want else 'lacks'} {flag}", (flag in features) == want)
+        for route in row.get("routes", []):
+            method, path, body = route if isinstance(route, list) else ("GET", route, None)
+            status, _ = hub.request(method, path, body)
+            rep.add(phase, id, f"{method} {path} {'answers' if want else 'is 404'}", (status != 404) == want, f"status {status}")
 
 
 def browser(rep, phase, base, token, hub_kind, ids, on, shots, work, schemes):

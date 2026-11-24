@@ -258,9 +258,10 @@ var rpcFailureKeys = map[string]string{
 	proto.CodeTurnOverBackground: "rpc-errors.turn_over_background", // a Stop that found the turn over (#10828)
 	"dialog_open":                "rpc-errors.dialog_open",
 	// an owner's message to an Agent with older messages held for it (devices held.go, #10661)
-	"held_ahead":    "rpc-errors.held_ahead",
-	"held_not_kept": "rpc-errors.held_not_kept",
-	"held_full":     "rpc-errors.held_full",
+	"held_ahead":      "rpc-errors.held_ahead",
+	"held_not_kept":   "rpc-errors.held_not_kept",
+	"held_full":       "rpc-errors.held_full",
+	"held_start_full": "rpc-errors.held_start_full",
 	// the first message to a Codex opened with no first message (node/codex_waiting.go, #4961)
 	"codex_not_ready":          "rpc-errors.codex_not_ready",
 	"codex_first_text":         "rpc-errors.codex_first_text",
@@ -285,6 +286,7 @@ var rpcFailureKeys = map[string]string{
 	"node_outdated":             "rpc-errors.node_outdated",
 	// A private-profile switch is refused before any message reaches the CLI.
 	"assistant_launcher_profile_switch":  "rpc-errors.assistant_launcher_profile_switch",
+	"assistant_model_unresolved":         "rpc-errors.assistant_model_unresolved",
 	"assistant_service_tier_start_only":  "rpc-errors.assistant_service_tier_start_only",
 	"assistant_service_tier_unsupported": "rpc-errors.assistant_service_tier_unsupported",
 	"assistant_service_tier_refused":     "rpc-errors.assistant_service_tier_refused",
@@ -402,6 +404,15 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 	code, _ := body["code"].(string)
 	key := rpcFailureKeys[code]
 	args := i18n.Args{"reason": original}
+	if code == "assistant_model_unresolved" {
+		model, _ := body["model"].(string)
+		launcher, _ := body["launcher"].(string)
+		if model != "" && launcher != "" {
+			args["model"], args["launcher"] = model, launcher
+		} else {
+			key = ""
+		}
+	}
 	if code == "assistant_supervision_runtime" {
 		var names []string
 		if values, ok := body["launchers"].([]any); ok {
@@ -449,7 +460,7 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 	// a summary that names {reason} carries the original words (git's, for a failed pull or push)
 	body["error"] = i18n.T(l, key, args)
 	switch code {
-	case "assistant_launcher_profile_switch", "assistant_service_tier_start_only", "assistant_service_tier_unsupported", "assistant_service_tier_refused":
+	case "assistant_launcher_profile_switch", "assistant_model_unresolved", "assistant_service_tier_start_only", "assistant_service_tier_unsupported", "assistant_service_tier_refused":
 		// The native diagnostic is not a person-facing instruction; the stable, translated refusal says what to do.
 		return
 	}

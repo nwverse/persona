@@ -265,9 +265,23 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if withDefaults {
 		presetNote = s.applyStartPreset(ctx, t, caller, defaults, params)
 	}
-	own, err := s.resolveStart(ctx, params, t.LauncherDefaultModel)
+	tierCtx, tierSlot := withTierStart(ctx, t.Machine)
+	own, err := s.resolveStart(tierCtx, params, t.LauncherDefaultModel)
 	if err != nil {
 		return "", "", err
+	}
+	// The candidate the tier gave this start (pickTierCandidate): on the plan card as the task's dispatch, and one
+	// model_routing row once the Agent started.
+	t.Dispatch, t.tierChoice = nil, tierSlot.pick
+	if tierSlot.pick != nil {
+		t.Dispatch = tierSlot.pick.dispatch()
+		defer func() {
+			if err == nil && sid != "" {
+				row := modelRoutingOf(*tierSlot.pick, mid)
+				row.TodoID, row.PlanID, row.TaskIndex, row.SessionID = t.TodoID, t.planID, t.planIndex, sid
+				s.recordModelRouting(ctx, row)
+			}
+		}()
 	}
 	if t.defaulted || t.Launcher == "" {
 		own.launcher, t.defaulted = "", true // filled in from a default, by this try or an earlier one

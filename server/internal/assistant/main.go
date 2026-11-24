@@ -412,6 +412,11 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 				svc.transcriptionReadinessChanged()
 			}
 		},
+		TracksChanged: func() {
+			if svc != nil {
+				svc.tracksChanged()
+			}
+		},
 		AssistantTools: func() []proto.Tool { return svc.toolsNow() },
 		// The model providers' keys that are references, for their provider extensions' details (launcher_secrets.go).
 		LauncherReferences: func(ctx context.Context) []extmgr.LauncherReference { return svc.launcherReferences(ctx) },
