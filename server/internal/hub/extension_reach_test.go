@@ -129,6 +129,10 @@ func TestAnExtensionsTokenActsOnlyAsItsManager(t *testing.T) {
 		{"the sessions of ma (query)", "GET", "/api/v1/sessions?machine_id=ma", "", nil},
 		{"the paged sessions of ma (query)", "GET", "/api/v1/sessions?limit=10&machine_id=ma", "", nil},
 		{"a notification on A's session (body)", "POST", "/api/v1/notify", `{"title":"t","body":"b","machine_id":"ma","session_id":"s3"}`, nil},
+		{"names A: push grading layer GET", "GET", "/api/v1/push/grading/layer", "", namesA},
+		{"names A by query: push grading layer PUT", "PUT", "/api/v1/push/grading/layer?manager=assistant", `{"grading_enabled":true}`, nil},
+		{"names A: push grading layer DELETE", "DELETE", "/api/v1/push/grading/layer", "", namesA},
+		{"names A: push grading preview", "POST", "/api/v1/push/grading/preview", `{"notification":{"level":"P1"}}`, namesA},
 	}
 	for _, c := range refused {
 		before := len(reached(a))
@@ -160,6 +164,8 @@ func TestAnExtensionsTokenActsOnlyAsItsManager(t *testing.T) {
 		{"POST", "/api/v1/assistant/workspace-naming/preview?manager=m-0b0b0b", `{"machine_id":"mb","layout":"root"}`},
 		{"GET", "/api/v1/inbox/done", ""},
 		{"POST", "/api/v1/notify", `{"title":"t","body":"b","machine_id":"mb","session_id":"b1"}`},
+		{"GET", "/api/v1/push/grading/layer", ""},
+		{"POST", "/api/v1/push/grading/preview", `{"notification":{"kind":"assistant","level":"P1"}}`},
 	} {
 		if code, out := extDo(t, url, c.method, c.path, c.body, nil); code != http.StatusOK {
 			t.Errorf("%s %s: %d %s", c.method, c.path, code, clip(out, 200))
@@ -395,6 +401,10 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"GET /api/v1/push/intercepts":                      "manager", // only entries with its manager (pushGradingRoutes, TestPushGradingInterceptsHeldToManager)
 		"GET /api/v1/push/ln-mode":                         "own",     // the hub-wide switch state, no manager's data in the answer
 		"GET /api/v1/push/grading":                         "own",     // alias of the hub-wide switch state, same answer and authorization
+		"GET /api/v1/push/grading/layer":                   "manager", // only the calling extension's own layer on its manager (pushGradingLayerRoutes)
+		"PUT /api/v1/push/grading/layer":                   "manager", // writes only the calling extension's own layer on its manager (pushGradingLayerRoutes)
+		"DELETE /api/v1/push/grading/layer":                "manager", // deletes only the calling extension's own layer on its manager (pushGradingLayerRoutes)
+		"POST /api/v1/push/grading/preview":                "manager", // read-only preview bounded to the calling extension's manager (pushGradingLayerRoutes)
 		"GET /api/v1/push/stats/daily":                     "manager", // only its manager's counts (pushGradingRoutes, TestPushDailyStatsHeldToManager)
 		"GET /api/v1/assistant":                            "manager",
 		"GET /api/v1/assistant/capabilities":               "manager",

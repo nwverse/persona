@@ -153,9 +153,29 @@ describe("the panel's providers", () => {
     expect(row?.description).toBe("这次手输的模型 ID");
   });
 
-  it("Codex has no effort here (a start doesn't set it); a list still read is a spinner", () => {
-    const p = panel();
-    expect(provider(p, "codex").models?.every((m) => m.efforts.length === 0)).toBe(true);
+  it("Codex offers only each model's reported efforts and keeps unset effort at Codex's default; a list still read is a spinner", () => {
+    const p = panel({
+      listOf: (name) => name === "codex" ? { list: {
+        agent: "codex",
+        models: [
+          ...codexList.models,
+          { id: "gpt-5.5-none", name: "GPT-5.5 None", efforts: ["none", "low", "high"] },
+          { id: "gpt-5.5-plain", name: "GPT-5.5 Plain" },
+        ],
+      } } : listOf(name),
+      choice: { launcher: "codex", model: "unlisted-codex", effort: "" },
+      configured: null,
+      runs: "codex",
+    });
+    const codex = provider(p, "codex");
+    expect(codex.models?.map((m) => [m.id, m.efforts, m.defaultEffort])).toEqual([
+      ["default", ["low", "medium", "high"], undefined],
+      ["gpt-5.5", ["low", "medium", "high"], undefined],
+      ["gateway/glm-5.3", ["low", "medium", "high"], undefined],
+      ["gpt-5.5-none", ["low", "high"], undefined],
+      ["gpt-5.5-plain", [], undefined],
+      ["unlisted-codex", [], undefined],
+    ]);
     expect(provider(p, "p-relay")).toMatchObject({ models: null, loading: true });
   });
 
@@ -310,7 +330,7 @@ describe("engines", () => {
     const glm = rows.find((r) => r.provider.id === "claude" && r.model.id === "gateway/glm-5.3")!;
     const choices = engineChoices(p.providers, glm, p.state);
     expect(choices.map((c) => [c.engine, c.provider.id, c.own])).toEqual([["claude", "claude", true], ["codex", "codex", false]]);
-    expect(engineSetup(choices[1], { provider: "claude", model: "gateway/glm-5.3", effort: "high" })).toEqual({ provider: "codex", model: "gateway/glm-5.3" });
+    expect(engineSetup(choices[1], { provider: "claude", model: "gateway/glm-5.3", effort: "high" })).toEqual({ provider: "codex", model: "gateway/glm-5.3", effort: "high" });
     const def = rows.length ? panelSections({ providers: p.providers, state: p.state, view: { kind: "all" }, query: "", favorites: [], recent: [], overrides: {} }).flatMap((s) => s.rows).find((r) => r.provider.id === "claude" && r.model.providerDefault)! : glm;
     expect(engineChoices(p.providers, def, p.state)).toHaveLength(1);
   });
@@ -352,22 +372,26 @@ describe("the pill", () => {
     expect(newAgentPill({ launchers, runs: "claude", list: lists.claude, choice: none, configured, fallback: "Default model" })).toEqual({ engine: "claude", provider: "claude", model: "Sonnet 5.5", effort: "high", loading: false, failed: false });
   });
 
-  it("a model picked, a launcher's own default, a fixed model, a Codex launcher (no effort)", () => {
+  it("a model picked, a launcher's own default, a fixed model, a Codex launcher (reported effort only)", () => {
     expect(newAgentPill({ launchers, runs: "claude", list: lists.claude, choice: { launcher: "claude", model: "opus", effort: "max" }, configured: null, fallback: "" })).toMatchObject({ model: "Opus 5.5", effort: "max" });
     expect(newAgentPill({ launchers, runs: "claude", list: lists.claude, choice: { launcher: "claude", model: "", effort: "" }, configured: null, fallback: "" }).model).toBe("Opus 5.5");
     expect(newAgentPill({ launchers, runs: "sonnetcc", list: lists.sonnetcc, choice: { launcher: "sonnetcc", model: "", effort: "" }, configured: null, fallback: "" }).model).toBe("sonnet");
-    expect(newAgentPill({ launchers, runs: "codex", list: lists.codex, choice: { launcher: "codex", model: "gpt-5.5", effort: "high" }, configured: null, fallback: "" })).toMatchObject({ engine: "codex", model: "5.5" });
-    expect(newAgentPill({ launchers, runs: "codex", list: lists.codex, choice: { launcher: "codex", model: "", effort: "high" }, configured: null, fallback: "" }).effort).toBeUndefined();
+    expect(newAgentPill({ launchers, runs: "codex", list: lists.codex, choice: { launcher: "codex", model: "gpt-5.5", effort: "" }, configured: null, fallback: "" })).toMatchObject({ engine: "codex", model: "5.5" });
+    expect(newAgentPill({ launchers, runs: "codex", list: lists.codex, choice: { launcher: "codex", model: "gpt-5.5", effort: "" }, configured: null, fallback: "" }).effort).toBeUndefined();
+    expect(newAgentPill({ launchers, runs: "codex", list: lists.codex, choice: { launcher: "codex", model: "gpt-5.5", effort: "high" }, configured: null, fallback: "" })).toMatchObject({ engine: "codex", model: "5.5", effort: "high" });
+    expect(newAgentPill({ launchers, runs: "codex", list: lists.codex, choice: { launcher: "codex", model: "", effort: "high" }, configured: null, fallback: "" }).effort).toBe("high");
+    expect(newAgentPill({ launchers, runs: "codex", list: lists.codex, choice: { launcher: "codex", model: "gpt-5.5", effort: "max" }, configured: null, fallback: "" }).effort).toBeUndefined();
+    expect(newAgentPill({ launchers, runs: "codex", list: lists.codex, choice: { launcher: "codex", model: "unlisted", effort: "high" }, configured: null, fallback: "" }).effort).toBeUndefined();
   });
 
-  it.each(["claude_desktop", "codex_app"])("%s pills retain supported selected models", (source) => {
+  it.each(["claude_desktop", "codex_app"])("%s pills retain supported selected models and efforts", (source) => {
     const desktop: Launcher = { name: "desktop", agent: source === "codex_app" ? "codex" : "claude", source };
     const list = source === "codex_app" ? codexList : claudeList;
     const model = source === "codex_app" ? "gpt-5.5" : "sonnet";
     const pill = newAgentPill({ launchers: [desktop], runs: desktop.name, list: { list },
       choice: { launcher: desktop.name, model, effort: "high" }, configured: null, fallback: "" });
     expect(pill.model).toBe(source === "codex_app" ? "5.5" : "Sonnet 5.5");
-    expect(pill.effort).toBe(source === "codex_app" ? undefined : "high");
+    expect(pill.effort).toBe("high");
   });
 
   it("while the list is read the first time, when that failed, and with no launcher known", () => {

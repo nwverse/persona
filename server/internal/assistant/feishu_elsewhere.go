@@ -113,7 +113,7 @@ func (s *Service) openFromElsewhere(ctx context.Context, src Source) (Todo, erro
 		s.logf("bots: elsewhere: topic of %s: %v", posted.MessageID, err)
 		return Todo{}, errors.New(i18n.T(l, "assistant-feishu.elsewhere_no_topic"))
 	}
-	// Any message of the topic will do for the bot's lines into it (feishu_thread_posts.go).
+	// Any message of the topic will do for the bot's lines into it (the lark module's thread_posts.go).
 	s.rememberTopicMessage(ctx, home, thread, posted.MessageID)
 	topic := &feishuTopic{Chat: home, Thread: thread}
 

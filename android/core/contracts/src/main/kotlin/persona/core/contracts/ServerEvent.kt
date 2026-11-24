@@ -64,7 +64,10 @@ data class Hello(
     @SerialName("message_send_state") val messageSendState: Int? = null,
     /** The pictures a message may carry; older hubs use the same documented defaults, not a four-picture cap. */
     @SerialName("image_limits") val imageLimits: ImageLimitsTable? = null,
-) : ServerEvent
+) : ServerEvent {
+    fun imageLimitsFor(agent: String? = null): ImageLimits =
+        (imageLimits ?: ImageLimitsTable.Standard).forAgent(agent)
+}
 
 @KeepGeneratedSerializer
 @Serializable(with = HubMeshSerializer::class)
@@ -458,7 +461,18 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
     }
 }
 
-object HelloSerializer : WireSerializer<Hello>(Hello.generatedSerializer())
+object HelloSerializer : WireSerializer<Hello>(Hello.generatedSerializer()) {
+    override fun deserialize(decoder: Decoder): Hello {
+        val input = decoder as? JsonDecoder ?: throw SerializationException("Wire models require JSON")
+        val obj = input.decodeJsonElement() as? JsonObject ?: throw SerializationException("Expected hello object")
+        val limits = parseImageLimitsTable(obj["image_limits"])
+        val withoutLimits = JsonObject(obj.filterKeys { it != "image_limits" })
+        return input.json.decodeFromJsonElement(
+            object : WireSerializer<Hello>(Hello.generatedSerializer()) {},
+            withoutLimits,
+        ).copy(imageLimits = limits)
+    }
+}
 object HubMeshSerializer : WireSerializer<HubMesh>(HubMesh.generatedSerializer())
 object MeshHubSerializer : WireSerializer<MeshHub>(MeshHub.generatedSerializer())
 object ItemsEventSerializer : WireSerializer<ItemsEvent>(ItemsEvent.generatedSerializer())

@@ -2301,6 +2301,15 @@ request; switching it off restores the standard experience with zero data migrat
 not expose boolean `todos_v2` degrade gracefully to a read-only row with an update hint. Graduation (making the new
 experience the default for at least one release with rollback kept) or removal is tracked in #14538.
 
+**Unified Integrations & Extensions** (#14802, #14805, `web/src/lib/labs-integrations-v2.ts`). This single assistant-scoped
+switch applies to the selected Assistant across devices and defaults to off (`integrations_v2` on `GET`/`PUT /api/v1/assistant`,
+guarded by `expected_integrations_v2` optimistic locking and explicit manager targeting). It provides one opt-in entry point
+for experimental Integrations & Extensions capabilities (unified settings views and channel group/topic routing) without flag
+sprawl. Changes take effect immediately on the next view or request; switching it off restores the standard Connectors,
+Channels, and Extensions tabs and legacy routing with zero data migration or data loss. Older hubs that do not expose boolean
+`integrations_v2` degrade gracefully to a read-only row with an update hint. Graduation (making the new experience the default
+for at least one release with rollback kept) or removal is tracked in #14802.
+
 **Terminal renderer** (`web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals
 (`views/session/terminal/feed.ts`) draw with xterm's DOM renderer (Standard, the default) or WebGL (`@xterm/addon-webgl`,
 its own chunk, loaded only when chosen). Full view always uses the DOM renderer and is not affected. It is kept by this
@@ -3000,8 +3009,9 @@ and Android follow in #5117.
   before never lands on the one picked since.
 - **What the pill says**: what this start runs: the mark of the Agent the launcher runs, the model (the one picked; else Model
   settings' model on their launcher; else the model the launcher's default entry stands for, by its list's name; a
-  launcher that fixes its own `--model`, that model) and, for Claude Code and Antigravity, the effort
-  (the one picked, else Model settings'). Codex shows no effort: a start doesn't set it. The workflow mark while ultracode
+  launcher that fixes its own `--model`, that model) and the effort: for Claude Code and Antigravity, the one picked
+  (else Model settings'); for Codex, only an explicit level reported by the selected model (unset follows Codex's
+  configured default, keeping existing launch settings; #13764). The workflow mark while ultracode
   is on.
 - **Providers** (`lib/new-agent-panel.ts`): the chosen computer's launchers in the hub's order (`GET
   /machines/{mid}/launchers`), by display name, the startup ID small and monospace beside the group's name and in the
@@ -3581,3 +3591,9 @@ in herdr appears at the next inventory refresh. The **Rename** dialog offers
 one **Name** field, which updates the tab and the CLI title where supported.
 Even with the setting off, an empty or shell-prompt title falls back to the
 herdr tab name. Sessions without a named herdr tab use their session title.
+
+### Model profiles
+
+Settings › Model configuration › **Model profiles** shows each saved profile's Agent presets, purpose bindings, launcher model overrides, and any fields that differ from the current live configuration (`changes`). Both the profile detail dialog and interactive editor expose **Update from current configuration**, backed by `PUT /api/v1/model-profiles/{id}` with `capture: true` (preserving the profile's name, description, and existing Agent presets, and refreshing the catalog on completion).
+
+When applying a profile with no drift (`changes` empty and no unsaved drift on the active profile), **Apply profile** applies immediately. When drift exists, **Apply profile** opens an inline confirmation step listing each affected purpose or launcher field and offering **Capture current into `<active>` first** (which captures the active profile via `capture: true` before applying the target), **Apply directly**, or **Cancel**. Editor saves omit empty optional fields and default (`standard`) tier speed for cross-version hub compatibility, and pin validation and save errors directly beside the Save button.

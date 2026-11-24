@@ -256,6 +256,27 @@ describe("what a pick keeps", () => {
     expect(assistantPickOf({ provider: "claude", model: "opus", effort: "medium" }, claudeList, now)).toBeNull();
     expect(assistantPickOf({ provider: "claude", model: "opus", effort: "max" }, claudeList, now)).toEqual({ launcher: "claude", model: "opus", effort: "max" });
   });
+
+  it("keeps a concrete model ID even when marked default, while 'default' and locked launchers still follow launcher default (#13567)", () => {
+    const concreteDefault: LauncherModels = {
+      agent: "claude",
+      models: [
+        { id: "default", name: "Default (recommended)", default: false, resolved: "claude-opus-5-5", efforts: ALL },
+        { id: "opus", name: "Opus 5.5", default: true, resolved: "claude-opus-5-5", efforts: ALL },
+        { id: "claude-opus-5-5", name: "Opus 5.5 exact", default: true, efforts: ALL },
+      ],
+    };
+    // Concrete models marked default: true keep their model ID so picking them pins the model.
+    expect(assistantPickOf({ provider: "claude", model: "opus", effort: "high" }, concreteDefault, null)).toEqual({ launcher: "claude", model: "opus", effort: "high" });
+    expect(assistantPickOf({ provider: "claude", model: "claude-opus-5-5" }, concreteDefault, null)).toEqual({ launcher: "claude", model: "claude-opus-5-5" });
+    // Explicit "default" row omits model even when launcher settings moved default: true to a concrete row.
+    expect(assistantPickOf({ provider: "claude", model: "default" }, concreteDefault, null)).toEqual({ launcher: "claude" });
+    // Locked launchers fix their own --model, so picking their sole default row still omits model.
+    const lockedConcrete: LauncherModels = { agent: "claude", locked: "--model", models: [{ id: "sonnet", name: "Sonnet", default: true }] };
+    expect(assistantPickOf({ provider: "relay", model: "sonnet" }, lockedConcrete, null)).toEqual({ launcher: "relay" });
+    // Fresh draft (current = null) pins the displayed setup instead of returning null.
+    expect(assistantPickOf(now, claudeList, null)).toEqual({ launcher: "claude", model: "opus", effort: "medium" });
+  });
 });
 
 it("keeps unsupported supervision connections visible with a reason", () => {
