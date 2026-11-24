@@ -171,6 +171,9 @@ type InboxItem struct {
 	SuggestSeq int `json:"suggest_seq,omitempty"`
 	// ReplyApproval is the overdue reminder's receipt, not another owner request.
 	ReplyApproval *inboxReplyApproval `json:"reply_approval,omitempty"`
+	// ReplyPolicy is the latest server-side reply-policy classification for this item (inbox_reply_policy.go).
+	// Persisted, never listed.
+	ReplyPolicy *InboxReplyPolicySnapshot `json:"reply_policy,omitempty"`
 }
 
 type InboxLark struct {
@@ -245,6 +248,7 @@ func (it *InboxItem) listed() InboxItem {
 	c.Meta, c.Group = nil, nil
 	c.ChainSeq, c.SuggestSeq = 0, 0
 	c.ReplyApproval = nil
+	c.ReplyPolicy = nil
 	c.Status = it.status()
 	c.Now, c.TitleBy = it.nowKey(), ""
 	c.PreMergeTitle, c.PreMergeTitleBy, c.MergeTitle = "", "", ""
@@ -264,6 +268,7 @@ func (it *InboxItem) listed() InboxItem {
 		g.Changes, g.Cwd = slices.Clone(g.Changes), ""
 		g.MailTarget = nil // the reply's internal conflict check, not a client's target to choose
 		g.Owner, g.SourceOf = nil, ""
+		g.ReplyPolicy = nil
 		c.Suggestion = &g
 		if c.Handling == nil && g.Conversation == nil && it.Agent != nil { // an old draft: its conversation is done with this round
 			c.Handling = &InboxHandling{Owner: HandlingOwner, State: HandlingDone, MachineID: it.Agent.MachineID, SessionID: it.Agent.SessionID}
