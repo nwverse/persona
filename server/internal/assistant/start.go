@@ -646,7 +646,7 @@ func (s *Service) startConversation(ctx context.Context, p startParams) (proto.S
 }
 
 // Start is assistant.start: a conversation one of the hub's features starts (the inbox's AI twin), or the channels'
-// (feishu_message.go, channels_plugin.go). It is named after its first turn like the app's, unless it is untitled.
+// (the lark module's message.go, channels_plugin.go). It is named after its first turn like the app's, unless it is untitled.
 func (s *Service) Start(ctx context.Context, p StartParams) (proto.Session, error) {
 	if p.Origin == "" || p.Origin == OriginUser {
 		p.Text = prompts.ProtectUserMessage(p.Text)

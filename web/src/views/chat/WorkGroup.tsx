@@ -229,17 +229,19 @@ export const WorkGroup = memo(function WorkGroup({ g, p, limit }: { g: WorkGroup
         // on a touch screen 40 tall, the margin taking back what it adds, so nothing around it moves
         className={cx("flex w-full min-w-0 items-center gap-1.5 py-[2px] text-left select-none [@media(pointer:coarse)]:-my-[7.5px] [@media(pointer:coarse)]:min-h-10", opens ? "cursor-pointer transition-opacity hover:opacity-80" : "cursor-default")}
       >
-        <span className="inline-flex h-[1lh] shrink-0 items-center text-tool-ink">{p.nested ? <Icon name={actions.icon} size={14} /> : g.live ? <Spinner size={14} /> : <Icon name="layers" size={14} />}</span>
+        {(p.nested || g.live) && (
+          <span className="inline-flex h-[1lh] shrink-0 items-center text-tool-ink">{p.nested ? <Icon name={actions.icon} size={14} /> : <Spinner size={14} />}</span>
+        )}
         <span className={cx("translate-y-[1px] text-[length:var(--chat-secondary)] text-tool-ink", summary ? "shrink-0" : "min-w-0 truncate")}>{heading}</span>
+        {opens && <Icon name="chevronRight" size={14} stroke={2.2} className="shrink-0 text-tool-ink transition-transform duration-150 motion-reduce:transition-none" style={{ transform: open ? "rotate(90deg)" : "none" }} />}
         {summary && (
           <span className="min-w-0 translate-y-[1px] truncate text-[length:var(--chat-secondary)] text-ink-3" data-work-summary>
             · {summary}
           </span>
         )}
-        <span className="flex-1" />
+        {(loading || (!p.nested && g.live && g.startedAt !== undefined)) && <span className="flex-1" />}
         {loading && <Spinner size={11} />}
         {!p.nested && g.live && g.startedAt !== undefined && (p.hideClock ? <LiveClockPresence /> : <Elapsed since={g.startedAt} />)}
-        {opens && <Icon name="chevronRight" size={14} stroke={2.2} className="shrink-0 text-tool-ink transition-transform duration-150 motion-reduce:transition-none" style={{ transform: open ? "rotate(90deg)" : "none" }} />}
       </button>
       {open && failed && !loading && (
         <div className="mt-1 flex items-center gap-2 pl-[22px] text-[12px] text-ink-3" role="status">

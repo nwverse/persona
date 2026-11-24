@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // The workbench (#1961, docs/extensions/bots.md "The workbench"): with the bot's `workbench` switch on, the chat gets a
@@ -20,12 +20,6 @@ import (
 // pinned and kept the only one (feishu_workbench_pin.go). These cards only read the assistant's state and call what
 // the app's pages call; nothing here decides anything a model would. With the switch off none of it exists: the
 // commands go on as text, no card carries a workbench button and /start has no permission field.
-
-// clip and oneLine are the core's text helpers (internal/textfmt).
-var (
-	clip    = textfmt.Clip
-	oneLine = textfmt.OneLine
-)
 
 const (
 	// wbInboxMost is the most Inbox rows one /inbox card lists: each has a row of buttons.
@@ -76,10 +70,10 @@ func (s core) workbenchNav(ctx context.Context, a *botcard.CardAction) *botcard.
 			return toast("error", i18n.T(l, "assistant-feishu_cards.main_off"))
 		}
 		if to == "new" {
-			s.h.SetChatTarget(false)
+			s.setBotCurrent(botTarget{Kind: targetPersona})
 			return toast("success", i18n.T(l, "assistant-feishu_cards.next_is_new"))
 		}
-		s.h.SetChatTarget(true)
+		s.setBotCurrent(botTarget{Kind: targetMain})
 		return toast("success", i18n.T(l, "assistant-feishu_cards.now_to_main"))
 	case "agents", "start":
 		if !f.Agents {
@@ -114,11 +108,11 @@ func (s core) workbenchNav(ctx context.Context, a *botcard.CardAction) *botcard.
 		}
 		switch to {
 		case "agents":
-			post(s.h.AgentsCard(cctx, ""))
+			post(s.agentsCard(cctx, ""))
 		case "start":
-			post(s.h.StartAgentCard(cctx, ""), "")
+			post(s.startAgentCard(cctx, ""), "")
 		case "list":
-			post(s.h.ConversationsCard(cctx))
+			post(s.conversationsCard(cctx))
 		case "tasks":
 			cards, fallbacks := s.h.TasksOverview(cctx)
 			for i, c := range cards {
@@ -150,7 +144,7 @@ func (s core) homeCard(ctx context.Context, f assistantwire.FeishuFeatures) (car
 	c, busy := s.workbenchCount(ctx, now)
 	rows := s.h.WorkbenchBoard(ctx, l, web, now)
 	title := wbT(l, "home_title")
-	target := s.h.ChatTargetLabel(ctx)
+	target := s.h.TargetLabel(ctx, s.botTargetFor("", ""))
 	card = botcard.NewCard(title, botcard.Blue, wbT(l, "home_summary")).Subtitle(wbT(l, "home_target", i18n.Args{"target": clip(target, 40)}))
 	if len(rows) > 0 {
 		card.Tag(wbT(l, "home_tag_waiting", i18n.Args{"n": len(rows)}), botcard.Orange)
@@ -194,7 +188,7 @@ func (s core) homeCard(ctx context.Context, f assistantwire.FeishuFeatures) (car
 		primary, secondary := s.h.SessionNames(ctx, r.Session)
 		label := clip(oneLine(primary), 24)
 		card.Row(map[string]any{"a": "switch", "k": targetAgent, "m": r.Machine, "s": r.Session.SessionID, "t": label + " · " + r.MachineName},
-			s.h.AgentRowMarkdown(l, label, secondary, r.MachineName, r.Session, 70))
+			agentRowMarkdown(l, label, secondary, r.MachineName, r.Session, 70))
 	}
 
 	// The Inbox and the day.
@@ -502,11 +496,19 @@ func (s core) workbenchInboxAction(ctx context.Context, a *botcard.CardAction) *
 		if op == "draft" {
 			list = mid // pressed on the Inbox card: it is redrawn once the reply goes out
 		}
+		expectedVersion, _ := strconv.Atoi(a.Str("version"))
 		go func() {
 			cctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
-			text, err := s.h.DraftReply(cctx, id, instruction)
-			card := s.draftCard(cctx, it, text, err, list)
+			cardItem, text, err := s.h.DraftReply(cctx, id, instruction, expectedVersion, op == "redraft")
+			if cardItem.ID == "" {
+				cardItem = it
+				if err == nil {
+					// A transient result cannot borrow a version from the item captured before generation.
+					cardItem.ReplyVersion = 0
+				}
+			}
+			card := s.draftCard(cctx, cardItem, text, err, list)
 			if op == "redraft" {
 				if err := s.botUpdateCard(cctx, mid, card); err == nil {
 					return
@@ -525,13 +527,16 @@ func (s core) workbenchInboxAction(ctx context.Context, a *botcard.CardAction) *
 		if it.Done {
 			return toast("info", wbT(l, "inbox_gone"))
 		}
+		// Missing, malformed and explicit zero all denote an old unversioned card. The reply-policy route decides
+		// whether that legacy card is still allowed; inside policy scope it fails closed.
+		expectedVersion, _ := strconv.Atoi(a.Str("version"))
 		list := a.Str("list")
 		go func() {
 			cctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 			// One reply per draft card however many presses: the card's message is the send's id, and a press that
 			// comes after the reply filed the item changes nothing (the first one drew the card).
-			filed, err := s.h.ReplyInbox(cctx, id, text, "feishu-workbench-"+mid)
+			filed, err := s.h.ReplyInbox(cctx, id, text, "feishu-workbench-"+mid, expectedVersion)
 			if filed {
 				return
 			}
@@ -573,11 +578,13 @@ func (s core) draftCard(ctx context.Context, it assistantwire.WorkbenchItem, tex
 	box := botcard.Input("text", wbT(l, "draft_text"), "", true)
 	box["default_value"] = text
 	instr := botcard.Input("instruction", wbT(l, "draft_instruction"), wbT(l, "draft_instruction_placeholder"), false)
-	// Sending goes out under the owner's name: Feishu's dialog asks first.
+	version := it.ReplyVersion
+	// Sending goes out under the owner's name: Feishu's dialog asks first. Both actions bind the exact AI card they
+	// rendered; an action from a replaced suggestion must never confirm its old text against the new source position.
 	card.Form("draft", []any{box, instr},
-		botcard.Confirm(botcard.Submit(wbT(l, "btn_send"), wbFilled, "send_submit", map[string]any{"a": "ib", "op": "send", "id": it.ID, "list": list}),
+		botcard.Confirm(botcard.Submit(wbT(l, "btn_send"), wbFilled, "send_submit", map[string]any{"a": "ib", "op": "send", "id": it.ID, "list": list, "version": version}),
 			wbT(l, "send_confirm_title"), wbT(l, "send_confirm_text", i18n.Args{"who": clip(wbWho(it), 20)})),
-		botcard.Submit(wbT(l, "btn_redraft"), botcard.Default, "redraft_submit", map[string]any{"a": "ib", "op": "redraft", "id": it.ID, "list": list}))
+		botcard.Submit(wbT(l, "btn_redraft"), botcard.Default, "redraft_submit", map[string]any{"a": "ib", "op": "redraft", "id": it.ID, "list": list, "version": version}))
 	reply := wbT(l, "draft_as_you")
 	if it.Connector && it.ConnectorReplyTo != "" {
 		reply = it.ConnectorReplyTo
@@ -684,9 +691,6 @@ type todayBody struct {
 func toast(kind, text string) *botcard.CardResponse {
 	return &botcard.CardResponse{Toast: &botcard.Toast{Type: kind, Content: text}}
 }
-
-// targetAgent is the kind of a chat target that is a coding agent (the core's feishu.go).
-const targetAgent = "agent"
 
 // wbT is a workbench string in l.
 func wbT(l i18n.Lang, key string, args ...i18n.Args) string {

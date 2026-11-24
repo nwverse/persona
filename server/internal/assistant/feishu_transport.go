@@ -26,7 +26,7 @@ func (s *Service) botPostKeyed(ctx context.Context, replyTo string, card *botcar
 // feishuTarget says where a feishu.post / feishu.text goes beyond the default (larkhost.Target): the chat to send into
 // (ChatID; "" is the owner's private chat, the only one the hub accepts for now), whether a reply goes into the
 // parent's thread, whether a reply whose parent is gone fails (the hub's no_detour) instead of landing in the chat as
-// a message of its own, and whether it answers the owner's "/read" in a group (feishu_read.go). The zero value is what
+// a message of its own, and whether it answers the owner's "/read" in a group (the lark module's read.go). The zero value is what
 // the calls always did.
 type feishuTarget = larkhost.Target
 

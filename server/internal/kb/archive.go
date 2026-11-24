@@ -619,7 +619,7 @@ func (e *Engine) notePerson(c *Chat, source string, m SourceMessage) {
 		}
 		e.addHandles(pid, m.SenderHandles)
 		// Only write when something a reader cares about changed (not on every message of a busy group).
-		return !p.persisted || attributed || len(p.Chats) != before || p.LastSeen.Sub(seen) > time.Hour
+		return !p.Persisted || attributed || len(p.Chats) != before || p.LastSeen.Sub(seen) > time.Hour
 	})
 	if linked {
 		c.People = addUnique(c.People, pid)

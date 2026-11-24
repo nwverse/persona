@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/channel"
@@ -15,7 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Reading a group with /read (feishu_read.go, #11803): the owner's "@bot /read …" goes to the main conversation with
+// Reading a group with /read (the lark module's read.go, #11803): the owner's "@bot /read …" goes to the main conversation with
 // what to read and where to put the downloads; the run shows nothing in the group but the reaction, and its answer
 // goes under the message, without the process or a web link. All ids are placeholders.
 
@@ -63,11 +64,7 @@ func (e *threadEnv) readLive(id string) *channel.Run {
 // read hands ev over the way FeishuMessage does for a message marked FeishuFromRead.
 func (e *threadEnv) read(ev botcard.MessageEvent) {
 	e.t.Helper()
-	st, err := e.s.feishuStatus(context.Background())
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	e.s.feishuRead(ev, st)
+	feishuHand(e.t, e.s, e.f, ev, assistantwire.FeishuFromRead)
 }
 
 func TestFeishuReadSendsTheRequestToTheMainConversation(t *testing.T) {
@@ -148,6 +145,7 @@ func TestFeishuReadInATopic(t *testing.T) {
 
 // A bare /read asks for a summary of the group.
 func TestFeishuReadWithNoWords(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := readEnv(t)
 	e.read(readEvent("om_r3", "/read", ""))
 	got := handoffs(e.f)
@@ -158,6 +156,7 @@ func TestFeishuReadWithNoWords(t *testing.T) {
 
 // What is not the owner's /read with the switch on is dropped without a word: nothing is sent, posted or reacted to.
 func TestFeishuReadDropsEverythingElse(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, c := range []struct {
 		name string
 		edit func(*threadEnv, *botcard.MessageEvent)
@@ -190,6 +189,7 @@ func TestFeishuReadDropsEverythingElse(t *testing.T) {
 // A question or approval the run raises goes to the owner's private chat, never to the group; and a private message
 // to the same conversation is not folded into the /read's answer.
 func TestFeishuReadKeepsCardsAndPrivateRunsOutOfTheGroup(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := readEnv(t)
 	e.read(readEvent("om_r4", "/read 看下", ""))
 	reply, to, note := e.s.interactionPlace(proto.Interaction{MachineID: "server", SessionID: "m1"})
@@ -215,6 +215,7 @@ func TestFeishuReadKeepsCardsAndPrivateRunsOutOfTheGroup(t *testing.T) {
 // A topic's run of the same conversation going on beside a /read does not take the /read's question into its group:
 // with no private run, the card goes to the owner's DM on its own, and no line in the topic points at it.
 func TestFeishuReadCardsSkipAConcurrentTopic(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := readEnv(t)
 	e.topicTodo("发版")
 	e.deliver(topicEvent("om_t1", "开始"))
@@ -308,6 +309,7 @@ func TestFeishuReadAnswerRetryKeepsItsKey(t *testing.T) {
 
 // The manager forwards the original post, so the assistant must preserve the same at/text boundary on reparse.
 func TestFeishuReadAdjacentPostMention(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, space := range []string{"", " "} {
 		t.Run("separator="+space, func(t *testing.T) {
 			e := readEnv(t)

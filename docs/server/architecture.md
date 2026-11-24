@@ -99,6 +99,7 @@ The parts (the hub, the managers, the node on each computer, extensions) talk on
 | --- | --- |
 | `assistantwire`, `devicewire`, `extwire` | The bus between the hub and a manager: methods, events, routes the hub relays, extension scopes and manifest types the bus carries; in `assistantwire` also the To-dos view, counts and places, generated from `schema/wire/todo-view.schema.json` (`server/internal/assistantwire/todo_view_gen.go`, never edited by hand) |
 | `kbwire` | Knowledge-base entities, identity hints, updates and chat context as they cross the bus and the connector protocol |
+| `recordingwire` | A meeting recording's data types (the recording, its upload and timeline, meeting.json, minutes, day recap, photos, live log, meeting room, hub segments), their constants, sentinel errors, pure accessors and lenient JSON readers; `kb` aliases and re-exports them and keeps its own rules as functions over them (`docs/plans/plan-kb-recording-port.md`) |
 | `connectorwire` | The connector SPI: `Connector`, its `Manifest` and capability interfaces, statuses, sign-in prompts, threads and recall errors; inbox things and replies, conversation batches, posts and snapshots from connectors (`docs/protocol/connector-protocol.md`, `docs/extensions/connectors.md`) |
 | `aiwire` | A model setting (`aiwire.Config`) |
 | `dialogwire` | A terminal dialog read off a screen, as the node and the apps see it |

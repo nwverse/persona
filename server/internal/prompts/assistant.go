@@ -937,6 +937,7 @@ type SuperviseEntry struct {
 	Ask             string              // needs_you: what it asks
 	Recommend       string              // escalated: the option the leader recommends
 	LeaderGone      bool                // decide: its task leader agent cannot be reached, so the supervisor takes the task over
+	SupervisorGone  bool                // decide: its assigned Assistant supervisor cannot receive the relay, so main takes over
 	Background      bool                // escalated: by the background supervisor, not a leader conversation (#4927)
 	DoneWhen        []string            // what done means
 	Round           int                 // reworks so far

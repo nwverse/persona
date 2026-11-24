@@ -24,17 +24,20 @@ import (
 // what the channel supports (Status, Features), a card (Post), a line under a message (Note, Reply), a card edited in
 // place (UpdateCard) and a line for a to-do's chat thread (ThreadPost). With the module in the build the port is the
 // module's layer; without it (persona_without_lark, persona_core_only) it is larkhost.None, which posts nothing and
-// says so. The port's implementation still lives in this package's feishu*.go and is served to the module through
-// larkHost until it moves there.
+// says so. The transport (feishu_transport.go) is still the core's and is served to the module through larkHost; the
+// chat itself (its state, the owner's messages and presses) is the module's, reached through larkhost.Chat
+// (lark_chat.go).
 
 // larkLayer is the module's layer, made once per service on first use (a service a test makes without New has one
-// too), and the module's times over its defaults (Options.LarkTimings; tests change them while it runs).
+// too), the module's times over its defaults (Options.LarkTimings; tests change them while it runs) and the chat's
+// clock (nil: the time now; tests set it).
 type larkLayer struct {
 	once    sync.Once
 	layer   larkhost.Layer
 	mu      sync.Mutex
 	timings map[string]time.Duration
 	lists   map[string][]time.Duration
+	now     func() time.Time
 }
 
 // larkModule is the lark module's layer, or larkhost.None without the module.
@@ -104,12 +107,6 @@ func (f feishuSink) progressIdle() time.Duration { return f.s.larkModule().TurnP
 // larkHost is the core as the lark module reaches it (larkhost.Host).
 type larkHost struct{ s *Service }
 
-func (h larkHost) Status(ctx context.Context) (FeishuStatus, error) { return h.s.feishuStatus(ctx) }
-
-func (h larkHost) Features(ctx context.Context) (FeishuFeatures, bool) {
-	return h.s.feishuFeatures(ctx)
-}
-
 func (h larkHost) Post(ctx context.Context, to larkhost.Target, replyTo string, card *botcard.Card, fallback, key string) (string, error) {
 	return h.s.botPostTo(ctx, to, replyTo, card, fallback, key)
 }
@@ -134,18 +131,6 @@ func (h larkHost) ThreadOf(todoID string) (string, string, bool) {
 		return "", "", false
 	}
 	return th.ChatID, th.ThreadID, true
-}
-
-func (h larkHost) StatusKept(ctx context.Context) (FeishuStatus, error) {
-	return h.s.feishuStatusKept(ctx)
-}
-
-func (h larkHost) TopicMessage(ctx context.Context, chatID, threadID string) string {
-	return h.s.topicMessage(ctx, chatID, threadID)
-}
-
-func (h larkHost) ForgetTopicMessage(ctx context.Context, chatID, threadID, messageID string) {
-	h.s.forgetTopicMessage(ctx, chatID, threadID, messageID)
 }
 
 func (h larkHost) TodoLink(web, todoID string) string  { return todoLink(web, todoID) }
@@ -195,10 +180,6 @@ func (h larkHost) LinkNamer(ctx context.Context) func(*url.URL) string { return 
 
 func (h larkHost) OpenButton(ctx context.Context, machine, session string) botcard.Button {
 	return h.s.openButton(ctx, machine, session)
-}
-
-func (h larkHost) RememberRun(messageID string, r *channel.Run) {
-	h.s.rememberBotThread(messageID, botTargetOf(r), r.Label)
 }
 
 func (h larkHost) Unreachable(err error) bool { return unreachable(err) }
@@ -294,7 +275,8 @@ func (h larkHost) SaveRuns() {
 	h.s.saveChannelStateLocked()
 }
 
-// larkWait waits, at most d, for the lark module's background work (the Feishu agent messages' workers) to end.
+// larkWait waits, at most d, for the lark module's background work (the Feishu agent messages' workers, the chat's
+// messages being handled) to end.
 func (s *Service) larkWait(d time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
@@ -309,18 +291,6 @@ func (h larkHost) WebBase(ctx context.Context) string          { return h.s.webB
 func (h larkHost) Location(ctx context.Context) *time.Location { return h.s.location(ctx) }
 func (h larkHost) StandingNow() time.Time                      { return h.s.standing.clock() }
 func (h larkHost) ClipFallback(text string) string             { return clip(text, reportFallbackMax) }
-
-func (h larkHost) ChatTargetLabel(ctx context.Context) string {
-	return h.s.targetLabel(ctx, h.s.botTargetFor("", ""))
-}
-
-func (h larkHost) SetChatTarget(main bool) {
-	if main {
-		h.s.setBotCurrent(botTarget{Kind: targetMain})
-		return
-	}
-	h.s.setBotCurrent(botTarget{Kind: targetPersona})
-}
 
 func (h larkHost) WorkbenchAgents(ctx context.Context, now time.Time) (assistantwire.WorkbenchCounts, []assistantwire.WorkbenchAgent) {
 	c, busy := h.s.workbenchCount(ctx, now)
@@ -354,6 +324,9 @@ func workbenchItemOf(it InboxItem) assistantwire.WorkbenchItem {
 	w := assistantwire.WorkbenchItem{ID: it.ID, Source: it.Source, AccountName: it.AccountName, Title: it.Title,
 		Sender: it.Sender, Preview: it.Preview, Summary: it.Summary, Recap: it.Recap, Tier: it.Tier, Urgent: it.Urgent,
 		UpdatedAt: it.UpdatedAt, Done: it.DoneAt != nil, Mail: it.Mail != nil, Lark: it.Lark != nil, Connector: it.Connector != nil}
+	if g := currentSuggestion(&it); g != nil && g.Kind == SuggestReply {
+		w.ReplyVersion = g.Version
+	}
 	if c := it.Connector; c != nil {
 		w.ConnectorLabel, w.ConnectorCanReply, w.ConnectorReplyTo = c.Label, c.CanReply, c.ReplyTo
 	}
@@ -381,10 +354,6 @@ func (h larkHost) SessionNames(ctx context.Context, sess proto.Session) (string,
 	return feishuSessionNames(sess, h.s.useHerdrTabName(ctx))
 }
 
-func (h larkHost) AgentRowMarkdown(l i18n.Lang, label, secondary, machine string, sess proto.Session, last int) string {
-	return agentRowMarkdown(l, label, secondary, machine, sess, last)
-}
-
 func (h larkHost) NextMeeting(ctx context.Context, now time.Time) *assistantwire.WorkbenchMeeting {
 	cal := snapshotCalendar(h.s.connectorSnapshots(ctx), now)
 	if cal == nil || len(cal.Events) == 0 {
@@ -396,7 +365,7 @@ func (h larkHost) NextMeeting(ctx context.Context, now time.Time) *assistantwire
 func (h larkHost) Companions(ctx context.Context) []assistantwire.WorkbenchCompanion {
 	var out []assistantwire.WorkbenchCompanion
 	for _, b := range h.s.companionBots(ctx) {
-		out = append(out, assistantwire.WorkbenchCompanion{Name: b.Name, Link: b.link(), Inbox: b.Kind == CompanionInbox})
+		out = append(out, assistantwire.WorkbenchCompanion{Name: b.Name, Link: companionLink(b), Inbox: b.Kind == CompanionInbox})
 	}
 	return out
 }
@@ -417,18 +386,6 @@ func (h larkHost) SummonWorkbench(ctx context.Context)               { h.s.summo
 func (h larkHost) WorkbenchRefresh(ctx context.Context)              { h.s.workbenchRefresh(ctx) }
 func (h larkHost) WorkbenchBringCard(ctx context.Context, id string) { h.s.workbenchBringCard(ctx, id) }
 
-func (h larkHost) AgentsCard(ctx context.Context, query string) (*botcard.Card, string) {
-	return h.s.agentsCard(ctx, query)
-}
-
-func (h larkHost) StartAgentCard(ctx context.Context, prompt string) *botcard.Card {
-	return h.s.startAgentCard(ctx, prompt)
-}
-
-func (h larkHost) ConversationsCard(ctx context.Context) (*botcard.Card, string) {
-	return h.s.conversationsCard(ctx)
-}
-
 func (h larkHost) TasksOverview(ctx context.Context) ([]*botcard.Card, []string) {
 	var cards []*botcard.Card
 	var fallbacks []string
@@ -448,12 +405,31 @@ func (h larkHost) InboxMute(ctx context.Context, source, tag, value, name string
 	return err
 }
 
-func (h larkHost) DraftReply(ctx context.Context, id, instruction string) (string, error) {
-	return h.s.draftReply(ctx, id, instruction)
+func (h larkHost) DraftReply(ctx context.Context, id, instruction string, expectedVersion int, strictVersion bool) (assistantwire.WorkbenchItem, string, error) {
+	publishedVersion := 0
+	text, err := h.s.draftReplyVersionMode(ctx, id, instruction, expectedVersion, strictVersion, &publishedVersion)
+	if hook := h.s.inbox.workbenchDraftHook; hook != nil {
+		hook()
+	}
+	live, liveOK := h.s.workbenchItem(id)
+	if publishedVersion > 0 && err == nil {
+		// Render only the exact text/version pair created by this generation. A replacement installed before this
+		// reload must never lend its newer version to the older generated text.
+		g := currentSuggestion(&live)
+		if !liveOK || g == nil || g.Kind != SuggestReply || g.Version != publishedVersion || g.Text != text {
+			err = errSuggestionStale
+		}
+	}
+	cardItem := workbenchItemOf(live)
+	if liveOK && publishedVersion == 0 && err == nil {
+		// A transient result has no publication version and must not borrow a mirror installed while it generated.
+		cardItem.ReplyVersion = 0
+	}
+	return cardItem, text, err
 }
 
-func (h larkHost) ReplyInbox(ctx context.Context, id, text, clientID string) (bool, error) {
-	_, err := h.s.replyInboxFrom(ctx, id, text, clientID, true)
+func (h larkHost) ReplyInbox(ctx context.Context, id, text, clientID string, expectedVersion int) (bool, error) {
+	_, err := h.s.replyInboxFromVersion(ctx, id, text, clientID, true, expectedVersion)
 	if errors.Is(err, errInboxItemDone) {
 		return true, nil
 	}

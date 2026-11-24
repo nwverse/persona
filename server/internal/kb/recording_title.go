@@ -47,7 +47,7 @@ const (
 )
 
 // liveTitleDue: r, still recording and named by nobody, has enough new text for its next live title.
-func (r *Recording) liveTitleDue(now time.Time) bool {
+func liveTitleDue(r *Recording, now time.Time) bool {
 	switch {
 	case r.Complete, r.Trimmed(), r.Kind == RecordingDay:
 		return false
@@ -108,8 +108,8 @@ func (e *Engine) RenameRecording(rawID, title string, now time.Time) (*Recording
 	return r, nil
 }
 
-// named puts r's name in the answer, with where it came from; neither while it is named only by when it started.
-func (p *RecordingPut) named(r *Recording) {
+// putNamed puts r's name in the answer, with where it came from; neither while it is named only by when it started.
+func putNamed(p *RecordingPut, r *Recording) {
 	if p.NameSource = r.NameSource(); p.NameSource != "" {
 		p.Name = r.Name
 	}
@@ -158,7 +158,7 @@ func (e *Engine) TitleRecordings(ctx context.Context, max int) int {
 	now := e.now()
 	var todo []*Recording
 	for _, r := range e.Store.Recordings() {
-		if r.liveTitleDue(now) {
+		if liveTitleDue(r, now) {
 			todo = append(todo, r)
 		}
 	}
@@ -195,7 +195,7 @@ func (e *Engine) titleRecording(ctx context.Context, id string, now time.Time) (
 		return false, err
 	}
 	r.Conv = meeting
-	if !r.liveTitleDue(now) {
+	if !liveTitleDue(&r, now) {
 		return false, nil
 	}
 	var device []RecordingSegment

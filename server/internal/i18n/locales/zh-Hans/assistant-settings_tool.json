@@ -1,4 +1,5 @@
 {
+  "title_dashboards": "让 Persona 做仪表盘",
   "title_modules": "内置模块",
   "change_modules": "内置模块：{before} → {after}。下次 manager 启动时生效，当前进程不变。",
   "modules_unchanged": "内置模块开关没有变化。",

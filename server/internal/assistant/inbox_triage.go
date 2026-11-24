@@ -1,9 +1,11 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -380,11 +382,33 @@ func (b *inboxBook) promptItemIn(it *InboxItem, language string) prompts.InboxIt
 // draftModelWait is how long a draft may take (the app waits on it).
 const draftModelWait = 2 * time.Minute
 
+// onDemandDraftAuthorization binds a generated draft to the complete item state and policy under which generation began.
+// The exact generated-text snapshot is attached only after the final classifier accepts that text.
+type onDemandDraftAuthorization struct {
+	before      []byte
+	policyState []byte
+	applied     bool
+	textPolicy  *InboxReplyPolicySnapshot
+}
+
 // draftReply writes a reply to an inbox item in the user's voice (optionally following their instruction).
 func (s *Service) draftReply(ctx context.Context, id, instruction string) (string, error) {
+	return s.draftReplyVersionMode(ctx, id, instruction, 0, false, nil)
+}
+
+// draftReplyVersionMode binds a Workbench redraft to its rendered suggestion and returns the exact version published by
+// this generation. strictVersion distinguishes an old unversioned redraft from an ordinary new draft.
+func (s *Service) draftReplyVersionMode(ctx context.Context, id, instruction string, expectedVersion int, strictVersion bool, publishedVersion *int) (string, error) {
 	hello := s.hello(ctx)
 	language := answerLanguage(hello.Locale)
-	policy := compileReplyPolicy(s.inboxConfig(ctx).ReplyPolicy)
+	initialCfg, err := s.inboxConfigFresh(ctx)
+	if err != nil {
+		return "", errReplyPolicyBlocked
+	}
+	policyCfg := initialCfg.ReplyPolicy
+	policy := compileReplyPolicy(policyCfg)
+	authorization := onDemandDraftAuthorization{applied: false}
+	authorization.policyState, _ = json.Marshal(policyCfg)
 	b := &s.inbox
 	b.mu.Lock()
 	it, ok := b.items[id]
@@ -392,6 +416,20 @@ func (s *Service) draftReply(ctx context.Context, id, instruction string) (strin
 	var policyItem replyPolicyItemData
 	var existingSnap *InboxReplyPolicySnapshot
 	if ok {
+		if expectedVersion > 0 {
+			g := currentSuggestion(it)
+			if g == nil || g.Kind != SuggestReply || g.Version != expectedVersion {
+				b.mu.Unlock()
+				return "", errSuggestionStale
+			}
+		}
+		authorization.before = itemState(it)
+		authorization.applied = policy.appliesToItem(it)
+		if authorization.applied && strictVersion && expectedVersion <= 0 {
+			// An old Workbench redraft cannot prove which suggestion it rewrites; fail closed before generation.
+			b.mu.Unlock()
+			return "", errSuggestionStale
+		}
 		item = b.promptItemIn(it, language)
 		if policy.enabled {
 			policyItem = snapshotItemForReplyPolicyLocked(it)
@@ -424,23 +462,45 @@ func (s *Service) draftReply(ctx context.Context, id, instruction string) (strin
 		text = strings.TrimSpace(text)
 		hit := quotesAny(text, neverQuote)
 		if hit == "" {
-			if livePolicy := compileReplyPolicy(s.inboxConfig(ctx).ReplyPolicy); livePolicy.enabled {
+			if policy.enabled {
+				// A policy transition is already enough to reject this generation. Check it before spending another model
+				// call on text authorization under a policy that can no longer publish the result.
+				currentCfg, configErr := s.inboxConfigFresh(cctx)
+				if configErr != nil {
+					return "", errReplyPolicyBlocked
+				}
+				currentPolicy := compileReplyPolicy(currentCfg.ReplyPolicy)
 				b.mu.Lock()
 				live := b.items[id]
 				if live == nil {
 					b.mu.Unlock()
 					return "", errNoInboxItem
 				}
-				liveCV := replyPolicyContentVersion(live)
+				unchanged := live != nil && bytes.Equal(authorization.before, itemState(live))
+				currentApplies := live != nil && currentPolicy.appliesToItem(live)
+				liveCV := ""
+				if live != nil {
+					liveCV = replyPolicyContentVersion(live)
+				}
 				b.mu.Unlock()
-				if !policy.enabled || livePolicy.revision != policy.revision || liveCV != policyItem.contentVersion {
+				policyChanged := authorization.applied != currentApplies ||
+					authorization.applied && !reflect.DeepEqual(policyCfg, currentCfg.ReplyPolicy)
+				if unchanged && (authorization.applied || currentApplies) && policyChanged {
 					return "", errReplyPolicyBlocked
 				}
-				if _, err := s.gateReplyPolicySend(ctx, livePolicy, policyItem, text); err != nil {
-					return "", errReplyPolicyBlocked
+				if liveCV == policyItem.contentVersion {
+					classifierItem := policyItem
+					if instruction = strings.TrimSpace(instruction); instruction != "" {
+						classifierItem = replyPolicyItemWithInstruction(classifierItem, &InboxChainEntry{Detail: instruction})
+					}
+					snap, err := s.gateReplyPolicySend(ctx, policy, classifierItem, text)
+					if err != nil {
+						return "", errReplyPolicyBlocked
+					}
+					authorization.textPolicy = snap
 				}
 			}
-			return text, nil
+			return s.finishOnDemandDraft(cctx, id, text, authorization, publishedVersion)
 		}
 		if d.Rewrite {
 			s.logf("inbox: draft for %s withheld: the rewrite still repeats a sentence an extension marked never to quote", id)
@@ -451,10 +511,160 @@ func (s *Service) draftReply(ctx context.Context, id, instruction string) (strin
 	}
 }
 
+// finishOnDemandDraft keeps the legacy transient result only outside reply-policy scope. Inside scope, the exact text
+// becomes a normal reply suggestion and old-App mirror. Publication is deliberately pending in one durable row and
+// committed by a separate write, so a restart or failed write cannot make uncommitted model output confirmable.
+func (s *Service) finishOnDemandDraft(ctx context.Context, id, text string, authorization onDemandDraftAuthorization, publishedVersion *int) (string, error) {
+	initialCfg, err := s.inboxConfigFresh(ctx)
+	if err != nil {
+		return "", errReplyPolicyBlocked
+	}
+	cfg := initialCfg.ReplyPolicy
+	policy := compileReplyPolicy(cfg)
+	b := &s.inbox
+	b.mu.Lock()
+	it := b.items[id]
+	if it == nil {
+		b.mu.Unlock()
+		return "", errNoInboxItem
+	}
+	applies := policy.appliesToItem(it)
+	if !applies && !authorization.applied {
+		// A legacy transient draft took no authorization snapshot. Unrelated updates during generation must not turn the
+		// old, policy-disabled endpoint into a stale-suggestion failure.
+		b.mu.Unlock()
+		return text, nil
+	}
+	if !bytes.Equal(authorization.before, itemState(it)) {
+		b.mu.Unlock()
+		return "", errSuggestionStale
+	}
+	if authorization.applied && !applies {
+		b.mu.Unlock()
+		return "", errReplyPolicyBlocked
+	}
+	if !applies {
+		b.mu.Unlock()
+		return text, nil
+	}
+	if authorization.textPolicy == nil || policy.allowsOwnerDraft(authorization.textPolicy, replyPolicyContentVersion(it)) != nil {
+		b.mu.Unlock()
+		return "", errReplyPolicyBlocked
+	}
+	if !it.open() {
+		b.mu.Unlock()
+		return "", errInboxItemDone
+	}
+	if uncertainLegacyReplyAttempt(it, text, nil) != nil {
+		// The same physical reply already has an unresolved outcome. A new on-demand mirror must not create a fresh
+		// authorization that could send it again under another suggestion version or caller identity.
+		b.mu.Unlock()
+		return "", errSuggestionStale
+	}
+	policyState, _ := json.Marshal(cfg)
+	if authorization.applied && !bytes.Equal(authorization.policyState, policyState) {
+		b.mu.Unlock()
+		return "", errReplyPolicyBlocked
+	}
+	nextSeq := it.SuggestSeq
+	if legacySuggestion(it) != nil {
+		nextSeq = max(nextSeq, 1)
+	}
+	now := time.Now().UTC()
+	g := &InboxSuggestion{Version: nextSeq + 1, Kind: SuggestReply, Text: text, At: now,
+		SourceOf: suggestionReplyTarget(it), MailTarget: mailTarget(*it), OnDemand: true, ReplyPublicationPending: true,
+		ReplyPolicy: cloneReplyPolicySnapshot(authorization.textPolicy)}
+	if it.Agent != nil {
+		g.Owner = &SessionRef{MachineID: it.Agent.MachineID, SessionID: it.Agent.SessionID}
+	}
+	w := beginWrite(it)
+	if it.Agent == nil {
+		it.Agent = &InboxAgent{State: AgentSkipped}
+	}
+	it.SuggestSeq, it.Suggestion = g.Version, g
+	it.ReplyPolicy = cloneReplyPolicySnapshot(authorization.textPolicy)
+	it.Agent.Wake, it.Agent.Back = false, ""
+	b.setHandling(it, HandlingDone, "", now)
+	var link *InboxChainLink
+	if it.Agent.MachineID != "" || it.Agent.SessionID != "" {
+		link = &InboxChainLink{Type: LinkSession, MachineID: it.Agent.MachineID, SessionID: it.Agent.SessionID}
+	}
+	b.chainAdd(it, InboxChainEntry{Kind: ChainHandling, At: now, Text: i18n.T(b.userLang(), "assistant-inbox_chain.suggested_reply"), Detail: clip(text, 600), Link: link})
+	if mirroredLegacyReply(it) == nil {
+		b.restore(w)
+		b.mu.Unlock()
+		return "", errSuggestionStale
+	}
+	b.settle(w)
+	b.mu.Unlock()
+	failed := s.saveWrites(ctx, []*inboxWrite{w}, "its on-demand reply suggestion")
+	if hook := s.inbox.onDemandDraftSaveHook; hook != nil {
+		hook()
+	}
+	b.mu.Lock()
+	undone := w.undone
+	tombstone := false
+	if failed[id] && !undone && b.items[id] == it && currentSuggestion(it) == g {
+		// A concurrent mutation can make generic rollback unsafe even though this exact mirror was never saved. Retain a
+		// fail-closed tombstone rather than letting an old client treat the unpublished model text as owner-authored.
+		g.ReplyPublicationFailed = true
+		b.touched(it.ID)
+		tombstone = true
+	}
+	current := b.items[id] == it && mirroredLegacyReply(it) == g && bytes.Equal(itemState(it), w.applied)
+	b.mu.Unlock()
+	if tombstone {
+		// Persist the tombstone as its own change, without saveWrites rolling back the mirror it is meant to quarantine.
+		s.saveInbox(ctx, []*InboxItem{it})
+	}
+	if failed[id] || undone {
+		return "", errInboxNotPersisted
+	}
+	if !current {
+		return "", errSuggestionStale
+	}
+	if g.ReplyPublicationPending {
+		b.mu.Lock()
+		stillCurrent := b.items[id] == it && currentSuggestion(it) == g && mirroredLegacyReply(it) == g
+		var committedState []byte
+		if stillCurrent {
+			g.ReplyPublicationPending = false
+			b.touched(it.ID)
+			committedState = itemState(it)
+		}
+		b.mu.Unlock()
+		if !stillCurrent {
+			return "", errSuggestionStale
+		}
+		if commitFailed := s.saveInbox(ctx, []*InboxItem{it}); commitFailed[id] {
+			b.mu.Lock()
+			if currentSuggestion(it) == g {
+				g.ReplyPublicationPending = true
+				b.touched(it.ID)
+			}
+			b.mu.Unlock()
+			return "", errInboxNotPersisted
+		}
+		b.mu.Lock()
+		committed := b.items[id] == it && currentSuggestion(it) == g && mirroredLegacyReply(it) == g &&
+			!g.ReplyPublicationPending && bytes.Equal(itemState(it), committedState)
+		b.mu.Unlock()
+		if !committed {
+			return "", errSuggestionStale
+		}
+	}
+	if publishedVersion != nil {
+		*publishedVersion = g.Version
+	}
+	return text, nil
+}
+
 // inboxReply serializes the replies to one inbox item and remembers the last one that went out.
 type inboxReply struct {
 	mu       sync.Mutex
 	clientID string
+	// beforeLock is a test synchronization point before this reply waits for the per-item send mutex.
+	beforeLock func()
 	// keptOpen: the last reply went out but the item stayed open, for what came into it while the reply was out.
 	keptOpen bool
 	// unsaved: the last reply filed the item but its row could not be written; a repeat of it writes it again.
@@ -511,7 +721,13 @@ func replyInDoubt(err error) bool {
 // item filed since (errInboxItemDone). Checked with the copy for the reply, so an item filed after sendFromCard
 // looked is not answered and keeps its mark (#4871).
 func (s *Service) replyInboxFrom(ctx context.Context, id, text, clientID string, fromCard bool, changes ...DocChange) (InboxItem, error) {
-	return s.replyInboxDo(ctx, id, text, clientID, fromCard, true, changes...)
+	return s.replyInboxDoModeVersion(ctx, id, text, clientID, fromCard, true, false, 0, changes...)
+}
+
+// replyInboxFromVersion binds a Workbench send to the exact suggestion version rendered on its card. Zero denotes an
+// old unversioned or transient card and is accepted only where the policy route can prove that legacy behavior is safe.
+func (s *Service) replyInboxFromVersion(ctx context.Context, id, text, clientID string, fromCard bool, expectedVersion int, changes ...DocChange) (InboxItem, error) {
+	return s.replyInboxDoModeVersion(ctx, id, text, clientID, fromCard, true, false, expectedVersion, changes...)
 }
 
 // replyInboxDo is replyInboxFrom; file false keeps the item open (a confirmed suggestion's reply: the event waits for
@@ -523,6 +739,191 @@ func (s *Service) replyInboxDo(ctx context.Context, id, text, clientID string, f
 // replyInboxDoMode adds the direct /reply route's waiting mode without changing the shared send-once path used by
 // handed-off suggestions. followDirect is true only for POST /api/v1/inbox/{id}/reply.
 func (s *Service) replyInboxDoMode(ctx context.Context, id, text, clientID string, fromCard, file, followDirect bool, changes ...DocChange) (InboxItem, error) {
+	return s.replyInboxDoModeVersion(ctx, id, text, clientID, fromCard, file, followDirect, 0, changes...)
+}
+
+func (s *Service) replyInboxDoModeVersion(ctx context.Context, id, text, clientID string, fromCard, file, followDirect bool, expectedVersion int, changes ...DocChange) (InboxItem, error) {
+	if out, rerouted, err := s.routeLegacyReplyConfirmation(ctx, id, text, clientID, fromCard, followDirect, true, nil, nil, expectedVersion, changes); rerouted {
+		return out, err
+	}
+	return s.replyInboxDoModeDirect(ctx, id, text, clientID, fromCard, file, followDirect, expectedVersion, changes...)
+}
+
+// uncertainLegacyReplyAttempt finds the same unresolved physical action even after its mirror was rejected, replaced,
+// or left policy scope. A fresh caller UUID is not evidence that the previous external reply is known not to exist.
+// The caller holds inbox.mu.
+func uncertainLegacyReplyAttempt(it *InboxItem, text string, changes []DocChange) *InboxSuggestionAttempt {
+	if it == nil {
+		return nil
+	}
+	text = strings.TrimSpace(text)
+	target := suggestionReplyTarget(it)
+	for _, a := range it.SuggestionAttempts {
+		if a == nil || a.Status != suggestionUnknown && a.Status != suggestionSending || a.Target != target {
+			continue
+		}
+		actual := actualReply(a)
+		if actual == nil {
+			if a.Text == text && len(changes) == 0 {
+				return a
+			}
+			continue
+		}
+		if actual.Text == text && slices.Equal(actual.Changes, changes) {
+			return a
+		}
+	}
+	return nil
+}
+
+func completedLegacyReplyAttempt(it *InboxItem, text string, changes []DocChange) *InboxSuggestionAttempt {
+	if it == nil {
+		return nil
+	}
+	text = strings.TrimSpace(text)
+	target := suggestionReplyTarget(it)
+	for _, a := range it.SuggestionAttempts {
+		if a == nil || a.Status != suggestionSent || a.Target != target {
+			continue
+		}
+		actual := actualReply(a)
+		if actual == nil {
+			if a.Text == text && len(changes) == 0 {
+				return a
+			}
+			continue
+		}
+		if actual.Text == text && slices.Equal(actual.Changes, changes) {
+			return a
+		}
+	}
+	return nil
+}
+
+// routeLegacyReplyConfirmation recognizes a visible old-App AI mirror and a current suggestion whose durable attempt
+// survived a restart. It runs before collection or per-item send locks, so the nested suggestion send cannot self-deadlock
+// or lose its AI identity while waiting.
+func (s *Service) routeLegacyReplyConfirmation(ctx context.Context, id, text, clientID string, fromCard, followDirect, full bool, mailUID *uint32, mailVersion *string, expectedVersion int, changes []DocChange) (InboxItem, bool, error) {
+	if suggestionSendOnly(ctx) || !followDirect && !fromCard {
+		return InboxItem{}, false, nil
+	}
+	b := &s.inbox
+	b.mu.Lock()
+	it := b.items[id]
+	var g *InboxSuggestion
+	var sources []string
+	var uncertain *InboxSuggestionAttempt
+	var completed *InboxSuggestionAttempt
+	var durable *InboxSuggestionAttempt
+	var rejectedDrafts []string
+	var out InboxItem
+	if it != nil {
+		g = mirroredLegacyReply(it)
+		if g == nil {
+			candidate := currentSuggestion(it)
+			if candidate != nil && candidate.Kind == SuggestReply && !candidate.Handback && suggestionAttempt(it, candidate.Version) != nil {
+				g = candidate
+			}
+		}
+		sources = replyPolicySourceSet(it)
+		uncertain = uncertainLegacyReplyAttempt(it, text, changes)
+		if uncertain != nil {
+			out = it.listed()
+		}
+		completed = completedLegacyReplyAttempt(it, text, changes)
+		if completed != nil {
+			out = it.listed()
+		}
+		if g != nil {
+			durable = suggestionAttempt(it, g.Version)
+		}
+		if g == nil {
+			rejectedDrafts = append([]string(nil), it.RejectedReplyDrafts...)
+			if it.RejectedReplyDraft != "" {
+				rejectedDrafts = append(rejectedDrafts, it.RejectedReplyDraft)
+			}
+		}
+	}
+	if g != nil {
+		// Keep publication markers and version on one locked snapshot rather than reading a concurrently changing mirror.
+		snapshot := *g
+		g = &snapshot
+	}
+	b.mu.Unlock()
+	if uncertain != nil {
+		return out, true, unknownSuggestionReply()
+	}
+	if completed != nil {
+		if mailUID == nil && mailVersion == nil {
+			return out, true, nil
+		}
+		var target *inboxMailTarget
+		if actual := actualReply(completed); actual != nil {
+			target = actual.MailTarget
+		}
+		if target == nil || mailUID != nil && *mailUID != target.UID || mailVersion != nil && *mailVersion != target.Version {
+			return out, true, errMailReplyTargetChanged
+		}
+		return out, true, nil
+	}
+	workbench := fromCard && strings.HasPrefix(clientID, "feishu-workbench-")
+	if g == nil && !workbench && len(rejectedDrafts) == 0 {
+		return InboxItem{}, false, nil
+	}
+	if g != nil && (g.ReplyPublicationFailed || g.ReplyPublicationPending) {
+		// Never let an unpublished mirror fall through as owner-authored text, even after reply-policy scope changes.
+		out, err := s.actOnSuggestion(ctx, id, suggestionReq{Version: g.Version, Action: suggestConfirm, Text: &text, ClientID: clientID, Changes: &changes}, full)
+		return out, true, err
+	}
+	freshCfg, err := s.inboxConfigFresh(ctx)
+	if err != nil {
+		return InboxItem{}, true, &rpc.Error{Code: assistantwire.CodeInboxSendFailed, Message: "reply policy configuration unavailable"}
+	}
+	policy := compileReplyPolicy(freshCfg.ReplyPolicy)
+	if !policy.enabled {
+		return InboxItem{}, false, nil
+	}
+	applies := len(policy.sources) == 0
+	for _, source := range sources {
+		if policy.sources[source] {
+			applies = true
+			break
+		}
+	}
+	if !applies {
+		return InboxItem{}, false, nil
+	}
+	if g == nil && slices.Contains(rejectedDrafts, strings.TrimSpace(text)) {
+		return InboxItem{}, true, errReplyPolicyBlocked
+	}
+	if g != nil && (mailUID != nil || mailVersion != nil) {
+		target := g.MailTarget
+		if target == nil || mailUID != nil && *mailUID != target.UID || mailVersion != nil && *mailVersion != target.Version {
+			return InboxItem{}, true, errMailReplyTargetChanged
+		}
+	}
+	if workbench {
+		switch {
+		case g == nil:
+			return InboxItem{}, true, errSuggestionStale
+		case expectedVersion == 0:
+			// An unversioned retry may read back an uncertain or completed outcome above, but cannot retry a known-none
+			// failed attempt belonging to a versioned replacement card.
+			if durable == nil || durable.Text != text || durable.Status == suggestionFailed {
+				return InboxItem{}, true, errSuggestionStale
+			}
+		case g.Version != expectedVersion:
+			return InboxItem{}, true, errSuggestionStale
+		}
+	}
+	if g == nil {
+		return InboxItem{}, false, nil
+	}
+	out, err = s.actOnSuggestion(ctx, id, suggestionReq{Version: g.Version, Action: suggestConfirm, Text: &text, ClientID: clientID, Changes: &changes}, full)
+	return out, true, err
+}
+
+func (s *Service) replyInboxDoModeDirect(ctx context.Context, id, text, clientID string, fromCard, file, followDirect bool, expectedVersion int, changes ...DocChange) (InboxItem, error) {
 	b := &s.inbox
 	b.mu.Lock()
 	it, ok := b.items[id]
@@ -531,7 +932,14 @@ func (s *Service) replyInboxDoMode(ctx context.Context, id, text, clientID strin
 		return InboxItem{}, errInboxItemDone
 	}
 	var c InboxItem
+	legacyMirrorVersion := 0
+	legacyMirrorText := ""
 	if ok {
+		if !suggestionSendOnly(ctx) {
+			if g := mirroredLegacyReply(it); g != nil {
+				legacyMirrorVersion, legacyMirrorText = g.Version, g.Text
+			}
+		}
 		c = *it
 		if it.Lark != nil { // collection rewrites these fields while the reply is out
 			l := *it.Lark
@@ -559,23 +967,83 @@ func (s *Service) replyInboxDoMode(ctx context.Context, id, text, clientID strin
 	if !ok {
 		return InboxItem{}, errNoInboxItem
 	}
+	attempt, _ := ctx.Value(suggestionReplyOnly{}).(*InboxSuggestionAttempt)
+	workbenchSend := attempt == nil && fromCard && strings.HasPrefix(clientID, "feishu-workbench-")
+	var beforePolicy assistantwire.InboxReplyPolicyConfig
+	beforePolicyRead := false
+	if attempt != nil {
+		beforePolicy, beforePolicyRead = ctx.Value(suggestionReplyPolicyBeforeSend{}).(assistantwire.InboxReplyPolicyConfig)
+	} else if (followDirect || fromCard) && (legacyMirrorVersion != 0 || workbenchSend) {
+		// Preserve the authorization seen before the per-item wait; two post-wait reads could otherwise agree on an
+		// already-changed source list or route and authorize the queued physical action.
+		beforeCfg, err := s.inboxConfigFresh(ctx)
+		if err != nil {
+			return InboxItem{}, &rpc.Error{Code: assistantwire.CodeInboxSendFailed, Message: "reply policy configuration unavailable"}
+		}
+		beforePolicy, beforePolicyRead = beforeCfg.ReplyPolicy, true
+	}
 	// Phone and watch can both press send, and a timed-out request gets retried: one reply of an item at a time,
 	// held until the item is filed (the check for "already sent" relies on it).
 	r, _ := b.replies.LoadOrStore(id, &inboxReply{})
 	once := r.(*inboxReply)
+	if once.beforeLock != nil {
+		once.beforeLock()
+	}
 	once.mu.Lock()
 	defer once.mu.Unlock()
-	if attempt, _ := ctx.Value(suggestionReplyOnly{}).(*InboxSuggestionAttempt); attempt != nil {
-		livePolicy := compileReplyPolicy(s.inboxConfig(ctx).ReplyPolicy)
-		b.mu.Lock()
-		current := b.currentReplyAttempt(it, attempt)
-		policyErr := verifyReplyPolicySendAttemptLocked(it, attempt, livePolicy)
-		b.mu.Unlock()
-		if !current {
-			return InboxItem{}, errSuggestionStale
+	if attempt != nil || legacyMirrorVersion != 0 || workbenchSend {
+		// The per-item send mutex may have waited behind another device. Reauthorize immediately before the outward call;
+		// neither the five-second display cache nor a pre-wait snapshot is sufficient for an AI-generated physical reply.
+		freshCfg, err := s.inboxConfigFresh(ctx)
+		if err != nil {
+			return InboxItem{}, &rpc.Error{Code: assistantwire.CodeInboxSendFailed, Message: "reply policy configuration unavailable"}
 		}
-		if policyErr != nil {
-			return InboxItem{}, errReplyPolicyBlocked
+		b.mu.Lock()
+		live := b.items[id]
+		freshPolicy := compileReplyPolicy(freshCfg.ReplyPolicy)
+		freshApplies := live != nil && freshPolicy.appliesToItem(live)
+		configChanged := false
+		if beforePolicyRead && freshApplies {
+			before := compileReplyPolicy(beforePolicy)
+			configChanged = !before.appliesToItem(live) || !reflect.DeepEqual(beforePolicy, freshCfg.ReplyPolicy)
+		}
+		current := false
+		policyErr := error(nil)
+		var out InboxItem
+		if live != nil {
+			out = live.listed()
+		}
+		switch {
+		case attempt != nil:
+			current = live == it && b.currentReplyAttempt(it, attempt)
+			if current {
+				policyErr = verifyReplyPolicySendAttemptLocked(it, attempt, freshPolicy)
+			}
+		case live != nil:
+			g := mirroredLegacyReply(live)
+			if g != nil {
+				current = live == it && g.Version == legacyMirrorVersion && g.Text == legacyMirrorText &&
+					(!workbenchSend || expectedVersion == 0 || g.Version == expectedVersion)
+				if current {
+					policyErr = verifyReplyPolicySuggestionLocked(live, g, suggestionAttempt(live, g.Version), freshPolicy)
+				}
+			} else if workbenchSend && legacyMirrorVersion == 0 {
+				// Explicit zero is a transient legacy draft. It remains sendable only while policy stayed outside scope.
+				current = !freshApplies && (!beforePolicyRead || !compileReplyPolicy(beforePolicy).appliesToItem(live))
+			}
+		}
+		b.mu.Unlock()
+		if configChanged {
+			return out, &rpc.Error{Code: assistantwire.CodeInboxSendFailed, Message: "reply policy configuration changed"}
+		}
+		if !current || policyErr != nil {
+			if errors.Is(policyErr, errSuggestionStale) {
+				return out, errSuggestionStale
+			}
+			if policyErr != nil && current {
+				return out, errReplyPolicyBlocked
+			}
+			return out, errSuggestionStale
 		}
 	}
 	if fromCard {

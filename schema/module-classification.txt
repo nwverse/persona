@@ -177,6 +177,7 @@ go server/internal/netproxy core
 go server/internal/netshape core
 go server/internal/node core
 go server/internal/node/clipshare core
+go server/internal/node/diskmap core
 go server/internal/node/imessageport core
 go server/internal/node/iphoneport core
 go server/internal/node/machdiag core
@@ -205,6 +206,7 @@ go server/internal/proto core
 go server/internal/proxyproto core
 go server/internal/pushcrypto core
 go server/internal/quota core
+go server/internal/recordingwire core
 go server/internal/recordinghost core
 go server/internal/relay core
 go server/internal/relayproto core
@@ -272,8 +274,11 @@ apple apple/LiveActivity core
 apple apple/Modules core
 apple apple/Modules/Health health
 apple apple/Modules/ScreenShare screen-share
+apple apple/Modules/Voice voice
 apple apple/PersonaCallIntents voice
 apple apple/PersonaLink screen-share
+# The independent pairing/menu-bar UI belongs to the core, not the optional screen-sharing feature.
+apple apple/PersonaLink/App core
 apple apple/PersonaNotify core
 apple apple/PersonaShare core
 apple apple/PersonaTests core
@@ -306,7 +311,6 @@ apple apple/Persona/Voice voice
 apple apple/Persona/Views/Feishu lark
 apple apple/Persona/Views/Knowledge knowledge-ui
 apple apple/Persona/Views/Mail mail
-apple apple/Persona/Views/Voice voice
 
 apple apple/Packages/BeautifulUI appearance-styles
 apple apple/Packages/PersonaCore core

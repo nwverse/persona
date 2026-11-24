@@ -235,6 +235,7 @@ func (h *Hub) features() []string {
 	out = append(out, h.meetingTranscriptionFeatures()...)
 	out = append(out, h.recordingDayFeatures()...)
 	out = append(out, h.assistantSearchFeatures()...)
+	out = append(out, h.assistantPagesFeatures()...)
 	for _, f := range h.defaultManagerModuleFeatures() {
 		if !slices.Contains(out, f) {
 			out = append(out, f)
@@ -271,8 +272,8 @@ func (h *Hub) features() []string {
 		switch f {
 		case assistantwire.CapabilityHealthItems, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityAssistantSegments, featureAgentSessionArchives, featureAgentSessionArchiveClose, featureAgentAutoname, featureMeetingAttendance, featureMeetingConversation,
 			featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingNotes, featureMeetingEcho, featureMeetingTranscription, featureRecordingDay,
-			assistantwire.CapabilityTaskInput, featureAssistantSearch, featureDirectionSessions, featureAssistantStartServiceTier, featureSessionsSideFold, featureRemoteImages, featureTodoView, featureTodoRevision, featureTodoPlaces, featureTodoAsks, featureTodoTimeline:
-			continue // only manager hello can promise fleet archives, requested names, meetings, all-day recordings, chat search, direction sessions, start speed, the side-session fold, remote images, the To-dos view, its answers and its history
+			assistantwire.CapabilityTaskInput, featureAssistantSearch, featureAssistantPages, featureDirectionSessions, featureAssistantStartServiceTier, featureSessionsSideFold, featureRemoteImages, featureTodoView, featureTodoRevision, featureTodoPlaces, featureTodoAsks, featureTodoTimeline:
+			continue // only manager hello can promise fleet archives, requested names, meetings, all-day recordings, chat search, dashboards, direction sessions, start speed, the side-session fold, remote images, the To-dos view, its answers and its history
 		}
 		if !slices.Contains(out, f) {
 			out = append(out, f)
