@@ -334,7 +334,7 @@ export struct MarkdownText {
   @Builder inlineLeaf(value: string, bold: boolean, italic: boolean, code: boolean, url: string, size: number,
     gapBefore: boolean = false, gapAfter: boolean = false) {
     if (code && this.transcript) {
-      // No box or padding (DESIGN_SYSTEM 3.11): the monospaced face at 0.94 em has the body x-height, in its own ink,
+      // No box or padding (DESIGN_SYSTEM 3.11): the monospaced face a little smaller than the body, in its own ink,
       // with a thin space outside the code where it meets a CJK letter. A tap on it in a reply copies it.
       if (gapBefore) Span('\u2009').fontSize(size)
       Span(value).fontFamily('monospace').fontSize(Math.round(size * Tokens.inlineCodeScale))
