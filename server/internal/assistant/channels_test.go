@@ -1164,6 +1164,7 @@ func TestFeishuMessagesGoInInTheOrderTheyCame(t *testing.T) {
 // A message that comes while the previous run's answer waits for a progress update to let go of it is not folded
 // into that run: the answer goes out under the earlier message, and the later message's answer would carry it again.
 func TestFeishuRunBeingAnsweredIsNotFolded(t *testing.T) {
+	needsLarkLayer(t)
 	s, posts, _ := cotHub(t, true)
 	r, prog := cotRun(s)
 	r.MsgIDs = []string{"feishu-m1"}

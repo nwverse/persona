@@ -206,13 +206,16 @@ func (s *Service) handleRecoveredInbox(ctx context.Context, moves []inboxMove) {
 		if len(ready) == 0 {
 			return // An empty selection would make the helpers below operate globally.
 		}
-		cfg := s.inboxConfig(ctx).Agent
+		inboxCfg := s.inboxConfig(ctx)
+		cfg := inboxCfg.Agent
 		if !cfg.Enabled {
 			return
 		}
 		ctx, cancel := context.WithTimeout(ctx, inboxAgentStartWait)
 		defer cancel()
-		s.saveWrites(ctx, b.escalate(time.Time{}, time.Now(), ready...), "the recovered items' escalation")
+		policy := compileReplyPolicy(inboxCfg.ReplyPolicy)
+		s.gateReplyPolicyQueue(ctx, policy, time.Time{}, ready...)
+		s.saveWrites(ctx, b.escalateWithPolicy(time.Time{}, time.Now(), policy, ready...), "the recovered items' escalation")
 		if !b.handing.TryLock() {
 			return // an ordinary pass, or the next round, can start the selected queued work
 		}

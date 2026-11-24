@@ -172,6 +172,10 @@ function PurposeRow({ purpose: p, providers, sourceName, category, onOpen }: { p
           </div>
           {usage && <div data-testid="purpose-usage" className="mt-1 truncate" title={usageDetail}>
             {t("settings-modelconfiguration.usage", { count: usage.calls, calls: formatNumber(usage.calls), tokens: formatTokens(usageTokens(usage)) })}
+            {/* failed calls on the line itself, not only in its tooltip: a purpose whose every call fails otherwise reads as busy */}
+            {usage.failures > 0 && <span data-testid="purpose-usage-failures" className="text-red">
+              {" · "}{t("settings-modelconfiguration.usage_failures", { count: usage.failures, failures: formatNumber(usage.failures) })}
+            </span>}
           </div>}
         </>} />
       </div>

@@ -403,13 +403,13 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   card update (PATCH) gets no retry of its own on 230020 (`feishubot/api.go` leaves that wait to the caller, because the
   tick may be holding the run's progress lock): the answer was then posted as a card of its own while nothing wrote the
   progress card again — the run had ended — so it kept saying it was still working, and a quiet end wrote nothing at
-  all. `botUpdateAnswerCard` (`feishu_turn.go`) waits `answerCardWait` (5 seconds, the first progress backoff) and
+  all. `botUpdateAnswerCard` (`server/internal/modules/lark/turn.go`) waits `answer_card_wait` (5 seconds, the first progress backoff) and
   tries once more before the answer falls back to a card of its own; another refusal still falls back at once. Waiting
   synchronously is the whole fix here: the run is over, so no tick can write that card later.
 
 - **A quiet ending says nothing when the run has no card left, so a timeout must carry a note** (#3930). `channel.Run.Check`
   returned the 2-hour held timeout (`HeldMost`) with no note, and `checkChannelRun` turns an empty note into `Quiet`; the
-  Lark sink answers a quiet ending only by rewriting the card it still has (`feishu_turn.go`), and a held run has none —
+  Lark sink answers a quiet ending only by rewriting the card it still has (`server/internal/modules/lark/turn.go`), and a held run has none —
   `finishChannelRun` gives the card back with the message (`delete(r.Ext, "card")`) — so the owner's first answer stayed
   the last word and the chat never learned the wait was over. Both limits now end with `channel-turns.gave_up`, as the
   docs promise ("Timed out, see the app"); a run with no card gets that line as a card of its own. Plugin channels, which

@@ -16,7 +16,7 @@ import { onRuntimeChanges, runtimeAgents, runtimeIdentity, runtimeRemoval, runti
 import { isHeldLevel } from "./attention";
 import { sameValue } from "./stable-lines";
 import { SESSIONS_LIST_CHANGES_FEATURE, SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
-import { SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
+import { SESSIONS_CROSS_MACHINE_HIERARCHY_FEATURE, SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
 import { SESSIONS_SIDE_FOLD_FEATURE, setSideFold } from "./side-fold";
 import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSnapshot } from "./sessions-delta";
 import { dueMarks, heldRows, liveMarks, newMark, nextDue, seenCopy, settleMarks, unansweredMarks, unseen, type SeenMark, type SeenMarks } from "./seen-outbox";
@@ -1039,6 +1039,7 @@ function onMessage(msg: Record<string, unknown>) {
       back();
       const summaryMode = state.features.includes(SESSIONS_LOOKUP_FEATURE);
       const rootsMode = state.features.includes(SESSIONS_HIERARCHY_FEATURE);
+      const crossMachineMode = rootsMode && state.features.includes(SESSIONS_CROSS_MACHINE_HIERARCHY_FEATURE);
       const agentsMode = supportsPagedAgents(state.features);
       const { loaded: agentsLoaded, loading: agentsLoading, error: agentsError } = runtimeAgents.getSnapshot();
       const usedAgentsList = agentsLoaded || agentsLoading || agentsError !== null;
@@ -1046,9 +1047,11 @@ function onMessage(msg: Record<string, unknown>) {
       runtimeSessions.setSummary(summaryMode);
       // a hub that folds child sessions (#5120): the Agents list and its counts leave them out, each parent counted once
       runtimeSessions.setRoots(rootsMode);
+      runtimeSessions.setCrossMachineHierarchy(crossMachineMode);
       if (agentsMode) {
         runtimeAgents.setSummary(summaryMode);
         runtimeAgents.setRoots(rootsMode);
+        runtimeAgents.setCrossMachineHierarchy(crossMachineMode);
       } else if (usedAgentsList) {
         runtimeAgents.reset();
       }

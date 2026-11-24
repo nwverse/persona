@@ -164,6 +164,7 @@ func (s *Service) fleetInputsInto(kept map[string][]proto.Session) ([]fleetInput
 			return !slices.ContainsFunc(machines, func(m fleetMachine) bool { return m.ID == id })
 		})
 	}
+	s.pruneRemovedFoldMachines()
 	agents := make([]fleetInput, 0, n)
 	turns := s.turnsBook()
 	for i, m := range machines {

@@ -300,6 +300,7 @@ func TestBriefCardReplacesThatDaysAcceptanceReminders(t *testing.T) {
 
 // If the briefing has not gone out an hour after its time, the reminders go as they did before.
 func TestBriefReminderComesWhenTheBriefingDoesNot(t *testing.T) {
+	needsLarkLayer(t)
 	e := newBriefRunEnv(t, true)
 	e.s.remindAcceptance(e.at(9, 30)) // the briefing's hour is not over
 	if e.reminded() != 0 {
@@ -379,6 +380,7 @@ func TestBriefCardIsForTheRunsOwnTurnOnly(t *testing.T) {
 // The reminders wait an hour for the briefing only when its card can go out: not with the Lark bot's pushes off, not on a
 // day the routine does not run, and never past midnight.
 func TestBriefReminderGraceOnlyWhenTheCardCanGoOut(t *testing.T) {
+	needsLarkLayer(t)
 	setMorning := func(e *briefRunEnv, change func(t *Task)) {
 		sc := e.s.loadSchedule(context.Background())
 		sc.mu.Lock()

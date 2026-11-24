@@ -303,7 +303,11 @@ func ownSend(it *InboxItem, last string) bool {
 // escalate hands the manager its work, under b.mu: a newly triaged Needs you event (recent) gets a processing
 // conversation (queued); new content of an event that has one — being handled, or triaged Needs you again — is sent into
 // that conversation. It returns the items it moved, settled (inbox_rollback.go).
-func (b *inboxBook) escalate(since, now time.Time, only ...inboxMove) []*inboxWrite {
+func (b *inboxBook) escalate(since, now time.Time) []*inboxWrite {
+	return b.escalateWithPolicy(since, now, replyPolicySpec{})
+}
+
+func (b *inboxBook) escalateWithPolicy(since, now time.Time, policy replyPolicySpec, only ...inboxMove) []*inboxWrite {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var changed []*inboxWrite
@@ -322,6 +326,9 @@ func (b *inboxBook) escalate(since, now time.Time, only ...inboxMove) []*inboxWr
 		handled := it.handled()
 		twin := b.policyTwin(it) // the user's policy (inbox_policies.go): first takes what is not Needs you too
 		if !handled && (twin == TwinNever || it.Tier != TierAction && twin != TwinFirst || !it.tiered()) {
+			continue
+		}
+		if !replyPolicyAllowsQueueLocked(it, policy) {
 			continue
 		}
 		// A URL-only link has an Agent record but has never asked the twin to work. It follows the same age

@@ -854,3 +854,15 @@ func ownerCannotStats(events []db.WorkEvent) map[string]map[string]int {
 	}
 	return out
 }
+
+// decisionLine is a decision as a line quotes it: the question and what was chosen.
+func decisionLine(d db.TodoDecisionRow) string {
+	q, c := clip(oneLine(d.Question), 40), clip(oneLine(d.Choice), 60)
+	switch {
+	case q == "":
+		return c
+	case c == "":
+		return q
+	}
+	return q + " → " + c
+}

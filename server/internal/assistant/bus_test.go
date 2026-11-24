@@ -22,6 +22,7 @@ import (
 
 // The hub relays assistantwire.Routes (it does not run this package): they are exactly the ones the assistant serves.
 func TestRoutesAreTheWireOnes(t *testing.T) {
+	needsLarkLayer(t)
 	s := newTestService(t, newFakeHub())
 	got, want := s.Routes(), slices.Concat(assistantwire.Routes, assistantwire.InboxRoutes)
 	if !s.recordingOn() { // the recording module's routes are served only with it (recording.go)

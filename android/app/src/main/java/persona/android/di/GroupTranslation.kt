@@ -30,12 +30,23 @@ internal class GroupNames(val namespace: String?) {
     fun owns(machineId: String) = GroupKeys.namespaceOf(machineId) == namespace
 
     fun machine(value: Machine) = if (plain) value else value.copy(id = machineId(value.id), name = value.name.ifEmpty { value.id })
-    fun session(value: Session) = if (plain) value else value.copy(machineId = machineId(value.machineId))
+    fun session(value: Session) = if (plain) value else value.copy(
+        machineId = machineId(value.machineId),
+        parentMachineId = value.parentMachineId?.takeIf(String::isNotBlank)?.let(::machineId),
+        foldedUnderMachineId = value.foldedUnderMachineId?.takeIf(String::isNotBlank)?.let(::machineId),
+    )
     /** Interaction ids are the hub's own and two hubs can use the same one: other groups' carry the suffix too. */
     fun interactionId(raw: String) = GroupKeys.machine(raw, namespace)
-    fun interaction(value: Interaction) = if (plain) value else value.copy(id = interactionId(value.id), machineId = machineId(value.machineId))
-    fun rawInteraction(value: Interaction) = if (plain) value else
-        value.copy(id = GroupKeys.raw(value.id), machineId = rawMachine(value.machineId))
+    fun interaction(value: Interaction) = if (plain) value else value.copy(
+        id = interactionId(value.id),
+        machineId = machineId(value.machineId),
+        foldedUnderMachineId = value.foldedUnderMachineId?.takeIf(String::isNotBlank)?.let(::machineId),
+    )
+    fun rawInteraction(value: Interaction) = if (plain) value else value.copy(
+        id = GroupKeys.raw(value.id),
+        machineId = rawMachine(value.machineId),
+        foldedUnderMachineId = value.foldedUnderMachineId?.takeIf(String::isNotBlank)?.let(::rawMachine),
+    )
     fun fleet(value: FleetState) = if (plain) value else value.copy(items = value.items.map { item ->
         // The id is "machine/session": FleetSummary.key opens and answers by its machine part.
         item.copy(id = path(item.id), interaction = item.interaction?.let(::interactionId))
@@ -78,7 +89,11 @@ internal class GroupNames(val namespace: String?) {
     // Plain values for the group's own services. Ids of another group never reach them (the facades route by suffix).
     fun raw(key: SessionKey) = GroupKeys.rawKey(key)
     fun rawMachine(machineId: String) = GroupKeys.raw(machineId)
-    fun rawSession(value: Session) = if (plain) value else value.copy(machineId = GroupKeys.raw(value.machineId))
+    fun rawSession(value: Session) = if (plain) value else value.copy(
+        machineId = GroupKeys.raw(value.machineId),
+        parentMachineId = value.parentMachineId?.takeIf(String::isNotBlank)?.let(::rawMachine),
+        foldedUnderMachineId = value.foldedUnderMachineId?.takeIf(String::isNotBlank)?.let(::rawMachine),
+    )
     fun rawDraftKey(value: DraftKey) = if (plain || value !is DraftKey.Chat) value else DraftKey.Chat(raw(value.session))
     fun rawDraft(value: DraftSnapshot) = if (plain) value else value.copy(key = rawDraftKey(value.key))
     fun rawOperationPreferences(value: AgentOperationPreferences) = if (plain) value else
@@ -201,6 +216,19 @@ internal fun ChatActions.inGroup(names: GroupNames): ChatActions {
         override suspend fun catalogPrices(ids: List<String>) = source.catalogPrices(ids)
         override suspend fun fork(session: Session, atItemId: String) = source.fork(names.rawSession(session), atItemId)
         override suspend fun rewind(session: Session, target: RewindTarget, restore: RewindRestore) = source.rewind(names.rawSession(session), target, restore)
+        override suspend fun codexTakeoverInfo(session: Session) = source.codexTakeoverInfo(names.rawSession(session))
+        override suspend fun codexTakeover(session: Session, token: String, confirmStop: Boolean) =
+            names.session(source.codexTakeover(names.rawSession(session), token, confirmStop))
+        override suspend fun startCodexContinuation(session: Session, info: CodexTakeoverInfo, operationId: String) =
+            when (val r = source.startCodexContinuation(names.rawSession(session), info, operationId)) {
+                is AgentStartResult.Created -> AgentStartResult.Created(names.session(r.session))
+                else -> r
+            }
+        override suspend fun codexContinuationOperation(session: Session, operationId: String) =
+            when (val r = source.codexContinuationOperation(names.rawSession(session), operationId)) {
+                is AgentStartResult.Created -> AgentStartResult.Created(names.session(r.session))
+                else -> r
+            }
     }
 }
 
@@ -416,6 +444,19 @@ internal fun AgentOperations.inGroup(names: GroupNames): AgentOperations {
         override suspend fun interruptSession(key: SessionKey) = source.interruptSession(names.raw(key))
         override suspend fun deleteSession(key: SessionKey) = source.deleteSession(names.raw(key))
         override suspend fun forkSession(key: SessionKey) = source.forkSession(names.raw(key))
+        override suspend fun codexTakeoverInfo(key: SessionKey) = source.codexTakeoverInfo(names.raw(key))
+        override suspend fun codexTakeover(key: SessionKey, token: String, confirmStop: Boolean) =
+            names.session(source.codexTakeover(names.raw(key), token, confirmStop))
+        override suspend fun startCodexContinuation(key: SessionKey, info: CodexTakeoverInfo, operationId: String, todoId: String?) =
+            when (val r = source.startCodexContinuation(names.raw(key), info, operationId, todoId)) {
+                is AgentStartResult.Created -> AgentStartResult.Created(names.session(r.session))
+                else -> r
+            }
+        override suspend fun codexContinuationOperation(key: SessionKey, operationId: String) =
+            when (val r = source.codexContinuationOperation(names.raw(key), operationId)) {
+                is AgentStartResult.Created -> AgentStartResult.Created(names.session(r.session))
+                else -> r
+            }
     }
 }
 
