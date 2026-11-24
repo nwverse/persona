@@ -5,6 +5,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setClassicOverview } from "../lib/overview-layout";
 import type { Machine, Session } from "../lib/types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -77,3 +78,6 @@ describe("the overview's clocks", () => {
     expect(fake.renders).toBe(renders);
   });
 });
+
+// these tests read the classic layout's sections (#13019: off by default, Settings › General › Overview)
+beforeEach(() => setClassicOverview(true));

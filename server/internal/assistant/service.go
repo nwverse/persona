@@ -83,6 +83,8 @@ type Options struct {
 
 // Service is the assistant. It implements Handler.
 type Service struct {
+	// sortMem keeps the to-do sort's batches when the store has no table for them (todo_sort_batches.go).
+	sortMem memSortBatches
 	// modules are the feature modules loaded (modules.go); nil, none.
 	modules         *kernel.Kernel
 	modulesOff      []string // the ids the modules setting switched off at start (loadModules): built-in and client-only
@@ -287,6 +289,7 @@ type Service struct {
 	admission      admissionBook     // admission.go: execution-agent resource and direction gate
 	adoptMu        sync.Mutex        // agent_control.go: one agent_supervise at a time
 	placeBook      placeBook         // places.go
+	watchBook      watchBook         // watch.go
 	accept         acceptBook        // acceptance.go
 	pushQuiet      quietSwitch       // push_quiet.go: the hub's low-distraction switch as last read
 	attention      attentionClock    // attention.go: the attention mode as last read, and its end
@@ -457,6 +460,7 @@ func New(o Options) *Service {
 	s.startRoutes()
 	s.skillRoutes()
 	s.workoutRoutes()
+	s.watchRoutes()
 	s.intakeRoutes()
 	s.scheduleRoutes()
 	s.scheduleGrantRoutes()
@@ -470,6 +474,7 @@ func New(o Options) *Service {
 	s.todayRoutes()
 	s.briefRoutes()
 	s.todoRoutes()
+	s.todoSortRoutes() // todo_sort_batches.go
 	s.agentRoutes()
 	s.sessionReviewRoutes()
 	s.workspaceBoardRoutes()

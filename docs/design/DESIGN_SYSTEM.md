@@ -3111,6 +3111,57 @@ section that holds what needs the user (Needs you, Stuck) has no switch and says
 `--ink-3` (3.4: a session that needs the user is never hidden); a hidden one is the same hairline outline as a hidden
 card, "Hidden" under its name. The greeting and its summary are not part of it and stay first. No new token or component.
 
+## Watch cards (web, #13020)
+
+The owner's watch cards (`docs/assistant/watch-cards.md`) are Overview's first block, above its sections and the
+extensions' cards: a heading ("Watching", the card count and, in `--red`, the alert count) over an adaptive grid of
+cards at least 240 px wide (`WATCH_GRID`). One card component, `WatchCard` (`web/src/views/watch/WatchCard.tsx`), draws
+every place a card appears (the wall and a project node's `ProjectWatchCards`):
+
+- Surface `rounded-card bg-surface shadow-card`, padding 14 px; the name in `text-meta` semibold (one line, the question
+  as its tooltip), a ⋯ `IconButton` for its actions, a `bell` when it has an alert rule.
+- The answer by display kind: **number** in `text-2xl` tabular figures with its unit in `--ink-3`; **status light** as an
+  8–10 px dot in `--green` / `--orange` / `--red` with its word in `text-card-title`; **table** in `bg-inset` at
+  `text-label`, at most 5 rows and "N more rows"; **trend** the number with a 96 × 32 sparkline (`--accent`, `--red`
+  when it alerts). The reading's line under it in `text-meta` `--ink-2`, at most two lines.
+- A tripped alert: a 2 px `--red` ring at half strength and an **Alert** tag (`bg-red-tint`, `--red`); a bad status
+  without an alert colours the value only. A paused card is drawn at 70% opacity and says Paused in its meta line.
+- A draft: a dashed `--line-strong` outline on the canvas (no surface), "Draft from Persona · add it?" in `--accent-ink`,
+  its preview as a two-column list and the two choices (primary **Add to Overview**, secondary **Discard**).
+- The meta line in `text-submeta` `--ink-3`: the refresh rule in the Scheduled tasks page's words (`ruleText`), when it
+  was updated, and its project (left out inside that project's own panel).
+- Reordering reuses "Arranging cards in place": the `grip`, an HTML drag onto another card (2 px inset `--accent` ring on
+  the target) and, for keyboard and touch, **Move earlier / Move later** in the ⋯ menu. Delete confirms in the menu row
+  (4.4), Discard on a draft does not ask (nothing ran yet).
+
+With no cards the wall is one line in `--ink-3` saying how to get one. No new token.
+
+## Overview by project (web, #13019)
+
+By default Overview (under the greeting, and **Needs you** / **Stuck, take a look** when they have rows) is the watch
+wall, then **By project**, then **Temporary** and **Unsorted**, then the main chat's question summary; the activity
+sections in columns (Working, Unread, tasks, computers) are the **Classic layout**, off unless Settings › General ›
+Overview turns it on (`docs/web/web.md` "Overview by project"). New here:
+
+- **Project card** (`web/src/views/overview/ProjectOverview.tsx` `ProjectCard`): one per top-level project of the
+  tree, in an adaptive grid of cards at least 320 px wide (as `WATCH_GRID`, wider for the milestone lines). Surface
+  `rounded-card bg-surface shadow-card`, `hover:bg-hover`; the name in `text-card-title` semibold with the `layers`
+  icon and, at the right, the open to-dos pill (`bg-accent-tint` / `--accent-ink` when any, `bg-field` / `--ink-3`
+  at none); the project's one line in `text-label` `--ink-2`; the sub-projects line (`folder`, the count and the first
+  four names); one line per milestone with the map's flag colors (open `--accent-ink`, accepted `--green`, not
+  accepted `--orange`), its target date and its acceptance word; and, over a hairline at the card's bottom, the latest
+  of its own yesterday notes. Nothing on it is new data: it is the node panel's (the counts come from one function,
+  `lib/project-overview.ts`). The whole card opens the project tree with the project selected (the title link's
+  overlay spans it, as a task card's does on touch).
+- **Temporary / Unsorted blocks**: a heading with its count (as Overview's groups) and one surface listing up to five
+  to-do titles (each opens its to-do), "N more" to the To-dos page, and on Unsorted the **Sort these N…** link in
+  `--accent-ink` that opens the sort sheet. Side by side at 60rem and wider, stacked below.
+- **No projects**: the quiet card Overview already uses for "no computers" (icon in `bg-field`, title, one line, a
+  secondary **Open the project tree** button), with the two blocks still under it.
+
+The node panel on the map gains the same open to-dos count (a `SectionTitle` with its count and a line saying how many
+are on the project itself) and the project's watch cards (`ProjectWatchCards`) under its milestones. No new token.
+
 ## Arranging conversations in place (#12017)
 
 The Assistant's ordinary conversations use the same progressive-disclosure pattern in the sidebar's Recent and in All
@@ -4039,6 +4090,31 @@ sidebar) the outline sits beside a detail column for the selected node, the web 
 Text follows Dynamic Type (the rows are reading content) and every row reads as one VoiceOver element.
 Android (#7678) draws the same outline with the same rules (`KnowledgeMapScreen`): rows of the design system's tokens, a dot and rails
 in the branch's tone, a 48 dp fold target with Expanded / Collapsed read out, in all three styles, with no detail column.
+
+## Project tree on the knowledge map (#12927)
+
+The web map's third view, **Project tree**, draws projects under the parents the user gave them (lib/kb-tree.ts,
+`knowledge/ProjectTree.tsx`). It reuses the map's canvas, layout, zoom, ribbons and side panel; the other two views are
+unchanged. New here, each with why the existing pattern did not fit:
+
+- **Drag to re-parent** (mouse and pen, past 6 px; a shorter press is still a click): every other node says at once
+  whether it takes the project. Those that can't are dimmed to 30% with the reason beside them ("Already here",
+  "It's under this project"); the one under the pointer gets an accent ring; past three levels the hint is in
+  `--attention`, never a refusal. Dropping on the center moves it to the top level. Esc or letting go elsewhere
+  cancels. The move shows at once and is saved after; a refusal puts it back with the hub's reason (principle 7).
+  Reordering lists elsewhere has no "drop onto" target, hence this pattern.
+- **Node menu** (right click, Shift+F10 or the menu key, a held finger on touch, the panel's ⋯): the design system's
+  `Menu` with **Move to…** (a submenu: the top level, then every project indented as it sits, the ones it can't take
+  disabled with the reason as their detail), **Rename** (the menu's rename row) and **Add a milestone**. It is the
+  keyboard, screen-reader and touch way to move, so drag is never the only way.
+- **Undo** follows section 4.4: a toast "Moved … under …" with Undo for every move and milestone change.
+- **Milestone flag**: a pill on the node in the flag's state color (open accent, accepted green, not accepted orange)
+  with the next open target date (or how they ended).
+- **By hierarchy | By tag**: the map header's segmented control (on a phone over the map's corner, where the header has
+  no room). By tag draws a project under each of its tags with where it sits in the tree under its name; no drag there.
+- **The panel is the project's home**: where it sits, sub-projects (Move out), milestones (edit in place: title,
+  target date, acceptance), its own yesterday notes (never its parent's), and a **Report** tab that says reports come
+  later. On a phone it rises as a sheet over the map.
 
 ## Repository link preview
 

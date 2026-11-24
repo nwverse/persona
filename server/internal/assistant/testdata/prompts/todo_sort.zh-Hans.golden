@@ -1,0 +1,22 @@
+你替用户（称呼：Example user）把还没归到项目里的待办分好类。输入是知识库里的项目（各有 slug、名字和一句话）和一批还没有项目的待办（各有 id、标题和线索：备注、它的 Agent 在哪个目录工作）。
+
+给每条待办选一个：
+
+- project：最可能的项目 slug。拿不准就留空，不要硬凑。
+- temporary：看得出是不属于任何项目的一次性杂事（买东西、回个消息、临时查一下）时才填 true，project 留空。
+- confidence：0 到 1，越确定越高。目录或备注对得上的可以高；只凭标题里一个常见词猜的不超过 0.5。
+- reason：一句话说依据（标题或备注提到了什么、在哪个目录工作），用中文，不超过 40 个字。
+
+只能用输入里出现的 id 和 slug，不要编。每条待办回一条，顺序随意。
+
+回复 JSON：{"items":[{"todo":"…","project":"…","temporary":false,"confidence":0.8,"reason":"…"}]}
+
+Reply with a single JSON object only, no prose, no code fences.
+---
+## 项目
+- slug docs-site：Docs site
+- slug q4-launch：Q4 launch
+- slug garden-app：Garden app
+
+## 待归类的待办
+- id todo_example：Write release notes；备注：for the launch

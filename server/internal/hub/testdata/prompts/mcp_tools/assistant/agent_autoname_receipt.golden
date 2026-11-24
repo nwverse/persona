@@ -1,6 +1,6 @@
 {
   "name": "agent_autoname_receipt",
-  "description": "Read-only: inspect the current assistant's existing agent_autoname confirmation cards and one coding agent's current naming snapshot. This does not prove that a particular earlier model call started, completed or succeeded: the model's tool-call id is not a manager-side correlation. The naming snapshot may predate the call or come from another caller, and background naming failures are not attributed to it. Do not retry a request from this result; unknown or ambiguous means the evidence cannot settle the outcome. Use only the exact machine and full session id from agents_list. The caller is verified from the actual assistant conversation; no other assistant's cards can be read. Optional since/before are an RFC3339 window of at most 24 hours, and must be supplied together. Confirmation history is read with bounded pages; incomplete pages are reported. This tool never calls the naming model, writes settings, approves or resolves a card, renames an agent, or publishes a session list. Not for Persona conversations, ordinary coding Agents, or extensions.",
+  "description": "Read-only: this assistant's agent_autoname confirmation cards and one coding agent's current naming snapshot. It cannot prove an earlier call started or succeeded (no correlation with the tool-call id; the snapshot may be older or another caller's; background failures are not attributed), so never retry from it: unknown means unsettled. Use the exact machine and full session id from agents_list; only the calling assistant's cards are read. since/before: an RFC3339 window of at most 24 hours, given together; pages are bounded and incomplete ones reported. It never calls the naming model, writes settings, resolves a card or renames. Not for Persona conversations, ordinary coding Agents or extensions.",
   "input_schema": {
     "type": "object",
     "additionalProperties": false,
@@ -20,12 +20,12 @@
       "since": {
         "type": "string",
         "format": "date-time",
-        "description": "inclusive RFC3339 start of the original confirmation window; requires before"
+        "description": "inclusive window start; requires before"
       },
       "before": {
         "type": "string",
         "format": "date-time",
-        "description": "exclusive RFC3339 end of the original confirmation window [since,before); at most 24 hours after since"
+        "description": "exclusive window end, at most 24 hours after since"
       }
     }
   }

@@ -58,6 +58,7 @@ DOMAINS = [
     "side_unread_mock",  # side sessions with unseen replies for the sidebar's Unread row (#13496), MOCK_SIDE_UNREAD
     "github_mock",  # GitHub's sign-ins and MOCK_GITHUB_INBOX's thread page (/api/v1/connectors/github/…)
     "kb_selection_mock",  # Settings › Knowledge selection (/api/v1/kb/selection), MOCK_KB_SELECTION
+    "project_tree_mock",  # the knowledge base's projects as a tree with milestones (#12927), MOCK_KB_TREE
     "project_lessons_mock",  # a project's lessons from finished tasks (/api/v1/kb/projects/{id}/lessons…), MOCK_PROJECT_LESSONS
     "mail_mock",  # mail accounts and write paths (/api/v1/mail/…, GET /mock/mail), MOCK_MAIL, MOCK_GOOGLE, MOCK_OUTLOOK
     "hub_update_mock",  # the hub's own update (/api/v1/hub/update…, GET /mock/hub_update), MOCK_HUB_UPDATE
@@ -67,12 +68,15 @@ DOMAINS = [
     "starred_mock",  # Starred messages (/api/v1/assistant/starred…), MOCK_STARRED
     "page_counts_mock",  # A paged session read with its counts, MOCK_PAGE_COUNTS
     "task_skip_mock",  # One scheduled occurrence, MOCK_SKIP_OCCURRENCE
+    "watch_cards_mock",  # Overview's watch cards (/api/v1/assistant/watches…), MOCK_WATCH_CARDS
     "outside_directions_mock",  # conversationless reporting directions (#8236), MOCK_OUTSIDE_DIRECTIONS
     "direction_sessions_mock",  # Move To… and one direction's page (#11516), MOCK_DIRECTION_SESSIONS
     "dock_mock",  # more of the main conversation's tasks waiting in the To Decide pager (#12831), MOCK_DOCK
     "meeting_finishing_mock",  # a meeting's final pass in progress for shots of the minutes line (#13461), MOCK_MEETING_FINISHING
     "extension_scene_mock",  # UI version 11's scene on a made-up Home page (#12544), MOCK_EXTENSION_SCENE
     "spaces_mock",  # domain spaces: tracks, kinds, SPACE.md, categories, extension trust (#13500), MOCK_SPACES
+    "todo_sort_mock",  # sorting to-dos into projects (/api/v1/todo-sort/…), MOCK_TODO_SORT
+    "overview_projects_mock",  # Overview by project (#13019): MOCK_KB_TREE with MOCK_TODO_SORT, no switch of its own
     "question_rail_mock",  # the main chat's question rail states and read marks (#13021), MOCK_QUESTION_RAIL
     "hub_modules_mock",  # a hub that publishes module flags: `modules` and `module.<id>` (#13849), MOCK_HUB_MODULES
 ]
