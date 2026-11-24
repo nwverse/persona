@@ -67,12 +67,18 @@ export interface Channel {
   read_only?: boolean;
 }
 
+export interface ChannelTargetOverride {
+  mode: "topics" | "threads" | (string & {});
+}
+
 /** GET /api/v1/channels/{id} (channel.Detail). */
 export interface ChannelDetail extends Channel {
   waiting: { answers: number; asks: number };
   conversations?: { machine_id: string; session_id: string; title?: string; at: string }[];
   /** The channel's own full page in the app ("settings/connectors/feishu-bot", "settings/plugins/<id>"). */
   settings_url?: string;
+  /** Set when topic or thread routing currently takes precedence over the channel's default target. */
+  target_override?: ChannelTargetOverride;
 }
 
 /** A bind step (connector.Prompt); a channel adds pair_code, a code to send to the bot, to the kinds a connector has. */

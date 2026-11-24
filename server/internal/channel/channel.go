@@ -206,6 +206,20 @@ type View struct {
 	ReadOnly bool `json:"read_only,omitempty"`
 }
 
+// TargetOverride modes describe why incoming messages bypass the channel's default target.
+const (
+	// TargetOverrideTopics: group topic routing sends each topic to its own conversation.
+	TargetOverrideTopics = "topics"
+	// TargetOverrideThreads: per-thread routing sends each thread to its own conversation.
+	TargetOverrideThreads = "threads"
+)
+
+// TargetOverride explains that threaded or topic messages currently route to dedicated conversations ahead of the
+// channel's default target, so the default target only applies to messages outside those threads or topics.
+type TargetOverride struct {
+	Mode string `json:"mode"`
+}
+
 // Detail is one channel's page (GET /api/v1/channels/{id}).
 type Detail struct {
 	View
@@ -214,6 +228,9 @@ type Detail struct {
 	// SettingsURL: the channel has a full page of its own (the Feishu bot's), linked from this one — an app route
 	// ("settings/connectors/feishu-bot"), not a web address.
 	SettingsURL string `json:"settings_url,omitempty"`
+	// TargetOverride: set when topic or thread routing currently takes precedence over the channel's default target;
+	// omitted when inactive so older clients and channels without overrides are unaffected.
+	TargetOverride *TargetOverride `json:"target_override,omitempty"`
 }
 
 // Waiting is how many answers and questions a channel waits on.
