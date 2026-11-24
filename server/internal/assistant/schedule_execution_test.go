@@ -285,7 +285,12 @@ func TestTaskExecutionLegacyEditMergesConcurrentRun(t *testing.T) {
 }
 
 func (h taskDirectoryWaitHub) DeviceCall(ctx context.Context, call DeviceCall) (json.RawMessage, error) {
-	if call.Method == assistantwire.DeviceAssistantDirectory {
+	// Only the slow save's check of its own directory waits: a run of a task in the default directory resolves that
+	// directory too (resolvedTaskCwd, #15004), and goes through.
+	var p struct {
+		Path string `json:"path"`
+	}
+	if call.Method == assistantwire.DeviceAssistantDirectory && json.Unmarshal(call.Params, &p) == nil && p.Path == "/work/project" {
 		close(h.entered)
 		select {
 		case <-h.release:

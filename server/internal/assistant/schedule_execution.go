@@ -13,9 +13,14 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
+
+// resolvedTaskCwdWait bounds resolvedTaskCwd's one call: the node that just prepared the directory answers it at once,
+// and a node that does not leaves the run its prepared path.
+const resolvedTaskCwdWait = 10 * time.Second
 
 func writeTaskExecutionError(w http.ResponseWriter, err error) {
 	status := http.StatusBadRequest
@@ -104,12 +109,18 @@ func (s *Service) taskSourceCwd(ctx context.Context, t Task) (string, bool) {
 // node resolves it (assistant.directory): the form preview and save gave the task's selections
 // (taskInputDefaultDirectory). A skill's id includes the cwd and a file selection names it, so a symlink in the node's
 // home or data directory path must not give the run another form of the same directory (#15004). When the node does
-// not resolve it (an error, no answer, an older node), the run keeps the prepared path, as before.
+// not resolve it (an error, no answer, an older node), the run keeps the prepared path, as before: the call never waits
+// for a node update as the run's own task-execution calls do (callDevice), and is bounded by resolvedTaskCwdWait.
 func (s *Service) resolvedTaskCwd(ctx context.Context, machine, cwd string) string {
+	if cwd == "" {
+		return cwd
+	}
+	ctx, cancel := context.WithTimeout(devicewire.WithoutTaskExecutionWait(ctx), resolvedTaskCwdWait)
+	defer cancel()
 	var result struct {
 		Cwd string `json:"cwd"`
 	}
-	if cwd == "" || s.call(ctx, machine, assistantwire.DeviceAssistantDirectory, map[string]any{"path": cwd}, &result) != nil || result.Cwd == "" {
+	if s.call(ctx, machine, assistantwire.DeviceAssistantDirectory, map[string]any{"path": cwd}, &result) != nil || result.Cwd == "" {
 		return cwd
 	}
 	return result.Cwd
