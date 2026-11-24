@@ -90,8 +90,10 @@ func pagesTestService(t *testing.T, also ...func(string, ...any)) (*Service, *pa
 	st := repositorystore.New(database)
 	logf := testLogf(t)
 	if len(also) > 0 {
+		// one guarded logger for the whole test: a background job that logs after it ended must not reach t
+		base := logf
 		logf = func(format string, args ...any) {
-			testLogf(t)(format, args...)
+			base(format, args...)
 			also[0](format, args...)
 		}
 	}
@@ -380,20 +382,15 @@ func TestPagesOwnerActions(t *testing.T) {
 // waitTap waits until tap id is in a state ok accepts.
 func waitTap(t *testing.T, database *db.DB, id string, ok func(*db.AssistantPageActionRow) bool) *db.AssistantPageActionRow {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		a, err := database.AssistantPageAction(context.Background(), id)
-		if err != nil {
+	var a *db.AssistantPageActionRow
+	waitFor(t, "tap "+id, func() bool {
+		var err error
+		if a, err = database.AssistantPageAction(context.Background(), id); err != nil {
 			t.Fatal(err)
 		}
-		if a != nil && ok(a) {
-			return a
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("tap %s: %+v", id, a)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return a != nil && ok(a)
+	})
+	return a
 }
 
 func lastTap(t *testing.T, database *db.DB, page string) db.AssistantPageActionRow {
@@ -482,20 +479,12 @@ func TestPageTapDelivery(t *testing.T) {
 	// its conversation's turn starts and ends
 	waitPending := func(ui string) {
 		t.Helper()
-		deadline := time.Now().Add(5 * time.Second)
-		for {
+		waitFor(t, "an invalidation of "+ui, func() bool {
 			s.pages.events.mu.Lock()
+			defer s.pages.events.mu.Unlock()
 			_, waiting := s.pages.events.queue.pending[ui]
-			told := s.pages.events.queue.last[ui]
-			s.pages.events.mu.Unlock()
-			if waiting || !told.IsZero() {
-				return
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("no invalidation of %s", ui)
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
+			return waiting || !s.pages.events.queue.last[ui].IsZero()
+		})
 	}
 	waitPending(run.ID)
 	s.pageTurnStarted("server", "conv-1", time.Now())
