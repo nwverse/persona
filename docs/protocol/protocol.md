@@ -2675,8 +2675,11 @@ Without the Health module the routes are absent and hello omits `health_items`.
 
 The Health module owns `health_strength` (#14713). The tool matches and manages exercises, logs or undoes confirmed
 sets, reads history, creates drafts and shows an existing draft in the caller's Health conversation. Execution requires
-a known Health caller; discovery still includes the tools in the common list until the first-session discovery work
-in #14855 lands. Creating, updating or logging requires the added `strength` item; existing pages and stored data remain
+a known Health caller. Both `health_intake` and `health_strength` are listed only in Health conversations by node
+`mcp.tools` and targeted hub `ToolsFor`. Before the first session snapshot, discovery uses the node's attested
+`caller_cwd` (#14855). Without directory evidence, including older nodes, Windows and runtime-hosted sessions, the
+next discovery heartbeat adds the tools within 30 seconds after the snapshot arrives; its cursor includes the
+effective space. Creating, updating or logging requires the added `strength` item; existing pages and stored data remain
 available after the item is removed. See docs/assistant/health.md "Strength training" for storage and workout linking.
 
 `-health-intake` is the Health module's reserved page id for water, protein **and strength training**. All use

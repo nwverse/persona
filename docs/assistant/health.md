@@ -196,7 +196,7 @@ The `conversation*` tools in a chat only see chats in the same space (`server/in
 - Calls not made from a chat (no caller session id) count as the assistant's own space.
 
 - `kb_update` from a health chat fails outright: health information does not go into the knowledge base (`assistant/tools.go` `runTool`). Knowledge base reads (`kb_search` etc.) work as usual.
-- `health_intake` logs, lists and deletes only in a known Health conversation. `runTool` checks `agentCallerSpace` using the caller's machine and session, including Health subdirectories; main-space and unknown callers are refused before storage access. Health chats on another computer work too. The tool appears in both spaces' discovery lists, but discovery grants no access.
+- `health_intake` logs, lists and deletes only in a known Health conversation. `runTool` checks `agentCallerSpace` using the caller's machine and session, including Health subdirectories; main-space and unknown callers are refused before storage access. Health chats on another computer work too. `health_intake` and `health_strength` are listed only in Health conversations by both node `mcp.tools` and targeted hub `ToolsFor`, while the Health module is available. Discovery grants no access by itself. The first list before a session snapshot requires the node's attested `caller_cwd` (#14855); without directory evidence (older nodes, Windows or runtime-hosted sessions), the next discovery heartbeat, within 30 seconds after the snapshot arrives, adds the tools. The cursor includes the effective space, so an earlier list without Health tools cannot stay cached.
 - Scheduled follow-ups and scheduled tasks created in a health chat (`schedule_followup`, `schedule_routine`) record their space (`Task.space`); when one fires and needs a new chat, it opens in the Health space.
   The space owns the task's working directory: a nonempty task `cwd` is rejected when saving and before dispatch,
   including an older stored override. Clear it to restore the canonical Health directory. Launcher, model, effort
@@ -253,8 +253,8 @@ Who this serves: people keeping gym sets, including people who recognize a machi
 Adding **Strength training** enables writing through `health_strength`; it adds no setup to other Health items.
 The model matches exercise names and aliases before creating an exercise, asks once how a new machine's weight is
 counted, and never invents weights or reps. A machine photo is conversation input, not an exercise photo archive.
-The tool requires a known Health caller. Its common discovery listing is retained pending #14855; execution is
-already isolated to Health.
+Both Health tools are listed only in known Health conversations, including a new conversation's first list when
+the node supplies attested directory evidence (#14855). Execution independently enforces the same caller boundary.
 
 The manager stores four tables in Postgres:
 
