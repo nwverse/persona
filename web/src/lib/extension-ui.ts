@@ -1,4 +1,5 @@
 import { canonicalAppURL } from "./compatibility";
+import { parse as parseRoute, type Route } from "./router";
 // An extension's declarative UI (docs/extensions/extensions.md "Declarative UI"): the extension sends a View (a few fixed kinds of items), the
 // web draws it with its own design system, and buttons go back to the extension. No extension code runs here, no extension
 // colors, sizes or icons: a tone becomes one of the theme's role colors. The checks match server/internal/extension/ui.go
@@ -559,8 +560,9 @@ export function outcome(
   r: UIActionResult,
   item?: string,
   extension?: string,
-): { view?: UIView; items?: UIItem[]; reload: boolean; toast?: string; url?: string; source?: true; settings?: string; ask?: string; push?: UIPush; pop?: true } {
+): { view?: UIView; items?: UIItem[]; reload: boolean; toast?: string; url?: string; source?: true; settings?: string; ask?: string; track?: Route; push?: UIPush; pop?: true } {
   const url = r.open_url && isHttps(r.open_url) ? r.open_url : undefined;
+  const track = r.open_url ? extensionTrackRoute(r.open_url) : undefined;
   const source = !!item && !!r.open_url && inboxSourceItem(r.open_url) === item;
   const settings = r.open_url ? extensionSettingsHref(r.open_url) : undefined;
   const ask = extension === SUBSCRIPTIONS_UI && r.open_url ? askText(r.open_url) : undefined;
@@ -576,9 +578,21 @@ export function outcome(
     ...(source ? { source: true as const } : {}),
     ...(settings ? { settings } : {}),
     ...(ask ? { ask } : {}),
+    ...(track ? { track } : {}),
     ...(push ? { push } : {}),
     ...(pop ? { pop: true as const } : {}),
   };
+}
+
+/** A space conversation handed back to the app. Only this narrow, read-only
+ * navigation contract is accepted; an extension cannot choose another route. */
+export function extensionTrackRoute(link: string): Route | undefined {
+  const match = /^persona:\/\/tracks\/([^/?#]+)\/([^/?#]+)\/([^/?#]+)$/.exec(canonicalAppURL(link));
+  if (!match) return undefined;
+  const parts = match.slice(1);
+  if (parts[1] === "health") return undefined;
+  const route = parseRoute(`persona/${encodeURIComponent(parts[2])}`, `?machine=${encodeURIComponent(parts[0])}`);
+  return route.name === "persona" && route.sid && route.mid ? route : undefined;
 }
 
 /** The text of a persona://ask?text=… link (an older name's scheme too, as other in-app links); undefined for any other

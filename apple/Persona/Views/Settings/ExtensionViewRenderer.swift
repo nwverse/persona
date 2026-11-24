@@ -713,7 +713,12 @@ struct ExtensionPageView: View {
                 if let error = outcome.error { app.toast = Toast(error, style: .error) }
                 else if let toast = outcome.toast { app.toast = Toast(toast) }
                 if let url = outcome.url, !app.openIfExtensionSettings(url, from: outcome.settingsOwner), !app.openIfAsk(url), !app.openIfSourcesGraph(url) {
-                    link = LinkTarget(url: url)
+                    if let key = ExtensionConversationLink.session(url) {
+                        app.extensionOpen = nil
+                        app.openAssistantConversation(key)
+                    } else {
+                        link = LinkTarget(url: url)
+                    }
                 }
             } else { await page.load() }
         }

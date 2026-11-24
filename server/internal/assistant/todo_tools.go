@@ -386,17 +386,17 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 
 func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args json.RawMessage) (string, error) {
 	var a struct {
-		ID       string          `json:"id"`
-		Title    json.RawMessage `json:"title"`
-		Notes    json.RawMessage `json:"notes"`
-		Due      json.RawMessage `json:"due"`
-		Remind   json.RawMessage `json:"remind"`
-		Priority json.RawMessage `json:"priority"`
+		ID          string          `json:"id"`
+		Title       json.RawMessage `json:"title"`
+		Notes       json.RawMessage `json:"notes"`
+		Due         json.RawMessage `json:"due"`
+		Remind      json.RawMessage `json:"remind"`
+		Priority    json.RawMessage `json:"priority"`
 		Project     json.RawMessage `json:"project"`
 		Audience    json.RawMessage `json:"audience"`
 		DirectionID json.RawMessage `json:"direction_id"`
 		PartOf      json.RawMessage `json:"part_of"`
-		After    json.RawMessage `json:"after"`
+		After       json.RawMessage `json:"after"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %w", err)

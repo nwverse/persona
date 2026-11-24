@@ -1604,20 +1604,21 @@ explicit user-facing actions still follow the usual visibility rules.
   unavailable, unless it settled with silent visibility. The full reply uses the ordinary reply bubble so its
   formatting and links remain available. Its work keeps the usual collapsed summary. Intermediate narration,
   generated quiet-heartbeat acknowledgements and empty turns stay folded. A successful silent finish keeps its round
-  folded unless an explicit user-visible action promoted it. One exception is a routine `conversation_send` report to
-  the main conversation: with folding on, its input and nonblank reply both stay inside the expandable background
-  record, and a normal finished reply sends no push. A P0, a specifically requested result or a decision can still be
-  promoted through the explicit actions above, which keep their existing display and push paths. Final replies in
-  leader conversations and scheduled rounds stay visible as before. Relay delivery, processing and hop/answer
-  behavior are unchanged.
+  folded unless an explicit user-visible action promoted it. The owner can also enable **Fold routine relay replies**
+  in Assistant settings. With both folding switches on, a routine `conversation_send` reply in the main chat stays
+  inside its expandable round and skips the ordinary finished notification. A direct answer or an explicitly promoted
+  report still gets its ordinary treatment even if another conversation has already sent its next input. The manager
+  checks the completed turn for Claude, Codex and runtime chats. Errors, interrupted turns and work waiting on the
+  owner keep their alerts. Leaders and scheduled rounds keep their usual reply display. Delivery and hop/answer
+  processing happen for every relay.
 - **Needs you** keeps its entry and its count. While folding is on and its rows come from more than one supervising
   conversation (a task's `origin`), they are grouped under that conversation's title, this conversation's own first;
   the rows and their order within a group are unchanged.
 - **Switch**: Settings › Assistant › **Fold background rounds** (`assistant.main_background_folded`, `PUT /api/v1/assistant`,
   on unless turned off; Persona's settings tool changes it only after the user confirms the card). Off, the main chat and
-  Needs you look exactly as before. A hub that does not send the field is treated as on. The switch changes presentation
-  and routine main-relay finished-push eligibility only: relay execution, explicit `notify_user` actions and every other
-  push decision are unchanged.
+  Needs you show the expanded view. A hub that omits this field uses the default of on. **Fold routine relay replies**
+  (`assistant.fold_routine_relay_replies`) is saved independently and defaults to off, including on older hubs.
+  A user who previously enabled background folding sees ordinary relay replies until they explicitly enable the new switch.
 
 ## Messages from the system wait for the owner (#4925)
 
@@ -1801,6 +1802,18 @@ operation then read as accepted and the bubble waited for the transcript and wen
   saving a carry reservation for waiting quiet messages stays fail-closed. Nothing is guessed from
   the words: only the explicit argument decides. A `quote` (the owner's request) always wakes, so the two together are
   refused. While kept, the message shows above the composer (`queuedRelays`) and disappears once consumed.
+- **Per-sender wake cap and deferred wakes** (#13888, #14352, `server/internal/assistant/conversation_fanout.go`,
+  `server/internal/assistant/delayed_waits.go`). To keep one broadcast from waking every leader at once, a sender may
+  immediately wake at most `fanoutWide - 1` (2) distinct conversations within `fanoutWindow` (10 min); a conversation
+  already woken in the window and a `quote` of the owner's request still wake immediately. Wake-intended messages past
+  the cap are kept in `relayState.Later` (`DeferredWake: true`) and get a durable deferred wake in
+  `assistant.delayed_waits` (`conversation_fanout_wake`) at the back of the sender's wake queue. The tool answer states
+  plainly that the message was kept and will wake the receiver automatically in about N minutes. When its window slot
+  opens, the deferred wake counts against the sender's cap, promotes the kept message(s) atomically from `Later` to the
+  back of `relayState.Queue`, and drains it — keeping broadcasts paced over time even across hub restarts (recent wake
+  timestamps are also persisted in `relayState.Fanout`). If the receiver wakes for any other reason first and reads the
+  kept messages, the deferred wake is dropped so it never double-wakes. Messages sent with explicit `wake: false` keep
+  `DeferredWake: false` and are never woken later.
 - **Between conversations.** `conversation_send` to a conversation that cannot take the message now no longer fails:
   the message goes into its relay queue and is tried again under the same `once_id`. A conversation that failed to
   take a relayed message is tried again after `relayRetryGap` (30 s), not on every session list.
@@ -1913,6 +1926,40 @@ manager that connects the computer holds it and sends it once the computer is ba
   (the assistant's, an extension's, the hub token's) carry no `ordered` mark and may go ahead of a person's held
   ones. A manager rolled back to a version without this keeps the rows it was told to hold but neither shows nor
   sends them; the apps were told they go later.
+
+### Starting a new Agent on an offline computer (#10674)
+
+Starting a new Agent (`POST /api/v1/sessions`, without `resume_session_id`) on a paired computer that is offline
+follows the same durable-hold model in `held_operations` (`kind = "start"`, `session_id = ""`,
+`server/internal/devices/held_starts.go`, `server/internal/hub/held_starts.go`, `server/internal/node/start_op.go`):
+
+- **Held after validation.** When a person's full device declaring `agent_start_hold` (`client_hello` or
+  `X-Persona-Features`) sends `POST /api/v1/sessions` with a UUID `X-Persona-Op-Id` targeting a trusted, paired
+  computer that is currently offline, the hub runs static, auth, image-limit, work-session, and trust checks first,
+  then asks the computer's manager to hold the start (`devices.hold_start`). The manager persists the original start
+  payload in Postgres and the hub answers **202** `{"delivered":"later","held_start":{…}}` (saved in `client_ops` so
+  HTTP retries replay the same 202 idempotently). Clients that do not declare `agent_start_hold`, resumes, non-person
+  tokens, or requests without `X-Persona-Op-Id` keep the existing offline failure. At most 50 held starts per computer
+  are allowed (`409 held_start_full`).
+- **List, Retry, Cancel, and live updates.** Full person devices list a computer's held starts with
+  `GET /api/v1/machines/{mid}/held-starts`, retry a failed one with `POST /api/v1/machines/{mid}/held-starts/{op}/retry`,
+  and cancel/delete a waiting or failed one with `DELETE /api/v1/machines/{mid}/held-starts/{op}` (409 while actively
+  starting). Transitions (`waiting`, `starting`, `failed`, `started` with `session_id`, `deleted`) push `held_start`
+  WebSocket events only to full devices declaring `agent_start_hold`.
+- **Replayed once through the real start path.** Once the computer reconnects (configured and listed, with the bus to
+  the hub up), the manager replays each waiting held start once via `devices.replay_held_start` on the hub, running
+  `startSessionWith` fresh (`todoHandoff`, `agentStartParams`, `WorkSession` checks, `NodeInfo.EngineHosts`, start
+  options/speed/goal, `TodoLink`, `h.fresh`, `autoTabName`). Revalidation refusal moves the row to `failed`
+  (`refused`) with the owner-readable reason; a held start waiting 24 hours expires (`expired`); revoking the sending
+  device credential marks it `failed` (`signed_out`, `delete_only: true`). Independent held starts on the same
+  computer do not block each other.
+- **Node-side `op_id` recording and reconciliation.** Every new-Agent `session.start` / `session.start.work` carries
+  `op_id`. Nodes announcing `start_op_id_v1` deduplicate concurrent/repeat `op_id` calls, persist `start_op_id` on the
+  session's state (`state.put` / `state.load`), and answer `start.status {op_id}` (`started` with `session_id`,
+  `pending`, or `unknown`). If a start disconnects mid-flight or the manager restarts while it is `sending`, the row
+  becomes `failed` (`unclear`) and is never blindly auto-retried: reconnect reconciliation checks `start.status` first,
+  completing and linking cleanly with zero duplicates if the session already started, or leaving the decision to the
+  owner (Retry checks once more → `unconfirmed` if still unknown/unsupported, then a second Retry starts it).
 - **Not yet held**: starting a new Agent on an offline computer (#10674) and dispatching a to-do to one (#10675).
 
 ## Availability metrics (#4924)

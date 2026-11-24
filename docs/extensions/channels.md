@@ -294,7 +294,7 @@ Other languages follow the protocol above, one JSON line per message (`docs/exte
 | Method | Path | Description |
 | --- | --- | --- |
 | GET | `/api/v1/channels` | `{channels: [View]}`: built-ins, extension-contributed channels (installed, including disabled ones), and not-yet-installed market entries with `channel` contributions. Ordered by `app`, connected, not connected, market |
-| GET | `/api/v1/channels/{id}` | `View` plus `waiting: {answers, asks}`, `conversations` (the channel's recent chats, up to 5: `{machine_id, session_id, title, at}`), `settings_url` (for channels like the Lark bot with a full settings page of their own, linked by the App) |
+| GET | `/api/v1/channels/{id}` | `View` plus `waiting: {answers, asks}`, `conversations` (the channel's recent chats, up to 5: `{machine_id, session_id, title, at}`), `settings_url` (for channels like the Lark bot with a full settings page of their own, linked by the App), and optional `target_override: {mode: "topics" \| "threads"}` when topic or thread routing currently takes precedence over the default target (omitted when inactive) |
 | PUT | `/api/v1/channels/{id}` | `{enabled?, target?, features?: {id: bool}}`, changes only supplied fields; returns `View`. `target.kind` is `main` / `new` / `conversation` (with `machine_id`, `session_id`; must be an assistant chat) |
 | POST | `/api/v1/channels/{id}/bind` | `{step?, values?}` → `connector.Prompt` (the step-by-step login in `docs/extensions/connectors.md`: fields, QR scan `qr`, pairing code `pair_code`). Empty `step` starts over. Extension channels forward to their connector; Lark bot: one step for App ID / Secret if no credentials, then a pairing code once they exist. A step's `Prompt` may carry `link` + `link_text`: the page shows a button that opens the provider's console (the Lark bot's credentials step links to the developer console, and after the credentials verify, the bot's scopes, events, long-connection mode and publish are configured through the platform's server API — `docs/extensions/bots.md` "What to do on the Open Platform") |
 | DELETE | `/api/v1/channels/{id}/binding` | Unbind: connector logout for extension channels; unpair for the Lark bot. Clears runs and pending questions together, as signing out of the channel's connector does |
@@ -313,7 +313,7 @@ if the assistant is disconnected, return `503 assistant_offline`; fields are unc
   - Top status: icon, name, state, account, latest message time; error reason and how to fix it.
   - "Enabled" switch.
   - Binding: when unbound, a "Bind" button follows `bind` steps (QR code displayed with "Save QR Code"; pairing code displays 6 digits and waits for the other side to send it; fields use a form). Once bound, shows the account and "Unbind" (confirmation first).
-  - "Send Messages To": main chat / new chat (starts on the next message) / select a chat (recent assistant chats).
+  - "Send Messages To": main chat / new chat (starts on the next message) / select a chat (recent assistant chats). When `target_override` is present, a hint beneath the row clarifies that topic or thread routing is active and that the default target only applies to direct or regular messages, linking to `settings_url` when available.
   - Feature switches: drawn from `features`.
   - "Send Test Message" (only to yourself), or "Check Connection" for `reply_only` channels (checks readiness without sending a proactive message).
   - With `settings_url` (Lark bot), an extra "More Settings" row opens the old page.

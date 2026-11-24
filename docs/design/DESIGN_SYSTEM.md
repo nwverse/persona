@@ -728,7 +728,7 @@ on-demand model panel, not the everyday Assistant home (#6887).
 | `.card()` | grouped-row card, padding default 14 | `apple/Persona/DesignSystem/Components.swift:429` |
 | `NoticeBanner` | persistent in-page notice, neutral, caution or danger, one action; optional `dismiss` puts the design system's close ✕ at the trailing end (accessibility label Hide, hit as a finger-sized square) for a notice the person may not be able to act on, and its owner decides how long the ✕ is remembered (#12319) | `apple/Persona/DesignSystem/Notice.swift:7` |
 | `.sectionCards()` | a list sectioned by state, one system inset grouped card per section (the To-dos list; iOS, hubs with `todo_view`, from #10465's switch-on); rows keep the system's cells | `apple/Persona/DesignSystem/SectionCards.swift` |
-| `ScreenMobileDataCard` | the live screen's one question on mobile data (#6396): a `.surface` card under the bars, covering none of the picture, no wider than `Size.readable`: the network in its title (mobile data or a personal hotspot), one line, two choices with about how much data an hour each takes (prominent Clearer, plain Data Saver; side by side where they fit, stacked at large text, never wrapped) and ✕. A `NoticeBanner` has one action; this is a choice between two. The web's (#6558, `MobileDataCard`) has the same parts under the page's bar, no wider than 420 px, in the stats panel's surface; it stacks the choices where they don't fit side by side (measured, as `ViewThatFits`), and ⋯ holds the choice, since the web has no Settings row for it | `apple/Modules/ScreenShare/ScreenMobileDataCard.swift`, `web/src/screen/VideoPicture.tsx` |
+| `ScreenMobileDataCard` | the live screen's one question on mobile data (#6396): a `.surface` card under the bars, covering none of the picture, no wider than `Size.readable`: the network in its title (mobile data or a personal hotspot), one line, two choices with about how much data an hour each takes (prominent Clearer, plain Data Saver; side by side where they fit, stacked at large text, never wrapped) and ✕. A `NoticeBanner` has one action; this is a choice between two. The web's (#6558, `MobileDataCard`) has the same parts under the page's bar, no wider than 420 px, in the stats panel's surface; it stacks the choices where they don't fit side by side (measured, as `ViewThatFits`), and ⋯ holds the choice, since the web has no Settings row for it | `apple/Modules/ScreenShare/ScreenMobileDataCard.swift`, `web/src/modules/screen-share/VideoPicture.tsx` |
 | `DispatchHandoffCard` | one card per dispatched task in the chat: ↳ well, title, New / Already Active / Resumed badge, last-active time and state, ↗; a failed start says why in red; one tappable element (`dispatch.task.<id>`) | `apple/Persona/Views/Assistant/Tasks/DispatchHandoffCard.swift` |
 | `PlanBriefView` | a plan task's brief before Start: who asked (two lines), one summary line, Show All for the goal, criteria, time and limits | `apple/Persona/Views/Assistant/Tasks/PlanBriefView.swift` |
 | `CardForm`, `CardFold`, `CardCode`, `CardPlan` | a pending card's form: what it asks in one scroll area over its answers, which stay in view; a long command, terminal text or plan folded to its first lines (fewer when the card is short), the last one fading, Show All N Lines / Show Full Text opening it whole (section 4.8, #6605) | `apple/Persona/Views/Interactions/CardFold.swift` |
@@ -1251,15 +1251,27 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
   one home of those requests, not a second home, and counts what the switch and tabs count (`agentsWaiting`). **The usage
   strip** (`SidebarUsageStrip`): the two fullest subscription accounts as name, percent and `UsageMeter`, the web
   sidebar's foot (#2432); a tap opens Machines. Separate stays the default and pixel-identical.
-  **Usage details** (#13173, web `UsagePopover`): one card per provider (`border-line`, `rounded-control`, 10 px padding) with the
-  provider's name (13 px semibold `--ink`), the account count and the newest sample age (11 px `--ink-3`); every account inside,
-  soonest 7d reset first, each with a `5h` and a `7d` row (bar with pace tick, percent, reset text). Under the accounts, **one
-  reset timeline per card**: a shared axis (45% of the width for the first day, 55% for days 1-7), a row per account in the
-  same order, a teal (`--hue-teal`) 5h capsule over a blue (`--hue-blue`) 7d capsule from the `--ink` now line to the reset, a
-  hollow end dot (`--surface` fill) and the time left (9.5 px semibold, white inside the capsule past 80% of the width). A
-  window's `protect_percent`, when the hub sends it, adds a 2 px `--orange` notch on its bar, a 9 px "protect N%" flag and a
-  hatched `--orange` zone to 100%. Colors and sizes are existing tokens; iOS and Android follow the same rule with their own
-  tokens (`docs/server/usage-windows.md`, "Provider cards and the reset timeline").
+  **Usage details** (#13173, #14690, web `UsagePopover`): every number is what is left (`r = 100 − used`), never what is
+  used. One card per provider (`border-line`, `rounded-control`, 10 px padding) with the provider's dot, name (13 px
+  semibold `--ink`), account count and newest sample age (11 px `--ink-3`); every account inside, soonest 7d reset first,
+  each with a `5h` and a `7d` row: a bar filled left to right to `r%`, `r%` in the bar's colour, and the reset text. The
+  colour comes from the headroom over the protection reserve, `h = r − R` (`R = 100 − protect_percent`, 0 without one;
+  `remainingTone`): `--green` from 20, `--orange` from 5, `--red` under 5. A protected window draws a hatched `--orange`
+  zone on the left `[0, R]`, a 2 px `--orange` line at `R` and a "Keep R%" flag; at `r ≤ R` scheduling is paused: the
+  bar is red and the reset reads "Paused · …". The pace tick sits at `100 − expected used`; a bar shorter than it is
+  "Ahead of pace". The collapsed strip shows the two accounts with the least headroom as "N% left". Under the cards,
+  **one reset timeline for the whole popover** (across every column, hidden when nothing has a reset): a row per account
+  in card order, then account order, a hairline between providers; the name column (22 spacing units) has the provider's
+  6 px dot, the name without its provider prefix and the plan in `--ink-3`; a teal (`--hue-teal`) 5h capsule over a blue
+  (`--hue-blue`) 7d capsule runs from the `--ink` now line to the reset (one lane per window length: per-model windows
+  merge at the soonest reset and are listed in the tooltip), and a lane whose own window is paused ends in an `--orange`
+  dot. **Layout**: fixed above its trigger, one 320 px column while everything fits the window's height; otherwise the
+  fewest columns (at most 3, as the width allows) in which the provider cards, kept whole, plus the full-width timeline
+  fit without scrolling, with 24 px hysteresis; only when 3 still overflow does it scroll, with faded edges. It opens over
+  240 ms (fade, 6 px rise, scale from 0.98), closes over 160 ms and moves to a new column count over 300 ms; reduced
+  motion keeps a 120 ms fade. The focus moves into it on open and back to its trigger on Escape; on a narrow screen Back
+  closes it before the drawer. Colors and sizes are existing tokens; iOS and Android keep the earlier used-percent cards
+  until they follow (`docs/server/usage-windows.md`, "Provider cards and the reset timeline").
 - Android (#6378) offers the same **Separate** and **Merged** values under **Settings › Appearance › Sidebar**.
   Separate is the Android default at every width. Merged uses the current left drawer and the regular window's
   existing beside or overlay policy. Main conversation stays above the scrollable Pages, Persona Chats and Agents.

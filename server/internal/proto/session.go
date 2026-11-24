@@ -245,6 +245,10 @@ type Session struct {
 	// apply to it, and a launcher switch to Launcher itself brings it back there. Beside EffortChangeFailed, in its
 	// padding: a Session stays in its allocation size class.
 	OffLauncher bool `json:"off_launcher,omitempty"`
+	// LogicalPlaceholder is manager-internal provenance: this row stands in for a logical conversation whose active
+	// physical segment is not listed. Its Assistant identity comes from the logical root, not from a physical Cwd.
+	// It occupies the last byte of padding before BackgroundStalledSince, keeping Session in its allocation size class.
+	LogicalPlaceholder bool `json:"-"`
 	// BackgroundStalledSince (#13744): the time since which this session's background commands have used no CPU and
 	// written no output, set only when a known worker (a build, tests, a download) runs there and that has lasted ten
 	// minutes while the turn is over. State stays working: a running tool is work, this only tells a client the work

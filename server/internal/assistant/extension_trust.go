@@ -269,10 +269,14 @@ func (s *Service) extensionTrustSet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) conversationCategoriesGet(w http.ResponseWriter, r *http.Request) {
-	if !userOnly(w, r) {
+	if !spacesWriter(w, r) {
 		return
 	}
 	id := r.PathValue("id")
+	if space, _ := s.conversationSpace(r.Context(), id); space != "" && r.Header.Get(RoleHeader) == roleExtension && s.extensionHides(r.Context(), space) {
+		apierr.Write(w, http.StatusNotFound, errors.New("conversation not found"))
+		return
+	}
 	if !validSessionID(id) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("invalid conversation id"))
 		return
@@ -286,10 +290,14 @@ func (s *Service) conversationCategoriesGet(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Service) conversationCategoriesSet(w http.ResponseWriter, r *http.Request) {
-	if !userOnly(w, r) {
+	if !spacesWriter(w, r) {
 		return
 	}
 	id := r.PathValue("id")
+	if space, _ := s.conversationSpace(r.Context(), id); space != "" && r.Header.Get(RoleHeader) == roleExtension && s.extensionHides(r.Context(), space) {
+		apierr.Write(w, http.StatusNotFound, errors.New("conversation not found"))
+		return
+	}
 	if !validSessionID(id) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("invalid conversation id"))
 		return

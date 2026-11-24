@@ -296,7 +296,8 @@ export function draftToProfileInput(draft: ProfileDraft, revision: number): Mode
       if (model) item.model = model;
       if (effort) item.effort = effort;
       if (permissionMode) item.permission_mode = permissionMode;
-      if (speed) item.speed = speed;
+      // Omit default/standard speed so older hubs using strict JSON decoding accept saves without newer optional fields.
+      if (speed && speed !== "standard") item.speed = speed;
       return item;
     });
     const primary = candidates[0] ?? { launcher: "" };

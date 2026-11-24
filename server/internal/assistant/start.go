@@ -1514,7 +1514,11 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		}
 	}
 	if !asked {
-		if pick, ok := s.modelPickOf(ctx, machine, sid); ok {
+		pick, ok, err := s.readModelPick(ctx, machine, sid)
+		if err != nil {
+			return err // an unreadable pick book is not permission to fall back to the default
+		}
+		if ok {
 			if proto.IsExternalLauncher(pick.Launcher) {
 				if model, _ := p["model"].(string); picked && model != pick.Model {
 					return i18n.Err("external-adapter.scope_required") // change the persisted pick, not a message's model
@@ -1523,16 +1527,6 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			}
 			if !picked {
 				return s.sendOnPick(ctx, machine, sid, p, pick, lang)
-			}
-		}
-		// An unreadable pick book is not permission to switch a conversation that
-		// already runs externally back to the global default.
-		s.modelPicks.mu.Lock()
-		known := s.modelPicks.loaded
-		s.modelPicks.mu.Unlock()
-		if !known {
-			if c, ok := s.session(ctx, machine, sid); ok && proto.IsExternalLauncher(c.Launcher) {
-				return i18n.Err("assistant-model_pick.err_unreadable")
 			}
 		}
 	}
