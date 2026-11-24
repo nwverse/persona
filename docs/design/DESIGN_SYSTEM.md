@@ -151,7 +151,7 @@ Defined once in `apple/Shared/StatusPalette.swift:19-36` and shared by the app, 
 | --- | --- | --- | --- |
 | Needs you | system blue `#007AFF`/`#0A84FF` | `#0064C8`/`#409CFF` | blue since #6231 |
 | Working | `#E8890C`/`#FFB224` | `#A35A00`/`#FFB224` | amber |
-| Unread / awaiting reply / just finished | `#30A46C`/`#4CC38A` | `#1D7A4C`/`#4CC38A` | green; awaiting reply and just finished are a plain dot on the web, not Unread's glow |
+| Unread / awaiting reply / just finished / finished, not opened | `#30A46C`/`#4CC38A` | `#1D7A4C`/`#4CC38A` | green; awaiting reply, just finished and finished, not opened (#14447) are a plain dot on the web, not Unread's glow |
 | Waiting in the background | working dot at 0.6 | secondary | clock mark; its soft fill the working dot at 0.08 |
 | Idle / Offline | secondary at 0.55 / 0.3 | secondary | gray |
 
@@ -1107,6 +1107,17 @@ a plain dot, its state word "Just finished" (the To-dos' section word, `StateNam
 that ended minutes ago sank under sessions seen days ago. Why after the work still going: as in the To-dos' order
 above, what still runs comes before what is done. The web and Android (#9786; there the dot is Unread's, as Awaiting
 reply's) have it; Apple and HarmonyOS follow in their own issues and show these rows as Seen until then.
+
+Past those three hours, and for a turn the triage found waiting on something the hub ends itself (a wake, an automatic
+retry), the row keeps the same plain dot under its own state word, **Finished, not opened** (#14447,
+`docs/protocol/agent-states.md` ("Finished, not opened")), and the same second line, until the owner opens it, marks
+it seen, or its host shows it. It is the hub's own Unread rule read before the triage (the host's `done`, `seen_at`
+before `updated_at`), so it needs no new field. Like Just finished it keeps its space, repository and worktree out of the
+idle folds, but it ranks and counts as Seen: By Status has no section for it, and no number changes meaning. A muted
+one, and one a usage limit stopped, stay plain Seen. Why a mark and not Unread or a section: the triage decided these
+need no look, and a section without a time limit would bring back the pile the three hours ended; but a row that says
+Seen for work nobody opened hid finished work from its owner. The web has it; Apple, Android and HarmonyOS show these
+rows as Seen until they follow.
 
 #### The work-item row
 

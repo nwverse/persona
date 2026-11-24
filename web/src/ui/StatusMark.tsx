@@ -12,8 +12,8 @@ import { STATE_LABEL, stateCount, stateName } from "../lib/state-labels";
  *  - alert: needs you, a glowing dot with a thin ring around it;
  *  - glow: done and not seen, a glowing dot;
  *  - dot: idle or unknown, a plain dot; seen and awaiting the user's reply (Awaiting Reply, #5096), or done before
- *    anybody looked (Just finished, #9751), a plain dot in the unread tint, between the glowing unread dot and the grey
- *    seen one;
+ *    anybody looked (Just finished, #9751; past its three hours, Finished, not opened, #14447), a plain dot in the
+ *    unread tint, between the glowing unread dot and the grey seen one;
  *  - ring: offline, a hollow ring;
  *  - wait: working, but only waiting on background commands (#6045): a clock in the faded working color, the same clock
  *    as the chat's running bar says it with. */
@@ -29,13 +29,14 @@ export function markOf(state: AgentState): { shape: MarkShape; color: string } {
 /** The one place an agent's state is drawn: sidebar rows, the session header, the terminal tree, the palette, pane
  *  tabs, subagent cards. Sizes, glow and the arc's speed are tokens (styles.css, "status marks"); `sm` is for the
  *  dense rows. Reduced motion slows the arc (the busy-motion class, lib/busy-motion.ts), it does not stop it. */
-export function StatusMark({ state, size = "md", label = true, awaiting = false, finished = false, waiting = false }: { state: AgentState; size?: "sm" | "md"; label?: boolean; /** Seen and awaiting the user's reply (lib/agent-groups.ts awaitsReply); only drawn on an idle state. */ awaiting?: boolean; /** Just finished (lib/agent-groups.ts justFinished); only drawn on an idle state. */ finished?: boolean; /** Working only because background commands wait (lib/format.ts backgroundWaiting); only drawn on a working state. */ waiting?: boolean }) {
+export function StatusMark({ state, size = "md", label = true, awaiting = false, finished = false, unopened = false, waiting = false }: { state: AgentState; size?: "sm" | "md"; label?: boolean; /** Seen and awaiting the user's reply (lib/agent-groups.ts awaitsReply); only drawn on an idle state. */ awaiting?: boolean; /** Just finished (lib/agent-groups.ts justFinished); only drawn on an idle state. */ finished?: boolean; /** Finished, not opened (lib/agent-groups.ts finishedUnopened): Just finished's mark under its own word; only drawn on an idle state, and Just finished's word wins while it lasts. */ unopened?: boolean; /** Working only because background commands wait (lib/format.ts backgroundWaiting); only drawn on a working state. */ waiting?: boolean }) {
   const reply = awaiting && state === "idle";
-  const done = finished && state === "idle" && !reply;
+  const done = (finished || unopened) && state === "idle" && !reply;
+  const doneState = finished ? "just_finished" : "unopened";
   const bg = waiting && state === "working";
   const { shape, color } = reply || done ? { shape: "dot" as const, color: stateColor("unread") } : bg ? { shape: "wait" as const, color: "var(--status-waiting)" } : markOf(state);
   const style = { "--mark-color": color } as CSSProperties;
-  const name = reply ? stateName("awaits_reply") : done ? stateName("just_finished") : bg ? stateName("bg_waiting") : STATE_LABEL[state];
+  const name = reply ? stateName("awaits_reply") : done ? stateName(doneState) : bg ? stateName("bg_waiting") : STATE_LABEL[state];
   const a11y = label ? ({ role: "img", "aria-label": name } as const) : ({ "aria-hidden": true } as const);
   if (shape === "wait") {
     return (
@@ -52,7 +53,7 @@ export function StatusMark({ state, size = "md", label = true, awaiting = false,
       </svg>
     );
   }
-  return <span {...a11y} className="status-mark" data-shape={shape} data-state={reply ? "awaits_reply" : done ? "just_finished" : state} data-size={size} style={style} />;
+  return <span {...a11y} className="status-mark" data-shape={shape} data-state={reply ? "awaits_reply" : done ? doneState : state} data-size={size} style={style} />;
 }
 
 /** What a folded group still shows of its agents: a mark and a monospace count for each of needs you, working and done,

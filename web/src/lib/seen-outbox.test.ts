@@ -1,7 +1,7 @@
 // The seen outbox (lib/seen-outbox.ts): a session this page marked seen stays seen until the hub's own rows say it was
 // recorded, a new turn ended, or the agent works or needs you again.
 import { afterEach, describe, expect, it } from "vitest";
-import { dueMarks, heldCounts, heldRows, heldSeen, liveMarks, markOver, newMark, nextDue, SEEN_CONFIRM_MS, SEEN_KEEP_MS, SEEN_SETTLE_MS, settleMarks, unansweredMarks, type SeenMark } from "./seen-outbox";
+import { dueMarks, heldCounts, heldRows, heldSeen, liveMarks, markOver, newMark, nextDue, SEEN_CONFIRM_MS, SEEN_KEEP_MS, SEEN_SETTLE_MS, seenCopy, settleMarks, turnUnseen, unansweredMarks, unopened, unseen, type SeenMark } from "./seen-outbox";
 import type { ListCounts } from "./session-list";
 import { runtimeIdentity } from "./runtime-list";
 import { setSideFold, unreadSides } from "./side-fold";
@@ -28,7 +28,40 @@ describe("seen outbox", () => {
     expect(shown.state).toBe("idle");
     expect(shown.work).toEqual({ phase: "done", line: "Merged", just_finished: false });
     expect(markOver({ ...finished, seen_at: "2026-01-01T00:00:03Z", work: { phase: "done", line: "Merged" } }, mark, T0 + 3000)).toBe(true);
-    expect(newMark(row({ state: "idle", work: { phase: "done", line: "Merged" } }), T0)).toBeUndefined();
+    // a done one seen after its turn ended waits for nothing
+    expect(newMark(row({ state: "idle", work: { phase: "done", line: "Merged" }, seen_at: "2026-01-01T00:00:01Z" }), T0)).toBeUndefined();
+  });
+
+  it("reads a turn nobody looked at by the hub's own Unread rule (#14447)", () => {
+    const done = (patch: Partial<Session> = {}) => row({ state: "idle", work: { phase: "done", line: "Merged" }, ...patch });
+    expect(turnUnseen(done())).toBe(true); // never seen: the hub's zero time
+    expect(turnUnseen(done({ seen_at: "2025-12-31T23:00:00Z" }))).toBe(true); // seen before this turn ended
+    expect(turnUnseen(done({ seen_at: "2025-12-31T23:59:59Z" }))).toBe(false); // within the hub's 2 s slack
+    expect(turnUnseen(done({ seen_at: "2026-01-01T00:00:01Z" }))).toBe(false); // seen after
+    expect(turnUnseen(done({ status: "idle" }))).toBe(false); // seen in its host (herdr, the desktop app)
+    expect(turnUnseen(done({ status: "offline" }))).toBe(false);
+    expect(turnUnseen(done({ seen_at: undefined }))).toBe(false); // a hub that sends no seen_at says nothing
+    // Finished, not opened: Seen as far as its state goes, out of Unread by the triage
+    expect(unopened(done())).toBe(true);
+    expect(unopened(done({ work: { phase: "blocked", on: "external", wake_at: "2026-01-01T01:00:00Z" } }))).toBe(true);
+    expect(unopened(row())).toBe(false); // Unread is its own state
+    expect(unopened(done({ work: undefined }))).toBe(false); // no triage took it out of Unread
+    expect(unopened(done({ assistant: true }))).toBe(false); // a Persona chat keeps its own marks
+  });
+
+  it("waits for Finished, not opened agents too, and shows them seen meanwhile (#14447)", () => {
+    const old = row({ state: "idle", work: { phase: "done", line: "Merged" }, seen_at: "2025-12-31T20:00:00Z" });
+    expect(unseen(old)).toBe(true);
+    const mark = newMark(old, T0)!;
+    expect(mark).toBeDefined();
+    const shown = heldSeen(old, mark, T0 + 1000);
+    expect(unopened(shown)).toBe(false);
+    expect(shown.seen_at).toBe(old.updated_at);
+    // the hub recorded it, or another turn ended since: the mark is over
+    expect(markOver({ ...old, seen_at: "2026-01-01T00:00:03Z" }, mark, T0 + 3000)).toBe(true);
+    expect(markOver({ ...old, updated_at: "2026-01-01T00:05:00Z" }, mark, T0 + 3000)).toBe(true);
+    // "Mark all as seen" and an Unread row held seen do not turn into it either
+    expect(unopened(seenCopy(row({ work: { phase: "done" } })))).toBe(false);
   });
 
   it("holds an unread row seen until the hub records it", () => {

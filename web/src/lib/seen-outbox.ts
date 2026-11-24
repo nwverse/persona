@@ -51,18 +51,38 @@ export type SeenMarks = Readonly<Record<string, SeenMark>>;
 
 const expired = (m: SeenMark, now: number) => now - m.markedAt > SEEN_KEEP_MS || (m.recordedAt !== undefined && now - m.recordedAt > SEEN_SETTLE_MS);
 
-/** Finished and not seen yet: Unread, or Just finished (seen as far as its state goes, but nobody looked, #9751). */
+/** Its last turn ended after anybody last looked at it, by the hub's own Unread rule (agentState in
+ *  server/internal/assistant/fleet.go): its host says the turn ended and nobody looked there (`done`), and the hub's
+ *  `seen_at` is the zero time or earlier than `updated_at` by more than the hub's slack. A row without `seen_at` (a hub
+ *  that does not send it) says nothing. */
+export function turnUnseen(s: Session): boolean {
+  if (s.status !== "done" || s.seen_at === undefined) return false;
+  const seen = timeMs(s.seen_at);
+  return seen <= 0 || seen < timeMs(s.updated_at) - SEEN_SAME_TURN_MS;
+}
+
+/** Finished, not opened (#14447): an Agent whose last turn nobody has looked at (turnUnseen), though its state is Seen:
+ *  the hub's work-state triage (`work`) took it out of Unread (a turn done, or a wait the hub ends by itself), and past
+ *  Just finished's three hours nothing else says so (docs/protocol/agent-states.md "Finished, not opened"). Not the
+ *  assistant's conversations, which the triage leaves alone. */
+export function unopened(s: Session): boolean {
+  return !s.assistant && stateOf(s) === "idle" && Boolean(s.work) && turnUnseen(s);
+}
+
+/** Finished and not seen yet: Unread, Just finished (seen as far as its state goes, but nobody looked, #9751), or
+ *  Finished, not opened (#14447). */
 export function unseen(s: Session): boolean {
   const st = stateOf(s);
-  return st === "unread" || (st === "idle" && Boolean(s.work?.just_finished));
+  return st === "unread" || (st === "idle" && Boolean(s.work?.just_finished)) || unopened(s);
 }
 
-/** `s` as seen: no longer Unread, nor Just finished. */
+/** `s` as seen: no longer Unread, nor Just finished, and its last turn seen (no longer Finished, not opened). */
 export function seenCopy(s: Session): Session {
-  return { ...s, state: "idle", ...(s.work?.just_finished ? { work: { ...s.work, just_finished: false } } : {}) };
+  return { ...s, state: "idle", ...(s.work?.just_finished ? { work: { ...s.work, just_finished: false } } : {}), ...(turnUnseen(s) ? { seen_at: s.updated_at } : {}) };
 }
 
-/** A mark for `s` as the page has it now; only an unseen one (Unread or Just finished) waits for the hub. */
+/** A mark for `s` as the page has it now; only an unseen one (Unread, Just finished, Finished, not opened) waits for
+ *  the hub. */
 export function newMark(s: Session, now: number, localSeenAt?: string): SeenMark | undefined {
   if (!unseen(s)) return undefined;
   return { seenBefore: timeMs(s.seen_at), updatedBefore: timeMs(s.updated_at), localSeenAt, markedAt: now, sentAt: now, route: "socket", answered: false };

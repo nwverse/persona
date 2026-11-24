@@ -9,6 +9,7 @@
   "bg_waiting": "Waiting in the background",
   "awaits_reply": "Awaiting your reply",
   "just_finished": "Just finished",
+  "unopened": "Finished, not opened",
   "done": "Done",
   "interrupted": "Interrupted",
   "follow_up": "Follow-up",

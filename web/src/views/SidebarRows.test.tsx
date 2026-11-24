@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { t } from "../i18n";
+import { stateName } from "../lib/state-labels";
 import { Icon } from "../ui/icons";
 import type { AgentSession } from "../lib/agents";
 import type { Session } from "../lib/types";
@@ -39,6 +40,32 @@ describe("an agent's row", () => {
   it("keeps its ⋯ shown when open, on hover only otherwise", () => {
     expect(more(renderToStaticMarkup(<SessionRow {...rowProps} active />))).toMatch(/class="[^"]*\bflex\b/);
     expect(more(renderToStaticMarkup(<SessionRow {...rowProps} active={false} />))).toMatch(/class="[^"]*\bhidden\b/);
+  });
+});
+
+describe("an agent whose last turn nobody has opened (#14447)", () => {
+  // the triage took the turn out of Unread (done, past Just finished's three hours): Seen as far as its state goes
+  const done: Session = { ...session, status: "done", state: "idle", updated_at: "2026-01-01T00:00:00Z", work: { phase: "done", line: "Merged the fix" } };
+  const render = (patch: Partial<Session>) => renderToStaticMarkup(<SessionRow {...rowProps} s={{ ...done, ...patch }} active={false} />);
+  const mark = (html: string) => html.match(/<span [^>]*class="status-mark"[^>]*>/)?.[0] ?? "";
+  const line = (html: string) => html.match(/<span data-row-line[^>]*>(.*?)<\/span>/)?.[1];
+  it("keeps Just finished's mark under its own word, with what it did under the title, however old", () => {
+    const html = render({ seen_at: "0001-01-01T00:00:00Z" });
+    expect(mark(html)).toContain('data-state="unopened"');
+    expect(mark(html)).toContain(`aria-label="${stateName("unopened")}"`);
+    expect(line(html)).toBe("✓ Merged the fix");
+    // looked at before this turn ended: still not opened since
+    expect(mark(render({ seen_at: "2025-12-31T20:00:00Z" }))).toContain('data-state="unopened"');
+  });
+  it("is plain Seen once opened after the turn ended, or seen in its host", () => {
+    for (const html of [render({ seen_at: "2026-01-01T00:00:05Z" }), render({ status: "idle", seen_at: "0001-01-01T00:00:00Z" })]) {
+      expect(mark(html)).toContain('data-state="idle"');
+      expect(line(html)).toBeUndefined();
+    }
+  });
+  it("leaves a turn a usage limit stopped without it: that turn goes on by itself", () => {
+    const html = render({ seen_at: "0001-01-01T00:00:00Z", turn_error: "usage limit reached", turn_error_kind: "usage_limit" });
+    expect(mark(html)).toContain('data-state="idle"');
   });
 });
 

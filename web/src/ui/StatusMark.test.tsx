@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { STATE_LABEL } from "../lib/state-labels";
+import { STATE_LABEL, stateName } from "../lib/state-labels";
 import { foldedCounts } from "../lib/folded-counts";
 import type { AgentState, Session } from "../lib/types";
 import { markOf, StateTally, StatusMark, type MarkShape } from "./StatusMark";
@@ -44,6 +44,28 @@ describe("state → mark", () => {
     expect(renderToStaticMarkup(<StatusMark state="idle" size="sm" />)).toContain('data-size="sm"');
     expect(renderToStaticMarkup(<StatusMark state="idle" />)).toContain('data-size="md"');
     expect(renderToStaticMarkup(<StatusMark state="idle" />)).not.toMatch(/width:|height:/);
+  });
+});
+
+describe("a finished turn nobody has looked at (#9751, #14447)", () => {
+  it("draws Just finished and Finished, not opened as the plain dot in the unread tint, each under its own word", () => {
+    const unopened = renderToStaticMarkup(<StatusMark state="idle" unopened />);
+    expect(unopened).toContain('data-shape="dot"');
+    expect(unopened).toContain('data-state="unopened"');
+    expect(unopened).toContain("--mark-color:var(--status-unread)");
+    expect(unopened).toContain(`aria-label="${stateName("unopened")}"`);
+    // Just finished's word wins while it lasts, Awaiting Reply's over both
+    const finished = renderToStaticMarkup(<StatusMark state="idle" finished unopened />);
+    expect(finished).toContain('data-state="just_finished"');
+    expect(finished).toContain(`aria-label="${stateName("just_finished")}"`);
+    expect(renderToStaticMarkup(<StatusMark state="idle" awaiting unopened />)).toContain('data-state="awaits_reply"');
+  });
+
+  it("leaves every other state as it is", () => {
+    expect(renderToStaticMarkup(<StatusMark state="unread" unopened />)).toContain('data-shape="glow"');
+    expect(renderToStaticMarkup(<StatusMark state="offline" unopened />)).toContain('data-shape="ring"');
+    expect(renderToStaticMarkup(<StatusMark state="working" unopened />)).toContain("<svg");
+    expect(renderToStaticMarkup(<StatusMark state="idle" />)).toContain("--mark-color:var(--status-idle)");
   });
 });
 

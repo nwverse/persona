@@ -2,7 +2,7 @@
 // agents. Imports only SidebarParts among the sidebar's files.
 import { memo, useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import { formatList, t } from "../i18n";
-import { awaitsReply, justFinished, sessionSource, sourceName } from "../lib/agent-groups";
+import { awaitsReply, finishedUnopened, justFinished, sessionSource, sourceName } from "../lib/agent-groups";
 import { addSection, arrangeSessions, assignSection, GROUP_LABEL, isDefaultView, providerLabel, refreshAgentSessions, removeSection, resetView, setView, SHOW_LABEL, SORT_LABEL, toggleProvider, togglePin, totalUnread, updateAgentPrefs, useAgentList, useAgentPrefs, viewOf, type AgentPrefs, type AgentSession, type GroupBy, type ShowMode, type SortBy } from "../lib/agents";
 import { ago, backgroundWaiting, sessionCan, sessionDisplayTab, sessionPreview, sourceSubtitle, sessionTitle, sessionTitleDetail, stateOf, tabLabel } from "../lib/format";
 import { useHerdrTabName } from "../lib/agents-display";
@@ -346,6 +346,9 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   const leadActive = workingMark && !showState && st !== "working" && st !== "needs_you" && st !== "unread";
   // Awaiting Reply (#5096): seen, but it asked you something you have not answered
   const awaiting = useStore((x) => awaitsReply(s, x.mutes));
+  // Finished, not opened (#14447): its last turn ended after you last looked, at any age and whatever the triage said;
+  // drawn as Just finished is (that word wins while it lasts) until it is opened
+  const unopened = useStore((x) => finishedUnopened(s, x.mutes));
   // Just finished (#9751): done before you looked, less than three hours ago
   const finished = useStore((x) => justFinished(s, x.mutes));
   // where it was opened, marked at the row's end: not on a tab with several panes (endRoom), where a herdr tab is a
@@ -435,7 +438,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
     askSide(row.machine_id, row.session_id, side.session_id);
     go(to)(e);
   }, [row, go, to]);
-  const line = draft ?? (showState && !s.assistant && !sideOnly ? rowLine(s, ix, awaiting, finished) : undefined);
+  const line = draft ?? (showState && !s.assistant && !sideOnly ? rowLine(s, ix, awaiting, finished || unopened) : undefined);
   // ultracode on (#3428): the workflow mark in the AI colour right after the title; a row without it is drawn as before.
   // Not on an offline row: the node keeps the last value it saw after the process is gone, and a resume starts it off.
   const ultra = showState && ultracodeMarkShown(s);
@@ -466,7 +469,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
     >
       {/* the agent's mark before its state (#6390): what runs there, then how it is doing */}
       {showState && !s.assistant && <SessionMark s={s} size={14} />}
-      <span className="flex size-3.5 shrink-0 items-center justify-center">{showState || st === "working" || leadActive ? <StatusMark state={leadActive ? "working" : usageLimitLabel(s) && st === "unread" ? "idle" : st} awaiting={awaiting} finished={finished} waiting={backgroundWaiting(s)} /> : <Icon name={icon} size={12} className="text-ink-3" />}</span>
+      <span className="flex size-3.5 shrink-0 items-center justify-center">{showState || st === "working" || leadActive ? <StatusMark state={leadActive ? "working" : usageLimitLabel(s) && st === "unread" ? "idle" : st} awaiting={awaiting} finished={finished} unopened={unopened} waiting={backgroundWaiting(s)} /> : <Icon name={icon} size={12} className="text-ink-3" />}</span>
       {prefix && <span className={prefixClass}>{prefix}</span>}
       {/* with the mark, the title sits in the column whether a second line shows or not: the same element through a
           workflow's start and end, so the mark does not fade in again */}

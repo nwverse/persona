@@ -33,8 +33,9 @@ const MAX = 160;
 /**
  * The second line of an agent's sidebar row: for one that needs you, its card's kind and what it asks
  * ("Has a question: which test framework?"), else why it waits (sessionPreview: the host's reason, the error, the hub's triage, its
- * last words); for one that finished unseen, Just finished ones too (`finished`, lib/agent-groups.ts justFinished, #9751),
- * what it did ("✓ conclusion" or its last words, as plain text); for one seen and
+ * last words); for one that finished unseen, Just finished and Finished, not opened ones too (`finished`,
+ * lib/agent-groups.ts justFinished and finishedUnopened, #9751, #14447), what it did ("✓ conclusion" or its last words,
+ * as plain text); for one seen and
  * awaiting the user's reply (`awaiting`, lib/agent-groups.ts awaitsReply, #5096), "Awaiting your reply:" and what it asks;
  * for a Codex opened with no first message, that it waits for one.
  * Undefined for every other state, and when there is nothing to say. `lead` is the colored part (`tone`: red for

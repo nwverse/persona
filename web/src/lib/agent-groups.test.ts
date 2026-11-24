@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentGrouping, type AgentMutes, awaitsReply, buildAgentGroups, hostsOf, isQuiet, justFinished, replyAsk, sessionHost, splitAgentSessions } from "./agent-groups";
+import { agentGrouping, type AgentMutes, awaitsReply, buildAgentGroups, finishedUnopened, hostsOf, isQuiet, justFinished, replyAsk, sessionHost, splitAgentSessions } from "./agent-groups";
 import { byAttention } from "./format";
 import type { AgentState, Machine, Session } from "./types";
 
@@ -189,6 +189,43 @@ describe("Just finished (#9751)", () => {
   it("ranks after Working and before the seen ones (byAttention)", () => {
     const all = [session("idle", "idle", { updated_at: date(9) }), finished("done"), session("working", "working"), session("unread", "unread")];
     expect(ids(all.sort(byAttention))).toEqual(["unread", "working", "done", "idle"]);
+  });
+});
+
+describe("Finished, not opened (#14447)", () => {
+  // the triage took its turn out of Unread: Seen as far as its state goes, while its host still says done and nobody
+  // looked since the turn ended (the hub's zero seen_at: never)
+  const unopenedRow = (id: string, patch: Partial<Session> = {}) => session(id, "idle", { status: "done", seen_at: "0001-01-01T00:00:00Z", work: { phase: "done", line: "Merged" }, ...patch });
+
+  it("is a turn that ended after the owner last looked, however long ago and whatever the triage said", () => {
+    expect(finishedUnopened(unopenedRow("a"))).toBe(true);
+    expect(finishedUnopened(unopenedRow("looked-before", { seen_at: date(0) }))).toBe(true);
+    expect(finishedUnopened(unopenedRow("hub-wait", { work: { phase: "blocked", on: "external", wake_at: date(5) } }))).toBe(true);
+    // within Just finished's three hours too: the row's mark says Just finished then (StatusMark)
+    expect(finishedUnopened(unopenedRow("just", { work: { phase: "done", just_finished: true } }))).toBe(true);
+  });
+
+  it("is not one opened since, seen in its host, Unread, stopped by a usage limit, muted, or a Persona chat", () => {
+    expect(finishedUnopened(unopenedRow("opened", { seen_at: date(2) }))).toBe(false);
+    expect(finishedUnopened(unopenedRow("host-seen", { status: "idle" }))).toBe(false);
+    expect(finishedUnopened(unopenedRow("unread", { state: "unread" }))).toBe(false);
+    expect(finishedUnopened(unopenedRow("limit", { turn_error: "usage limit reached", turn_error_kind: "usage_limit" }))).toBe(false);
+    expect(finishedUnopened(unopenedRow("muted-idle"), mutes)).toBe(false);
+    expect(finishedUnopened(unopenedRow("in-space", { space_name: "项目" }), mutes)).toBe(false);
+    expect(finishedUnopened(unopenedRow("chat", { assistant: true }))).toBe(false);
+  });
+
+  it("is not quiet, so its space stays out of Idle spaces until it is opened; a muted one still is", () => {
+    expect(isQuiet(unopenedRow("old"))).toBe(false);
+    expect(isQuiet(unopenedRow("opened", { seen_at: date(2) }))).toBe(true);
+    expect(isQuiet(unopenedRow("muted-idle"), mutes)).toBe(true);
+  });
+
+  it("ranks and groups as Seen: By status has no section for it, and the attention order is Seen's", () => {
+    const groups = buildAgentGroups([unopenedRow("old"), session("idle", "idle")], machines, "state");
+    expect(groups.map((g) => [g.key, ids(g.sessions)])).toEqual([["state:idle", ["idle", "old"]]]);
+    const all = [unopenedRow("old", { updated_at: date(9) }), session("working", "working"), session("unread", "unread")];
+    expect(ids(all.sort(byAttention))).toEqual(["unread", "working", "old"]);
   });
 });
 

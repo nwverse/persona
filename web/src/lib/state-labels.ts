@@ -4,8 +4,8 @@
 import { t } from "../i18n";
 import type { AgentState } from "./types";
 
-/** An agent's state (AgentState), Waiting, Waiting in the background (#6045), Awaiting reply (#5096), Just finished (an agent's turn or a to-do, #9751), and the states only a task or a summary has: Done, Interrupted, Follow-up, Not started, Didn't start. A task whose agent waits to be brought back (#3274) is named by what it waits on (waitName). */
-export type StateName = AgentState | "waiting" | "bg_waiting" | "awaits_reply" | "just_finished" | "done" | "interrupted" | "follow_up" | "not_started" | "failed";
+/** An agent's state (AgentState), Waiting, Waiting in the background (#6045), Awaiting reply (#5096), Just finished (an agent's turn or a to-do, #9751), Finished, not opened (an agent's turn past Just finished, #14447), and the states only a task or a summary has: Done, Interrupted, Follow-up, Not started, Didn't start. A task whose agent waits to be brought back (#3274) is named by what it waits on (waitName). */
+export type StateName = AgentState | "waiting" | "bg_waiting" | "awaits_reply" | "just_finished" | "unopened" | "done" | "interrupted" | "follow_up" | "not_started" | "failed";
 
 export function stateName(s: StateName): string {
   return t(`lib-state-labels.${s}`);

@@ -13,6 +13,7 @@ whether there's a pending interaction, and whether the user has looked at it in 
 | `unread` Unread | A turn finished and the result hasn't been seen | `done` (never focused in herdr) | And not viewed in the App since it finished | Green |
 | `idle` Seen | Finished and seen, waiting for input | `idle` (seen in herdr) | Or herdr still says `done` but it was viewed in the App | Gray |
 | Just finished (a kind of `idle`) | The triage found the turn done before anybody looked, less than three hours ago ("Just finished" below, #9751, `work.just_finished`) | — | Session Triage on, and the turn Unread before the triage took it out | Green, a plain dot |
+| Finished, not opened (a kind of `idle`, a mark only) | The triage took the turn out of Unread and nobody has opened it since it ended, however long ago ("Finished, not opened" below, #14447) | `done` | Not viewed in the App since the turn ended (`seen_at` before `updated_at`), read by the web | Green, a plain dot |
 | `offline` Not running | Not in the host, only a transcript. An Agent of a terminal engine is read-only (#4754): a message is refused (`agent_stopped`), and Resume on its terminal page brings it back (`--resume`) | — | — | Light gray |
 | `interrupted` Interrupted by restart (a `status`: its `state` is `offline`, #14447) | Was running before a restart, and the restart took herdr's panes with it (#1917) | — | The record has a pane, the start time is earlier than this node's start, and there's no live agent now | Light gray, with "Continue" (the apps offer it by the status) |
 | `unknown` Unknown | The host recognized the agent but can't tell its state | `unknown` | — | Gray |
@@ -121,6 +122,36 @@ session therefore carries `work.just_finished` (`state` is unchanged; older apps
   still lists these turns under "Done (within 24 hours)".
 - **Clients** (#9751): the web, Android (#9786), iOS and Mac (#9787) and the shared Rust sort core use this rank.
   Android and Apple keep an open chat's row in its original place until the chat is left.
+
+### Finished, not opened (#14447)
+
+Just finished lasts three hours, and a turn the triage found waiting on something the manager ends itself (a wake, an
+automatic retry) is never Just finished. Both then read Seen though nobody opened them, so a row whose finished work
+the owner had not checked looked like one they had read. The web therefore marks such a row from what every row,
+full or summary, already carries: the hub's own Unread rule read before the triage. `state`, the triage and the
+manager are unchanged.
+
+- **When** (`web/src/lib/seen-outbox.ts` `unopened`): `state` is `idle` and the row has a `work` state (the triage took
+  it out of Unread), its host's `status` is `done` (the turn ended and nobody looked at it there), and `seen_at` is the
+  zero time or earlier than `updated_at` by more than `agentState`'s 2 seconds ("Seen" below). Not for a turn a usage
+  limit stopped (it goes on by itself, and its row says when), a muted Agent (plain Seen, as a muted Just finished is)
+  or a Persona chat (`finishedUnopened` in `web/src/lib/agent-groups.ts`).
+- **Gone** when the owner opens it, marks it seen or marks all as seen (the seen outbox holds it seen on that device at
+  once), when its host shows it (`status` `idle`), and when a new turn starts.
+- **Rows**: Just finished's plain dot in the unread tint, the state word "Finished, not opened"
+  (`lib-state-labels.unopened`; Just finished's word while that lasts) and what it did as its second line, in every
+  grouping drawn with the sidebar's agent row (`SessionRow`).
+- **Lists**: as Just finished, it is not quiet: it and its space stay out of Idle Spaces and the "N more idle" folds
+  until it is opened (a muted one is plain Seen). It ranks and sorts as Seen: By status has no section for it (the
+  three hours keep Just finished's rank, "Why three hours" above).
+- **Not counted**: the quick filters, folded tallies, group headers, the Unread and Needs you counts, badges and pushes
+  are as before: none of them names it, so none changes meaning.
+- **Which hosts say `done`**: herdr, Tern and Rex panes until the tab is focused on the computer; Claude's desktop app
+  while it runs the session's claude, until the app shows the session (once that claude exits, the row is Not running
+  and has neither Unread nor this mark); the Codex App's threads until opened in the App, for 72 hours
+  (`codexDesktopRecent`, then Not running); runtimes by their own unread mark. An agy pane's `updated_at` must be its
+  latest activity for the rule to see a new turn (#13710).
+- **Clients**: the web. iOS / Mac, Android and HarmonyOS show these rows as Seen until they follow.
 
 ### Codex (#4865)
 

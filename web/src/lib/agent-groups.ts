@@ -4,6 +4,8 @@ import { hubWaits } from "./work";
 import type { AgentState, Machine, Session } from "./types";
 import { byTime } from "./times";
 import { stateName } from "./state-labels";
+import { unopened } from "./seen-outbox";
+import { usageLimitLabel } from "./usage-limit";
 
 export type AgentGrouping = "repo" | "space" | "state" | "machine" | "todo";
 // "By to-do" leads and is the default for a browser that never picked one (#2812); a grouping picked before stays. The
@@ -143,6 +145,15 @@ export function justFinished(s: Session, mutes: AgentMutes = NO_MUTES): boolean 
   return stateOf(s) === "idle" && Boolean(s.work?.just_finished) && !isMuted(s, mutes);
 }
 
+/** Finished, not opened (#14447, docs/protocol/agent-states.md): seen as far as its state goes, but its last turn ended
+ *  after the owner last looked (lib/seen-outbox.ts unopened), however long ago and whatever the triage concluded; not
+ *  stopped by a usage limit (it goes on by itself, and its row says when) and not muted. Its row keeps Just finished's
+ *  mark until it is opened (Just finished's own word for the first three hours). Such an agent is not quiet, so its
+ *  space stays out of Idle Spaces; it ranks and counts as Seen. */
+export function finishedUnopened(s: Session, mutes: AgentMutes = NO_MUTES): boolean {
+  return unopened(s) && !usageLimitLabel(s) && !isMuted(s, mutes);
+}
+
 /** What an Awaiting Reply agent asks: what the triage says it waits for (blocked on the user), else the question its last reply
  *  put to the user; "" when neither says. */
 export function replyAsk(s: Session): string {
@@ -151,10 +162,10 @@ export function replyAsk(s: Session): string {
   return s.asks?.trim() ?? "";
 }
 
-/** Nothing to look at: seen (or unknown), not waiting on the hub or itself, not waiting for the user's reply, and not
- *  just finished. */
+/** Nothing to look at: seen (or unknown), not waiting on the hub or itself, not waiting for the user's reply, not
+ *  just finished, and not finished since the owner last opened it. */
 export function isQuiet(s: Session, mutes: AgentMutes = NO_MUTES): boolean {
-  return ["idle", "unknown"].includes(stateOf(s)) && !isWaiting(s) && !awaitsReply(s, mutes) && !justFinished(s, mutes);
+  return ["idle", "unknown"].includes(stateOf(s)) && !isWaiting(s) && !awaitsReply(s, mutes) && !justFinished(s, mutes) && !finishedUnopened(s, mutes);
 }
 
 function isMuted(s: Session, mutes: AgentMutes): boolean {
