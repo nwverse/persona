@@ -239,8 +239,9 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 		return msg, false, true
 	}
 	now := time.Now()
+	tried := !msg.TriedAt.IsZero() || !msg.DoubtedAt.IsZero()
 	var deferred []superviseSignal
-	if msg.TriedAt.IsZero() {
+	if !tried {
 		signals, deferred = s.partitionFinalWakeSignals(ctx, signals, now, "drain")
 	}
 	// A tried message cannot change its text or identity; do not let wake partitioning strand it at the queue head.
@@ -283,7 +284,7 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 				}
 			}
 		}
-		if e, ok := s.digestEntry(ctx, g, web); ok {
+		if e, ok := s.digestEntryRecheck(ctx, g, web, tried); ok {
 			if g.Kind == sigAsk {
 				g.Cards = e.Asks
 			}
@@ -329,7 +330,7 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 		return msg, false, true
 	}
 	// Do not change the identity or destination of a send that may already have landed.
-	if !msg.TriedAt.IsZero() && (next.Text != msg.Text || len(groups) > 1 || len(groups[to]) == 0) {
+	if tried && (next.Text != msg.Text || len(groups) > 1 || len(groups[to]) == 0) {
 		b.mu.Unlock()
 		return msg, false, true
 	}
