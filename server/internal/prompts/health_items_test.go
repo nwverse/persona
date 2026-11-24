@@ -14,6 +14,9 @@ func TestHealthItemsPromptConsentAndSections(t *testing.T) {
 					strings.Contains(got, "记下约 N 克") != protein {
 					t.Fatalf("unexpected intake sections for %s water=%v protein=%v", lang, water, protein)
 				}
+				if !strings.Contains(got, "估算的数量先用 `ask_user` 确认，确认后才 `log`") {
+					t.Errorf("%s lost estimate consent: water=%v protein=%v", lang, water, protein)
+				}
 				adding := !(water && protein)
 				if strings.Contains(got, "**添加健康项**") != adding || strings.Contains(got, "`add_item`") != adding {
 					t.Errorf("%s addition guidance: water=%v protein=%v", lang, water, protein)

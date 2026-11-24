@@ -390,3 +390,27 @@ func TestHealthItemsFutureIDsDoNotBlockReminders(t *testing.T) {
 		t.Fatalf("future IDs blocked water reminder: %v %v", err, f.pushed())
 	}
 }
+
+func TestHealthItemsWaterPageReminderStatus(t *testing.T) {
+	ctx := context.Background()
+	st, f := &intakeTestStore{}, newFakeHub()
+	s := newServiceOn(t, f, st)
+	setSettings(t, s, func(v *Settings) { v.Timezone = "UTC" })
+	c := defaultHealthIntakeSettings()
+	c.Water.Remind, c.Water.Weekends = true, true
+	c.Water.Start, c.Water.End = "00:00", "23:59"
+	if err := st.PutSetting(ctx, healthIntakeKey, c); err != nil {
+		t.Fatal(err)
+	}
+	for i, items := range [][]string{{"protein"}, {"protein", "water"}} {
+		putItems(t, s, items, int64(i))
+		w := intakePageHTTP(s, "water", "", nil, "", 11, "full")
+		intakePageResult(t, w)
+		body := w.Body.String()
+		absent := i == 0
+		if strings.Contains(body, "Add Water to Health to receive reminders.") != absent ||
+			strings.Contains(body, "Next reminder ") == absent {
+			t.Fatalf("water added=%v: %s", !absent, body)
+		}
+	}
+}
