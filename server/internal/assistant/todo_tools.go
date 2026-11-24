@@ -357,7 +357,7 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 		}
 		filed := ""
 		if w := s.fileCurrentMessage(ctx, machine, self, t.ID); w != "" {
-			filed = " The owner's message 「" + clip(oneLine(w), 60) + "」 is filed under it."
+			filed = fmt.Sprintf(" The owner's message %q is filed under it.", clip(oneLine(w), 60))
 			s.todosChanged(ctx)
 		}
 		return "Concern recorded (it stays open until you report its outcome with concern_report):" + filed +

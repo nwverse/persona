@@ -223,6 +223,19 @@ func TestMatterResolutionAndOwnerMoves(t *testing.T) {
 	if m[run.ID].Matter != "" {
 		t.Fatalf("a concern has a matter: %q", m[run.ID].Matter)
 	}
+	// Below concern, request and piece there is no further level, and a concern without tasks is no piece either.
+	deep := e.create("third level")
+	if w := e.do("PATCH", "/api/v1/todos/"+deep.ID, `{"part_of":"`+piece.ID+`"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("a piece took a piece: %d %s", w.Code, w.Body)
+	}
+	e.f.setItems(ownerSaid("m3", "one more thing", t0.Add(90*time.Second)))
+	if _, err := e.tool("concern_file", map[string]any{"title": "bare matter"}); err != nil {
+		t.Fatal(err)
+	}
+	bare := concernNamed(t, e.matters(), "bare matter")
+	if w := e.do("PATCH", "/api/v1/todos/"+bare.ID, `{"part_of":"`+run.ID+`"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("a concern without tasks became a piece: %d %s", w.Code, w.Body)
+	}
 
 	// A task whose brief started from an owner message filed under a concern joins that matter.
 	e.f.setItems(ownerSaid("m4", "also check the logs", t0.Add(2*time.Minute)))
@@ -237,6 +250,15 @@ func TestMatterResolutionAndOwnerMoves(t *testing.T) {
 	if got := e.matters()[briefTask.ID].Matter; got != run.ID {
 		t.Fatalf("the brief's filed message did not place the task: %q", got)
 	}
+	var one struct {
+		Todo listedMatter `json:"todo"`
+	}
+	if err := json.Unmarshal(e.must("GET", "/api/v1/todos/"+briefTask.ID, "").Body.Bytes(), &one); err != nil {
+		t.Fatal(err)
+	}
+	if one.Todo.Matter != run.ID {
+		t.Fatalf("GET of the one to-do: matter %q, the list says %q", one.Todo.Matter, run.ID)
+	}
 
 	// The owner moves a message to the other matter; the word says they did.
 	if w := e.do("PUT", "/api/v1/todos/"+trace.ID+"/words", `{"conversation":"conv1","message_id":"m1"}`); w.Code != http.StatusOK {
@@ -247,7 +269,7 @@ func TestMatterResolutionAndOwnerMoves(t *testing.T) {
 		m[trace.ID].Concern.Words[0].By != "owner" {
 		t.Fatalf("moved: %+v", m[trace.ID].Concern)
 	}
-	if got := wordTexts(m[run.ID].Concern); len(got) != 0 {
+	if got := wordTexts(m[run.ID].Concern); strings.Join(got, "|") != "also check the logs" {
 		t.Fatalf("left: %v", got)
 	}
 	if w := e.do("PUT", "/api/v1/todos/"+run.ID+"/words", `{"conversation":"conv1","message_id":"never"}`); w.Code != http.StatusBadRequest {

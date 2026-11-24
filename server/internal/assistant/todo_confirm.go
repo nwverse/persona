@@ -29,24 +29,24 @@ func (s *Service) confirmFinished(ctx context.Context, id string, confirmed bool
 
 // setConfirmed writes todo id's confirmed_at (nil: none).
 func (s *Service) setConfirmed(ctx context.Context, id string, at *time.Time) (Todo, error) {
-	cur, ok := s.todoNow(id)
+	s.todos.writing.Lock()
+	cur, ok := s.todoNow(id) // under the lock: every earlier write is in it
 	if !ok {
+		s.todos.writing.Unlock()
 		return Todo{}, db.ErrTodoNotFound
 	}
-	s.todos.writing.Lock()
-	var row *db.TodoRow
 	if st := s.todoDB(); st != nil {
-		var err error
-		if row, err = st.ConfirmTodo(ctx, id, at); err != nil {
+		stored, err := st.ConfirmTodo(ctx, id, at)
+		if err != nil {
 			s.todos.writing.Unlock()
 			return Todo{}, err
 		}
-	} else {
-		r := todoRowOf(cur)
-		r.ConfirmedAt = at
-		row = &r
+		at = stored.ConfirmedAt // as the store keeps it
 	}
-	out, _, applied := s.setTodoRow(id, *row, nil)
+	// Only that column was written, so only that field changes here: nothing else of the to-do moves with a confirm.
+	row := todoRowOf(cur)
+	row.ConfirmedAt = at
+	out, _, applied := s.setTodoRow(id, row, nil)
 	s.todos.writing.Unlock()
 	if !applied {
 		return Todo{}, db.ErrTodoNotFound // deleted meanwhile

@@ -402,13 +402,19 @@ func (s *Service) ownerMessages(ctx context.Context, machine, conversation strin
 	return out, nil
 }
 
-// ownerText is a message's text when the owner wrote it (ownerMessageText: not a notice, a relayed message or a wake),
-// and it is a plain text message Persona did not type in; false for any other item.
+// ownerText is a message's text when the owner wrote it (not a tool result, a picture, a notice, a message Persona
+// typed in for them or one relayed from elsewhere), without the context blocks around it; false for any other item.
+// Unlike ownerMessageText (dispatch_policy.go) it takes a message without a client message id: one typed in a terminal
+// or read through an older node is the owner's too, and every owner message is filed. Persona's own notices, which
+// have none either, are told by their text (prompts.ParseInjected).
 func ownerText(it proto.Item) (string, bool) {
-	if it.Role != "user" || it.Kind != proto.KindText || it.ID == "" || it.Injected != nil || prompts.ParseInjected(it.Text) != nil {
+	if it.Role != "user" || it.Kind != proto.KindText || it.Task != nil && !it.Wake || it.ID == "" {
 		return "", false
 	}
-	text := ownerMessageText(it)
+	if prompts.ItemSource(it) != nil || it.From != "" || it.Wake || it.Injected != nil || prompts.ParseInjected(it.Text) != nil {
+		return "", false
+	}
+	text := strings.TrimSpace(stripContext(it.Text))
 	return text, text != ""
 }
 
@@ -500,7 +506,7 @@ func (s *Service) toolConcernFile(ctx context.Context, machine, self string, arg
 			return "", fmt.Errorf("the concern could not be saved, nothing filed: %w", err)
 		}
 		id = t.ID
-		lines = append(lines, "New concern "+id+" 「"+t.Title+"」.")
+		lines = append(lines, fmt.Sprintf("New concern %s %q.", id, t.Title))
 	default:
 		return "", errors.New("give id, an existing concern (todo_list kind concern), or title, a new one")
 	}
@@ -524,7 +530,7 @@ func (s *Service) toolConcernFile(ctx context.Context, machine, self string, arg
 			if from != "" && from != id {
 				what = "Moved from " + from + " and filed"
 			}
-			lines = append(lines, what+" 「"+clip(oneLine(m.Text), 60)+"」 under "+id+".")
+			lines = append(lines, fmt.Sprintf("%s %q under %s.", what, clip(oneLine(m.Text), 60), id))
 			if t, ok := s.todoNow(id); ok && t.DoneAt != nil {
 				// the owner speaks of a matter that was done: it is being worked on again
 				if err := s.reopenTodo(ctx, id); err != nil {
