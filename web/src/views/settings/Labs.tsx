@@ -5,6 +5,7 @@
 import { t } from "../../i18n";
 import type { ConfigurationSource } from "../../lib/configuration/contract";
 import type { ConfigurationGuidance } from "../../lib/configuration/guidance";
+import { todosV2LabsSource } from "../../lib/labs-todos-v2";
 import { workGuideLabsSource } from "../../lib/labs-work-guide";
 import { useChosenManager, useKnownDefault } from "../../lib/manager-choice";
 import { terminalLabsSource } from "../../lib/labs-terminal";
@@ -19,13 +20,19 @@ export interface LabsModule {
 
 const defaultModules: readonly LabsModule[] = [{ source: terminalLabsSource() }];
 
-// This field follows the selected manager. The browser-local experiments below render
+// These fields follow the selected manager. The browser-local experiments below render
 // immediately, even while the roster is resolving the default manager.
-function WorkGuideSettings() {
+function AssistantLabsSettings() {
   const chosen = useChosenManager();
   const knownDefault = useKnownDefault();
   const manager = chosen ?? knownDefault;
-  return manager ? <div className="mb-6"><ConfigurationForm key={manager} source={workGuideLabsSource(manager)} /></div> : <Loading />;
+  if (!manager) return <Loading />;
+  return (
+    <>
+      <div className="mb-6"><ConfigurationForm key={`work-guide:${manager}`} source={workGuideLabsSource(manager)} /></div>
+      <div className="mb-6"><ConfigurationForm key={`todos-v2:${manager}`} source={todosV2LabsSource(manager)} /></div>
+    </>
+  );
 }
 
 export function LabsSettings({ modules }: { modules?: readonly LabsModule[] } = {}) {
@@ -34,7 +41,7 @@ export function LabsSettings({ modules }: { modules?: readonly LabsModule[] } = 
       <Group anchor="labs" footer={t("settings-labs.scope_note")}>
         <SettingsHint>{t("settings-labs.intro")}</SettingsHint>
       </Group>
-      {!modules && <WorkGuideSettings />}
+      {!modules && <AssistantLabsSettings />}
       {(modules ?? defaultModules).map(({ source, guidance }) => (
         <div key={source.key} className="mb-6">
           <ConfigurationForm source={source} guidance={guidance} />

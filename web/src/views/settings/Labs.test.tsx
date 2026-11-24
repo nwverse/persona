@@ -9,6 +9,7 @@ import { registerModule, resetModulesForTest } from "../../core/module-host";
 import { t } from "../../i18n";
 import { allTypes } from "../../lib/configuration/fixtures/shared";
 import type { ConfigurationUpdate } from "../../lib/configuration/contract";
+import { chooseManager, MANAGER_HEADER } from "../../lib/manager-choice";
 import { LabsDialog, LabsSettings, type LabsModule } from "./Labs";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -143,6 +144,50 @@ describe("Settings › Labs", () => {
     act(() => void window.dispatchEvent(new StorageEvent("storage", { key: KEY })));
     await settle();
     expect(chosen()).toBe(t("settings-labs.terminal_renderer_webgl"));
+  });
+
+  it("mounts the assistant-scoped New To-dos & Tasks toggle for the chosen manager", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/api/v1/assistant")) {
+        if (init?.method === "PUT") {
+          const body = JSON.parse(String(init.body ?? "{}")) as { todos_v2?: boolean };
+          return new Response(JSON.stringify({ manager: "example", work_guide: false, todos_v2: body.todos_v2 === true }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ manager: "example", work_guide: false, todos_v2: false }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("{}", { status: 404 });
+    });
+    chooseManager("example");
+    try {
+      await render();
+      const todosForm = host.querySelector<HTMLElement>('[data-configuration="assistant-todos-v2"]');
+      expect(todosForm).not.toBeNull();
+      const row = todosForm!.querySelector<HTMLElement>('[data-configuration-field="todos_v2"]')!;
+      expect(row.textContent).toContain(t("settings-labs.todos_v2_title"));
+      expect(row.textContent).toContain(t("settings-labs.todos_v2_hint"));
+      expect([...row.querySelectorAll("dt")].map((d) => d.textContent)).toEqual([
+        t("settings-labs.scope"),
+        t("settings-labs.activation"),
+        t("settings-labs.rollback"),
+      ]);
+      const toggle = row.querySelector<HTMLButtonElement>('[role="switch"]')!;
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
+      await click(toggle);
+      expect(toggle.getAttribute("aria-checked")).toBe("true");
+      const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT");
+      expect(putCall).toBeDefined();
+      expect(new Headers(putCall?.[1]?.headers).get(MANAGER_HEADER)).toBe("example");
+      expect(JSON.parse(String(putCall?.[1]?.body))).toEqual({ todos_v2: true, expected_todos_v2: false });
+    } finally {
+      act(() => chooseManager(null));
+    }
   });
 });
 

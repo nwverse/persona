@@ -316,14 +316,14 @@ export function TodosView({
   // a search and the filter narrow the to-dos first; the sections (or the folders) place what is left
   const filterTodo = (t: Todo) => matchesSearch(t) && inFilter(t);
 
-  // Developing Persona's view switch (docs/web/web.md "Developing Persona"): the sections from the hub's view, a row
-  // without one placed as before
+  // Hub to-do view projection (#14583, docs/web/web.md "Developing Persona"): preferred by default when the hub lists
+  // `todo_view` (with `persona.todos.viewDraw=0` as browser rollback); a row without a readable view keeps today's place.
   const features = useStore((s) => s.features);
   const fromView = useMemo(() => viewDrawOn(features), [features]);
   const triaged = useMemo(
     () => {
       const r = orderWaitGroups(triageTodos(todos.filter(filterTodo), lookup, Date.now(), restored, { superseded }), Date.now());
-      return fromView ? drawnFromView(r, Date.now()) : r;
+      return fromView ? drawnFromView(r, Date.now(), restored) : r;
     },
     [todos, lookup, restored, search, listFilter, superseded, tick, fromView],
   );
@@ -332,7 +332,7 @@ export function TodosView({
     () => {
       if (!search.trim()) return triaged;
       const r = orderWaitGroups(triageTodos(todos.filter(inFilter), lookup, Date.now(), restored, { superseded }), Date.now());
-      return fromView ? drawnFromView(r, Date.now()) : r;
+      return fromView ? drawnFromView(r, Date.now(), restored) : r;
     },
     [todos, lookup, restored, search, listFilter, superseded, triaged, tick, fromView],
   );
@@ -1797,51 +1797,53 @@ const TodoListItem = memo(function TodoListItem({
           </span>
         </div>
 
-        {/* Status Line */}
-        <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px]" data-testid="todo-status-line">
-          {open && <StatusMark state={dotState} size="sm" />}
-          <span className={cx("shrink-0 whitespace-nowrap font-medium", TONE_CLASS[look.tone])} data-testid="todo-status">{steps?.label ?? look.label}</span>
-          {!todo.done_at && activeCount > 0 && (
-            <>
-              <span className="text-ink-3">·</span>
-              <span className="text-ink-3">{t("todos.agent_count", { count: activeCount })}</span>
-            </>
-          )}
-          {steps?.after && (
-            <>
-              <span className="text-ink-3">·</span>
-              <span className="shrink-0 whitespace-nowrap text-ink-3" data-testid="todo-steps">{steps.after}</span>
-            </>
-          )}
-          {responsible && (
-            <>
-              <span className="text-ink-3">·</span>
-              <span
-                data-testid="todo-responsible"
-                data-kind={responsible.kind}
-                title={t("todos.responsible_label", { name: responsible.name })}
-                className="inline-flex min-w-0 items-center gap-1 truncate text-ink-2"
-              >
-                <Icon name={responsible.kind === "person" ? "person" : "terminal"} size={11} stroke={2} className="shrink-0 text-ink-3" />
-                <span className="truncate">{responsible.name}</span>
+        {/* Status Line (parked rows collapse to title + concise TaskWaitInfo summary line) */}
+        {!showWait && (
+          <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px]" data-testid="todo-status-line">
+            {open && <StatusMark state={dotState} size="sm" />}
+            <span className={cx("shrink-0 whitespace-nowrap font-medium", TONE_CLASS[look.tone])} data-testid="todo-status">{steps?.label ?? look.label}</span>
+            {!todo.done_at && activeCount > 0 && (
+              <>
+                <span className="text-ink-3">·</span>
+                <span className="text-ink-3">{t("todos.agent_count", { count: activeCount })}</span>
+              </>
+            )}
+            {steps?.after && (
+              <>
+                <span className="text-ink-3">·</span>
+                <span className="shrink-0 whitespace-nowrap text-ink-3" data-testid="todo-steps">{steps.after}</span>
+              </>
+            )}
+            {responsible && (
+              <>
+                <span className="text-ink-3">·</span>
+                <span
+                  data-testid="todo-responsible"
+                  data-kind={responsible.kind}
+                  title={t("todos.responsible_label", { name: responsible.name })}
+                  className="inline-flex min-w-0 items-center gap-1 truncate text-ink-2"
+                >
+                  <Icon name={responsible.kind === "person" ? "person" : "terminal"} size={11} stroke={2} className="shrink-0 text-ink-3" />
+                  <span className="truncate">{responsible.name}</span>
+                </span>
+              </>
+            )}
+            {/* its steps were handed out: what is next once they are all closed, else nothing about handing it over */}
+            {!todo.done_at && activeCount === 0 && (steps?.tail !== undefined ? (
+              steps.tail && <span className="truncate text-ink-3" data-testid="todo-steps-next">· {steps.tail}</span>
+            ) : !responsible ? (
+              <span className="truncate text-ink-3">· {t("todos.not_handed")}</span>
+            ) : null)}
+            {(section ?? view.section) === "just_done" && seenCanFile(todo) && onSeen ? (
+              <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                {!todo.done_at && <ReviewBadge todo={todo} />}
+                <SeenButton onClick={() => onSeen(todo.id)} />
               </span>
-            </>
-          )}
-          {/* its steps were handed out: what is next once they are all closed, else nothing about handing it over */}
-          {!todo.done_at && activeCount === 0 && (steps?.tail !== undefined ? (
-            steps.tail && <span className="truncate text-ink-3" data-testid="todo-steps-next">· {steps.tail}</span>
-          ) : !responsible ? (
-            <span className="truncate text-ink-3">· {t("todos.not_handed")}</span>
-          ) : null)}
-          {(section ?? view.section) === "just_done" && seenCanFile(todo) && onSeen ? (
-            <span className="ml-auto flex shrink-0 items-center gap-1.5">
-              {!todo.done_at && <ReviewBadge todo={todo} />}
-              <SeenButton onClick={() => onSeen(todo.id)} />
-            </span>
-          ) : (
-            !todo.done_at && <ReviewBadge todo={todo} className="ml-auto" />
-          )}
-        </div>
+            ) : (
+              !todo.done_at && <ReviewBadge todo={todo} className="ml-auto" />
+            )}
+          </div>
+        )}
 
         {/* What it waits on from the user, with the one tap that answers it (#2056) */}
         <TodoAskLine todo={todo} className="mt-1" />

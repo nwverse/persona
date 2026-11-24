@@ -4,7 +4,7 @@ Fixed machine_policy keeps the machine and rejects unavailable launchers. Flexib
 
 Started tasks keep a hub brief (owner request or started_why). Give goal, done_when and out_of_bounds. Writes need done_when (PR/issue defaults to merged+closed unless PR/draft-only). Reads need goal. Omit expect_minutes for auto estimate; positive overrides (manual Agents lack estimate_due). Use continues+continues_why to continue, task_retry for failed starts, task_scope+scope_revision for approved changes.
 
-Edits need readonly=false and authorized write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds the read-only constraint. Claude-family uses bypassPermissions for both; Codex uses plan unless assistant.readonly_mode=prompt; pi/cursor/agy refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review (workers cannot delegate).
+Edits need readonly=false and authorized write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds a read-only constraint. Claude-family uses bypassPermissions for both; Codex and companion agy use plan unless assistant.readonly_mode=prompt; pi/cursor refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review (workers cannot delegate).
 
 The user's explicit repository URL or path takes precedence. Resolve unclear identity via repositories_list, then repository_get if useful. A binding is a reference, not authorization. Verify machine and checkout independently. Non-repository tasks need no lookup; retrieval is optional before dispatch. The owner chooses terminal cleanup on Start.
 
@@ -122,7 +122,7 @@ Workspace: "new" isolates; {"new":{"branch":"task/my-change"}} names its branch.
           },
           "readonly": {
             "type": "boolean",
-            "description": "true only for a task that must remain read-only; false for explicitly authorized file changes (a Codex read-only sandbox: see the description). The first message adds「本任务只读：不改项目文件、不提交、不对外写入」 only when true"
+            "description": "true only for a task that must remain read-only; false for explicitly authorized file changes (see the description). The first message adds「本任务只读：不改项目文件、不提交、不对外写入」 only when true"
           },
           "user_requested": {
             "type": "boolean",

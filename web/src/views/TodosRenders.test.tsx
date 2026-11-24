@@ -84,11 +84,15 @@ afterEach(async () => {
 });
 
 describe("todo rows on a sessions push", () => {
-  it("renders a fresh waiting PR in its own section with link and blocker details", async () => {
+  it("renders a fresh waiting PR in its own section with collapsed summary and expandable blocker details", async () => {
     const url = "https://example.com/repo/pull/91";
     await act(async () => putTodo({ ...getState().todos[0], id: "ta", title: "Waiting PR", agents: [], pr_url: url, delivery: { state: "pr" }, pr_status: { url, state: "open", draft: false, review: "required", checks: "failure", conflicts: false, checked_at: new Date(Date.now() - 30_000).toISOString() } }));
     const section = host.querySelector<HTMLElement>('[data-testid="todo-section"][data-section="parked"]');
     expect(section?.textContent).toContain("Waiting PR");
+    expect(section?.querySelector('[data-testid="todo-status-line"]')).toBeNull();
+    expect(section?.querySelector('[data-wait-collapsed="true"]')).not.toBeNull();
+    expect(section?.querySelector('[data-testid="todo-pr-line"] a')).toBeNull();
+    await act(async () => section?.querySelector<HTMLButtonElement>("[data-wait-toggle]")!.click());
     const link = section?.querySelector<HTMLAnchorElement>('[data-testid="todo-pr-line"] a');
     expect(link?.href).toBe(url);
     expect(section?.textContent).toContain(t("assistant-tasks.pr_blocker_review_required"));
