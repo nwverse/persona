@@ -179,7 +179,9 @@ type Host interface {
 	LaterHandled(ctx context.Context, id string) (bool, error)
 	TabName(ctx context.Context, prompt string) string
 	ApplyModel(ctx context.Context, kind string, params map[string]any) error
-	NodeCall(ctx context.Context, machine, method string, params, out any) error
+	// StartAgent starts a coding agent on machine from the /start card (the owner's own start: unsupervised, as the
+	// core's start paths list it).
+	StartAgent(ctx context.Context, machine string, params map[string]any) (proto.Session, error)
 	StartChannelRun(r *channel.Run)
 
 	// The nudges (nudge.go): a card still waiting (waiting false: it ended, or that is not known), its agent gone, a

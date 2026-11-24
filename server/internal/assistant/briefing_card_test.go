@@ -132,6 +132,7 @@ func (e *briefRunEnv) cards() []string {
 // With facts on, the routine's answer goes to Lark as one card made by Persona: the model's summary on top, under it the
 // waiting cards, the last twelve hours and the task to verify with its Accept button.
 func TestBriefRoutineSendsOneCard(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefRunEnv(t, true)
 	e.mirror()
 	cards := e.cards()
@@ -160,6 +161,7 @@ func TestBriefRoutineSendsOneCard(t *testing.T) {
 
 // With facts off the routine sends its answer as before: the model's own text, no sections of Persona's.
 func TestBriefRoutineWithoutFactsSendsTheAnswerAsBefore(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefRunEnv(t, false)
 	e.mirror()
 	cards := e.cards()
@@ -176,6 +178,7 @@ func TestBriefRoutineWithoutFactsSendsTheAnswerAsBefore(t *testing.T) {
 // Too many rows are not cut off in the middle of the card: each section lists briefRowsMax of them and says how many more,
 // and the card stays one card inside the size Lark takes.
 func TestBriefRoutineCountsWhatDoesNotFit(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefRunEnvWith(t, true, func(e *briefRunEnv) {
 		for i := 0; i < 11; i++ { // 13 waiting in all, 12 to verify
 			e.waiting(fmt.Sprintf("ix_more_%02d", i), fmt.Sprintf("再来一个问题%02d", i), time.Duration(i+1)*time.Minute)
@@ -225,6 +228,7 @@ func (e *briefRunEnv) reminded() int {
 // once the task has been asked again (another round) the old card's button is answered "already handled" and verifies
 // nothing (#4853).
 func TestBriefAcceptButtonIsForItsRoundOnly(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefRunEnv(t, true)
 	e.mirror()
 	var card struct {

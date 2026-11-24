@@ -391,8 +391,10 @@ func (s *Service) AcceptAction(context.Context, *botcard.CardAction) (string, st
 func (s *Service) LaterHandled(context.Context, string) (bool, error)       { return true, nil }
 func (s *Service) TabName(context.Context, string) string                   { return "" }
 func (s *Service) ApplyModel(context.Context, string, map[string]any) error { return nil }
-func (s *Service) NodeCall(context.Context, string, string, any, any) error { return nil }
-func (s *Service) StartChannelRun(r *channel.Run)                           { s.startChannelRun(r) }
+func (s *Service) StartAgent(context.Context, string, map[string]any) (proto.Session, error) {
+	return proto.Session{}, nil
+}
+func (s *Service) StartChannelRun(r *channel.Run) { s.startChannelRun(r) }
 
 func (s *Service) CardLook(_ context.Context, id string) (proto.Interaction, bool) {
 	if f := s.ch().look; f != nil {

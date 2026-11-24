@@ -87,6 +87,7 @@ func TestWebClarifyRouteKeepsPrivateCardInItsPrivateConversation(t *testing.T) {
 }
 
 func TestFeishuClarifyRequiresFreshCardBoundOwnerActionAndRoutesAnswerHome(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	ft := newFleetTestNoStore(t)
 	preparedTestConversation(ft)
 	done := startPreparedTest(t, ft, "ix_lark_question", "", nil)
@@ -164,6 +165,7 @@ func TestFeishuClarifyRequiresFreshCardBoundOwnerActionAndRoutesAnswerHome(t *te
 }
 
 func TestFeishuTokenlessCallbacksDoNotCollapseDistinctQuestions(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	ft := newFleetTestNoStore(t)
 	preparedTestConversation(ft)
 	done := startPreparedTest(t, ft, "ix_lark_tokenless", "", nil)

@@ -112,6 +112,7 @@ func TestAgentNameDoesNotOverwriteTabRenamedDuringNaming(t *testing.T) {
 }
 
 func TestFeishuAgentsCardHerdrSessionNames(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f := newFakeHub().withMachine()
 	f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) { return map[string]any{"message_id": "om_agents"}, nil })
 	s := newTestService(t, f)

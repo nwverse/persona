@@ -474,6 +474,7 @@ func TestThreadPostsSameWordsTwiceBothArrive(t *testing.T) {
 	seen := map[string]bool{}
 	var landed []string
 	var keys []string
+	id := e.bound("发版", testThread) // its anchor seeded before the lines are counted
 	e.f.answerApp(AppFeishu, FeishuText, func(p json.RawMessage) (any, error) {
 		var m map[string]any
 		_ = json.Unmarshal(p, &m)
@@ -490,7 +491,6 @@ func TestThreadPostsSameWordsTwiceBothArrive(t *testing.T) {
 		}
 		return map[string]any{"message_id": "om_x"}, nil
 	})
-	id := e.bound("发版", testThread)
 	for range [3]int{} {
 		e.decide(id, "先发安卓")
 		e.clk.advance(threadPostEvery)

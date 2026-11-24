@@ -140,6 +140,7 @@ func (a *askRig) result(t *testing.T, done chan string) string {
 
 // With the defaults, the Lark bot nudges once under a waiting ask_user card, a minute after nudge_after.
 func TestAskUserCardIsNudgedAfterTheDefaultWait(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	a := newAskRig(t)
 	ix, _ := a.ask(t)
 	a.tick(a.s, time.Duration(assistantwire.NudgeAfterDefault-1)*time.Minute)
@@ -157,6 +158,7 @@ func TestAskUserCardIsNudgedAfterTheDefaultWait(t *testing.T) {
 // The user writing in the conversation takes back the question it waits on: the tool returns at once with the reason,
 // the card is closed as dismissed with "replied in the chat" (not "expired"), and a later answer finds nothing.
 func TestUserWritingWithdrawsTheWaitingAskUser(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	a := newAskRig(t)
 	ix, done := a.ask(t)
 	a.s.UserSpoke(context.Background(), SessionRef{MachineID: "mac", SessionID: "s1"})
@@ -287,6 +289,7 @@ func TestUserWritingWithdrawsAskUserWithoutTheQueue(t *testing.T) {
 // to the to-dos (the question becomes one, ask_todo.go), and it is never nudged. The wait is shortened to 300 ms here; the real one
 // is askUserWait.
 func TestExpiredAskUserCardIsEndedForGood(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	a := newAskRig(t)
 	card, _ := a.ask(t) // the real tool's card, only for its shape
 	short := card

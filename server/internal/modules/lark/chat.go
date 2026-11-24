@@ -48,7 +48,6 @@ const (
 	FeishuFromRead      = assistantwire.FeishuFromRead
 	InteractionsGet     = assistantwire.InteractionsGet
 	NotifyQuietGet      = assistantwire.NotifyQuietGet
-	DeviceSessionStart  = assistantwire.DeviceSessionStart
 	CodeTryAgain        = assistantwire.CodeTryAgain
 )
 

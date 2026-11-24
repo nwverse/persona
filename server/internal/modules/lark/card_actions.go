@@ -479,10 +479,9 @@ func (s core) botStartAgent(machine, cwd, prompt, mode string) error {
 		s.botSay(ctx, i18n.T(l, "assistant-feishu_cards.cannot_start", i18n.Args{"error": err.Error()}))
 		return err
 	}
-	var res struct {
-		Session proto.Session `json:"session"`
-	}
-	if err := s.h.NodeCall(ctx, d.ID, DeviceSessionStart, params, &res); err != nil {
+	var res struct{ Session proto.Session }
+	var err error
+	if res.Session, err = s.h.StartAgent(ctx, d.ID, params); err != nil {
 		s.botSay(ctx, i18n.T(l, "assistant-feishu_cards.cannot_start", i18n.Args{"error": clip(oneLine(err.Error()), 200)}))
 		return err
 	}

@@ -429,8 +429,17 @@ func (h larkHost) ApplyModel(ctx context.Context, kind string, params map[string
 	return h.s.applyModel(ctx, kind, params)
 }
 
-func (h larkHost) NodeCall(ctx context.Context, machine, method string, params, out any) error {
-	return h.s.call(ctx, machine, method, params, out)
+func (h larkHost) StartAgent(ctx context.Context, machine string, params map[string]any) (proto.Session, error) {
+	return h.s.startChatAgent(ctx, machine, params)
+}
+
+// startChatAgent starts the coding agent the owner asked for on the Lark bot's /start card.
+func (s *Service) startChatAgent(ctx context.Context, machine string, params map[string]any) (proto.Session, error) {
+	var res struct {
+		Session proto.Session `json:"session"`
+	}
+	err := s.call(ctx, machine, DeviceSessionStart, params, &res)
+	return res.Session, err
 }
 
 func (h larkHost) StartChannelRun(r *channel.Run) { h.s.startChannelRun(r) }

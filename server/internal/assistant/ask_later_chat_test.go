@@ -266,6 +266,7 @@ func TestChannelReplyPassesANoWaitQuestionToTheCardThatWaits(t *testing.T) {
 // On the queue, a no-wait card that runs out after the owner wrote in the conversation closes saying "Replied in the
 // chat", not "Moved to to-dos": it makes none.
 func TestAskUserNoWaitCardClosesAsRepliedInChatAfterTheUserWrote(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	a := newAskRig(t)
 	old := askUserWait
 	askUserWait = 400 * time.Millisecond
