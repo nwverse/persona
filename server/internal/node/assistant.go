@@ -1096,7 +1096,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if strings.TrimSpace(text) != "" || len(images) == 0 {
 		content = append(content, map[string]any{"type": "text", "text": text})
 	}
-	in := assistantInput{text: text, images: images, content: content}
+	in := assistantInput{text: text, images: images, content: content, supervision: ctx.Value(supervisionDeliveryKey{}) == true}
 	startAttemptsAt := time.Now()
 	if fresh && !p.born.IsZero() {
 		startAttemptsAt = p.born

@@ -2,7 +2,7 @@ import { decisionSourceLabel } from "../lib/todo-decision-label";
 import { NewTodoRepositoryBindings, TodoRepositoryBindings, useRepositoryRequestContext } from "../ui/TaskRepositoryBindingsEditor";
 import { cleanRepositoryDraft, createTodoWithRepositories, repositoryDuplicateLink, validRepositoryDraft, type CreateRepositoryBindings, type RepositoryCatalog } from "../lib/task-repositories";
 import { hasRequestPieces } from "../lib/request-pieces";
-import { defaultManager, MANAGER_HEADER, useShownManager } from "../lib/manager-choice";
+import { defaultManager, MANAGER_HEADER, sameManager, useShownManager } from "../lib/manager-choice";
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type InputHTMLAttributes, type ReactNode, type RefObject } from "react";
 import { api, apiBlob, credentialOwner, enc, errorText, getToken, subscribeCredentialOwner } from "../lib/api";
@@ -81,6 +81,7 @@ import { SESSION_LIST_STYLE } from "../ui/list-metrics";
 import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
 import { cancellationReason, formatAgentSource, formatTodoContext } from "../lib/todo-details";
+import { useCachedDirectionNames } from "../lib/direction-names";
 import { directionTitle, groupsByDirection, useDirectionTree, type Direction } from "../lib/direction-tree";
 import { DirectionCountsText } from "./DirectionMarks";
 import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, countsAsOpen, lastActivity, openMergePRs, sectionStartsFolded, supersededFailedStarts, triage, triageTodos, type OwnerNeed, type TriageGroup, type TriageResult, type TriageRule, type TriageSection } from "../lib/todo-triage";
@@ -103,6 +104,7 @@ import type { MenuItem } from "../ui/menu-model";
 import { useRestoredTodos } from "../lib/todo-restore";
 import { stepsWords } from "../lib/todo-steps";
 import { useOwnerNeeds, useTodoLookup, useTodoMinute } from "../lib/todo-owner-needs";
+import { evidenceAuthorLabel, type EvidenceAuthorContext } from "../lib/evidence-author";
 import { autoReviewLine, checklist, latestReview, parkedLine, progressLine, type CheckMark, type Supervision } from "../lib/supervision";
 import { resultExtras } from "../lib/brief";
 import { prLink } from "./TodoStageBar";
@@ -314,14 +316,14 @@ export function TodosView({
   // a search and the filter narrow the to-dos first; the sections (or the folders) place what is left
   const filterTodo = (t: Todo) => matchesSearch(t) && inFilter(t);
 
-  // Developing Persona's view switch (docs/web/web.md "Developing Persona"): the sections from the hub's view, a row
-  // without one placed as before
+  // Hub to-do view projection (#14583, docs/web/web.md "Developing Persona"): preferred by default when the hub lists
+  // `todo_view` (with `persona.todos.viewDraw=0` as browser rollback); a row without a readable view keeps today's place.
   const features = useStore((s) => s.features);
   const fromView = useMemo(() => viewDrawOn(features), [features]);
   const triaged = useMemo(
     () => {
       const r = orderWaitGroups(triageTodos(todos.filter(filterTodo), lookup, Date.now(), restored, { superseded }), Date.now());
-      return fromView ? drawnFromView(r, Date.now()) : r;
+      return fromView ? drawnFromView(r, Date.now(), restored) : r;
     },
     [todos, lookup, restored, search, listFilter, superseded, tick, fromView],
   );
@@ -330,7 +332,7 @@ export function TodosView({
     () => {
       if (!search.trim()) return triaged;
       const r = orderWaitGroups(triageTodos(todos.filter(inFilter), lookup, Date.now(), restored, { superseded }), Date.now());
-      return fromView ? drawnFromView(r, Date.now()) : r;
+      return fromView ? drawnFromView(r, Date.now(), restored) : r;
     },
     [todos, lookup, restored, search, listFilter, superseded, triaged, tick, fromView],
   );
@@ -1795,51 +1797,53 @@ const TodoListItem = memo(function TodoListItem({
           </span>
         </div>
 
-        {/* Status Line */}
-        <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px]" data-testid="todo-status-line">
-          {open && <StatusMark state={dotState} size="sm" />}
-          <span className={cx("shrink-0 whitespace-nowrap font-medium", TONE_CLASS[look.tone])} data-testid="todo-status">{steps?.label ?? look.label}</span>
-          {!todo.done_at && activeCount > 0 && (
-            <>
-              <span className="text-ink-3">·</span>
-              <span className="text-ink-3">{t("todos.agent_count", { count: activeCount })}</span>
-            </>
-          )}
-          {steps?.after && (
-            <>
-              <span className="text-ink-3">·</span>
-              <span className="shrink-0 whitespace-nowrap text-ink-3" data-testid="todo-steps">{steps.after}</span>
-            </>
-          )}
-          {responsible && (
-            <>
-              <span className="text-ink-3">·</span>
-              <span
-                data-testid="todo-responsible"
-                data-kind={responsible.kind}
-                title={t("todos.responsible_label", { name: responsible.name })}
-                className="inline-flex min-w-0 items-center gap-1 truncate text-ink-2"
-              >
-                <Icon name={responsible.kind === "person" ? "person" : "terminal"} size={11} stroke={2} className="shrink-0 text-ink-3" />
-                <span className="truncate">{responsible.name}</span>
+        {/* Status Line (parked rows collapse to title + concise TaskWaitInfo summary line) */}
+        {!showWait && (
+          <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px]" data-testid="todo-status-line">
+            {open && <StatusMark state={dotState} size="sm" />}
+            <span className={cx("shrink-0 whitespace-nowrap font-medium", TONE_CLASS[look.tone])} data-testid="todo-status">{steps?.label ?? look.label}</span>
+            {!todo.done_at && activeCount > 0 && (
+              <>
+                <span className="text-ink-3">·</span>
+                <span className="text-ink-3">{t("todos.agent_count", { count: activeCount })}</span>
+              </>
+            )}
+            {steps?.after && (
+              <>
+                <span className="text-ink-3">·</span>
+                <span className="shrink-0 whitespace-nowrap text-ink-3" data-testid="todo-steps">{steps.after}</span>
+              </>
+            )}
+            {responsible && (
+              <>
+                <span className="text-ink-3">·</span>
+                <span
+                  data-testid="todo-responsible"
+                  data-kind={responsible.kind}
+                  title={t("todos.responsible_label", { name: responsible.name })}
+                  className="inline-flex min-w-0 items-center gap-1 truncate text-ink-2"
+                >
+                  <Icon name={responsible.kind === "person" ? "person" : "terminal"} size={11} stroke={2} className="shrink-0 text-ink-3" />
+                  <span className="truncate">{responsible.name}</span>
+                </span>
+              </>
+            )}
+            {/* its steps were handed out: what is next once they are all closed, else nothing about handing it over */}
+            {!todo.done_at && activeCount === 0 && (steps?.tail !== undefined ? (
+              steps.tail && <span className="truncate text-ink-3" data-testid="todo-steps-next">· {steps.tail}</span>
+            ) : !responsible ? (
+              <span className="truncate text-ink-3">· {t("todos.not_handed")}</span>
+            ) : null)}
+            {(section ?? view.section) === "just_done" && seenCanFile(todo) && onSeen ? (
+              <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                {!todo.done_at && <ReviewBadge todo={todo} />}
+                <SeenButton onClick={() => onSeen(todo.id)} />
               </span>
-            </>
-          )}
-          {/* its steps were handed out: what is next once they are all closed, else nothing about handing it over */}
-          {!todo.done_at && activeCount === 0 && (steps?.tail !== undefined ? (
-            steps.tail && <span className="truncate text-ink-3" data-testid="todo-steps-next">· {steps.tail}</span>
-          ) : !responsible ? (
-            <span className="truncate text-ink-3">· {t("todos.not_handed")}</span>
-          ) : null)}
-          {(section ?? view.section) === "just_done" && seenCanFile(todo) && onSeen ? (
-            <span className="ml-auto flex shrink-0 items-center gap-1.5">
-              {!todo.done_at && <ReviewBadge todo={todo} />}
-              <SeenButton onClick={() => onSeen(todo.id)} />
-            </span>
-          ) : (
-            !todo.done_at && <ReviewBadge todo={todo} className="ml-auto" />
-          )}
-        </div>
+            ) : (
+              !todo.done_at && <ReviewBadge todo={todo} className="ml-auto" />
+            )}
+          </div>
+        )}
 
         {/* What it waits on from the user, with the one tap that answers it (#2056) */}
         <TodoAskLine todo={todo} className="mt-1" />
@@ -2131,6 +2135,9 @@ const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; classNa
 
 /** The task's criteria, each as its latest report or review found it, and what the supervisor said last. */
 export function ReviewChecklist({ todo, lookup }: { todo: Todo; lookup?: SessionLookup }) {
+  const cachedDirectionNames = useCachedDirectionNames();
+  const assistant = useStore((s) => s.assistant);
+  const shown = useShownManager();
   const sup = todo.supervision;
   if (!sup) return null;
   const list = checklist(sup);
@@ -2138,6 +2145,14 @@ export function ReviewChecklist({ todo, lookup }: { todo: Todo; lookup?: Session
   const parked = triage(todo, lookup, Date.now()).section === "parked";
   // What this list cannot say of finished work (#3822): the criteria a scope change dropped, and what was done beyond the brief.
   const extras = todo.done_at ? resultExtras(todo) : undefined;
+  const assistantMatchesTodo = Boolean(assistant && sameManager(assistant.manager ?? shown, todo.manager));
+  const authorCtx: EvidenceAuthorContext = {
+    manager: todo.manager,
+    directionNames: sameManager(todo.manager, defaultManager()) ? cachedDirectionNames : undefined,
+    conversations: assistantMatchesTodo ? assistant?.conversations : undefined,
+    mainConversationId: assistantMatchesTodo ? assistant?.main : undefined,
+    lookup,
+  };
   return (
     <section data-testid="review-checklist" className="mt-4 rounded-control bg-inset p-3.5 shadow-hairline">
       <div className="flex items-center gap-2">
@@ -2152,6 +2167,7 @@ export function ReviewChecklist({ todo, lookup }: { todo: Todo; lookup?: Session
         <ul className="mt-2 flex flex-col gap-1.5">
           {list.map((c) => {
             const m = MARK[c.mark];
+            const author = evidenceAuthorLabel(c.by, authorCtx);
             return (
               <li key={c.criterion} className="flex items-start gap-2 text-[13px]">
                 <span role="img" aria-label={m.label()} title={m.label()} className={cx("mt-0.5 shrink-0", m.className)}>
@@ -2160,9 +2176,9 @@ export function ReviewChecklist({ todo, lookup }: { todo: Todo; lookup?: Session
                 <span className="flex min-w-0 flex-col">
                   <span className="text-ink">{c.criterion}</span>
                   {c.evidence && <span className="text-[12px] text-ink-3 select-text">{c.evidence}</span>}
-                  {(c.at || c.by) && (
+                  {(c.at || author) && (
                     <span className="flex flex-wrap gap-x-1.5 text-[11px] text-ink-3">
-                      {c.by && <span>{c.by}</span>}
+                      {author && <span data-testid="review-evidence-author">{author}</span>}
                       {c.at && <time dateTime={c.at} title={c.at}>{new Date(c.at).toLocaleString()}</time>}
                     </span>
                   )}
