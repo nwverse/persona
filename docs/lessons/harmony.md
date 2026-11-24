@@ -116,3 +116,13 @@ frame cap turned it into a `frame_too_large` reconnect loop with an empty Agents
 the largest message it legitimately carries (Hub events 64 MiB, port relays 1 MiB), check frames and fragments
 against that, and feed each TLS read into the buffer in pieces: one read can hold the tail of one frame and several
 whole ones. Keep the failure reason on the state callback so tests can tell a size limit from a broken socket.
+
+## Keep the reader's row yourself in a Repeat list
+
+`List.maintainVisibleContentPosition(true)` did not hold the visible content when rows were inserted above it through
+`Repeat` with `virtualScroll` (API 26, on a phone): the list kept its first visible index, so a page of earlier turns
+replaced the rows under the reader, and a session that opened at its latest rows could show an earlier window. Record
+the first visible row and its offset before changing the rows and put it back with `scrollToIndex` in the same pass when
+its index moved. Keep leading rows (notices, Load more) in the list even when empty, so their coming and going never
+shifts indices, and hold a change that arrives during a gesture until the gesture settles. On a device, check the row
+ID and its offset before and after an insert, not only that the list still scrolls.

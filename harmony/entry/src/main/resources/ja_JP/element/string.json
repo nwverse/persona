@@ -6367,6 +6367,10 @@
     {
       "name": "plan_before_last_message",
       "value": "最新のメッセージより前の計画"
+    },
+    {
+      "name": "chat_history_failed",
+      "value": "読み込めませんでした。タップして再試行"
     }
   ]
 }
