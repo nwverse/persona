@@ -2841,9 +2841,10 @@ only deletion markers and minimal offline closure identities.
 switches without adding another engine protocol. The settings-backed batch stores each conversation's before-image,
 target, expected epoch and operation ID before starting anything. Busy items wait for their current turn and pending
 work; no interrupt or synthetic message completes a batch. When an activated batch item has no durable input pending,
-the coordinator accepts the completed switch immediately. If real input is pending, the first-turn acceptance/refusal
-rules above remain unchanged. A late preparation failure cannot return an activated operation to `in_doubt`;
-reconciliation continues from the activated state. The existing history loop and session-list changes wake queued items
+the coordinator accepts the completed switch immediately and keeps its handoff for the conversation's next input
+(#14488): that input goes through the queue, which attaches the handoff once, so the target still learns what went
+before. If real input is pending, the first-turn acceptance/refusal rules above remain unchanged. A late preparation
+failure cannot return an activated operation to `in_doubt`; reconciliation continues from the activated state. The existing history loop and session-list changes wake queued items
 after a restart.
 
 The batch response distinguishes queued, switching, switched and refused items; one refusal does not cancel independent
@@ -2865,7 +2866,9 @@ content digest, delivery state and ordering metadata; its duplicate payload and
 transport provenance are removed after the receipt commits. A rejected first
 input that rollback requeues keeps its payload until the restored source accepts
 it. Ambiguous deliveries retain their content for positive-receipt reconciliation.
-Terminal switch records discard their handoff summary. Deleting the logical chat
+Terminal switch records discard their handoff summary, except the one an idle
+acceptance keeps until the conversation's next input is accepted, or a later
+switch is. Deleting the logical chat
 cascades to receipts, segments, inputs and switch context. Physical device aliases
 are locked together during first adoption, preventing concurrent managers from
 creating two logical roots for the same physical chat.
