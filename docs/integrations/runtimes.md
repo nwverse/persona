@@ -218,7 +218,9 @@ The list carries only recent sessions (`rt.recent`). A caller reading an older p
   if two runtimes' launchers clash, only the one that connected first provides it.
   A local `agy` launcher supplies the model catalog and starts in a pane when the selected host is herdr (#10237),
   including when herdr is the default and the node detects the local CLI. The connected companion serves Assistant
-  and terminal-less Agent requests (the node RPC can target `host: "agy"`). A shell alias, function or helper definition
+  and terminal-less Agent requests (the node RPC can target `host: "agy"`); the assistant's `task_plan` and `agent_start`
+  target it for an agy launcher it runs when they name no host, and a start targeting it while it is not connected is
+  refused with `agy_companion_offline` (#13447). A shell alias, function or helper definition
   named `agy` still has precedence over automatic companion selection (#9181).
 
 ## Minimal example
@@ -762,6 +764,11 @@ identifies its loopback native service. `RevertToCascadeStep` receives `conversa
 index, including `-1` for an empty conversation. Native refusal propagates to the caller. The bridge uses the current
 native summary and replacement step indices to discard the abandoned export tail, then publishes a changed history
 token. This survives companion restarts without modifying native transcript files.
+A reused lower index is not proof of a rewind: when the export goes past the replaced steps before the replacement run
+reaches their last index, another process wrote the same conversation. The bridge then keeps both runs, ordered by
+step index (old steps first), and changes the content revision (#14626). If the replacement run later exports an index
+inside the restored steps (a rewind whose parallel results arrived out of order, #11086), it did re-cover them: the bridge
+drops them again for good. A second writer that goes on into those indices is treated the same way.
 
 Antigravity declares `caps.fork` for Agent and Assistant chats. `ForkConversation` keeps the existing workspace and
 copies through an inclusive native step index. The bridge resolves a reply from the exported transcript and stops

@@ -104,6 +104,8 @@ import persona.platform.phonetools.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -120,8 +122,17 @@ fun PersonaRoot(
     val features = persona.core.designsystem.LocalHubFeatures.current
     val api = services.extensions?.takeIf { active != null && active?.demo == null &&
         ("extension_manager" in features || "plugin_manager" in features) }
+    val spaceConversations = remember(services.extensionSlots) {
+        services.extensionSlots?.state?.map { slots -> slots.places.any { it.extension == "space-conversations" && it.id == "home" } }?.distinctUntilChanged()?.stateIn(
+            scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main.immediate),
+            started = kotlinx.coroutines.flow.SharingStarted.Eagerly,
+            initialValue = services.extensionSlots?.state?.value?.places?.any { it.extension == "space-conversations" && it.id == "home" } == true,
+        )
+    }
+    CompositionLocalProvider(persona.feature.assistant.LocalSpaceConversationsEnabled provides spaceConversations) {
     persona.feature.settings.ExtensionDeclarationsHost(api, active?.identity.orEmpty()) {
         PersonaRootContent(hub, openNavigation, services, shell, onPaired)
+    }
     }
 }
 
@@ -1226,7 +1237,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             }
             moduleEntries(modules) { module ->
                 persona.core.moduleapi.ModuleNavContext(navigator, session.modules[module.id],
-                    unavailable = { message -> UnavailablePage(message, navigator) }, shell = moduleShell)
+                    unavailable = { message -> UnavailablePage(message, navigator) }, audioFocus = shell.audioFocus.forModule(module),
+                    shell = moduleShell)
             }
             tools?.run { register(navigator) }
         }

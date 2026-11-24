@@ -24,11 +24,13 @@ import (
 // Claude Code plugin 0.3.0 permission / question / plan approval bridging (#14214) adds 6,363 B (260,569 B).
 // Antigravity multi-instance companion flags and --agy-dir env propagation (#14483) add 373 B (260,942 B).
 // An Antigravity CLI without session/set_mode: checks skip the switch and starts say to update agy (#14533), 149 B (261,091 B).
-// Leaving conversations the agy CLI has open to it (#13451) adds 1,009 B (main measured 261,091 B on 2026-11-24,
-// 262,100 B with it), and the ceiling rises by the same 1,009 B.
+// Antigravity Gemini API-key gateway model discovery routes through HTTP(S)_PROXY and honors NO_PROXY (#14552), 1,497 B (262,588 B).
+// Keeping Antigravity steps at a reused lower index when the export goes on past them, dropping them again once the run re-covers them (#14626), adds 230 B (262,818 B).
+// Leaving conversations the agy CLI has open to it (#13451) adds 973 B (main measured 262,790 B after #14829,
+// 263,763 B with it).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 262_100
+	const budget = 263_763
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

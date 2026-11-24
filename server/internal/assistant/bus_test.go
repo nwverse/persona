@@ -28,6 +28,11 @@ func TestRoutesAreTheWireOnes(t *testing.T) {
 	if !s.recordingOn() { // the recording module's routes are served only with it (recording.go)
 		want = slices.DeleteFunc(want, func(r string) bool { return strings.Contains(r, " /api/v1/recordings") })
 	}
+	if !s.healthOn() { // the Health module's routes likewise (health_layer.go); workouts stay in the core
+		want = slices.DeleteFunc(want, func(r string) bool {
+			return strings.Contains(r, " /api/v1/assistant/health/intake") || strings.Contains(r, " /api/v1/assistant/health/water/")
+		})
+	}
 	slices.Sort(got)
 	slices.Sort(want)
 	if !slices.Equal(got, want) {

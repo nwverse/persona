@@ -110,9 +110,18 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		t.Model = strings.TrimSpace(t.Model)
 		t.Speed = strings.TrimSpace(t.Speed)
 		t.Permission = strings.TrimSpace(t.Permission)
+		if t.Host = strings.TrimSpace(t.Host); checkStartHostName(t.Host) != nil {
+			return "", fmt.Errorf("task %d: %w", i+1, checkStartHostName(t.Host))
+		}
 		if t.OwnerStep = strings.TrimSpace(t.OwnerStep); !validOwnerStep(t.OwnerStep) {
 			return "", fmt.Errorf("task %d: owner_step must be empty, %q, %q or %q", i+1, ownerStepMoney, ownerStepOutward, ownerStepIrreversible)
 		}
+		aud, err := todoAudience(t.Audience)
+		if err != nil {
+			return "", fmt.Errorf("task %d: %w", i+1, err)
+		}
+		t.Audience = aud
+		t.DirectionID = strings.TrimSpace(t.DirectionID)
 		if err := t.checkRole(scope != nil); err != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, err)
 		}

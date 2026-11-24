@@ -98,7 +98,7 @@ func TestCallNotFoundReason(t *testing.T) {
 
 // The hub localizes start refusals with no parameters for both a session's start_error and the HTTP response.
 func TestPlainStartRefusalLocalization(t *testing.T) {
-	for _, code := range []string{"readonly_unsupported", "directory_untypable", "omp_options"} {
+	for _, code := range []string{"readonly_unsupported", "directory_untypable", "omp_options", proto.CodeAgyCompanionOffline} {
 		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
 			want := i18n.T(lang, "rpc-errors."+code)
 			if got := Sentence(lang, code, nil); got != want || got == "" || got == "rpc-errors."+code {
@@ -389,6 +389,7 @@ func TestRPCFailureLocalePreservesOutcomeAndDiagnostics(t *testing.T) {
 		{"held ahead", &rpc.Error{Code: "held_ahead", Message: "the manager's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.held_ahead"},
 		{"held not kept", &rpc.Error{Code: "held_not_kept", Message: "the manager's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.held_not_kept"},
 		{"held full", &rpc.Error{Code: "held_full", Message: "the manager's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.held_full"},
+		{"held start full", &rpc.Error{Code: "held_start_full", Message: "the manager's own words"}, "rpc-errors.held_start_full"},
 	}
 	for _, tc := range cases {
 		legacy := httptest.NewRecorder()
@@ -658,6 +659,25 @@ func TestSupervisionRefusalsSpeakTheClientsLanguage(t *testing.T) {
 		want := i18n.T(lang, "rpc-errors.assistant_supervision_runtime", i18n.Args{"launchers": i18n.T(lang, "rpc-errors.assistant_supervision_none")})
 		if body["error"] != want {
 			t.Fatalf("legacy %s: %v", lang, body)
+		}
+	}
+}
+
+func TestUnresolvedModelRefusalSpeaksTheClientsLanguage(t *testing.T) {
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		rec := httptest.NewRecorder()
+		data := json.RawMessage(`{"delivered":"none","retryable":false,"launcher":"gw","model":"opus"}`)
+		body := call(t, langWriter{rec, lang}, rec, &rpc.Error{Code: "assistant_model_unresolved", Message: "native diagnostic", Data: data})
+		want := i18n.T(lang, "rpc-errors.assistant_model_unresolved", i18n.Args{"launcher": "gw", "model": "opus"})
+		if rec.Code != http.StatusConflict || body["code"] != "assistant_model_unresolved" || body["error"] != want ||
+			body["delivered"] != "none" || body["retryable"] != false || body["detail"] != nil {
+			t.Fatalf("%s: %d %v", lang, rec.Code, body)
+		}
+		// Missing metadata keeps the original message rather than leaking unexpanded placeholders.
+		rec = httptest.NewRecorder()
+		body = call(t, langWriter{rec, lang}, rec, &rpc.Error{Code: "assistant_model_unresolved", Message: "explicit fallback"})
+		if body["error"] != "explicit fallback" || strings.Contains(body["error"].(string), "{") {
+			t.Fatalf("fallback %s: %v", lang, body)
 		}
 	}
 }

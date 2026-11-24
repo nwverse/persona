@@ -89,3 +89,6 @@ func (f *fakeDevices) HeldMessages(string, i18n.Lang) map[string][]proto.Undeliv
 }
 func (f *fakeDevices) HeldRetry(context.Context, string, string) (bool, error)  { return false, nil }
 func (f *fakeDevices) HeldDelete(context.Context, string, string) (bool, error) { return false, nil }
+func (f *fakeDevices) AgentTransfer(context.Context, devices.AgentTransfer) (devices.AgentTransferResult, error) {
+	return devices.AgentTransferResult{}, errors.New("no transfers here")
+}

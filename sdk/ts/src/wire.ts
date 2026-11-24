@@ -328,6 +328,7 @@ export interface Contributes {
   assistant?: AssistantItem[];
   mcp_servers?: MCPServerItem[];
   ui?: UIItem[];
+  track_kinds?: TrackKindItem[];
   agent_sources?: AgentSourceItem[];
   channel?: ChannelItem[];
   events?: EventsItem[];
@@ -690,6 +691,41 @@ export interface ConnectorItem {
    * install preview says so.
    */
   sends_as_user?: boolean;
+}
+
+export interface TrackAttention {
+  push_cap?: string;
+  deep_default?: string;
+  enter_mode?: string;
+}
+
+export interface TrackSidebar {
+  group?: string;
+  order?: number;
+  icon?: string;
+}
+
+export interface TrackKindConfig {
+  schema: 1;
+  template: string;
+  user_instructions?: string;
+  context: string;
+  default_categories: string[];
+  tag_focus: string[];
+  rhythms: (Record<string, unknown>)[];
+  attention: TrackAttention;
+  supervision: string;
+  usage: (Record<string, unknown>)[];
+  assembly: string;
+  capture_target?: boolean;
+  channels: string[];
+  sidebar: TrackSidebar;
+}
+
+export interface TrackKindItem {
+  id: string;
+  title: string;
+  config: TrackKindConfig;
 }
 
 /**
@@ -5101,6 +5137,13 @@ export type ChannelSendKind = "answer" | "note" | "ask" | "push" | (string & {})
 export const CHANNEL_SEND_KINDS = ["answer", "note", "ask", "push"] as const;
 
 /**
+ * What kind of chat a channel message came from: direct (private chat), group (regular group chat), or topic (a topic
+ * or thread inside a group).
+ */
+export type ChannelChatKind = "direct" | "group" | "topic" | (string & {});
+export const CHANNEL_CHAT_KINDS = ["direct", "group", "topic"] as const;
+
+/**
  * channel.receive: one of the owner's messages (only the owner's). Answered once the hub has it, deduplicated by id
  * and queued, not after the turn.
  */
@@ -5123,6 +5166,12 @@ export interface ChannelMessage {
   chat?: string;
   /** The topic or thread within chat, when the request came from one. */
   topic?: string;
+  /** Opaque chat or group identifier for conversation routing when integrations_v2 is enabled. */
+  chat_id?: string;
+  /** Kind of chat the message came from (direct, group, or topic), when known. */
+  chat_kind?: ChannelChatKind;
+  /** Opaque topic or thread identifier within chat_id for conversation routing when integrations_v2 is enabled. */
+  topic_id?: string;
   /**
    * Context the extension gathered for this request, such as nearby chat history. It is data, not owner-authored
    * instructions.

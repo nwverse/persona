@@ -22,6 +22,7 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/recordinghost"
@@ -61,7 +62,7 @@ func TestBusHelloNamesRecordingDay(t *testing.T) {
 	p, _ := b.client.HelloParams().(map[string]any)
 	caps, _ := p["capabilities"].([]string)
 	// The recording module's capabilities, only when the build has it (persona_without_recording leaves them out).
-	if on := recordinghost.InBuild(); slices.Contains(caps, assistantwire.CapabilityRecordingDay) != on ||
+	if on := recordinghost.InBuild(moduleswitch.Set{}); slices.Contains(caps, assistantwire.CapabilityRecordingDay) != on ||
 		slices.Contains(caps, assistantwire.CapabilityMeetingAttendance) != on {
 		t.Fatalf("capabilities %v (module in the build: %v)", caps, on)
 	}
@@ -1015,7 +1016,7 @@ func TestRecordingFollowsItsModule(t *testing.T) {
 		name string
 		off  []string
 		on   bool
-	}{{"build", nil, recordinghost.InBuild()}, {"switched off", []string{recordinghost.ModuleID}, false}} {
+	}{{"build", nil, recordinghost.InBuild(moduleswitch.Set{})}, {"switched off", []string{recordinghost.ModuleID}, false}} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFakeHub()
 			s := withSettings(t, f, New(Options{Hub: f, Logf: testLogf(t), ModulesOff: c.off}))

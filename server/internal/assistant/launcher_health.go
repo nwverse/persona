@@ -464,10 +464,13 @@ func classifyLauncherError(text string) string {
 	return errKindOther
 }
 
-// repairNow: a failure the repairs know right away; the others wait for a second one in a row. Never a usage limit or
+// repairNow: a current failure the repairs know right away; the others wait for a second one in a row. Never a usage limit or
 // an exhausted upstream account pool, however many in a row: nothing on the machine is broken. The same for an
 // unfinished first-run setup: only a person at the machine can finish it.
 func (r LauncherHealth) repairNow() bool {
+	if r.State != healthFailing || !r.unusable() {
+		return false
+	}
 	switch r.Kind {
 	case errKindUsageLimit, errKindOnboarding, errKindUpstream:
 		return false
@@ -513,7 +516,8 @@ func (s *Service) launcherHealthRoutes() {
 			if (machine != "" && d.ID != machine) || !d.Reachable {
 				continue
 			}
-			out = append(out, s.checkMachine(ctx, d, cfg, false, launcher)...)
+			records, _ := s.checkMachine(ctx, d, cfg, false, launcher)
+			out = append(out, records...)
 		}
 		if out == nil {
 			out = []LauncherHealth{}

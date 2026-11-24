@@ -210,6 +210,8 @@ type Service struct {
 	lists   map[string][]time.Duration
 	ctx     context.Context
 	logs    []string
+	wbd     *wbData     // the workbench's data (wb)
+	thd     *threadData // the to-do threads (th)
 }
 
 func newTestService(t testing.TB, f Hub) *Service {
@@ -447,19 +449,6 @@ func (s *Service) call(ctx context.Context, method string, params, out any) erro
 		return json.Unmarshal(res, out)
 	}
 	return nil
-}
-
-func targetParams(t assistantwire.ChannelTarget, p map[string]any) map[string]any {
-	if t.ChatID != "" {
-		p["chat_id"] = t.ChatID
-	}
-	if t.InThread {
-		p["in_thread"] = true
-	}
-	if t.NoDetour {
-		p["no_detour"] = true
-	}
-	return p
 }
 
 func (s *Service) Status(ctx context.Context) (FeishuStatus, error) {
@@ -780,4 +769,193 @@ func lastCard(t *testing.T, r *channel.Run, posts []map[string]any) string {
 	}
 	card, _ := last["card"].(string)
 	return card
+}
+
+// ---- the workbench's part of the host ----
+
+// wbData is what the fake core gives the workbench (tests set it).
+type wbData struct {
+	web       string
+	counts    assistantwire.WorkbenchCounts
+	agents    []assistantwire.WorkbenchAgent
+	inbox     []assistantwire.WorkbenchItem
+	board     []assistantwire.WorkbenchBoardRow
+	companion []assistantwire.WorkbenchCompanion
+	today     json.RawMessage
+	target    string
+	main      *bool
+	done      []string
+	mutes     []string
+	drafts    []string
+	replies   []string
+	draft     string
+}
+
+func (s *Service) wb() *wbData {
+	s.tmu.Lock()
+	defer s.tmu.Unlock()
+	if s.wbd == nil {
+		s.wbd = &wbData{target: "Persona"}
+	}
+	return s.wbd
+}
+
+func (s *Service) WebBase(context.Context) string          { return s.wb().web }
+func (s *Service) Location(context.Context) *time.Location { return time.UTC }
+func (s *Service) StandingNow() time.Time                  { return s.clock() }
+func (s *Service) ClipFallback(text string) string         { return clip(text, 1500) }
+func (s *Service) ChatTargetLabel(context.Context) string  { return s.wb().target }
+func (s *Service) SetChatTarget(main bool)                 { s.wb().main = &main }
+
+func (s *Service) WorkbenchAgents(context.Context, time.Time) (assistantwire.WorkbenchCounts, []assistantwire.WorkbenchAgent) {
+	d := s.wb()
+	return d.counts, d.agents
+}
+
+func (s *Service) WorkbenchInbox() []assistantwire.WorkbenchItem { return slices.Clone(s.wb().inbox) }
+
+func (s *Service) WorkbenchItem(id string) (assistantwire.WorkbenchItem, bool) {
+	for _, it := range s.wb().inbox {
+		if it.ID == id {
+			return it, true
+		}
+	}
+	return assistantwire.WorkbenchItem{}, false
+}
+
+func (s *Service) WorkbenchBoard(context.Context, i18n.Lang, string, time.Time) []assistantwire.WorkbenchBoardRow {
+	return s.wb().board
+}
+
+func (s *Service) SessionNames(_ context.Context, sess proto.Session) (string, string) {
+	return sess.Title, ""
+}
+
+func (s *Service) AgentRowMarkdown(_ i18n.Lang, label, _, machine string, _ proto.Session, _ int) string {
+	return "**" + label + "** · " + machine
+}
+
+func (s *Service) NextMeeting(context.Context, time.Time) *assistantwire.WorkbenchMeeting { return nil }
+
+func (s *Service) Companions(context.Context) []assistantwire.WorkbenchCompanion {
+	return s.wb().companion
+}
+
+func (s *Service) TodayBody(context.Context) json.RawMessage { return s.wb().today }
+
+func (s *Service) SummonWorkbench(context.Context)            {}
+func (s *Service) WorkbenchRefresh(context.Context)           {}
+func (s *Service) WorkbenchBringCard(context.Context, string) {}
+
+func (s *Service) AgentsCard(context.Context, string) (*botcard.Card, string) {
+	return botcard.NewCard("agents", "", "agents"), "agents"
+}
+
+func (s *Service) StartAgentCard(context.Context, string) *botcard.Card {
+	return botcard.NewCard("start", "", "start")
+}
+
+func (s *Service) ConversationsCard(context.Context) (*botcard.Card, string) {
+	return botcard.NewCard("list", "", "list"), "list"
+}
+
+func (s *Service) TasksOverview(context.Context) ([]*botcard.Card, []string) { return nil, nil }
+
+func (s *Service) InboxDone(_ context.Context, id string, dismissed bool) error {
+	d := s.wb()
+	s.tmu.Lock()
+	defer s.tmu.Unlock()
+	d.done = append(d.done, fmt.Sprintf("%s dismissed=%v", id, dismissed))
+	return nil
+}
+
+func (s *Service) InboxMute(_ context.Context, source, tag, value, name string) error {
+	d := s.wb()
+	s.tmu.Lock()
+	defer s.tmu.Unlock()
+	d.mutes = append(d.mutes, source+" "+tag+"="+value+" "+name)
+	return nil
+}
+
+func (s *Service) DraftReply(_ context.Context, id, instruction string) (string, error) {
+	d := s.wb()
+	s.tmu.Lock()
+	defer s.tmu.Unlock()
+	d.drafts = append(d.drafts, id+": "+instruction)
+	return d.draft, nil
+}
+
+func (s *Service) ReplyInbox(_ context.Context, id, text, clientID string) (bool, error) {
+	d := s.wb()
+	s.tmu.Lock()
+	defer s.tmu.Unlock()
+	d.replies = append(d.replies, id+" "+clientID+": "+text)
+	return false, nil
+}
+
+// ---- a to-do's topic lines' part of the host ----
+
+// threadData is the fake core's to-do threads and topic anchors, and the timers the lines asked for (tests set them).
+type threadData struct {
+	bound   map[string][2]string // to-do → chat, thread
+	anchors map[string]string    // chat/thread → message
+	later   []func()
+	forgot  []string
+}
+
+func (s *Service) th() *threadData {
+	s.tmu.Lock()
+	defer s.tmu.Unlock()
+	if s.thd == nil {
+		s.thd = &threadData{bound: map[string][2]string{}, anchors: map[string]string{}}
+	}
+	return s.thd
+}
+
+func (s *Service) ThreadOf(id string) (string, string, bool) {
+	d := s.th()
+	s.tmu.Lock()
+	defer s.tmu.Unlock()
+	b, ok := d.bound[id]
+	return b[0], b[1], ok
+}
+
+func (s *Service) StatusKept(ctx context.Context) (FeishuStatus, error) { return s.Status(ctx) }
+
+func (s *Service) TopicMessage(_ context.Context, chat, thread string) string {
+	d := s.th()
+	s.tmu.Lock()
+	defer s.tmu.Unlock()
+	return d.anchors[chat+"/"+thread]
+}
+
+func (s *Service) ForgetTopicMessage(_ context.Context, chat, thread, id string) {
+	d := s.th()
+	s.tmu.Lock()
+	defer s.tmu.Unlock()
+	d.forgot = append(d.forgot, chat+"/"+thread+" "+id)
+	delete(d.anchors, chat+"/"+thread)
+}
+
+func (s *Service) TodoLink(web, id string) string { return web + "/todos/" + id }
+func (s *Service) PostNow() time.Time             { return s.clock() }
+
+// PostLater keeps the line's timer for the test to fire (fireLater).
+func (s *Service) PostLater(_ time.Duration, f func()) {
+	d := s.th()
+	s.tmu.Lock()
+	defer s.tmu.Unlock()
+	d.later = append(d.later, f)
+}
+
+// fireLater runs the timers asked for so far.
+func (s *Service) fireLater() {
+	d := s.th()
+	s.tmu.Lock()
+	fs := d.later
+	d.later = nil
+	s.tmu.Unlock()
+	for _, f := range fs {
+		f()
+	}
 }

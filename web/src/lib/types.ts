@@ -1067,6 +1067,8 @@ export interface AssistantInfo {
   leaders?: string[];
   /** "Fold background rounds" in effect (#4314, docs/assistant/assistant.md "Background rounds"); absent from an older hub, which means on. */
   main_background_folded?: boolean;
+  /** Opt-in to fold routine relay replies and skip their finished notification in the main conversation. */
+  fold_routine_relay_replies?: boolean;
   /** "Show scheduled task chats" in the sidebar's Recent (#8324, lib/recent-task-chats.ts): one value on the hub for all
    *  of the user's devices, off by default; absent from an older hub (no switch, and Recent leaves them out). */
   recent_task_chats?: boolean;
@@ -1081,6 +1083,10 @@ export interface AssistantInfo {
   /** The background supervisor's conversation (#4927, lib/background-supervisor.ts): its session id once the hub made
    *  it; absent before that and from an older hub. Read-only. */
   background_supervisor?: string;
+  /** Unified experimental To-dos & Tasks Labs toggle (#14538, #14584); off by default and absent from older hubs. */
+  todos_v2?: boolean;
+  /** Unified experimental Integrations & Extensions Labs toggle (#14802, #14805); off by default and absent from older hubs. */
+  integrations_v2?: boolean;
   conversations: Session[];
 }
 
