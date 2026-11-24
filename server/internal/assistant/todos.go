@@ -1010,6 +1010,7 @@ func (s *Service) todoRoutes() {
 	s.todoSeenRoutes()
 	s.todoMarkRoutes()
 	s.todoRetitleRoute()
+	s.todoReorganizeRoute()
 	s.todoImportRoutes()
 	s.todoViewRoutes()
 	s.todoAskRoutes()
