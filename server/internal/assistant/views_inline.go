@@ -30,7 +30,14 @@ func (s *Service) registerInlineViews(parent context.Context, p SessionItems) {
 	if session, known := s.session(ctx, p.MachineID, p.SessionID); !known || !session.Assistant {
 		return
 	}
+	s.registerInlineViewItems(ctx, st, p, true)
+}
+
+func (s *Service) registerInlineViewItems(ctx context.Context, st inlineViewStore, p SessionItems, reportErrors bool) {
 	for _, it := range p.Items {
+		if ctx.Err() != nil {
+			return
+		}
 		if it.ID == "" || it.Role != "assistant" || it.Kind != proto.KindText {
 			continue
 		}
@@ -56,7 +63,9 @@ func (s *Service) registerInlineViews(parent context.Context, p SessionItems) {
 			}
 			v, err := b.Parse()
 			if err != nil {
-				problems = append(problems, scrubViewError(scrubViewNames(fmt.Sprintf("persona-view block %d: %v", b.Index, err), b.Raw)))
+				if reportErrors {
+					problems = append(problems, scrubViewError(scrubViewNames(fmt.Sprintf("persona-view block %d: %v", b.Index, err), b.Raw)))
+				}
 				continue
 			}
 			raw, err := json.Marshal(v)
@@ -73,6 +82,9 @@ func (s *Service) registerInlineViews(parent context.Context, p SessionItems) {
 			if created {
 				s.event(ctx, map[string]any{"type": "assistant_view_block", "conversation": p.SessionID, "key": row.Key})
 			}
+		}
+		if !reportErrors {
+			continue // reading history must not change the feedback sent to the assistant
 		}
 		if len(problems) == 0 {
 			if valid == 0 {
@@ -105,11 +117,63 @@ func (s *Service) registerInlineTurn(parent context.Context, r SessionRef) {
 	s.registerInlineViews(ctx, SessionItems{MachineID: r.MachineID, SessionID: r.SessionID, Items: result.Items})
 }
 
-// registerInlineTurnSettled re-runs registerInlineTurn after the turn settles so runtimes that flush their native
-// transcript after TurnEnded (replacing temporary live/unexported item ids with final persisted ids) still register
-// their final persona-view blocks idempotently.
+// Antigravity can expose its completed reply under a provisional ID until native export catches up. The
+// interim and exported session rows can have the same revision and preview, so a list change is not guaranteed.
+type inlineViewSourceKey struct{}
+
+const inlineViewRecentTurns = 3
+
 func (s *Service) registerInlineTurnSettled(ctx context.Context, machine, sid string) {
-	s.registerInlineTurn(ctx, SessionRef{MachineID: machine, SessionID: sid})
+	r := SessionRef{MachineID: machine, SessionID: sid}
+	// Include the preceding turns in case a quick follow-up pushed the exported reply out of the latest turn.
+	// Retry within and beyond the runtime's normal export polling window even if no app is watching.
+	if _, ok := s.store().(inlineViewStore); ok && strings.HasPrefix(sid, "agy-") {
+		for _, delay := range []time.Duration{4 * time.Second, 20 * time.Second} {
+			time.AfterFunc(delay, func() { s.reconcileInlineTurn(ctx, r) })
+		}
+	}
+	s.registerInlineTurn(ctx, r)
+}
+
+func (s *Service) reconcileInlineTurn(parent context.Context, r SessionRef) {
+	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
+	defer cancel()
+	st, ok := s.inlineViewRepairStore(ctx, r)
+	if !ok {
+		return
+	}
+	ctx = context.WithValue(ctx, inlineViewSourceKey{}, true)
+	var result struct {
+		Items []proto.Item `json:"items"`
+	}
+	params := map[string]any{"session_id": r.SessionID, "turns": inlineViewRecentTurns, "lazy_images": true}
+	if err := s.call(ctx, r.MachineID, DeviceSessionItems, params, &result); err == nil {
+		s.registerInlineViewItems(ctx, st, SessionItems{MachineID: r.MachineID, SessionID: r.SessionID, Items: result.Items}, false)
+	}
+}
+
+func (s *Service) repairInlineViewPage(parent context.Context, p SessionItems) {
+	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
+	defer cancel()
+	if st, ok := s.inlineViewRepairStore(ctx, SessionRef{MachineID: p.MachineID, SessionID: p.SessionID}); ok {
+		s.registerInlineViewItems(ctx, st, p, false)
+	}
+}
+
+func (s *Service) inlineViewRepairStore(ctx context.Context, r SessionRef) (inlineViewStore, bool) {
+	st, ok := s.store().(inlineViewStore)
+	if !ok || s.conversationAvailable(ctx, r.MachineID, r.SessionID) != nil {
+		return nil, false
+	}
+	sess, known := s.session(ctx, r.MachineID, r.SessionID)
+	if !known || !sess.Assistant {
+		return nil, false
+	}
+	switch sess.Status {
+	case proto.StatusDone, proto.StatusIdle, proto.StatusOffline, proto.StatusInterrupted:
+		return st, true
+	}
+	return nil, false
 }
 
 func (s *Service) conversationViewBlockKeys(ctx context.Context, conversation string) ([]string, error) {

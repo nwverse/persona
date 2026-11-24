@@ -13,6 +13,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -183,6 +184,126 @@ func (m *memInlineViewStore) AssistantViewBlockKeys(_ context.Context, conversat
 
 func (m *memInlineViewStore) RecordAssistantViewErrors(_ context.Context, _, _, _ string, _ []string, _ time.Time) error {
 	return nil
+}
+
+func (m *memInlineViewStore) Feed(context.Context, string, time.Time, int) ([]db.FeedRow, error) {
+	return nil, nil
+}
+
+const antigravityInlineCard = "```persona-view\n" +
+	`{"fallback":"Choose","sections":[{"items":[{"type":"row","title":"Use option A","action":{"id":"choose-a","reply":"Use option A"}}]}]}` + "\n```"
+
+func TestAntigravityInlineTurnRecoversLateExport(t *testing.T) {
+	for _, priorTurns := range []bool{false, true} {
+		name := "first turn"
+		if priorTurns {
+			name = "follow-up already visible"
+		}
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx := context.Background()
+				f := newFakeHub().withMachine()
+				f.ownModels = true
+				st := newMemInlineViewStore()
+				s := newServiceOn(t, f, st)
+				r := SessionRef{MachineID: "server", SessionID: "agy-fixture"}
+				f.setSessions(r.MachineID, proto.Session{SessionID: r.SessionID, Assistant: true, Status: proto.StatusDone, Rev: 8})
+				final := proto.Item{ID: "8@0123456789abcdef0123#1", Seq: 8, TS: time.Now(), Role: "assistant", Kind: proto.KindText, Text: antigravityInlineCard}
+				temporary := final
+				temporary.ID = "8@abcdef0123456789abcd#0"
+				var exported bool
+				f.page = func(turns int) []proto.Item {
+					if priorTurns && turns == 1 {
+						return nil
+					}
+					if exported {
+						return []proto.Item{final}
+					}
+					return []proto.Item{temporary}
+				}
+				s.registerInlineTurn(ctx, r)
+				s.registerInlineTurnSettled(ctx, r.MachineID, r.SessionID)
+				elapse(5 * time.Second) // after the original settle read and first retry
+				key := wire.AssistantBlockKey(final.ID, 0)
+				if keys, _ := st.AssistantViewBlockKeys(ctx, r.SessionID); slices.Contains(keys, key) {
+					t.Fatalf("exported key acknowledged before export: %v", keys)
+				}
+				exported = true // same session revision, no app watch or list event
+				elapse(15 * time.Second)
+				if keys, _ := st.AssistantViewBlockKeys(ctx, r.SessionID); !slices.Contains(keys, key) {
+					t.Fatalf("missing final key after retry: %v", keys)
+				}
+				row := st.blocks[r.SessionID][key]
+				if row.ItemID != final.ID || row.MachineID != r.MachineID {
+					t.Fatalf("wrong registration provenance: %+v", row)
+				}
+				view, err := wire.ParseAssistantView(row.View)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if text, _, err := viewReplyMessage(view, key, viewActionInput{Action: "choose-a"}); err != nil || !strings.HasPrefix(text, "Use option A") {
+					t.Fatalf("declared reply: %q, %v", text, err)
+				}
+				if _, _, err := viewReplyMessage(view, key, viewActionInput{Action: "undeclared"}); err == nil {
+					t.Fatal("accepted an undeclared action")
+				}
+				events := f.eventTypes()
+				s.reconcileInlineTurn(ctx, r)
+				if got := f.eventTypes(); got != events {
+					t.Fatalf("replay broadcast again: %q -> %q", events, got)
+				}
+			})
+		})
+	}
+}
+
+func TestInlineViewPageRepairsHistoricalCardAndFeed(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.Background()
+		f := newFakeHub().withMachine()
+		f.ownModels = true
+		st := newMemInlineViewStore()
+		s := newServiceOn(t, f, st)
+		bus := newNoticeBus(t, s).b
+		f.setSessions("server",
+			proto.Session{SessionID: "agy-history", Assistant: true, Status: proto.StatusIdle},
+			proto.Session{SessionID: "agy-working", Assistant: true, Status: proto.StatusWorking},
+			proto.Session{SessionID: "agy-ordinary", Status: proto.StatusIdle},
+		)
+		card := proto.Item{ID: "7@abcdef0123456789abcd#1", Seq: 7, Role: "assistant", Kind: proto.KindText, Text: antigravityInlineCard}
+		for _, sid := range []string{"agy-history", "agy-working", "agy-ordinary"} {
+			p := SessionItems{MachineID: "server", SessionID: sid, Items: []proto.Item{
+				card, {ID: "user-text", Role: "user", Kind: proto.KindText, Text: antigravityInlineCard},
+			}}
+			raw, err := json.Marshal(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				if err := bus.event(ctx, busEvent{name: assistantwire.EventInlineViewPage, params: raw}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			synctest.Wait()
+			w := serve(s, "GET", "/api/v1/assistant/conversations/"+sid+"/feed", "")
+			var feed struct {
+				Keys []string `json:"view_blocks"`
+			}
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &feed) != nil {
+				t.Fatalf("feed for %s: %d %s", sid, w.Code, w.Body.String())
+			}
+			var want []string
+			if sid == "agy-history" {
+				want = []string{wire.AssistantBlockKey(card.ID, 0)}
+			}
+			if !slices.Equal(feed.Keys, want) {
+				t.Fatalf("feed for %s: keys %v, want %v", sid, feed.Keys, want)
+			}
+		}
+		if got := strings.Count(f.eventTypes(), "assistant_view_block"); got != 1 {
+			t.Fatalf("historical card ack count = %d, want 1", got)
+		}
+	})
 }
 
 func TestInlineTurnRegistersFinalIDAfterSettleAndIsIdempotent(t *testing.T) {
