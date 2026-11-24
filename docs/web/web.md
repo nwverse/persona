@@ -2292,6 +2292,14 @@ only the work tools requested by name to that connection. Switching it off resto
 and the original MCP list, including the existing load-all or deferred-loading preference. After either
 change, the form asks the user to start a new chat. Existing chats may retain earlier guidance and tool information.
 
+**New To-dos & Tasks** (#14538, #14584, `web/src/lib/labs-todos-v2.ts`). This single assistant-scoped switch applies to
+the selected Assistant across devices and defaults to off (`todos_v2` on `GET`/`PUT /api/v1/assistant`, guarded by
+`expected_todos_v2` optimistic locking and explicit manager targeting). It provides one opt-in entry point for
+experimental To-dos & Tasks capabilities without flag sprawl. Changes take effect immediately on the next view or
+request; switching it off restores the standard experience with zero data migration or data loss. Older hubs that do
+not expose boolean `todos_v2` degrade gracefully to a read-only row with an update hint. Graduation (making the new
+experience the default for at least one release with rollback kept) or removal is tracked in #14538.
+
 **Terminal renderer** (`web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals
 (`views/session/terminal/feed.ts`) draw with xterm's DOM renderer (Standard, the default) or WebGL (`@xterm/addon-webgl`,
 its own chunk, loaded only when chosen). Full view always uses the DOM renderer and is not affected. It is kept by this

@@ -108,6 +108,8 @@ type Settings struct {
 	// the automatic all-in-use-tag row; a non-nil empty list is a deliberately customized empty row.
 	ConversationTagFilters []string `json:"conversation_tag_filters"`
 	WorkGuide              *bool    `json:"work_guide,omitempty"`
+	// TodosV2 enables the unified experimental New To-dos & Tasks experience (#14538, #14584). nil is off (the default).
+	TodosV2 *bool `json:"todos_v2,omitempty"`
 	// MeetingAttendanceDefault: the role a meeting recording pre-selects on the phone (off, listener, participant;
 	// docs/assistant/meeting-minutes.md "Attending a meeting"); nil is off.
 	MeetingAttendanceDefault *string `json:"meeting_attendance_default,omitempty"`
@@ -344,6 +346,7 @@ func (s *Service) updateSettingsSaveChecked(ctx context.Context, fn func(*Settin
 }
 
 func (v Settings) workGuideOn() bool { return v.WorkGuide != nil && *v.WorkGuide }
+func (v Settings) todosV2On() bool   { return v.TodosV2 != nil && *v.TodosV2 }
 
 // prEventsRouteToAgentOn reports whether assistant.pr_events_route_to_agent is enabled (off by default).
 func (s *Service) prEventsRouteToAgentOn(ctx context.Context) bool {
@@ -785,6 +788,7 @@ type assistantView struct {
 	// RecentTaskChats is in effect, like DoneNeedsDelivery.
 	RecentTaskChats bool `json:"recent_task_chats"`
 	WorkGuide       bool `json:"work_guide"`
+	TodosV2         bool `json:"todos_v2"`
 	// MeetingAttendanceDefault is in effect (off until changed).
 	MeetingAttendanceDefault      string   `json:"meeting_attendance_default"`
 	MeetingTranscriptionDefault   string   `json:"meeting_transcription_default"`
@@ -854,6 +858,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		ReadonlyMode:            readonlyModeOf(v),
 		MainBackgroundFolded:    quietOn(v.MainBackgroundFolded),
 		WorkGuide:               v.workGuideOn(),
+		TodosV2:                 v.todosV2On(),
 		RecentTaskChats:         v.RecentTaskChats != nil && *v.RecentTaskChats,
 		DeliveryGate:            deliveryGateOf(v),
 		DoneNeedsDelivery:       deliveryGateOf(v) == deliveryGateLive, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
