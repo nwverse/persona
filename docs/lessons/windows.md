@@ -141,6 +141,7 @@ The tray (`server/internal/linktray`, [windows.md](../operations/windows.md), "T
 See [windows.md](../operations/windows.md) ("Codex") and [codex.md](../integrations/codex.md) ("Windows"). Found on a physical Windows 11 machine on 2026-11-07:
 
 - **The Codex App's bus is a named pipe, not `<CODEX_HOME>/ipc/ipc.sock`**: `\\.\pipe\codex-ipc`, one per user session whatever the Codex home. Without it the App's chats stayed "view only" and nothing said why: the node looked for a socket file that never exists on Windows.
+- **Node.js cannot connect to an AF_UNIX socket on Windows**: `net.connect(path)` always treats the path as a named pipe, so a runtime on Node.js dialing `runtime.sock` gets `connect EACCES`. The runtime SDK retries quietly, so the node log showed the companion running and never connected, and agy stayed a plain CLI launcher that cannot run the main chat. The node hands those runtimes a named pipe instead (`server/internal/node/runtimepipe_windows.go`).
 - **`os.Stat` on a named pipe connects to it**: Go's Stat opens the path with `CreateFile`. On a pipe that takes one of the server's free instances (a test listener saw a client arrive) or fails with "All pipe instances are busy".
   To see whether a pipe exists, list it (`FindFirstFile` on the full name; it does not connect).
 - **go-winio pipes have no buffer by default**: `ListenPipe(name, nil)` makes a pipe whose write waits for the other side to read. A fake server that writes two frames in a row (the answer to `initialize` and its own question) deadlocked against a client
