@@ -18,8 +18,10 @@ const (
 	justFinishedFor = 24 * time.Hour   // rows 6 and 9: closed work unseen, or finished work after it was seen
 	inactiveAfter   = 48 * time.Hour   // row 13: no activity this long gets the Inactive mark
 	usageLimitGrace = 10 * time.Minute // a usage limit still holds this long past its reset
-	retryGrace      = 5 * time.Minute  // a scheduled retry still counts this long past its wake_at (the hub's wakeGrace)
-	prFreshFor      = 15 * time.Minute // PR facts count this long after they were checked
+	retryGrace                 = 5 * time.Minute  // a scheduled retry still counts this long past its wake_at (the hub's wakeGrace)
+	prFreshFor                 = 15 * time.Minute // PR facts count this long after they were checked
+	pendingReviewEscalateAfter = 24 * time.Hour   // todos_v2: pending_review stays in working this long, then surfaces to needs_you
+	canWaitEscalateAfter       = 48 * time.Hour   // todos_v2: non-critical can_wait decisions age into active needs_you after this long
 )
 
 // runKind is how one linked run stands, as far as the rules care; the order is the order runReading checks them in.
@@ -132,6 +134,10 @@ func activeRuns(f *Facts, now time.Time) []run {
 		r.kind = runReading(r, now)
 		if linked != nil {
 			r.kind = runAsks
+		} else if r.kind == runAsks && r.card != nil && r.card.Delegating {
+			// The card went to the conversation supervising it (or Persona decides whether to answer it): Persona's work
+			// until that conversation passes it up, not the owner's.
+			r.kind = runPersona
 		} else if r.card == nil && r.kind == runAsks && r.s.Work != nil && r.s.Work.InteractionID == parkInteractionID(f, a) {
 			// The exact linked card is gone; this is its stale session state, not a new owner question.
 			r.kind = runIdle
@@ -387,6 +393,17 @@ func reviewState(f *Facts) string {
 		return ""
 	}
 	return st
+}
+
+// pendingReviewSince is when a pending_review task began waiting for supervisor review.
+func pendingReviewSince(f *Facts) time.Time {
+	if f.Supervision == nil {
+		return time.Time{}
+	}
+	if f.Supervision.PendingSince != nil {
+		return *f.Supervision.PendingSince
+	}
+	return f.Supervision.UpdatedAt
 }
 
 // openAsk is the to-do's own ask when a whole one waits.

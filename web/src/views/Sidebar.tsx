@@ -1,6 +1,9 @@
 import { pendingPlanCounts } from "../lib/pending-plan-counts";
 import { loadFeed, useFeed } from "../lib/feed";
-import { useBotmuxHidden } from "../lib/agents-display";
+import { saveAgentsDisplay, useAgentsDisplay, useBotmuxHidden, useShowFilter, useSortByActivity, type AgentsDisplay, type DisplayChange } from "../lib/agents-display";
+import { activityOrder, useActivityDates } from "../lib/agent-sort";
+import { useSidebarEngaged } from "../lib/sidebar-engaged";
+import { setChatList, useChatList } from "../lib/agent-chat-list";
 import { SectionAdd } from "./SectionAdd";
 import { AgentsAdd } from "./agents/AgentsAdd";
 import { isSidebarAgent } from "../lib/sidebar-agent";
@@ -12,8 +15,8 @@ import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo,
 import { t } from "../i18n";
 import { NARROW, useMedia } from "../lib/viewport";
 import { AGENT_FILTERS, agentFilter, applyFilter, arrangeSpaces, filterCounts, isSpaceMuted, matchesFilter, matchingKeys, shownFilters, unreadOf, withoutBotmux, type AgentFilter, type FilterCounts } from "../lib/agent-filter";
-import { applyDimensionFilters, buildAgentFacets, DEFAULT_DIMENSION_FILTERS, hasActiveDimensionFilters, NO_FACETS, type AgentDimensionFilters } from "../lib/agent-chatlist-filter";
-import { getAgentListFilters, setAgentListFilters, useAgentListFilters } from "../lib/agent-list-filters";
+import { applyDimensionFilters, buildAgentFacets, DEFAULT_DIMENSION_FILTERS, hasActiveDimensionFilters, type AgentDimensionFilters, type AgentFacetCounts } from "../lib/agent-chatlist-filter";
+import { pagedFilterOf, resetAgentListFilters, setAgentListFilters, useAgentListFilters } from "../lib/agent-list-filters";
 import { AgentChatListRow, AgentFilterButton, AgentFilterChips } from "./agents/AgentChatListControls";
 import { agentGrouping, AGENT_GROUPINGS, type AgentGrouping, buildAgentGroups, buildSpaces, hostsOf, isQuiet, sessionHost, splitAgentSessions, type AgentGroup, type Space } from "../lib/agent-groups";
 import { buildRepoMachineTree, hasWorkspacePin } from "../lib/agent-repos";
@@ -383,7 +386,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   );
 
   return (
-    <aside className="flex h-full w-full flex-col bg-canvas">
+    <aside data-sidebar-root className="flex h-full w-full flex-col bg-canvas">
       <div className="px-2.5 pt-2.5">
         <div className="mb-2 flex items-center gap-1">
           <div className="min-w-0 flex-1"><AssistantSwitcher phase={phase} online={online} total={total} route={route} /></div>
@@ -655,6 +658,8 @@ function MorePages({ more, reg, hover, activeKey, go }: { more: NavPage[]; reg: 
 
 /** The sidebar's "Agents": grouping, the quick filter, "Pinned", "Starting", the groups (spaces, machines, repositories,
  *  states or todos) and "Recent". The drawer and the phone's Agents page both show it. `add`: the title row's "+". */
+/** What Settings › Agents turned on and what the Filter holds, read once by AgentsBlock for whichever list it draws. */
+type AgentsDisplayProps = { showFilter: boolean; dimFilters: AgentDimensionFilters; chatList: boolean; /** the hub's display settings, for the ⋯ menu's switches (null: an older hub, or not read yet) */ displayValue: AgentsDisplay | null };
 type AgentsBlockProps = { workspaceActions?: WorkspaceTreeActions; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onNewAgent: () => void; onNavigate?: () => void; add?: boolean; foldable?: boolean; chooseGrouping?: (g: AgentGrouping) => void };
 
 /** The to-dos could not be read and none are known (audit item 27): By to-do has nothing to group by, so it shows By
@@ -679,6 +684,14 @@ function AgentsBlock(props: AgentsBlockProps) {
   // paged one would only load), whatever features an earlier login left (audit item 36)
   const hubUnreachable = useHubUnreachable();
   const pins = useStore((s) => s.pins);
+  // The Filter is a Settings switch (hub-synced, default off): off, it is not drawn and what it held is not applied
+  const showFilter = useShowFilter();
+  const displayValue = useAgentsDisplay().value;
+  const displayLoaded = useAgentsDisplay().value !== null;
+  const storedFilters = useAgentListFilters();
+  const dimFilters = showFilter ? storedFilters : DEFAULT_DIMENSION_FILTERS;
+  const chatList = useChatList() && showFilter;
+  useEffect(() => { if (displayLoaded && !showFilter && storedFilters !== DEFAULT_DIMENSION_FILTERS) resetAgentListFilters(); }, [displayLoaded, showFilter, storedFilters]);
   const [stored, setGrouping] = useState(() => storedValue("persona.agentGrouping"));
   useEffect(() => onGrouping(setGrouping), []);
   const grouping = agentGrouping(stored);
@@ -690,7 +703,10 @@ function AgentsBlock(props: AgentsBlockProps) {
   const several = useScope().several;
   // One set of groupings either way (#6662): the paged list draws them all but By repository, whose worktree level needs
   // every session, and By to-do only on a hub that lists sessions by to-do; pins need the complete list too.
-  const paged = pagedAgentList({ bounded, byTodo, todosSupported, pins, stored, several });
+  // A filter or view the hub's paged list cannot ask for (model, pinned, search scope, several computers, the chat list…)
+  // is answered by the complete list, which has every one of them: never a filter that half works
+  const paged = pagedAgentList({ bounded, byTodo, todosSupported, pins, stored, several }) && !chatList && pagedFilterOf(dimFilters) !== null;
+  const display: AgentsDisplayProps = { showFilter, dimFilters, chatList, displayValue };
   const chooseGrouping = useCallback((g: AgentGrouping) => {
     storeValue("persona.agentGrouping", g);
     setGrouping(g);
@@ -700,8 +716,8 @@ function AgentsBlock(props: AgentsBlockProps) {
     props.hover(null);
   }, [props.hover]);
   // `shown !== "repo"` only tells TypeScript what pagedAgentList already rules out
-  return paged && shown !== "repo" && !hubUnreachable ? <BoundedAgentsBlock {...props} grouping={shown} todosUnread={todosUnread && grouping === "todo"} chooseGrouping={chooseGrouping} />
-    : <LegacyAgentsBlock {...props} grouping={grouping} hubUnreachable={hubUnreachable} chooseGrouping={chooseGrouping} />;
+  return paged && shown !== "repo" && !hubUnreachable ? <BoundedAgentsBlock {...props} {...display} grouping={shown} todosUnread={todosUnread && grouping === "todo"} chooseGrouping={chooseGrouping} />
+    : <LegacyAgentsBlock {...props} {...display} grouping={grouping} hubUnreachable={hubUnreachable} chooseGrouping={chooseGrouping} />;
 }
 
 /** The Agents block's title, the paged list's as the complete list's (#6662): unpinning changes nothing above the list. */
@@ -722,10 +738,21 @@ function ListMenuButton({ open, onClick }: { open: boolean; onClick: React.Mouse
   );
 }
 
+/** What the ⋯ switches show: the hub's answer (null when unread or an older hub) and the two effective values. */
+type ListDisplay = { value: AgentsDisplay | null; sort: boolean; filter: boolean };
+
 /** The ⋯'s items, the paged list's as the complete list's (#6662). Collapse all / Expand all are the title row's button
- *  alone (#6447). */
-function agentListItems({ archives, hover, onNavigate }: { archives: boolean; hover: (k: string | null) => void; onNavigate?: () => void }): MenuItem[] {
-  return archives ? [{ key: "archived", label: t("agentmenus.archived_agents"), icon: "archive" as const, onSelect: () => { navigate({ name: "agent-archives" }); onNavigate?.(); hover(null); } }] : [];
+ *  alone (#6447). The two display choices (#13727) are switches here, writing the same hub setting Settings › Agents
+ *  holds, so a click shows on every device and that page follows; an older hub has neither field and gets no item. */
+function agentListItems({ archives, hover, onNavigate, display }: { archives: boolean; hover: (k: string | null) => void; onNavigate?: () => void; display: ListDisplay }): MenuItem[] {
+  const set = (change: DisplayChange) => { void saveAgentsDisplay(change); hover(null); };
+  const sortable = display.value?.sort_by_activity !== undefined;
+  const filterable = display.value?.show_filter !== undefined;
+  return [
+    ...(sortable ? [{ key: "sort-activity", label: t("sidebar.sort_activity"), icon: "clock" as const, checked: display.sort, keepOpen: true, divider: true, onSelect: () => set({ sort_by_activity: !display.sort }) }] : []),
+    ...(filterable ? [{ key: "show-filter", label: t("sidebar.show_list_filter"), icon: "filter" as const, checked: display.filter, keepOpen: true, divider: !sortable, onSelect: () => set({ show_filter: !display.filter }) }] : []),
+    ...(archives ? [{ key: "archived", label: t("agentmenus.archived_agents"), icon: "archive" as const, divider: sortable || filterable, onSelect: () => { navigate({ name: "agent-archives" }); onNavigate?.(); hover(null); } }] : []),
+  ];
 }
 
 /** The groupings this hub offers: By to-do only where it has to-dos. */
@@ -750,7 +777,34 @@ const PAGED_DIMENSION: Record<Exclude<AgentGrouping, "repo">, GroupDimension> = 
 
 const NO_EXCLUDED_IDS: ReadonlySet<string> = new Set();
 
-function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, add = true, grouping, todosUnread = false, chooseGrouping }: AgentsBlockProps & { grouping: Exclude<AgentGrouping, "repo">; /** By to-do shown by status: its to-dos cannot be read */ todosUnread?: boolean; chooseGrouping: (g: AgentGrouping) => void }) {
+/** The Filter's options on the paged list: the loaded sessions' harnesses, projects and models (the hub counts none of them)
+ *  and the hub's own counts of the computers. Only drawn while the Filter is on, so the list does not follow every push
+ *  for it otherwise. */
+function usePagedFacets(machines: readonly Machine[]): AgentFacetCounts {
+  const summaryAgents = useAgentSessions();
+  const pins = useStore((s) => s.pins);
+  const botmuxHidden = useBotmuxHidden();
+  const rootCounts = useSyncExternalStore(runtimeAgents.subscribe, runtimeAgents.getSnapshot, runtimeAgents.getSnapshot).counts;
+  return useMemo(() => {
+    const loaded = buildAgentFacets(withoutBotmux(summaryAgents.filter(isSidebarAgent), botmuxHidden), machines, pins);
+    const counted = Object.entries(rootCounts?.machine ?? {}).filter(([id, n]) => id && n > 0);
+    if (!counted.length) return loaded;
+    const options = counted.map(([id, count]) => ({ id, count, label: machineWithHub(id, [...machines]) || id }));
+    return { ...loaded, machines: options.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)) };
+  }, [summaryAgents, botmuxHidden, machines, pins, rootCounts]);
+}
+
+function PagedFilterButton({ filters, machines, chatList, onToggleChatList }: { filters: AgentDimensionFilters; machines: readonly Machine[]; chatList: boolean; onToggleChatList: () => void }) {
+  const facets = usePagedFacets(machines);
+  return <AgentFilterButton filters={filters} onChange={setAgentListFilters} facets={facets} chatList={chatList} onToggleChatList={onToggleChatList} />;
+}
+
+function PagedFilterChips({ filters, machines }: { filters: AgentDimensionFilters; machines: readonly Machine[] }) {
+  const facets = usePagedFacets(machines);
+  return <AgentFilterChips filters={filters} onChange={setAgentListFilters} facets={facets} />;
+}
+
+function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, add = true, grouping, todosUnread = false, chooseGrouping, showFilter, dimFilters, chatList, displayValue }: AgentsBlockProps & AgentsDisplayProps & { grouping: Exclude<AgentGrouping, "repo">; /** By to-do shown by status: its to-dos cannot be read */ todosUnread?: boolean; chooseGrouping: (g: AgentGrouping) => void }) {
   const machines = useStore(selectSidebarMachines);
   const allLaunches = useStore((s) => s.launches);
   const launches = useMemo(() => Object.values(allLaunches).filter((launch) => launch.phase !== "ready"), [allLaunches]);
@@ -816,14 +870,19 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
   const groupsRef = useRef<HTMLDivElement>(null);
   // the words ⌘K's "Filter Agents list" put on the list, its search (#6589): only its words, which the hub matches as
   // text; the Filter menu's choices are the complete list's, so a chip shows here only what this list is narrowed by
-  const listQuery = useAgentListFilters().query;
-  const queryOnly = useMemo(() => ({ ...DEFAULT_DIMENSION_FILTERS, query: listQuery }), [listQuery]);
-  const setQuery = useCallback((next: AgentDimensionFilters) => setAgentListFilters({ ...getAgentListFilters(), query: next.query }), []);
-  // The hub pages newest first for its cursors; the sidebar presents the same stable herdr order as the complete list.
+  // the Filter's choices (and ⌘K's words) that the hub's paged read can express: the words as `q`, one computer as
+  // `machine_id`; AgentsBlock draws the complete list for any other
+  const listQuery = dimFilters.query;
+  const narrowed = useMemo(() => pagedFilterOf(dimFilters) ?? {}, [dimFilters]);
+  // The activity order (Settings › Agents), held still while the pointer or the keyboard is in the sidebar; off, the
+  // hub pages newest first for its cursors but the sidebar presents the same stable herdr order as the complete list.
+  const sortByActivity = useSortByActivity();
+  const engaged = useSidebarEngaged(groupsRef);
+  const byUpdate = sortByActivity && grouping !== "state";
   const listMenu = useMenu();
   const machineOrder = useMemo(() => machines.map((m) => m.id), [machines]);
   const rowOrder = useMemo(() => machineSessionPresentation(machines), [machines]);
-  const listItems = agentListItems({ archives, hover, onNavigate });
+  const listItems = agentListItems({ archives, hover, onNavigate, display: { value: displayValue, sort: sortByActivity, filter: showFilter } });
   const pagedGrouping = useMemo(() => ({
     dimension: PAGED_DIMENSION[grouping],
     label: AGENT_GROUPINGS.find((g) => g.key === grouping)?.label ?? "",
@@ -831,17 +890,21 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
     quick,
     // its sections follow the title row's fold-all, as the complete list's groups do
     foldScope: AGENTS_FOLD,
-    rowOrder,
+    rowOrder: byUpdate ? undefined : rowOrder,
+    byUpdate,
+    hold: engaged,
+    filters: narrowed,
     bar: <GroupingBar groupings={groupings} selection={grouping} onChoose={chooseGrouping} />,
     query: listQuery,
     // the to-dos' failure under the chips, lined up with the list's own errors below (the chips' row is padded)
-    chips: <><AgentFilterChips filters={queryOnly} onChange={setQuery} facets={NO_FACETS} />{todosUnread && <div className="-mx-1"><TodosUnread /></div>}</>,
-  }), [grouping, todoNames, groupings, chooseGrouping, quick, rowOrder, listQuery, queryOnly, setQuery, todosUnread]);
+    chips: <>{showFilter && <PagedFilterChips filters={dimFilters} machines={machines} />}{todosUnread && <div className="-mx-1"><TodosUnread /></div>}</>,
+  }), [grouping, todoNames, groupings, chooseGrouping, quick, rowOrder, byUpdate, engaged, narrowed, listQuery, showFilter, dimFilters, machines, todosUnread]);
   return <div data-sidebar-agents ref={groupsRef}>
     {/* the complete list's title row (#6662): fold all, the ⋯ with its sorts and the archived Agents, and "+" */}
     <div className={cx(SESSION_LIST_STYLE.heading, TITLE_ROW_TOUCH)}>
       <span className={AGENTS_TITLE}>Agents</span>
       <GroupFoldButton groups={groupsRef} onAction={() => hover(null)} />
+      {showFilter && <PagedFilterButton filters={dimFilters} machines={machines} chatList={chatList} onToggleChatList={() => { setChatList(!chatList); hover(null); }} />}
       {listItems.length > 0 && <ListMenuButton open={Boolean(listMenu.anchor)} onClick={listMenu.open} />}
       {add && <AgentsAdd onNewAgent={onNewAgent} onNavigate={onNavigate} className={TITLE_ICON_TOUCH} />}
     </div>
@@ -883,7 +946,7 @@ function retainedActiveSpaces(): ReadonlySet<string> | undefined {
   }
 }
 
-function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, workspaceActions, add = true, foldable = false, grouping, hubUnreachable, chooseGrouping }: AgentsBlockProps & { grouping: AgentGrouping; /** useHubUnreachable */ hubUnreachable: boolean; chooseGrouping: (g: AgentGrouping) => void }) {
+function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, workspaceActions, add = true, foldable = false, grouping, hubUnreachable, chooseGrouping, showFilter, dimFilters, chatList, displayValue }: AgentsBlockProps & AgentsDisplayProps & { grouping: AgentGrouping; /** useHubUnreachable */ hubUnreachable: boolean; chooseGrouping: (g: AgentGrouping) => void }) {
   // the current assistant's computers, agents and to-dos (all of them with one assistant)
   const scope = useScope();
   const sidebarMachines = useStore(selectSidebarMachines);
@@ -895,7 +958,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     const own = new Set(ownIds);
     return sidebarMachines.filter((m) => own.has(m.id));
   }, [ownIds, sidebarMachines]);
-  const rowOrder = useMemo(() => machineSessionOrder(machines), [machines]);
+  const structuralOrder = useMemo(() => machineSessionOrder(machines), [machines]);
   const { sessions: every, loaded, error: listError } = useFullAgentSessions();
   const summaryAgents = useAgentSessions();
   const pagedTransport = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
@@ -924,22 +987,16 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const todosLoaded = useStore((s) => s.todosLoaded);
   const todosUnread = useTodosUnread();
   // the Filter menu's choices and the words ⌘K's "Filter Agents list" put on it (#6589): the list has no field of its own
-  const dimFilters = useAgentListFilters();
+  // (both come from AgentsBlock: off in Settings › Agents, the Filter is not drawn and holds nothing)
   const setDimFilters = setAgentListFilters;
   // chat-list rows only for someone who picked them in the Filter menu; the grouped list is the default (#4397)
-  const [chatList, setChatList] = useState<boolean>(() => localStorage.getItem("persona.agentChatList") === "1");
   const toggleChatList = () => {
-    setChatList((prev) => {
-      const next = !prev;
-      localStorage.setItem("persona.agentChatList", next ? "1" : "0");
-      return next;
-    });
+    setChatList(!chatList);
     hover(null);
   };
   // Stable, so the memoized grouping bar skips store pushes that leave its props equal.
   const chooseGroupingOutOfChatList = useCallback((g: AgentGrouping) => {
     setChatList(false);
-    localStorage.setItem("persona.agentChatList", "0");
     chooseGrouping(g);
   }, [chooseGrouping]);
   // a hub without todos shows by machine, a by-todo choice kept for when it has them; to-dos that cannot be read, by
@@ -956,6 +1013,15 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const [savedFilter, setFilter] = useState(() => agentFilter(storedValue("persona.agentFilter")));
   const [kept, setKept] = useState<ReadonlySet<string>>(() => new Set());
   const botmuxHidden = useBotmuxHidden();
+  // The activity order (Settings › Agents), held still while the pointer or the keyboard is in the sidebar; off, the
+  // stable structural order of #11801. By status keeps its own order either way.
+  const sortByActivity = useSortByActivity();
+  const groupsRef = useRef<HTMLDivElement>(null);
+  const engaged = useSidebarEngaged(groupsRef);
+  const byUpdate = sortByActivity && shownGrouping !== "state";
+  const activityDates = useActivityDates(agents, engaged);
+  const activity = useMemo(() => activityOrder(activityDates), [activityDates]);
+  const rowOrder = byUpdate ? activity.byUpdated : structuralOrder;
   const listed = useMemo(() => withoutBotmux(all, botmuxHidden), [all, botmuxHidden]);
   const previewListed = useMemo(() => [...withoutBotmux(previewAll, botmuxHidden)].sort(rowOrder), [previewAll, botmuxHidden, rowOrder]);
   const facets = useMemo(() => buildAgentFacets(listed, machines, pins), [listed, machines, pins]);
@@ -993,8 +1059,9 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const recent = useMemo(() => (filter !== "all" ? [] : offline.filter((s) => !pinnedAgents.some((p) => agentKey(p) === agentKey(s)))), [filter, offline, pinnedAgents]);
   const { spaces, loose } = useMemo(() => {
     const built = buildSpaces(unpinned, machines);
-    return { spaces: built.spaces.map((sp) => ({ ...sp, sessions: [...sp.sessions].sort(rowOrder) })), loose: [...built.loose].sort(rowOrder) };
-  }, [unpinned, machines, rowOrder]);
+    const placed = { spaces: built.spaces.map((sp) => ({ ...sp, sessions: [...sp.sessions].sort(rowOrder) })), loose: [...built.loose].sort(rowOrder) };
+    return byUpdate ? activity.projectsByUpdate(placed) : placed;
+  }, [unpinned, machines, rowOrder, byUpdate, activity]);
   const groups = useMemo(() => {
     if (shownGrouping === "space" || shownGrouping === "repo" || shownGrouping === "machine") return [];
     if (shownGrouping === "todo") return [];
@@ -1021,17 +1088,19 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const todoTree = useMemo(() => {
     if (shownGrouping !== "todo" || !todosLoaded) return undefined;
     const built = buildTodoTree(unpinned, machines, todos, mutes, Date.now(), { keepEmpty: keepEmptyGroups, compareSessions: rowOrder });
-    return shareTree(lastTodoTree.current, built);
-  }, [unpinned, machines, shownGrouping, mutes, todos, todosLoaded, keepEmptyGroups, rowOrder]);
+    return shareTree(lastTodoTree.current, byUpdate ? activity.todoTreeByUpdate(built) : built);
+  }, [unpinned, machines, shownGrouping, mutes, todos, todosLoaded, keepEmptyGroups, rowOrder, byUpdate, activity]);
   lastTodoTree.current = todoTree;
   const repoMachines = useMemo(() => {
     if (shownGrouping !== "repo") return [];
-    return buildRepoMachineTree(unpinned, machines, { ...catalog, hiddenSources: botmuxHidden ? ["botmux"] : undefined, navigationSessions: [...shown, ...pinnedAgents.filter((p) => !shown.includes(p))], hideEmpty: filtered, compareSessions: rowOrder });
-  }, [unpinned, machines, shownGrouping, catalog, shown, pinnedAgents, filtered, botmuxHidden, rowOrder]);
+    const built = buildRepoMachineTree(unpinned, machines, { ...catalog, hiddenSources: botmuxHidden ? ["botmux"] : undefined, navigationSessions: [...shown, ...pinnedAgents.filter((p) => !shown.includes(p))], hideEmpty: filtered, compareSessions: rowOrder });
+    return byUpdate ? activity.repoMachinesByUpdate(built) : built;
+  }, [unpinned, machines, shownGrouping, catalog, shown, pinnedAgents, filtered, botmuxHidden, rowOrder, byUpdate, activity]);
   const machineTree = useMemo(() => {
     if (shownGrouping !== "machine") return [];
-    return buildMachineTree(machines, unpinned, { pins, hideEmpty: filtered });
-  }, [shownGrouping, machines, unpinned, pins, filtered]);
+    const built = buildMachineTree(machines, unpinned, { pins, hideEmpty: filtered });
+    return byUpdate ? activity.machineTreeByUpdate(built) : built;
+  }, [shownGrouping, machines, unpinned, pins, filtered, byUpdate, activity]);
   // by todo a group mixes hosts (herdr, botmux…): when the list has more than one, rows outside herdr name theirs (#1836)
   const mixedHosts = useMemo(() => shownGrouping === "todo" && hostsOf(live).size > 1, [shownGrouping, live]);
   const unreadShown = filter === "unread" ? unreadOf(shown) : [];
@@ -1072,7 +1141,6 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   // and opens by itself when ⌘K puts words on the list, so what was asked for is in view (#6589)
   const [blockFolded, toggleBlock] = useFolded("agents", false, { all: false, holds: dimFilters.query.trim() !== "" });
   const folded = foldable && blockFolded;
-  const groupsRef = useRef<HTMLDivElement>(null);
   const [showAllRecent, setShowAllRecent] = useState(false);
   const recentShown = showAllRecent ? recent : firstAndCurrent(recent, 8, (s) => rowKey(s) === activeKey);
   const recentState = worstTreeState(recent.map(agentTreeState));
@@ -1123,7 +1191,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const tree = { machines, reg, hover, activeKey, go, mutes, onSpaceMenu, onRowMenu, onNodeMenu, onNavigate };
 
   // the list menu, the paged list's too (agentListItems); with nothing in it the menu's button goes
-  const listItems = agentListItems({ archives, hover, onNavigate });
+  const listItems = agentListItems({ archives, hover, onNavigate, display: { value: displayValue, sort: sortByActivity, filter: showFilter } });
 
   return (
     <div data-sidebar-agents ref={groupsRef}>
@@ -1142,7 +1210,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
         {folded && <SessionTally sessions={live} folded />}
         <GroupFoldButton groups={groupsRef} onAction={() => hover(null)} block={foldable ? { folded, toggle: toggleBlock } : undefined} flat={chatList} />
         {/* the Filter beside the list's other menu buttons, its count on it (#6589; it sat beside the list's own search field) */}
-        <AgentFilterButton filters={dimFilters} onChange={setDimFilters} facets={facets} chatList={chatList} onToggleChatList={toggleChatList} />
+        {showFilter && <AgentFilterButton filters={dimFilters} onChange={setDimFilters} facets={facets} chatList={chatList} onToggleChatList={toggleChatList} />}
         {listItems.length > 0 && (
           <ListMenuButton open={Boolean(listMenu.anchor)} onClick={listMenu.open} />
         )}
@@ -1159,7 +1227,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
       <Collapse open={!folded} sidebarFold unclipped>
       <div inert={folded || undefined}>
       {/* what filters the list, only while something does: the chips and Reset, Search as Code's plan bar */}
-      <AgentFilterChips filters={dimFilters} onChange={setDimFilters} facets={facets} plan={searchPlan} />
+      {showFilter && <AgentFilterChips filters={dimFilters} onChange={setDimFilters} facets={facets} plan={searchPlan} />}
       {/* "herdr is not running on <computer>" with "Start" (#1916): before a message to an agent there fails */}
       {/* the one line about the hub (#2897): updating, rolled back, a newer version or image */}
       {!folded && <HubNoticeLine />}

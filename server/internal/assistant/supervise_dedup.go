@@ -96,7 +96,7 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 // words stay the same.
 func keyIsNews(kind string) bool {
 	switch kind {
-	case sigParkedDue, sigParkDecided, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigDeliveryHold, sigFailed, sigStarted, sigAllStopped, sigDecisionReply, sigHandoffResult, sigEstimateDue, sigOverdue, sigTimedOut, sigCardlessWait, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo,
+	case sigParkedDue, sigParkDecided, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigDeliveryHold, sigFailed, sigStarted, sigAllStopped, sigDecisionReply, sigHandoffResult, sigEstimateDue, sigOverdue, sigTimedOut, sigCardlessWait, sigReviewNudge, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo,
 		sigCheck: // a check's run, or the owner's answer to its decision: an Agent that only runs tools says the same all along
 		return true
 	}
@@ -285,8 +285,8 @@ func (s *Service) ackSupervisionDedupLocked(ctx context.Context, signals []super
 	b.dedup = next
 }
 
-// forgetSupervision takes the signals' fingerprints out of the deduplication history: their message was queued for a
-// conversation that is gone and was never read, so they are told again. dedupMu is held.
+// forgetSupervision releases only fingerprints still reserved by these exact signal keys. A newer signal can inherit
+// the same semantic fingerprint while an older message waits, and that newer reservation must survive. dedupMu is held.
 func (s *Service) forgetSupervision(ctx context.Context, signals []superviseSignal, web string) error {
 	b := &s.supervise
 	history := b.dedup
@@ -301,12 +301,16 @@ func (s *Service) forgetSupervision(ctx context.Context, signals []superviseSign
 	for _, g := range signals {
 		if g.Kind == sigAllStopped {
 			key, _ := digestFingerprint(prompts.SuperviseEntry{}, g)
-			delete(next, key) // a lost queue releases its key even while the participants cannot be read
+			if seen, ok := next[key]; ok && seen.Key == g.Key {
+				delete(next, key)
+			}
 			continue
 		}
 		if e, ok := s.digestEntry(ctx, g, web); ok {
 			key, _ := digestFingerprint(e, g)
-			delete(next, key)
+			if seen, ok := next[key]; ok && seen.Key == g.Key {
+				delete(next, key)
+			}
 		}
 	}
 	if len(next) == len(history) {
@@ -413,6 +417,9 @@ func (s *Service) clearTaskBoundSignalDedup(ctx context.Context, todoID, kind st
 }
 
 func (s *Service) restoreDigest(signals []superviseSignal, at, prev time.Time) {
+	if !s.autoSupervisionOn(context.Background()) {
+		return // withdrawn, not retried: they would otherwise come back once the switch is on again
+	}
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()

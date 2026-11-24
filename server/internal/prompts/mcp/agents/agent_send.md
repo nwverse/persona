@@ -1,10 +1,10 @@
-Send requested work; task required unless on your open task. Busy Agents may queue; nearly full ones compact. Stops need resume+resume_why: recorded non-user stops, including quota/capacity, allow it; user/exit/unknown stops need the user's Resume. Unrelated work: agent_start; unsure: ask_user. A branch starts on its first message. Only /exit or /quit stops a running Agent and keeps its tab; other conversations' Agents need their owner's controls.
+Send requested work; task required unless on your open task. Busy Agents may queue; nearly full ones compact. Stops need resume+resume_why: non-user/unknown stops allow it; user/exit stops need the user's Resume. Unrelated work: agent_start; unsure: ask_user. A branch starts on its first message. Only /exit or /quit stops a running Agent and keeps its tab; other conversations' Agents need their owner's controls.
 
 dialog_open: dismiss_notice only for Enter-only notices; permissions/pickers need the user or interaction_answer.
 
 task: supervise new work; include done_when in text. Keeps existing work's title, updates criteria; refuses different titles or user/others' tasks. Failed sends create no task. Omit for replies/nudges/decisions.
 
-continuation: only failed task_plan's exact plan_id/task_index action, original session/scope; omit task/handoff. Retains start failure; no duplicate/uncertain replay. Read Agent to verify execution.
+continuation: only failed task_plan's exact plan_id/task_index action, original live session/scope; no stopped-session recovery; omit task/handoff. Retains start failure; no duplicate/uncertain replay. Read Agent to verify.
 
 handoff: already-stopped task you supervise; node ACK starts waiting for receiver's result.
 

@@ -83,7 +83,7 @@ func (f *File) history() string {
 	if f.lines == 0 {
 		return "" // nothing read yet: no identity to compare
 	}
-	version := ""
+	version := ".items1"
 	if !f.meta.Codex {
 		version = ".items3" // Model-only interjection items are removed; reload older client history.
 	}
@@ -491,6 +491,13 @@ func (f *File) End() Span {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return Span{History: f.history(), To: f.lines}
+}
+
+// TurnClosedAfter reports whether a non-hidden turn close occurred after seq in the lines f has parsed.
+func (f *File) TurnClosedAfter(seq int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.meta.TurnClosed && f.meta.turnEndSeq > seq && (f.tree == nil || !f.tree.hidden[f.meta.turnEndLine])
 }
 
 // CoversClosedTurnAfter reports whether the checked end still covers every line after seq in history and the latest

@@ -75,11 +75,13 @@ func (s *Service) todoFactsOf(ctx context.Context, list []listedTodo) []projecti
 	}
 	cards := s.todoRunCards(want)
 	loc := s.location(ctx)
+	todosV2 := s.settings(ctx).todosV2On()
 	facts := make([]projection.Facts, len(list))
 	for i := range list {
 		t := &list[i]
 		linked := hasParkInteractionLink(t.Supervision)
 		facts[i] = projectionFacts(*t, sessions, loc)
+		facts[i].TodosV2 = todosV2
 		if t.DoneAt != nil && t.StartError == "" {
 			continue
 		}
@@ -226,7 +228,7 @@ func projectionFacts(t listedTodo, sessions map[[2]string]proto.Session, loc *ti
 		}
 	}
 	if v := t.Supervision; v != nil {
-		f.Supervision = &projection.Supervision{State: v.State, PendingSince: v.PendingSince, UpdatedAt: v.UpdatedAt}
+		f.Supervision = &projection.Supervision{State: v.State, Supervisor: v.Supervisor, PendingSince: v.PendingSince, UpdatedAt: v.UpdatedAt}
 		if p := v.Parked; p != nil {
 			parked := &projection.Parked{Reason: p.Reason, Until: p.Until, WaitingOn: p.WaitingOn}
 			if p.Evidence != nil && p.Evidence.InteractionID != "" {

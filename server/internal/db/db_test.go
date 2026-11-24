@@ -49,7 +49,7 @@ func open(t testing.TB) *DB {
 
 // openTables are what open clears (with what refers to them): the union of the integration branch's list and master's
 // TruncateForTest. TruncateForTest alone does not clear lock_tests, client_ops, pair_tokens or device_sessions.
-var openTables = []string{"push_device_retirements", "lock_tests", "client_ops", "devices", "device_tokens", "pair_tokens",
+var openTables = []string{"health_intake", "push_device_retirements", "lock_tests", "client_ops", "devices", "device_tokens", "pair_tokens",
 	"device_sessions", "live_activities", "phone_tools", "node_sessions", "mail_accounts", "interactions", "settings",
 	"inbox_items", "kb_entities", "connector_secrets", "machine_systems", "machine_metrics", "machine_usage",
 	"sent_messages", "todos", "todo_agents", "assistant_always", "sent_as_user", "hub_push_sent", "urgent_calls", "model_usage",
@@ -1077,6 +1077,93 @@ func TestMarkInteractionResumableKeepsTheCardAcrossARestart(t *testing.T) {
 	}
 	if !slices.Equal(cancelled, []string{"ixkept"}) {
 		t.Fatalf("cancelled %v: only the one never marked", cancelled)
+	}
+}
+
+func TestInsertResolvedInteraction(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	allow := true
+	ix := proto.Interaction{ID: "resolved-direct", MachineID: "server", SessionID: "s", Kind: proto.IxPermission,
+		ToolName: "persona_settings", CreatedAt: time.Now().UTC(),
+		ToolInput: json.RawMessage(`{"actor":"assistant","operation":"persona_settings.set","outcome":"attempted","before":null}`)}
+	res := &proto.Resolution{Allow: &allow, AnsweredBy: proto.AnsweredByAssistant, Reason: "exactly reversible"}
+	historyOutcome := func(id string) string {
+		t.Helper()
+		rec, err := d.InteractionRecord(ctx, id)
+		if err != nil || rec == nil {
+			t.Fatalf("history record %s = %+v, %v", id, rec, err)
+		}
+		var input struct {
+			Outcome string `json:"outcome"`
+		}
+		if err := json.Unmarshal(rec.Interaction.ToolInput, &input); err != nil {
+			t.Fatal(err)
+		}
+		return input.Outcome
+	}
+	if err := d.InsertResolvedInteraction(ctx, ix, res); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := d.Interactions(ctx, "server", "s", 10)
+	if err != nil || len(recs) != 1 || recs[0].Status != "resolved" || recs[0].ResolvedAt == nil || recs[0].Resolution == nil ||
+		recs[0].Resolution.AnsweredBy != proto.AnsweredByAssistant {
+		t.Fatalf("resolved history = %+v, %v", recs, err)
+	}
+	if got := historyOutcome(ix.ID); got != "attempted" {
+		t.Fatalf("initial history outcome = %q, want attempted", got)
+	}
+	var pending int
+	if err := d.pool.QueryRow(ctx, `SELECT count(*) FROM interactions WHERE id = $1 AND status = 'pending'`, ix.ID).Scan(&pending); err != nil || pending != 0 {
+		t.Fatalf("pending rows = %d, %v", pending, err)
+	}
+	markedAt := time.Now().UTC().Add(time.Second)
+	if err := d.MarkResolvedInteractionOutcome(ctx, ix.ID, ix.CreatedAt, "saved", markedAt); err != nil {
+		t.Fatal(err)
+	}
+	if got := historyOutcome(ix.ID); got != "saved" {
+		t.Fatalf("saved history outcome = %q", got)
+	}
+	var authorized int
+	if err := d.pool.QueryRow(ctx, `SELECT count(*) FROM interactions WHERE id = $1 AND auto_authorized_at = $2`, ix.ID, markedAt).Scan(&authorized); err != nil || authorized != 1 {
+		t.Fatalf("saved automatic-authorization timestamp rows = %d, %v", authorized, err)
+	}
+	if err := d.InsertResolvedInteraction(ctx, ix, res); err == nil {
+		t.Fatal("duplicate resolved interaction was silently accepted")
+	}
+
+	failed := ix
+	failed.ID, failed.CreatedAt = "resolved-not-saved", ix.CreatedAt.Add(time.Second)
+	if err := d.InsertResolvedInteraction(ctx, failed, res); err != nil {
+		t.Fatal(err)
+	}
+	if got := historyOutcome(failed.ID); got != "attempted" {
+		t.Fatalf("failed operation's initial outcome = %q, want attempted", got)
+	}
+	if err := d.MarkResolvedInteractionOutcome(ctx, failed.ID, failed.CreatedAt, "not_saved", markedAt.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if got := historyOutcome(failed.ID); got != "not_saved" {
+		t.Fatalf("failed operation's history outcome = %q", got)
+	}
+	var uncounted int
+	if err := d.pool.QueryRow(ctx, `SELECT count(*) FROM interactions WHERE id = $1 AND auto_authorized_at IS NULL`, failed.ID).Scan(&uncounted); err != nil || uncounted != 1 {
+		t.Fatalf("failed operation acquired an automatic-authorization timestamp: rows = %d, %v", uncounted, err)
+	}
+	counts, err := d.ConfirmationCounts(ctx, markedAt.Add(-time.Minute), markedAt.Add(time.Minute))
+	if err != nil || len(counts) != 1 || counts[0].AutoAuthorized != 1 || counts[0].UserNotified != 0 || counts[0].Kind != proto.IxPermission {
+		t.Fatalf("automatic-authorization counts = %+v, %v", counts, err)
+	}
+	if err := d.MarkResolvedInteractionOutcome(ctx, failed.ID, failed.CreatedAt, "unknown", markedAt); err == nil {
+		t.Fatal("unknown outcome was accepted")
+	}
+	if err := d.MarkResolvedInteractionOutcome(ctx, failed.ID, failed.CreatedAt.Add(-time.Second), "saved", markedAt); err == nil {
+		t.Fatal("outcome update with the wrong creation time was accepted")
+	}
+	if err := d.MarkResolvedInteractionOutcome(ctx, "missing", failed.CreatedAt, "saved", markedAt); err == nil {
+		t.Fatal("outcome update for a missing history row was accepted")
+	}
+	if got := historyOutcome(failed.ID); got != "not_saved" {
+		t.Fatalf("rejected outcome updates changed history to %q", got)
 	}
 }
 

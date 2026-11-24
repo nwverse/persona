@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -31,17 +31,38 @@ const (
 func decideAsk(a *acceptAsk) bool { return a.Conclusion && a.Outcome == outcomeDecide }
 
 // verdictText is an ask's verdict line: the same words on its Lark card, the briefing's card and `brief` item, the board
-// and the snapshot. A deployed task's ask is done, deployed.
-func verdictText(l i18n.Lang, a *acceptAsk) string {
+// and the snapshot. A verification ask (!a.Conclusion) reflects the to-do's effective delivery state.
+func verdictText(l i18n.Lang, a *acceptAsk, delivery *TodoDelivery) string {
 	label := i18n.T(l, "assistant-reports.verdict_"+cmp.Or(a.Outcome, outcomeDone))
 	reason := a.Reason
 	if !a.Conclusion {
-		reason = i18n.T(l, "assistant-reports.verdict_deployed")
+		reason = verifyReason(l, delivery)
 	}
 	if reason == "" {
 		return label
 	}
 	return i18n.T(l, "assistant-reports.verdict_line", i18n.Args{"verdict": label, "reason": reason})
+}
+
+// verifyReason picks the verification ask's reason from the to-do's effective delivery state: only explicit live says
+// deployed; held states name their gate; none or missing live evidence stays neutral.
+func verifyReason(l i18n.Lang, delivery *TodoDelivery) string {
+	state := ""
+	if delivery != nil {
+		state = delivery.State
+	}
+	switch state {
+	case deliveryLive:
+		return i18n.T(l, "assistant-reports.verdict_deployed")
+	case deliveryPR:
+		return i18n.T(l, "assistant-reports.verdict_verify_pr")
+	case deliveryMerged:
+		return i18n.T(l, "assistant-reports.verdict_verify_merged")
+	case deliveryOff:
+		return i18n.T(l, "assistant-reports.verdict_verify_off")
+	default:
+		return i18n.T(l, "assistant-reports.verdict_verify")
+	}
 }
 
 // recommendText is a decision's recommended option as a line ("" when it is not a decision or recommends nothing).
@@ -55,7 +76,7 @@ func recommendText(l i18n.Lang, a *acceptAsk) string {
 // askSummary is the plain line a card of ask a falls back to, and what the chat list shows of it.
 func askSummary(l i18n.Lang, a *acceptAsk) string {
 	if a.Conclusion {
-		return verdictText(l, a)
+		return verdictText(l, a, nil)
 	}
 	return a.Changed
 }
@@ -112,27 +133,28 @@ func acceptedNote(l i18n.Lang, a *acceptAsk) string {
 
 // conclusionCard is a conclusion's card: the verdict line, the recommended option of a decision, the link, and the button
 // ("Got it", or for a decision "Take the recommendation"); once passed, what came of it instead of the button.
-func (s *Service) conclusionCard(ctx context.Context, t Todo, a acceptAsk) *feishubot.Card {
+func (s *Service) conclusionCard(ctx context.Context, t Todo, a acceptAsk) *botcard.Card {
 	l := s.botLang(ctx)
 	title := s.feishuDirection(ctx, t, s.feishuDirections(ctx)) + i18n.T(l, "assistant-reports.verdict_title", i18n.Args{"task": clip(oneLine(t.Title), 30)})
-	color := feishubot.Green
+	color := botcard.Green
 	switch {
 	case !a.AcceptedAt.IsZero(): // passed: over
-		color = feishubot.Grey
+		color = botcard.Grey
 	case a.Outcome == outcomeCannot:
-		color = feishubot.Red
+		color = botcard.Red
 	case a.Outcome == outcomeDecide:
-		color = feishubot.Orange
+		color = botcard.Orange
 	}
-	c := feishubot.NewCard(title, color, verdictText(l, &a)).Tag(i18n.T(l, "assistant-reports.tag_conclusion"), feishubot.Neutral)
+	delivery := currentDelivery(t)
+	c := botcard.NewCard(title, color, verdictText(l, &a, delivery)).Tag(i18n.T(l, "assistant-reports.tag_conclusion"), botcard.Neutral)
 	// The goal, where it is now (with how far the work went out) and the evidence below (#3218).
-	now := feishubot.EscapeMarkdown(verdictText(l, &a))
+	now := botcard.EscapeMarkdown(verdictText(l, &a, delivery))
 	if live := liveText(l, s.todoStages(ctx)[t.ID]); live != "" && a.Outcome != outcomeDecide {
-		now += " · " + feishubot.EscapeMarkdown(live)
+		now += " · " + botcard.EscapeMarkdown(live)
 	}
-	c.Markdown(i18n.T(l, "assistant-reports.goal_head", i18n.Args{"goal": feishubot.EscapeMarkdown(clip(oneLine(t.Title), 80)), "now": now}))
+	c.Markdown(i18n.T(l, "assistant-reports.goal_head", i18n.Args{"goal": botcard.EscapeMarkdown(clip(oneLine(t.Title), 80)), "now": now}))
 	if r := recommendText(l, &a); r != "" {
-		c.Markdown(feishubot.EscapeMarkdown(r))
+		c.Markdown(botcard.EscapeMarkdown(r))
 	}
 	// The criteria and how each ended stay on the task's page, not on the card (#10380): the card leads with the result,
 	// and names only what was not met, so a shortfall is never hidden behind "Done".
@@ -142,31 +164,31 @@ func (s *Service) conclusionCard(ctx context.Context, t Todo, a acceptAsk) *feis
 		}
 	}
 	if d := deadlineText(l, s.location(ctx), a.Deadline, a.Reversible, time.Now()); d != "" && decideAsk(&a) && a.AcceptedAt.IsZero() && a.AgentReply == nil {
-		c.Markdown(feishubot.EscapeMarkdown(d))
+		c.Markdown(botcard.EscapeMarkdown(d))
 	}
 	// Self-contained (#3804): where it came from and stands, what each option leads to, what waiting costs.
 	for _, line := range decisionLines(l, s.location(ctx), &a) {
-		c.Markdown(feishubot.EscapeMarkdown(line))
+		c.Markdown(botcard.EscapeMarkdown(line))
 	}
 	if a.Link != "" {
-		c.Markdown(i18n.T(l, "assistant-reports.verdict_link", i18n.Args{"link": "[" + feishubot.EscapeMarkdown(clip(a.Link, 80)) + "](" + a.Link + ")"}))
+		c.Markdown(i18n.T(l, "assistant-reports.verdict_link", i18n.Args{"link": "[" + botcard.EscapeMarkdown(clip(a.Link, 80)) + "](" + a.Link + ")"}))
 	}
 	if !a.AcceptedAt.IsZero() {
 		return c.Note(acceptedNote(l, &a))
 	}
 	// One row: the primary answer, the first other option of a decision, and a "more" menu with the rest — the other
 	// options, the fixed answers for a decision they cannot answer as it is (decision.go), the link.
-	var bs []feishubot.Button
-	var menu []feishubot.MenuItem
+	var bs []botcard.Button
+	var menu []botcard.MenuItem
 	hint := "assistant-reports.verdict_reply_hint"
 	switch {
 	case decideAsk(&a) && a.Recommend != "":
-		bs = append(bs, feishubot.Btn(i18n.T(l, "assistant-reports.verdict_take"), feishubot.Primary, map[string]any{"a": "accept", "id": t.ID}))
+		bs = append(bs, botcard.Btn(i18n.T(l, "assistant-reports.verdict_take"), botcard.Primary, map[string]any{"a": "accept", "id": t.ID}))
 		hint = "assistant-reports.verdict_decide_hint"
 	case decideAsk(&a):
 		hint = "assistant-reports.verdict_decide_hint_none"
 	default:
-		bs = append(bs, feishubot.Btn(i18n.T(l, "assistant-reports.verdict_ack"), feishubot.Primary, map[string]any{"a": "accept", "id": t.ID}))
+		bs = append(bs, botcard.Btn(i18n.T(l, "assistant-reports.verdict_ack"), botcard.Primary, map[string]any{"a": "accept", "id": t.ID}))
 	}
 	if decideAsk(&a) {
 		for i, o := range a.Options {
@@ -174,23 +196,23 @@ func (s *Service) conclusionCard(ctx context.Context, t Todo, a acceptAsk) *feis
 				continue
 			}
 			if len(bs) < 2 {
-				bs = append(bs, feishubot.Btn(clip(o.Label, 20), feishubot.Default, map[string]any{"a": "accept", "id": t.ID, "opt": o.Label}))
+				bs = append(bs, botcard.Btn(clip(o.Label, 20), botcard.Default, map[string]any{"a": "accept", "id": t.ID, "opt": o.Label}))
 				continue
 			}
-			menu = append(menu, feishubot.MenuItem{Label: clip(o.Label, 20), Value: map[string]any{"opt": o.Label}})
+			menu = append(menu, botcard.MenuItem{Label: clip(o.Label, 20), Value: map[string]any{"opt": o.Label}})
 		}
 		for _, r := range ownerResponses {
-			menu = append(menu, feishubot.MenuItem{Label: i18n.T(l, "assistant-reports.decision_response_"+r), Value: map[string]any{"resp": r}})
+			menu = append(menu, botcard.MenuItem{Label: i18n.T(l, "assistant-reports.decision_response_"+r), Value: map[string]any{"resp": r}})
 		}
 	}
 	if a.Link != "" {
 		if len(menu) == 0 {
-			bs = append(bs, feishubot.LinkBtn(i18n.T(l, "assistant-reports.accept_open"), a.Link))
+			bs = append(bs, botcard.LinkBtn(i18n.T(l, "assistant-reports.accept_open"), a.Link))
 		} else {
-			menu = append(menu, feishubot.MenuItem{Label: i18n.T(l, "assistant-reports.accept_open"), URL: a.Link})
+			menu = append(menu, botcard.MenuItem{Label: i18n.T(l, "assistant-reports.accept_open"), URL: a.Link})
 		}
 	}
-	c.Buttons(append(bs, feishubot.Overflow(map[string]any{"a": "accept", "id": t.ID}, menu...))...)
+	c.Buttons(append(bs, botcard.Overflow(map[string]any{"a": "accept", "id": t.ID}, menu...))...)
 	return c.Note(i18n.T(l, hint))
 }
 
@@ -358,6 +380,7 @@ func (s *Service) supersedeDecision(ctx context.Context, id, reason string) {
 	cp := *a
 	b.mu.Unlock()
 	s.askChanged(ctx)
+	s.todoPushOver(id) // a later decision of the task rings again
 	if len(cp.Messages) > 0 {
 		s.updateAskCards(ctx, id, cp)
 	}
@@ -365,17 +388,26 @@ func (s *Service) supersedeDecision(ctx context.Context, id, reason string) {
 
 // askCopy is task id's ask as it is now (false: none, or a claim still going out).
 func (s *Service) askCopy(id string) (acceptAsk, bool) {
+	a, _, ok := s.askCopyReadable(id)
+	return a, ok
+}
+
+// askCopyReadable is the three-state form of askCopy. readable is false when the acceptance book could not be read
+// (a transient settings-store failure), which is not evidence that no owner card exists: callers that would spend a
+// once-per-round marker on that conclusion must hold off and retry rather than treat an unreadable ledger as card-less.
+// ok is false both for an unreadable book and for a readable one with no ask; the distinction is readable.
+func (s *Service) askCopyReadable(id string) (ask acceptAsk, readable, ok bool) {
 	b := &s.accept
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !s.loadAcceptLocked(context.Background()) {
-		return acceptAsk{}, false
+		return acceptAsk{}, false, false
 	}
 	a := b.asks[id]
 	if a == nil || a.AskedAt.IsZero() {
-		return acceptAsk{}, false
+		return acceptAsk{}, true, false
 	}
-	return *a, true
+	return *a, true, true
 }
 
 // takeRecommendation: the owner took decision a's recommended option for task id (or, a.ByDefault, nobody answered by its

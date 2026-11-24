@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -82,6 +83,9 @@ type TodoRow struct {
 	// Responsible is an external responsible party that is not a Persona-started agent (#12712): a long-running
 	// external session or a person, with optional machine_id / session_id hints; nil while none is set.
 	Responsible *TodoResponsible `json:"responsible,omitempty"`
+	// Audience distinguishes human-facing deliverables ("human") from autonomous engineering tasks ("autonomous"),
+	// or "" for unset/legacy to-dos (#14619).
+	Audience string `json:"audience,omitempty"`
 	// Images are the to-do's pictures, in the order the client supplied them. CreateTodo stores Data atomically with
 	// the row; ListTodos reconstructs only their metadata.
 	Images []TodoImage `json:"images,omitempty"`
@@ -131,6 +135,25 @@ const (
 	PriorityLow  = "low"
 )
 
+// A todo's audience besides unset ("") (#14619).
+const (
+	AudienceHuman      = "human"
+	AudienceAutonomous = "autonomous"
+)
+
+// ErrInvalidTodoAudience is returned when a to-do's audience is not "", AudienceHuman, or AudienceAutonomous.
+var ErrInvalidTodoAudience = errors.New(`audience must be "", "human", or "autonomous"`)
+
+// ValidateTodoAudience reports whether audience is "", AudienceHuman, or AudienceAutonomous.
+func ValidateTodoAudience(audience string) error {
+	switch audience {
+	case "", AudienceHuman, AudienceAutonomous:
+		return nil
+	default:
+		return fmt.Errorf("%w: %q", ErrInvalidTodoAudience, audience)
+	}
+}
+
 // DoneByAuto marks a todo the hub closed because its task's work was judged finished (docs/assistant/todos.md "Automatic completion").
 const DoneByAuto = "auto"
 
@@ -164,13 +187,13 @@ type TodoAgentRow struct {
 }
 
 const todoColumns = `id, title, notes, done_at, created_at, updated_at, origin, plan_id, start_error, done_by, done_reason, reopened_at, quiet,
-	due_at, due_date, remind_at, reminded_at, priority, project, kind, seen_at, inbox_item, part_of, after_ids, restored_at, someday_until, require_accepted_after, responsible`
+	due_at, due_date, remind_at, reminded_at, priority, project, kind, seen_at, inbox_item, part_of, after_ids, restored_at, someday_until, require_accepted_after, responsible, audience`
 
 // todoDest is where a row of todoColumns is scanned to.
 func todoDest(r *TodoRow) []any {
 	return []any{&r.ID, &r.Title, &r.Notes, &r.DoneAt, &r.CreatedAt, &r.UpdatedAt, &r.Origin, &r.PlanID, &r.StartError, &r.DoneBy,
 		&r.DoneReason, &r.ReopenedAt, &r.Quiet, &r.DueAt, &r.DueDate, &r.RemindAt, &r.RemindedAt, &r.Priority, &r.Project, &r.Kind,
-		&r.SeenAt, &r.InboxItem, &r.PartOf, &r.After, &r.RestoredAt, &r.SomedayUntil, &r.RequireAcceptedAfter, &r.Responsible}
+		&r.SeenAt, &r.InboxItem, &r.PartOf, &r.After, &r.RestoredAt, &r.SomedayUntil, &r.RequireAcceptedAfter, &r.Responsible, &r.Audience}
 }
 
 // ListTodos returns all todos ordered by created_at DESC, with image metadata but without image bytes.
@@ -311,15 +334,18 @@ func CreateTodoTx(ctx context.Context, tx pgx.Tx, t TodoRow) error {
 func createTodo(ctx context.Context, executor interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 }, t TodoRow) error {
+	if err := ValidateTodoAudience(t.Audience); err != nil {
+		return err
+	}
 	resp, err := responsibleParam(t.Responsible)
 	if err != nil {
 		return err
 	}
 	_, err = executor.Exec(ctx, `INSERT INTO todos (id, title, notes, done_at, created_at, updated_at, origin, plan_id, start_error, done_by,
-		done_reason, reopened_at, quiet, due_at, due_date, remind_at, reminded_at, priority, project, kind, inbox_item, part_of, after_ids, require_accepted_after, responsible)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)`,
+		done_reason, reopened_at, quiet, due_at, due_date, remind_at, reminded_at, priority, project, kind, inbox_item, part_of, after_ids, require_accepted_after, responsible, audience)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)`,
 		t.ID, t.Title, t.Notes, t.DoneAt, t.CreatedAt, t.UpdatedAt, t.Origin, t.PlanID, t.StartError, t.DoneBy, t.DoneReason, t.ReopenedAt, t.Quiet,
-		t.DueAt, t.DueDate, t.RemindAt, t.RemindedAt, t.Priority, t.Project, t.Kind, t.InboxItem, t.PartOf, nonNilIDs(t.After), t.RequireAcceptedAfter, resp)
+		t.DueAt, t.DueDate, t.RemindAt, t.RemindedAt, t.Priority, t.Project, t.Kind, t.InboxItem, t.PartOf, nonNilIDs(t.After), t.RequireAcceptedAfter, resp, t.Audience)
 	if err != nil {
 		return err
 	}
@@ -364,6 +390,8 @@ type TodoEdit struct {
 	// SetResponsible updates Responsible (nil clears it); the caller has validated it (assistant/todo_responsible.go).
 	SetResponsible bool
 	Responsible    *TodoResponsible
+	// Audience updates Audience ("" clears it); validated against "", AudienceHuman, AudienceAutonomous (#14619).
+	Audience *string
 }
 
 // Apply makes the edit to cur at the moment at: done stamps done_at (once), not done reopens it (reopened_at, no
@@ -429,6 +457,9 @@ func (e TodoEdit) Apply(cur *TodoRow, at time.Time) {
 			cur.Responsible = nil
 		}
 	}
+	if e.Audience != nil {
+		cur.Audience = *e.Audience
+	}
 	cur.UpdatedAt = at
 }
 
@@ -447,6 +478,11 @@ func sameMoment(a, b *time.Time) bool {
 // EditTodo makes edit e to todo id at updatedAt (TodoEdit.Apply) and returns the row as it is now; ErrTodoNotFound when
 // it is not there.
 func (d *DB) EditTodo(ctx context.Context, id string, e TodoEdit, updatedAt time.Time) (*TodoRow, error) {
+	if e.Audience != nil {
+		if err := ValidateTodoAudience(*e.Audience); err != nil {
+			return nil, err
+		}
+	}
 	conn, err := d.pool.Acquire(ctx)
 	if err != nil {
 		return nil, err
@@ -476,10 +512,10 @@ func (d *DB) EditTodo(ctx context.Context, id string, e TodoEdit, updatedAt time
 		_, err = tx.Exec(ctx, `UPDATE todos SET title = $2, notes = $3, done_at = $4, updated_at = $5, start_error = $6,
 			done_by = $7, done_reason = $8, reopened_at = $9, due_at = $10, due_date = $11, remind_at = $12, reminded_at = $13,
 			priority = $14, project = $15, origin = $16, part_of = $17, after_ids = $18, inbox_item = $19,
-			someday_until = $20, require_accepted_after = $21, responsible = $22 WHERE id = $1`,
+			someday_until = $20, require_accepted_after = $21, responsible = $22, audience = $23 WHERE id = $1`,
 			cur.ID, cur.Title, cur.Notes, cur.DoneAt, cur.UpdatedAt, cur.StartError, cur.DoneBy, cur.DoneReason, cur.ReopenedAt,
 			cur.DueAt, cur.DueDate, cur.RemindAt, cur.RemindedAt, cur.Priority, cur.Project, cur.Origin, cur.PartOf, nonNilIDs(cur.After), cur.InboxItem,
-			cur.SomedayUntil, cur.RequireAcceptedAfter, resp)
+			cur.SomedayUntil, cur.RequireAcceptedAfter, resp, cur.Audience)
 		if err != nil {
 			return err
 		}

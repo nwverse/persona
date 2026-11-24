@@ -83,7 +83,7 @@ func (s *Service) todoAsks(ctx context.Context) map[string]todoAsk {
 	l, loc := s.botLang(ctx), s.location(ctx)
 	out := map[string]todoAsk{}
 	for _, w := range s.awaitingAcceptance(ctx) {
-		a := todoAsk{Outcome: w.ask.Outcome, Verdict: verdictText(l, &w.ask), AskedAt: w.ask.AskedAt, Risk: askRisk(&w.ask)}
+		a := todoAsk{Outcome: w.ask.Outcome, Verdict: verdictText(l, &w.ask, w.delivery), AskedAt: w.ask.AskedAt, Risk: askRisk(&w.ask)}
 		if decideAsk(&w.ask) {
 			a.Recommend = w.ask.Recommend
 			if w.ask.OutsideID == "" {
@@ -139,6 +139,7 @@ func askRisk(a *acceptAsk) string {
 // askChanged: a to-do's ask came up, was taken or ended: the apps read the to-dos again ({"type":"todos"}) and the board
 // follows.
 func (s *Service) askChanged(context.Context) {
+	s.trevision.changed()
 	s.todosPushSoon() // with the rest of the write that changed it
 	s.boardChanged()
 }
@@ -156,6 +157,13 @@ func (s *Service) pushDecision(ctx context.Context, id string) bool {
 // pushDecisionErr is pushDecision that tells a push the hub did not take (the error: it may take it later) from one
 // that is not due (false, nil).
 func (s *Service) pushDecisionErr(ctx context.Context, id string) (bool, error) {
+	return s.pushDecisionAbout(ctx, id, assistantwire.TodoPushDecide)
+}
+
+// pushDecisionAbout is pushDecisionErr about reason (assistantwire.TodoPushDecide, or TodoPushDecideOverdue for the
+// reminder past its deadline): the hub rings one push per to-do and reason while the decision waits (TodoPushKey), and
+// takes it back once the decision is over (todoPushOver).
+func (s *Service) pushDecisionAbout(ctx context.Context, id, reason string) (bool, error) {
 	a, ok := s.askCopy(id)
 	t, found := s.todoNow(id)
 	if !ok || !found || !decideAsk(&a) || a.Recommend == "" || !a.AcceptedAt.IsZero() ||
@@ -173,14 +181,18 @@ func (s *Service) pushDecisionErr(ctx context.Context, id string) (bool, error) 
 	l := s.lang(ctx)
 	n := Notification{ID: "ntf_" + randomHex(8), Kind: assistantwire.NotifyDecide, Subtitle: "Persona", DeviceID: here, SessionID: sessionID,
 		Title: i18n.T(l, "assistant-reports.verdict_title", i18n.Args{"task": clip(oneLine(t.Title), 30)}),
-		Body:  verdictText(l, &a) + "\n" + recommendText(l, &a),
-		// A decision the owner must take now: P0 interrupts even with the hub's push tiering on, every time it is
-		// pushed (its reminders too); the hub keys it by to-do and round.
-		Level: assistantwire.LevelP0,
+		Body:  verdictText(l, &a, nil) + "\n" + recommendText(l, &a),
+		// The level goes by why it is the owner's (decisionPushLevel): one that cannot wait interrupts even with the
+		// hub's push tiering on, every time it is pushed (its reminders too); the hub keys it by to-do and round.
+		Level: decisionPushLevel(a.WhyOwner),
 		// The ask and how its push may answer it: the view's (projection), so a notification never offers what the
 		// to-do's row would not answer in place.
 		Todo: &assistantwire.NotifyTodo{ID: id, AskedAt: a.AskedAt, Recommend: a.Recommend, Responses: ownerResponses,
-			Ask: projection.DecisionAskID(a.AskedAt), Lockscreen: projection.Lockscreen(askRisk(&a))}}
+			Ask: projection.DecisionAskID(a.AskedAt), Lockscreen: projection.Lockscreen(askRisk(&a))},
+		// One push a to-do and reason while it waits, not one a round (todoPushOver lets the next one ring). The hub
+		// names its card (TodoAskCardID) as the push's card_id, never interaction_id: the iOS app clears a delivered
+		// push whose interaction_id is not in its card list as stale, and a decision is never in that list.
+		RelatedKey: assistantwire.TodoPushKey(id, reason)}
 	for _, o := range a.Options {
 		n.Todo.Options = append(n.Todo.Options, o.Label)
 	}
@@ -199,9 +211,20 @@ func (s *Service) pushDecisionErr(ctx context.Context, id string) (bool, error) 
 		n.Title, n.Body = s.redactedNotice(ctx, l, space)
 		n.Todo.Options, n.Todo.Lockscreen = nil, assistantwire.OwnerAskLockscreenOpenOnly
 	}
+	s.noteCard(ctx, cardDecision, n)
 	if _, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
 		s.logf("task %s: decision push: %v", id, err)
 		return false, err
 	}
 	return true, nil
+}
+
+// todoPushOver: to-do id no longer waits on the owner (its decision answered, superseded or withdrawn by its
+// supervisor, its owner wait over, the to-do closed). Its card is over (resolveCard): the hub lets the next push about it
+// ring (assistantwire.TodoPushKey) and takes the decision's push, which names the card as card_id, off the devices it
+// went to. Nothing is pushed.
+func (s *Service) todoPushOver(id string) {
+	if id != "" {
+		s.resolveCard(assistantwire.TodoAskCardID(id))
+	}
 }

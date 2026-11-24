@@ -1,5 +1,17 @@
 # Lessons: web UI and interactions
 
+## A folder of trees names its repository, it is not one (#13453)
+
+Path inference keys a tree in a folder kept apart from its repository (herdr's `~/.herdr/worktrees/<repository>/<tree>`)
+by that folder. Nothing is checked out there, so a Repo section keyed by it never meets the repository's own section,
+which Git keys by the main checkout. When a tree was removed after its work merged, or has not been read yet, Git places
+none of its Agents, and the repository showed as a second section with its name. Treat such a folder as naming its
+repository, and resolve it against what Git placed on the same computer: another tree of that folder, else the one
+section of that name. When either is ambiguous, keep it apart. A fixture where every session carries `repo_root` never
+reaches this fallback, so test sessions with a removed tree's bare `cwd`. Check the folder is at the computer's home: a
+cwd in a folder of a repository's own tree (`/code/app/.worktrees/feature/src`) has the same shape, and joining by the
+tree's name moved its Agent into an unrelated repository's section.
+
 ## A folded launcher must retain its identity (#10249)
 
 When replacing a launcher rail, do not promote the current launcher's models into a separate Recommended group or
@@ -1530,3 +1542,14 @@ keeps the old way-back strip, so read the current entry when the revision change
 a replace, not a push, so it cannot add a duplicate history entry.
 
 - A standalone Vite component screenshot fixture still needs the production language-catalog and page-token plugins, plus the text-scale PostCSS transform. Loading the raw locale metadata as a catalog fails before React renders. Initialize localization before importing the component and capture browser page errors so a missing table reports its initialization error instead of only a selector timeout.
+
+## Two projections of one tree need one flat rule (#13454)
+
+By repo builds a repository's rows two ways: from the hosts' workspace catalog, and from sessions alone where no host
+lists the place. The session-only projection drew a lone main checkout flat (`showsWorktreeLevel`), but a catalog
+workspace always kept its level, so a folder with a herdr workspace read `notes › notes › Agents` while the same folder
+without one read `notes › Agents`; every Agent row under it then ended with `<repository> › <tree>`, a third copy of
+the headings' names. Give both projections the same rule: a level that only repeats its heading's name is left out, and
+the heading takes the row's marks and menu. A host that does not say which workspace is the main checkout (herdr has no
+`is_main`) leaves it to the folder, the workspace at the repository's own folder, and that guess may only mark and
+order the tree: actions keep reading what the host said.
