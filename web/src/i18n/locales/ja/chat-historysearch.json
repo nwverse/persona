@@ -1,0 +1,11 @@
+{
+  "dialog_aria": "履歴検索",
+  "header": "^R 履歴検索",
+  "placeholder": "キーワードで絞り込み…",
+  "input_aria": "メッセージ履歴を検索",
+  "count_other": "{count} 件",
+  "empty": "履歴はまだありません",
+  "no_matches": "一致する履歴がありません",
+  "current_session": "現在のセッション",
+  "footer_hint": "↑↓ 選択 · ⏎ 入力 · Esc キャンセル"
+}

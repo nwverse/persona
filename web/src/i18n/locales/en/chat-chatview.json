@@ -135,5 +135,8 @@
   "export": "Export Conversation…",
   "side_sessions_count": "Side sessions ({count})",
   "side_sessions_needs_you": "A side session needs you",
-  "open_agent_page": "Open Agent page"
+  "open_agent_page": "Open Agent page",
+  "font_scale_toast": "Chat text size: {label}",
+  "cycle_font_scale": "Switch chat text size",
+  "find_in_chat": "Find in chat (⌘F)"
 }

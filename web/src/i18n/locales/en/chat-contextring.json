@@ -1,0 +1,8 @@
+{
+  "usage_title": "Context usage: {pct}% ({used} / {window})",
+  "live_output": "Turn output: ↓ {tokens} tokens",
+  "heading": "Context usage",
+  "generating": "Generating",
+  "used_window": "Used / Window",
+  "compact_action": "Run /compact"
+}

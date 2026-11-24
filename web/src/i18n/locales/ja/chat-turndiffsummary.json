@@ -1,0 +1,11 @@
+{
+  "files_changed_other": "{count} 件のファイルを変更",
+  "view_diff": "差分を見る",
+  "diff_copied": "コピー済み",
+  "copy_short": "コピー",
+  "copy_diff": "差分をコピー",
+  "diff_title": "変更",
+  "diff_title_for": "{name} の変更",
+  "open_file": "ファイルを開く",
+  "diff_expand_more_other": "残り {count} 行を表示"
+}

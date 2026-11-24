@@ -1,0 +1,7 @@
+{
+  "duration": "所要 {duration}",
+  "tools_other": "ツール {count} 回",
+  "thoughts_other": "推論 {count} 件",
+  "copied": "コピー済み",
+  "copy_reply": "このターンの返信をコピー"
+}

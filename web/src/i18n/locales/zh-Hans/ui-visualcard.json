@@ -1,0 +1,15 @@
+{
+  "default_title": "交互视图",
+  "generating": "正在生成可视化内容…",
+  "view_source_preview": "查看源码预览",
+  "preview": "预览",
+  "source": "源码",
+  "switch_to_preview": "切换至预览",
+  "view_source": "查看源码",
+  "copy_source": "拷贝源码",
+  "copied": "已拷贝",
+  "copy": "拷贝",
+  "fullscreen": "全屏",
+  "view_fullscreen": "全屏查看",
+  "fullscreen_title": "{title}（全屏）"
+}

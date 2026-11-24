@@ -1,0 +1,13 @@
+{
+  "files_changed_one": "{count} file changed",
+  "files_changed_other": "{count} files changed",
+  "view_diff": "View diff",
+  "diff_copied": "Copied",
+  "copy_short": "Copy",
+  "copy_diff": "Copy diff",
+  "diff_title": "Changes",
+  "diff_title_for": "Changes to {name}",
+  "open_file": "Open file",
+  "diff_expand_more_one": "Show {count} more line",
+  "diff_expand_more_other": "Show {count} more lines"
+}

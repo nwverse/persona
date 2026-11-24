@@ -135,5 +135,8 @@
   "export": "会話を書き出す…",
   "side_sessions_count": "子セッション（{count}）",
   "side_sessions_needs_you": "子セッションが対応を待っています",
-  "open_agent_page": "Agent のページを開く"
+  "open_agent_page": "Agent のページを開く",
+  "font_scale_toast": "チャットの文字サイズ：{label}",
+  "cycle_font_scale": "文字サイズを切り替え",
+  "find_in_chat": "会話内を検索 (⌘F)"
 }

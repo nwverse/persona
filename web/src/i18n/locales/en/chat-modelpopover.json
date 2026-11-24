@@ -1,0 +1,7 @@
+{
+  "fallback_label": "Model",
+  "model_title": "Model: {model}",
+  "switch_model": "Switch model",
+  "current": "Current",
+  "custom_model": "Enter custom model…"
+}

@@ -1,0 +1,15 @@
+{
+  "default_title": "Interactive view",
+  "generating": "Generating visual…",
+  "view_source_preview": "View source preview",
+  "preview": "Preview",
+  "source": "Source",
+  "switch_to_preview": "Switch to preview",
+  "view_source": "View source",
+  "copy_source": "Copy source",
+  "copied": "Copied",
+  "copy": "Copy",
+  "fullscreen": "Fullscreen",
+  "view_fullscreen": "View fullscreen",
+  "fullscreen_title": "{title} (Fullscreen)"
+}

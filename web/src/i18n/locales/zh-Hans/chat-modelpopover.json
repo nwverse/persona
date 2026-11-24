@@ -1,0 +1,7 @@
+{
+  "fallback_label": "模型",
+  "model_title": "模型：{model}",
+  "switch_model": "切换模型",
+  "current": "当前",
+  "custom_model": "输入自定义模型…"
+}

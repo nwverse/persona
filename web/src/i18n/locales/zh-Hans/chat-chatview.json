@@ -135,5 +135,8 @@
   "export": "导出对话…",
   "side_sessions_count": "分支会话（{count}）",
   "side_sessions_needs_you": "有分支会话需要你",
-  "open_agent_page": "打开 Agent 会话"
+  "open_agent_page": "打开 Agent 会话",
+  "font_scale_toast": "对话字号：{label}",
+  "cycle_font_scale": "切换对话字号",
+  "find_in_chat": "对话内搜索 (⌘F)"
 }

@@ -66,6 +66,7 @@ import { IMAGE_LIMIT_CODE } from "../../lib/api-errors";
 import { COMPACT_FEATURE, compactBody, compactPath } from "../../lib/compaction";
 import { canResendFailedTurn, compactResendSupport, failedTurnToResend, isImageLimitError, resolveFailedTurnPayload, type OutgoingPayload } from "../../lib/compact-resend";
 import { CLEAR_MAIN_FEATURE, clearMainContext, isClearCommand, mainCommands } from "../../lib/main-clear";
+import { useSessionLive } from "../../lib/live";
 import { PendingCards, TurnCards } from "./Interactions";
 import { splitTurnAsks } from "../../lib/turn-asks";
 import { focusedCard, focusedFirst } from "../../lib/card-focus";
@@ -74,6 +75,14 @@ import { FailureNote, showsFailureNote } from "./FailureNote";
 import { LazyCloseoutCard } from "./closeout-chunks";
 import { shownCloseout } from "../../lib/closeout";
 import { AWAIT_MS, awaitingTurn, DOCK_MAX, turnStart } from "./dock";
+const ChatEmptyState = lazyPage(() => import("./ChatEmptyState").then((m) => m.ChatEmptyState));
+const ChatFindBar = lazyPage(() => import("./ChatFindBar").then((m) => m.ChatFindBar));
+import { CHAT_FONT_OPTIONS, useChatFontScale } from "./chat-font";
+const ContextRing = lazyPage(() => import("./ContextRing").then((m) => m.ContextRing));
+const ModelPopover = lazyPage(() => import("./ModelPopover").then((m) => m.ModelPopover));
+const SelectionQuotePill = lazyPage(() => import("./SelectionQuotePill").then((m) => m.SelectionQuotePill));
+const TurnRail = lazyPage(() => import("./TurnRail").then((m) => m.TurnRail));
+import type { TurnRailItem } from "./TurnRail";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
 import { AgentModelPill, AssistantModelPill, useAssistantTurnFix } from "./ModelPill";
 import { switchRefused } from "../../lib/session-models";
@@ -1615,6 +1624,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     if (state !== "working") stopDone();
   }, [state, stopDone]);
 
+  const [findOpen, setFindOpen] = useState(false);
+  useEffect(() => setFindOpen(false), [mid, sid]);
+
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       // in the terminal view Esc belongs to the program in the terminal; a message still waiting for its turn to start can be
@@ -1622,17 +1634,45 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       // a worker's conversation in a Team panel, and an Agent's in a task's or an Agent's side panel, leave Esc to the
       // panel (it closes it) and to the page beside it
       if (embedded || inPanel) return;
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      if (e.target instanceof Element && e.target.closest("[data-session-overview]")) return;
-      if ((state === "working" || awaiting) && view !== "term" && !document.querySelector("[role=dialog],[role=menu]")) {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "f" && view !== "term") {
+        if (document.querySelector("[role=dialog]")) return;
         e.preventDefault();
-        void interrupt();
+        setFindOpen(true);
+        return;
+      }
+      if (e.key === "Escape" && !e.defaultPrevented && !findOpen) {
+        if (e.target instanceof Element && e.target.closest("[data-session-overview]")) return;
+        if ((state === "working" || awaiting) && view !== "term" && !document.querySelector("[role=dialog],[role=menu]")) {
+          e.preventDefault();
+          void interrupt();
+          return;
+        }
+      }
+      // Type-anywhere auto-focus into composer (inspired by Moshi-Web)
+      if (
+        view !== "term" &&
+        !offlineLine &&
+        !findOpen &&
+        canCompose &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        e.key.length === 1 &&
+        e.key !== " " &&
+        !document.querySelector("[role=dialog],[role=menu]")
+      ) {
+        const target = e.target instanceof HTMLElement ? e.target : null;
+        if (target && (target.closest("input, textarea, select, [contenteditable='true']") || target.isContentEditable)) return;
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed) return;
+        const ta = composerBox.current?.querySelector("textarea");
+        if (ta && !ta.disabled) ta.focus();
       }
     };
     addEventListener("keydown", key);
     return () => removeEventListener("keydown", key);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, awaiting, session, view, embedded, inPanel]);
+  }, [state, awaiting, session, view, embedded, inPanel, findOpen, canCompose, offlineLine]);
 
   // Once the hub says the turn is over, four kinds of background work draw the last exchange finished (its work folded,
   // any run's card inside it) instead of keeping the turn's "Working…" clock going: first a workflow (#3434), then
@@ -1672,6 +1712,19 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // retained for Background activity; running, legacy quiet and every promoted round keep their existing rendering.
   const quiet = useMemo(() => splitBackgroundActivity(allLines, feed, historyFrom), [allLines, feed, historyFrom]);
   const lines = quiet.timeline;
+  const railItems = useMemo<TurnRailItem[]>(() => {
+    const out: TurnRailItem[] = [];
+    for (const line of lines) {
+      if (line.kind !== "segment" || !line.seg.user?.text?.trim()) continue;
+      out.push({
+        id: line.seg.id,
+        prompt: line.seg.user.text.trim(),
+        reply: line.seg.answer?.text?.trim(),
+        working: Boolean(line.live),
+      });
+    }
+    return out;
+  }, [lines]);
   // a DayLine over the first line of each new calendar day (#8160); day-only keys keep them stable as pages and
   // midnight arrivals land. Days the earlier stretches already open with a divider are not repeated here.
   const dayTaken = useMemo(() => new Set(earlier.stretchDays), [earlier.stretchDays]);
@@ -2264,11 +2317,32 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       <PlanPill todos={plan.todos} live={lastLive} onClose={closePlan} />
     </Suspense>
   ) : null;
+  const onSelectModel = useCallback((modelId: string) => {
+    void deliver({ text: `/model ${modelId}`, images: [] }, uuid());
+  }, [deliver]);
+  const onCompactCommand = useCallback(() => {
+    void deliver({ text: "/compact", images: [] }, uuid());
+  }, [deliver]);
+  const composerFooter = useMemo(
+    () =>
+      session ? (
+        <ComposerFooter
+          session={session}
+          assistant={assistant}
+          draftKey={draftKey}
+          canCompose={canCompose}
+          working={state === "working"}
+          onSelectModel={onSelectModel}
+          onCompact={!assistant && canCompose ? onCompactCommand : undefined}
+        />
+      ) : null,
+    [session, assistant, draftKey, canCompose, state, onSelectModel, onCompactCommand],
+  );
   // Persona's own chats too (#3654), and from the moment the message is in, not from the hub's next push
   const background = useMemo(() => backgroundLine(session), [session]);
   // ✓ Done only for a turn that finished: one waiting on you, stopped or cut off by an error keeps its last words
   const done = turnDone(state, session, lastLine, tr.items);
-  const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={runningWorking} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={!backgroundState || backgroundState.kind === "workflow" ? background : null} wait={wait} subtasks={subtasks} command={command} /> : null;
+  const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={runningWorking} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={!backgroundState || backgroundState.kind === "workflow" ? background : null} wait={wait} subtasks={subtasks} command={command} onStop={sessionCan(session, "interrupt") ? interrupt : undefined} /> : null;
   // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
   // the run's status. The same element while nothing in it changes: the composer is memoized.
   const queue = useMemo(
@@ -2508,6 +2582,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     // eslint-disable-next-line react-hooks/exhaustive-deps -- backToComposer reads stable refs and fine media state
   }, [bannerError, session, compactResend.supported, compactResend.mode, tailKey, mid, sid, draftKey, deliver]);
 
+  const toggleFind = useCallback(() => setFindOpen((o) => !o), []);
   const page = (
     <div className="@container/session flex h-full min-w-0 flex-col">
       {!embedded && <Header
@@ -2523,6 +2598,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         siblings={siblings}
         onToggleSidebar={onToggleSidebar}
         onInterrupt={interrupt}
+        onOpenFind={toggleFind}
+        findOpen={findOpen}
         last={faceLast}
         onSearch={openSearch}
         onActivity={isMain ? openActivity : undefined}
@@ -2603,6 +2680,15 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             )}
             <LiveClockContext.Provider value={countClock}>
             <LatestMessageTime.Provider value={latestTime}>
+            {!tr.loading && !tr.error && !starting && !embedded && tr.items.length === 0 && !tr.streaming && shownPending.length === 0 && outbox.length === 0 && (!assistant || feed.length === 0) && (
+              <LazyChatEmptyState
+                assistant={assistant}
+                personaName={persona.name}
+                cwd={session?.cwd}
+                canCompose={canCompose}
+                onPick={(prompt) => void sendDraft(draftKey, { type: "replace", text: prompt })}
+              />
+            )}
             <ChatContext.Provider value={ctx}>
               <CardConversation.Provider value={assistant ? sid : ""}>
               {earlier.host && <Suspense fallback={null}><EarlierStretches {...earlier.host} offscreen={offscreen} /></Suspense>}
@@ -2703,6 +2789,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         )}
         {away && !jumpInDock && <JumpPill label={jumpLabel(newSince)} onClick={toEnd} />}
         {picked && !search.open && <ReturnPill onClick={backToOrigin} />}
+        {!embedded && findOpen && <Suspense fallback={null}><ChatFindBar open={findOpen} onClose={() => setFindOpen(false)} containerRef={scroller} /></Suspense>}
+        {!embedded && railItems.length > 0 && <Suspense fallback={null}><TurnRail items={railItems} scrollerRef={scroller} onJump={() => follow(false)} /></Suspense>}
+        {!embedded && canCompose && <LazySelectionQuotePill containerRef={scroller} disabled={!canCompose} onQuote={(text) => void sendDraft(draftKey, { type: "quote", text })} />}
       </div>
 
       <div
@@ -2850,6 +2939,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           planMode={planMode}
           action={composerAction.action}
           top={short ? undefined : queue}
+          footer={composerFooter}
         />
         )}
         {!stoppedLine && !codexReadOnlyLine && session && (
@@ -3009,6 +3099,68 @@ export function ComposerSource({ session, assistant }: { session: Session; assis
   );
 }
 
+function ComposerFooter({
+  session,
+  assistant,
+  draftKey,
+  canCompose,
+  working,
+  onSelectModel,
+  onCompact,
+}: {
+  session: Session;
+  assistant?: boolean;
+  draftKey?: string;
+  canCompose?: boolean;
+  working?: boolean;
+  onSelectModel?: (modelId: string) => void;
+  onCompact?: () => void;
+}) {
+  const live = useSessionLive(session.machine_id, session.session_id);
+  const modelName = !assistant ? session.model?.split("/").pop() : undefined;
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      {modelName && draftKey && canCompose && onSelectModel ? (
+        <Suspense fallback={null}>
+          <ModelPopover
+            currentModel={session.model}
+            launcher={session.launcher}
+            onSelectModel={onSelectModel}
+            onCustomModel={() => void sendDraft(draftKey, { type: "replace", text: "/model " })}
+          />
+        </Suspense>
+      ) : null}
+      {(live?.tokens_down || working) && <Suspense fallback={null}><ContextRing liveTokensDown={live?.tokens_down} working={working} onCompact={onCompact} /></Suspense>}
+    </span>
+  );
+}
+
+/** Defers mounting the lazy ChatEmptyState to the next frame so it stays off the first-screen bundle and never suspends synchronous mounts. */
+function LazyChatEmptyState(props: { assistant?: boolean; personaName: string; cwd?: string; canCompose?: boolean; onPick: (prompt: string) => void }) {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setReady(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+  if (!ready) return null;
+  return <Suspense fallback={null}><ChatEmptyState {...props} /></Suspense>;
+}
+
+/** Mounts the lazy SelectionQuotePill only after the reader selects text, keeping first-screen bundle & initial mount clean. */
+function LazySelectionQuotePill(props: { containerRef: React.RefObject<HTMLElement | null>; disabled?: boolean; onQuote: (text: string) => void }) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (armed) return;
+    const onSelect = () => {
+      if (window.getSelection()?.toString().trim()) setArmed(true);
+    };
+    document.addEventListener("selectionchange", onSelect);
+    return () => document.removeEventListener("selectionchange", onSelect);
+  }, [armed]);
+  if (!armed) return null;
+  return <Suspense fallback={null}><SelectionQuotePill {...props} /></Suspense>;
+}
+
 /** The line under the composer as menu rows (#3533): the value in full (wrapped), what it is beside it; choosing one
  *  copies it, except the source, which is a sentence to read rather than a value to paste. The launcher and model are
  *  the model pill's (#5032). */
@@ -3070,6 +3222,8 @@ export const Header = memo(function Header({
   siblings,
   onToggleSidebar,
   onInterrupt,
+  onOpenFind,
+  findOpen,
   last,
   onSearch,
   onActivity,
@@ -3105,6 +3259,8 @@ export const Header = memo(function Header({
   siblings: Session[];
   onToggleSidebar?: () => void;
   onInterrupt: () => void;
+  onOpenFind?: () => void;
+  findOpen?: boolean;
   /** The assistant's face: the last item's role and kind. */
   last?: Pick<Item, "role" | "kind">;
   /** "Search in chat" (ChatSearch.tsx). */
@@ -3179,6 +3335,14 @@ export const Header = memo(function Header({
   };
   const [linkTodoOpen, setLinkTodoOpen] = useState(false);
   const [sharingOpen, setSharingOpen] = useState(false);
+  const [fontScale, setFontScale] = useChatFontScale();
+  const fontScaleLabel = CHAT_FONT_OPTIONS.find((o) => o.value === fontScale)?.label ?? t("chat-font.default");
+  const cycleFontScale = () => {
+    const idx = CHAT_FONT_OPTIONS.findIndex((o) => o.value === fontScale);
+    const next = CHAT_FONT_OPTIONS[(idx + 1) % CHAT_FONT_OPTIONS.length]!;
+    setFontScale(next.value);
+    toast(t("chat-chatview.font_scale_toast", { label: next.label }));
+  };
   const allowed = session ? sessionMenuActions(session) : [];
   // Live link loads with the click (lib/attach-live.ts), off the first screen
   const attach = () => session && import("../../lib/attach-live").then((m) => m.attachLive(session));
@@ -3336,6 +3500,7 @@ export const Header = memo(function Header({
         // the whole conversation as Markdown (#7375): its dialog is a chunk of its own
         { key: "export", label: t("chat-chatview.export"), icon: "download", onSelect: () => import("./ExportDialog").then((m) => m.openExportDialog({ session, title, machineName, assistant: Boolean(assistant) }), (e: unknown) => toast(errorText(e), "error")) },
         { key: "info", label: t("chat-chatview.session_info"), icon: "info", onSelect: () => setDialog("info") },
+        { key: "font-scale", label: t("chat-chatview.cycle_font_scale"), icon: "read", hint: fontScaleLabel, onSelect: cycleFontScale },
         ...(canRename ? [{ key: "rename", label: t("chat-chatview.rename"), icon: "pencil" as const, onSelect: () => setDialog("rename") }] : []),
         ...(!assistant && session.space_id && !session.source_kind ? [{ key: "space", label: t("chat-chatview.rename_space"), icon: "folder" as const, onSelect: () => setDialog("space") }] : []),
         ...(!assistant ? [{ key: "mute", label: muted ? t("chat-chatview.unmute") : t("chat-chatview.mute"), icon: muted ? ("bell" as const) : ("bellOff" as const), onSelect: () => void flipMute() }] : []),
@@ -3455,6 +3620,7 @@ export const Header = memo(function Header({
           {sides.needs && <span aria-hidden data-side-sessions-needs className="pointer-events-none absolute top-0.5 right-0.5 size-2 rounded-full bg-attention shadow-[0_0_0_2px_var(--page)]" />}
         </span>
       )}
+      {onOpenFind && <IconButton icon="search" label={t("chat-chatview.find_in_chat")} onClick={onOpenFind} active={Boolean(findOpen)} className="hidden sm:flex" />}
       {showFiles && <IconButton icon="folder" label={t("chat-chatview.files")} onClick={openFiles} active={here(panel, "files") || here(panel, "git")} className="hidden sm:flex" />}
       {/* the terminal: one button to the other view at every width (cindy's terminal is one of its right sidebar's tabs) */}
       {view && onView && (

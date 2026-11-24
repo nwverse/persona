@@ -1,0 +1,15 @@
+{
+  "default_title": "インタラクティブビュー",
+  "generating": "ビジュアルを生成中…",
+  "view_source_preview": "ソースプレビューを表示",
+  "preview": "プレビュー",
+  "source": "ソース",
+  "switch_to_preview": "プレビューに切り替え",
+  "view_source": "ソースを表示",
+  "copy_source": "ソースをコピー",
+  "copied": "コピー済み",
+  "copy": "コピー",
+  "fullscreen": "全画面",
+  "view_fullscreen": "全画面で表示",
+  "fullscreen_title": "{title}（全画面）"
+}
