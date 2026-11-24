@@ -1,4 +1,4 @@
-Delete one of the user's Persona to-dos for good (its notes, links to agents and decisions go with it), only when the user asks for it to be deleted; one that is finished is completed instead (todo_complete). Every delete is confirmed on the phone first; if the user declines, writes instead, or does not answer, nothing is deleted. The agents that worked on it are left as they are.{{template "shared/mcp_language" .}}
+Delete a Persona to-do for good (with its notes, agent links and decisions), only when the user asks; a finished one is completed instead (todo_complete). Always confirmed on the phone first; declined, answered in writing or unanswered, nothing is deleted. Its agents are left as they are.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -7,7 +7,7 @@ Delete one of the user's Persona to-dos for good (its notes, links to agents and
   "properties": {
     "id": {
       "type": "string",
-      "description": "the to-do's id (todo_…), as todo_list gives it"
+      "description": "To-do id from todo_list."
     }
   }
 }

@@ -83,6 +83,8 @@ type Options struct {
 
 // Service is the assistant. It implements Handler.
 type Service struct {
+	// sortMem keeps the to-do sort's batches when the store has no table for them (todo_sort_batches.go).
+	sortMem memSortBatches
 	// modules are the feature modules loaded (modules.go); nil, none.
 	modules         *kernel.Kernel
 	modulesOff      []string // the ids the modules setting switched off at start (loadModules): built-in and client-only
@@ -470,6 +472,7 @@ func New(o Options) *Service {
 	s.todayRoutes()
 	s.briefRoutes()
 	s.todoRoutes()
+	s.todoSortRoutes() // todo_sort_batches.go
 	s.agentRoutes()
 	s.sessionReviewRoutes()
 	s.workspaceBoardRoutes()

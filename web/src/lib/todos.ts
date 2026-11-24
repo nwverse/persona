@@ -102,6 +102,9 @@ export interface Todo {
   priority?: string;
   /** The slug of the knowledge-base project it belongs to (#2581, docs/assistant/todos.md "Project"); unset for none. */
   project?: string;
+  /** A one-off to-do that belongs to no project (#13026, docs/assistant/todos.md "Sorting into projects"); unset otherwise
+   *  and from hubs without it. Filing it under a project clears it. */
+  temporary?: boolean;
   /** The to-do whose request this one is a piece of, and the pieces it waits for (docs/assistant/todos.md "Requests in
    *  pieces"); unset for a to-do that is no piece and from hubs without them. */
   part_of?: string;
@@ -926,6 +929,8 @@ export interface TodoPatch {
   priority?: string;
   /** A knowledge-base project's slug; "" takes it out of its project. */
   project?: string;
+  /** Marks (true) or unmarks a one-off to-do (#13026); marking it takes it out of its project. */
+  temporary?: boolean;
   /** A responsible party that is not a Persona-started agent (#12712); null clears it. */
   responsible?: TodoResponsible | null;
 }

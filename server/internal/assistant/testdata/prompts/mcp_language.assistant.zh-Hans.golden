@@ -3537,7 +3537,7 @@
   },
   {
     "name": "todo_list",
-    "description": "List Persona to-dos (not Feishu tasks): open/failed starts by default, due first and undated last. Returns id, title/state, priority/project, due/reminder, agents and first note line; times use the user's time zone. Filter by the schema fields. Find an id here before edits; use todo_get for details.",
+    "description": "List Persona to-dos (not Feishu tasks): open/failed starts by default, due first. Returns id, title/state, priority/project, due/reminder, agents and first note line; times use the user's time zone. Find an id here before edits; use todo_get for details.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -3649,7 +3649,7 @@
         },
         "project": {
           "type": "string",
-          "description": "Existing kb_list project slug/name; prefer long-term work. Only when clear; no near-duplicates."
+          "description": "Existing kb_list project slug/name, only when clear."
         },
         "part_of": {
           "type": "string",
@@ -3839,7 +3839,7 @@
         },
         "project": {
           "type": "string",
-          "description": "Existing knowledge-base project slug/name (kb_list projects), preferably a long-term work area. Set only when clear; do not invent near-duplicates. \"\" clears."
+          "description": "Existing kb_list project slug/name; \"\" clears."
         },
         "part_of": {
           "type": "string",
@@ -3857,7 +3857,7 @@
   },
   {
     "name": "todo_complete",
-    "description": "Mark one of the user's Persona to-dos done, when the user says it is done (or asks you to close it). The user's own to-do is closed at once. A task's, or one agents work on, is confirmed on the phone first, because closing it also closes its agents once they are idle; if the user declines, nothing changes. A concern is not closed with this: report its outcome with concern_report.",
+    "description": "Mark a Persona to-do done when the user says it is done or asks to close it. A plain to-do closes at once; a task's, or one agents work on, is confirmed on the phone first, since closing it also closes its agents once idle; declined, nothing changes. A concern is not closed with this: report its outcome with concern_report.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3866,7 +3866,7 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "the to-do's id (todo_…), as todo_list gives it"
+          "description": "To-do id from todo_list."
         }
       }
     },
@@ -3874,7 +3874,7 @@
   },
   {
     "name": "todo_reopen",
-    "description": "Open a done Persona to-do again, when the user says it is not done after all. The user's own to-do is reopened at once; a task's, or one agents worked on, is confirmed on the phone first.",
+    "description": "Reopen a done Persona to-do when the user says it is not done after all. A plain to-do reopens at once; a task's, or one agents worked on, is confirmed on the phone first.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3883,7 +3883,7 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "the to-do's id (todo_…), as todo_list gives it"
+          "description": "To-do id from todo_list."
         }
       }
     },
@@ -3891,7 +3891,7 @@
   },
   {
     "name": "todo_delete",
-    "description": "Delete one of the user's Persona to-dos for good (its notes, links to agents and decisions go with it), only when the user asks for it to be deleted; one that is finished is completed instead (todo_complete). Every delete is confirmed on the phone first; if the user declines, writes instead, or does not answer, nothing is deleted. The agents that worked on it are left as they are.",
+    "description": "Delete a Persona to-do for good (with its notes, agent links and decisions), only when the user asks; a finished one is completed instead (todo_complete). Always confirmed on the phone first; declined, answered in writing or unanswered, nothing is deleted. Its agents are left as they are.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3900,7 +3900,7 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "the to-do's id (todo_…), as todo_list gives it"
+          "description": "To-do id from todo_list."
         }
       }
     },
@@ -3908,7 +3908,7 @@
   },
   {
     "name": "concern_report",
-    "description": "Report the outcome of one of the user's concerns (a to-do of kind concern, see todo_list kind concern) and close it: main conversation only. Call it in the same reply in which you tell the user the outcome, with report the words you told them, faithfully; it is kept on the concern as a decision of source reported (shown in the app, sent to extensions). It is the only way a concern closes: nothing closes one on its own, and todo_complete refuses it. Report only an outcome the user has actually been told; if the concern is not settled yet, leave it open. A concern the user reopens needs another report.",
+    "description": "Report the outcome of a user's concern (todo_list kind concern) and close it: main conversation only. Call it in the same reply in which you tell the user the outcome, with report the words you told them, faithfully; it is kept on the concern as a decision of source reported (shown in the app, sent to extensions). It is the only way a concern closes: nothing closes one on its own, and todo_complete refuses it. Report only an outcome the user was actually told; an unsettled concern stays open. A concern the user reopens needs another report.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3918,11 +3918,39 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "the concern's id (todo_…), as todo_list gives it"
+          "description": "Concern id from todo_list."
         },
         "report": {
           "type": "string",
           "description": "what you told the user of its outcome, as you said it in this reply (at most 4000 characters)"
+        }
+      }
+    },
+    "defer_loading": true
+  },
+  {
+    "name": "todo_sort",
+    "description": "File to-dos under kb_list projects or mark them temporary (one-off), as one undoable batch. suggest: places for unsorted to-dos, how sure and why; moves nothing, show the user. apply: what the user accepted or asked. undo: a batch back; no batch lists them.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "action"
+      ],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "suggest",
+            "apply",
+            "undo"
+          ]
+        },
+        "items": {
+          "type": "array",
+          "description": "[{id, project or temporary}]"
+        },
+        "batch": {
+          "type": "string"
         }
       }
     },

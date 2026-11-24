@@ -42,7 +42,7 @@ Record requested/agreed work or reminders immediately, without confirmation; exe
     },
     "project": {
       "type": "string",
-      "description": "Existing kb_list project slug/name; prefer long-term work. Only when clear; no near-duplicates."
+      "description": "Existing kb_list project slug/name, only when clear."
     },
     "part_of": {
       "type": "string",
