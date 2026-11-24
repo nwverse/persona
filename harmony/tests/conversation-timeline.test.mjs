@@ -35,3 +35,12 @@ test('one refresh can insert history and live replies while retaining the visibl
  const observed=new Proxy(current,{get(target,key,receiver){if(key==='splice')return(...args)=>{mutations.push(args.slice(0,2));return Array.prototype.splice.apply(target,args);};return Reflect.get(target,key,receiver);}});
  const next=[{id:'a'},{id:'b'},{id:'c'},{id:'d'},{id:'e'}];reconcileTimelineRows(observed,next);assert.deepEqual(current,next);assert.deepEqual(mutations,[[0,0],[4,0]]);
 });
+
+test('new stream frames only rebind rows whose contents changed', () => {
+  const first={id:'prompt',body:{}}, tail={id:'reply',body:{}}, current=[first, tail];
+  const writes=[];
+  const observed=new Proxy(current,{set(target,key,value){writes.push(key);return Reflect.set(target,key,value);}});
+  const nextTail={...tail,body:{text:'new delta'}};
+  reconcileTimelineRows(observed,[{...first},nextTail],(a,b)=>a.body===b.body);
+  assert.deepEqual(writes,['1']);assert.equal(current[0],first);assert.equal(current[1],nextTail);
+});

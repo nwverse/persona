@@ -33,7 +33,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ComposeListItemV2, ContentItemV2, KeyboardAvoidMode, TextModifier, SymbolGlyphModifier, CapsuleSegmentButtonV2, SegmentButtonV2Items, ColorMetrics, LengthMetrics, uiMaterial, window } from '@kit.ArkUI';
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { ClientModel, client } from '../models/ClientModel';
-import { ResourceRow, HubProfile, Wire } from '../models/Wire';
+import { ResourceRow, HubProfile, Wire, SessionLauncher, SessionModelCatalog } from '../models/Wire';
 import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { Pairing, PairingTarget } from '../platform/Pairing';
 import { Conversation } from '../components/Conversation';
@@ -50,7 +50,8 @@ import { IconTypeV2 } from '@kit.ArkUI';
 import { Tokens } from '../design/Tokens';
 import { Colors } from '../design/Colors';
 import { Symbols } from '../design/Symbols';
-import { ButtonStyles } from '../design/Controls';
+import { agentBrand, agentBrandColor } from '../design/AgentBrand';
+import { ButtonStyles, SelectStyles } from '../design/Controls';
 import { AgentWorkspace } from '../models/AgentWorkspace';
 import { nativeEnvironment, NativeEnvironment } from '../platform/NativeEnvironment';
 import { nativeSheetInset } from '../platform/NativeInsets';
@@ -111,7 +112,19 @@ struct Index {
   private launchPairCamera: boolean = false;
   @Local resourceKind: string = 'todo';
   @Local newTask: string = '';
-  @Local selectedMachine: number = 0;
+  @Local agentMachineId: string = '';
+  @Local fixedAgentMachine: string = '';
+  @Local sessionLaunchers: SessionLauncher[] = [];
+  @Local launchersLoading: boolean = false;
+  @Local launchersFailed: boolean = false;
+  @Local startModels: Record<string, Object>[] = [];
+  @Local startModel: string = '';
+  @Local modelsLoading: boolean = false;
+  @Local modelsFailed: boolean = false;
+  @Local modelLocked: boolean = false;
+  @Local typingStartModel: boolean = false;
+  private modelRequest: number = 0;
+  private launcherRequest: number = 0;
   @Local creatingAgent: boolean = false;
   @Local agentModel: ClientModel = client;
   @Local agentTodo: ResourceRow | undefined = undefined;
@@ -262,7 +275,7 @@ struct Index {
       this.launchPairCamera = false; this.scanPairing(false);
     }
   }
-  private sheetTitle(): string { return tr(this.sheetKind === 'tour' ? 'hub_tour_title' : this.sheetKind === 'hub' ? 'hub' : this.sheetKind === 'newagent' ? 'new_agent' : 'welcome'); }
+  private sheetTitle(): string { return tr(this.sheetKind === 'tour' ? 'hub_tour_title' : this.sheetKind === 'hub' ? 'hub' : this.sheetKind === 'newagent' ? 'agent_new_session' : 'welcome'); }
   @Builder sheetContent() {
     if (this.sheetKind === 'tour') {
       HubDemoVideo({ onDemo: () => { this.showSheet = false; this.model.useDemo(); } })
@@ -370,7 +383,6 @@ struct Index {
   }
   private openRow(row: ResourceRow, root: boolean = true): void {
     const name = NavigationContext.destination(row);
-    this.chatReady = false; this.detailRoute = '';
     if (row.kind === 'session') { this.stack.clear(); this.tool = 0; }
     this.stack.pushPath({ name: name, param: JSON.stringify(this.routeTarget(row, root || !this.stack.size())) }); this.savePath();
   }
@@ -379,7 +391,6 @@ struct Index {
     try {
       if (!['inbox', 'todo', 'knowledge', 'file', 'todo_source', 'todo_thread'].includes(row.kind)) await this.model.viewFor(row);
       if (!this.model.owns(generation, scope) || this.activeChild !== source) return;
-      this.chatReady = false; this.detailRoute = '';
       const target = this.routeTarget(row, false), name = NavigationContext.destination(target), data = target.data();
       const handoff = target.kind === 'inbox' && Wire.bool(data, 'open_handoff');
       if (Wire.has(data, 'open_handoff')) data['open_handoff'] = false; target.raw = JSON.stringify(data);
@@ -387,6 +398,35 @@ struct Index {
       if (handoff) this.pendingInboxHandoff = this.childKey(name, param);
       this.stack.pushPath({ name: name, param: param }); this.savePath();
     } catch (error) { if (this.model.owns(generation, scope) && this.activeChild === source) this.model.reportError(error as Error); }
+  }
+  private async openMachineChat(param: Object, agent: ResourceRow): Promise<void> {
+    const source = this.childKey('settings', param), machine = NavigationContext.from('settings', param as string).row;
+    const stack = this.stack, top = stack.size() - 1;
+    if (this.activeChild !== source || top < 0 || stack.getParamByIndex(top) !== param ||
+      agent.kind !== 'session' || agent.machine !== machine.id || (agent.group && machine.group && agent.group !== machine.group) ||
+      (agent.manager && machine.manager && agent.manager !== machine.manager)) return;
+    const root = this.model, generation = root.connectionGeneration(), scope = root.scope(), intent = ++this.navigationIntent;
+    const current = (): boolean => this.activeChild === source && this.stack === stack && stack.size() === top + 1 &&
+      stack.getParamByIndex(top) === param && this.navigationIntent === intent && root.owns(generation, scope);
+    try {
+      const view = await root.viewFor(machine);
+      const viewGeneration = view.connectionGeneration(), viewScope = view.scope(), pairing = view.pairingRevision();
+      const admitted = (): boolean => current() && view.owns(viewGeneration, viewScope) && view.pairingRevision() === pairing;
+      if (!admitted() || (agent.group && agent.group !== view.profile.id) || (agent.manager && agent.manager !== view.profile.manager)) return;
+      const session = view.sessions.find((row: ResourceRow) => row.kind === 'session' && row.machine === machine.id &&
+        row.id === agent.id && (row.session || row.id) === (agent.session || agent.id) &&
+        (!row.group || row.group === view.profile.id) && (!row.manager || row.manager === view.profile.manager));
+      if (!session) { this.getUIContext().getPromptAction().showToast({ message: tr('request_updated') }); return; }
+      const target = this.routeTarget(session, false);
+      target.group = view.profile.id; target.manager = view.profile.manager;
+      if (view.selected.key() !== target.key() || view.draftLoading) await view.select(target, false, admitted);
+      if (!admitted() || view.selected.key() !== target.key() || view.draftLoading) return;
+      const next = JSON.stringify(target);
+      if (this.detailModel !== view) this.detailModel.hideConversation();
+      this.detailModel = view;
+      this.markDetailReady(this.childKey('session', next));
+      stack.pushPath({ name: 'session', param: next }); this.savePath();
+    } catch (error) { if (current()) root.reportError(error as Error); }
   }
   private openFrom(name: string, param: Object, row: ResourceRow): void {
     if (this.activeChild === this.childKey(name, param)) { if (!row.group) row.group = NavigationContext.from(name, param as string).row.group || this.model.profile.id; this.openLinkedResource(row); }
@@ -534,7 +574,7 @@ struct Index {
   private menus(): NavigationMenuItem[] {
     if (this.rail()) return [];
     return [
-      { value: tr(this.peer() === 1 ? 'new_agent' : 'new_chat'), symbolIcon: new SymbolGlyphModifier(Symbols.plus), action: () => this.peer() === 1 ? this.openSheet('newagent') : this.newConversation() },
+      { value: tr(this.peer() === 1 ? 'agent_new_session' : 'new_chat'), symbolIcon: new SymbolGlyphModifier(Symbols.plus), action: () => this.peer() === 1 ? this.openSheet('newagent') : this.newConversation() },
       { value: tr('conversation_spaces'), symbolIcon: new SymbolGlyphModifier(Symbols.spaces), action: () => this.spacesShown = true }
     ];
   }
@@ -836,58 +876,236 @@ struct Index {
     return this.agentModel.operationBlocked('/api/v1/sessions') ? 'result_unknown' : 'create';
   }
 
-  @Builder newAgentForm() {
-    Column({ space: Tokens.page }) {
-      TextArea({ text: this.newTask, placeholder: tr('task') }).onChange((value: string) => { this.newTask = value; this.saveAgentDraft(); }).height(Tokens.inputExpanded).id('agent.task')
-      Select(this.agentMachines().map((row: ResourceRow): SelectOption => ({ value: row.title || row.id }))).selected(this.selectedMachine).value(this.agentMachines()[this.selectedMachine]?.title || this.agentMachines()[this.selectedMachine]?.id || tr('machines'))
-        .onSelect((index: number) => this.selectedMachine = index).id('agent.machine')
-      TextInput({ text: this.directory, placeholder: tr('directory') }).onChange((value: string) => { this.directory = value; this.saveAgentDraft(); }).id('agent.directory')
-      TextInput({ text: this.launcher, placeholder: tr('launcher') }).onChange((value: string) => { this.launcher = value; this.saveAgentDraft(); }).id('agent.launcher')
-      if (this.agentModel.error) Text(tr(this.agentModel.error)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
-      Button({ type: ButtonType.Circle }) { if (IconActions.busy(this.createAgentKey())) LoadingProgress().width(Tokens.symbol).height(Tokens.symbol).color(Colors.onAction); else SymbolGlyph(IconActions.symbol(this.createAgentKey())).fontSize(Tokens.symbolFont).fontColor([IconActions.color(this.createAgentKey(), true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr(this.createAgentKey())).bindTips(tr(this.createAgentKey())).enabled(!this.creatingAgent && !this.agentModel.operationBlocked('/api/v1/sessions') && this.newTask.trim().length > 0 && this.agentMachines().length > 0)
-        .onClick(() => this.confirmCreateAgent()).id('agent.create').alignSelf(ItemAlign.End)
-    }.padding(Tokens.page)
+  private readyToStart(): boolean {
+    return !!this.agentMachine() && !this.creatingAgent && !this.launchersLoading && !this.modelsLoading &&
+      (!this.typingStartModel || SessionModelCatalog.validTypedId(this.startModel)) &&
+      (!!this.newTask.trim() || this.chosenLauncher()?.promptOptional === true) && !this.agentModel.operationBlocked('/api/v1/sessions');
   }
-  private agentDraftKey(): string { return 'new-agent:' + (this.agentTodo?.id || 'standalone'); }
-  private async prepareAgent(todo?: ResourceRow): Promise<void> {
-    const revision = ++this.agentFormRevision, generation = this.model.connectionGeneration(), scope = this.model.scope();
-    this.readerShown = false; this.creatingAgent = false; this.selectedMachine = 0; this.newTask = ''; this.directory = ''; this.launcher = ''; this.agentTodo = todo;
+
+  @Builder setupLabel(title: string) {
+    Text(tr(title)).fontSize(Tokens.meta).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
+  }
+
+  @Builder newAgentForm() {
+    Scroll() {
+      Column({space:Tokens.page}) {
+        Column() {
+          Row({space:Tokens.gap}) {
+            SymbolGlyph(Symbols.machine).fontSize(Tokens.body).fontColor([Colors.secondary])
+            this.setupLabel('machine')
+            Blank()
+            Select(this.agentMachines().map((row: ResourceRow): SelectOption => ({ value: this.agentMachineLabel(row) })))
+              .selected(this.agentMachines().findIndex(row => this.isAgentMachine(row)))
+              .value(this.agentMachine() ? this.agentMachineLabel(this.agentMachine()!) : tr('agent_no_online_machine')).attributeModifier(SelectStyles.inline)
+              .enabled(!this.fixedAgentMachine && !this.creatingAgent).constraintSize({maxWidth:'65%'})
+              .onSelect((index: number) => {
+                const row = this.agentMachines()[index]; if (!row || this.isAgentMachine(row)) return;
+                const owner = this.model.directoryOwnerFor(row); if (!owner) return;
+                this.agentModel = owner; this.agentMachineId = row.id; this.directory = ''; this.launcher = ''; this.startModel = ''; this.saveAgentDraft(); void this.readSessionLaunchers();
+              }).id('agent.machine')
+          }.width('100%').constraintSize({minHeight:Tokens.touch})
+          Divider().color(Colors.divider)
+          Row({space:Tokens.gap}) {
+            if (agentBrand(this.chosenLauncher()?.agent || '')) Image(agentBrand(this.chosenLauncher()?.agent || '')).width(Tokens.body).height(Tokens.body)
+              .objectFit(ImageFit.Contain).fillColor(agentBrandColor(this.chosenLauncher()?.agent || ''))
+            else SymbolGlyph(Symbols.agent).fontSize(Tokens.body).fontColor([Colors.teal])
+            Text('Agent').fontSize(Tokens.meta).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
+            Blank()
+            if (this.launchersFailed) Button(tr('retry')).attributeModifier(ButtonStyles.quiet).onClick(() => { void this.readSessionLaunchers(); })
+            else Select([{value:tr('agent_machine_default')}, ...this.sessionLaunchers.map((item:SessionLauncher): SelectOption => ({value:item.label}))])
+              .selected(this.sessionLaunchers.findIndex(item => item.name === this.launcher) + 1)
+              .value(this.launchersLoading ? tr('loading') : this.chosenLauncher()?.label || tr('agent_machine_default'))
+              .attributeModifier(SelectStyles.inline).constraintSize({maxWidth:'65%'}).enabled(!this.creatingAgent && !this.launchersLoading && !!this.agentMachine())
+              .onSelect((index:number) => {
+                this.launcher = this.sessionLaunchers[index-1]?.name || ''; this.startModel = ''; this.saveAgentDraft(); void this.readStartModels();
+              }).id('agent.launcher')
+          }.width('100%').constraintSize({minHeight:Tokens.touch})
+          if (this.launchersFailed) {
+            Text(tr('agent_launchers_unavailable')).fontSize(Tokens.caption).fontColor(Colors.secondary)
+            TextInput({text:this.launcher, placeholder:tr('launcher')}).onChange((v:string) => {this.launcher = v.trim(); this.saveAgentDraft();}).id('agent.launcher.manual')
+          }
+          if (this.chosenLauncher()) {
+            Divider().color(Colors.divider)
+            Row({space:Tokens.gap}) {
+              this.setupLabel('model')
+              Blank()
+              Select(this.startModelOptions())
+                .selected(this.typingStartModel ? this.startModels.length + 1 : this.startModels.findIndex(item => Wire.text(item,'id') === this.startModel) + 1)
+                .value(this.modelsLoading ? tr('loading') : this.modelLocked ? this.modelLockLabel() : this.modelLabel())
+                .attributeModifier(SelectStyles.inline).constraintSize({maxWidth:'64%'})
+                .enabled(!this.creatingAgent && !this.modelsLoading && !this.modelLocked && (this.startModels.length > 0 || this.canTypeStartModel()))
+                .onSelect((index:number) => this.pickStartModel(index)).id('agent.model')
+              if (!this.modelLocked || this.modelsFailed) {
+                Button({type:ButtonType.Circle}) {
+                  SymbolGlyph(Symbols.refresh).fontSize(Tokens.body).fontColor([Colors.secondary])
+                }.attributeModifier(ButtonStyles.chrome).enabled(!this.modelsLoading && !this.creatingAgent)
+                  .accessibilityText(tr('agent_refresh_models')).onClick(() => {void this.readStartModels(true);}).id('agent.models.refresh')
+              }
+            }.width('100%').constraintSize({minHeight:Tokens.touch})
+            if (this.typingStartModel && this.canTypeStartModel()) {
+              TextInput({text:this.startModel,placeholder:tr('model_id')}).enabled(!this.creatingAgent && !this.modelsLoading)
+                .backgroundColor(Colors.control).borderRadius(Tokens.inset).margin({bottom:Tokens.gap})
+                .onChange((value:string) => {this.startModel = value.trim(); this.saveAgentDraft();}).id('agent.model.custom')
+              if (this.startModel && !SessionModelCatalog.validTypedId(this.startModel)) {
+                Text(tr('agent_model_id_invalid')).fontSize(Tokens.caption).fontColor(Colors.danger).width('100%').margin({bottom:Tokens.gap})
+              }
+            }
+            if (this.modelsFailed) Text(tr('agent_models_unavailable')).width('100%').fontSize(Tokens.caption).fontColor(Colors.secondary)
+              .margin({bottom:Tokens.gap})
+          }
+        }.padding({left:Tokens.page,right:Tokens.page}).backgroundColor(Colors.planSurface).border({width:Tokens.divider,color:Colors.planBorder}).borderRadius(Tokens.card)
+        Column({space:Tokens.gap}) {
+          this.setupLabel('directory')
+          TextInput({ text:this.directory, placeholder:tr('agent_default_folder') }).enabled(!this.creatingAgent)
+            .backgroundColor(Colors.control).borderRadius(Tokens.inset).onChange((value:string) => {this.directory=value;this.saveAgentDraft();}).id('agent.directory')
+        }.alignItems(HorizontalAlign.Start).width('100%')
+        Column({space:Tokens.gap}) {
+          this.setupLabel('agent_first_message')
+          TextArea({ text:this.newTask, placeholder:tr(this.chosenLauncher()?.promptOptional ? 'agent_message_optional' : 'message') })
+            .enabled(!this.creatingAgent).height(104).padding(Tokens.inset).backgroundColor(Colors.control).borderRadius(Tokens.inset)
+            .onChange((value:string) => {this.newTask=value;this.saveAgentDraft();}).id('agent.task')
+        }.alignItems(HorizontalAlign.Start).width('100%')
+        if (this.agentModel.error) Text(tr(this.agentModel.error)).fontSize(Tokens.meta).fontColor(Colors.danger)
+        Button(tr(this.createAgentKey() === 'create' ? 'agent_new_session' : this.createAgentKey())).attributeModifier(ButtonStyles.primary)
+          .width('100%').enabled(this.readyToStart()).onClick(() => this.confirmCreateAgent()).id('agent.create')
+      }.padding(Tokens.page).width('100%').constraintSize({maxWidth:Tokens.readingMax})
+    }.width('100%').align(Alignment.Top)
+  }
+
+  private canTypeStartModel(): boolean {
+    const launcher = this.chosenLauncher();
+    return !!launcher && launcher.agent === 'codex' && launcher.name !== 'codex-app' && !this.modelLocked;
+  }
+  private modelLockLabel(): string {
+    return tr(this.chosenLauncher()?.name === 'codex-app' ? 'agent_codex_desktop_model' : 'agent_locked_model');
+  }
+  private startModelOptions(): SelectOption[] {
+    const options: SelectOption[] = [{value:tr('agent_default_model')}];
+    this.startModels.forEach(item => options.push({value:Wire.text(item,'name') || Wire.text(item,'id')}));
+    if (this.canTypeStartModel()) options.push({value:tr('agent_custom_model')});
+    return options;
+  }
+  private pickStartModel(index: number): void {
+    this.typingStartModel = this.canTypeStartModel() && index === this.startModels.length + 1;
+    const model = this.startModels[index - 1];
+    this.startModel = model ? Wire.text(model,'id') : '';
+    this.saveAgentDraft();
+  }
+  private modelLabel(): string {
+    if (this.typingStartModel) return tr('agent_custom_model');
+    const match = this.startModels.find(item => Wire.text(item,'id') === this.startModel);
+    return match ? Wire.text(match,'name') || this.startModel : tr('agent_default_model');
+  }
+  private async readStartModels(refresh: boolean = false): Promise<void> {
+    const ticket = ++this.modelRequest, owner = this.agentModel, machine = this.agentMachine(), launcher = this.chosenLauncher();
+    if (!refresh) { this.startModels = []; this.modelLocked = false; this.typingStartModel = false; }
+    this.modelsFailed = false; this.modelsLoading = !!machine && !!launcher;
+    if (!machine || !launcher) return;
+    const generation = owner.connectionGeneration(), scope = owner.scope();
+    const current = (): boolean => ticket === this.modelRequest && this.showSheet && this.sheetKind === 'newagent' &&
+      this.agentModel === owner && owner.owns(generation, scope) && this.agentMachineId === machine.id && this.launcher === launcher.name;
     try {
-      const owner = todo ? await this.model.viewFor(todo) : this.model;
+      const result = await owner.repo().sessionModels(machine.id, launcher.name, refresh || launcher.agent === 'codex');
+      if (!current()) return;
+      this.modelLocked = result.locked;
+      this.startModels = result.models;
+      const listed = this.startModels.some(item => Wire.text(item,'id') === this.startModel);
+      this.typingStartModel = this.canTypeStartModel() && !listed && (!!this.startModel || this.typingStartModel);
+      if (this.modelLocked || !listed && !this.typingStartModel) this.startModel = '';
+    } catch (_) {
+      if (current()) {
+        this.modelsFailed = true;
+        if (!this.startModels.length && this.startModel) {
+          this.typingStartModel = this.canTypeStartModel();
+          if (!this.typingStartModel) this.startModel = '';
+        }
+      }
+    } finally { if (ticket === this.modelRequest) this.modelsLoading = false; }
+  }
+  private agentDraftKey(): string { return 'new-agent:' + (this.agentTodo?.id || (this.fixedAgentMachine ? 'machine:' + this.fixedAgentMachine : 'standalone')); }
+  private async prepareAgent(todo?: ResourceRow, computer?: ResourceRow): Promise<void> {
+    const revision = ++this.agentFormRevision, generation = this.model.connectionGeneration(), scope = this.model.scope();
+    this.readerShown = false; this.creatingAgent = false; this.fixedAgentMachine = computer?.id || ''; this.agentMachineId = this.fixedAgentMachine; this.launcherRequest++; this.sessionLaunchers = []; this.launchersLoading = false; this.launchersFailed = false; this.newTask = ''; this.directory = ''; this.launcher = ''; this.agentTodo = todo;
+    try {
+      const origin = computer || todo;
+      const owner = origin ? await this.model.viewFor(origin) : this.model;
       if (revision !== this.agentFormRevision || !this.model.owns(generation, scope)) return;
       this.agentModel = owner;
       const raw = await owner.loadView(this.agentDraftKey());
       if (revision !== this.agentFormRevision || !this.model.owns(generation, scope)) return;
       const saved = Wire.parse(raw); this.newTask = Wire.text(saved, 'task', todo ? todo.title + (Wire.text(todo.data(), 'notes') ? '\n\n' + Wire.text(todo.data(), 'notes') : '') : '');
-      this.directory = Wire.text(saved, 'directory'); this.launcher = Wire.text(saved, 'launcher');
-      this.sheetKind = 'newagent'; this.showSheet = true;
+      this.startModel = Wire.text(saved, 'model'); this.directory = Wire.text(saved, 'directory'); this.launcher = Wire.text(saved, 'launcher');
+      const savedMachine = Wire.text(saved, 'machine');
+      const available = this.agentMachines();
+      const savedScope = Wire.text(saved,'machine_scope',owner.scope());
+      const selected = available.find(row => row.id === (this.fixedAgentMachine || savedMachine) &&
+        this.model.directoryOwnerFor(row)?.scope() === savedScope) || available[0];
+      if (selected) this.agentModel = this.model.directoryOwnerFor(selected) || owner;
+      this.agentMachineId = this.fixedAgentMachine || selected?.id || '';
+      if (savedMachine && (savedMachine !== this.agentMachineId || this.agentModel.scope() !== savedScope)) {
+        this.launcher = ''; this.startModel = ''; this.directory = '';
+      }
+      this.sheetKind = 'newagent'; this.showSheet = true; void this.readSessionLaunchers();
     } catch (error) { if (revision === this.agentFormRevision && this.model.owns(generation, scope)) this.model.reportError(error as Error); }
   }
   private saveAgentDraft(): void {
     if (this.sheetKind !== 'newagent' || !this.showSheet) return;
-    const owner = this.agentModel, generation = owner.connectionGeneration(), scope = owner.scope();
-    owner.saveView(this.agentDraftKey(), JSON.stringify(Wire.payload(['task', 'directory', 'launcher'], [this.newTask, this.directory, this.launcher])))
+    const owner = this.agentDraftOwner(), generation = owner.connectionGeneration(), scope = owner.scope();
+    owner.saveView(this.agentDraftKey(), JSON.stringify(Wire.payload(['task','directory','launcher','machine','model','machine_scope'],
+      [this.newTask,this.directory,this.launcher,this.agentMachineId,this.startModel,this.agentModel.scope()])))
       .catch(() => { if (owner.owns(generation, scope)) owner.error = 'cache_unavailable'; });
   }
-  private agentMachines(): ResourceRow[] { return this.agentModel.machines.filter((row: ResourceRow) => row.manager === this.agentModel.profile.manager && Wire.text(row.data(), 'trust') !== 'pending' && !Wire.bool(row.data(), 'pending_confirm') && !Wire.bool(row.data(), 'pending') && Wire.bool(row.data(), 'online')); }
-  private agentFingerprint(): string { return JSON.stringify([this.agentModel.scope(), this.agentTodo?.id || '', this.agentMachines()[this.selectedMachine]?.id || '', this.newTask, this.directory, this.launcher]); }
+  private agentDraftOwner(): ClientModel { return this.agentTodo || this.fixedAgentMachine ? this.agentModel : this.model; }
+  private agentMachines(): ResourceRow[] {
+    const roster = this.agentTodo || this.fixedAgentMachine || !this.model.directoryReady ? this.agentModel.machines : this.model.directoryMachines;
+    return roster.filter(row => {
+      const data = row.data();
+      return !!this.model.directoryOwnerFor(row)?.connected && (!this.fixedAgentMachine || row.id === this.fixedAgentMachine) &&
+        Wire.text(data,'trust') !== 'pending' && !Wire.bool(data,'pending_confirm') && !Wire.bool(data,'pending') && Wire.bool(data,'online');
+    });
+  }
+  private isAgentMachine(row: ResourceRow): boolean { return row.id === this.agentMachineId && this.model.directoryOwnerFor(row) === this.agentModel; }
+  private agentMachine(): ResourceRow | undefined { return this.agentMachines().find(row => this.isAgentMachine(row)); }
+  private agentMachineLabel(row: ResourceRow): string {
+    const label = row.title || row.id;
+    return this.agentMachines().some(item => item.key() !== row.key() && (item.title || item.id) === label) ?
+      label + ' · ' + this.model.groupName(row) + ' · ' + row.manager : label;
+  }
+  private chosenLauncher(): SessionLauncher | undefined { return this.sessionLaunchers.find(item => item.name === this.launcher); }
+  private async readSessionLaunchers(): Promise<void> {
+    const ticket = ++this.launcherRequest, owner = this.agentModel, machine = this.agentMachine();
+    this.modelRequest++; this.modelsLoading = false; this.typingStartModel = false; this.modelLocked = false; this.startModels = []; this.sessionLaunchers = []; this.launchersFailed = false; this.launchersLoading = !!machine;
+    if (!machine) return;
+    const generation = owner.connectionGeneration(), scope = owner.scope();
+    const current = (): boolean => this.showSheet && this.sheetKind === 'newagent' && ticket === this.launcherRequest &&
+      this.agentModel === owner && owner.owns(generation, scope) && this.agentMachineId === machine.id;
+    try {
+      const choices = await owner.repo().sessionLaunchers(machine.id);
+      if (!current()) return;
+      this.sessionLaunchers = choices;
+      if (!this.chosenLauncher()) { this.launcher = ''; this.startModel = ''; }
+      void this.readStartModels();
+    } catch (_) { if (current()) { this.launchersFailed = true; this.startModel = ''; } }
+    finally { if (ticket === this.launcherRequest) this.launchersLoading = false; }
+  }
+  private agentFingerprint(): string { return JSON.stringify([this.agentModel.scope(), this.agentTodo?.id || '', this.agentMachine()?.id || '', this.newTask, this.directory, this.launcher, this.startModel]); }
   private confirmCreateAgent(): void {
-    const machine = this.agentMachines()[this.selectedMachine]; if (!machine || this.creatingAgent) return;
+    const machine = this.agentMachine(); if (!machine || !this.readyToStart()) return;
     const revision = this.agentFormRevision, fingerprint = this.agentFingerprint(), owner = this.agentModel, generation = owner.connectionGeneration(), scope = owner.scope();
-    this.getUIContext().showAlertDialog({ title: tr('new_agent'), message: owner.profile.name + ' · ' + owner.profile.manager + '\n' + (machine.title || machine.id) + '\n' + this.directory + '\n\n' + this.newTask,
+    this.getUIContext().showAlertDialog({ title: tr('agent_new_session'), message: owner.profile.name + ' · ' + owner.profile.manager + '\n' + (machine.title || machine.id) + ' · ' + (this.chosenLauncher()?.label || this.launcher || tr('agent_machine_default')) + (this.startModel ? ' · ' + (this.typingStartModel ? this.startModel : this.modelLabel()) : '') + (this.directory ? '\n' + this.directory : '') + (this.newTask ? '\n\n' + this.newTask : ''),
       primaryButton: { value: tr('cancel'), action: () => {} }, secondaryButton: { value: tr('create'), action: () => {
         if (revision === this.agentFormRevision && owner.owns(generation, scope) && fingerprint === this.agentFingerprint()) this.createAgent();
       } } });
   }
   private async createAgent(): Promise<void> {
-    const machine = this.agentMachines()[this.selectedMachine]; if (!machine || this.creatingAgent) return;
+    const machine = this.agentMachine(); if (!machine || !this.readyToStart()) return;
     const owner = this.agentModel, generation = owner.connectionGeneration(), scope = owner.scope(), rootGeneration = this.model.connectionGeneration(), rootScope = this.model.scope(), revision = this.agentFormRevision, fingerprint = this.agentFingerprint(), draftKey = this.agentDraftKey();
     const valid = (): boolean => owner.owns(generation, scope) && this.model.owns(rootGeneration, rootScope) && revision === this.agentFormRevision && this.showSheet && this.sheetKind === 'newagent' && fingerprint === this.agentFingerprint();
     this.creatingAgent = true;
     try {
-      const row = await owner.createAgent(this.newTask, machine, this.directory, this.launcher, this.agentTodo?.id || '', valid);
+      const row = await owner.createAgent(this.newTask, machine, this.directory, this.launcher, this.agentTodo?.id || '', valid, this.chosenLauncher()?.agent || '', this.startModel);
       if (!valid()) return;
-      this.showSheet = false; this.newTask = ''; owner.saveView(draftKey, '').catch(() => {}); this.openRow(row);
+      this.showSheet = false; this.newTask = ''; this.agentDraftOwner().saveView(draftKey, '').catch(() => {}); this.openRow(row);
     } catch (error) { if (valid()) owner.reportError(error as Error); }
     finally { if (revision === this.agentFormRevision) this.creatingAgent = false; }
   }
@@ -902,6 +1120,8 @@ struct Index {
     if (!descriptor.scoped) return;
     const key = this.childKey(name, param), revision = ++this.routeRevision, generation = this.model.connectionGeneration(), scope = this.model.scope();
     if (name === 'settings' && descriptor.page === 'machine_detail') return;
+    const chat = name === 'session' || name === 'conversation';
+    const current = (): boolean => revision === this.routeRevision && this.activeChild === key && this.model.owns(generation, scope);
     const keepContent = this.targetReady(name, param);
     if (!keepContent) { this.chatReady = false; this.detailRoute = ''; }
     try {
@@ -911,13 +1131,13 @@ struct Index {
         if (!resolved && view.connected) { await view.refresh(); resolved = view.conversations.concat(view.sessions).find((item: ResourceRow) => item.id === row.id || item.session === row.session && !!row.session); }
         if (!resolved) throw new Error('request_updated'); row = resolved;
       }
-      if (revision !== this.routeRevision || this.activeChild !== key || !this.model.owns(generation, scope)) return;
+      if (!current()) return;
       if (this.detailModel !== view) this.detailModel.hideConversation();
       this.detailModel = view;
-      if (row.key() !== view.selected.key()) await view.select(row);
-      else if (name === 'session' || name === 'conversation') { if (view.connected) view.showConversation(row); }
-      if (revision !== this.routeRevision || this.activeChild !== key || !this.model.owns(generation, scope) || view.selected.key() !== row.key()) return;
+      if (row.key() !== view.selected.key() || (chat && view.draftLoading)) await view.select(row, !chat, current);
+      if (!current() || view.selected.key() !== row.key() || (chat && view.draftLoading)) return;
       this.markDetailReady(key);
+      if (chat) view.showConversation(row);
       if (name === 'assistant' || name === 'settings' && descriptor.page === 'voice') view.watchDecisions(true);
     } catch (error) { if (revision === this.routeRevision && this.activeChild === key && this.model.owns(generation, scope)) this.model.reportError(error as Error); }
   }
@@ -993,7 +1213,9 @@ struct Index {
   @Builder destination(name: string, param: Object) {
     NavDestination() {
       if (name === 'session' || name === 'conversation') {
-        if (this.targetReady(name, param)) Conversation({ model: this.detailModel, admission: (): boolean => this.activeChild === this.childKey(name, param) && this.targetReady(name, param), onOpenFile: (path: string) => this.openTools(path), active: this.activeChild === this.childKey(name, param), onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address), showContextMenu: this.mainDestination(name, param) || this.hideChatTitle(name, param), onOpenCard: (itemId: string, kind: string) => { if (this.activeChild === this.childKey(name, param) && this.targetReady(name, param)) this.openAssistantCard(itemId, kind); }, onPrimaryStop: (shown: boolean) => { if (this.activeChild === this.childKey(name, param) && this.targetReady(name, param)) this.inlineStopIdentity = shown ? JSON.stringify([this.detailModel.scope(), this.detailModel.connectionGeneration(), this.detailModel.target()]) : ''; }, onShowActions: () => this.showChatActions(name, param), actionItems: this.chatMenuActions, actionsVisible: this.chatBodyMenuVisible && this.activeChild === this.childKey(name, param), actionsRequest: this.chatMenuRevision, onHideActions: (request: number) => this.closeChatActions(request) })
+        if (this.targetReady(name, param)) Conversation({ model: this.detailModel, onOpenComputer: (row: ResourceRow) => {
+          if (this.activeChild === this.childKey(name, param) && this.targetReady(name, param) && this.selectedComputer()?.key() === row.key()) this.openComputer(row);
+        }, admission: (): boolean => this.activeChild === this.childKey(name, param) && this.targetReady(name, param), onOpenFile: (path: string) => this.openTools(path), active: this.activeChild === this.childKey(name, param), onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address), showContextMenu: this.mainDestination(name, param) || this.hideChatTitle(name, param), onOpenCard: (itemId: string, kind: string) => { if (this.activeChild === this.childKey(name, param) && this.targetReady(name, param)) this.openAssistantCard(itemId, kind); }, onPrimaryStop: (shown: boolean) => { if (this.activeChild === this.childKey(name, param) && this.targetReady(name, param)) this.inlineStopIdentity = shown ? JSON.stringify([this.detailModel.scope(), this.detailModel.connectionGeneration(), this.detailModel.target()]) : ''; }, onShowActions: () => this.showChatActions(name, param), actionItems: this.chatMenuActions, actionsVisible: this.chatBodyMenuVisible && this.activeChild === this.childKey(name, param), actionsRequest: this.chatMenuRevision, onHideActions: (request: number) => this.closeChatActions(request) })
         else this.targetLoading(name, param)
       } else if (name === 'history') {
         if (this.targetReady(name, param)) InteractionHistoryPage({ model: this.detailModel, active: this.activeChild === this.childKey(name, param), onLink: (address: string) => this.openReader(address) })
@@ -1069,7 +1291,8 @@ struct Index {
           onSaved: (): void => { const owner = this.settingsModel(param); if (this.activeChild === this.childKey(name, param)) owner.selectProfile(owner.profile, true); } })
       } else if (name === 'settings' && this.settingsKind(param) === 'machine_detail') {
         SettingsPage({ model: this.model, page: 'machine_detail', machineRoute: param as string,
-          active: this.activeChild === this.childKey(name, param), onChat: (row: ResourceRow) => this.openFrom(name, param, row),
+          onNewSession: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) void this.prepareAgent(undefined, row); },
+          active: this.activeChild === this.childKey(name, param), onChat: (row: ResourceRow) => { this.openMachineChat(param, row); },
           onComputer: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openComputer(row); } })
       } else if (name === 'settings') {
         if (!NavigationContext.from(name, param as string).scoped || this.targetReady(name, param)) SettingsPage({ model: this.settingsKind(param) === 'appearance' ? this.model : this.settingsModel(param), agentWorkspace: this.agentWorkspace, onChat: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openLinkedResource(row); }, active: this.activeChild === this.childKey(name, param), page: this.settingsKind(param), onDetail: (page: string, row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openSettingsDetail(page, row); }, onExtension: (extensionId: string, uiId: string, title: string) => { if (this.activeChild === this.childKey(name, param)) this.openExtension(this.settingsModel(param), extensionId, uiId, title); }, onBack: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } }, onComputer: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openComputer(row); }, onOpen: (page: string) => this.openSettings(page, NavigationContext.from(name, param as string).scoped) })

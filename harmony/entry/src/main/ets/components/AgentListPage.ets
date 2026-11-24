@@ -1,3 +1,4 @@
+import { agentBrand, agentBrandColor } from '../design/AgentBrand';
 import { IconActions } from '../design/IconActions';
 import { ColorMetrics, LengthMetrics } from '@kit.ArkUI';
 import { util } from '@kit.ArkTS';
@@ -29,6 +30,7 @@ const STATE_LABELS: Record<string, string> = {'pinned': 'agent_group_pinned', 's
 class AgentRowPresentation {
   @Trace raw: string = '';
   @Trace lastText: string = '';
+  @Trace brand: string = '';
   @Trace rawStatus: string = '';
   @Trace updatedAt: number = Number.NaN;
   @Trace worktree: string = '';
@@ -110,11 +112,20 @@ export struct AgentListPage {
   @Monitor('model.forgottenEpoch') forgottenChanged(): void { this.workspace.forgetHub(this.model.forgottenProfile); if (this.editingRow?.group === this.model.forgottenProfile) { this.editorOpen = false; this.editingRow = undefined; this.editingAdmission = undefined; } }
   @Monitor('model.profile') profileChanged(): void { this.editorOpen = false; this.editingAdmission = undefined; this.syncRowBindings(); if (!this.active) return; this.activateWorkspace(); }
   @Monitor('selectedRow') externalSelectionChanged(): void { this.workspace.selectExternal(this.selectedRow); }
-  @Monitor('model.directorySessions', 'model.directoryReady') directoryChanged(): void { if (!this.active) return; this.workspace.update(this.model, this.readingDetail); this.workspace.selectExternal(this.selectedRow); }
-  @Monitor('model.sessionsReady') catalogChanged(): void { if (!this.active) return; this.workspace.update(this.model, this.readingDetail); }
-  @Monitor('model.sessions') sessionsChanged(): void { if (!this.active) return; this.workspace.update(this.model, this.readingDetail); }
-  @Monitor('model.selected') selectionChanged(): void { if (!this.active) return; this.workspace.update(this.model, this.readingDetail); }
-  @Monitor('model.machines') machinesChanged(): void { if (!this.active) return; this.workspace.update(this.model, this.readingDetail); }
+  @Computed get machineRosterKey(): string {
+    // Metrics and last_seen change frequently. The Agent sorter only consumes the scoped machine IDs and labels.
+    const machines = this.model.directoryReady ? this.model.directoryMachines : this.model.machines;
+    return JSON.stringify(machines.map((row: ResourceRow) => [row.group, row.manager, row.id, row.title, row.state]));
+  }
+  @Monitor('model.directorySessions', 'model.directoryReady', 'model.sessionsReady', 'model.sessions', 'machineRosterKey')
+  catalogChanged(): void {
+    if (!this.active) return;
+    this.workspace.update(this.model, this.readingDetail);
+    this.workspace.selectExternal(this.selectedRow);
+  }
+  @Monitor('model.selected') selectionChanged(): void {
+    if (this.active && this.workspace.isBoundTo(this.model)) this.workspace.syncSelected(this.model);
+  }
   @Monitor('model.features') featuresChanged(): void {
     if (!this.active) return; this.workspace.update(this.model, this.readingDetail);
     this.workspace.refresh(this.model).catch(() => undefined);
@@ -195,6 +206,7 @@ export struct AgentListPage {
       presentation.raw = row.raw;
       presentation.lastText = Wire.text(data, 'last_text');
       presentation.rawStatus = Wire.text(data, 'status');
+      presentation.brand = Wire.text(data, 'agent') || Wire.text(data, 'agent_type') || (Wire.text(data, 'source_kind').startsWith('codex') ? 'codex' : 'claude');
       presentation.updatedAt = Date.parse(Wire.text(data, 'updated_at'));
       presentation.worktree = Wire.text(data, 'worktree');
       presentation.repositoryRoot = Wire.text(data, 'repo_root');
@@ -337,10 +349,11 @@ export struct AgentListPage {
           Text(tr(STATE_LABELS[binding.value.id] || '') || binding.value.machineName).fontSize(Tokens.meta).fontWeight(FontWeight.Medium)
             .fontColor(Colors.secondary).maxLines(2)
           Text(this.groupCounts(binding.value)).fontSize(Tokens.caption).fontColor(Colors.secondary)
-        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1).constraintSize({minHeight:Tokens.touch}).justifyContent(FlexAlign.Center)
+          .onClick(() => { if (!this.workspace.search) this.workspace.toggleFold(binding.value.id); })
         Button({ type: ButtonType.Circle }) {
           SymbolGlyph(binding.value.folded ? Symbols.down : Symbols.up).fontSize(Tokens.symbolFont).fontColor([Colors.link])
-        }.attributeModifier(ButtonStyles.icon)
+        }.attributeModifier(ButtonStyles.icon).enabled(!this.workspace.search)
           .accessibilityText((tr(STATE_LABELS[binding.value.id] || '') || binding.value.machineName) + ' ' +
             tr(binding.value.folded ? 'agent_expand' : 'agent_collapse'))
           .onClick(() => this.workspace.toggleFold(binding.value.id)).id('agents.group.toggle.' + binding.value.id)
@@ -357,7 +370,7 @@ export struct AgentListPage {
       const count = Wire.number(group.stateCounts, key);
       if (count) values.push(String(count) + ' ' + tr(labels[key]));
     });
-    if (group.totalRowCount > group.rows.length) values.push(String(group.totalRowCount - group.rows.length) + ' ' + tr('agent_group_more_idle'));
+    if (!group.folded && group.totalRowCount > group.rows.length) values.push(String(group.totalRowCount - group.rows.length) + ' ' + tr('agent_group_more_idle'));
     return values.join(' · ');
   }
 
@@ -419,8 +432,9 @@ export struct AgentListPage {
     ListItem() {
       Row({ space: Tokens.gap }) {
         Column() {
-          if (this.rail) Text((binding.bound.value.title || tr('agent_untitled')).slice(0, 2)).fontSize(Tokens.meta).fontColor(Colors.ink).maxLines(1)
-          else SymbolGlyph(Symbols.agent).fontSize(Tokens.symbolFont).fontColor([Colors.secondary])
+          if (agentBrand(binding.presentation.brand)) Image(agentBrand(binding.presentation.brand)).width(Tokens.section).height(Tokens.section)
+            .objectFit(ImageFit.Contain).fillColor(agentBrandColor(binding.presentation.brand)).accessibilityText(binding.presentation.brand)
+          else SymbolGlyph(Symbols.agent).fontSize(Tokens.symbolFont).fontColor([Colors.teal]).accessibilityText(binding.presentation.brand)
         }.width(Tokens.avatar).height(Tokens.avatar).alignItems(HorizontalAlign.Center).justifyContent(FlexAlign.Center)
           .backgroundColor(Colors.control).borderRadius(Tokens.avatar / 2)
         if (!this.rail) Column({ space: Tokens.fine }) {
@@ -433,7 +447,13 @@ export struct AgentListPage {
           if (this.mixedMachines && this.workspace.groupingMode !== 'machine') Text(binding.presentation.metadata.slice(0, 2).filter((value: string) => !!value).join(' · ') || binding.bound.value.machine).fontSize(Tokens.caption).fontColor(Colors.secondary).width('100%').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           if (binding.presentation.recentContent) Text(binding.presentation.recentContent).fontSize(Tokens.meta)
             .fontColor(Colors.secondary).width('100%').maxLines(this.look.density === 'compact' || this.rail ? 1 : 2)
-          if (this.rowStatus(binding.presentation)) Text(this.rowStatus(binding.presentation)).fontSize(Tokens.meta).fontWeight(FontWeight.Medium)
+          if (binding.presentation.status === 'working') {
+            Row({ space: Tokens.fine }) {
+              if (this.active && !this.environment.reduceMotion) LoadingProgress().width(Tokens.caption).height(Tokens.caption).color(Colors.working)
+              else Circle().width(7).height(7).fill(Colors.working)
+              Text(tr('working')).fontSize(Tokens.caption).fontWeight(FontWeight.Medium).fontColor(Colors.working)
+            }.padding({left:Tokens.gap, right:Tokens.gap, top:2, bottom:2}).backgroundColor(Colors.control).borderRadius(Tokens.capsule)
+          } else if (this.rowStatus(binding.presentation)) Text(this.rowStatus(binding.presentation)).fontSize(Tokens.meta).fontWeight(FontWeight.Medium)
             .fontColor(this.rowStatusColor(binding.presentation)).width('100%')
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
       }.width('100%').alignItems(VerticalAlign.Center).justifyContent(this.rail ? FlexAlign.Center : FlexAlign.Start)
@@ -528,17 +548,21 @@ export struct AgentListPage {
         if (this.workspace.loading && !this.workspace.hasRows()) ListItem() { LoadingProgress().height(Tokens.touch).width(Tokens.touch).padding(Tokens.page) }
         ForEach(this.groupBindings, (binding: BoundAgentGroup) => {
             ListItemGroup({ header: () => this.groupHeader(binding) }) {
-              ForEach(binding.rows, (rowBinding: BoundAgentRow) => this.agentRow(rowBinding), (rowBinding: BoundAgentRow) =>
-                rowBinding.key)
+              Repeat<BoundAgentRow>(binding.rows).each((entry: RepeatItem<BoundAgentRow>) => this.agentRow(entry.item))
+                .key((rowBinding: BoundAgentRow) => rowBinding.key)
+                .virtualScroll({ totalCount: binding.rows.length, reusable: false })
             }.id('agents.group.' + binding.value.id)
-            if (binding.value.totalRowCount > binding.value.rows.length && !binding.value.folded) ListItem() {
+            if (!binding.value.folded && !this.workspace.search && this.workspace.quickFilter === 'all' && (binding.value.id === 'state/idle' || binding.value.totalRowCount > binding.value.rows.length || this.workspace.idleRowsExpanded(binding.value.id))) ListItem() {
               Button() {
                 Row({ space: Tokens.gap }) {
-                  Text(String(binding.value.totalRowCount - binding.value.rows.length) + ' ' + tr('agent_group_more_idle')).fontSize(Tokens.meta).fontColor(Colors.link).layoutWeight(1)
-                  SymbolGlyph(Symbols.down).fontSize(Tokens.symbolFont).fontColor([Colors.link])
+                  Text(binding.value.id === 'state/idle' || this.workspace.idleRowsExpanded(binding.value.id) ? tr('agent_collapse') : String(binding.value.totalRowCount - binding.value.rows.length) + ' ' + tr('agent_group_more_idle')).fontSize(Tokens.meta).fontColor(Colors.link).layoutWeight(1)
+                  SymbolGlyph(binding.value.id === 'state/idle' || this.workspace.idleRowsExpanded(binding.value.id) ? Symbols.up : Symbols.down).fontSize(Tokens.symbolFont).fontColor([Colors.link])
                 }.width('100%').padding(Tokens.page).constraintSize({ minHeight: Tokens.touch })
               }.type(ButtonType.Normal).buttonStyle(ButtonStyleMode.TEXTUAL).backgroundColor(Color.Transparent).width('100%')
-                .onClick(() => this.workspace.toggleIdleRows(binding.value.id)).id('agents.idle.expand.' + binding.value.id)
+                .onClick(() => {
+                  if (binding.value.id === 'state/idle') this.workspace.toggleFold(binding.value.id);
+                  else this.workspace.toggleIdleRows(binding.value.id);
+                }).id('agents.idle.expand.' + binding.value.id)
             }
           }, (binding: BoundAgentGroup) => binding.key)
         if (!this.workspace.hasRows() && !this.workspace.loading) ListItem() {

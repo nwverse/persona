@@ -613,3 +613,16 @@ test('a retired pin completion cannot release the busy lock of a new list operat
  releases[0]();assert.equal(await old,false);assert.equal(workspace.busy,true,'old finally must not release new operation');
  releases[1]();assert.equal(await fresh,true);assert.equal(workspace.busy,false);assert.equal(state.calls.filter(c=>c.method==='PUT').length,1);
 });
+
+test('machine idle rows expand, survive a directory update, and collapse again', async () => {
+  const {workspace,client} = await opened({sessions:[agent('busy'),agent('quiet',{state:'idle',status:'idle'})]});
+  workspace.setGroupingMode('machine');
+  const group = workspace.groups.find(item => item.id.startsWith('machine/'));
+  assert.deepEqual(group.rows.map(item => item.id), ['busy']);
+  workspace.toggleIdleRows(group.id);
+  workspace.update(client);
+  assert.equal(workspace.idleRowsExpanded(group.id),true);
+  assert.deepEqual(workspace.visibleRows().map(item=>item.id).sort(),['busy','quiet']);
+  workspace.toggleIdleRows(group.id);
+  assert.deepEqual(workspace.visibleRows().map(item=>item.id),['busy']);
+});

@@ -231,17 +231,26 @@ function readableBubble(fill: string, suppliedText: string | undefined): [string
   return [result, textColor];
 }
 
+export function deviceLookQuoteInk(colors: DeviceLookColorSet): string {
+  if (colors.userBubble === '#E9F3FE' && colors.userBubbleText === '#0C2849') return '#4F6580';
+  for (let amount = 0.28; amount > 0; amount -= 0.04) {
+    const color = mix(colors.userBubbleText, colors.userBubble, amount);
+    if (contrastRatio(color, colors.userBubble) >= 4.5) return color;
+  }
+  return colors.userBubbleText;
+}
+
 function styleColors(style: string, dark: boolean): DeviceLookColorSet {
   const brand = style === 'system' ? '#0071E3' : dark ? '#9BB4FF' : '#0055FF';
   const bubbles: Record<string, [string, string]> = {
-    system: ['#DCEAFF', '#233B57'],
+    system: ['#E9F3FE', '#1B4075'],
     glass: ['#E0EDFF', '#263E61'],
     brief: ['#F1EADB', '#403B2E'],
     board: ['#DCE8F4', '#283A4D']
   };
   const selected = bubbles[style] || bubbles.glass;
   const bubble = dark ? selected[1] : selected[0];
-  const text = dark ? '#FFFFFF' : '#000000';
+  const text = dark ? '#FFFFFF' : style === 'system' ? '#0C2849' : '#000000';
   return { brand: brand, emphasize: style === 'system' ? dark ? '#86B6FF' : '#0064C8' : brand, userBubble: bubble, userBubbleText: text };
 }
 

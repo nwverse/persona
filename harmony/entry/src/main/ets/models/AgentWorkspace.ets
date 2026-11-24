@@ -64,12 +64,6 @@ function rowSpaceKey(row: ResourceRow): string {
 function coreRowId(row: ResourceRow): string {
   return (row.group ? row.group + '|' : '') + (row.manager ? row.manager + '|' : '') + rowMachine(row) + '|' + rowSession(row);
 }
-function cloneRow(row: ResourceRow): ResourceRow {
-  const copy = new ResourceRow(row.id, row.title, row.kind);
-  copy.group = row.group; copy.detail = row.detail; copy.state = row.state; copy.manager = row.manager; copy.machine = row.machine;
-  copy.session = row.session; copy.path = row.path; copy.raw = row.raw;
-  return copy;
-}
 function stringsFrom(value: Record<string, Object>, key: string, optional: boolean = false): string[] {
   if (!Wire.has(value, key) && optional) return [];
   const item = value[key];
@@ -278,8 +272,7 @@ export class AgentWorkspace {
       this.expandedQuiet = this.expandedQuiet.includes(id) ? removeKey(this.expandedQuiet, id) : this.expandedQuiet.concat([id]);
     } else if (id === 'state/idle') {
       this.folded = this.folded.includes('!state/idle') ? removeKey(this.folded, '!state/idle') : this.folded.concat(['!state/idle']);
-      this.toggleIdleRows(id);
-      return;
+
     } else {
       this.folded = this.folded.includes(id) ? removeKey(this.folded, id) : this.folded.concat([id]);
     }
@@ -287,7 +280,16 @@ export class AgentWorkspace {
     this.rebuild(); this.refreezeAfterFilter(); this.saveViewLater();
   }
 
+  idleRowsExpanded(id: string): boolean {
+    return this.expandedIdle.includes(this.idleRowsKey(id));
+  }
+
+  private idleRowsKey(id: string): string {
+    return id.startsWith('machine/') ? 'machine-' + id.slice(8) : id;
+  }
+
   toggleIdleRows(id: string): void {
+    id = this.idleRowsKey(id);
     this.releaseFreeze();
     this.expandedIdle = this.expandedIdle.includes(id) ? removeKey(this.expandedIdle, id) : this.expandedIdle.concat([id]);
     this.rebuild(); this.refreezeAfterFilter(); this.saveViewLater();
@@ -609,7 +611,7 @@ export class AgentWorkspace {
     const key = rowKey(row);
     const patch = (items: ResourceRow[]): ResourceRow[] => items.map((item: ResourceRow) => {
       if (rowKey(item) !== key) return item;
-      const next = cloneRow(item), data = next.data();
+      const next = item.copy(), data = next.data();
       if (state === 'idle') {
         const work = Wire.object(data, 'work');
         if (Wire.bool(work, 'just_finished')) { work['just_finished'] = false; data['work'] = work; }
@@ -654,14 +656,18 @@ export class AgentWorkspace {
 
   private rowsForClient(client: ClientModel | undefined): ResourceRow[] {
     if (!client) return [];
-    return (client.directoryReady ? client.directorySessions : client.sessions).filter((row: ResourceRow) => row.kind === 'session' &&
-      !Wire.bool(row.data(), 'archived') && !Wire.bool(row.data(), 'assistant'));
+    return (client.directoryReady ? client.directorySessions : client.sessions).filter((row: ResourceRow) => {
+      if (row.kind !== 'session') return false;
+      const raw = row.data();
+      return !Wire.bool(raw, 'archived') && !Wire.bool(raw, 'assistant');
+    });
   }
 
-  private syncSelected(client: ClientModel): void {
+  syncSelected(client: ClientModel): void {
     const selected = this.externalSelection || client.selected;
     if (!selected.kind) { if (this.externalSelection) this.selectedKey = ''; return; }
-    const next = selected.kind === 'session' && this.sourceRows.some((row: ResourceRow) => rowKey(row) === rowKey(selected)) ? rowKey(selected) : '';
+    const key = selected.kind === 'session' ? rowKey(selected) : '';
+    const next = key && this.sourceRows.some((row: ResourceRow) => rowKey(row) === key) ? key : '';
     if (next === this.selectedKey) return;
     this.selectedKey = next; this.saveViewLater();
   }

@@ -436,6 +436,13 @@ export class DemoRepository extends HubRepository {
 
   private machinesRoute(parts: string[], method: string): DemoRecord {
     if (parts.length === 1 && method === 'GET') return demoRecord(['machines'], [[this.machineData()]]);
+    if (parts.length === 5 && parts[1] === DEMO_MACHINE && parts[2] === 'launchers' && parts[4] === 'models' && method === 'GET') {
+      const names = parts[3] === 'claude' ? ['sonnet','opus'] : parts[3] === 'codex' ? ['codex-demo'] : [];
+      return demoRecord(['agent','models'], [parts[3], names.map(id => demoRecord(['id','name'],[id,id]))]);
+    }
+    if (parts.length === 3 && parts[1] === DEMO_MACHINE && parts[2] === 'launchers' && method === 'GET') {
+      return demoRecord(['launchers'], [['claude', 'codex', 'gemini'].map(name => demoRecord(['name','agent_type','prompt_optional'],[name,name,true]))]);
+    }
     if (parts.length === 2 && parts[1] === DEMO_MACHINE && method === 'GET') return demoRecord(['machine'], [this.machineData()]);
     throw new HttpFailure(404, 'demo_unsupported');
   }
@@ -499,7 +506,8 @@ export class DemoRepository extends HubRepository {
   private createAgentRecord(body: DemoRecord): DemoRecord {
     const machine = Wire.text(body, 'machine_id'), requestedCwd = Wire.text(body, 'cwd'), cwd = requestedCwd || '/demo/ReleaseDesk';
     const launcher = Wire.text(body, 'launcher');
-    const prompt = nonEmpty(Wire.text(body, 'prompt'), MAX_TEXT_BYTES);
+    const first = Wire.text(body, 'prompt');
+    const prompt = first || !launcher ? nonEmpty(first, MAX_TEXT_BYTES) : '';
     if (machine !== DEMO_MACHINE || !safePath(cwd) || !['', 'codex', 'claude', 'gemini'].includes(launcher)) throw new HttpFailure(400, 'demo_invalid_input');
     this.ensureRoom(this.sessionsData);
     const todoId = Wire.text(body, 'todo_id');
@@ -512,7 +520,9 @@ export class DemoRepository extends HubRepository {
       'branch', 'source_kind', 'assistant', 'archived', 'capabilities', 'created_at', 'updated_at'],
       [id, id, DEMO_MACHINE, DEMO_MANAGER, title, 'working', 'working', cwd, cwd, cwd, 'demo', 'live', false, false,
         capabilities, '2026-11-11T09:30:00Z', '2026-11-11T09:30:00Z']);
-    if (launcher) session['launcher'] = launcher;
+    if (launcher) { session['launcher'] = launcher; session['agent'] = launcher; }
+    if (Wire.text(body, 'model')) session['model'] = Wire.text(body, 'model');
+    if (!prompt) { session['state'] = 'idle'; session['status'] = 'idle'; }
     this.sessionsData.unshift(session);
     if (todo) {
       const agents = Wire.rows(todo, 'agents').filter((item: DemoRecord) => Wire.text(item, 'session_id') !== id);
@@ -520,7 +530,7 @@ export class DemoRepository extends HubRepository {
         [DEMO_MACHINE, id, title, cwd, launcher, 'manual', '2026-11-11T09:30:00Z']));
       todo['agents'] = agents;
     }
-    this.transcripts.set(this.transcriptKey(DEMO_MACHINE, id), [this.item('user', prompt), this.item('assistant', 'A sample agent was created inside the local demo.')]);
+    this.transcripts.set(this.transcriptKey(DEMO_MACHINE, id), prompt ? [this.item('user', prompt), this.item('assistant', 'A sample agent was created inside the local demo.')] : []);
     return demoRecord(['session'], [cloneRecord(session)]);
   }
 

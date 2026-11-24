@@ -301,7 +301,7 @@ export class HubTransport {
 
   hello(features: string[]): boolean {
     const identity = JSON.parse(JSON.stringify(this.clientMetadata())) as Record<string, Object>;
-    identity['type'] = 'client_hello'; identity['features'] = features.concat([AGENT_MESSAGE_HOLD]); identity['locale'] = clientLocale(i18n.getSystemLanguage());
+    identity['type'] = 'client_hello'; identity['features'] = features.concat([AGENT_MESSAGE_HOLD, 'session_live', 'session_live_tools']); identity['locale'] = clientLocale(i18n.getSystemLanguage());
     return this.send(JSON.stringify(identity));
   }
   private authHeaders(): Record<string, string> {
@@ -327,7 +327,7 @@ export class HubTransport {
     }
   }
 
-  private async requestData(path: string, method: string, body: rcp.RequestContent | undefined, contentType: string, limit: number, opId: string, acceptTransfer: boolean = false): Promise<BytesResponse> {
+  private async requestData(path: string, method: string, body: rcp.RequestContent | undefined, contentType: string, limit: number, opId: string, acceptTransfer: boolean = false, transferTimeout: number = REQUEST_TIMEOUT_MS): Promise<BytesResponse> {
     const generation = this.generation; this.assertLive(generation);
     const verb = method.toUpperCase();
     if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'].includes(verb)) throw new Error('invalid_method');
@@ -341,7 +341,7 @@ export class HubTransport {
     }
     const session = rcp.createSession(); this.requests.add(session);
     const request = new rcp.Request(target, verb as rcp.HttpMethod, headers, body);
-    request.configuration = { transfer: { autoRedirect: false, timeout: { connectMs: REQUEST_TIMEOUT_MS, transferMs: REQUEST_TIMEOUT_MS, inactivityMs: REQUEST_TIMEOUT_MS } },
+    request.configuration = { transfer: { autoRedirect: false, timeout: { connectMs: REQUEST_TIMEOUT_MS, transferMs: transferTimeout, inactivityMs: transferTimeout } },
       security: { remoteValidation: this.pin ? (context: rcp.ValidationContext) => this.validateContextPin(context) : 'system' } };
     if (this.proxy) request.configuration.proxy = { url: 'http://' + this.proxy.host + ':' + this.proxy.port,
       createTunnel: 'always', security: { serverAuthentication: { authenticationType: 'basic', credential: {
@@ -373,10 +373,10 @@ export class HubTransport {
     } finally { this.requests.delete(session); try { session.close(); } catch (_) {} }
   }
 
-  async request(path: string, method: string = 'GET', body: string = '', opId: string = ''): Promise<string> {
+  async request(path: string, method: string = 'GET', body: string = '', opId: string = '', transferTimeout: number = REQUEST_TIMEOUT_MS): Promise<string> {
     if (utf8(body).length > MAX_HTTP_BYTES) throw new HttpFailure(0, 'request_too_large');
     const limit = method.toUpperCase() === 'GET' && path.split('?')[0] === '/api/v1/sessions' ? MAX_HUB_EVENT_BYTES : MAX_HTTP_BYTES;
-    const response = await this.requestData(path, method, body || undefined, 'application/json', limit, opId);
+    const response = await this.requestData(path, method, body || undefined, 'application/json', limit, opId, false, transferTimeout);
     try { return utf8String(new Uint8Array(response.data), true); }
     catch (_) { throw new HttpFailure(0, 'response_invalid', !['GET', 'HEAD'].includes(method.toUpperCase())); }
   }
@@ -413,11 +413,13 @@ export class HubTransport {
     const generation = this.generation;
     this.connectionStage = 'open_socket';
     try {
-      const requestPath = routePath(this.endpoint, this.streamPath);
+      const path = this.streamPath === '/api/v1/ws' ? this.streamPath + '?features=sessions_list' : this.streamPath;
+      const requestPath = routePath(this.endpoint, path);
       const cancelled = new Promise<void>((_, reject) => { this.openReject = reject; });
       const open = this.endpoint.scheme === 'https' ? this.connectSecure(requestPath, generation) : this.connectPlain(requestPath, generation);
       await Promise.race([open, cancelled]);
       this.assertLive(generation);
+      this.connectionStage = 'connected';
       this.stateCallback?.('ready');
     } catch (error) {
       const fields = error as Object as Record<string, Object>; const code = fields ? fields['code'] : undefined;

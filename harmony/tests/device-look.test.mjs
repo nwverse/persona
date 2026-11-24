@@ -1,3 +1,4 @@
+import { deviceLookQuoteInk } from '../entry/src/main/ets/core/DeviceLook.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chooseDeviceLookAvatarFile, contrastRatio, deviceLookAccentText, deviceLookPackageJSON, deviceLookPalette, parseDeviceLookPackage,
@@ -102,4 +103,14 @@ test('mid-gray supplied bubble text reaches contrast through the better endpoint
  const input=info();input.manifest.colors.light.bubble_text='#888888';input.manifest.colors.dark.bubble_text='#888888';
  const pack=parseDeviceLookPackage(input),palette=deviceLookPalette('avatar','glass',pack.colors);
  assert.ok(contrastRatio(palette.light.userBubble,palette.light.userBubbleText)>=4.5);assert.ok(contrastRatio(palette.dark.userBubble,palette.dark.userBubbleText)>=4.5);
+});
+
+test('system chat matches the reference bubble and quoted text remains readable across appearances', () => {
+  const system = deviceLookPalette('style','system',undefined);
+  assert.equal(system.light.userBubble,'#E9F3FE'); assert.equal(system.light.userBubbleText,'#0C2849');
+  assert.equal(deviceLookQuoteInk(system.light),'#4F6580');
+  for (const accent of ['style','blue','coral','lavender','teal','lark']) {
+    const palette = deviceLookPalette(accent,'system',undefined);
+    for (const set of [palette.light,palette.dark]) assert.ok(contrastRatio(deviceLookQuoteInk(set),set.userBubble) >= 4.5);
+  }
 });

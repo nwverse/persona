@@ -47,6 +47,7 @@ export struct SettingsPage {
   @Event onDetail: (page: string, row: ResourceRow) => void = () => {};
   @Event onExtension: (extensionId: string, uiId: string, title: string) => void = () => {};
   @Event onBack: () => void = () => {};
+  @Event onNewSession: (row: ResourceRow) => void = () => {};
   @Event onComputer: (row: ResourceRow) => void = () => {};
   @Event onChat: (row: ResourceRow) => void = () => {};
   @Local management: ManagementModel = new ManagementModel();
@@ -803,6 +804,11 @@ export struct SettingsPage {
             }.width('100%').padding(Tokens.page).backgroundColor(Colors.canvas).borderRadius(Tokens.card)
           }
         } else {
+          if (this.detailCard.online) ListItem() {
+            Button(tr('agent_new_session')).attributeModifier(ButtonStyles.secondary).width('100%')
+              .enabled(!!this.screenMachine() && !this.management.loading)
+              .onClick(() => { const row = this.screenMachine(); if (this.active && row) this.onNewSession(row); }).id('machines.new.session')
+          }
           if (!this.model.demo && this.detailCard.online && this.supportsScreen(this.detailCard.row)) ListItem() {
             Button(tr('computer_screen_open')).attributeModifier(ButtonStyles.secondary).width('100%')
               .enabled(this.canOpenScreen())
@@ -847,7 +853,7 @@ export struct SettingsPage {
         MachineRefresh({ controlId: 'machines.detail.pull', available: !!this.detailOwner?.connected, loading: this.management.loading,
           onRefresh: () => this.loadMachineDirectory() }) { this.machineDetail() }
       } else MachineDirectoryView({ model: this.model, cards: this.overviewCards, readings: this.machineReadings,
-        loading: this.model.directoryLoading || this.management.loading, error: this.management.error,
+        loading: this.model.directoryLoading || this.management.loading, error: !this.model.connected && this.model.workspaceStatus(this.model.profile) === 'workspace_pair_again' ? 'workspace_pair_hint' : this.management.error,
         addVisible: this.model.features.includes('machines_add'), addEnabled: this.canOpenComputerForm(),
         receiptAvailable: this.receiptAvailable, onReceipt: () => this.openComputerForm(true),
         onAdd: () => this.openComputerForm(), onMachine: (row: ResourceRow) => this.openMachine(row), onRefresh: () => this.loadMachineDirectory() })

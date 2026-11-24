@@ -8,21 +8,36 @@ const body = source.slice(source.indexOf('export struct TranscriptImage'), sourc
   .replace('export struct TranscriptImage', 'class TranscriptImage')
   .replace(/@(?:Require|Param|Local|Event)\s+/g, '').replace(/@Monitor\([^)]*\)\s*/g, '');
 function deferred() { let resolve; const promise = new Promise(yes => { resolve = yes; }); return { promise, resolve }; }
-function fixture() {
+function fixture(cache = new Map()) {
   const loads = [], released = [];
   const image = { createImageSource() { return { async getImageInfo() { return { size: {width: 100, height: 100} }; },
     async createPixelMap() { const pixel = { async release() { released.push(pixel); } }; return pixel; }, async release() {} }; } };
-  const Component = new Function('image','loadMessageImage','messageImageGalleryWindow', stripTypeScriptTypes(body + '\n}') + '; return TranscriptImage;')(
+  const Component = new Function('image','loadMessageImage','messageImageGalleryWindow','readDisplayThumbnail','readThumbnail','writeThumbnail','thumbnailByteLimit', stripTypeScriptTypes(body + '\n}') + '; return TranscriptImage;')(
     image, () => { const gate = deferred(); loads.push(gate); return gate.promise; },
-    (entries, selectedIndex) => ({entries,selectedIndex,signature: JSON.stringify(entries.map(e=>e.key))}));
+    (entries, selectedIndex) => ({entries,selectedIndex,signature: JSON.stringify(entries.map(e=>e.key))}),
+    async key => cache.get(key), key => cache.get(key), (key,data) => cache.set(key,data), 192*1024);
   const component = new Component();
   const client = { profile: {id:'hub',hubId:'hub'},connected:true,generation:1,
-    target:()=> 'chat',scope:()=> 'scope',isChat:()=>true,connectionGeneration(){return this.generation;},owns(generation,scope){return this.connected && this.generation===generation && scope==='scope';} };
+    target:()=> 'chat',scope:()=> 'scope',isChat:()=>true,connectionGeneration(){return this.generation;},owns(generation,scope){return this.generation===generation && scope==='scope';} };
   component.model=client;component.itemId='message';component.remotePath='/image';
   return {component,client,loads,released};
 }
 const bytes = () => ({data:new Uint8Array([1,2,3]).buffer,mime:'image/jpeg'});
 const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('an explicit tap starts a visible user photo even before an area callback; offline revisits can use the thumbnail',async()=>{
+  const cache=new Map(), {component,client,loads}=fixture(cache);
+  component.maximumThumbnailWidth=112;component.maximumThumbnailHeight=80;
+  component.getUIContext=()=>({vp2px:value=>value*2}); component.cachePath=()=>client.scope()+'/'+client.target()+'/item';
+  component.aboutToAppear();assert.equal(loads.length,0);
+  const load=component.load(true);await settle();assert.equal(loads.length,1);
+  const thumbnail=bytes();loads[0].resolve({...thumbnail,original:false});await load;
+  assert.ok(component.pixels);assert.equal(component.loaded,undefined,'a small rendition is never passed off as the original');
+  component.aboutToDisappear();client.connected=false; component.aboutToAppear();await component.load(true);
+  assert.ok(component.pixels);assert.equal(loads.length,1);
+  component.aboutToDisappear();client.target=()=> 'another chat';component.aboutToAppear();await component.load(true);
+  assert.equal(component.pixels,undefined);
+});
 
 test('reconnect replaces a loaded thumbnail and enables the new generation lease',async()=>{
  const {component,client,loads,released}=fixture();component.aboutToAppear();loads[0].resolve(bytes());await settle();
@@ -50,4 +65,28 @@ test('native gallery activity pause does not invalidate its presented source lea
  const args=[client,component.revision,component.sourceVisit,1,'scope','chat','hub',component.galleryVisit,component.gallerySignature()];
  component.active=false;component.activityChanged();assert.equal(component.currentOwner(...args),true);
  component.active=true;component.activityChanged();assert.equal(loads.length,1);assert.equal(component.currentOwner(...args),true);component.aboutToDisappear();
+});
+
+test('user thumbnails only fetch visible images and preserve the original preview bytes after thumbnail decoding', async()=>{
+ const {component,loads}=fixture(); component.maximumThumbnailWidth=112;component.maximumThumbnailHeight=80;
+ component.getUIContext=()=>({vp2px:value=>value*2});component.aboutToAppear();
+ assert.equal(loads.length,0);
+ component.thumbnailVisible=true;component.load();assert.equal(loads.length,1);
+ const original=bytes();loads[0].resolve(original);await settle();
+ assert.equal(component.loaded.data,original.data);assert.equal(component.loaded.mime,'image/jpeg');assert.ok(component.pixels);
+ component.aboutToDisappear();
+});
+
+test('scrolling back to an immutable picture uses its cached thumbnail; a workspace file is revalidated',async()=>{
+  for (const remotePath of ['', '/project/screenshot.png']) {
+    const {component,loads}=fixture(new Map([['item-thumb',bytes().data]]));
+    component.remotePath=remotePath;component.maximumThumbnailWidth=112;
+    component.cachePath=()=> 'item-thumb';component.getUIContext=()=>({vp2px:v=>v*2});
+    component.aboutToAppear();
+    const draw=component.load(true);await settle();
+    assert.ok(component.pixels);
+    assert.equal(loads.length,remotePath?1:0);
+    if(loads.length) loads[0].resolve(bytes());
+    await draw;component.aboutToDisappear();
+  }
 });

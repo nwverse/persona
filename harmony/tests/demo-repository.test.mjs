@@ -277,3 +277,21 @@ test('unsupported actions and rejected admission do not mutate or touch transpor
   await assert.rejects(repo.call('/api/v1/extensions?manager=demo'), { code: 'demo_unsupported' });
   assert.equal(globalThis.__demoTransportCalls, 0);
 });
+
+test('both phone launchers create a writable chat, accept a follow-up, and interrupt the same session', async () => {
+  const repo = new DemoRepository(), [machine] = await repo.machines();
+  const launchers = await repo.sessionLaunchers(machine.id);
+  for (const family of ['codex','claude']) {
+    const launcher = launchers.find(entry => entry.agent === family);
+    const catalog = await repo.call('/api/v1/machines/' + machine.id + '/launchers/' + launcher.name + '/models');
+    const chosen = catalog.models[0].id;
+    const chat = await repo.createAgent('First message',machine,'',launcher.name,'start-'+family,'',undefined,family,chosen);
+    assert.equal(chat.data().agent,family); assert.equal(chat.data().model,chosen);
+    assert.equal(chat.data().capabilities.send,true); assert.equal(chat.data().capabilities.interrupt,true);
+    await repo.send(chat,'Follow-up while working','followup-'+family,'');
+    assert.ok(repo.historyItems(chat).some(item => item.client_msg_id === 'followup-'+family));
+    await repo.stop(chat);
+    const final = (await repo.sessions()).find(row => row.id === chat.id && row.machine === chat.machine);
+    assert.equal(final.data().status,'interrupted');
+  }
+});

@@ -34,14 +34,14 @@ export function mergeConversationTimeline(messages: readonly TimelineMessage[], 
 export interface TimelineRowIdentity { readonly id: string; }
 
 /** Keep one observed array and describe insertion positions to native Repeat/List. */
-export function reconcileTimelineRows<T extends TimelineRowIdentity>(current: T[], next: readonly T[]): void {
+export function reconcileTimelineRows<T extends TimelineRowIdentity>(current: T[], next: readonly T[], same: (a: T, b: T) => boolean = (a, b) => a === b): void {
   const wanted = new Set(next.map((row: T) => row.id));
   for (let index = current.length - 1; index >= 0; index--) if (!wanted.has(current[index].id)) current.splice(index, 1);
   const retained = new Set(current.map((row: T) => row.id));
   let index = 0;
   while (index < next.length) {
     if (current[index]?.id === next[index].id) {
-      if (current[index] !== next[index]) current[index] = next[index];
+      if (!same(current[index], next[index])) current[index] = next[index];
       index++;
     } else if (retained.has(next[index].id)) {
       const previous = current.findIndex((row: T) => row.id === next[index].id);

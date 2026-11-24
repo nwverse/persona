@@ -8,6 +8,9 @@ export function isAttachmentCopyName(name: string): boolean {
   const match = /^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.([a-z0-9]+)$/.exec(name);
   return !!match && (match[2] === 'bin' || PREVIEW_EXTENSIONS.includes(match[2]));
 }
+export function isMessageThumbnailName(name: string): boolean {
+  return /^thumb-[a-f0-9]{64}\.img$/.test(name);
+}
 export function attachmentMimeType(name: string): string {
   switch (attachmentExtension(name)) {
     case 'jpg': case 'jpeg': return 'image/jpeg';

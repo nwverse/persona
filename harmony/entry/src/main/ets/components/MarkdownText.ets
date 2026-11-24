@@ -1,13 +1,153 @@
+import { pasteboard } from '@kit.BasicServicesKit';
 import { Theme } from '@kit.ArkUI';
-import { MarkdownBlock, MarkdownInline, MarkdownTableRow, parseMarkdown } from '../core/Markdown';
+import { ClientModel } from '../models/ClientModel';
+import { TranscriptImage } from './TranscriptImage';
+import { conversationImageKey, messageImageGalleryWindow } from '../core/MessageImageGallery';
+import type { ConversationPhotoRequest, LoadedMessageImage, MessageImageGalleryEntry } from '../core/MessageImageGallery';
+import { markdownProseText, markdownCodeSelection, ConversationMarkdownCache, chatImagePath, markdownLinkProvider, markdownMediaRuns, MarkdownMediaRun, markdownImagePaths, chatFilePath, MarkdownBlock, MarkdownInline, MarkdownTableRow, markdownInlineText, markdownVisibleText, markdownTableWidths, parseMarkdown } from '../core/Markdown';
+import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
+import { NativeEnvironment, nativeEnvironment } from '../platform/NativeEnvironment';
+import { ConversationCode } from './ConversationCode';
+import { Colors } from '../design/Colors';
 import { Tokens } from '../design/Tokens';
+import { tr } from '../design/Strings';
+
+function referenceMark(url: string): Resource | undefined {
+  switch (markdownLinkProvider(url)) {
+    case 'github': return $r('app.media.reference_github');
+    case 'figma': return $r('app.media.reference_figma');
+    case 'notion': return $r('app.media.reference_notion');
+    case 'linear': return $r('app.media.reference_linear');
+    case 'googledrive': return $r('app.media.reference_googledrive');
+    default: return undefined;
+  }
+}
+
+@ComponentV2
+struct MarkdownTable {
+  @Require @Param table: MarkdownBlock;
+  @BuilderParam cellText: (nodes: MarkdownInline[], header: boolean, alignment: TextAlign) => void;
+  @Param environment: NativeEnvironment = nativeEnvironment;
+  @Local viewport: number = 0;
+
+  @Computed get measured(): number[] {
+    const scale = this.environment.fontScale;
+    const measured = this.table.alignments.map(() => 0);
+    const ui = this.getUIContext();
+    for (const row of this.table.rows.slice(0, 48)) {
+      row.cells.forEach((cell: MarkdownInline[], column: number) => {
+        for (const line of markdownInlineText(cell).slice(0, 64).split('\n')) {
+          const px = ui.getMeasureUtils().measureText({ textContent: line, fontSize: '15fp',
+            fontWeight: row.header ? FontWeight.Medium : FontWeight.Normal });
+          measured[column] = Math.max(measured[column], ui.px2vp(px));
+        }
+      });
+    }
+    return measured.map((n: number) => Math.min(n, 320 * scale));
+  }
+  @Computed get widths(): number[] {
+    return markdownTableWidths(this.measured, Math.max(0, this.viewport - 2 * Tokens.hairline), this.environment.fontScale);
+  }
+  @Computed get total(): number { return this.widths.reduce((a: number, b: number) => a + b, 0); }
+  private alignment(index: number): TextAlign {
+    const a = this.table.alignments[index];
+    return a === 'center' ? TextAlign.Center : a === 'end' ? TextAlign.End : TextAlign.Start;
+  }
+  build() {
+    Scroll() {
+      Column() {
+        ForEach(this.table.rows, (row: MarkdownTableRow, rowIndex: number) => {
+          if (rowIndex > 0) Divider().strokeWidth(Tokens.hairline).color(Colors.divider)
+          Flex({ direction: FlexDirection.Row, alignItems: ItemAlign.Stretch }) {
+            ForEach(row.cells, (cell: MarkdownInline[], col: number) => {
+              Column() { this.cellText(cell, row.header, this.alignment(col)) }
+                .width(this.widths[col]).flexShrink(0).alignItems(HorizontalAlign.Start)
+                .padding({ left: col === 0 ? 0 : 9, right: col === this.widths.length - 1 ? 0 : 9,
+                  top: Tokens.gap, bottom: Tokens.gap })
+                .id('markdown.table.cell.' + rowIndex + '.' + col)
+            }, (_cell: MarkdownInline[], col: number) => String(col))
+          }.width(this.total)
+        }, (row: MarkdownTableRow, index: number) => String(index) + ':' + JSON.stringify(row.cells))
+      }.width(this.total).alignItems(HorizontalAlign.Start)
+    }.width('100%').align(Alignment.TopStart).scrollable(ScrollDirection.Horizontal)
+      .scrollBar(this.total > this.viewport + 1 ? BarState.Auto : BarState.Off).clip(true)
+      .onAreaChange((_old: Area, area: Area) => {
+        const width = Number(area.width);
+        if (width > 0 && Math.abs(width - this.viewport) > 0.5) this.viewport = width;
+      }).id('markdown.table')
+  }
+}
+
+@ComponentV2
+struct UserPassage {
+  @Require @Param preview: string;
+  @Require @Param limit: number;
+  @Require @Param overflow: boolean;
+  @Require @Param ink: ResourceColor;
+  @Require @Param actionInk: ResourceColor;
+  @Require @Param proseSize: number;
+  @Require @Param identity: string;
+  @BuilderParam full: () => void;
+  @Event hold: (change: () => void) => void = change => change();
+  @Event onReveal: () => void = () => {};
+  @Event onBodyTap?: () => void;
+  @Local open: boolean = false;
+  @Monitor('identity') reset(): void { this.open = false; }
+
+  build() {
+    Column({ space: 3 }) {
+      if (this.overflow && !this.open) {
+        Text(this.preview).width('100%').fontSize(this.proseSize).fontColor(this.ink)
+          .lineHeight(String(Math.round(this.proseSize * Tokens.replyBodyLeading)) + 'fp').wordBreak(WordBreak.BREAK_WORD)
+          .maxLines(this.limit).textOverflow({overflow:TextOverflow.Ellipsis}).copyOption(CopyOptions.LocalDevice).onClick(this.onBodyTap)
+      } else { this.full() }
+      if (this.overflow) {
+        Button({type:ButtonType.Normal,buttonStyle:ButtonStyleMode.TEXTUAL}) {
+          Row({space:4}) {
+            Text(tr(this.open ? 'user_passage_less' : 'user_passage_more')).fontSize(14).fontWeight(FontWeight.Medium).fontColor(this.actionInk)
+            SymbolGlyph($r('sys.symbol.chevron_down')).fontSize(12).fontColor([this.actionInk]).rotate({angle:this.open ? 180 : 0})
+          }
+        }.height(34).padding(0).backgroundColor(Color.Transparent)
+          .accessibilityText(tr(this.open ? 'user_passage_less' : 'user_passage_more'))
+          .accessibilityStateDescription(tr(this.open ? 'work_expanded' : 'work_collapsed'))
+          .onClick(() => this.hold(() => { this.open = !this.open; if (this.open) this.onReveal(); })).id('chat.passage.toggle.' + this.identity)
+      }
+    }.width('100%').alignItems(HorizontalAlign.Start)
+  }
+}
 
 @ComponentV2
 export struct MarkdownText {
   @Require @Param text: string;
   @Param fitContent: boolean = false;
+  @Param compact: boolean = false;
+  @Param ownMessage: boolean = false;
+  @Param narration: boolean = false;
+  @Event onBodyTap?: () => void;
+  @Param messageInk: ResourceColor | undefined = undefined;
+  @Param messageQuoteInk: ResourceColor | undefined = undefined;
+  @Param ownWidth: number = 0;
+  @Param quoteInk: boolean = false;
+  @Param messageId: string = '';
+  @Param clipped: boolean = false;
+  @Event readOriginal: () => Promise<string> = async (): Promise<string> => '';
+  @Local original: string = '';
+  @Local pending: boolean = false;
+  @Local unavailable: boolean = false;
+  private readSequence: number = 0;
+  @Event hold: (change: () => void) => void = change => change();
+  @Param transcript: boolean = false;
+  @Param documents: ConversationMarkdownCache | undefined = undefined;
+  @Param workspaceRoot: string = '';
+  @Param mediaModel: ClientModel | undefined = undefined;
+  @Param mediaTarget: string = '';
+  @Param mediaWidth: number = 0;
+  @Event onEditImage: (image: LoadedMessageImage) => void = () => {};
+  @Param mediaActive: boolean = false;
+  @Event onPreview: (request: ConversationPhotoRequest) => void = () => {};
+  @Event onOpenFile: (path: string) => void = (_path: string) => {};
   @Event onLink: (url: string) => void = (_url: string) => {};
-  @Local blocks: MarkdownBlock[] = [];
+  @Local blocks: BoundRow<MarkdownBlock>[] = [];
   @Local foreground: ResourceColor = $r('sys.color.font_primary');
   @Local secondary: ResourceColor = $r('sys.color.font_secondary');
   @Local emphasize: ResourceColor = $r('sys.color.font_emphasize');
@@ -17,10 +157,66 @@ export struct MarkdownText {
     this.emphasize = theme.colors.fontEmphasize; this.codeFill = theme.colors.compBackgroundTertiary;
   }
 
-  aboutToAppear(): void { this.blocks = parseMarkdown(this.text); }
-  @Monitor('text') textChanged(): void { this.blocks = parseMarkdown(this.text); }
+  aboutToAppear(): void { this.parseBlocks(); }
+  aboutToDisappear(): void { this.readSequence++; this.pending = false; }
+  @Monitor('text', 'messageId') textChanged(): void {
+    this.readSequence++; this.original = ''; this.pending = false; this.unavailable = false;
+    this.parseBlocks();
+  }
+  private parseBlocks(): void {
+    const source = this.original || this.text;
+    const parsed = this.documents ? this.documents.parse(source) : parseMarkdown(source);
+    const keys = new Map<MarkdownBlock, string>();
+    parsed.forEach((block: MarkdownBlock, i: number) => {
+      const value = this.ownMessage || block.kind === 'table' ? block.kind : block.source;
+      keys.set(block, String(i) + ':' + value);
+    });
+    this.blocks = reconcileBoundRows(this.blocks, parsed, (b: MarkdownBlock) => keys.get(b)!, this, this, 'text', 'text');
+  }
+  private async loadOriginal(): Promise<void> {
+    if (!this.clipped || this.original || this.pending) return;
+    const sequence = ++this.readSequence;
+    this.pending = true; this.unavailable = false;
+    try {
+      const text = await this.readOriginal();
+      if (sequence === this.readSequence && text) this.hold(() => { this.original = text; this.parseBlocks(); });
+    } catch (_) {
+      if (sequence === this.readSequence) this.unavailable = true;
+    } finally {
+      if (sequence === this.readSequence) this.pending = false;
+    }
+  }
+
+  @Computed get replyProse(): boolean { return this.transcript && !this.compact && !this.ownMessage && !this.quoteInk && !this.narration; }
+  @Computed get proseSize(): number {
+    if (this.compact) return Tokens.toolLabel;
+    if (this.ownMessage || this.quoteInk) return Tokens.userBody;
+    return this.narration ? Tokens.progressBody : Tokens.body;
+  }
+  @Computed get primaryInk(): ResourceColor { return this.messageInk ?? (this.narration ? Colors.progress : this.foreground); }
+  @Computed get quotedInk(): ResourceColor { return this.messageQuoteInk ?? this.secondary; }
+  private measuredHeight(text: string, size: number, lines: number): number {
+    return Number(this.getUIContext().getMeasureUtils().measureTextSize({ textContent:text, fontSize:size + 'fp',
+      constraintWidth:this.ownWidth + 'vp', lineHeight:Math.round(size * Tokens.replyBodyLeading) + 'fp',
+      wordBreak:WordBreak.BREAK_WORD, maxLines:lines }).height);
+  }
+  private overflows(text: string, size: number, limit: number): boolean {
+    if (!text || this.ownWidth <= 0 || nativeEnvironment.fontScale <= 0) return false;
+    return this.measuredHeight(text,size,limit + 1) > this.measuredHeight(text,size,limit) + 0.5;
+  }
+  @Computed get userPreview(): string {
+    if (!this.ownMessage || this.blocks.some(row => row.value.kind === 'quote')) return '';
+    return markdownVisibleText(this.blocks.map(row => row.value));
+  }
+  @Computed get longUserMessage(): boolean { return !!this.userPreview && (this.clipped || this.overflows(this.userPreview, Tokens.userBody, 6)); }
 
   private headingSize(level: number): number {
+    if (this.transcript) {
+      if (level <= 1) return Tokens.replyHeading1;
+      if (level === 2) return Tokens.replyHeading2;
+      if (level === 3) return Tokens.title;
+      return level === 4 ? Tokens.replyHeading4 : Tokens.body;
+    }
     if (level <= 1) return Tokens.markdownHeading1;
     if (level === 2) return Tokens.markdownHeading2;
     if (level === 3) return Tokens.markdownHeading3;
@@ -29,68 +225,130 @@ export struct MarkdownText {
     return Tokens.body;
   }
 
-  private tableTextAlign(table: MarkdownBlock, column: number): TextAlign {
-    const alignment = table.alignments[column] || 'start';
-    if (alignment === 'center') return TextAlign.Center;
-    if (alignment === 'end') return TextAlign.End;
-    return TextAlign.Start;
+  @Computed get hasMediaOwner(): boolean {
+    return !!this.mediaModel && !!this.mediaTarget && this.mediaModel.target() === this.mediaTarget;
+  }
+  @Computed get replyImages(): MessageImageGalleryEntry[] {
+    if (!this.hasMediaOwner) return [];
+    return markdownImagePaths(this.blocks.map(row => row.value), this.workspaceRoot).map((path: string): MessageImageGalleryEntry =>
+      ({key:conversationImageKey(this.mediaTarget,this.messageId,'markdown',path),itemId:'',remotePath:path,target:this.mediaTarget}));
+  }
+  private openImage(path: string): void {
+    const model = this.mediaModel;
+    if (!model || !this.mediaActive || !this.hasMediaOwner) return;
+    const gallery = messageImageGalleryWindow(this.replyImages, this.replyImages.findIndex(entry => entry.remotePath === path));
+    if (gallery) this.onPreview({gallery, scope:model.scope(), hub:model.profile.hubId || model.profile.id});
+  }
+  @Computed get linkInk(): ResourceColor {
+    return this.transcript ? Colors.reference : this.emphasize;
+  }
+  @Builder webLink(node: MarkdownInline, mark: Resource | undefined, size: number, bold: boolean, italic: boolean, code: boolean) {
+    if (mark) {
+      ImageSpan(mark).width((size - 2) + 'fp').height((size - 2) + 'fp').verticalAlign(ImageSpanAlignment.CENTER)
+        .margin({right:3}).onClick(() => this.onLink(node.url))
+    }
+    ForEach(node.children, (child: MarkdownInline) => this.inlineNode(child, bold, italic, code, node.url, size),
+      (child: MarkdownInline, index: number) => String(index))
+  }
+  @Builder inlineText(nodes: MarkdownInline[], size: number = Tokens.body, bold: boolean = false, alignment: TextAlign = TextAlign.Start, fillCell: boolean = false) {
+    if (this.hasMediaOwner && this.replyImages.length) {
+      ForEach(markdownMediaRuns(nodes, this.workspaceRoot), (run: MarkdownMediaRun) => {
+        if (run.path) {
+          TranscriptImage({ model:this.mediaModel!, active:this.mediaActive, remotePath:run.path, label:run.label,
+            sourceKey:conversationImageKey(this.mediaTarget,this.messageId,'markdown',run.path), galleryEntries:this.replyImages,
+            galleryIndex:this.replyImages.findIndex(entry => entry.remotePath === run.path),
+            maximumThumbnailWidth:Math.max(Tokens.touch,this.mediaWidth),maximumThumbnailHeight:260,thumbnailEdge:1024,
+            onPreview:this.onPreview, onEdit:this.onEditImage }).margin({top:4,bottom:4}).id('chat.markdown.image')
+        } else { this.prose(run.nodes,size,bold,alignment,fillCell) }
+      }, (run: MarkdownMediaRun, i: number) => JSON.stringify([i, run.path, run.nodes]))
+    } else { this.prose(nodes,size,bold,alignment,fillCell) }
   }
 
-  @Builder inlineText(nodes: MarkdownInline[], size: number = Tokens.body, bold: boolean = false, alignment: TextAlign = TextAlign.Start, breakAll: boolean = false) {
+  private copyMenu(nodes: MarkdownInline[]): EditMenuOptions {
+    return {
+      onCreateMenu: (items: TextMenuItem[]): TextMenuItem[] => items,
+      onMenuItemClick: (item: TextMenuItem, range: TextRange): boolean => {
+        if (!this.transcript || !item.id.equals(TextMenuItemId.COPY) || range.start === undefined || range.end === undefined) return false;
+        const text = markdownCodeSelection(nodes,range.start,range.end,this.transcript,this.workspaceRoot,this.hasMediaOwner);
+        if (text === undefined) return false;
+        pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN,text)).catch(() => {});
+        return true;
+      }
+    };
+  }
+  @Builder prose(nodes: MarkdownInline[], size: number = Tokens.body, bold: boolean = false, alignment: TextAlign = TextAlign.Start, fillCell: boolean = false) {
     Text() {
-      ForEach(nodes, (node: MarkdownInline) => this.inlineNode(node, bold), (node: MarkdownInline, index: number) => String(index))
+      ForEach(nodes, (node: MarkdownInline) => this.inlineNode(node, bold, false, false, '', size), (node: MarkdownInline, index: number) => String(index))
     }
       .fontSize(size).fontColor(this.foreground).fontWeight(bold ? FontWeight.Bold : FontWeight.Normal)
-      .textAlign(alignment).wordBreak(breakAll ? WordBreak.BREAK_ALL : WordBreak.BREAK_WORD)
-      .copyOption(CopyOptions.LocalDevice).width(this.fitContent ? undefined : '100%')
+      .lineHeight(this.transcript ? String(Math.round(size * (size > Tokens.body ? Tokens.replyHeadingLeading : this.replyProse && size === Tokens.body ? 1.52 : Tokens.replyBodyLeading))) + 'fp' : undefined)
+      .textAlign(alignment).wordBreak(WordBreak.BREAK_WORD)
+      .lineBreakStrategy(this.ownMessage && this.fitContent && this.text.length < 200 && !this.longUserMessage ? LineBreakStrategy.BALANCED :
+        this.transcript && !this.ownMessage ? LineBreakStrategy.HIGH_QUALITY : LineBreakStrategy.GREEDY)
+      .copyOption(CopyOptions.LocalDevice).editMenuOptions(this.copyMenu(nodes)).onClick(this.onBodyTap).width(this.fitContent && !fillCell ? undefined : '100%')
   }
 
-  @Builder inlineNode(node: MarkdownInline, bold: boolean = false, italic: boolean = false, code: boolean = false, url: string = '') {
+  @Builder inlineNode(node: MarkdownInline, bold: boolean = false, italic: boolean = false, code: boolean = false, url: string = '', size: number = Tokens.body) {
     if (node.kind === 'bold') {
-      ForEach(node.children, (child: MarkdownInline) => this.inlineNode(child, true, italic, code, url),
+      ForEach(node.children, (child: MarkdownInline) => this.inlineNode(child, true, italic, code, url, size),
         (child: MarkdownInline, index: number) => String(index))
     } else if (node.kind === 'italic') {
-      ForEach(node.children, (child: MarkdownInline) => this.inlineNode(child, bold, true, code, url),
+      ForEach(node.children, (child: MarkdownInline) => this.inlineNode(child, bold, true, code, url, size),
         (child: MarkdownInline, index: number) => String(index))
     } else if (node.kind === 'code') {
-      this.inlineLeaf(node.text, bold, italic, true, url)
+      this.inlineLeaf(node.text, bold, italic, true, url, size)
+    } else if (node.kind === 'image') {
+      this.inlineLeaf(markdownInlineText(node.children) || tr('image'), bold, italic, false, '', size)
+    } else if (node.kind === 'file' && this.hasMediaOwner && chatImagePath(node.url, this.workspaceRoot)) {
+      SymbolSpan($r('sys.symbol.picture')).fontSize(size - 2).fontColor([this.linkInk])
+        .onClick(() => this.openImage(chatImagePath(node.url, this.workspaceRoot)))
+      Span(' ' + (markdownInlineText(node.children) || tr('image'))).fontSize(size).fontColor(this.linkInk).fontWeight(bold ? FontWeight.Bold : FontWeight.Medium)
+        .onClick(() => this.openImage(chatImagePath(node.url, this.workspaceRoot)))
+    } else if (node.kind === 'file') {
+      if (chatFilePath(node.url, this.workspaceRoot)) {
+        Span(markdownInlineText(node.children)).fontSize(size).fontColor(this.linkInk).fontWeight(bold ? FontWeight.Bold : FontWeight.Medium)
+          .decoration({ type: this.transcript ? TextDecorationType.None : TextDecorationType.Underline, color: this.linkInk })
+          .onClick(() => this.onOpenFile(chatFilePath(node.url, this.workspaceRoot)))
+      } else {
+        this.inlineLeaf(markdownInlineText(node.children), bold, italic, true, '', size)
+      }
     } else if (node.kind === 'link') {
-      ForEach(node.children, (child: MarkdownInline) => this.inlineNode(child, bold, italic, code, node.url),
-        (child: MarkdownInline, index: number) => String(index))
+      this.webLink(node, this.transcript ? referenceMark(node.url) : undefined, size, bold, italic, code)
     } else {
-      this.inlineLeaf(node.text, bold, italic, code, url)
+      this.inlineLeaf(node.text, bold, italic, code, url, size)
     }
   }
 
-  @Builder inlineLeaf(value: string, bold: boolean, italic: boolean, code: boolean, url: string) {
+  @Computed get inlineCodeFill(): ResourceColor {
+    if (!this.transcript) return this.codeFill;
+    return this.ownMessage || this.quoteInk ? $r('app.color.persona_bubble_code') : $r('app.color.persona_inline_code');
+  }
+  @Builder inlineLeaf(value: string, bold: boolean, italic: boolean, code: boolean, url: string, size: number) {
     if (code) {
-      if (url) {
-        Span(value).fontFamily('monospace').fontSize(Tokens.meta).fontColor(this.emphasize)
-          .fontWeight(bold ? FontWeight.Bold : FontWeight.Normal).fontStyle(italic ? FontStyle.Italic : FontStyle.Normal)
-          .textBackgroundStyle({ color: this.codeFill, radius: Tokens.fine })
-          .decoration({ type: TextDecorationType.Underline, color: this.emphasize })
-          .onClick(() => this.onLink(url))
-      } else {
-        Span(value).fontFamily('monospace').fontSize(Tokens.meta)
-          .fontWeight(bold ? FontWeight.Bold : FontWeight.Normal).fontStyle(italic ? FontStyle.Italic : FontStyle.Normal)
-          .fontColor(this.secondary)
-          .textBackgroundStyle({ color: this.codeFill, radius: Tokens.fine })
-      }
-    } else if (url) {
-      Span(value).fontColor(this.emphasize)
+      Span(this.transcript ? '\u202f' + value + '\u202f' : value).fontFamily('monospace')
+        .fontSize(this.transcript ? Math.round(size * Tokens.inlineCodeScale) : Tokens.meta)
         .fontWeight(bold ? FontWeight.Bold : FontWeight.Normal).fontStyle(italic ? FontStyle.Italic : FontStyle.Normal)
-        .decoration({ type: TextDecorationType.Underline, color: this.emphasize })
+        .fontColor(url ? this.linkInk : this.foreground)
+        .decoration({type:url && !this.transcript ? TextDecorationType.Underline : TextDecorationType.None,color:this.linkInk})
+        .textBackgroundStyle({color:this.inlineCodeFill,radius:this.transcript ? 5 : Tokens.fine})
+        .onClick(url ? () => this.onLink(url) : undefined)
+    } else if (url) {
+      Span(this.transcript ? markdownProseText(value) : value).fontColor(this.linkInk)
+        .fontWeight(bold ? FontWeight.Bold : this.transcript ? FontWeight.Medium : FontWeight.Normal).fontStyle(italic ? FontStyle.Italic : FontStyle.Normal)
+        .decoration({ type: this.transcript ? TextDecorationType.None : TextDecorationType.Underline, color: this.linkInk })
         .onClick(() => this.onLink(url))
     } else {
-      Span(value).fontColor(this.foreground).fontWeight(bold ? FontWeight.Bold : FontWeight.Normal).fontStyle(italic ? FontStyle.Italic : FontStyle.Normal)
+      Span(this.transcript ? markdownProseText(value) : value).fontColor(this.quoteInk ? this.quotedInk : bold && this.narration ? this.foreground : this.primaryInk).fontWeight(bold ? FontWeight.Bold : FontWeight.Normal).fontStyle(italic ? FontStyle.Italic : FontStyle.Normal)
     }
   }
 
-  @Builder blockView(block: MarkdownBlock) {
+  @Builder blockView(block: MarkdownBlock, path: string = '') {
     if (block.kind === 'paragraph') {
-      this.inlineText(block.inlines)
+      this.inlineText(block.inlines, this.proseSize, false, TextAlign.Start, false)
     } else if (block.kind === 'heading') {
-      this.inlineText(block.inlines, this.headingSize(block.level), true)
+      this.inlineText(block.inlines, this.compact ? Tokens.meta : this.headingSize(block.level), true)
+    } else if (block.kind === 'code' && this.transcript) {
+      ConversationCode({ code: block.text, language: block.language, onBodyTap:this.onBodyTap })
     } else if (block.kind === 'code') {
       Column({ space: Tokens.gap }) {
         if (block.language) Text(block.language).fontSize(Tokens.meta).fontColor(this.secondary)
@@ -104,64 +362,62 @@ export struct MarkdownText {
         .border({ width: Tokens.hairline, color: this.secondary, radius: Tokens.fine })
     } else if (block.kind === 'raw') {
       Text(block.text).fontSize(Tokens.body).fontColor(this.foreground).wordBreak(WordBreak.BREAK_WORD)
-        .copyOption(CopyOptions.LocalDevice).width('100%')
+        .copyOption(CopyOptions.LocalDevice).onClick(this.onBodyTap).width('100%')
     } else if (block.kind === 'rule') {
-      Divider().strokeWidth(Tokens.hairline).color(this.secondary).width('100%')
+      Divider().strokeWidth(Tokens.hairline).color(this.transcript ? Colors.divider : this.secondary).width('100%')
         .margin({ top: Tokens.gap, bottom: Tokens.gap })
+    } else if (block.kind === 'quote' && this.ownMessage) {
+      UserPassage({ preview:markdownVisibleText(block.children), limit:2, overflow:this.clipped || this.overflows(markdownVisibleText(block.children),16,2),
+        ink:this.quotedInk, actionInk:this.primaryInk, proseSize:16, identity:this.messageId + '.quote.' + path, hold:this.hold, onBodyTap:this.onBodyTap, onReveal:() => { void this.loadOriginal(); } }) {
+        MarkdownText({ text:block.children.map(b => b.source).join('\n\n'), documents:this.documents, transcript:true, quoteInk:true, messageInk:this.primaryInk, messageQuoteInk:this.quotedInk,
+          workspaceRoot:this.workspaceRoot, onOpenFile:this.onOpenFile, onLink:this.onLink, onBodyTap:this.onBodyTap })
+      }
     } else if (block.kind === 'quote') {
       Column({ space: Tokens.gap }) {
-        ForEach(block.children, (child: MarkdownBlock) => this.blockView(child),
+        ForEach(block.children, (child: MarkdownBlock, i: number) => this.blockView(child, path + '.q' + i),
           (child: MarkdownBlock, index: number) => 'quote.' + String(index))
       }
         .padding(Tokens.inset).width('100%').alignItems(HorizontalAlign.Start)
-        .backgroundColor(this.codeFill)
-        .border({ width: Tokens.hairline, color: this.emphasize, radius: Tokens.fine })
+        .backgroundColor(this.transcript ? Color.Transparent : this.codeFill)
+        .border({ width: this.transcript ? { left: Tokens.fine } : Tokens.hairline, color: this.transcript ? Colors.divider : this.emphasize, radius: Tokens.fine })
     } else if (block.kind === 'list') {
-      Column({ space: Tokens.gap }) {
-        ForEach(block.items, (item: MarkdownBlock) => this.listItem(item),
+      Column({ space: this.replyProse ? Tokens.fine : Tokens.gap }) {
+        ForEach(block.items, (item: MarkdownBlock, i: number) => this.listItem(item, path + '.l' + i),
           (item: MarkdownBlock, index: number) => 'list.' + String(index))
       }.width('100%').alignItems(HorizontalAlign.Start)
     } else if (block.kind === 'table') {
-      Scroll() {
-        Column({ space: Tokens.fine }) {
-          ForEach(block.rows, (row: MarkdownTableRow) => this.tableRow(row, block),
-            (row: MarkdownTableRow, index: number) => 'row.' + String(index))
-        }
-      }
-        .scrollable(ScrollDirection.Horizontal).align(Alignment.TopStart).scrollBar(BarState.Auto).width('100%')
+      MarkdownTable({ table: block, cellText: (nodes: MarkdownInline[], header: boolean, align: TextAlign): void =>
+        this.inlineText(nodes, 15, header, align, true) })
     }
   }
 
-  @Builder listItem(item: MarkdownBlock) {
-    Row({ space: Tokens.inset }) {
-      Text(item.marker).fontSize(Tokens.body).fontColor(this.secondary)
+  @Builder listItem(item: MarkdownBlock, path: string) {
+    Row({ space: this.replyProse ? 6 : Tokens.inset }) {
+      Text(item.marker).fontSize(this.proseSize).fontColor(this.secondary)
       Column({ space: Tokens.gap }) {
-        ForEach(item.children, (child: MarkdownBlock) => this.blockView(child),
+        ForEach(item.children, (child: MarkdownBlock, i: number) => this.blockView(child, path + '.i' + i),
           (child: MarkdownBlock, index: number) => 'item.' + String(index))
       }.layoutWeight(1).alignItems(HorizontalAlign.Start)
     }.width('100%').alignItems(VerticalAlign.Top)
   }
 
-  @Builder tableRow(row: MarkdownTableRow, table: MarkdownBlock) {
-    Row() {
-      ForEach(row.cells, (cell: MarkdownInline[], index: number) => this.tableCell(cell, table, index, row.header),
-        (cell: MarkdownInline[], index: number) => 'cell.' + String(index))
-    }.alignItems(VerticalAlign.Top)
-  }
-
-  @Builder tableCell(cell: MarkdownInline[], table: MarkdownBlock, index: number, header: boolean) {
-    Column() {
-      this.inlineText(cell, Tokens.body, header, this.tableTextAlign(table, index), true)
-    }
-      .width(Tokens.markdownTableCell).padding(Tokens.inset).alignItems(HorizontalAlign.Start)
-      .border({ width: Tokens.hairline, color: this.secondary, radius: Tokens.fine })
-      .backgroundColor(header ? this.codeFill : Color.Transparent)
-  }
-
-  build() {
-    Column({ space: Tokens.gap }) {
-      ForEach(this.blocks, (block: MarkdownBlock) => this.blockView(block),
-        (block: MarkdownBlock, index: number) => 'block.' + String(index) + ':' + JSON.stringify(block))
+  @Builder contents() {
+    Column({ space: this.compact ? Tokens.fine : this.replyProse ? Tokens.replyParagraphGap : Tokens.gap }) {
+      ForEach(this.blocks, (row: BoundRow<MarkdownBlock>) => this.blockView(row.value, row.key), (row: BoundRow<MarkdownBlock>) => row.key)
     }.width(this.fitContent ? undefined : '100%').alignItems(HorizontalAlign.Start)
+  }
+  build() {
+    Column({ space:Tokens.fine }) {
+      if (this.longUserMessage) {
+        UserPassage({ preview:this.userPreview, limit:6, overflow:true, ink:this.primaryInk, actionInk:this.primaryInk,
+          proseSize:Tokens.userBody, identity:this.messageId + '.body', hold:this.hold, onBodyTap:this.onBodyTap, onReveal:() => { void this.loadOriginal(); } }) { this.contents() }
+      } else { this.contents() }
+      if (this.pending) Text(tr('loading')).fontSize(Tokens.caption).fontColor(this.quotedInk)
+      if (this.unavailable) {
+        Button(tr('retry'), { type:ButtonType.Normal, buttonStyle:ButtonStyleMode.TEXTUAL })
+          .fontSize(Tokens.meta).fontColor(this.primaryInk).backgroundColor(Color.Transparent)
+          .onClick(() => { void this.loadOriginal(); })
+      }
+    }.width(this.longUserMessage ? this.ownWidth : this.fitContent ? undefined : '100%').alignItems(HorizontalAlign.Start)
   }
 }

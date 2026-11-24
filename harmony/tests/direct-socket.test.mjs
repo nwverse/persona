@@ -79,7 +79,7 @@ test('held Agent HTTP 202 and client hello use the actual transport contract', a
   client.clientMetadata = () => ({platform:'harmony',version:'1',build:'1',os:{}});
   client.send = message => {envelopes.push(JSON.parse(message));return true;};
   assert.ok(client.hello(['elicitation']));
-  assert.deepEqual(envelopes[0].features, ['elicitation','agent_message_hold']);
+  assert.deepEqual(envelopes[0].features, ['elicitation','agent_message_hold','session_live','session_live_tools']);
   const root = '/api/v1/sessions/my%20laptop/chat%2Fone', path = root + '/messages';
   reply = {delivered:'later',undelivered:{id:'own-id',state:'waiting',computer:'Desk'}};
   assert.deepEqual(JSON.parse(await client.request(path,'POST','{}','own-id')), reply);

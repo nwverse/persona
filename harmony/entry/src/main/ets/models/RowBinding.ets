@@ -20,7 +20,7 @@ export class BoundRow<T> {
  * reused only inside the same owner and scope; duplicate model keys get a
  * distinct occurrence key so they never share one wrapper.
  */
-export function reconcileBoundRows<T>(current: BoundRow<T>[], rows: T[], keyOf: (row: T) => string,
+export function reconcileBoundRows<T>(current: BoundRow<T>[], rows: readonly T[], keyOf: (row: T) => string,
   currentOwner: Object | undefined, nextOwner: Object, currentScope: string, nextScope: string): BoundRow<T>[] {
   const previous: BoundRow<T>[] = currentOwner === nextOwner && currentScope === nextScope ? current : [];
   const available = new Map<string, BoundRow<T>[]>();

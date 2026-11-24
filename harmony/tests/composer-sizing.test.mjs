@@ -32,12 +32,12 @@ test('compact Persona and Agent editors get the remaining width after fixed acti
   const v = fixture();
   assert.equal(v.expandedComposer(), false);
   assert.equal(v.composerColumns(), 1116);
-  assert.equal(v.leftColumns(), 336);
-  assert.equal(v.sendColumns(), 168);
-  assert.equal(v.composerColumns() - v.leftColumns() - v.sendColumns(), 612);
+  assert.equal(v.leftColumns(), 318);
+  assert.equal(v.sendColumns(), 150);
+  assert.equal(v.composerColumns() - v.leftColumns() - v.sendColumns(), 648);
   v.showContextMenu = false;
-  assert.equal(v.leftColumns(), 168);
-  assert.equal(v.composerColumns() - v.leftColumns() - v.sendColumns(), 780);
+  assert.equal(v.leftColumns(), 150);
+  assert.equal(v.composerColumns() - v.leftColumns() - v.sendColumns(), 816);
 });
 
 test('compact action gaps stay within one physical pixel at each native device density', () => {
@@ -46,7 +46,7 @@ test('compact action gaps stay within one physical pixel at each native device d
     assert.equal(v.expandedComposer(), false);
     for (const gap of [v.leftColumns() * unit - v.leftActionWidth() * density,
       v.sendColumns() * unit - Tokens.touch * density]) {
-      assert.ok(Math.abs(gap - Tokens.gap * density) <= 1.01, { density, width, gap });
+      assert.ok(Math.abs(gap - Tokens.composerGutter * density) <= 1.01, { density, width, gap });
     }
   }
 });
@@ -59,4 +59,11 @@ test('focus, a retained draft, attachments and accessibility sizes keep the exis
     assert.equal(v.expandedComposer(), true);
     assert.equal(v.composerColumns(), 12);
   }
+});
+
+test('dismissed input fits the compact row without losing the draft', () => {
+  const v = fixture();
+  v.model.draft = '保留草稿'; v.editorDismissed = true;
+  assert.equal(v.expandedComposer(), false);
+  assert.equal(v.model.draft, '保留草稿');
 });
