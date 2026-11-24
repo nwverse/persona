@@ -50,6 +50,7 @@ var managerMessageTypes = map[string]bool{
 	"extension_upgrade": true, "plugin_upgrade": true, "subscription": true,
 	// its devices
 	"file_transfer": true,
+	"held_start":    true,
 }
 
 // hubMessageTypes are the messages the hub sends the apps from its own state (cards, machines, sessions and their
@@ -117,6 +118,10 @@ func (h *Hub) relayBroadcastFrom(from string, message json.RawMessage) error {
 	}
 	if typ == proto.FileTransferEvent {
 		h.toFullWanting(proto.FileTransferEvent, out)
+		return nil
+	}
+	if typ == proto.HeldStartEventType {
+		h.toFullWanting(proto.FeatureAgentStartHold, out)
 		return nil
 	}
 	if typ == "inbox" { // before the apps hear it: the list they ask for then is fetched afresh (inbox_answers.go)

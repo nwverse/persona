@@ -157,6 +157,7 @@ func (s *Service) checkGitHubPRDelivery(ctx context.Context, t Todo, pr, gate, o
 		if err != nil {
 			if errors.Is(err, errGitHubUnconfigured) {
 				s.logf("task %s: delivery %s not checked: GitHub is not connected (%v)", t.ID, pr, err)
+				recordFollowupWatchHint(ctx, pr, repository.PRFollowupWatchHostNotConnected, repository.PRFollowupReasonHostNotConnected)
 				return i18n.T(s.lang(ctx), "assistant-reports.delivery_host_not_connected", i18n.Args{"pr": pr, "host": "github.com"}), nil
 			}
 			if allowNonPRCleanup {
@@ -529,6 +530,9 @@ func (s *Service) otherHostDelivery(ctx context.Context, t Todo, pr, gate string
 	lang := s.lang(ctx)
 	if h == nil {
 		s.logf("task %s: delivery %s not checked: no code host reads %s", t.ID, pr, host)
+		if s.repoExt == nil || s.providersListed() {
+			recordFollowupWatchHint(ctx, pr, repository.PRFollowupWatchHostNotConnected, repository.PRFollowupReasonUnsupportedHost)
+		}
 		return i18n.T(lang, "assistant-reports.delivery_host_not_connected", i18n.Args{"pr": pr, "host": host}), nil
 	}
 	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -537,8 +541,16 @@ func (s *Service) otherHostDelivery(ctx context.Context, t Todo, pr, gate string
 	switch {
 	case errors.Is(err, errReviewUnsupported):
 		s.logf("task %s: delivery %s not checked: %s cannot read its state", t.ID, pr, h.Name())
+		recordFollowupWatchHint(ctx, pr, repository.PRFollowupWatchHostNotConnected, repository.PRFollowupReasonUnsupportedHost)
 		return i18n.T(lang, "assistant-reports.delivery_host_not_connected", i18n.Args{"pr": pr, "host": host}), nil
 	case err != nil:
+		var pe *repository.ProviderError
+		var ce *repository.CheckError
+		if errors.Is(err, errGitLabTokenUnreadable) ||
+			(errors.As(err, &ce) && ce.Code == "authentication") ||
+			(errors.As(err, &pe) && (pe.Code == "no_provider" || pe.Code == "provider_off" || pe.Code == "not_signed_in")) {
+			recordFollowupWatchHint(ctx, pr, repository.PRFollowupWatchHostNotConnected, repository.PRFollowupReasonHostNotConnected)
+		}
 		s.logf("task %s: delivery %s not checked on %s: %v", t.ID, pr, h.Name(), err)
 		return i18n.T(lang, "assistant-reports.delivery_host_unchecked", i18n.Args{"pr": pr, "host": host, "reason": err.Error()}), nil
 	case status.Merged():

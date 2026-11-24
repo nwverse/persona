@@ -979,7 +979,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
     With anti-recall on and the original retained by the Lark gateway (`retained`), recalled messages, quotes and pin summaries show the original marked **Withdrawn**; system messages and ones not retained still just say recalled. The hover bar still offers no reply / pin (the recalled mark still governs write actions).
     With edit history on and `edit_history` present, **Edited** is clickable and a dialog lists old versions; encrypted old versions show only `olk.publicParts` (the web app does not decrypt). Topic cards in topic groups also show retained originals under anti-recall, but **Edited** on cards cannot open the history yet. Both switches are in **Settings › Connectors › Lark › Message display**; writes carry the account and old value, and conflicts / unknown results are not retried: the settings are cleared until the user clicks **Reload**.
     The section title describes its purpose first: **消息显示（风灵月影）** in Chinese, retaining the original name in parentheses; **Message display** in English; **メッセージ表示** in Japanese. Inbox hints use the same settings title as the current UI language (#3595).
-- **Messages** (`/messages`, `/messages/<chat>`, `src/views/messages/`, `src/lib/lark-chats.ts`, `docs/extensions/lark-migration.md` ("Entry point")): the narrow exception from #392.
+- **Messages** (`/messages`, `/messages/<chat>`, the lark module `src/modules/lark/` (`Messages.tsx`, `lark-chats.ts`; docs/web/web.md "Modules"), `docs/extensions/lark-migration.md` ("Entry point")): the narrow exception from #392.
   The sidebar shows **Messages** only when this browser has turned on **Settings › Connectors › Lark › Show Messages on Home** (off by default, stored in `localStorage` `lark.homeMessages`, local like on iOS, not synced to the hub); the hub's features must also include `lark` (#1530).
   Browse all DMs and group chats: `GET /lark/conversations?scope=chats&account_bound=1` (60 per page, more loaded when scrolling to the bottom) and `GET /lark/pinned?account_bound=1` (a row of pinned avatars, with order and unread counts from the server);
   opening one reuses the Inbox's Lark chat page (`LarkThread`: message flow, replies, read when visible, pins). Search only covers loaded chats.
@@ -2301,6 +2301,15 @@ request; switching it off restores the standard experience with zero data migrat
 not expose boolean `todos_v2` degrade gracefully to a read-only row with an update hint. Graduation (making the new
 experience the default for at least one release with rollback kept) or removal is tracked in #14538.
 
+**Unified Integrations & Extensions** (#14802, #14805, `web/src/lib/labs-integrations-v2.ts`). This single assistant-scoped
+switch applies to the selected Assistant across devices and defaults to off (`integrations_v2` on `GET`/`PUT /api/v1/assistant`,
+guarded by `expected_integrations_v2` optimistic locking and explicit manager targeting). It provides one opt-in entry point
+for experimental Integrations & Extensions capabilities (unified settings views and channel group/topic routing) without flag
+sprawl. Changes take effect immediately on the next view or request; switching it off restores the standard Connectors,
+Channels, and Extensions tabs and legacy routing with zero data migration or data loss. Older hubs that do not expose boolean
+`integrations_v2` degrade gracefully to a read-only row with an update hint. Graduation (making the new experience the default
+for at least one release with rollback kept) or removal is tracked in #14802.
+
 **Terminal renderer** (`web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals
 (`views/session/terminal/feed.ts`) draw with xterm's DOM renderer (Standard, the default) or WebGL (`@xterm/addon-webgl`,
 its own chunk, loaded only when chosen). Full view always uses the DOM renderer and is not affected. It is kept by this
@@ -2355,9 +2364,9 @@ code. Its fields use the names of the module contract in #13430 section 4, in ca
 | `feature` | `feature` (its hello feature flag, `module.<id>`; see "When a module is there") | yes |
 | `needs` | `needs` (other modules it may import; ESLint holds it to them) | yes (guard) |
 | `wants` | `wants` (modules it uses when they are there) | declared, not yet served |
-| `shell_places` | `routes` (a page: a base segment, its aliases, its title), `extensionPages` (reserved `/extension/-<id>/…` pages the module draws, such as the health module's water and protein pages, #13176), `navItems` (a sidebar entry and the page it follows), `kbKinds` (knowledge entry kinds whose page it adds parts to: the `kb.detail` slot) and `standalonePages` (pages it draws on their own, without the app shell: see **Pages of their own** below) | yes |
+| `shell_places` | `routes` (a page: a base segment, its aliases, its title), `extensionPages` (reserved `/extension/-<id>/…` pages the module draws, such as the health module's water and protein pages, #13176), `navItems` (a sidebar entry and the page it follows; `shown`, an optional condition read with each look at the sidebar, with its own `subscribe`), `kbKinds` (knowledge entry kinds whose page it adds parts to: the `kb.detail` slot) and `standalonePages` (pages it draws on their own, without the app shell: see **Pages of their own** below) | yes |
 | `i18n_namespaces` | `i18nNamespaces` and `locales` (its catalog loaders) | yes |
-| `settings` | `settingsTabs` (a Settings category in one of its groups) | yes (#13846) |
+| `settings` | `settingsTabs` (a Settings category in one of its groups) and `settingsRows` (rows in a section of a core Settings page, one of `SETTINGS_ROW_PLACES`: `connectors.lark`, drawn by `web/src/core/SettingsRows.tsx`) | yes (#13846, #13404) |
 | `chat_card_kinds` | `cardRenderers` (pending-card kinds the core has no card for) | yes (#13846) |
 | `composer_actions`, `chat_accessories` | `chatSlots`: `composer.trailingAction`, `chat.tail`, `chat.bar`, `interaction.asked` | yes (#13846) |
 
@@ -2487,6 +2496,18 @@ stats overlay and the data-use meter, with their strings (`screen-share-screen.j
 flag is `module.screen-share`; off, the machine page has no **View screen** and `/screen/<machine>` is an unknown
 address. Its Labs name and line are `sidebar.json`'s. `lib/computer.ts` (whether a Mac offers its screen, the page's
 address) stays in core with the machine page.
+
+**The lark module** (#13404, web half). The Messages page (`web/src/modules/lark/`,
+`docs/extensions/lark-migration.md` "Entry point"): every Lark chat in one list (`Messages.tsx`, `lark-chats.ts`), its
+sidebar entry right after Inbox and the "Show messages on home" row of Settings › Connectors › Lark (`LarkHomeSwitch.tsx`,
+the `connectors.lark` place), with their strings (`lark-messages.json`, `lark-chats.json`, `lark-homeswitch.json`). The
+entry keeps its old condition through `shown` (`home.ts`: this browser's switch, and a hub that reads Lark); the page
+opens from its address whatever the switch says, as before. Its code entry (`lark-code.ts`) holds the row and the page as a
+chunk of its own, so the Connectors page draws the row without loading the page. Its hub flag is `module.lark`; off,
+there is no entry and no row, `/messages` is an unknown address, and the chunk and strings are never requested. The
+Inbox's Lark chat view (`views/inbox/LarkThread.tsx`), its parts (`Chip`, `Count`, `LarkAvatar`), `lib/lark-history.ts`
+(with the chat type), `lib/lark-accounts.ts` and the account its writes carry (`lib/lark-account.ts`, which the
+module's lists keep current) stay in core.
 
 **The recording module** (#13407, web half). A recording's parts of its knowledge page
 (`web/src/modules/recording/`, `docs/assistant/meeting-minutes.md`, `docs/assistant/day-recap.md`): Rename and Hand to
@@ -3000,8 +3021,9 @@ and Android follow in #5117.
   before never lands on the one picked since.
 - **What the pill says**: what this start runs: the mark of the Agent the launcher runs, the model (the one picked; else Model
   settings' model on their launcher; else the model the launcher's default entry stands for, by its list's name; a
-  launcher that fixes its own `--model`, that model) and, for Claude Code and Antigravity, the effort
-  (the one picked, else Model settings'). Codex shows no effort: a start doesn't set it. The workflow mark while ultracode
+  launcher that fixes its own `--model`, that model) and the effort: for Claude Code and Antigravity, the one picked
+  (else Model settings'); for Codex, only an explicit level reported by the selected model (unset follows Codex's
+  configured default, keeping existing launch settings; #13764). The workflow mark while ultracode
   is on.
 - **Providers** (`lib/new-agent-panel.ts`): the chosen computer's launchers in the hub's order (`GET
   /machines/{mid}/launchers`), by display name, the startup ID small and monospace beside the group's name and in the
@@ -3581,3 +3603,9 @@ in herdr appears at the next inventory refresh. The **Rename** dialog offers
 one **Name** field, which updates the tab and the CLI title where supported.
 Even with the setting off, an empty or shell-prompt title falls back to the
 herdr tab name. Sessions without a named herdr tab use their session title.
+
+### Model profiles
+
+Settings › Model configuration › **Model profiles** shows each saved profile's Agent presets, purpose bindings, launcher model overrides, and any fields that differ from the current live configuration (`changes`). Both the profile detail dialog and interactive editor expose **Update from current configuration**, backed by `PUT /api/v1/model-profiles/{id}` with `capture: true` (preserving the profile's name, description, and existing Agent presets, and refreshing the catalog on completion).
+
+When applying a profile with no drift (`changes` empty and no unsaved drift on the active profile), **Apply profile** applies immediately. When drift exists, **Apply profile** opens an inline confirmation step listing each affected purpose or launcher field and offering **Capture current into `<active>` first** (which captures the active profile via `capture: true` before applying the target), **Apply directly**, or **Cancel**. Editor saves omit empty optional fields and default (`standard`) tier speed for cross-version hub compatibility, and pin validation and save errors directly beside the Save button.
