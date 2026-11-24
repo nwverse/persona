@@ -2895,9 +2895,6 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "assistant.cache_clear":
 		n.forgetCacheWarm(p.SessionID)
 		return ok(nil)
-	case "assistant.cancel_supervision": // the switch for automatic supervision messages (assistant_queue.go)
-		cancelled, err := n.assistantCancelSupervision(ctx, p.SessionID)
-		return map[string]any{"cancelled": cancelled}, err
 	case "session.close":
 		n.forgetCacheWarm(p.SessionID)
 		var closeParams struct {
