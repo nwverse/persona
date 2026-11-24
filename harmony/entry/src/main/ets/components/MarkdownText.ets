@@ -296,7 +296,7 @@ export struct MarkdownText {
       ForEach(node.children, (child: MarkdownInline) => this.inlineNode(child, bold, true, code, url, size),
         (child: MarkdownInline, index: number) => String(index))
     } else if (node.kind === 'code') {
-      this.inlineLeaf(node.text, bold, italic, true, url, size)
+      this.inlineLeaf(node.text, bold, italic, true, url, size, node.gapBefore, node.gapAfter)
     } else if (node.kind === 'image') {
       this.inlineLeaf(markdownInlineText(node.children) || tr('image'), bold, italic, false, '', size)
     } else if (node.kind === 'file' && this.hasMediaOwner && chatImagePath(node.url, this.workspaceRoot)) {
@@ -310,7 +310,7 @@ export struct MarkdownText {
           .decoration({ type: this.transcript ? TextDecorationType.None : TextDecorationType.Underline, color: this.linkInk })
           .onClick(() => this.onOpenFile(chatFilePath(node.url, this.workspaceRoot)))
       } else {
-        this.inlineLeaf(markdownInlineText(node.children), bold, italic, true, '', size)
+        this.inlineLeaf(markdownInlineText(node.children), bold, italic, true, '', size, node.gapBefore, node.gapAfter)
       }
     } else if (node.kind === 'link') {
       this.webLink(node, this.transcript ? referenceMark(node.url) : undefined, size, bold, italic, code)
@@ -319,18 +319,35 @@ export struct MarkdownText {
     }
   }
 
-  @Computed get inlineCodeFill(): ResourceColor {
-    if (!this.transcript) return this.codeFill;
-    return this.ownMessage || this.quoteInk ? $r('app.color.persona_bubble_code') : $r('app.color.persona_inline_code');
+  /** Inline code keeps the ink of words drawn in an ink of their own (a quote, quiet agent words, a bubble), else a step quieter than the body. */
+  private codeInk(bold: boolean): ResourceColor {
+    if (this.quoteInk) return this.quotedInk;
+    if (this.messageInk !== undefined) return this.messageInk;
+    return this.narration && !bold ? Colors.progress : Colors.inlineCode;
   }
-  @Builder inlineLeaf(value: string, bold: boolean, italic: boolean, code: boolean, url: string, size: number) {
-    if (code) {
-      Span(this.transcript ? '\u202f' + value + '\u202f' : value).fontFamily('monospace')
-        .fontSize(this.transcript ? Math.round(size * Tokens.inlineCodeScale) : Tokens.meta)
+  private copyCode(value: string): void {
+    const prompt = this.getUIContext().getPromptAction();
+    pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, value))
+      .then(() => prompt.showToast({ message: tr('ev_code_copied') }))
+      .catch(() => prompt.showToast({ message: tr('ev_code_copy_failed') }));
+  }
+  @Builder inlineLeaf(value: string, bold: boolean, italic: boolean, code: boolean, url: string, size: number,
+    gapBefore: boolean = false, gapAfter: boolean = false) {
+    if (code && this.transcript) {
+      // No box or padding (DESIGN_SYSTEM 3.11): the monospaced face at 0.94 em has the body x-height, in its own ink,
+      // with a thin space outside the code where it meets a CJK letter. A tap on it in a reply copies it.
+      if (gapBefore) Span('\u2009').fontSize(size)
+      Span(value).fontFamily('monospace').fontSize(Math.round(size * Tokens.inlineCodeScale))
+        .fontWeight(bold ? FontWeight.Bold : FontWeight.Normal).fontStyle(italic ? FontStyle.Italic : FontStyle.Normal)
+        .fontColor(url ? this.linkInk : this.codeInk(bold))
+        .onClick(url ? () => this.onLink(url) : this.ownMessage ? undefined : () => this.copyCode(value))
+      if (gapAfter) Span('\u2009').fontSize(size)
+    } else if (code) {
+      Span(value).fontFamily('monospace').fontSize(Tokens.meta)
         .fontWeight(bold ? FontWeight.Bold : FontWeight.Normal).fontStyle(italic ? FontStyle.Italic : FontStyle.Normal)
         .fontColor(url ? this.linkInk : this.foreground)
-        .decoration({type:url && !this.transcript ? TextDecorationType.Underline : TextDecorationType.None,color:this.linkInk})
-        .textBackgroundStyle({color:this.inlineCodeFill,radius:this.transcript ? 5 : Tokens.fine})
+        .decoration({type:url ? TextDecorationType.Underline : TextDecorationType.None,color:this.linkInk})
+        .textBackgroundStyle({color:this.codeFill,radius:Tokens.fine})
         .onClick(url ? () => this.onLink(url) : undefined)
     } else if (url) {
       Span(this.transcript ? markdownProseText(value) : value).fontColor(this.linkInk)

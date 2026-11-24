@@ -57,12 +57,8 @@
       "value": "#191919"
     },
     {
-      "name": "persona_inline_code",
-      "value": "#EDEDF0"
-    },
-    {
-      "name": "persona_bubble_code",
-      "value": "#CEDFF0"
+      "name": "persona_inline_code_ink",
+      "value": "#C3000000"
     },
     {
       "name": "persona_brand_claude",
