@@ -29,14 +29,14 @@ nonisolated extension ExtensionUIPlace: Identifiable {
 nonisolated extension ExtensionUIContext {
     #if os(iOS)
     /// The UI version a whole page of the app draws (`ExtensionPageView`): 8's columns (#9158), 9's gauge rings
-    /// (`ExtensionTiles.swift`), 10's native graph canvas (`ExtensionGraph.swift`, #9727) and 11's 3D scene
-    /// (`ExtensionScene.swift`, #12544).
-    static let pageVersion = 11
+    /// (`ExtensionTiles.swift`), 10's native graph canvas (`ExtensionGraph.swift`, #9727), 11's 3D scene
+    /// (`ExtensionScene.swift`, #12544) and 12's interactive map (`ExtensionMap.swift`).
+    static let pageVersion = 12
 
     /// The UI version the app's cards and sections draw: the same components, with code components read-only and a
-    /// graph or 3D scene as a still preview which opens full screen. Widgets, the watch and the system extensions keep
-    /// `version` (Shared, 3): they draw none of it.
-    static let cardVersion = 11
+    /// graph, 3D scene or map as a still preview which opens full screen. Widgets, the watch and the system extensions
+    /// keep `version` (Shared, 3): they draw none of it.
+    static let cardVersion = 12
     #else
     /// Other older surfaces keep the version they can actually draw.
     static let pageVersion = 8
@@ -104,6 +104,7 @@ nonisolated extension ExtensionComponent {
         case .carousel(let c): c.key
         case .graph(let c): c.key
         case .scene(let c): c.key
+        case .map(let c): c.key
         case .unknown: nil
         }
     }

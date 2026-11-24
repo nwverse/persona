@@ -6,7 +6,7 @@ The desktop experience for macOS and Windows is an Electron shell around the hub
 
 **Persona desktop** is for everyone who wants to chat and use Agents on any computer. It needs no local node and no Persona Link. It supplies the existing web sign-in and screens, native notifications, the existing Needs-you badge, desktop presence, single-instance behavior, window-state restoration, deep links, a tray with close-to-background behavior, a visible launch-at-login setting and public-release update wiring.
 
-**Persona Link** is only for a computer whose Agents the hub should reach. Its CLI and service are independently installable and useful without the desktop app, including on Linux and headless computers. The connector owns the hub connection, node-service management and the Persona Screen recording helper. Do not delete these capabilities when removing an old desktop UI.
+**Persona Link** is only for a computer whose Agents the hub should reach. It stands alone: its CLI and service, and its own Mac menu bar App and Windows tray for pairing and the connection, need nothing from the desktop app, including on Linux and headless computers ([link.md](../operations/link.md), "Tray and menu bar App"). The connector owns the hub connection, node-service management and the Persona Screen recording helper.
 
 When an installed Link is present, the desktop's local setup page can show its redacted status and offer fixed operations for pairing, reconnect and node-service installation. Link remains a separate install; the desktop app never silently installs a background service or bundles one as a prerequisite. When it is absent, those controls are disabled and the page offers the separate installation guide.
 
@@ -345,6 +345,6 @@ record; this audit does not backdate a new review or imply a prior one.
 
 ## Migration boundaries
 
-The retired `PersonaMac` target and native-Mac source directory are removed separately, with iOS, watchOS, visionOS and shared package checks. The old Mac menu bar UI and Windows `linktray` are removed too: independent Link installation, pairing/reconnect/status/service controls and Persona Screen packaging now use the CLI and fixed desktop setup bridge. The CLI/service works without the desktop app; Mac uses launchd `com.persona.link`, Windows retains its scheduled task.
+The retired `PersonaMac` target and native-Mac source directory are removed separately, with iOS, watchOS, visionOS and shared package checks. Persona Link keeps its own Mac menu bar App and Windows tray (`linktray`) for pairing and the connection, with no notifications; the CLI/service works without the desktop app; Mac uses launchd `com.persona.link`, Windows retains its scheduled task.
 
 Remaining platform acceptance, signed/notarized artifacts, Windows installation and a published auto-update belong to the migration issue (#6770), not to a claim that the shell or independent Link packaging completes the migration.

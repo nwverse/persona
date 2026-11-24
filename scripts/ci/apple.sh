@@ -184,8 +184,11 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
   # The module contract and registry (#13432, docs/apple/ios.md "Modules").
   ci_run 'PersonaModuleAPI unit tests' 300 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaModuleAPI" --scratch-path "$SPM/PersonaModuleAPI" -Xswiftc -warnings-as-errors
   ci_run 'Persona Input build' 600 xcrun swift build -c release --package-path "$SOURCE/apple/PersonaLink/Input" --scratch-path "$SPM/PersonaInput" -Xswiftc -warnings-as-errors
-  # The independent Link package contains only Persona Screen, built as mac-link.sh builds it; PersonaScreenCore's tests
-  # cover its capture decisions. There is no menu-bar app or separate Link UI test target to build.
+  # The Persona Link menu bar App (apple/PersonaLink/App, docs/operations/link.md "Tray and menu bar App"): a package of
+  # its own, apart from Persona Screen's, outside apple/project.yml.
+  ci_run 'Persona Link menu bar unit tests' 600 xcrun swift test --package-path "$SOURCE/apple/PersonaLink/App" --scratch-path "$SPM/PersonaLink" -Xswiftc -warnings-as-errors
+  # Persona Screen's package contains only Persona Screen, built as mac-link.sh builds it; PersonaScreenCore's tests
+  # cover its capture decisions.
   ci_run 'Persona Screen build' 600 xcrun swift build -c release --package-path "$SOURCE/apple/PersonaLink" --scratch-path "$SPM/PersonaScreen" --product PersonaScreen -Xswiftc -warnings-as-errors
   # Blocking calls on the main actor (docs/apple/performance.md, "Automated checks"). The lint is built in a fixed
   # folder beside its build output: the snapshot above moves on every run, and a package whose folder moved is rebuilt
