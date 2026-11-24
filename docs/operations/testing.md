@@ -657,6 +657,43 @@ Three selections decide what a change affects: `scripts/ci/paths.py` picks CI's 
 
 What it does not see: a suite that runs or reads a script by its path instead of importing it (the suite rules of check-fast's table cover those); a Go test that builds a path from variables; and a file outside the server lane's inputs and `apple/`, `android/` that a Go test reads, such as `web/src/i18n/locales/` (`internal/kb`), which neither CI's server lane nor check-fast runs today.
 
+## Module e2e gate
+
+A module move (#13430) merges only after `scripts/ci/module-e2e.py` passes on its branch on the hub machine (#14417):
+unit tests and the core-only smoke test show each half alone, this shows the switch end to end on a real hub with the
+real web app.
+
+```bash
+DOCKER=<docker client> python3 scripts/ci/module-e2e.py --modules voice,health,recording \
+    [--checkout <dir>] [--shots ~/persona-pr-shots/<pr>] [--evidence <file>] [--strict-before-hello]
+```
+
+- **Start-up**: builds `personad`, `persona-hub`, `persona-manager` and `persona-node` (a default build) and the web app
+  (`npm run build`; `--no-build-web` serves the existing `web/dist`, `--npm-ci` installs first) from the checkout, then
+  starts a disposable `postgres:18-alpine` container on a private port and `persona-hub run` in a temporary home with
+  its own `hub.json` and token and a clean environment, as `scripts/ci/core-only-smoke.py` does (its helpers are
+  reused). The hub serves that web build. Nothing of this machine's own hub is read or touched. `DOCKER` names a wrapper
+  where the shell is not in the `docker` group (`sg docker -c "docker …"`).
+- **Phases**: `on` (default), `off` (the `modules` row `{"disabled": [ids]}` written into the disposable manager
+  database, `persona_manager.settings`, and the hub restarted), `back-on` (the row deleted, restarted), then
+  `older-hub` and `mock-flags-off`: the same web build (`vite preview`) against `scripts/mock/mock_hub.py` without the
+  `modules` marker (everything on) and with the marker and every flag but the modules' (them off). The mock hub has
+  conversations, so the composer's voice button is checked there; the test hub has no computer or model.
+- **Checks**, in each phase: the core (health, `/api/v1/managers`, the hello's `modules` marker, the main chat's
+  composer and the Agents page in Chrome, no page or console error); per module, the hello flag, the manager's
+  `modules: loaded …` line, its server-side parts (extensions, connectors, routes; table `SERVER`) and its web entry
+  (table `WEB`: a selector or text on a page, what clicking it opens, an address of its own that answers like a removed
+  page while off) in light and dark, and its chunks: none may be requested once the app has the hello. A chunk an off
+  module's page fetches during a reload, before the hello is applied, is a `WARN` (#14431); `--strict-before-hello`
+  makes it a failure.
+- **Output**: a `PASS` / `WARN` / `FAIL` line per phase, module and check, the evidence JSON (`--evidence`, default
+  `<shots>/evidence.json`: commit, the settings row, the manager line, the hello's module flags, what the browser got and
+  requested), and screenshots `<phase>-<scheme>-<name>.png` in `--shots` (this machine's name is masked; never commit
+  or push them). The last line is the verdict (`PASS`, `FAIL` or `TIMEOUT` after `--timeout`, default 40 minutes); the
+  exit code is non-zero unless it is `PASS`. A run takes about four to six minutes after the builds.
+- **A module the tables lack** is still checked for its hello flag and the manager line, and the run says so: the PR
+  that moves a module adds its rows (what the hub has of it, what the web app shows of it).
+
 ## End-to-end (verified 2026-10-24)
 
 | Scenario | Method | Result |
