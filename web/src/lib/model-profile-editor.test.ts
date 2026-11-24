@@ -1,6 +1,11 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { initI18n } from "../i18n";
-import type { ModelProfile } from "./model-profiles";
+import {
+  captureProfileInput,
+  parseProfileChange,
+  profileApplyDrift,
+  type ModelProfile,
+} from "./model-profiles";
 import {
   draftToProfileInput,
   isProfileDraftDirty,
@@ -115,5 +120,92 @@ describe("model-profile-editor", () => {
       description: "",
     });
     expect(profileDraftProblems(draft).some((p) => p.includes("Duplicate"))).toBe(true);
+  });
+
+  it("omits empty optional fields and default standard speed for cross-version hub compatibility", () => {
+    const profile: ModelProfile = {
+      id: "compat",
+      name: "Compat",
+      purposes: {
+        assistant: { provider: "launcher.claude", model: "sonnet-4" },
+      },
+      tiers: {
+        standard: { launcher: "claude", model: "sonnet-4", speed: "standard" },
+        quick: { launcher: "claude", speed: "fast", permission_mode: "plan" },
+      },
+      changes: [],
+    };
+    const draft = profileToDraft(profile);
+    const input = draftToProfileInput(draft, 4);
+    expect(input.purposes?.assistant).toEqual({ provider: "launcher.claude", model: "sonnet-4" });
+    expect("permission_mode" in (input.purposes?.assistant ?? {})).toBe(false);
+    expect(input.tiers?.standard).toEqual({ launcher: "claude", model: "sonnet-4" });
+    expect("speed" in (input.tiers?.standard ?? {})).toBe(false);
+    expect("permission_mode" in (input.tiers?.standard ?? {})).toBe(false);
+    expect(input.tiers?.quick).toEqual({ launcher: "claude", speed: "fast", permission_mode: "plan" });
+    expect("capture" in input).toBe(false);
+  });
+
+  it("builds minimal capture: true payloads preserving name and description without tiers", () => {
+    expect(captureProfileInput({ name: "Performance", description: "Fast models" }, 7)).toEqual({
+      revision: 7,
+      name: "Performance",
+      description: "Fast models",
+      capture: true,
+    });
+    const noDesc = captureProfileInput({ name: "Economy", description: "" }, 2);
+    expect(noDesc).toEqual({ revision: 2, name: "Economy", capture: true });
+    expect("description" in noDesc).toBe(false);
+    expect("tiers" in noDesc).toBe(false);
+    expect("purposes" in noDesc).toBe(false);
+    expect("launchers" in noDesc).toBe(false);
+  });
+
+  it("parses dotted category IDs and dotted launcher field changes unambiguously", () => {
+    expect(parseProfileChange("assistant")).toEqual({ kind: "purpose", id: "assistant" });
+    expect(parseProfileChange("agent.new")).toEqual({ kind: "purpose", id: "agent.new" });
+    expect(parseProfileChange("inbox.triage")).toEqual({ kind: "purpose", id: "inbox.triage" });
+    expect(parseProfileChange("agent.delegate")).toEqual({ kind: "purpose", id: "agent.delegate" });
+    expect(parseProfileChange("gw.small_model")).toEqual({ kind: "launcher", launcher: "gw", field: "small_model" });
+    expect(parseProfileChange("relay.example.com.effort")).toEqual({ kind: "launcher", launcher: "relay.example.com", field: "effort" });
+    expect(parseProfileChange("custom.unknown_field")).toEqual({ kind: "other", raw: "custom.unknown_field" });
+  });
+
+  it("computes apply drift and active-profile capture availability accurately", () => {
+    expect(profileApplyDrift({ id: "economy", changes: [] }, { id: "performance", changes: [] })).toEqual({
+      targetChanges: [],
+      activeDrift: [],
+      hasDrift: false,
+      hasActiveDrift: false,
+      canCaptureActiveFirst: true,
+    });
+    expect(profileApplyDrift({ id: "economy", changes: ["assistant"] }, { id: "performance", changes: ["kb"] })).toEqual({
+      targetChanges: ["assistant"],
+      activeDrift: ["kb"],
+      hasDrift: true,
+      hasActiveDrift: true,
+      canCaptureActiveFirst: true,
+    });
+    expect(profileApplyDrift({ id: "economy", changes: [] }, { id: "performance", changes: ["translate"] })).toEqual({
+      targetChanges: [],
+      activeDrift: ["translate"],
+      hasDrift: true,
+      hasActiveDrift: true,
+      canCaptureActiveFirst: true,
+    });
+    expect(profileApplyDrift({ id: "performance", changes: ["assistant"] }, { id: "performance", changes: ["assistant"] })).toEqual({
+      targetChanges: ["assistant"],
+      activeDrift: [],
+      hasDrift: true,
+      hasActiveDrift: false,
+      canCaptureActiveFirst: false,
+    });
+    expect(profileApplyDrift({ id: "economy", changes: ["assistant"] }, undefined)).toEqual({
+      targetChanges: ["assistant"],
+      activeDrift: [],
+      hasDrift: true,
+      hasActiveDrift: false,
+      canCaptureActiveFirst: false,
+    });
   });
 });

@@ -82,9 +82,9 @@ func (p *Pusher) sendCard(manager string, policy pushPolicy, build localized, id
 		return ""
 	}
 	policy.manager = manager
-	if policy.level != assistantwire.LevelP0 || p.attentionNow().Active() {
+	if policy.level != assistantwire.LevelP0 || p.attentionNow().Active() || p.hasActiveGradingLayerFor(manager) {
 		// Extract before applyPushGrading's mode check too: enabling push grading between checks must not hold a source-less card.
-		// An immersive block lets through the cards of the session in focus, which it knows by the source.
+		// An immersive block or an extension grading layer may inspect the session in focus, which it knows by the source.
 		policy = pushPolicyWithSource(policy, build(i18n.Default))
 	}
 	if allow, reason := p.applyPushGrading(policy); !allow {

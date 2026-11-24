@@ -519,7 +519,8 @@ private fun ChatPage(
     var reportedSeen by pageReader.reportedSeen
     val readThrough = pageReader.readThrough
     val context = pageReader.context
-    LaunchedEffect(placedForwards, readOnly, canSend) {
+    val imageLimits = rememberSessionImageLimits(chrome.connection, session?.agent)
+    LaunchedEffect(placedForwards, readOnly, canSend, imageLimits) {
         if (placedForwards == null || readOnly || !canSend) return@LaunchedEffect
         val fresh = mutableListOf<ForwardPlacement>()
         val duplicates = mutableListOf<RestoredPhotos>()
@@ -531,14 +532,20 @@ private fun ChatPage(
                 fresh += placement
             }
         }
-        duplicates.forEach { discardForwardedPhotos(context, it) }
-        val rejected = attachForwardedPhotos(context, composer, fresh.map(ForwardPlacement::photos))
-        val lost = fresh.sumOf { it.photos.lost } + rejected.size
-        if (lost > 0) {
-            val message = forwardedPhotoNotice(res, lost)
-            if (feedback?.notice(message) != true) notice = message
+        // `take(key)` clears `placedForwards`, which cancels this LaunchedEffect on recomposition; finish the
+        // taken handoff on the page scope so IO measurement and cleanup are not aborted mid-flight.
+        scope.launch {
+            duplicates.forEach { discardForwardedPhotos(context, it) }
+            val rejected = attachForwardedPhotos(context, composer, fresh.map(ForwardPlacement::photos),
+                limits = imageLimits, canSpill = composerService != null,
+                onNotice = { message -> if (feedback?.notice(message) != true) notice = message })
+            val lost = fresh.sumOf { it.photos.lost } + rejected.size
+            if (lost > 0) {
+                val message = forwardedPhotoNotice(res, lost)
+                if (feedback?.notice(message) != true) notice = message
+            }
+            composer.focusRequest++
         }
-        composer.focusRequest++
     }
     val pairingLoader = pageReader.pairingLoader
     val loader = pageReader.loader
@@ -1146,7 +1153,7 @@ private fun ChatPage(
                                 // Not while a "/" quick message is being picked: the list opens above the field, and with the
                                 // keyboard up the queue, the list and the status line together climbed over the top bar.
                                 if (renderStyle != ChatRenderStyle.Assistant && SlashCommand.suggestions(composer.value.text, clear = true).isEmpty())
-                                    ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh)
+                                    ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh, imageLimits = imageLimits)
                                 // A source that only lets the phone read says so where the typing would be.
                                 if (!canSend && session != null) ChatSourceNote(session)
                                 if (assistantChat) taskHost?.let { host ->
@@ -1202,7 +1209,7 @@ private fun ChatPage(
                                 if (renderStyle == ChatRenderStyle.Assistant && SlashCommand.mainSuggestions(composer.value.text,
                                         clear = canSend && LocalMainChatClear.current != null,
                                         permissions = SessionModes.offersPermissions(session, glass, modeSheet), resources = res).isEmpty())
-                                    ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh)
+                                    ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh, imageLimits = imageLimits)
                                 if (embedded && assistantChat) LocalMainChatGuidance.current?.invoke()
                                 val offlineHint = if (agentChat) offlineAgentPlaceholder(session, machine, heldActions != null) else null
                                 LargeWindowComposer(key, composer, session?.status == "working" && !(agentChat && machine?.online == false),
@@ -1301,7 +1308,8 @@ private fun ChatPage(
                                     // web's `canPickPermissions`: Claude's sessions and Persona's while they can change it (#6513)
                                     onPermissions = if (SessionModes.offersPermissions(session, glass, modeSheet)) ({ openPermissions = true }) else null,
                                     // (on Glass /model opens the pill's panel, where the model is picked)
-                                    loop = claudeCommands)
+                                    loop = claudeCommands,
+                                    imageLimits = imageLimits)
                             }
                         }
                     },
@@ -1344,7 +1352,8 @@ private fun ChatPage(
                 onDelete = { target -> messages.firstOrNull { it.clientMessageId == target.id }?.let { message ->
                     deliveryAction(message, if (message.state.allows(DeliveryAction.Cancel)) DeliveryAction.Cancel else DeliveryAction.Delete)
                 } }, viewerState, chatList, backgroundActions = chrome.actions,
-                backgroundConnection = chrome.connection, backgroundFiles = chrome.files)
+                backgroundConnection = chrome.connection, backgroundFiles = chrome.files,
+                imageLimits = imageLimits, canUploadPhotos = composerService != null)
             pageTakeover?.let { CodexTakeoverDialogs(it) }
         }
     }

@@ -2898,7 +2898,7 @@ struct ChatView: View {
                 }
                 // The last card was answered: one low-key entry to the next conversation that needs you (#4348).
                 if let next = nextNeedsYouSession {
-                    NextNeedsYouStrip(title: next.assistant ? (next.title.isEmpty ? model.assistantShownName : next.title) : next.displayTitle) {
+                    NextNeedsYouStrip(title: next.assistant ? (next.title.isEmpty ? model.assistantShownName : next.title) : next.displayTitle(preferTab: model.prefersHerdrTabName(for: next))) {
                         openNext(next)
                     }
                 }
@@ -3870,11 +3870,12 @@ struct ChatView: View {
             Menu {
                 Section("Switch Agent") {
                     ForEach(host.agents) { s in
+                        let agentTitle = s.displayTitle(preferTab: model.prefersHerdrTabName(for: s))
                         Button { if s.key != key { host.select(s.key) } } label: {
                             if s.key == key {
-                                Label(s.displayTitle, systemImage: Theme.Icon.success)
+                                Label(agentTitle, systemImage: Theme.Icon.success)
                             } else {
-                                Text("\(s.displayTitle) · \(s.state.label)")
+                                Text("\(agentTitle) · \(s.state.label)")
                             }
                         }
                     }
@@ -3950,7 +3951,7 @@ struct ChatView: View {
     /// A hosting page's part of ⋯ (#3255): what it is about (the session's own title when the page's differs, the
     /// page's note), its own actions, and the agent in the Agents page, where its space's other agents are.
     @ViewBuilder private func hostedMenuItems(_ host: HostedChat) -> some View {
-        let own = session?.displayTitle ?? ""
+        let own = session?.displayTitle(preferTab: preferHerdrTabName) ?? ""
         let header = [own != title ? own : nil, host.note].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
         if header.isEmpty {
             hostedMenuActions(host)
@@ -3976,17 +3977,17 @@ struct ChatView: View {
             let words = stateWords(s, now: now)
             // Hosted (one agent's page, #3255) the line is status · machine · project: the tab's name would crowd the machine out.
             let tabShown = host != nil || !model.siblings(of: key).isEmpty
-            let place = [s.spaceName, tabShown ? nil : s.slotLabel].compactMap { $0 }.joined(separator: " › ")
             let machine = model.namedMachine(s.machineRef)?.title ?? s.machineID
+            let rest = s.chatSubtitleParts(machine: machine, tabShown: tabShown, preferTab: preferHerdrTabName)
             HStack(spacing: Theme.Space.xs) {
                 AgentMark(s, side: Theme.Size.markXS) // its agent before its state (#6390); this line is an agent's only
                 StatusDot(state: s.state, size: 7, waiting: s.waitsInBackground)
                 // Not ViewThatFits: that measured both lines again at every width of a window resize (#1337).
                 FirstFitting {
-                    subtitleLine(s, words, [machine, place])
-                    subtitleLine(s, words, [place.isEmpty ? machine : place]) // truncates when it must
+                    subtitleLine(s, words, rest.full)
+                    subtitleLine(s, words, rest.short) // truncates when it must
                 }
-                .firstFittingText(subtitleText(s, words, [machine, place]))
+                .firstFittingText(subtitleText(s, words, rest.full))
             }
         }
     }
@@ -5100,8 +5101,10 @@ struct ChatView: View {
         let item = model.chat(key).items.first { $0.id == bar.id }
         let role: ForwardMessage.Role = bar.isUser ? .user : bar.from != nil ? .other : s?.assistant == true ? .persona : .agent
         let author = bar.from ?? (role == .persona ? "Persona" : s?.agentLabel ?? "Claude")
-        let project = s?.assistant == true ? nil : [s?.spaceName, s?.slotLabel].compactMap { $0 }.joined(separator: " › ")
-        let source = ForwardMessage.Source(key: key, item: bar.id, role: role, author: author, chat: s?.displayTitle ?? "",
+        let preferTab = s.map { model.prefersHerdrTabName(for: $0) } ?? false
+        let primaryTab = s?.displayTabName(preferTab: preferTab)
+        let project = s?.assistant == true ? nil : [s?.spaceName, primaryTab != nil ? nil : s?.slotLabel].compactMap { $0 }.joined(separator: " › ")
+        let source = ForwardMessage.Source(key: key, item: bar.id, role: role, author: author, chat: s?.displayTitle(preferTab: preferTab) ?? "",
                                            project: project, machine: s?.assistant == true ? nil : model.machine(key.machineRef)?.name,
                                            time: bar.date ?? item?.ts)
         // The transcript's text, as the bubble or the source card reads it; what the bar has when the item is not loaded.
@@ -5227,7 +5230,7 @@ struct ChatView: View {
         let without = pickedDrafts(questions: false), with = pickedDrafts(questions: true)
         guard let first = with.first else { return }
         let s = model.session(key)
-        exporting = ExportRequest(title: s?.displayTitle ?? "",
+        exporting = ExportRequest(title: s?.displayTitle(preferTab: s.map { model.prefersHerdrTabName(for: $0) } ?? false) ?? "",
                                   agent: s?.assistant == true ? model.assistantShownName(in: key) : (s?.agentLabel ?? ""),
                                   pieces: { questions in (questions ? with : without).flatMap(\.pieces) },
                                   loadImage: first.loadImage, width: menu.areaWidth > 0 ? menu.areaWidth : Self.phoneWidth,
@@ -5282,9 +5285,15 @@ struct ChatView: View {
         }
     }
 
+    private var preferHerdrTabName: Bool {
+        guard style == .dev else { return false }
+        return session.map { model.prefersHerdrTabName(for: $0) } ?? model.prefersHerdrTabName(for: key.group)
+    }
+
     private var title: String {
         if backgroundActivity { return String(localized: "Background activity") }
         if style == .dev, let t = host?.title, !t.isEmpty { return t }
+        if style == .dev, let s = session, let tab = s.displayTabName(preferTab: preferHerdrTabName) { return tab }
         let t = session?.title ?? ""
         if style == .assistant { return t.isEmpty || t == "Claude Code" ? "Persona" : t }
         return t.isEmpty ? String(localized: "Chat") : t
@@ -5307,9 +5316,12 @@ struct ChatView: View {
             let launcher = model.assistantLaunchers[key] ?? s.launcher
             return s.status.isActive ? String(localized: "Working…") : ([launcher, Fmt.model(s.model)].compactMap { $0 }.joined(separator: " · "))
         }
+        let preferTab = preferHerdrTabName
+        let primaryTab = s.displayTabName(preferTab: preferTab)
+        let titleDetail = s.displayTitleDetail(preferTab: preferTab)
         let machine = model.namedMachine(s.machineRef)?.title ?? s.machineID
-        let place = [s.spaceName, s.slotLabel].compactMap { $0 }.joined(separator: " › ")
-        return [s.sourceSubtitle, machine, place.isEmpty ? nil : place, s.hasSource ? nil : s.agentLabel, s.stateLabel(muted: model.isMuted(s))].compactMap { $0 }.joined(separator: " · ")
+        let place = [s.spaceName, primaryTab != nil ? nil : s.slotLabel].compactMap { $0 }.joined(separator: " › ")
+        return [titleDetail, s.sourceSubtitle, machine, place.isEmpty ? nil : place, s.hasSource ? nil : s.agentLabel, s.stateLabel(muted: model.isMuted(s))].compactMap { $0 }.joined(separator: " · ")
     }
 
     /// The extension that opened this Persona conversation (#3758), when `item` is the message it opened it with: the
