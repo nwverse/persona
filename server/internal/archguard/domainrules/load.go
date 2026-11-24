@@ -65,9 +65,10 @@ type File struct {
 	Imports  []Import
 	Doc      string // the package comment's text, directives left out
 
-	wire bool      // its bytes hold ".Wire"
-	ast  *ast.File // the whole file, once parsed
-	pkg  *Pkg
+	wire  bool      // its bytes hold ".Wire"
+	visit bool      // its bytes hold ") Visit": it may declare a Visit method
+	ast   *ast.File // the whole file, once parsed
+	pkg   *Pkg
 }
 
 // An Import is one import of a file.
@@ -239,7 +240,7 @@ func (t *tree) load(rels []string) ([]*Pkg, error) {
 			pkgs = append(pkgs, p)
 		}
 		file := &File{Rel: rel, Test: strings.HasSuffix(rel, "_test.go"), pkg: p,
-			wire: strings.Contains(string(src), ".Wire")}
+			wire: strings.Contains(string(src), ".Wire"), visit: strings.Contains(string(src), ") Visit")}
 		name := f.Name.Name
 		file.External = file.Test && strings.HasSuffix(name, "_test")
 		if !file.External && p.Name == "" {

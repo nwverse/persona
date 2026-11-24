@@ -48,9 +48,10 @@ func fullLayer(l string) bool {
 }
 
 // Run is every rule over pkgs: it parses the declared domain and application packages in full, and of the other
-// files those that import a core, shared kernel, kit or adapter, or hold a .Wire selector. With scope set (a
-// package's directory under the root, as the hook runs it), only that package and the files that import it are
-// parsed and checked.
+// files those that import a core, shared kernel, kit or adapter, hold a .Wire selector, or may declare a Visit method
+// in a package another file of which imports a core or the kit (a generic type's Visit method names no core). With
+// scope set (a package's directory under the root, as the hook runs it), only that package and the files that
+// import it, or may declare a Visit method in a package that does, are parsed and checked.
 func Run(pkgs []*Pkg, idx Index, scope string) ([]Finding, Stats, error) {
 	st := Stats{Layers: map[string]int{}}
 	for _, p := range pkgs {
@@ -67,20 +68,33 @@ func Run(pkgs []*Pkg, idx Index, scope string) ([]Finding, Stats, error) {
 	}
 	scoped := idx.pkg(idx.module + "/" + scope)
 	for _, p := range pkgs {
+		visits := false // a file of p may declare a Visit method, and one imports what a visitor of it would visit
+		for _, f := range p.Files {
+			visits = visits || f.visit
+		}
+		if visits {
+			visits = false
+			for _, f := range p.Files {
+				for _, imp := range f.Imports {
+					l := idx.layer(imp.Path)
+					visits = visits || scope == "" && (core(l) || l == layerKit) || scoped != nil && imp.Path == scoped.Path
+				}
+			}
+		}
 		for _, f := range p.Files {
 			if f.ast != nil {
 				continue
 			}
-			parse := false
+			parse := f.visit && visits
 			if scope == "" {
-				parse = f.wire
+				parse = parse || f.wire
 				for _, imp := range f.Imports {
 					if l := idx.layer(imp.Path); core(l) || l == layerKit || l == layerAdapter {
 						parse = true
 					}
 				}
 			} else if scoped != nil {
-				parse = p == scoped
+				parse = parse || p == scoped
 				for _, imp := range f.Imports {
 					parse = parse || imp.Path == scoped.Path
 				}

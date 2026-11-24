@@ -141,6 +141,16 @@ func TestDomainRuleCases(t *testing.T) {
 				"\t\"github.com/nwverse/persona/server/internal/domainkit/slot\"\n",
 			"type view struct{ rows int }\n\nfunc (x *view) VisitAgent(a slot.Slot, w fleetcount.Why, s instant.Instant) {}\n")),
 			[]string{"out-visitor-impl"}},
+		// A generic type's Visit method names no core, and the file that declares it need not import one: in a package
+		// another file of which imports a core or the kit, it implements a visitor all the same, undeclared code included.
+		{"a generic visitor split from its use in undeclared code", merged(fleet, map[string]string{
+			"internal/legacy/peek.go": "package legacy\n\ntype peek[T any] struct{ total *T }\n\n" +
+				"func (p peek[T]) VisitTotal(total T) { *p.total = total }\n",
+			"internal/legacy/legacy.go": "package legacy\n\nimport \"github.com/nwverse/persona/server/internal/assistant/" +
+				"fleetcount\"\n\nvar total peek[fleetcount.RowCount]\n"}), []string{"layer-declared", "out-visitor-impl"}},
+		{"a generic Visit method in a package that imports no core passes", map[string]string{
+			"internal/legacy/peek.go": "package legacy\n\ntype peek[T any] struct{ total *T }\n\n" +
+				"func (p peek[T]) VisitTotal(total T) { *p.total = total }\n"}, []string{"layer-declared"}},
 		{"a type parameter in a core", core("func same[H comparable](a, b H) bool { return a == b }\n"),
 			[]string{"core-type-param"}},
 		{"a package var in a core", core("var seen int\n"), []string{"core-package-var"}},

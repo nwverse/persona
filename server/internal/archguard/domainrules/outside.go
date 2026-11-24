@@ -201,9 +201,10 @@ func (c *outsideChecks) declares(p *Pkg, name string) bool {
 // visitorImpl is out-visitor-impl on one method: a Visit* method whose parameters name a type of an imported core
 // or the kit implements a visitor, which only adapters, testkit and a core's own tests do. The finding counts against
 // the first core the parameters name (the kit when they name no core). A Visit* method of a generic type names only
-// its type parameters, and an instance of the type (peek[fleetcount.Why]) implements any core's visitor, so in a
-// file that imports a core or the kit it counts against the first core the file imports, by path (the kit when it
-// imports none); in a core's own test, against another core it imports.
+// its type parameters, and an instance of the type (peek[fleetcount.Why]), made in any file of the package,
+// implements any core's visitor, so in a package a file of which imports a core or the kit it counts against a core
+// or kit package the package imports: first one that declares an interface method of its name, then a core, then by
+// path; in a core's own test, only another core it imports.
 func (c *outsideChecks) visitorImpl(f *File, fd *ast.FuncDecl, refs map[string]ref, allowed bool) {
 	if allowed || fd.Recv == nil || !strings.HasPrefix(fd.Name.Name, "Visit") {
 		return
@@ -215,19 +216,24 @@ func (c *outsideChecks) visitorImpl(f *File, fd *ast.FuncDecl, refs map[string]r
 			named = append(named, r)
 		}
 	}
+	generic := ""
 	if len(named) == 0 && genericReceiver(fd) {
 		var first *ref
-		for _, r := range refs {
+		rank := func(r ref) [2]bool { return [2]bool{declaresMethod(r.pkg, fd.Name.Name), core(r.pkg.Layer)} }
+		for _, r := range c.pkgRefs() {
 			if f.Test && core(c.p.Layer) && (r.pkg == c.p || !core(r.pkg.Layer)) {
 				continue // a core's own tests visit it, with the kit's types
 			}
-			if first == nil || core(r.pkg.Layer) && !core(first.pkg.Layer) ||
-				core(r.pkg.Layer) == core(first.pkg.Layer) && r.pkg.Rel < first.pkg.Rel {
+			if first == nil || better(rank(r), rank(*first)) || rank(r) == rank(*first) && r.pkg.Rel < first.pkg.Rel {
 				first = &r
 			}
 		}
-		if first != nil {
-			named = append(named, *first)
+		if first == nil {
+			return
+		}
+		named = append(named, *first)
+		if !declaresMethod(first.pkg, fd.Name.Name) {
+			generic = " is a generic type's Visit method in a package that imports " + first.name
 		}
 	}
 	if len(named) == 0 {
@@ -243,7 +249,51 @@ func (c *outsideChecks) visitorImpl(f *File, fd *ast.FuncDecl, refs map[string]r
 		}
 	}
 	recv, _ := receiverName(fd.Recv.List[0].Type)
-	c.at(f, fd.Name, "out-visitor-impl", pick.pkg.Rel, recv+"."+fd.Name.Name+" implements "+pick.name+"'s visitor")
+	what := " implements " + pick.name + "'s visitor"
+	if generic != "" {
+		what = generic
+	}
+	c.at(f, fd.Name, "out-visitor-impl", pick.pkg.Rel, recv+"."+fd.Name.Name+what)
+}
+
+// declaresMethod says whether p declares an interface with a method of that name: a visitor a generic type's Visit
+// method of the name can implement.
+func declaresMethod(p *Pkg, name string) bool {
+	if p.decls == nil {
+		return false
+	}
+	for _, t := range p.decls.order {
+		if t.iface == nil {
+			continue
+		}
+		for _, m := range t.iface.Methods.List {
+			for _, n := range m.Names {
+				if n.Name == name {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// better says whether rank a comes before rank b: true before false, the first entry first.
+func better(a, b [2]bool) bool {
+	if a[0] != b[0] {
+		return a[0]
+	}
+	return a[1] && !b[1]
+}
+
+// pkgRefs is the domain packages any file of the package imports (refs of each), by path.
+func (c *outsideChecks) pkgRefs() map[string]ref {
+	out := map[string]ref{}
+	for _, f := range c.p.Files {
+		for _, r := range c.refs(f) {
+			out[r.imp.Path] = r
+		}
+	}
+	return out
 }
 
 // genericReceiver says whether a method's receiver is a generic type's (peek[T], *pair[K, V]).

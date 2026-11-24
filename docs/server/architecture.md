@@ -320,11 +320,12 @@ func NewAgentBuilder(ref agentref.Ref, at slot.Slot) AgentStateStep {
 Every read of a core's data from outside goes through `Accept(XVisitor)`. Every method of an exported visitor
 interface starts with `Visit` and takes domain values, and only adapters, testkit and the core's own tests implement
 one: application code that wants an answer calls behaviour. A `Visit` method of a generic type names only its type
-parameters, yet an instance of the type implements a core's visitor, so in a file that imports a core or the kit it
-counts as implementing one. A core that renders rows for its caller keeps the
-caller's place per entry as a kit `slot.Slot`, which only adapters mint, and hands it back through the visitor; a core
-declares no type parameters. An adapter keeps nested visitor targets as fields, so nested `Accept` calls do not
-allocate, and offers `Act(decision, effects)` when the application must carry out a decision that holds data.
+parameters, yet an instance of the type implements a core's visitor, so in a package that imports a core or the kit it
+counts as implementing one, whichever of the package's files declares it. A core that renders rows for its caller
+keeps the caller's place per entry as a kit `slot.Slot`, which only adapters mint, and hands it back through the
+visitor; a core declares no type parameters. An adapter keeps nested visitor targets as fields, so nested `Accept`
+calls do not allocate, and offers `Act(decision, effects)` when the application must carry out a decision that holds
+data.
 
 ```go
 // TallyVisitor is told every row of a tally, then the total.
@@ -497,30 +498,31 @@ A programmer error is a defect (`defect.Raise`), never a returned failure, and o
 ### Data objects and adapters
 
 Stored rows, wire types, prompt inputs and fixture shapes are plain data and live outside cores: in contracts, in `db`
-or `prompts`, or in the adapter that owns them, named `Record`. A core has no struct tags and no codec method (`String`,
-`Error`, `GoString`, `Format`, `MarshalJSON` and the other marshal and unmarshal methods, `AppendText`, `Scan`, `Value`,
-`LogValue`). A single value leaves through `Wire()`, which returns its field and which only adapters and testkit name,
-called or not; a composite leaves through `Accept`. Outside the core, its tests, adapters and testkit, nothing calls its
-`Parse` or `Restore`; nothing outside it builds its types by literal (the zero literal included: `var x pkg.T` names the
-documented zero), converts into them, aliases them, dot-imports the package, or reads them with `unsafe` or `reflect`
-(`reflect.DeepEqual` aside). An adapter returns nothing, core values (as outcomes), contracts, `db` rows, prompt inputs,
-its `Record`, `error`, or `Log`'s string, which goes straight into a log call; a pointer, slice, map or channel of them
-holds only them, a map's keys included. A contract's, `db`'s or `prompts`' type is plain data only in what it holds:
-what can be called on it is read from its declaration, and the methods of an interface (those it embeds included), a
-func type, and the func- and interface-typed exported fields of a struct, through the types of those packages it holds,
-take and return only what an adapter may hand out, or the type is a getter one layer out (`kbwire.ItemSource`, whose
-`DocTitle` returns a `string`). It hands out nothing else through its parameters either: what it writes through a
-pointer, slice, map or channel, passes to a callback, writes into what a callback returns, or passes to an interface it
-declares or to a contract's, `db`'s or `prompts`' interface, func or func field, or to what those return, is one of
-those (`Act`'s `save func(Record) error` passes; `mailwire.Store`, whose `PutSetting` takes `any`, does not, and
-neither does `connectorwire.Items`, whose `ItemSource` returns a `kbwire.ItemSource` whose `DocTitle` takes text). It takes no parameter of
-type `any`, `interface{}` or a type parameter, which can carry a pointer to anything, and no parameter of another
-package's type but one it may hand out: a named map or slice (`http.Header`, `url.Values`), a struct with a map inside
-(`*http.Request`) or an interface whose methods take what the adapter passes them (`context.Context`'s `Value`) all
-reach the caller, and the rule does not read other packages' declarations. No exported struct of its own but `Record`
-has an exported field, and it has no exported variable (a getter any caller can also replace) or constant, and no
-exported alias or named slice, map, array, func or chan type; its named basic types are counted as application
-code's. It exports no type named like one of its core's.
+or `prompts`, or in the adapter that owns them, named `Record`. A core has no struct tags and no codec method
+(`String`, `Error`, `GoString`, `Format`, `MarshalJSON` and the other marshal and unmarshal methods, `AppendText`,
+`Scan`, `Value`, `LogValue`). A single value leaves through `Wire()`, which returns its field and which only adapters
+and testkit name, called or not; a composite leaves through `Accept`. Outside the core, its tests, adapters and
+testkit, nothing calls its `Parse` or `Restore`; nothing outside it builds its types by literal (the zero literal
+included: `var x pkg.T` names the documented zero), converts into them, aliases them, dot-imports the package, or
+reads them with `unsafe` or `reflect` (`reflect.DeepEqual` aside). An adapter returns nothing, core values (as
+outcomes), contracts, `db` rows, prompt inputs, its `Record`, `error`, or `Log`'s string, which goes straight into a
+log call; a pointer, slice, map or channel of them holds only them, a map's keys included. A contract's, `db`'s or
+`prompts`' type is plain data only in what it holds: what can be called on it is read from its declaration, and the
+methods of an interface (those it embeds included), a func type, and the func- and interface-typed exported fields of
+a struct, through the types of those packages it holds, take and return only what an adapter may hand out, or the type
+is a getter one layer out (`kbwire.ItemSource`, whose `DocTitle` returns a `string`). It hands out nothing else
+through its parameters either: what it writes through a pointer, slice, map or channel, passes to a callback, writes
+into what a callback returns, or passes to an interface it declares or to a contract's, `db`'s or `prompts`'
+interface, func or func field, or to what those return, is one of those (`Act`'s `save func(Record) error` passes;
+`mailwire.Store`, whose `PutSetting` takes `any`, does not, and neither does `connectorwire.Items`, whose `ItemSource`
+returns a `kbwire.ItemSource` whose `DocTitle` takes text). It takes no parameter of type `any`, `interface{}` or a
+type parameter, which can carry a pointer to anything, and no parameter of another package's type but one it may hand
+out: a named map or slice (`http.Header`, `url.Values`), a struct with a map inside (`*http.Request`) or an interface
+whose methods take what the adapter passes them (`context.Context`'s `Value`) all reach the caller, and the rule does
+not read other packages' declarations. No exported struct of its own but `Record` has an exported field, and it has no
+exported variable (a getter any caller can also replace) or constant, and no exported alias or named slice, map,
+array, func or chan type; its named basic types are counted as application code's. It exports no type named like one
+of its core's.
 
 What the rule does not read is a review's to check, and the adapter's signature still names the domain value it starts
 from: `io.Writer` and `http.ResponseWriter`, which an answer is written to (`sinks` in
@@ -725,7 +727,7 @@ stated above; #15088 lists the ones known.
 | `out-conversion` | no conversion to a core's or the kit's type outside it | the core |
 | `out-wire-ref` | no `.Wire` outside adapters and testkit, called or not | the package it is in |
 | `out-parse-call` | a core's `Parse` and `Restore` only from it, its tests, adapters and testkit | the core |
-| `out-visitor-impl` | a `Visit` method that takes a core's or the kit's type, or any `Visit` method of a generic type in a file that imports a core or the kit, only in adapters, testkit and the core's own tests | the core |
+| `out-visitor-impl` | a `Visit` method that takes a core's or the kit's type, or any `Visit` method of a generic type in a package that imports a core or the kit, only in adapters, testkit and the core's own tests | the core |
 | `out-clock-read` | `instant.ReadClock` only in `domainkit/clock` and its testkit | `domainkit/instant` |
 | `out-slot-mint` | `slot.NewSlot` only in adapters and testkit | `domainkit/slot` |
 | `out-code-mint` | `fail.NewCode` and `fail.NewPart` only in cores, the kit and testkit | `domainkit/fail` |
