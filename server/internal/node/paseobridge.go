@@ -480,8 +480,8 @@ var paseoBridgeCommand = func(ctx context.Context, rh *RuntimeHost) (*exec.Cmd, 
 		return nil, err
 	}
 	rh.logger.Printf("paseo bridge: Node.js %s, %s: %s", js.Version, js.From, js.Path)
-	cmd := exec.Command(js.Path, paseoBridgeArgs(dir, rh.path, home)...)
-	cmd.Env = js.env(append(os.Environ(), "PERSONA_RUNTIME_SOCKET="+rh.path))
+	cmd := exec.Command(js.Path, paseoBridgeArgs(dir, rh.dialPath(), home)...)
+	cmd.Env = js.env(append(os.Environ(), "PERSONA_RUNTIME_SOCKET="+rh.dialPath()))
 	cmd.Dir = dir
 	return cmd, nil
 }

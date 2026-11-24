@@ -253,12 +253,12 @@ var agyBridgeCommand = func(ctx context.Context, rh *RuntimeHost, agyBin, instan
 		return nil, err
 	}
 	args := []string{filepath.Join(dir, "antigravity", "companion.mjs"),
-		"--socket", rh.path, "--agy-bin", agyBin, "--no-update", "--parent-stdin"}
+		"--socket", rh.dialPath(), "--agy-bin", agyBin, "--no-update", "--parent-stdin"}
 	if instance != "" {
 		args = append(args, "--instance", instance)
 	}
 	cmd := exec.Command(js.Path, args...)
-	env := append(os.Environ(), "PERSONA_RUNTIME_SOCKET="+rh.path)
+	env := append(os.Environ(), "PERSONA_RUNTIME_SOCKET="+rh.dialPath())
 	cmd.Env = js.env(append(env, rh.agyProviderEnv()...))
 	cmd.Dir = dir
 	return cmd, nil
