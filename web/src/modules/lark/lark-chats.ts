@@ -4,82 +4,19 @@
 // page at a time and the pinned conversations on top. A chat opens in the inbox's Feishu chat view (LarkThread).
 // Each Feishu account has its own list (docs/extensions/feishu.md "Multiple accounts", lark-accounts.ts); rows carry the account they are in.
 // Nothing is written to disk: the last list lives in memory for this tab only.
-import { t } from "../i18n";
+// The "Show messages on home" switch is home.ts; the chat type is core (lib/lark-history.ts, the Feishu chat view's),
+// and so is the account kept for that view's writes (lib/lark-account.ts).
+import { t } from "../../i18n";
 import { useSyncExternalStore } from "react";
-import { api, ApiError, enc, errorText } from "./api";
-import { larkPath } from "./lark-path";
-import { itemHeaders } from "./manager-choice";
-import { sameValue } from "./stable-lines";
+import { api, ApiError, enc, errorText } from "../../lib/api";
+import { rememberLarkAccount } from "../../lib/lark-account";
+import type { LarkConversation, LarkConversationPage } from "../../lib/lark-history";
+import { larkPath } from "../../lib/lark-path";
+import { sameValue } from "../../lib/stable-lines";
 
-// ── Show messages on home ──────────────────────────────────────
-
-const HOME_KEY = "lark.homeMessages";
-const homeListeners = new Set<() => void>();
-
-export function getLarkHome(): boolean {
-  try {
-    return localStorage.getItem(HOME_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-export function setLarkHome(on: boolean) {
-  if (on) localStorage.setItem(HOME_KEY, "1");
-  else localStorage.removeItem(HOME_KEY);
-  homeListeners.forEach((l) => l());
-}
-
-if (typeof window !== "undefined") {
-  window.addEventListener("storage", (e) => {
-    if (e.key === HOME_KEY || e.key === null) homeListeners.forEach((l) => l());
-  });
-}
-
-const subscribeHome = (l: () => void) => {
-  homeListeners.add(l);
-  return () => {
-    homeListeners.delete(l);
-  };
-};
-
-/** Whether this browser shows the "Messages" page (off unless turned on). */
-export function useLarkHome(): boolean {
-  return useSyncExternalStore(subscribeHome, getLarkHome, () => false);
-}
+export type { LarkConversation, LarkConversationPage } from "../../lib/lark-history";
 
 // ── the conversations ────────────────────────────────────
-
-/** GET /api/v1/lark/conversations: one chat (server/internal/lark/feed.go Conversation). */
-export interface LarkConversation {
-  id: string;
-  name: string;
-  avatar?: string;
-  avatar_url?: string;
-  is_group: boolean;
-  is_topic?: boolean;
-  unread: number;
-  marked_unread?: boolean;
-  at_me: boolean;
-  at_all?: boolean;
-  muted: boolean;
-  pinned?: boolean;
-  tags?: string[];
-  preview: string;
-  preview_sender?: string;
-  is_mine: boolean;
-  updated_at: string;
-  read_position?: string;
-  mention_position?: string;
-  /** Client only: the Feishu account the chat is in (`ol_account`); undefined: the hub's own. */
-  ol_account?: number;
-}
-
-export interface LarkConversationPage {
-  account_id?: string;
-  conversations: LarkConversation[];
-  next_cursor?: string;
-}
 
 export const CONVERSATION_PAGE = 60;
 
@@ -121,8 +58,8 @@ export function filterConversations(list: readonly LarkConversation[], query: st
 export function conversationPreview(c: Pick<LarkConversation, "preview" | "preview_sender" | "is_mine" | "is_group">): string {
   const text = c.preview?.trim() ?? "";
   if (!text) return "";
-  if (c.is_mine) return t("lib-lark-chats.preview_mine", { text });
-  if (c.is_group && c.preview_sender) return t("lib-lark-chats.preview_sender", { sender: c.preview_sender, text });
+  if (c.is_mine) return t("lark-chats.preview_mine", { text });
+  if (c.is_group && c.preview_sender) return t("lark-chats.preview_sender", { sender: c.preview_sender, text });
   return text;
 }
 
@@ -145,10 +82,10 @@ export type LarkListProblem = { kind: "not_logged_in" | "not_configured" | "othe
 
 export function listProblem(e: unknown): LarkListProblem {
   if (e instanceof ApiError) {
-    if (e.code === "lark_not_logged_in") return { kind: "not_logged_in", text: t("lib-lark-chats.not_logged_in") };
-    if (e.status === 404 && !e.code) return { kind: "not_configured", text: t("lib-lark-chats.not_configured") };
+    if (e.code === "lark_not_logged_in") return { kind: "not_logged_in", text: t("lark-chats.not_logged_in") };
+    if (e.status === 404 && !e.code) return { kind: "not_configured", text: t("lark-chats.not_configured") };
   }
-  return { kind: "other", text: t("lib-lark-chats.load_failed", { error: errorText(e) }) };
+  return { kind: "other", text: t("lark-chats.load_failed", { error: errorText(e) }) };
 }
 
 // ── the store ────────────────────────────────────────────
@@ -198,7 +135,9 @@ export class LarkChatsStore {
   private listeners = new Set<() => void>();
   private revision = 0;
   private again = false;
-  constructor(private deps: LarkChatsDeps = liveChatsDeps) {}
+  /** `onAccount`: told the account the list is of whenever it changes (core lib/lark-account.ts keeps it for the
+   *  Feishu chat view's writes). */
+  constructor(private deps: LarkChatsDeps = liveChatsDeps, private onAccount?: (account: string | undefined) => void) {}
 
   get state(): LarkChatsState {
     return this.s;
@@ -210,7 +149,9 @@ export class LarkChatsStore {
     };
   };
   private set(patch: Partial<LarkChatsState>) {
+    const before = this.s.account;
     this.s = { ...this.s, ...patch };
+    if (this.s.account !== before) this.onAccount?.(this.s.account);
     this.listeners.forEach((l) => l());
   }
 
@@ -238,7 +179,7 @@ export class LarkChatsStore {
         let read = 0;
         do {
           const p = await this.deps.page(cursor, account);
-          if (account && p.account_id && p.account_id !== account) throw new ApiError(409, t("lib-lark-chats.account_changed"), { code: "lark_account_changed" });
+          if (account && p.account_id && p.account_id !== account) throw new ApiError(409, t("lark-chats.account_changed"), { code: "lark_account_changed" });
           account = p.account_id || account;
           rows = mergeConversations(rows, p.conversations ?? []);
           read += 1;
@@ -312,7 +253,7 @@ export class LarkChatsStore {
         this.set({ loadingMore: false });
         return;
       }
-      if (account && p.account_id && p.account_id !== account) throw new ApiError(409, t("lib-lark-chats.account_changed"), { code: "lark_account_changed" });
+      if (account && p.account_id && p.account_id !== account) throw new ApiError(409, t("lark-chats.account_changed"), { code: "lark_account_changed" });
       const next = p.next_cursor && p.next_cursor !== cursor ? p.next_cursor : undefined;
       this.set({ rows: mergeConversations(this.s.rows, p.conversations ?? []), cursor: next, pages: this.s.pages + 1, loadingMore: false });
     } catch (e) {
@@ -330,27 +271,17 @@ export class LarkChatsStore {
 }
 
 /** The tab's list of the hub's own account: opening "Messages" again shows the last copy at once, then reads it again. */
-export const larkChats = new LarkChatsStore();
+export const larkChats = new LarkChatsStore(liveChatsDeps, (account) => rememberLarkAccount(undefined, account));
 const otherAccounts = new Map<number, LarkChatsStore>();
 
 /** The tab's list of account `ol` (undefined: the hub's own). */
 export function larkChatsFor(ol?: number): LarkChatsStore {
   if (ol === undefined) return larkChats;
   let s = otherAccounts.get(ol);
-  if (!s) otherAccounts.set(ol, (s = new LarkChatsStore(liveChatsDepsFor(ol))));
+  if (!s) otherAccounts.set(ol, (s = new LarkChatsStore(liveChatsDepsFor(ol), (account) => rememberLarkAccount(ol, account))));
   return s;
 }
 
 export function useLarkChats(store: LarkChatsStore = larkChats): LarkChatsState {
   return useSyncExternalStore(store.subscribe, () => store.state);
-}
-
-/** The signed-in Feishu user of account `ol` as the hub last said (an add-Pin write carries it); another manager's
- *  (an inbox item's, docs/assistant/managers.md "Clients") is asked of it, as the Messages page's lists are the default's. */
-export async function larkAccount(ol?: number, manager?: string): Promise<string> {
-  const known = itemHeaders(manager) ? undefined : larkChatsFor(ol).state.account;
-  if (known) return known;
-  const p = await api<LarkConversationPage>(larkPath("/lark/conversations?scope=chats&limit=1&account_bound=1", ol, manager));
-  if (!p.account_id) throw new ApiError(426, t("lib-lark-pins.hub_upgrade"), { code: "lark_hub_upgrade_required" });
-  return p.account_id;
 }
