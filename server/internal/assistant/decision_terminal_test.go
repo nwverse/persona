@@ -28,6 +28,7 @@ func settingPuts(st *memStore) int {
 
 // The terminal link comes from the hub's own refusal to resume an Agent of the task, never from a reason's wording: a
 // reason that mentions a terminal or says not to resume one links nothing, and a refusal links only the Agent refused.
+// Each of resumeAllowed's refusals that leaves Resume to the owner links it; a stop the supervisor may resume does not.
 func TestDecisionLinksTerminalOnlyAfterRefusedResume(t *testing.T) {
 	raise := func(t *testing.T, s *Service, f *fakeHub, todo Todo, reason string) (acceptAsk, todoAsk) {
 		t.Helper()
@@ -55,23 +56,37 @@ func TestDecisionLinksTerminalOnlyAfterRefusedResume(t *testing.T) {
 			}
 		})
 	}
-	t.Run("refused", func(t *testing.T) {
-		s, f, todo := newSupervisedService(t)
-		ag := todo.Agents[0]
-		stopped := proto.Session{MachineID: ag.MachineID, SessionID: ag.SessionID,
-			Capabilities: &proto.SessionCapabilities{Read: true, Terminal: true, StopCause: proto.StopUser}}
-		if err := s.resumeAllowed(context.Background(), "conv1", Device{ID: ag.MachineID}, stopped, "its context", nil); err == nil {
-			t.Fatal("the assistant may resume a user stop")
-		}
-		a, row := raise(t, s, f, todo, "Choose how this task goes on.")
-		want := &SessionRef{MachineID: ag.MachineID, SessionID: ag.SessionID}
-		if !reflect.DeepEqual(a.ResumeTerminal, want) || !reflect.DeepEqual(row.Terminal, want) || row.TerminalOption != "" {
-			t.Fatalf("refused Agent not linked: %+v / %+v %q", a.ResumeTerminal, row.Terminal, row.TerminalOption)
-		}
-		if s.manualResumeTarget(todoNow(s, todo.ID)) != nil {
-			t.Fatal("one refusal linked a second decision")
-		}
-	})
+	for _, c := range []struct {
+		name string
+		caps *proto.SessionCapabilities
+		link bool
+	}{
+		{"user stop", &proto.SessionCapabilities{Read: true, Terminal: true, StopCause: proto.StopUser}, true},
+		{"no stop cause reported", nil, true}, // its node is too old to report one
+		// The supervisor may resume an unknown stop itself (#11528): whatever else holds this resume up, it is not left to
+		// the owner's terminal, so it links nothing.
+		{"unknown stop", &proto.SessionCapabilities{Read: true, Terminal: true, StopCause: proto.StopUnknown}, false},
+	} {
+		t.Run("resume of "+c.name, func(t *testing.T) {
+			s, f, todo := newSupervisedService(t)
+			ag := todo.Agents[0]
+			stopped := proto.Session{MachineID: ag.MachineID, SessionID: ag.SessionID, Capabilities: c.caps}
+			if err := s.resumeAllowed(context.Background(), "conv1", Device{ID: ag.MachineID}, stopped, "its context", nil); c.link && err == nil {
+				t.Fatal("the assistant may resume it")
+			}
+			a, row := raise(t, s, f, todo, "Choose how this task goes on.")
+			var want *SessionRef
+			if c.link {
+				want = &SessionRef{MachineID: ag.MachineID, SessionID: ag.SessionID}
+			}
+			if !reflect.DeepEqual(a.ResumeTerminal, want) || !reflect.DeepEqual(row.Terminal, want) || row.TerminalOption != "" {
+				t.Fatalf("terminal link %+v / %+v %q, want %+v", a.ResumeTerminal, row.Terminal, row.TerminalOption, want)
+			}
+			if s.manualResumeTarget(todoNow(s, todo.ID)) != nil {
+				t.Fatal("one refusal linked a second decision")
+			}
+		})
+	}
 }
 
 // A refusal links a decision only for an Agent still on the task that it reached after joining it, and only when it is
