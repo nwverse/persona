@@ -56,9 +56,20 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	}
 	n.mu.Lock()
 	agents := make(map[string]host.Agent, len(n.agents))
+	curTraexLive := map[string]bool{}
 	for id, agent := range n.agents {
 		agents[id] = agent
+		if agent.Agent == traexAgent {
+			curTraexLive[id] = true
+		}
 	}
+	var stoppedTraex []string
+	for id := range n.traexLive {
+		if !curTraexLive[id] {
+			stoppedTraex = append(stoppedTraex, id)
+		}
+	}
+	n.traexLive = curTraexLive
 	onList := n.onAgentsList // replaced whole with n.agents (setAgentsAt), never changed in place
 	n.mu.Unlock()
 
@@ -164,6 +175,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		var textAt, promptAt time.Time
 		var rollout quickMeta
 		var rolloutPath string
+		if a.Agent == traexAgent && s.Status != proto.StatusWorking {
+			n.traexRefreshHistory(id)
+		}
 		if p := n.transcriptPath(id); p != "" {
 			if st, err := os.Stat(p); err == nil {
 				m := n.meta(p, st)
@@ -200,6 +214,24 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				n.setBackgroundWait(&s) // bgwait.go (#6045, #13744)
 				s.Loop, s.Goal, s.Plan = m.loop, m.goal, m.plan
 				s.Subagents = n.subagents(id)
+			}
+		}
+		if a.Agent == traexAgent {
+			if t, ok := n.traexThread(id); ok {
+				if s.Title == "" && t.Title != "" {
+					s.Title = t.Title
+				}
+				if s.Model == "" {
+					s.Model = t.Model
+				}
+				if updated := t.updated(); !updated.IsZero() {
+					if rollout.activity.IsZero() && (s.UpdatedAt.IsZero() || rolloutPath != "") {
+						// Projected history with no turns yet has a synthetic file mtime; keep the database timestamp.
+						s.UpdatedAt = updated
+					} else if s.UpdatedAt.IsZero() || updated.After(s.UpdatedAt) {
+						s.UpdatedAt = updated
+					}
+				}
 			}
 		}
 		if a.Agent != "codex" && a.Agent != traexAgent {
@@ -306,6 +338,10 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	var rowIDs map[string]bool // the runtimes' rows, where the line of a fork stops (aliasesOf)
 	for i := from; i < len(out); i++ {
 		s := &out[i]
+		if sess := n.paneHerdrSession(n.ownPane(s.PaneID)); n.herdrSessionBlocked(sess) && !n.isAssistantSession(s.SessionID) && !n.keptSessions()[s.SessionID] {
+			n.noteHerdrSessionID(s.SessionID, sess)
+			continue
+		}
 		if seen[s.SessionID] {
 			continue
 		}
@@ -353,6 +389,11 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		out = append(out, s)
 		seen[s.SessionID] = true
 	}
+	for _, id := range stoppedTraex {
+		if !seen[id] {
+			n.traexRefreshHistory(id)
+		}
+	}
 	for _, s := range n.traexSessions(seen) {
 		out = append(out, s)
 		seen[s.SessionID] = true
@@ -392,6 +433,10 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			n.noteGatewayRunning(s)
 		}
 		if earlier[s.SessionID] || n.isRoundFork(s.SessionID) || !n.sessionScopeAllows(s.Cwd) {
+			continue
+		}
+		if sess := n.paneHerdrSession(s.PaneID); n.herdrSessionBlocked(sess) && !n.isAssistantSession(s.SessionID) && !n.keptSessions()[s.SessionID] {
+			n.noteHerdrSessionID(s.SessionID, sess)
 			continue
 		}
 		if n.listBlocked(s.SessionID, s.Cwd) {
@@ -711,6 +756,9 @@ func (n *Node) revsChanged(list []proto.Session) map[string]int64 {
 // listBlocked: the live list leaves session sid out for its working folder cwd: a blocked Agent folder or Claude config
 // folder, except the assistant's own conversations and the sessions the hub keeps.
 func (n *Node) listBlocked(sid, cwd string) bool {
+	if n.herdrSessionIDBlocked(sid) {
+		return true
+	}
 	return cwd != "" && n.cwdBlocked(cwd) && !n.isAssistantSession(sid) && !n.keptSessions()[sid]
 }
 

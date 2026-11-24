@@ -55,6 +55,7 @@
   "status.done": "今天不再提醒，已达标。",
   "status.weekend": "周末不提醒，下个提醒日 {at} 开始。",
   "status.closed": "今天的提醒时间过了，下个提醒时段 {at} 开始。",
+  "status.add_water": "把喝水添加到健康后才会提醒。",
   "status.next": "下次提醒 {at}",
   "status.quiet": "低打扰模式开着：提醒会攒进简报，不会响。",
   "delivery.no_device": "暂时没有能收到通知的设备。",

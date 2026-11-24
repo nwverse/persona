@@ -763,7 +763,7 @@ export function supervisionTool(rawName?: string): "notify_user" | "ask_user" | 
 }
 
 /** Visibility is round-wide and derived again after every page merge. Arguments alone never prove success. */
-function supervisionVisibility(ordered: Item[], results: ReadonlyMap<string, Item> | undefined, live: boolean, routineMainRelay = false): { visible: boolean; completedSilent: boolean } {
+function supervisionVisibility(ordered: Item[], results: ReadonlyMap<string, Item> | undefined, live: boolean, routineMainRelay = false, attentionReply?: string): { visible: boolean; completedSilent: boolean } {
   if (ordered.some((i) => i.supervisionUser || i.fold?.supervision_user || (injectedOf(i)?.state === "supervise" && injectedOf(i)?.level === "user"))) return { visible: true, completedSilent: false };
   let silent = false;
   for (const use of ordered) {
@@ -800,23 +800,25 @@ function supervisionVisibility(ordered: Item[], results: ReadonlyMap<string, Ite
       // A failed or malformed receipt does not decide visibility.
     }
   }
-  const visible = !live && !silent && !routineMainRelay && hasBackgroundReply(ordered);
+  const visible = !live && hasBackgroundReply(ordered, routineMainRelay, attentionReply, silent);
   return { visible, completedSilent: !live && silent && !visible };
 }
 
-export function supervisionVisible(ordered: Item[], results: ReadonlyMap<string, Item>, live: boolean, routineMainRelay = false): boolean {
-  return supervisionVisibility(ordered, results, live, routineMainRelay).visible;
+export function supervisionVisible(ordered: Item[], results: ReadonlyMap<string, Item>, live: boolean, routineMainRelay = false, attentionReply?: string): boolean {
+  return supervisionVisibility(ordered, results, live, routineMainRelay, attentionReply).visible;
 }
 
 /** An answer ends the round's work. Older runtimes also emit plain intermediate text before their next call. */
-function hasBackgroundReply(items: Item[]): boolean {
+function hasBackgroundReply(items: Item[], routineMainRelay: boolean, attentionReply: string | undefined, silent: boolean): boolean {
   let last: Item | undefined;
   for (const item of items) {
     const relevant = isAnswerText(item) || item.kind === "tool_use" || item.kind === "thinking" || item.kind === "fold" ||
       item.wake || item.model_refusal || isInterruptNotice(item);
     if (relevant && (!last || blockOrder(last, item) < 0)) last = item;
   }
-  return !!last && isAnswerText(last) && !last.narration && !last.codex_heartbeat_quiet;
+  if (!last || !isAnswerText(last) || last.narration || last.codex_heartbeat_quiet) return false;
+  const needsAttention = last.id === attentionReply || parseAPIError(last.text) !== null;
+  return (!routineMainRelay || needsAttention) && (!silent || needsAttention);
 }
 
 /** Message sources whose rounds fold in the main conversation while `assistant.main_background_folded` is on
@@ -958,9 +960,12 @@ export interface ChatLinesOptions {
   /** Fold quiet background rounds in the main and leader conversations. A scheduled task's prompt stays hidden
    *  (docs/assistant/assistant.md "Background rounds"). */
   background?: boolean;
-  /** The main Assistant conversation: routine cross-conversation replies stay folded even when nonempty.
-   * Explicit owner-visibility actions and every leader conversation keep their existing behavior (#11764). */
+  /** This is the main conversation: completed canonical silent rounds belong in Background activity. */
   main?: boolean;
+  /** The main conversation opted in to folding ordinary nonempty relay replies. Explicit promotions stay visible. */
+  foldRoutineRelayReplies?: boolean;
+  /** The current session needs attention, even if its latest completed reply came from a relay. */
+  latestReplyNeedsAttention?: boolean;
 }
 
 function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>): ChatLine[] {
@@ -1013,6 +1018,7 @@ export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[
   const blocks = buildBlocks(foldCompactions(feed), background);
   const source = feed.at(-1);
   // The live exchange is the owner of the latest source item, not the last drawn block.
+  const attentionReply = opts.latestReplyNeedsAttention && opts.foldRoutineRelayReplies ? feed.findLast(isAnswerText)?.id : undefined;
   const active = opts.live && source ? blocks.find((b) => b.kind === "turn" && (b.turn.ordered.some((i) => i.id === source.id) || b.turn.trailing.some((i) => i.id === source.id))) : undefined;
   const liveId = active && active.kind === "turn" ? active.turn.id : undefined;
   const out: ChatLine[] = [];
@@ -1023,7 +1029,7 @@ export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[
   let round: { lines: ChatLine[]; ordered: Item[]; live: boolean; source?: MessageSource } | undefined;
   const flush = (until?: string) => {
     if (!round) return;
-    const visibility = supervisionVisibility(round.ordered, results, round.live, opts.main === true && round.source?.kind === "conversation");
+    const visibility = supervisionVisibility(round.ordered, results, round.live, opts.foldRoutineRelayReplies === true && round.source?.kind === "conversation", attentionReply);
     if (visibility.visible) out.push(...round.lines);
     else out.push({
       kind: "supervision", id: round.lines[0].id, lines: round.lines, live: round.live,

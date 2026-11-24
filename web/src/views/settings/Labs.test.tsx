@@ -189,6 +189,75 @@ describe("Settings › Labs", () => {
       act(() => chooseManager(null));
     }
   });
+
+  it("mounts the assistant-scoped Unified Integrations & Extensions toggle for the chosen manager", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/api/v1/assistant")) {
+        if (init?.method === "PUT") {
+          const body = JSON.parse(String(init.body ?? "{}")) as { integrations_v2?: boolean };
+          return new Response(JSON.stringify({ manager: "example", work_guide: false, todos_v2: false, integrations_v2: body.integrations_v2 === true }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ manager: "example", work_guide: false, todos_v2: false, integrations_v2: false }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("{}", { status: 404 });
+    });
+    chooseManager("example");
+    try {
+      await render();
+      const integrationsForm = host.querySelector<HTMLElement>('[data-configuration="assistant-integrations-v2"]');
+      expect(integrationsForm).not.toBeNull();
+      const row = integrationsForm!.querySelector<HTMLElement>('[data-configuration-field="integrations_v2"]')!;
+      expect(row.textContent).toContain(t("settings-labs.integrations_v2_title"));
+      expect(row.textContent).toContain(t("settings-labs.integrations_v2_hint"));
+      expect([...row.querySelectorAll("dt")].map((d) => d.textContent)).toEqual([
+        t("settings-labs.scope"),
+        t("settings-labs.activation"),
+        t("settings-labs.rollback"),
+      ]);
+      const toggle = row.querySelector<HTMLButtonElement>('[role="switch"]')!;
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
+      await click(toggle);
+      expect(toggle.getAttribute("aria-checked")).toBe("true");
+      const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT");
+      expect(putCall).toBeDefined();
+      expect(new Headers(putCall?.[1]?.headers).get(MANAGER_HEADER)).toBe("example");
+      expect(JSON.parse(String(putCall?.[1]?.body))).toEqual({ integrations_v2: true, expected_integrations_v2: false });
+    } finally {
+      act(() => chooseManager(null));
+    }
+  });
+
+  it("renders Unified Integrations & Extensions as read-only when an older hub omits integrations_v2", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/api/v1/assistant")) {
+        return new Response(JSON.stringify({ manager: "example", work_guide: false, todos_v2: false }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("{}", { status: 404 });
+    });
+    chooseManager("example");
+    try {
+      await render();
+      const integrationsForm = host.querySelector<HTMLElement>('[data-configuration="assistant-integrations-v2"]');
+      expect(integrationsForm).not.toBeNull();
+      const row = integrationsForm!.querySelector<HTMLElement>('[data-configuration-field="integrations_v2"]')!;
+      expect(row.textContent).toContain(t("settings-labs.integrations_v2_unsupported"));
+      const toggle = row.querySelector<HTMLButtonElement>('[role="switch"]')!;
+      expect(toggle.disabled).toBe(true);
+    } finally {
+      act(() => chooseManager(null));
+    }
+  });
 });
 
 describe.each(["settings", "feature dialog"])("experiment guidance from %s", (entry) => {

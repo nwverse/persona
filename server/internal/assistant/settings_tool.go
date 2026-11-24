@@ -99,6 +99,7 @@ func (s *Service) allOwnSettings() []ownSetting {
 	getSet := []string{"get", "set"}
 	return []ownSetting{
 		s.hiddenDirSetting(),
+		s.blockedHerdrSessionsSetting(),
 		{Setting: Setting{Key: modulesKey, Title: "Built-in modules", Actions: getSet,
 			About: "built-in feature modules switched off; a change applies when the manager next starts, not to the running process",
 			Value: `{"disabled": ["<module id>", …]}; null or an empty list restores every compiled-in module`},
@@ -195,6 +196,13 @@ func (s *Service) allOwnSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.mainBackgroundFolded(ctx)), nil },
 			set: s.setMainBackgroundFolded},
+		{Setting: Setting{Key: "assistant.fold_routine_relay_replies", Title: "Fold routine relay replies", Actions: getSet,
+			About: "off by default. When background rounds are folded in the main chat, keep routine replies from other conversations in their expandable round and skip their ordinary finished notification. Explicit owner notifications and errors retain their normal behavior.",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) {
+				return fmt.Sprint(s.settings(ctx).foldRoutineRelayReplies()), nil
+			},
+			set: s.setFoldRoutineRelayReplies},
 		{Setting: Setting{Key: "assistant.main_compact_window", Title: "Main chat compaction window", Actions: getSet,
 			About: "400000 (the default): the main conversation is compacted at about this many tokens (and sent /compact when " +
 				"idle at 75% of it) instead of its model's whole window, when it runs on a launcher Persona manages that declares " +
@@ -337,6 +345,15 @@ func (s *Service) allOwnSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.inboxSignalsOn(ctx)), nil },
 			set: s.setInboxSignals},
+		{Setting: Setting{Key: "assistant.auto_supervision_messages", Title: "Automatic supervision messages", Actions: getSet,
+			About: "on (the default): the assistant sends its follow-up messages about supervised tasks on its own (they wake the main " +
+				"conversation, a leader or the background supervisor, and each costs a model turn). off: it sends none, queues none and " +
+				"schedules none, and what was waiting is withdrawn once. Not affected: the task ledger and states, the user's own " +
+				"questions and task_review, approval and permission cards, and the safety checks. Turning it back on takes only what " +
+				"happens afterwards. Applies at once",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.autoSupervisionOn(ctx)), nil },
+			set: s.setAutoSupervisionMessages},
 		{Setting: Setting{Key: "inbox.todo_forward.enabled", Title: "Auto-forward PR/Issue Inbox events to the bound to-do's Agent", Actions: getSet,
 			About: "off (the default): Inbox ingestion performs zero automatic forwards to task Agents. on: incoming Inbox items " +
 				"with an exact canonical GitHub PR or Issue URL bound to an open to-do's pr_url or todo_repositories are " +
@@ -654,13 +671,14 @@ var settingTitles = map[string]string{modulesKey: "title_modules", standingAutho
 	"assistant.start_requested_tasks":     "title_start_requested_tasks", "assistant.launcher": "title_launcher", "assistant.limit_fallbacks": "title_limit_fallbacks",
 	"assistant.recording_days": "title_recording_days", "assistant.delivery_gate": "title_delivery_gate", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders", "assistant.briefing_waits": "title_briefing_waits", "assistant.background_supervisor_keeps_context": "title_background_supervisor_keeps_context", "assistant.chat_reply_relay": "title_chat_reply_relay",
-	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.task_lessons": "title_task_lessons", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "inbox.todo_forward.enabled": "title_inbox_todo_forward", "assistant.pr_events_route_to_agent": "title_pr_events_route_to_agent", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", "model_profiles.tiers": "title_model_tiers",
+	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.task_lessons": "title_task_lessons", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "assistant.auto_supervision_messages": "title_auto_supervision_messages", "inbox.todo_forward.enabled": "title_inbox_todo_forward", "assistant.pr_events_route_to_agent": "title_pr_events_route_to_agent", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", "model_profiles.tiers": "title_model_tiers",
 	"assistant.load_all_tools":                "title_load_all_tools",
 	"assistant.meeting_transcription_default": "title_meeting_transcription_default",
 	"assistant.meeting_attendance_default":    "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days",
 	"assistant.kb_topics": "title_kb_topics", "assistant.main_background_folded": "title_main_background_folded",
-	"assistant.main_compact_window": "title_main_compact_window",
-	"assistant.recent_task_chats":   "title_recent_task_chats", admissionSettingsKey: "title_admission", trustSetting: "title_task_trust"}
+	"assistant.fold_routine_relay_replies": "title_fold_routine_relay_replies",
+	"assistant.main_compact_window":        "title_main_compact_window",
+	"assistant.recent_task_chats":          "title_recent_task_chats", admissionSettingsKey: "title_admission", trustSetting: "title_task_trust"}
 
 // clipped is a value as the card shows it, in l.
 func clipped(l i18n.Lang, s string) string {
@@ -902,6 +920,12 @@ func (s *Service) setMainBackgroundFolded(ctx context.Context, v json.RawMessage
 		return i18n.T(l, "assistant-settings_tool.change_main_background_folded", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.MainBackgroundFolded },
 		"assistant.main_background_folded is %v; the apps redraw the main conversation with it.")
+}
+
+func (s *Service) setFoldRoutineRelayReplies(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, func(ctx context.Context) bool { return s.settings(ctx).foldRoutineRelayReplies() }, "assistant.fold_routine_relay_replies is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_fold_routine_relay_replies", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.FoldRoutineRelayReplies }, "assistant.fold_routine_relay_replies is %v for routine reports in the main conversation.")
 }
 
 func (s *Service) setRecentTaskChats(ctx context.Context, v json.RawMessage) (*ownChange, error) {
@@ -1154,6 +1178,13 @@ func (s *Service) setInboxSignals(ctx context.Context, v json.RawMessage) (*ownC
 		return i18n.T(l, "assistant-settings_tool.change_inbox_signals", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.InboxSignals },
 		"assistant.inbox_signals is %v from the next new Inbox message on (signals already waiting go out only while it is on).")
+}
+
+func (s *Service) setAutoSupervisionMessages(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.autoSupervisionOn, "assistant.auto_supervision_messages is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_auto_supervision_messages", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.AutoSupervisionMessages },
+		"assistant.auto_supervision_messages is %v now (settingsChanged applies the switch at once; turning it off withdraws what waited, turning it on replays nothing).")
 }
 
 func (s *Service) setInboxTodoForward(ctx context.Context, v json.RawMessage) (*ownChange, error) {

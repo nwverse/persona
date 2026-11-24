@@ -96,7 +96,10 @@ func init() {
 		if old == nil || !slices.Equal(before.Features, after.Features) || !machineExtrasEqual(before.Machines, after.Machines) {
 			h.broadcastMachines()
 		}
-		h.looksReported(before.Looks, after.Looks)               // the extensions' looks (looks.go)
+		h.looksReported(before.Looks, after.Looks) // the extensions' looks (looks.go)
+		if r.PushGradingDeclared && h.push != nil {
+			h.push.reconcileGradingLayers(from, r.PushGradingExtensions)
+		}
 		if h.store != nil && from == assistantwire.AssistantID { // kept across a restart: the assistant's
 			h.queueExtReportSave(r)
 		}

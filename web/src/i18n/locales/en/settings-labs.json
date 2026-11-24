@@ -32,5 +32,12 @@
   "todos_v2_activation": "Takes effect immediately on the next view or request.",
   "todos_v2_rollback": "Turn this off at any time to return to the standard To-dos & Tasks experience with zero data loss.",
   "todos_v2_saved": "Saved. Changes take effect immediately on the next view or request.",
-  "todos_v2_unsupported": "Update this assistant to change this setting."
+  "todos_v2_unsupported": "Update this assistant to change this setting.",
+  "integrations_v2_title": "Unified Integrations & Extensions",
+  "integrations_v2_hint": "Try the unified experimental Integrations & Extensions experience as new capabilities roll out behind this switch (tracked in #14802).",
+  "integrations_v2_scope": "This assistant, across your devices.",
+  "integrations_v2_activation": "Takes effect immediately on the next view or request.",
+  "integrations_v2_rollback": "Turn this off at any time to restore the standard Connectors, Channels, and Extensions views and routing with zero data loss.",
+  "integrations_v2_saved": "Saved. Changes take effect immediately on the next view or request.",
+  "integrations_v2_unsupported": "Update this assistant to change this setting."
 }

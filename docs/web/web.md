@@ -778,6 +778,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
     over the observed time from a prompt or background wake to the last work timestamp, including first-token and tool waits.
     The average divides total output by total elapsed time across the loaded turns with both measurements. A peak requires streaming samples.
   - Interaction cards (questions / plans / permissions / terminal dialogs / MCP forms and links) sit above the input, styled as an Approval Card; **Leave to computer**, a text button on its own row under the card's body (Android's words), hands the request back to the computer's terminal (`dismiss`): one click, no confirmation, and it goes into the answered line naming the request, as an answer does (the hub answers that card only with 410 afterwards, so there is nothing to undo; #2450).
+    While the current chat has a pending command-input card (#14571), the composer says **A command is waiting for your input**. **Answer** opens and focuses that existing card, with its single entry in Needs you. The compact dock gives the card more room above its sticky footer until the command ends or the composer takes focus. The composer can still send a message. If Antigravity explicitly reports that its queue is held by background work, the chat shows the background wait and explains that messages wait until the work ends, even when there is no command-input card.
     A script ask with `format: "markdown"` renders its permission summary or question through the same `Markdown` component as chat replies (`small compact`), including inline styles, lists and short tables. The raw source stays the card's accessibility title and question answer key. Missing and unrecognized formats keep the existing literal question title and preformatted permission summary (#10857).
     **One slot, not a stack** (`PendingCards`; the model in `views/chat/card-stack.ts`): at every width only the first waiting card is drawn, with where it stands in the run at its top right (**2 / 6**: cards seen waiting since the stack was last empty, so it counts on as they are answered and grows when another comes). Answering it brings the next one into the same place: the dock is anchored at the composer, so the answer row stays where it was, and the mis-tap guard (`lib/tap-guard.ts`) holds that card's buttons for its first 450 ms against a second tap meant for the last one. Answered with the keyboard (Enter, a digit, a focused button), the focus moves to the next card so Enter goes on; a pointer answer leaves focus alone. Tapping **2 / 6** shows them all; the same chip then reads **Show first only** and folds them back, so the control stays where it was used and takes no line of the dock under the cards (a phone on its side keeps its **Collapse** under them). What this page just answered is one line over the slot instead of a card each (`AnsweredSummary`): **Answered · Allowed · <what it was>** for one, **4 answered · All allowed** (or **3 allowed · 1 denied**, **N handed back**) for several; tapping it lists each answer with what it answered, in a box that scrolls past a third of the visible height (`ANSWERED_LIST_MAX`). The line goes 3 seconds after the last answer (`ANSWERED_SHOWN_MS`; each answer had stayed 20 seconds as its own card before), not while the mouse or the keyboard is on it or it is open, and again 3 seconds after it is left; the store still keeps each answer 20 seconds (`ANSWERED_MS`), because the agent's state lags behind it (`views/assistant/answered-lookup.ts`). Each answer keeps its own `data-answered` element (a list for screen readers while the line is closed) for the sync scenarios. Before, a run of eleven settings approvals in the main conversation stacked every receipt above the next card and moved its buttons with each answer. There is no "allow all": each approval is its own decision, and the page cannot tell which ones are sensitive. Mock: `MOCK_ASSISTANT_CARDS=run` (six `persona_settings` approvals in the main conversation).
     A card has at most one answer on its way (#2793, `answerCard` in `lib/card-answer.ts`, shared by the card, Overview's quick answers and notification buttons): the same answer again shares that request, a different one is refused with "An answer to this card is already being sent" without a request (a retry keeps its op id and body, and the first may have reached the hub). While it is on its way (through a gap, up to `OP_OFFLINE_MS` while the hub is away) the card, also after leaving the chat and coming back, keeps every answer and **Leave to computer** disabled and its footer says **Sending: Allowed** once it has taken half a second (one delivered at once shows no line), or **Sends when connected: Allowed** at once while the hub can't be reached; delivery leaves the usual receipt, a failure the usual toast and an answerable card. Reproduce with the mock hub: `GET /mock/down?s=60` plus failing `/api/**` in the browser, then `GET /mock/resolved`.
@@ -979,7 +980,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
     With anti-recall on and the original retained by the Lark gateway (`retained`), recalled messages, quotes and pin summaries show the original marked **Withdrawn**; system messages and ones not retained still just say recalled. The hover bar still offers no reply / pin (the recalled mark still governs write actions).
     With edit history on and `edit_history` present, **Edited** is clickable and a dialog lists old versions; encrypted old versions show only `olk.publicParts` (the web app does not decrypt). Topic cards in topic groups also show retained originals under anti-recall, but **Edited** on cards cannot open the history yet. Both switches are in **Settings › Connectors › Lark › Message display**; writes carry the account and old value, and conflicts / unknown results are not retried: the settings are cleared until the user clicks **Reload**.
     The section title describes its purpose first: **消息显示（风灵月影）** in Chinese, retaining the original name in parentheses; **Message display** in English; **メッセージ表示** in Japanese. Inbox hints use the same settings title as the current UI language (#3595).
-- **Messages** (`/messages`, `/messages/<chat>`, `src/views/messages/`, `src/lib/lark-chats.ts`, `docs/extensions/lark-migration.md` ("Entry point")): the narrow exception from #392.
+- **Messages** (`/messages`, `/messages/<chat>`, the lark module `src/modules/lark/` (`Messages.tsx`, `lark-chats.ts`; docs/web/web.md "Modules"), `docs/extensions/lark-migration.md` ("Entry point")): the narrow exception from #392.
   The sidebar shows **Messages** only when this browser has turned on **Settings › Connectors › Lark › Show Messages on Home** (off by default, stored in `localStorage` `lark.homeMessages`, local like on iOS, not synced to the hub); the hub's features must also include `lark` (#1530).
   Browse all DMs and group chats: `GET /lark/conversations?scope=chats&account_bound=1` (60 per page, more loaded when scrolling to the bottom) and `GET /lark/pinned?account_bound=1` (a row of pinned avatars, with order and unread counts from the server);
   opening one reuses the Inbox's Lark chat page (`LarkThread`: message flow, replies, read when visible, pins). Search only covers loaded chats.
@@ -1404,9 +1405,12 @@ owner-bubble quote chip; `e2e/leader-background-rounds.mjs` checks the leader ch
 before/after screenshots.
 Opened, its inputs are source blocks, not raw model input; a scheduled task's or follow-up's input shows only its line,
 never the prompt (`promptHidden`), folded or not. The supervision visibility rule (`supervisionVisible`) keeps rounds that
-asked or told the user shown. In the main conversation, a routine `conversation_send` reply stays inside the expandable
-background record even when nonempty, and sends no routine finished push; an explicit P0 / requested-result / decision
-promotion still opens and notifies. A leader conversation keeps the previous visible-reply fallback. Needs you groups rows by the task's supervising conversation (`needsYouBySupervisor`,
+asked or told the user shown. By default, a completed, nonempty reply from another conversation appears in the main chat
+and receives its ordinary finished notification. Settings › Assistant › **Fold routine replies from other chats**
+(`fold_routine_relay_replies`, #11899) keeps those replies in the expandable record and quiets that notification when
+**Fold background rounds** is also on. A hub that omits the opt-in keeps the default and hides the new switch. Changing
+either setting preserves the other. Explicit user promotions (including P0, requested results and decisions) remain visible
+and notify. Leader conversations keep their completed replies visible. Needs you groups rows by the task's supervising conversation (`needsYouBySupervisor`,
 `lib/assistant-entries.ts`) when more than one has rows. `e2e/background-rounds.mjs` checks it in a real browser with
 synthetic data and takes the screenshots; with the switch off the chat is pixel-identical to a build without the feature.
 
@@ -2298,6 +2302,19 @@ request; switching it off restores the standard experience with zero data migrat
 not expose boolean `todos_v2` degrade gracefully to a read-only row with an update hint. Graduation (making the new
 experience the default for at least one release with rollback kept) or removal is tracked in #14538.
 
+**Unified Integrations & Extensions** (#14802, #14805, #14868, #14874, `web/src/lib/labs-integrations-v2.ts`,
+`web/src/views/settings/Integrations.tsx`, `web/src/views/settings/IntegrationDetail.tsx`). This single assistant-scoped
+switch applies to the selected Assistant across devices and defaults to off (`integrations_v2` on `GET`/`PUT /api/v1/assistant`,
+guarded by `expected_integrations_v2` optimistic locking and explicit manager targeting). When enabled, Settings collapses the
+three legacy tabs (`Channels`, `Connectors`, and `Extensions`) into one lazy-loaded **Integrations & Extensions** entry that
+deduplicates built-in services and multi-capability extensions, provides capability filter chips (`All`, `Chat channels`,
+`Data sources`, `Tools & appearance`), preserves Extension Market access, and mounts `IntegrationDetail` in desktop split-pane
+or mobile drill-down layouts. Legacy deep links (`/settings/connectors/...`, `/settings/channels/...`, `/settings/extensions/...`,
+including `@manager` targets) redirect cleanly into the unified view when enabled, and `/settings/integrations/...` links fall
+back cleanly to the corresponding legacy tab when disabled, with zero data migration or data loss. Older hubs that do not expose
+boolean `integrations_v2` degrade gracefully to a read-only row with an update hint. Graduation (making the new experience the
+default for at least one release with rollback kept) or removal is tracked in #14802.
+
 **Terminal renderer** (`web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals
 (`views/session/terminal/feed.ts`) draw with xterm's DOM renderer (Standard, the default) or WebGL (`@xterm/addon-webgl`,
 its own chunk, loaded only when chosen). Full view always uses the DOM renderer and is not affected. It is kept by this
@@ -2352,9 +2369,9 @@ code. Its fields use the names of the module contract in #13430 section 4, in ca
 | `feature` | `feature` (its hello feature flag, `module.<id>`; see "When a module is there") | yes |
 | `needs` | `needs` (other modules it may import; ESLint holds it to them) | yes (guard) |
 | `wants` | `wants` (modules it uses when they are there) | declared, not yet served |
-| `shell_places` | `routes` (a page: a base segment, its aliases, its title), `extensionPages` (reserved `/extension/-<id>/…` pages the module draws, such as the health module's water and protein pages, #13176), `navItems` (a sidebar entry and the page it follows), `kbKinds` (knowledge entry kinds whose page it adds parts to: the `kb.detail` slot) and `standalonePages` (pages it draws on their own, without the app shell: see **Pages of their own** below) | yes |
+| `shell_places` | `routes` (a page: a base segment, its aliases, its title), `extensionPages` (reserved `/extension/-<id>/…` pages the module draws, such as the health module's water and protein pages, #13176), `navItems` (a sidebar entry and the page it follows; `shown`, an optional condition read with each look at the sidebar, with its own `subscribe`), `kbKinds` (knowledge entry kinds whose page it adds parts to: the `kb.detail` slot) and `standalonePages` (pages it draws on their own, without the app shell: see **Pages of their own** below) | yes |
 | `i18n_namespaces` | `i18nNamespaces` and `locales` (its catalog loaders) | yes |
-| `settings` | `settingsTabs` (a Settings category in one of its groups) | yes (#13846) |
+| `settings` | `settingsTabs` (a Settings category in one of its groups) and `settingsRows` (rows in a section of a core Settings page, one of `SETTINGS_ROW_PLACES`: `connectors.lark`, drawn by `web/src/core/SettingsRows.tsx`) | yes (#13846, #13404) |
 | `chat_card_kinds` | `cardRenderers` (pending-card kinds the core has no card for) | yes (#13846) |
 | `composer_actions`, `chat_accessories` | `chatSlots`: `composer.trailingAction`, `chat.tail`, `chat.bar`, `interaction.asked` | yes (#13846) |
 
@@ -2484,6 +2501,18 @@ stats overlay and the data-use meter, with their strings (`screen-share-screen.j
 flag is `module.screen-share`; off, the machine page has no **View screen** and `/screen/<machine>` is an unknown
 address. Its Labs name and line are `sidebar.json`'s. `lib/computer.ts` (whether a Mac offers its screen, the page's
 address) stays in core with the machine page.
+
+**The lark module** (#13404, web half). The Messages page (`web/src/modules/lark/`,
+`docs/extensions/lark-migration.md` "Entry point"): every Lark chat in one list (`Messages.tsx`, `lark-chats.ts`), its
+sidebar entry right after Inbox and the "Show messages on home" row of Settings › Connectors › Lark (`LarkHomeSwitch.tsx`,
+the `connectors.lark` place), with their strings (`lark-messages.json`, `lark-chats.json`, `lark-homeswitch.json`). The
+entry keeps its old condition through `shown` (`home.ts`: this browser's switch, and a hub that reads Lark); the page
+opens from its address whatever the switch says, as before. Its code entry (`lark-code.ts`) holds the row and the page as a
+chunk of its own, so the Connectors page draws the row without loading the page. Its hub flag is `module.lark`; off,
+there is no entry and no row, `/messages` is an unknown address, and the chunk and strings are never requested. The
+Inbox's Lark chat view (`views/inbox/LarkThread.tsx`), its parts (`Chip`, `Count`, `LarkAvatar`), `lib/lark-history.ts`
+(with the chat type), `lib/lark-accounts.ts` and the account its writes carry (`lib/lark-account.ts`, which the
+module's lists keep current) stay in core.
 
 **The recording module** (#13407, web half). A recording's parts of its knowledge page
 (`web/src/modules/recording/`, `docs/assistant/meeting-minutes.md`, `docs/assistant/day-recap.md`): Rename and Hand to
@@ -2997,8 +3026,9 @@ and Android follow in #5117.
   before never lands on the one picked since.
 - **What the pill says**: what this start runs: the mark of the Agent the launcher runs, the model (the one picked; else Model
   settings' model on their launcher; else the model the launcher's default entry stands for, by its list's name; a
-  launcher that fixes its own `--model`, that model) and, for Claude Code and Antigravity, the effort
-  (the one picked, else Model settings'). Codex shows no effort: a start doesn't set it. The workflow mark while ultracode
+  launcher that fixes its own `--model`, that model) and the effort: for Claude Code and Antigravity, the one picked
+  (else Model settings'); for Codex, only an explicit level reported by the selected model (unset follows Codex's
+  configured default, keeping existing launch settings; #13764). The workflow mark while ultracode
   is on.
 - **Providers** (`lib/new-agent-panel.ts`): the chosen computer's launchers in the hub's order (`GET
   /machines/{mid}/launchers`), by display name, the startup ID small and monospace beside the group's name and in the
@@ -3226,6 +3256,7 @@ How narrow screens (below `lg`) and touch screens work; wide desktop screens sta
   - Pulling down at the top of the page does not reload the app (`overscroll-behavior-y: none` on `html` and `body`; the drawer's sideways drag is unaffected).
 - **Back closes overlays first**: the drawer, full-screen side panels, the image viewer, bottom sheets, popup menus (⋯ and the like, #5132), the search palette, and the composer's full editor, + panel and model panel (#11442) each push a same-URL history entry when opened (`lib/back-close.ts`). Search in the drawer hands the drawer's entry to the palette, and a picked result's page replaces it, so one Back returns to where you were. One Back closes the model panel with its flyout; in New Agent's sheet the panel's entry sits on the sheet's, so a pick leaves the sheet for the next Back, and Configure models / How to fix go on only once the panel's entry is off, so the page they open replaces the sheet's. A reload keeps that entry but not the overlay, so before the app draws, `settleOverlayEntry` goes back off any entry still marked as an overlay's (or, if the page moved under it, just drops the marker); otherwise the first Back after a reload does nothing (#5134). Switching panes uses replace and adds no entry. An old `/s/` link is replaced with the matching `/t/` after opening. A session id in `/s/` can be just its first 8 or more characters (short ids from the assistant and notifications, #2464): it is resolved against that machine's session list. With exactly one match, the link is replaced in place with the full id; with several, they are listed for you to pick; with none, the node is asked as-is, and if that finds nothing it says the session can't be found (`lib/session-link.ts`). The node only accepts full ids.
 - **Input area**:
+  - **Answer** for a waiting command gives the compact dock up to 72% of the visible height so its field can sit above the sticky footer, with the composer still on screen. Focusing the composer or the command leaving its card returns the dock to its usual cap (#14571).
   - The bar above the input box takes at most about 55% of the visible height and scrolls on its own. The one exception is typing into a waiting card's own field (its "Or write your own…" answer, a plan's reject note) with the phone's keyboard up: the bar may then take the whole visible height so the field stays in sight, with the input box still on screen (`data-kb` on `<html>` from `lib/viewport.ts`: iOS's keyboard is the visual viewport's frame, Android's the page standing at least 120 px short of its tallest at this width while a field has focus; the rule in `styles.css`, #11442); once the keyboard goes down or the focus leaves the field, the 55% cap applies again. With several pending cards, only the first is expanded; the rest collapse into "N more ›". When you answer this Agent's last card here while other Agents still have cards waiting, an extra line appears under "Answered": "N more waiting for you · Next: <Agent> · <what it asks> ›" (#4091). The count comes from Overview's "Needs you" card list (minus this chat), the first item is taken in that order, and tapping it opens that chat with that card first. It never jumps automatically, and the line disappears when "Answered" does (in landscape or with the keyboard up, "Answered" is not shown, so neither is this line). It only appears on the Agent's own page; Persona's chats don't show it (task questions have their own bar). When the visible height is under 500px (landscape, keyboard up), cards collapse to one line (except while you type into a card's own field: that card stays, #11442), and plan step count, run status, and queue merge into one line too.
   - On every width, a waiting card cut off below the box over the composer (its answers stuck at the box's bottom edge, the end of its body under them or below the box) says in its answer row what they answer, its title and command (`data-card-answers`, its tooltip the whole text, a click bringing the whole card into view with the focus on it). A card that asks only its title (a question) says it only while that title is out of view too, never repeating what is in view. While any card of several is cut off, the first says **N pending** at its top end (`data-chat-cards-count`): a wide stack, or a narrow one opened in full (folded, its "N more" row says it). `views/chat/card-cut.ts`, `web/e2e/pending-cards-cut.mjs`. Never an Allow next to nothing.
   - The input box is at most `min(240px, visible height × 35%)`.
@@ -3578,3 +3609,20 @@ in herdr appears at the next inventory refresh. The **Rename** dialog offers
 one **Name** field, which updates the tab and the CLI title where supported.
 Even with the setting off, an empty or shell-prompt title falls back to the
 herdr tab name. Sessions without a named herdr tab use their session title.
+
+### Named herdr sessions in Settings › Agents (#14898)
+
+**Named herdr sessions** (`web/src/views/settings/HerdrSessions.tsx`), directly
+below **Agent folders** in Settings › Agents, lets the user pick a computer,
+view detected named herdr sessions (`GET /api/v1/machines/{mid}/herdr/sessions`),
+block or unblock individual sessions, or type a session name to block
+(`PUT /api/v1/machines/{mid}/herdr/sessions/blocked`). Empty by default; works
+for offline computers (showing saved blocked sessions). Also searchable from
+Settings search and manageable through `persona_settings`
+(`agents.blocked_herdr_sessions`).
+
+### Model profiles
+
+Settings › Model configuration › **Model profiles** shows each saved profile's Agent presets, purpose bindings, launcher model overrides, and any fields that differ from the current live configuration (`changes`). Both the profile detail dialog and interactive editor expose **Update from current configuration**, backed by `PUT /api/v1/model-profiles/{id}` with `capture: true` (preserving the profile's name, description, and existing Agent presets, and refreshing the catalog on completion).
+
+When applying a profile with no drift (`changes` empty and no unsaved drift on the active profile), **Apply profile** applies immediately. When drift exists, **Apply profile** opens an inline confirmation step listing each affected purpose or launcher field and offering **Capture current into `<active>` first** (which captures the active profile via `capture: true` before applying the target), **Apply directly**, or **Cancel**. Editor saves omit empty optional fields and default (`standard`) tier speed for cross-version hub compatibility, and pin validation and save errors directly beside the Save button.

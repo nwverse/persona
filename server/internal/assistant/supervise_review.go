@@ -189,6 +189,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	restartUserCheck := t.Supervision.state(t) == reviewUserCheck && verdict != reviewAccepted
 	deliveryNote := ""
 	if verdict == reviewAccepted { // delivery_gate: owner wait & criteria first, then PR/issue/deploy gate (supervise_review_delivery.go)
+		ctx = withFollowupWatchHints(ctx)
 		if t.DoneAt == nil && t.Supervision != nil && t.Supervision.Waits != nil && !withdraw {
 			w := *t.Supervision.Waits
 			return "", ownerWaitError(t.ID, &w)

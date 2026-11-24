@@ -7,13 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"regexp"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // The core's types the module names, as the seam (internal/healthhost) declares them.
@@ -107,7 +107,7 @@ func fullRole(r *http.Request) bool {
 }
 
 // intakeUUIDPattern is an entry's id.
-var intakeUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+var intakeUUIDPattern = lazyre.New(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 func randomHex(n int) string {
 	b := make([]byte, n)
