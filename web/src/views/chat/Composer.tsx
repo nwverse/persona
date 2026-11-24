@@ -1416,7 +1416,7 @@ export const Composer = memo(function Composer({
               onClick={() => void submit()}
               className={ROUND}
             >
-              <Icon name="send" size={14} stroke={2} className="-translate-x-px translate-y-px fill-current" />
+              <Icon name="up" size={15} stroke={2.4} />
             </button>
           )}
         </div>

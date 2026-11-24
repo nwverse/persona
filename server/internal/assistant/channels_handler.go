@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -169,7 +170,7 @@ func (s *Service) channelsReconnected(ctx context.Context) {
 		s.askFollow(ctx, k[0], k[1]) // a failure is asked again by the run's watcher
 	}
 	s.forgetChannelList()
-	s.feishuForgetStatus()
+	s.larkModule().ForgetStatus()
 	if _, err := s.chat().Status(ctx); err != nil { // the pairing as it is now (feishuReconcile)
 		s.logf("channels: the Feishu bot's status: %v", err)
 	}
@@ -245,16 +246,14 @@ func (s *Service) channelsCatchUp(ctx context.Context) {
 // after this runs), so each is closed only once the history says it ended for good (botCardOver). One that may still
 // be waiting is looked at again a little later, once (again).
 func (s *Service) closeEndedBotCards(ctx context.Context, pending map[string]bool, again bool) {
-	b := &s.fbot
-	b.mu.Lock()
-	s.loadBotLocked(ctx) // cards posted before a restart are in the chat's state
 	var maybe []botCard
-	for id, card := range b.cards {
-		if !pending[id] && card.MessageID != "" {
-			maybe = append(maybe, card)
+	s.larkModule().Book(ctx, func(b assistantwire.ChatBook) { // cards posted before a restart are in the chat's state
+		for id, card := range b.Cards() {
+			if !pending[id] && card.MessageID != "" {
+				maybe = append(maybe, card)
+			}
 		}
-	}
-	b.mu.Unlock()
+	})
 	var unsure []botCard
 	for _, card := range maybe {
 		switch s.botCardOver(ctx, card.Ix.ID) {

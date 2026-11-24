@@ -231,7 +231,7 @@ func (s *Service) createTodoFromWithImages(ctx context.Context, title, notes, in
 
 // createDirectionTodo makes a piece of leader's direction (#5846): a todo with plan's due date, reminder, priority and
 // project, opened by the leader and supervised by it, with no agent and no done_when, as a Lark topic opens one
-// (feishu_thread_open.go). So the direction tree lists it under that direction (as not started until an agent works on
+// (the lark module's thread_open.go). So the direction tree lists it under that direction (as not started until an agent works on
 // it, direction_tree.go), and task_plan's todo_id can run an agent on it later instead of opening a second todo.
 func (s *Service) createDirectionTodo(ctx context.Context, leader, title, notes string, plan db.TodoEdit, bindings ...*repository.CreateBindings) (Todo, error) {
 	now := time.Now().UTC()
