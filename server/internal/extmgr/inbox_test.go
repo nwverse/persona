@@ -492,8 +492,8 @@ func TestInboxSourcesAnswerTheManager(t *testing.T) {
 	h.cfg.Inbox.Rules = "  示例规则  "
 	h.cfg.Inbox.Agent = InboxAgentConfig{Enabled: true, Concurrency: 2}
 	h.cfg.Inbox.ReplyPolicy = InboxReplyPolicyConfig{
-		Enabled: true, Revision: "rpc-v1", Sources: []string{"lark", "mail"}, UnknownMode: "owner_only", RequireIndependentReview: true,
-		Categories: map[string]string{"ordinary_coordination": "owner_draft", "approval_permission": "owner_only"},
+		Enabled: true, Revision: "rpc-v1", Sources: []string{"lark", "mail"}, RequireIndependentReview: true,
+		Categories: map[string]string{"ordinary_coordination": "owner_draft", "approval_permission": "owner_only", "unknown": "owner_only"},
 	}
 	h.cfg.Lark.Account = 3
 	app := func(app, method string, params any) (json.RawMessage, error) {
@@ -565,8 +565,8 @@ func TestInboxSourcesAnswerTheManager(t *testing.T) {
 	}
 	policy := cfg.ReplyPolicy
 	if !policy.Enabled || policy.Revision != "rpc-v1" || !slices.Equal(policy.Sources, []string{"lark", "mail"}) ||
-		policy.UnknownMode != "owner_only" || !policy.RequireIndependentReview ||
-		policy.Categories["ordinary_coordination"] != "owner_draft" || policy.Categories["approval_permission"] != "owner_only" {
+		!policy.RequireIndependentReview || policy.Categories["ordinary_coordination"] != "owner_draft" ||
+		policy.Categories["approval_permission"] != "owner_only" || policy.Categories["unknown"] != "owner_only" {
 		t.Fatalf("reply policy did not survive the real inbox.config RPC: %s", out)
 	}
 	// A mail's text for translation keeps the HTML's paragraphs and links.
