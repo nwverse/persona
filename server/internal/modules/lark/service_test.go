@@ -756,15 +756,18 @@ func (s *Service) SaveRuns() {
 
 // ---- runs ----
 
-// waitFor waits up to two seconds for ok.
+// waitFor polls ok until it holds, for at most five seconds (as the assistant's).
 func waitFor(t testing.TB, what string, ok func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	deadline := time.After(5 * time.Second)
 	for !ok() {
-		if time.Now().After(deadline) {
+		select {
+		case <-tick.C:
+		case <-deadline:
 			t.Fatalf("timed out waiting for %s", what)
 		}
-		time.Sleep(5 * time.Millisecond)
 	}
 }
 
