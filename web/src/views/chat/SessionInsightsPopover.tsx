@@ -202,7 +202,7 @@ function BreakdownCard({ breakdown }: { breakdown: SessionContextBreakdown }) {
             className="size-2 shrink-0 rounded-full"
             style={{ backgroundColor: BREAKDOWN_COLOR[breakdown.topConsumer.key] }}
           />
-          <span className="min-w-0 truncate">
+          <span className="min-w-0">
             {t("chat-sessioninsights.breakdown_top_consumer", {
               category: t(BREAKDOWN_LABEL_KEY[breakdown.topConsumer.key]),
               percent: Math.round(breakdown.topConsumer.usedShare),
