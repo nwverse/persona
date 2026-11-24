@@ -253,6 +253,12 @@ func TestChannelRoutingGatedByIntegrationsV2AndLosslessRollback(t *testing.T) {
 
 	// Toggle integrations_v2 ON again -> persisted config still active; groupSess is now idle > 1h so it rotates.
 	setIntegrationsV2(t, s, true)
+	rec = channelAPIRequest(t, s, http.MethodGet, "/api/v1/channels/examplechat", "full", "")
+	detail = channel.Detail{}
+	_ = json.Unmarshal(rec.Body.Bytes(), &detail)
+	if detail.TargetOverride == nil || detail.TargetOverride.Mode != channel.TargetOverrideTopics {
+		t.Fatalf("integrations_v2=true per_group_and_topic target_override = %+v, want topics", detail.TargetOverride)
+	}
 	if err := s.channelForward(ctx, "examplechat", channel.Message{
 		ID: "on_again_rotated", Text: "rotated group", ChatID: "oc_g1", ChatKind: channel.ChatKindGroup,
 	}); err != nil {
@@ -261,6 +267,17 @@ func TestChannelRoutingGatedByIntegrationsV2AndLosslessRollback(t *testing.T) {
 	rotatedSess := boundThread(s, groupKey)
 	if f.sent() != 3 || rotatedSess == "" || rotatedSess == groupSess {
 		t.Fatalf("re-enabled integrations_v2 did not rotate idle group: starts=%d new=%q old=%q", f.sent(), rotatedSess, groupSess)
+	}
+
+	// Switching to channel_default while integrations_v2=true clears target_override.
+	rec = channelAPIRequest(t, s, http.MethodPut, "/api/v1/channels/examplechat", "full", `{"thread_mode":"channel_default"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT channel_default: %d %s", rec.Code, rec.Body.String())
+	}
+	detail = channel.Detail{}
+	_ = json.Unmarshal(rec.Body.Bytes(), &detail)
+	if detail.TargetOverride != nil {
+		t.Fatalf("integrations_v2=true channel_default target_override = %+v, want nil", detail.TargetOverride)
 	}
 }
 

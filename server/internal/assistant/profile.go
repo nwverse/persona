@@ -359,8 +359,10 @@ func (v Settings) todosV2On() bool        { return v.TodosV2 != nil && *v.TodosV
 func (v Settings) integrationsV2On() bool { return v.IntegrationsV2 != nil && *v.IntegrationsV2 }
 
 // integrationsV2On reports whether assistant.integrations_v2 is enabled (off by default).
+// Uses settingsLastGood so hot receive/routing paths never trigger a hub hello RPC.
 func (s *Service) integrationsV2On(ctx context.Context) bool {
-	return s.settings(ctx).integrationsV2On()
+	v, _ := s.settingsLastGood(ctx)
+	return v.integrationsV2On()
 }
 
 // prEventsRouteToAgentOn reports whether assistant.pr_events_route_to_agent is enabled (off by default).
