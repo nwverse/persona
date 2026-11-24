@@ -43,9 +43,11 @@ type logicalSwitchStore interface {
 	logicalConversationStore
 	PutConversationHandoff(context.Context, string, string, string, json.RawMessage) error
 	ConversationPreparation(context.Context, string, string, string) (json.RawMessage, bool, error)
+	ConversationPendingHandoff(context.Context, string, string, string) (json.RawMessage, error)
 	ClaimConversationPreparation(context.Context, string, string, string) (bool, error)
 	ConversationUnresolvedInput(context.Context, string, string) (*db.ConversationInput, error)
 	ConversationInputPending(context.Context, string, string) (bool, error)
+	AcceptIdleConversationSwitch(context.Context, string, string, string, int64) (bool, error)
 	ConversationClosures(context.Context) ([][2]string, error)
 	ConversationClosureDone(context.Context, string, string) error
 }

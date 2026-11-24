@@ -534,6 +534,9 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 				continue
 			}
 			id = bound
+			if src, ok := n.codexSource(bound); ok && src.home != "" {
+				home = src.home
+			}
 		}
 		if named, claimed := n.codexByTitle(a, id, m); named != "" {
 			id = named
@@ -681,6 +684,12 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 		a, ok := m[otherSession(host.Agent{Agent: agyAgent, PaneID: pane})]
 		if !ok || a.Agent != agyAgent || a.PaneID != pane {
 			delete(n.agyBound, pane)
+		}
+	}
+	for pane, r := range n.agyReports { // a pane whose agent is gone, or that no engine lists any more
+		row, listed := agyRowOfPane(m, pane)
+		if listed && row.Agent != agyAgent || !listed && time.Since(r.at) > agyReportGrace {
+			delete(n.agyReports, pane)
 		}
 	}
 	// herdr's omp integration reports the session file: what resuming a stopped one needs (ompresume.go).

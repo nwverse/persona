@@ -357,6 +357,46 @@ data class BackgroundTask(
 }
 
 /**
+ * Explicit takeover / continuation capability for a read-only Codex CLI session
+ * (`docs/protocol/protocol.md`, #5813). Absent on older hubs and ordinary sessions.
+ */
+@KeepGeneratedSerializer
+@Serializable(with = CodexTakeoverCapabilitySerializer::class)
+data class CodexTakeoverCapability(
+    val running: Boolean = false,
+    @SerialName("can_resume") val canResume: Boolean = false,
+    val reason: String? = null,
+)
+
+/** Error code returned on 409 when a Codex takeover can only continue in a new session. */
+const val CODEX_TAKEOVER_CONTINUE_ONLY = "codex_takeover_continue_only"
+
+/** Result of `GET /api/v1/machines/{mid}/codex/{sid}/takeover`. */
+@Serializable
+data class CodexTakeoverInfo(
+    val running: Boolean = false,
+    @SerialName("can_resume") val canResume: Boolean = false,
+    val reason: String? = null,
+    val token: String = "",
+    val cwd: String = "",
+    @SerialName("transcript_path") val transcriptPath: String = "",
+    @SerialName("continuation_prompt") val continuationPrompt: String = "",
+)
+
+/** Request body for `POST /api/v1/machines/{mid}/codex/{sid}/takeover`. */
+@Serializable
+data class CodexTakeoverRequest(
+    val token: String,
+    @SerialName("confirm_stop") val confirmStop: Boolean = false,
+)
+
+/** Response body for `POST /api/v1/machines/{mid}/codex/{sid}/takeover`. */
+@Serializable
+data class CodexTakeoverResponse(
+    val session: Session,
+)
+
+/**
  * What a session with a [Session.sourceKind] allows; a missing field is a refusal (docs/protocol/protocol.md "Codex sources
  * and capabilities"), except the optional ones, whose null keeps the app's own rule.
  */
@@ -371,6 +411,8 @@ data class SessionCapabilities(
     val attach: Boolean = false,
     /** Null on an older hub: the client keeps its agent-based rule instead of treating the field as a refusal. */
     val modes: Boolean? = null,
+    /** Explicit takeover / continuation offered for a read-only Codex CLI session (#5813). */
+    val takeover: CodexTakeoverCapability? = null,
     /** Close the agent, terminal or not (a runtime's session, #6294); null from an older node: the app keeps its terminal rule. */
     val close: Boolean? = null,
     /** Rename it, terminal or not (a runtime's session, #6294); null from an older node: the app keeps its terminal rule. */
@@ -387,6 +429,8 @@ data class SessionCapabilities(
      * between them (`persona.core.domain.sort.listedModes`); null from an older node and wherever Claude Code's modes stand.
      */
     @SerialName("permission_modes") val permissionModes: List<String>? = null,
+    /** Reply to asynchronous questions without granting general approval support. */
+    @SerialName("answer_questions") val answerQuestions: Boolean = false,
 )
 
 /**
@@ -509,6 +553,9 @@ data class ModeChange(
     @WireTime val at: String = "",
 )
 
+/** Hub hello feature advertising cross-machine subagent folding, orphan filtering, and parent_machine_id queries. */
+const val SESSIONS_CROSS_MACHINE_HIERARCHY = "sessions_cross_machine_hierarchy"
+
 @KeepGeneratedSerializer
 @Serializable(with = SessionSerializer::class)
 data class Session(
@@ -550,11 +597,19 @@ data class Session(
     @SerialName("source_instance_id") val sourceInstanceId: String? = null,
     @SerialName("parent_thread_id") val parentThreadId: String? = null,
     @SerialName("parent_session_id") val parentSessionId: String? = null,
+    /** When [parentSessionId] lives on another computer (cross-machine A2A / dispatch subagent); null for same-machine. */
+    @SerialName("parent_machine_id") val parentMachineId: String? = null,
     @SerialName("root_session_id") val rootSessionId: String? = null,
     @SerialName("is_subagent") val isSubagent: Boolean = false,
     @SerialName("asking_parent_session_id") val askingParentSessionId: String? = null,
     /** The listed ancestor whose chat owns this child (sessions_hierarchy). */
     @SerialName("folded_under") val foldedUnder: String? = null,
+    /** Beside [foldedUnder] when the topmost listed ancestor lives on another computer; null for same-machine folds. */
+    @SerialName("folded_under_machine_id") val foldedUnderMachineId: String? = null,
+    /** Durable A2A task ID that launched this subagent session; null for peer messages and non-A2A subagents. */
+    @SerialName("a2a_task_id") val a2aTaskId: String? = null,
+    /** How a subagent session was created: native, a2a, dispatch, runtime, or spawned. */
+    @SerialName("subagent_origin") val subagentOrigin: String? = null,
     /** Why a row that is no child folds: [FoldedAs.WORKER] (a tab's worker, #5180) or [FoldedAs.SIDE] (#7944). */
     @SerialName("folded_as") val foldedAs: String? = null,
     /**
@@ -707,6 +762,9 @@ data class Session(
     @SerialName("starting") val starting: Boolean = false,
     /** Why starting it failed; the session is offline and sends get the same error. */
     @SerialName("start_error") val startError: String? = null,
+    /** The coded start remedy, and a terminal question's line/choices when the start waits for an answer. */
+    @SerialName("start_error_code") val startErrorCode: String? = null,
+    @SerialName("start_error_args") val startErrorArgs: Map<String, String>? = null,
     /** Codex is open in its pane and has no thread until its first message. */
     @SerialName("awaiting_first_message") val awaitingFirstMessage: Boolean = false,
     /**
@@ -790,8 +848,20 @@ data class Session(
     val undelivered: List<HeldAgentMessage>? = null,
 ) {
     val key: SessionKey get() = SessionKey(machineId, sessionId)
+    /** The listed ancestor's key (`folded_under_machine_id` when cross-machine, else `machine_id`); null when not folded. */
+    val foldedUnderKey: SessionKey?
+        get() = foldedUnder?.takeIf(String::isNotBlank)?.let {
+            SessionKey(foldedUnderMachineId?.takeIf(String::isNotBlank) ?: machineId, it)
+        }
+    /** Direct parent session key (`parent_machine_id` when cross-machine, else `machine_id`); null when absent. */
+    val parentKey: SessionKey?
+        get() = parentSessionId?.takeIf(String::isNotBlank)?.let {
+            SessionKey(parentMachineId?.takeIf(String::isNotBlank) ?: machineId, it)
+        }
     /** A chat of the health space ([space]), which the assistant's own lists leave out. */
     val isHealth: Boolean get() = space == persona.core.contracts.api.AssistantSpace.HEALTH
+    /** A chat of any space ([space]: health or a domain space, #13500), which the assistant's own lists leave out. */
+    val isSpace: Boolean get() = !space.isNullOrEmpty()
     val agentState: AgentState get() = AgentState.of(state, status)
     /**
      * The list state of this session and its folded children; its own wire state stays intact. A side session's result
@@ -1275,6 +1345,8 @@ data class Interaction(
     @SerialName("session_id") val sessionId: String = "",
     @SerialName("session_title") val sessionTitle: String? = null,
     @SerialName("folded_under") val foldedUnder: String? = null,
+    /** Beside [foldedUnder] when the folded ancestor lives on another computer; null for same-machine folds. */
+    @SerialName("folded_under_machine_id") val foldedUnderMachineId: String? = null,
     @SerialName("folded_as") val foldedAs: String? = null,
     /** The side session whose chat this card belongs to when it comes from a row folded through one (#7944). */
     @SerialName("folded_side") val foldedSide: String? = null,
@@ -1359,7 +1431,11 @@ data class Interaction(
             else -> null
         }
     /** The page that answers it; resolution still uses this interaction's own id and session. */
-    val homeKey: SessionKey get() = SessionKey(machineId, foldedUnder?.takeIf(String::isNotBlank) ?: sessionId)
+    val homeKey: SessionKey
+        get() {
+            val folded = foldedUnder?.takeIf(String::isNotBlank) ?: return SessionKey(machineId, sessionId)
+            return SessionKey(foldedUnderMachineId?.takeIf(String::isNotBlank) ?: machineId, folded)
+        }
 
     /** Asked by an agent other than Claude Code (Codex, a compatible CLI, a runtime's): the card is that agent's, never Claude's. */
     val fromOtherAgent: Boolean get() = !agent.isNullOrEmpty() && agent != "claude"
@@ -1545,6 +1621,7 @@ object DetectedEngineSerializer : WireSerializer<DetectedEngine>(DetectedEngine.
 object LoopInfoSerializer : WireSerializer<LoopInfo>(LoopInfo.generatedSerializer())
 object GoalInfoSerializer : WireSerializer<GoalInfo>(GoalInfo.generatedSerializer())
 object BackgroundTaskSerializer : WireSerializer<BackgroundTask>(BackgroundTask.generatedSerializer())
+object CodexTakeoverCapabilitySerializer : WireSerializer<CodexTakeoverCapability>(CodexTakeoverCapability.generatedSerializer())
 object SessionCapabilitiesSerializer : WireSerializer<SessionCapabilities>(SessionCapabilities.generatedSerializer())
 object SessionTodoSerializer : WireSerializer<SessionTodo>(SessionTodo.generatedSerializer())
 object WorkflowSerializer : WireSerializer<Workflow>(Workflow.generatedSerializer())

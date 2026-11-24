@@ -136,15 +136,14 @@ final class ScreenshotBannerUITests: XCTestCase {
         return (request.results ?? []).compactMap { o in o.topCandidates(1).first.map { ($0.string, o.boundingBox) } }
     }
 
-    /// Settings › Appearance & Display has the switch (on: the UI tests pass it, a fresh install's default is
+    /// Settings › Advanced › Appearance & Display has the switch (on: the UI tests pass it, a fresh install's default is
     /// `ScreenshotBannerPrefs.enabledByDefault`, ScreenshotBannerTests).
     @MainActor func testTheSwitch() throws {
         for scheme in ["light", "dark"] {
             let app = launch(["-ui.scheme", scheme, "-tab", "settings", "-app.tab", "settings"], banner: true)
             defer { app.terminate() }
-            let appearance = app.descendants(matching: .any)["settings-appearance"].firstMatch
-            XCTAssertTrue(app.descendants(matching: .any)["settings-list"].firstMatch.waitForExistence(timeout: 30), "no Settings")
-            for _ in 0..<8 where !appearance.isHittable { app.swipeUp() }
+            XCTAssertTrue(app.openSettingsAdvancedPage(), "no Settings › Advanced")
+            let appearance = app.settingsAdvancedRow("settings-appearance")
             appearance.tap()
             let toggle = app.switches["settings-screenshot-banner"].firstMatch
             XCTAssertTrue(app.descendants(matching: .any)["settings-style"].firstMatch.waitForExistence(timeout: 15), "no Appearance & Display")
@@ -262,8 +261,12 @@ final class ScreenshotBannerUITests: XCTestCase {
         let ctx = try XCTUnwrap(CGContext(data: &px, width: crop.width, height: crop.height, bitsPerComponent: 8, bytesPerRow: crop.width * 4,
                                           space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
         ctx.draw(crop, in: CGRect(x: 0, y: 0, width: crop.width, height: crop.height))
-        return Crop(luma: stride(from: 0, to: px.count, by: 4).map { i in
-            (Int(px[i]) * 299 + Int(px[i + 1]) * 587 + Int(px[i + 2]) * 114) / 1000
+        // Typed parts: with Vision imported, the one-line sum timed out Xcode 26's type-checker (#13374).
+        return Crop(luma: stride(from: 0, to: px.count, by: 4).map { (i: Int) -> Int in
+            let r: Int = Int(px[i]) * 299
+            let g: Int = Int(px[i + 1]) * 587
+            let b: Int = Int(px[i + 2]) * 114
+            return (r + g + b) / 1000
         })
     }
 

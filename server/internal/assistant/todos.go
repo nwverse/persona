@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/nwverse/persona/server/internal/compat"
 	"net/http"
 	"slices"
 	"sort"
@@ -13,11 +12,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/compat"
+
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/larkhost"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -280,9 +282,9 @@ func sessionSpaceKey(machineID string, c proto.Session) string {
 func (s *Service) ensureTodosLoaded(ctx context.Context) error {
 	loaded, err := s.loadTodoInventory(ctx)
 	if loaded {
-		s.rehomeSupervisedTodos(ctx)
+		s.backfillPlanSupervisors(ctx)
 		s.restoreSupervisePending(ctx)
-		s.retryOwnerWaits(ctx) // crash recovery resumes only explicitly undelivered owner pushes
+		s.migrateOwnerWaits(ctx) // waits earlier versions pushed straight to the owner go to the supervisor
 		// The links as read are the ones the marks go by from now on: one that goes away later syncs its machine
 		// again (syncLinkedTodoTokens), even before any of the links changed.
 		s.syncLinkedTodoTokens()
@@ -467,6 +469,7 @@ func (s *Service) todosLoaded() bool {
 // todosChanged tells the apps to read the todos again ({"type":"todos"}), once the rest of the write is in
 // (todosPushSoon).
 func (s *Service) todosChanged(ctx context.Context) {
+	s.trevision.changed() // seen/restored/Someday come through here too, without moving updated_at
 	s.todosPushSoon()
 	s.todoChangedSoon()
 	s.remindSoon()        // a reminder set, moved or done (todo_plan.go)
@@ -999,8 +1002,19 @@ func (s *Service) todoRoutes() {
 	// GET /api/v1/todos: list all todos (newest created_at first), agents sorted (active first, then released); a todo
 	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go); each its
 	// view, and the list its counts (todo_view_routes.go); to an extension's token without the to-dos it is not shown
-	// (todo_scope.go)
+	// (todo_scope.go). With ?limit or ?cursor it answers one page and how to read the next (todo_pagination.go); no
+	// parameter keeps the complete answer, its fields and its revision header unchanged.
 	s.handle("GET /api/v1/todos", func(w http.ResponseWriter, r *http.Request) {
+		limit, after, paged, err := todoListPageQuery(r.URL.Query())
+		if err != nil {
+			code := "invalid_todo_limit"
+			if errors.Is(err, errTodoPageCursor) {
+				code = "invalid_todo_cursor"
+			}
+			apierr.WriteCode(w, http.StatusBadRequest, code, err)
+			return
+		}
+		writes := s.trevision.writes.Load()
 		list, p, err := s.todosViewed(r.Context(), true)
 		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
@@ -1008,9 +1022,16 @@ func (s *Service) todoRoutes() {
 		}
 		if r.Header.Get(RoleHeader) == roleExtension {
 			list = s.extensionRows(r.Context(), list, p)
+		} else if !paged {
+			s.tagTodoRevision(w, writes, p)
+		}
+		if paged {
+			writeTodoPage(w, list, p, limit, after)
+			return
 		}
 		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts()})
 	})
+	s.handle("GET /api/v1/todos/revision", s.todoRevisionRead)
 
 	// POST /api/v1/todos: create todo {title, notes, due_at | due_date, remind_at, priority, project, kind}; kind concern
 	// records one of the owner's concerns (concerns.go): it closes only once its outcome is reported (…/decisions
@@ -1598,7 +1619,7 @@ func (s *Service) setTodoRow(id string, row db.TodoRow, guard func(*Todo) bool) 
 		s.workEvent("", "", todoReopenedEvent, reopenedEvent) // a wrong "done" in the work stats (agents_work_wrong_done.go)
 	}
 	if closing != nil {
-		s.threadPost(id, *closing) // after the lock: it looks the todo up again
+		s.chat().ThreadPost(id, *closing) // after the lock: it looks the todo up again
 		s.sourceReportSoon(id, sourceReportWait)
 	}
 	return out, doneKeys, true
@@ -1976,7 +1997,7 @@ func (s *Service) failTodoIf(ctx context.Context, id, reason string, keep func(T
 	t := s.todos.todos[id]
 	var before Todo
 	var failKeys [][2]string
-	var closing *threadEvent
+	var closing *larkhost.ThreadEvent
 	if t != nil {
 		before = copyTodoLocked(t)
 		closing = threadClosing(t.DoneAt == nil, reason, "")
@@ -1999,7 +2020,7 @@ func (s *Service) failTodoIf(ctx context.Context, id, reason string, keep func(T
 		return false, db.ErrTodoNotFound
 	}
 	if closing != nil {
-		s.threadPost(id, *closing)
+		s.chat().ThreadPost(id, *closing)
 		s.sourceReportSoon(id, threadPostSettle) // no outcome is coming for a start that failed
 	}
 	if len(failKeys) > 0 {
@@ -2133,6 +2154,7 @@ func (s *Service) reopenFailedTodo(ctx context.Context, id string) (Todo, bool, 
 	}
 	s.resetTodoReadyWake(ctx, id)
 	s.resetParentCloseoutWake(ctx, id)
+	s.resolveCard(taskFailedCardID(id)) // started again: the failure's push is over
 	return out, true, nil
 }
 
@@ -2219,4 +2241,16 @@ func cleanPromptTitle(prompt string) string {
 		}
 	}
 	return ""
+}
+
+// threadClosing is what the topic is told when a todo became done (nil when it did not): why, when the hub's judge
+// closed it or its agent never started.
+func threadClosing(becameDone bool, startError, doneReason string) *larkhost.ThreadEvent {
+	switch {
+	case !becameDone:
+		return nil
+	case startError != "":
+		return &larkhost.ThreadEvent{Kind: larkhost.ThreadTodoFailed, Text: clip(oneLine(startError), 80)}
+	}
+	return &larkhost.ThreadEvent{Kind: larkhost.ThreadTodoDone, Text: clip(oneLine(doneReason), 80)}
 }

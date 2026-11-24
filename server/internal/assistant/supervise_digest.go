@@ -400,8 +400,9 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	s.clearSentParentCloseout(moot)
 	s.turnsTold(ctx, moot) // what no longer holds is not told after a restart either (task_turns.go)
 	s.discardFailedStartBatches(ctx, moot, now)
+	ackable := append(slices.Clone(moot), kept...) // retry entries were restored and must survive every ACK path
 	if len(entries) == 0 {
-		s.ackSupervisePending(list) // every signal no longer holds, as the in-memory digest already decided
+		s.ackSupervisePending(ackable)
 		return false
 	}
 	for i := range kept {
@@ -419,7 +420,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	}
 	if len(entries) == 0 {
 		s.automaticParksTold(ctx, holds)
-		s.ackSupervisePending(list) // already covered by the deduplication history
+		s.ackSupervisePending(ackable) // already covered by the deduplication history
 		s.agentDecisionRepliesTold(ctx, holds)
 		s.handoffResultsTold(ctx, holds)
 		s.todoReadyTold(ctx, holds)
@@ -469,7 +470,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			}
 			s.rememberLegacyBackground(to, legacy)
 		}
-		s.ackSupervisePending(list)
+		s.ackSupervisePending(ackable)
 		s.ackSupervisionDedupLocked(ctx, delivered, ackKeys)
 		s.parkedDueTold(ctx, kept) // told for good: not again after a restart (parked.go)
 		s.automaticParksTold(ctx, kept)
@@ -554,7 +555,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.logf("supervise: %d signal(s) to the main conversation", len(entries))
 	}
 	c, ok := s.session(ctx, here.MachineID, to)
-	if !ok || c.Starting || s.relayReplacing(to) || !msg.Interject && (c.Status == proto.StatusWorking || s.relayWaits(to, msg)) {
+	if !ok || c.Starting || s.relayReplacing(to) || s.relayHasUnresolvedSupervision(to) || !msg.Interject && (c.Status == proto.StatusWorking || s.relayWaits(to, msg)) {
 		if !s.queueDigest(to, msg, kept, now, prev) {
 			return false
 		}
@@ -574,6 +575,9 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		if s.queueDigest(to, msg, kept, now, prev) {
 			accepted = true
 			s.publish(ctx)
+			if !msg.LookAfter.IsZero() {
+				s.drainAfter(here.MachineID, to, max(time.Until(msg.LookAfter), 0))
+			}
 		}
 		return accepted
 	}
@@ -605,20 +609,27 @@ func (b *superviseBook) setQueuedLocked(to string, list []superviseSignal) {
 // place), the message still queued for it (supervise.queued) stays as it was, the last message is prev again (nothing went
 // out), and the digest is tried again in the urgent gap, or later when the gap after prev has not passed yet.
 func (s *Service) queueDigest(to string, msg relayMsg, kept []superviseSignal, at, prev time.Time) bool {
-	if slices.ContainsFunc(kept, func(g superviseSignal) bool {
+	tried := !msg.TriedAt.IsZero() || !msg.DoubtedAt.IsZero()
+	if !tried && slices.ContainsFunc(kept, func(g superviseSignal) bool {
 		return g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPREvent || g.Kind == sigDecisionReply ||
 			g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
 	}) {
-		// Rendered relays cannot recheck PR facts, a source acknowledgment or a decision round. Keep these signals pending, so the next
-		// dispatch revalidates them; deliverDigest releases the unaccepted dedup reservation.
+		// Rendered relays cannot recheck PR facts, a source acknowledgment or a decision round. Keep untried signals
+		// pending so the next dispatch revalidates them; deliverDigest releases the unaccepted dedup reservation.
+		// Once tryDirectRelay has attempted the send, retain the exact rendered payload, OnceID, and attempt state in
+		// the durable queue so reconciliation settles or retries under the same delivery identity (#12567).
 		s.restoreDigest(kept, at, prev)
 		return false
 	}
+	wasInterject := msg.Interject
+	msg.Interject = false // interject is never persisted in the relay queue
 	b := &s.supervise
 	msg.Signals = encodeDigestSignals(kept)
 	if n, err := s.queueRelayDurable(to, msg); err == nil && n > 0 {
 		b.mu.Lock()
-		b.setQueuedLocked(to, kept)
+		if !wasInterject {
+			b.setQueuedLocked(to, kept)
+		}
 		b.mu.Unlock()
 		return true
 	}
@@ -666,6 +677,7 @@ func mergeSignals(a, b []superviseSignal) []superviseSignal {
 			if g.Kind == sigInbox && out[i].Key != g.Key {
 				g = joinInbox(out[i], g)
 			}
+			g = preserveIdleHandoff(out[i], g)
 			out[i] = g
 		} else {
 			out = append(out, g)
@@ -685,13 +697,15 @@ func (s *Service) replaceQueuedSupervise(to string, msg relayMsg) bool {
 	previousQueue := b.st.Queue
 	previousPending := maps.Clone(b.st.SupervisePending)
 	q := slices.Clone(previousQueue[to])
+	// A withdrawn, tried, or doubtful supervision relay still owns the outcome of its original send. Let drainRelays
+	// reconcile and remove it before a replacement can replay any of the same signals under a new message id (#5732).
+	if slices.ContainsFunc(q, func(m relayMsg) bool {
+		return m.unresolvedSupervision() || m.Tool == superviseTool && !b.doubted[relayMsgID(to, m)].IsZero()
+	}) {
+		return false
+	}
 	for i := range q {
-		// A withdrawn or doubtful head still owns the outcome of its original send. Let drainRelays check its durable
-		// doubt and remove it before a replacement can replay any of the same signals under a new message id (#5732).
-		if q[i].Tool == superviseTool && (q[i].Withdrawn || !q[i].DoubtedAt.IsZero()) {
-			return false
-		}
-		if q[i].Tool == superviseTool && !q[i].Withdrawn && q[i].DoubtedAt.IsZero() && (i > 0 || !b.draining[to]) {
+		if q[i].Tool == superviseTool && (i > 0 || !b.draining[to]) {
 			q[i] = msg.replacing(q[i], time.Now()) // it waited since then (relay_presence.go)
 			if signals, structured := decodeDigestSignals(msg.Signals); structured {
 				ackSupervisePendingLocked(b.st.SupervisePending, signals)
@@ -724,9 +738,34 @@ func (s *Service) digestEntryChecked(ctx context.Context, g superviseSignal, web
 		return s.prMergedDigestEntry(ctx, g, web)
 	case sigParentCloseout:
 		return s.parentCloseoutDigestEntry(ctx, g, web)
+	case sigCardlessWait:
+		// P1-1: an unreadable acceptance book is not evidence of no card — restore and retry before any claim logic.
+		if s.cardlessDigestShouldRetry(g) {
+			return prompts.SuperviseEntry{}, false, true // acceptance book unreadable: restore and retry, never render on an unknown ledger
+		}
+		if valid, retry := s.completeCardlessClaim(ctx, g); !valid {
+			return prompts.SuperviseEntry{}, false, retry
+		}
 	}
 	e, ok := s.digestEntry(ctx, g, web)
 	return e, ok, false
+}
+
+// cardlessDigestShouldRetry reports that a cardless entry's delivery-time revalidation could not run because the
+// acceptance book could not be read. The signal is then restored for a later digest instead of being dropped or
+// rendered against an unknown ledger. Every other outcome (a card/worker now answers, or the claim still holds) is
+// left to the two-state digestEntry, which re-runs the same checks against a readable book.
+func (s *Service) cardlessDigestShouldRetry(g superviseSignal) bool {
+	t, ok := s.todoNow(g.Todo)
+	if !ok || t.Supervision == nil {
+		return false
+	}
+	v := t.Supervision
+	if v.state(t) != reviewPending || v.CardlessToldAt == nil {
+		return false // reviewed or handed back meanwhile: moot, not a transient retry
+	}
+	_, readable, _ := s.askCopyReadable(t.ID)
+	return !readable
 }
 
 // todoReadyDigestEntry builds the supervision entry for a sigTodoReady signal, returning retry=true on transient
@@ -764,6 +803,12 @@ func (s *Service) todoReadyDigestEntry(ctx context.Context, g superviseSignal, w
 
 // digestEntry is signal g as the message lists it; false when it no longer holds.
 func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string) (prompts.SuperviseEntry, bool) {
+	return s.digestEntryRecheck(ctx, g, web, false)
+}
+
+// digestEntryRecheck is digestEntry, allowing an already-tried queued sigDecisionReply whose queue admission set
+// ToldAt to be rechecked for open-round validity before retrying under its original OnceID (#12567).
+func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web string, triedQueued bool) (prompts.SuperviseEntry, bool) {
 	switch g.Kind {
 	case sigTodoReady:
 		e, ok, _ := s.todoReadyDigestEntry(ctx, g, web)
@@ -835,7 +880,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		}
 	case sigDecisionReply:
 		a, ok := s.askCopy(t.ID)
-		if !ok || a.AgentReply == nil || !a.AgentReply.ToldAt.IsZero() || agentDecisionReplyKey(a) != g.Key || acceptAskStale(&a, t) {
+		if !ok || a.AgentReply == nil || !triedQueued && !a.AgentReply.ToldAt.IsZero() || agentDecisionReplyKey(a) != g.Key || acceptAskStale(&a, t) {
 			return prompts.SuperviseEntry{}, false
 		}
 		if a.AgentReply.Handled {
@@ -940,9 +985,9 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 			return prompts.SuperviseEntry{}, false // decided or reviewed again meanwhile
 		}
 	case sigCardlessWait:
-		// The marker (stamped when raised, persisted whole-round) is the hold: Postgres truncates PendingSince to
-		// microseconds, so a full key comparison against it could fail only on a database-backed service.
-		if st != reviewPending || v.CardlessToldAt == nil {
+		// The pending claim is durable before this marker. Compare round identities at Postgres precision so a
+		// restored signal cannot acknowledge a newer review or be rejected merely for losing nanoseconds.
+		if !cardlessClaimMatches(t, g) || v.CardlessToldAt == nil {
 			return prompts.SuperviseEntry{}, false // reviewed, or handed back already, meanwhile
 		}
 		// Re-run the conditions that made the signal valid against current data: a card or active worker can have
