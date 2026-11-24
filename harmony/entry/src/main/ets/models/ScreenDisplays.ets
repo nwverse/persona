@@ -34,24 +34,39 @@ function touchingLayout(machine: ScreenDisplay[], width: number, height: number,
   if (!main || machine.length < 2 || machine.some((d: ScreenDisplay) => !(d.scale || commonScale))) return [];
   const scale = main.scale || commonScale;
   const placed: ScreenDisplay[] = [new ScreenDisplay(main.key, 0, 0, main.width * scale, main.height * scale, true)];
-  for (let at: number = 0; at < placed.length; at++) {
-    const frame = placed[at];
-    const base = machine.find((d: ScreenDisplay) => d.key === frame.key) as ScreenDisplay;
-    for (const d of machine) {
-      if (placed.some((p: ScreenDisplay) => p.key === d.key)) continue;
-      const w = d.width * (d.scale || commonScale), h = d.height * (d.scale || commonScale);
-      let x = frame.x + d.x - base.x, y = frame.y + d.y - base.y;
-      const overlapX = Math.min(d.x + d.width, base.x + base.width) > Math.max(d.x, base.x);
-      const overlapY = Math.min(d.y + d.height, base.y + base.height) > Math.max(d.y, base.y);
-      if (overlapX && d.y === base.y + base.height) y = frame.y + frame.height;
-      else if (overlapX && d.y + d.height === base.y) y = frame.y - h;
-      else if (overlapY && d.x === base.x + base.width) x = frame.x + frame.width;
-      else if (overlapY && d.x + d.width === base.x) x = frame.x - w;
-      else continue;
-      placed.push(new ScreenDisplay(d.key, x, y, w, h, d.main));
+  const remaining = machine.filter((d: ScreenDisplay) => d !== main);
+  const bases: ScreenDisplay[] = [main];
+  while (remaining.length) {
+    let next: ScreenDisplay | undefined;
+    let nextIndex = -1, bestOffset = Infinity;
+    // Prefer aligned neighbours. Two screens in the same row can both touch the main
+    // screen; placing both relative to it would overlap their backing-pixel rectangles.
+    for (let at = 0; at < placed.length; at++) {
+      const frame = placed[at], base = bases[at];
+      for (let i = 0; i < remaining.length; i++) {
+        const d = remaining[i];
+        const w = d.width * (d.scale || commonScale), h = d.height * (d.scale || commonScale);
+        const dx = d.x - base.x, dy = d.y - base.y;
+        let x = frame.x + dx, y = frame.y + dy, offset: number;
+        if (dx < base.width && dx > -d.width && (dy === base.height || dy === -d.height)) {
+          y = dy > 0 ? frame.y + frame.height : frame.y - h;
+          offset = Math.abs(dx);
+        } else if (dy < base.height && dy > -d.height && (dx === base.width || dx === -d.width)) {
+          x = dx > 0 ? frame.x + frame.width : frame.x - w;
+          offset = Math.abs(dy);
+        } else continue;
+        if (offset >= bestOffset || placed.some((p: ScreenDisplay) =>
+          x < p.x + p.width && x + w > p.x && y < p.y + p.height && y + h > p.y)) continue;
+        next = new ScreenDisplay(d.key, x, y, w, h, d.main);
+        nextIndex = i;
+        bestOffset = offset;
+      }
     }
+    if (!next) return [];
+    placed.push(next);
+    bases.push(remaining.splice(nextIndex, 1)[0]);
   }
-  return placed.length === machine.length ? normalize(placed, width, height, true) : [];
+  return normalize(placed, width, height, true);
 }
 
 export class ScreenDisplays {

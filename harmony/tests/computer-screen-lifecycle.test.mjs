@@ -331,6 +331,18 @@ for (const layout of layouts) {
   });
 }
 
+test('adjoining displays in a vertical column keep their shared edge independent of enumeration order', () => {
+  const rows = [
+    { id: 1, main: true, x: 0, y: 0, width: 1117, height: 1728, scale: 2 },
+    { id: 2, x: -1080, y: 870, width: 1080, height: 1920, scale: 2 },
+    { id: 3, x: -1080, y: -1050, width: 1080, height: 1920, scale: 2 }
+  ];
+  for (const displays of [rows, rows.toReversed()]) {
+    const mapped = ScreenDisplays.layout(4394, 7680, [], ScreenDisplays.machine({ displays }));
+    assert.deepEqual(mapped.map(d => [d.key, d.x, d.y]), [['1',2160,2970], ['3',0,0], ['2',0,3840]]);
+  }
+});
+
 test('mixed display scales and RFB display IDs preserve the main monitor selection', () => {
   const machine = ScreenDisplays.machine({ displays: [
     { id: 5, x: 0, y: 0, width: 1728, height: 1117, scale: 2, main: true },
@@ -803,4 +815,21 @@ test('an outstanding local password read cannot answer a hidden connection', asy
   await opening;
   assert.equal(stream.sent.length,sent);
   assert.equal(screen.credentialsRequested,false);
+});
+
+test('one legal full-screen update can arrive as a burst above the pre-login queue limit', async t => {
+  const stream = new TestStream();
+  const {screen, parent, row} = screenFixture(stream);
+  const opening = screen.open(parent,row);
+  t.after(async () => { screen.close(); await opening; });
+  await waitFor(() => !!stream.onBinary);
+  const width = 2304, height = 1024;
+  stream.receive(serverHandshake(width, height));
+  await waitFor(() => screen.isLive());
+  stream.receive([0,0,0,1,0,0,0,0,width >> 8,width & 255,height >> 8,height & 255,0,0,0,0]);
+  const bytes = new Uint8Array(width * height * 4);
+  bytes[bytes.length - 4] = 123;
+  for (let i = 0; i < bytes.length; i += 256 * 1024) stream.onBinary(bytes.buffer.slice(i, i + 256 * 1024));
+  await waitFor(() => screen.hasFrame);
+  assert.equal(screen.presentationSource().pixels.at(-4),123);
 });
