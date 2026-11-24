@@ -40,6 +40,7 @@ var (
 const nodeRecoveryKeyPrefix = "node-recovery:"
 
 type nodeOnlineRecord struct {
+	machine     string
 	lastOnline  time.Time
 	offlineAt   time.Time
 	bootTime    int64
@@ -49,7 +50,10 @@ type nodeOnlineRecord struct {
 
 type nodeRecoveryBook struct {
 	mu      sync.Mutex
-	records map[string]nodeOnlineRecord
+	records []nodeOnlineRecord
+	// nodeInfoHook is an optional test hook supplying machine metadata without
+	// replacing Service.devs (which switches sessions() to fleet localSessions).
+	nodeInfoHook func(machine string) (name, hostname string, bootTime int64, connectedAt time.Time, ok bool)
 }
 
 type nodeRecoveryEvent struct {
@@ -77,32 +81,31 @@ type nodeRecoveryResult struct {
 	WokenTodos []string
 }
 
+func (b *nodeRecoveryBook) indexLocked(id string) int {
+	for i := range b.records {
+		if b.records[i].machine == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// noteNodeOnline refreshes lastOnline for an already-tracked node without heap
+// allocations on the hot SessionsChanged path.
 func (s *Service) noteNodeOnline(machine string, now time.Time) {
 	id := s.canonical(machine)
 	if id == "" {
 		return
 	}
-	var bootTime int64
-	if s.devs != nil {
-		if m, _, _ := s.devs.MachineResources(id); m != nil && m.System != nil {
-			bootTime = m.System.BootTime
-		}
-	}
 	b := &s.nodeRecovery
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.records == nil {
-		b.records = map[string]nodeOnlineRecord{}
+	if i := b.indexLocked(id); i >= 0 {
+		if now.After(b.records[i].lastOnline) {
+			b.records[i].lastOnline = now
+		}
+		b.records[i].offlineAt = time.Time{}
 	}
-	rec := b.records[id]
-	if now.After(rec.lastOnline) {
-		rec.lastOnline = now
-	}
-	rec.offlineAt = time.Time{}
-	if bootTime > 0 && rec.bootTime == 0 {
-		rec.bootTime = bootTime
-	}
-	b.records[id] = rec
+	b.mu.Unlock()
 }
 
 func (s *Service) noteNodeOffline(machine string, now time.Time) {
@@ -113,17 +116,20 @@ func (s *Service) noteNodeOffline(machine string, now time.Time) {
 	b := &s.nodeRecovery
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.records == nil {
-		b.records = map[string]nodeOnlineRecord{}
+	if i := b.indexLocked(id); i >= 0 {
+		if b.records[i].offlineAt.IsZero() {
+			b.records[i].offlineAt = now
+		}
+		if b.records[i].lastOnline.IsZero() {
+			b.records[i].lastOnline = now
+		}
+		return
 	}
-	rec := b.records[id]
-	if rec.offlineAt.IsZero() {
-		rec.offlineAt = now
-	}
-	if rec.lastOnline.IsZero() {
-		rec.lastOnline = now
-	}
-	b.records[id] = rec
+	b.records = append(b.records, nodeOnlineRecord{
+		machine:    id,
+		lastOnline: now,
+		offlineAt:  now,
+	})
 }
 
 // NodeConnected is called when a node finishes connecting and listing sessions
@@ -145,7 +151,20 @@ func (s *Service) nodeConnectedAt(ctx context.Context, machine string, now time.
 		machineName = id
 		hostname    string
 	)
-	if s.devs != nil {
+	b := &s.nodeRecovery
+	b.mu.Lock()
+	hook := b.nodeInfoHook
+	b.mu.Unlock()
+	if hook != nil {
+		if n, h, bt, ca, ok := hook(id); ok {
+			if n != "" {
+				machineName = n
+			}
+			hostname = h
+			bootTime = bt
+			connectedAt = ca
+		}
+	} else if s.devs != nil {
 		connectedAt = s.devs.ConnectedAt(id)
 		if m, _, _ := s.devs.MachineResources(id); m != nil {
 			if m.Name != "" {
@@ -166,12 +185,15 @@ func (s *Service) nodeConnectedAt(ctx context.Context, machine string, now time.
 		connectedAt = now
 	}
 
-	b := &s.nodeRecovery
 	b.mu.Lock()
-	if b.records == nil {
-		b.records = map[string]nodeOnlineRecord{}
+	idx := b.indexLocked(id)
+	had := idx >= 0
+	var rec nodeOnlineRecord
+	if had {
+		rec = b.records[idx]
+	} else {
+		rec.machine = id
 	}
-	rec, had := b.records[id]
 	prevOnline := rec.lastOnline
 	if !rec.offlineAt.IsZero() && (prevOnline.IsZero() || rec.offlineAt.After(prevOnline)) {
 		prevOnline = rec.offlineAt
@@ -202,7 +224,11 @@ func (s *Service) nodeConnectedAt(ctx context.Context, machine string, now time.
 		rec.sweptConnAt = connectedAt
 		rec.sweptBootAt = bootTime
 	}
-	b.records[id] = rec
+	if had {
+		b.records[idx] = rec
+	} else {
+		b.records = append(b.records, rec)
+	}
 	b.mu.Unlock()
 
 	if !shouldSweep {
@@ -378,7 +404,7 @@ func (s *Service) runNodeRecoverySweep(ctx context.Context, ev nodeRecoveryEvent
 				released := s.releaseCoveredNodeAgents(ctx, t, plan.onNode)
 				res.Released += released
 				if t.DoneAt == nil {
-					detail := fmt.Sprintf("%s；已由 %s 接手，旧节点上的 Agent 已释放并撤掉残留门禁票与后台等待",
+					detail := fmt.Sprintf("%s; taken over by %s; old Agent released and leftover waits/gates withdrawn",
 						recoveryEventHeader(ev, outageMin), cov.by)
 					s.signal(superviseSignal{
 						Todo:    t.ID,
@@ -399,7 +425,7 @@ func (s *Service) runNodeRecoverySweep(ctx context.Context, ev nodeRecoveryEvent
 
 			case recoveryConflict:
 				res.Conflicts++
-				detail := fmt.Sprintf("%s；检测到双边进展冲突（未自动选边，旧 Agent 保持冻结）：%s",
+				detail := fmt.Sprintf("%s; diverging progress conflict (old Agent kept frozen, supervisor decision required): %s",
 					recoveryEventHeader(ev, outageMin), cov.detail)
 				s.signal(superviseSignal{
 					Todo:    t.ID,
@@ -448,7 +474,7 @@ func (s *Service) runNodeRecoverySweep(ctx context.Context, ev nodeRecoveryEvent
 					continue
 				}
 				unresumableRef = item.agent
-				unresumable = append(unresumable, fmt.Sprintf("%s（自动唤醒失败：%v）", item.step, err))
+				unresumable = append(unresumable, fmt.Sprintf("%s (auto-wake failed: %v)", item.step, err))
 				continue
 			}
 			unresumableRef = item.agent
@@ -456,7 +482,7 @@ func (s *Service) runNodeRecoverySweep(ctx context.Context, ev nodeRecoveryEvent
 			if item.listed && item.session.TurnError != "" && !proto.SilentTurnKind(item.session.TurnErrorKind) {
 				orphanReason = orphanError
 			}
-			unresumable = append(unresumable, fmt.Sprintf("%s（%s）", item.step, why))
+			unresumable = append(unresumable, fmt.Sprintf("%s (%s)", item.step, why))
 		}
 		if wokenAny {
 			res.WokenTodos = append(res.WokenTodos, t.ID)
@@ -508,12 +534,12 @@ func classifyRecoveryCoverage(plan recoveryTaskPlan, ev nodeRecoveryEvent) recov
 	t := plan.todo
 	if t.DoneAt != nil {
 		if t.Cancelled() {
-			return recoveryCoverage{kind: recoveryCovered, by: "任务已取消"}
+			return recoveryCoverage{kind: recoveryCovered, by: "task cancelled"}
 		}
-		return recoveryCoverage{kind: recoveryCovered, by: cmp.Or(t.DoneReason, "任务已完成/验收")}
+		return recoveryCoverage{kind: recoveryCovered, by: cmp.Or(t.DoneReason, "task completed")}
 	}
 	if t.PRStatus != nil && t.PRStatus.State == "merged" {
-		return recoveryCoverage{kind: recoveryCovered, by: "PR " + cmp.Or(t.PRStatus.URL, t.PRURL) + " 已合并"}
+		return recoveryCoverage{kind: recoveryCovered, by: "merged PR " + cmp.Or(t.PRStatus.URL, t.PRURL)}
 	}
 
 	// Check whether another active Agent on a different node took over during the outage.
@@ -536,7 +562,6 @@ func classifyRecoveryCoverage(plan recoveryTaskPlan, ev nodeRecoveryEvent) recov
 
 	otherSess, otherListed := plan.byKey[[2]string{newestOther.MachineID, newestOther.SessionID}]
 	if !otherListed {
-		// Try canonical lookup as well.
 		for k, sess := range plan.byKey {
 			if k[1] == newestOther.SessionID {
 				otherSess, otherListed = sess, true
@@ -592,22 +617,22 @@ func detectDivergingProgress(old recoveryTarget, other TodoAgent, otherSess prot
 	otherRef := leaderRef(other.MachineID, other.SessionID)
 	branchNote := ""
 	if sameBranch {
-		branchNote = fmt.Sprintf("分支 %s 上 ", old.session.Branch)
+		branchNote = fmt.Sprintf("on branch %s ", old.session.Branch)
 	}
 	oldNote := clip(oneLine(cmp.Or(old.session.LastText, old.session.Activity, old.step)), 120)
 	otherNote := clip(oneLine(cmp.Or(otherSess.LastText, otherSess.Activity, other.Title)), 120)
-	return fmt.Sprintf("%s%s（%s）与 %s（%s）两边均有新进展/提交，请督办者判断保留哪边",
+	return fmt.Sprintf("%sboth %s (%s) and %s (%s) made progress/commits; supervisor must choose which side to keep",
 		branchNote, oldRef, oldNote, otherRef, otherNote), true
 }
 
 func sessionHasCommitProgress(c proto.Session) bool {
 	combined := strings.ToLower(c.LastText + " " + c.Activity)
-	for _, kw := range []string{"pushed", "push ", "commit", "committed", "git push", "提交", "推送"} {
+	for _, kw := range []string{"pushed", "push ", "commit", "committed", "git push"} {
 		if strings.Contains(combined, kw) {
 			return true
 		}
 	}
-	return false
+	return strings.Contains(combined, "提交") || strings.Contains(combined, "推送") // i18n-ignore: matches agent transcript output
 }
 
 // releaseCoveredNodeAgents releases old Agents on the returning node whose work
@@ -669,19 +694,19 @@ func unresumableReason(listed bool, c proto.Session, rebooted bool) string {
 	switch {
 	case !listed:
 		if rebooted {
-			return "节点重启后会话已消失"
+			return "session missing after node reboot"
 		}
-		return "节点重连后未列出该会话"
+		return "session not listed after reconnect"
 	case c.Status == proto.StatusInterrupted:
-		return "节点重启导致终端进程中断"
+		return "terminal process interrupted by node reboot"
 	case sessionClosed(c) || c.Status == proto.StatusOffline:
-		return "Agent 标签或进程已关闭"
+		return "agent tab or process closed"
 	case c.State == proto.StateNeedsYou || c.PendingInteractions > 0:
-		return "Agent 正在等待交互卡片确认，无法自动唤醒"
+		return "agent waits on an approval/question card"
 	case c.TurnError != "":
-		return "Agent 上一轮报错停止：" + clip(oneLine(c.TurnError), 120)
+		return "agent stopped on error: " + clip(oneLine(c.TurnError), 120)
 	default:
-		return "Agent 当前不可自动续接"
+		return "agent cannot resume automatically"
 	}
 }
 
@@ -719,17 +744,17 @@ func waitingOnNodeStep(c proto.Session, tokens []string) (string, bool) {
 	for _, bg := range c.Background {
 		if matchesNodeTokens(bg.Command, tokens) || matchesNodeTokens(bg.Description, tokens) {
 			label := cmp.Or(strings.TrimSpace(bg.Description), strings.TrimSpace(bg.Command), bg.Kind)
-			return fmt.Sprintf("后台 %s「%s」", cmp.Or(bg.Kind, "任务"), clip(oneLine(label), 120)), true
+			return fmt.Sprintf("background %s %q", cmp.Or(bg.Kind, "task"), clip(oneLine(label), 120)), true
 		}
 	}
 	if c.Work != nil && (c.Work.Phase == proto.WorkBlocked || c.Work.Wait != "" || c.Work.Line != "") {
 		if matchesNodeTokens(c.Work.Wait, tokens) || matchesNodeTokens(c.Work.Line, tokens) {
 			label := cmp.Or(strings.TrimSpace(c.Work.Wait), strings.TrimSpace(c.Work.Line))
-			return fmt.Sprintf("等待外部步骤「%s」", clip(oneLine(label), 120)), true
+			return fmt.Sprintf("waiting on %q", clip(oneLine(label), 120)), true
 		}
 	}
 	if matchesNodeTokens(c.Activity, tokens) && (c.BackgroundWorking || c.BackgroundWaiting || c.State == proto.StateWorking) {
-		return fmt.Sprintf("当前步骤「%s」", clip(oneLine(c.Activity), 120)), true
+		return fmt.Sprintf("step %q", clip(oneLine(c.Activity), 120)), true
 	}
 	return "", false
 }
@@ -738,7 +763,7 @@ func affectedStepSummary(t Todo, c proto.Session, machineName string, isWaiter b
 	if len(c.Background) > 0 {
 		bg := c.Background[0]
 		label := cmp.Or(strings.TrimSpace(bg.Description), strings.TrimSpace(bg.Command), bg.Kind)
-		return fmt.Sprintf("后台 %s「%s」", cmp.Or(bg.Kind, "任务"), clip(oneLine(label), 120))
+		return fmt.Sprintf("background %s %q", cmp.Or(bg.Kind, "task"), clip(oneLine(label), 120))
 	}
 	if c.Work != nil && (c.Work.Wait != "" || c.Work.Line != "") {
 		return clip(oneLine(cmp.Or(c.Work.Wait, c.Work.Line)), 120)
@@ -750,44 +775,37 @@ func affectedStepSummary(t Todo, c proto.Session, machineName string, isWaiter b
 		return clip(oneLine(c.Activity), 120)
 	}
 	if strings.TrimSpace(t.Stage) != "" {
-		return "阶段 " + t.Stage
+		return "stage " + t.Stage
 	}
 	if strings.TrimSpace(c.LastText) != "" {
 		return clip(oneLine(c.LastText), 120)
 	}
 	if isWaiter {
-		return fmt.Sprintf("等待节点 %s 的后台作业", machineName)
+		return fmt.Sprintf("background job waiting on node %s", machineName)
 	}
-	return fmt.Sprintf("节点 %s 上的进行中步骤", machineName)
+	return fmt.Sprintf("in-flight step on node %s", machineName)
 }
 
 func recoveryEventHeader(ev nodeRecoveryEvent, outageMin int) string {
 	if ev.rebooted {
 		if outageMin > 0 {
-			return fmt.Sprintf("节点 %s 离线 %d 分钟并重启后恢复", ev.machineName, outageMin)
+			return fmt.Sprintf("node %s rebooted and reconnected after %dm offline", ev.machineName, outageMin)
 		}
-		return fmt.Sprintf("节点 %s 重启后恢复", ev.machineName)
+		return fmt.Sprintf("node %s rebooted and reconnected", ev.machineName)
 	}
-	return fmt.Sprintf("节点 %s 离线 %d 分钟后重连", ev.machineName, outageMin)
+	return fmt.Sprintf("node %s reconnected after %dm offline", ev.machineName, outageMin)
 }
 
 func formatRecoveryWakeMessage(ev nodeRecoveryEvent, outageMin int, step string, isWaiter bool) string {
-	cause := fmt.Sprintf("离线 %d 分钟后已重新连上", outageMin)
-	if ev.rebooted {
-		if outageMin > 0 {
-			cause = fmt.Sprintf("离线 %d 分钟并发生重启后已恢复上线", outageMin)
-		} else {
-			cause = "刚刚发生重启并已恢复上线"
-		}
-	}
+	header := recoveryEventHeader(ev, outageMin)
 	if isWaiter {
-		return fmt.Sprintf("【节点恢复通知】目标节点 %s %s。你正在等待的 %s 可能在断连/重启期间中断，输出结果已丢失。请立即核对远端状态，必要时重新提交作业并继续推进当前任务。",
-			ev.machineName, cause, step)
+		return fmt.Sprintf("[Node recovery] Target %s. Your %s may have been interrupted and its results lost during the outage. Check the remote state, re-submit any dropped job, and continue the task.",
+			header, step)
 	}
-	return fmt.Sprintf("【节点恢复通知】所在节点 %s %s。你手上的 %s 及相关后台命令、Monitor 或临时连接可能已在断连期间中断或丢失。请检查现场状态，重新提交丢失的步骤并继续完成任务。",
-		ev.machineName, cause, step)
+	return fmt.Sprintf("[Node recovery] Host %s. Your %s and any background commands, Monitors, or tunnels may have been interrupted or lost. Verify local state, re-submit dropped work, and continue.",
+		header, step)
 }
 
 func formatRecoverySignalDetail(ev nodeRecoveryEvent, outageMin int, items []string) string {
-	return fmt.Sprintf("%s；受影响步骤：%s", recoveryEventHeader(ev, outageMin), strings.Join(items, "；"))
+	return fmt.Sprintf("%s; affected step: %s", recoveryEventHeader(ev, outageMin), strings.Join(items, "; "))
 }

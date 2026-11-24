@@ -14,44 +14,40 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-type recoveryTestDevices struct {
-	*fakeDevices
-	mu        sync.Mutex
-	machines  map[string]*proto.Machine
-	connected map[string]time.Time
+type recoveryNodeMeta struct {
+	name        string
+	hostname    string
+	bootTime    int64
+	connectedAt time.Time
 }
 
-func newRecoveryTestDevices() *recoveryTestDevices {
-	return &recoveryTestDevices{
-		fakeDevices: &fakeDevices{},
-		machines:    map[string]*proto.Machine{},
-		connected:   map[string]time.Time{},
+type recoveryNodeTable struct {
+	mu    sync.Mutex
+	nodes map[string]recoveryNodeMeta
+}
+
+func attachRecoveryNodes(s *Service) *recoveryNodeTable {
+	tbl := &recoveryNodeTable{nodes: map[string]recoveryNodeMeta{}}
+	s.nodeRecovery.mu.Lock()
+	s.nodeRecovery.nodeInfoHook = func(machine string) (string, string, int64, time.Time, bool) {
+		tbl.mu.Lock()
+		defer tbl.mu.Unlock()
+		m, ok := tbl.nodes[machine]
+		return m.name, m.hostname, m.bootTime, m.connectedAt, ok
 	}
+	s.nodeRecovery.mu.Unlock()
+	return tbl
 }
 
-func (d *recoveryTestDevices) setMachine(id, name, hostname string, bootTime int64, connectedAt time.Time) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.machines[id] = &proto.Machine{
-		ID:       id,
-		Name:     name,
-		Hostname: hostname,
-		Online:   true,
-		System:   &proto.System{BootTime: bootTime},
+func (r *recoveryNodeTable) set(id, name, hostname string, bootTime int64, connectedAt time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.nodes[id] = recoveryNodeMeta{
+		name:        name,
+		hostname:    hostname,
+		bootTime:    bootTime,
+		connectedAt: connectedAt,
 	}
-	d.connected[id] = connectedAt
-}
-
-func (d *recoveryTestDevices) MachineResources(id string) (*proto.Machine, *proto.MetricSample, *bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.machines[id], nil, nil
-}
-
-func (d *recoveryTestDevices) ConnectedAt(id string) time.Time {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.connected[id]
 }
 
 func createSupervisedRecoveryTodo(t *testing.T, s *Service, title, machine, session string) Todo {
@@ -74,16 +70,14 @@ func TestNodeRecoveryDisconnectReconnect(t *testing.T) {
 	ctx := context.Background()
 	s, f := newQuietService(t)
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
-	devs := newRecoveryTestDevices()
-	s.devs = devs
+	nodes := attachRecoveryNodes(s)
 
 	base := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
 	bootBefore := base.Add(-2 * time.Hour).Unix()
-	devs.setMachine("worker", "Worker Node", "worker-host", bootBefore, base.Add(-time.Hour))
-	devs.setMachine("other", "Other Node", "other-host", bootBefore, base.Add(-time.Hour))
+	nodes.set("worker", "Worker Node", "worker-host", bootBefore, base.Add(-time.Hour))
+	nodes.set("other", "Other Node", "other-host", bootBefore, base.Add(-time.Hour))
 
 	// Record initial online state and then a disconnect.
-	s.noteNodeOnline("worker", base)
 	s.noteNodeOffline("worker", base)
 
 	// Task 1: resumable Agent on the reconnecting node with a live tab and background monitor.
@@ -140,7 +134,7 @@ func TestNodeRecoveryDisconnectReconnect(t *testing.T) {
 
 	// Brief disconnect (< nodeRecoveryOfflineAfter) with unchanged boot time does not trigger a sweep.
 	shortBack := base.Add(nodeRecoveryOfflineAfter - time.Minute)
-	devs.setMachine("worker", "Worker Node", "worker-host", bootBefore, shortBack)
+	nodes.set("worker", "Worker Node", "worker-host", bootBefore, shortBack)
 	if res := s.nodeConnectedAt(ctx, "worker", shortBack); res.Triggered {
 		t.Fatalf("brief disconnect should not trigger recovery sweep: %+v", res)
 	}
@@ -148,7 +142,7 @@ func TestNodeRecoveryDisconnectReconnect(t *testing.T) {
 	// Disconnect again and reconnect after an extended outage (20m > 10m).
 	s.noteNodeOffline("worker", shortBack)
 	reconnectedAt := shortBack.Add(20 * time.Minute)
-	devs.setMachine("worker", "Worker Node", "worker-host", bootBefore, reconnectedAt)
+	nodes.set("worker", "Worker Node", "worker-host", bootBefore, reconnectedAt)
 	res := s.nodeConnectedAt(ctx, "worker", reconnectedAt)
 	if !res.Triggered || res.Rebooted || res.Checked != 4 || res.Frozen != 1 || res.Woken != 2 || res.Signalled != 2 {
 		t.Fatalf("unexpected disconnect/reconnect sweep result: %+v", res)
@@ -159,10 +153,10 @@ func TestNodeRecoveryDisconnectReconnect(t *testing.T) {
 	resumableMsg := wakes["worker/s-resumable"]
 	waiterMsg := wakes["other/s-waiter"]
 	wakeMu.Unlock()
-	if !strings.Contains(resumableMsg, "20 分钟") || !strings.Contains(resumableMsg, "watch build queue") {
+	if !strings.Contains(resumableMsg, "20m") || !strings.Contains(resumableMsg, "watch build queue") {
 		t.Fatalf("resumable wake message missing outage/step details: %q", resumableMsg)
 	}
-	if !strings.Contains(waiterMsg, "20 分钟") || !strings.Contains(waiterMsg, "CI shard on worker") {
+	if !strings.Contains(waiterMsg, "20m") || !strings.Contains(waiterMsg, "CI shard on worker") {
 		t.Fatalf("waiter wake message missing outage/lost job details: %q", waiterMsg)
 	}
 
@@ -174,10 +168,10 @@ func TestNodeRecoveryDisconnectReconnect(t *testing.T) {
 	_, hasWaiterSig := s.supervise.pending[tWaiter.ID+"|"+sigRecovered]
 	s.supervise.mu.Unlock()
 
-	if !okOrphan || gOrphan.Minutes != 20 || !strings.Contains(gOrphan.Detail, "running migration") || !strings.Contains(gOrphan.Detail, "20 分钟") {
+	if !okOrphan || gOrphan.Minutes != 20 || !strings.Contains(gOrphan.Detail, "running migration") || !strings.Contains(gOrphan.Detail, "20m") {
 		t.Fatalf("expected orphaned signal with outage and step, got %+v (ok=%v)", gOrphan, okOrphan)
 	}
-	if !okRecovered || gRecovered.Minutes != 20 || !strings.Contains(gRecovered.Detail, "awaiting approval for deploy") || !strings.Contains(gRecovered.Detail, "20 分钟") {
+	if !okRecovered || gRecovered.Minutes != 20 || !strings.Contains(gRecovered.Detail, "awaiting approval for deploy") || !strings.Contains(gRecovered.Detail, "20m") {
 		t.Fatalf("expected recovered signal with outage and step, got %+v (ok=%v)", gRecovered, okRecovered)
 	}
 	if hasResumableSig || hasWaiterSig {
@@ -208,15 +202,13 @@ func TestNodeRecoveryReboot(t *testing.T) {
 	ctx := context.Background()
 	s, f := newQuietService(t)
 	s.superviseTimes = superviseTimings{gather: time.Millisecond, every: time.Millisecond, urgent: time.Millisecond}
-	devs := newRecoveryTestDevices()
-	s.devs = devs
+	nodes := attachRecoveryNodes(s)
 
 	base := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
 	oldBoot := base.Add(-4 * time.Hour).Unix()
-	devs.setMachine("builder", "Builder Box", "builder-host", oldBoot, base.Add(-time.Hour))
-	devs.setMachine("controller", "Controller Box", "controller-host", oldBoot, base.Add(-time.Hour))
+	nodes.set("builder", "Builder Box", "builder-host", oldBoot, base.Add(-time.Hour))
+	nodes.set("controller", "Controller Box", "controller-host", oldBoot, base.Add(-time.Hour))
 
-	s.noteNodeOnline("builder", base)
 	s.noteNodeOffline("builder", base)
 
 	// Task 1: Agent on rebooted node became interrupted after reboot (cannot auto-resume).
@@ -266,7 +258,7 @@ func TestNodeRecoveryReboot(t *testing.T) {
 	// Only 2 minutes offline (< 10m), but BootTime is after lastOnline -> reboot detected.
 	reconnectedAt := base.Add(2 * time.Minute)
 	newBoot := base.Add(1 * time.Minute).Unix()
-	devs.setMachine("builder", "Builder Box", "builder-host", newBoot, reconnectedAt)
+	nodes.set("builder", "Builder Box", "builder-host", newBoot, reconnectedAt)
 
 	res := s.nodeConnectedAt(ctx, "builder", reconnectedAt)
 	if !res.Triggered || !res.Rebooted || res.Checked != 3 || res.Woken != 1 || res.Signalled != 2 {
@@ -276,7 +268,7 @@ func TestNodeRecoveryReboot(t *testing.T) {
 	wakeMu.Lock()
 	waiterMsg := wakes["controller/s-ci-waiter"]
 	wakeMu.Unlock()
-	if !strings.Contains(waiterMsg, "重启") || !strings.Contains(waiterMsg, "builder-host") {
+	if !strings.Contains(waiterMsg, "rebooted") || !strings.Contains(waiterMsg, "builder-host") {
 		t.Fatalf("waiter wake message on reboot missing reboot/target info: %q", waiterMsg)
 	}
 
@@ -287,7 +279,7 @@ func TestNodeRecoveryReboot(t *testing.T) {
 		t.Fatalf("expected 1 supervision digest notice, got %d: %v", len(notices), notices)
 	}
 	msg := notices[0]
-	for _, want := range []string{tInterrupted.ID, "signal=orphaned", "compile server binary", "重启", tWakeFail.ID, "signal=recovered", "syncing cache", "自动唤醒失败"} {
+	for _, want := range []string{tInterrupted.ID, "signal=orphaned", "compile server binary", "rebooted", tWakeFail.ID, "signal=recovered", "syncing cache", "auto-wake failed"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("supervision digest missing %q:\n%s", want, msg)
 		}
@@ -317,15 +309,13 @@ func TestNodeRecoveryMovedToAnotherNode(t *testing.T) {
 	ctx := context.Background()
 	s, f := newQuietService(t)
 	s.superviseTimes = superviseTimings{gather: time.Millisecond, every: time.Millisecond, urgent: time.Millisecond}
-	devs := newRecoveryTestDevices()
-	s.devs = devs
+	nodes := attachRecoveryNodes(s)
 
 	base := time.Date(2026, 11, 24, 14, 0, 0, 0, time.UTC)
 	bootBefore := base.Add(-3 * time.Hour).Unix()
-	devs.setMachine("old-node", "Old Node", "old-host", bootBefore, base.Add(-time.Hour))
-	devs.setMachine("new-node", "New Node", "new-host", bootBefore, base.Add(-time.Hour))
+	nodes.set("old-node", "Old Node", "old-host", bootBefore, base.Add(-time.Hour))
+	nodes.set("new-node", "New Node", "new-host", bootBefore, base.Add(-time.Hour))
 
-	s.noteNodeOnline("old-node", base)
 	s.noteNodeOffline("old-node", base)
 
 	// Task originally started on old-node, then during the outage was moved to new-node.
@@ -333,7 +323,6 @@ func TestNodeRecoveryMovedToAnotherNode(t *testing.T) {
 	if err := s.linkTodoAgent(ctx, task.ID, "new-node", "s-new", "Ship feature branch", "/code/app", "claude"); err != nil {
 		t.Fatal(err)
 	}
-	// Ensure LinkedAt clearly reflects old-node before outage and new-node during outage.
 	s.todos.mu.Lock()
 	for i := range s.todos.todos[task.ID].Agents {
 		if s.todos.todos[task.ID].Agents[i].MachineID == "old-node" {
@@ -371,7 +360,9 @@ func TestNodeRecoveryMovedToAnotherNode(t *testing.T) {
 		woken       []string
 	)
 	f.answerNode("session.interrupt", func(machine string, raw json.RawMessage) (any, error) {
-		var p struct{ SessionID string `json:"session_id"` }
+		var p struct {
+			SessionID string `json:"session_id"`
+		}
 		_ = json.Unmarshal(raw, &p)
 		mu.Lock()
 		interrupted = append(interrupted, machine+"/"+p.SessionID)
@@ -379,7 +370,9 @@ func TestNodeRecoveryMovedToAnotherNode(t *testing.T) {
 		return map[string]any{"ok": true, "settled": true}, nil
 	})
 	f.answerNode(deviceSessionStop, func(machine string, raw json.RawMessage) (any, error) {
-		var p struct{ SessionID string `json:"session_id"` }
+		var p struct {
+			SessionID string `json:"session_id"`
+		}
 		_ = json.Unmarshal(raw, &p)
 		mu.Lock()
 		stopped = append(stopped, machine+"/"+p.SessionID)
@@ -387,7 +380,9 @@ func TestNodeRecoveryMovedToAnotherNode(t *testing.T) {
 		return map[string]any{"ok": true}, nil
 	})
 	f.answerNode(DeviceSessionSend, func(machine string, raw json.RawMessage) (any, error) {
-		var p struct{ SessionID string `json:"session_id"` }
+		var p struct {
+			SessionID string `json:"session_id"`
+		}
 		_ = json.Unmarshal(raw, &p)
 		mu.Lock()
 		woken = append(woken, machine+"/"+p.SessionID)
@@ -396,7 +391,7 @@ func TestNodeRecoveryMovedToAnotherNode(t *testing.T) {
 	})
 
 	reconnectedAt := base.Add(20 * time.Minute)
-	devs.setMachine("old-node", "Old Node", "old-host", bootBefore, reconnectedAt)
+	nodes.set("old-node", "Old Node", "old-host", bootBefore, reconnectedAt)
 	res := s.nodeConnectedAt(ctx, "old-node", reconnectedAt)
 	if !res.Triggered || res.Frozen != 1 || res.Released != 1 || res.Woken != 0 || res.Conflicts != 0 || res.Signalled != 1 {
 		t.Fatalf("unexpected moved-task recovery result: %+v", res)
@@ -438,10 +433,10 @@ func TestNodeRecoveryMovedToAnotherNode(t *testing.T) {
 		t.Fatalf("expected leftover work wait to be retired, got %+v", we)
 	}
 
-	// Supervision digest records "已由 new-node/s-new 接手" silently.
+	// Supervision digest records "taken over by new-node/s-new" silently.
 	s.sendDigest(ctx)
 	notices := f.notices()
-	if len(notices) != 1 || !strings.Contains(notices[0], "已由 new-node/s-new 接手") {
+	if len(notices) != 1 || !strings.Contains(notices[0], "taken over by new-node/s-new") {
 		t.Fatalf("expected takeover record in supervision digest, got %v", notices)
 	}
 }
@@ -453,15 +448,13 @@ func TestNodeRecoveryBothSidesPushedConflict(t *testing.T) {
 	ctx := context.Background()
 	s, f := newQuietService(t)
 	s.superviseTimes = superviseTimings{gather: time.Millisecond, every: time.Millisecond, urgent: time.Millisecond}
-	devs := newRecoveryTestDevices()
-	s.devs = devs
+	nodes := attachRecoveryNodes(s)
 
 	base := time.Date(2026, 11, 24, 15, 0, 0, 0, time.UTC)
 	bootBefore := base.Add(-3 * time.Hour).Unix()
-	devs.setMachine("node-a", "Node A", "host-a", bootBefore, base.Add(-time.Hour))
-	devs.setMachine("node-b", "Node B", "host-b", bootBefore, base.Add(-time.Hour))
+	nodes.set("node-a", "Node A", "host-a", bootBefore, base.Add(-time.Hour))
+	nodes.set("node-b", "Node B", "host-b", bootBefore, base.Add(-time.Hour))
 
-	s.noteNodeOnline("node-a", base)
 	s.noteNodeOffline("node-a", base)
 
 	task := createSupervisedRecoveryTodo(t, s, "Refactor scheduler", "node-a", "s-a")
@@ -496,7 +489,9 @@ func TestNodeRecoveryBothSidesPushedConflict(t *testing.T) {
 		woken       []string
 	)
 	f.answerNode("session.interrupt", func(machine string, raw json.RawMessage) (any, error) {
-		var p struct{ SessionID string `json:"session_id"` }
+		var p struct {
+			SessionID string `json:"session_id"`
+		}
 		_ = json.Unmarshal(raw, &p)
 		mu.Lock()
 		interrupted = append(interrupted, machine+"/"+p.SessionID)
@@ -504,7 +499,9 @@ func TestNodeRecoveryBothSidesPushedConflict(t *testing.T) {
 		return map[string]any{"ok": true, "settled": true}, nil
 	})
 	f.answerNode(DeviceSessionSend, func(machine string, raw json.RawMessage) (any, error) {
-		var p struct{ SessionID string `json:"session_id"` }
+		var p struct {
+			SessionID string `json:"session_id"`
+		}
 		_ = json.Unmarshal(raw, &p)
 		mu.Lock()
 		woken = append(woken, machine+"/"+p.SessionID)
@@ -513,7 +510,7 @@ func TestNodeRecoveryBothSidesPushedConflict(t *testing.T) {
 	})
 
 	reconnectedAt := base.Add(20 * time.Minute)
-	devs.setMachine("node-a", "Node A", "host-a", bootBefore, reconnectedAt)
+	nodes.set("node-a", "Node A", "host-a", bootBefore, reconnectedAt)
 	res := s.nodeConnectedAt(ctx, "node-a", reconnectedAt)
 	if !res.Triggered || res.Frozen != 1 || res.Conflicts != 1 || res.Released != 0 || res.Woken != 0 || res.Signalled != 1 {
 		t.Fatalf("unexpected conflict recovery result: %+v", res)
@@ -543,7 +540,7 @@ func TestNodeRecoveryBothSidesPushedConflict(t *testing.T) {
 	if len(notices) != 1 {
 		t.Fatalf("expected 1 conflict supervision digest, got %d: %v", len(notices), notices)
 	}
-	for _, want := range []string{"signal=recovered", "双边进展冲突", "feat/scheduler", "node-a/s-a", "node-b/s-b"} {
+	for _, want := range []string{"signal=recovered", "diverging progress conflict", "feat/scheduler", "node-a/s-a", "node-b/s-b"} {
 		if !strings.Contains(notices[0], want) {
 			t.Fatalf("conflict digest missing %q:\n%s", want, notices[0])
 		}
