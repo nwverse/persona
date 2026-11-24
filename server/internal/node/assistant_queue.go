@@ -34,6 +34,9 @@ type assistantInput struct {
 	content []map[string]any
 	queued  bool      // Claude Code said it queued it, and has not started it yet
 	at      time.Time // when it was written
+	// supervision: the message came from the manager as a supervision message (its structured message source, not its
+	// words), so the manager can take it back while it has not started (assistantCancelSupervision).
+	supervision bool
 }
 
 // assistantInputKeep is how long a message whose lifecycle never comes (a Claude Code without command_lifecycle,
@@ -234,6 +237,45 @@ func (n *Node) writeQueuedAgain(p *assistantProc, w assistantInput) error {
 	p.lastActive = time.Now()
 	p.mu.Unlock()
 	return p.writeInput(w)
+}
+
+// assistantCancelSupervision takes back the supervision messages written to conversation id that have not started
+// yet (the manager's switch for automatic supervision messages, assistant.cancel_supervision): the ones Claude Code
+// queued and the ones it has not acknowledged yet. cancel_async_message answers whether each was still waiting, so a
+// message that started meanwhile stays where it went, and a turn that has started or what a transcript already shows
+// is never taken back. It answers how many were cancelled; a conversation with nothing written, no live process or not
+// on claude has none.
+func (n *Node) assistantCancelSupervision(ctx context.Context, id string) (int, error) {
+	defer n.typing.lock(id)() // not while a message is on its way in
+	defer n.assistantLife.lock(id)()
+	n.mu.Lock()
+	p := n.procs[id]
+	n.mu.Unlock()
+	if p == nil || !p.alive() || p.agent != "claude" {
+		return 0, nil
+	}
+	p.mu.Lock()
+	var waiting []assistantInput
+	for _, w := range p.written {
+		if w.supervision {
+			waiting = append(waiting, w)
+		}
+	}
+	p.mu.Unlock()
+	cancelled := 0
+	for _, w := range waiting {
+		ok, err := p.cancelQueued(ctx, w.id)
+		if err != nil {
+			return cancelled, err
+		}
+		if ok {
+			cancelled++
+		}
+	}
+	if cancelled > 0 {
+		n.notifySessions()
+	}
+	return cancelled, nil
 }
 
 // assistantSendNow gives claude what waits in its queue now (#4342), with Claude Code's own send-now: an interrupt with

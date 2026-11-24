@@ -140,4 +140,37 @@ describe("drawnFromView", () => {
     });
     expect([r.open, r.shelved, r.finished, r.cancelled]).toEqual([8, 0, 0, 0]);
   });
+
+  it("falls back row-by-row when view is missing or carries an unknown phase, section, or reason (#14583)", () => {
+    const list = [
+      todo("todo_known", { view: view("needs_you", "owner_decides", { phase: "needs_you", rank: 0 }) }),
+      todo("todo_missing"),
+      todo("todo_bad_phase", { view: view("needs_you", "owner_decides", { phase: "future_phase", rank: 0 }) }),
+      todo("todo_bad_section", { view: view("future_section", "owner_decides", { phase: "needs_you", rank: 0 }) }),
+      todo("todo_bad_reason", { view: view("needs_you", "future_reason", { phase: "needs_you", rank: 0 }) }),
+    ];
+    const r = drawnFromView(triageTodos(list, undefined, NOW), NOW);
+    expect(ids(r)).toEqual({
+      waiting: [["todo_known"]],
+      other: [["todo_bad_phase"], ["todo_bad_reason"], ["todo_bad_section"], ["todo_missing"]],
+    });
+    expect([r.open, r.shelved, r.finished, r.cancelled]).toEqual([5, 0, 0, 0]);
+  });
+
+  it("keeps a browser-restored inactive row in Other open across hub snapshots (#14583)", () => {
+    const shelved = todo("todo_shelved", {
+      created_at: ago(72),
+      updated_at: ago(72),
+      view: view("todo", "rest", { inactive: ago(72) }),
+    });
+    const restored = new Map<string, number>([["todo_shelved", NOW - 60_000]]);
+    const r = drawnFromView(triageTodos([shelved], undefined, NOW, restored), NOW, restored);
+    expect(ids(r)).toEqual({ other: [["todo_shelved"]] });
+    expect([r.open, r.shelved]).toEqual([1, 0]);
+    // Without local restore (or once 48 h have elapsed), the hub's inactive mark shelves it.
+    const expired = new Map<string, number>([["todo_shelved", NOW - 49 * 3_600_000]]);
+    const after = drawnFromView(triageTodos([shelved], undefined, NOW, expired), NOW, expired);
+    expect(ids(after)).toEqual({ shelved: [["todo_shelved"]] });
+    expect([after.open, after.shelved]).toEqual([0, 1]);
+  });
 });

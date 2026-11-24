@@ -108,6 +108,8 @@ type Settings struct {
 	// the automatic all-in-use-tag row; a non-nil empty list is a deliberately customized empty row.
 	ConversationTagFilters []string `json:"conversation_tag_filters"`
 	WorkGuide              *bool    `json:"work_guide,omitempty"`
+	// TodosV2 enables the unified experimental New To-dos & Tasks experience (#14538, #14584). nil is off (the default).
+	TodosV2 *bool `json:"todos_v2,omitempty"`
 	// MeetingAttendanceDefault: the role a meeting recording pre-selects on the phone (off, listener, participant;
 	// docs/assistant/meeting-minutes.md "Attending a meeting"); nil is off.
 	MeetingAttendanceDefault *string `json:"meeting_attendance_default,omitempty"`
@@ -213,6 +215,11 @@ type Settings struct {
 	// MainSupervisesOwnTasks: the main conversation follows up the tasks no leader supervises itself. nil is off (the
 	// default, #4927): the background supervisor does (supervise_background.go).
 	MainSupervisesOwnTasks *bool `json:"main_supervises_own_tasks,omitempty"`
+	// AutoSupervisionMessages: the assistant sends its automatic supervision messages (the follow-up messages that wake
+	// the main, leader or background supervisor conversation). nil is on (the default); false stops them from being
+	// made, queued or sent, and withdraws the ones still waiting (supervise_switch.go). The task ledger, the owner's own
+	// questions and acceptance, permission cards and approval answers do not depend on it.
+	AutoSupervisionMessages *bool `json:"auto_supervision_messages,omitempty"`
 	// SupervisionBatchMinutes independently batches routine supervision per final recipient, anchored at its first
 	// routine signal. Nil or 0 preserves the legacy shared gather and spacing. Immediate signals bypass the batch.
 	SupervisionBatchMinutes *int `json:"supervision_batch_minutes,omitempty"`
@@ -344,6 +351,7 @@ func (s *Service) updateSettingsSaveChecked(ctx context.Context, fn func(*Settin
 }
 
 func (v Settings) workGuideOn() bool { return v.WorkGuide != nil && *v.WorkGuide }
+func (v Settings) todosV2On() bool   { return v.TodosV2 != nil && *v.TodosV2 }
 
 // prEventsRouteToAgentOn reports whether assistant.pr_events_route_to_agent is enabled (off by default).
 func (s *Service) prEventsRouteToAgentOn(ctx context.Context) bool {
@@ -726,6 +734,7 @@ func (s *Service) leadSessions(ctx context.Context, v Settings) []SessionRef {
 
 // settingsChanged: the hub learns them (the snapshot's profile) and the next message reads the time in the new zone.
 func (s *Service) settingsChanged(ctx context.Context) {
+	s.syncAutoSupervision(ctx)          // the automatic-supervision switch takes effect now (supervise_switch.go)
 	s.transcriptionSettingsChanged(ctx) // only another contribution chosen drops the readiness answer
 	s.ProfileChanged(ctx)
 	s.revalidateFailedStartDeferrals(ctx)
@@ -785,6 +794,7 @@ type assistantView struct {
 	// RecentTaskChats is in effect, like DoneNeedsDelivery.
 	RecentTaskChats bool `json:"recent_task_chats"`
 	WorkGuide       bool `json:"work_guide"`
+	TodosV2         bool `json:"todos_v2"`
 	// MeetingAttendanceDefault is in effect (off until changed).
 	MeetingAttendanceDefault      string   `json:"meeting_attendance_default"`
 	MeetingTranscriptionDefault   string   `json:"meeting_transcription_default"`
@@ -826,6 +836,8 @@ type assistantView struct {
 	// the tasks no leader supervises.
 	MainSupervisesOwnTasks  bool `json:"main_supervises_own_tasks"`
 	SupervisionBatchMinutes int  `json:"supervision_batch_minutes"`
+	// AutoSupervisionMessages is in effect (true unless the owner turned the automatic supervision messages off).
+	AutoSupervisionMessages bool `json:"auto_supervision_messages"`
 }
 
 // view is GET /api/v1/assistant; withArchived lists archived conversations too (flagged `archived`). It lists the
@@ -854,6 +866,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		ReadonlyMode:            readonlyModeOf(v),
 		MainBackgroundFolded:    quietOn(v.MainBackgroundFolded),
 		WorkGuide:               v.workGuideOn(),
+		TodosV2:                 v.todosV2On(),
 		RecentTaskChats:         v.RecentTaskChats != nil && *v.RecentTaskChats,
 		DeliveryGate:            deliveryGateOf(v),
 		DoneNeedsDelivery:       deliveryGateOf(v) == deliveryGateLive, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
@@ -875,6 +888,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		PREventsRouteToAgent:         v.PREventsRouteToAgent != nil && *v.PREventsRouteToAgent,
 		MainSupervisesOwnTasks:       !s.backgroundOn(v),
 		SupervisionBatchMinutes:      supervisionBatchMinutesOf(v),
+		AutoSupervisionMessages:      autoSupervisionOf(v),
 		NextSuggestions:              v.NextSuggestions != nil && *v.NextSuggestions}
 	if d, ok := s.device(ctx, v.MachineID); ok {
 		out.Cwd = s.spaceCwd(ctx, d, sp)
