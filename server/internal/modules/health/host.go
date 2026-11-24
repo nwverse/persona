@@ -58,7 +58,7 @@ type Host interface {
 // Service is the module's layer on one manager (internal/healthhost.Layer).
 type Service struct {
 	h Host
-	// intakeMu serializes intake settings, reminder state and local intake mutations.
+	// intakeMu serializes health items, intake settings, reminder state and local intake mutations.
 	intakeMu sync.Mutex
 }
 
@@ -66,7 +66,11 @@ type Service struct {
 func New(h Host) *Service { return &Service{h: h} }
 
 // Routes registers the module's HTTP routes through handle.
-func (s *Service) Routes(handle func(pattern string, fn http.HandlerFunc)) { s.intakeRoutes(handle) }
+func (s *Service) Routes(handle func(pattern string, fn http.HandlerFunc)) {
+	s.intakeRoutes(handle)
+	handle("GET /api/v1/assistant/health/items", s.getHealthItems)
+	handle("PUT /api/v1/assistant/health/items", s.putHealthItems)
+}
 
 // Tool runs the health_intake tool; the core has checked the caller's space.
 func (s *Service) Tool(ctx context.Context, args json.RawMessage) (string, error) {

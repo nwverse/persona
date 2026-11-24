@@ -1,5 +1,6 @@
 {
   "forbidden": "This device cannot access these health records.",
+  "invalid_items": "Health items could not be saved. Refresh Health and try again.",
   "invalid_entry": "Check the record ID, kind, amount, time and note, then try again.",
   "invalid_settings": "Check the health goals, cup size and reminder schedule.",
   "invalid_query": "Choose 1–366 days, a nonnegative change number, or a limit of 1–1000 records.",

@@ -4090,7 +4090,7 @@
   },
   {
     "name": "health_intake",
-    "description": "Health chats only. log kind/amount (water ml, protein g); list entries/IDs, daily totals/goals (default 7 days incl. today); delete record UUID, repeatable. Estimates need ask_user; new ID per log; list before retrying.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Health only: log water ml/protein g; list records/IDs, daily totals/goals (default 7d incl. today); delete UUID, repeatable; add_item after consent.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -4102,7 +4102,17 @@
           "enum": [
             "log",
             "list",
-            "delete"
+            "delete",
+            "add_item"
+          ]
+        },
+        "item": {
+          "type": "string",
+          "enum": [
+            "water",
+            "protein",
+            "activity",
+            "trends"
           ]
         },
         "kind": {
@@ -4114,7 +4124,7 @@
         },
         "amount": {
           "type": "number",
-          "description": "ml 1-3000; g \u003e0-200; max one decimal."
+          "description": "ml 1-3000; g 0.1-200; one decimal."
         },
         "at": {
           "type": "string",
@@ -4122,7 +4132,7 @@
         },
         "note": {
           "type": "string",
-          "description": "Food/portion; max 4096 UTF-8 bytes; no NUL."
+          "description": "Food/portion; 4096 UTF-8 bytes; no NUL."
         },
         "days": {
           "type": "integer",

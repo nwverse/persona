@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -106,6 +107,10 @@ type waterReminderAttempt struct {
 
 // The caller holds intakeMu through planning and claiming the occurrence, but not delivery.
 func (s *Service) prepareWaterReminderLocked(ctx context.Context, now time.Time) (*waterReminderAttempt, error) {
+	items, err := s.healthItemsLocked(ctx)
+	if err != nil || !slices.Contains(items.Items, "water") {
+		return nil, err
+	}
 	c, err := s.healthIntakeSettings(ctx)
 	if err != nil || !c.Water.Remind {
 		return nil, err
