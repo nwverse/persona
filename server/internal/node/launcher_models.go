@@ -279,7 +279,8 @@ func (n *Node) agentModelsCommand(ctx context.Context, name, agent, dir string) 
 	case agyAgent:
 		launcher += " models"
 	case traexAgent:
-		launcher += " models --json"
+		// Frame the JSON separately from output printed by the interactive shell's startup files.
+		launcher = `builtin printf '\036'; ` + launcher + " models --json"
 	case "codex":
 		if managed {
 			// `personad launch` runs codex itself, not the shell's codex codexShell wraps: without the subcommand
@@ -315,7 +316,11 @@ func (n *Node) listAgentModels(ctx context.Context, name, agent string) ([]proto
 		if err != nil {
 			return nil, fmt.Errorf("%s models: %w", name, err)
 		}
-		return traexModelList(out)
+		_, catalog, ok := bytes.Cut(out, []byte{0x1e})
+		if !ok {
+			return nil, fmt.Errorf("%s models: missing catalog marker", name)
+		}
+		return traexModelList(catalog)
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

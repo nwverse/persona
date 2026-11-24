@@ -594,6 +594,11 @@ func TestLauncherModelsTraex(t *testing.T) {
 	n, _ := testNode(t)
 	t.Setenv("HOME", n.home)
 	t.Setenv("ZDOTDIR", n.home)
+	for _, rc := range []string{".bashrc", ".zshrc"} {
+		if err := os.WriteFile(filepath.Join(n.home, rc), []byte("printf 'Shell startup [notice]\\n'\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	bin := t.TempDir()
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	script := `#!/bin/sh
