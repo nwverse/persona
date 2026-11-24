@@ -36,6 +36,8 @@ func TestOwnerPresentWakesSupervisorOnAppOnlineAndDedupes(t *testing.T) {
 	ft := newFleetTestNoStore(t)
 	s := ft.s
 	shortSupervise(t, s)
+	presenceTimes(t, 0, 0)
+	ownerTurnTimes(t, 0, 0)
 	ft.f.setSessions("mac", proto.Session{MachineID: "mac", SessionID: "sup1", Assistant: true, Status: proto.StatusIdle})
 
 	// Simulate two expired secret_run cards in the same supervisor conversation (same matter).
@@ -82,28 +84,13 @@ func TestOwnerPresentWakesSupervisorOnAppOnlineAndDedupes(t *testing.T) {
 // and the user speaks in any conversation, the hub sends one supervision digest entry to the
 // task's supervisor and does not duplicate it on repeated presence signals.
 func TestOwnerPresentWakesSupervisedTaskOnUserSpokeAndDedupes(t *testing.T) {
-	f := newFakeHub()
-	f.devices = []Device{{ID: "server", Name: "Server", Online: true}}
-	f.setSessions("server",
-		proto.Session{MachineID: "server", SessionID: "main1", Assistant: true, Status: proto.StatusIdle},
-		proto.Session{MachineID: "server", SessionID: "lead1", Assistant: true, Status: proto.StatusIdle},
-		proto.Session{MachineID: "server", SessionID: "other_chat", Assistant: true, Status: proto.StatusIdle},
-	)
-	s := newTestService(t, f)
-	shortSupervise(t, s)
+	s, f, todo := newSupervisedService(t)
+	presenceTimes(t, 0, 0)
+	ownerTurnTimes(t, 0, 0)
 	ctx := context.Background()
-	if err := s.setSettings(ctx, Settings{MachineID: "server", Main: "main1"}); err != nil {
-		t.Fatal(err)
-	}
 
 	now := time.Now().UTC()
-	todo, err := s.addTodo(ctx, Todo{Title: "Deploy with sudo password", Origin: "lead1"})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
-		v.Supervisor = "lead1"
-		v.SupervisorSource = "explicit"
 		v.State = reviewNeedsUser
 		v.Reviews = append(v.Reviews, TaskReview{
 			At:       now,
@@ -116,13 +103,16 @@ func TestOwnerPresentWakesSupervisedTaskOnUserSpokeAndDedupes(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	before := len(sentTextsTo(f, "conv1"))
+
 	// User speaks in an unrelated conversation.
 	s.UserSpoke(ctx, SessionRef{MachineID: "server", SessionID: "other_chat"})
 
 	waitFor(t, "supervisor receives owner_present supervision message", func() bool {
-		return len(sentTextsTo(f, "lead1")) == 1
+		return len(sentTextsTo(f, "conv1")) == before+1
 	})
-	msg := sentTextsTo(f, "lead1")[0]
+	sent := sentTextsTo(f, "conv1")
+	msg := sent[len(sent)-1]
 	if !strings.Contains(msg, "signal=owner_present") || !strings.Contains(msg, todo.ID) {
 		t.Fatalf("supervision message = %q, want owner_present for %s", msg, todo.ID)
 	}
@@ -132,50 +122,46 @@ func TestOwnerPresentWakesSupervisedTaskOnUserSpokeAndDedupes(t *testing.T) {
 	s.ownerAppeared(ctx, "app_online")
 	time.Sleep(150 * time.Millisecond)
 
-	if got := len(sentTextsTo(f, "lead1")); got != 1 {
-		t.Fatalf("supervisor got %d messages for same task wait, want 1", got)
+	if got := len(sentTextsTo(f, "conv1")); got != before+1 {
+		t.Fatalf("supervisor got %d messages for same task wait, want %d", got, before+1)
 	}
 }
 
 // If a live owner-only card is already pending in "Needs you" for the task, user presence must not
 // redundantly nudge the supervisor to issue another card.
 func TestOwnerPresentSkipsWhenLiveOwnerCardAlreadyPending(t *testing.T) {
-	ft := newFleetTestNoStore(t)
-	s := ft.s
-	shortSupervise(t, s)
+	s, f, todo := newSupervisedService(t)
+	presenceTimes(t, 0, 0)
+	ownerTurnTimes(t, 0, 0)
 	ctx := context.Background()
-	ft.f.setSessions("mac", proto.Session{MachineID: "mac", SessionID: "lead1", Assistant: true, Status: proto.StatusIdle})
-	if err := s.setSettings(ctx, Settings{MachineID: "mac", Main: "lead1"}); err != nil {
-		t.Fatal(err)
-	}
-	todo, err := s.addTodo(ctx, Todo{Title: "Need sudo", Origin: "lead1"})
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
-		v.Supervisor = "lead1"
-		v.SupervisorSource = "explicit"
 		v.Waits = &OwnerWait{Work: time.Now().UTC(), At: time.Now().UTC(), Reason: "Waiting on password"}
 		return true
 	}); err != nil {
 		t.Fatal(err)
 	}
 
+	before := len(sentTextsTo(f, "conv1"))
+
 	// Put a live secret_run card on the supervisor conversation.
 	cardCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
 		_, _ = s.waitInteraction(cardCtx, proto.Interaction{
-			ID: "ix_live", MachineID: "mac", SessionID: "lead1",
+			ID: "ix_live", MachineID: "server", SessionID: "conv1",
 			Kind: proto.IxPermission, ToolName: proto.SecretRunTool,
 			Fields: []proto.Field{{Key: "password", Label: "Password", Secret: true}},
 		})
 	}()
-	ft.waitPending(1)
+	waitFor(t, "live secret_run card pending", func() bool {
+		_, ok := s.pendingIx("ix_live")
+		return ok
+	})
 
 	s.ownerAppeared(ctx, "app_online")
 	time.Sleep(150 * time.Millisecond)
-	if got := len(sentTextsTo(ft.f, "lead1")); got != 0 {
-		t.Fatalf("expected 0 nudges while live owner card is pending, got %d", got)
+	if got := len(sentTextsTo(f, "conv1")); got != before {
+		t.Fatalf("expected no extra nudges while live owner card is pending, got %d (before=%d)", got, before)
 	}
 }

@@ -206,17 +206,9 @@ func (s *Service) ownerAppeared(ctx context.Context, source string) {
 	}
 
 	// 2. Open supervised tasks waiting on an owner-only action.
-	if err := s.ensureTodosLoaded(ctx); err != nil {
-		return
-	}
-	s.todos.mu.Lock()
-	todos := make([]Todo, 0, len(s.todos.todos))
-	for _, t := range s.todos.todos {
-		if t != nil && t.DoneAt == nil && t.Supervision != nil {
-			todos = append(todos, t.clone())
-		}
-	}
-	s.todos.mu.Unlock()
+	todos := s.todosWhere(ctx, "*", func(t *Todo) bool {
+		return t.DoneAt == nil && t.Supervision != nil
+	})
 
 	for _, t := range todos {
 		key, detail, ok := ownerPresentTodoWait(t)

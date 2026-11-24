@@ -99,7 +99,7 @@ func TestOwnerOnlyCardStaysPendingUntilSeenThenExpires(t *testing.T) {
 			case "route":
 				req := httptest.NewRequest(http.MethodPost, "/api/v1/interactions/"+tc.ix.ID+"/seen", nil)
 				rec := httptest.NewRecorder()
-				ft.s.Handler().ServeHTTP(rec, req)
+				ft.s.ServeHTTP(rec, req)
 				if rec.Code != http.StatusOK {
 					t.Fatalf("POST /seen = %d %s", rec.Code, rec.Body)
 				}
