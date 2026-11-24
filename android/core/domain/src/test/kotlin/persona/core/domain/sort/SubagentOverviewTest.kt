@@ -139,4 +139,41 @@ class SubagentOverviewTest {
         assertEquals(listOf("L0", "L1", "L2", "L3 flattened"), result.running.map { it.title })
         assertEquals(listOf(0, 1, 2, 2), result.running.map { it.depth })
     }
+
+    @Test fun sameSessionIdAcrossDifferentMachinesDoesNotCollideOrMisnest() {
+        val lead = Session(machineId = "mac", sessionId = "lead", agent = "claude", state = "working")
+        val workerA = Session(
+            machineId = "box-a", sessionId = "worker-1", title = "Worker on A", agent = "codex", state = "working",
+            isSubagent = true, parentMachineId = "mac", parentSessionId = "lead",
+            foldedUnder = "lead", foldedUnderMachineId = "mac", startedAt = "2026-11-24T01:05:00Z",
+        )
+        val workerB = Session(
+            machineId = "box-b", sessionId = "worker-1", title = "Worker on B", agent = "codex", state = "working",
+            isSubagent = true, parentMachineId = "mac", parentSessionId = "lead",
+            foldedUnder = "lead", foldedUnderMachineId = "mac", startedAt = "2026-11-24T01:04:00Z",
+        )
+        val grandA = Session(
+            machineId = "box-a", sessionId = "grand-1", title = "Grandchild on A", agent = "codex", state = "working",
+            isSubagent = true, parentMachineId = "box-a", parentSessionId = "worker-1",
+            foldedUnder = "lead", foldedUnderMachineId = "mac", startedAt = "2026-11-24T01:06:00Z",
+        )
+        val grandB = Session(
+            machineId = "box-b", sessionId = "grand-1", title = "Grandchild on B", agent = "codex", state = "working",
+            isSubagent = true, parentMachineId = "box-b", parentSessionId = "worker-1",
+            foldedUnder = "lead", foldedUnderMachineId = "mac", startedAt = "2026-11-24T01:07:00Z",
+        )
+        val result = buildOverviewSubagents(
+            parent = lead,
+            childRows = listOf(workerA, workerB, grandA, grandB),
+            machineNames = mapOf("mac" to "Mac", "box-a" to "Alpha", "box-b" to "Beta"),
+        )
+        assertEquals(4, result.running.size)
+        assertEquals(4, result.running.map { it.id }.toSet().size)
+        assertEquals(
+            listOf("Worker on A" to 0, "Grandchild on A" to 1, "Worker on B" to 0, "Grandchild on B" to 1),
+            result.running.map { it.title to it.depth },
+        )
+        assertEquals("Alpha · Codex", result.running[0].originChip)
+        assertEquals("Beta · Codex", result.running[2].originChip)
+    }
 }

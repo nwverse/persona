@@ -157,8 +157,11 @@ final class AppModel {
         for s in indexedSides where index[s.key] == nil { index[s.key] = s }
         // Folded & cross-machine child rows stay out of `allSessions` (never leaking into the Agents list), while
         // joining `sessionIndex` so opening a subagent detail page or answering its card resolves its live metadata.
+        // Preserve full detail fields if `sessionIndex` already held a `summary=0` row for an open child session.
         for rows in childIndex.heldNow.values {
-            for s in rows where index[s.key] == nil { index[s.key] = s }
+            for s in rows where index[s.key] == nil {
+                index[s.key] = s.preservingDetails(from: sessionIndex[s.key])
+            }
         }
         sessionIndex = index
         for (key, cell) in sideCells {
@@ -1864,18 +1867,22 @@ final class AppModel {
     /// A child whose parent row is already in hand opens that parent, with the child's card revealed. Anything else
     /// opens immediately. A child whose row is not loaded yet is looked up in the background (`refreshSessionDetail`),
     /// and moves to the parent only when that parent row exists.
-    func open(_ key: SessionKey, latestAnswer: Bool = false, reveal: String? = nil) {
+    func open(_ key: SessionKey, latestAnswer: Bool = false, reveal: String? = nil, revealKey: SessionKey? = nil) {
         provisionalChat = nil
         // A side session lives in its parent's chat (#7944): its parent opens with the side shown over it, not with a
         // child's card revealed (`openChat` turns it into the parent and `sideLanding`).
-        if reveal == nil, !openingExactStar(key), sideFold.home[key] == nil, let home = localChildHome(key), home.key != key {
+        if reveal == nil, revealKey == nil, !openingExactStar(key), sideFold.home[key] == nil,
+           let home = localChildHome(key), home.key != key {
             moveDraft(from: key, to: home.key)
-            open(home.key, latestAnswer: latestAnswer, reveal: home.childID)
+            open(home.key, latestAnswer: latestAnswer, reveal: home.childID, revealKey: home.childKey)
             return
         }
         // A prior missing answer must not flash on a reopen before the lookup returns (#8748).
         clearMissingSessionDetail(key)
-        if let reveal {
+        if let revealKey {
+            revealToken += 1
+            revealChild = ChildReveal(key: revealKey, token: revealToken)
+        } else if let reveal {
             revealToken += 1
             revealChild = ChildReveal(sessionID: reveal, token: revealToken)
         } else {
@@ -1911,11 +1918,11 @@ final class AppModel {
         }
         provisionalChat = nil
         var target = key
-        if sideFold.home[key] == nil, let home = localChildHome(key), home.key != key, let child = home.childID {
+        if sideFold.home[key] == nil, let home = localChildHome(key), home.key != key, let childKey = home.childKey {
             moveDraft(from: key, to: home.key)
             target = home.key
             revealToken += 1
-            revealChild = ChildReveal(sessionID: child, token: revealToken)
+            revealChild = ChildReveal(key: childKey, token: revealToken)
         } else {
             revealChild = nil
         }
@@ -1964,33 +1971,50 @@ final class AppModel {
         if cell.rows != rows { cell.rows = rows }
     }
 
+    /// Asks the already-open parent chat to expand the card for `childKey` without switching tabs or resetting `openChat`.
+    func requestRevealChild(_ childKey: SessionKey) {
+        revealToken += 1
+        revealChild = ChildReveal(key: childKey, token: revealToken)
+    }
+
     /// The child index read `parent`'s children: its child cards, per-child metadata cells (for full subagent detail
     /// without adding children to `allSessions`), and when the read holds side sessions the lists, which fold them
-    /// behind its Side Sessions chip (#7944).
+    /// behind its Side Sessions chip (#7944). Summary child rows preserve detail-only fields already fetched for an
+    /// open child session (`preservingDetails`).
     private func childRowsRead(_ parent: SessionKey) {
         let rows = childIndex.knownNow(parent)
         for child in rows {
-            if sessionIndex[child.key] == nil || (sessionIndex[child.key]?.rev ?? -1) <= (child.rev ?? -1) {
-                sessionIndex[child.key] = child
+            let merged: Session
+            if let existing = sessionIndex[child.key] {
+                if (existing.rev ?? -1) > (child.rev ?? -1) {
+                    merged = (existing.listWaiting != nil && child.listWaiting == nil)
+                        ? existing.preservingDetails(from: child)
+                        : existing
+                } else {
+                    merged = child.preservingDetails(from: existing)
+                }
+            } else {
+                merged = child
             }
-            if let cell = sessionCells[child.key], !Session.sameForItsPage(cell.value, sessionIndex[child.key]) {
-                cell.value = sessionIndex[child.key]
+            sessionIndex[child.key] = merged
+            if let cell = sessionCells[child.key], !Session.sameForItsPage(cell.value, merged) {
+                cell.value = merged
             }
-            if let cell = sessionLineCells[child.key], !Session.sameApartFromTicks(cell.value, sessionIndex[child.key]) {
-                cell.value = sessionIndex[child.key]
+            if let cell = sessionLineCells[child.key], !Session.sameApartFromTicks(cell.value, merged) {
+                cell.value = merged
             }
         }
         refreshChildFold(parent)
         if sideFoldGroups.contains(parent.group), rows.contains(where: SideFold.isSideRow) { sessionsChanged() }
     }
 
-    /// Reads all folded / cross-machine / archived-parent children of `parent` for Session Overview.
+    /// Reads all folded / cross-machine / archived-parent children of `parent` for Session Overview, serialized through
+    /// the per-parent `childHints` gate so concurrent reads never race or roll back `childIndex`'s checkpoint.
     func refreshOverviewChildren(_ parent: SessionKey) async {
         guard features(parent.group).contains(ChildSessions.feature),
               let api = api(parent.group),
               socket(parent.group)?.state == .connected else { return }
-        await childIndex.refresh(parent: parent, api: api)
-        childRowsRead(parent)
+        await runChildRefresh(parent, api: api, hint: nil, force: true)
     }
 
     private func refreshChildFolds() {
@@ -2068,6 +2092,10 @@ final class AppModel {
     /// does not name the chat leaves that row as it was (#9479).
     @ObservationIgnored private var detailAt: [SessionKey: String] = [:]
     @ObservationIgnored private var childHints: [SessionKey: FetchHint] = [:]
+    /// Parents with a forced Overview child refresh queued behind an in-flight `childHints` read.
+    @ObservationIgnored private var childForceQueued: Set<SessionKey> = []
+    /// Callers waiting for the active per-parent `childHints` refresh loop to finish.
+    @ObservationIgnored private var childRefreshWaiters: [SessionKey: [CheckedContinuation<Void, Never>]] = [:]
     /// Folded children of open chats, kept out of the root list window.
     let childIndex = ChildSessionIndex()
     /// One parent's folded children, observed on their own. A push about any other agent does not redraw the chat.
@@ -2145,7 +2173,7 @@ final class AppModel {
                     }
                     if openChat == key {
                         moveDraft(from: key, to: parent.key)
-                        open(parent.key, reveal: full.sessionID)
+                        open(parent.key, reveal: full.sessionID, revealKey: full.key)
                     }
                     return
                 }
@@ -2212,28 +2240,61 @@ final class AppModel {
               socket(key.group)?.state == .connected,
               ChildSessions.needsRead(parent: session(key), known: everyFoldedChild(key)) else { return }
         if let hint, childIndex.checkpoint(key) == hint { return }
-        var next = hint
-        while true {
-            var gate = childHints[key] ?? FetchHint()
-            guard gate.start(next) else {
-                childHints[key] = gate
-                return
-            }
+        await runChildRefresh(key, api: api, hint: hint, force: false)
+    }
+
+    /// Single per-parent serialized child-page runner shared by `refreshOpenChildren` and `refreshOverviewChildren`:
+    /// at most one `childIndex.refresh` runs per `key` at a time, preventing concurrent reads from racing and rolling
+    /// back `ChildSessionIndex`'s checkpoint.
+    func runChildRefresh(_ key: SessionKey, api: APIClient, hint: String?, force: Bool) async {
+        var gate = childHints[key] ?? FetchHint()
+        guard gate.start(hint) else {
             childHints[key] = gate
+            if force {
+                childForceQueued.insert(key)
+                await withCheckedContinuation { continuation in
+                    childRefreshWaiters[key, default: []].append(continuation)
+                }
+            }
+            return
+        }
+        childHints[key] = gate
+        while true {
             await childIndex.refresh(parent: key, api: api)
             childRowsRead(key)
             gate = childHints[key] ?? FetchHint()
-            switch gate.finish() {
+            let pending = gate.finish()
+            let forced = childForceQueued.remove(key) != nil
+            switch pending {
             case .none:
                 childHints[key] = gate
+                resumeChildRefreshWaiters(for: key)
                 return
             case .hint(let queued):
+                let shouldContinue: Bool
+                if forced {
+                    shouldContinue = true
+                } else if !ChildSessions.needsRead(parent: session(key), known: everyFoldedChild(key)) {
+                    shouldContinue = false
+                } else if let queued, childIndex.checkpoint(key) == queued {
+                    shouldContinue = false
+                } else {
+                    shouldContinue = true
+                }
+                guard shouldContinue else {
+                    childHints[key] = gate
+                    resumeChildRefreshWaiters(for: key)
+                    return
+                }
+                _ = gate.start(queued)
                 childHints[key] = gate
-                next = queued
-                guard ChildSessions.needsRead(parent: session(key), known: everyFoldedChild(key)) else { return }
-                if let queued, childIndex.checkpoint(key) == queued { return }
             }
         }
+    }
+
+    private func resumeChildRefreshWaiters(for key: SessionKey) {
+        guard let waiters = childRefreshWaiters.removeValue(forKey: key) else { return }
+        for continuation in waiters { continuation.resume() }
     }
 
     /// `row` where the list has its session (any other copy of it dropped), or at the end when it has none: an unchanged
@@ -2955,7 +3016,7 @@ final class AppModel {
         }
         guard let shown = openChat, let home = localChildHome(shown), home.key != shown else { return }
         moveDraft(from: shown, to: home.key)
-        open(home.key, reveal: home.childID)
+        open(home.key, reveal: home.childID, revealKey: home.childKey)
     }
 
     /// Conversations the assistant settings were read again for (`readSettingsForNewTaskConversations`): once each.
@@ -5423,10 +5484,29 @@ nonisolated struct WorkflowCallKey: Hashable, Sendable {
 }
 
 /// A link to a folded child, once per open. `token` changes when the same child is opened again, so the card opens
-/// again; an ordinary open has none.
+/// again; an ordinary open has none. Carries the full `SessionKey` when known so cross-machine children sharing a
+/// `sessionID` never collide.
 struct ChildReveal: Equatable {
+    var key: SessionKey?
     var sessionID: String
     var token: Int
+
+    init(key: SessionKey, token: Int) {
+        self.key = key
+        self.sessionID = key.sessionID
+        self.token = token
+    }
+
+    init(sessionID: String, token: Int) {
+        self.key = nil
+        self.sessionID = sessionID
+        self.token = token
+    }
+
+    func matches(_ candidate: SessionKey) -> Bool {
+        if let key { return key == candidate }
+        return candidate.sessionID == sessionID
+    }
 }
 
 /// Questions and approvals waiting, as the tab bar counts them: the Persona tab's (its conversations') and the Agents

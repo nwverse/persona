@@ -11,6 +11,51 @@ nonisolated enum ChildSessions {
     /// The synthetic work-step id prefix. Not an Agent or Task call, so it is not a subagent grid card.
     static let callPrefix = "child:"
 
+    /// Stable synthetic work-step id carrying the full `SessionKey` (group + machine + session) so cross-machine
+    /// children sharing a `sessionID` never collide. Normal IDs stay human-readable (`child:box-b/child-1`).
+    static func callID(for key: SessionKey) -> String {
+        let machine = encodeCallSegment(key.machineID)
+        let prefix = key.group.isEmpty ? "" : encodeCallSegment(key.group) + "|"
+        return callPrefix + prefix + machine + "/" + key.sessionID
+    }
+
+    /// Extracts the full `SessionKey` from a synthetic child work-step id (`child:<encoded key>`), falling back to a
+    /// same-machine key when given a legacy `child:<sessionID>` id.
+    static func sessionKey(fromCallID id: String, defaultGroup: String = "", defaultMachineID: String = "") -> SessionKey? {
+        guard id.hasPrefix(callPrefix) else { return nil }
+        let raw = String(id.dropFirst(callPrefix.count))
+        guard !raw.isEmpty else { return nil }
+        var rest = Substring(raw)
+        var group = ""
+        if let bar = rest.firstIndex(of: "|"), rest[..<bar].firstIndex(of: "/") == nil {
+            group = decodeCallSegment(String(rest[..<bar]))
+            rest = rest[rest.index(after: bar)...]
+        }
+        if let slash = rest.firstIndex(of: "/") {
+            let machine = decodeCallSegment(String(rest[..<slash]))
+            let session = String(rest[rest.index(after: slash)...])
+            if !machine.isEmpty && !session.isEmpty {
+                return SessionKey(group: group, machineID: machine, sessionID: session)
+            }
+        }
+        guard !defaultMachineID.isEmpty else { return nil }
+        return SessionKey(group: defaultGroup, machineID: defaultMachineID, sessionID: raw)
+    }
+
+    private static func encodeCallSegment(_ segment: String) -> String {
+        segment
+            .replacingOccurrences(of: "%", with: "%25")
+            .replacingOccurrences(of: "/", with: "%2F")
+            .replacingOccurrences(of: "|", with: "%7C")
+    }
+
+    private static func decodeCallSegment(_ segment: String) -> String {
+        segment
+            .replacingOccurrences(of: "%7C", with: "|")
+            .replacingOccurrences(of: "%2F", with: "/")
+            .replacingOccurrences(of: "%25", with: "%")
+    }
+
     /// Unified parent-row rollup for subagents (#27): Needs you > Running > quiet when all ended.
     struct Rollup: Equatable, Hashable, Sendable {
         enum Kind: Equatable, Hashable, Sendable {
@@ -52,16 +97,28 @@ nonisolated enum ChildSessions {
 
     struct Home: Equatable {
         var key: SessionKey
+        /// Full key of the redirected child session when `key` is the parent and that parent row is in hand.
+        var childKey: SessionKey?
         /// Set only when `key` is the parent and that parent row is in hand.
-        var childID: String?
+        var childID: String? { childKey?.sessionID }
+
+        init(key: SessionKey, childKey: SessionKey? = nil) {
+            self.key = key
+            self.childKey = childKey
+        }
+
+        init(key: SessionKey, childID: String?) {
+            self.key = key
+            self.childKey = childID.map { SessionKey(group: key.group, machineID: key.machineID, sessionID: $0) }
+        }
     }
 
     /// Where a request is shown. The answer still uses the interaction's own id and session.
     static func home(requested: SessionKey, row: Session?, parent: Session?) -> Home {
         guard let row, let parentKey = parentKey(row), let parent, parent.key == parentKey else {
-            return Home(key: requested, childID: nil)
+            return Home(key: requested, childKey: nil)
         }
-        return Home(key: parent.key, childID: row.sessionID)
+        return Home(key: parent.key, childKey: row.key)
     }
 
     /// The listed parent this row folds under, resolving `folded_under_machine_id` (defaulting to the child's own
@@ -99,18 +156,70 @@ nonisolated enum ChildSessions {
         return row.state
     }
 
-    /// Subagents running on the parent row: the row's own reported count and its non-side working children, once (web
-    /// `runningChildren`). A lead that also lists them as background agents is not counted twice.
-    static func shownRunning(_ row: Session) -> Int {
-        let reported = row.listRunningSubagents ?? row.subagents?.filter(\.running).count ?? 0
-        let childrenWorking = max(0, (row.children?.working ?? 0) - (row.children?.sidesWorking ?? 0))
+    /// Non-side, non-worker standalone child sessions belonging to `parent`, deduplicated by `SessionKey`.
+    private static func subagentChildren(of parent: SessionKey, in rows: [Session]) -> [Session] {
+        guard !rows.isEmpty else { return [] }
+        return children(of: parent, in: rows).filter { !SideFold.isSideRow($0) && $0.foldedAs != "worker" }
+    }
+
+    /// Subagents running on the parent row, deduplicated by full `SessionKey` across embedded `row.subagents` and
+    /// non-side/non-worker standalone children (matching `SubagentOverview.build`), summing distinct running subagents.
+    /// Falls back to `max(reported, childrenWorking)` on summary rows where `row.subagents` is omitted so a lead that
+    /// also counts its same-machine folded children in `running_subagents` is not counted twice.
+    static func shownRunning(_ row: Session, heldChildren: [Session] = []) -> Int {
+        let heldSubagents = subagentChildren(of: row.key, in: heldChildren)
+        let hubWorking = max(0, (row.children?.working ?? 0) - (row.children?.sidesWorking ?? 0))
+        let heldWorking = heldSubagents.filter { $0.state == .working || $0.backgroundWorking }.count
+        let childrenWorking = max(heldWorking, hubWorking)
+
+        if let embedded = row.subagents {
+            let heldKeys = Set(heldSubagents.map(\.key))
+            var embeddedRunningKeys: Set<SessionKey> = []
+            for agent in embedded where agent.running {
+                let sid = agent.sessionID.isEmpty ? "\(row.sessionID)@\(agent.id)" : agent.sessionID
+                let key = SessionKey(group: row.group, machineID: row.machineID, sessionID: sid)
+                if !heldKeys.contains(key) {
+                    embeddedRunningKeys.insert(key)
+                }
+            }
+            return embeddedRunningKeys.count + childrenWorking
+        }
+
+        let reported = max(0, row.listRunningSubagents ?? 0)
         return max(reported, childrenWorking)
     }
 
+    /// Total subagents (running + ended) on the parent row, deduplicated by full `SessionKey` across embedded
+    /// `row.subagents` and standalone non-side/non-worker children.
+    static func totalSubagentCount(_ row: Session, heldChildren: [Session] = []) -> Int {
+        let heldSubagents = subagentChildren(of: row.key, in: heldChildren)
+        let nonSideChildren = max(0, (row.children?.total ?? 0) - (row.children?.sides ?? 0))
+        let childrenTotal = max(heldSubagents.count, nonSideChildren)
+
+        if let embedded = row.subagents {
+            let heldKeys = Set(heldSubagents.map(\.key))
+            var embeddedKeys: Set<SessionKey> = []
+            for agent in embedded {
+                let sid = agent.sessionID.isEmpty ? "\(row.sessionID)@\(agent.id)" : agent.sessionID
+                let key = SessionKey(group: row.group, machineID: row.machineID, sessionID: sid)
+                if !heldKeys.contains(key) {
+                    embeddedKeys.insert(key)
+                }
+            }
+            return embeddedKeys.count + childrenTotal
+        }
+
+        let reported = max(0, row.listRunningSubagents ?? 0)
+        return max(reported, childrenTotal)
+    }
+
     /// Pure unified parent-row rollup (#27): Needs you priority > Running > quiet when all ended.
-    static func childRollup(_ row: Session) -> Rollup {
-        let needsYou = max(0, (row.children?.needsYou ?? 0) - (row.children?.sidesNeedsYou ?? 0))
-        let running = max(0, shownRunning(row))
+    static func childRollup(_ row: Session, heldChildren: [Session] = []) -> Rollup {
+        let heldSubagents = subagentChildren(of: row.key, in: heldChildren)
+        let hubNeedsYou = max(0, (row.children?.needsYou ?? 0) - (row.children?.sidesNeedsYou ?? 0))
+        let heldNeedsYou = heldSubagents.filter { $0.state == .needsYou }.count
+        let needsYou = max(heldNeedsYou, hubNeedsYou)
+        let running = max(0, shownRunning(row, heldChildren: heldSubagents))
         if needsYou > 0 {
             return Rollup(kind: .needsYou(needsYou), needsYouCount: needsYou, runningCount: running)
         }
@@ -169,15 +278,21 @@ nonisolated enum ChildSessions {
     }
 
     /// A baseline replaces what is held. A `since` page keeps the rest, drops removals, and applies changes.
+    /// Summary rows (`summary=1`) preserve detail-only fields already fetched for an open child session.
     static func merge(held: [Session], changes: [Session], removals: [SessionKey], baseline: Bool) -> [Session] {
-        var by: [SessionKey: Session] = [:]
-        if !baseline {
-            for row in held { by[row.key] = row }
-        }
+        var oldByKey: [SessionKey: Session] = [:]
+        for row in held { oldByKey[row.key] = row }
+        var by: [SessionKey: Session] = baseline ? [:] : oldByKey
         for key in removals { by[key] = nil }
         for row in changes {
-            if let old = by[row.key], (old.rev ?? -1) > (row.rev ?? -1) { continue }
-            by[row.key] = row
+            if let old = by[row.key], (old.rev ?? -1) > (row.rev ?? -1) {
+                if old.listWaiting != nil && row.listWaiting == nil {
+                    by[row.key] = old.preservingDetails(from: row)
+                }
+                continue
+            }
+            let existing = by[row.key] ?? oldByKey[row.key]
+            by[row.key] = row.preservingDetails(from: existing)
         }
         return Array(by.values)
     }
@@ -202,18 +317,41 @@ nonisolated enum ChildSessions {
     }
 
     struct Place: Equatable {
-        var sessionID: String
+        var key: SessionKey
         var time: Date?
+
+        var sessionID: String { key.sessionID }
+
+        init(key: SessionKey, time: Date?) {
+            self.key = key
+            self.time = time
+        }
+
+        /// Backwards-compatible initializer for same-machine callers and tests.
+        init(sessionID: String, time: Date?, machineID: String = "", group: String = "") {
+            self.key = SessionKey(group: group, machineID: machineID, sessionID: sessionID)
+            self.time = time
+        }
     }
 
-    /// `started_at` when the hub sent it. Otherwise the first `updated_at` this process saw, so a later push does not
-    /// move a card that is still running.
+    /// `started_at` when the hub sent it. Otherwise the first `updated_at` this process saw, keyed by full
+    /// `SessionKey` so cross-machine children sharing a `sessionID` stay distinct.
+    static func places(_ rows: [Session], seen: inout [SessionKey: Date?]) -> [Place] {
+        rows.map { row in
+            if let started = row.startedAt { return Place(key: row.key, time: started) }
+            if let known = seen[row.key] { return Place(key: row.key, time: known) }
+            seen[row.key] = row.updatedAt
+            return Place(key: row.key, time: row.updatedAt)
+        }
+    }
+
+    /// Backwards-compatible overload keyed by `sessionID` for legacy same-machine callers.
     static func places(_ rows: [Session], seen: inout [String: Date?]) -> [Place] {
         rows.map { row in
-            if let started = row.startedAt { return Place(sessionID: row.sessionID, time: started) }
-            if let known = seen[row.sessionID] { return Place(sessionID: row.sessionID, time: known) }
+            if let started = row.startedAt { return Place(key: row.key, time: started) }
+            if let known = seen[row.sessionID] { return Place(key: row.key, time: known) }
             seen[row.sessionID] = row.updatedAt
-            return Place(sessionID: row.sessionID, time: row.updatedAt)
+            return Place(key: row.key, time: row.updatedAt)
         }
     }
 
@@ -247,7 +385,9 @@ nonisolated enum ChildSessions {
                 let left = a.time ?? .distantFuture
                 let right = b.time ?? .distantFuture
                 if left != right { return left < right }
-                return a.sessionID < b.sessionID
+                if a.key.machineID != b.key.machineID { return a.key.machineID < b.key.machineID }
+                if a.key.sessionID != b.key.sessionID { return a.key.sessionID < b.key.sessionID }
+                return a.key.group < b.key.group
             }
             out[exchange.id] = list
         }
@@ -328,7 +468,7 @@ struct FetchHint: Equatable {
     /// The same rows, unread by views. `AppModel.childRows` seeds a per-parent cell from this, not from `held`.
     @ObservationIgnored private(set) var heldNow: [SessionKey: [Session]] = [:]
     /// First `updated_at` seen for a child that has no `started_at`. Not observed: recording it must not redraw.
-    @ObservationIgnored var seen: [String: Date?] = [:]
+    @ObservationIgnored var seen: [SessionKey: Date?] = [:]
     @ObservationIgnored private var revision: [SessionKey: String] = [:]
     @ObservationIgnored private var loaded: Set<SessionKey> = []
 

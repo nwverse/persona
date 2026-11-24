@@ -123,9 +123,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
     }
 
     nonisolated var subagentCount: Int {
-        let embedded = session.subagents?.count ?? 0
-        let nonSideChildren = max(0, (session.children?.total ?? 0) - (session.children?.sides ?? 0))
-        return max(embedded, nonSideChildren)
+        ChildSessions.totalSubagentCount(session)
     }
 
     /// The complete ordered inventory, including the nested node actions as separate entries.

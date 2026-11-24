@@ -162,4 +162,49 @@ import Testing
         #expect(ui.endedExpanded)
         #expect(!ui.reopenOverviewOnReturn)
     }
+
+    @Test func inputStampInvalidatesWhenEmbeddedTaskStatusTransitionsToCompletedOrFailed() throws {
+        let parent = try sessionRow("parent", machine: "box-a", agent: "claude", state: "working", extra: [
+            "subagents": [[
+                "id": "a1",
+                "session_id": "parent@a1",
+                "description": "Audit tests",
+                "tool_use_id": "call-1",
+                "running": true,
+            ]],
+        ])
+        let runningTasks = TaskIndex()
+        let stampRunning = SubagentOverview.inputStamp(session: parent, children: [], pending: [], tasks: runningTasks)
+
+        var completedTasks = TaskIndex()
+        completedTasks.agentStatuses["call-1"] = "completed"
+        let stampCompleted = SubagentOverview.inputStamp(session: parent, children: [], pending: [], tasks: completedTasks)
+        #expect(stampCompleted != stampRunning)
+
+        var failedTasks = TaskIndex()
+        failedTasks.agentStatuses["call-1"] = "failed"
+        let stampFailed = SubagentOverview.inputStamp(session: parent, children: [], pending: [], tasks: failedTasks)
+        #expect(stampFailed != stampRunning)
+        #expect(stampFailed != stampCompleted)
+
+        // Verify the rebuilt overview reflects the failed status immediately using the same tasks state.
+        let embeddedShown = (parent.subagents ?? []).map { $0.shown(in: failedTasks, sessionWorks: true) }
+        let overview = SubagentOverview.build(
+            parent: parent,
+            parentKey: parent.key,
+            embedded: embeddedShown,
+            foldedChildren: [],
+            agentStatuses: failedTasks.agentStatuses
+        )
+        #expect(overview.running.isEmpty)
+        #expect(overview.ended.count == 1)
+        #expect(overview.ended[0].status == .failed)
+
+        // Also verify synchronous tool_result completion (`tasks.answered`) invalidates the stamp even when
+        // `session.subagents` still reports `running == true`.
+        var answeredTasks = TaskIndex()
+        answeredTasks.answered.insert("call-1")
+        let stampAnswered = SubagentOverview.inputStamp(session: parent, children: [], pending: [], tasks: answeredTasks)
+        #expect(stampAnswered != stampRunning)
+    }
 }

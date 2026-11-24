@@ -111,6 +111,7 @@ internal fun ChatHeader(
     var leftWhilePushingSubagent by rememberSaveable { mutableStateOf(false) }
     var savedOverviewIndex by rememberSaveable { mutableIntStateOf(0) }
     var savedOverviewOffset by rememberSaveable { mutableIntStateOf(0) }
+    var savedOverviewEndedExpanded by rememberSaveable(session?.key?.path) { mutableStateOf(false) }
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     LaunchedEffect(openSubagentsRequested) {
         if (openSubagentsRequested) {
@@ -382,6 +383,8 @@ internal fun ChatHeader(
                 connection = overviewConnection,
                 scrollToSubagents = scrollToSubagents,
                 onSubagentsScrolled = { scrollToSubagents = false },
+                endedExpanded = savedOverviewEndedExpanded,
+                onEndedExpandedChange = { savedOverviewEndedExpanded = it },
                 listState = overviewListState,
                 onOpenTodo = onOpenTodo,
                 onOpenSubagent = subagentOpener?.let { open ->
@@ -398,6 +401,7 @@ internal fun ChatHeader(
                 onDismiss = {
                     savedOverviewIndex = 0
                     savedOverviewOffset = 0
+                    savedOverviewEndedExpanded = false
                     scrollToSubagents = false
                     reopenOverviewOnReturn = false
                     dialog = null

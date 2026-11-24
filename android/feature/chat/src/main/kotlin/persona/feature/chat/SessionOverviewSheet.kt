@@ -105,6 +105,8 @@ internal fun SessionOverviewSheet(
     connection: HubConnection? = null,
     scrollToSubagents: Boolean = false,
     onSubagentsScrolled: () -> Unit = {},
+    endedExpanded: Boolean? = null,
+    onEndedExpandedChange: ((Boolean) -> Unit)? = null,
     listState: LazyListState = rememberLazyListState(),
     onOpenTodo: ((String) -> Unit)? = null,
     onOpenSubagent: ((SessionKey) -> Unit)? = null,
@@ -121,7 +123,12 @@ internal fun SessionOverviewSheet(
     var infoError by remember(session.key) { mutableStateOf<String?>(null) }
     var infoAttempt by remember(session.key) { mutableIntStateOf(0) }
     var bgRetry by remember(session.key) { mutableIntStateOf(0) }
-    var endedExpanded by rememberSaveable(session.key.path) { mutableStateOf(false) }
+    var localEndedExpanded by rememberSaveable(session.key.path) { mutableStateOf(false) }
+    val isEndedExpanded = endedExpanded ?: localEndedExpanded
+    val toggleEndedExpanded = {
+        val next = !isEndedExpanded
+        if (onEndedExpandedChange != null) onEndedExpandedChange(next) else localEndedExpanded = next
+    }
 
     LaunchedEffect(session.key, infoAttempt) {
         infoError = null
@@ -137,9 +144,23 @@ internal fun SessionOverviewSheet(
         }
     }
 
+    // On bounded/paginated hubs, a summary=1 parent row omits embedded `subagents`, `background`, `workflows`, and `loop`.
+    // Load the complete parent row on demand when overview opens so embedded subagents and background tasks are complete.
+    val completeDetail = backgroundDetail(session, actions, connection, exact, bgRetry)
+    val effectiveSession = remember(session, completeDetail.row) {
+        val full = completeDetail.row ?: return@remember session
+        session.copy(
+            subagents = full.subagents ?: session.subagents,
+            background = full.background ?: session.background,
+            backgroundEnded = full.backgroundEnded ?: session.backgroundEnded,
+            workflows = full.workflows ?: session.workflows,
+            loop = full.loop ?: session.loop,
+        )
+    }
+
     val machineNames = remember(machines) { machines.associate { it.id to it.displayName } }
-    val subagents = remember(session, childRows, machineNames) {
-        buildOverviewSubagents(session, childRows, machineNames)
+    val subagents = remember(effectiveSession, childRows, machineNames) {
+        buildOverviewSubagents(effectiveSession, childRows, machineNames)
     }
     val hasRunningSubagents = subagents.running.isNotEmpty()
     val now by produceState(Instant.now(), hasRunningSubagents) {
@@ -149,35 +170,35 @@ internal fun SessionOverviewSheet(
         }
     }
 
-    val bgDetail = if (!session.assistant) {
-        backgroundDetail(session, actions, connection, exact, bgRetry)
-    } else null
-    val bgSession = bgDetail?.row ?: session
+    val bgDetail = completeDetail.takeIf { !effectiveSession.assistant }
+    val bgSession = effectiveSession
     val bgSections = remember(bgSession, now) {
-        if (!session.assistant) backgroundSections(bgSession, now) else null
+        if (!bgSession.assistant) backgroundSections(bgSession, now) else null
     }
 
-    val envRows = remember(session, machine, info, features, res) {
-        overviewEnvironmentRows(res, session, machine, info, features, onOpenTodo)
+    val envRows = remember(effectiveSession, machine, info, features, res) {
+        overviewEnvironmentRows(res, effectiveSession, machine, info, features, onOpenTodo)
     }
-    val contextRows = remember(session, info, res) {
-        overviewContextRows(res, session, info)
+    val contextRows = remember(effectiveSession, info, res) {
+        overviewContextRows(res, effectiveSession, info)
     }
 
-    val hasBackground = !session.assistant && bgSections != null && (
+    val hasBackground = !effectiveSession.assistant && bgSections != null && (
         bgSession.loop != null ||
             bgSections.runningRuns.isNotEmpty() ||
             bgSections.runningCommands.isNotEmpty() ||
             bgSections.completedRuns.isNotEmpty() ||
             bgSections.completedCommands.isNotEmpty()
         )
+    val loadingEmbeddedSubagents = subagents.isEmpty && completeDetail.loading && session.waiting != null
+    val subagentsSectionMounted = !subagents.isEmpty || loadingEmbeddedSubagents
 
-    // Scroll straight to the Subagents section when opened from a parent row's subagent rollup.
-    LaunchedEffect(scrollToSubagents, envRows.size, contextRows.size, subagents.total) {
-        if (!scrollToSubagents) return@LaunchedEffect
+    // Keep the scroll request pending until the Subagents section header is actually mounted in the list.
+    LaunchedEffect(scrollToSubagents, subagentsSectionMounted, envRows.size, contextRows.size, info != null, infoError != null) {
+        if (!scrollToSubagents || !subagentsSectionMounted) return@LaunchedEffect
         val index = computeSubagentsHeaderIndex(
-            hasExternalLink = session.externalLink != null,
-            hasDelegated = !session.assistant,
+            hasExternalLink = effectiveSession.externalLink != null,
+            hasDelegated = !effectiveSession.assistant,
             envRowCount = envRows.size,
             hasInfoError = infoError != null && info == null,
             hasInfoLoading = info == null && infoError == null,
@@ -285,7 +306,7 @@ internal fun SessionOverviewSheet(
             }
 
             // 3. Subagents
-            if (!subagents.isEmpty) {
+            if (subagentsSectionMounted) {
                 item(key = "section-subagents") {
                     val countSummary = listOfNotNull(
                         subagents.running.size.takeIf { it > 0 }?.let { stringResource(R.string.chat_overview_subagents_running_count, it) },
@@ -298,6 +319,12 @@ internal fun SessionOverviewSheet(
                             JIcon(PersonaIcons.agents, null, size = Tokens.Size.markS, tint = PersonaTheme.palette.ink2, decorative = true)
                         },
                     )
+                }
+
+                if (loadingEmbeddedSubagents) {
+                    item(key = "subagents-loading") {
+                        JLoading()
+                    }
                 }
 
                 // Running · N (hidden completely when 0)
@@ -327,12 +354,12 @@ internal fun SessionOverviewSheet(
                         EndedSubagentsToggleRow(
                             count = subagents.ended.size,
                             marks = marks,
-                            expanded = endedExpanded,
+                            expanded = isEndedExpanded,
                             modifier = Modifier.padding(top = if (subagents.running.isNotEmpty()) Tokens.Space.s else Tokens.Space.flush),
-                            onToggle = { endedExpanded = !endedExpanded },
+                            onToggle = toggleEndedExpanded,
                         )
                     }
-                    if (endedExpanded) {
+                    if (isEndedExpanded) {
                         itemsIndexed(subagents.ended, key = { _, item -> "sub-end:${item.id}" }) { index, item ->
                             OverviewSubagentRow(
                                 item = item,

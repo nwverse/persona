@@ -152,5 +152,21 @@ class ChildSessionsTest {
         // Held cross-machine children also drive NeedsYou rollup
         val remoteAsk = Session("box-b", "sub-1", state = "needs_you", isSubagent = true, foldedUnder = "p", foldedUnderMachineId = "box-a")
         assertEquals(ChildRollup(ChildRollupKind.NeedsYou, 1), childRollup(base, listOf(remoteAsk)))
+
+        // Deduplicates a subagent present in both parent.subagents and heldChildren by SessionKey, while summing distinct ones.
+        val sameKeyChild = Session("box-a", "p@emb1", state = "working", isSubagent = true, foldedUnder = "p")
+        val remoteWorkingChild = Session(
+            "box-b", "a2a-1", state = "working", isSubagent = true,
+            parentMachineId = "box-a", parentSessionId = "p", foldedUnder = "p", foldedUnderMachineId = "box-a",
+        )
+        val parentWithEmbedded = base.copy(
+            subagents = listOf(
+                Subagent("emb1", sessionId = "p@emb1", running = true),
+                Subagent("emb2", sessionId = "p@emb2", running = true),
+            ),
+        )
+        // p@emb1 is in both embedded and held (counted once), p@emb2 is embedded-only (+1), box-b/a2a-1 is remote (+1) => 3 total.
+        assertEquals(ChildRollup(ChildRollupKind.Running, 3), childRollup(parentWithEmbedded, listOf(sameKeyChild, remoteWorkingChild)))
+        assertEquals(3, buildOverviewSubagents(parentWithEmbedded, listOf(sameKeyChild, remoteWorkingChild)).running.size)
     }
 }

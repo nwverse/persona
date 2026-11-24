@@ -419,4 +419,205 @@ import Testing
         #expect(detail.result == "Done")
         #expect(detail.lastTool == "Bash")
     }
+
+    @Test func crossMachineChildrenSharingSessionIDStayDistinctAcrossPlacementAndReveal() throws {
+        let childA = try childRow("shared-id", under: "parent", state: "working", machine: "box-a", extra: [
+            "folded_under_machine_id": "box-a",
+            "updated_at": "2026-11-01T00:00:10Z",
+        ])
+        let childB = try childRow("shared-id", under: "parent", state: "idle", machine: "box-b", extra: [
+            "folded_under_machine_id": "box-a",
+            "updated_at": "2026-11-01T00:00:20Z",
+        ])
+
+        var seen: [SessionKey: Date?] = [:]
+        let places = ChildSessions.places([childA, childB], seen: &seen)
+        #expect(places.count == 2)
+        #expect(places[0].key == childA.key && places[1].key == childB.key)
+        #expect(places[0].time != places[1].time)
+
+        let sessionsByKey = Dictionary([childA, childB].map { ($0.key, $0) }, uniquingKeysWith: { _, newer in newer })
+        #expect(sessionsByKey.count == 2)
+
+        let work = ChatLine.work(
+            id: "w-1",
+            items: [.step(.call(ToolCall(use: item("u1", seq: 1, role: "assistant", kind: "tool_use", tool: "Read"))))],
+            live: false,
+            start: Date(timeIntervalSince1970: 0),
+            end: nil
+        )
+        let inserted = ChildSessionLines.insert([work], places: places, sessions: sessionsByKey, complete: true)
+        let targetA = ChildSessionLines.target(of: childA.key, in: inserted)
+        let targetB = ChildSessionLines.target(of: childB.key, in: inserted)
+        #expect(targetA != nil && targetB != nil)
+        #expect(targetA?.groupID == "w-1" && targetB?.groupID == "w-1")
+        #expect(targetA?.stepID != targetB?.stepID)
+        #expect(targetA?.lineID != targetB?.lineID)
+
+        let revealB = ChildReveal(key: childB.key, token: 1)
+        #expect(!revealB.matches(childA.key))
+        #expect(revealB.matches(childB.key))
+        #expect(ChildSessionLines.target(matching: revealB, in: inserted) == targetB)
+
+        let parent = try sessionRow("parent", machine: "box-a")
+        let homeB = ChildSessions.home(requested: childB.key, row: childB, parent: parent)
+        #expect(homeB.key == parent.key && homeB.childKey == childB.key && homeB.childID == "shared-id")
+    }
+
+    @Test func summaryChildRefreshPreservesFullDetailOfOpenChildSession() async throws {
+        let fullChild = try childRow("child-1", under: "parent", state: "working", machine: "box-b", extra: [
+            "folded_under_machine_id": "box-a",
+            "rev": 5,
+            "permission_mode": "plan",
+            "queued": ["follow up"],
+            "queued_relayed": 1,
+            "ports": [["port": 3000, "process": "node"]],
+            "loop": ["kind": "interval", "prompt": "/loop check CI", "interval_seconds": 60],
+            "background": [["id": "bg-1", "kind": "shell", "command": "swift test"]],
+            "subagents": [[
+                "id": "sub-1", "session_id": "child-1@sub-1", "description": "Deep audit", "running": true,
+            ]],
+        ])
+        let summaryChild = try childRow("child-1", under: "parent", state: "idle", machine: "box-b", extra: [
+            "folded_under_machine_id": "box-a",
+            "rev": 8,
+            "waiting": true,
+            "background_count": 1,
+            "running_subagents": 1,
+            "activity": "Finished step",
+            "loop": ["kind": "interval", "prompt": "", "interval_seconds": 60],
+        ])
+
+        // 1. Pure merge preserves full detail fields on baseline and delta summary refreshes.
+        let mergedDelta = ChildSessions.merge(held: [fullChild], changes: [summaryChild], removals: [], baseline: false)
+        let mergedBaseline = ChildSessions.merge(held: [fullChild], changes: [summaryChild], removals: [], baseline: true)
+        for merged in [mergedDelta.first, mergedBaseline.first] {
+            #expect(merged?.rev == 8)
+            #expect(merged?.state == .idle)
+            #expect(merged?.activity == "Finished step")
+            #expect(merged?.subagents?.map(\.id) == ["sub-1"])
+            #expect(merged?.background?.map(\.id) == ["bg-1"])
+            #expect(merged?.queued == ["follow up"])
+            #expect(merged?.queuedRelayed == 1)
+            #expect(merged?.permissionMode == "plan")
+            #expect(merged?.ports?.first?.port == 3000)
+            #expect(merged?.loop?.prompt == "/loop check CI")
+        }
+
+        // 2. End-to-end through AppModel's child refresh path: full detail already in sessionIndex stays intact.
+        let model = AppModel()
+        let parentKey = SessionKey(group: "", machineID: "box-a", sessionID: "parent")
+        model.childIndex.hold(fullChild)
+        model.applySessions([fullChild.machineRef: [fullChild]])
+        #expect(model.session(fullChild.key)?.subagents?.count == 1)
+
+        var api = APIClient(config: ServerConfig(url: URL(string: "http://127.0.0.1:18660")!, token: "t"), group: "")
+        api.sessionsHierarchy = true
+        api.sessionsCrossMachineHierarchy = true
+        api.transport = { _ in
+            Data(#"{"sessions":[{"machine_id":"box-b","session_id":"child-1","title":"child-1","cwd":"/code/app","status":"idle","state":"idle","rev":9,"waiting":true,"background_count":1,"running_subagents":1,"folded_under":"parent","folded_under_machine_id":"box-a","loop":{"kind":"interval","prompt":"","interval_seconds":60}}],"remove":[],"has_more":false,"revision":"r2","total":1}"#.utf8)
+        }
+        await model.runChildRefresh(parentKey, api: api, hint: nil, force: true)
+        let after = model.session(fullChild.key)
+        #expect(after?.rev == 9)
+        #expect(after?.state == .idle)
+        #expect(after?.subagents?.map(\.id) == ["sub-1"])
+        #expect(after?.background?.map(\.id) == ["bg-1"])
+        #expect(after?.queued == ["follow up"])
+        #expect(after?.permissionMode == "plan")
+        #expect(after?.loop?.prompt == "/loop check CI")
+    }
+
+    @Test func overviewChildRefreshSerializesThroughChildHintsWithoutRollingBackCheckpoint() async throws {
+        final class Tracker: @unchecked Sendable {
+            var inFlight = 0
+            var maxInFlight = 0
+            var requests: [[String: String]] = []
+            var firstRelease: CheckedContinuation<Void, Never>?
+            var firstStarted: CheckedContinuation<Void, Never>?
+        }
+        let tracker = Tracker()
+        let model = AppModel()
+        let parentKey = SessionKey(group: "", machineID: "box-a", sessionID: "parent")
+
+        var api = APIClient(config: ServerConfig(url: URL(string: "http://127.0.0.1:18660")!, token: "t"), group: "")
+        api.sessionsHierarchy = true
+        api.sessionsCrossMachineHierarchy = true
+        api.transport = { req in
+            tracker.inFlight += 1
+            tracker.maxInFlight = max(tracker.maxInFlight, tracker.inFlight)
+            let call = tracker.requests.count + 1
+            tracker.requests.append(req.query)
+            if call == 1 {
+                tracker.firstStarted?.resume()
+                tracker.firstStarted = nil
+                await withCheckedContinuation { cont in
+                    tracker.firstRelease = cont
+                }
+                tracker.inFlight -= 1
+                return Data(#"{"sessions":[{"machine_id":"box-b","session_id":"c1","title":"C1","cwd":"/tmp","status":"idle","state":"working","rev":1,"waiting":true,"folded_under":"parent","folded_under_machine_id":"box-a"}],"remove":[],"has_more":false,"revision":"r1","total":1}"#.utf8)
+            }
+            tracker.inFlight -= 1
+            return Data(#"{"sessions":[{"machine_id":"box-b","session_id":"c1","title":"C1","cwd":"/tmp","status":"idle","state":"idle","rev":2,"waiting":false,"folded_under":"parent","folded_under_machine_id":"box-a"}],"remove":[],"has_more":false,"revision":"r2","total":1}"#.utf8)
+        }
+
+        let started = Task { @MainActor in
+            await withCheckedContinuation { cont in
+                tracker.firstStarted = cont
+            }
+        }
+        let first = Task { @MainActor in
+            await model.runChildRefresh(parentKey, api: api, hint: "r1", force: false)
+        }
+        await started.value
+
+        // Trigger Overview forced refresh while the first read is still in-flight.
+        let overview = Task { @MainActor in
+            await model.runChildRefresh(parentKey, api: api, hint: nil, force: true)
+        }
+        await Task.yield()
+        #expect(tracker.maxInFlight == 1)
+
+        tracker.firstRelease?.resume()
+        tracker.firstRelease = nil
+        await first.value
+        await overview.value
+
+        #expect(tracker.maxInFlight == 1)
+        #expect(tracker.requests.count == 2)
+        #expect(tracker.requests[0]["since"] == nil)
+        #expect(tracker.requests[1]["since"] == "r1")
+        #expect(model.childIndex.checkpoint(parentKey) == "r2")
+        #expect(model.childRows(parentKey).first?.rev == 2)
+    }
+
+    @Test func childRollupDeduplicatesEmbeddedAndIndependentSubagentsAndSumsDistinctRunning() throws {
+        // 1 embedded running + 1 cross-machine A2A child running => 2 running (never undercounted to max(1, 1) = 1).
+        let parent = try sessionRow("parent", machine: "box-a", extra: [
+            "subagents": [[
+                "id": "a1", "session_id": "parent@a1", "description": "Explore", "running": true,
+            ]],
+            "children": ["total": 1, "working": 1],
+        ])
+        let remoteA2A = try childRow("remote-1", under: "parent", state: "working", machine: "box-b", extra: [
+            "folded_under_machine_id": "box-a", "is_subagent": true, "subagent_origin": "a2a",
+        ])
+        #expect(ChildSessions.shownRunning(parent, heldChildren: [remoteA2A]) == 2)
+        #expect(ChildSessions.childRollup(parent, heldChildren: [remoteA2A]).kind == .running(2))
+        #expect(ChildSessions.shownRunning(parent) == 2)
+        #expect(parent.childRollup.kind == .running(2))
+        #expect(ChildSessions.totalSubagentCount(parent, heldChildren: [remoteA2A]) == 2)
+
+        // Overlapping same-machine child present in both `subagents` and `heldChildren` is counted ONCE (aligned with SubagentOverview).
+        let overlappingParent = try sessionRow("parent", machine: "box-a", extra: [
+            "subagents": [[
+                "id": "local-1", "session_id": "local-1", "description": "Local child", "running": true,
+            ]],
+            "children": ["total": 1, "working": 1],
+        ])
+        let localChild = try childRow("local-1", under: "parent", state: "working", machine: "box-a")
+        #expect(ChildSessions.shownRunning(overlappingParent, heldChildren: [localChild]) == 1)
+        #expect(ChildSessions.childRollup(overlappingParent, heldChildren: [localChild]).kind == .running(1))
+        #expect(ChildSessions.totalSubagentCount(overlappingParent, heldChildren: [localChild]) == 1)
+    }
 }

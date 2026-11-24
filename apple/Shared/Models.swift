@@ -2251,6 +2251,45 @@ nonisolated extension Session {
         }
         return x
     }
+
+    /// Row-only fields on a `summary=1` response are authoritative, while absent detail-only fields (embedded
+    /// subagents, background tasks, workflows, queued messages, loop prompt, modes) stay intact from an earlier full
+    /// row instead of being wiped when a summary list or child-list refresh lands.
+    func preservingDetails(from old: Session?) -> Session {
+        guard listWaiting != nil, let old else { return self }
+        var row = self
+        row.background = old.background
+        row.subagents = old.subagents
+        row.workflows = old.workflows
+        if !row.assistant, row.undelivered == nil { row.undelivered = old.undelivered }
+        row.queued = old.queued
+        row.queuedRelayed = old.queuedRelayed
+        if var loop = row.loop, (loop.prompt ?? "").isEmpty, let oldPrompt = old.loop?.prompt, !oldPrompt.isEmpty {
+            loop.prompt = oldPrompt
+            row.loop = loop
+        }
+        row.ports = old.ports
+        row.permissionMode = old.permissionMode
+        row.bypassAvailable = old.bypassAvailable
+        // The pending choice and the confirmed effort come from the same session snapshot.
+        if row.pendingEffort == nil && old.pendingEffort == nil, row.effort == nil { row.effort = old.effort }
+        row.efforts = old.efforts
+        row.serviceTier = old.serviceTier
+        row.serviceTiers = old.serviceTiers
+        row.ultracode = old.ultracode
+        row.launcher = old.launcher
+        row.suggestion = old.suggestion
+        row.suggestionRisky = old.suggestionRisky
+        row.codexRoute = old.codexRoute
+        row.codexRouteNote = old.codexRouteNote
+        row.runtime = old.runtime
+        row.runtimeFallback = old.runtimeFallback
+        row.modelFallback = old.modelFallback
+        row.modelRestore = old.modelRestore
+        row.compaction = old.compaction
+        row.asks = old.asks
+        return row
+    }
 }
 
 extension Session {

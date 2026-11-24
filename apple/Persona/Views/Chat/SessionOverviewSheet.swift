@@ -21,6 +21,22 @@ nonisolated enum SessionOverviewSection: String, Hashable, Sendable {
     /// Preserves the collapsed/expanded state of the Ended subagents group across detail round-trips.
     var endedExpanded = false
 
+    /// Callbacks hosted on this reference so `SessionOverviewPresentation` carries neither a giant `Session?` value
+    /// nor `ChatView`-capturing closures on `ChatView.body`'s stack frame (`MainPagesStackTests`).
+    @ObservationIgnored var onOpenOutput: ((BackgroundTask) -> Void)?
+    @ObservationIgnored var onShowInChat: ((SubagentOverview.Target) -> Void)?
+    @ObservationIgnored var canShowInChat: ((SubagentOverview.Target) -> Bool)?
+
+    func setHandlers(
+        openOutput: @escaping (BackgroundTask) -> Void,
+        showInChat: @escaping (SubagentOverview.Target) -> Void,
+        canShowInChat: @escaping (SubagentOverview.Target) -> Bool
+    ) {
+        onOpenOutput = openOutput
+        onShowInChat = showInChat
+        self.canShowInChat = canShowInChat
+    }
+
     func openOverview(focus: SessionOverviewSection? = nil) {
         focusSection = focus
         showOverview = true
@@ -75,17 +91,15 @@ struct SessionOverviewSheet: View {
     private var liveSession: Session? { model.session(key) ?? session }
     private var isAssistant: Bool { assistant || liveSession?.assistant == true }
 
-    /// Compact change token so `SubagentOverview.build` runs only when subagent inputs change (P4), never per body.
-    private var subagentInputStamp: String {
-        let s = liveSession
-        let embedded = s?.subagents ?? []
-        let children = model.childRows(key)
-        let pending = model.interactions(for: key)
-        let ePart = embedded.map { "\($0.id):\($0.running):\($0.updatedAt?.timeIntervalSince1970 ?? 0):\($0.lastTool?.summary ?? $0.lastTool?.name ?? "")" }.joined(separator: ",")
-        let cPart = children.map { "\($0.key.path):\($0.rev ?? 0):\($0.state.rawValue):\($0.updatedAt?.timeIntervalSince1970 ?? 0):\($0.activity ?? "")" }.joined(separator: ",")
-        let pPart = pending.map(\.uid).joined(separator: ",")
-        let sPart = "\(s?.state.rawValue ?? "")|\(s?.agent ?? "")|\(s?.machineID ?? "")"
-        return "\(sPart)#\(ePart)#\(cPart)#\(pPart)"
+    /// Equatable change token so `SubagentOverview.build` runs only when subagent inputs or `ChatStore.tasks`
+    /// (embedded completion/failure statuses) change (P4), never per body.
+    private var subagentInputStamp: SubagentOverview.InputStamp {
+        SubagentOverview.inputStamp(
+            session: liveSession,
+            children: model.childRows(key),
+            pending: model.interactions(for: key),
+            tasks: model.chat(key).tasks
+        )
     }
 
     var body: some View {
@@ -788,16 +802,21 @@ struct SubagentDetailPage: View {
 
 // MARK: - Unified Overview Presentation (iPhone Sheet + Push / iPad Inspector + Internal Push + Expand)
 
-/// Attaches the unified Session Overview and Subagent Detail navigation to `ChatView` behind a type-erased boundary
-/// (matching `SideSessionsPresentation` so `MainPagesStackTests` stays shallow).
+/// Attaches the unified Session Overview and Subagent Detail navigation to `ChatView` behind lightweight,
+/// type-erased presentation boundaries (matching `SideSessionsPresentation` so `MainPagesStackTests` stays well
+/// under the 512 KB Debug first-render stack budget). Neither a `Session?` value nor `ChatView`-capturing closures
+/// live on this modifier: `SessionOverviewSheet` reads `model.session(parent)` when presented and callbacks stay on
+/// `ui`.
+///
+/// iOS's `.inspector` modifier wraps the page in an internal inspector host that adds tens of KB to `ChatView`'s
+/// Debug first-render stack even when dismissed, so it is attached only on iPad (`userInterfaceIdiom == .pad`,
+/// invariant for the process lifetime — never changing view identity), while iPhone uses the `.medium`/`.large`
+/// sheet + pushed `SubagentDetailPage`.
 struct SessionOverviewPresentation: ViewModifier {
     let parent: SessionKey
-    var session: Session?
     var assistant: Bool
     var on: Bool
     let ui: SessionOverviewUI
-    var onOpenOutput: (BackgroundTask) -> Void
-    var onShowInChat: (SubagentOverview.Target) -> Void
 
     @Environment(\.horizontalSizeClass) private var widthClass
     @State private var inspectorPath: [SubagentOverview.Target] = []
@@ -814,61 +833,73 @@ struct SessionOverviewPresentation: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        // Cut the modifier chain at every presentation boundary (`stackSegment` / `AnyView`) so an unoptimized Debug
-        // build never stacks sheet + inspector + navigationDestination frames on `ChatView`'s render stack
-        // (`MainPagesStackTests`).
-        let base = AnyView(content)
-        let withSheet = AnyView(
-            base.sheet(isPresented: Binding(get: { on && !usesInspector && ui.showOverview },
-                                            set: { ui.showOverview = $0 }),
-                       onDismiss: {
+        content
+            .inspector(isPresented: Binding(get: { on && usesInspector && ui.showOverview },
+                                            set: { ui.showOverview = $0 })) {
+                SessionOverviewInspectorContent(
+                    parent: parent,
+                    assistant: assistant,
+                    ui: ui,
+                    inspectorPath: $inspectorPath
+                )
+            }
+            .stackSegment()
+            .sheet(isPresented: Binding(get: { on && !usesInspector && ui.showOverview },
+                                        set: { ui.showOverview = $0 }),
+                   onDismiss: {
                 if let target = pendingDetail {
                     pendingDetail = nil
                     ui.detailTarget = target
                 }
             }) {
-                AnyView(compactOverviewSheet)
+                SessionOverviewCompactContent(
+                    parent: parent,
+                    assistant: assistant,
+                    ui: ui,
+                    onPickSubagent: { target in
+                        pendingDetail = target
+                        ui.reopenOverviewOnReturn = true
+                        ui.showOverview = false
+                    }
+                )
             }
-        )
-        let withInspector = AnyView(
-            withSheet.inspector(isPresented: Binding(get: { on && usesInspector && ui.showOverview },
-                                                     set: { ui.showOverview = $0 })) {
-                AnyView(regularOverviewInspector)
-            }
-        )
-        return withInspector
+            .stackSegment()
             .navigationDestination(item: Binding(get: { on ? ui.detailTarget : nil },
                                                  set: { next in
                 if next == nil { ui.detailDismissed() } else { ui.detailTarget = next }
             })) { target in
-                AnyView(fullDetailPage(target))
+                SessionOverviewFullDetailContent(parent: parent, target: target, ui: ui)
             }
             .onChange(of: parent) { _, _ in
                 inspectorPath.removeAll()
+                pendingDetail = nil
                 ui.showOverview = false
                 ui.detailTarget = nil
                 ui.reopenOverviewOnReturn = false
             }
     }
+}
 
-    private var compactOverviewSheet: some View {
+private struct SessionOverviewCompactContent: View {
+    let parent: SessionKey
+    var assistant: Bool
+    let ui: SessionOverviewUI
+    var onPickSubagent: (SubagentOverview.Target) -> Void
+
+    var body: some View {
         let endedBinding = Binding(get: { ui.endedExpanded }, set: { ui.endedExpanded = $0 })
-        return NavigationStack {
+        NavigationStack {
             SessionOverviewSheet(
                 key: parent,
-                session: session,
+                session: nil,
                 assistant: assistant,
                 inInspector: false,
                 focusSection: ui.focusSection,
                 endedExpanded: endedBinding,
-                onSelectSubagent: { target in
-                    pendingDetail = target
-                    ui.reopenOverviewOnReturn = true
-                    ui.showOverview = false
-                },
+                onSelectSubagent: onPickSubagent,
                 onOpenOutput: { task in
                     ui.showOverview = false
-                    onOpenOutput(task)
+                    ui.onOpenOutput?(task)
                 },
                 onDismiss: { ui.showOverview = false }
             )
@@ -876,13 +907,20 @@ struct SessionOverviewPresentation: ViewModifier {
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }
+}
 
-    private var regularOverviewInspector: some View {
+private struct SessionOverviewInspectorContent: View {
+    let parent: SessionKey
+    var assistant: Bool
+    let ui: SessionOverviewUI
+    @Binding var inspectorPath: [SubagentOverview.Target]
+
+    var body: some View {
         let endedBinding = Binding(get: { ui.endedExpanded }, set: { ui.endedExpanded = $0 })
-        return NavigationStack(path: $inspectorPath) {
+        NavigationStack(path: $inspectorPath) {
             SessionOverviewSheet(
                 key: parent,
-                session: session,
+                session: nil,
                 assistant: assistant,
                 inInspector: true,
                 focusSection: ui.focusSection,
@@ -891,7 +929,7 @@ struct SessionOverviewPresentation: ViewModifier {
                     inspectorPath.append(target)
                 },
                 onOpenOutput: { task in
-                    onOpenOutput(task)
+                    ui.onOpenOutput?(task)
                 },
                 onDismiss: {
                     inspectorPath.removeAll()
@@ -899,6 +937,9 @@ struct SessionOverviewPresentation: ViewModifier {
                 }
             )
             .navigationDestination(for: SubagentOverview.Target.self) { target in
+                let showInChat: ((SubagentOverview.Target) -> Void)? = (ui.canShowInChat?(target) == true)
+                    ? { target in ui.onShowInChat?(target) }
+                    : nil
                 SubagentDetailPage(
                     parent: parent,
                     target: target,
@@ -911,26 +952,33 @@ struct SessionOverviewPresentation: ViewModifier {
                         ui.showOverview = false
                         ui.openDetail(target, fromOverview: false)
                     },
-                    onShowInChat: { target in
-                        onShowInChat(target)
-                    }
+                    onShowInChat: showInChat
                 )
             }
         }
     }
+}
 
-    private func fullDetailPage(_ target: SubagentOverview.Target) -> some View {
+private struct SessionOverviewFullDetailContent: View {
+    let parent: SessionKey
+    let target: SubagentOverview.Target
+    let ui: SessionOverviewUI
+
+    var body: some View {
+        let showInChat: ((SubagentOverview.Target) -> Void)? = (ui.canShowInChat?(target) == true)
+            ? { target in
+                ui.reopenOverviewOnReturn = false
+                ui.detailTarget = nil
+                ui.onShowInChat?(target)
+            }
+            : nil
         SubagentDetailPage(
             parent: parent,
             target: target,
             inInspector: false,
             onBack: { ui.detailDismissed() },
             onExpand: nil,
-            onShowInChat: { target in
-                ui.reopenOverviewOnReturn = false
-                ui.detailTarget = nil
-                onShowInChat(target)
-            }
+            onShowInChat: showInChat
         )
     }
 }

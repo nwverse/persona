@@ -82,9 +82,11 @@ data class ChildRollup(
 )
 
 /**
- * Computes the single-line parent-row subagent rollup:
+ * Computes the single-line parent-row subagent rollup using the same deduplicated subagent identity as Session Overview:
  * 1. If any child subagent waits for the user -> [ChildRollupKind.NeedsYou] with count.
- * 2. Else if any embedded subagent or folded subagent child is running -> [ChildRollupKind.Running] with count.
+ * 2. Else if any embedded subagent or folded subagent child is running -> [ChildRollupKind.Running] with count
+ *    (deduplicating embedded entries against held standalone children by [SessionKey], with summary fallback when
+ *    embedded details are omitted).
  * 3. Else -> null (all ended; parent row stays quiet).
  *
  * Side sessions (`folded_as: "side"`) and tab workers (`folded_as: "worker"`) are excluded from subagent counts.
@@ -92,19 +94,31 @@ data class ChildRollup(
 fun childRollup(parent: Session, heldChildren: List<Session> = emptyList()): ChildRollup? {
     val heldSubagents = heldChildren.filter {
         it.belongsToParent(parent.key) && it.sideHome == null && it.foldedAs != FoldedAs.WORKER
-    }
-    val embeddedRunning = parent.runningSubagents ?: parent.subagents.orEmpty().count { it.running }
+    }.distinctBy { it.key }
 
     val hub = parent.children
     val hubNeedsYou = if (hub != null) (hub.needsYou - hub.sidesNeedsYou).coerceAtLeast(0) else 0
     val hubWorking = if (hub != null) (hub.working - hub.sidesWorking).coerceAtLeast(0) else 0
 
     val heldNeedsYou = heldSubagents.count { it.agentState == AgentState.NeedsYou }
-    val heldWorking = heldSubagents.count { it.agentState == AgentState.Working || it.backgroundWorking == true }
-
     val needsYou = maxOf(heldNeedsYou, hubNeedsYou)
     if (needsYou > 0) return ChildRollup(ChildRollupKind.NeedsYou, needsYou)
 
+    val heldKeys = heldSubagents.mapTo(HashSet()) { it.key }
+    val embedded = parent.subagents
+    val embeddedRunning = if (embedded != null) {
+        embedded.asSequence()
+            .filter { it.running }
+            .map { sub ->
+                val sid = sub.sessionId.takeIf(String::isNotBlank) ?: "${parent.sessionId}@${sub.id}"
+                SessionKey(parent.machineId, sid)
+            }
+            .distinct()
+            .count { it !in heldKeys }
+    } else {
+        parent.runningSubagents ?: 0
+    }
+    val heldWorking = heldSubagents.count { it.agentState == AgentState.Working || it.backgroundWorking == true }
     val running = embeddedRunning + maxOf(heldWorking, hubWorking)
     if (running > 0) return ChildRollup(ChildRollupKind.Running, running)
 

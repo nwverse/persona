@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Folded child rows for the open parent, by session id. The work step reads one, not the whole list.
+/// Folded child rows for the open parent, keyed by full `SessionKey` so cross-machine children sharing a `sessionID`
+/// never collide. The work step reads one, not the whole list.
 struct ChildSessionRowsKey: EnvironmentKey {
-    static let defaultValue: [String: Session] = [:]
+    static let defaultValue: [SessionKey: Session] = [:]
 }
 
 /// Agent chats name what runs the child. Persona's own chats do not (web `childMeta`).
@@ -36,7 +37,7 @@ struct ChildSessionHarnessKey: EnvironmentKey {
 }
 
 extension EnvironmentValues {
-    var childSessionRows: [String: Session] {
+    var childSessionRows: [SessionKey: Session] {
         get { self[ChildSessionRowsKey.self] }
         set { self[ChildSessionRowsKey.self] = newValue }
     }
@@ -53,7 +54,7 @@ extension EnvironmentValues {
 /// A folded child inside its parent's work summary. Opening it reads the child's transcript and offers View full
 /// to inspect its complete conversation.
 struct ChildSessionCard: View {
-    var sessionID: String
+    var key: SessionKey
     @Environment(AppModel.self) private var model
     @Environment(\.childSessionRows) private var rows
     @Environment(\.showsChildHarness) private var showsHarness
@@ -63,7 +64,7 @@ struct ChildSessionCard: View {
     @State private var detail: ChildSessions.Detail?
     @State private var fullResult: String?
 
-    private var session: Session? { rows[sessionID] }
+    private var session: Session? { rows[key] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -172,7 +173,7 @@ struct ChildSessionCard: View {
     }
 
     private func revealIfAsked() {
-        if model.revealChild?.sessionID == sessionID { expanded = true }
+        if model.revealChild?.matches(key) == true { expanded = true }
     }
 
     private func statusLine(_ status: ChildSessions.Status, now: Date) -> String {

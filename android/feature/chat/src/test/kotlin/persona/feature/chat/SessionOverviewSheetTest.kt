@@ -1,6 +1,10 @@
 package persona.feature.chat
 
 import android.content.Context
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.core.app.ApplicationProvider
@@ -9,6 +13,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -18,6 +24,7 @@ import persona.core.contracts.api.ChatAction
 import persona.core.contracts.api.ChatActionResult
 import persona.core.contracts.api.ChatActions
 import persona.core.designsystem.AppStyle
+import persona.core.designsystem.LocalHubFeatures
 import persona.core.designsystem.PersonaTheme
 
 @RunWith(AndroidJUnit4::class)
@@ -116,11 +123,11 @@ class SessionOverviewSheetTest {
         rule.onNodeWithTag("session-overview-list").performScrollToKey("subagents-ended-toggle")
         rule.onNodeWithTag("overview-ended-toggle").performClick()
         rule.waitForIdle()
-        rule.onNodeWithTag("session-overview-list").performScrollToKey("sub-end:embedded:emb-done")
+        rule.onNodeWithTag("session-overview-list").performScrollToKey("sub-end:embedded:mac/parent-1:emb-done")
         rule.onNodeWithText("Finished audit").assertExists()
 
         // Tapping ended embedded subagent opens its parent@agent target key.
-        rule.onNodeWithTag("overview-subagent-row:embedded:emb-done").performClick()
+        rule.onNodeWithTag("overview-subagent-row:embedded:mac/parent-1:emb-done").performClick()
         // Tapping cross-machine A2A subagent opens its remote SessionKey.
         rule.onNodeWithTag("session-overview-list").performScrollToKey("sub-run:session:linux-box/remote-sub")
         rule.onNodeWithTag("overview-subagent-row:session:linux-box/remote-sub").performClick()
@@ -129,5 +136,118 @@ class SessionOverviewSheetTest {
         // Background tasks section appears after Subagents.
         rule.onNodeWithTag("session-overview-list").performScrollToKey("section-background")
         rule.onNodeWithText("Background tasks").assertExists()
+    }
+
+    @Test fun paginatedSummaryParentLoadsCompleteRowForEmbeddedSubagents() {
+        val res = ApplicationProvider.getApplicationContext<Context>().resources
+        val fullParent = Session(
+            machineId = "mac",
+            sessionId = "parent-summary",
+            title = "Main session",
+            cwd = "/repo/app",
+            agent = "claude",
+            state = "working",
+            subagents = listOf(
+                Subagent(
+                    id = "emb-live",
+                    sessionId = "parent-summary@emb-live",
+                    description = "Embedded from completeRow",
+                    running = true,
+                    startedAt = "2026-11-24T00:40:00Z",
+                ),
+            ),
+        )
+        val pagedActions = object : ChatActions {
+            override suspend fun isMuted(session: Session) = false
+            override suspend fun execute(session: Session, action: ChatAction) = ChatActionResult.Done
+            override suspend fun verify(session: Session, action: ChatAction) = ChatActionResult.Done
+            override suspend fun info(session: Session) = SessionInfo(sessionId = session.sessionId, cwd = "/repo/app")
+            override suspend fun completeRow(session: Session): Session = fullParent
+        }
+        val state = ChatChromeState(res, pagedActions, CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate), {}, {})
+        // Summary=1 parent has waiting != null, runningSubagents = 1, and omits subagents array.
+        val summaryParent = fullParent.copy(subagents = null, waiting = true, runningSubagents = 1)
+
+        rule.setContent {
+            CompositionLocalProvider(LocalHubFeatures provides setOf("sessions_lookup")) {
+                PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
+                    SessionOverviewSheet(
+                        session = summaryParent,
+                        machine = Machine("mac", "MacBook", online = true),
+                        machines = listOf(Machine("mac", "MacBook", online = true)),
+                        childRows = emptyList(),
+                        state = state,
+                        actions = pagedActions,
+                        onDismiss = {},
+                    )
+                }
+            }
+        }
+        rule.mainClock.advanceTimeBy(300)
+        rule.waitForIdle()
+
+        rule.onNodeWithTag("session-overview-list").performScrollToKey("section-subagents")
+        rule.onNodeWithText("Embedded from completeRow").assertExists()
+    }
+
+    @Test fun scrollToSubagentsWaitsForAsyncChildrenAndHoistedEndedExpandedSurvivesReopen() {
+        val res = ApplicationProvider.getApplicationContext<Context>().resources
+        val state = ChatChromeState(res, actions, CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate), {}, {})
+        val parent = Session(machineId = "mac", sessionId = "p-async", title = "Parent", cwd = "/repo/app", agent = "claude", state = "idle")
+        val endedChild = Session(
+            machineId = "linux-box", sessionId = "ended-1", title = "Completed remote task", agent = "codex", state = "idle",
+            isSubagent = true, parentMachineId = "mac", parentSessionId = "p-async",
+            foldedUnder = "p-async", foldedUnderMachineId = "mac",
+        )
+        var children by mutableStateOf<List<Session>>(emptyList())
+        var scrollPending by mutableStateOf(true)
+        var scrolledCount = 0
+        var sheetOpen by mutableStateOf(true)
+        var hoistedEndedExpanded by mutableStateOf(false)
+
+        rule.setContent {
+            PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
+                if (sheetOpen) {
+                    SessionOverviewSheet(
+                        session = parent,
+                        machine = Machine("mac", "MacBook", online = true),
+                        machines = listOf(Machine("mac", "MacBook", online = true), Machine("linux-box", "87K-itx", online = true)),
+                        childRows = children,
+                        state = state,
+                        scrollToSubagents = scrollPending,
+                        onSubagentsScrolled = { scrollPending = false; scrolledCount++ },
+                        endedExpanded = hoistedEndedExpanded,
+                        onEndedExpandedChange = { hoistedEndedExpanded = it },
+                        onDismiss = {},
+                    )
+                }
+            }
+        }
+        rule.waitForIdle()
+        // Before async children arrive, scrollToSubagents stays pending and is not consumed prematurely.
+        assertTrue(scrollPending)
+        assertEquals(0, scrolledCount)
+
+        // Once children arrive, the Subagents header mounts and consumes scrollToSubagents.
+        children = listOf(endedChild)
+        rule.waitForIdle()
+        assertFalse(scrollPending)
+        assertEquals(1, scrolledCount)
+
+        // Expand ended group, simulate pushing detail (sheet closes) and returning (sheet reopens).
+        rule.onNodeWithTag("session-overview-list").performScrollToKey("subagents-ended-toggle")
+        rule.onNodeWithTag("overview-ended-toggle").performClick()
+        rule.waitForIdle()
+        assertTrue(hoistedEndedExpanded)
+        rule.onNodeWithText("Completed remote task").assertExists()
+
+        sheetOpen = false
+        rule.waitForIdle()
+        sheetOpen = true
+        rule.waitForIdle()
+
+        // Ended group stays expanded upon returning from subagent detail.
+        rule.onNodeWithTag("session-overview-list").performScrollToKey("sub-end:session:linux-box/ended-1")
+        rule.onNodeWithText("Completed remote task").assertExists()
     }
 }

@@ -85,10 +85,13 @@ fun buildOverviewSubagents(
             sub.lastTool?.summary?.takeIf(String::isNotBlank)
                 ?: sub.lastTool?.name?.takeIf(String::isNotBlank)
         } else null
+        val linkKey = "embedded:${parent.key.path}:${sub.id}"
+        val parentLinkKey = sub.parentId?.takeIf { it.isNotBlank() && it != sub.id }
+            ?.let { "embedded:${parent.key.path}:$it" }
         rawEntries += RawEntry(
-            id = "embedded:${sub.id}",
-            linkId = sub.id,
-            parentLinkId = sub.parentId?.takeIf { it.isNotBlank() && it != sub.id },
+            id = linkKey,
+            linkId = linkKey,
+            parentLinkId = parentLinkKey,
             targetKey = target,
             title = sub.description?.trim()?.takeIf(String::isNotEmpty) ?: sub.type.trim().takeIf(String::isNotEmpty),
             status = status,
@@ -133,11 +136,12 @@ fun buildOverviewSubagents(
                 else -> child.activity?.trim()?.takeIf(String::isNotEmpty)
             }
         } else null
-        val directParent = child.parentSessionId?.takeIf { it.isNotBlank() && it != parent.sessionId && it != child.sessionId }
+        val directParent = child.parentKey?.takeIf { it != parent.key && it != child.key }
+        val linkKey = "session:${child.key.path}"
         rawEntries += RawEntry(
-            id = "session:${child.key.path}",
-            linkId = child.sessionId,
-            parentLinkId = directParent,
+            id = linkKey,
+            linkId = linkKey,
+            parentLinkId = directParent?.let { "session:${it.path}" },
             targetKey = child.key,
             title = child.title.trim().takeIf { it.isNotEmpty() && it != "Claude Code" }
                 ?: child.folderName.takeIf(String::isNotBlank),
@@ -236,13 +240,12 @@ private fun orderWithNesting(
     comparator: Comparator<OverviewSubagent>,
 ): List<OverviewSubagent> {
     if (items.size <= 1) return items
-    val itemByLink = items.associateBy { item -> item.embedded?.id ?: item.session?.sessionId ?: item.targetKey.sessionId }
+    val itemById = items.associateBy { it.id }
     val childrenByParent = HashMap<String, MutableList<OverviewSubagent>>()
     val roots = mutableListOf<OverviewSubagent>()
     for (item in items) {
-        val linkId = item.embedded?.id ?: item.session?.sessionId ?: item.targetKey.sessionId
-        val parentLink = byLinkId[linkId]?.parentLinkId
-        if (parentLink != null && parentLink in itemByLink && parentLink != linkId) {
+        val parentLink = byLinkId[item.id]?.parentLinkId
+        if (parentLink != null && parentLink in itemById && parentLink != item.id) {
             childrenByParent.getOrPut(parentLink) { mutableListOf() }.add(item)
         } else {
             roots += item
@@ -251,10 +254,9 @@ private fun orderWithNesting(
     val out = ArrayList<OverviewSubagent>(items.size)
     val visited = HashSet<String>()
     fun emit(item: OverviewSubagent) {
-        val linkId = item.embedded?.id ?: item.session?.sessionId ?: item.targetKey.sessionId
-        if (!visited.add(linkId)) return
+        if (!visited.add(item.id)) return
         out += item
-        childrenByParent[linkId].orEmpty().sortedWith(comparator).forEach(::emit)
+        childrenByParent[item.id].orEmpty().sortedWith(comparator).forEach(::emit)
     }
     roots.sortedWith(comparator).forEach(::emit)
     // Defensive fallback in case of a parent cycle.

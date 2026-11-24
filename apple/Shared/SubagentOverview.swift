@@ -110,6 +110,97 @@ nonisolated struct SubagentOverview: Equatable, Sendable {
     var isEmpty: Bool { running.isEmpty && ended.isEmpty }
     var needsYouCount: Int { running.filter { $0.status == .needsYou }.count }
 
+    /// Equatable change token for `SessionOverviewSheet`'s projection invalidation (P4): captures parent metadata,
+    /// embedded subagent state resolved against `ChatStore.tasks` (completion/failure notices & `agentStatuses`),
+    /// standalone folded/cross-machine child rows, and pending interactions so embedded task status changes refresh
+    /// Session Overview immediately without rebuilding in `body`.
+    struct InputStamp: Equatable, Sendable {
+        struct EmbeddedEntry: Equatable, Sendable {
+            var id: String
+            var sessionID: String
+            var shownRunning: Bool
+            var agentStatus: String?
+            var updatedAt: Date?
+            var lastTool: String?
+            var parentID: String?
+            var description: String?
+            var type: String?
+        }
+
+        struct ChildEntry: Equatable, Sendable {
+            var key: SessionKey
+            var rev: Int64?
+            var state: AgentState
+            var backgroundWorking: Bool
+            var turnError: String?
+            var failureReason: String?
+            var startedAt: Date?
+            var updatedAt: Date?
+            var activity: String?
+            var waitLine: String?
+            var title: String
+            var foldedUnder: String?
+            var foldedUnderMachineID: String?
+            var parentSessionID: String?
+            var parentMachineID: String?
+            var foldedAs: String?
+        }
+
+        var parentState: AgentState?
+        var parentAgent: String?
+        var parentMachineID: String?
+        var embedded: [EmbeddedEntry]
+        var agentStatuses: [String: String]
+        var children: [ChildEntry]
+        var pendingUIDs: [String]
+    }
+
+    static func inputStamp(session: Session?, children: [Session], pending: [Interaction], tasks: TaskIndex) -> InputStamp {
+        let works = session?.state == .working || session?.state == .needsYou
+        let embedded = (session?.subagents ?? []).map { agent in
+            InputStamp.EmbeddedEntry(
+                id: agent.id,
+                sessionID: agent.sessionID,
+                shownRunning: agent.running(in: tasks, sessionWorks: works),
+                agentStatus: agent.toolUseID.flatMap { tasks.agentStatuses[$0] },
+                updatedAt: agent.updatedAt,
+                lastTool: agent.lastTool?.summary ?? agent.lastTool?.name,
+                parentID: agent.parentID,
+                description: agent.description,
+                type: agent.type
+            )
+        }
+        let childEntries = children.map { row in
+            InputStamp.ChildEntry(
+                key: row.key,
+                rev: row.rev,
+                state: row.state,
+                backgroundWorking: row.backgroundWorking,
+                turnError: row.turnError,
+                failureReason: row.failureReason,
+                startedAt: row.startedAt,
+                updatedAt: row.updatedAt,
+                activity: row.activity,
+                waitLine: row.waitLine,
+                title: row.displayTitle,
+                foldedUnder: row.foldedUnder,
+                foldedUnderMachineID: row.foldedUnderMachineID,
+                parentSessionID: row.parentSessionID,
+                parentMachineID: row.parentMachineID,
+                foldedAs: row.foldedAs
+            )
+        }
+        return InputStamp(
+            parentState: session?.state,
+            parentAgent: session?.agent,
+            parentMachineID: session?.machineID,
+            embedded: embedded,
+            agentStatuses: tasks.agentStatuses,
+            children: childEntries,
+            pendingUIDs: pending.map(\.uid)
+        )
+    }
+
     /// Progressive disclosure origin chip (#27): shown ONLY when child machine or harness differs from parent,
     /// displaying only the differing part (`Machine · Harness` / `Machine` / `Harness`).
     static func originChip(childMachineID: String, childMachineTitle: String, childHarness: String,

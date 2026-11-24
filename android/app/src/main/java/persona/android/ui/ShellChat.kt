@@ -102,12 +102,12 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
     var git by remember { mutableStateOf<persona.core.contracts.api.SessionGitStatus?>(null) }
     val cwd = metadata?.cwd.orEmpty()
     val connectionState = (wiring?.connection ?: session.connection).state
-    LaunchedEffect(cwd, session.files, pane, connectionState) {
+    LaunchedEffect(key.machineId, cwd, session.files, pane, connectionState) {
         val files = session.files
-        if (!assistant && cwd.isNotBlank() && files != null) followGitStatus(connectionState, { files.status(route.machineId, cwd) }) { git = it }
+        if (!assistant && cwd.isNotBlank() && files != null) followGitStatus(connectionState, { files.status(key.machineId, cwd) }) { git = it }
     }
     val filesAvailable = !assistant && cwd.isNotBlank() && session.files != null
-    val canOpenFilePath = filesAvailable || (assistant && route.machineId.isNotBlank() && session.files != null)
+    val canOpenFilePath = filesAvailable || (assistant && key.machineId.isNotBlank() && session.files != null)
     fun open(p: FilesPane, path: String? = null, line: Int? = null) {
         insertionFocused = composer.focused; focus.clearFocus(); openedPath = path; openedLine = line; pane = p
     }
@@ -172,7 +172,7 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
             if (pane != null && (filesAvailable || (canOpenFilePath && openedPath != null))) {
                 BackHandler { pane = null; openedPath = null; openedLine = null }
                 CompositionLocalProvider(persona.core.designsystem.LocalSplitDetail provides null) {
-                    SessionFilesScreen(route.copy(sessionId = key.sessionId), cwd.ifBlank { "~" }, requireNotNull(session.files), { pane = null; openedPath = null; openedLine = null }, { path ->
+                    SessionFilesScreen(route.copy(machineId = key.machineId, sessionId = key.sessionId), cwd.ifBlank { "~" }, requireNotNull(session.files), { pane = null; openedPath = null; openedLine = null }, { path ->
                         composer.value = insertFilePath(composer.value, path, insertionFocused)
                         pane = null
                         openedPath = null

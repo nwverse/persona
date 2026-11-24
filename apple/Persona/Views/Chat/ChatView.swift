@@ -353,15 +353,62 @@ struct ChatView: View {
     }
 
     var body: some View {
+        #if DEBUG || PERF_SIGNPOST
+        let _ = PerfTrace.body("ChatView")
+        // `-showPerfChanges YES`: what made the page draw again, in the log (docs/apple/mac.md「Measuring hitches on Mac」).
+        let _ = Self.printsChanges ? Self._printChanges() : ()
+        #endif
+        // Build the page sequentially across `@inline(never)` type-erased stages so an unoptimized Debug build never
+        // keeps `chatLifecycle` + `chatActivity` + `chatPresentation` + `chatSurface` + `paneContent` + `chatPane`
+        // live on the main thread stack simultaneously (#6735, `MainPagesStackTests`). Every stage wraps the same
+        // static SwiftUI view tree in `AnyView`, preserving view identity and state.
+        let _ = syncChatHandlers()
+        let stage0 = buildSwipeablePanes()
+        let stage1 = applyChatSurface(stage0)
+        let stage2 = applyChatPresentation(stage1)
+        let stage3 = applyChatActivityTop(stage2)
+        let stage4 = applyChatActivityMiddle(stage3)
+        let stage5 = applyChatActivityBottom(stage4)
+        let stage6 = applyChatLifecycleTop(stage5)
+        let stage7 = applyChatLifecycleBottom(stage6)
+        return applyChatPageShell(stage7)
+    }
+
+    @inline(never) private func syncChatHandlers() {
+        actions.set(handlers)
+        overviewUI.setHandlers(
+            openOutput: { t in
+                if let out = t.outputFile { file = FileRef(group: key.group, machineID: key.machineID, path: out, cwd: session?.cwd) }
+            },
+            showInChat: { target in
+                showSubagentInChat(target)
+            },
+            canShowInChat: { target in
+                canShowSubagentInChat(target)
+            }
+        )
+        _ = childOpener.set { childKey in
+            overviewUI.openDetail(.session(childKey), fromOverview: false)
+        }
+    }
+
+    @inline(never) private func buildSwipeablePanes() -> AnyView {
+        AnyView(swipeablePanes)
+    }
+
+    @inline(never) private func applyChatPageShell(_ base: AnyView) -> AnyView {
         // Every row's memo below (RowMemo) is this chat's: item ids repeat across chats (#372). Outermost, so the
         // sheets this page presents (a tool's detail) are inside it too.
-        chatPage.environment(\.rowMemoScope, RowMemo.scope(shownKey))
+        base
+            .background { DismissReader(holder: dismissChat) }
+            .environment(\.rowMemoScope, RowMemo.scope(shownKey))
             .environment(\.assistantCardConversation, style == .assistant ? shownKey : nil)
             // Only this chat hands its lifted message to the page (a chat shown in a sheet from it draws its own).
             .environment(\.messageLiftHost, nil)
             // A pressed message, lifted over the whole page with its bar (#603); over the page around it where that
             // floats a bar over the chat (Persona's conversation, `MessageLiftHost`, #3188).
             .liftBlur(menu)
+            .stackSegment()
             .overlay { if liftHost == nil { MessageLiftLayer(menu: menu) } }
             .devScreen(style == .assistant ? "assistant-chat" : "chat")
             .onAppear { liftHost?.menu = menu }
@@ -370,21 +417,11 @@ struct ChatView: View {
                 model.adopt(adopted)
                 switchTo(adopted.key)
             }
+            .stackSegment()
     }
 
-    @ViewBuilder private var chatPage: some View {
-        #if DEBUG || PERF_SIGNPOST
-        let _ = PerfTrace.body("ChatView")
-        // `-showPerfChanges YES`: what made the page draw again, in the log (docs/apple/mac.md「Measuring hitches on Mac」).
-        let _ = Self.printsChanges ? Self._printChanges() : ()
-        #endif
-        let _ = actions.set(handlers)
-        chatLifecycle
-            .background { DismissReader(holder: dismissChat) }
-    }
-
-    private var chatSurface: some View {
-        AnyView(swipeablePanes)
+    @inline(never) private func applyChatSurface(_ base: AnyView) -> AnyView {
+        base
         // A readable measure on a wide page (iPhone Duo open, nothing beside the chat); a no-op on other iPhones.
         .frame(maxWidth: Self.readableWidth)
         // Where a message's action bar may go (MessageMenu): this chat, not the whole screen.
@@ -398,6 +435,7 @@ struct ChatView: View {
                 Color.clear.accessibilityElement().accessibilityIdentifier("background-activity-page")
             }
         }
+        .stackSegment()
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         // Agents chats draw their own header (devChrome) so it can follow the scroll; the assistant's floats over the
@@ -430,6 +468,7 @@ struct ChatView: View {
         .safeAreaPadding(.top, pinsSideTop ? Theme.Space.xl : 0)
         .ignoresSafeArea(.container, edges: pinsSideTop ? .top : [])
         #endif
+        .stackSegment()
     }
 
     /// The closeout the header's card shows (#3612, `CloseoutCard`): a stopped agent's own account of its work, on its
@@ -495,21 +534,14 @@ struct ChatView: View {
     }
 
 
-    private var chatPresentation: some View {
-        AnyView(chatSurface) // see chatActivity
+    @inline(never) private func applyChatPresentation(_ base: AnyView) -> AnyView {
+        base
         // Unified Session Overview sheet (iPhone .medium/.large) / inspector (iPad) + full Subagent Detail navigation (#27, #14322).
         .modifier(SessionOverviewPresentation(
             parent: key,
-            session: session,
             assistant: style == .assistant,
             on: !backgroundActivity,
-            ui: overviewUI,
-            onOpenOutput: { t in
-                if let out = t.outputFile { file = FileRef(group: key.group, machineID: key.machineID, path: out, cwd: session?.cwd) }
-            },
-            onShowInChat: { target in
-                showSubagentInChat(target)
-            }
+            ui: overviewUI
         ))
         .stackSegment()
         .sheet(isPresented: Binding(get: { style == .assistant && TasksStore.shared.showBoard },
@@ -532,16 +564,15 @@ struct ChatView: View {
                 else if let key = TasksStore.shared.detailAgent { TaskDetailSheet(agent: key) }
             }
         }
+        .stackSegment()
     }
 
-    private var chatActivity: some View {
-        // AnyView here, in chatPresentation and in chatLifecycle: the page's modifiers as one type were ~60 levels deep, and the runtime spent
+    @inline(never) private func applyChatActivityTop(_ base: AnyView) -> AnyView {
+        // AnyView between stages: the page's modifiers as one type were ~60 levels deep, and the runtime spent
         // about 100 ms building that type's metadata the first time the page drew (cold start, #1337). Each boundary
-        // is the same type every time, so nothing below loses its identity or state. Also cut midway here, in
-        // chatLifecycle, chatSurface, paneContent, chatScroll, mainFooter and Composer: unoptimized, each getter
-        // reserved a stack slot for every intermediate of its chain, each holding all before it, and a Debug build's
-        // chat page reached 665 KB of an iPhone's 1 MB main-thread stack (#6735, `MainPagesStackTests`).
-        let activityTop = AnyView(chatPresentation)
+        // is the same type every time, so nothing below loses its identity or state. Split into sequential
+        // `@inline(never)` stages so an unoptimized Debug build never stacks their frames together (#6735, `MainPagesStackTests`).
+        base
         .task(id: "\(key.machineID)/\(key.sessionID)|\(session?.cwd ?? "")") { await loadGit() }
         #if os(iOS)
         .task(id: "\(key.path)|\(session != nil)") { takeAgentMenuDestination() }
@@ -599,8 +630,12 @@ struct ChatView: View {
         // the terminal): the cover goes, and the page showing again takes the bar away (`VoiceCalls.returnTo`).
         .onChange(of: VoiceCalls.shared.returning == key) { _, back in if back { closeCovers() } }
         .onChange(of: status) { _, st in if !st.isActive { Task { await loadGit() } } }
+        .stackSegment()
+    }
+
+    @inline(never) private func applyChatActivityMiddle(_ base: AnyView) -> AnyView {
         // One stack: the chat takes the whole screen. Beside the list (split) the tab bar stays, or there is no way out.
-        let activityMiddle = AnyView(activityTop)
+        base
         .hidesTabBarWhenShown(style == .dev && split == nil)
         .fullScreenCover(isPresented: Binding(get: { showTerminal && session?.canTerminal == true },
                                               set: { showTerminal = $0; if !$0 { resumeOnOpen = false } })) {
@@ -636,7 +671,11 @@ struct ChatView: View {
             NavigationStack { KnowledgeDetailView(entry: entry).toolbar { SheetClose { openedKnowledge = nil } } }
         }
         .sheet(isPresented: $planOpen) { PlanSheet(plan: latestPlan) }
-        return AnyView(activityMiddle)
+        .stackSegment()
+    }
+
+    @inline(never) private func applyChatActivityBottom(_ base: AnyView) -> AnyView {
+        base
         #if DEBUG
         // Simulator automation: `-showComposerPhoto YES` puts a made-up picture in the composer, as if picked from
         // Photos (the UI tests of a sent picture showing in the chat); `-showComposerPhoto 22` that many, past the hub's
@@ -676,10 +715,11 @@ struct ChatView: View {
                 }
             }
         }
+        .stackSegment()
     }
 
-    private var chatLifecycle: some View {
-        let lifecycleTop = AnyView(chatActivity) // see chatActivity
+    @inline(never) private func applyChatLifecycleTop(_ base: AnyView) -> AnyView {
+        base
         .environment(\.openFile, actions.openFile)
         .environment(\.fileScope, FileScope(machine: key.machineRef, cwd: session?.cwd ?? ""))
         .environment(\.chatImages, store.images)
@@ -723,7 +763,11 @@ struct ChatView: View {
             if let cwd = session?.cwd { PreviewChooser(key: key, cwd: cwd) { o in previewPicked = o; previewing = false } }
         }
         #endif
-        return AnyView(lifecycleTop)
+        .stackSegment()
+    }
+
+    @inline(never) private func applyChatLifecycleBottom(_ base: AnyView) -> AnyView {
+        base
         .environment(\.attachImage, actions.attachImage)
         .environment(\.loadImage, actions.loadImage)
         .environment(\.loadFullText, actions.loadFullText)
@@ -810,6 +854,7 @@ struct ChatView: View {
         .onChange(of: session?.needsSeen()) { _, unseen in
             if !backgroundActivity, unseen == true && model.visibleSession == key { model.markSeen(key) }
         }
+        .stackSegment()
     }
 
     #if os(iOS)
@@ -838,7 +883,7 @@ struct ChatView: View {
         let kids = model.childRows(shownKey)
         scratch.childRows = kids
         let modes = shownModes(until: frozen == nil ? nil : items[..<cut].last(where: { $0.ts != nil })?.ts ?? .distantPast)
-        let childStamp = kids.map { "\($0.sessionID):\($0.rev ?? 0):\($0.state.rawValue):\($0.updatedAt?.timeIntervalSince1970 ?? 0)" }.joined(separator: "|")
+        let childStamp = kids.map { "\($0.key.path):\($0.rev ?? 0):\($0.state.rawValue):\($0.updatedAt?.timeIntervalSince1970 ?? 0)" }.joined(separator: "|")
         let key = ChatScratch.LinesKey(store: "\(shownKey.machineID)/\(shownKey.sessionID)", version: frozen == nil ? store.version : cut,
                                        first: items.first?.id, live: frozen == nil ? liveTurnID : frozen?.live, open: openWork,
                                        runs: openRuns, frozen: frozen, feed: ChatLines.feedKey(allFeed),
@@ -858,7 +903,7 @@ struct ChatView: View {
         var seen = model.childIndex.seen
         builder.childPlaces = ChildSessions.places(kids, seen: &seen)
         model.childIndex.seen = seen
-        builder.childSessions = Dictionary(uniqueKeysWithValues: kids.map { ($0.sessionID, $0) })
+        builder.childSessions = Dictionary(kids.map { ($0.key, $0) }, uniquingKeysWith: { _, newer in newer })
         builder.historyComplete = store.loadedOnce && !store.hasMore
         let presentation: ChatLines.Presentation = backgroundActivity ? .backgroundActivity : .timeline
         let projection = builder.projection(Self.debugTrim(blocks), live: key.live, streaming: key.streaming,
@@ -928,6 +973,14 @@ struct ChatView: View {
     /// Opens or folds a work line from wherever it is (including a jump to a step).
     private func flipWork(_ id: String) {
         if openWork.contains(id) { openWork.remove(id) } else { openWork.insert(id) }
+    }
+
+    private func isSupervisionOpen(_ id: String) -> Bool {
+        openSupervision.contains(id) != Self.debugOpenSupervision
+    }
+
+    private func flipSupervision(_ id: String) {
+        if openSupervision.contains(id) { openSupervision.remove(id) } else { openSupervision.insert(id) }
     }
 
     private func isRunOpen(_ id: String) -> Bool { openRuns.contains(id) != Self.debugOpenRuns }
@@ -2229,16 +2282,16 @@ struct ChatView: View {
             }))
         .stackSegment()
         .environment(\.openSubagent, actions.openSubagent)
-        .environment(\.openChildSession, childOpener.set { childKey in
-            overviewUI.openDetail(.session(childKey), fromOverview: false)
-        })
+        .environment(\.openChildSession, childOpener)
         .environment(\.openPlan, actions.openPlan)
         .environment(\.subagentsByCall, subagentsByCall)
-        .environment(\.childSessionRows, Dictionary(uniqueKeysWithValues: scratch.childRows.map { ($0.sessionID, $0) }))
+        .environment(\.childSessionRows, Dictionary(scratch.childRows.map { ($0.key, $0) }, uniquingKeysWith: { _, newer in newer }))
         .environment(\.showsChildHarness, style != .assistant)
         .task(id: model.revealChild) {
-            guard let sid = model.revealChild?.sessionID, let group = ChildSessionLines.group(of: sid, in: currentLines()) else { return }
-            openWork.insert(group)
+            guard let reveal = model.revealChild,
+                  let target = ChildSessionLines.target(matching: reveal, in: currentLines()) else { return }
+            if let sid = target.supervisionID, !isSupervisionOpen(sid) { flipSupervision(sid) }
+            if !isOpen(target.groupID) { flipWork(target.groupID) }
         }
         .stackSegment()
         .environment(\.workflowChat, key)
@@ -2483,6 +2536,46 @@ struct ChatView: View {
         return true
     }
 
+    /// Whether `id` (a tool_use_id) appears anywhere in `lines`, including inside folded work or supervision rounds.
+    private func hasCallTarget(_ id: String, in lines: [ChatLine]) -> Bool {
+        for line in lines {
+            switch line.content {
+            case .work(_, let items, _, _, _):
+                for case .step(.call(let c)) in items where c.use.toolUseID == id { return true }
+            case .row(.tools(let steps)):
+                for case .call(let c) in steps where c.use.toolUseID == id { return true }
+            case .agentOut(_, let c):
+                if c.use.toolUseID == id { return true }
+            case .agents(_, let calls, _, _):
+                if calls.contains(where: { $0.use.toolUseID == id }) { return true }
+            case .supervision(_, let inner, _, _):
+                if hasCallTarget(id, in: inner) { return true }
+            default:
+                break
+            }
+        }
+        return false
+    }
+
+    /// Finds the rendered line id for `toolUseID` after its enclosing supervision/work/run lines have been opened.
+    private func renderedLineID(forCall id: String, in lines: [ChatLine]) -> String? {
+        for line in lines {
+            switch line.content {
+            case .workStep(_, .step(.call(let c)), _) where c.use.toolUseID == id:
+                return line.id
+            case .agentOut(_, let c) where c.use.toolUseID == id:
+                return line.id
+            case .agents(_, let calls, _, _) where calls.contains(where: { $0.use.toolUseID == id }):
+                return line.id
+            case .row(.tools(let steps)) where steps.contains(where: { if case .call(let c) = $0 { c.use.toolUseID == id } else { false } }):
+                return line.id
+            default:
+                break
+            }
+        }
+        return nil
+    }
+
     /// From a background task's notice to the call that started it: opens the work line it is folded in and brings
     /// the step into view (rows of the newest end hold still; the list stops following it).
     private func jumpToCall(_ id: String) {
@@ -2490,37 +2583,52 @@ struct ChatView: View {
             for case .call(let c) in steps where c.use.toolUseID == id { return c.id }
             return nil
         }
-        var target: String?
-        for line in currentLines() {
-            switch line.content {
-            case .work(let wid, let items, let live, _, _):
-                let steps = items.compactMap { if case .step(let s) = $0 { s } else { nil } }
-                if let step = holds(steps) {
-                    var t = Transaction()
-                    t.disablesAnimations = true
-                    if !isOpen(wid, live: live) {
-                        withTransaction(t) { flipWork(wid) }
+        func locate(in lines: [ChatLine], supervisionID: String? = nil) -> (supervisionID: String?, target: String)? {
+            for line in lines {
+                switch line.content {
+                case .work(let wid, let items, let live, _, _):
+                    let steps = items.compactMap { if case .step(let s) = $0 { s } else { nil } }
+                    if let step = holds(steps) {
+                        var t = Transaction()
+                        t.disablesAnimations = true
+                        if let sid = supervisionID, !isSupervisionOpen(sid) {
+                            withTransaction(t) { flipSupervision(sid) }
+                        }
+                        if !isOpen(wid, live: live) {
+                            withTransaction(t) { flipWork(wid) }
+                        }
+                        if AppStyle.current.usesBeautifulUI, let run = runID(holding: step, group: wid, items: items), !isRunOpen(run) {
+                            withTransaction(t) { _ = openRuns.insert(run) }
+                        }
+                        let resolved = renderedLineID(forCall: id, in: currentLines()) ?? (wid + "/" + step)
+                        return (supervisionID, resolved)
                     }
-                    if AppStyle.current.usesBeautifulUI, let run = runID(holding: step, group: wid, items: items), !isRunOpen(run) {
-                        withTransaction(t) { _ = openRuns.insert(run) }
+                case .row(.tools(let steps)):
+                    if holds(steps) != nil {
+                        if let sid = supervisionID, !isSupervisionOpen(sid) {
+                            var t = Transaction()
+                            t.disablesAnimations = true
+                            withTransaction(t) { flipSupervision(sid) }
+                        }
+                        return (supervisionID, line.id)
                     }
-                    target = wid + "/" + step
+                case .supervision(let sid, let inner, _, _):
+                    if let found = locate(in: inner, supervisionID: supervisionID ?? sid) { return found }
+                default: break
                 }
-            case .row(.tools(let steps)):
-                if holds(steps) != nil { target = line.id }
-            default: break
             }
-            if target != nil { break }
+            return nil
         }
-        guard let target else {
+        guard let found = locate(in: currentLines()) else {
             Haptics.attention()
             return
         }
+        let target = found.target
         userScrolled = true
         setFollow { $0.read() }
         Haptics.tap()
         Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(120)) // the opened work line's steps are laid out first
+            try? await Task.sleep(for: .milliseconds(160)) // the opened work line's steps are laid out first
             withAnimation(Theme.Motion.standard) { position.scrollTo(id: target, anchor: .center) }
         }
     }
@@ -3633,8 +3741,7 @@ struct ChatView: View {
                 }
                 // The header's status line shows only running subagents: finished, folded and cross-machine ones live in
                 // Session Overview's Subagents section (a hosted sheet still keeps its own strip).
-                let nonSideChildren = max(0, (session?.children?.total ?? 0) - (session?.children?.sides ?? 0))
-                let subagentTotal = max(session?.subagents?.count ?? 0, nonSideChildren)
+                let subagentTotal = session.map { ChildSessions.totalSubagentCount($0, heldChildren: model.childRows(key)) } ?? 0
                 if host == nil, subagentTotal > 0 {
                     Button { overviewUI.openOverview(focus: .subagents) } label: {
                         Label(String(localized: "Subagents (\(subagentTotal)) [Session Overview]"), systemImage: Theme.Icon.subagent).lineLimit(1)
@@ -4254,6 +4361,19 @@ struct ChatView: View {
         }
     }
 
+    /// Whether `target` has a real launch call or folded child card anchor in the parent chat's loaded transcript.
+    /// Drives whether "Show in chat" is offered on `SubagentDetailPage`.
+    private func canShowSubagentInChat(_ target: SubagentOverview.Target) -> Bool {
+        let lines = currentLines()
+        switch target {
+        case .embedded(_, let agent):
+            guard let callID = agent.toolUseID, !callID.isEmpty else { return false }
+            return hasCallTarget(callID, in: lines)
+        case .session(let childKey):
+            return ChildSessionLines.target(of: childKey, in: lines) != nil
+        }
+    }
+
     /// Scrolls the parent chat to the launch call or folded child card for `target` ("Show in chat").
     private func showSubagentInChat(_ target: SubagentOverview.Target) {
         switch target {
@@ -4262,10 +4382,37 @@ struct ChatView: View {
                 jumpToCall(callID)
             }
         case .session(let childKey):
-            if let group = ChildSessionLines.group(of: childKey.sessionID, in: currentLines()) {
-                openWork.insert(group)
+            jumpToChildSession(childKey)
+        }
+    }
+
+    /// Expands the enclosing supervision/work group and `ChildSessionCard` for `childKey`, then scrolls the transcript
+    /// directly to that real child card anchor.
+    private func jumpToChildSession(_ childKey: SessionKey) {
+        guard let target = ChildSessionLines.target(of: childKey, in: currentLines()) else {
+            Haptics.attention()
+            return
+        }
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            if let sid = target.supervisionID, !isSupervisionOpen(sid) {
+                flipSupervision(sid)
             }
-            model.open(key, reveal: childKey.sessionID)
+            if !isOpen(target.groupID) {
+                flipWork(target.groupID)
+            }
+        }
+        model.requestRevealChild(childKey)
+        userScrolled = true
+        setFollow { $0.read() }
+        Haptics.tap()
+        let lineID = target.lineID
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(160)) // allow popped detail transition + opened work steps to lay out
+            withAnimation(Theme.Motion.standard) { position.scrollTo(id: lineID, anchor: .center) }
+            try? await Task.sleep(for: .milliseconds(250))
+            quoteFlash = QuoteFlashMark(line: lineID)
         }
     }
 
@@ -7456,7 +7603,9 @@ struct WorkStepView: View, Equatable {
         Group {
             switch item {
             case .step(.call(let c)) where c.id.hasPrefix(ChildSessions.callPrefix):
-                ChildSessionCard(sessionID: String(c.id.dropFirst(ChildSessions.callPrefix.count)))
+                if let childKey = ChildSessionLines.childKey(of: c) {
+                    ChildSessionCard(key: childKey)
+                }
             case .step(.call(let c)) where SubagentCard.isAgent(c):
                 SubagentCard(call: c)
             case .step(.call(let c)) where WorkflowCallCard.isWorkflow(c):
