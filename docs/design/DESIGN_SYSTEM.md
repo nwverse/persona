@@ -2491,7 +2491,9 @@ The task cards follow `docs/design/task-cards.md`, which holds the state tables 
 
 For a failed continuation (#13495, web), separate the failed attempt, the confirmed follow-up delivery and the
 original session's current state. A confirmed send uses neutral delivery text; its original error remains in a
-collapsed dispatch-history disclosure. The card opens that original session, with a separate current-task link.
+collapsed dispatch-history disclosure. Receipt validation, history details and the current-task link load only for a
+failed continuation. While they load, keep its title and the failed attempt visible; show delivery and live state only
+after validating the receipt. Ordinary hand-off cards stay immediate. The card opens that original session.
 When membership ends, retain the delivery history without showing later work as this task's state. An uncorrelated
 legacy failure stays an attempt failure, never an inferred running task. Sending and unknown delivery remain visible;
 unknown delivery does not offer a blind retry. This serves everyday Assistant users without exposing executor details

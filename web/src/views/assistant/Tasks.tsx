@@ -68,7 +68,7 @@ const WaitingTaskRow = lazy(() => import("./WaitingTaskRow"));
 const ruleLine = (of: RuleCard) => (of.suggestion || underCard.made?.has(of.id!)) && <Suspense fallback={null}><NeedsYouPart rule={of} /></Suspense>;
 underCard.line = ruleLine;
 import { SentLine } from "./Sent";
-import { failedContinuationHandoff, feedWake, HandoffCard, HandoffCards, TASK_LINE_SLACK_MS, taskHandoffs } from "./Handoff";
+import { feedWake, HandoffCard, HandoffCards, TASK_LINE_SLACK_MS, taskHandoffs } from "./Handoff";
 import { acceptanceStands, latestReview, parkedLine, progressLine } from "../../lib/supervision";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
 import { useChosenManager, useLinkManager, useShownManager } from "../../lib/manager-choice";
@@ -255,8 +255,7 @@ const PERMISSION: Record<string, string> = { acceptEdits: t("assistant-tasks.per
 
 /** A task of a started plan that did not start: why. */
 function PlanTaskFailed({ task }: { task: PlanTask }) {
-  const recovery = useStore((s) => failedContinuationHandoff(task, s.todos));
-  if (recovery) return <HandoffCard handoff={recovery} />;
+  if (task.error && (task.continues || task.reuse_todo) && !task.todo_id) return <HandoffCard handoff={{ key: "continuation", title: task.title, wake: "continuation", continuationTask: task }} />;
   // A blank reason from the hub would leave the sentence hanging after the colon (#4809).
   const error = task.error?.trim() || t("assistant-tasks.unknown_reason");
   return <span className="text-red">{t("assistant-tasks.plan_task_failed", { title: task.title, error })}</span>;
@@ -773,8 +772,7 @@ function PlanHandoffs({ plan, since }: { plan: TaskPlan; since?: string }) {
   const plans = useFeed((s) => s.plans);
   const handoffs = useStoreRows((s) =>
     plan.tasks.flatMap((task, i) => {
-      const recovery = failedContinuationHandoff(task, s.todos, `${plan.id}/${i}`);
-      if (recovery) return [recovery];
+      if (task.error && (task.continues || task.reuse_todo) && !task.todo_id) return [{ key: `${plan.id}/${i}`, title: task.title, wake: "continuation" as const, continuationTask: task }];
       const id = planTaskTodo(plan, i, s.todos);
       // a later plan that continued the to-do holds it now; this plan's todo_id was cleared then (tasks_start.go)
       const superseded = Boolean(id && !task.todo_id && Object.values(plans).some((p) => p.id !== plan.id && p.tasks.some((x) => x.todo_id === id)));

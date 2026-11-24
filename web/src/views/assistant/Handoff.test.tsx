@@ -65,6 +65,7 @@ async function show(item: FeedItem, todos: Todo[], sessions: Session[]) {
   });
   act(() => root.render(<StrictMode><AssistantActionBar conversation={conversation} /><div data-chat-scroll><FeedLineView item={item} simplified /></div></StrictMode>));
   await settle();
+  await act(async () => { await vi.dynamicImportSettled(); });
 }
 
 describe("hand-off cards", () => {
@@ -156,6 +157,7 @@ describe("hand-off cards", () => {
     expect(card!.querySelector("[data-handoff-failure]")?.textContent).toBe(t("assistant-tasks.continuation_failed_attempt"));
     act(() => card!.click());
     expect(getPanel()).toBeNull();
+    await act(async () => { await vi.dynamicImportSettled(); });
     const details = host.querySelector<HTMLDetailsElement>("[data-handoff-history]")!;
     expect(details.open).toBe(false);
     expect(details.textContent).toContain(plan.tasks[0]!.error);
