@@ -177,7 +177,7 @@ function BubbleText({ text: full, blocks, ts, mid, sid, own, pending }: { text: 
     <div
       ref={ref}
       {...fold}
-      className={`text-[length:var(--chat-body)] leading-[1.6] whitespace-pre-wrap [overflow-wrap:anywhere] ${folded ? FOLDED : ""}`}
+      className={`text-[length:var(--chat-body)] leading-[1.6] whitespace-pre-wrap [overflow-wrap:anywhere] ${folded ? `${FOLDED} user-bubble-fade` : ""}`}
       data-folded={folded || undefined}
       data-bubble-text
     >

@@ -147,7 +147,7 @@ type modelProfiles struct {
 }
 
 type modelProfileState struct {
-	Active         string              `json:"active,omitempty"`           // the profile last switched to ("" none yet)
+	Active         string              `json:"active,omitempty"` // the profile last switched to ("" none yet)
 	At             time.Time           `json:"at,omitzero"`
 	By             ProfileActor        `json:"by,omitzero"`
 	Previous       *modelProfileImage  `json:"previous,omitempty"`         // latest rollback point (synced with Rollbacks for backward compatibility)

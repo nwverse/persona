@@ -4,7 +4,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LarkConversation } from "../../lib/lark-chats";
+import type { LarkConversation } from "./lark-chats";
 
 vi.mock("../../lib/store", async (original) => ({ ...(await original<typeof import("../../lib/store")>()), useLarkOn: () => true }));
 // Collect the component graph before the tests' deadlines. page() still gives each test fresh list stores.
@@ -12,7 +12,7 @@ await import("./Messages");
 // a fresh module per test: the chat list is the tab's own store
 const page = async () => {
   vi.resetModules();
-  (await import("../../lib/lark-chats")).setLarkHome(true);
+  (await import("./home")).setLarkHome(true);
   return (await import("./Messages")).Messages;
 };
 

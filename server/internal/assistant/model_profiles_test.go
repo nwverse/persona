@@ -1207,12 +1207,12 @@ func TestModelProfileLegacyModelOnlyBindingMigration(t *testing.T) {
 			ModelProfile{
 				ID: "legacy", Name: "Legacy",
 				Purposes: map[string]ModelBinding{
-					"assistant":      {Model: "chat-model"},                              // resolves to launcher.gw (matches live!)
-					"agent.new":      {Model: "agent-model"},                             // resolves to launcher.claude
-					"kb":             {Model: "kb-model"},                                // resolves to launcher.api-default
-					"inbox.triage":   {Provider: "launcher.triage-gw", Model: "fast-m"},  // explicit provider in profile
-					"agent.delegate": {Model: "delegate-model"},                          // must follow profile's inbox.triage (launcher.triage-gw), not live!
-					"translate":      {Model: "translate-model"},                         // must follow profile's inbox.triage (launcher.triage-gw)
+					"assistant":      {Model: "chat-model"},                             // resolves to launcher.gw (matches live!)
+					"agent.new":      {Model: "agent-model"},                            // resolves to launcher.claude
+					"kb":             {Model: "kb-model"},                               // resolves to launcher.api-default
+					"inbox.triage":   {Provider: "launcher.triage-gw", Model: "fast-m"}, // explicit provider in profile
+					"agent.delegate": {Model: "delegate-model"},                         // must follow profile's inbox.triage (launcher.triage-gw), not live!
+					"translate":      {Model: "translate-model"},                        // must follow profile's inbox.triage (launcher.triage-gw)
 				},
 			},
 			ModelProfile{

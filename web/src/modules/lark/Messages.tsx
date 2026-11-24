@@ -7,20 +7,30 @@ import { shortTime } from "../../lib/inbox";
 import { accountTitle, larkAccounts, useLarkAccounts, type LarkAccountsState } from "../../lib/lark-accounts";
 import { useLarkDisplayState } from "../../lib/lark-display";
 import { entryOf, type LarkEntry } from "../../lib/lark-history";
+import { useLarkHome } from "./home";
 import {
-  arrangeConversations, conversationPreview, filterConversations, larkChatsFor, unreadBadge, useLarkChats, useLarkHome, type LarkChatsStore,
+  arrangeConversations, conversationPreview, filterConversations, larkChatsFor, unreadBadge, useLarkChats, type LarkChatsStore,
   type LarkConversation,
-} from "../../lib/lark-chats";
+} from "./lark-chats";
 import { isResumed } from "../../lib/reconnect";
-import { href, navigate, onLinkClick } from "../../lib/router";
+import { href, navigate, onLinkClick, type Route } from "../../lib/router";
+import type { ModulePageProps } from "../../core/module-host";
 import { onHubEvent, useLarkOn } from "../../lib/store";
 import { t } from "../../i18n";
 import { Button, cx, IconButton, Loading, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { Chip, Count, LarkAvatar } from "../inbox/InboxParts";
-import { LarkThread } from "../inbox/LarkThread";
+import { Chip, Count, LarkAvatar } from "../../views/inbox/InboxParts";
+import { LarkThread } from "../../views/inbox/LarkThread";
 
 const SETTINGS = "/settings?tab=connectors";
+
+/** The page's address in the app (the lark module's route, module.ts): the list, or one chat. */
+export const messagesRoute = (id?: string): Route => ({ name: "module", module: "lark", base: "messages", path: id ? [id] : [] });
+
+/** The module's page (core/module-host.ts ModuleCode.Page): `/messages`, `/messages/<chat id>`. */
+export function MessagesPage({ path, onToggleSidebar }: ModulePageProps) {
+  return <Messages id={path[0] || undefined} onToggleSidebar={onToggleSidebar ?? (() => {})} />;
+}
 
 export function Messages({ id, onToggleSidebar }: { id?: string; onToggleSidebar: () => void }) {
   const lark = useLarkOn();
@@ -85,28 +95,28 @@ export function Messages({ id, onToggleSidebar }: { id?: string; onToggleSidebar
     const switched = listed.current && shownAccount.current !== accounts.request;
     shownAccount.current = accounts.request;
     listed.current = accounts.accounts.length > 0;
-    if (switched && id) navigate({ name: "messages" });
+    if (switched && id) navigate(messagesRoute());
   }, [accounts.request, accounts.accounts.length, id]);
 
   if (!on) {
     return (
       <div className="flex h-full flex-col">
         <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
-          <IconButton icon="sidebar" label={t("messages-messages.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
-          <h1 className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">{t("messages-messages.title")}</h1>
+          <IconButton icon="sidebar" label={t("lark-messages.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
+          <h1 className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">{t("lark-messages.title")}</h1>
         </header>
         <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
           <span className="flex size-10 items-center justify-center rounded-full bg-field text-ink-3"><Icon name="chat" size={18} /></span>
           {lark ? (
             <>
-              <p className="text-[13.5px] font-medium text-ink">{t("messages-messages.off_title")}</p>
-              <p className="max-w-[340px] text-[12.5px] text-ink-3">{t("messages-messages.off_hint")}</p>
-              <Button tone="secondary" icon="gear" className="mt-2" onClick={() => navigate(SETTINGS)}>{t("messages-messages.goto_lark_settings")}</Button>
+              <p className="text-[13.5px] font-medium text-ink">{t("lark-messages.off_title")}</p>
+              <p className="max-w-[340px] text-[12.5px] text-ink-3">{t("lark-messages.off_hint")}</p>
+              <Button tone="secondary" icon="gear" className="mt-2" onClick={() => navigate(SETTINGS)}>{t("lark-messages.goto_lark_settings")}</Button>
             </>
           ) : (
             <>
-              <p className="text-[13.5px] font-medium text-ink">{t("messages-messages.no_lark_title")}</p>
-              <p className="max-w-[340px] text-[12.5px] text-ink-3">{t("messages-messages.no_lark_hint")}</p>
+              <p className="text-[13.5px] font-medium text-ink">{t("lark-messages.no_lark_title")}</p>
+              <p className="max-w-[340px] text-[12.5px] text-ink-3">{t("lark-messages.no_lark_hint")}</p>
             </>
           )}
         </div>
@@ -117,27 +127,27 @@ export function Messages({ id, onToggleSidebar }: { id?: string; onToggleSidebar
   return (
     <div className="@container flex h-full flex-col">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
-        <IconButton icon="sidebar" label={t("messages-messages.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
-        {id && <IconButton icon="chevronLeft" label={t("messages-messages.back")} onClick={() => navigate({ name: "messages" })} className="@4xl:hidden" />}
+        <IconButton icon="sidebar" label={t("lark-messages.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
+        {id && <IconButton icon="chevronLeft" label={t("lark-messages.back")} onClick={() => navigate(messagesRoute())} className="@4xl:hidden" />}
         <h1 className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">
-          {id ? <><span className="@4xl:hidden">{chat?.name || t("messages-messages.lark_chat")}</span><span className="hidden @4xl:inline">{t("messages-messages.title")}</span></> : t("messages-messages.title")}
+          {id ? <><span className="@4xl:hidden">{chat?.name || t("lark-messages.lark_chat")}</span><span className="hidden @4xl:inline">{t("lark-messages.title")}</span></> : t("lark-messages.title")}
         </h1>
         {s.loading && s.loaded && <Spinner />}
-        {id && <IconButton icon="pin" label={t("messages-messages.pin_messages")} onClick={() => setPins(true)} />}
-        <IconButton icon="retry" label={t("messages-messages.refresh")} onClick={() => void larkChats.refresh()} disabled={s.loading} />
-        <IconButton icon="gear" label={t("messages-messages.lark_settings")} onClick={() => navigate(SETTINGS)} />
+        {id && <IconButton icon="pin" label={t("lark-messages.pin_messages")} onClick={() => setPins(true)} />}
+        <IconButton icon="retry" label={t("lark-messages.refresh")} onClick={() => void larkChats.refresh()} disabled={s.loading} />
+        <IconButton icon="gear" label={t("lark-messages.lark_settings")} onClick={() => navigate(SETTINGS)} />
       </header>
       <div className="flex min-h-0 flex-1">
-        <section aria-label={t("messages-messages.chat_list")} className={cx("min-h-0 w-full flex-col @4xl:flex @4xl:w-[380px] @4xl:shrink-0 @4xl:border-r @4xl:border-line", id ? "hidden" : "flex")}>
+        <section aria-label={t("lark-messages.chat_list")} className={cx("min-h-0 w-full flex-col @4xl:flex @4xl:w-[380px] @4xl:shrink-0 @4xl:border-r @4xl:border-line", id ? "hidden" : "flex")}>
           <ChatList selected={id} store={larkChats} accounts={accounts} />
         </section>
-        <section aria-label={t("messages-messages.chat")} className={cx("min-h-0 min-w-0 flex-1 flex-col @4xl:flex", id ? "flex" : "hidden")}>
+        <section aria-label={t("lark-messages.chat")} className={cx("min-h-0 min-w-0 flex-1 flex-col @4xl:flex", id ? "flex" : "hidden")}>
           {id ? (
             <div className="flex h-full min-h-0 flex-col">
               <ChatHeader chat={chat} accountName={accounts.selectedName} account={accounts.selected} />
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                 {landing ? (
-                  <LarkThread key={entryKey} chat={{ feed: id, title: chat?.name || t("messages-messages.lark_chat"), topic: chat?.is_topic, account: accounts.request,
+                  <LarkThread key={entryKey} chat={{ feed: id, title: chat?.name || t("lark-messages.lark_chat"), topic: chat?.is_topic, account: accounts.request,
                     group: chat?.is_group, ...landing }} pinsOpen={pins} onPinsOpen={setPins} />
                 ) : <div className="p-5"><Loading label={t("inbox-larkthread.loading")} /></div>}
               </div>
@@ -145,8 +155,8 @@ export function Messages({ id, onToggleSidebar }: { id?: string; onToggleSidebar
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
               <span className="flex size-10 items-center justify-center rounded-full bg-field text-ink-3"><Icon name="chat" size={18} /></span>
-              <p className="text-[13.5px] font-medium text-ink">{t("messages-messages.pick_title")}</p>
-              <p className="text-[12.5px] text-ink-3">{t("messages-messages.pick_hint")}</p>
+              <p className="text-[13.5px] font-medium text-ink">{t("lark-messages.pick_title")}</p>
+              <p className="text-[12.5px] text-ink-3">{t("lark-messages.pick_hint")}</p>
             </div>
           )}
         </section>
@@ -164,7 +174,7 @@ function ChatHeader({ chat, accountName, account }: { chat?: LarkConversation; a
       <LarkAvatar name={chat.name} size={28} avatarURL={chat.avatar_url} avatar={chat.avatar} account={account} />
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13.5px] font-semibold text-ink">{chat.name}</p>
-        <p className="truncate text-[11.5px] text-ink-3">{[chat.is_topic ? t("messages-messages.kind_topic") : chat.is_group ? t("messages-messages.kind_group") : t("messages-messages.kind_dm"), accountName].filter(Boolean).join(" · ")}</p>
+        <p className="truncate text-[11.5px] text-ink-3">{[chat.is_topic ? t("lark-messages.kind_topic") : chat.is_group ? t("lark-messages.kind_group") : t("lark-messages.kind_dm"), accountName].filter(Boolean).join(" · ")}</p>
       </div>
     </div>
   );
@@ -198,12 +208,12 @@ function ChatList({ selected, store: larkChats, accounts }: { selected?: string;
       <div className="mx-auto max-w-[760px] px-3 pt-3 pb-16 sm:px-4">
         <label className="flex h-8 items-center gap-2 rounded-control bg-surface px-2.5 shadow-btn focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
           <Icon name="search" size={13} stroke={2} className="shrink-0 text-ink-3" />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("messages-messages.search_placeholder")} aria-label={t("messages-messages.search_label")} className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-ink-3" />
-          {query && <IconButton icon="x" label={t("messages-messages.clear")} size={20} iconSize={11} onClick={() => setQuery("")} />}
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("lark-messages.search_placeholder")} aria-label={t("lark-messages.search_label")} className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-ink-3" />
+          {query && <IconButton icon="x" label={t("lark-messages.clear")} size={20} iconSize={11} onClick={() => setQuery("")} />}
         </label>
 
         {accounts.accounts.length > 1 && (
-          <div role="group" aria-label={t("messages-messages.accounts")} className="mt-2.5 flex gap-1.5 overflow-x-auto pb-0.5">
+          <div role="group" aria-label={t("lark-messages.accounts")} className="mt-2.5 flex gap-1.5 overflow-x-auto pb-0.5">
             {accounts.accounts.map((a) => (
               <Chip key={a.id} on={a.id === accounts.selected} onClick={() => larkAccounts.select(a.id)} title={a.tenant}>
                 <span className="inline-flex items-center gap-1.5">
@@ -220,21 +230,21 @@ function ChatList({ selected, store: larkChats, accounts }: { selected?: string;
             <Icon name="info" size={14} className="mt-0.5 shrink-0 text-orange" />
             <p className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-ink-2">{s.problem.text}</p>
             {s.problem.kind === "other" ? (
-              <Button tone="secondary" icon="retry" busy={s.loading} onClick={() => void larkChats.refresh()}>{t("messages-messages.retry")}</Button>
+              <Button tone="secondary" icon="retry" busy={s.loading} onClick={() => void larkChats.refresh()}>{t("lark-messages.retry")}</Button>
             ) : (
-              <Button tone="secondary" icon="gear" onClick={() => navigate(SETTINGS)}>{t("messages-messages.lark_settings")}</Button>
+              <Button tone="secondary" icon="gear" onClick={() => navigate(SETTINGS)}>{t("lark-messages.lark_settings")}</Button>
             )}
           </div>
         )}
-        {!s.loaded && !s.rows.length && <div className="mt-6 px-1"><Loading label={t("messages-messages.loading")} /></div>}
+        {!s.loaded && !s.rows.length && <div className="mt-6 px-1"><Loading label={t("lark-messages.loading")} /></div>}
 
         {!query && pinned.length > 0 && <PinnedShelf chats={pinned} selected={selected} account={accounts.selected} />}
 
         {s.loaded && !shown.length && !s.problem && (
           <div className="mt-10 flex flex-col items-center gap-2 text-center">
             <span className="flex size-10 items-center justify-center rounded-full bg-field text-ink-3"><Icon name={query ? "search" : "chat"} size={17} /></span>
-            <p className="text-[13.5px] font-medium text-ink">{query ? t("messages-messages.empty_no_match") : t("messages-messages.empty_none")}</p>
-            <p className="text-[12.5px] text-ink-3">{query ? t("messages-messages.empty_no_match_hint") : t("messages-messages.empty_none_hint")}</p>
+            <p className="text-[13.5px] font-medium text-ink">{query ? t("lark-messages.empty_no_match") : t("lark-messages.empty_none")}</p>
+            <p className="text-[12.5px] text-ink-3">{query ? t("lark-messages.empty_no_match_hint") : t("lark-messages.empty_none_hint")}</p>
           </div>
         )}
 
@@ -246,7 +256,7 @@ function ChatList({ selected, store: larkChats, accounts }: { selected?: string;
         {!query && s.moreProblem && (
           <div className="mt-3 flex items-center gap-3 px-1">
             <p className="min-w-0 flex-1 truncate text-[12px] text-red">{s.moreProblem}</p>
-            <Button tone="secondary" icon="retry" onClick={() => void larkChats.more()}>{t("messages-messages.retry")}</Button>
+            <Button tone="secondary" icon="retry" onClick={() => void larkChats.more()}>{t("lark-messages.retry")}</Button>
           </div>
         )}
         {!query && s.cursor && !s.moreProblem && <div ref={end} className="flex justify-center py-4"><Spinner /></div>}
@@ -258,11 +268,11 @@ function ChatList({ selected, store: larkChats, accounts }: { selected?: string;
 /** "Pinned": the pinned chats, a row of faces with their names and unread counts (the Lark gateway's order). */
 function PinnedShelf({ chats, selected, account }: { chats: LarkConversation[]; selected?: string; account?: number }) {
   return (
-    <section aria-label={t("messages-messages.pinned_label")} className="mt-3">
-      <p className="px-1 pb-1.5 text-[12px] font-medium text-ink-3">{t("messages-messages.pinned")} <span className="text-[11.5px] tabular-nums">{chats.length}</span></p>
+    <section aria-label={t("lark-messages.pinned_label")} className="mt-3">
+      <p className="px-1 pb-1.5 text-[12px] font-medium text-ink-3">{t("lark-messages.pinned")} <span className="text-[11.5px] tabular-nums">{chats.length}</span></p>
       <div className="flex gap-1 overflow-x-auto pb-1">
         {chats.map((c) => {
-          const to = { name: "messages", id: c.id } as const;
+          const to = messagesRoute(c.id);
           const b = unreadBadge(c);
           return (
             <a
@@ -294,7 +304,7 @@ function PinnedShelf({ chats, selected, account }: { chats: LarkConversation[]; 
 /** One chat of the list. It draws again only when its props change: a refresh keeps the object of a chat that did not
  * change (LarkChatsStore), and the list works out the time label each time it draws, so a new day still moves it on. */
 const ChatRow = memo(function ChatRow({ c, selected, time, account }: { c: LarkConversation; selected: boolean; time: string; account?: number }) {
-  const to = { name: "messages", id: c.id } as const;
+  const to = messagesRoute(c.id);
   const b = unreadBadge(c);
   const preview = conversationPreview(c);
   return (
@@ -316,7 +326,7 @@ const ChatRow = memo(function ChatRow({ c, selected, time, account }: { c: LarkC
         </span>
         <span className="mt-0.5 flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-2">
-            {c.at_me && <span className="mr-1 font-medium text-attention">{c.at_all ? t("messages-messages.at_all") : t("messages-messages.at_me")}</span>}
+            {c.at_me && <span className="mr-1 font-medium text-attention">{c.at_all ? t("lark-messages.at_all") : t("lark-messages.at_me")}</span>}
             {preview}
           </span>
           {b.count ? <Count n={b.count} accent={!b.muted} /> : b.dot ? <span className={cx("size-2 shrink-0 rounded-full", b.muted ? "bg-ink-3" : "bg-accent")} /> : null}
