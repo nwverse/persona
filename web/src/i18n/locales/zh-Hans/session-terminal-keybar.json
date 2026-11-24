@@ -6,5 +6,12 @@
   "shortcuts": "快捷命令",
   "copy_selection": "复制选中的文字",
   "paste": "粘贴剪贴板",
-  "enter": "回车"
+  "enter": "回车",
+  "line": "输入隐藏的一行",
+  "line_title": "输入一行（隐藏）",
+  "line_placeholder": "密码、令牌、验证码……",
+  "line_send": "输入并回车",
+  "line_show": "显示输入的内容",
+  "line_hide": "隐藏输入的内容",
+  "line_hint": "按原样输入终端，再按回车。Persona 不会保存。"
 }
