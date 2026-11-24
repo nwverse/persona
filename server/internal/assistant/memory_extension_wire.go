@@ -13,8 +13,8 @@ import (
 
 // What the manager takes of a memory extension's memory.entries answers (schema/extension/memory.schema.json,
 // docs/extensions/extensions.md "Memory sources", #13532): the pages, re-checked and mapped to the assembler's input
-// (memoryExtensionBatch, memory_assemble_entry.go). Pure: calling the extension, and switching its text outlets off
-// once it answers, come in a later change, which only adds the call around memoryExtensionBatchOf.
+// (memoryExtensionBatch, memory_assemble_entry.go). Pure: the extensions' manager calls the extension
+// (extmgr/memory_sources.go) and memory_extension_source.go maps what it answered with memoryExtensionBatchOf.
 
 // The bounds of reading one memory_sources contribution for an assembly.
 const (
