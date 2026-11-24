@@ -65,8 +65,11 @@ type TodoRow struct {
 	// Kind is "" for a to-do or a task, or KindConcern (#3561). Set when it is made, never changed.
 	Kind string `json:"kind"`
 	// SeenAt is when the owner last looked at it in Just finished (#5707): Got it, or opening it; nil when never, or
-	// after an Undo. Only SeeTodo writes it.
+	// after an Undo. Only SeeTodo / AutoSeeTodo writes it.
 	SeenAt *time.Time `json:"seen_at"`
+	// AutoSeenUndone records that the owner explicitly called Undo (DELETE /api/v1/todos/{id}/seen) so background
+	// supervision / re-acceptance never silently re-applies auto-seen (#14639).
+	AutoSeenUndone bool `json:"auto_seen_undone,omitempty"`
 	// InboxItem is the id of the Inbox row it was made from (#6480), "" for any other to-do. Set when it is made.
 	InboxItem string `json:"inbox_item"`
 	// PartOf is the to-do whose request this one is a piece of, "" for none; After the pieces of that request it waits
@@ -187,13 +190,13 @@ type TodoAgentRow struct {
 }
 
 const todoColumns = `id, title, notes, done_at, created_at, updated_at, origin, plan_id, start_error, done_by, done_reason, reopened_at, quiet,
-	due_at, due_date, remind_at, reminded_at, priority, project, kind, seen_at, inbox_item, part_of, after_ids, restored_at, someday_until, require_accepted_after, responsible, audience`
+	due_at, due_date, remind_at, reminded_at, priority, project, kind, seen_at, auto_seen_undone, inbox_item, part_of, after_ids, restored_at, someday_until, require_accepted_after, responsible, audience`
 
 // todoDest is where a row of todoColumns is scanned to.
 func todoDest(r *TodoRow) []any {
 	return []any{&r.ID, &r.Title, &r.Notes, &r.DoneAt, &r.CreatedAt, &r.UpdatedAt, &r.Origin, &r.PlanID, &r.StartError, &r.DoneBy,
 		&r.DoneReason, &r.ReopenedAt, &r.Quiet, &r.DueAt, &r.DueDate, &r.RemindAt, &r.RemindedAt, &r.Priority, &r.Project, &r.Kind,
-		&r.SeenAt, &r.InboxItem, &r.PartOf, &r.After, &r.RestoredAt, &r.SomedayUntil, &r.RequireAcceptedAfter, &r.Responsible, &r.Audience}
+		&r.SeenAt, &r.AutoSeenUndone, &r.InboxItem, &r.PartOf, &r.After, &r.RestoredAt, &r.SomedayUntil, &r.RequireAcceptedAfter, &r.Responsible, &r.Audience}
 }
 
 // ListTodos returns all todos ordered by created_at DESC, with image metadata but without image bytes.
@@ -535,11 +538,16 @@ func (d *DB) EditTodo(ctx context.Context, id string, e TodoEdit, updatedAt time
 	return &updated, nil
 }
 
-// SeeTodo sets when the owner looked at todo id (#5707, docs/assistant/todo-status-sop.md "Seen"); nil clears it (Undo).
+// SeeTodo sets when the owner looked at todo id (#5707, docs/assistant/todo-status-sop.md "Seen"); nil clears it (Undo)
+// and persists auto_seen_undone = true so background auto-seen never silently overwrites manual Undo (#14639).
+// Manual PUT /seen (at != nil) leaves auto_seen_undone untouched.
 // It is not an edit: updated_at stays, so being seen never counts as activity.
 func (d *DB) SeeTodo(ctx context.Context, id string, at *time.Time) (*TodoRow, error) {
 	var r TodoRow
-	err := d.pool.QueryRow(ctx, `UPDATE todos SET seen_at = $2 WHERE id = $1 RETURNING `+todoColumns, id, at).
+	err := d.pool.QueryRow(ctx, `UPDATE todos
+		SET seen_at = $2,
+			auto_seen_undone = CASE WHEN $2::timestamptz IS NULL THEN true ELSE auto_seen_undone END
+		WHERE id = $1 RETURNING `+todoColumns, id, at).
 		Scan(todoDest(&r)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrTodoNotFound
@@ -548,6 +556,25 @@ func (d *DB) SeeTodo(ctx context.Context, id string, at *time.Time) (*TodoRow, e
 		return nil, err
 	}
 	return &r, nil
+}
+
+// AutoSeeTodo marks todo id seen at at only when auto_seen_undone is false (#14639).
+// Returns (nil, false, nil) when the to-do exists but was previously manually undone.
+func (d *DB) AutoSeeTodo(ctx context.Context, id string, at time.Time) (*TodoRow, bool, error) {
+	var r TodoRow
+	err := d.pool.QueryRow(ctx, `UPDATE todos SET seen_at = $2
+		WHERE id = $1 AND NOT auto_seen_undone RETURNING `+todoColumns, id, at).
+		Scan(todoDest(&r)...)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if _, gerr := d.GetTodo(ctx, id); gerr != nil {
+			return nil, false, gerr
+		}
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return &r, true, nil
 }
 
 // RestoreTodo records that the owner brought todo id back from Inactive at at (#10226). Like SeeTodo it is not an edit:

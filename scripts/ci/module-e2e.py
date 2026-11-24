@@ -79,6 +79,7 @@ SERVER = {
     # The Feishu / Lark bot is the hub's, set up at /api/v1/bots/feishu (its client is the module's, internal/botport);
     # the lark-cli connector is registered only where lark.cli is configured, which the test hub is not.
     "lark": {"routes": ["/api/v1/bots/feishu"]},
+    "mail": {"routes": ["/api/v1/mail/accounts"]},
 }
 
 # What the web app shows of a module (web/e2e/module-gate.mjs). An entry:
@@ -108,6 +109,28 @@ WEB = {
         ],
         "chunks": [r"/assets/(Health|HealthReports|HealthIntakePage)-[\w-]+\.js", r"/src/modules/health/"],
         "chunk_when_on": ["test", "mock"],
+    },
+    "github": {
+        "entries": [
+            {"name": "Settings › Connectors row", "hubs": ["test"], "page": "/settings?tab=connectors",
+             "ready": {"text": r"^Connectors$"}, "selector": "[data-connector-row='github']", "opens": {"url": r"github"}},
+        ],
+        "chunks": [],
+    },
+    "imessage": {
+        "entries": [
+            {"name": "Settings › Extensions row", "hubs": ["test"], "page": "/settings?tab=extensions",
+             "ready": {"selector": "[data-extension-row]"}, "selector": "[data-extension-row='imessage']",
+             "opens": {"url": r"imessage"}},
+        ],
+        "chunks": [],
+    },
+    "mail": {
+        "entries": [
+            {"name": "Settings › Connectors Mail group", "hubs": ["test"], "page": "/settings?tab=connectors",
+             "ready": {"text": r"^Connectors$"}, "selector": "[data-settings-group='mail']"},
+        ],
+        "chunks": [],
     },
     "recording": {
         "entries": [

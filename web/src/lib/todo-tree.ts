@@ -1,6 +1,6 @@
 import { t } from "../i18n";
 import { splitAgentSessions, type AgentGroup, type AgentMutes } from "./agent-groups";
-import { repoOf } from "./agent-repos";
+import { repoOf } from "./agent-repos-core";
 import { backgroundWaiting, stateOf } from "./format";
 import { buildTodoAgentGroups, interruptedAgent, makeSessionLookup, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { todoLook, waitOf, type WaitReason } from "./todo-wait-reason";

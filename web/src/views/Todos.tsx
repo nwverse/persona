@@ -95,12 +95,15 @@ import {
   isTodoListFilter,
   isTodoListSort,
   listFilterCounts,
+  matchesKindFilter,
   matchesListFilter,
   sortTriageGroups,
+  type TodoKindFilter,
   type TodoListFilter,
   type TodoListSort,
 } from "../lib/todo-list-filter";
 import type { MenuItem } from "../ui/menu-model";
+import { foldGoalTasks, type GoalFoldResult, type GoalSummary } from "../lib/todo-goal-fold";
 import { useRestoredTodos } from "../lib/todo-restore";
 import { stepsWords } from "../lib/todo-steps";
 import { useOwnerNeeds, useTodoLookup, useTodoMinute } from "../lib/todo-owner-needs";
@@ -146,6 +149,7 @@ const SORT_KEY = "persona.todos.sort";
 /** A filter's and a sort's name, as the menu and the chip say them. */
 const filterLabel = (f: TodoListFilter) => t(`todos.filter_${f}`);
 const sortLabel = (s: TodoListSort) => t(`todos.sort_${s}`);
+const kindFilterLabel = (k: TodoKindFilter) => t(`todos.kind_filter_${k}`);
 
 type TodoGrouping = "status" | "folder" | "direction" | "request";
 
@@ -281,9 +285,21 @@ export function TodosView({
     () => new Map(todos.map((td) => [td.id, triage(td, lookup, Date.now(), restored.get(td.id) ?? 0, superseded.has(td.id)).section])),
     [todos, lookup, restored, superseded, tick],
   );
+  // Unified Labs toggle for To-dos v2 (#14584, #14642): strictly gated on the selected assistant's `todos_v2 === true`.
+  const assistant = useStore((s) => s.assistant);
+  const todosV2 = Boolean(assistant && sameManager(assistant.manager ?? repositoryManager, repositoryManager) && assistant.todos_v2 === true);
+  // open todos under the knowledge-base project they are in (#2581), else the one their agents work in (#2526)
+  const kbProjects = useTodoProjects();
+  const projectName = useMemo(() => projectNames(kbProjects), [kbProjects]);
   // A sessions push builds a new lookup: what it leaves in the same order stays the same list (and the same groups,
   // the same row views below), so the rows and sections it did not touch skip their render.
-  const views = useSteady(useMemo(() => todoRowViews(todos, lookup, interactions, sectionOf, needs), [todos, lookup, interactions, sectionOf, needs]), steadyViews);
+  const views = useSteady(
+    useMemo(
+      () => todoRowViews(todos, lookup, interactions, sectionOf, needs, todosV2 ? projectName : undefined),
+      [todos, lookup, interactions, sectionOf, needs, todosV2, projectName],
+    ),
+    steadyViews,
+  );
 
   // The filter by due date and the order inside each section (#3740): this browser's, in both groupings
   const [listFilter, setListFilter] = useState<TodoListFilter>(() => {
@@ -294,6 +310,9 @@ export function TodosView({
     const v = pref(SORT_KEY);
     return isTodoListSort(v) ? v : "recent";
   });
+  // Lightweight All / To-dos / Tasks filter gated behind todos_v2 (#14642); turning todos_v2 off reverts immediately.
+  const [kindFilter, setKindFilter] = useState<TodoKindFilter>("all");
+  const effectiveKindFilter: TodoKindFilter = todosV2 ? kindFilter : "all";
   const chooseFilter = (f: TodoListFilter) => {
     setPref(FILTER_KEY, f);
     setListFilter(f);
@@ -302,7 +321,7 @@ export function TodosView({
     setPref(SORT_KEY, s);
     setListSort(s);
   };
-  const inFilter = (td: Todo) => matchesListFilter(td, listFilter, tick);
+  const inFilter = (td: Todo) => matchesListFilter(td, listFilter, tick) && matchesKindFilter(td, effectiveKindFilter);
   // Filter by search query
   const matchesSearch = (t: Todo) => {
     const q = search.trim().toLowerCase();
@@ -325,8 +344,12 @@ export function TodosView({
       const r = orderWaitGroups(triageTodos(todos.filter(filterTodo), lookup, Date.now(), restored, { superseded }), Date.now());
       return fromView ? drawnFromView(r, Date.now(), restored) : r;
     },
-    [todos, lookup, restored, search, listFilter, superseded, tick, fromView],
+    [todos, lookup, restored, search, listFilter, effectiveKindFilter, superseded, tick, fromView],
   );
+  // Under todos_v2 (#14661), fold non-urgent `part_of` child tasks under their top-level parent goal while surfacing
+  // `needs_you` / active-ask child blockers in `waiting`; when todos_v2 is off, keep `triaged` untouched.
+  const goalFold = useMemo(() => (todosV2 ? foldGoalTasks(triaged) : undefined), [todosV2, triaged]);
+  const displayTriaged = goalFold ? goalFold.triaged : triaged;
   // the header's counts: what the filter shows, whatever is searched
   const triageAll = useMemo(
     () => {
@@ -334,7 +357,7 @@ export function TodosView({
       const r = orderWaitGroups(triageTodos(todos.filter(inFilter), lookup, Date.now(), restored, { superseded }), Date.now());
       return fromView ? drawnFromView(r, Date.now(), restored) : r;
     },
-    [todos, lookup, restored, search, listFilter, superseded, triaged, tick, fromView],
+    [todos, lookup, restored, search, listFilter, effectiveKindFilter, superseded, triaged, tick, fromView],
   );
   // Where the status sections place each to-do the search and the filter leave: its row's section (a merged row takes
   // its most urgent member's), and whether it counts as open (countsAsOpen, the header's Not done, its own reading).
@@ -365,9 +388,6 @@ export function TodosView({
     useMemo(() => sortTodos(todos.filter((td) => placed.row.get(td.id) === "cancelled"), lookup), [todos, placed, lookup]),
     sameList,
   );
-  // open todos under the knowledge-base project they are in (#2581), else the one their agents work in (#2526)
-  const kbProjects = useTodoProjects();
-  const projectName = useMemo(() => projectNames(kbProjects), [kbProjects]);
   const projectGroups = useSteady(
     // a folder holding a to-do in Needs you says so, a failed start waiting on the owner too (audit item 13)
     useMemo(() => groupTodosByProject(filteredUncompleted, lookup, Date.now(), projectName, (td) => sectionOf.get(td.id) === "waiting"), [filteredUncompleted, lookup, projectName, sectionOf]),
@@ -433,10 +453,10 @@ export function TodosView({
   }, [grouping, byDirection, triaged, placed, listSort]);
   // what waits on the user that the filter leaves out: the line over the sections says how many (#3740)
   const hiddenWaitingCount = useMemo(
-    () => (listFilter === "all" ? 0 : hiddenWaiting(todos.filter(matchesSearch), inFilter, lookup, Date.now(), restored, superseded)),
-    [todos, lookup, restored, search, listFilter, superseded, tick],
+    () => (listFilter === "all" ? 0 : hiddenWaiting(todos.filter((td) => matchesSearch(td) && matchesKindFilter(td, effectiveKindFilter)), (td) => matchesListFilter(td, listFilter, tick), lookup, Date.now(), restored, superseded)),
+    [todos, lookup, restored, search, listFilter, effectiveKindFilter, superseded, tick],
   );
-  const filterCounts = useMemo(() => listFilterCounts(todos.filter(matchesSearch), tick), [todos, search, tick]);
+  const filterCounts = useMemo(() => listFilterCounts(todos.filter((td) => matchesSearch(td) && matchesKindFilter(td, effectiveKindFilter)), tick), [todos, search, effectiveKindFilter, tick]);
   const onRestore = useCallback(
     (id: string) => {
       restoreTodo(id);
@@ -494,13 +514,13 @@ export function TodosView({
     if (requestMode || !split) return undefined;
     if (byStatus) {
       // the first row of an open section; none rather than one that would unfold a folded section (Shelved, Done)
-      for (const sec of TRIAGE_SECTIONS) if (!sectionStartsFolded(sec, triaged.sections[sec], tick) && triaged.sections[sec].length) return triaged.sections[sec][0].lead;
+      for (const sec of TRIAGE_SECTIONS) if (!sectionStartsFolded(sec, displayTriaged.sections[sec], tick) && displayTriaged.sections[sec].length) return displayTriaged.sections[sec][0].lead;
       return undefined;
     }
     // by 常驻: the first row shown (a direction's, else an unfolded status section's below them), else history
     if (grouping === "direction") return directionSections[0]?.todos[0] ?? directionRest.find((s) => !FOLDED_SECTIONS.has(s.sec))?.groups[0].lead ?? filteredCompleted[0] ?? filteredCancelled[0];
     return filteredUncompleted[0] ?? filteredCompleted[0] ?? filteredCancelled[0];
-  }, [activeId, selectedId, todos, filteredUncompleted, filteredCompleted, filteredCancelled, byStatus, requestMode, split, triaged, grouping, directionSections, directionRest]);
+  }, [activeId, selectedId, todos, filteredUncompleted, filteredCompleted, filteredCancelled, byStatus, requestMode, split, displayTriaged, grouping, directionSections, directionRest, tick]);
 
   // The to-do open beside the calendar: the address's, while it is there.
   const selectedTodo = calendarOn && selectedId ? todos.find((td) => td.id === selectedId) : undefined;
@@ -699,7 +719,14 @@ export function TodosView({
               <span className="text-[12px] whitespace-nowrap text-ink-3 max-sm:hidden" data-testid="todos-summary">
                 {/* one count in every grouping (audit item 12): open as countsAsOpen counts it, section counts as their
                     titles do, with Cancelled always separate from Done (#11085, #5732) */}
-                {t(listFilter === "all" ? "todos.summary_triage" : "todos.summary_filtered", { filter: filterLabel(listFilter), open: triageAll.open, parked: sectionSize(triageAll, "parked"), shelved: sectionSize(triageAll, "shelved"), done: sectionSize(triageAll, "done"), cancelled: sectionSize(triageAll, "cancelled") })}
+                {t(listFilter === "all" && effectiveKindFilter === "all" ? "todos.summary_triage" : "todos.summary_filtered", {
+                  filter: [effectiveKindFilter !== "all" ? kindFilterLabel(effectiveKindFilter) : "", listFilter !== "all" ? filterLabel(listFilter) : ""].filter(Boolean).join(" · "),
+                  open: triageAll.open,
+                  parked: sectionSize(triageAll, "parked"),
+                  shelved: sectionSize(triageAll, "shelved"),
+                  done: sectionSize(triageAll, "done"),
+                  cancelled: sectionSize(triageAll, "cancelled"),
+                })}
               </span>
             )}
           </div>
@@ -779,6 +806,7 @@ export function TodosView({
                 onOpenHandover={() => openHandover()}
                 onOpenTodo={(id) => navigate(calendarRoute(calendarMode, anchor, id))}
                 onDeleteClick={() => askDelete(selectedTodo.id)}
+                todosV2={todosV2}
               />
             </div>
           )}
@@ -821,6 +849,21 @@ export function TodosView({
               compact
             />
           </div>
+          {todosV2 && !requestMode && (
+            <div className="px-3 pb-2" data-testid="todos-kind-filter">
+              <Segmented
+                label={t("todos.kind_filter_label")}
+                value={effectiveKindFilter}
+                options={[
+                  { v: "all", label: t("todos.kind_filter_all") },
+                  { v: "todos", label: t("todos.kind_filter_todos") },
+                  { v: "tasks", label: t("todos.kind_filter_tasks") },
+                ]}
+                onChange={setKindFilter}
+                compact
+              />
+            </div>
+          )}
 
           {/* List Content */}
           {requestMode ? (
@@ -868,6 +911,18 @@ export function TodosView({
                     {t("todos.filter_empty_body")}
                   </Empty>
                 </>
+              ) : effectiveKindFilter !== "all" ? (
+                <Empty
+                  icon="todo"
+                  title={t(`todos.kind_empty_${effectiveKindFilter}`)}
+                  action={
+                    <Button tone="secondary" onClick={() => setKindFilter("all")}>
+                      {t("todos.filter_show_all")}
+                    </Button>
+                  }
+                >
+                  {t("todos.filter_empty_body")}
+                </Empty>
               ) : (
                 <Empty
                   icon="todo"
@@ -886,15 +941,16 @@ export function TodosView({
               <div className="flex flex-col gap-1" data-testid="todos-sections" data-todo-source={fromView ? "view" : undefined}>
                 {hiddenWaitingCount > 0 && <HiddenWaitingLine count={hiddenWaitingCount} filter={listFilter} onShowAll={() => chooseFilter("all")} />}
                 {TRIAGE_SECTIONS.map((sec) =>
-                  triaged.sections[sec].length === 0 ? null : (
+                  displayTriaged.sections[sec].length === 0 ? null : (
                     <TodoTriageSection
                       key={sec}
                       section={sec}
                       // Fresh accepted, ticked and cancelled outcomes stay visible; older history keeps the folded default.
-                      folded={sectionStartsFolded(sec, triaged.sections[sec], tick)}
-                      groups={sortTriageGroups(triaged.sections[sec], listSort)}
-                      count={sectionSize(triaged, sec)}
+                      folded={sectionStartsFolded(sec, displayTriaged.sections[sec], tick)}
+                      groups={sortTriageGroups(displayTriaged.sections[sec], listSort)}
+                      count={sectionSize(displayTriaged, sec)}
                       views={views}
+                      goalFold={goalFold}
                       selectedId={activeTodo?.id}
                       onSelect={openFromList}
                       onToggleDone={toggleDone}
@@ -950,6 +1006,7 @@ export function TodosView({
                     group={g}
                     views={sectionViews.get(g.key)!}
                     selectedId={activeTodo?.id}
+                    hideUnsortedHeader={todosV2}
                     onSelect={openFromList}
                     onToggleDone={toggleDone}
                     onSeen={seenOn ? onSeen : undefined}
@@ -1053,6 +1110,7 @@ export function TodosView({
               onOpenHandover={() => openHandover()}
               onOpenTodo={openFromList}
               onDeleteClick={() => askDelete(activeTodo.id)}
+              todosV2={todosV2}
             />
           ) : (
             <div className="flex flex-1 items-center justify-center text-[13px] text-ink-3">
@@ -1206,6 +1264,7 @@ const TodoProjectSection = memo(function TodoProjectSection({
   group,
   views,
   selectedId,
+  hideUnsortedHeader,
   onSelect,
   onToggleDone,
   onSeen,
@@ -1215,6 +1274,8 @@ const TodoProjectSection = memo(function TodoProjectSection({
   /** Its todos' row views, in the same order as group.todos. */
   views: readonly TodoRowView[];
   selectedId: string | undefined;
+  /** Under todos_v2 (#14642), omit the noisy "Unsorted / 未归类" placeholder header for uncategorized rows. */
+  hideUnsortedHeader?: boolean;
   onSelect: (id: string) => void;
   onToggleDone: (todo: Todo, open?: boolean) => void;
   /** Got it on a row in Just finished (one closed in the last day stays in its folder until it is seen). */
@@ -1223,6 +1284,24 @@ const TodoProjectSection = memo(function TodoProjectSection({
 }) {
   const holds = group.todos.some((td) => td.id === selectedId);
   const [folded, toggle] = useFolded(group.key, group.folded, { follow: true, holds });
+  if (hideUnsortedHeader && group.key === "todos-project:\u0000") {
+    return (
+      <div className="mt-1 first:mt-0 flex flex-col gap-1" data-testid="todo-group" data-group={group.key}>
+        {group.todos.map((todo, i) => (
+          <TodoListItem
+            key={todo.id}
+            todo={todo}
+            view={views[i]}
+            selected={selectedId === todo.id}
+            onSelect={onSelect}
+            onToggleDone={onToggleDone}
+            onSeen={onSeen}
+            onMenu={onMenu}
+          />
+        ))}
+      </div>
+    );
+  }
   return (
     <div className="mt-1 first:mt-0" data-testid="todo-group" data-group={group.key}>
       <button type="button" aria-expanded={!folded} onClick={toggle} className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-control px-2 text-left text-[12px] text-ink-2 hover:bg-hover">
@@ -1394,6 +1473,7 @@ const TodoTriageSection = memo(function TodoTriageSection({
   groups,
   count,
   views,
+  goalFold,
   selectedId,
   onSelect,
   onToggleDone,
@@ -1408,6 +1488,8 @@ const TodoTriageSection = memo(function TodoTriageSection({
   /** To-dos its rows list (a merged row holds several): the number its title shows (#3712, the same on iOS). */
   count: number;
   views: ReadonlyMap<string, TodoRowView>;
+  /** Goal folding summary when todos_v2 is active (#14661); undefined otherwise. */
+  goalFold?: GoalFoldResult;
   selectedId: string | undefined;
   onSelect: (id: string) => void;
   onToggleDone: (todo: Todo, open?: boolean) => void;
@@ -1416,7 +1498,11 @@ const TodoTriageSection = memo(function TodoTriageSection({
   onSeen?: (id: string) => void;
   onMenu: TodoRowMenuOpener;
 }) {
-  const holds = groups.some((g) => g.members.some((m) => m.id === selectedId));
+  const holds = groups.some(
+    (g) =>
+      g.members.some((m) => m.id === selectedId) ||
+      Boolean(goalFold?.goals.get(g.lead.id)?.children.some((c) => c.todo.id === selectedId)),
+  );
   const [folded, toggle] = useFolded(`todos-section:${section}`, foldedFirst, { follow: true, holds });
   const title = sectionTitle(section, groups.flatMap((g) => [...g.triage.values()].map((t) => t.rule)));
   return (
@@ -1431,7 +1517,19 @@ const TodoTriageSection = memo(function TodoTriageSection({
       {!folded && (
         <div className="flex flex-col gap-1 pt-0.5">
           {groups.map((g) => (
-            <TodoTriageRow key={g.key} group={g} views={views} selectedId={selectedId} onSelect={onSelect} onToggleDone={onToggleDone} onRestore={onRestore} onSeen={onSeen} onMenu={onMenu} />
+            <TodoTriageRow
+              key={g.key}
+              group={g}
+              views={views}
+              goalInfo={goalFold?.goals.get(g.lead.id)}
+              surfacedParent={goalFold?.surfacedParent}
+              selectedId={selectedId}
+              onSelect={onSelect}
+              onToggleDone={onToggleDone}
+              onRestore={onRestore}
+              onSeen={onSeen}
+              onMenu={onMenu}
+            />
           ))}
         </div>
       )}
@@ -1452,6 +1550,8 @@ function mergePinnedOrder(pinned: readonly string[], members: readonly Todo[]): 
 function TodoTriageRow({
   group,
   views,
+  goalInfo,
+  surfacedParent,
   selectedId,
   onSelect,
   onToggleDone,
@@ -1461,6 +1561,8 @@ function TodoTriageRow({
 }: {
   group: TriageGroup;
   views: ReadonlyMap<string, TodoRowView>;
+  goalInfo?: GoalSummary;
+  surfacedParent?: ReadonlyMap<string, Todo>;
   selectedId: string | undefined;
   onSelect: (id: string) => void;
   onToggleDone: (todo: Todo, open?: boolean) => void;
@@ -1483,6 +1585,16 @@ function TodoTriageRow({
       setPinnedOrder(group.members.map((m) => m.id));
     }
   }
+
+  // Under todos_v2 (#14661), expand folded goal children on demand or when deep-linked directly to a folded child.
+  const selectedFoldedChildId = goalInfo?.children.some((c) => c.todo.id === selectedId && !c.blocker) ? selectedId : undefined;
+  const [goalExpanded, setGoalExpanded] = useState(selectedFoldedChildId !== undefined);
+  const [seenFoldedChildId, setSeenFoldedChildId] = useState(selectedFoldedChildId);
+  if (selectedFoldedChildId !== seenFoldedChildId) {
+    setSeenFoldedChildId(selectedFoldedChildId);
+    if (selectedFoldedChildId !== undefined && !goalExpanded) setGoalExpanded(true);
+  }
+  const toggleGoalExpanded = useCallback(() => setGoalExpanded((v) => !v), []);
 
   if (opened && pinnedOrder) {
     const nextOrder = mergePinnedOrder(pinnedOrder, group.members);
@@ -1517,7 +1629,7 @@ function TodoTriageRow({
       setPinnedOrder(group.members.map((m) => m.id));
     }
   };
-  const item = (td: Todo) => (
+  const item = (td: Todo, isLead = false) => (
     <TodoListItem
       key={td.id}
       todo={td}
@@ -1529,11 +1641,45 @@ function TodoTriageRow({
       onRestore={onRestore}
       onSeen={onSeen}
       onMenu={onMenu}
+      goalSummary={
+        isLead && goalInfo
+          ? {
+              done: goalInfo.done,
+              total: goalInfo.total,
+              blockedCount: goalInfo.blockedCount,
+              expanded: goalExpanded,
+              onToggle: toggleGoalExpanded,
+            }
+          : undefined
+      }
+      parentGoalTitle={surfacedParent?.get(td.id)?.title}
     />
   );
   return (
     <div data-testid="todo-triage-row" data-id={lead.id} data-group-key={group.key} data-members={displayMembers.length}>
-      {item(lead)}
+      {item(lead, true)}
+      {goalExpanded && goalInfo && goalInfo.children.length > 0 && (
+        <div
+          data-testid="todo-goal-children"
+          data-parent={lead.id}
+          className="ml-6 mt-1 flex flex-col gap-1 border-l border-line pl-2"
+        >
+          {goalInfo.children.map((child) => (
+            <TodoListItem
+              key={child.todo.id}
+              todo={child.todo}
+              view={views.get(child.todo.id)!}
+              selected={selectedId === child.todo.id}
+              onSelect={onSelect}
+              onToggleDone={onToggleDone}
+              section={child.section}
+              onRestore={onRestore}
+              onSeen={onSeen}
+              onMenu={onMenu}
+            />
+          ))}
+        </div>
+      )}
       {others.length > 0 && (
         <button
           type="button"
@@ -1546,7 +1692,7 @@ function TodoTriageRow({
           {!opened && <OwnerMarkCount count={ownerCount(others, views)} />}
         </button>
       )}
-      {opened && others.length > 0 && <div className="ml-6 flex flex-col gap-1 border-l border-line pl-2">{others.map(item)}</div>}
+      {opened && others.length > 0 && <div className="ml-6 flex flex-col gap-1 border-l border-line pl-2">{others.map((m) => item(m))}</div>}
     </div>
   );
 }
@@ -1610,6 +1756,8 @@ export type TodoRowView = {
   wait?: WaitReason;
   /** Why the sidebar's To-dos badge counts it (#11838, lib/todo-owner-needs.ts), unset when it does not: its mark. */
   owner?: OwnerNeed;
+  /** Under todos_v2 (#14642), the resolved project name when assigned; undefined when unset or todos_v2 is off. */
+  projectLabel?: string;
 };
 
 const DOT_STATE: Record<TodoStatus, AgentState> = {
@@ -1681,14 +1829,39 @@ function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interacti
 }
 
 /** Every todo's row view by id, with its status section and why the sidebar's badge counts it (`needs`, its own set). */
-function todoRowViews(todos: Todo[], lookup: SessionLookup, interactions: Interaction[], sections: ReadonlyMap<string, TriageSection>, needs: ReadonlyMap<string, OwnerNeed>): ReadonlyMap<string, TodoRowView> {
-  return new Map(todos.map((td) => [td.id, { ...todoRowView(td, lookup, interactions), section: sections.get(td.id), owner: needs.get(td.id) }]));
+function todoRowViews(
+  todos: Todo[],
+  lookup: SessionLookup,
+  interactions: Interaction[],
+  sections: ReadonlyMap<string, TriageSection>,
+  needs: ReadonlyMap<string, OwnerNeed>,
+  projectLabel?: (slug: string) => string,
+): ReadonlyMap<string, TodoRowView> {
+  return new Map(
+    todos.map((td) => [
+      td.id,
+      {
+        ...todoRowView(td, lookup, interactions),
+        section: sections.get(td.id),
+        owner: needs.get(td.id),
+        projectLabel: projectLabel && td.project ? projectLabel(td.project) : undefined,
+      },
+    ]),
+  );
 }
 
 const TONE_CLASS = TODO_TONE_CLASS;
 
 /** Opens a row's menu (#4429) where `at` says, for the to-do the row's checkbox shows open (`open`) or done. */
 type TodoRowMenuOpener = (todo: Todo, at: MenuAt, open: boolean) => void;
+
+interface TodoGoalRowControl {
+  done: number;
+  total: number;
+  blockedCount: number;
+  expanded: boolean;
+  onToggle: () => void;
+}
 
 const TodoListItem = memo(function TodoListItem({
   todo,
@@ -1700,6 +1873,8 @@ const TodoListItem = memo(function TodoListItem({
   onRestore,
   onSeen,
   onMenu,
+  goalSummary,
+  parentGoalTitle,
 }: {
   todo: Todo;
   view: TodoRowView;
@@ -1712,6 +1887,10 @@ const TodoListItem = memo(function TodoListItem({
   /** Got it (#5707), on a row in Just finished (`section`, else the view's). */
   onSeen?: (id: string) => void;
   onMenu?: TodoRowMenuOpener;
+  /** Under todos_v2 (#14661), compact child-task progress & inline expand toggle on a top-level parent goal row. */
+  goalSummary?: TodoGoalRowControl;
+  /** Under todos_v2 (#14661), parent goal title shown on a surfaced `needs_you` child blocker. */
+  parentGoalTitle?: string;
 }) {
   const { status, dotState, activeCount } = view;
   const showWait = (section ?? view.section) === "parked";
@@ -1720,7 +1899,7 @@ const TodoListItem = memo(function TodoListItem({
   // its state word and tone; a waiting one's say what it waits on, attention only on the owner (#11090)
   const look = todoLook(todo, status, view.wait);
   // its steps as the hub counts them (#11858, lib/todo-steps.ts): in place of Not started, or after its Agent count
-  const steps = stepsWords(todo, status);
+  const steps = goalSummary ? undefined : stepsWords(todo, status);
   const held = heldDelivery(todo);
   const responsible = responsibleOf(todo);
   const thread = useStore((s) => todoThreadsOn(s.features)) ? boundThread(todo) : undefined;
@@ -1775,11 +1954,12 @@ const TodoListItem = memo(function TodoListItem({
       {/* Body */}
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2">
-          {view.ultracode || todo.kind === "concern" || view.owner ? (
+          {view.ultracode || todo.kind === "concern" || view.owner || view.projectLabel ? (
             <span className="flex min-w-0 items-center gap-1">
               <span className={cx("truncate text-[13.5px] font-semibold text-ink", !view.ultracode && !open && "text-ink-3 font-normal", !view.ultracode && strikesThrough(todo, open) && "line-through")} data-testid="todo-title">{todo.title}</span>
               {view.ultracode && <UltraMark size={11} />}
               {todo.kind === "concern" && <Tag><span data-testid="todo-concern">{t("todos.concern")}</span></Tag>}
+              {view.projectLabel && <Tag><span data-testid="todo-project-tag">{view.projectLabel}</span></Tag>}
               {view.owner && <OwnerMark need={view.owner} />}
             </span>
           ) : (
@@ -1796,6 +1976,49 @@ const TodoListItem = memo(function TodoListItem({
             {view.age}
           </span>
         </div>
+
+        {/* Surfaced blocker parent goal context under todos_v2 (#14661) */}
+        {parentGoalTitle && (
+          <div className="mt-0.5 flex min-w-0 items-center gap-1 text-xs text-ink-3" data-testid="todo-parent-goal">
+            <Icon name="target" size={11} stroke={2} className="shrink-0" />
+            <span className="truncate">{t("todos.goal_parent_hint", { title: parentGoalTitle })}</span>
+          </div>
+        )}
+
+        {/* Parent goal progress & accessible inline fold toggle under todos_v2 (#14661) */}
+        {goalSummary && (
+          <div className="mt-1 flex flex-wrap items-center gap-1.5" data-testid="todo-goal-summary">
+            <button
+              type="button"
+              data-testid="todo-goal-toggle"
+              aria-expanded={goalSummary.expanded}
+              aria-label={t(goalSummary.expanded ? "todos.goal_collapse" : "todos.goal_expand", {
+                title: todo.title,
+                done: goalSummary.done,
+                total: goalSummary.total,
+              })}
+              onClick={(e) => {
+                e.stopPropagation();
+                goalSummary.onToggle();
+              }}
+              className="touch-hit inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-field px-2 text-xs font-medium whitespace-nowrap text-ink-2 tabular-nums transition-colors hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              <Icon
+                name="chevron"
+                size={10}
+                stroke={2.4}
+                className="shrink-0 opacity-70 transition-transform"
+                style={{ transform: goalSummary.expanded ? "none" : "rotate(-90deg)" }}
+              />
+              <span data-testid="todo-goal-progress">{t("todos.goal_progress", { done: goalSummary.done, total: goalSummary.total })}</span>
+            </button>
+            {goalSummary.blockedCount > 0 && (
+              <span data-testid="todo-goal-blocked" className="inline-flex shrink-0">
+                <Tag tone="accent">{t("todos.goal_blocked", { count: goalSummary.blockedCount })}</Tag>
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Status Line (parked rows collapse to title + concise TaskWaitInfo summary line) */}
         {!showWait && (
@@ -1969,7 +2192,7 @@ function PlanField({ value, onCommit, ...field }: { value: string; onCommit: (va
 
 /** The detail's due date (a day, with a time when one is set), reminder, priority and project. A pick from a menu is
  *  saved at once, a date or time once it is entered (PlanField); no field is disabled while it saves, so the focus stays. */
-function TodoPlanEditor({ todo }: { todo: Todo }) {
+function TodoPlanEditor({ todo, todosV2 }: { todo: Todo; todosV2?: boolean }) {
   const [busy, setBusy] = useState(false);
   const projects = projectChoices(useTodoProjects(), todo.project);
   const save = async (patch: TodoPatch) => {
@@ -2046,7 +2269,7 @@ function TodoPlanEditor({ todo }: { todo: Todo }) {
           className={cx(PLAN_FIELD, "max-w-56 truncate")}
           data-testid="todo-plan-project"
         >
-          <option value="">{t("todos.project_none")}</option>
+          <option value="" aria-label={t("todos.project_none")}>{todosV2 ? "" : t("todos.project_none")}</option>
           {projects.map((p) => (
             <option key={p.slug} value={p.slug}>
               {p.name}
@@ -2395,6 +2618,7 @@ function TodoDetail({
   onOpenHandover,
   onOpenTodo,
   onDeleteClick,
+  todosV2,
 }: {
   todo: Todo;
   owner: string;
@@ -2412,6 +2636,7 @@ function TodoDetail({
   onOpenHandover: () => void;
   onOpenTodo: (id: string) => void;
   onDeleteClick: () => void;
+  todosV2?: boolean;
 }) {
   const title = useTodoField({
     remote: todo.title, owner, allowEmpty: false,
@@ -2605,7 +2830,7 @@ function TodoDetail({
       <HeldForBriefing todo={todo} />
 
       {/* Due date, reminder, priority (#1683) */}
-      <TodoPlanEditor todo={todo} />
+      <TodoPlanEditor todo={todo} todosV2={todosV2} />
       {/* The brief its work is held to (#3822): who asked and in what words above the criteria; the scope changes
           and who worked on it under them. */}
       {todo.brief && (
