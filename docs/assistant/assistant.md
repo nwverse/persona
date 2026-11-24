@@ -2778,7 +2778,8 @@ The manager pulls unfolded pages after a durable source cursor, woken by session
 without subscribing to every chat or requiring an open app. Each sweep reads at most eight pages of a conversation;
 the next sweep continues a long import. A periodic source probe also detects rewrites with unchanged byte counts.
 Notifications are only hints: replaying an old notification cannot restore an abandoned generation. Covered ranges,
-the known source end and item completeness are distinct. Missing older ranges fall back to the runtime; a cached
+the known source end and item completeness are distinct; a page answering a cursor past the source's end records
+that end, never the cursor. Missing older ranges fall back to the runtime; a cached
 offline page says `partial` when coverage or freshness is uncertain. Source failures never manufacture complete
 empty history. The disposable text-search index can be rebuilt without deleting durable messages.
 Legacy conversations on current nodes are imported lazily using the same source IDs. A node/runtime that omits
@@ -2814,6 +2815,11 @@ moves between engines. The manager stores physical segments, source generations 
 Postgres. Integer transcript cursors compose those ranges; only later segments namespace item IDs. Reads, full/image
 references, live events, subscriptions, reconnect backlog, inventory and the derived search index use that same
 logical projection. Retired tails remain physical history and never shift later offsets.
+A source that renumbers its lines under a new history (agy, when a turn's export replaces its live steps) can leave
+a reader's cursor past its end. The projection reads the source's answer to that cursor as an empty span at the
+source's end, so the page, live event or reconnect backlog still reaches the reader with the conversation's new
+history, and readers, the search index included, start over instead of failing. The search index also starts over
+after a read that the history moved under on every try (#14354).
 
 When configured device entries for one computer are absorbed into another entry, authenticated callbacks resolve
 through the current physical fleet aliases. Durable segment/history keys and the public conversation identity stay
@@ -2841,12 +2847,14 @@ only deletion markers and minimal offline closure identities.
 switches without adding another engine protocol. The settings-backed batch stores each conversation's before-image,
 target, expected epoch and operation ID before starting anything. Busy items wait for their current turn and pending
 work; no interrupt or synthetic message completes a batch. When an activated batch item has no durable input pending,
-the coordinator accepts the completed switch immediately. If real input is pending, the first-turn acceptance/refusal
-rules above remain unchanged. A first-turn batch (`first_turn`, the ones the usage-limit fallback makes,
-`docs/assistant/agent-work.md` "Usage limits: a backup launcher") is never accepted idle: its activated items wait for
-their next input, which carries the handoff, and that input's acceptance or refusal settles them. A late preparation failure cannot return an activated operation to `in_doubt`;
-reconciliation continues from the activated state. The existing history loop and session-list changes wake queued items
-after a restart.
+the coordinator accepts the completed switch immediately and keeps its handoff for the conversation's next input
+(#14488): that input goes through the queue, which attaches the handoff once, so the target still learns what went
+before. If real input is pending, the first-turn acceptance/refusal rules above remain unchanged. A first-turn batch
+(`first_turn`, the ones the usage-limit fallback makes, `docs/assistant/agent-work.md` "Usage limits: a backup
+launcher") is never accepted idle: its activated items wait for their next input, which carries the handoff, and that
+input's acceptance or refusal settles them. A late preparation failure cannot return an activated operation to
+`in_doubt`; reconciliation continues from the activated state. The existing history loop and session-list changes wake
+queued items after a restart.
 
 The batch response distinguishes queued, switching, switched and refused items; one refusal does not cancel independent
 items. `restore_batch_id` creates a new, itself-restorable batch toward the original per-conversation settings rather
@@ -2867,7 +2875,9 @@ content digest, delivery state and ordering metadata; its duplicate payload and
 transport provenance are removed after the receipt commits. A rejected first
 input that rollback requeues keeps its payload until the restored source accepts
 it. Ambiguous deliveries retain their content for positive-receipt reconciliation.
-Terminal switch records discard their handoff summary. Deleting the logical chat
+Terminal switch records discard their handoff summary, except the one an idle
+acceptance keeps until the conversation's next input is accepted, or a later
+switch is. Deleting the logical chat
 cascades to receipts, segments, inputs and switch context. Physical device aliases
 are locked together during first adoption, preventing concurrent managers from
 creating two logical roots for the same physical chat.
