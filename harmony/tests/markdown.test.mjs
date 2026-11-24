@@ -243,7 +243,7 @@ test('provider marks use actual host boundaries and keep unrecognized sites plai
   for (const url of ['https://github.com.example.org/x','https://notgithub.com','https://github.com@evil.example/x',
     'https://other.org/?host=github.com','javascript:github.com','https://unknown.example']) assert.equal(markdownLinkProvider(url), undefined);
   const text = parseMarkdown('[GitHub](https://github.com) 与 `abc`')[0].inlines;
-  assert.equal(markdownCodeSelection(text,0,15,true),'GitHub 与 abc');
+  assert.equal(markdownCodeSelection(text,0,13,true),'GitHub 与 abc');
 });
 test('screen captures exported to the workspace owner’s tmp directory keep an image link and gallery entry', () => {
   const file = '/Users/u/tmp/persona-conversation-follow-20261123.jpg', cwd = '/Users/u/workspace/persona';
@@ -266,10 +266,33 @@ test('a chat reuses previously parsed Markdown on return and bounds retained doc
  cache.parse(b);assert.notEqual(cache.parse(a),old);
 });
 
-test('copying across code omits decorative insets and preserves spaces in the source', () => {
-  const parts=parseMarkdown('值是 `a\u2009b`。')[0].inlines;
-  assert.equal(markdownCodeSelection(parts,0,9),'值是 a\u2009b。');
-  assert.equal(markdownCodeSelection(parts,4,7),undefined);
+test('copying across code omits the room beside CJK letters and preserves spaces in the source', () => {
+  const parts=parseMarkdown('值是`a\u2009b`。')[0].inlines;
+  assert.deepEqual([parts[1].gapBefore,parts[1].gapAfter],[true,false]);
+  assert.equal(markdownCodeSelection(parts,0,7),'值是a\u2009b。');
+  assert.equal(markdownCodeSelection(parts,3,6),undefined);
+  const spaced=parseMarkdown('值是 `a\u2009b`。')[0].inlines;
+  assert.deepEqual([spaced[1].gapBefore,spaced[1].gapAfter],[false,false]);
+  assert.equal(markdownCodeSelection(spaced,0,7),undefined);
+});
+
+test('inline code gets room only where it meets a CJK letter directly', () => {
+  const gaps=(source)=>{
+    const found=[];
+    const walk=(nodes)=>nodes.forEach(node=>{ if(node.kind==='code') found.push([node.text,node.gapBefore,node.gapAfter]); walk(node.children); });
+    walk(parseMarkdown(source)[0].inlines);
+    return found;
+  };
+  assert.deepEqual(gaps('在`internal/workflow`中'),[['internal/workflow',true,true]]);
+  assert.deepEqual(gaps('改为`a`，然后`b`。'),[['a',true,false],['b',true,false]]);
+  assert.deepEqual(gaps('**更新**`x`和_说明_'),[['x',true,true]]);
+  assert.deepEqual(gaps('「`x`」・`y`ー'),[['x',false,false],['y',false,false]]);
+  assert.deepEqual(gaps('한국어`x`かな`y`'),[['x',true,true],['y',true,false]]);
+  assert.deepEqual(gaps('Use `x` and `y`.'),[['x',false,false],['y',false,false]]);
+  assert.deepEqual(gaps('`a`中`b`'),[['a',false,true],['b',true,false]]);
+  const table=parseMarkdown('| 名称 |\n| --- |\n| 值`v`说明 |')[0];
+  const cell=table.rows[1].cells[0].find(node=>node.kind==='code');
+  assert.deepEqual([cell.gapBefore,cell.gapAfter],[true,true]);
 });
 
 test('Claude list labels retain emphasis around inline code and stop before the explanation', () => {
@@ -289,8 +312,8 @@ test('slash commands stay together in prose and selections keep the original tex
   }
   const source=text+'（`bf118c9908`）。';
   const nodes=parseMarkdown(source)[0].inlines;
-  const withInsets=rendered+'（\u202fbf118c9908\u202f）。';
-  assert.equal(markdownCodeSelection(nodes,0,withInsets.length,true),text+'（bf118c9908）。');
+  const drawn=rendered+'（bf118c9908）。';
+  assert.equal(markdownCodeSelection(nodes,0,drawn.length,true),text+'（bf118c9908）。');
   const at=rendered.indexOf('/');
   assert.equal(markdownCodeSelection(nodes,at,at+4,true),'/ai');
   assert.equal(markdownCodeSelection(nodes,at+1,at+2,true),'');

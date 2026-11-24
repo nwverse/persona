@@ -57,12 +57,8 @@
       "value": "#EFEFEF"
     },
     {
-      "name": "persona_inline_code",
-      "value": "#323237"
-    },
-    {
-      "name": "persona_bubble_code",
-      "value": "#3E536B"
+      "name": "persona_inline_code_ink",
+      "value": "#C3FFFFFF"
     },
     {
       "name": "persona_grouped",
