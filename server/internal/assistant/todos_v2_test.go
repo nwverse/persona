@@ -8,7 +8,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 )
 
@@ -338,5 +340,111 @@ func TestTodosV2AudienceLosslessRollback(t *testing.T) {
 	// Ensure context-based read also sees todos_v2 enabled cleanly.
 	if !s.settings(context.Background()).todosV2On() {
 		t.Fatalf("expected todosV2On to be true after re-enable")
+	}
+}
+
+func TestTodosV2CriticalPathRankingAndRollback(t *testing.T) {
+	s, _, _ := briefService(t, "Critical path ranking regression")
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	older, err := s.createPieceTodo(ctx, "conv1", "Isolated older ask", "", db.TodoEdit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := s.createPieceTodo(ctx, "conv1", "Release rollout", "", db.TodoEdit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	partOf := parent.ID
+	blocker, err := s.createPieceTodo(ctx, "conv1", "Critical path blocker", "", db.TodoEdit{PartOf: &partOf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterBlocker := []string{blocker.ID}
+	mid, err := s.createPieceTodo(ctx, "conv1", "Downstream step 1", "", db.TodoEdit{PartOf: &partOf, After: &afterBlocker})
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterMid := []string{mid.ID}
+	if _, err := s.createPieceTodo(ctx, "conv1", "Downstream step 2", "", db.TodoEdit{PartOf: &partOf, After: &afterMid}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mark both older (-3h) and blocker (-1h) as needing the owner via needs_user review.
+	s.todos.mu.Lock()
+	olderAt := now.Add(-3 * time.Hour)
+	s.todos.todos[older.ID].Supervision = &Supervision{
+		State:     reviewNeedsUser,
+		UpdatedAt: olderAt,
+		Reviews:   []TaskReview{{At: olderAt, Verdict: reviewNeedsUser, Reason: "Approve isolated task?"}},
+	}
+	blockerAt := now.Add(-1 * time.Hour)
+	s.todos.todos[blocker.ID].Supervision = &Supervision{
+		State:     reviewNeedsUser,
+		UpdatedAt: blockerAt,
+		Reviews:   []TaskReview{{At: blockerAt, Verdict: reviewNeedsUser, Reason: "Unblock downstream chain?"}},
+	}
+	s.todos.mu.Unlock()
+
+	setTodosV2 := func(want, expected bool) {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{"todos_v2": want, "expected_todos_v2": expected})
+		w, _ := permissionSettingsRequest(t, s, "PUT", "/api/v1/assistant", s.managerIdentity(), "full", string(body))
+		if w.Code != http.StatusOK {
+			t.Fatalf("PUT todos_v2=%t: code=%d body=%s", want, w.Code, w.Body.String())
+		}
+	}
+	getViews := func() map[string]assistantwire.TodoSummary {
+		t.Helper()
+		r := httptest.NewRequest("GET", "/api/v1/todos", nil)
+		r.Header.Set(RoleHeader, "full")
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /api/v1/todos: code=%d body=%s", w.Code, w.Body.String())
+		}
+		var resp struct {
+			Todos []struct {
+				ID   string                     `json:"id"`
+				View *assistantwire.TodoSummary `json:"view"`
+			} `json:"todos"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		out := make(map[string]assistantwire.TodoSummary, len(resp.Todos))
+		for _, td := range resp.Todos {
+			if td.View != nil {
+				out[td.ID] = *td.View
+			}
+		}
+		return out
+	}
+
+	// Default (todos_v2=false): older ask ranks ahead of newer blocker.
+	legacyViews := getViews()
+	if legacyViews[older.ID].Section != assistantwire.TodoListSectionNeedsYou ||
+		legacyViews[blocker.ID].Section != assistantwire.TodoListSectionNeedsYou {
+		t.Fatalf("expected both in needs_you: older=%+v blocker=%+v", legacyViews[older.ID], legacyViews[blocker.ID])
+	}
+	if !(legacyViews[older.ID].Rank < legacyViews[blocker.ID].Rank) {
+		t.Fatalf("legacy order mismatch: older.rank=%d blocker.rank=%d",
+			legacyViews[older.ID].Rank, legacyViews[blocker.ID].Rank)
+	}
+
+	// Enable todos_v2: blocker (2 downstream open tasks) ranks ahead of older (0 downstream).
+	setTodosV2(true, false)
+	v2Views := getViews()
+	if !(v2Views[blocker.ID].Rank < v2Views[older.ID].Rank) {
+		t.Fatalf("todos_v2 critical-path order mismatch: blocker.rank=%d older.rank=%d",
+			v2Views[blocker.ID].Rank, v2Views[older.ID].Rank)
+	}
+
+	// Disable todos_v2: legacy order and views are restored instantaneously.
+	setTodosV2(false, true)
+	rollbackViews := getViews()
+	if !reflect.DeepEqual(rollbackViews, legacyViews) {
+		t.Fatalf("rollback views mismatch:\ngot:  %+v\nwant: %+v", rollbackViews, legacyViews)
 	}
 }
