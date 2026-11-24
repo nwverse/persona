@@ -49,5 +49,12 @@
   "goal": "目标",
   "no_summary": "还没有整理好的摘要：项目有新进展时后台整理会写出来。",
   "main_chat_notes": "主对话记录",
-  "no_notes": "最近的时间线里没有主对话的记录。"
+  "no_notes": "最近的时间线里没有主对话的记录。",
+  "view_tree": "项目树",
+  "subtitle_tree": "把项目拖到另一个项目上即可放到它下面；右键查看更多",
+  "arrange": "排列",
+  "by_hierarchy": "按层级",
+  "by_tag": "按标签",
+  "drop_top": "放到这里：顶层",
+  "close": "关闭"
 }

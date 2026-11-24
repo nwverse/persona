@@ -821,7 +821,9 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
 // And 26 B for the stalled-background hint (#13744): the idle sidebar rows (SidebarRows.tsx) draw "Background commands
 // quiet for N h" under a Working row whose background work has stalled (ui/BackgroundStallHint.tsx). Main 7b023aa70 with
 // #13842 sends 46,091 B at idle, 16 B over; 10 B of room on top.
-export const IDLE_TIER_BUDGET = 46_101;
+// And 29 B for the watch wall (#13020): Overview (idle) gains the lazy import of views/watch/WatchWall.tsx and its
+// Suspense; the wall itself loads as a chunk of its own. Merged with main ec2563b7d7 (46,101 B above, #13744): 46,101 + 29 = 46,130 B.
+export const IDLE_TIER_BUDGET = 46_130;
 
 const gzip = promisify(gzipCompress);
 

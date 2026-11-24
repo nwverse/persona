@@ -13,5 +13,10 @@
   "not_found": "这个待办已不存在",
   "round_not_found": "待办对话里的这一段已经不在了",
   "agent_not_listed": "这台电脑还没有列出这个 Agent，请稍后再试。",
-  "images_forbidden": "此设备无法读取待办图片"
+  "images_forbidden": "此设备无法读取待办图片",
+  "sort_reason_direction": "它的主管负责「{name}」",
+  "sort_reason_dirs": "它的 Agent 在 {dir} 工作，是「{name}」的目录",
+  "sort_reason_title": "标题提到了「{name}」",
+  "sort_batch_missing": "没有这次改动可以撤销",
+  "sort_batch_undone": "这次改动已经撤销过了"
 }
