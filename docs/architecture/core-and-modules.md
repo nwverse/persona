@@ -287,6 +287,9 @@ needs in its own terms:
 - a live screen's sessions (#6398): `server/internal/node/screenport` (`Provide`, `New`, the `Links` and `Session`
   interfaces). Without them the node offers no session, and a live screen is the plain relayed stream the phone gets
   when it asks for none.
+- the built-in program `iphone` (phone control): `server/internal/node/iphoneport` (`Provide`, `Get`, the `Bridge`
+  interface of its methods over `proto` types). Without it `node.info` lists no `iphone` program, so the hub offers no
+  phone control on that computer, and the program's methods are unknown.
 
 Such a module keeps its manager side small: the module's root package (`internal/modules/<id>`) holds only its
 manifest and a `modapi.Module` that registers nothing, and `internal/modules/all` lists it, so a hub announces its flag
@@ -306,6 +309,10 @@ The modules of this kind:
   the measuring tool `vncbench`. Its manifest's flag `module.screen-share` replaces the id's place in
   `modapi.ClientModules`, so a hub whose manager lacks the module turns the clients' screen sharing off. The node's
   `internal/screen` is not part of it: it reads Agents' terminal panes (dialogs, the input box, rewind) and is core.
+- `phone-extra` (`server/internal/modules/phone-extra`, #14258): phone control of this computer's paired iPhones
+  (`docs/extensions/iphone.md`): the built-in program `iphone` (`phone-extra/nodeiphone`), the device bridge's client
+  and pairing store (`phone-extra/iphone`), the look-and-do core (`phone-extra/iphonectl`), and `personad iphone …`.
+  It uses two small helpers of the node that are leaf libraries (`internal/clitext`, `internal/node/nodekit`).
 
 ### Guards
 
