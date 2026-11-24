@@ -16,8 +16,8 @@ func strengthHomeChartInView(t *testing.T, view wire.View) wire.Component {
 	for _, section := range view.Sections {
 		for _, item := range section.Items {
 			if item.Type == "chart" {
-				if len(section.Items) != 1 || section.Title != item.Title {
-					t.Fatal("recent days section must contain only its chart", section)
+				if len(section.Items) != 1 || section.Title == item.Title {
+					t.Fatal("recent days section must contain only its chart, titled apart from the section", section)
 				}
 				charts = append(charts, item)
 			}
@@ -76,7 +76,12 @@ func TestStrengthHomeChartLocalDaysAndWorkingSets(t *testing.T) {
 						t.Fatal(err)
 					}
 					chart := strengthHomeChartInView(t, view)
-					if chart.Title != i18n.T(lang, "assistant-health_strength.recent_days") || chart.Unit != i18n.T(lang, "assistant-health_strength.sets_unit") || chart.Series[0].Name != i18n.T(lang, "assistant-health_strength.sets") {
+					for _, section := range view.Sections {
+						if len(section.Items) == 1 && section.Items[0].Type == "chart" && section.Title != i18n.T(lang, "assistant-health_strength.recent_days") {
+							t.Fatal("recent days section title ignored the language", section.Title)
+						}
+					}
+					if chart.Title != i18n.T(lang, "assistant-health_strength.sets") || chart.Unit != i18n.T(lang, "assistant-health_strength.sets_unit") || chart.Series[0].Name != i18n.T(lang, "assistant-health_strength.sets") {
 						t.Fatal("chart copy ignored the language", chart)
 					}
 					for i, point := range chart.Series[0].Points {

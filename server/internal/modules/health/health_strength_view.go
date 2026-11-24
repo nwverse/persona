@@ -290,7 +290,7 @@ func drawStrengthPage(p strengthPageState, es []assistantwire.StrengthExercise, 
 			day := from.AddDate(0, 0, i)
 			points = append(points, wire.ChartPoint{Label: day.Format("01-02"), Value: counts[day.Format("2006-01-02")]})
 		}
-		chart := wire.Component{Type: "chart", Kind: "bar", Title: tr("recent_days"), Unit: tr("sets_unit"), Series: []wire.ChartSeries{{Name: tr("sets"), Points: points}}}
+		chart := wire.Component{Type: "chart", Kind: "bar", Title: tr("sets"), Unit: tr("sets_unit"), Series: []wire.ChartSeries{{Name: tr("sets"), Points: points}}}
 		page.Sections = append(page.Sections, section("recent_days", []wire.Component{chart}))
 		if len(rows) > 0 {
 			records := strengthRecentRecords(rows, es, now, loc, l)
