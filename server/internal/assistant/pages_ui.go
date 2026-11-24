@@ -468,8 +468,10 @@ func pageTime(l i18n.Lang, loc *time.Location, now, at time.Time, key string) st
 	return i18n.T(l, "assistant-pages."+key+"_on", i18n.Args{"date": pageDate(l, at)})
 }
 
+// pageDate is a day as the language writes it (Nov 20, 11月20日).
 func pageDate(l i18n.Lang, at time.Time) string {
-	return i18n.T(l, "assistant-pages.date", i18n.Args{"month": int(at.Month()), "day": at.Day()})
+	month := i18n.T(l, fmt.Sprintf("assistant-pages.month_%d", int(at.Month())))
+	return i18n.T(l, "assistant-pages.date", i18n.Args{"month": month, "day": at.Day()})
 }
 
 func pageWord(l i18n.Lang, key string) string { return i18n.T(l, "assistant-pages."+key) }
