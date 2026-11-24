@@ -6363,6 +6363,22 @@
     {
       "name": "relation_running_count",
       "value": "{n} 个运行中"
+    },
+    {
+      "name": "agent_interrupt",
+      "value": "中断"
+    },
+    {
+      "name": "agent_mark_all_seen",
+      "value": "全部标为已读"
+    },
+    {
+      "name": "agent_collapse_all",
+      "value": "全部折叠"
+    },
+    {
+      "name": "agent_expand_all",
+      "value": "全部展开"
     }
   ]
 }

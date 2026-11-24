@@ -6363,6 +6363,22 @@
     {
       "name": "relation_running_count",
       "value": "{n} 件が実行中"
+    },
+    {
+      "name": "agent_interrupt",
+      "value": "中断"
+    },
+    {
+      "name": "agent_mark_all_seen",
+      "value": "すべて既読にする"
+    },
+    {
+      "name": "agent_collapse_all",
+      "value": "すべて折りたたむ"
+    },
+    {
+      "name": "agent_expand_all",
+      "value": "すべて展開"
     }
   ]
 }

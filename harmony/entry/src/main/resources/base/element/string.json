@@ -6363,6 +6363,22 @@
     {
       "name": "relation_running_count",
       "value": "{n} running"
+    },
+    {
+      "name": "agent_interrupt",
+      "value": "Interrupt"
+    },
+    {
+      "name": "agent_mark_all_seen",
+      "value": "Mark all as read"
+    },
+    {
+      "name": "agent_collapse_all",
+      "value": "Collapse all"
+    },
+    {
+      "name": "agent_expand_all",
+      "value": "Expand all"
     }
   ]
 }

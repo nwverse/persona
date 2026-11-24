@@ -17,6 +17,7 @@ import { ToolGlyph } from '../design/ToolGlyph';
 import { tr } from '../design/Strings';
 import { nativeEnvironment, NativeEnvironment } from '../platform/NativeEnvironment';
 import { nativeSheetInset } from '../platform/NativeInsets';
+import { Haptics } from '../platform/Haptics';
 import { DeviceLook, deviceLook } from '../models/DeviceLook';
 
 const QUICK_FILTERS: string[] = ['all', 'needsYou', 'working', 'unread', 'backgroundWaiting'];
@@ -337,7 +338,28 @@ export struct AgentListPage {
   }
   private chooseQuick(index: number): void {
     const key = this.quickFilters()[index];
-    if (key && key !== this.workspace.quickFilter) this.workspace.setQuickFilter(key);
+    if (key && key !== this.workspace.quickFilter) { Haptics.tap(); this.workspace.setQuickFilter(key); }
+  }
+
+  /** Folding a group, a family or the idle rows taps, as iOS. */
+  private toggleGroup(id: string): void { Haptics.tap(); this.workspace.toggleFold(id); }
+  private toggleFamilyRow(row: ResourceRow): void { Haptics.tap(); this.workspace.toggleFamily(row); }
+  private toggleIdle(id: string): void { Haptics.tap(); if (id === 'state/idle') this.workspace.toggleFold(id); else this.workspace.toggleIdleRows(id); }
+  private foldAll(fold: boolean): void {
+    if (!this.workspace.canFoldAll(fold)) return;
+    Haptics.tap(); this.workspace.foldAll(fold); this.filterSheetOpen = false;
+  }
+
+  /** Interrupt from the row menu (iOS), no confirmation: the turn stops and the session waits for the next message. */
+  private interruptRow(row: ResourceRow): void {
+    this.workspace.interrupt(row).then((done: boolean) => { if (done) Haptics.tap(); }).catch(() => undefined);
+  }
+
+  /** Mark all as read under the Unread filter, and how many rows it clears (the chip counts them the same way). */
+  private markAllCount(): number { return this.workspace.quickFilter === 'unread' ? this.workspace.unreadToMark().length : 0; }
+  private markAllLabel(count: number): string { return String(count) + ' ' + tr('agent_group_unread'); }
+  private markAllSeen(): void {
+    this.workspace.markAllSeen().then((done: boolean) => { if (done) Haptics.success(); }).catch(() => undefined);
   }
 
   private machineOptions(): ResourceRow[] {
@@ -423,6 +445,8 @@ export struct AgentListPage {
       MenuItem({ content: tr(this.workspace.isPinned(binding.bound.value) ? 'agent_unpin' : 'agent_pin') })
         .enabled(this.workspace.rowOnline(binding.bound.value) && !this.workspace.busy)
         .onClick(() => this.workspace.togglePin(binding.bound.value).catch(() => undefined))
+      if (this.workspace.canInterrupt(binding.bound.value)) MenuItem({ content: tr('agent_interrupt') })
+        .enabled(!this.workspace.busy).onClick(() => this.interruptRow(binding.bound.value))
       MenuItem({ content: tr(this.workspace.isMuted(binding.bound.value) ? 'unmute' : 'mute') })
         .enabled(this.workspace.rowOnline(binding.bound.value) && !this.workspace.busy)
         .onClick(() => this.workspace.toggleMute(binding.bound.value).catch(() => undefined))
@@ -464,14 +488,14 @@ export struct AgentListPage {
             if (this.groupCounts(binding.value)) Span(this.groupCounts(binding.value)).fontColor(Colors.secondary)
           }.fontSize(Tokens.caption)
         }.alignItems(HorizontalAlign.Start).layoutWeight(1).constraintSize({minHeight:Tokens.touch}).justifyContent(FlexAlign.Center)
-          .onClick(() => { if (!this.workspace.search && binding.value.id !== NEEDS_GROUP) this.workspace.toggleFold(binding.value.id); })
+          .onClick(() => { if (!this.workspace.search && binding.value.id !== NEEDS_GROUP) this.toggleGroup(binding.value.id); })
           .accessibilityGroup(true).accessibilityText([this.groupTitle(binding.value), this.groupTotal(binding.value), this.groupNeeds(binding.value),
             this.groupCounts(binding.value)].filter((value: string) => !!value).join(' · '))
         if (binding.value.id !== NEEDS_GROUP) Button({ type: ButtonType.Circle }) {
           SymbolGlyph(binding.value.folded ? Symbols.down : Symbols.up).fontSize(Tokens.symbolFont).fontColor([Colors.link])
         }.attributeModifier(ButtonStyles.icon).enabled(!this.workspace.search)
           .accessibilityText(this.groupTitle(binding.value) + ' ' + tr(binding.value.folded ? 'agent_expand' : 'agent_collapse'))
-          .onClick(() => this.workspace.toggleFold(binding.value.id)).id('agents.group.toggle.' + binding.value.id)
+          .onClick(() => this.toggleGroup(binding.value.id)).id('agents.group.toggle.' + binding.value.id)
       }.width('100%').alignItems(VerticalAlign.Center)
     }.alignItems(HorizontalAlign.Start)
       .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.fine }).width('100%')
@@ -527,6 +551,13 @@ export struct AgentListPage {
     return String(Math.floor(elapsed / 86400)) + tr('agent_time_day_suffix');
   }
 
+  /** Collapse all / Expand all: side by side, or full width one above the other with large text. */
+  @Builder foldAllButton(fold: boolean, stacked: boolean) {
+    Button(tr(fold ? 'agent_collapse_all' : 'agent_expand_all')).attributeModifier(ButtonStyles.secondary)
+      .width(stacked ? '100%' : 'auto').layoutWeight(stacked ? 0 : 1)
+      .enabled(this.workspace.canFoldAll(fold)).onClick(() => this.foldAll(fold)).id(fold ? 'agents.collapse_all' : 'agents.expand_all')
+  }
+
   @Builder filterSheet() {
     Column() {
       Row({ space: Tokens.page }) {
@@ -552,6 +583,12 @@ export struct AgentListPage {
           .attributeModifier(SelectStyles.inline).constraintSize({ minHeight: Tokens.touch, maxWidth: '68%' })
           .onSelect((index: number) => this.selectGrouping(index)).id('agents.grouping')
       }.width('100%').constraintSize({ minHeight: Tokens.header }).alignItems(VerticalAlign.Center)
+      Divider().strokeWidth(Tokens.hairline).color(Colors.divider)
+      if (this.environment.fontScale >= 1.5) {
+        Column({ space: Tokens.gap }) { this.foldAllButton(true, true); this.foldAllButton(false, true) }.width('100%').padding({ top: Tokens.gap, bottom: Tokens.gap })
+      } else {
+        Row({ space: Tokens.gap }) { this.foldAllButton(true, false); this.foldAllButton(false, false) }.width('100%').padding({ top: Tokens.gap, bottom: Tokens.gap })
+      }
     }.alignItems(HorizontalAlign.Start).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap, bottom: Tokens.page + this.filterInset }).width('100%')
       .id(this.filterNodeId).onAreaChange(() => this.measureFilters())
   }
@@ -639,7 +676,7 @@ export struct AgentListPage {
         }.alignSelf(ItemAlign.Start).margin({left:Tokens.page + Tokens.avatar}).padding({left:Tokens.gap,right:Tokens.gap})
           .constraintSize({minHeight:Tokens.touch}).backgroundColor(Color.Transparent)
           .accessibilityText(binding.presentation.familySummary + ' ' + tr(binding.presentation.familyExpanded ? 'agent_collapse' : 'agent_expand'))
-          .onClick(() => this.workspace.toggleFamily(binding.bound.value)).id('agents.family.' + binding.bound.value.key())
+          .onClick(() => this.toggleFamilyRow(binding.bound.value)).id('agents.family.' + binding.bound.value.key())
       }
       }.width('100%')
     }
@@ -727,6 +764,17 @@ export struct AgentListPage {
       Refresh({ refreshing: $$this.refreshing }) {
       List() {
         if (this.workspace.loading && !this.workspace.hasRows()) ListItem() { LoadingProgress().height(Tokens.touch).width(Tokens.touch).padding(Tokens.page) }
+        if (this.markAllCount() > 0) ListItem() {
+          Button() {
+            Row({ space: Tokens.gap }) {
+              SymbolGlyph(Symbols.check).fontSize(Tokens.symbolFont).fontColor([Colors.link])
+              Text(tr('agent_mark_all_seen')).fontSize(Tokens.body).fontColor(Colors.link).layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+              Text(this.markAllLabel(this.markAllCount())).fontSize(Tokens.caption).fontColor(Colors.secondary).maxLines(1)
+            }.width('100%').padding({ left: Tokens.page, right: Tokens.page }).constraintSize({ minHeight: Tokens.touch })
+          }.type(ButtonType.Normal).buttonStyle(ButtonStyleMode.TEXTUAL).backgroundColor(Color.Transparent).width('100%')
+            .enabled(!this.workspace.busy).onClick(() => this.markAllSeen())
+            .accessibilityText(tr('agent_mark_all_seen') + ' · ' + this.markAllLabel(this.markAllCount())).id('agents.mark_all_seen')
+        }
         ForEach(this.groupBindings, (binding: BoundAgentGroup) => {
             ListItemGroup({ header: () => this.groupHeader(binding) }) {
               Repeat<BoundAgentRow>(binding.rows).each((entry: RepeatItem<BoundAgentRow>) => this.agentRow(entry.item, binding.value.id))
@@ -740,10 +788,7 @@ export struct AgentListPage {
                   SymbolGlyph(binding.value.id === 'state/idle' || this.workspace.idleRowsExpanded(binding.value.id) ? Symbols.up : Symbols.down).fontSize(Tokens.symbolFont).fontColor([Colors.link])
                 }.width('100%').padding(Tokens.page).constraintSize({ minHeight: Tokens.touch })
               }.type(ButtonType.Normal).buttonStyle(ButtonStyleMode.TEXTUAL).backgroundColor(Color.Transparent).width('100%')
-                .onClick(() => {
-                  if (binding.value.id === 'state/idle') this.workspace.toggleFold(binding.value.id);
-                  else this.workspace.toggleIdleRows(binding.value.id);
-                }).id('agents.idle.expand.' + binding.value.id)
+                .onClick(() => this.toggleIdle(binding.value.id)).id('agents.idle.expand.' + binding.value.id)
             }
           }, (binding: BoundAgentGroup) => binding.key)
         if (!this.workspace.hasRows() && !this.workspace.loading) ListItem() {

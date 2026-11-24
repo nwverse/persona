@@ -538,9 +538,10 @@ test('group folds use named native icons and idle expansion retains its count', 
   assert.match(header,/binding\.value\.folded \? Symbols\.down : Symbols\.up/);
   assert.match(header,/attributeModifier\(ButtonStyles\.icon\)/);
   assert.ok(header.includes("tr(binding.value.folded ? 'agent_expand' : 'agent_collapse')"));
-  assert.ok(header.includes('this.workspace.toggleFold(binding.value.id)'));
+  assert.ok(header.includes('this.toggleGroup(binding.value.id)'));
   assert.ok(source.includes("String(binding.value.totalRowCount - binding.value.rows.length) + ' ' + tr('agent_group_more_idle')"));
-  assert.ok(source.includes('this.workspace.toggleIdleRows(binding.value.id)'));
+  assert.ok(source.includes('this.toggleIdle(binding.value.id)'));
+  assert.ok(source.includes("private toggleIdle(id: string): void { Haptics.tap(); if (id === 'state/idle') this.workspace.toggleFold(id); else this.workspace.toggleIdleRows(id); }"));
 });
 
 test('merged rows with identical runtime ids isolate pin, mute and mutation ownership',async()=>{
@@ -846,4 +847,103 @@ test('a folded side chat that needs you puts its parent in Needs you, the header
   workspace.setQuickFilter('needsYou');
   assert.equal(workspace.familyState(main), 'idle', 'without folding the child is its own row');
   assert.deepEqual(workspace.groups[0].rows.map((row) => row.id), ['side']);
+});
+
+test('Interrupt is offered on a running or waiting turn its source can stop, and posts the existing route', async () => {
+  const running = agent('run');
+  const waiting = agent('wait', { state: 'needs_you', status: 'needs_you' });
+  const idle = agent('rest', { state: 'idle', status: 'idle' });
+  const refused = agent('refused', { source_kind: 'claude_desktop', capabilities: { read: true, send: true, interrupt: false } });
+  const allowed = agent('allowed', { source_kind: 'claude_desktop', capabilities: { read: true, send: true, interrupt: true } });
+  const locked = agent('locked', { read_only_reason: 'history' });
+  const { workspace, state } = await opened({ sessions: [running, waiting, idle, refused, allowed, locked] });
+  assert.deepEqual([running, waiting, idle, refused, allowed, locked].map((row) => workspace.canInterrupt(row)),
+    [true, true, false, false, true, false]);
+  state.calls.length = 0;
+  assert.equal(await workspace.interrupt(idle), false);
+  assert.equal(await workspace.interrupt(running), true);
+  assert.deepEqual(state.calls.filter((call) => call.path.includes('/sessions/')).map((call) => [call.method, call.path, call.body]), [
+    ['POST', '/api/v1/sessions/m1/run/interrupt', {}]
+  ]);
+  state.blocked.add('/api/v1/sessions/m1/wait/interrupt');
+  assert.equal(await workspace.interrupt(waiting), false, 'a request already in flight is not sent twice');
+});
+
+test('Mark all as read under Unread marks every listed row at once and puts back a row the hub refuses', async () => {
+  const first = agent('first', { state: 'unread', status: 'done' });
+  const second = agent('second', { state: 'unread', status: 'done', machine_id: 'm2' });
+  const quiet = agent('keep-muted', { state: 'unread', status: 'done' });
+  const { workspace, state } = await opened({ sessions: [first, second, quiet, agent('busy')], machines: [machine('m1'), machine('m2')] });
+  assert.deepEqual(workspace.unreadToMark(), [], 'only under the Unread filter');
+  workspace.setGroupingMode('machine');
+  workspace.setQuickFilter('unread');
+  workspace.toggleFold('machine/work|m2');
+  assert.equal(workspace.visibleRows().some((row) => row.id === 'second'), false);
+  assert.deepEqual(workspace.unreadToMark().map((row) => row.id).sort(), ['first', 'second'], 'a folded group counts; a muted row does not');
+  assert.equal(workspace.counts.unread, 2, 'the chip counts the same rows');
+
+  let release; const held = new Promise((resolve) => { release = resolve; });
+  state.request = async (call) => {
+    if (!call.path.endsWith('/seen')) return undefined;
+    await held;
+    if (call.path.includes('/second/')) throw new Error('refused');
+    return { ok: true };
+  };
+  state.calls.length = 0;
+  const done = workspace.markAllSeen();
+  assert.equal(workspace.counts.unread, 0, 'the rows leave Unread before the hub answers');
+  assert.deepEqual(workspace.unreadToMark(), []);
+  assert.equal(workspace.busy, true);
+  release();
+  assert.equal(await done, false);
+  assert.deepEqual(state.calls.map((call) => [call.method, call.path]).sort(), [
+    ['POST', '/api/v1/sessions/m1/first/seen'], ['POST', '/api/v1/sessions/m2/second/seen']
+  ]);
+  assert.equal(workspace.latestSourceRows.find((row) => row.id === 'first').state, 'idle');
+  assert.equal(workspace.latestSourceRows.find((row) => row.id === 'second').state, 'unread', 'the refused row comes back');
+  assert.equal(workspace.counts.unread, 1);
+  assert.equal(workspace.error, 'failed');
+  assert.equal(workspace.busy, false);
+});
+
+test('Collapse all folds every group but Needs you, Expand all opens them with Idle, and neither acts during search', async () => {
+  const sessions = [agent('w1'), agent('n1', { state: 'needs_you', status: 'needs_you', machine_id: 'm2' }),
+    agent('i1', { state: 'idle', status: 'idle' }), agent('u1', { state: 'unread', status: 'done', machine_id: 'm2' })];
+  const { workspace } = await opened({ sessions, machines: [machine('m1'), machine('m2')] });
+  workspace.setGroupingMode('machine');
+  assert.equal(workspace.groups[0].id, 'needs');
+  assert.equal(workspace.canFoldAll(false), false, 'nothing is folded yet');
+  workspace.foldAll(true);
+  assert.deepEqual(workspace.groups.filter((group) => group.id !== 'needs').map((group) => group.folded), [true, true]);
+  assert.deepEqual(workspace.groups[0].rows.map((row) => row.id), ['n1'], 'Needs you stays open');
+  assert.equal(workspace.canFoldAll(true), false);
+  assert.equal(workspace.canFoldAll(false), true);
+
+  workspace.setGroupingMode('state');
+  const byStatus = (id) => workspace.groups.find((group) => group.id === id);
+  assert.equal(byStatus('state/idle').folded, true, 'Idle folds by default');
+  workspace.foldAll(false);
+  assert.equal(workspace.groups.every((group) => !group.folded), true, 'Expand all opens Idle too');
+  workspace.foldAll(true);
+  assert.equal(byStatus('state/needs').folded, false, 'By Status keeps its Needs you group open');
+  assert.equal(byStatus('state/idle').folded, true);
+  assert.equal(byStatus('state/working').folded, true);
+
+  workspace.setSearch('w1');
+  assert.equal(workspace.canFoldAll(true), false);
+  assert.equal(workspace.canFoldAll(false), false);
+});
+
+test('the quick filter chips leave out a muted row that is unread or working, as the filters list it (iOS filterCounts)', async () => {
+  const sessions = [agent('first', { state: 'unread', status: 'done' }), agent('keep-muted', { state: 'unread', status: 'done' }),
+    agent('busy'), agent('muted-busy', { space_name: 'space' }), agent('ask', { state: 'needs_you', status: 'needs_you', space_name: 'space' })];
+  const { workspace } = await opened({ sessions });
+  assert.equal(workspace.isMuted(sessions[3]), true, 'muted through its space');
+  assert.deepEqual([workspace.counts.unread, workspace.counts.working, workspace.counts.needsYou], [1, 1, 1], 'a muted row that needs you still counts');
+  for (const quick of ['unread', 'working']) {
+    workspace.setQuickFilter(quick);
+    assert.equal(workspace.visibleRows().length, workspace.counts[quick], quick + ': the chip says what the filter lists');
+  }
+  workspace.setSearch('Agent first');
+  assert.equal(workspace.counts.unread, 1);
 });

@@ -2,7 +2,8 @@ import type { ClientModel } from './ClientModel';
 import { SessionRelations, sessionRelations, unavailableSessionSources } from './SessionRelations';
 import { ResourceRow, Wire } from './Wire';
 import type { AgentListAdapter } from '../core/AgentListAdapter';
-import type { AgentListInput, AgentListRow, AgentListPreferences, CoreAgentListGroup } from '../core/AgentListProjection';
+import { sessionCapabilities } from '../core/Domain';
+import type { AgentListInput, AgentListRow, AgentListPreferences, CoreAgentListGroup, CoreAgentListProjection } from '../core/AgentListProjection';
 import { CoreAgentListAdapter } from '../core/AgentListAdapter';
 
 interface AgentRepository {
@@ -57,10 +58,24 @@ export class AgentWorkspaceGroup {
 /** The Needs you section above every grouping but By Status, which has its own (DESIGN_SYSTEM 3.4). */
 export const NEEDS_GROUP: string = 'needs';
 const STATE_COUNT_KEYS: string[] = ['needs_you', 'working', 'unread', 'idle'];
+/** Groups Collapse All leaves open (DESIGN_SYSTEM 3.4). */
+const STAYS_OPEN: string[] = [NEEDS_GROUP, 'state/needs'];
 
 function segment(value: string): string { return encodeURIComponent(value); }
 function rowSession(row: ResourceRow): string { return row.session || Wire.text(row.data(), 'session_id') || row.id; }
 function rowMachine(row: ResourceRow): string { return row.machine || Wire.text(row.data(), 'machine_id'); }
+interface SeenJob { key: string; path: string; snapshot: AgentOwnerSnapshot; }
+
+/** A copy of a row in a new state; seen also ends Just finished. */
+function seenRow(item: ResourceRow, state: string): ResourceRow {
+  const next = item.copy(), data = next.data();
+  if (state === 'idle') {
+    const work = Wire.object(data, 'work');
+    if (Wire.bool(work, 'just_finished')) { work['just_finished'] = false; data['work'] = work; }
+  }
+  data['state'] = state; next.raw = JSON.stringify(data); next.state = state; return next;
+}
+
 function rowKey(row: ResourceRow): string { return JSON.stringify(row.group ? [row.group, row.kind, row.manager, rowMachine(row), rowSession(row)] : [row.kind, row.manager, rowMachine(row), rowSession(row)]); }
 function rowSpaceKey(row: ResourceRow): string {
   const name = Wire.text(row.data(), 'space_name');
@@ -118,6 +133,8 @@ export class AgentWorkspace {
   revokeRowActions(): void { this.actionEpoch++; this.busy = false; }
   relations: SessionRelations = new SessionRelations([]);
   private expandedFamilies = new Set<string>();
+  /** The core's unread rows under the current filter (`unread_shown`), what Mark All as Seen marks. */
+  private unreadShown: string[] = [];
   foldFamilies(): boolean { return this.quickFilter === 'all' && !this.search.trim(); }
   foldedChildren(row: ResourceRow, graph: SessionRelations = this.relations): ResourceRow[] {
     return graph.children(row).filter(child => !this.isPinned(child));
@@ -507,6 +524,139 @@ export class AgentWorkspace {
     finally { if (this.ownerActive(snapshot)) this.busy = false; }
   }
 
+  /** Interrupt from the list (iOS AgentsMenus): a running or waiting turn whose source lets the owner stop it. */
+  canInterrupt(row: ResourceRow): boolean {
+    if (!this.canMutateSession(row) || !['working', 'needs_you'].includes(row.state)) return false;
+    const data = row.data(), capabilities = Wire.object(data, 'capabilities');
+    if (Wire.bool(data, 'archived') || Wire.bool(data, 'deleted')) return false;
+    return sessionCapabilities({ sourceKind: Wire.text(data, 'source_kind'), readOnly: Wire.bool(data, 'read_only', Wire.bool(data, 'readonly')),
+      readOnlyReason: Wire.text(data, 'read_only_reason'), capabilities: { interrupt: Wire.bool(capabilities, 'interrupt') } }).canInterrupt;
+  }
+
+  async interrupt(row: ResourceRow): Promise<boolean> {
+    if (!this.canInterrupt(row) || this.busy) return false;
+    const path = this.sessionPath(row) + '/interrupt', snapshot = this.captureRow(row, path);
+    if (!snapshot || this.blocked(snapshot, path)) return false;
+    this.busy = true; this.error = '';
+    try {
+      await snapshot.repo.call(path, 'POST', Wire.payload([], []), '', (): boolean => this.active(snapshot));
+      if (!this.ownerActive(snapshot)) return false;
+      await this.refreshAfterMutation(snapshot);
+      return this.ownerActive(snapshot);
+    } catch (failure) { if (this.active(snapshot)) this.fail(failure as Error); return false; }
+    finally { if (this.ownerActive(snapshot)) this.busy = false; }
+  }
+
+  /**
+   * What Mark All as Seen marks under the Unread filter (iOS `markSeen(unreadShown)`): the core's unread rows the filter
+   * lists, folded groups included, so the chip empties. Families are open under a quick filter, so each child is its own row.
+   */
+  unreadToMark(): ResourceRow[] {
+    if (this.quickFilter !== 'unread' || !this.unreadShown.length) return [];
+    const byId = new Map<string, ResourceRow>();
+    this.relations.rows.forEach((row: ResourceRow) => byId.set(coreRowId(row), row));
+    const rows: ResourceRow[] = [], seen = new Set<string>();
+    this.unreadShown.forEach((id: string) => {
+      const row = byId.get(id);
+      if (!row || row.state !== 'unread' || this.isMuted(row) || !this.canMarkSeen(row) || seen.has(rowKey(row))) return;
+      seen.add(rowKey(row)); rows.push(row);
+    });
+    return rows;
+  }
+
+  /**
+   * The chips count what each filter lists, as iOS `filterCounts`: a muted row that is unread or working is listed under
+   * neither, though the core's `counts` include it (sort/mod.rs `counts`, kept for the shared sort parity). Only with such
+   * a row is there anything to take away, and only then does the core list the rows the search admits once more.
+   */
+  private listedCounts(input: AgentListInput, projection: CoreAgentListProjection): Record<string, Object> {
+    const counts: Record<string, Object> = {};
+    Object.keys(projection.counts || {}).forEach((key: string) => counts[key] = projection.counts[key]);
+    const muted = input.rows.filter((row: AgentListRow): boolean => {
+      const state = Wire.text(row.raw, 'state');
+      return (state === 'unread' || state === 'working') && !Wire.bool(row.raw, 'background_waiting') && this.isMuted(row.source as ResourceRow);
+    });
+    if (!muted.length) return counts;
+    let admitted = input.quick === 'all' ? projection.filtered : undefined;
+    if (!admitted) {
+      const settings: Record<string, Object> = {};
+      Object.keys(input.coreSettings).forEach((key: string) => settings[key] = input.coreSettings[key]);
+      settings['inventory'] = true;
+      admitted = this.adapter.project(this.makeListInput(this.relations, 'all', settings)).filtered || [];
+    }
+    const listed = new Set<string>(admitted);
+    muted.forEach((row: AgentListRow) => {
+      const key = Wire.text(row.raw, 'state');
+      if (listed.has(coreRowId(row.source as ResourceRow))) counts[key] = Math.max(0, Wire.number(counts, key) - 1);
+    });
+    return counts;
+  }
+
+  /** Marks every row at once and leaves Unread before the hub answers; a row the hub refuses comes back with the error shown. */
+  async markAllSeen(rows: ResourceRow[] = this.unreadToMark()): Promise<boolean> {
+    if (this.busy) return false;
+    const jobs: SeenJob[] = [];
+    rows.forEach((row: ResourceRow) => {
+      if (!this.canMarkSeen(row)) return;
+      const path = this.sessionPath(row) + '/seen', snapshot = this.captureRow(row, path);
+      if (snapshot && !this.blocked(snapshot, path)) jobs.push({ key: rowKey(row), path: path, snapshot: snapshot });
+    });
+    if (!jobs.length) return false;
+    this.busy = true; this.error = '';
+    const restore = this.markSeenLocally(new Set<string>(jobs.map((job: SeenJob) => job.key)));
+    const failures = await Promise.all(jobs.map(async (job: SeenJob): Promise<Error | undefined> => {
+      try { await job.snapshot.repo.call(job.path, 'POST', Wire.payload([], []), '', (): boolean => this.active(job.snapshot)); return undefined; }
+      catch (failure) { return failure as Error; }
+    }));
+    const current = jobs.filter((job: SeenJob) => this.ownerActive(job.snapshot));
+    const failed = new Set<string>(), first = failures.find((failure: Error | undefined, index: number) => !!failure && current.includes(jobs[index]));
+    jobs.forEach((job: SeenJob, index: number) => { if (failures[index] && current.includes(job)) failed.add(job.key); });
+    if (failed.size) restore(failed);
+    if (first) this.fail(first);
+    if (current.length) this.busy = false;
+    return !failed.size && current.length === jobs.length;
+  }
+
+  private markSeenLocally(keys: Set<string>): (failed: Set<string>) => void {
+    const before = new Map<ResourceRow, ResourceRow>();
+    const patch = (items: ResourceRow[]): ResourceRow[] => items.map((item: ResourceRow) => {
+      if (!keys.has(rowKey(item))) return item;
+      const next = seenRow(item, 'idle'); before.set(next, item); return next;
+    });
+    this.latestSourceRows = patch(this.latestSourceRows); this.historyRows = patch(this.historyRows); this.rebuild();
+    return (failed: Set<string>): void => {
+      // Only a row still as marked here goes back: a newer list from the hub wins.
+      const restore = (items: ResourceRow[]): ResourceRow[] => items.map((item: ResourceRow) =>
+        failed.has(rowKey(item)) && before.has(item) ? before.get(item) as ResourceRow : item);
+      this.latestSourceRows = restore(this.latestSourceRows); this.historyRows = restore(this.historyRows); this.rebuild();
+    };
+  }
+
+  /** Collapse All / Expand All (iOS AgentsMenus): what each would change, so a button with nothing to do is off. */
+  canFoldAll(fold: boolean): boolean {
+    if (this.search.trim()) return false;
+    return this.groups.some((group: AgentWorkspaceGroup) => !STAYS_OPEN.includes(group.id) &&
+      (fold ? !group.folded : group.folded && group.parent !== 'quiet'));
+  }
+
+  /**
+   * Every group by the core's fold rules (Idle folds by default); Collapse All folds quiet spaces too, as iOS. Needs you,
+   * the section and By Status's group, stays open, so a session that needs the owner shows without opening anything.
+   */
+  foldAll(fold: boolean): void {
+    if (!this.canFoldAll(fold)) return;
+    if (fold) {
+      const next = this.folded.filter((id: string) => id !== '!state/idle');
+      this.groups.forEach((group: AgentWorkspaceGroup) => {
+        if (!STAYS_OPEN.includes(group.id) && group.parent !== 'quiet' && group.id !== 'state/idle' && !next.includes(group.id)) next.push(group.id);
+      });
+      this.folded = next; this.expandedQuiet = [];
+    } else {
+      this.folded = ['!state/idle'];
+    }
+    this.releaseFreeze(); this.rebuild(); this.refreezeAfterFilter(); this.saveViewLater();
+  }
+
   machineIdentity(row: ResourceRow): string { return JSON.stringify([row.group || this.client?.profile.id || '', row.manager, row.kind === 'machine' ? row.id : rowMachine(row)]); }
 
   private sessionKey(row: ResourceRow): string {
@@ -649,15 +799,7 @@ export class AgentWorkspace {
 
   private patchState(row: ResourceRow, state: string): void {
     const key = rowKey(row);
-    const patch = (items: ResourceRow[]): ResourceRow[] => items.map((item: ResourceRow) => {
-      if (rowKey(item) !== key) return item;
-      const next = item.copy(), data = next.data();
-      if (state === 'idle') {
-        const work = Wire.object(data, 'work');
-        if (Wire.bool(work, 'just_finished')) { work['just_finished'] = false; data['work'] = work; }
-      }
-      data['state'] = state; next.raw = JSON.stringify(data); next.state = state; return next;
-    });
+    const patch = (items: ResourceRow[]): ResourceRow[] => items.map((item: ResourceRow) => rowKey(item) !== key ? item : seenRow(item, state));
     this.latestSourceRows = patch(this.latestSourceRows); this.historyRows = patch(this.historyRows); this.rebuild();
   }
 
@@ -729,8 +871,9 @@ export class AgentWorkspace {
     try {
       const relations = sessionRelations(this.latestSourceRows, unavailableSessionSources(this.client?.directoryOwners() || []));
       relations.rows.forEach(row => byId.set(coreRowId(row), row));
-      const projection = this.adapter.project(this.makeListInput(relations));
-      groups = projection.groups; counts = projection.counts || {};
+      const input = this.makeListInput(relations), projection = this.adapter.project(input);
+      groups = projection.groups; counts = this.listedCounts(input, projection);
+      this.unreadShown = projection.unread_shown || [];
       // The core matches the query (including machine and quick filters) before it hides
       // offline rows from its ordinary groups. Offer those readable matches once.
       if (this.search.trim() && projection.filtered) {
@@ -832,7 +975,8 @@ export class AgentWorkspace {
     return counts;
   }
 
-  private makeListInput(relations: SessionRelations = this.relations): AgentListInput {
+  private makeListInput(relations: SessionRelations = this.relations, quick: string = this.quickFilter,
+    settings?: Record<string, Object>): AgentListInput {
     const fold = this.foldFamilies();
     const displayed = fold ? relations.rows.filter(row => !relations.root(row) || this.isPinned(row)) : relations.rows;
     const rows: AgentListRow[] = displayed.map((row: ResourceRow): AgentListRow => {
@@ -842,7 +986,7 @@ export class AgentWorkspace {
       if (fold) raw['state'] = this.familyState(row, relations);
       return {id: row.id, raw, source: row};
     });
-    return {rows, history: this.history, grouping: this.groupingMode, quick: this.quickFilter,
+    return {rows, history: this.history, grouping: this.groupingMode, quick: quick,
       machineFilter: this.machineFilter, query: this.search, reading: this.readingDetail,
       kept: this.frozenGroups?.flatMap((group) => group.memberIds) || [],
       machines: this.client?.directoryOwners().flatMap((owner: ClientModel): Record<string, Object>[] => {
@@ -857,7 +1001,7 @@ export class AgentWorkspace {
           });
         return current;
       }) || [],
-      coreSettings: { 'inventory': !!this.search.trim(), 'sort': 'state', 'folded': this.folded, 'expanded_idle': this.expandedIdle, 'expanded_quiet': this.expandedQuiet,
+      coreSettings: settings || { 'inventory': !!this.search.trim(), 'sort': 'state', 'folded': this.folded, 'expanded_idle': this.expandedIdle, 'expanded_quiet': this.expandedQuiet,
         'compact': false, 'history': this.history, 'now': new Date().toISOString(), 'held': this.heldSession },
       preferencesFor: (row: AgentListRow): AgentListPreferences => this.preferencesFor(row.source as ResourceRow),
       machineIdentity: (row: AgentListRow): string => this.machineIdentity(row.source as ResourceRow),

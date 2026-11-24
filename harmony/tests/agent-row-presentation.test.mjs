@@ -336,16 +336,21 @@ test('parent rows count their running subagents', () => {
 });
 
 test('quick filters show All, nonempty states with counts, and the chosen one while it empties', () => {
+  const taps = [];
   const Quick = methodsClass(['quickFilters', 'quickLabel', 'quickIndex', 'chooseQuick'], { QUICK_FILTERS: ['all', 'needsYou', 'working', 'unread', 'backgroundWaiting'],
-    QUICK_LABELS: { all: 'all', needsYou: 'needs_you', working: 'working', unread: 'unread', backgroundWaiting: 'agent_group_background' }, tr: (key) => key });
+    QUICK_LABELS: { all: 'all', needsYou: 'needs_you', working: 'working', unread: 'unread', backgroundWaiting: 'agent_group_background' }, tr: (key) => key,
+    Haptics: { tap: () => taps.push('tap') } });
   const page = new Quick();
   let chosen = '';
   page.workspace = { quickFilter: 'all', counts: { needsYou: 2, working: 0, unread: 3, backgroundWaiting: 0 }, setQuickFilter(key) { chosen = key; } };
   assert.deepEqual(page.quickFilters(), ['all', 'needsYou', 'unread']);
   assert.equal(page.quickLabel('needsYou'), 'needs_you 2');
   assert.equal(page.quickLabel('all'), 'all');
+  page.chooseQuick(0);
+  assert.deepEqual(taps, [], 'choosing the filter already shown does nothing');
   page.chooseQuick(2);
   assert.equal(chosen, 'unread');
+  assert.deepEqual(taps, ['tap']);
   page.workspace.quickFilter = 'working';
   assert.deepEqual(page.quickFilters(), ['all', 'needsYou', 'working', 'unread']);
   assert.equal(page.quickIndex(), 2);
@@ -381,4 +386,59 @@ test('a parent row shows its family state and running count once, and a child sa
   assert.match(page.rowSpoken(binding), /relation_running_count/);
   const child = page.bindAgentRows([], [{ identity: 'k2', key: 'k2', value: kids[1] }], true)[0];
   assert.match(page.rowSpoken(child), /relation_side · relation_root/);
+});
+
+test('list actions tap on folds and filters, Interrupt taps once it is sent, and Mark all as read succeeds once', async () => {
+  const feedback = [];
+  const Actions = methodsClass(['toggleGroup', 'toggleFamilyRow', 'toggleIdle', 'foldAll', 'interruptRow', 'markAllCount', 'markAllLabel', 'markAllSeen'],
+    { Haptics: { tap: () => feedback.push('tap'), success: () => feedback.push('success') }, tr: (key) => key });
+  const page = new Actions(), calls = [];
+  let interruptResult = true, markResult = true, canFold = true;
+  page.filterSheetOpen = true;
+  page.workspace = {
+    quickFilter: 'all', unread: ['a', 'b'],
+    toggleFold: (id) => calls.push('fold ' + id), toggleFamily: (row) => calls.push('family ' + row.id), toggleIdleRows: (id) => calls.push('idle ' + id),
+    canFoldAll: () => canFold, foldAll: (fold) => calls.push('all ' + fold),
+    interrupt: async (row) => { calls.push('interrupt ' + row.id); return interruptResult; },
+    unreadToMark() { return this.unread; }, markAllSeen: async () => { calls.push('mark'); return markResult; }
+  };
+  page.toggleGroup('state/working'); page.toggleFamilyRow({ id: 'main' }); page.toggleIdle('state/idle'); page.toggleIdle('machine/m1');
+  assert.deepEqual(calls.splice(0), ['fold state/working', 'family main', 'fold state/idle', 'idle machine/m1']);
+  assert.deepEqual(feedback.splice(0), ['tap', 'tap', 'tap', 'tap']);
+
+  canFold = false; page.foldAll(true);
+  assert.deepEqual([calls.length, feedback.length, page.filterSheetOpen], [0, 0, true], 'nothing to fold: no tap and the sheet stays');
+  canFold = true; page.foldAll(false);
+  assert.deepEqual([calls.splice(0), feedback.splice(0), page.filterSheetOpen], [['all false'], ['tap'], false]);
+
+  page.interruptRow({ id: 'run' }); await new Promise((resolve) => setTimeout(resolve));
+  interruptResult = false; page.interruptRow({ id: 'gone' }); await new Promise((resolve) => setTimeout(resolve));
+  assert.deepEqual([calls.splice(0), feedback.splice(0)], [['interrupt run', 'interrupt gone'], ['tap']]);
+
+  assert.equal(page.markAllCount(), 0, 'only under the Unread filter');
+  page.workspace.quickFilter = 'unread';
+  assert.equal(page.markAllCount(), 2);
+  assert.equal(page.markAllLabel(2), '2 agent_group_unread', 'the count reads as the group headers do');
+  page.markAllSeen(); await new Promise((resolve) => setTimeout(resolve));
+  markResult = false; page.markAllSeen(); await new Promise((resolve) => setTimeout(resolve));
+  assert.deepEqual([calls.splice(0), feedback.splice(0)], [['mark', 'mark'], ['success']]);
+});
+
+test('Interrupt, Mark all as read and Collapse / Expand all sit where iOS puts them, and haptics are touch vibration', () => {
+  const source = readFileSync(new URL('../entry/src/main/ets/components/AgentListPage.ets', import.meta.url), 'utf8');
+  const menu = source.slice(source.indexOf('  @Builder rowMenu('), source.indexOf('  @Builder groupHeader('));
+  assert.ok(menu.indexOf("tr('agent_interrupt')") > menu.indexOf("'agent_unpin' : 'agent_pin'"), 'after Pin, as iOS');
+  assert.ok(menu.includes("if (this.workspace.canInterrupt(binding.bound.value)) MenuItem({ content: tr('agent_interrupt') })"));
+  const list = source.slice(source.indexOf('  build() {'));
+  assert.ok(list.indexOf('this.markAllCount() > 0') < list.indexOf('ForEach(this.groupBindings'), 'Mark all as read heads the list');
+  assert.ok(list.includes(".id('agents.mark_all_seen')"));
+  const sheet = source.slice(source.indexOf('  @Builder filterSheet('), source.indexOf('  private isRowSelected('));
+  assert.ok(sheet.includes('this.foldAllButton(true, false); this.foldAllButton(false, false)'));
+  assert.ok(sheet.includes('this.environment.fontScale >= 1.5'), 'stacked with large text');
+  assert.ok(source.includes('.enabled(this.workspace.canFoldAll(fold))'));
+  const haptics = readFileSync(new URL('../entry/src/main/ets/platform/Haptics.ets', import.meta.url), 'utf8');
+  assert.ok(haptics.includes("{ usage: 'touch' }"), 'the phone touch-vibration setting governs it');
+  assert.ok(haptics.includes('isSupportEffectSync'));
+  const module = readFileSync(new URL('../entry/src/main/module.json5', import.meta.url), 'utf8');
+  assert.ok(module.includes('"ohos.permission.VIBRATE"'));
 });

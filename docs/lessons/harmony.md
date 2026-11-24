@@ -116,3 +116,10 @@ frame cap turned it into a `frame_too_large` reconnect loop with an empty Agents
 the largest message it legitimately carries (Hub events 64 MiB, port relays 1 MiB), check frames and fragments
 against that, and feed each TLS read into the buffer in pieces: one read can hold the tail of one frame and several
 whole ones. Keep the failure reason on the state callback so tests can tell a size limit from a broken socket.
+
+## The core's counts are not the chips' counts
+
+The shared core's `counts` keep a muted unread or working row in the total, matching the iOS shadow comparison
+(`sort/mod.rs` `counts`). The Unread and Working filters themselves leave muted rows out, as iOS's `filterCounts` does.
+Showing the core's number on a chip then promises rows its filter never lists, and Mark all as read cannot empty it.
+Subtract the muted rows the search admits, and test a chip's number against the rows its filter shows.
