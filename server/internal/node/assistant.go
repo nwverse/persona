@@ -405,6 +405,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	// External authority and the raw runtime must be checked before guest/resume normalization can replace options.
 	requested := executionOption(options)
+	callerModeExplicit := requested.PermissionModeExplicit && mode != ""
 	public := requested.Public // audience belongs to this input, even when launcher normalization replaces execution
 	requestedLauncher := launcherOr(launcher, st.Launcher)
 	if proto.IsExternalLauncher(requestedLauncher) || requested.External != nil {
@@ -463,7 +464,48 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		return "", errAssistantOriginUnknown
 	}
 	if mode == "" && guest == nil {
-		mode = st.AppMode
+		running := false
+		onRuntime := false
+		runtimeAgent := ""
+		if resume {
+			n.mu.Lock()
+			p := n.procs[id]
+			running = p != nil && p.alive()
+			n.mu.Unlock()
+			if row, h, ok := n.runtimes.rowOf(id); ok {
+				onRuntime = true
+				running = row.Status != proto.StatusOffline
+				runtimeAgent = cmp.Or(row.Agent, h.agent())
+			} else {
+				_, _, runtimeOwned := n.runtimes.belongs(id)
+				onRuntime = runtimeOwned || n.runtimeAssistant(id)
+			}
+		}
+		// A deliberate conversation choice wins. For Claude Code, a stopped/new process follows the manager's current
+		// default; legacy AppMode/transcript evidence is used only when an older manager supplied no default. Other
+		// agents always keep that legacy precedence, and a live process keeps its mode until a later stopped resume.
+		if st.AppModeExplicit {
+			mode = st.AppMode
+		}
+		if mode == "" && !running && requested.DefaultPermissionMode != "" {
+			defaultAgent := ""
+			if resume {
+				if onRuntime {
+					defaultAgent = cmp.Or(runtimeAgent, assistantOnRuntime)
+				} else {
+					defaultAgent = n.conversationAgent(id)
+				}
+			}
+			if defaultAgent == "" {
+				defaultAgent, _ = n.assistantAgent(ctx, launcherOr(requestedLauncher, "claude"))
+			}
+			if defaultAgent == "claude" {
+				mode = requested.DefaultPermissionMode
+			}
+		}
+		if mode == "" {
+			mode = st.AppMode
+		}
 		if mode == "" {
 			mode = n.assistantModeOf(id)
 		}
@@ -514,6 +556,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	// A new conversation has no legacy origin to recover. A resumed one gets here only with the manager's explicit
 	// decision or a previously persisted one; internal sends retain the decision already in session state.
 	execution.OriginKnown = originKnown
+	if execution.Source.Role == "" {
+		execution.Source = st.ModelSource
+	}
 	// An agent runtime's launcher, or a conversation one runs (assistant_runtime.go): it keeps its model; the node
 	// keeps the conversation's state, snapshot, mode and memory.
 	rl := launcherOr(launcher, st.Launcher)
@@ -557,14 +602,14 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			eff = execution.Effort
 		}
 		superviseRoundFrom(ctx).set(roundKept, roundWhyUnsupported) // a runtime keeps its own context (assistant_round.go)
-		return n.assistantSendRuntime(ctx, onRuntime, id, cwd, rl, text, images, mode, execution.Public, execution.Strict, selected, execution.Model, eff, policy)
+		return n.assistantSendRuntime(ctx, onRuntime, id, cwd, rl, text, images, mode, execution.Public, execution.Strict, callerModeExplicit, selected, execution.Model, eff, policy)
 	}
 	if len(options) == 0 || (execution.Fingerprint == "" && execution.Model == "") {
 		if launcher == "" || launcher == st.Launcher {
 			// What it ran, with this message's claude_interactive: the manager's switch, sent with every message, not a
 			// model pick (assistant_tui.go). Without it a message that picks no model (a supervision message, a relay)
 			// started claude -p, and restarted a conversation that runs interactive Claude Code.
-			execution = modelExecution{CacheKeepalive: execution.CacheKeepalive, Strict: execution.Strict, Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, SupervisionInstructions: st.SupervisionInstructions, Origin: origin, Interactive: execution.Interactive, FollowsSetting: execution.FollowsSetting || st.FollowsSetting}
+			execution = modelExecution{Source: execution.Source, CacheKeepalive: execution.CacheKeepalive, Strict: execution.Strict, Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, SupervisionInstructions: st.SupervisionInstructions, Origin: origin, Interactive: execution.Interactive, FollowsSetting: execution.FollowsSetting || st.FollowsSetting}
 		}
 	}
 	if launcher != "" && st.Launcher != "" && launcher != st.Launcher && execution.Fingerprint == "" {
@@ -927,7 +972,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 		n.noteModes(id, mode, effort)
 	}
-	if st, known := n.state.get(id); !known || st.Launcher != launcher || st.Cwd != cwd || st.Model != execution.Model || st.ModelFingerprint != execution.Fingerprint || st.ModelEffort != execution.Effort || st.Origin != origin || st.OriginKnown != execution.OriginKnown || st.IsMain != execution.IsMain || st.MainCompactWindow != execution.MainCompactWindow || st.ConfigDir != execution.ConfigDir || st.FollowsSetting != execution.FollowsSetting || st.SupervisionInstructions != execution.SupervisionInstructions || hasInput && st.TaskExecution != execution.Strict || !resume && !hasInput {
+	if st, known := n.state.get(id); !known || st.Launcher != launcher || st.Cwd != cwd || st.Model != execution.Model || st.ModelFingerprint != execution.Fingerprint || st.ModelEffort != execution.Effort || st.Origin != origin || st.OriginKnown != execution.OriginKnown || st.ModelSource != execution.Source || st.IsMain != execution.IsMain || st.MainCompactWindow != execution.MainCompactWindow || st.ConfigDir != execution.ConfigDir || st.FollowsSetting != execution.FollowsSetting || st.SupervisionInstructions != execution.SupervisionInstructions || hasInput && st.TaskExecution != execution.Strict || !resume && !hasInput {
 		started := st.StartedAt
 		if started.IsZero() {
 			started = time.Now().UTC()
@@ -936,6 +981,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		st.Model, st.ModelFingerprint, st.ModelEffort = execution.Model, execution.Fingerprint, execution.Effort
 		st.Origin = origin
 		st.OriginKnown = execution.OriginKnown
+		st.ModelSource = execution.Source
 		st.IsMain, st.MainCompactWindow = execution.IsMain, execution.MainCompactWindow
 		st.SupervisionInstructions = execution.SupervisionInstructions
 		st.FollowsSetting = execution.FollowsSetting
@@ -949,7 +995,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		n.state.put(id, st)
 	}
 
-	n.persistModes(id, mode, effort) // after saving state, including defaults filled on resume
+	n.persistModes(id, mode, effort, callerModeExplicit && origin != originInbox && guest == nil) // after saving state, including defaults filled on resume
 	if err := n.idleCompactBeforeInput(ctx, p); err != nil {
 		return "", err
 	}
@@ -1193,19 +1239,24 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 // in the hub's database), else the assistant directory. A stored folder that is gone (the data directory moved,
 // docs/operations/persona-cutover.md) is the folder of the same name in the data directory when there is one (the assistant
 // directory, the health space, another manager's), else the assistant directory: it is never made again where it was,
-// which would start the conversation in an empty folder without its instructions and memory (#6299).
+// which would start the conversation in an empty folder without its instructions and memory (#6299). On a scoped
+// node the assistant directory is its own (assistantFallbackDir), and a stored built-in one goes back to it
+// (unlistedAssistantDir): resumed outside the scope, the conversation was never listed.
 func (n *Node) storedCwd(stored string) string {
+	if n.unlistedAssistantDir(stored) {
+		stored = ""
+	}
 	if stored != "" {
 		if dirExists(stored) {
 			return stored
 		}
 		if name := filepath.Base(stored); name != "." && name != string(filepath.Separator) {
-			if moved := filepath.Join(identity.DataDir(n.home), name); dirExists(moved) {
+			if moved := filepath.Join(identity.DataDir(n.home), name); dirExists(moved) && !n.unlistedAssistantDir(moved) {
 				return moved
 			}
 		}
 	}
-	return identity.AssistantDir(n.home)
+	return n.assistantFallbackDir()
 }
 
 // readAssistant turns the stream-json output into live deltas and turn-finished signals.
@@ -1358,6 +1409,9 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			if p.commandLifecycle(ev.Command, ev.State) {
 				n.notifySessionsSoon() // the queue strip shows it, or no longer
 			}
+		case "rate_limit_event":
+			// the account's subscription windows after a reply (#12855, usagewindows_claudestream.go)
+			n.claudeStreamUsage(p.launcher, p.model.ConfigDir, line, time.Now())
 		case "stream_event":
 			if ev.ParentToolUseID != nil && *ev.ParentToolUseID != "" {
 				// A subagent's stream (#4495): its words are not the conversation's live text, its start does not clear

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -37,7 +38,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		return "", err
 	}
 	var a struct{ Tasks []PlanTask }
-	lead := "" // legacy supervisor input, kept in the saved plan; new work is supervised by main (#5732)
+	lead := "" // optional initial leader assignment; omission keeps the planning lead or main
 	if scope != nil {
 		tasks, err := scope.workerTasks(args)
 		if err != nil {
@@ -88,10 +89,16 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if t.Readonly {
 			asked = ""
 		}
+		callerPermission := asked
+		t.CallerPermission = &callerPermission
+		t.LauncherDefaultModel = false // the hub's: a tool call cannot import another start's native-default choice
+		t.StartPermission = ""
+		t.RetryFromAgent, t.RetryFromAllowAll = "", false // a new plan cannot import another retry's provenance
 		t.normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
 		t.TodoID, t.Error, t.ErrorCode, t.ErrorArgs, t.RetryWith = "", "", "", nil, nil
 		t.WorkspaceResolved, t.ReservedTodoID, t.WorkspaceInferred = nil, "", false
 		t.OwnerStarted = false // the hub's: only the owner's Start on the card sets it (startPlan)
+		t.MemoryTopic = nil    // the hub's: the plan's own confirmation decision sets it (below)
 		t.RequestGate, t.Queue = "", nil
 		t.CloseTabOnAccept, t.TerminalTarget, t.TerminalCleanup = false, taskTerminalTarget{}, ""
 		t.TerminalAuthorized = false
@@ -104,6 +111,9 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		t.Model = strings.TrimSpace(t.Model)
 		t.Speed = strings.TrimSpace(t.Speed)
 		t.Permission = strings.TrimSpace(t.Permission)
+		if t.OwnerStep = strings.TrimSpace(t.OwnerStep); !validOwnerStep(t.OwnerStep) {
+			return "", fmt.Errorf("task %d: owner_step must be empty, %q, %q or %q", i+1, ownerStepMoney, ownerStepOutward, ownerStepIrreversible)
+		}
 		if err := t.checkRole(scope != nil); err != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, err)
 		}
@@ -118,7 +128,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			return "", fmt.Errorf("task %d: expect_minutes must be zero or a positive number of minutes", i+1)
 		}
 		t.DoneWhen, t.ExpectMinutes = cleanDoneWhen(t.DoneWhen), min(t.ExpectMinutes, 24*60)
-		if t.Title == "" || t.Prompt == "" || t.Cwd == "" && !t.backendWorkspace() {
+		if t.Title == "" || t.Prompt == "" || t.Cwd == "" && !t.backendWorkspace() && !s.canInferContainerWorkspace(ctx, *t) {
 			return "", fmt.Errorf("task %d: title, prompt and cwd are required", i+1)
 		}
 		t.Brief = nil // the hub's (planBriefs below), never the tool call's
@@ -244,8 +254,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		return "", err
 	}
 	// A round the hub started for a scheduled task (schedule_grant.go, #8045): its plan names the schedule, so the card
-	// can offer to let it start these by itself, and that schedule's grant may start them now. Never in a space that
-	// confirms what leaves it, whose plans always wait for Start.
+	// can offer to let it start these by itself, and that schedule's grant may start them now. Never for a plan whose
+	// words are confirmed before they leave (policy below), which always waits for Start.
 	if scope == nil && slices.ContainsFunc(a.Tasks, func(t PlanTask) bool { return t.UserRequested }) && s.inScheduledTurn(ctx, machine, sessionID) {
 		// A round the hub started has no message of the owner's: "the user asked for this" is only the model's word.
 		for i := range a.Tasks {
@@ -254,13 +264,56 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	}
 	// A direction's lead that a hand-over of the owner's quoted words went into (#11699): the words may have reached the
 	// wrong lead, so until the owner writes there, "the user asked for this" is no Start for writable work it plans
-	// outside the kinds the owner already let this lead start (heldOutsideOwnKinds, #12953).
+	// outside the kinds the owner already let this lead start (heldOutsideOwnKinds, #12953). Since decision rights a
+	// lead's own plan starts at once whatever it says (orchestrates below), and a scheduled round has dropped user_requested
+	// above: kept, it no longer holds a plan back.
 	if scope == nil && slices.ContainsFunc(a.Tasks, func(t PlanTask) bool { return t.UserRequested }) && s.handedOver(sessionID) {
-		s.heldOutsideOwnKinds(ctx, sessionID, a.Tasks)
+		s.heldOutsideOwnKinds(ctx, machine, sessionID, a.Tasks)
+	}
+	// Supervisors orchestrate on the owner's behalf (decision rights, 2026-11-23): a plan from the main conversation or
+	// a direction lead is the supervisor's own release, so it starts at once, read-only or writable, whether or not the
+	// owner asked for it in so many words (user_requested only records where the work came from). It waits for the
+	// owner's Start only when a task needs them: a request gate, a track that confirms every hand-off (health), or a
+	// task that spends money, speaks outward as the owner or takes an irreversible step they have not agreed to
+	// (owner_step). Also in a lead a hand-over of the owner's quoted words went into (#11699): words handed to the wrong
+	// lead start work in the wrong place, which is reversible and its supervisor's to set right, none of the six. Not in a
+	// scheduled round, where "the user asked for this" is only the model's word. An ordinary conversation's plan is not
+	// its supervisor's release: as before.
+	orchestrates := scope == nil && (s.isLeader(ctx, sessionID) || (s.isMainOn(ctx, machine, sessionID) && !s.mainPlansWait)) &&
+		!s.inScheduledTurn(ctx, machine, sessionID)
+	// A plan from a conversation hands its prompts to agents outside it (scene 3): what it says, titles first (they are
+	// what its push shows), decides once whether it waits for "Start" and what its push says (health.go). A leader's
+	// workers (scope) need no decision.
+	var policy TrackPolicy
+	var space string
+	if scope == nil {
+		var out strings.Builder
+		for _, t := range a.Tasks {
+			out.WriteString(t.Title + "\n")
+		}
+		for _, t := range a.Tasks {
+			out.WriteString(t.Prompt + "\n" + t.Context + "\n\n")
+		}
+		space, _ = s.selfSpace(ctx, sessionID)
+		u := s.exitUse(ctx, out.String(), sessionID, space)
+		policy = policyOf(u)
+		if orchestrates && !s.trackPolicy(ctx, space).ConfirmOutbound {
+			// A direction lead hands work to Agents on the owner's own computers as the owner's
+			// delegate: what the words say is not asked about again (the owner confirmed the work when it reached them).
+			// A track whose own rules confirm every hand-off (health) still asks; no sensitive memory rides along untapped.
+			policy.ConfirmOutbound = false
+		}
+		// The categories that made the plan wait for "Start" are the sensitive memory entries its starts may carry once
+		// the owner tapped it (memory_handoff.go): the text the owner confirms is the one tagged, never another.
+		if policy.ConfirmOutbound && u.Known {
+			for i := range a.Tasks {
+				a.Tasks[i].MemoryTopic = slices.Clone(u.Categories)
+			}
+		}
 	}
 	var round Task
 	var inRound bool
-	if scope == nil && !s.selfPolicy(ctx, sessionID).ConfirmOutbound {
+	if scope == nil && !policy.ConfirmOutbound {
 		if round, inRound = s.scheduledRoundOf(ctx, machine, sessionID); inRound && round.grantEligible() && s.claudeConversation(ctx, machine, sessionID) {
 			for i := range a.Tasks { // the card offers to let this schedule start these by itself
 				a.Tasks[i].Schedule, a.Tasks[i].ScheduleTitle, a.Tasks[i].ScheduleBasis = round.ID, round.labelIn(s.lang(ctx)), round.runGrantBasis
@@ -284,9 +337,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			s.logf("task plan %s: feed: %v", p.ID, err)
 		}
 	}
-	// A plan from a space that confirms what leaves it hands its prompts to agents outside it: it waits for the user's
-	// "Start" on its card, whatever would start it at once; and a space that redacts names no task in its push (health.go).
-	policy := s.selfPolicy(ctx, sessionID)
+	// A plan whose words are confirmed before they leave waits for the user's "Start" on its card, whatever would start
+	// it at once; one whose words are redacted names no task in its push (policy above).
 	if scope != nil { // no card: a leader's workers start at once, as part of the task the user let start
 		started, err := s.startPlan(ctx, p.ID, nil, false)
 		if err != nil {
@@ -313,8 +365,18 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if inRound {
 		granted = func() func(PlanTask) bool { return s.scheduleGrantCover(ctx, round, machine, sessionID) }
 	}
-	if policy.ConfirmOutbound || slices.ContainsFunc(p.Tasks, func(task PlanTask) bool { return task.RequestGate != "" }) || !s.planStartsAtOnceUnder(ctx, p.Tasks, granted) {
+	// Only what the owner really has to approve waits on a card: confirmed words, a request gate, and an ordinary
+	// conversation's writable work where the owner has not let such work start by itself.
+	step := planOwnerStep(p.Tasks)
+	needsOwner := policy.ConfirmOutbound || step != "" ||
+		slices.ContainsFunc(p.Tasks, func(task PlanTask) bool { return task.RequestGate != "" })
+	if needsOwner || (!orchestrates && !s.planStartsAtOnceUnder(ctx, p.Tasks, granted)) {
 		s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, s.planWithSuggestion(ctx, p, s.lang(ctx)))})
+		if _, talking := s.ownersPresent(time.Now())[sessionID]; talking {
+			// The owner is talking in this very conversation: the card is in front of them, a push would only repeat it.
+			return fmt.Sprintf("Plan %s is on the user's screen as a card in this conversation; nothing has started. "+
+				"Don't wait for it: carry on. When they start it, the tasks show up in the context snapshot.", p.ID) + dups + taskPlanEstimateNotes(p.Tasks), nil
+		}
 		// A card below the answer is easy to miss: push it as well.
 		titles := make([]string, 0, len(p.Tasks))
 		for _, t := range p.Tasks {
@@ -332,9 +394,9 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 		body := strings.Join(titles, i18n.T(l, "assistant-tasks.list_sep"))
 		if policy.Redact {
-			title, body = spaceNotice(l)
+			title, body = s.redactedNotice(ctx, l, space)
 		}
-		s.push(ctx, Notification{Subtitle: machineName, DeviceID: here, SessionID: sessionID, Title: title, Body: body})
+		s.push(withCard(ctx, planCardSource(step)), Notification{CardID: p.ID, Subtitle: machineName, DeviceID: here, SessionID: sessionID, Title: title, Body: body})
 		if lead != "" || s.isLeader(ctx, sessionID) {
 			s.lreports.plansDue.Store(true)
 			s.directionsSoon() // a leader's plan waiting for Start is a decision for the owner (leader_reports.go)
@@ -348,8 +410,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	}
 	var b strings.Builder
 	supervisor := ""
-	fmt.Fprintf(&b, "Queued %d task(s) for dispatch without asking (read-only, asked for by the user, a kind the user trusts, or one "+
-		"the user lets this scheduled task start):\n", len(started.Tasks))
+	fmt.Fprintf(&b, "Queued %d task(s) for dispatch without asking (released by you as their supervisor, read-only, asked for "+
+		"by the user, a kind the user trusts, or one the user lets this scheduled task start):\n", len(started.Tasks))
 	for _, t := range started.Tasks {
 		if t.Error != "" {
 			fmt.Fprintf(&b, "- %s on %s: dispatch failed: %s\n", t.Title, t.Machine, t.Error)
@@ -397,17 +459,18 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	return b.String(), nil
 }
 
-// planSupervisor validates task_plan's legacy supervisor input: "" or a current leader, which only the main
-// conversation may name. The value is saved for old-plan recognition; every new task is supervised by main (#5732).
+// planSupervisor validates an optional initial leader assignment. A lead may name itself; main may choose
+// a current lead explicitly. Omission uses the planning lead, or main for an ordinary conversation.
 func (s *Service) planSupervisor(ctx context.Context, self, lead string) (string, error) {
 	lead = strings.TrimSpace(lead)
 	switch {
 	case lead == "" || lead == self:
 		return "", nil
 	case !s.isMain(ctx, self):
-		return "", errors.New("supervisor: only the main conversation may name a leader here; leave it out: new tasks are supervised by the main conversation")
-	case !s.isLeader(ctx, lead):
-		return "", fmt.Errorf("supervisor: %s is not a leader conversation (assistant.leaders lists them); leave it out: the main conversation supervises the tasks", lead)
+		return "", errors.New("supervisor: only the main conversation may name another leader; omit it to keep this direction lead as supervisor")
+	}
+	if err := s.validateSupervisorLead(ctx, lead); err != nil {
+		return "", fmt.Errorf("supervisor: %w", err)
 	}
 	return lead, nil
 }
@@ -453,8 +516,9 @@ func applyPlanEdit(t *PlanTask, e PlanTask) {
 	if s := strings.TrimSpace(e.Speed); s != "" {
 		t.Speed = s
 	}
-	if s := strings.TrimSpace(e.Permission); s != "" {
+	if s := strings.TrimSpace(e.Permission); s != "" && s != strings.TrimSpace(t.Permission) {
 		t.Permission = s
+		t.CallerPermission = &s
 	}
 	if e.Ultracode != nil {
 		t.Ultracode = e.Ultracode
@@ -492,4 +556,14 @@ func (t *PlanTask) checkRole(byLeader bool) error {
 		return errors.New(`a task leader plans workers only: role must be "worker"`)
 	}
 	return nil
+}
+
+// planPushOver takes a plan card's push back once the card is decided anywhere (Start, Don't start, a withdrawal):
+// the hub withdraws the push it sent with the plan's id as its card (Notification.CardID) from the devices it went to,
+// as it does an answered interaction's (#4349), and the apps drop the card. A plan that was never pushed costs a no-op.
+func (s *Service) planPushOver(id string) {
+	if s.hub == nil {
+		return
+	}
+	s.hub.Tell(assistantwire.EventFleetResolved, assistantwire.FleetResolved{ID: id})
 }

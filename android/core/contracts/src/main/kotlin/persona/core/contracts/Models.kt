@@ -357,6 +357,46 @@ data class BackgroundTask(
 }
 
 /**
+ * Explicit takeover / continuation capability for a read-only Codex CLI session
+ * (`docs/protocol/protocol.md`, #5813). Absent on older hubs and ordinary sessions.
+ */
+@KeepGeneratedSerializer
+@Serializable(with = CodexTakeoverCapabilitySerializer::class)
+data class CodexTakeoverCapability(
+    val running: Boolean = false,
+    @SerialName("can_resume") val canResume: Boolean = false,
+    val reason: String? = null,
+)
+
+/** Error code returned on 409 when a Codex takeover can only continue in a new session. */
+const val CODEX_TAKEOVER_CONTINUE_ONLY = "codex_takeover_continue_only"
+
+/** Result of `GET /api/v1/machines/{mid}/codex/{sid}/takeover`. */
+@Serializable
+data class CodexTakeoverInfo(
+    val running: Boolean = false,
+    @SerialName("can_resume") val canResume: Boolean = false,
+    val reason: String? = null,
+    val token: String = "",
+    val cwd: String = "",
+    @SerialName("transcript_path") val transcriptPath: String = "",
+    @SerialName("continuation_prompt") val continuationPrompt: String = "",
+)
+
+/** Request body for `POST /api/v1/machines/{mid}/codex/{sid}/takeover`. */
+@Serializable
+data class CodexTakeoverRequest(
+    val token: String,
+    @SerialName("confirm_stop") val confirmStop: Boolean = false,
+)
+
+/** Response body for `POST /api/v1/machines/{mid}/codex/{sid}/takeover`. */
+@Serializable
+data class CodexTakeoverResponse(
+    val session: Session,
+)
+
+/**
  * What a session with a [Session.sourceKind] allows; a missing field is a refusal (docs/protocol/protocol.md "Codex sources
  * and capabilities"), except the optional ones, whose null keeps the app's own rule.
  */
@@ -371,6 +411,8 @@ data class SessionCapabilities(
     val attach: Boolean = false,
     /** Null on an older hub: the client keeps its agent-based rule instead of treating the field as a refusal. */
     val modes: Boolean? = null,
+    /** Explicit takeover / continuation offered for a read-only Codex CLI session (#5813). */
+    val takeover: CodexTakeoverCapability? = null,
     /** Close the agent, terminal or not (a runtime's session, #6294); null from an older node: the app keeps its terminal rule. */
     val close: Boolean? = null,
     /** Rename it, terminal or not (a runtime's session, #6294); null from an older node: the app keeps its terminal rule. */
@@ -707,6 +749,9 @@ data class Session(
     @SerialName("starting") val starting: Boolean = false,
     /** Why starting it failed; the session is offline and sends get the same error. */
     @SerialName("start_error") val startError: String? = null,
+    /** The coded start remedy, and a terminal question's line/choices when the start waits for an answer. */
+    @SerialName("start_error_code") val startErrorCode: String? = null,
+    @SerialName("start_error_args") val startErrorArgs: Map<String, String>? = null,
     /** Codex is open in its pane and has no thread until its first message. */
     @SerialName("awaiting_first_message") val awaitingFirstMessage: Boolean = false,
     /**
@@ -792,6 +837,8 @@ data class Session(
     val key: SessionKey get() = SessionKey(machineId, sessionId)
     /** A chat of the health space ([space]), which the assistant's own lists leave out. */
     val isHealth: Boolean get() = space == persona.core.contracts.api.AssistantSpace.HEALTH
+    /** A chat of any space ([space]: health or a domain space, #13500), which the assistant's own lists leave out. */
+    val isSpace: Boolean get() = !space.isNullOrEmpty()
     val agentState: AgentState get() = AgentState.of(state, status)
     /**
      * The list state of this session and its folded children; its own wire state stays intact. A side session's result
@@ -1545,6 +1592,7 @@ object DetectedEngineSerializer : WireSerializer<DetectedEngine>(DetectedEngine.
 object LoopInfoSerializer : WireSerializer<LoopInfo>(LoopInfo.generatedSerializer())
 object GoalInfoSerializer : WireSerializer<GoalInfo>(GoalInfo.generatedSerializer())
 object BackgroundTaskSerializer : WireSerializer<BackgroundTask>(BackgroundTask.generatedSerializer())
+object CodexTakeoverCapabilitySerializer : WireSerializer<CodexTakeoverCapability>(CodexTakeoverCapability.generatedSerializer())
 object SessionCapabilitiesSerializer : WireSerializer<SessionCapabilities>(SessionCapabilities.generatedSerializer())
 object SessionTodoSerializer : WireSerializer<SessionTodo>(SessionTodo.generatedSerializer())
 object WorkflowSerializer : WireSerializer<Workflow>(Workflow.generatedSerializer())

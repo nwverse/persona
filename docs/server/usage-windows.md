@@ -13,6 +13,7 @@ Persona collects usage on each computer without reading or handling agent login 
 | Codex app-server | In a bounded background poll, the node asks the official local Codex app-server for `account/rateLimits/read`. Codex makes the authenticated usage read and can return `accountId` with the same snapshot. Persona sends only a digest of a personal account ID to the usage manager | Preferred |
 | Codex rollout | `token_count` events in `~/.codex/sessions/…/rollout-*.jsonl` carry `rate_limits`: `primary` / `secondary` with `used_percent`, `window_minutes`, `resets_at` (seconds), plus `plan_type`, `limit_id`. The node reads the tail (512 KB) of the most recent few rollouts and takes the last event whose `limit_id` is `codex` (or unset). This sample identifies its reporting source only | Fallback |
 | Claude Code status line | Claude Code puts `rate_limits` (`five_hour` / `seven_day`, each with `used_percentage`, `resets_at`) in the **JSON input of the status line command** (see its changelog), and writes it to neither the transcript nor any other file | Yes, but the user has to wire it up (next section) |
+| Claude Code stream (#12855) | After a model reply, Claude Code's stream-json output carries a `rate_limit_event` whose `rate_limit_info.unifiedWindows` holds `five_hour` / `seven_day`, each with `utilization` (a fraction) and `resetsAt` (seconds). The node reads it in the Claude assistant conversations it runs (`readAssistant`) and keeps the newest per launcher and config directory choice; an event without `unifiedWindows` (an API key or a gateway) adds nothing | Yes, for the conversations Persona runs: no setup, no extra process or request |
 | Antigravity native quota summary | The agy companion asks its ACP process's local native service for `RetrieveUserQuotaSummary` every five minutes, with `forceRefresh: false` so agy's own cache controls upstream reads. Valid buckets and groups become usage windows using `remainingFraction`, `window`, `resetTime` and the optional model. `window` is read as a duration (`18000s`), a span (`5h`, `7d`) or a name (`daily`, `weekly`); a bucket whose `window` is none of these falls back to its bucket id (`…-5h`, `…-weekly`). agy 1.5.14 sends names (`5h`, `weekly`), checked against a real agy on Linux on 2026-11-22 (#12910). No conversation or model request is started, and no status-line email or credential is read | Yes |
 | Codex account usage API (ChatGPT's `wham/usage`) | Needs the login token in `~/.codex/auth.json` | **No**. Moshi uses it; Persona does not read `auth.json` |
 | Claude account usage API (`/api/oauth/usage`) and the `anthropic-ratelimit-*` response headers | Needs Claude's OAuth token (Keychain / `.credentials.json`); the headers also need a request of your own | **No**, same reason |
@@ -22,7 +23,7 @@ The app-server starts no conversation or model request. The account ID applies o
 
 ### Wiring in Claude Code's usage (optional)
 
-Claude Code only exposes usage in the status line command's input, so Persona cannot read it out of thin air. **Persona never edits your `settings.json`**; if you want to see Claude's usage,
+Outside the conversations Persona runs itself (the stream source above), Claude Code exposes usage only in the status line command's input, so an interactive session's usage cannot be read out of thin air. **Persona never edits your `settings.json`**; if you want to see Claude's usage,
 wrap your status line command so it drops `rate_limits` into the node's directory `~/.persona/usage/claude.json` (for multiple config directories use `claude-<name>.json`; each file counts as one source):
 
 ```sh
@@ -45,13 +46,14 @@ The gateway's `rate_limits.spend_limit` (an amount of money) is not a window and
 ## Collection and merging
 
 - **node** (`server/internal/node/usagewindows.go`): refreshes every 5 minutes (the first time 20 seconds after connecting to the hub, so the hub's `node.configure` delivers the switch first).
-  Each source (one Codex home, one `claude*.json`, or one local runtime id) keeps its last sample, kept even when the source goes quiet, and dropped after 3 days. Windows whose `resets_at` has passed are dropped (those numbers belong to the previous period);
+  Each source (one Codex home, one `claude*.json`, one local runtime id, or the Claude conversations of one launcher and config directory choice) keeps its last sample, kept even when the source goes quiet, and dropped after 3 days. Windows whose `resets_at` has passed are dropped (those numbers belong to the previous period);
   a source whose windows have all passed is not listed. A local runtime reports through the optional `usage.windows` event when the node advertises `usage_windows`; its runtime id replaces the same source after a companion restart, and a valid empty snapshot clears it. `usage.windows` uses the cache or local files without waiting for the Codex app-server.
 - **Off**: `machines[].usage_windows` in `hub.json` (`docs/operations/config.md`); with `false`, that computer's node stops collection and the manager does not ask it. Unset means on.
   If the node is older than this version (no `usage.windows`), the manager treats it as having no data.
 - **Manager** (`server/internal/devices/usagewindows.go`): on `GET /api/v1/usage/windows` it asks the online machines (in parallel, 8 seconds each; repeated requests within 30 seconds reuse the previous merged result),
   remembers each machine's last answer (in memory only, forgotten after 3 days or when the machine is removed from hub.json), then merges:
   - **Codex**: samples with the same upstream personal account ID form one row, with the newest sample's windows and the names of the computers that reported it. Without a personal account ID, each source gets its own row with its source label. A shared workspace ID does not identify a member's allowance. A reset time describes a window and plays no part in Codex account grouping.
+  - **Antigravity** (#13964) uses the provider ID `antigravity` for both the companion's `agy` and external sources. The display response combines a local window with a unique external window of the same model scope, length and reset second. It keeps the external row and uses the newest reading, preferring fresh samples. Gemini and Claude/GPT keep their own quotas. Unmatched windows and distinct external accounts stay visible.
   - **Other providers**: samples for one provider can merge when they have a plan window with the same length and the same reset second. Each window length takes the newest sample with that window.
   - **Prepaid balances** (#11825): an official DeepSeek launcher reports money left, not an allowance window. One row per launcher key carries `balance` instead of `windows` (below); it takes no place among the two fullest window bars, and the popover lists it beside them.
   - Samples older than 30 minutes are marked `stale` (sorted last, faded in the UI and labeled "out of date"); windows older than 3 days or past their reset time are dropped.
@@ -84,6 +86,8 @@ A window from a usage extension may also carry the gateway's protection line:
 `local` says the numbers were read on one of the computers. `machines` names those computers (their names in hub.json now, #1907), and `sources` names the account-pool gateways that reported it (below).
 
 With no data, `accounts` is `[]`; old hubs lack this route (404), and the web treats that as no data.
+
+`hidden_providers` (#13179) is added to the answer, as in `"hidden_providers": ["claude", "codex"]`, when the owner hid providers (`usage.hidden_providers`, "Configuration" below): their lowercase names, left out when none is hidden, so the answer is what it was before. It lets a client leave those providers out of everything else it draws for the bars: the web's "not connected" rows (a model-switcher launcher with no usage account, such as "Claude Code") are listed only for providers that are not hidden. Old clients ignore the field; an old hub never sends it, and the web then hides nothing extra.
 
 ## Account-pool gateways (relay…, #2595)
 
@@ -135,7 +139,7 @@ The manager's `manager.json` (the built-in manager's `~/.persona/managers/assist
 | --- | --- |
 | `usage.enabled` | `false` is the master switch: no gateway is queried any more (what computers read themselves is unaffected). Unset means on |
 | `usage.poll_minutes` | How often each source is read, default 5, 1 to 1440 |
-| `usage.hidden_providers` | Providers the usage bars leave out, such as `["codex"]` (#11753). **Display only**: `GET /api/v1/usage/windows` drops their accounts, while nodes and gateways are still read and the scheduler's capacity view (below) still counts them. Names are lowercase (`^[a-z0-9][a-z0-9_-]{0,31}$`, at most 16). Set on the admin Usage sources page ("Providers in the usage bars"), one switch per provider (the usual two, what the bars last showed, and anything already hidden) |
+| `usage.hidden_providers` | Providers the usage bars leave out, such as `["codex"]` (#11753). **Display only**: `GET /api/v1/usage/windows` drops their accounts and names them in `hidden_providers`, so the web strip's "not connected" rows leave them out too, while nodes and gateways are still read and the scheduler's capacity view (below) still counts them. Names are lowercase (`^[a-z0-9][a-z0-9_-]{0,31}$`, at most 16). `agy` and `antigravity` both select Antigravity. Set on the admin Usage sources page ("Providers in the usage bars"), one switch per provider (the usual two, what the bars last showed, and anything already hidden) |
 | `usage.sources[]` | At most 8. `id` is assigned by the manager (`src-…`, generated by the admin UI), `name` is the source name in the sidebar (at most 40 characters), `type` is `relay` / `relay_key` / `generic` (or `extension`, "Usage extensions"), `url` is an http(s) address (no username or password in it), `key` is sent as `Authorization: Bearer` (required for both relay types: a management key for `relay`, an ordinary API key for `relay_key`), `enabled: false` disables this one |
 
 The admin UI (`/admin/usage`, `docs/operations/admin.md`) adds, edits, deletes, toggles and has "Test connection"; changes take effect immediately with no restart. If you edit `manager.json` by hand, the manager adopts the version on disk the next time this page is opened.
@@ -265,11 +269,12 @@ User decision: the hub is only a communication center, and computers belong to t
 
 ## UI (web)
 
-- **Bottom of the sidebar**: one thin bar each for the two fullest accounts (name, percentage of the fullest window), warning color at ≥ 80%; out-of-date ones fade; the hover tooltip shows the source. **With no data the whole block is not drawn**, and the sidebar looks as before.
+- **Bottom of the sidebar**: one thin bar each for the two fullest accounts (name, percentage of the fullest window), warning color at ≥ 80%; out-of-date ones fade; the hover tooltip shows the source. **With no data the whole block is not drawn**, and the sidebar looks as before. Users can optionally pin one or more live accounts from the popover to stay visible in the collapsed strip (browser-local `localStorage`, display-only, with one-click **Reset to automatic** and automatic fallback when all pinned accounts are unavailable; #12418).
+  Accounts tied at the displayed whole percentage are ordered by provider ID and then by row ID.
 - **Opened**: one row per window per account: window length (5h / 7d), percent used, a bar, the reset countdown, a pace hint; the sample time ("12 seconds ago") sits right of the account title.
   The line under the account title gives the plan and sources ("MacBook · Relay"); per-model windows show the model name next to the length; when the gateway cannot read, a one-line explanation (see "Account-pool gateways"). Esc or clicking elsewhere closes it.
 - **Reset countdown**: under 1 hour reads `Resets in 45m`; within today, the time `Resets at 13:05`; longer, `Resets in 2d 3h`, or `Resets in 5d` when no hours are left over (never `5d 0h`). Each language writes its own units: Chinese and Japanese spell out minutes, hours and days as words rather than the letters m / h / d.
-- **Pace** (`pace` in `lib/usage-windows.ts`): the window length is read from the label (`5h`, `7d`, falling back to `window_minutes`); expected progress = elapsed time / window length.
+- **Pace** (`pace` in `lib/usage-pace.ts`) uses the window length from the label (`5h`, `7d`, falling back to `window_minutes`). Expected progress is elapsed time divided by the window length.
   More than 5 percentage points above expected is "Ahead of pace", more than 5 below is "Behind pace", nothing in between; a tick on the bar marks the expected position.
   No judgment and no tick in the first 5% of a window (in the first few minutes, using even a little counts as "ahead").
   No judgment and no tick for an out-of-date account either (`accountPace`; iOS `UsageWindows.pace(_:stale:now:)`, Android `pace(w, now, stale)`, #12411): an old reading says nothing about how fast the window is used now, so its numbers and reset stay, faded and dated, without a verdict.
@@ -303,7 +308,7 @@ Same rules as the web (pure functions in `apple/Packages/PersonaWire/Sources/Per
 
 ## Limitations
 
-- Claude's usage requires the user to wire up the status line (above); otherwise only Codex shows.
+- Without the status line (above), Claude's usage comes only from the conversations Persona runs on Claude Code (the main chat and other assistant conversations), from their first reply on; interactive Agents and sessions outside Persona need the status line. A stream sample turns out of date like any other 30 minutes after the last reply.
 - Codex rollout fallback numbers update when Codex is used. The sample time in the UI shows how old they are.
 - After the manager restarts (it restarts along with the hub), the last answers of machines that have gone offline are lost until they come back online and are asked again; the gateway's last answer is also in memory, so after a restart the sidebar lacks its accounts until the first round (within seconds) reads them.
 - **The different window types have not been verified against a real relay** (no gateway is running on this dev machine): the adapter follows the first connected relay's public API documentation (account read views, access control);

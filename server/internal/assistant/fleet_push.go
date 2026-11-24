@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -342,8 +343,20 @@ func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings)
 		return
 	}
 	place := s.pushPlace(machine, sess)
-	redact := s.trackPolicy(context.Background(), spaceOf(sess)).Redact
-	head, text := doneAlertIn(s.lang(context.Background()), sess, redact)
+	// Decided once on the words the push would carry (exitPolicy), for the push and its Feishu card alike.
+	bg, l, space := context.Background(), s.lang(context.Background()), spaceOf(sess)
+	head, text := doneAlertIn(l, sess, false)
+	if report && strings.HasPrefix(head, "⚠️") && s.briefOf(id) != nil && !s.trackPolicy(bg, space).Redact {
+		return // the scheduled-run watcher sends the one fixed-facts fallback, not this model error
+	}
+	redact := s.exitPolicy(bg, head+"\n"+text, id, space).Redact
+	if redact {
+		if floor, _ := s.trackFloor(bg, space); slices.Contains(floor, categoryHealth) {
+			head, text = doneAlertIn(l, sess, true) // as the health space always said
+		} else {
+			head, text = s.redactedNotice(bg, l, space)
+		}
+	}
 	if report && strings.HasPrefix(head, "⚠️") && s.briefOf(id) != nil {
 		return // the scheduled-run watcher sends the one fixed-facts fallback, not this model error
 	}
@@ -358,7 +371,7 @@ func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings)
 		Body: text, TookMS: took.Milliseconds(), LongMS: long.Milliseconds()})
 	// The same finished turn's one Feishu card (#4674); the sender re-checks the pushes switch and the conversations
 	// with their own Feishu path (main, scheduled task, health).
-	go s.feishuAgentDone(machine, sess, head, text, place)
+	go s.feishuAgentDone(machine, sess, head, text, place, redact)
 	// And the topic of the todo this agent works on, if it has one (the same decision again, not a second one).
 	s.threadAgentDone(machine, sess)
 }
@@ -523,24 +536,35 @@ func (s *Service) notifyInteraction(ix proto.Interaction, machine string, covere
 func (s *Service) notifyInteractionAt(ix proto.Interaction, machine string, covered bool, level, key string) {
 	n := Notification{Kind: assistantwire.NotifyInput, DeviceID: ix.MachineID, Subtitle: machine, SessionID: ix.SessionID,
 		Interaction: &ix, Level: level, RelatedKey: key}
+	src := s.inputCardSource(ix, level != "" || key != "") // a level or key: ask_route rang it (card_layers.go)
 	if !covered || s.devs == nil {
-		s.deliver(n)
+		s.deliverCard(src, n)
 		return
 	}
 	go func() {
 		n.LinkCovered = s.devs.LinkRang(s.runCtx(), ix.ID, linkRangWait)
-		s.deliver(n)
+		s.deliverCard(src, n)
 	}()
 }
 
 // deliver has the hub deliver a push the manager decided on (notify.request), off the caller's way.
-func (s *Service) deliver(n Notification) {
+func (s *Service) deliver(n Notification) { s.deliverCard("", n) }
+
+// deliverCard is deliver of a push made at source (card_layers.go); "" counts a finished turn's push as agent_done
+// and any other as untagged.
+func (s *Service) deliverCard(source string, n Notification) {
 	if n.ID == "" {
 		n.ID = "ntf_" + randomHex(8)
+	}
+	if source == "" && n.Kind == assistantwire.NotifyDone {
+		source = cardAgentDone
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		// Off the caller's way, no lock of theirs is held: the owner may be read from the to-dos.
+		s.noteCardOwner(ctx, source, s.supervisingOwner(ctx, n))
+		s.capTrackPush(ctx, &n) // a track's push_cap (track_attention.go); never a card's
 		if _, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
 			s.logf("assistant: push: %v", err)
 		}

@@ -74,17 +74,37 @@ type PlanTask struct {
 	Speed              string `json:"speed,omitempty"`
 	Tier               string `json:"tier,omitempty"`
 	Permission         string `json:"permission,omitempty"`
+	// StartPermission is the effective mode of the last started assignment, not a caller choice. It lets task_spawn
+	// recover that mode when an older node omits the live parent permission.
+	StartPermission string `json:"start_permission,omitempty"`
+	// CallerPermission is the permission the caller actually named: empty when it named none, before the card or a
+	// start settles Permission. Nil is an opaque legacy row whose Permission is retained rather than guessing its source.
+	// The hub owns this pointer; tool input cannot set it directly.
+	CallerPermission *string `json:"caller_permission,omitempty"`
+	// RetryFromAgent and RetryFromAllowAll describe the failed start's actual agent. They are hub-owned, refreshed for
+	// every retry, and persisted so queueing or a cross-machine reroute cannot reinterpret a machine-local launcher name.
+	RetryFromAgent    string `json:"retry_from_agent,omitempty"`
+	RetryFromAllowAll bool   `json:"retry_from_allow_all,omitempty"`
 	// Ultracode: the agent starts with Claude Code's ultracode on (#12). A pointer so that an edit from the card can
 	// turn it off, and one from a client that does not know it keeps the assistant's choice.
 	Ultracode *bool `json:"ultracode,omitempty"`
 	Readonly  bool  `json:"readonly,omitempty"`
 	// UserRequested: the user asked for this very task in the turn that planned it (#2559); with
 	// assistant.start_requested_tasks on it starts without the card's "Start".
-	UserRequested bool   `json:"user_requested,omitempty"`
-	Why           string `json:"why,omitempty"`
+	UserRequested bool `json:"user_requested,omitempty"`
+	// OwnerStep: the task spends money (money), speaks outward as the owner (outward) or takes an irreversible step
+	// they have not agreed to (irreversible), as the planner says; "" for none. Any of them keeps the plan waiting for
+	// the owner's Start even when its supervisor releases it (task_plan, decision rights).
+	OwnerStep string `json:"owner_step,omitempty"`
+	Why       string `json:"why,omitempty"`
 	// OwnerStarted: the owner tapped Start on the plan's card (POST …/start), as against the hub starting it without
 	// asking; the hub's, never what a tool call or an edit says. What a suggested rule counts (rule_suggest.go, #4929).
 	OwnerStarted bool `json:"owner_started,omitempty"`
+	// MemoryTopic: the categories the plan's words were tagged with when they made it wait for the owner's Start
+	// (task_plan's confirmation decision, #13532): a start carries a sensitive memory entry only when it is OwnerStarted
+	// and this carries every one of the entry's categories (memory_handoff.go). The hub's: set when the plan is made,
+	// never what a tool call or an edit says.
+	MemoryTopic []string `json:"memory_topic,omitempty"`
 	// CloseTabOnAccept is set only by the owner's Start request.
 	CloseTabOnAccept   bool               `json:"close_tab_on_accept,omitempty"`
 	TerminalTarget     taskTerminalTarget `json:"terminal_target,omitzero"`
@@ -123,8 +143,8 @@ type PlanTask struct {
 	// StartedWhy: why the assistant starts this on its own, when the owner did not just ask for it.
 	StartedWhy string     `json:"started_why,omitempty"`
 	Brief      *TaskBrief `json:"brief,omitempty"`
-	// Supervisor: the legacy task_plan supervisor input (#3608), retained in saved plans so pre-#5732 leader-plan
-	// tasks can be told apart from the manual-Agent exception. It no longer chooses the supervisor of new work.
+	// Supervisor: optional initial direction lead chosen by main. Otherwise a planning lead supervises its own
+	// work and ordinary conversations use main. The durable task ledger takes precedence after a transfer.
 	Supervisor string `json:"supervisor,omitempty"`
 	// ReuseTodo: the todo this task runs on instead of a new one (task_plan's todo_id, #5279): one this conversation
 	// opened that has no agent yet, such as the todo a Lark topic opened (feishu_thread_open.go). Checked when the
@@ -144,6 +164,9 @@ type PlanTask struct {
 	// Project: the knowledge-base project the task's todo goes in (#2581, todo_project.go), checked and kept as its slug
 	// when the plan is made; "" for none.
 	Project string `json:"project,omitempty"`
+	// SkipProjectMemory omits the automatic project/direction handoff for this start only. It is persisted so queued
+	// starts, retries and reloads keep the caller's choice; the assignment and to-do decisions are unaffected (#13538).
+	SkipProjectMemory bool `json:"skip_project_memory,omitempty"`
 	// Attachments: pictures and files the user gave the assistant for this task, by their paths on AttachFrom, the
 	// assistant's computer (#2437, attachments.go); Mentioned: those of them the prompt names by path without listing
 	// them. Checked when the plan is made; copied to the task's computer when it starts. AttachFrom and Mentioned are
@@ -193,8 +216,10 @@ type PlanTask struct {
 	rememberKind bool
 	// task_spawn preserves the caller's mode instead of applying a fresh task's Claude-family permission default.
 	preservePermission bool
-	// A spawned session can inherit a known launcher default even when agent.new configures another model.
-	launcherDefaultModel bool
+	// LauncherDefaultModel selects the launcher's own model instead of a matching Agents binding. It is hub-owned:
+	// task_spawn sets it for an explicitly empty parent model, and a launcher-only retry override sets it too. Its
+	// absence on a legacy plan keeps that row's opaque launch unchanged.
+	LauncherDefaultModel bool `json:"launcher_default_model,omitempty"`
 	// planFirst: start defaults asked for the self-planning constraint in the prompt (start_defaults.go); never
 	// serialized, this try only.
 	planFirst bool
@@ -442,7 +467,15 @@ func planFromRow(row db.TaskPlanRow) *TaskPlan {
 }
 
 // movePlan moves p from state from to its State with its Tasks; false when someone else moved it first.
-func (s *Service) movePlan(ctx context.Context, p *TaskPlan, from string) (bool, error) {
+func (s *Service) movePlan(ctx context.Context, p *TaskPlan, from string) (moved bool, err error) {
+	if from == planOpen && p.State != planOpen {
+		// the card is decided (started, not started, withdrawn): its push leaves the phones it went to (planPushOver)
+		defer func() {
+			if moved && err == nil {
+				s.planPushOver(p.ID)
+			}
+		}()
+	}
 	p.UpdatedAt = time.Now().UTC()
 	st := s.store()
 	if st == nil {

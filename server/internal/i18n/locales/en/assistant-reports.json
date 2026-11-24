@@ -1,4 +1,5 @@
 {
+  "manual_terminal_resume": "Open the Agent’s terminal and use Resume there. The decision is still open.",
   "title": "Task progress: {n}",
   "title_needs": "{n} need your call",
   "tag_report": "Report",

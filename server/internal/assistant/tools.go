@@ -19,6 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -35,16 +36,16 @@ import (
 
 // toolNames are the tools only assistant conversations get; their descriptions and schemas are in prompts/mcp
 // (docs/assistant/prompts.md).
-var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "schedule_followup", "schedule_routine", "schedule_state_set", "delete_routine", "list_followups",
+var toolNames = []string{"resource_status", "ask_user", "notify_user", "supervision_finish", "schedule_followup", "schedule_routine", "schedule_state_set", "delete_routine", "list_followups",
 	"cancel_followup", "list_places", "save_place", "machines_list", "machine_redeploy", "agents_list", "agent_read", "agent_send", "agent_switch", "agents_switch", "agent_interrupt", "agent_start", "agent_supervise", "agent_transfer", "agent_archive", "agent_unarchive", "agent_autoname", "agent_autoname_receipt", "interaction_answer", "ask_escalate", "inbox_suggest", "inbox_draft",
 	"inbox_folders", "inbox_move", "inbox_post", "kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run", "skill_import",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"repositories_list", "repository_get", "repository_add", "view_show", "view_update", "view_get",
-	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
+	"conversations_list", "conversations_switch", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
 	"conversation_tags_set",
 	"conversation_new", "conversation_send", "task_plan", "task_plan_withdraw", "task_review", "task_scope", "task_decided", "task_start_screen", "task_start_keys", "task_retry",
 	"todo_workspace", "todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add", "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
-	"direction_name", "leader_progress", "decision_record", "decisions_query"}
+	"direction_name", "leader_progress", "decision_record", "decisions_query", "health_intake"}
 
 // Tools are the assistant's tools (assistant.tools).
 func (s *Service) Tools(ctx context.Context) []proto.Tool {
@@ -57,6 +58,7 @@ func (s *Service) Tools(ctx context.Context) []proto.Tool {
 	if s.urgentOn(ctx) {
 		tools = append(tools, toolsNamed([]string{"urgent_call"})...)
 	}
+	tools = append(tools, s.moduleTools()...)
 	return localizedMCPTools(append(tools, s.knowledgeFolderTools(ctx)...), s.toolLanguage(ctx))
 }
 
@@ -90,6 +92,8 @@ func (s *Service) tool(ctx context.Context, call ToolCall) proto.ToolResult {
 		return res // a meeting's batch started this turn: only reading tools (meeting_turns.go)
 	}
 	switch call.Name {
+	case "resource_status", "resource_acquire", "resource_get", "resource_renew", "resource_release", "resource_cancel":
+		return s.resourceTool(ctx, call.MachineID, call.SessionID, call.Name, args)
 	case "persona_settings":
 		return s.toolPersonaSettings(ctx, call, args) // settings_tool.go
 	case "task_plan", "agent_start", "conversation_new":
@@ -137,6 +141,9 @@ func (s *Service) appTool(ctx context.Context, app string, call ToolCall, args j
 }
 
 func (s *Service) runTool(ctx context.Context, machine, self, name string, args json.RawMessage) (string, error) {
+	if name == "health_intake" && s.agentCallerSpace(ctx, machine, self) != SpaceHealth {
+		return "", errors.New("health_intake is only available in a known Health conversation")
+	}
 	// What is said in a space stays there (docs/assistant/health.md "How directories and memory are isolated"): a space
 	// whose policy says so writes nothing to the knowledge base, nor changes or starts what is imported into it
 	// (kb_history_status only reads).
@@ -151,6 +158,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 	switch name {
 	case "decision_record", "decisions_query":
 		return s.toolEntries(ctx, machine, self, name, args)
+	case spaceStateTool: // a space track's conversations only (track_space_md.go)
+		return s.toolSpaceStateUpdate(ctx, machine, self, args)
+	case "health_intake":
+		return s.toolHealthIntake(ctx, args)
 	case "repository_add":
 		return s.toolRepositoryAdd(ctx, machine, self, args)
 	case "repositories_list", "repository_get":
@@ -183,10 +194,19 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		res, err := s.toolTaskReview(ctx, self, args) // supervise_review.go
 		if err == nil {
 			var a struct {
-				Verdict string `json:"verdict"`
+				TodoID    string `json:"todo_id"`
+				Verdict   string `json:"verdict"`
+				UserCheck bool   `json:"user_check"`
 			}
-			if json.Unmarshal(args, &a) == nil && (a.Verdict == reviewAccepted || a.Verdict == reviewNeedsUser) {
-				s.promoteSupervision(self)
+			if json.Unmarshal(args, &a) == nil {
+				if a.Verdict == reviewAccepted && s.quietInternalAcceptedReview(ctx, a.TodoID, a.UserCheck) {
+					message := res + ` This internal accepted conclusion stays in Background activity. Finish this supervision wake-up with supervision_finish visibility="silent".`
+					body, marshalErr := json.Marshal(map[string]any{"background": true, "message": message})
+					return string(body), marshalErr
+				}
+				if a.Verdict == reviewAccepted || a.Verdict == reviewNeedsUser {
+					s.promoteSupervision(self)
+				}
 			}
 		}
 		return res, err
@@ -211,6 +231,15 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		return s.toolKnowledgeFolder(ctx, name, args)
 	case "kb_search", "kb_list", "kb_get", "kb_update":
+		// What kb_update writes carries its own categories (info_use.go exitPolicy): a sensitive text is not written
+		// either, judged once the update is valid and about to be written.
+		ctx = withKBWriteCheck(ctx, func(text string) error {
+			if space, _ := s.selfSpace(ctx, self); s.exitPolicy(ctx, text, self, space).NoKBWrite {
+				return errors.New("this isn't written to the knowledge base: it carries sensitive information, which stays in " +
+					"its conversation and memory. Nothing was saved")
+			}
+			return nil
+		})
 		return s.toolKB(ctx, name, args)
 	case "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume":
 		return s.historyTools().Call(ctx, name, args) // kbhistory/tools.go
@@ -259,12 +288,16 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			// which the meeting page shows.
 			return justMeNotice(s.lang(ctx)), nil
 		}
-		if s.selfPolicy(ctx, self).Redact { // the lock screen and the channels hear there is news, not what it is (health.go)
-			a.Title, a.Body = spaceNotice(s.lang(ctx))
+		// The lock screen and the channels hear there is news, not what it is (health.go): decided once, for the push and
+		// its copies alike.
+		space, _ := s.selfSpace(ctx, self)
+		if s.exitPolicy(ctx, a.Title+"\n"+a.Body, self, space).Redact {
+			a.Title, a.Body = s.redactedNotice(ctx, s.lang(ctx), space)
 		}
-		// Asked for explicitly: every device, the Feishu bot too, and no separate push when this turn ends.
-		res, err := s.pushResult(ctx, Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body,
-			Asked: true, Level: a.PushLevel, RelatedKey: clip(strings.TrimSpace(a.RelatedKey), 200)})
+		// Asked for explicitly: every device, the Feishu bot too, and no separate push when this turn ends. pushResult holds
+		// it to its track's push_cap (track_attention.go), and the track tells immersive mode where it is from.
+		res, err := s.pushResult(withCard(ctx, cardNotifyUser), Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body,
+			Asked: true, Level: a.PushLevel, RelatedKey: clip(strings.TrimSpace(a.RelatedKey), 200), Track: space})
 		if err != nil {
 			return "", err
 		}
@@ -285,6 +318,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolUrgentCall(ctx, machine, self, args) // urgent_call_tool.go
 	case "conversations_list":
 		return s.toolConversationsList(ctx, self, args)
+	case "conversations_switch":
+		return s.toolConversationsSwitch(ctx, machine, self, args)
 	case "conversation_read":
 		return s.toolConversationRead(ctx, self, args)
 	case "conversation_rename":
@@ -434,10 +469,14 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if resume != "" { // the phone says it resumes the agent, and why
 			summary = s.resumeNote(ctx, c, am, resume) + "\n\n" + a.Text
 		}
-		if ok, err := s.confirmOutbound(ctx, machine, self, name, summary, args); err != nil {
+		words := a.Text // the words the agent gets: the text, and a task's title and done_when
+		if a.Task != nil {
+			words = strings.Join(append([]string{a.Task.Title, a.Text}, a.Task.DoneWhen...), "\n\n")
+		}
+		if ok, outcome, err := s.confirmOutbound(ctx, machine, self, name, words, summary, args); err != nil {
 			return "", err
 		} else if !ok {
-			return "The user declined on the phone: nothing was sent to that agent.", nil
+			return outboundNotDone(outcome, "The user declined on the phone: nothing was sent to that agent.", "nothing was sent to that agent"), nil
 		}
 		var task *handedTask
 		if a.Task != nil {
@@ -589,16 +628,17 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", waitErr
 		}
 		var a struct {
-			Machine        string `json:"machine"`
-			Cwd            string `json:"cwd"`
-			Prompt         string `json:"prompt"`
-			Launcher       string `json:"launcher"`
-			Model          string `json:"model"`
-			Effort         string `json:"effort"`
-			Speed          string `json:"speed"`
-			PermissionMode string `json:"permission_mode"`
-			Tier           string `json:"tier"`
-			Worktree       struct {
+			Machine           string `json:"machine"`
+			Cwd               string `json:"cwd"`
+			Prompt            string `json:"prompt"`
+			SkipProjectMemory bool   `json:"skip_project_memory"`
+			Launcher          string `json:"launcher"`
+			Model             string `json:"model"`
+			Effort            string `json:"effort"`
+			Speed             string `json:"speed"`
+			PermissionMode    string `json:"permission_mode"`
+			Tier              string `json:"tier"`
+			Worktree          struct {
 				Branch string `json:"branch"`
 			} `json:"worktree"`
 			Ultracode bool `json:"ultracode"`
@@ -634,7 +674,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if assistantWorkspace(am, a.Cwd) {
 			return "", i18n.Err("rpc-errors.agent_assistant_workspace")
 		}
-		own := startPick{launcher: strings.TrimSpace(a.Launcher), effort: strings.TrimSpace(a.Effort), speed: strings.TrimSpace(a.Speed), permission: a.PermissionMode} // before the tier
+		own := startPick{launcher: strings.TrimSpace(a.Launcher), model: a.Model, effort: strings.TrimSpace(a.Effort), speed: strings.TrimSpace(a.Speed), permission: a.PermissionMode} // before the tier
 		// The tier is resolved first (an unknown one asks and starts nothing), then Model Settings' Agents laid over it as
 		// the start lays it: what runs is said on the card (a hand-off from a space that confirms what leaves it asks) and in the answer.
 		tier := strings.TrimSpace(a.Tier)
@@ -727,10 +767,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if a.Ultracode {
 			where += " · ultracode"
 		}
-		if ok, err := s.confirmOutbound(ctx, machine, self, name, where+"\n\n"+a.Prompt, withoutSecretEnv(args)); err != nil {
+		if ok, outcome, err := s.confirmOutbound(ctx, machine, self, name, a.Prompt, where+"\n\n"+a.Prompt, withoutSecretEnv(args)); err != nil {
 			return "", err
 		} else if !ok {
-			return "The user declined on the phone: no agent was started.", nil
+			return outboundNotDone(outcome, "The user declined on the phone: no agent was started.", "no agent was started"), nil
 		}
 		var res struct {
 			Session proto.Session `json:"session"`
@@ -742,10 +782,13 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// conversation's turn and given agentStartTimeout instead of the old 100s.
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartTimeout)
 		defer cancel()
-		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820).
+		// The tab is named from the prompt as written; unless this start opts out, its project's background goes before it (#2820).
 		title := s.tabName(sctx, a.Prompt)
 		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed, "permission_mode": a.PermissionMode, "tab_name": title, "title": title}
-		prompt := s.withProjectContext(sctx, am.ID, a.Cwd, self, a.Prompt)
+		prompt := a.Prompt
+		if !a.SkipProjectMemory {
+			prompt = s.withProjectContext(sctx, am.ID, a.Cwd, self, a.Prompt)
+		}
 		if a.Ultracode {
 			params["ultracode"] = true
 		}
@@ -850,6 +893,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("the task could not be recorded; no agent was started")
 		}
 		params["creation_id"], params["incarnation"] = task.ID, "start_"+randomHex(8)
+		// The to-do is there before the start, so the Agent's model requests name it from their first one: the headers are
+		// fixed when the Agent starts, and linking it to the to-do afterwards does not reach them.
+		params["model_source"] = planModelSource(PlanTask{TodoID: task.ID})
 		failBeforeStart := func(reason string) {
 			// The card already exists: every definite no-start exit must close it as a failed start, not leave an
 			// open task with no Agent and no explanation (#5732). Unknown start results are handled below instead.
@@ -942,6 +988,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		warning := agentStartTaskWarning(closedDuringStart, linkErr)
 		return finish(fmt.Sprintf("Started on %s in %s: session %s, a task of this conversation (its card is in the conversation; "+
 			"%s).%s", am.Name, a.Cwd, res.Session.SessionID, told, note) + warning), nil
+	}
+	if out, err, ok := s.runModuleTool(ctx, machine, self, name, args); ok {
+		return out, err
 	}
 	return "", fmt.Errorf("unknown tool %s", name)
 }
@@ -1290,6 +1339,8 @@ func (s *Service) ask(ctx context.Context, ix proto.Interaction) (proto.Resoluti
 	resume := pushMCPInteraction(ctx, ix)
 	defer resume()
 	ix = s.ownCard(ctx, ix)
+	s.cardAsks.Store(ix.ID, cmp.Or(cardSourceOf(ctx), ownCardSource(ix))) // what its push is counted as (card_layers.go)
+	defer s.cardAsks.Delete(ix.ID)
 	q := &question{ix: ix, answer: make(chan proto.Resolution, 1)}
 	if ix.ToolName == "ask_user" && ix.Kind == proto.IxQuestion {
 		q.release = make(chan struct{})
@@ -1563,12 +1614,16 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		}
 		session := ix.SessionID
 		source := [2]string{ix.MachineID, session}
-		isFolded := ix.FoldedUnder != "" && ix.FoldedUnder != session
+		targetMachine := ix.MachineID
+		isFolded := ix.FoldedUnder != "" && (ix.FoldedUnder != session || (ix.FoldedUnderMachineID != "" && ix.FoldedUnderMachineID != ix.MachineID))
 		if isFolded {
 			folded[source] = false // include a folded card only after checking its own session
 			session = ix.FoldedUnder
+			if ix.FoldedUnderMachineID != "" {
+				targetMachine = ix.FoldedUnderMachineID
+			}
 		}
-		k := [2]string{ix.MachineID, session}
+		k := [2]string{targetMachine, session}
 		// The id goes after the clip: a long request must not cut it off, or interaction_answer has nothing to answer.
 		id := " (interaction_id=" + ix.ID + ")"
 		pending[k] = append(pending[k], pendingCard{clip(what, max(400-utf8.RuneCountInString(id), 1)) + id, isFolded, source})
@@ -1606,7 +1661,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 					folded[source] = true
 				}
 			}
-			if c.Assistant || c.FoldedUnder() != "" || s.isBackgroundSession(ctx, c.SessionID) {
+			if c.Assistant || c.FoldedUnder() != "" || c.IsSubagent || c.IsCodexSubagent() || s.isBackgroundSession(ctx, c.SessionID) {
 				continue
 			}
 			c.State = c.FoldedState()
@@ -1644,6 +1699,31 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 				}
 			}
 			rows = append(rows, row{m, c})
+		}
+	}
+	// When machine filtering skipped a cross-machine child's machine, verify folded approvals
+	// belonging to included parent rows so agents_list(machine=<parent>) keeps their interaction_ids.
+	if machine != "" && wanted && len(folded) > 0 {
+		needMachines := map[string]bool{}
+		for _, r := range rows {
+			for _, p := range pending[[2]string{r.m.ID, r.c.SessionID}] {
+				if p.folded && !folded[p.source] && p.source[0] != want.ID {
+					needMachines[p.source[0]] = true
+				}
+			}
+		}
+		for childMid := range needMachines {
+			list, _, _ := s.sessionsMuted(ctx, childMid)
+			for _, c := range list {
+				if c.HiddenByDirectory() || c.IsDeleted() || runSpace(c) != space {
+					continue
+				}
+				if source := [2]string{childMid, c.SessionID}; c.FoldedUnder() != "" {
+					if _, tracked := folded[source]; tracked {
+						folded[source] = true
+					}
+				}
+			}
 		}
 	}
 	order := map[string]int{proto.StateNeedsYou: 0, proto.StateWorking: 1, proto.StateUnread: 2, proto.StateIdle: 3}
@@ -1688,6 +1768,12 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		} else if c.TurnErrorKind == proto.TurnErrorUsageLimit && c.TurnError != "" {
 			b.WriteString(" · usage_limit")
 		}
+		if upstreamRow(c) { // stalled on an exhausted upstream pool or consecutive 5xx turns (fleet_upstream.go, #13372)
+			b.WriteString(" · upstream_unavailable")
+			if n := s.upstreamAttempts(r.m.ID, c); n >= upstreamStallAfter {
+				fmt.Fprintf(&b, " attempts=%d", n)
+			}
+		}
 		if !c.UpdatedAt.IsZero() {
 			fmt.Fprintf(&b, " · %s", ago(c.UpdatedAt))
 		}
@@ -1720,6 +1806,9 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		}
 		if c.AwaitsReply && c.Asks != "" {
 			fmt.Fprintf(&b, "    在问你、还没回：%s\n", c.Asks) // i18n-ignore: agents_list output for the model, as the lines around it
+		}
+		if upstreamRow(c) {
+			fmt.Fprintf(&b, "    上游异常：%s\n", clip(oneLine(c.TurnError), 300)) // i18n-ignore: agents_list output for the model, as the lines around it
 		}
 		// Why it waits, while it does (a dialog's first line, a host's reason), as the apps' rows show it; else its last words.
 		if last := c.LastText; c.State == proto.StateNeedsYou && strings.TrimSpace(c.AttentionReason) != "" {
@@ -1787,22 +1876,78 @@ func silentRow(c proto.Session) bool {
 	return c.TurnError != "" && proto.SilentTurnKind(c.TurnErrorKind) && (c.State == proto.StateUnread || c.State == proto.StateIdle)
 }
 
-// agentsListState is c's state as agents_list filters and sorts it: a silentRow is needs_you, as the snapshot groups it
-// (snapshotAgentGroup), never "done, not seen".
+// upstreamRow: c stopped on an exhausted upstream account pool or >= 2 consecutive no-work upstream 5xx turns (#13372):
+// surfaced in agents_list and the live snapshot while keeping wire State and TurnErrorKind unchanged.
+func upstreamRow(c proto.Session) bool {
+	return c.TurnError != "" && c.TurnErrorCode == proto.TurnErrorUpstreamUnavailable &&
+		(c.State == proto.StateUnread || c.State == proto.StateIdle)
+}
+
+// agentsListState is c's state as agents_list filters and sorts it: a silentRow or upstreamRow is needs_you, as the
+// snapshot groups it (snapshotAgentGroup), never "done, not seen" or hidden under idle.
 func agentsListState(c proto.Session) string {
-	if silentRow(c) {
+	if silentRow(c) || upstreamRow(c) {
 		return proto.StateNeedsYou
 	}
 	return c.State
 }
 
-// agentsListLabel is how agents_list names c's state: as the apps' rows do, a silentRow as what it is.
+// agentsListLabel is how agents_list names c's state: as the apps' rows do, a silentRow or upstreamRow as what it is.
 func agentsListLabel(c proto.Session) string {
 	switch {
+	case upstreamRow(c):
+		return "上游不可用" // i18n-ignore: agents_list output for the model, as the lines around it
 	case !silentRow(c):
 		return stateNames[c.State]
 	case c.TurnErrorKind == proto.TurnErrorStopped:
 		return "被停下了，没做完" // i18n-ignore: agents_list output for the model, as the lines around it
 	}
 	return "中断了，没做完" // i18n-ignore: agents_list output for the model, as the lines around it
+}
+
+// kbUpdateText is the words a kb_update writes (names, notes, summaries, log lines, profile items), not its ids, links
+// or settings.
+func kbUpdateText(args json.RawMessage) string {
+	var u kbwire.Update
+	if json.Unmarshal(args, &u) != nil {
+		return ""
+	}
+	parts := []string{u.Name, u.Status, u.Goal, u.MyRole, u.Note, u.Summary, u.Log}
+	if u.Pinned != nil {
+		parts = append(parts, *u.Pinned)
+	}
+	parts = append(parts, u.Aliases...)
+	parts = append(parts, u.Tags...)
+	if p := u.Profile; p != nil {
+		for _, items := range [][]kbwire.ProfileItem{p.Facts, p.Views, p.Inferences} {
+			for _, it := range items {
+				parts = append(parts, it.Text, it.Basis)
+			}
+		}
+		for _, c := range p.Commitments {
+			parts = append(parts, c.Text)
+		}
+	}
+	var b strings.Builder
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			b.WriteString(p)
+			b.WriteByte('\n')
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// kbWriteCheckKey carries what a knowledge-base write from a conversation is checked against (withKBWriteCheck).
+type kbWriteCheckKey struct{}
+
+// withKBWriteCheck gives toolKB the check of the words a kb_update writes, for the conversation that calls it.
+func withKBWriteCheck(ctx context.Context, check func(text string) error) context.Context {
+	return context.WithValue(ctx, kbWriteCheckKey{}, check)
+}
+
+// kbWriteCheckOf is the check withKBWriteCheck gave ctx, nil for none.
+func kbWriteCheckOf(ctx context.Context) func(text string) error {
+	check, _ := ctx.Value(kbWriteCheckKey{}).(func(text string) error)
+	return check
 }
