@@ -87,6 +87,8 @@ type fakeHub struct {
 	itemsFail      int                          // session.items fails this many more times (then recovers)
 	itemsFailPlain int                          // one-turn completion reads without lazy_images fail this many times
 	items          []proto.Item                 // session.items answers this
+	sentItems      map[string][]proto.Item      // user transcript items written by successful assistant.send calls, by session_id
+	omitSentItems  bool                         // suppress sentItems writes to simulate RPC success without a transcript item
 	page           func(turns int) []proto.Item // when set, session.items answers with this instead (a real transcript's PageTurns)
 	pageTurns      bool                         // and only the last n turns of it to "turns": n, as the node does (else all of it)
 	itemsPage      int                          // > 0: session.items with after_seq pages them by seq, this many a page
@@ -127,6 +129,7 @@ type fakeHub struct {
 	failStart    error
 	refuseUltra  error            // session.start's answer to a start that asks for ultracode (a node refusing it, #3596)
 	refuseGoal   error            // session.start's answer to a start that carries a goal (a node too old for it)
+	refuseHost   map[string]error // session.start's answer to a start naming that host (a node whose Antigravity companion went away)
 	startFailed  string           // the StartError of the sessions session.start answers (the launcher failed in its new tab)
 	worktrees    []map[string]any // worktree.prepare / worktree.create params, {"method": …} added
 	failWorktree error            // worktree.create's answer when set
@@ -502,6 +505,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			return json.Marshal(map[string]any{"items": page, "more_after": more})
 		}
 		items := f.items
+		if sid, _ := a["session_id"].(string); sid != "" && len(f.sentItems[sid]) > 0 {
+			items = append(slices.Clone(items), f.sentItems[sid]...)
+		}
 		if n, _ := a["turns"].(float64); f.pageTurns && n > 0 {
 			items = lastTurns(items, int(n))
 		}
@@ -694,6 +700,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if g, _ := a["goal"].(string); f.refuseGoal != nil && g != "" {
 			return nil, f.refuseGoal
 		}
+		if h, _ := a["host"].(string); f.refuseHost[h] != nil {
+			return nil, f.refuseHost[h]
+		}
 		if f.onStart != nil {
 			f.onStart(f, a) // the node changes state (for example its session list) while handling this start
 		}
@@ -783,6 +792,22 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		out := map[string]any{"session_id": id}
 		if f.assistantAnswer != nil {
 			maps.Copy(out, f.assistantAnswer(a))
+		}
+		if !f.omitSentItems && a[holdPushesParam] == true {
+			if text, _ := a["text"].(string); text != "" {
+				target, _ := out["session_id"].(string)
+				if target == "" {
+					target = id
+				}
+				if f.sentItems == nil {
+					f.sentItems = map[string][]proto.Item{}
+				}
+				item := proto.Item{Seq: len(f.sentItems[target]) + 1, Role: "user", Kind: proto.KindText, Text: text, TS: time.Now()}
+				if cid, _ := a["client_msg_id"].(string); cid != "" {
+					item.ClientMsgID = cid
+				}
+				f.sentItems[target] = append(f.sentItems[target], item)
+			}
 		}
 		return json.Marshal(out)
 	}
