@@ -75,11 +75,13 @@ func (s *Service) todoFactsOf(ctx context.Context, list []listedTodo) []projecti
 	}
 	cards := s.todoRunCards(want)
 	loc := s.location(ctx)
+	todosV2 := s.settings(ctx).todosV2On()
 	facts := make([]projection.Facts, len(list))
 	for i := range list {
 		t := &list[i]
 		linked := hasParkInteractionLink(t.Supervision)
 		facts[i] = projectionFacts(*t, sessions, loc)
+		facts[i].TodosV2 = todosV2
 		if t.DoneAt != nil && t.StartError == "" {
 			continue
 		}

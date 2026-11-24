@@ -500,7 +500,14 @@ Each client documents its side in its own platform doc; these are pointers only.
   `docs/apple/ios.md`, "Modules" (#13849).
 - **Android** (#13433): `:core:moduleapi` and `:module:<id>`. See `docs/android/` (written with #13433).
 - **Web** (#13434, #13846): the module host `web/src/core/module-host.ts` and `web/src/modules/<id>/`, serving routes,
-  sidebar entries, chat slots, Settings categories and card renderers. See `docs/web/web.md` ("Modules").
+  sidebar entries, chat slots, Settings categories and card renderers. Shipped module switches are lasting browser
+  preferences in Settings › General › Optional features. The form reads the registry and the browser stores disabled
+  module ids in `persona.modules.off`. A core-only build has no module switches. See `docs/web/web.md` ("Modules").
+
+Web Labs admits temporary trials or a choice between stable and new implementations of one capability. A trial keeps
+the stable default and a lossless rollback, and links a tracking issue with a plan to graduate or remove it. Put
+permanent browser and advanced preferences in their owning Settings category. Keep irreversible changes, internal
+debug controls and placeholder demos out of Labs. See `docs/web/web.md` ("Labs").
 
 **Hub flags.** Every client switches modules on the hub's hello the same way (agreed on #13844): a module's `feature`
 is `module.<id>`; a hub that publishes module flags also announces the marker `modules`; a module with a `feature` is

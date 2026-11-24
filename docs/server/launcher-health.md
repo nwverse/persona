@@ -26,6 +26,8 @@ runtime errors. Shell launchers, managed launchers and older runtimes keep their
   Runtime launchers (DSH, agy and others, whose `source` is the runtime's id) are not checked, with one exception (#10369): the main chat's launcher and the Agents' default launcher.
   While one of those has a failing record on a computer that lists it (`failing`, `repairing` or `blocked` within 6 hours, or a usage limit in force), the round checks it there like any launcher (once per interval, through the runtime's own `launchers.check`, as the on-demand probe below already does), and so does `POST /api/v1/launchers/health/check`; a failure updates the record's check time, a pass clears it.
   A runtime launcher of theirs that passed, or never failed there, is not checked again, so no runtime spends a request each interval; its record stays while the computer lists the launcher. Before, nothing rechecked such a record (a round dropped it instead, as a launcher the computer does not have), so the main chat's readiness could stay in setup for up to 6 hours after the cause was fixed.
+  Asked for by name (`POST /api/v1/launchers/health/check?machine=<id>&launcher=<name>`, the alert sheet's **Test again**), any runtime launcher the computer lists is checked, whatever its record says and whoever runs on it (#14534): a person asked for that one request. Before, a runtime launcher that was neither the main chat's nor the Agents' got no check and an empty answer, so a failure a start had recorded stayed until it went stale.
+  A check drops only the records of launchers the computer no longer lists (its whole list, not just the ones that run checks), so checking one launcher never erases another's record.
   The desktop apps' launchers (`claude_desktop`, `codex_app`), whose check runs no prompt, are never checked.
 - A failed Agent start is recorded too: when `agent_start`, a task plan starting an Agent (`startTaskAgent`) or a repair Agent's start gets an error from `session.start`, it is recorded as a failure (source `start`),
   and a check runs right away to confirm (one network blip should not leave a launcher unavailable; if the check passes, it recovers).
@@ -123,7 +125,7 @@ Nothing is ever taken away by a failure. "No new information" means the fold cha
 | `upstream` | Explicit upstream account-pool exhaustion (`no eligible upstream`, `no other eligible account`, `upstream attempt budget`, #13372), matched before `model_route` even when the message also names the requested model | None, however many in a row: nothing on the computer is broken |
 | `model_route` | `Bare Claude model name`, `cannot be routed`, `no account match`, model does not exist / not supported | Repair Agent (reconfigure the gateway's model) |
 | `auth` | 401 / 403, `invalid … api key`, `authentication_error`, `Not logged in`, expired token | Repair Agent (reconfigure the gateway's key) |
-| `cli_outdated` | `unknown option`, asks to upgrade / version too old / no longer supported | First the node upgrades itself (`claude update`); if that fails, a repair Agent |
+| `cli_outdated` | `unknown option`, a JSON-RPC `Method not found` (a CLI older than a method its runtime calls), asks to upgrade / version too old / no longer supported | First the node upgrades itself (`claude update`); if that fails, a repair Agent |
 | `timeout` | `context deadline exceeded`, no answer within 150 seconds (twice: a timed-out check is asked again at once) | Counts only after two in a row; handed to a repair Agent |
 | `other` | Everything else | Same: repaired only after two in a row |
 | `not_in_terminal` | A start's new terminal tab could not run the launcher or its claude (`launcher_missing` / `claude_missing` with `where: "terminal"`, #1642, `docs/integrations/launchers.md` "The terminal's shell is another environment") | None: `blocked` at once, the reason says to define the launcher where the terminal's shell reads it or add it as a model provider |
@@ -177,6 +179,7 @@ Every new Agent is now held to what its target computer can start before anythin
 
 ## Automatic repair
 
+- Only launchers covered by the periodic check are eligible for automatic repair. The latest failure must still be in effect. Other listed runtime launchers keep their records for inspection and can be checked with **Test again**.
 - One repair round per computer at a time (several launchers on one computer usually share one cause: the gateway config is broken and every launcher returns 400); at most two repairs per round, then it is recorded as `blocked` and waits for a person.
   Blocked launchers are still retested at the normal interval and recover on their own when they pass.
 - **Upgrade the CLI**: the node's `launchers.repair {name, action: "upgrade_cli"}` does only a fixed thing: for Claude launchers it runs `claude update` (login shell, 5-minute timeout);
@@ -206,16 +209,18 @@ set `default` if you want it to wait for your approval at every step. Member hub
 ## API for the board
 
 - `GET /api/v1/launchers/health?state=blocked&machine=`: all records (or filtered by state or computer), `{records: [{machine, launcher, state, kind, error, checked_at, source, fails, missing_fails?, repair?, blocked_reason?, resets_at?, limit_models?, limit_resets?}]}`.
-- `POST /api/v1/launchers/health/check?machine=&launcher=`: check right now (without parameters, all online computers), returns this run's results.
+- `POST /api/v1/launchers/health/check?machine=&launcher=`: check right now (without parameters, all online computers), returns this run's results. With no record in the answer for the launcher it asked about (the computer is offline, or no longer lists it), the web alert sheet reads `GET /api/v1/launchers/health` again, so it shows what the hub holds now.
 - A state change broadcasts a `launcher_health` event (`{type, record}`, only to connected clients, not a push).
   The "decisions / blocked / progress" board reads `state=blocked` records, or subscribes to this event, to list what is blocked.
 
 ## In the App
 
 Decided with the user (2026-11-11): the two model lists offer only what works now, so a launcher whose latest check failed is not listed at all (#4437). Earlier (#1643) the clients grayed out a `blocked` launcher with the reason and kept it selectable.
+Decided with the owner (2026-11-24, #14535): New Agent still does not offer such a launcher, but no longer leaves it missing. It comes in the answer's `unavailable` (code `launcher_unhealthy`) with a reason in the request's language: the failure's class on that computer (key or sign-in rejected, gateway can't use the model, CLI too old, no answer, usage limit, no gateway account free, first-run setup, else failed its last check) and the record's line, clipped to one short line. The clients already draw `unavailable` after the launchers, grayed with its reason and How to fix (the provider's page, whose Test availability clears the record), and never pick it, so a person can tell a failing launcher from one the computer does not have. The main chat's list is unchanged.
 
 - **New Agent** (iOS / Mac / visionOS `LauncherPicker` in `NewChatView`, web `NewAgent.tsx`) and the main chat's launcher menu both read `GET /api/v1/machines/{mid}/launchers`, which now leaves out a launcher whose latest check failed on that computer
   (a `failing`, `repairing` or `blocked` record within 6 hours, a usage limit until its reset) — the same records that route starts elsewhere. `failing` and `repairing` used to be offered; they are hidden too now.
+  For New Agent (`purpose` empty or `agent.new`) the launchers left out come back in `unavailable` with why (#14535, above), never in both lists; the presets that name them stay out.
   A launcher that was never checked stays: no result is not a failure, and the periodic checks are off unless the manager turns them on.
 - It comes back with a passing check on that computer (a periodic round when those are on, or **Test availability**), or when the record stops counting: the failure is older than 6 hours, or a usage limit's reset has passed.
   A successful start does not clear these: `recordStartSuccess` only clears `not_in_terminal`.
