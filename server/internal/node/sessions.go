@@ -112,7 +112,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		viaBotmux := pane.Kind == host.Botmux
 		if viaBotmux {
 			if h, ok := n.hosts.Get(host.Botmux).(*botmuxHost); ok {
-				s.BotmuxExternalTrigger = h.externalTriggerNotice()
+				s.SetBotmuxExternalTrigger(h.externalTriggerNotice())
 				h.refreshCapsAsync(pane.ID)
 			}
 		}

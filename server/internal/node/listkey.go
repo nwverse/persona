@@ -86,12 +86,12 @@ func listKeySized(list []proto.Session, size int) string {
 		w.quote(s.FailureReason, '/')
 		w.str(s.ExternalURL, '\n')
 		// A topic dispatched or a session's chat known: the todos follow it at once.
-		if s.Chat != "" || len(s.Dispatched) > 0 || s.BotmuxExternalTrigger {
+		if s.Chat != "" || len(s.Dispatched) > 0 || s.BotmuxExternalTrigger() {
 			w.b.WriteString("botmux:")
 			w.str(s.Chat, '/')
 			w.str(s.Topic, '/')
 			w.quotes(s.Dispatched)
-			if s.BotmuxExternalTrigger {
+			if s.BotmuxExternalTrigger() {
 				w.b.WriteString("/ext")
 			}
 			w.b.WriteByte('\n')

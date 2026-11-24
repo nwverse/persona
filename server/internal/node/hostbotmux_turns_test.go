@@ -152,7 +152,7 @@ func TestBotmuxSessionListRefreshesExpiredCapabilities(t *testing.T) {
 	notice := func() bool {
 		for _, row := range n.sessionList(ctx, false) {
 			if row.SessionID == sidA {
-				return row.BotmuxExternalTrigger
+				return row.BotmuxExternalTrigger()
 			}
 		}
 		t.Fatal("BotMux session missing from the list")
@@ -897,7 +897,8 @@ func bmxMustJSON(v any) json.RawMessage {
 
 func TestBotmuxListKeyIncludesExternalTrigger(t *testing.T) {
 	a := []proto.Session{{SessionID: sidA, PaneID: "botmux:" + sidA, UpdatedAt: time.Unix(100, 0)}}
-	b := []proto.Session{{SessionID: sidA, PaneID: "botmux:" + sidA, UpdatedAt: time.Unix(100, 0), BotmuxExternalTrigger: true}}
+	b := []proto.Session{{SessionID: sidA, PaneID: "botmux:" + sidA, UpdatedAt: time.Unix(100, 0)}}
+	b[0].SetBotmuxExternalTrigger(true)
 	if listKey(a) == listKey(b) {
 		t.Fatal("listKey must change when BotmuxExternalTrigger toggles")
 	}

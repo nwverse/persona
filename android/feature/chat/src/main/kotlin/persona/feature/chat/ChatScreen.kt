@@ -814,7 +814,10 @@ private fun ChatPage(
     }
     val turnModelActions = if (turnFix != TurnErrorFix.ModelRoute) null else when {
         ownModelPicker -> TurnErrorModelActions(openPicker = { openModelRoutePicker = true }, clearPick = clearModelAction,
-            clearLabel = if (session?.sessionId == chrome.mainConversation) R.string.chat_modelpill_follow_default else R.string.chat_modelpill_undo_pick)
+            clearLabel = if (session != null && (session.sessionId == chrome.mainConversation ||
+                session.sessionId in chrome.leaderConversations || session.origin == "task")) {
+                R.string.chat_modelpill_follow_default
+            } else R.string.chat_modelpill_undo_pick)
         fixModel != null -> TurnErrorModelActions(
             openPicker = { fixModel(persona.core.designsystem.ReadinessActionId.PickModel) }, clearPick = clearModelAction)
         else -> null
@@ -991,6 +994,7 @@ private fun ChatPage(
                         }, terminal, { if (task) taskOverlay = it else stackOverlay = it }, linkVisible = linkVisible,
                             folds = requestFolds,
                             blockedReason = if (canApprove) null else approvalBlockedReason(res, session),
+                            answerSession = session,
                             terminalHelp = canTerminal, onDiscardLocal = interactionController::discard, keyboard = keyboard,
                             labels = if (task) taskAsk?.let { mapOf(it.card.id to it.label) }.orEmpty() else emptyMap(),
                             first = if (task) null else chrome.requestId, counted = !task, suggestion = ruleLine,
@@ -1237,6 +1241,16 @@ private fun ChatPage(
                                         else -> null
                                     },
                                     modeHint = if (glass) null else chatModeHint(session, includeModes = modeSheet),
+                                    // Brief and Board share one wrapping row for the launcher and mode chips; Glass's pill does its work (#5055).
+                                    hintChips = if (!glass && renderStyle == ChatRenderStyle.Assistant && chrome.assistantManagement != null &&
+                                        !readOnly && (canSend || turnFix == TurnErrorFix.ModelRoute)) ({
+                                        ConversationLauncherChip(chrome.assistantManagement, key.machineId, key.sessionId, session?.launcher,
+                                            conversationLauncher, conversationModel, openRequested = openModes || openModelRoutePicker,
+                                            onOpenHandled = { openModes = false; openModelRoutePicker = false }) { launcher, model ->
+                                            conversationLauncher = launcher
+                                            conversationModel = model
+                                        }
+                                    }) else null,
                                     // The model pill (#5055, the web's ModelPill): Glass's, in an Agent's chat and a Persona chat.
                                     modelPill = if (!glass || switchSession == null) null else ({ width ->
                                         val online = connection == null || connection == ConnectionState.Online
@@ -1261,19 +1275,17 @@ private fun ChatPage(
                                             onEffort = { effort -> controls.run(switchSession, ChatAction.Modes(effort = effort)) },
                                             openRequested = openModes || openModelRoutePicker,
                                             onOpenHandled = { openModes = false; openModelRoutePicker = false },
-                                            clearRequested = clearModelPick, onClearHandled = { clearModelPick = false })
+                                            clearRequested = clearModelPick, onClearHandled = { clearModelPick = false },
+                                            leaderConversations = chrome.leaderConversations,
+                                            onSwitched = {
+                                                scope.launch {
+                                                    try { sessions.refresh() }
+                                                    catch (cancelled: CancellationException) { throw cancelled }
+                                                    catch (_: Exception) { }
+                                                }
+                                            })
                                     }),
                                     accessory = {
-                                        // Brief and Board keep the launcher chip; Glass's pill does its work (#5055).
-                                        if (!glass && renderStyle == ChatRenderStyle.Assistant && chrome.assistantManagement != null &&
-                                            !readOnly && (canSend || turnFix == TurnErrorFix.ModelRoute)) {
-                                            ConversationLauncherChip(chrome.assistantManagement, key.machineId, key.sessionId, session?.launcher,
-                                                conversationLauncher, conversationModel, openRequested = openModes || openModelRoutePicker,
-                                                onOpenHandled = { openModes = false; openModelRoutePicker = false }) { launcher, model ->
-                                                conversationLauncher = launcher
-                                                conversationModel = model
-                                            }
-                                        }
                                         if (linkContexts.isEmpty()) ComposerSuggestion(session, composer, onSend = { text -> send(text) })
                                         // One line each while the link card peeks: the whole cards left no room for the composer.
                                         if (linkContexts.isNotEmpty()) ComposerContextCards(linkContexts, compact = linkInset.value > 0f) { removed ->

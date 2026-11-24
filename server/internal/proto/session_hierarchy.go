@@ -104,6 +104,11 @@ type SessionHierarchy struct {
 	// "context_breakdown" wire key.
 	ContextBreakdown *ContextBreakdown `json:"context_breakdown,omitempty"`
 	Deleted          bool              `json:"deleted,omitempty"` // Permanent manager tombstone; use Session.IsDeleted/SetDeleted.
+	// BotmuxExternalTrigger: on a botmux session whose botmux instance was probed and does not advertise ownerActor
+	// (an older botmux without GET /api/sessions/:id/turns or without actor:"owner"), sends go through the untrusted
+	// external-event trigger; clients show a one-line notice in the composer. Stored here so ordinary Session rows
+	// stay inside their 1,536-byte allocation size class; encoded as top-level "botmux_external_trigger".
+	BotmuxExternalTrigger bool `json:"botmux_external_trigger,omitempty"`
 }
 
 // ContextBreakdown returns the session's structured context window breakdown, or nil when unavailable.
@@ -198,7 +203,22 @@ func (h *SessionHierarchy) empty() bool {
 		h.FoldedUnder == "" && h.FoldedUnderMachineID == "" && h.FoldedAs == "" && h.FoldedSide == "" &&
 		h.ParentMachineID == "" && h.A2ATaskID == "" && h.SubagentOrigin == "" &&
 		h.Children == nil && len(h.EngineHistory) == 0 && h.CompletedTodo == nil && len(h.Aliases) == 0 &&
-		len(h.BackgroundEnded) == 0 && h.ContextBreakdown == nil && !h.Deleted
+		len(h.BackgroundEnded) == 0 && h.ContextBreakdown == nil && !h.Deleted && !h.BotmuxExternalTrigger
+}
+
+// BotmuxExternalTrigger reports whether this botmux session's sends fall back to the untrusted external-event trigger.
+func (s *Session) BotmuxExternalTrigger() bool {
+	return s.Hierarchy != nil && s.Hierarchy.BotmuxExternalTrigger
+}
+
+// SetBotmuxExternalTrigger updates the sparse external-trigger flag without mutating shared copies of the row.
+func (s *Session) SetBotmuxExternalTrigger(v bool) {
+	if s.BotmuxExternalTrigger() == v {
+		return
+	}
+	h := s.hierarchy()
+	h.BotmuxExternalTrigger = v
+	s.setHierarchy(h)
 }
 
 // HiddenByDirectory reports the manager's directory visibility without growing every session row.
