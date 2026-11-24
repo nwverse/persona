@@ -11,6 +11,7 @@ struct AssistantModelPanelModelTests {
         var kept: ModelPick?
         var dropped = false
         var launcherError: APIError?
+        var launcherResponse: APIClient.LaunchersResponse?
         var modelErrors: [String: APIError] = [:]
         var canSwitch = false
         var switchState = APIClient.ConversationSwitchState(enabled: true, epoch: 8, supervisionRequired: nil)
@@ -39,7 +40,7 @@ struct AssistantModelPanelModelTests {
             launchers: { _, refresh in
                 recorder.launcherRefreshes.append(refresh)
                 if let error = recorder.launcherError { throw error }
-                return response
+                return recorder.launcherResponse ?? response
             },
             models: { _, launcher, refresh in
                 recorder.modelRefreshes[launcher, default: []].append(refresh)
@@ -176,6 +177,7 @@ struct AssistantModelPanelModelTests {
         #expect(recorder.segmentReads == 1 && recorder.switchRequests.count == 1)
         #expect(recorder.switchRequests.first?.launcher == "agy" && recorder.switchRequests.first?.model == "gemini")
         #expect(recorder.pillRefreshes == 1 && recorder.kept == nil)
+        #expect(recorder.launcherRefreshes == [false])
     }
 
     @Test func supervisedAgyToNativeClaudeKeepsTheExistingSwitchBehavior() async throws {
@@ -193,6 +195,7 @@ struct AssistantModelPanelModelTests {
         #expect(changed && panel.switchError == nil)
         #expect(recorder.switchRequests.first?.launcher == "claude")
         #expect(recorder.segmentReads == 1 && recorder.pillRefreshes == 1 && recorder.kept == nil)
+        #expect(recorder.launcherRefreshes == [false, true])
     }
 
     @Test func supervisionPrecheckBlocksAnIncapableAgyTargetBeforeTheSwitchWrite() async throws {
@@ -209,6 +212,7 @@ struct AssistantModelPanelModelTests {
         #expect(panel.switchError == String(localized: "This connection cannot receive separate task follow-up instructions."))
         #expect(recorder.segmentReads == 1 && recorder.switchRequests.isEmpty)
         #expect(recorder.pillRefreshes == 0 && recorder.kept == nil)
+        #expect(recorder.launcherRefreshes == [false, true])
 
         panel.cancelSwitch()
         #expect(panel.switchPick == nil && panel.switchError == nil)
@@ -228,6 +232,44 @@ struct AssistantModelPanelModelTests {
         #expect(changed && panel.switchError == nil)
         #expect(recorder.switchRequests.first?.launcher == "agy-capable")
         #expect(recorder.segmentReads == 1 && recorder.pillRefreshes == 1 && recorder.kept == nil)
+        #expect(recorder.launcherRefreshes == [false, true])
+    }
+
+    @Test func supervisionPrecheckReadsTheLatestTargetCapabilityBeforeTheFirstSwitch() async throws {
+        let recorder = Recorder()
+        recorder.canSwitch = true
+        recorder.switchState.supervisionRequired = true
+        let panel = AssistantModelPanelModel(key: key, machine: machine, deps: deps(recorder))
+        await panel.load()
+        _ = await panel.choose(launcher: "agy", model: "gemini", session: try session())
+        recorder.launcherResponse = APIClient.LaunchersResponse(
+            launchers: [Launcher(name: "agy", model: "gemini", agent: "antigravity", assistant: true,
+                                 supervisionPolicy: true, source: "agy")],
+            default: nil, unavailable: nil)
+
+        let changed = await panel.confirmSwitch(session: try session())
+
+        #expect(changed && panel.switchError == nil)
+        #expect(recorder.switchRequests.first?.launcher == "agy")
+        #expect(recorder.launcherRefreshes == [false, true])
+        #expect(recorder.segmentReads == 1 && recorder.pillRefreshes == 1 && recorder.kept == nil)
+    }
+
+    @Test func supervisionCapabilityRefreshFailureDoesNotSubmitTheSwitch() async throws {
+        let recorder = Recorder()
+        recorder.canSwitch = true
+        recorder.switchState.supervisionRequired = true
+        let panel = AssistantModelPanelModel(key: key, machine: machine, deps: deps(recorder))
+        await panel.load()
+        _ = await panel.choose(launcher: "agy-capable", model: "gemini", session: try session())
+        recorder.launcherError = APIError(status: 502, message: "capability refresh failed")
+
+        let changed = await panel.confirmSwitch(session: try session())
+
+        #expect(!changed && !panel.switchUncertain && panel.switchPick != nil)
+        #expect(panel.switchError == "capability refresh failed")
+        #expect(recorder.launcherRefreshes == [false, true])
+        #expect(recorder.segmentReads == 1 && recorder.switchRequests.isEmpty && recorder.pillRefreshes == 0)
     }
 
     @Test func uncertainSwitchRetryKeepsTheExactOperation() async throws {
@@ -245,6 +287,7 @@ struct AssistantModelPanelModelTests {
         #expect(panel.switchError?.contains("Optional(") == false)
         #expect(recorder.kept == nil && recorder.segmentReads == 1 && recorder.switchRequests.count == 1)
         #expect(recorder.pillRefreshes == 0)
+        #expect(recorder.launcherRefreshes == [false, true])
         let request = try #require(recorder.switchRequests.first)
         #expect(request.expectedEpoch == 8 && request.sourceMachineID == "box" && request.machineID == "box")
         #expect(request.launcher == "team-api" && request.model == "gpt-standard" && request.effort == "high")
@@ -255,6 +298,7 @@ struct AssistantModelPanelModelTests {
         #expect(second && panel.switchPick == nil && !panel.switchUncertain)
         #expect(recorder.switchRequests == [request, request])
         #expect(recorder.segmentReads == 1 && recorder.kept == nil && recorder.pillRefreshes == 1)
+        #expect(recorder.launcherRefreshes == [false, true])
     }
 
     @Test func aDefinitelyUndeliveredSwitchReportsTheRefusalWithoutUncertainty() async throws {
@@ -268,6 +312,7 @@ struct AssistantModelPanelModelTests {
         let changed = await panel.confirmSwitch(session: try session())
         #expect(!changed && !panel.switchUncertain && panel.switchError == "conversation changed")
         #expect(recorder.switchRequests.count == 1 && recorder.kept == nil)
+        #expect(recorder.launcherRefreshes == [false])
         panel.cancelSwitch()
         #expect(panel.switchPick == nil && panel.switchError == nil)
     }

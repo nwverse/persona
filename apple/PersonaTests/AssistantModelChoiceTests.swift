@@ -310,7 +310,7 @@ struct AssistantModelChoiceTests {
             session: runtime, target: Launcher(name: "hosted-elsewhere", model: nil, agent: "claude", source: "runtime-two")))
     }
 
-    @Test func supervisionEligibilityMirrorsWebWithoutChangingNativeClaudeOrCodex() {
+    @Test func supervisionEligibilityRequiresACapableRuntimeWithoutChangingNativeClaudeOrCodex() {
         #expect(AssistantModelChoice.launcherSupervisionPolicy(Launcher(name: "claude")))
         #expect(AssistantModelChoice.launcherSupervisionPolicy(
             Launcher(name: "codex", agent: "codex", source: "path")))
@@ -324,6 +324,10 @@ struct AssistantModelChoiceTests {
             Launcher(name: "agy", agent: "antigravity", assistant: true, source: "agy")))
         #expect(!AssistantModelChoice.launcherSupervisionPolicy(
             Launcher(name: "agy", agent: "antigravity", assistant: true, source: "path")))
+        #expect(!AssistantModelChoice.launcherSupervisionPolicy(
+            Launcher(name: "agy", agent: "antigravity", assistant: true, supervisionPolicy: true, source: "path")))
+        #expect(!AssistantModelChoice.launcherSupervisionPolicy(
+            Launcher(name: "managed-agy", agent: "antigravity", assistant: true, supervisionPolicy: true, source: "persona")))
         #expect(!AssistantModelChoice.launcherSupervisionPolicy(
             Launcher(name: "ordinary", agent: "antigravity", supervisionPolicy: true, source: "agy")))
         #expect(AssistantModelChoice.launcherSupervisionPolicy(

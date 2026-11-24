@@ -156,7 +156,7 @@ nonisolated enum AssistantModelChoice {
         let source = target.source ?? ""
         let native = source.isEmpty || ["zshrc", "path", "builtin", "persona", LegacyNames.product].contains(source)
         let agent = target.runtimeAgent ?? ""
-        if native && (agent.isEmpty || agent == "claude" || agent == "codex") { return true }
+        if native { return agent.isEmpty || agent == "claude" || agent == "codex" }
         return target.assistant == true && target.supervisionPolicy == true
     }
 
@@ -440,7 +440,8 @@ final class AssistantModelPanelModel {
                     throw APIError(status: 409, message: String(localized: "Switching connections is unavailable. Refresh the conversation and try again."))
                 }
                 if state.supervisionRequired == true {
-                    guard let target = response?.launchers.first(where: { $0.name == pick.launcher }),
+                    let latest = try await deps.launchers(machine, true)
+                    guard let target = latest.launchers.first(where: { $0.name == pick.launcher }),
                           AssistantModelChoice.launcherSupervisionPolicy(target) else {
                         throw APIError(status: 409, message: String(localized: "This connection cannot receive separate task follow-up instructions."))
                     }
