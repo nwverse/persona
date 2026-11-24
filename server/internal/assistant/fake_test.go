@@ -267,6 +267,19 @@ func (f *fakeHub) Hello(context.Context) (Hello, error) {
 	return h, nil
 }
 
+// setHello updates the hub's hello under f.mu so tests can mutate it after a
+// Service has started background work without racing against Hello.
+func (f *fakeHub) setHello(fn func(*Hello)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn(&f.hello)
+}
+
+// setLocale sets the hub hello's locale under f.mu.
+func (f *fakeHub) setLocale(locale string) {
+	f.setHello(func(h *Hello) { h.Locale = locale })
+}
+
 // deviceCallsForTest records calls made with the test's context under fakeHub.mu.
 // Background refreshes can reach the same node independently of the action under test.
 type deviceCallsForTest struct{}
@@ -1106,10 +1119,45 @@ type memStore struct {
 	puts    int
 	// failSetting: what reading a setting fails with (nil: it reads; set through setFailSetting).
 	failSetting error
-	// failPut: what writing settings fails with (nil: it writes); nothing is written then.
+	// failPut: what writing settings fails with (nil: it writes; set through setFailPut); nothing is written then.
 	failPut error
 	// failKeys: what reading one key fails with, the other keys still reading (set through failKey).
 	failKeys map[string]error
+}
+
+// rawSetting returns a cloned copy of the raw JSON bytes stored for key under m.mu.
+func (m *memStore) rawSetting(key string) ([]byte, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	raw, ok := m.vals[key]
+	if !ok {
+		return nil, false
+	}
+	return slices.Clone(raw), true
+}
+
+// setRawSetting stores raw JSON bytes directly for key under m.mu without incrementing puts (for seeding raw or corrupt JSON).
+func (m *memStore) setRawSetting(key string, raw []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.vals == nil {
+		m.vals = map[string][]byte{}
+	}
+	m.vals[key] = slices.Clone(raw)
+}
+
+// putCount returns the number of settings writes recorded under m.mu.
+func (m *memStore) putCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.puts
+}
+
+// snapshotRaw captures putCount and a cloned copy of key's stored JSON bytes atomically under m.mu.
+func (m *memStore) snapshotRaw(key string) (int, []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.puts, slices.Clone(m.vals[key])
 }
 
 // setFailSetting makes reading every setting fail with err from now on; nil reads them again. It takes the lock, as the

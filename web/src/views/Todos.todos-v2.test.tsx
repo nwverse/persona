@@ -415,4 +415,55 @@ describe("TodosView goal folding and blocker surfacing under todos_v2 (#14661)",
     expect(host.querySelector('[data-testid="todo-parent-goal"]')).toBeNull();
     expect(visibleTodoIds()).toEqual(["child_blocker", "goal_ship", "child_work", "solo_todo", "child_done"]);
   });
+
+  it("gates the detail view Target Repo / Reference Repo matrix on todos_v2 and reverts immediately when switched off", async () => {
+    const repoSet = {
+      schema_version: 1,
+      manager: "assistant",
+      todo_id: "task_agent",
+      revision: 1,
+      repositories: [
+        {
+          repo_id: "docs",
+          requested_ref: { kind: "branch", value: "docs/v2" },
+          source_snapshot: {
+            identity: { provider: "github", instance_url: "https://github.com", path: "example/docs", canonical_url: "https://github.com/example/docs" },
+            clone_url: "https://github.com/example/docs",
+            transport_origin: "canonical_default",
+            catalog_revision: 1,
+          },
+          links: [{ kind: "issue", number: "5", canonical_url: "https://github.com/example/docs/issues/5", role: "reference" }],
+        },
+        {
+          repo_id: "web",
+          requested_ref: { kind: "default" },
+          source_snapshot: {
+            identity: { provider: "github", instance_url: "https://github.com", path: "example/web", canonical_url: "https://github.com/example/web" },
+            clone_url: "https://github.com/example/web",
+            transport_origin: "canonical_default",
+            catalog_revision: 1,
+          },
+          links: [{ kind: "pull_request", number: "12", canonical_url: "https://github.com/example/web/pull/12", role: "delivery" }],
+        },
+      ],
+    };
+    api.mockImplementation(async (path: string) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/task_agent/repositories") return repoSet;
+      return {};
+    });
+
+    await render({ todos: sampleTodos, todosV2: true, selectedId: "task_agent" });
+    const matrix = host.querySelector("[data-repo-matrix]");
+    expect(matrix).toBeTruthy();
+    const rows = [...matrix!.querySelectorAll<HTMLElement>("[data-repository-row]")];
+    expect(rows.map((r) => r.dataset.repoRole)).toEqual(["target", "reference"]);
+    expect(matrix!.querySelector('[data-repo-role-badge="target"]')?.textContent).toBe(t("task-repositories.role_target"));
+    expect(matrix!.querySelector('[data-repo-role-badge="reference"]')?.textContent).toBe(t("task-repositories.role_reference"));
+
+    await act(async () => patchAssistant({ todos_v2: false }));
+    await flush();
+    expect(host.querySelector("[data-repo-matrix]")).toBeNull();
+    expect(host.querySelector("[data-repo-role-badge]")).toBeNull();
+  });
 });

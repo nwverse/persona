@@ -924,13 +924,15 @@ extension authors and integrations; this increment adds no client screen. RPC `a
 All filters are ANDed. Scope dimensions are ANDed too: `executor=any` entries match either execution audience;
 machine/project restrictions match an overlapping requested ID, or every ID if the stored list is empty. A personal
 filter never grants permission. An installed extension whose manifest declares `assistant.entries.read` and whose
-current per-extension grant includes it may read all personal entries over HTTP or RPC, regardless of source space
-or content category. The manager checks the live registry by authenticated extension ID on every request and again
-when delivering events: disabling the extension or revoking the scope takes effect without renewing its credential.
-An allowed reader may alternatively prove co-location through the same-user Node socket. Legacy full-hub permission
-alone does not opt into remote personal reads; an upgrade that first declares the scope requires fresh consent. No space or privacy-tier exclusion applies; `origin_space` and `category` are
-metadata reserved for later labeling and use-time policy. Secret input fields and automated answers are not owner
-question answers.
+current per-extension grant includes it may read personal entries over HTTP or RPC; what it is shown is then filtered
+by its extension trust and category grants (scene 6 in `docs/assistant/health.md`, #13548): an owner-trusted extension
+reads entries across every space, while a third-party extension reads only entries whose source-track floor and
+`category` values are all known and granted to it; source-track usage rules tightening `extension` apply on top. The manager checks the live
+registry by authenticated extension ID on every request and again when delivering events: disabling the extension or
+revoking the scope takes effect without renewing its credential. An allowed reader may alternatively prove co-location
+through the same-user Node socket for personal entries; co-location does not bypass category grants. Legacy full-hub
+permission alone does not opt into remote personal reads; an upgrade that first declares the scope requires fresh
+consent. Secret input fields and automated answers are not owner question answers.
 
 The response is `{entries: [...], after: "<opaque continuation>", has_more: false}`. Entries are ordered by increasing,
 server-assigned publication `at`, then `id`. Keep the filters unchanged while paging. At the end, retain `after` for
@@ -938,7 +940,7 @@ future increments; an empty result retains the incoming cursor. Source timestamp
 
 | Entry field | Type and meaning |
 | --- | --- |
-| `origin_space`, `category` | Source-space string (`""` means main) and content-category string array (`[]` means general); for example `health`, `finance`, `relationships`, `emotion`, `legal_id`; neither restricts authorized reads |
+| `origin_space`, `category` | Source-space string (`""` means main) and content-category string array (`[]` means general); for example `health`, `finance`, `relationships`, `emotion`, `legal_id`; third-party extension reads require category grants covering both the source track's default categories and every entry category |
 | `id`, `type`, `text` | Stable ID, one of the four persisted types, one-line judgment; hot state is not stored |
 | `quote` | Source wording; model-supplied quotes stay inferred until later verification |
 | `source` | `{machine, session, msg_uuid?, card_id?, file?, line?}`; original source pointer |

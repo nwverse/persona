@@ -76,6 +76,12 @@ SERVER = {
     },
     "github": {"connectors": ["github"], "routes": ["/api/v1/connectors/github/auth"]},
     "imessage": {"extensions": ["imessage"]},
+    # Lark: its parts are the bot's client (internal/botport), the lark-cli adapter (internal/cliport) and the assistant's
+    # Feishu layer (internal/larkhost), none with a route or list entry of its own. The bot's settings
+    # (/api/v1/bots/feishu) are the extension host's and answer in every build (binding and starting are what is refused
+    # without the module), and the lark-cli connector exists only where lark.cli is configured, which the test hub is not.
+    # So what the gate sees of it is its hello flag and the manager's module list. The web app gates nothing on it.
+    "lark": {},
     "mail": {"routes": ["/api/v1/mail/accounts"]},
 }
 

@@ -1707,8 +1707,18 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // off screen (SegmentView `offscreen`). Not on a touch-only screen: a script moving the view (keeping it still as one
   // is drawn) can stop a fling there.
   const touch = useMedia(NO_HOVER);
-  const drawnLast = useMemo(() => new Set(lines.filter((l) => l.kind === "segment").slice(-2).map((l) => l.id)), [lines]);
-  const offscreen = (line: ChatLine) => (!touch && line.kind === "segment" && !line.live && !drawnLast.has(line.id) ? watchSegment : undefined);
+  let drawnLastA: string | undefined;
+  let drawnLastB: string | undefined;
+  for (let i = lines.length - 1; i >= 0 && drawnLastA === undefined; i--) {
+    const line = lines[i];
+    if (line.kind !== "segment") continue;
+    if (drawnLastB === undefined) drawnLastB = line.id;
+    else drawnLastA = line.id;
+  }
+  const offscreen = useCallback(
+    (line: ChatLine) => (!touch && line.kind === "segment" && !line.live && line.id !== drawnLastA && line.id !== drawnLastB ? watchSegment : undefined),
+    [touch, drawnLastA, drawnLastB, watchSegment],
+  );
   const linesNow = useRef(lines);
   linesNow.current = lines;
   const limitOn = limitLine ? lines.reduce((id, line) => (line.kind === "apiError" ? line.id : id), "") : "";

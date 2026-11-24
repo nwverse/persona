@@ -2,6 +2,7 @@ package lark
 
 import (
 	"context"
+	"encoding/json"
 	"net/url"
 	"time"
 
@@ -73,6 +74,39 @@ type Host interface {
 	// live says it was, kept that the run is still among the channels' runs (and has ext now). SaveRuns saves them.
 	PersistRunExt(id string, state any, still func() bool, ext map[string]string) (live, kept bool)
 	SaveRuns()
+
+	// What the workbench (workbench.go) reads of the core and asks it to do.
+	WebBase(ctx context.Context) string
+	Location(ctx context.Context) *time.Location
+	// StandingNow is the standing board's clock (the home card's "updated at").
+	StandingNow() time.Time
+	ClipFallback(text string) string
+	ChatTargetLabel(ctx context.Context) string
+	// SetChatTarget makes the chat's messages go to the main conversation (main) or to a new conversation.
+	SetChatTarget(main bool)
+	WorkbenchAgents(ctx context.Context, now time.Time) (assistantwire.WorkbenchCounts, []assistantwire.WorkbenchAgent)
+	WorkbenchInbox() []assistantwire.WorkbenchItem
+	WorkbenchItem(id string) (assistantwire.WorkbenchItem, bool)
+	WorkbenchBoard(ctx context.Context, l i18n.Lang, web string, now time.Time) []assistantwire.WorkbenchBoardRow
+	SessionNames(ctx context.Context, sess proto.Session) (primary, secondary string)
+	AgentRowMarkdown(l i18n.Lang, label, secondary, machine string, sess proto.Session, last int) string
+	NextMeeting(ctx context.Context, now time.Time) *assistantwire.WorkbenchMeeting
+	Companions(ctx context.Context) []assistantwire.WorkbenchCompanion
+	TodayBody(ctx context.Context) json.RawMessage
+	SummonWorkbench(ctx context.Context)
+	WorkbenchRefresh(ctx context.Context)
+	WorkbenchBringCard(ctx context.Context, id string)
+	AgentsCard(ctx context.Context, query string) (*botcard.Card, string)
+	StartAgentCard(ctx context.Context, prompt string) *botcard.Card
+	ConversationsCard(ctx context.Context) (*botcard.Card, string)
+	TasksOverview(ctx context.Context) (cards []*botcard.Card, fallbacks []string)
+	// InboxDone files an item (dismissed: muted along with it); InboxMute mutes what is tagged tag = value in source.
+	InboxDone(ctx context.Context, id string, dismissed bool) error
+	InboxMute(ctx context.Context, source, tag, value, name string) error
+	DraftReply(ctx context.Context, id, instruction string) (string, error)
+	// ReplyInbox sends text as the owner's reply to item id, once per clientID; filed: the item was filed meanwhile
+	// and nothing was sent.
+	ReplyInbox(ctx context.Context, id, text, clientID string) (filed bool, err error)
 }
 
 // Layer is the module's assistant layer, what the core asks of it (internal/larkhost.Layer): the outbound channel port
@@ -146,3 +180,23 @@ func (l *Layer) TurnProgressAfter(r *channel.Run) time.Duration {
 	return l.turns.sink().progressAfter(r)
 }
 func (l *Layer) TurnProgressIdle() time.Duration { return l.turns.sink().progressIdle() }
+
+// WorkbenchCommand answers /home, /today and /inbox with the workbench on; false when cmd is none of them.
+func (l *Layer) WorkbenchCommand(ctx context.Context, f assistantwire.FeishuFeatures, cmd string) bool {
+	return l.turns.sink().s.workbenchCommand(ctx, f, cmd)
+}
+
+// WorkbenchNav answers a workbench button ({a: nav}).
+func (l *Layer) WorkbenchNav(ctx context.Context, a *botcard.CardAction) *botcard.CardResponse {
+	return l.turns.sink().s.workbenchNav(ctx, a)
+}
+
+// WorkbenchInboxAction answers an Inbox button of the workbench ({a: ib}).
+func (l *Layer) WorkbenchInboxAction(ctx context.Context, a *botcard.CardAction) *botcard.CardResponse {
+	return l.turns.sink().s.workbenchInboxAction(ctx, a)
+}
+
+// HomeCard is the workbench's home card; said is the card without its "updated at" note.
+func (l *Layer) HomeCard(ctx context.Context, f assistantwire.FeishuFeatures) (card *botcard.Card, fallback, said string) {
+	return l.turns.sink().s.homeCard(ctx, f)
+}

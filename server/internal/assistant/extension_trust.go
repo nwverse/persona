@@ -158,6 +158,19 @@ func (s *Service) extensionHidesConversation(ctx context.Context, c proto.Sessio
 	return usage(info, sceneExtension, readerGrant(ctx)) == usageDeny
 }
 
+// extensionHidesEntryWith decides whether an extension with grant is hidden from ledger entry e, combining its source
+// track's floor and usage rules (base) with the entry's own categories (scene 6, #13548).
+func extensionHidesEntryWith(grant extensionGrant, base infoUse, e proto.AssistantEntry) bool {
+	cats, catsKnown := normalCategories(append(slices.Clone(base.Categories), e.Category...))
+	info := infoUse{
+		Categories:  cats,
+		Known:       base.Known && catsKnown,
+		SourceTrack: base.SourceTrack,
+		Rules:       base.Rules,
+	}
+	return usage(info, sceneExtension, grant) == usageDeny
+}
+
 // extensionReaderRequest is r with the reading extension's grant in its context, when an extension's token sent it
 // (the hub's headers: a client's own are dropped on the way).
 func (s *Service) extensionReaderRequest(r *http.Request) *http.Request {
