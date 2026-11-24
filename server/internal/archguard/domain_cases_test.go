@@ -274,6 +274,7 @@ func TestDomainLists(t *testing.T) {
 		"import \"os\"\n\nvar a, b int\n\nfunc since(name string) bool { return os.Getenv(name) == \"\" }\n", 1)})
 	v = judge(t, swapped, "", edges, baseline, nil)
 	if len(v.Failures) != 1 || !strings.Contains(v.Failures[0], "RULE core-import internal/tokenuse/tokenuse.go imports os") ||
+		!strings.Contains(v.Failures[0], "\"Domain model\". If the import only moved here with its package and legacy_edges.txt lists it under the old path, python3 scripts/test/name_freezes.py moves carries its line.") ||
 		len(v.Notices) != 1 || !strings.Contains(v.Notices[0], "imports time no longer happens") {
 		t.Errorf("a swapped legacy import: %q, %q", v.Failures, v.Notices)
 	}
@@ -288,7 +289,7 @@ func TestDomainLists(t *testing.T) {
 	fresh := map[string]string{"internal/old/old.go": "package old\n", "internal/fresh/fresh.go": "package fresh\n"}
 	v = judge(t, merged(files, fresh), "internal/gone\ninternal/old\ninternal/tokenuse\ninternal/user\ninternal/waiting #77\n", edges, baseline, nil)
 	if len(v.Failures) != 1 || !strings.Contains(v.Failures[0], "RULE layer-declared internal/fresh declares no layer") ||
-		!strings.Contains(v.Failures[0], "If the package only moved here from one undeclared.txt lists, python3 scripts/test/name_freezes.py moves carries its line.") ||
+		!strings.Contains(v.Failures[0], "Domain model\". If the package only moved here and undeclared.txt lists its old path, python3 scripts/test/name_freezes.py moves carries its line.") ||
 		len(v.Notices) != 4 {
 		t.Errorf("frozen undeclared packages: %q, %q", v.Failures, v.Notices)
 	}
@@ -332,8 +333,19 @@ func TestDomainListsGiveNoNewRoom(t *testing.T) {
 		t.Errorf("an application count line without a base: %q", v.Failures)
 	}
 	v = judge(t, seats, "", edges, own, baseOf(t, legacy, "", edges, baseline))
-	if !failing(v, "RULE app-exported-record internal/zznewapp adds an exported-field record (count 1 > 0)") {
+	if !failing(v, "domain_layers/baseline.txt line 3: internal/zznewapp app-exported-record gives room for 1, more "+
+		"than the 0 the merge base's baseline gives: a count's line only falls",
+		"RULE app-exported-record internal/zznewapp adds an exported-field record (count 1 > 0)") {
 		t.Errorf("an application count line the merge base lacks: %q", v.Failures)
+	}
+
+	// A count line raised by hand: the merge base's count holds the code, and the line itself fails, so it gives no
+	// room to a later run without a base either.
+	raised := "internal/tokenuse core-package-var 5\ninternal/tokenuse out-literal 1\n"
+	v = judge(t, legacy, "", edges, raised, baseOf(t, legacy, "", edges, baseline))
+	if !failing(v, "domain_layers/baseline.txt line 1: internal/tokenuse core-package-var gives room for 5, more than "+
+		"the 2 the merge base's baseline gives") {
+		t.Errorf("a count line raised by hand: %q", v.Failures)
 	}
 
 	// An allowance the change wrote for its own type: no room, and its line fails.
@@ -396,6 +408,11 @@ func TestDomainAllowances(t *testing.T) {
 	v = judge(t, more, "", edges, landed, baseOf(t, files, "", edges, landed))
 	if len(v.Failures) != 1 || !strings.Contains(v.Failures[0], "(count 2 > 1)") {
 		t.Errorf("a record beside an allowed type the merge base has: %q", v.Failures)
+	}
+	// Taking a landed type into its count (lower_baselines.py) keeps the room the same, so it passes with a base.
+	v = judge(t, files, "", edges, id+" 1\n"+lines, baseOf(t, files, "", edges, id+" Seat #4512\n"+lines))
+	if len(v.Failures) != 0 {
+		t.Errorf("an allowance taken into its count: %q", v.Failures)
 	}
 	// Only the counts of named types take an allowance.
 	lists := domainrules.ParseLists("", "", "", "internal/tokenuse core-package-var Seat #4512\n")
@@ -472,7 +489,8 @@ func TestDomainMoves(t *testing.T) {
 	}
 	v = judge(t, grown, "internal/modules/phone/iphonectl\n", edges,
 		"internal/modules/phone/iphonectl app-exported-record 3\ninternal/modules/phone/iphonectl app-named-primitive 1\n"+coreLines, base(moves...))
-	if !failing(v, "RULE app-exported-record internal/iphonectl, internal/modules/phone/iphonectl add an exported-field record (count 3 > 2 together)",
+	if !failing(v, "domain_layers/baseline.txt line 1: internal/modules/phone/iphonectl app-exported-record gives room for 3, more than the 2",
+		"RULE app-exported-record internal/iphonectl, internal/modules/phone/iphonectl add an exported-field record (count 3 > 2 together)",
 		"internal/iphonectl, internal/modules/phone/iphonectl app-exported-record: 3 now together, above their 2 at the merge base") {
 		t.Errorf("a move that adds a record, its line raised by hand: %q", v.Failures)
 	}
@@ -500,6 +518,7 @@ func TestDomainMoves(t *testing.T) {
 	}
 	v = judge(t, fresh, "internal/iphonectl\ninternal/zzother\n", edges, baseline+"internal/zzother app-exported-record 1\n", base())
 	if !failing(v, "domain_layers/undeclared.txt line 2: internal/zzother is not on the merge base's list",
+		"domain_layers/baseline.txt line 5: internal/zzother app-exported-record gives room for 1, more than the 0",
 		"RULE app-exported-record internal/zzother adds an exported-field record (count 1 > 0)") {
 		t.Errorf("a package that only claims a line: %q", v.Failures)
 	}

@@ -261,7 +261,8 @@ func Judge(findings []Finding, counts []Count, pkgs []*Pkg, lists Lists, base *B
 			}
 			line := f.String()
 			if f.Edge != "" {
-				line += " If the package only moved here from one undeclared.txt lists, " + movesHint + " carries its line."
+				line += ". If the package only moved here and undeclared.txt lists its old path, " + movesHint +
+					" carries its line."
 			}
 			v.Failures = append(v.Failures, line)
 		case f.Edge != "":
@@ -269,7 +270,8 @@ func Judge(findings []Finding, counts []Count, pkgs []*Pkg, lists Lists, base *B
 				usedEdges[f.Edge] = true
 				continue
 			}
-			v.Failures = append(v.Failures, f.String())
+			v.Failures = append(v.Failures, f.String()+". If the import only moved here with its package and "+
+				"legacy_edges.txt lists it under the old path, "+movesHint+" carries its line.")
 		case strict(f.Rule):
 			v.Failures = append(v.Failures, f.String())
 		default:
@@ -334,7 +336,7 @@ func Judge(findings []Finding, counts []Count, pkgs []*Pkg, lists Lists, base *B
 		}
 		if c, ok := byID[id]; ok {
 			what := c.Key + " adds " + countWhat(rule) + " (count " + itoa(n) + " > " + itoa(top) + ")"
-			v.Failures = append(v.Failures, c.Pos.Filename+":1: "+message(rule, what)+" Counted: "+
+			v.Failures = append(v.Failures, c.Pos.Filename+":1: "+message(rule, what)+". Counted: "+
 				strings.Join(c.Names, ", ")+". If its code only moved here, "+movesHint+" carries its lines.")
 			continue
 		}

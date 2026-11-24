@@ -329,8 +329,9 @@ repair worker may not edit baselines (`docs/operations/main-verification.md`), s
   refuses anyway), and only the baseline holds it. check-fast's diff mode runs the sleep ratchet with `--base` (it does not run
   the other two), and hosted CI sets `CI_BASE_SHA` for its guards job. archguard's `TestDomainLayers` reads `CI_BASE_SHA`
   itself and holds the domain counts more strictly: every count, one the merge base's baseline lacks included, may not
-  rise above its count at the merge base, and a line of its lists that the merge base's lack fails unless it followed
-  code that moved (`scripts/test/name_freezes.py moves`; `docs/server/architecture.md` "The rules and their checks").
+  rise above its count at the merge base, and a name or allowance its lists add over the merge base's, or a count line
+  raised or added so that it gives more room than there, fails unless it followed code that moved
+  (`scripts/test/name_freezes.py moves`; `docs/server/architecture.md` "The rules and their checks").
   check-fast's diff mode sets it to its merge base for the repo-wide guards, while the hosted server lane, a shallow
   clone without it, holds them to the baseline only.
 - **With no base, only the baseline holds**, so a full-tree run on `main` checks only `count > baseline`. There is no fallback to

@@ -608,9 +608,11 @@ layer), `legacy_edges.txt` (imports frozen by name, `<pkg> imports <path>`) and 
 (`legacyCores` in `server/internal/archguard/domainrules/lists.go`): a line for any other package is refused, so a
 core declared since starts at zero. A count may not rise above its line. Given a base, `TestDomainLayers` (which
 reads it from `CI_BASE_SHA`; check-fast's diff mode sets it to its merge base) also holds every count to its count at
-the merge base, a package the merge base's baseline has no line for included, and fails on any line of the three
-lists that the merge base's lists lack, so no later change adds itself to one. The server lane runs without a base,
-and there only the lines hold. A count that falls prints a notice, and `python3 scripts/ci/lower_baselines.py --only
+the merge base, a package the merge base's baseline has no line for included. It also fails on a name in
+`undeclared.txt` or `legacy_edges.txt` and an allowance that the merge base's lists lack, and on a count whose line
+and allowances give more room than the merge base's did, a raised or new line included, so no later change adds
+itself to a list or widens a line. The server lane and the `rules_test.go` hooks run without a base, and there only
+the lines hold. A count that falls prints a notice, and `python3 scripts/ci/lower_baselines.py --only
 domain-rules` lowers the lines ("Count ratchets" in `docs/operations/testing.md`). A rule marked "fails at once" takes
 no count.
 
@@ -619,8 +621,9 @@ Code that moves takes its lines along. A change that moves a package's files wit
 with `origin/main`, it puts the packages a frozen one's files went to in `undeclared.txt` in its place, renames the
 moved imports in `legacy_edges.txt`, and sets the counts of the packages files moved between to their counts now,
 provided their total has not risen; a waiting allowance of a package that is gone goes to the package most of its
-files went to. With a base, the packages files moved between are held together, their total no higher than at the
-merge base, and a list line the merge base lacks passes only as one a move carried. A move that also adds a record
+files went to. With a base, the packages files moved between are held together: their total no higher than at the
+merge base, their lines' room no more than it was, and a name the merge base's lists lack passes only as one a move
+carried. A move that also adds a record
 therefore still fails. The failures of a moved package whose lines were not carried name the command, and a legacy
 core that moves is renamed in `legacyCores` in the same change.
 

@@ -2,7 +2,8 @@
 # ratchets"): "<key> <rule> <count>", the key being the package for core-* and app-* rules and the core whose type is
 # used for out-* rules. Core, seam and out-* counts are kept only for the five legacy cores. server/internal/archguard's
 # TestDomainLayers fails when a count rises above its line (with a base, above its count at the merge base too, a
-# package without a line included) and prints a notice when one falls; lower the lines with
+# package without a line included, and when a line is raised or added: a count's lines give no more room than the
+# merge base's) and prints a notice when one falls; lower the lines with
 # python3 scripts/ci/lower_baselines.py --only domain-rules. Code that moves takes its lines along:
 # python3 scripts/test/name_freezes.py moves.
 #

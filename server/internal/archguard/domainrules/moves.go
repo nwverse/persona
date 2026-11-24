@@ -90,9 +90,11 @@ func (g groups) edgeMoved(name string) bool {
 	return g.moved(edgeDir(pkg)) || g.moved(path)
 }
 
-// added is what the lists have that the merge base's lack and no move carried: undeclared and frozen-import names, and
-// allowances. A line comes only from the change that adds a list, the day it lands; after that it is the merge base's,
-// or it followed code that moved.
+// added is what the lists have that the merge base's lack and no move carried: undeclared and frozen-import names,
+// allowances, and room in a count: a count line and the allowances beside it may give no more room than the merge
+// base's did, the packages files moved between taken together. A line comes only from the change that adds a list,
+// the day it lands; after that it is the merge base's, or it followed code that moved, and a count's room only falls
+// (lower_baselines.py taking an allowance into its count keeps it the same).
 func (b *Base) added(l Lists, g groups) []string {
 	var out []string
 	for _, e := range l.Undeclared.Entries {
@@ -115,6 +117,57 @@ func (b *Base) added(l Lists, g groups) []string {
 				") is not on the merge base's baseline: allowances were the open PRs' the day the baseline landed, "+
 				"and none is added since")
 		}
+	}
+	return append(out, b.roomRises(l, g)...)
+}
+
+// roomRises is the counts whose lines give more room than the merge base's: a count line's count plus one for each
+// allowance beside it that the merge base lists (one it does not list fails on its own), summed over the packages
+// files moved between. Without it, a raised or new count line would pass wherever a base holds the count and give
+// room wherever none does.
+func (b *Base) roomRises(l Lists, g groups) []string {
+	room := func(bl Baseline, listed func(BaselineEntry) bool) (map[string]int, map[string][]BaselineEntry, []string) {
+		total, lines := map[string]int{}, map[string][]BaselineEntry{}
+		var order []string
+		for _, e := range bl.Entries {
+			n := e.Count
+			if e.Allowance() {
+				if !listed(e) {
+					continue
+				}
+				n = 1
+			}
+			gid := g.of(e.Key) + " " + e.Rule
+			if _, ok := lines[gid]; !ok {
+				order = append(order, gid)
+			}
+			total[gid] += n
+			lines[gid] = append(lines[gid], e)
+		}
+		return total, lines, order
+	}
+	now, lines, order := room(l.Baseline, func(e BaselineEntry) bool { return b.allowsType(e, g) })
+	then, _, _ := room(b.Lists.Baseline, func(BaselineEntry) bool { return true })
+	var out []string
+	for _, gid := range order {
+		if now[gid] <= then[gid] {
+			continue
+		}
+		var at []string
+		for _, e := range lines[gid] {
+			at = append(at, itoa(e.Line))
+		}
+		_, rule, _ := strings.Cut(gid, " ")
+		var keys []string
+		for _, e := range lines[gid] {
+			if !contains(keys, e.Key) {
+				keys = append(keys, e.Key)
+			}
+		}
+		out = append(out, baselineFile+" line "+strings.Join(at, ", ")+": "+strings.Join(keys, ", ")+" "+rule+
+			" gives room for "+itoa(now[gid])+", more than the "+itoa(then[gid])+" the merge base's baseline gives: "+
+			"a count's line only falls, so put it back and fix the code its count names; code that only moved here "+
+			"carries its lines with "+movesHint)
 	}
 	return out
 }
@@ -229,7 +282,7 @@ func (b *Base) movedRises(now Measure, lists Lists, g groups, byID map[string]Co
 		keys := strings.Join(t.keys, ", ")
 		if pos != "" {
 			out = append(out, pos+":1: "+message(rule, keys+" add "+countWhat(rule)+" (count "+itoa(t.now)+" > "+
-				itoa(top)+" together)")+" Counted: "+strings.Join(counted, ", ")+".")
+				itoa(top)+" together)")+". Counted: "+strings.Join(counted, ", ")+".")
 		}
 		out = append(out, keys+" "+rule+": "+itoa(t.now)+" now together, above their "+itoa(top)+" at the merge base: "+
 			"code that moves carries its count, and the packages it moved between are held together, so the count "+
