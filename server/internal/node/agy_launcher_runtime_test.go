@@ -120,6 +120,8 @@ func TestAgyStartRoutesHerdrAndCompanion(t *testing.T) {
 		companion                      bool
 	}{
 		{name: "explicit herdr with companion", startHost: proto.EngineHerdr, model: "example-low", effort: "low", companion: true},
+		// A New Agent start with the default host keeps its pane (#10237); a task the assistant starts names the
+		// companion instead (host agy, below and TestAgyCompanionHostAwayIsRefused; assistant/start_host.go, #13447).
 		{name: "default herdr with companion", model: "example-medium", effort: "medium", companion: true},
 		{name: "herdr without companion", startHost: proto.EngineHerdr, model: "example-high", effort: "high"},
 		{name: "extra high", startHost: proto.EngineHerdr, model: "example-xhigh", effort: "xhigh"},
@@ -221,6 +223,74 @@ func TestAgyStartRoutesHerdrAndCompanion(t *testing.T) {
 				t.Fatal("companion start created a pane")
 			}
 		})
+	}
+}
+
+// A start naming the companion (host agy) while none is connected is refused with agy_companion_offline before any
+// pane opens, not the generic unknown host; the same start without the host opens its pane, as a task the hub sent to
+// the companion by itself does then (#13447). A companion that connects takes it, and once it leaves it is away again.
+func TestAgyCompanionHostAwayIsRefused(t *testing.T) {
+	n, f, home := herdrNode(t)
+	catalog, _ := fakeAgyModels(t, home)
+	writeFile(t, catalog, "local-model\tLocal Model\n")
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_input" && strings.Contains(c.String(), "HERDR_AGENT=agy") {
+			f.reply("session.snapshot", snapshot(nil, nil, []any{
+				agentOf(agyAgent, "", proto.StatusIdle, "w1:p2", "w1:t2", "w1", home, agyAgent),
+			}, nil))
+			f.setScreen("w1:p2", agyIdleScreen)
+		}
+	})
+	start := func(host string) (json.RawMessage, error) {
+		p := map[string]any{"cwd": home, "launcher": agyAgent, "workspace_id": "w1", "async": true}
+		if host != "" {
+			p["host"] = host
+		}
+		return nodeCall(t, n, "session.start", p)
+	}
+	if _, err := start(proto.HostAgy); refusalCode(err) != proto.CodeAgyCompanionOffline {
+		t.Fatalf("terminal-less start with no companion: %v, want %s", err, proto.CodeAgyCompanionOffline)
+	}
+	if len(f.trace("tab.create")) != 0 || len(f.trace("pane.send_input")) != 0 {
+		t.Fatal("a refused terminal-less start reached herdr")
+	}
+	res, err := start("")
+	var started struct{ Session proto.Session }
+	if err != nil || json.Unmarshal(res, &started) != nil || started.Session.PaneID != "w1:p2" {
+		t.Fatalf("the same start in the default host = %s, %v", res, err)
+	}
+
+	n.logger = log.New(io.Discard, "", 0)
+	n.runtimeSock = filepath.Join(filepath.Dir(f.sock), "runtime.sock")
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	if _, err := n.listenRuntimeSocket(ctx); err != nil {
+		t.Fatal(err)
+	}
+	hello := assistantRuntimeHello()
+	hello["runtime"], hello["agent"], hello["launcher"] = agyAgent, agyAgent, agyAgent
+	hello["launchers"] = []map[string]any{{"name": agyAgent, "agent": agyAgent}}
+	companion := dialRuntime(t, n, hello)
+	companion.mu.Lock()
+	companion.answer = func(method string, _ json.RawMessage) (any, error) {
+		if method == "session.start" {
+			return map[string]any{"session": proto.Session{SessionID: "agy-companion", Cwd: home, Status: proto.StatusIdle}}, nil
+		}
+		return map[string]any{"ok": true}, nil
+	}
+	companion.mu.Unlock()
+	if res, err := start(proto.HostAgy); err != nil || !strings.Contains(string(res), "agy-companion") {
+		t.Fatalf("terminal-less start with the companion connected = %s, %v", res, err)
+	}
+	_ = companion.conn.Close()
+	waitFor(t, "the companion gone", func() bool { return !n.agyRuntimeConnected() })
+	if _, err := start(proto.HostAgy); refusalCode(err) != proto.CodeAgyCompanionOffline {
+		t.Fatalf("terminal-less start after the companion left: %v", err)
+	}
+	if len(f.trace("tab.create")) != 1 {
+		t.Fatalf("panes opened: %d, want only the default host's one", len(f.trace("tab.create")))
 	}
 }
 
