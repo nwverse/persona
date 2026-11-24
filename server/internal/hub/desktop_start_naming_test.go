@@ -15,15 +15,19 @@ import (
 
 // A start in Claude's desktop app (#13728): the hub waits on no tab name for it (the session has no terminal tab), and
 // once the node has answered, session.start_ended carries the new session, its placeholder title and what it is named
-// from, for the manager to name it off the start's path.
+// from (the start of the first message), for the manager to name it off the start's path.
 func TestADesktopStartReportsItsSessionForNaming(t *testing.T) {
 	const first = "用中文工作，最后用中文汇报。帮我修复 PDF 导出时丢失图片的问题"
+	long := first + strings.Repeat("。补充说明", assistantwire.StartedNameFromRunes)
 	for _, tc := range []struct {
-		name, body string
+		name, body, nameFrom string
 	}{
-		{"desktop launcher picked", `{"machine_id":"machine","cwd":"/code/report","launcher":"claude-desktop","prompt":` + quote(first) + `}`},
+		{"desktop launcher picked", `{"machine_id":"machine","cwd":"/code/report","launcher":"claude-desktop","prompt":` + quote(first) + `}`, first},
 		// The app sends async with no launcher; the manager resolves Models › Agents' default, the desktop app's.
-		{"desktop launcher by default", `{"machine_id":"machine","cwd":"/code/report","async":true,"prompt":` + quote(first) + `}`},
+		{"desktop launcher by default", `{"machine_id":"machine","cwd":"/code/report","async":true,"prompt":` + quote(first) + `}`, first},
+		// A long first message is named from its start: no more of it goes over the bus again.
+		{"long first message", `{"machine_id":"machine","cwd":"/code/report","launcher":"claude-desktop","prompt":` + quote(long) + `}`,
+			string([]rune(long)[:assistantwire.StartedNameFromRunes])},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newTestHub(t)
@@ -42,6 +46,7 @@ func TestADesktopStartReportsItsSessionForNaming(t *testing.T) {
 			h.devices.assign = map[string]string{m.cfg.ID: m.owner}
 			h.devices.assignRead = true
 			tabNames := make(chan string, 4)
+			nameFrom := make(chan string, 1)
 			manager := connectGuardManager(t, h, srv.URL, m.owner, func(method string, raw json.RawMessage) (any, error) {
 				switch method {
 				case assistantwire.MethodAgentStartParams:
@@ -49,6 +54,7 @@ func TestADesktopStartReportsItsSessionForNaming(t *testing.T) {
 					if err := json.Unmarshal(raw, &in); err != nil {
 						return nil, err
 					}
+					nameFrom <- in.NameFrom
 					in.Params["launcher"] = "claude-desktop"
 					return map[string]any{"params": in.Params}, nil
 				case assistantwire.MethodAgentTabName:
@@ -75,6 +81,9 @@ func TestADesktopStartReportsItsSessionForNaming(t *testing.T) {
 				t.Fatalf("the desktop start waited for a tab name: %s", raw)
 			default:
 			}
+			if got := <-nameFrom; got != "" {
+				t.Fatalf("the manager was asked for a tab name from %q", got)
+			}
 			var event struct {
 				OK      bool `json:"ok"`
 				Started *struct {
@@ -91,7 +100,7 @@ func TestADesktopStartReportsItsSessionForNaming(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("no session.start_ended")
 			}
-			if !event.OK || event.Started == nil || event.Started.SessionID != "created" || event.Started.Title != "report" || event.Started.NameFrom != first {
+			if !event.OK || event.Started == nil || event.Started.SessionID != "created" || event.Started.Title != "report" || event.Started.NameFrom != tc.nameFrom {
 				t.Fatalf("session.start_ended: %+v (started %+v)", event, event.Started)
 			}
 		})

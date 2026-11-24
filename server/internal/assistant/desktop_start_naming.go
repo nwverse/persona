@@ -2,17 +2,21 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // A new session in Claude's desktop app is seeded under a placeholder title, its folder's name
 // (node/claudedesktop_new.go, #13728): the app shows the title the transcript starts with, and the first message made
-// an unreadable one that said nothing of the task. Once the start has ended, the hub reports the session
-// (StartEnded.Started) and the manager names it from what the start asked, off the start's path, with the prompt, model
-// and check of every automatic Agent name (agentNameFromDialogue) and in its ledger. The name stands over the
-// placeholder in the apps' lists as a requested one does (agent_naming_request.go): nothing is typed into the session,
-// and a rename in the app or in Claude still wins.
+// an unreadable one that said nothing of the task. Once the start has ended, the hub reports the session for an app's
+// start (StartEnded.Started), and the manager's own call says it for a start the manager sent (desktopStartCalled:
+// agent_start, dispatch and the others). The manager names it from what the start asked, off the start's path, with
+// the prompt, model and check of every automatic Agent name (agentNameFromDialogue) and in its ledger. The name stands
+// over the placeholder in the apps' lists as a requested one does (agent_naming_request.go): nothing is typed into the
+// session, and a rename in the app or in Claude still wins.
 //
 // Fallback: with the automatic-naming switch off or nothing to name it from, nothing is asked; when the model is not
 // set up, fails, times out or gives no usable title, the placeholder stays (never the first message), the reason is
@@ -20,9 +24,9 @@ import (
 // share one model call with each other and with a requested name, and a session already named or renamed is not asked
 // about again.
 
-// nameDesktopStart names the desktop session an app's start made, in the background: the start was answered before.
+// nameDesktopStart names the desktop session a start made, in the background: the start was answered before.
 func (s *Service) nameDesktopStart(machine string, started StartedSession) {
-	text := strings.TrimSpace(started.NameFrom)
+	text := cutRunes(strings.TrimSpace(started.NameFrom), agentNamingFirstRunes) // what is read of it; no more is held
 	if machine == "" || started.SessionID == "" || text == "" {
 		return
 	}
@@ -73,7 +77,7 @@ func (s *Service) nameDesktopStartNow(ctx context.Context, machine, sid, seeded,
 		return agentNameResult{Title: before.Title}, nil // named or renamed already: not asked again
 	}
 	callCtx, cancel := context.WithTimeout(ctx, agentNamingTimeout)
-	title, reason := s.agentNameFromDialogue(callCtx, cutRunes(text, agentNamingFirstRunes), "")
+	title, reason := s.agentNameFromDialogue(callCtx, text, "")
 	cancel()
 	// The raw node row, as the background pass reads it: the name is kept against the native title.
 	current, found := s.rawAgentForNaming(ctx, machine, sid)
@@ -119,4 +123,36 @@ func (s *Service) nameDesktopStartNow(ctx context.Context, machine, sid, seeded,
 	s.publishSessions(machine) // decorating takes the ledger lock: published after it is released
 	s.logf("agent naming: desktop start session=%q/%q result=named", machine, sid)
 	return agentNameResult{Title: title, Changed: title != raw}, nil
+}
+
+// startsSession says a node call is session.start. Service.call reads its answer after the call; the start is its
+// caller's (start_paths_test.go).
+func startsSession(method string) bool { return method == DeviceSessionStart }
+
+// desktopStartCalled is the session a manager's session.start (params, answered res) made in Claude's desktop app, to
+// be named as one an app's start made: the hub reports only those (StartEnded.Started). Named from the name hint or
+// the prompt, as the hub does; a resume made nothing.
+func desktopStartCalled(params any, res json.RawMessage) (StartedSession, bool) {
+	p, ok := params.(map[string]any)
+	if !ok || len(res) == 0 {
+		return StartedSession{}, false
+	}
+	if resume, _ := p["resume_session_id"].(string); resume != "" {
+		return StartedSession{}, false
+	}
+	var answer struct {
+		Session struct {
+			SessionID  string `json:"session_id"`
+			Title      string `json:"title"`
+			SourceKind string `json:"source_kind"`
+		} `json:"session"`
+	}
+	if json.Unmarshal(res, &answer) != nil || answer.Session.SessionID == "" || answer.Session.SourceKind != proto.SourceClaudeDesktop {
+		return StartedSession{}, false
+	}
+	text, _ := p["prompt"].(string)
+	if hint, _ := p["name_hint"].(string); strings.TrimSpace(hint) != "" {
+		text = hint
+	}
+	return StartedSession{SessionID: answer.Session.SessionID, Title: answer.Session.Title, NameFrom: text}, true
 }

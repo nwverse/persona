@@ -90,8 +90,10 @@ share one model call. Persona's own conversations are refused.
 
 **Named after a start in Claude's desktop app (#13728).** A session the `claude-desktop` launcher starts is seeded
 under its folder's name, never its first message (`docs/integrations/claude-integration.md`, "New sessions in the
-desktop app"). When the hub's `session.start_ended` carries it (`started`), the manager names it in the background
-from the start's first message or name hint, with the same prompt, model and validity check as the background pass
+desktop app"). When the hub's `session.start_ended` carries it (`started`, an app's start), or the manager's own
+`session.start` made it (`agent_start`, `dispatch_start` and its other starts: `desktopStartCalled`), the manager names
+it in the background from the start's first message or name hint (at most 2,000 characters), with the same prompt,
+model and validity check as the background pass
 (`agentNameFromDialogue`, `desktop_start_naming.go`); the dialogue is not read, so the seed's `/rename` line cannot
 name it. The start has already been answered. The result is recorded as a requested name over the placeholder:
 it is published with `title_source: "auto"`, holds until the native title changes or the user renames the session,

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/ai"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -341,5 +343,93 @@ func TestAgentStartParamsAsksNoTabNameForTheDesktopApp(t *testing.T) {
 		NameFrom: "修登录"})
 	if err != nil || p["tab_name"] != "fix-login" || len(f.tabAsked) != 1 {
 		t.Fatalf("terminal start: %v %v (tab names asked %d)", p, err, len(f.tabAsked))
+	}
+}
+
+// A session the manager starts in Claude's desktop app itself (agent_start here; dispatch and its other starts send the
+// same session.start) is named the same way: the hub reports only an app's start, so the manager's own call does. A
+// start in a terminal, or a resume, is not.
+func TestADesktopSessionTheManagerStartsIsNamedByTheModel(t *testing.T) {
+	var naming atomic.Int32
+	var input atomic.Value
+	prompt, _ := json.Marshal(strings.TrimSpace(prompts.RenderAgentSessionName()))
+	namingPrompt := strings.Trim(string(prompt), `"`)
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			System   any `json:"system"`
+			Messages any `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if system, _ := json.Marshal(body.System); !strings.Contains(string(system), namingPrompt) {
+			namingReply(w, "fix-pdf") // agent_start's own calls (its tab name), as before
+			return
+		}
+		naming.Add(1)
+		in, _ := json.Marshal(body.Messages)
+		input.Store(string(in))
+		namingReply(w, "修复 PDF 导出丢图")
+	}))
+	t.Cleanup(model.Close)
+	f := newFakeHub()
+	f.sessions["box"] = nil
+	f.settings = &Settings{Timezone: "Asia/Shanghai"}
+	f.ownModels = true
+	f.hello.Models.AI = ai.Config{BaseURL: model.URL, APIKey: "fixture", Model: "processing"}
+	f.hello.Models.TriageAI = &ai.Config{BaseURL: model.URL, APIKey: "fixture", Model: "sorting", ReasoningEffort: "off"}
+	desktop := true
+	f.startReply = func(_ map[string]any, sess *proto.Session) *proto.StartInstead {
+		if desktop { // seeded under its folder's name, a custom title (node/claudedesktop_new.go)
+			sess.SourceKind, sess.Title, sess.TitleSource, sess.TitleManual = proto.SourceClaudeDesktop, "app", proto.TitleSourceManual, true
+		}
+		sess.Status, sess.UpdatedAt = proto.StatusWorking, time.Now()
+		f.sessions["box"] = []proto.Session{*sess} // the fake hub's lock is held
+		return nil
+	}
+	s := storelessService(t, f)
+	start := func(prompt string) proto.Session {
+		t.Helper()
+		raw, _ := json.Marshal(map[string]any{"machine": "box", "cwd": "/code/app", "prompt": prompt})
+		if _, err := s.runTool(context.Background(), "server", "conv9", "agent_start", raw); err != nil {
+			t.Fatal(err)
+		}
+		s.agentNames.runs.Wait()
+		f.mu.Lock()
+		row := f.sessions["box"][0]
+		f.mu.Unlock()
+		s.nameAgentRow("box", &row)
+		return row
+	}
+	row := start(desktopFirst)
+	if naming.Load() != 1 {
+		t.Fatalf("%d naming calls, want 1", naming.Load())
+	}
+	first, _ := json.Marshal(desktopFirst)
+	if in, _ := input.Load().(string); !strings.Contains(in, strings.Trim(string(first), `"`)) {
+		t.Fatalf("not named from the start's prompt: %s", in)
+	}
+	if row.Title != "修复 PDF 导出丢图" || row.TitleSource != proto.TitleSourceAuto {
+		t.Fatalf("listed as %q (source %q), want the model's title as an automatic name", row.Title, row.TitleSource)
+	}
+	noAgentInput(t, f)
+
+	desktop = false
+	if row := start("修登录"); naming.Load() != 1 || row.Title == "修复 PDF 导出丢图" {
+		t.Fatalf("a terminal start was named as a desktop one: %d calls, %q", naming.Load(), row.Title)
+	}
+	desktop = true
+	var res struct{}
+	if err := s.call(context.Background(), "box", DeviceSessionStart, map[string]any{"cwd": "/code/app", "resume_session_id": "s1", "prompt": "继续"}, &res); err != nil {
+		t.Fatal(err)
+	}
+	s.agentNames.runs.Wait()
+	if naming.Load() != 1 {
+		t.Fatalf("a resume was named: %d calls", naming.Load())
+	}
+}
+
+// What the hub reports is at most what the manager reads of it.
+func TestAStartedSessionCarriesWhatTheManagerReads(t *testing.T) {
+	if assistantwire.StartedNameFromRunes < agentNamingFirstRunes {
+		t.Fatalf("started sessions carry %d runes, the manager reads %d", assistantwire.StartedNameFromRunes, agentNamingFirstRunes)
 	}
 }

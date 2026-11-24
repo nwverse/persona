@@ -1000,8 +1000,8 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	params := map[string]any{}
 	_ = json.Unmarshal(raw, &params)
 	name := "" // a tab named now, before it opens; one started in the background is renamed when its name comes (below)
-	if !async && p.TabName == "" && p.ResumeSessionID == "" {
-		name = nameFrom
+	if !async && p.TabName == "" && p.ResumeSessionID == "" && p.Launcher != claudeDesktopLauncher {
+		name = nameFrom // Claude's desktop app has no tab: its session is named once the start has ended (below)
 	}
 	// The manager says what it runs on (Models › Agents, a model picked for this start) and names its tab
 	// (agents_link.go).
@@ -1114,7 +1114,8 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 		if p.ResumeSessionID == "" && res.Session.SessionID != "" && res.Session.SourceKind == proto.SourceClaudeDesktop {
 			// Seeded under a placeholder title (node/claudedesktop_new.go): the manager names it from what the start
 			// asked, off the start's path (assistant/desktop_start_naming.go, #13728).
-			started = &assistantwire.StartedSession{SessionID: res.Session.SessionID, Title: res.Session.Title, NameFrom: nameFrom}
+			started = &assistantwire.StartedSession{SessionID: res.Session.SessionID, Title: res.Session.Title,
+				NameFrom: cutNameFrom(nameFrom)}
 		}
 		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, started, nil)
 	}
@@ -1226,6 +1227,18 @@ func startBudget(async bool) time.Duration {
 
 // claudeDesktopLauncher is the node's launcher that starts a session in Claude's desktop app (node/claudedesktop_new.go).
 const claudeDesktopLauncher = "claude-desktop"
+
+// cutNameFrom is what a started session is named from: the start of it, at most assistantwire.StartedNameFromRunes.
+func cutNameFrom(s string) string {
+	n := 0
+	for i := range s {
+		if n == assistantwire.StartedNameFromRunes {
+			return s[:i]
+		}
+		n++
+	}
+	return s
+}
 
 func desktopStartLauncher(launcher string) bool {
 	return launcher == claudeDesktopLauncher || launcher == "codex-app"
