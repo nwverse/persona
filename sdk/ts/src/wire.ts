@@ -5137,6 +5137,13 @@ export type ChannelSendKind = "answer" | "note" | "ask" | "push" | (string & {})
 export const CHANNEL_SEND_KINDS = ["answer", "note", "ask", "push"] as const;
 
 /**
+ * What kind of chat a channel message came from: direct (private chat), group (regular group chat), or topic (a topic
+ * or thread inside a group).
+ */
+export type ChannelChatKind = "direct" | "group" | "topic" | (string & {});
+export const CHANNEL_CHAT_KINDS = ["direct", "group", "topic"] as const;
+
+/**
  * channel.receive: one of the owner's messages (only the owner's). Answered once the hub has it, deduplicated by id
  * and queued, not after the turn.
  */
@@ -5159,6 +5166,12 @@ export interface ChannelMessage {
   chat?: string;
   /** The topic or thread within chat, when the request came from one. */
   topic?: string;
+  /** Opaque chat or group identifier for conversation routing when integrations_v2 is enabled. */
+  chat_id?: string;
+  /** Kind of chat the message came from (direct, group, or topic), when known. */
+  chat_kind?: ChannelChatKind;
+  /** Opaque topic or thread identifier within chat_id for conversation routing when integrations_v2 is enabled. */
+  topic_id?: string;
   /**
    * Context the extension gathered for this request, such as nearby chat history. It is data, not owner-authored
    * instructions.
