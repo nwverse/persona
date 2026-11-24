@@ -18,6 +18,7 @@ vi.mock("../../ui/atoms", async (original) => ({
 
 import { t } from "../../i18n";
 import { getInbox, itemKey, itemPath, itemRequest, resetInboxForTests, unsentReplies, type InboxItem } from "../../lib/inbox";
+import { inboxReturnTo } from "../../lib/inbox-nav";
 import { DraftDialog } from "./InboxDialogs";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -75,6 +76,17 @@ afterEach(() => {
 });
 
 describe("AI reply drafts", () => {
+  it("opens the AI twin's archived conversation on its computer and keeps the item address", async () => {
+    const draft = item({ agent: { state: "drafted", draft: "Generated reply", machine_id: "remote", session_id: "inbox-chat" } });
+    history.replaceState(null, "", `/inbox/${encodeURIComponent(draft.id)}?manager=owner-a`);
+    await open(draft);
+    await click(t("inbox-inboxdialogs.view_process"));
+    expect(location.pathname + location.search).toBe("/persona/inbox-chat?machine=remote&manager=owner-a");
+    expect(inboxReturnTo(history.state)).toEqual({ id: draft.id, manager: draft.manager });
+    expect(area()).toBeNull();
+    history.replaceState(null, "", "/");
+  });
+
   it.each(["Escape", "backdrop", "close button"])("retains exact edited text after %s and reopen", async (how) => {
     await open();
     const edited = "  My edited reply\nwith a second line.  ";

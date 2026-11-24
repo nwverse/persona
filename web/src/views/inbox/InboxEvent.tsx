@@ -7,7 +7,8 @@ import {
   actOnSuggestion, canExpand, chainRows, chainTap, chainTime, firstLine, handlingFailed, handlingWord, preparing, suggestionButtons, suggestionTitle,
   type ChainEntry, type ChainTap, type InboxSuggestion,
 } from "../../lib/inbox-events";
-import { conversationRoute, getInbox, isDone, itemKey, itemPath, itemRequest, itemRoute, reloadInbox, replaceItem, sameItem, suggestionAct, uncertainReplyKey, useInbox, type InboxItem } from "../../lib/inbox";
+import { getInbox, isDone, itemKey, itemPath, itemRequest, itemRoute, reloadInbox, replaceItem, sameItem, suggestionAct, uncertainReplyKey, useInbox, type InboxItem } from "../../lib/inbox";
+import { conversationRoute, inboxConversationPage } from "../../lib/conversation-page";
 import { api, ApiError, errorText } from "../../lib/api";
 import { markdownBody, markdownInSummary, withoutMarks } from "../../lib/inbox-markdown";
 import { docChangeLine } from "../../lib/inbox-page";
@@ -34,13 +35,6 @@ import { useItemReadOnly } from "./item-write-gate";
 
 /** Where a tapped `source` entry (or "Original") opens the item's own page: at a Feishu position, a mail's uid, or a URL. */
 export type SourceAt = { position?: string; uid?: number; url?: string };
-
-/** The processing conversation's route: the assistant's conversations open in Persona, the rest as agents. */
-function useConversation(): (mid: string, sid: string) => Route {
-  const sessions = useStore((s) => s.sessions);
-  const assistant = useStore((s) => s.assistant);
-  return (mid, sid) => conversationRoute(mid, sid, sessions, assistant);
-}
 
 // ── the row ──────────────────────────────────────────────
 
@@ -214,7 +208,7 @@ function EventSummary({ text, marked = false }: { text: string; marked?: boolean
 }
 
 function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
-  const conversation = useConversation();
+  const assistantMachine = useStore((s) => s.assistant?.machine_id);
   const [sayOpen, setSayOpen] = useState(false);
   const [say, setSay] = useState("");
   const [acting, setActing] = useState(false);
@@ -226,7 +220,7 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
   if (!h && !canSay && now === undefined) return null;
   const word = now ?? (done ? (item.done_by === "manager" ? t("inbox-inboxevent.manager_done") : undefined) : handlingWord(item));
   const working = h?.state === "looking" || h?.state === "agent";
-  const to = h?.machine_id && h.session_id ? conversation(h.machine_id, h.session_id) : undefined;
+  const to = h?.machine_id && h.session_id ? inboxConversationPage(h.session_id, h.machine_id, item.manager, assistantMachine) : undefined;
   const instruct = async (words: string) => {
     const text = words.trim();
     if (!text || acting) return;
@@ -598,8 +592,9 @@ export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: Sour
     setOpen(view.chainOpen(key));
   }
   useEffect(() => view.setChainOpen(key, open), [view, key, open]);
-  const conversation = useConversation();
+  const assistant = useStore((s) => s.assistant);
   const sessions = useStore((s) => s.sessions);
+  const summaries = useStore((s) => s.sessionSummaries);
   const all = item.chain ?? [];
   if (!all.length) return null;
   const rows = chainRows(all, open);
@@ -608,6 +603,15 @@ export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: Sour
     const link = agentSession(e);
     if (link) latestAgent.set(link.key, e.id);
   }
+  const conversation = (e: ChainEntry, mid: string, sid: string): Route => {
+    const row = sessions[mid]?.find((s) => s.session_id === sid) ?? summaries.find((s) => s.machine_id === mid && s.session_id === sid);
+    const h = item.handling;
+    // A handling entry without detail records an Assistant taking over. A suggestion with detail can come from an Agent.
+    if (e.kind === "handling" && (!e.detail || (h?.machine_id === mid && h.session_id === sid)) && !row?.space) {
+      return inboxConversationPage(sid, mid, row?.manager ?? item.manager, assistant?.machine_id);
+    }
+    return conversationRoute(mid, sid, sessions, assistant, row);
+  };
   const tap = (x: ChainTap) => {
     if (x.kind === "source") {
       if (x.url) {
@@ -634,7 +638,7 @@ export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: Sour
         )}
       </div>
       <ol className="flex flex-col">
-        {rows.map((e) => <ChainRow key={e.id} item={item} e={e} tap={chainTap(e, conversation, otherManager(item.manager))} onTap={tap} agentState={agentState(e)} />)}
+        {rows.map((e) => <ChainRow key={e.id} item={item} e={e} tap={chainTap(e, (mid, sid) => conversation(e, mid, sid), otherManager(item.manager))} onTap={tap} agentState={agentState(e)} />)}
       </ol>
     </section>
   );

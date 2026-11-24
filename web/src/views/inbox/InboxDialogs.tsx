@@ -9,12 +9,13 @@ import { api, ApiError, errorText } from "../../lib/api";
 import { startConversation } from "../../lib/assistant-start";
 import { adoptConversation, askPersonaOf, noteSent, sendToSession } from "../../lib/outbox";
 import { baseName, sessionTitle, stateOf, uuid } from "../../lib/format";
-import { agentDraft, connectorReference, conversationRoute, docChangeKey, handOffToMain, isLark, itemKey, itemPath, itemRequest, keepDropped, keptChanges, sendReply, useDroppedChanges, setDone, unsentReplies, type InboxItem } from "../../lib/inbox";
+import { agentDraft, connectorReference, docChangeKey, handOffToMain, isLark, itemKey, itemPath, itemRequest, keepDropped, keptChanges, sendReply, useDroppedChanges, setDone, unsentReplies, type InboxItem } from "../../lib/inbox";
+import { openFromInbox } from "../../lib/inbox-nav";
 import { docChangeLine, HANDOFF_PRESETS, handOffContext, handOffMessage, recordHandOff } from "../../lib/inbox-page";
 import { isTransient } from "../../lib/ops";
 import { hasFinePointer } from "../../lib/viewport";
 import { machineWithHub } from "../../lib/mesh";
-import { conversationPage } from "../../lib/conversation-page";
+import { conversationPage, inboxConversationPage } from "../../lib/conversation-page";
 import { navigate } from "../../lib/router";
 import { openNewAgent } from "../../lib/new-agent";
 import { refreshAssistant, useStore } from "../../lib/store";
@@ -57,8 +58,7 @@ export function DraftDialog(props: { item: InboxItem; onClose: () => void }) {
 
 function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }) {
   const readOnly = useItemReadOnly(item);
-  const sessions = useStore((s) => s.sessions);
-  const assistant = useStore((s) => s.assistant);
+  const assistantMachine = useStore((s) => s.assistant?.machine_id);
   const key = itemKey(item);
   const agentText = agentDraft(item);
   const [text, setText] = useState(() => unsentReplies.get(key) ?? agentText ?? "");
@@ -154,8 +154,7 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
               type="button"
               onClick={() => {
                 onClose();
-                // The AI twin runs as the assistant (docs/assistant/inbox.md): its conversation is one of Persona's.
-                navigate(agent.machine_id === assistant?.machine_id ? conversationPage(agent.session_id!, agent.machine_id, item.manager) : conversationRoute(agent.machine_id!, agent.session_id!, sessions, assistant, item.manager));
+                openFromInbox(inboxConversationPage(agent.session_id!, agent.machine_id!, item.manager, assistantMachine));
               }}
               className="mt-1.5 flex items-center gap-1 text-[12px] font-medium whitespace-nowrap text-accent-ink hover:underline"
             >
