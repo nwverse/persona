@@ -121,6 +121,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			return "", fmt.Errorf("task %d: %w", i+1, err)
 		}
 		t.Audience = aud
+		t.DirectionID = strings.TrimSpace(t.DirectionID)
 		if err := t.checkRole(scope != nil); err != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, err)
 		}

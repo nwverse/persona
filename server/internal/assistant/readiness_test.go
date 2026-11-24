@@ -595,10 +595,10 @@ func TestReadinessDismiss(t *testing.T) {
 		t.Fatalf("after a restart: %+v", r)
 	}
 	// The same result again is not written again.
-	puts := st.puts
+	puts := st.putCount()
 	getReadiness(t, s, "", "")
-	if st.puts != puts {
-		t.Fatalf("written again: %d → %d", puts, st.puts)
+	if after := st.putCount(); after != puts {
+		t.Fatalf("written again: %d → %d", puts, after)
 	}
 	if status, _ := serveJSON(t, s, "POST", "/api/v1/assistant/readiness/dismiss", "", `{"dismissed":false}`); status != 200 {
 		t.Fatal(status)

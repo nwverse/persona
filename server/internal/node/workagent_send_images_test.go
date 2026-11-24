@@ -30,6 +30,9 @@ func TestWorkAgentSendImages(t *testing.T) {
 				const pane = "w1:p1"
 				agent := agentOf(kind, "", proto.StatusIdle, pane, "w1:t1", "w1", home, kind)
 				seedAgents(t, n, f, agent)
+				if kind == agyAgent {
+					stubAgyNativePrompt(t, n, f, pane, agyTestID)
+				}
 				f.reply("agent.get", map[string]any{"agent": agent})
 				id := otherSession(host.Agent{Agent: kind, PaneID: pane})
 				_, err := request(t, n, "session.send", map[string]any{"session_id": id, "text": tc.text, "images": tc.images})

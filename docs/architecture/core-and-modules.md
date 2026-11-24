@@ -513,6 +513,13 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
   `feishu_answer.go`, which the core's own cards use too). The module's times (`timings.go`) come through
   `Host.Timings` from `assistant.Options.LarkTimings` and `LarkTimingLists`, a test and tuning knob as recording's;
   `Layer.Wait` waits for the agent messages' workers (the service waits for them when its connection ends).
+- **The workbench is the module's** (`server/internal/modules/lark/workbench.go`): `/home`, `/today` and `/inbox`,
+  their buttons and the home card, reached through `larkhost.Workbench`. The core gives it what it shows, in the
+  contract's terms (`assistantwire.WorkbenchItem`, `WorkbenchCounts`, `WorkbenchAgent`, `WorkbenchBoardRow`,
+  `WorkbenchCompanion`, `WorkbenchMeeting`; the Today card's JSON as stored), and does what its buttons ask (file or
+  mute an Inbox item, draft and send a reply, switch the chat's target, the other cards). The Inbox item a button names
+  is read by the Inbox core (`server/internal/assistant/inbox_workbench.go`); the counts by
+  `server/internal/assistant/workbench_view.go`.
 - **Tests**: the turns' own tests run in the module on a fake core (`server/internal/modules/lark/service_test.go`:
   the channels' runs, their finishing, folding and dropping, and the hub's transport); the assistant's tests of the
   turns through the channels' pipeline stay in `internal/assistant` and skip without the module (`needsLarkLayer`).

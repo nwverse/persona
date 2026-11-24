@@ -324,5 +324,11 @@
   "goal_expand": "展开「{title}」的子任务（已完成 {done}/{total}）",
   "goal_collapse": "收起「{title}」的子任务（已完成 {done}/{total}）",
   "goal_blocked": "{count} 项需要你",
-  "goal_parent_hint": "属于：{title}"
+  "goal_parent_hint": "属于：{title}",
+  "shared_blockers_region": "公共外部卡点",
+  "shared_blockers_title": "公共外部卡点 · {count}",
+  "shared_blockers_count": "阻塞 {count} 项",
+  "shared_blockers_clear": "清除筛选",
+  "shared_blockers_open_link": "打开 {label}",
+  "shared_blockers_empty": "该卡点下暂无匹配任务"
 }
