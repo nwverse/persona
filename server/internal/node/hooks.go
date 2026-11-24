@@ -248,6 +248,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		// A guest's (its MCP server says so, or this node knows it is one): the hub gives it only its own tools.
 		guest := req.Guest || n.guestOf(session) != nil
 		params := mcpToolsParams(req.Input, session, assistant, guest)
+		n.putMCPCallerCwd(c, params, session)
 		// A supervision round's process asks for its narrower set (assistant_round.go); a manager that does not know
 		// it gives the whole list.
 		if req.ToolSet != "" {
@@ -307,6 +308,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		}
 		params := map[string]any{"name": req.Name, "args": req.Args, "session_id": sid,
 			"assistant": assistant, "guest": guest}
+		n.putMCPCallerCwd(c, params, sid)
 		n.putSourcePermission(c, params, sid, req.Name, req.Args)
 		if origin := n.assistantOrigin(sid); origin != "" {
 			params["origin"] = origin
