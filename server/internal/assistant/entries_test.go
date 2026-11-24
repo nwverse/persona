@@ -202,15 +202,6 @@ func (h *entriesAccessHub) EntriesReadAccess(id string) (bool, bool) {
 	return h.allowed, h.personal
 }
 
-// entryIDList is shared by the memory assemble and extension-source tests.
-func entryIDList(entries []proto.AssistantEntry) []string {
-	ids := make([]string, len(entries))
-	for i, e := range entries {
-		ids[i] = e.ID
-	}
-	return ids
-}
-
 func TestEntriesHTTPPersonalGrantRevocationAndCategories(t *testing.T) {
 	database := todoTestDB(t)
 	e := newTodoEnv(t, database)
