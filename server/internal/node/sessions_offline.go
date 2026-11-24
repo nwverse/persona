@@ -30,6 +30,9 @@ var offlineCache struct {
 	// origins: the folders the desktop app's sessions were started in (claudeDesktopIndex.origins, placeClaudeDesktop),
 	// read and replaced the same way.
 	origins map[string]string
+	// folds: the transcripts the desktop app's sessions went on from (foldDesktopEarlier, #14394), read and replaced
+	// the same way.
+	folds desktopFolds
 }
 
 // appendOffline appends to dst the recent transcripts without a live agent, straight into the caller's list (sessionList's);
@@ -41,6 +44,7 @@ func (n *Node) appendOffline(dst []proto.Session, live map[string]bool) []proto.
 		offlineCache.list = n.scanOffline()
 		desktop := readClaudeDesktopIndex(n.home) // its files were just read: unchanged ones are not parsed again
 		offlineCache.parents, offlineCache.origins = desktop.parents, desktop.origins
+		offlineCache.folds = desktopFolds{earlier: desktop.earlier, before: desktop.before}
 		offlineCache.at, offlineCache.home = time.Now(), n.offlineCacheKey()
 	}
 	for i := range offlineCache.list {
@@ -74,6 +78,32 @@ func (n *Node) offlineDesktop() (parents, origins map[string]string) {
 		return nil, nil
 	}
 	return offlineCache.parents, offlineCache.origins
+}
+
+// offlineFolds is what the last offline scan of this node's home read of the transcripts the desktop app's sessions
+// went on from (offlineCache.folds); none when another home's scan is cached.
+func (n *Node) offlineFolds() desktopFolds {
+	offlineCache.Lock()
+	defer offlineCache.Unlock()
+	if offlineCache.home != n.offlineCacheKey() {
+		return desktopFolds{}
+	}
+	return offlineCache.folds
+}
+
+// alwaysListed are the sessions the offline scan lists whatever the desktop app's index says of them: the kept ones
+// (the main conversation) and "Branch to New Chat"'s copies (fork.go).
+func (n *Node) alwaysListed() map[string]bool {
+	out := map[string]bool{}
+	for id := range n.keptSessions() {
+		out[id] = true
+	}
+	n.mu.Lock()
+	for id := range n.forked {
+		out[id] = true
+	}
+	n.mu.Unlock()
+	return out
 }
 
 // forgetOfflineScan drops the cached scan of offline transcripts: the next list scans again.
