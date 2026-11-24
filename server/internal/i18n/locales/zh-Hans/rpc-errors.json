@@ -44,7 +44,6 @@
   "open_elsewhere_program": "这个会话正在电脑上的另一个程序里开着，Persona 不会再起一个 Claude 同时写它。在那边接着用，或者先在那边关掉它再发。这次没有发送。",
   "open_elsewhere_other": "这个会话正在电脑上的另一个地方开着，Persona 不会再起一个 Claude 同时写它。在那边接着用，或者先在那边关掉它再发。这次没有发送。",
   "open_elsewhere_agents_list": "这个标签停在 Claude Code 的 agents 列表上：打开终端，用方向键选中一个会话、回车进去后再发。这次没有发送。",
-  "open_elsewhere_agy_cli": "这个会话正在电脑上一个终端的 Antigravity CLI（agy）里开着，Persona 不会再从另一个 agy 进程同时操作它。在那边接着用，或者先在那边关掉它再试。这次没有发送也没有改动。",
   "modes_on_computer": "这个 Claude 会话运行在电脑上的 Claude 里（桌面 App 或其他终端），它的模式、思考强度和模型请在那里改。",
   "modes_not_running": "这个 Agent 没在运行。先在它的终端页点「恢复」，再改这一项。",
   "modes_unsupported": "这个 Agent 跑在终端里（Cursor CLI 或 Antigravity CLI），它的权限模式、思考强度和模型在启动时就定了，不能在这里改。需要别的模式请用那个模式新开一个 Agent。",

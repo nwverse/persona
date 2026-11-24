@@ -574,15 +574,21 @@ process, though the companion lists it too (#13451). The CLI holds an exclusive 
 `presence/<conversation id>.lock` in agy's data directory while the conversation is open and leaves the empty file when
 it exits; ACP sessions take none. The companion only reads that lock: on Linux from `/proc/locks`, and elsewhere it
 cannot tell, so there a conversation with a presence file counts as open while something other than the companion wrote
-its transcript in the last minute. Taking the lock, even for an instant, would make a CLI opening the conversation then
-warn that it is already open and run without the lock. For such a conversation the companion does not resume it for a
-native cut check or read its native tail (where the lock cannot be read, not while its summary lags at all), refuses a
-send, fork, rewind or mode change with `open_elsewhere` (`where: agy_cli`, `delivered: none`) while the CLI has it
-open, ahead of the busy refusal its running summary would give, and, while agy's summary lags the CLI's transcript, takes the status from the transcript: `working` while another
-process wrote it in the last minute, `done` once its last step is a complete reply and the CLI has closed it or nobody
-wrote for a minute, and `unknown` otherwise (an open tool call or new input never reads idle). A check never installs a
-cut when the transcript changed while the native snapshot was taken, and a session the companion resumed only for a
-check is closed again unless a turn of its own took it meanwhile. A conversation no CLI has open keeps the rules above while its transcript is fresh, and once nobody wrote it for a minute reads the same way: `done` when its last step is a complete reply, `unknown` otherwise. agy's idle summary can keep the step count of an earlier turn long after the conversation finished (with agy 1.5.14, one stopped where the second of eight turns began), which alone would leave it `summary_behind` for good.
+its transcript in the last minute. Taking the lock, even a shared lock for an instant, makes a CLI that opens the
+conversation in that instant warn that it is already open and run its whole session without the lock: agy 1.5.16 tries
+`LOCK_EX|LOCK_NB` once and never again (#14561). For such a conversation the companion does not resume it for a native
+cut check or read its native tail (where the lock cannot be read, not while its summary lags at all), refuses a send,
+fork, rewind or mode change while the CLI has it open with `agy_in_terminal` (`delivered: none`), the code and words
+the node gives a driving call it stops before the companion (#13635), ahead of the busy refusal the CLI's running
+summary would give, and, while agy's summary lags the CLI's transcript, takes the status from the transcript: `working`
+while another process wrote it in the last minute, `done` once its last step is a complete reply and the CLI has closed
+it or nobody wrote for a minute, and `unknown` otherwise (an open tool call or new input never reads idle). A check
+never installs a cut when the transcript changed while the native snapshot was taken, and a session the companion
+resumed only for a check is closed again unless a turn of its own took it meanwhile. A conversation no CLI has open
+keeps the rules above while its transcript is fresh, and once nobody wrote it for a minute reads the same way: `done`
+when its last step is a complete reply, `unknown` otherwise. agy's idle summary can keep the step count of an earlier
+turn long after the conversation finished (with agy 1.5.14, one stopped where the second of eight turns began), which
+alone would leave it `summary_behind` for good.
 
 agy's summary store records no run state (an empty status) for every conversation no agy process is running: each agy
 process empties the status when its summary-store reconciliation runs at startup, so after any agy start (a CLI, the

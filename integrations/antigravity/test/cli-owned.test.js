@@ -35,6 +35,7 @@ const nativeRecord = (s) => ({
   ...(s.type === 'PLANNER_RESPONSE' ? { plannerResponse: { response: s.content } } : {}),
 })
 const minutesAgo = (n) => new Date(Date.now() - n * 60_000)
+const IN_TERMINAL = JSON.parse(readFileSync(new URL('../../../server/internal/i18n/locales/en/rpc-errors.json', import.meta.url), 'utf8')).agy_in_terminal
 
 // The /proc/locks line of an exclusive flock on file, as Linux writes it (major:minor in hex, inode in decimal).
 function lockLine(file) {
@@ -92,11 +93,14 @@ async function fixture(t, { steps = finished, stepCount = 2, lock = 'held', mtim
     await until('inventory refreshed', () => node.all('runtime.sessions').length > before)
     return node.last('runtime.sessions').sessions.find((s) => s.session_id === SESSION)?.status
   }
+  // The node's refusal for the same case (#13635: agy_in_terminal, delivered none, the hub's English words), so the
+  // owner sees one code and one wording whichever of the two refuses.
   const refused = async (method, params) => {
     const err = await node.peer.call(method, { session_id: SESSION, ...params }).then(() => null, (e) => e)
     assert.ok(err, `${method} was not refused`)
-    assert.equal(err.code, 'open_elsewhere', `${method}: ${err.message}`)
-    assert.deepEqual(err.data, { where: 'agy_cli', delivered: 'none' }, method)
+    assert.equal(err.code, 'agy_in_terminal', `${method}: ${err.message}`)
+    assert.deepEqual(err.data, { delivered: 'none' }, method)
+    assert.equal(err.message, IN_TERMINAL, method)
   }
   return { home, node, presence, write, setLock, calls, methods, status, refused, db }
 }
