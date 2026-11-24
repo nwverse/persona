@@ -60,6 +60,8 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import persona.feature.inbox.*
 import persona.feature.settings.demoSettingsServices
+import persona.core.inbox.*
+import persona.feature.inbox.InboxRepository
 
 /** Acceptance tests use the production shell, decorators, navigator, pages and Back dispatcher. */
 @RunWith(AndroidJUnit4::class)
@@ -846,6 +848,7 @@ class PersonaShellOverlayTest {
                 override fun notice(message: String) = false
             }
             override val terminalPanes: TerminalPanes? = null
+            override val audioFocus = persona.core.moduleapi.AudioBroker.withoutSystem()
             override fun groupTerminal(key: SessionKey): TerminalTransport? = null
             override fun exitDemo() = Unit
         }

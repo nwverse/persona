@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -93,7 +93,7 @@ func TestWorkbenchOffChangesNothing(t *testing.T) {
 	if js := e.s.startAgentCard(context.Background(), "").JSON(); strings.Contains(js, `"name":"mode"`) {
 		t.Fatalf("/start has a permission field with the workbench off: %s", js)
 	}
-	if _, err := e.s.botPost(context.Background(), "", feishubot.NewCard("t", feishubot.Blue, "t").Markdown("hello"), ""); err != nil {
+	if _, err := e.s.botPost(context.Background(), "", botcard.NewCard("t", botcard.Blue, "t").Markdown("hello"), ""); err != nil {
 		t.Fatal(err)
 	}
 	if js := e.postJSON(-1); strings.Contains(js, `"to":"home"`) {
@@ -111,6 +111,7 @@ func TestWorkbenchOffChangesNothing(t *testing.T) {
 // /home posts the home card, pins it as the bot's only pin and makes it the board; the next /home posts a fresh one,
 // pins it and withdraws the one before. One too old to withdraw is redrawn to say where the workbench went.
 func TestWorkbenchHomeIsPinnedAndTheOnlyOne(t *testing.T) {
+	needsLarkLayer(t)
 	e := newWorkbenchEnv(t, workbenchOnFeatures)
 	l := e.s.botLang(context.Background())
 	if h, _ := e.command("/home"); !h {
@@ -157,12 +158,13 @@ func TestWorkbenchHomeIsPinnedAndTheOnlyOne(t *testing.T) {
 // With the workbench on, a card the bot posts gets the workbench button (once), the home card itself none; switched
 // off, the next card has none.
 func TestWorkbenchButtonOnEveryCard(t *testing.T) {
+	needsLarkLayer(t)
 	e := newWorkbenchEnv(t, workbenchOnFeatures)
 	e.command("/home")
 	if js := e.postJSON(0); strings.Contains(js, `"to":"home"`) {
 		t.Fatalf("the home card links to itself: %s", js)
 	}
-	card := feishubot.NewCard("t", feishubot.Blue, "t").Markdown("an answer")
+	card := botcard.NewCard("t", botcard.Blue, "t").Markdown("an answer")
 	if _, err := e.s.botPost(context.Background(), "", card, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +176,7 @@ func TestWorkbenchButtonOnEveryCard(t *testing.T) {
 	}
 	e.setFeatures(FeishuFeatures{Main: true, Agents: true})
 	_, _ = e.s.feishuFeatures(context.Background())
-	if _, err := e.s.botPost(context.Background(), "", feishubot.NewCard("t", feishubot.Blue, "t").Markdown("later"), ""); err != nil {
+	if _, err := e.s.botPost(context.Background(), "", botcard.NewCard("t", botcard.Blue, "t").Markdown("later"), ""); err != nil {
 		t.Fatal(err)
 	}
 	if js := e.postJSON(-1); strings.Contains(js, `"to":"home"`) {
@@ -183,7 +185,7 @@ func TestWorkbenchButtonOnEveryCard(t *testing.T) {
 }
 
 // buttonPayload finds a button by its localized label anywhere in a card, including a form.
-func buttonPayload(t *testing.T, card *feishubot.Card, label string) map[string]any {
+func buttonPayload(t *testing.T, card *botcard.Card, label string) map[string]any {
 	t.Helper()
 	var root any
 	if err := json.Unmarshal([]byte(card.JSON()), &root); err != nil {
@@ -237,7 +239,7 @@ func behaviorPayload(t *testing.T, button map[string]any, kind string) map[strin
 func TestWorkbenchFooterKeepsNavigationTogether(t *testing.T) {
 	e := newWorkbenchEnv(t, workbenchOnFeatures)
 	t.Run("navigation", func(t *testing.T) {
-		card := feishubot.NewCard("", "", "answer").Note("Main chat").Buttons(feishubot.LinkBtn("Open on web", "https://example.com"))
+		card := botcard.NewCard("", "", "answer").Note("Main chat").Buttons(botcard.LinkBtn("Open on web", "https://example.com"))
 		e.s.workbenchStamp(context.Background(), card)
 		if got := strings.Count(card.JSON(), `"tag":"column_set"`); got != 1 {
 			t.Fatalf("navigation actions occupy %d rows: %s", got, card.JSON())
@@ -265,7 +267,7 @@ func TestWorkbenchFooterKeepsNavigationTogether(t *testing.T) {
 		}
 	})
 	t.Run("callbacks stay independent", func(t *testing.T) {
-		card := feishubot.NewCard("", "", "approval").Buttons(feishubot.Btn("Allow", feishubot.Primary, map[string]any{"allow": true}))
+		card := botcard.NewCard("", "", "approval").Buttons(botcard.Btn("Allow", botcard.Primary, map[string]any{"allow": true}))
 		e.s.workbenchStamp(context.Background(), card)
 		if got := strings.Count(card.JSON(), `"tag":"column_set"`); got != 2 {
 			t.Fatalf("an approval action was merged with navigation: %s", card.JSON())
@@ -276,9 +278,9 @@ func TestWorkbenchFooterKeepsNavigationTogether(t *testing.T) {
 		}
 	})
 	t.Run("mixed actions stay independent", func(t *testing.T) {
-		card := feishubot.NewCard("", "", "approval").Buttons(
-			feishubot.LinkBtn("Open on web", "https://example.com"),
-			feishubot.Btn("Allow", feishubot.Primary, map[string]any{"allow": true}))
+		card := botcard.NewCard("", "", "approval").Buttons(
+			botcard.LinkBtn("Open on web", "https://example.com"),
+			botcard.Btn("Allow", botcard.Primary, map[string]any{"allow": true}))
 		e.s.workbenchStamp(context.Background(), card)
 		if got := strings.Count(card.JSON(), `"tag":"column_set"`); got != 2 {
 			t.Fatalf("a mixed action row was merged with navigation: %s", card.JSON())
@@ -292,8 +294,8 @@ func TestWorkbenchFooterKeepsNavigationTogether(t *testing.T) {
 		}
 	})
 	t.Run("form callbacks stay independent", func(t *testing.T) {
-		card := feishubot.NewCard("", "", "form").Form("approval", nil,
-			feishubot.Submit("Send", feishubot.Primary, "send", map[string]any{"sent": true}))
+		card := botcard.NewCard("", "", "form").Form("approval", nil,
+			botcard.Submit("Send", botcard.Primary, "send", map[string]any{"sent": true}))
 		e.s.workbenchStamp(context.Background(), card)
 		send := buttonPayload(t, card, "Send")
 		if send["form_action_type"] != "submit" {
@@ -305,7 +307,7 @@ func TestWorkbenchFooterKeepsNavigationTogether(t *testing.T) {
 		}
 	})
 	t.Run("size guard", func(t *testing.T) {
-		card := feishubot.NewCard("", "", "large").Markdown(strings.Repeat("x", workbenchStampMost)).Buttons(feishubot.LinkBtn("Open on web", "https://example.com"))
+		card := botcard.NewCard("", "", "large").Markdown(strings.Repeat("x", workbenchStampMost)).Buttons(botcard.LinkBtn("Open on web", "https://example.com"))
 		e.s.workbenchStamp(context.Background(), card)
 		if strings.Contains(card.JSON(), `"to":"home"`) {
 			t.Fatalf("the oversized card gained a workbench button: %d bytes", len(card.JSON()))
@@ -374,6 +376,7 @@ const companionsBody = `{"bots":[{"kind":"inbox","name":"Inbox","icon":"📥","a
 // The companions are checked and kept; the home card links to them, and the Inbox companion's link replaces the
 // /inbox button. A read-only device cannot change them.
 func TestWorkbenchCompanionsAreLinkedFromTheHomeCard(t *testing.T) {
+	needsLarkLayer(t)
 	e := newWorkbenchEnv(t, workbenchOnFeatures)
 	if code, _ := e.companionsCall("PUT", "/api/v1/assistant/feishu/companions", `{"bots":[{"kind":"inbox","name":"Inbox","app_id":"not an app"}]}`); code != http.StatusBadRequest {
 		t.Fatalf("a bad app id: %d", code)
@@ -391,7 +394,7 @@ func TestWorkbenchCompanionsAreLinkedFromTheHomeCard(t *testing.T) {
 	if code, out := e.companionsCall("PUT", "/api/v1/assistant/feishu/companions", companionsBody); code != http.StatusOK {
 		t.Fatalf("companions: %d %v", code, out)
 	}
-	card, _, _ := e.s.homeCard(context.Background(), workbenchOnFeatures)
+	card, _, _ := e.s.larkModule().HomeCard(context.Background(), workbenchOnFeatures)
 	js := card.JSON()
 	if !strings.Contains(js, "appId=cli_inboxbot01") || !strings.Contains(js, "appId=cli_noticebot1") || strings.Contains(js, `"to":"inbox"`) {
 		t.Fatalf("the home card's companions: %s", js)
@@ -465,6 +468,7 @@ func TestWorkbenchNoticesGoToAPollingCompanion(t *testing.T) {
 // /inbox lists what needs the owner first, each with Done and (for a reply that can be sent) AI draft; Done files it
 // and the card is redrawn without it.
 func TestWorkbenchInboxCardFilesAnItem(t *testing.T) {
+	needsLarkLayer(t)
 	e := newWorkbenchEnv(t, workbenchOnFeatures)
 	now := time.Now()
 	e.s.inbox.mu.Lock()
@@ -477,15 +481,17 @@ func TestWorkbenchInboxCardFilesAnItem(t *testing.T) {
 		UpdatedAt: now, Lark: &InboxLark{FeedID: "f2"}}
 	e.s.inbox.mu.Unlock()
 
-	card, _ := e.s.inboxCard(context.Background())
-	js := card.JSON()
+	if ok, _ := e.command("/inbox"); !ok {
+		t.Fatal("/inbox was not taken")
+	}
+	js := e.postJSON(-1)
 	if a, b := strings.Index(js, "Alex"), strings.Index(js, "Sam"); a < 0 || b < 0 || a > b {
 		t.Fatalf("what needs the owner is not first: %s", js)
 	}
 	if !strings.Contains(js, `"op":"draft"`) || !strings.Contains(js, `"op":"done"`) {
 		t.Fatalf("the Inbox card's buttons: %s", js)
 	}
-	var a feishubot.CardAction
+	var a botcard.CardAction
 	a.Action.Value = map[string]any{"a": "ib", "op": "done", "id": "lark:f1:1"}
 	a.Context.MessageID = "om_inbox"
 	resp := e.s.botCardAction(context.Background(), &a, "")
@@ -495,23 +501,6 @@ func TestWorkbenchInboxCardFilesAnItem(t *testing.T) {
 	redrawn, _ := json.Marshal(resp.Card.Data)
 	if strings.Contains(string(redrawn), "Alex") || !strings.Contains(string(redrawn), "Sam") {
 		t.Fatalf("the redrawn card: %s", redrawn)
-	}
-}
-
-// A card names where an item came from in words: a connector's label for it, else its source's name (a subscription's
-// one row has no label, #5671), never the source's id.
-func TestWorkbenchSourceIsAName(t *testing.T) {
-	for _, c := range []struct {
-		it   InboxItem
-		want string
-	}{
-		{InboxItem{Source: "github", AccountName: "GitHub", Connector: &InboxConnector{Label: "Review requested"}}, "Review requested"},
-		{InboxItem{Source: "sub_example", AccountName: "Example group", Connector: &InboxConnector{}}, "Example group"},
-		{InboxItem{Source: "sub_example", Connector: &InboxConnector{}}, "sub_example"},
-	} {
-		if got := wbSource(i18n.En, c.it); got != c.want {
-			t.Errorf("%+v: %q, want %q", c.it, got, c.want)
-		}
 	}
 }
 
@@ -528,10 +517,11 @@ func (u tokenSpanStore) UsageSpans(context.Context, []time.Time, db.UsageBy) ([]
 // What waits for the owner is rows pressed whole: a card that holds something up comes down. An agent's row says its
 // state as a tag, not a coloured dot.
 func TestWorkbenchHomeRowsArePressedWhole(t *testing.T) {
+	needsLarkLayer(t)
 	e := newWorkbenchEnv(t, workbenchOnFeatures)
 	e.s.fleet.interactions["ix_q"] = &pending{ix: proto.Interaction{ID: "ix_q", MachineID: "box", SessionID: "ag1", Kind: proto.IxQuestion,
 		Questions: []proto.Question{{Question: "用哪个库？"}}}}
-	card, _, _ := e.s.homeCard(context.Background(), workbenchOnFeatures)
+	card, _, _ := e.s.larkModule().HomeCard(context.Background(), workbenchOnFeatures)
 	js := card.JSON()
 	if !strings.Contains(js, `"tag":"interactive_container"`) || !strings.Contains(js, `"value":{"a":"nav","id":"ix_q","to":"ix"}`) ||
 		!strings.Contains(js, `"content":"等你 1"`) {
@@ -546,15 +536,5 @@ func TestWorkbenchHomeRowsArePressedWhole(t *testing.T) {
 	row = agentRowMarkdown(i18n.ZhHans, "登录", "修登录的测试", "box", sess, 70)
 	if row != "<text_tag color='blue'>工作中</text_tag> **登录** · box\n修登录的测试\n<font color='grey'>在跑测试</font>" {
 		t.Fatalf("agent row with a secondary name %q", row)
-	}
-}
-
-// Sending a draft goes out under the owner's name: its button asks first in Feishu's dialog, Redraft does not.
-func TestDraftCardSendAsksFirst(t *testing.T) {
-	s := newTestService(t, newFakeHub())
-	it := InboxItem{ID: "i1", Source: "lark", Title: "项目群", Sender: "张三", Preview: "明天能发吗？"}
-	js := s.draftCard(context.Background(), it, "可以，明早发。", nil, "").JSON()
-	if n := strings.Count(js, `"confirm":`); n != 1 || !strings.Contains(js, `"op":"send"`) || !strings.Contains(js, `"op":"redraft"`) {
-		t.Fatalf("the draft card asks first %d times: %s", n, js)
 	}
 }

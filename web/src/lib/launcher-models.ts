@@ -100,7 +100,7 @@ export interface UnavailableLauncher {
   agent?: string;
   /** A direct API's protocol (responses, chat…). */
   api?: string;
-  /** not_main_chat, api_protocol, launcher_out_of_scope, launcher_own_service */
+  /** not_main_chat, api_protocol, launcher_out_of_scope, launcher_own_service, launcher_unhealthy */
   code?: string;
   reason: string;
 }
@@ -267,6 +267,16 @@ export function modelName(m: { id: string; name?: string }): string {
   return gpt[1].split("-").map((part, i) => i ? part[0].toUpperCase() + part.slice(1) : part).join(" ");
 }
 
+/** A catalog variant encodes its default effort in its model ID. */
+export function effortVariantBase(id: string, effort?: string): string | undefined {
+  return effort && id.endsWith(`-${effort}`) ? id.slice(0, -effort.length - 1) || undefined : undefined;
+}
+
+/** Drop effort from the trailing qualifiers while keeping context size and other model qualifiers. */
+export function withoutEffortQualifier(name: string): string {
+  return name.replace(/\s*[(（](?:minimal|low|medium|high|xhigh|max|ultra)[)）](?=(?:\s*[(（[][^()（）[\]]*[)）\]])*\s*$)/giu, "").trimEnd() || name;
+}
+
 /** "Default"'s second line: what "Model configuration" sets, else the concrete model the default entry stands for. */
 export function defaultDetail(models: AgentModel[], followed: ModelBinding): string {
   if (followed.model) return followed.model;
@@ -289,7 +299,7 @@ export function matches(fields: (string | undefined)[], query: string): boolean 
 
 /** What the open list shows for `query` (name, id, resolved model, folded aliases, description; every word): "Default"
  *  first when it matches, then the rest in the agent's order. */
-export function modelRows(models: AgentModel[], query: string, followed: ModelBinding = {}): { showDefault: boolean; rows: AgentModel[] } {
+export function modelRows<M extends AgentModel>(models: M[], query: string, followed: ModelBinding = {}): { showDefault: boolean; rows: M[] } {
   const d = defaultModel(models);
   const showDefault = !query.trim() || matches([t("lib-launcher-models.default"), "default", defaultDetail(models, followed), d && modelName(d), d?.name, d?.id, d?.resolved, d?.description], query);
   const rows = models.filter((m) => m !== d && matches([modelName(m), m.name, m.id, m.resolved, ...(m.aliases ?? []), m.description], query));

@@ -159,6 +159,14 @@ describe("the panel's providers", () => {
     expect(provider(p, "p-relay")).toMatchObject({ models: null, loading: true });
   });
 
+  it("supplies the tier encoded by the Antigravity variant to the start pill", () => {
+    const model = "gemini-4-neon-xhigh";
+    const list: LauncherModels = { agent: "agy", models: [{ id: model, name: "Gemini 4 Neon (XHigh)", default_effort: "xhigh" }] };
+    const choice = { launcher: "agy", model, effort: "" };
+    const view = newAgentPill({ launchers: [{ name: "agy", agent: "agy" }], runs: "agy", list: { list }, choice, configured: null, fallback: "" });
+    expect(view.effort).toBe("xhigh");
+  });
+
   // A launcher that lists its permission modes (#8261, Paseo's Grok and its Codex providers) takes the efforts its models
   // list: each row its model's own, the Default row the default model's, none for a model nobody lists the levels of.
   it("a launcher that lists its permission modes offers each model's own efforts, and none where nobody says", () => {
@@ -259,7 +267,7 @@ describe("presets", () => {
     const p = panel();
     expect(p.presets).toEqual([
       { key: "quick", name: "quick", description: "Small, quick fixes", setup: { provider: "sonnetcc", model: "default" } },
-      { key: "review", name: "review", description: "claude · Opus 5.5 · 高", setup: { provider: "claude", model: "opus", effort: "high" } },
+      { key: "review", name: "review", description: "claude · Opus 5.5 · High", setup: { provider: "claude", model: "opus", effort: "high" } },
     ]);
     const sections = panelSections({ providers: p.providers, state: p.state, view: { kind: "all" }, query: "", favorites: [{ uid: "f", provider: "claude", model: "sonnet" }], recent: [], overrides: {}, presets: p.presets });
     expect(sections.slice(0, 2).map((s) => s.kind)).toEqual(["favorites", "presets"]);

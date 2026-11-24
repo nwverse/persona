@@ -22,8 +22,10 @@ import (
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/uistream"
+	"github.com/nwverse/persona/server/internal/extmgr/mailport"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/mailwire"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -36,9 +38,11 @@ import (
 // Run starts the extensions, connectors and bots and runs their loops until ctx ends; then it stops the programs.
 func (h *Manager) Run(ctx context.Context) error {
 	h.ctx = ctx
-	if ms, ok := h.store.(mailStore); ok && NewMail != nil {
+	if ms, ok := h.store.(mailStore); ok && mailport.Factory(h.modules()) != nil {
 		var err error
-		if h.mail, err = NewMail(h.cfg.dir, h.secretKeyPath(), ms, h.cfg.Google, h.cfg.Microsoft); err != nil {
+		if h.mail, err = mailport.Factory(h.modules())(mailwire.Config{DataDir: h.cfg.dir, SecretKey: h.secretKeyPath(), Store: ms,
+			GoogleClientID: h.cfg.Google.ClientID, GoogleProxy: h.cfg.Google.Proxy,
+			MicrosoftClientID: h.cfg.Microsoft.ClientID, MicrosoftRedirect: h.cfg.Microsoft.RedirectURI}); err != nil {
 			h.logf("mail disabled: %v", err)
 			h.mail = nil
 		}
@@ -51,12 +55,13 @@ func (h *Manager) Run(ctx context.Context) error {
 	go h.inboxLoop(ctx)
 	go h.noLockLoop(ctx)
 	go h.extensionLeaseLoop(ctx)
-	h.extensions = newExtensions(h.cfg.dir, h.cfg.extensionConfigs(h.logf), h.logf)
+	h.extensions = newExtensionsWith(h.cfg.dir, h.cfg.extensionConfigs(h.logf), h.logf, h.modules())
 	h.extensions.stats.redact = h.redactOwnSecrets
 	h.startTokenRecord(ctx) // before any extension starts with a token (extension_scopes.go)
 	h.startConnectors(ctx)  // the extensions' connectors join here (attachExtensions)
 	h.startExtensions(ctx)
-	h.startSubscriptions(ctx) // after the connectors it pulls from
+	h.startSpacesMigration(ctx) // existing users only; an installed/disabled choice wins
+	h.startSubscriptions(ctx)   // after the connectors it pulls from
 	go h.extensionUpgradeLoop(ctx)
 	go h.extensionMetricsLoop(ctx)
 	go h.pageLoop(ctx)

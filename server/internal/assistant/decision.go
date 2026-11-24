@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -126,6 +127,17 @@ type reviewDecision struct {
 	Options                                    []DecisionOption
 }
 
+// decisionPushLevel is the push level of a decision the owner is asked, by why it is theirs. Choosing what comes
+// first (priority) is the owner's call but no emergency: P1, in Needs you without ringing through low-distraction
+// mode. A step that cannot be undone, one others will see, a delivery to accept or what only the owner knows stays
+// P0 (decision rights: a2eb5451's "update the profile now?" rang as P0 on 2026-11-23).
+func decisionPushLevel(why string) string {
+	if why == whyPriority {
+		return assistantwire.LevelP1
+	}
+	return assistantwire.LevelP0
+}
+
 // neverDefault: the decision is never taken by default (it cannot be undone, or other people will see it).
 func neverDefault(why string) bool { return why == whyIrreversible || why == whyVisible }
 
@@ -134,10 +146,14 @@ const decisionElse = "When nothing needs the user, don't use needs_user: decide 
 	"send the work back (rework), or close it (accepted or cancelled). A task that only waits for something or someone is no " +
 	"decision either: park it (parked, with reason, waiting_on, evidence and until), and it comes back to you at that time."
 
+// decisionReasonMaxRunes is the shared rune cap for a needs_user decision's question/reason across validation
+// (readDecision) and stored asks (askConclusion).
+const decisionReasonMaxRunes = 200
+
 // readDecision checks a review's decision: every part there, the recommended option first among two to four. The
 // error names everything missing at once, and what to do when nothing needs the owner.
 func readDecision(why, reason, recommend, cost string, options []DecisionOption) (reviewDecision, error) {
-	d := reviewDecision{WhyOwner: strings.TrimSpace(why), Reason: clip(oneLine(reason), 200), Recommend: clip(oneLine(recommend), 120),
+	d := reviewDecision{WhyOwner: strings.TrimSpace(why), Reason: clip(oneLine(reason), decisionReasonMaxRunes), Recommend: clip(oneLine(recommend), 120),
 		CostOfWaiting: clip(oneLine(cost), 200)}
 	for _, o := range options {
 		o.Label, o.LeadsTo = clip(oneLine(o.Label), 120), clip(oneLine(o.LeadsTo), 200)
@@ -841,4 +857,16 @@ func ownerCannotStats(events []db.WorkEvent) map[string]map[string]int {
 		out[sup][resp]++
 	}
 	return out
+}
+
+// decisionLine is a decision as a line quotes it: the question and what was chosen.
+func decisionLine(d db.TodoDecisionRow) string {
+	q, c := clip(oneLine(d.Question), 40), clip(oneLine(d.Choice), 60)
+	switch {
+	case q == "":
+		return c
+	case c == "":
+		return q
+	}
+	return q + " → " + c
 }

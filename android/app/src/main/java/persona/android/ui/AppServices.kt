@@ -1,5 +1,6 @@
 package persona.android.ui
 
+import persona.feature.inbox.forPages
 import persona.android.AppText
 import persona.android.R
 import android.app.Application
@@ -120,6 +121,8 @@ class AppServices @Inject constructor(
         localize = { it.resolve(app) })
     var automation = false
         set(value) { field = value; if (value) mutableSession.value?.phone?.close() }
+    /** The core's audio broker over Android's audio focus (#13847): who owns the microphone and the speaker. */
+    val audioFocus = persona.core.moduleapi.AudioBroker(persona.android.platform.AndroidAudioFocus(app))
     /** Debug captures only: a pretend fold posture (see LaunchInput.posture). */
     val posture = androidx.compose.runtime.mutableStateOf<String?>(null)
 
@@ -249,7 +252,7 @@ class AppServices @Inject constructor(
         val conversations = RealAssistantRepository(demo.inboxConnection, local.sessions, scope, snapshots, localPreferences)
         mode.edit().putBoolean("demo", true).apply()
         mutableSession.value = ShellSession(demo.hubScope.path, demo, local.sessions, local.chats, local.interactions,
-            messages, conversations, localInbox, AgentsPreferences(listPreferences, localPreferences), demo = demo)
+            messages, conversations, localInbox.forPages(), AgentsPreferences(listPreferences, localPreferences), demo = demo)
         scope.launch { demo.notices.collect { feedback.notice(it) } }
         scope.launch {
             try { awaitCancellation() }
