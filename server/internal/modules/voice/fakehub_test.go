@@ -39,7 +39,7 @@ type fakeHub struct {
 	manual   bool                           // a message is put in the transcript and left there: the test answers it
 	work     time.Duration                  // how long a turn works (0: 50 ms)
 	delay    time.Duration                  // how long a send takes
-	subDelay time.Duration                  // how long a subscribe takes to get here
+	subBlock chan struct{}                  // a subscribe waits here before becoming active
 	pageAt   int                            // items per after_seq page (0: all)
 	noWS     bool                           // /api/v1/ws is not there
 	cut      bool                           // a send's connection is dropped before the hub answers
@@ -375,9 +375,9 @@ func (h *fakeHub) server(t *testing.T) *httptest.Server {
 			sid, _ := f["session_id"].(string)
 			switch f["type"] {
 			case "subscribe":
-				if d := h.subDelay; d > 0 {
+				if block := h.subBlock; block != nil {
 					h.mu.Unlock()
-					time.Sleep(d)
+					<-block
 					h.mu.Lock()
 				}
 				h.ws[c][sid] = true

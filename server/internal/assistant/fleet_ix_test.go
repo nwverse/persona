@@ -21,15 +21,16 @@ func TestWaitInteractionResolved(t *testing.T) {
 	ft := newFleetTestNoStore(t)
 	s := ft.s
 	ix := proto.Interaction{ID: "ix_1", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, Summary: "send mail"}
+	ready := make(chan struct{})
 	done := make(chan proto.Resolution, 1)
 	go func() {
-		r, err := s.waitInteraction(context.Background(), ix)
+		r, err := s.waitInteractionReady(context.Background(), ix, nil, ready)
 		if err != nil {
 			t.Errorf("waitInteraction: %v", err)
 		}
 		done <- r
 	}()
-	ft.waitPending(1)
+	<-ready
 	allow := true
 	if err := s.resolve("ix_1", proto.Resolution{Allow: &allow}); err != nil {
 		t.Fatalf("resolve: %v", err)

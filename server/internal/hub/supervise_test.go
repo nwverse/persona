@@ -59,6 +59,7 @@ func TestSupervisedTaskOverTheBus(t *testing.T) {
 	setManagerJSON(t, h, "inbox", map[string]any{"triage_ai": ai.Config{BaseURL: judge.URL, APIKeyFile: key, Model: "m"}})
 
 	n := newAssistantNode(t, h) // the main conversation's machine, "server"
+	n.recordSendItems = true
 	n.m.info.Home = "/home/me"
 	editSessions(n.m, func([]proto.Session) []proto.Session {
 		return []proto.Session{{SessionID: "main-1", Cwd: convDir, Title: "Persona", UpdatedAt: time.Now().UTC()}}

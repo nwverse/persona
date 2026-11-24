@@ -30,6 +30,8 @@ type assistantNode struct {
 	sentItems     map[string][]proto.Item // user transcript items written by successful supervision assistant.send calls, by session_id
 	omitSentItems bool                    // suppress sentItems writes to simulate RPC success without a transcript item
 	itemReads     int                     // session.items calls handled
+	// recordSendItems makes assistant.send append its user item before answering, as supervision confirmation needs.
+	recordSendItems bool
 	// assistant.handoff answers handoff; assistant.compact notes the session and answers compactErr
 	// (assistant_main_test.go).
 	handoff    map[string]any
@@ -110,6 +112,10 @@ func newAssistantNode(t *testing.T, h *Hub) *assistantNode {
 			return map[string]any{"ok": true}, nil
 		case "assistant.send":
 			n.sends = append(n.sends, p)
+			if n.recordSendItems {
+				text, _ := p["text"].(string)
+				n.items = append(n.items, proto.Item{Role: "user", Kind: proto.KindText, Text: text})
+			}
 			id, _ := p["session_id"].(string)
 			if id == "" {
 				n.made++

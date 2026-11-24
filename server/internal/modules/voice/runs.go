@@ -344,7 +344,7 @@ func (t *tracker) check(ctx context.Context, r *voiceRun) {
 			switch {
 			case t.asks.covers(ctx, key): // a card waiting says itself (asks.go)
 				r.owed = time.Time{}
-			case !t.asks.inScope(key) || now.Sub(r.owed) >= cardGrace: // no card says itself here, or none came
+			case t.asks.runWaitNeedsWords(key, now.Sub(r.owed)): // no card says itself here, or none came
 				r.owed = time.Time{}
 				t.say(r, plainWords(prompts.RenderVoiceReport(prompts.VoiceReport{Lang: string(l), To: t.c.target.to(), Status: "needs_you",
 					Tasks: r.Tasks, Observed: r.Observed})), false)

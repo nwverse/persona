@@ -110,17 +110,56 @@ func TestAgentWaitKeepsAReplyReadAtTheDeadline(t *testing.T) {
 	s, f := newTaskService(t)
 	now := time.Now()
 	f.sessions["box"] = []proto.Session{{SessionID: "s1", Status: proto.StatusIdle, UpdatedAt: now.Add(time.Second)}}
-	const wait = 10 * time.Millisecond
-	start := time.Now()
-	f.answerNode(DeviceSessionItems, func(string, json.RawMessage) (any, error) {
-		for time.Since(start) < 2*wait { // answer only once the deadline has passed
-			<-time.After(time.Millisecond)
+	readStarted := make(chan struct{})
+	releaseRead := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(releaseRead)
 		}
+	}()
+	f.answerNode(DeviceSessionItems, func(string, json.RawMessage) (any, error) {
+		close(readStarted)
+		<-releaseRead
 		return map[string]any{"items": inlineItems("mine", now)}, nil
 	})
-	got := s.waitAgentReply(context.Background(), "Sent.", "mine", wait, fixedWaitTarget("box", "s1"))
-	if !strings.Contains(got, "sample checked") || strings.Contains(got, `"state":"timeout"`) {
-		t.Fatal(got)
+	targetContexts := make(chan context.Context, 1)
+	target := func(ctx context.Context) (string, string, error) {
+		select {
+		case targetContexts <- ctx:
+		default:
+		}
+		return "box", "s1", nil
+	}
+	finished := make(chan string, 1)
+	const wait = time.Second
+	go func() { finished <- s.waitAgentReply(context.Background(), "Sent.", "mine", wait, target) }()
+
+	var wctx context.Context
+	select {
+	case wctx = <-targetContexts:
+	case <-time.After(10 * time.Second):
+		t.Fatal("wait did not resolve its target")
+	}
+	select {
+	case <-readStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("wait did not start its items read")
+	}
+	select {
+	case <-wctx.Done():
+	case <-time.After(2 * wait):
+		t.Fatal("wait deadline did not expire while the items read was held")
+	}
+	close(releaseRead)
+	released = true
+	select {
+	case got := <-finished:
+		if !strings.Contains(got, "sample checked") || strings.Contains(got, `"state":"timeout"`) {
+			t.Fatal(got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("wait did not finish after the held items read returned")
 	}
 }
 func TestAgentStartInlineReply(t *testing.T) {

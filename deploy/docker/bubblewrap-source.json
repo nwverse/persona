@@ -1,0 +1,6 @@
+{
+  "source": "https://github.com/containers/bubblewrap/releases/download/v0.12.0/bubblewrap-0.12.0.tar.xz",
+  "sha256": "9760d007363e3abba7c747489910f9f82d9fca53ba3bd3282e396fa3c97a3314",
+  "local_patch": "bubblewrap-0.12.0-proc-subset.patch",
+  "required_kernel_change": "05dab768fc2dc7eb9b827201bb39bb5be54bce49"
+}

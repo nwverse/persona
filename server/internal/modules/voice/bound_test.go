@@ -1204,24 +1204,53 @@ func TestBoundTurnBetweenTheLookAndTheRead(t *testing.T) {
 func TestBoundTurnEndsBeforeTheLinkSubscribes(t *testing.T) {
 	hub := agentHub(t)
 	hub.manual = true
-	hub.subDelay = 2 * time.Second
+	hub.subBlock = make(chan struct{})
 	up := boundUpstream(t, false)
-	pl := testPlugin(t, liveProvider(up), hub.server(t))
+	srv := hub.server(t)
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(hub.subBlock) }) }
+	t.Cleanup(release)
+	pl := testPlugin(t, liveProvider(up), srv)
 	a := dialApp(t, pl, boundStart("a1", nil))
 	a.until(ofType("ready"))
 	a.send(map[string]any{"type": "text", "text": "跑一下全部测试"})
 	m := hub.waitSent(1)
-	looks := hub.lookCount()
-	for deadline := time.Now().Add(5 * time.Second); hub.lookCount() < looks+2; {
-		if time.Now().After(deadline) {
-			t.Fatal("the run was never looked at")
+	wait := func(what string, ready func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(15 * time.Second); !ready(); {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+			time.Sleep(20 * time.Millisecond)
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
+	looks := hub.lookCount()
+	wait("the run lookup and its since_seq=0 subscription", func() bool {
+		if hub.lookCount() < looks+2 {
+			return false
+		}
+		n, last := hub.subscribes("a1")
+		since, ok := last["since_seq"].(float64)
+		return n > 0 && ok && since == 0
+	})
 	hub.status("a1", "working")
 	hub.add("a1", proto.Item{Role: "assistant", Kind: proto.KindText, Text: "测试在后台跑了，单元测试都过了。"})
 	hub.edit("a1", func(s *fakeSession) { s.background = 1 })
 	hub.end("a1")
+	hub.mu.Lock()
+	items := slices.Clone(hub.sessions["a1"].items)
+	hub.mu.Unlock()
+	if len(items) == 0 || items[len(items)-1].Kind != "turn_duration" {
+		t.Fatalf("the fake turn did not end with turn_duration: %v", items)
+	}
+	finalSeq := items[len(items)-1].Seq
+	release()
+	key := linkKey{"m", "a1"}
+	wait("the ended turn's items backlog", func() bool {
+		pl.link.mu.Lock()
+		defer pl.link.mu.Unlock()
+		return pl.link.since[key] >= finalSeq
+	})
 	if states := a.runStates(m.ID, runHeld); slices.Contains(states, runDone) {
 		t.Fatalf("run states %v", states)
 	}

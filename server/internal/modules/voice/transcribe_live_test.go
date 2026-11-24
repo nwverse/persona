@@ -22,6 +22,29 @@ func trCaptionJob() (*trJob, *trSession) {
 // trAt is recording second at in samples.
 func trAt(at float64) int64 { return int64(math.Round(at * trRate)) }
 
+func TestFirstCaptionAtSpeechOnsetBelongsToTheNewWindow(t *testing.T) {
+	j, session := trCaptionJob()
+	cut, onset := trAt(6.1), trAt(6.4)
+	j.windows[0].to = cut
+	j.windows = append(j.windows, &trWin{n: 1, from: cut, to: -1})
+	j.nextWin = 2
+	j.vad.spans = [][2]int64{{trAt(3.8), trAt(5.6)}}
+	j.vad.open, j.vad.from, j.vad.last = true, onset, trAt(6.5)
+
+	// The reader can receive the first words while the sending goroutine still reports exactly the onset.
+	// A timestamp one sample earlier is still in silence and must not adopt a future utterance.
+	if start := j.captionStart(session, onset-1); start >= cut {
+		t.Fatalf("caption before the new speech starts at sample %d, past the cut %d", start, cut)
+	}
+	j.caption(session, tevent{kind: tevCaption, item: "third", text: "下周三"}, onset, onset)
+	if got := j.captionText(session, j.windows[0]); got != "" {
+		t.Fatalf("the preceding window took the first words of the next sentence: %q", got)
+	}
+	if got := j.captionText(session, j.windows[1]); got != "下周三" {
+		t.Fatalf("next window caption = %q", got)
+	}
+}
+
 // trFrameAt is one caption frame and where the session's audio was when it came, in recording seconds.
 type trFrameAt struct {
 	at    float64

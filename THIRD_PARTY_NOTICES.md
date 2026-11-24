@@ -7,6 +7,14 @@
 namespace and mount setup rules for non-root bubblewrap. Its license is in
 `deploy/docker/MOBY-LICENSE`.
 
+## bubblewrap
+
+The runtime image builds bubblewrap 0.12.0 (LGPL-2.1-or-later) from the immutable
+source archive and SHA-256 recorded in `deploy/docker/bubblewrap-source.json`.
+One local patch makes a fresh PID namespace mount procfs as `subset=pid`; it does
+not change the upstream version string. The distributed image includes the upstream
+`COPYING`, the patch, and that source/digest record under `/usr/share/licenses/bubblewrap/`.
+
 ## Password login WebAssembly client
 
 `web/public/pake/client.wasm` uses `github.com/bytemare/opaque` v0.18.0 (MIT),

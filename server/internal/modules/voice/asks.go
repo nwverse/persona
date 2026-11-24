@@ -110,6 +110,16 @@ func (k *asker) inScope(key linkKey) bool {
 	return slices.ContainsFunc(k.t.runs, func(r *voiceRun) bool { return key == linkKey{r.MachineID, r.SessionID} })
 }
 
+// runWaitNeedsWords keeps the generic wait out of the window between ready and arm/bind. During that window a card
+// may already cover the run but its scope is not known yet. Once initialized, an out-of-scope wait is immediate and a
+// cardless in-scope wait retains cardGrace.
+func (k *asker) runWaitNeedsWords(key linkKey, waited time.Duration) bool {
+	if k.on && (!k.armed || k.v2 && k.target == (linkKey{})) {
+		return false
+	}
+	return !k.inScope(key) || waited >= cardGrace
+}
+
 // event marks a look due when what the hub link said may concern the call's cards.
 func (k *asker) event(ev linkEvent) {
 	if ev.key == (linkKey{}) || k.inScope(ev.key) {

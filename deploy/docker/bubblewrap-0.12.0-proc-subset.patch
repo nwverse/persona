@@ -1,0 +1,24 @@
+Subject: [PATCH] bubblewrap: mount fresh proc as subset=pid
+
+Keep a fresh PID namespace's procfs restricted to process entries. This avoids
+revealing Docker's protected proc mounts while retaining task-local proc files.
+Requires Linux 05dab768fc2dc7eb9b827201bb39bb5be54bce49 or an equivalent backport.
+---
+ bubblewrap.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/bubblewrap.c b/bubblewrap.c
+index 9f5c54d5e3d0c..7a99f0b31a3e4 100644
+--- a/bubblewrap.c
++++ b/bubblewrap.c
+@@ -1387,7 +1387,7 @@ setup_newroot (bool unshare_pid)
+             if (unshare_pid || opt_pidns_fd != -1)
+               {
+                 /* Our own procfs */
+-                if (mount ("proc", dest_path, "proc", MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL) != 0)
++                if (mount ("proc", dest_path, "proc", MS_NOSUID | MS_NOEXEC | MS_NODEV, "subset=pid") != 0)
+                   die_with_mount_error ("Can't mount proc on %s", op->dest);
+               }
+             else
+--
+2.43.0

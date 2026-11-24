@@ -182,6 +182,13 @@ without AppArmor use only the base file; an image update alone cannot alter the 
 security configuration. An older compose file on an AppArmor host may therefore need
 the documented profile/override before required extensions can run.
 
+The runtime image builds bubblewrap 0.12.0 with one restricted-proc source patch: a fresh
+PID namespace mounts procfs as `subset=pid`, retaining task-local process files while
+hiding global proc entries. This requires Linux commit
+`05dab768fc2dc7eb9b827201bb39bb5be54bce49` or an equivalent backport. An unsupported
+kernel must keep required extensions stopped; do not bind the outer `/proc`, remove the
+PID namespace, or select an unconfined compatibility override instead.
+
 `server-other` CI runs the real extension filesystem/network isolation test as the
 non-root image user in a disposable container built from the same runtime stage,
 with all outer capabilities dropped and the supplied security options. It also requires the manager tests for refusal, `active=true` and the official

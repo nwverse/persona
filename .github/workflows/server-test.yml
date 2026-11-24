@@ -62,6 +62,8 @@ jobs:
             sudo apparmor_parser -r "${profiles[0]}"
           fi
       - name: Server checks
+        env:
+          PERSONA_REQUIRE_APPARMOR: ${{ matrix.shard == 'other' && '1' || '' }}
         run: scripts/ci/server.sh "$CI_SERVER_SHARD"
       - name: Save shard Go caches
         if: success() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'

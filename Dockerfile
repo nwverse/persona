@@ -100,13 +100,52 @@ RUN for p in persona-hub persona-manager; do \
         -ldflags "-s -w -X main.version=$VERSION -X main.channel=docker -X main.image=$IMAGE -X main.updateURL=$UPDATE_URL" -o /out/$p ./cmd/$p || exit 1; \
     done
 
-FROM alpine:3.22 AS sandbox-runtime
+FROM alpine:3.22 AS bwrap-proc-subset-build
+# One local change: a fresh PID namespace mounts procfs with subset=pid. Runtime use also
+# requires Linux 05dab768fc2dc7eb9b827201bb39bb5be54bce49 or an equivalent backport.
+ENV SOURCE_DATE_EPOCH=1787739078
+ADD --checksum=sha256:9760d007363e3abba7c747489910f9f82d9fca53ba3bd3282e396fa3c97a3314 \
+    https://github.com/containers/bubblewrap/releases/download/v0.12.0/bubblewrap-0.12.0.tar.xz \
+    /tmp/bubblewrap-0.12.0.tar.xz
+COPY deploy/docker/bubblewrap-0.12.0-proc-subset.patch /tmp/
+RUN apk add --no-cache build-base libcap-dev meson ninja patch \
+ && tar -C /tmp -xJf /tmp/bubblewrap-0.12.0.tar.xz
+WORKDIR /tmp/bubblewrap-0.12.0
+RUN patch -p1 < /tmp/bubblewrap-0.12.0-proc-subset.patch \
+ && meson setup build \
+      --prefix=/usr \
+      --buildtype=release \
+      --wrap-mode=nofallback \
+      -Dselinux=disabled \
+      -Dman=disabled \
+      -Dtests=false \
+      -Dbash_completion=disabled \
+      -Dzsh_completion=disabled \
+ && meson compile -C build bwrap \
+ && install -D -m 0755 build/bwrap /out/bwrap \
+ && install -D -m 0644 COPYING /out/COPYING \
+ && test "$(/out/bwrap --version)" = "bubblewrap 0.12.0" \
+ && sha256sum /out/bwrap
+
+FROM alpine:3.22 AS sandbox-runtime-stock
 # ssh: machines the hub reaches over ssh (optional with tailcat); su-exec: the entrypoint drops to the persona user.
 # bubblewrap uses unprivileged user namespaces; the Compose seccomp profile permits its setup syscalls.
-RUN apk add --no-cache ca-certificates tzdata openssh-client su-exec bubblewrap \
+RUN apk add --no-cache ca-certificates tzdata openssh-client su-exec bubblewrap=0.12.0-r0 \
  && chmod 0755 /usr/bin/bwrap \
  && adduser -D -h /home/persona -u 1000 persona \
  && mkdir -p /home/persona/.persona && chown persona:persona /home/persona/.persona && chmod 700 /home/persona/.persona
+
+FROM sandbox-runtime-stock AS sandbox-runtime
+# Keep only the reviewed restricted-proc binary and its runtime library/license, not the build tools or stock package.
+RUN apk del --no-cache bubblewrap && apk add --no-cache libcap2
+COPY --from=bwrap-proc-subset-build /out/bwrap /usr/bin/bwrap
+COPY --from=bwrap-proc-subset-build /out/COPYING /usr/share/licenses/bubblewrap/COPYING
+COPY deploy/docker/bubblewrap-0.12.0-proc-subset.patch /usr/share/licenses/bubblewrap/proc-subset.patch
+COPY deploy/docker/bubblewrap-source.json /usr/share/licenses/bubblewrap/source.json
+RUN chmod 0755 /usr/bin/bwrap \
+ && test ! -u /usr/bin/bwrap \
+ && test "$(/usr/bin/bwrap --version)" = "bubblewrap 0.12.0" \
+ && sha256sum /usr/bin/bwrap
 FROM sandbox-runtime
 ARG TARGETARCH
 COPY --from=build /out/nodes/ /opt/persona/nodes/

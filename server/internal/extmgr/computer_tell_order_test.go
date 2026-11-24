@@ -3,6 +3,7 @@ package extmgr
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -54,6 +55,8 @@ func (g *gatedNode) Call(ctx context.Context, method string, params, out any) er
 	return g.nodeCaller.Call(ctx, method, params, out)
 }
 
+var computerTellOrderSequence atomic.Uint64
+
 // The plugin's changes tell each Mac its no-auto-lock and cursor settings from goroutines that run at once: the node
 // must end up with the newest setting even when a tell that read the older one is slower to reach it.
 func TestComputerTellsReachTheMacInOrder(t *testing.T) {
@@ -64,16 +67,17 @@ func TestComputerTellsReachTheMacInOrder(t *testing.T) {
 		on, off      string
 	}{
 		{"nolock", "computer.nolock", fakeNoLock, (*Manager).tellNoLock,
-			`{"machines": ["mac"], "no_auto_lock": ["mac"]}`, `{"machines": ["mac"]}`},
+			`{"machines": [%[1]q], "no_auto_lock": [%[1]q]}`, `{"machines": [%[1]q]}`},
 		{"cursor", "computer.cursor", fakeCursor, (*Manager).tellCursor,
-			`{"machines": ["mac"]}`, `{"machines": ["mac"], "show_cursor": false}`},
+			`{"machines": [%[1]q]}`, `{"machines": [%[1]q], "show_cursor": false}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h, _ := extensionTestHub(t)
 			ctx := context.Background()
-			mac, _ := computerMac(t, h, "mac")
+			id := fmt.Sprintf("mac-order-%s-%d", c.name, computerTellOrderSequence.Add(1))
+			mac, _ := computerMac(t, h, id)
 			fakeNoLockMu.Lock()
-			delete(c.told, "mac")
+			delete(c.told, id)
 			fakeNoLockMu.Unlock()
 			config := func(s string) {
 				t.Helper()
@@ -84,11 +88,11 @@ func TestComputerTellsReachTheMacInOrder(t *testing.T) {
 			if err := h.extensions.reg.SetEnabled(ctx, cuaExtensionID, true, "test"); err != nil {
 				t.Fatal(err)
 			}
-			config(c.on)
+			config(fmt.Sprintf(c.on, id))
 			told := func() []bool { // what the Mac was told
 				fakeNoLockMu.Lock()
 				defer fakeNoLockMu.Unlock()
-				return append([]bool(nil), c.told["mac"]...)
+				return append([]bool(nil), c.told[id]...)
 			}
 
 			g := &gatedNode{method: c.method, hold: true, arrived: make(chan struct{}), newer: make(chan struct{}),
@@ -108,7 +112,7 @@ func TestComputerTellsReachTheMacInOrder(t *testing.T) {
 				t.Fatal("the first tell never reached the node")
 			}
 			before := len(told())
-			config(c.off) // its own tells start too (computerChanged)
+			config(fmt.Sprintf(c.off, id)) // its own tells start too (computerChanged)
 			wg.Add(1)
 			go func() { defer wg.Done(); c.tell(h, ctx, mac) }() // reads off
 			// Without the per-Mac order the newer tell gets through now; with it, it waits for the held one.

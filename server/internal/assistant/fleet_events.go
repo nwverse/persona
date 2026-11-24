@@ -282,7 +282,7 @@ func (s *Service) FleetUp(ctx context.Context) {
 	s.fleet.sentMu.Lock()
 	s.fleet.sent, s.fleet.archived = nil, nil
 	s.fleet.sentMu.Unlock()
-	s.hub.Tell(assistantwire.EventFleetInteractions, assistantwire.FleetInteractions{Interactions: s.pendingInteractions()})
+	s.tellPendingInteractions()
 	reviewInteractions, _ := s.sessionReviewInteractions(ctx)
 	s.askOnPhone(reviewInteractions)
 	for _, m := range s.fleetMachines() {

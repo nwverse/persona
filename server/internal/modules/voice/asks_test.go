@@ -454,6 +454,32 @@ func TestAskStatusAndUnheardAnswers(t *testing.T) {
 	}
 }
 
+func TestRunWaitWordsWaitForCardScopeInitialization(t *testing.T) {
+	key := linkKey{machine: "m", session: "a1"}
+	other := linkKey{machine: "m", session: "other"}
+	for _, tc := range []struct {
+		name   string
+		asker  *asker
+		waited time.Duration
+		want   bool
+	}{
+		{"before arm", &asker{on: true, v2: true}, 0, false},
+		{"before arm past grace", &asker{on: true, v2: true}, cardGrace + time.Second, false},
+		{"before bind", &asker{on: true, armed: true, v2: true}, 0, false},
+		{"before bind past grace", &asker{on: true, armed: true, v2: true}, cardGrace + time.Second, false},
+		{"bound before grace", &asker{on: true, armed: true, v2: true, target: key}, 0, false},
+		{"bound cardless past grace", &asker{on: true, armed: true, v2: true, target: key}, cardGrace, true},
+		{"bound other conversation", &asker{on: true, armed: true, v2: true, target: other}, 0, true},
+		{"caller cannot cover cards", &asker{}, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.asker.runWaitNeedsWords(key, tc.waited); got != tc.want {
+				t.Fatalf("generic wait = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // A plan and a permission are said by their kinds only, never the command, its path or the plan, and never asked: a
 // spoken "approve" is not sent. The turn waiting on them is not said again as "go look on the phone".
 func TestApprovalsAreSaidByTheirKind(t *testing.T) {

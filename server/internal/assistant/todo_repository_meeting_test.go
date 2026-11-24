@@ -1,10 +1,13 @@
 package assistant
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
@@ -13,7 +16,6 @@ import (
 )
 
 func TestMeetingRepositoryReadsDoNotImportLegacyLinks(t *testing.T) {
-	needsRecordingModule(t)
 	for _, entry := range []string{"todo_get", "todo_repositories_get", "agent"} {
 		for _, populated := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/populated=%t", entry, populated), func(t *testing.T) {
@@ -38,6 +40,9 @@ func TestMeetingRepositoryReadsDoNotImportLegacyLinks(t *testing.T) {
 				}
 				// Reconstruct the service so the legacy state comes from durable storage.
 				s, _ := repositoryService(t, database)
+				if s.rec == nil {
+					s.rec = &meetingRepositoryRecording{}
+				}
 				if _, err := s.meetingTurnSent("box", "attendee", "recording", entry != "agent"); err != nil {
 					t.Fatal(err)
 				}
@@ -89,4 +94,32 @@ func TestMeetingRepositoryReadsDoNotImportLegacyLinks(t *testing.T) {
 			})
 		}
 	}
+}
+
+// meetingRepositoryRecording keeps the core repository assertions executable when the recording module is absent.
+// The embedded layer leaves every unrelated recording operation unimplemented; normal builds keep the real module.
+type meetingRepositoryRecording struct {
+	recordingLayer
+	running atomic.Bool
+}
+
+func (r *meetingRepositoryRecording) MeetingTurnSent(_, _, _ string, _ bool) (time.Time, error) {
+	r.running.Store(true)
+	return time.Now(), nil
+}
+
+func (r *meetingRepositoryRecording) MeetingTurnRunning(_ context.Context, _, _ string) (bool, error) {
+	return r.running.Load(), nil
+}
+
+func (r *meetingRepositoryRecording) MeetingTurnAgentRunning(context.Context, string) (bool, error) {
+	return r.running.Load(), nil
+}
+
+func (r *meetingRepositoryRecording) MeetingTurnUserSpoke(_, _ string) {
+	r.running.Store(false)
+}
+
+func (r *meetingRepositoryRecording) MeetingRefuses(_ context.Context, _, _, _ string, _ bool) (proto.ToolResult, bool) {
+	return proto.ToolResult{}, false
 }
