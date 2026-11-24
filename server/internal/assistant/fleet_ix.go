@@ -1464,6 +1464,7 @@ func (s *Service) keepAlways(ix proto.Interaction, r proto.Resolution) {
 // NodeDetached: a machine's node connection ended (devices.Options.Detached): the cards waiting on it that cannot be
 // claimed again end (resumable ones wait for their hook through the next connection), its list shows it.
 func (s *Service) NodeDetached(machine string) {
+	s.noteNodeOffline(machine, time.Now())
 	if !s.fleetOn() {
 		return
 	}
@@ -1496,6 +1497,29 @@ func (s *Service) cancelMachineInteractions(machineID string) {
 	s.feishuDetach(ids)
 	for _, id := range ids {
 		if s.endPreparedByID(id, "cancelled", "The computer that owned this approval disconnected; nothing changed.") {
+			continue
+		}
+		s.finishInteraction(id)
+	}
+}
+
+// cancelSessionInteractions withdraws leftover approval gates and pending cards
+// for one superseded session on a returning node (node_recovery.go, #14781).
+func (s *Service) cancelSessionInteractions(machineID, sessionID string) {
+	s.fleet.mu.Lock()
+	var ids []string
+	for id, p := range s.fleet.interactions {
+		if p.ix.MachineID == machineID && p.ix.SessionID == sessionID {
+			ids = append(ids, id)
+		}
+	}
+	s.fleet.mu.Unlock()
+	if len(ids) == 0 {
+		return
+	}
+	s.feishuDetach(ids)
+	for _, id := range ids {
+		if s.endPreparedByID(id, "cancelled", "The superseded Agent was released during node recovery; nothing changed.") {
 			continue
 		}
 		s.finishInteraction(id)

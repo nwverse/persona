@@ -132,6 +132,11 @@ const (
 	CapabilityTodoImages = "todo_images"
 )
 
+// ManagerStatus is EventManagerStatus's params: live runtime status a connected manager reports to the hub's roster.
+type ManagerStatus struct {
+	PendingRestart bool `json:"pending_restart"`
+}
+
 // BodyStream is where MethodHTTPStreamed's body comes from: the relay the hub holds with ID (devicewire.RelayPath
 // ?id=, only the manager the request is for may take it), which carries exactly Size bytes as a body stream
 // (bus.WriteBody) and then closes normally.
@@ -140,16 +145,17 @@ type BodyStream struct {
 	Size int64  `json:"size"`
 }
 
-// The methods and events, by direction. The assistant's handshake is manager.hello {id, host, os, arch, deploy,
-// version, capabilities}; its answer is Hello (with the hub's name, role and managers besides).
+// The methods and events, by direction. The assistant's handshake is manager.hello {id, host, machine_uid?, os, arch,
+// deploy, version, pending_restart?, capabilities}; its answer is Hello (with the hub's name, role and managers besides).
 const (
 	// The assistant calls the hub (Hub).
-	MethodHello    = "manager.hello"
-	MethodDevice   = "device.call"
-	MethodApp      = "app.call"
-	MethodNotify   = "notify.request"
-	MethodSnapshot = "manager.snapshot"
-	EventBroadcast = "ws.broadcast" // one way
+	MethodHello        = "manager.hello"
+	MethodDevice       = "device.call"
+	MethodApp          = "app.call"
+	MethodNotify       = "notify.request"
+	MethodSnapshot     = "manager.snapshot"
+	EventBroadcast     = "ws.broadcast"   // one way
+	EventManagerStatus = "manager.status" // one way: ManagerStatus (live roster status, e.g. pending_restart)
 
 	// The hub calls the assistant (Handler).
 	MethodHTTP = "http.request" // HTTPRequest → HTTPResponse

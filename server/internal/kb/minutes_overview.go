@@ -9,6 +9,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // The summary card (#6563, docs/assistant/meeting-minutes.md "Summary card (#6563)"): besides the legacy lists the
@@ -26,37 +28,17 @@ type MinutesOverview struct {
 	Groups []MinutesGroup `json:"groups"`
 }
 
-// MinutesConclusion is a core conclusion: where the meeting landed, citing a line, or a photo a bullet cites.
-type MinutesConclusion struct {
-	Text   string   `json:"text"`
-	Strong []string `json:"strong,omitempty"`
-	At     float64  `json:"at"`
-	Photo  int      `json:"photo,omitempty"`
-}
+// MinutesConclusion is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type MinutesConclusion = recordingwire.MinutesConclusion
 
-// MinutesGroup is a heading over topics; Title is "" for the single untitled group.
-type MinutesGroup struct {
-	Title  string         `json:"title"`
-	Topics []MinutesTopic `json:"topics"`
-}
+// MinutesGroup is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type MinutesGroup = recordingwire.MinutesGroup
 
-// MinutesTopic is a topic card: Icon one of minutesTopicIcons.
-type MinutesTopic struct {
-	Title   string          `json:"title"`
-	Icon    string          `json:"icon"`
-	Bullets []MinutesBullet `json:"bullets"`
-}
+// MinutesTopic is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type MinutesTopic = recordingwire.MinutesTopic
 
-// MinutesBullet is a point (Who as the point's) or a decision (Decision) of the minutes, with the same Text, At and
-// Photo; Strong the places of Text set in bold (strongSpans).
-type MinutesBullet struct {
-	Text     string   `json:"text"`
-	Strong   []string `json:"strong,omitempty"`
-	At       float64  `json:"at"`
-	Photo    int      `json:"photo,omitempty"`
-	Who      string   `json:"who,omitempty"`
-	Decision bool     `json:"decision,omitempty"`
-}
+// MinutesBullet is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type MinutesBullet = recordingwire.MinutesBullet
 
 const (
 	minutesTopics          = 12  // topics of one overview, after same-titled ones are merged; more leaves it out

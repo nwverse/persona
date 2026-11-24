@@ -180,7 +180,7 @@ func (m chanMutex) TryLock() bool {
 
 // claimChannelMessage claims a message without a thread reservation; unreadable or unwritable state stays retryable.
 func (s *Service) claimChannelMessage(id, msg string) (bool, error) {
-	admission, err := s.admitChannelMessage(id, channel.Message{ID: msg})
+	admission, err := s.admitChannelMessage(context.Background(), id, channel.Message{ID: msg})
 	return admission != nil, err
 }
 
@@ -367,7 +367,7 @@ func (s *Service) sweepChannelRuns() {
 // sinkReady: channel id can be answered now (the Feishu bot is connected and paired; a plugin's is there).
 func (s *Service) sinkReady(ctx context.Context, id string) bool {
 	if id == channel.Feishu {
-		st, err := s.feishuStatusKept(ctx)
+		st, err := s.larkModule().StatusKept(ctx)
 		return err == nil && st.Ready
 	}
 	_, ok := s.pluginChannel(ctx, id)

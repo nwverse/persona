@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // Hub transcription (#3862 phase 5, docs/assistant/meeting-minutes.md "Phase 5: hub transcription"): a meeting
@@ -19,44 +21,38 @@ import (
 // reads: transcript.md, detail.segments, search, the minutes, the summary and the follow-up's seed. The manager owns
 // the socket, the jobs and the final pass; it changes the state through TranscriptionUpdate.
 
-// Modes, states, parts, limits.
+// Re-exported from recordingwire.
 const (
-	// The transcription modes (meeting.json's transcription.mode, the upload's transcription).
-	TranscriptionDevice, TranscriptionHub = "device", "hub"
-	// The states of a hub-mode recording's transcription.
-	TranscriptionLive, TranscriptionFinishing, TranscriptionFinal, TranscriptionFailed = "live", "finishing", "final", "failed"
-	// The upload's transcription_problem: the hub was asked for and is not ready, or the recording is not a meeting.
-	TranscriptionUnavailable, TranscriptionNotMeeting = "unavailable", "not_meeting"
-	// The meeting parts the apps read again (GET …/live?parts=, the meeting_live event): PartTranscription's revision
-	// is kept in meeting.json, PartInterim's is the caption's time in milliseconds (the manager's, never stored).
-	PartTranscription, PartInterim = "transcription", "interim"
-	// The timeline's limits: role changes and speaking spans.
-	MaxTimelineRoles, MaxTimelineSpans = 100, 1000
-	// AudioRate is the stored audio's sample rate (PCM16 little-endian, mono).
-	AudioRate = 16000
-	// MaxAudioSeconds is the most audio the hub keeps for one recording: none from this recording second on.
-	MaxAudioSeconds = 12 * 3600
-	// The passes that wrote the hub's transcript (HubTranscript.Pass).
-	HubPassLive, HubPassFinal = "live", "final"
-	// A segment's source in the transcript of record (RecordingSegment.Source) and a live line's (LiveSegment.Source).
-	SourceHub, SourceDevice = "hub", "device"
+	TranscriptionDevice      = recordingwire.TranscriptionDevice
+	TranscriptionHub         = recordingwire.TranscriptionHub
+	TranscriptionLive        = recordingwire.TranscriptionLive
+	TranscriptionFinishing   = recordingwire.TranscriptionFinishing
+	TranscriptionFinal       = recordingwire.TranscriptionFinal
+	TranscriptionFailed      = recordingwire.TranscriptionFailed
+	TranscriptionUnavailable = recordingwire.TranscriptionUnavailable
+	TranscriptionNotMeeting  = recordingwire.TranscriptionNotMeeting
+	PartTranscription        = recordingwire.PartTranscription
+	PartInterim              = recordingwire.PartInterim
+	MaxTimelineRoles         = recordingwire.MaxTimelineRoles
+	MaxTimelineSpans         = recordingwire.MaxTimelineSpans
+	AudioRate                = recordingwire.AudioRate
+	MaxAudioSeconds          = recordingwire.MaxAudioSeconds
+	HubPassLive              = recordingwire.HubPassLive
+	HubPassFinal             = recordingwire.HubPassFinal
+	SourceHub                = recordingwire.SourceHub
+	SourceDevice             = recordingwire.SourceDevice
 )
 
 // minutesHubWait is how long a hub-mode meeting's minutes wait for its final transcript after the complete upload.
 const minutesHubWait = 45 * time.Minute
 
+// Re-exported from recordingwire.
 var (
-	// ErrHubTranscribes: POST …/live on a recording the hub transcribes (its live log is the hub's).
-	ErrHubTranscribes = errors.New("the hub transcribes this meeting")
-	// ErrNotHub: the recording's mode is not hub (the audio socket, PUT …/audio).
-	ErrNotHub = errors.New("this recording is not transcribed on the hub")
-	// ErrTranscriptionFinal: the final pass has started; the hub takes no more audio.
-	ErrTranscriptionFinal = errors.New("the final pass has started")
-	// ErrAudioFull: the recording holds MaxAudioSeconds of audio.
-	ErrAudioFull = errors.New("the hub holds the most audio a recording may have")
-	// ErrBadAudio: audio that is not whole 16-bit samples, or a position that is not 0 or more seconds (400, or the
-	// socket's bad_frame).
-	ErrBadAudio = errors.New("audio must be whole 16-bit samples")
+	ErrHubTranscribes     = recordingwire.ErrHubTranscribes
+	ErrNotHub             = recordingwire.ErrNotHub
+	ErrTranscriptionFinal = recordingwire.ErrTranscriptionFinal
+	ErrAudioFull          = recordingwire.ErrAudioFull
+	ErrBadAudio           = recordingwire.ErrBadAudio
 )
 
 // ---- the timeline ----
@@ -318,18 +314,8 @@ func (t *MeetingTranscription) finalProgress() (done, end float64, ok bool) {
 	return min(max(t.FinalDone, 0), t.End), t.End, true
 }
 
-// TranscriptionView is transcription on GET …/live and in detail.meta.
-type TranscriptionView struct {
-	Mode     string        `json:"mode"`
-	State    string        `json:"state,omitempty"`
-	Gaps     *[][2]float64 `json:"gaps,omitempty"` // hub: always present, [] when none
-	Problem  string        `json:"problem,omitempty"`
-	Fallback bool          `json:"fallback,omitempty"`
-	// FinalDone and End: while the final pass runs (finishing, the pass started), how far it is and the recording's
-	// end, both in recording seconds (#13461); absent otherwise. FinalDone is 0 as the pass starts.
-	FinalDone *float64 `json:"final_done,omitempty"`
-	End       *float64 `json:"end,omitempty"`
-}
+// TranscriptionView is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type TranscriptionView = recordingwire.TranscriptionView
 
 // TranscriptionView is m's transcription as the apps read it; nil while no mode was decided. gaps are the spans the
 // hub holds no audio for now; nil takes those meeting.json keeps (the audio writes keep them up to date). Once the

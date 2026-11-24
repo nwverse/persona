@@ -72,6 +72,8 @@ func (s *Service) inboxSuggestionRoutes() {
 			apierr.Write(w, http.StatusForbidden, err)
 		case errors.Is(err, errMailReplyTargetChanged):
 			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "mail_reply_target_changed", "error": i18n.T(l, "assistant-inbox.mail_target_changed"), "retryable": false, "delivered": "none", "item": it})
+		case errors.Is(err, errReplyPolicyBlocked):
+			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": assistantwire.CodeInboxReplyPolicyBlocked, "error": i18n.T(l, "assistant-inbox.reply_policy_blocked"), "retryable": false, "delivered": "none", "item": it})
 		case err != nil && s.writeInboxSendError(w, r, "suggestion", r.PathValue("id"), err, it):
 			// in doubt (delivered unknown), or why nothing was sent (#9125)
 		case err != nil:
@@ -86,7 +88,9 @@ func (s *Service) inboxSuggestionRoutes() {
 // instruction at version 0 is also accepted when no suggestion is current. full is false for an answer-only device
 // (the watch): it may only confirm a reply or a conclusion, as text.
 func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionReq, full bool) (InboxItem, error) {
-	enabled := s.inboxConfig(ctx).Agent.Enabled
+	inboxCfg := s.inboxConfig(ctx)
+	enabled := inboxCfg.Agent.Enabled
+	policy := compileReplyPolicy(inboxCfg.ReplyPolicy)
 	b := &s.inbox
 	b.mu.Lock()
 	it := b.items[id]
@@ -120,7 +124,7 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 		return InboxItem{}, errAnswerOnly
 	}
 	if g != nil && g.Kind == SuggestReply && in.Action == suggestConfirm && !g.Handback {
-		return s.confirmSuggestionReplyLocked(ctx, it, g, in)
+		return s.confirmSuggestionReplyLocked(ctx, it, g, in, policy)
 	}
 	if g != nil && g.Conversation != nil {
 		resetInboxFollowChecks(it)

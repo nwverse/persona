@@ -19,7 +19,8 @@ export type Route =
   | { name: "persona-new" }
   // `view` is the page's `?view=chat|term`; without it the page shows what it showed last (lib/session-view.ts)
   // `at`: the message to land on (?at=<item id>, the hub's links to one message, docs/protocol/deep-links.md)
-  | { name: "session"; mid: string; sid: string; view?: SessionView; work?: true; at?: string }
+  // `standalone`: explicit full-page open for a subagent ("Open as page", prevents redirecting back to parent panel)
+  | { name: "session"; mid: string; sid: string; view?: SessionView; work?: true; at?: string; standalone?: true }
   // one herdr tab (a slot) of a workspace; `sid` picks its pane (lib/herdr-tree.ts resolveTab)
   | { name: "tab"; mid: string; space: string; slot: string; sid?: string; view?: SessionView; work?: true; at?: string }
   // `mid` / `manager`: the computer the conversation runs on and its manager when another than the default
@@ -43,7 +44,6 @@ export type Route =
   // `manager`: whose item it is when that is another manager than the default (`?manager=`, docs/assistant/managers.md
   // "Clients"): two managers may list the same id
   | { name: "inbox"; id?: string; manager?: string }
-  | { name: "messages"; id?: string }
   | { name: "starred" }
   | { name: "routines" }
   | { name: "kb"; kind?: string; id?: string }
@@ -94,7 +94,12 @@ export function parse(path: string, search = ""): Route {
   const detail = () => {
     const q = new URLSearchParams(search);
     const at = q.get("at");
-    return { ...(view && { view }), ...(q.get("work") === "1" && { work: true as const }), ...(at && { at }) };
+    return {
+      ...(view && { view }),
+      ...(q.get("work") === "1" && { work: true as const }),
+      ...(at && { at }),
+      ...(q.get("standalone") === "1" && { standalone: true as const }),
+    };
   };
   if (p[0] === "s" && p[1] && p[2]) return { name: "session", mid: p[1], sid: p[2], ...detail() };
   if (p[0] === "t" && p[1] && p[2] && p[3]) return { name: "tab", mid: p[1], space: p[2], slot: p[3], sid: p[4] || undefined, ...detail() };
@@ -117,7 +122,6 @@ export function parse(path: string, search = ""): Route {
     const manager = p[1] ? new URLSearchParams(search).get("manager") : null;
     return manager ? { name: "inbox", id: p[1], manager } : { name: "inbox", id: p[1] };
   }
-  if (p[0] === "messages") return { name: "messages", id: p[1] };
   if (p[0] === "starred" && p.length === 1) return { name: "starred" };
   if (p[0] === "routines") return { name: "routines" };
   // an entry of a kind a feature module draws (a recording) is unknown while the module is off (core/module-host.ts)
@@ -212,8 +216,6 @@ export function routePath(r: Route): string {
       return "/assistant";
     case "inbox":
       return r.id ? `/inbox/${encodeURIComponent(r.id)}${r.manager ? `?manager=${encodeURIComponent(r.manager)}` : ""}` : "/inbox";
-    case "messages":
-      return r.id ? `/messages/${encodeURIComponent(r.id)}` : "/messages";
     case "starred":
       return "/starred";
     case "routines":
@@ -264,8 +266,8 @@ export function routePath(r: Route): string {
   }
 }
 
-function detailQuery({ view, work, at }: { view?: SessionView; work?: true; at?: string }): string {
-  const q = [view && `view=${view}`, work && "work=1", at && `at=${encodeURIComponent(at)}`].filter(Boolean).join("&");
+function detailQuery({ view, work, at, standalone }: { view?: SessionView; work?: true; at?: string; standalone?: true }): string {
+  const q = [view && `view=${view}`, work && "work=1", at && `at=${encodeURIComponent(at)}`, standalone && "standalone=1"].filter(Boolean).join("&");
   return q ? `?${q}` : "";
 }
 

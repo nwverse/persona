@@ -42,6 +42,7 @@ func countCardComponents(t *testing.T, js string) int {
 }
 
 func TestFeishuInteractionCardBudget(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s := newTestService(t, newFakeHub())
 	ctx := context.Background()
 
@@ -161,6 +162,7 @@ func TestFeishuInteractionCardBudget(t *testing.T) {
 }
 
 func TestFeishuAnsweredCardBudget(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s := newTestService(t, newFakeHub())
 	ctx := context.Background()
 
@@ -225,6 +227,7 @@ func TestFeishuAnsweredCardBudget(t *testing.T) {
 }
 
 func TestFeishuBotCardDoneFallback(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f := newFakeHub()
 	s := newTestService(t, f)
 	ctx := context.Background()
@@ -263,6 +266,7 @@ func TestFeishuBotCardDoneFallback(t *testing.T) {
 
 // A form must carry every question: the submit handler asks for an answer to each, so a clipped form could never be sent.
 func TestFeishuQuestionCardTooManyQuestionsGoesToApp(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s := newTestService(t, newFakeHub())
 	for _, n := range []int{maxFormQuestions, maxFormQuestions + 1} {
 		var qs []proto.Question
