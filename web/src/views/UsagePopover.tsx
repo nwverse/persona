@@ -536,8 +536,8 @@ export function UsagePopover({
     <div
       ref={dialogRef}
       role="dialog"
-      tabIndex={-1}
       aria-label={tr("usage.title")}
+      tabIndex={-1}
       aria-hidden={phase === "closing" || undefined}
       inert={phase === "closing" || undefined}
       data-usage-popover={phase}
