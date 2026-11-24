@@ -217,6 +217,7 @@ type Node struct {
 	hostSig   map[string]*watcherSignals // change signals of the registered watcher hosts, by host kind (herdrevents.go)
 	cdirs     *claudeDirs                // Claude Code config directories in use (claudedirs.go)
 	cfiles    claudeFiles                // every claude's sessions/<pid>.json as last parsed (claudefiles.go)
+	agyParses *lru[string, *agyParsed]   // agy transcripts as far as agyRead parsed them (agyParse, agypane.go)
 	ttft      turnTTFTTracker
 	// profileSeedMu orders a new/empty assistant profile's hook seed across concurrent starts of one launcher.
 	profileSeedMu sync.Mutex

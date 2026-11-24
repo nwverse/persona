@@ -634,7 +634,8 @@ it on the new code; direct launches outside the store leave self-update off. The
 socket, lists CLI transcripts, and uses `agy acp` for terminal-less session creation, sending and interruption. It can also
 serve as an assistant backend through the optional assistant contract above. It requires an installed, authenticated `agy`
 with ACP support; `--agy-bin`, `--agy-dir`, `--socket`, `--no-update` and `--parent-stdin` override the executable, CLI data
-directory, node socket, automatic updates and parent-pipe shutdown.
+directory, node socket, automatic updates and parent-pipe shutdown. When `--agy-dir` is passed explicitly, the companion also sets `ANTIGRAVITY_CLI_CONFIG_DIR` for its spawned `agy` child processes (`acp` and `models`) so discovery, ACP sessions, and transcript reads share the same directory.
+To run an additional companion instance alongside the default `agy` companion (for example, a wrapped `agy` executable or separate configuration directory), pass a distinct `--runtime <id>` (default `agy`), and optionally `--launcher <name>` (default `<runtime>`), `--display-name <label>` (default `Antigravity`), `--prefix <prefix>` (default `<runtime>-`), and `--assistant-for <launcher>` to point a non-assistant Agent launcher at this companion in the main-chat picker. Custom runtime IDs keep `agent: "agy"` and do not cause the node's built-in `agy` companion to yield.
 Models come from authenticated `agy models` discovery and ACP session metadata. The companion refreshes the catalog every
 five minutes, and the picker's refresh requests a fresh catalog through optional `models({launcher, refresh})`
 (`caps.models`, `launchers.models`). Discovery never sends a prompt. The native settings file determines the advertised
