@@ -52,6 +52,8 @@ type Options struct {
 	Trust MachineTrust
 	// AgentDirs keeps each computer's hidden Agent folders (hidden_agent_dirs.go): the devices; nil: nothing hidden.
 	AgentDirs AgentDirs
+	// HerdrSessions keeps each computer's blocked named herdr sessions (herdr_sessions.go): the devices; nil: none.
+	HerdrSessions HerdrSessions
 	// SecretKey is the path of the key the model providers' keys are sealed with (the manager's own secret.key,
 	// models_launchers.go); "" makes one for this run only (tests).
 	SecretKey string
@@ -101,6 +103,8 @@ type Service struct {
 	history          conversationHistoryBook
 	// agentDirs keeps each computer's hidden Agent folders (hidden_agent_dirs.go); nil: none.
 	agentDirs AgentDirs
+	// herdrSessions keeps each computer's blocked named herdr sessions (herdr_sessions.go); nil: none.
+	herdrSessions HerdrSessions
 	// remoteImages fetches the pictures replies name by address for the apps (remote_image.go).
 	remoteImages *remoteimage.Fetcher
 	// channelPicture fetches an answer's pictures for a channel that sends them (channels_images.go): remoteImages.Get,
@@ -146,6 +150,9 @@ type Service struct {
 	// startCandidates lists the presets a start-defaults rule can pick on a machine (start_candidates.go); nil: the
 	// built-in model-profile source. A dynamic candidates source is injected here without touching matching or retries.
 	startCandidates startCandidateSource
+	// tierRank orders the usable candidates of a tier with several (tier_pick.go); nil: the user's order. Scoring
+	// (#14701) sets it; a trial of a profile not in use (#14702) calls pickTierCandidateIn with that profile.
+	tierRank tierRanker
 	// refs is the provider extensions' values for launcher keys that are references (launcher_secrets.go); nil: none.
 	refs launcherSecrets
 	// trans reaches the transcription contributions (meeting_transcribe_ext.go): the extensions' when they offer it
@@ -410,7 +417,7 @@ var _ Handler = (*Service)(nil)
 // New makes the assistant; nothing runs until the hub calls it.
 func New(o Options) *Service {
 	s := &Service{moduleSwitch: moduleswitch.Off(o.ModulesOff...), hub: o.Hub, store: o.Store, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
-		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1),
+		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, herdrSessions: o.HerdrSessions, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1),
 		a2aWake: make(chan struct{}, 1), a2aLogicalWrites: make(chan struct{}, 4)}
 	s.inbox.lang = func() i18n.Lang { return s.lang(context.Background()) }
 	s.remoteImages = remoteimage.New(remoteimage.Options{CacheDir: o.RemoteImageCache, Logf: o.Logf, DoH: s.remoteImageDoH})
@@ -452,6 +459,7 @@ func New(o Options) *Service {
 	s.startPresetRoutes()
 	s.startDefaultsRoutes() // start_defaults_routes.go
 	s.directionTreeRoutes()
+	s.organizationSnapshotRoutes()
 	s.directionSessionRoutes()
 	s.routeRoutes()
 	s.agentRouteRoutes()

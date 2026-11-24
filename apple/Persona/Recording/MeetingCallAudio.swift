@@ -183,7 +183,7 @@ nonisolated final class MeetingTalkTap: @unchecked Sendable {
 /// recorder's player through the same jitter buffer as a phone call's (`VoicePlayout`, reading how much the player has
 /// left off its render position, `VoicePlayerClock`, #13963); stopping it lets go of both and
 /// leaves the recording as it was. A made-up recording (`-showMeetingSample`) has no player: the voice then "plays" for
-/// as long as its PCM lasts, as `VoiceSample.SilentAudio` does, so the call and the echo spans follow it.
+/// as long as its PCM lasts, as `SilentVoiceAudio` does, so the call and the echo spans follow it.
 @MainActor final class MeetingCallAudio: VoiceAudio {
     nonisolated static let log = Logger(subsystem: "persona", category: "meeting-call")
 
