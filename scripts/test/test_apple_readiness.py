@@ -287,6 +287,12 @@ class AppleReadinessTests(unittest.TestCase):
         (self.output / "config.json").write_text(json.dumps({"app": {"bundle_id": "org.example.persona.ci"}}))
         whole = yaml.safe_load((ROOT / 'apple/project.yml').read_text())
         whole.pop('include')
+        modules = yaml.safe_load((ROOT / 'apple/modules.yml').read_text())['targets']['Persona']
+        whole['targets']['Persona']['sources'] = [
+            *modules['sources'], *whole['targets']['Persona']['sources'],
+        ]
+        whole['targets']['Persona']['settings']['base']['SWIFT_ACTIVE_COMPILATION_CONDITIONS'] = \
+            modules['settings']['base']['SWIFT_ACTIVE_COMPILATION_CONDITIONS']
         whole['targets']['Persona']['dependencies'] = [
             {'target': 'PersonaWatch'}, {'target': 'PersonaShare'},
             *whole['targets']['Persona']['dependencies'],
