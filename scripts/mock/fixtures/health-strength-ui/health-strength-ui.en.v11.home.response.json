@@ -31,7 +31,7 @@
         "items": [
           {
             "type": "chart",
-            "title": "Last 7 days",
+            "title": "Sets",
             "kind": "bar",
             "series": [
               {

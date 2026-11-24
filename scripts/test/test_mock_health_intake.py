@@ -304,6 +304,9 @@ class HealthStrengthMockTests(unittest.TestCase):
         # the hub's home card charts the last seven days' working sets (#14713), one bar a day, today last
         charts = [i for s in home.result["view"]["sections"] for i in s["items"] if i["type"] == "chart"]
         self.assertEqual([(c["kind"], len(c["series"][0]["points"])) for c in charts], [("bar", 7)])
+        # titled apart from its section, so the card does not say "Last 7 days" twice
+        section = next(s for s in home.result["view"]["sections"] if charts[0] in s["items"])
+        self.assertNotEqual(charts[0]["title"], section["title"])
         overview = self.page({"page": "strength.overview"}).result
         self.assertNotIn('"manage":true', overview["view"]["state"])
         managed = self.page({"page": "strength.overview"}, "manage").result

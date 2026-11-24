@@ -31,7 +31,7 @@
         "items": [
           {
             "type": "chart",
-            "title": "最近 7 天",
+            "title": "正式组",
             "kind": "bar",
             "series": [
               {
