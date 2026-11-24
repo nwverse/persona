@@ -39,7 +39,7 @@ type larkLayer struct {
 func (s *Service) larkModule() larkhost.Layer {
 	s.lark.once.Do(func() {
 		s.lark.layer = larkhost.None{}
-		if l, ok := larkhost.New(larkHost{s}); ok {
+		if l, ok := larkhost.New(s.moduleSwitch, larkHost{s}); ok { // nothing when built out or switched off
 			s.lark.layer = l
 		}
 	})

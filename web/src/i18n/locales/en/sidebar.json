@@ -178,5 +178,6 @@
   "subagents_running": "{count} running",
   "subagents_need_you": "{count} need you",
   "sort_activity": "Sort by recent activity",
-  "show_list_filter": "Show filter"
+  "show_list_filter": "Show filter",
+  "show_empty_workspaces": "Show empty workspaces"
 }

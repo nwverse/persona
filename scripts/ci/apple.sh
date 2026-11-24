@@ -318,16 +318,25 @@ fi
   IOS_UNIT_SELECTION=(-only-testing:PersonaTests/MainPagesStackTests
     -only-testing:PersonaTests/PhoneSystemToolsTests)
 fi
-  # The same real Persona test host and all of PersonaTests, but no second
-  # compilation of the embedded Watch/Share targets already covered by the
-  # device build. Resolve the ordinary project once, then remove only targets
-  # the offline test host cannot reach. The default/UI/About projects are whole.
+  OFFLINE_PROFILE=full
+  if [ "$LANE" = ios-focused ]; then
+    OFFLINE_PROFILE=focused
+  elif [ "$LANE" = ios-ipad-diagnostic ]; then
+    OFFLINE_PROFILE=ipad-diagnostic
+  fi
+  # -only-testing selects execution, not target membership. Resolve the ordinary
+  # project once, then remove targets the test host cannot reach. Focused lanes
+  # additionally compile their explicit executed suites, probes and shared
+  # helpers; ordinary/ios18/regression lanes retain every PersonaTests source.
+  # The default/UI/About projects and device/simulator DerivedData stay separate.
   ci_run 'Generate iPhone-only offline unit-test project' 120 bash -c '
     set -euo pipefail
-    spec="$1"; output="$2"
+    spec="$1"; output="$2"; profile="$4"; tests="$5"
     xcodegen dump --spec "$spec" --type json > "$output/Persona.whole.json"
-    python3 "$3" "$output/Persona.whole.json" "$output/PersonaOfflineUnitTests.json"
-  ' -- "$SOURCE/apple/project.yml" "$OUTPUT" "$CI_ROOT/scripts/ci/apple_offline_project.py"
+    python3 "$3" "$output/Persona.whole.json" "$output/PersonaOfflineUnitTests.json" \
+      --profile "$profile" --source-root "$tests"
+  ' -- "$SOURCE/apple/project.yml" "$OUTPUT" "$CI_ROOT/scripts/ci/apple_offline_project.py" \
+    "$OFFLINE_PROFILE" "$SOURCE/apple/PersonaTests"
   ci_run 'Generate offline unit-test Xcode project' 120 xcodegen generate \
     --spec "$OUTPUT/PersonaOfflineUnitTests.json" --project-root "$SOURCE/apple" \
     --project "$SOURCE/apple"

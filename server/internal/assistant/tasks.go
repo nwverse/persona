@@ -171,6 +171,8 @@ type PlanTask struct {
 	Project string `json:"project,omitempty"`
 	// Audience: optional to-do audience ("human" or "autonomous"); "" for unset/legacy (#14619).
 	Audience string `json:"audience,omitempty"`
+	// DirectionID: optional organizational direction membership, decoupled from runtime supervision (#14660).
+	DirectionID string `json:"direction_id,omitempty"`
 	// SkipProjectMemory omits the automatic project/direction handoff for this start only. It is persisted so queued
 	// starts, retries and reloads keep the caller's choice; the assignment and to-do decisions are unaffected (#13538).
 	SkipProjectMemory bool `json:"skip_project_memory,omitempty"`
