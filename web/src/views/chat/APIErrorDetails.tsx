@@ -21,7 +21,7 @@ export function APIErrorDetails({ info, count, at, exhausted }: { info: APIError
         </div>
       )}
       <ErrorDetailsText text={info.raw} />
-      <button type="button" onClick={() => copyText(info.raw)} className="touch-hit flex w-fit items-center gap-1 text-[12px] font-medium whitespace-nowrap text-accent-ink hover:underline">
+      <button type="button" onClick={() => copyText(info.raw)} className="touch-hit flex w-fit items-center gap-1 text-label font-medium whitespace-nowrap text-accent-ink hover:underline">
         <Icon name="copy" size={12} />
         {t("chat-lines.copy_raw")}
       </button>
@@ -31,7 +31,7 @@ export function APIErrorDetails({ info, count, at, exhausted }: { info: APIError
 
 function Field({ label, value, copy = true, mono = true }: { label: string; value: string; copy?: boolean; mono?: boolean }) {
   return (
-    <div className="flex min-w-0 items-center gap-2 text-[12px] leading-5">
+    <div className="flex min-w-0 items-center gap-2 text-label leading-5">
       <span className="w-20 shrink-0 truncate text-ink-3">{label}</span>
       <span className={cx("min-w-0 truncate text-ink-2", mono && "font-mono")}>{value}</span>
       {copy && (
