@@ -4058,6 +4058,31 @@ Text follows Dynamic Type (the rows are reading content) and every row reads as 
 Android (#7678) draws the same outline with the same rules (`KnowledgeMapScreen`): rows of the design system's tokens, a dot and rails
 in the branch's tone, a 48 dp fold target with Expanded / Collapsed read out, in all three styles, with no detail column.
 
+## Project tree on the knowledge map (#12927)
+
+The web map's third view, **Project tree**, draws projects under the parents the user gave them (lib/kb-tree.ts,
+`knowledge/ProjectTree.tsx`). It reuses the map's canvas, layout, zoom, ribbons and side panel; the other two views are
+unchanged. New here, each with why the existing pattern did not fit:
+
+- **Drag to re-parent** (mouse and pen, past 6 px; a shorter press is still a click): every other node says at once
+  whether it takes the project. Those that can't are dimmed to 30% with the reason beside them ("Already here",
+  "It's under this project"); the one under the pointer gets an accent ring; past three levels the hint is in
+  `--attention`, never a refusal. Dropping on the center moves it to the top level. Esc or letting go elsewhere
+  cancels. The move shows at once and is saved after; a refusal puts it back with the hub's reason (principle 7).
+  Reordering lists elsewhere has no "drop onto" target, hence this pattern.
+- **Node menu** (right click, Shift+F10 or the menu key, a held finger on touch, the panel's ⋯): the design system's
+  `Menu` with **Move to…** (a submenu: the top level, then every project indented as it sits, the ones it can't take
+  disabled with the reason as their detail), **Rename** (the menu's rename row) and **Add a milestone**. It is the
+  keyboard, screen-reader and touch way to move, so drag is never the only way.
+- **Undo** follows section 4.4: a toast "Moved … under …" with Undo for every move and milestone change.
+- **Milestone flag**: a pill on the node in the flag's state color (open accent, accepted green, not accepted orange)
+  with the next open target date (or how they ended).
+- **By hierarchy | By tag**: the map header's segmented control (on a phone over the map's corner, where the header has
+  no room). By tag draws a project under each of its tags with where it sits in the tree under its name; no drag there.
+- **The panel is the project's home**: where it sits, sub-projects (Move out), milestones (edit in place: title,
+  target date, acceptance), its own yesterday notes (never its parent's), and a **Report** tab that says reports come
+  later. On a phone it rises as a sheet over the map.
+
 ## Repository link preview
 
 Settings › Assistant › Repositories reuses the existing `Dialog`, form controls, inset preview and `Loading`.

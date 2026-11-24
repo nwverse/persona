@@ -1434,7 +1434,7 @@
   },
   {
     "name": "kb_get",
-    "description": "Read one entity: its metadata (links to people / chats / projects, tags), compressed context (summary.md), a project's timeline, a chat's messages of the last 7 days, a recording's meeting minutes, or an all-day recording's day recap (the day's timeline, meetings, suggested to-dos), with each action item's state (suggested, or its to-do's) and its timestamped transcript while still retained (phone/watch recordings, text only), a meeting's / event's recordings, a topic's knowledge points by subtopic (each with its kind, reason and the entries it came from). Transcripts expire after recording_days (14 days by default); minutes and recaps stay for minutes_days (forever by default). id from kb_list / kb_search (a project also by name). A project lists its 20 most relevant people and a count (all: meta.json).",
+    "description": "Read one entity: metadata (links, tags), compressed context (summary.md), a project's timeline, parent, sub-projects and milestones, a chat's last 7 days of messages, a recording's minutes or an all-day recording's recap (timeline, meetings, suggested to-dos) with each action item's state and, while retained, its timestamped transcript (text only), a meeting's/event's recordings, a topic's points by subtopic (kind, reason, source entries). Transcripts expire after recording_days (default 14); minutes and recaps stay for minutes_days (forever by default). id from kb_list/kb_search (a project also by name). A project lists its 20 most relevant people and a count (all: meta.json).",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1463,7 +1463,7 @@
   },
   {
     "name": "kb_update",
-    "description": "Write settled facts to the KB. Projects: edit name, project_kind (short|long), status, goal, my_role, aliases, chats/people, code dirs (`\u003cmachine\u003e:\u003cpath\u003e`, linking Agents), timeline log or summary; merge_into folds duplicates, unmerge reverses it, with no other changes in that call. Annotate chats, people, docs, meetings, events, recordings (phone-owned content; tags, pinned and projects only) and topics (name, note, aliases, tags only). Explicit tags override automatic ones. remove_* (ids) permanently unlinks only that link; other updates proceed. Change project_mode/source_urls only at the user's direction: reference-only keeps pointers and aliases but leaves details at the source; full in a separate call restores detail writes.",
+    "description": "Write settled facts to the KB. Projects: the fields below (dirs: `\u003cmachine\u003e:\u003cpath\u003e`, linking Agents); merge_into folds a duplicate, unmerge reverses it, each alone in its call. Other kinds take annotations; recordings (phone-owned) only tags, pinned, projects; topics only name, note, aliases, tags. Explicit tags beat automatic ones. remove_* (ids) unlinks only that link, for good. At the user's word only: parent (\"\" = top level); milestone adds (no id), edits or removes (id, remove) a flag; its result has the undo. project_mode/source_urls: reference-only keeps pointers and aliases, details stay at the source; full, alone, restores detail writes.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1490,11 +1490,40 @@
         },
         "merge_into": {
           "type": "string",
-          "description": "projects only: fold this project into the target (slug or name)"
+          "description": "projects: fold into this target (slug or name)"
         },
         "unmerge": {
           "type": "boolean",
-          "description": "projects only: undo the merge that folded this project into another"
+          "description": "projects: undo its merge"
+        },
+        "parent": {
+          "type": "string"
+        },
+        "milestone": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "target": {
+              "type": "string",
+              "description": "YYYY-MM-DD"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "open",
+                "accepted",
+                "not_accepted"
+              ]
+            },
+            "remove": {
+              "type": "boolean"
+            }
+          }
         },
         "name": {
           "type": "string"
