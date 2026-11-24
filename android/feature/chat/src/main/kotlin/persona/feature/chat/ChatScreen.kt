@@ -50,6 +50,7 @@ import persona.core.domain.sort.READ_ONLY
 import persona.core.domain.sort.canApprove
 import persona.core.domain.sort.canChangeEffortOnly
 import persona.core.domain.sort.canChangeModes
+import persona.core.domain.sort.canContinueCodex
 import persona.core.domain.sort.canSwitchListedModes
 import persona.core.domain.sort.canInterrupt
 import persona.core.domain.sort.canSend
@@ -321,6 +322,17 @@ private fun ChatPage(
         rememberUpdatedState(readOnly), statusSheetState,
         deliveryActions, clearingPaneState, pageCloseout.drawnSwitch, switchSession, tasks, timelineFollow, submittedContextState)
     var notice by interactionController.notice
+    val takeoverClient = remember(chrome.takeoverActions, chrome.hubScope) {
+        chrome.takeoverActions?.let { CodexTakeoverClient.of(it, chrome.hubScope) }
+    }
+    val takeoverCoordinator = rememberCodexTakeoverCoordinator(
+        client = takeoverClient,
+        sessions = sessions,
+        onOpenSession = if (historyOnly) null else chrome.onOpenSession,
+        onFallbackNotice = { notice = it },
+        onCompleted = if (historyOnly) ({ _, adopted -> chrome.onOpenSession?.invoke(adopted.key) }) else null,
+    )
+    val pageTakeover = takeoverCoordinator.takeIf { takeoverClient != null && renderStyle != ChatRenderStyle.Assistant && child == null && workflowAgent == null }
     var submittedDraft by interactionController.submittedDraft
     var submittedContexts by submittedContextState
     var sending by interactionController.sending
@@ -439,7 +451,9 @@ private fun ChatPage(
     }).collectAsStateWithLifecycle()
     // The chat jumps to a task's notice through the task host's navigation.
     // The message a hub link named (`?at=`, #2194) while it is being landed on: like a search hit, its drawer opens.
-    val childCards = rememberChatChildren(key, session, sessionList, chrome, repository)
+    var overviewOpen by remember(key) { mutableStateOf(false) }
+    var openSubagentsPending by rememberSaveable(key.path, chrome.openSubagents) { mutableStateOf(chrome.openSubagents) }
+    val childCards = rememberChatChildren(key, session, sessionList, chrome, repository, forceRead = overviewOpen)
     val modeChangeStore = remember(key, repository, scope) { ModeChangeStore(scope) { repository.modeChanges(it) } }
     DisposableEffect(modeChangeStore) { onDispose(modeChangeStore::close) }
     LaunchedEffect(key, repository, renderStyle, session != null, session?.permissionMode, session?.bypassPending) {
@@ -447,7 +461,7 @@ private fun ChatPage(
     }
     val modeChangesUntil = remember(timelineVersion, projection) { modeChangesCutoff(timeline.isFrozen(), projection.lines) }
     val pageLines = rememberChatPageLines(key, renderStyle, snapshot, session, foldsBackground, supervisingConversation, tasks, taskTodos, search,
-        openWork, projection, feed, taskPlans, taskCardProjection, childCards.rows.values.toList(), modeChanges = modeChangeStore.changes,
+        openWork, projection, feed, taskPlans, taskCardProjection, childCards.list, modeChanges = modeChangeStore.changes,
         modeChangesUntil = modeChangesUntil)
     var jumpItem by pageLines.jumpItem
     val assistantPresentation = pageLines.assistantPresentation
@@ -599,8 +613,7 @@ private fun ChatPage(
         wireText = command ?: linkMessage(composer.message(), linkContexts, context.resources), paneId = session?.paneId,
         conversationLauncher = conversationLauncher, conversationModel = conversationModel, glassAgent = glass && agentChat,
         onFailed = onFailed, onCleared = { refs -> linkContexts = linkContexts.filterNot { ref -> refs.any { it.id == ref.id } } })
-    // Chat content (group A): the message menu, the image viewer, photos and paths in messages, the API error retry.
-    val messageMenu = remember(key) { MessageMenuState() }
+    // Chat content (group A): the message menu, quote and context actions.
     // A swipe to the left quotes (iOS #1058) wherever the long-press menu's "Quote" is offered.
     val quoteTarget: (MessageTarget) -> Unit = { target ->
         // Over the box as a quote that goes with the next message, the draft left as it is (iOS #986).
@@ -614,10 +627,11 @@ private fun ChatPage(
         composer.focusRequest++
     }
     val pickedQuote by rememberUpdatedState(quoteWords)
+    val messageMenuState = remember(key) { MessageMenuState() }
     val menuWrites = messageMenuWrites(readOnly, session)
     LaunchedEffect(menuWrites) {
-        messageMenu.quote = if (menuWrites) ({ target: MessageTarget -> swipeQuote(target) }) else null
-        messageMenu.quoteWords = if (menuWrites) ({ target: MessageTarget, words: String -> pickedQuote(target, words) }) else null
+        messageMenuState.quote = if (menuWrites) ({ target: MessageTarget -> swipeQuote(target) }) else null
+        messageMenuState.quoteWords = if (menuWrites) ({ target: MessageTarget, words: String -> pickedQuote(target, words) }) else null
     }
     // "Branch to new chat" (#2137) from a reply, "Rewind to here" (#2436) on your message: the menu's session-wide extras (web ⋯).
     var forking by remember { mutableStateOf(false) }
@@ -699,46 +713,17 @@ private fun ChatPage(
         chrome.childSessionId?.let { subagentFolds.open(persona.core.domain.lines.ChildSessionCards.call(it)) }
     }
     val workflowCards = pageSubagents.workflowCards
-    val viewerState = remember { mutableStateOf<ViewerRequest?>(null) }
+    val messageActions = rememberChatRowActionPreparation(key, repository, chrome, scope, renderStyle, session,
+        projection, readOnly, canSend, session?.status == "working" || messages.isNotEmpty(), currentItems, messageMenuState) { send(it) }
+    val messageMenu = messageMenuState
+    val viewerState = messageActions.viewer
     var viewer by viewerState
-    val photos = remember(chrome.files, key, session?.cwd) { chrome.files?.let { AttachedPhotos(it, key.machineId, session?.cwd.orEmpty()) } }
-    val localCacheDir = androidx.compose.ui.platform.LocalContext.current.cacheDir
-    val localImages = remember(chrome.files, chrome.hubScope, key.machineId, session?.cwd, localCacheDir) {
-        chrome.files?.let { LocalMarkdownImages(it, chrome.hubScope, key.machineId, session?.cwd.orEmpty(), localCacheDir) }
-    }
-    // A "Continue" already on its way counts as working: the card offers no second one.
-    // A turn that failed on the refusal fallback's missing model (#2528): "Continue" would go to the same model.
-    // Every model of a main or leader conversation's recovery chain failed (#7824): the turn's last error card names
-    // the cause and when the configured model is back, and keeps "Retry" whatever the error says.
     val lastUserId = snapshot.items.lastOrNull { it.role == "user" && it.kind == "text" }?.id
-    // Persona's last turn ended on a model set-up error the hub named: the fix replaces the error line (#4339 C18, iOS
-    // `turnFix`). An older hub has no turn_error_code; as on the web, its raw tool-search 400 still names that one remedy.
-    val rawTurnFix = (projection.lines.lastOrNull() as? ChatLine.ApiError)
-        ?.takeIf { it.info.toolSearchUnsupported }?.let { TurnErrorFix.ToolSearchUnsupported }
-    val turnFix = if (renderStyle == ChatRenderStyle.Assistant) {
-        // An explicit hub code always wins, including a code this client does not map (model_fallback_unavailable).
-        if (session?.turnErrorCode.isNullOrBlank()) rawTurnFix else TurnErrorFix.of(session?.turnErrorCode)
-    } else null
-    val exhausted = exhaustedRecovery(projection.lines, session?.modelFallback)
-    val retryId = retryLine(projection.lines, session?.status == "working" || messages.isNotEmpty(),
-        !readOnly && canSend && session?.turnErrorCode != FALLBACK_UNAVAILABLE, exhausted = exhausted != null, turnFix = turnFix)
-    // Paths in messages link only when there on the machine (PathLinks.kt): asked of the session's directory.
-    val pathPresence = remember(chrome.files, key, session?.cwd, chrome.onOpenPath != null) {
-        val files = chrome.files
-        val cwd = session?.cwd.orEmpty().ifBlank { "~" }
-        if (files == null || key.machineId.isBlank() || chrome.onOpenPath == null) null
-        else PathPresence(scope, { paths -> files.stat(key.machineId, cwd, paths) })
-    }
-    val currentSend by rememberUpdatedState<(String) -> Unit>({ send(it) })
-    // Stays the same object while the conversation streams: rows read it, and a new one would redraw them all.
     val continueText = stringResource(R.string.chat_screen_continue_message)
-    val imageDescription = stringResource(R.string.chat_content_image)
-    val replyImages = remember(key, repository) { (repository as? ChatLocalStorage)?.replyImages(key) }
-        ?.collectAsStateWithLifecycle(initialValue = null)?.value
-    val rowActions = rememberChatRowActions(key, repository, replyImages, localImages, photos, retryId, exhausted,
-        chrome.onOpenPath, pathPresence, chrome.files, session?.cwd, chrome.onOpenPath,
-        { images, index -> viewer = ViewerRequest(images, index) }, currentItems, messageMenu,
-        { currentSend(continueText) }, imageDescription)
+    val rowActions = messageActions.actions
+    val exhausted = messageActions.exhausted
+    val retryId = messageActions.retryId
+    val turnFix = messageActions.turnFix
     val currentMarkdownPaths by rememberUpdatedState(rowActions.paths?.takeIf { rowActions.openPath != null })
     LaunchedEffect(liveItems) {
         liveItems.revisions.collect { revision ->
@@ -1043,7 +1028,18 @@ private fun ChatPage(
                                         sides = childCards.sides, sideRollup = childCards.sideRollup, onOpenSide = chrome.onOpenSide,
                                         onForkSession = if (onFork != null && session?.canFork == true) ({ onFork("") }) else null,
                                         forking = forking,
-                                        menuOpen = headerMenuOpen)
+                                        takeover = pageTakeover,
+                                        menuOpen = headerMenuOpen,
+                                        machines = machines,
+                                        childRows = childCards.list,
+                                        onOpenSubagent = chrome.onOpenSubagent ?: chrome.onOpenSession,
+                                        onOpenBackgroundDestination = openBackground,
+                                        onStopLoop = if (readOnly || !canSend) null else ({ send(ChatActivity.STOP_LOOP) }),
+                                        overviewActions = chrome.actions,
+                                        overviewConnection = chrome.connection,
+                                        openSubagentsRequested = openSubagentsPending,
+                                        onOpenSubagentsHandled = { openSubagentsPending = false },
+                                        onOverviewVisible = { overviewOpen = it })
                                     // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
                                     if (tabs && session != null && onOpenSibling != null) {
                                         ChatSiblingTabs(session, siblingSessions, onOpenSibling, trailing = activityPill)
@@ -1123,9 +1119,25 @@ private fun ChatPage(
                             if (!historyOnly && !readOnly && session != null) ModelFallbackCard(session, chrome.actions)
                             if (historyOnly) footer?.invoke()
                             else if (readOnly) Text(stringResource(R.string.chat_screen_subagent_read_only), Modifier.padding(Tokens.Space.m), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
-                            else if (session?.isStoppedAgent == true && machine?.online != false) ChatStoppedNote(agentTerminal,
-                                resumeInTerminal?.takeIf { terminalResume(session, machine) == TerminalResume.Available })
-                            else {
+                            else if (session?.isStoppedAgent == true && machine?.online != false) {
+                                if (session.canContinueCodex && pageTakeover != null) {
+                                    ChatSourceNote(
+                                        session = session,
+                                        takeover = pageTakeover,
+                                        takeoverEnabled = (connection == null || connection == ConnectionState.Online) && machine?.online != false,
+                                    )
+                                }
+                                ChatStoppedNote(agentTerminal,
+                                    resumeInTerminal?.takeIf { terminalResume(session, machine) == TerminalResume.Available })
+                            }
+                            else if (!canSend && session != null && session.canContinueCodex && pageTakeover != null) {
+                                // Replace the disabled read-only composer with a single actionable bar (no duplicate notice).
+                                ChatSourceNote(
+                                    session = session,
+                                    takeover = pageTakeover,
+                                    takeoverEnabled = (connection == null || connection == ConnectionState.Online) && machine?.online != false,
+                                )
+                            } else {
                                 // What waits in the agent's queue sits right above the composer, while the composer shows (Persona's further down).
                                 // Not while a "/" quick message is being picked: the list opens above the field, and with the
                                 // keyboard up the queue, the list and the status line together climbed over the top bar.
@@ -1321,6 +1333,7 @@ private fun ChatPage(
                     deliveryAction(message, if (message.state.allows(DeliveryAction.Cancel)) DeliveryAction.Cancel else DeliveryAction.Delete)
                 } }, viewerState, chatList, backgroundActions = chrome.actions,
                 backgroundConnection = chrome.connection, backgroundFiles = chrome.files)
+            pageTakeover?.let { CodexTakeoverDialogs(it) }
         }
     }
 }

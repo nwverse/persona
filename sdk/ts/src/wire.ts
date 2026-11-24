@@ -343,6 +343,7 @@ export interface Contributes {
   auth_relay?: AuthRelayItem[];
   secret_providers?: SecretProviderItem[];
   repository_providers?: RepositoryProviderItem[];
+  memory_sources?: MemorySourceItem[];
   messaging?: MessagingItem[];
   /** Extra keys are opaque JSON; declared properties keep their own types. */
   [key: string]: unknown;
@@ -581,6 +582,19 @@ export interface RepositoryProviderItem {
    * (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.
    */
   capabilities?: RepositoryCapability[];
+}
+
+/**
+ * The extension's memory, read by the manager one entry at a time (memory.entries; memory.schema.json) so the hub
+ * decides which entries reach which scene (a conversation's standing context, a recall, a dispatched task, the
+ * Inbox's helper). Needs the program to speak the protocol; one per extension. Once declared, the hub stops
+ * delivering the extension's own text outlets (its assistant instructions, project context, Inbox context and its
+ * connectors' read tools in the assistant's conversations) directly.
+ */
+export interface MemorySourceItem {
+  id: string;
+  /** What settings call the source (My memory). Not only spaces, no control characters. */
+  name: string;
 }
 
 /**
@@ -3706,7 +3720,7 @@ export interface ConnectorCatalogCallParams {
 
 /**
  * items: new items, each kept once; snapshot: the answer as one state, kept when it changes; things: the answer lists
- * Inbox rows ready-made (ConnectorInboxThing), kept and handed to the Inbox as they are.
+ * Inbox rows ready-made (ConnectorInboxThing), and the Inbox gets the latest answer's rows as they are, in its order.
  */
 export type ConnectorSubscriptionMode = "items" | "snapshot" | "things" | (string & {});
 export const CONNECTOR_SUBSCRIPTION_MODES = ["items", "snapshot", "things"] as const;
@@ -6338,8 +6352,7 @@ export interface BrowserMachinesResult {
 }
 
 /**
- * browser.run (browser.run): run a script inside an extension-isolated browser task space (ext-<extensionID>-<slot>)
- * on machine_id.
+ * browser.run (browser.run): run a script inside an extension-isolated browser task space on machine_id.
  */
 export interface BrowserRunParams {
   machine_id: string;

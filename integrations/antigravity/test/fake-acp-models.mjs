@@ -33,6 +33,11 @@ let loaded = false
 let settingsAgentMode
 const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`)
 
+const reportWindow = () => {
+  const size = settings().windows?.[model]
+  if (size !== undefined) send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: id, update: { sessionUpdate: 'usage_update', used: 0, size } } })
+}
+
 // Opt-in native settings updates: agy 1.5.12 reports default when it refuses auto.
 const nativeAgentMode = () => {
   const requested = nativeSettings().agentMode || 'default'
@@ -105,6 +110,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   if (method === 'initialize') result = { protocolVersion: 1, agentInfo: { version: 'test' } }
   if (method === 'session/new' || method === 'session/resume') {
     loaded = true
+    reportWindow()
     settingsAgentMode = nativeSettings().agentMode || 'default'
     result = { sessionId: id, models: { availableModels: settings().models, currentModelId: model }, modes: { currentModeId: mode }, configOptions: configuration() }
   }
@@ -132,7 +138,11 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   }
   if (method === 'session/set_model') {
     if (!settings().models.some((entry) => entry.modelId === params.modelId)) error = { code: -32602, message: 'Model unavailable' }
-    else { model = params.modelId; effort = model.split('-').at(-1) }
+    else {
+      model = params.modelId
+      effort = model.split('-').at(-1)
+      reportWindow()
+    }
   }
   if (method === 'session/set_mode') {
     if (params.modeId === 'accept-edits' && settings().holdFallback) {

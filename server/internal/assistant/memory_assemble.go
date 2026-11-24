@@ -259,10 +259,15 @@ func (s *Service) memoryEntriesFor(ctx context.Context, p proto.AssistantEntries
 	return out, err
 }
 
-// assembleMemory is the entries p selects, and the memory extension's (memoryExtensionEntries), as f takes them.
+// assembleMemory is the entries p selects, and the memory extension's (memoryExtensionEntries; for a standing channel
+// only its standing ones), as f takes them.
 func (s *Service) assembleMemory(ctx context.Context, f assembleFor, p proto.AssistantEntriesParams, personal bool) (assembled, error) {
 	entries, err := s.memoryEntriesFor(ctx, p, personal)
-	all, info := s.memorySources(ctx, entries, s.memoryExtensionEntries(ctx, personal))
+	ext := s.memoryExtensionEntries(ctx, personal)
+	if f.Role == assembleStanding {
+		ext = ext.standingOnly()
+	}
+	all, info := s.memorySources(ctx, entries, ext)
 	if len(all) == 0 {
 		return assembled{}, err
 	}
