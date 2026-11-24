@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -291,7 +292,14 @@ func TestTodosV2AudienceLosslessRollback(t *testing.T) {
 		if !exists {
 			t.Fatalf("todo %s lost after rollback", id)
 		}
-		if !reflect.DeepEqual(offRow["view"], onRow["view"]) {
+		// A time-derived cursor can move between two reads; compare placement and content, not that cursor or rank.
+		stable := func(v any) any {
+			m := maps.Clone(v.(map[string]any))
+			delete(m, "next_change_at")
+			delete(m, "rank")
+			return m
+		}
+		if !reflect.DeepEqual(stable(offRow["view"]), stable(onRow["view"])) {
 			t.Fatalf("todo %s view changed on rollback: off=%v on=%v", id, offRow["view"], onRow["view"])
 		}
 		for _, legacyKey := range []string{"id", "title", "notes", "created_at", "updated_at", "spaces", "agents", "quiet", "view"} {
@@ -318,11 +326,11 @@ func TestTodosV2AudienceLosslessRollback(t *testing.T) {
 		t.Fatalf("counts changed after re-enable: got=%v want=%v", reEnabledCounts, onCounts)
 	}
 	wantAudience := map[string]string{
-		legacyID:        "",
-		mcpCleared.ID:   "",
-		httpHumanID:     db.AudienceHuman,
-		mcpAuto.ID:      db.AudienceAutonomous,
-		plannedTodo.ID:  db.AudienceAutonomous,
+		legacyID:       "",
+		mcpCleared.ID:  "",
+		httpHumanID:    db.AudienceHuman,
+		mcpAuto.ID:     db.AudienceAutonomous,
+		plannedTodo.ID: db.AudienceAutonomous,
 	}
 	for id, want := range wantAudience {
 		td, ok := s.todoNow(id)
