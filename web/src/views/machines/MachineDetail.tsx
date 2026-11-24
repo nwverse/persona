@@ -10,6 +10,7 @@ import { hostedManagersForMachine, offlineManagerOf, useRoster } from "../../lib
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, enc, errorText, isAbort } from "../../lib/api";
 import { ago } from "../../lib/format";
+import { openUsageMap } from "../../lib/usage-map-link";
 import { agentName, isTraeCli } from "../../lib/agent-kind";
 import {
   agentsBySpace,
@@ -431,7 +432,7 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
             </div>
           )
         ) : (
-          <Monitor data={data} range={range} online={online} system={system} onRange={setRange} />
+          <Monitor data={data} range={range} online={online} system={system} onRange={setRange} machine={{ id: m.id, name: m.name }} />
         )}
         {data && failure && <p className="mt-2 px-1 text-[11.5px] text-red">{t("machines-machinedetail.refresh_failed", { error: failure })}</p>}
         <p className="mt-2 px-1 text-[11.5px] leading-relaxed text-ink-3">{t("machines-machinedetail.metrics_note")}</p>
@@ -546,12 +547,15 @@ function Monitor({
   online,
   system,
   onRange,
+  machine,
 }: {
   data: { metrics: DetailMetrics; range: MetricRange; at: number };
   range: MetricRange;
   online: boolean;
   system: DetailMachine["system"];
   onRange: (r: MetricRange) => void;
+  /** The disk tile opens its disk map (#14576). */
+  machine?: { id: string; name: string };
 }) {
   const { metrics } = data;
   const live = online ? (metrics.latest ?? undefined) : undefined;
@@ -561,7 +565,7 @@ function Monitor({
   if (isEmpty(metrics.points))
     return (
       <>
-        {live && <NowTiles s={live} cores={system?.cores} />}
+        {live && <NowTiles s={live} cores={system?.cores} machine={machine} />}
         {coresNow(metrics.latest, online) && <CoreBars cores={coresNow(metrics.latest, online)!} />}
         <div className={cx("flex flex-col items-center gap-2.5 rounded-card bg-surface px-4 py-7 text-center shadow-card transition-opacity duration-200", data.range !== range && "opacity-60")}>
           <p className="text-[12.5px] text-ink-2">
@@ -578,7 +582,7 @@ function Monitor({
 
   return (
     <>
-      {live && <NowTiles s={live} cores={system?.cores} />}
+      {live && <NowTiles s={live} cores={system?.cores} machine={machine} />}
       <Charts data={data} range={range} live={live} system={system} />
       {perCore && <CoreBars cores={perCore} />}
     </>
@@ -638,17 +642,17 @@ function Charts({
   );
 }
 
-function NowTiles({ s, cores }: { s: NonNullable<DetailMetrics["latest"]>; cores?: number }) {
+function NowTiles({ s, cores, machine }: { s: NonNullable<DetailMetrics["latest"]>; cores?: number; machine?: { id: string; name: string } }) {
   const memPct = memPercent(s.mem_used, s.mem_total);
   const diskPct = memPercent(s.disk_used, s.disk_total);
   const swapPct = s.swap_total ? memPercent(s.swap_used, s.swap_total) : undefined;
   const perCore = s.load !== undefined && cores ? s.load / cores : undefined;
-  const tiles: { label: string; value: string; sub?: string; frac?: number; lv: Level }[] = [
+  const tiles: { label: string; value: string; sub?: string; frac?: number; lv: Level; open?: () => void; openLabel?: string }[] = [
     { label: "CPU", value: percent(s.cpu), sub: cores ? t("machines-machinedetail.cores", { count: cores }) : undefined, frac: s.cpu, lv: level(s.cpu, 75, 90) },
     { label: t("machines-machinedetail.memory"), value: percent(memPct), sub: s.mem_used !== undefined ? usedOfTotal(s.mem_used, s.mem_total) : undefined, frac: memPct, lv: level(memPct, 80, 90) },
     { label: t("machines-machinedetail.network"), value: `↓ ${rate(s.net_rx)}`, sub: `↑ ${rate(s.net_tx)}`, lv: "normal" },
     { label: t("machines-machinedetail.load"), value: loadText(s.load), sub: cores ? t("machines-machinedetail.cores", { count: cores }) : undefined, lv: level(perCore, 1, 2) },
-    { label: t("machines-machinedetail.disk"), value: percent(diskPct), sub: s.disk_used !== undefined ? usedOfTotal(s.disk_used, s.disk_total) : undefined, frac: diskPct, lv: level(diskPct, 80, 90) },
+    { label: t("machines-machinedetail.disk"), value: percent(diskPct), sub: s.disk_used !== undefined ? usedOfTotal(s.disk_used, s.disk_total) : undefined, frac: diskPct, lv: level(diskPct, 80, 90), open: machine && (() => openUsageMap(machine.id)), openLabel: machine && t("machines-usagemap.reclaim_open_tile", { machine: machine.name }) },
     { label: t("machines-machinedetail.swap"), value: s.swap_total ? bytesBin(s.swap_used) : t("machines-machinedetail.swap_off"), sub: s.swap_total ? t("machines-machinedetail.swap_total", { total: bytesBin(s.swap_total) }) : undefined, frac: swapPct, lv: "normal" },
   ];
   if (s.battery_percent !== undefined && Number.isFinite(s.battery_percent)) {
@@ -671,8 +675,14 @@ function NowTiles({ s, cores }: { s: NonNullable<DetailMetrics["latest"]>; cores
   }
   return (
     <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-      {tiles.map((tile) => (
-        <div key={tile.label} className="min-w-0 rounded-card bg-surface px-2.5 py-2.5 shadow-card sm:px-3">
+      {tiles.map((tile) => {
+        const Tile = tile.open ? "button" : "div";
+        return (
+        <Tile
+          key={tile.label}
+          {...(tile.open ? { type: "button" as const, onClick: tile.open, "aria-label": `${tile.label} ${tile.value}, ${tile.openLabel ?? ""}`, title: tile.openLabel, "data-testid": "disk-tile" } : {})}
+          className={cx("min-w-0 rounded-card bg-surface px-2.5 py-2.5 text-left shadow-card sm:px-3", tile.open && "cursor-pointer transition-colors hover:bg-hover")}
+        >
           <div className="flex items-center gap-1.5 text-[11px] text-ink-3">
             <span className="truncate">{tile.label}</span>
             {tile.lv !== "normal" && (
@@ -692,8 +702,9 @@ function NowTiles({ s, cores }: { s: NonNullable<DetailMetrics["latest"]>; cores
               />
             )}
           </div>
-        </div>
-      ))}
+        </Tile>
+        );
+      })}
     </div>
   );
 }

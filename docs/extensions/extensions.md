@@ -146,6 +146,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `secret_providers` (version 1, #3962) | `secrets.` | `id`, `name` (1–80 characters: the settings say "From <name>"), `schemes` (1–4 of `^[a-z][a-z0-9+.-]{0,15}$`, not `http`, `https`, `file`, `data`, `persona`, `about`, `javascript`) | Process speaks the protocol; a scheme another installed extension claims fails the install | Values for references of its schemes (`op://vault/item/field`), asked by the manager only (`secrets.describe`, `secrets.resolve`, the event `secrets.used`), each resolution recorded on it; see [secret-providers.md](secret-providers.md) |
 | `repository_providers` (version 1, #10330) | `repo.` | `id`, `name` (1–80 characters: what the catalog and a to-do's repositories call the source), `hosts` (1–16 exact lowercase host names, no IP address; not `github.com`, `gitlab.com` or the other hosts the built-in providers read), `link_kinds?` (`[{kind: issue / pull_request, label}]`, each kind once, a label of 1–24 characters; only relabels), `capabilities?` (`["pr_status"]`: it answers `repo.pr_status`, #11584) | Process speaks the protocol; a host another installed extension claims (even one that is off), or one host in two items, fails the install | A code-hosting source for **Settings › Repositories** and a to-do's repositories and links on its hosts, asked by the manager only (`repo.parse`, `repo.check`, `repo.link`, the optional `repo.describe` and `repo.pr_status`; `schema/extension/repository.schema.json`), each answer re-checked; the install page lists its hosts, and they are in the permission digest |
 | `memory_sources` (version 1, #13532, #13586) | `memory.` | `id`, `name` (1–80 characters, not only spaces, no control characters: what settings call the source); one per extension | Process speaks the protocol | The extension's memory, entry by entry: the manager reads it with `memory.entries` (`schema/extension/memory.schema.json`) and grades each entry by scene itself, and stops delivering the extension's own text outlets directly; the install page says so, the permission digest does not change; see "Memory sources" below |
+| `disk_offload` (version 1, #14576) | `offload.` | `id`, `name` (1–40 characters: the disk map offers "Offload to <name>"), `kinds?` (1–3 of `file`, `dir`, `app`, each once; omitted means `file`, `dir`), `restore?` (items can be brought back) | Process speaks the protocol | A provider for a computer's disk usage map: the map lists the enabled contributions, draws what the provider already holds of that computer beside the local map (`offload.inventory`), and, after the user confirmed and the computer's own protection rules agreed to every path, starts an offload or restore (`offload.run`, followed with `offload.job`, the optional `offload.cancel`; `schema/extension/offload.schema.json`). Asked by the manager only, each answer held to the schema; see "Disk offload" below |
 | `track_kinds` (version 1, #14574) | `track_kinds.` | `id`, `title`, `config` (`schema: 1`, the declarative `assistantwire.TrackKindConfig`: template, context, categories, rhythms, attention, supervision, usage, assembly, capture target, channels and sidebar) | Declarative only; the manager validates every field and option | The headless assistant track registry and execution policy. The optional `space-conversations` extension contributes the `space` kind. An extension-provided kind is read-only through the custom-kind API; disabling its provider hides its surface but preserves existing records and conversations. |
 
 Extension points the hub doesn't know: the extension still installs (it may be written for a newer hub), that item has no effect, and the preview and list show a warning. When adding extension points later (knowledge base sources, link recognition…), add a row to this table.
@@ -802,6 +803,20 @@ The schema is `schema/extension/assistant.schema.json`; the Go SDK has it as `ex
 ```json
 {"permissions":{"hub":["assistant.memory.read"]}}
 ```
+
+### Disk offload
+
+An extension that moves files, folders or apps from a computer to storage elsewhere contributes `disk_offload`
+(#14576). Core never names a provider: the disk usage map of a computer (`docs/server/machine-usage-map.md`) lists the
+enabled contributions by `name`, draws what each already holds of that computer on the same scale as the local map, and
+offers "Offload to <name>" on the items the computer's protection rules allow. The manager asks the program
+(`offload.inventory`, `offload.run`, `offload.job`, `offload.cancel`; `schema/extension/offload.schema.json`) with the
+contribution, the caller's language and the computer (`{id, name, os, online}`, the same object a `machine_section`
+gets), and only for a device with full credentials: an extension's token never reaches these routes. Every path of an
+offload is checked on the computer with `machine.storage.check` before the program hears of it. When the provider needs
+a command-line tool on the computer, `offload.run` answers `needs_install` with the tool and where it comes from; the
+apps ask the user a second time and only then send `install: true`. The routes, errors and the install confirmation
+are in `docs/server/machine-usage-map.md` "Extension point `disk_offload`".
 
 ### Memory sources
 
