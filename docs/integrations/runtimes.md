@@ -563,7 +563,10 @@ preserving genuine assistant questions. User messages and tool records remain av
 
 agy leaves print-mode (`agy -p`) conversations untitled. Before falling back to the folder name, the session title uses
 the first non-empty line of the cached metadata `summary.Preview`, with agy's request wrapper and Persona's context
-removed, cut to 60 characters (#14629). Several one-shot runs in one folder then show their own prompts.
+removed, cut to 60 characters (#14629). Several one-shot runs in one folder then show their own prompts. Such a title
+carries `title_source: "prompt"`, so the node keeps that provenance for the agy pane and Persona's naming may replace it.
+A preview whose first line is Persona's context (`Content of persona-context:…`, `<persona-context …>`) gives no title:
+agy keeps only that line, so the block cannot be removed whole.
 
 A session is listed `unknown` when the evidence cannot say working, idle or done (`transcriptState` in
 `integrations/antigravity/lib/map.js`). It is never guessed as idle: an idle native summary closes a turn only when its

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { test } from 'node:test'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
@@ -108,12 +108,25 @@ test('untitled conversations take their title from the first line of the preview
   const first = 'Draft the release checklist for the sample project and list every open question'
   const Preview = `<USER_REQUEST>\n\n  ${first}  \nSecond line\n</USER_REQUEST>`
   const { node } = await fixture(t, [step('PLANNER_RESPONSE', { content: 'Done' })], idle, { meta: { summary: { Title: '', Preview } } })
-  assert.equal(node.last('runtime.sessions').sessions[0].title, first.slice(0, 60).trimEnd() + '\u2026')
+  const row = node.last('runtime.sessions').sessions[0]
+  assert.equal(row.title, first.slice(0, 60).trimEnd() + '\u2026')
+  // A title from the prompt says so, as the node's own prompt titles do, so Persona's naming may replace it.
+  assert.equal(row.title_source, 'prompt')
 })
 
 test('a short preview is the whole title of an untitled conversation', { timeout: 15_000 }, async (t) => {
   const { node } = await fixture(t, [step('PLANNER_RESPONSE', { content: 'Done' })], idle, { meta: { summary: { Title: '', Preview: 'Summarize brief.md' } } })
   assert.equal(node.last('runtime.sessions').sessions[0].title, 'Summarize brief.md')
+})
+
+test('a preview that opens with Persona context leaves the folder name as the title', { timeout: 15_000 }, async (t) => {
+  // agy keeps only the request's first line, so the context block that opens it is never there whole.
+  for (const Preview of ['Content of persona-context:///snapshot.txt:', '<persona-context kind="snapshot">']) {
+    const { node } = await fixture(t, [step('PLANNER_RESPONSE', { content: 'Done' })], idle, { meta: { summary: { Title: '', Preview } } })
+    const row = node.last('runtime.sessions').sessions[0]
+    assert.equal(row.title, basename(row.cwd))
+    assert.equal(row.title_source, undefined)
+  }
 })
 
 test('runtime inventory follows an external tool turn through its final reply', { timeout: 15_000 }, async (t) => {
