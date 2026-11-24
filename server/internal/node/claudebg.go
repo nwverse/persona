@@ -150,6 +150,10 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 		if seen[id] || listed[id] {
 			continue // a pane lists it (and a cli claude's environment is not read for nothing)
 		}
+		if sess := n.claudeProcHerdrSession(c); n.herdrSessionBlocked(sess) && !n.isAssistantSession(id) && !n.keptSessions()[id] {
+			n.noteHerdrSessionID(id, sess)
+			continue
+		}
 		source := n.outsideSource(c)
 		if source == "" {
 			continue

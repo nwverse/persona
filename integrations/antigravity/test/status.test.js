@@ -121,7 +121,7 @@ test('a short preview is the whole title of an untitled conversation', { timeout
 
 test('a preview that opens with Persona context leaves the folder name as the title', { timeout: 15_000 }, async (t) => {
   // agy keeps only the request's first line, so the context block that opens it is never there whole.
-  for (const Preview of ['Content of persona-context:///snapshot.txt:', '<persona-context kind="snapshot">']) {
+  for (const Preview of ['Content of persona-context:///snapshot.txt:', '<persona-context kind="snapshot">', '<' + 'jarvis-context kind="snapshot">']) {
     const { node } = await fixture(t, [step('PLANNER_RESPONSE', { content: 'Done' })], idle, { meta: { summary: { Title: '', Preview } } })
     const row = node.last('runtime.sessions').sessions[0]
     assert.equal(row.title, basename(row.cwd))

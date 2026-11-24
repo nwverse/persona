@@ -433,6 +433,10 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		ctx = withHookCall(ctx, req)
 	}
 	defer n.hookFlights.enter(in.SessionID)() // its process waits on this call: not idle (model_restore.go)
+	if sess := n.paneHerdrSession(req.Pane); n.herdrSessionBlocked(sess) && !n.isAssistantSession(in.SessionID) && !n.keptSessions()[in.SessionID] {
+		n.noteHerdrSessionID(in.SessionID, sess)
+		return nil, nil // a blocked named herdr session (herdrsessions.go): nothing reported, no card; Claude Code asks itself
+	}
 	if n.sessionBlocked(in.SessionID, in.Cwd) {
 		return nil, nil // a blocked Agent folder (agentdirs.go): nothing reported, no card; Claude Code asks itself
 	}

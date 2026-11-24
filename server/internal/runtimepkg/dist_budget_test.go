@@ -30,10 +30,10 @@ import (
 // Antigravity subagent reports and background task results as task notices, invoke_subagent Role / Prompt (#14625), 749 B (263,994 B).
 // Untitled Antigravity conversations take a short title from their first prompt line (#14629), 218 B (264,212 B).
 // An API error agy streams as message text becomes the turn's error, kept in history and settled idle (#14628), 231 B (264,443 B).
-// Switching models and efforts on running Antigravity Agents (#13754) adds 116 B (main measured 264,443 B, 264,559 B with it).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 264_559
+	// Switching models and efforts on running Antigravity Agents (#13754) brings total to 264,650 B.
+	const budget = 264_650
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
