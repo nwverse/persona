@@ -1,8 +1,10 @@
 # The package directories under server/ that declare no layer, frozen by name (docs/server/architecture.md "Domain
 # model", "Layers"): server/internal/archguard's TestDomainLayers fails on any other package whose package comment has
 # no //persona:layer line. Undeclared packages count as application. These packages predate the rules; do not copy
-# their shapes. A package that gains its line prints a notice, and its line here can go; add none. Pending names come
-# from python3 scripts/test/name_freezes.py pending --write.
+# their shapes. A package that gains its line prints a notice, and its line here can go; add none: with a base, the
+# test fails on a name the merge base's list lacks, unless a frozen package's files moved there (python3
+# scripts/test/name_freezes.py moves writes those). Pending names come from python3 scripts/test/name_freezes.py
+# pending --write.
 cmd/password-wasm
 cmd/persona-hub
 cmd/persona-link

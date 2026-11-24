@@ -1,7 +1,9 @@
 # Imports outside the domain rules, frozen by name (docs/server/architecture.md "Domain model"): "<pkg> imports
 # <path>", the legacy cores' own imports outside core-import and the imports of them by the hub and db that path-no-core
 # refuses ("(test)" for test files). server/internal/archguard's TestDomainLayers fails on any other such import; one
-# that no longer happens prints a notice, and its line can go. Add none.
+# that no longer happens prints a notice, and its line can go. Add none: with a base, the test fails on a line the
+# merge base's list lacks, unless a frozen import's package or path moved (python3 scripts/test/name_freezes.py moves
+# writes those).
 #
 # These packages predate the rules; their counts only fall; do not copy their shapes. Copy server/internal/domainkit and
 # the compliant twins in server/internal/archguard/testdata/domainrules/planted (agentref, assistant/fleetcount and

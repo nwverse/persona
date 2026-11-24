@@ -286,7 +286,7 @@ repair worker may not edit baselines (`docs/operations/main-verification.md`), s
 | Web hard-coded text | CJK strings per `web/src` file | `web/src/i18n/hardcoded-baseline.json` | `web/src/i18n/catalog.test.ts` (web lane) | `UPDATE_I18N_BASELINE=1` |
 | Prompt sizes | bytes per instruction section, tool description and supervision event | `server/internal/assistant/testdata/prompt_sizes.json` | `TestPromptSizeRatchet` (server lane) | `PROMPT_SIZE_UPDATE=1` |
 | Inbox book readers | places per file that reach the Inbox's in-memory book | `inboxBookReaders` in `server/internal/archguard/inbox_slice_test.go` | `TestInboxBookStaysInTheInbox` (server lane) | by hand |
-| Domain rules | the domain rules' findings per package in server code that predates them, and the application and library packages' exported-field records, named primitive types, `DoneAt` / `DoneBy` writes and uses of an adapter's `Wire` (`docs/server/architecture.md` "Domain model") | `server/internal/archguard/testdata/domain_layers/baseline.txt` | `TestDomainLayers` (server lane; check-fast, with its merge base) and each declared package's `rules_test.go` | `DOMAIN_LAYERS_UPDATE=1`, which also takes an allowance whose type landed into its count; `scripts/test/name_freezes.py pending --write --only domain_layers_baseline`, on a checkout of `main`, drops one whose PRs closed |
+| Domain rules | the domain rules' findings per package in server code that predates them, and the application and library packages' exported-field records, named primitive types, `DoneAt` / `DoneBy` writes and uses of an adapter's `Wire` (`docs/server/architecture.md` "Domain model") | `server/internal/archguard/testdata/domain_layers/baseline.txt` | `TestDomainLayers` (server lane; check-fast, with its merge base) and each declared package's `rules_test.go` | `DOMAIN_LAYERS_UPDATE=1`, which also takes an allowance whose type landed into its count; `scripts/test/name_freezes.py pending --write --only domain_layers_baseline`, on a checkout of `main`, drops one whose PRs closed; `scripts/test/name_freezes.py moves` carries a moved package's lines |
 | Android text | hard-coded Chinese / Japanese and English UI text per Kotlin file | each module's `i18n-baseline.json` and `i18n-english-baseline.json` | `scripts/app/android_i18n_check.py` (Android lane, check-fast) | `--update` |
 | Android tokens | hard-coded values and Material 3 components per file | `android/core/designsystem/tools/token-baseline.json` | `scripts/app/android_token_baseline.py` (Android lane, check-fast) | `--update-baseline` |
 | Android motion | literal animation specs per file | `android/core/designsystem/tools/motion-baseline.json` | `scripts/app/android_motion_baseline.py` (Android lane, check-fast) | `--update-baseline` |
@@ -302,8 +302,11 @@ repair worker may not edit baselines (`docs/operations/main-verification.md`), s
   not have yet is the change's own (a file the web font's `--update` let take sizes that moved to it, or a raise the sleep ratchet
   refuses anyway), and only the baseline holds it. check-fast's diff mode runs the sleep ratchet with `--base` (it does not run
   the other two), and hosted CI sets `CI_BASE_SHA` for its guards job. archguard's `TestDomainLayers` reads `CI_BASE_SHA`
-  itself and holds the domain counts the same way; check-fast's diff mode sets it to its merge base for the repo-wide
-  guards, while the hosted server lane, a shallow clone without it, holds them to the baseline only.
+  itself and holds the domain counts more strictly: every count, one the merge base's baseline lacks included, may not
+  rise above its count at the merge base, and a line of its lists that the merge base's lack fails unless it followed
+  code that moved (`scripts/test/name_freezes.py moves`; `docs/server/architecture.md` "The rules and their checks").
+  check-fast's diff mode sets it to its merge base for the repo-wide guards, while the hosted server lane, a shallow
+  clone without it, holds them to the baseline only.
 - **With no base, only the baseline holds**, so a full-tree run on `main` checks only `count > baseline`. There is no fallback to
   the clone's `origin/main`: it is only as fresh as the last fetch, and main verification pins `HEAD` by SHA without moving it
   (`docs/operations/main-verification.md`), so right after a merge it usually names the parent and would hold the merged files to

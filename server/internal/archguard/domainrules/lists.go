@@ -160,6 +160,33 @@ func (e BaselineEntry) ID() string { return e.Key + " " + e.Rule }
 // Allowance says whether the line is an allowance rather than a count.
 func (e BaselineEntry) Allowance() bool { return e.Name != "" }
 
+// legacyCores are the cores that predate the rules: the only keys a core-*, seam-* or out-* count may have. A core or
+// seam declared later starts at zero, so a baseline line for one is no way around its rules; a legacy core that moves
+// is renamed here in the change that moves it, and it joins no other.
+var legacyCores = map[string]bool{
+	"internal/assistant/chatsearch":    true,
+	"internal/assistant/todo/timeline": true,
+	"internal/conversationlog":         true,
+	"internal/sessionhistory":          true,
+	"internal/tokenuse":                true,
+}
+
+// legacyCoreList is legacyCores sorted, for messages.
+func legacyCoreList() []string {
+	var out []string
+	for k := range legacyCores {
+		out = append(out, k)
+	}
+	sortStrings(out)
+	return out
+}
+
+// legacyOnly says whether a rule's count may be kept only for a legacy core: the core, seam and outside rules, whose
+// findings are about domain code.
+func legacyOnly(rule string) bool {
+	return strings.HasPrefix(rule, "core-") || strings.HasPrefix(rule, "seam-") || strings.HasPrefix(rule, "out-")
+}
+
 // allowable says whether a rule's count can take an allowance: its findings are named types, which an allowance
 // names.
 func allowable(rule string) bool {
@@ -214,6 +241,12 @@ func ReadBaseline(text string) (Baseline, []string) {
 		}
 		if _, known := rules[e.Rule]; !known {
 			problems = append(problems, "line "+itoa(i+1)+" names no rule: "+e.Rule)
+			continue
+		}
+		if !e.Allowance() && !legacyCores[e.Key] && legacyOnly(e.Rule) {
+			problems = append(problems, "line "+itoa(i+1)+" counts "+e.Rule+" for "+e.Key+": core-*, seam-* and "+
+				"out-* counts hold only the cores that predate the rules ("+strings.Join(legacyCoreList(), ", ")+
+				"); a core or seam declared since starts at zero, and code outside one holds none of its findings")
 			continue
 		}
 		if e.Allowance() && !allowable(e.Rule) {
@@ -295,7 +328,12 @@ func (b Baseline) Lowered(text string, m Measure) string {
 			kept = append(kept, BaselineEntry{Key: key, Rule: rule, Count: n})
 		}
 	}
-	sortSlice(kept, func(a, b BaselineEntry) bool { return a.sortKey() < b.sortKey() })
+	return composeBaseline(text, kept)
+}
+
+// composeBaseline is baseline.txt with entries for lines: the comment text starts with, then the entries sorted.
+func composeBaseline(text string, entries []BaselineEntry) string {
+	sortSlice(entries, func(a, b BaselineEntry) bool { return a.sortKey() < b.sortKey() })
 	var out []string
 	for _, line := range strings.Split(text, "\n") {
 		if t := strings.TrimSpace(line); t != "" && !strings.HasPrefix(t, "#") {
@@ -306,7 +344,7 @@ func (b Baseline) Lowered(text string, m Measure) string {
 	for len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
 		out = out[:len(out)-1]
 	}
-	for _, e := range kept {
+	for _, e := range entries {
 		out = append(out, e.line())
 	}
 	return strings.Join(out, "\n") + "\n"

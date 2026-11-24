@@ -35,6 +35,14 @@ PRs are not all closed, and the new ones. Once it has landed, --write only tidie
 take in the allowances whose types landed (TestDomainLayers' DOMAIN_LAYERS_UPDATE, which
 scripts/ci/lower_baselines.py runs too), and the allowances whose PRs have all closed leave. It adds no allowance.
 
+Code that moves between packages takes its lines along: `python3 scripts/test/name_freezes.py moves [--base origin/main]`
+runs TestDomainLayers with DOMAIN_LAYERS_MOVES, which reads git's renames of .go files under server/ since the merge
+base with --base and rewrites the three domain lists along them (domainrules.Carried): undeclared.txt names the
+packages a frozen one's files moved to, legacy_edges.txt the frozen imports under their new names, and baseline.txt's
+counts of the packages files moved between become their counts now, as long as their total has not risen. It adds no
+room: a rise keeps its lines and the test fails on it. With CI_BASE_SHA, which check-fast's diff mode sets,
+TestDomainLayers then checks that each line it lacks at the merge base is one a move carried.
+
 Both domain lists read the open PRs' trees, BATCH PRs at a time, so the temporary directory holds a few PRs'
 directories, not every one. Once a domain list is on --base, a run leaves it out unless `--only` names it: it takes
 nothing new then, and a run for a central list (a seam's new row, on its own branch) needs neither.
@@ -701,15 +709,55 @@ def on_base(base, path):
                           capture_output=True).returncode == 0
 
 
+def carry_moves(base, log=sys.stderr):
+    """`moves`: the domain lists rewritten along the packages moved since the merge base of HEAD with base
+    (TestDomainLayers with DOMAIN_LAYERS_MOVES and CI_BASE_SHA), the lines it changed and a verdict. 0 when
+    TestDomainLayers passes afterwards."""
+    sha = run(["git", "rev-parse", "--verify", base + "^{commit}"], 60).strip()
+    paths = [UNDECLARED.file, EDGES, BASELINE.file]
+    before = {p: (ROOT / p).read_text() for p in paths}
+    try:
+        result = subprocess.run(GO_UPDATE + ["-v"], cwd=ROOT / "server", capture_output=True, text=True, timeout=1200,
+                                env=dict(os.environ, CI_BASE_SHA=sha, DOMAIN_LAYERS_MOVES="1"))
+    except subprocess.TimeoutExpired:
+        print("moves: VERDICT timeout: TestDomainLayers ran over 1200 s; the lists may be half rewritten, see git diff",
+              file=log)
+        return 1
+    changed = 0
+    for p in paths:
+        old, new = before[p].splitlines(), (ROOT / p).read_text().splitlines()
+        gone, added = sorted(set(old) - set(new)), sorted(set(new) - set(old))
+        changed += len(gone) + len(added)
+        for line in gone:
+            print("%s: -%s" % (p, line), file=log)
+        for line in added:
+            print("%s: +%s" % (p, line), file=log)
+    if result.returncode != 0:
+        failures = [l.strip() for l in (result.stdout + result.stderr).splitlines() if "domain_test.go" in l
+                    and "notice:" not in l and "domain layers:" not in l and "carried " not in l]
+        print("\n".join(failures[-20:] or (result.stdout + result.stderr).splitlines()[-20:]), file=log)
+        print("moves: VERDICT failing: %d list line(s) changed, and TestDomainLayers still fails on what no move "
+              "carries (above)" % changed, file=log)
+        return 1
+    print("moves: VERDICT ok: %d list line(s) changed, and TestDomainLayers passes against %s" % (changed, base),
+          file=log)
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
+    moves = sub.add_parser("moves", help="carry the domain lists' lines along the packages moved since --base")
+    moves.add_argument("--base", default="origin/main", help="the moves are read since HEAD's merge base with it "
+                       "(default origin/main)")
     cmd = sub.add_parser("pending", help="the names open PRs add to the server's central lists")
     cmd.add_argument("--base", default="origin/main", help="what the names are counted against (default origin/main)")
     cmd.add_argument("--idle-days", type=int, default=14, help="a draft whose head commit is older is left out")
     cmd.add_argument("--write", action="store_true", help="rewrite the lists' files (a list --base has: pruned only)")
     cmd.add_argument("--only", help="comma-separated list ids (default every list)")
     args = parser.parse_args(argv)
+    if args.command == "moves":
+        return carry_moves(args.base, log=sys.stderr)
     base = run(["git", "rev-parse", "--verify", args.base + "^{commit}"], 60).strip()
     wanted = set(args.only.split(",")) if args.only else None
     with tempfile.TemporaryDirectory(prefix="name-freezes-") as work:

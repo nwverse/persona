@@ -21,13 +21,18 @@ const serverModule = "github.com/nwverse/persona/server"
 // (scripts/ci/lower_baselines.py runs it).
 const domainBaselineUpdate = "DOMAIN_LAYERS_UPDATE"
 
+// domainBaselineMoves carries the lists' lines along the packages a change moved since the merge base with
+// CI_BASE_SHA (python3 scripts/test/name_freezes.py moves runs it): domainrules.Carried.
+const domainBaselineMoves = "DOMAIN_LAYERS_MOVES"
+
 // TestDomainLayers holds the whole server to the domain rules (docs/server/architecture.md "Domain model"): every
 // package declares its layer or is frozen by name in testdata/domain_layers/undeclared.txt, each declaration is
 // checked, the declared domain packages follow their layer's rules and carry the rules_test.go hook, and the code
 // that predates the rules stays within testdata/domain_layers' shrink-only counts and frozen imports. With a base
 // (CI_BASE_SHA, which check-fast's diff mode sets to its merge base), a count may not rise above its count at the
-// merge base either. It prints the packages it checked per layer and the files it parsed in full, which is its
-// budget, and fails when it inspected nothing.
+// merge base either, code that moved carries its counts, and the lists take no line the merge base's lack that no
+// move carried. It prints the packages it checked per layer and the files it parsed in full, which is its budget,
+// and fails when it inspected nothing.
 func TestDomainLayers(t *testing.T) {
 	lists, err := domainrules.ReadLists("testdata")
 	if err != nil {
@@ -42,10 +47,25 @@ func TestDomainLayers(t *testing.T) {
 	if !st.Inspected() {
 		t.Fatalf("the domain rules inspected nothing under %s: %s", serverDir, st.Summary())
 	}
+	mergeBase := domainMergeBase(t)
+	var moves []domainrules.Move
+	if mergeBase != "" {
+		moves = domainMoves(t, mergeBase)
+	}
+	if os.Getenv(domainBaselineMoves) != "" {
+		if mergeBase == "" {
+			t.Fatalf("%s carries the lists along the moves since a merge base: set CI_BASE_SHA too", domainBaselineMoves)
+		}
+		lists = carryDomainLists(t, lists, findings, counts, pkgs, moves)
+	}
 	if os.Getenv(domainBaselineUpdate) != "" {
 		lists = lowerDomainBaseline(t, lists, domainrules.Measured(findings, counts))
 	}
-	v := domainrules.Judge(findings, counts, pkgs, lists, domainBaseMeasure(t, lists), "")
+	var base *domainrules.Base
+	if mergeBase != "" {
+		base = domainBase(t, lists, mergeBase, moves)
+	}
+	v := domainrules.Judge(findings, counts, pkgs, lists, base, "")
 	for _, n := range v.Notices {
 		t.Log("notice: " + n)
 	}
@@ -71,10 +91,14 @@ func domainRun(t *testing.T, pkgs []*domainrules.Pkg, lists domainrules.Lists) (
 	return findings, counts, st
 }
 
+// domainListPaths are the three lists' files, under testdata.
+var domainListPaths = []string{filepath.Join("testdata", "domain_layers", "undeclared.txt"),
+	filepath.Join("testdata", "domain_layers", "legacy_edges.txt"), filepath.Join("testdata", "domain_layers", "baseline.txt")}
+
 // lowerDomainBaseline writes the baseline lowered to m, the tree now, and returns the lists with it.
 func lowerDomainBaseline(t *testing.T, lists domainrules.Lists, m domainrules.Measure) domainrules.Lists {
 	t.Helper()
-	path := filepath.Join("testdata", "domain_layers", "baseline.txt")
+	path := domainListPaths[2]
 	old, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -94,33 +118,101 @@ func lowerDomainBaseline(t *testing.T, lists domainrules.Lists, m domainrules.Me
 	return lists
 }
 
-// domainBaseMeasure is the measure at the merge base with CI_BASE_SHA of the counts the merge base's baseline has,
-// nil when no base is given. It reads the tree as it is, with every .go file under server/ the change touched since
-// the merge base (committed or not, untracked included) put back as it was there. A base that does not resolve is an
-// error, never "no base".
-func domainBaseMeasure(t *testing.T, lists domainrules.Lists) *domainrules.Measure {
+// carryDomainLists writes the lists with the lines of the packages moves moved carried along (domainrules.Carried),
+// and returns the lists as they read then.
+func carryDomainLists(t *testing.T, lists domainrules.Lists, findings []domainrules.Finding, counts []domainrules.Count,
+	pkgs []*domainrules.Pkg, moves []domainrules.Move) domainrules.Lists {
+	t.Helper()
+	var old [3]string
+	for i, path := range domainListPaths {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		old[i] = string(b)
+	}
+	got := domainrules.Carried(domainrules.ListTexts{Undeclared: old[0], Edges: old[1], Baseline: old[2]}, lists,
+		findings, counts, pkgs, moves)
+	for i, text := range []string{got.Undeclared, got.Edges, got.Baseline} {
+		if text == old[i] {
+			continue
+		}
+		if err := os.WriteFile(domainListPaths[i], []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("carried %s along %d moved files", domainListPaths[i], len(moves))
+	}
+	lists, err := domainrules.ReadLists("testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return lists
+}
+
+// domainGit is git's output for args, run in the server's directory; a failure names CI_BASE_SHA, the base it was
+// given, since only that makes git run here.
+func domainGit(t *testing.T, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", serverDir}, args...)...).Output()
+	if err != nil {
+		msg := ""
+		if ee, ok := err.(*exec.ExitError); ok {
+			msg = string(ee.Stderr)
+		}
+		t.Fatalf("git %s: %v %s (CI_BASE_SHA=%s must name a commit with a merge base here)",
+			strings.Join(args, " "), err, msg, os.Getenv("CI_BASE_SHA"))
+	}
+	return string(out)
+}
+
+// domainMergeBase is the merge base of HEAD with CI_BASE_SHA, "" when CI_BASE_SHA is unset. A base that does not
+// resolve is an error, never "no base".
+func domainMergeBase(t *testing.T) string {
 	t.Helper()
 	base := os.Getenv("CI_BASE_SHA")
 	if base == "" {
-		return nil
+		return ""
 	}
-	git := func(args ...string) string {
-		t.Helper()
-		out, err := exec.Command("git", append([]string{"-C", serverDir}, args...)...).Output()
-		if err != nil {
-			msg := ""
-			if ee, ok := err.(*exec.ExitError); ok {
-				msg = string(ee.Stderr)
-			}
-			t.Fatalf("git %s: %v %s (CI_BASE_SHA=%s must name a commit with a merge base here)",
-				strings.Join(args, " "), err, msg, base)
+	return strings.TrimSpace(domainGit(t, "merge-base", "HEAD", base))
+}
+
+// domainMoves is the .go files under server/ git finds renamed between mergeBase and the tree as it is (committed,
+// staged or not; a file not yet added is no rename), as package moves.
+func domainMoves(t *testing.T, mergeBase string) []domainrules.Move {
+	t.Helper()
+	var renames [][2]string
+	for _, line := range strings.Split(domainGit(t, "diff", "--name-status", "--find-renames", "-l0", mergeBase, "--", "."), "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) != 3 || !strings.HasPrefix(f[0], "R") {
+			continue
 		}
-		return string(out)
+		from, ok1 := strings.CutPrefix(f[1], "server/")
+		to, ok2 := strings.CutPrefix(f[2], "server/")
+		if ok1 && ok2 {
+			renames = append(renames, [2]string{from, to})
+		}
 	}
-	mergeBase := strings.TrimSpace(git("merge-base", "HEAD", base))
+	return domainrules.Moves(renames)
+}
+
+// domainBase is what TestDomainLayers holds the tree to at mergeBase besides the lists: its counts, read from the tree
+// as it is with every .go file under server/ the change touched since then (committed or not, untracked included) put
+// back as it was there; its lists; and the moves. It is nil when the merge base has no lists yet: the change that adds
+// them is held to its own.
+func domainBase(t *testing.T, lists domainrules.Lists, mergeBase string, moves []domainrules.Move) *domainrules.Base {
+	t.Helper()
+	var texts [3]string
+	for i, path := range domainListPaths {
+		text, err := exec.Command("git", "-C", serverDir, "show",
+			mergeBase+":server/internal/archguard/"+filepath.ToSlash(path)).Output()
+		if err != nil {
+			return nil
+		}
+		texts[i] = string(text)
+	}
 	changed, gone := map[string]string{}, map[string]bool{}
-	touched := strings.Fields(git("diff", "--name-only", "--no-renames", mergeBase, "--", "."))
-	untracked := strings.Fields(git("ls-files", "--others", "--exclude-standard", "--full-name", "--", "."))
+	touched := strings.Fields(domainGit(t, "diff", "--name-only", "--no-renames", mergeBase, "--", "."))
+	untracked := strings.Fields(domainGit(t, "ls-files", "--others", "--exclude-standard", "--full-name", "--", "."))
 	var tracked []string
 	for _, path := range append(touched, untracked...) {
 		rel, ok := strings.CutPrefix(path, "server/")
@@ -147,16 +239,11 @@ func domainBaseMeasure(t *testing.T, lists domainrules.Lists) *domainrules.Measu
 		t.Fatal(err)
 	}
 	findings, counts, _ := domainRun(t, pkgs, lists)
-	m := domainrules.Measured(findings, counts)
-	// A count the merge base's baseline does not have is the change's own, and only the baseline holds it.
-	held := domainrules.Measure{Counts: map[string]int{}, Names: m.Names}
-	if text, err := exec.Command("git", "-C", serverDir, "show",
-		mergeBase+":server/internal/archguard/testdata/domain_layers/baseline.txt").Output(); err == nil {
-		for _, e := range domainrules.ParseLists("", "", "", string(text)).Baseline.Entries {
-			held.Counts[e.ID()] = m.Counts[e.ID()]
-		}
+	return &domainrules.Base{
+		Measure: domainrules.Measured(findings, counts),
+		Lists:   domainrules.ParseLists("", texts[0], texts[1], texts[2]),
+		Moves:   moves,
 	}
-	return &held
 }
 
 // gitBlobs is the text of each path (from the repository's root) at revision, read in one git cat-file --batch, so a

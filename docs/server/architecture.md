@@ -493,11 +493,14 @@ outcomes), contracts, `db` rows, prompt inputs, its `Record`, `error`, or `Log`'
 log call; a pointer, slice, map or channel of them holds only them, a map's keys included. It hands out nothing else
 through its parameters either: what it writes through a pointer, slice, map or channel, passes to a callback or to an
 interface it declares is one of those (`Act`'s `save func(Record) error`). It takes no parameter of type `any`,
-`interface{}` or a type parameter, which can carry a pointer to anything; no exported struct of its own but `Record`
-has an exported field, and it has no exported variable, a getter any caller can also replace. An interface of another
-package, such as the `io.Writer` or `http.ResponseWriter` an answer is written to, is the one way out the rule does
-not read: what an adapter writes there is a review's to check, and the adapter's signature still names the domain
-value it starts from. It exports no type named like one of its core's.
+`interface{}` or a type parameter, which can carry a pointer to anything, and no parameter of another package's type
+but one it may hand out: a named map or slice (`http.Header`, `url.Values`), a struct with a map inside
+(`*http.Request`) or an interface whose methods take what the adapter passes them (`context.Context`'s `Value`) all
+reach the caller, and the rule cannot tell which of these a type is. No exported struct of its own but `Record` has an
+exported field, and it has no exported variable, a getter any caller can also replace. `io.Writer` and
+`http.ResponseWriter`, which an answer is written to, are the two ways out the rule does not read (`sinks` in
+`server/internal/archguard/domainrules/outside.go`): what an adapter writes there is a review's to check, and the
+adapter's signature still names the domain value it starts from. It exports no type named like one of its core's.
 
 ```go
 // FromWire is the session a wire reference names.
@@ -597,19 +600,34 @@ func TestDomainRules(t *testing.T) { domainrules.Check(t) }
 ```
 
 Every finding is one line, `RULE <id> <what>. WHY <why>. FIX <the change>. GOOD <code that does it right>. see
-docs/server/architecture.md "Domain model"`. There is no ignore marker, and no list a later change can add itself
-to. Code that predates the rules is held by three lists under `server/internal/archguard/testdata/domain_layers`:
-`undeclared.txt` (the packages frozen without a layer), `legacy_edges.txt` (imports frozen by name, `<pkg> imports
-<path>`) and `baseline.txt` (shrink-only counts, `<key> <rule> <count>`). A count may not rise above its line, nor,
-given a base, above its count at the merge base: `TestDomainLayers` reads the base from `CI_BASE_SHA`, which
-check-fast's diff mode sets to its merge base (the server lane runs without one, so there only the line holds). One
-that falls prints a notice, and `python3 scripts/ci/lower_baselines.py --only domain-rules` lowers the lines ("Count
-ratchets" in `docs/operations/testing.md`). A rule marked "fails at once" takes no count.
+docs/server/architecture.md "Domain model"`. There is no ignore marker. Code that predates the rules is held by three
+lists under `server/internal/archguard/testdata/domain_layers`: `undeclared.txt` (the packages frozen without a
+layer), `legacy_edges.txt` (imports frozen by name, `<pkg> imports <path>`) and `baseline.txt` (shrink-only counts,
+`<key> <rule> <count>`). Core, seam and outside counts are kept only for the five cores that predate the rules
+(`legacyCores` in `server/internal/archguard/domainrules/lists.go`): a line for any other package is refused, so a
+core declared since starts at zero. A count may not rise above its line. Given a base, `TestDomainLayers` (which
+reads it from `CI_BASE_SHA`; check-fast's diff mode sets it to its merge base) also holds every count to its count at
+the merge base, a package the merge base's baseline has no line for included, and fails on any line of the three
+lists that the merge base's lists lack, so no later change adds itself to one. The server lane runs without a base,
+and there only the lines hold. A count that falls prints a notice, and `python3 scripts/ci/lower_baselines.py --only
+domain-rules` lowers the lines ("Count ratchets" in `docs/operations/testing.md`). A rule marked "fails at once" takes
+no count.
+
+Code that moves takes its lines along. A change that moves a package's files with `git mv`, whole or split, runs
+`python3 scripts/test/name_freezes.py moves`: from git's renames of `.go` files under `server/` since its merge base
+with `origin/main`, it puts the packages a frozen one's files went to in `undeclared.txt` in its place, renames the
+moved imports in `legacy_edges.txt`, and sets the counts of the packages files moved between to their counts now,
+provided their total has not risen; a waiting allowance of a package that is gone goes to the package most of its
+files went to. With a base, the packages files moved between are held together, their total no higher than at the
+merge base, and a list line the merge base lacks passes only as one a move carried. A move that also adds a record
+therefore still fails. The failures of a moved package whose lines were not carried name the command, and a legacy
+core that moves is renamed in `legacyCores` in the same change.
 
 The day the rules landed, the open PRs' additions to the record and named-primitive counts became allowances,
 `<key> <rule> <Type> #PR ...`, each naming the type a PR adds. An allowance adds one to its count's limit only while
 its type is in the package, so the room is that PR's and no other change can spend it; with a base, the merge base's
-count already holds the allowed types it has. Allowances only leave: once the type is on main, `lower_baselines.py`
+count already holds the allowed types it has, and an allowance the merge base's baseline does not list gives no room
+and fails. Allowances only leave: once the type is on main, `lower_baselines.py`
 takes it into the count and removes the line (`TestDomainLayers` says so in a notice), and once its PRs have all closed
 without it, `python3 scripts/test/name_freezes.py pending --write --only domain_layers_baseline`, run on a checkout of
 main, drops it. That script also wrote them, the day the baseline landed; it adds none to a baseline main has, and a
@@ -680,14 +698,14 @@ run that does not name the baseline with `--only` leaves it out once main has it
 | `out-rules-import` | only tests import `domainrules` | fails at once |
 | `out-log-use` | an adapter's `Log` result only as an argument of a logging call | the package it is in |
 | `adapter-name` | an adapter exports no type named like one of its core's | the adapter |
-| `adapter-exported-result` | an adapter hands out only what the section above lists, in results (a map's keys included), through parameters (none of type `any`, `interface{}` or a type parameter) and in exported fields; it has no exported variable | the adapter |
+| `adapter-exported-result` | an adapter hands out only what the section above lists, in results (a map's keys included), through parameters (none of type `any`, `interface{}`, a type parameter or another package's type but `io.Writer` and `http.ResponseWriter`) and in exported fields; it has no exported variable | the adapter |
 | `app-exported-record` | exported structs with an exported field, in undeclared, application and library packages (contracts, `db` and `prompts` aside) | the package |
 | `app-named-primitive` | named basic types, in undeclared, application and library packages | the package |
 | `app-lifecycle-write` | assignments to a `DoneAt` or `DoneBy` field, in undeclared, application and library packages | the package |
 | `app-bridge-call` | uses of an adapter's `Wire` function, called or passed on, in undeclared, application and library packages' production code | the package |
 
-The `app-*` counts hold the habits this model replaces from spreading in code that has not moved yet, and a new
-package starts at zero; they run only in `TestDomainLayers`, as does `layer-declared`.
+The `app-*` counts hold the habits this model replaces from spreading in code that has not moved yet, and, given a
+base, a new package starts at zero; they run only in `TestDomainLayers`, as does `layer-declared`.
 
 ### The domain kit
 

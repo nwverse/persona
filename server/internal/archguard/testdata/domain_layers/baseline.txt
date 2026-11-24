@@ -1,14 +1,17 @@
 # Shrink-only counts of the domain rules' findings in code that predates them (docs/operations/testing.md "Count
 # ratchets"): "<key> <rule> <count>", the key being the package for core-* and app-* rules and the core whose type is
-# used for out-* rules. server/internal/archguard's TestDomainLayers fails when a count rises above its line (with a
-# base, above its count at the merge base too) and prints a notice when one falls; lower the lines with
-# python3 scripts/ci/lower_baselines.py --only domain-rules.
+# used for out-* rules. Core, seam and out-* counts are kept only for the five legacy cores. server/internal/archguard's
+# TestDomainLayers fails when a count rises above its line (with a base, above its count at the merge base too, a
+# package without a line included) and prints a notice when one falls; lower the lines with
+# python3 scripts/ci/lower_baselines.py --only domain-rules. Code that moves takes its lines along:
+# python3 scripts/test/name_freezes.py moves.
 #
 # "<key> <rule> <Type> #PR ..." is an allowance, made the day the rules landed, for a type an open PR was adding to an
 # app-exported-record or app-named-primitive count. It adds one to that count's limit only while the type is in the
 # package, so the room is that PR's alone. Once the type is on main, lower_baselines.py takes it into the count and
 # removes the line; once its PRs have all closed without it, python3 scripts/test/name_freezes.py pending --write
-# --only domain_layers_baseline drops it. No PR opened later gets one.
+# --only domain_layers_baseline drops it. No PR opened later gets one: with a base, the test fails on an allowance the
+# merge base's baseline lacks.
 #
 # These packages predate the rules; their counts only fall; do not copy their shapes. Copy server/internal/domainkit and
 # the compliant twins in server/internal/archguard/testdata/domainrules/planted (agentref, assistant/fleetcount and

@@ -410,6 +410,50 @@ class BaselineTests(unittest.TestCase):
         self.assertLessEqual(rules, set(name_freezes.ALLOWABLE))
 
 
+class MovesTests(unittest.TestCase):
+    """`moves` runs TestDomainLayers with DOMAIN_LAYERS_MOVES and CI_BASE_SHA set to --base's commit, shows the lines
+    the lists changed and ends with a verdict; a test still failing (a rise no move carries) exits 1."""
+
+    def carry(self, returncode, output=""):
+        with tempfile.TemporaryDirectory() as root:
+            for path in (name_freezes.UNDECLARED.file, name_freezes.EDGES, name_freezes.BASELINE.file):
+                Path(root, path).parent.mkdir(parents=True, exist_ok=True)
+                Path(root, path).write_text("# list\ninternal/old\n")
+            seen = {}
+
+            def go(args, cwd, env, **kw):
+                seen.update(args=args, cwd=cwd, base=env.get("CI_BASE_SHA"), moves=env.get("DOMAIN_LAYERS_MOVES"))
+                Path(root, name_freezes.UNDECLARED.file).write_text("# list\ninternal/modules/old\n")
+                return subprocess_result(returncode, output)
+
+            err = io.StringIO()
+            with mock.patch.multiple(name_freezes, ROOT=Path(root), run=lambda args, timeout, **kw: "basesha\n"), \
+                    mock.patch.object(name_freezes.subprocess, "run", go), mock.patch("sys.stderr", err):
+                code = name_freezes.main(["moves", "--base", "origin/main"])
+            return code, err.getvalue(), seen
+
+    def test_the_lists_carried_and_the_verdict(self):
+        code, err, seen = self.carry(0)
+        self.assertEqual(code, 0, err)
+        self.assertEqual((seen["base"], seen["moves"]), ("basesha", "1"))
+        self.assertIn("^TestDomainLayers$", seen["args"])
+        self.assertIn("undeclared.txt: -internal/old", err)
+        self.assertIn("undeclared.txt: +internal/modules/old", err)
+        self.assertTrue(err.rstrip().endswith("moves: VERDICT ok: 2 list line(s) changed, and TestDomainLayers passes "
+                                              "against origin/main"), err)
+
+    def test_a_rise_no_move_carries_fails(self):
+        code, err, _ = self.carry(1, "    domain_test.go:80: internal/x app-exported-record: 3 now together\n")
+        self.assertEqual(code, 1)
+        self.assertIn("internal/x app-exported-record: 3 now together", err)
+        self.assertIn("moves: VERDICT failing", err)
+
+
+def subprocess_result(returncode, stdout):
+    """A finished process as subprocess.run returns it."""
+    return name_freezes.subprocess.CompletedProcess([], returncode, stdout=stdout, stderr="")
+
+
 @unittest.skipUnless(shutil.which("go"), "needs go")
 class GoLayerNamesTests(unittest.TestCase):
     """The undeclared packages come from the archguard test itself, read as TestDomainLayers reads them."""

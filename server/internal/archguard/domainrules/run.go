@@ -230,18 +230,27 @@ type limit struct {
 }
 
 // Judge holds findings and counts to the lists: frozen names suppress what they name, and a count may not rise above
-// its count line plus its allowances whose types are in the tree; given base (the merge base's measure, of the lines
-// its baseline has), not above its count there either, plus the allowed types the merge base lacks. Every other
-// finding fails. pkgs names what exists, for the notices. scope limits it to one package, as the hook runs.
-func Judge(findings []Finding, counts []Count, pkgs []*Pkg, lists Lists, base *Measure, scope string) Verdict {
+// its count line plus its allowances whose types are in the tree. Given base (a merge base whose lists have landed),
+// a count may not rise above its count there either, plus the allowances the merge base's baseline lists whose types
+// it lacks; the packages files moved between are held together (Base); and a list line the merge base's lists lack
+// fails unless a move carried it. Every other finding fails. pkgs names what exists, for the notices. scope limits it
+// to one package, as the hook runs.
+func Judge(findings []Finding, counts []Count, pkgs []*Pkg, lists Lists, base *Base, scope string) Verdict {
 	var v Verdict
 	in := func(key string) bool { return scope == "" || key == scope }
+	var g groups
+	if base != nil {
+		g = newGroups(base.Moves)
+	}
 	if scope == "" {
 		v.Failures = append(v.Failures, lists.Problems...)
+		if base != nil {
+			v.Failures = append(v.Failures, base.added(lists, g)...)
+		}
 	}
 	// Frozen names: the undeclared packages and the legacy edges.
 	usedEdges := map[string]bool{}
-	groups := map[string][]Finding{}
+	groupsByID := map[string][]Finding{}
 	var order []string
 	for _, f := range findings {
 		switch {
@@ -250,7 +259,11 @@ func Judge(findings []Finding, counts []Count, pkgs []*Pkg, lists Lists, base *M
 			if _, ok := lists.Undeclared.Has(f.Edge); ok && f.Edge != "" {
 				continue
 			}
-			v.Failures = append(v.Failures, f.String())
+			line := f.String()
+			if f.Edge != "" {
+				line += " If the package only moved here from one undeclared.txt lists, " + movesHint + " carries its line."
+			}
+			v.Failures = append(v.Failures, line)
 		case f.Edge != "":
 			if _, ok := lists.Edges.Has(f.Edge); ok {
 				usedEdges[f.Edge] = true
@@ -261,10 +274,10 @@ func Judge(findings []Finding, counts []Count, pkgs []*Pkg, lists Lists, base *M
 			v.Failures = append(v.Failures, f.String())
 		default:
 			id := f.Key + " " + f.Rule
-			if _, ok := groups[id]; !ok {
+			if _, ok := groupsByID[id]; !ok {
 				order = append(order, id)
 			}
-			groups[id] = append(groups[id], f)
+			groupsByID[id] = append(groupsByID[id], f)
 		}
 	}
 	now := Measured(findings, counts)
@@ -272,9 +285,9 @@ func Judge(findings []Finding, counts []Count, pkgs []*Pkg, lists Lists, base *M
 	for _, c := range counts {
 		id := c.Key + " " + c.Rule
 		byID[id] = c
-		if _, ok := groups[id]; !ok {
+		if _, ok := groupsByID[id]; !ok {
 			order = append(order, id)
-			groups[id] = nil
+			groupsByID[id] = nil
 		}
 	}
 	limits := map[string]*limit{}
@@ -309,18 +322,11 @@ func Judge(findings []Finding, counts []Count, pkgs []*Pkg, lists Lists, base *M
 			l = &limit{}
 		}
 		top, why := l.count.Count+len(l.allowed), "baseline "+itoa(l.count.Count)+allowedText(l.allowed)
-		if base != nil {
-			if b, ok := base.Counts[id]; ok {
-				// What the merge base has already holds the allowed types it has; the change may add the others.
-				fresh := 0
-				for _, e := range l.allowed {
-					if !base.Names[id][e.Name] {
-						fresh++
-					}
-				}
-				if b+fresh < top {
-					top, why = b+fresh, "merge base "+itoa(b)+", baseline "+itoa(l.count.Count)+allowedText(l.allowed)
-				}
+		if base != nil && !g.moved(key) {
+			// What the merge base has already holds the allowed types it has; the allowances it lists add the others.
+			b := base.Measure.Counts[id]
+			if held := b + base.fresh(l.allowed, g, []string{key}); held < top {
+				top, why = held, "merge base "+itoa(b)+", baseline "+itoa(l.count.Count)+allowedText(l.allowed)
 			}
 		}
 		if n <= top {
@@ -328,13 +334,18 @@ func Judge(findings []Finding, counts []Count, pkgs []*Pkg, lists Lists, base *M
 		}
 		if c, ok := byID[id]; ok {
 			what := c.Key + " adds " + countWhat(rule) + " (count " + itoa(n) + " > " + itoa(top) + ")"
-			v.Failures = append(v.Failures, c.Pos.Filename+":1: "+message(rule, what)+" Counted: "+strings.Join(c.Names, ", "))
+			v.Failures = append(v.Failures, c.Pos.Filename+":1: "+message(rule, what)+" Counted: "+
+				strings.Join(c.Names, ", ")+". If its code only moved here, "+movesHint+" carries its lines.")
 			continue
 		}
-		for _, f := range groups[id] {
+		for _, f := range groupsByID[id] {
 			v.Failures = append(v.Failures, f.String())
 		}
-		v.Failures = append(v.Failures, key+" "+rule+": "+itoa(n)+" now, above its limit ("+why+"): the count only falls; fix the code the lines above name")
+		v.Failures = append(v.Failures, key+" "+rule+": "+itoa(n)+" now, above its limit ("+why+"): the count only "+
+			"falls; fix the code the lines above name (if it only moved here, "+movesHint+" carries its lines)")
+	}
+	if base != nil && scope == "" {
+		v.Failures = append(v.Failures, base.movedRises(now, lists, g, byID, groupsByID)...)
 	}
 	// What can be tidied: a count under its line, an allowance whose type landed, one still waiting for its PRs.
 	for _, id := range ids {
