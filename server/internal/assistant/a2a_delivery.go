@@ -485,6 +485,7 @@ func (s *Service) a2aLaunch(ctx context.Context, st a2aStore, t *a2aTask) error 
 	request := map[string]any{"cwd": t.Launch.CWD, "launcher": t.Launch.Launcher, "session_id": sid,
 		"prompt": a2aPrompt(t, e, t.source(), string(s.lang(ctx))), "client_msg_id": a2aDeliveryID(taskID, 1),
 		"message_source": a2aMessageSource(t.source()), "permission_mode": permMode}
+	t.Launch.Run.lay(request) // a tier's launcher, model, effort and speed; never its permission mode (agent_presets.go)
 	go func() {
 		ctx, cancel := context.WithTimeout(s.runCtx(), agentStartTimeout)
 		defer cancel()
