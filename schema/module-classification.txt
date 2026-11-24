@@ -205,6 +205,7 @@ go server/internal/proto core
 go server/internal/proxyproto core
 go server/internal/pushcrypto core
 go server/internal/quota core
+go server/internal/recordingwire core
 go server/internal/recordinghost core
 go server/internal/relay core
 go server/internal/relayproto core
