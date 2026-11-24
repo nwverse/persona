@@ -166,9 +166,9 @@ func (s *Service) botCardAction(ctx context.Context, a *botcard.CardAction, acti
 		}()
 		return toast("info", i18n.T(l, "assistant-feishu_cards.starting"))
 	case "nav": // a workbench button (feishu_workbench.go)
-		return s.workbenchNav(ctx, a)
+		return s.larkModule().WorkbenchNav(ctx, a)
 	case "ib": // an Inbox button of the workbench's /inbox card
-		return s.workbenchInboxAction(ctx, a)
+		return s.larkModule().WorkbenchInboxAction(ctx, a)
 	case "stop":
 		// A progress card may outlive its run when its final edit was refused.
 		f, _ := s.feishuFeatures(ctx)

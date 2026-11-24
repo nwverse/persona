@@ -209,7 +209,7 @@ func (s *Service) guardTools(ctx context.Context, machine, session string, tools
 
 // ToolsFor is the assistant's own tool list for one conversation.
 func (s *Service) ToolsFor(ctx context.Context, machine, session string) []proto.Tool {
-	return s.guardTools(ctx, machine, session, s.Tools(ctx))
+	return append(s.guardTools(ctx, machine, session, s.Tools(ctx)), s.spaceTools(ctx, machine, session)...)
 }
 
 // rejectDuplicateGuardKeys validates every object occurrence before RawMessage decoding can discard an earlier
@@ -440,6 +440,9 @@ func (s *Service) guardDeniedForDiscovery(ctx context.Context, machine, session 
 func (s *Service) guardDiscoveryCursor(ctx context.Context, machine, session string, assistant bool, base string) string {
 	if !assistant {
 		return base
+	}
+	if space := s.agentCallerSpace(ctx, machine, session); space != "" {
+		base += ":space=" + space
 	}
 	denied := s.guardDeniedForDiscovery(ctx, machine, session)
 	if len(denied) == 0 {

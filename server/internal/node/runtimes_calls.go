@@ -309,7 +309,9 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 				}
 				sentAt := time.Now()
 				n.ttft.arm(p.SessionID, sentAt, "")
+				finishAgy := n.runtimes.agyWorkBegin(h, method, p.SessionID)
 				out, err := call(method, input)
+				finishAgy(err, false)
 				said = out
 				if (err != nil && !maybeDelivered(err)) || (err == nil && runtimeAnswerFlag(out, "queued")) {
 					n.ttft.disarm(p.SessionID, sentAt)
@@ -327,7 +329,9 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 			return nil, errRuntimeUnsupported(label, "中断"), true
 		}
 		// A runtime that waited for the turn to end says so (settled); one that only asked it to stop does not.
+		finishAgy := n.runtimes.agyWorkBegin(h, method, p.SessionID)
 		out, err := call("session.interrupt", map[string]any{"session_id": p.SessionID})
+		finishAgy(err, runtimeAnswerFlag(out, "settled"))
 		return withFlag(okResult(err), out, "settled"), err, true
 	case "session.close":
 		if !caps.Close {
@@ -340,7 +344,9 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		if p.Force {
 			closeParams["force"] = true
 		}
+		finishAgy := n.runtimes.agyWorkBegin(h, method, p.SessionID)
 		_, err := call("session.close", closeParams)
+		finishAgy(err, true)
 		return okResult(err), err, true
 	case "session.archive", "session.unarchive":
 		// Its own archive (archive.go): one that has none keeps the archive Persona's alone.
@@ -379,10 +385,16 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 			if s.SessionID == p.SessionID {
 				info["cwd"], info["model"], info["agent"], info["last_activity"] = s.Cwd, s.Model, s.Agent, s.UpdatedAt
 				info["permission_mode"], info["effort"] = s.PermissionMode, s.Effort
-				if h.agent() == agyAgent && (s.ContextTokens > 0 || s.OutputTokens > 0) {
-					info["context_tokens"] = int(s.ContextTokens)
-					info["output_tokens"] = s.OutputTokens
-					delete(info, "usage_unknown")
+				if h.agent() == agyAgent {
+					if s.ContextTokens > 0 || s.OutputTokens > 0 {
+						info["context_tokens"] = int(s.ContextTokens)
+						info["output_tokens"] = s.OutputTokens
+						delete(info, "usage_unknown")
+					}
+					n.resolveAgyContextWindow(&s)
+					if bd := s.ContextBreakdown(); bd != nil {
+						info["context_breakdown"] = bd
+					}
 				}
 			}
 		}
@@ -417,7 +429,10 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		if !caps.QueueSendNow || strings.Contains(p.SessionID, subagentSep) {
 			return nil, errRuntimeUnsupported(label, "这个操作"), true
 		}
-		if _, err := call(method, map[string]any{"session_id": p.SessionID}); err != nil {
+		finishAgy := n.runtimes.agyWorkBegin(h, method, p.SessionID)
+		_, err := call(method, map[string]any{"session_id": p.SessionID})
+		finishAgy(err, false)
+		if err != nil {
 			return nil, err, true
 		}
 		return map[string]any{"sent": true}, nil, true

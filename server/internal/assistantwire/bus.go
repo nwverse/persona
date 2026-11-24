@@ -194,7 +194,7 @@ const (
 	CodeStaleSnapshot    = "stale_snapshot"    // ErrStaleSnapshot
 	CodeAssistantOffline = "assistant_offline" // the hub has no connection from the assistant
 	// CodeFeishuAPI: Feishu answered the bot's call with an error code (Data: {"code": n}): a refusal or a passing
-	// failure the assistant tells apart (the agent messages, feishu_cot.go).
+	// failure the assistant tells apart (the agent messages, internal/modules/lark/cot.go).
 	CodeFeishuAPI = "feishu_api"
 	// CodeFeishuSave: the image downloaded, but saving its bytes on the selected machine failed.
 	CodeFeishuSave = "feishu_save"

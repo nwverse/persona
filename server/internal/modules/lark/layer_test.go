@@ -10,45 +10,45 @@ import (
 	"github.com/nwverse/persona/server/internal/botcard"
 )
 
-// fakeHost records what the layer asks of the core.
-type fakeHost struct{ calls []any }
+// outboundHost records the outbound port's calls the layer hands to the core; the rest is the fake core's.
+type outboundHost struct {
+	*Service
+	calls []any
+}
 
-func (h *fakeHost) Status(context.Context) (assistantwire.FeishuStatus, error) {
+func (h *outboundHost) Status(context.Context) (assistantwire.FeishuStatus, error) {
 	h.calls = append(h.calls, "status")
 	return assistantwire.FeishuStatus{Ready: true, Owner: "ou_1"}, nil
 }
 
-func (h *fakeHost) Features(context.Context) (assistantwire.FeishuFeatures, bool) {
+func (h *outboundHost) Features(context.Context) (assistantwire.FeishuFeatures, bool) {
 	h.calls = append(h.calls, "features")
 	return assistantwire.FeishuFeatures{Reports: true}, true
 }
 
-func (h *fakeHost) Post(_ context.Context, to assistantwire.ChannelTarget, replyTo string, card *botcard.Card, fallback, key string) (string, error) {
+func (h *outboundHost) Post(_ context.Context, to assistantwire.ChannelTarget, replyTo string, card *botcard.Card, fallback, key string) (string, error) {
 	h.calls = append(h.calls, []any{"post", to, replyTo, card, fallback, key})
 	return "om_1", nil
 }
 
-func (h *fakeHost) Note(_ context.Context, to assistantwire.ChannelTarget, replyTo, text string) {
+func (h *outboundHost) Note(_ context.Context, to assistantwire.ChannelTarget, replyTo, text string) {
 	h.calls = append(h.calls, []any{"note", to, replyTo, text})
 }
 
-func (h *fakeHost) Reply(_ context.Context, to assistantwire.ChannelTarget, replyTo, text, key string, full bool) error {
+func (h *outboundHost) Reply(_ context.Context, to assistantwire.ChannelTarget, replyTo, text, key string, full bool) error {
 	h.calls = append(h.calls, []any{"reply", to, replyTo, text, key, full})
 	return errors.New("refused")
 }
 
-func (h *fakeHost) UpdateCard(_ context.Context, messageID string, card *botcard.Card) error {
+func (h *outboundHost) UpdateCard(_ context.Context, messageID string, card *botcard.Card) error {
 	h.calls = append(h.calls, []any{"update", messageID, card})
 	return nil
 }
 
-func (h *fakeHost) ThreadPost(todoID string, ev assistantwire.ThreadEvent) {
-	h.calls = append(h.calls, []any{"thread", todoID, ev})
-}
-
-// The layer's outbound port hands each call to the core's host unchanged and gives back what it answers.
+// The layer's outbound port hands each send to the core's host unchanged and gives back what it answers (a to-do's
+// topic lines are the module's own, thread_posts_test.go).
 func TestLayerForwardsTheOutboundPort(t *testing.T) {
-	h := &fakeHost{}
+	h := &outboundHost{Service: newTestService(t, newFakeHub())}
 	l := New(h)
 	ctx := context.Background()
 	card := &botcard.Card{}
@@ -69,10 +69,8 @@ func TestLayerForwardsTheOutboundPort(t *testing.T) {
 	if err := l.UpdateCard(ctx, "om_4", card); err != nil {
 		t.Fatal(err)
 	}
-	ev := assistantwire.ThreadEvent{Kind: assistantwire.ThreadTodoDone, Text: "done"}
-	l.ThreadPost("todo_1", ev)
 	want := []any{"status", "features", []any{"post", to, "om_0", card, "fb", "k1"}, []any{"note", to, "om_2", "a note"},
-		[]any{"reply", to, "om_3", "a reply", "k2", true}, []any{"update", "om_4", card}, []any{"thread", "todo_1", ev}}
+		[]any{"reply", to, "om_3", "a reply", "k2", true}, []any{"update", "om_4", card}}
 	if !reflect.DeepEqual(h.calls, want) {
 		t.Fatalf("calls %v, want %v", h.calls, want)
 	}

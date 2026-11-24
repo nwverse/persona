@@ -1572,7 +1572,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.a2aLoop(ctx)
 	go s.resourceLoop(ctx)
 	go s.transcriptionReadyLoop(ctx)
-	go s.waterReminderLoop(ctx)
+	go s.healthReminders(ctx)
 	recoverCtx, cancel := context.WithTimeout(ctx, taskFailTimeout)
 	if err := s.recoverTaskStarts(recoverCtx, s.tasks.recoverBefore); err != nil {
 		s.logf("recover interrupted task starts: %v", err)
@@ -2460,6 +2460,9 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	if run.Retried {
 		return
 	}
+	if s.hasPendingTransientWake(m.ID, run.SessionID) {
+		return // never schedule a second prompt while in-conversation transient recovery is still pending
+	}
 	if hasSession {
 		if failedSession.TurnError == "" {
 			failedSession.TurnError = full
@@ -2468,20 +2471,31 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 			return // the unavailable refusal fallback needs the user's recovery, never an automatic replay
 		}
 	}
-	if reset, turn, resumes, limited := s.runLimit(ctx, m.ID, run.SessionID, full); limited {
-		// A subscription's usage limit (docs/assistant/agent-work.md "Usage limits"): a retry before it resets is
-		// refused at once. The conversation that goes on by itself then needs none; otherwise the retry waits for the
-		// reset, however long that is — the watcher's time is for the turn, not for this.
-		if resumes {
+	now := time.Now()
+	if rec := s.runRecovery(ctx, m.ID, run.SessionID, failedSession, hasSession, full, now); rec.ok {
+		// A subscription's usage limit or a terminal provider failure with an advertised future recovery time:
+		// a retry before recovery is likely to fail again. A conversation that goes on by itself after a usage
+		// limit needs none; otherwise the retry waits durably for the recovery window — the watcher's timeout
+		// is for the turn, not for this.
+		if rec.resumes {
 			s.logf("task %s run %s: its conversation goes on by itself once the usage limit resets at %s: not retried", t.ID, run.ID,
-				reset.UTC().Format(time.RFC3339))
+				rec.at.UTC().Format(time.RFC3339))
 			return
 		}
-		now := time.Now()
-		wait := s.limitRetryWait(reset, now)
-		s.logf("task %s run %s: the usage limit resets at %s: retried in %s", t.ID, run.ID, reset.UTC().Format(time.RFC3339), wait.Round(time.Second))
-		w := delayedWait{ID: "limit_" + run.ID, Kind: delayedScheduledRetry, At: now.Add(wait),
-			Retry: &scheduledLimitRetry{Run: run, RunOf: run.of, MachineName: m.Name, LimitTurn: turn}}
+		wait := s.limitRetryWait(rec.at, now)
+		waitID := "limit_" + run.ID
+		if rec.usageLimit {
+			s.logf("task %s run %s: the usage limit resets at %s: retried in %s", t.ID, run.ID, rec.at.UTC().Format(time.RFC3339), wait.Round(time.Second))
+		} else {
+			waitID = "retry_" + run.ID
+			s.logf("task %s run %s: provider recovery advertised at %s: retried in %s", t.ID, run.ID, rec.at.UTC().Format(time.RFC3339), wait.Round(time.Second))
+		}
+		retryRun := run
+		if retryRun.MachineID == "" {
+			retryRun.MachineID = m.ID
+		}
+		w := delayedWait{ID: waitID, Kind: delayedScheduledRetry, At: now.Add(wait),
+			Retry: &scheduledLimitRetry{Run: retryRun, RunOf: run.of, MachineName: m.Name, LimitTurn: rec.turn}}
 		persisted := false
 		if s.store != nil && s.store() != nil {
 			pctx, cancel := context.WithTimeout(s.runCtx(), 5*time.Second)
@@ -2489,7 +2503,7 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 			cancel()
 			persisted = err == nil
 			if err != nil {
-				s.logf("task %s run %s: persist usage-limit retry: %v", t.ID, run.ID, err)
+				s.logf("task %s run %s: persist delayed retry: %v", t.ID, run.ID, err)
 			}
 		}
 		// Keep this watcher (and its state-draft ownership) until the retry finishes, just as the old in-memory wait did.
@@ -2505,6 +2519,9 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 			return
 		case <-time.After(delay):
 		}
+	}
+	if s.hasPendingTransientWake(m.ID, run.SessionID) {
+		return
 	}
 	// The failure push sends the user to the task's page; by now they may have switched it off, deleted it or changed
 	// its prompt. The retry goes by what the schedule holds now, not by the copy the run started with: that copy ran
@@ -2524,25 +2541,77 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	}
 }
 
-// runLimit: the run's conversation (sid on machine) stopped on a subscription's usage limit whose reset is known
-// (text: its turn's error), the end of that turn (the conversation's updated_at), and whether its CLI said it goes on
-// by itself then. As the lists have the conversation (the node's record, else Claude Code's words when they name a time
-// zone, decorateLimit), else as the node has it.
-func (s *Service) runLimit(ctx context.Context, machine, sid, text string) (reset, turn time.Time, resumes, ok bool) {
+type scheduledRecovery struct {
+	at         time.Time
+	turn       time.Time
+	resumes    bool
+	usageLimit bool
+	ok         bool
+}
+
+// runRecovery resolves whether the failed scheduled turn carries either a subscription/gateway usage-limit reset or a
+// trustworthy future recovery time from a terminal provider failure. It preserves the raw node session's recovery
+// timestamps before decorateLimit strips non-usage-limit metadata, and returns the failed turn's UpdatedAt so a later
+// turn during the wait cancels the retry.
+func (s *Service) runRecovery(ctx context.Context, machine, sid string, raw proto.Session, hasRaw bool, text string, now time.Time) scheduledRecovery {
+	if !hasRaw || (raw.TurnErrorResetsAt == nil && raw.ModelFallback == nil) {
+		if ns, ok := s.nodeSession(machine, sid); ok {
+			if !hasRaw {
+				raw, hasRaw = ns, true
+			} else {
+				if raw.TurnErrorResetsAt == nil {
+					raw.TurnErrorResetsAt = ns.TurnErrorResetsAt
+				}
+				if raw.ModelFallback == nil {
+					raw.ModelFallback = ns.ModelFallback
+				}
+			}
+		}
+	}
 	c, found := s.decoratedSession(machine, sid)
 	if !found {
-		c, _ = s.session(ctx, machine, sid)
+		if hasRaw {
+			c = raw
+		} else {
+			c, _ = s.session(ctx, machine, sid)
+		}
 	}
 	if strings.TrimSpace(c.TurnError) == "" {
 		c.TurnError = text // Claude Code's error is its last words: an older node's raw session has no turn error
 	}
-	turn = c.UpdatedAt
-	if c.UpdatedAt.IsZero() {
-		c.UpdatedAt = time.Now()
+	turn := c.UpdatedAt
+	if turn.IsZero() && hasRaw {
+		turn = raw.UpdatedAt
 	}
-	decorateLimit(&c)
-	reset, ok = usageLimitReset(c)
-	return reset, turn, ok && c.TurnErrorResumes, ok
+	anchor := turn
+	if anchor.IsZero() {
+		anchor = now
+	}
+	decorated := c
+	if decorated.UpdatedAt.IsZero() {
+		decorated.UpdatedAt = anchor
+	}
+	decorateLimit(&decorated)
+	if reset, ok := usageLimitReset(decorated); ok {
+		return scheduledRecovery{at: reset, turn: turn, resumes: decorated.TurnErrorResumes, usageLimit: true, ok: true}
+	}
+	errText := strings.TrimSpace(text)
+	if errText == "" {
+		errText = strings.TrimSpace(c.TurnError)
+	}
+	if at, ok := providerRecoveryAt(raw, decorated, errText, anchor, now); ok {
+		return scheduledRecovery{at: at, turn: turn, ok: true}
+	}
+	return scheduledRecovery{}
+}
+
+// hasPendingTransientWake reports whether in-conversation transient recovery still has an active wake for (machine, sid).
+func (s *Service) hasPendingTransientWake(machine, sid string) bool {
+	if machine == "" || sid == "" {
+		return false
+	}
+	e, exists := s.workEntry([2]string{machine, sid})
+	return exists && e.WakeAt != nil && e.Work.On == proto.WaitTransient && e.Work.RetiredAt == nil
 }
 
 // limitRetryWait is how long the retry of a run a usage limit stopped waits: until a minute or so after the reset

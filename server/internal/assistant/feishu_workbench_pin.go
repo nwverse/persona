@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/botcard"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -57,7 +58,7 @@ func (s *Service) workbenchLoop() {
 // standingCard is what the standing board shows: the home card with the workbench on, the waiting list without.
 func (s *Service) standingCard(ctx context.Context) (card *botcard.Card, fallback, said string) {
 	if f, ready := s.feishuFeatures(ctx); s.workbenchOn(f, ready) {
-		return s.homeCard(ctx, f)
+		return s.larkModule().HomeCard(ctx, f)
 	}
 	return s.boardCard(ctx)
 }
@@ -165,4 +166,8 @@ func (s *Service) workbenchBringCard(ctx context.Context, id string) {
 		}
 	}
 	s.postInteractionCard(ctx, ix)
+}
+
+func wbT(l i18n.Lang, key string, args ...i18n.Args) string {
+	return i18n.T(l, "assistant-feishu_workbench."+key, args...)
 }

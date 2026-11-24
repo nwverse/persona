@@ -37,6 +37,7 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/managerconf"
 	"github.com/nwverse/persona/server/internal/managerupdate"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/update"
 )
@@ -366,9 +367,14 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		UpdateHandoffGrace:     func() time.Duration { return nodeUpdateHandoffGraceOf(svc.hello(context.Background())) },
 		PromptLanguage:         func() string { return answerLanguage(svc.hello(context.Background()).Locale) },
 		// The extensions' part of a node's connection and its events (internal/extmgr).
-		Own:         func(ctx context.Context, machine string) map[string]json.RawMessage { return ext.Own(ctx, machine) },
-		OnConnected: func(machine string) { ext.NodeConnected(machine) },
-		OnEvent:     func(machine, event string, params json.RawMessage) bool { return ext.NodeEvent(machine, event, params) },
+		Own: func(ctx context.Context, machine string) map[string]json.RawMessage { return ext.Own(ctx, machine) },
+		OnConnected: func(machine string) {
+			ext.NodeConnected(machine)
+			if svc != nil {
+				svc.NodeConnected(ctx, machine)
+			}
+		},
+		OnEvent: func(machine, event string, params json.RawMessage) bool { return ext.NodeEvent(machine, event, params) },
 		// The messages held for a machine's Agents changed (devices held.go): its rows again, nothing else of a list.
 		HeldChanged: func(machine string) { svc.publishSessions(machine) },
 		// A node's new connection gets the launchers added in Persona, with their keys (models_launchers_push.go).
@@ -390,9 +396,13 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 			return ext.UsageQuery(ctx, id, launcher)
 		},
 		Hub: lazyHost{c: func() *bus.Client { return bh.Client() }}})
+	// The run-time module switch (the modules settings row), read once here, before the extensions: the kernel and every
+	// provider seam (moduleswitch) get the same list, so a module switched off is absent as one built out.
+	assistantStore := repositorystore.New(database)
+	modulesOff := ReadModuleSwitch(ctx, assistantStore, logf)
 	// The extensions, connectors and bots (internal/extmgr): the data directory here, its own sections in manager.json
 	// (as moveConfig read and checked them) and its own secret.key.
-	ext = extmgr.New(extmgr.Options{Dir: home, ConfigFile: o.ConfigFile, Config: o.ExtConfig, SecretKey: o.SecretKey,
+	ext = extmgr.New(extmgr.Options{Modules: moduleswitch.Off(modulesOff...), Dir: home, ConfigFile: o.ConfigFile, Config: o.ExtConfig, SecretKey: o.SecretKey,
 		Store: database, Build: build, ManagerID: o.ID, HubURL: hub, HubClient: httpClient, HubProofKey: extwire.ProofKey(token),
 		Logf: log.New(stderr, "extensions: ", log.LstdFlags).Printf,
 		Hub:  lazyHost{c: func() *bus.Client { return bh.Client() }, b: func() *BusHub { return bh }}, Devices: devs,
@@ -405,6 +415,11 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		TranscriptionChanged: func() {
 			if svc != nil {
 				svc.transcriptionReadinessChanged()
+			}
+		},
+		TracksChanged: func() {
+			if svc != nil {
+				svc.tracksChanged()
 			}
 		},
 		AssistantTools: func() []proto.Tool { return svc.toolsNow() },
@@ -433,11 +448,10 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		Logf: logf, Devices: devs, Extensions: ext, StopWhenRevoked: o.StopWhenRevoked, StopWhenRejected: o.TokenFirst})
 	// The knowledge base in its directory, kept as its manager.json's kb section says (over the hub's hello). The model
 	// providers' keys are sealed with its own secret.key.
-	assistantStore := repositorystore.New(database)
 	svc = New(Options{Hub: bh, Store: func() Store { return assistantStore }, Logf: logf, Devices: devs,
-		ModulesOff: ReadModuleSwitch(ctx, assistantStore, logf), // the built-in modules switched off (modules.go)
+		ModulesOff: modulesOff, // the built-in modules switched off (modules.go)
 		KB:         &KBOptions{Dir: o.KBDir, KeyDir: o.HandlesDir}, SecretKey: o.SecretKey,
-		Trust: devs, AgentDirs: devs, ID: o.ID, Build: version, RepositoryConfig: o.ConfigFile,
+		Trust: devs, AgentDirs: devs, HerdrSessions: devs, ID: o.ID, Build: version, RepositoryConfig: o.ConfigFile,
 		RemoteImageCache: filepath.Join(home, "cache", "remote-images")})
 	svc.SetExtensions(ext) // the connectors', Cua's and ego's tools, in this process (fleet_tools.go)
 	// When the north star's recording began (north_star.go).

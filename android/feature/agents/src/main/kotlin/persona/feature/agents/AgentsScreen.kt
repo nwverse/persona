@@ -41,6 +41,7 @@ import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 import persona.core.designsystem.icons.PersonaIcons
+import persona.core.domain.sort.canAnswerInteraction
 import persona.core.domain.sort.*
 import persona.core.domain.answer.firstBySession
 import persona.core.domain.answer.rowLine
@@ -188,6 +189,9 @@ internal fun AgentsScreen(
     var pickingTodoForSpace by remember { mutableStateOf<Pair<String, String>?>(null) }
     val todos by (model.tasks?.todos ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyList()) }).collectAsStateWithLifecycle()
     val sessionsByKey = remember(page.sessions) { page.sessions.associateBy { it.key } }
+    // Visible (post-local-seen, pre-foldRows) sessions, so rows can tell whether a parent is Unread only via folded sides (#13524).
+    val visibleSessions = remember(page.sessions, page.preferences) { page.sessions.map { it.listSession(page.preferences).session } }
+    val visibleSessionsByKey = remember(visibleSessions) { visibleSessions.associateBy { it.key } }
     // By To-do only when the hub has to-dos, as iOS offers it (`DevGrouping.offered(supportsTodos:)`, #4338 A5).
     val todosSupported by (model.tasks?.todosSupported ?: remember { kotlinx.coroutines.flow.MutableStateFlow(false) }).collectAsStateWithLifecycle()
     // "By pinned" only from a hub with the direction tree (#4352), or while it is the one chosen.
@@ -305,7 +309,16 @@ internal fun AgentsScreen(
     }
     /** Whether a request can be answered now: through its own group's connection when there are several groups. */
     fun reachable(request: Interaction) = groups.stateFor(request.machineId, connection) == ConnectionState.Online
-    fun open(session: SessionKey) { navigator.navigate(ChatRoute(session.machineId, session.sessionId)) }
+    fun open(session: SessionKey, openSubagents: Boolean = false) {
+        navigator.navigate(
+            ChatRoute(
+                session.machineId,
+                session.sessionId,
+                kind = if (openSubagents) ConversationKind.Agent else null,
+                openSubagents = openSubagents,
+            ),
+        )
+    }
     val takeoverOps = model.operationsApi ?: LocalAgentsOperations.current?.operations
     val takeoverClient = remember(takeoverOps) { takeoverOps?.let(CodexTakeoverClient::of) }
     val takeoverCoordinator = rememberCodexTakeoverCoordinator(
@@ -333,6 +346,22 @@ internal fun AgentsScreen(
             // A search hit inside a side session (#7944) opens the parent with that side shown.
             open(page.settings.sideHit(row.session, page.sessions, names) ?: row.session.key)
         }
+    }
+    fun openRowSubagents(row: AgentSession) {
+        model.opened(row)
+        open(row.session.key, openSubagents = true)
+    }
+    val legacyNestedKeys = remember(page.list.children) {
+        page.list.children.values.flatten().mapTo(HashSet()) { it.session.key }
+    }
+    val heldChildrenByParent = remember(page.sessions, legacyNestedKeys) {
+        val grouped = HashMap<SessionKey, MutableList<Session>>()
+        for (candidate in page.sessions) {
+            if (candidate.key in legacyNestedKeys) continue
+            val target = candidate.foldedUnderKey ?: candidate.takeIf { it.isSubagent }?.parentKey ?: continue
+            if (target != candidate.key) grouped.getOrPut(target) { mutableListOf() }.add(candidate)
+        }
+        grouped
     }
     LaunchedEffect(sidebar?.searchPick) {
         val picked = sidebar?.searchPick ?: return@LaunchedEffect
@@ -643,7 +672,7 @@ internal fun AgentsScreen(
                                     showsPlace = entry.showsPlace,
                                     onOpen = { requestDetail = entry.request },
                                     onAnswer = model::answer,
-                                    approvable = entry.owner?.canApprove ?: true,
+                                    approvable = entry.owner?.canAnswerInteraction(entry.request) ?: true,
                                 )
                             }
                         }
@@ -667,7 +696,7 @@ internal fun AgentsScreen(
                         } else items(row.cards, key = { "request:${it.id}" }) { request ->
                             RequestCard(request, names[request.machineId], metadata, now, reachable(request),
                                 delivery[request.id], { requestDetail = request }, model::answer,
-                                space = owner?.spaceName?.takeIf { it.isNotBlank() }, approvable = owner?.canApprove ?: true)
+                                space = owner?.spaceName?.takeIf { it.isNotBlank() }, approvable = owner?.canAnswerInteraction(request) ?: true)
                         }
                     }
                 }
@@ -863,6 +892,7 @@ internal fun AgentsScreen(
                         val infoWithDelivery = info.withDelivery(messagesBySession[row.session.key].orEmpty(), row.session.key in unknownRequests)
                             .let { if (operationUncertain) it.copy(needsConfirmation = true) else it }
                         val slot = repoSlots[entry.key]
+                        val sideUnread = unreadSideSummary(row.session, visibleSessionsByKey[row.session.key], visibleSessions)
                         // In a repository's card the rows sit under their line at its level, without rules between them (iOS).
                         Box(if (slot != null) Modifier.repoCard(slot.first, slot.last) else Modifier) {
                             CompositionLocalProvider(LocalDetailKey provides detail.takeIf { sidebar == null || entry.key == selectedEntry }) {
@@ -874,7 +904,10 @@ internal fun AgentsScreen(
                                 onClose = closeSwipe(row, operations.busy) { operationDialog = AgentOperationDialog.Close(row.session) },
                                 launcher = entry.launcher, branch = entry.branch, hideState = entry.inStateSection,
                                 requestCount = cardCounts[row.session.key] ?: 0, card = requestCards[row.session.key],
-                                mixesComputers = mixesComputers, showHost = showHost, style = page.preferences.rowStyle)
+                                mixesComputers = mixesComputers, showHost = showHost, style = page.preferences.rowStyle,
+                                heldChildren = heldChildrenByParent[row.session.key].orEmpty(),
+                                onOpenSubagents = { openRowSubagents(row) },
+                                sideUnread = sideUnread, onOpenSide = { side -> model.opened(row); open(side) })
                             }
                         }
                     }
@@ -1226,7 +1259,7 @@ internal fun AgentsScreen(
                 requestDetail = null
                 navigator.navigate(TerminalRoute(request.machineId, request.sessionId))
             }), machine = machine,
-            blockedReason = session?.takeIf { !it.canApprove }?.let { approveBlocked },
+            blockedReason = session?.takeIf { !it.canAnswerInteraction(request) }?.let { approveBlocked },
             terminalHelp = session?.canTerminal != false)
     }
 }
@@ -1336,6 +1369,14 @@ internal fun SlotRow(
     showHost: Boolean = false,
     /** Glass's row style while the list is not [compact] (#4338 A9); Brief and Board keep their row. */
     style: AgentRowStyle = AgentRowStyle.Avatar,
+    /** Held folded children under this parent row, for unified [childRollup] computation. */
+    heldChildren: List<Session> = emptyList(),
+    /** Tapping the subagent rollup subtitle opens this parent session at Session Overview's Subagents section. */
+    onOpenSubagents: (() -> Unit)? = null,
+    /** Unread side session(s) keeping this parent row Unread (#13524); null leaves the row unchanged. */
+    sideUnread: UnreadSideSummary? = null,
+    /** Opens the named unread side session directly in one tap (#13524). */
+    onOpenSide: ((SessionKey) -> Unit)? = null,
 ) {
     var menu by remember { mutableStateOf(false) }
     val session = row.session
@@ -1353,13 +1394,15 @@ internal fun SlotRow(
             if (kind == AgentSource.Feishu) SourceKind.Feishu else SourceKind.Terminal,
             onClick = link?.let { { links.openUri(it) } }, clickLabel = link?.let { stringResource(R.string.agents_source_feishu_open) })
     }
+    val rowSideUnread = sideUnread?.toRowSideUnread(onOpenSide)
     JSwipeActions(end = onClose?.let { SwipeAction(stringResource(R.string.agents_close), PhIcons.X, Status.NeedsYou, it, destructive = true) }) {
     AgentRow(
         title = session.displayTitle, status = row.rowStatus(muted), depth = depth, position = position,
         onClick = onOpen, onLongClick = menuItems?.let { { menu = true } }, compact = compact, muted = muted,
         selected = isSessionSelected(LocalDetailKey.current, session.key),
         // What its card asks while it needs you, else why its host says it waits or stopped, where its work stands, its last words.
-        preview = session.rowLine(card, now, muted)?.text(), time = relativeTime(agentResources(), row.updatedAt, now),
+        // When only folded side sessions are unread, omit the parent's own already-seen preview so the side line stands in its place (#13524).
+        preview = if (sideUnread?.replacesPreview == true) null else session.rowLine(card, now, muted)?.text(), time = relativeTime(agentResources(), row.updatedAt, now),
         // Codex, a compatible CLI or what the hub calls a runtime's agent ("DSH"); a session with a source names it in its facts instead.
         agent = session.agentLabel.takeIf { !session.isClaude && source == null },
         statusText = content.stateWord?.text(),
@@ -1387,10 +1430,6 @@ internal fun SlotRow(
             session.loop?.let { add(RowFact(it.nextRunLabel(agentResources(), now))) }
             // a running workflow is in background too: counted once (#2935)
             session.backgroundCount.takeIf { it > 0 }?.let { add(RowFact(stringResource(R.string.agents_row_background, it))) }
-            val childrenWorking = session.children?.working ?: 0
-            maxOf(session.runningSubagents ?: session.subagents.orEmpty().count { it.running }, childrenWorking).takeIf { it > 0 }?.let {
-                add(RowFact(stringResource(if (childrenWorking > 0) R.string.agents_row_children_running else R.string.agents_row_subagents, it)))
-            }
             if (metadata.needsConfirmation) add(RowFact(if (metadata.verifying) PendingStatus.Verifying.localizedLabel else PendingStatus.Unconfirmed.localizedLabel, caution = true))
             if (metadata.pendingCount > 0) add(RowFact(stringResource(R.string.agents_row_queued, metadata.pendingCount), caution = true))
             if (metadata.sending) add(RowFact(PendingStatus.Sending.localizedLabel))
@@ -1424,12 +1463,48 @@ internal fun SlotRow(
             RowPlace(CoreText.joined(" · ", content.place).text(), content.model, content.todo, content.muted) else null,
         waiting = row.waitsInBackground && !muted,
         style = style,
-        showPreviewWithMetadata = card?.foldedUnder == session.sessionId,
+        showPreviewWithMetadata = card != null && !card.foldedUnder.isNullOrBlank() && card.homeKey == session.key,
+        subagent = childRollup(session, heldChildren)?.let { rollup ->
+            RowSubagent(
+                text = stringResource(
+                    if (rollup.kind == ChildRollupKind.NeedsYou) R.string.agents_row_subagents_need_you
+                    else R.string.agents_row_subagents_running,
+                    rollup.count,
+                ),
+                needsYou = rollup.kind == ChildRollupKind.NeedsYou,
+                onClick = onOpenSubagents,
+            )
+        },
+        sideUnread = rowSideUnread,
         // Its running Workflows (#2935) stay structured until the row lays them out beside critical facts (#3435).
         note = WorkflowSummary.lineFields(session, now)?.let { RowNote(it, WorkflowIcon) },
     )
     }
     if (menu && menuItems != null) JActionSheet(menuItems(), { menu = false }, title = session.displayTitle)
+}
+
+@Composable
+private fun UnreadSideSummary.toRowSideUnread(onOpenSide: ((SessionKey) -> Unit)?): RowSideUnread {
+    val side = latest
+    if (side != null) {
+        val sideTitle = side.displayTitle
+        val label = stringResource(R.string.agents_side_unread_kicker, sideTitle)
+        val more = extraCount.takeIf { it > 0 }?.let { stringResource(R.string.agents_side_unread_more, it) }
+        val openLabel = stringResource(R.string.agents_side_unread_open, sideTitle)
+        val spoken = listOfNotNull(
+            stringResource(R.string.agents_side_unread_spoken, sideTitle),
+            otherTitles.takeIf { it.isNotEmpty() }?.let { stringResource(R.string.agents_side_unread_also, it.joinToString(", ")) },
+        ).joinToString(". ")
+        return RowSideUnread(
+            label = label,
+            more = more,
+            spoken = spoken,
+            clickLabel = openLabel,
+            onClick = onOpenSide?.let { cb -> { cb(side.key) } },
+        )
+    }
+    val countText = pluralStringResource(R.plurals.agents_side_unread_count, count, count)
+    return RowSideUnread(label = countText, spoken = countText)
 }
 
 /**

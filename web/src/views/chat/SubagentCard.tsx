@@ -9,6 +9,7 @@
 import { memo, useMemo, useState } from "react";
 import { t } from "../../i18n";
 import { agentSummary, isLaunchReceipt, modelChipLabel, subagentCardKey, subagentEnded, subagentFor, subagentTitle } from "../../lib/tasks";
+import { openPanel } from "../../lib/panel";
 import { compactTokens } from "../../lib/tokens";
 import type { Item, Subagent, TaskNote } from "../../lib/types";
 import { tsMs, workDuration, type AgentStatus, type ToolStep } from "../../lib/work-groups";
@@ -86,6 +87,7 @@ export const SubagentCard = memo(function SubagentCard({ step, status, mid, sid,
     running && start !== undefined && <RunningFor key="running" since={start} />,
   ].filter(Boolean);
   const output = notes?.findLast((n) => n.output_file)?.output_file;
+  const fullSid = meta?.session_id || (meta?.id && sid ? `${sid}@${meta.id}` : "");
   return (
     <TaskCard
       icon="agent"
@@ -105,6 +107,18 @@ export const SubagentCard = memo(function SubagentCard({ step, status, mid, sid,
           <SubagentResult item={resultItem(result, reports)} fallback={running ? "" : reportOf(result, notes) || agentSummary(result, meta)} mid={mid} sid={sid} />
           {meta?.last_tool?.name && <p className="text-[12px] leading-4 text-ink-3" data-subagent-last-tool>{t("chat-subagentcard.last_tool", { tool: meta.last_tool.name })}</p>}
           {output && <p className="text-[12px] leading-4 break-all text-ink-3" data-subagent-output>{t("chat-subagentcard.output_file", { path: output })}</p>}
+          {fullSid && (
+            <div className="mt-1.5">
+              <button
+                type="button"
+                data-subagent-view-full
+                onClick={() => openPanel({ kind: "subagent", mid, sid: fullSid, parentMid: mid, parentSid: sid, call, from: "card" })}
+                className="whitespace-nowrap text-xs font-medium text-accent-ink hover:underline"
+              >
+                {t("chat-subagentcard.view_full")}
+              </button>
+            </div>
+          )}
         </div>
       </Collapse>
     </TaskCard>
