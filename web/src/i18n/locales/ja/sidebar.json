@@ -170,5 +170,6 @@
   "subagents_running": "{count} 件が実行中",
   "subagents_need_you": "{count} 件が確認待ち",
   "sort_activity": "最近の更新順に並べる",
-  "show_list_filter": "フィルターを表示"
+  "show_list_filter": "フィルターを表示",
+  "show_empty_workspaces": "空のワークスペースを表示"
 }

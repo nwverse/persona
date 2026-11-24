@@ -17,6 +17,8 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/moduleswitch"
+
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
@@ -158,23 +160,20 @@ func (None) TurnProgressAfter(*channel.Run) time.Duration { return channel.Progr
 func (None) TurnProgressIdle() time.Duration              { return channel.ProgressIdle }
 func (None) Wait(context.Context) error                   { return nil }
 
-var provided func(Host) Layer
+var port = moduleswitch.NewPort[func(Host) Layer]("larkhost")
 
-// Provide provides the module: new makes its layer for one manager's host (init only).
-func Provide(new func(Host) Layer) {
-	if provided != nil {
-		panic("larkhost: the lark module provided twice")
-	}
-	provided = new
-}
+// Provide provides the module under its id: new makes its layer for one manager's host (init only; twice panics).
+func Provide(module string, new func(Host) Layer) { port.Provide(module, new) }
 
-// InBuild says whether the lark module is in this build.
-func InBuild() bool { return provided != nil }
+// InBuild says whether the lark module is in this build and s has it on.
+func InBuild(s moduleswitch.Set) bool { return port.On(s) }
 
-// New is the module's layer for h; false when the module is not in this build.
-func New(h Host) (Layer, bool) {
-	if provided == nil {
+// New is the module's layer for h; false when the module is not in this build or s switched it off (the `modules`
+// setting the manager started with), so it is absent exactly as one built out.
+func New(s moduleswitch.Set, h Host) (Layer, bool) {
+	newLayer, ok := port.Get(s)
+	if !ok {
 		return nil, false
 	}
-	return provided(h), true
+	return newLayer(h), true
 }
