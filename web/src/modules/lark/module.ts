@@ -38,5 +38,5 @@ export const lark: ModuleDescriptor = {
   settingsRows: ["connectors.lark"],
   i18nNamespaces: ["lark-chats", "lark-homeswitch", "lark-messages"],
   locales: byLanguage(import.meta.glob<CatalogModule>("../../i18n/locales/*/_meta.json", { query: "?catalog=module-lark" })),
-  load: () => import("./code").then((m) => m.code),
+  load: () => import("./lark-code").then((m) => m.code),
 };

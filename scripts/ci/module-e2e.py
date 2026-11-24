@@ -78,6 +78,8 @@ SERVER = {
     "imessage": {"extensions": ["imessage"]},
     # its sessions run on the computers (internal/modules/all/node): nothing on the manager but its flag
     "screen-share": {},
+    # its manager parts (the bot, the Lark CLI connector) are wired by internal/modules/all, not through modapi.Host
+    "lark": {},
 }
 
 # What the web app shows of a module (web/e2e/module-gate.mjs). An entry:
@@ -119,6 +121,17 @@ WEB = {
         "chunks": [r"/assets/(standalone|ScreenView|ScreenMenu|DisplayMenu|StatsOverlay|VideoPicture)-[\w-]+\.js",
                    r"/src/modules/screen-share/"],
         "chunk_when_on": [],  # the button is a link that opens a new tab: nothing of it loads on the machine page
+    },
+    "lark": {
+        "entries": [
+            # the "Show messages on home" row in the Lark section (a hub with feature `lark`: the mock hub); the Messages
+            # page's own address answers like a removed page while off
+            {"name": "Settings › Connectors › Lark row", "hubs": ["mock"], "page": "/settings?tab=connectors",
+             "ready": {"selector": "main"}, "text": r"^Show messages on home$",
+             "off_page": {"path": "/messages", "text": NOT_FOUND}},
+        ],
+        "chunks": [r"/assets/(lark-code|Messages|LarkHomeSwitch|lark-chats)-[\w-]+\.js", r"/src/modules/lark/"],
+        "chunk_when_on": ["mock"],  # the row is the module's code, loaded when the section draws
     },
     "recording": {
         "entries": [

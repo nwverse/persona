@@ -2492,7 +2492,7 @@ address) stays in core with the machine page.
 sidebar entry right after Inbox and the "Show messages on home" row of Settings › Connectors › Lark (`LarkHomeSwitch.tsx`,
 the `connectors.lark` place), with their strings (`lark-messages.json`, `lark-chats.json`, `lark-homeswitch.json`). The
 entry keeps its old condition through `shown` (`home.ts`: this browser's switch, and a hub that reads Lark); the page
-opens from its address whatever the switch says, as before. Its code entry (`code.ts`) holds the row and the page as a
+opens from its address whatever the switch says, as before. Its code entry (`lark-code.ts`) holds the row and the page as a
 chunk of its own, so the Connectors page draws the row without loading the page. Its hub flag is `module.lark`; off,
 there is no entry and no row, `/messages` is an unknown address, and the chunk and strings are never requested. The
 Inbox's Lark chat view (`views/inbox/LarkThread.tsx`), its parts (`Chip`, `Count`, `LarkAvatar`), `lib/lark-history.ts`
