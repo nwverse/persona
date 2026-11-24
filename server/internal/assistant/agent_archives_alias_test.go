@@ -8,9 +8,10 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// A Close made on an Antigravity CLI pane's row holds once its conversation is listed under the conversation's own id
-// and that row names the pane's (#14395): the row is archived, Archived lists it once and never under the pane's id,
-// and activity after the close lists it again without touching the record, which shows again once no row names it.
+// An archive kept under an Antigravity CLI pane's id (made while the pane's conversation was not known, or before
+// #14520) holds once its conversation is listed under the conversation's own id and that row names the pane's (#14395):
+// the row is archived, Archived lists it once and never under the pane's id, and activity after the close lists it
+// again, restored under the conversation's id; the pane's record shows again once no row names it.
 func TestArchiveUnderAPaneRowHoldsForTheConversationsRow(t *testing.T) {
 	const conversation = "agy-11111111-2222-4333-8444-555555555555"
 	ft, rows := archiveTestService(t)
@@ -18,7 +19,6 @@ func TestArchiveUnderAPaneRowHoldsForTheConversationsRow(t *testing.T) {
 	closed := time.Now().Add(-time.Hour)
 	pane := proto.Session{MachineID: "mac", SessionID: "agy-w1-p1", Agent: "agy", PaneID: "w1:p1", Title: "Release notes",
 		Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: closed}
-	pane.SetAliases([]string{conversation})
 	ft.d.setSessions("mac", append(slices.Clone(rows), pane))
 	if w := archiveRequest(s, "mac", pane.SessionID, roleFull, true); w.Code != 200 {
 		t.Fatal(w.Body)
@@ -41,7 +41,7 @@ func TestArchiveUnderAPaneRowHoldsForTheConversationsRow(t *testing.T) {
 		}
 	}
 
-	// Activity after the close lists it again; the record under the pane's id is left as it was.
+	// Activity after the close restores it, under the conversation's id; the record under the pane's id stays as it was.
 	row.UpdatedAt = time.Now()
 	ft.d.setSessions("mac", append(slices.Clone(rows), row))
 	if got := archivedIDs(t, s); len(got) != 0 {

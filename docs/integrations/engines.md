@@ -153,9 +153,18 @@ instead. The row listed names the conversation's other IDs in its `aliases`: a p
 and whichever row lists the conversation names the pane rows that showed it before, most recent first (up to eight).
 The node remembers which conversation the last 256 pane rows it listed showed, in memory only, so a pane that closed
 while the node was not running is not named. A pane that runs another conversation now names that one: its ID is its
-own row's again. Agents' A2A addresses are resolved through these IDs (`docs/integrations/a2a.md`), and an archive made
-under one of them, such as a Close on a pane's row, holds for the row that names it (`docs/protocol/protocol.md`,
-"Agent session archives").
+own row's again. Agents' A2A addresses are resolved through these IDs (`docs/integrations/a2a.md`).
+
+**Close…** on an agy Agent that is not busy archives and closes it, as it does a Claude Code one (#14520): from its
+pane's row the pane closes (`session.retire`), from its own row the companion closes it. The archive is kept under
+`agy-<conversation id>`, also when made on a pane's row, so it holds for whichever row lists the conversation next, and
+after Restore a message continues the conversation in the companion; the tool's archive, which Antigravity does not
+have, answers `unsupported` (`docs/protocol/protocol.md`, "Agent session archives"). When the user only closes a pane
+(**Close anyway** on a busy Agent) or stops agy in it, the companion's row for its conversation is listed as a closed
+Claude Code pane is: offline, stopped by the user ("Not running"), until a pane shows the conversation again, or it works
+or changes a minute or more after the close. It still takes the user's messages, which the companion runs, as there is
+no terminal to resume it in; A2A messages do not wake it. The node keeps this mark in memory for the last 256
+conversations closed: after a restart the companion's rows are listed as it says.
 
 Orca's native Claude chats (structured, no terminal) connect through node's bridge: list, state, send text / images, interrupt, close,
 answer approvals / questions, change permission / thinking (no plan mode); no screen reads, keys, or live terminal. Chats appear only after their first message;
