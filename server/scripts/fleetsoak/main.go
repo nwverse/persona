@@ -6,9 +6,9 @@
 // per minute (docs/operations/testing.md "Fleet soak").
 //
 //	cd server
-//	go run ./internal/fleetsoak -label head -minutes 20
-//	go run ./internal/fleetsoak -label base -minutes 20 -tree <a worktree of the base commit>/server
-//	go run ./internal/fleetsoak -compare <base out>/report.json <head out>/report.json
+//	go run ./scripts/fleetsoak -label head -minutes 20
+//	go run ./scripts/fleetsoak -label base -minutes 20 -tree <a worktree of the base commit>/server
+//	go run ./scripts/fleetsoak -compare <base out>/report.json <head out>/report.json
 //
 // CPU time follows the machine's state: to compare it, run the two soaks at the same time (each in its own terminal,
 // they share nothing) and -compare prints the second's CPU time over the first's in the same minute.

@@ -100,9 +100,21 @@ type fleetBook struct {
 	// asks: what each session's last words ask, while they stay the same (fleet_asks.go).
 	asks asksMemo
 	// folds: what each machine's last complete list folded its children under (fleet_fold.go), for the rows and
-	// cards sent without the rest of the list.
-	foldMu sync.Mutex
-	folds  map[string]sessionFold
+	// cards sent without the rest of the list. foldMeta / crossParents / crossChildren track only machines
+	// participating in cross-machine subagent hierarchies so unrelated machines stay on the local fast path.
+	foldMu        sync.Mutex
+	folds         map[string]sessionFold
+	foldMeta      map[string][]foldEntry
+	crossParents  map[string]map[string]bool // childMachine -> referenced parentMachines
+	crossChildren map[string]map[string]bool // parentMachine -> referencing childMachines
+
+	// subagents: durable child (machine, session) -> parent/task provenance restored on demand by visible
+	// target identity from a2a_tasks, legacy dispatches, and task_spawn todo agents (subagent_index.go).
+	subagentsMu           sync.RWMutex
+	subagentsLegacyLoaded bool
+	subagents             map[[2]string]subagentLink
+	subagentsChecked      map[string]map[string]struct{} // machine -> checked sessionIDs
+	subagentsByTask       map[string][2]string
 
 	// rep is the last snapshot's parts the session lists show (fleetTakeSnapshot).
 	rep fleetReport

@@ -1,4 +1,4 @@
-package iphone
+package nodeiphone
 
 // Operating the iPhones this computer reaches over RemotePairing, for the assistant (the built-in extension iphone,
 // docs/extensions/iphone.md). The built-in program iphone answers the manager: status (which iPhones there are and
@@ -22,7 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/iphone"
+	"github.com/nwverse/persona/server/internal/modules/phone-extra/iphone"
 	"github.com/nwverse/persona/server/internal/node/nodekit"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"

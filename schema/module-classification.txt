@@ -173,6 +173,7 @@ go server/internal/netshape core
 go server/internal/node core
 go server/internal/node/clipshare core
 go server/internal/node/imessageport core
+go server/internal/node/iphoneport core
 go server/internal/node/machdiag core
 go server/internal/node/nodekit core
 go server/internal/node/screenport core
@@ -251,9 +252,6 @@ go server/plugins core
 go server/internal/transcribelive voice
 go server/internal/lark lark
 go server/internal/screen core
-go server/internal/iphone phone-extra
-go server/internal/iphonectl phone-extra
-go server/internal/node/iphone phone-extra
 go server/internal/protectedapps computer-use
 go server/internal/orcart/... engines-extra
 go server/internal/terncli engines-extra

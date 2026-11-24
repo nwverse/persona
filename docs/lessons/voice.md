@@ -539,6 +539,16 @@ Measured against a gateway's `/v1/realtime` (`gpt-realtime-1.5`, the GA Realtime
   and while a raised lead gathers, what is held plays once nothing more has come for 1 s. The same replay gives 2
   pauses at 94 % and 4 at 60 %. Each stall and the call's total are logged (`voice` category). Size the lead in
   pieces as the service actually sends them, not in milliseconds picked for 40 ms deltas.
+- **A player's completions are an output latency late** (#13963, 2026-11-24). #12923 judged "the player ran dry" by
+  `.dataPlayedBack`, which comes once the buffer has gone out of the device, then hops to the main actor. A link at 90–94 %
+  of the voice leaves a 25–43 ms gap after each 384 ms piece, shorter than a phone's output latency, so every piece came
+  while the last one's completion was still on its way: it went straight to a player that was already silent, the gap
+  was heard, and no stall was counted. With 50 ms of latency or more the lead never left 200 ms (replay: a 30 s reply
+  at 90 % had 77 gaps of 43 ms and no stall counted). The replay tests passed because they gave the playout the exact
+  play end. Read the player's render position instead (`VoicePlayerClock`: `playerTime(forNodeTime: lastRenderTime)`
+  against where what was scheduled ends), and count less than 50 ms left as run dry: the render position is a render
+  cycle old, and the piece still has to be scheduled. A replay of a player has to model what the code can observe and
+  when (output latency, render cycles), not the truth.
 - Before blaming the link, measure the upstream on its own. A probe call over the extension's unix socket gives each
   binary frame's arrival time and size: the service's speed and its piece size. The hub forwards bytes as they come,
   so whatever is left between the hub and the player is the phone's link or the app.
