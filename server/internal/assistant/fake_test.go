@@ -108,6 +108,7 @@ type fakeHub struct {
 	replies        []string      // the model's answers, in turn (the last one again when they run out)
 	answers        []fakeAnswer  // how each of those answers comes, in turn (none: at once and whole)
 	modelDown      bool          // the model's gateway answers 502 to the calls replies would answer: asked, never answering
+	modelRequests  int           // every model HTTP request, across all purposes
 	noModel        bool
 	asked          []modelCall
 	pushes         []Notification
@@ -1699,6 +1700,9 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 	jsonOnly := strings.TrimSpace(prompts.RenderJSONOnly(""))
 	tabName := prompts.RenderTabName()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.modelRequests++
+		f.mu.Unlock()
 		if r.Method == http.MethodGet && r.URL.Path == "/" { // a node's port probe (node/ports.go), not this test's client
 			http.NotFound(w, r)
 			return

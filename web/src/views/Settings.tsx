@@ -32,6 +32,7 @@ import { SourcesUI } from "./subscriptions/SourcesUI";
 import { useInboxSourcesShown } from "../lib/subscriptions";
 import { ModelConfiguration } from "./settings/ModelConfiguration";
 import { HiddenAgentDirs } from "./settings/HiddenAgentDirs";
+import { HerdrSessions } from "./settings/HerdrSessions";
 import { AgentSettings } from "./settings/AgentSettings";
 import { SidebarPagesGroup } from "./settings/SidebarPages";
 import { StartPageGroup } from "./settings/StartPage";
@@ -379,6 +380,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
           ) : (
             <div key={ASSISTANT_TABS.has(tab) ? `${tab}@${picked ?? ""}` : tab} className={cx("mx-auto px-5 py-6 sm:px-8", tab === "integrations" || tab === "channels" || tab === "connectors" || tab === "extensions" || (tab === "sources" && sourcesGraph) ? "max-w-[1120px]" : "max-w-[760px]")} style={{ animation: `fade-up 320ms ${EASE} both` }}>
               {tab === "general" && <General onModel={() => pick("models", "translate", "model-config")} />}
+              {tab === "advanced" && <Advanced />}
               {tab === "persona" && <AssistantProfile onTriageModel={() => pick("models", "agent.triage", "model-config")} />}
               {tab === "avatar" && (
                 <Group title={t("settings.avatar")} footer={t("settings.avatar_footer")} anchor="avatar">
@@ -516,6 +518,7 @@ function AgentSections({ section }: { section: SettingsSection | null }) {
   return (
     <>
       <HiddenAgentDirs />
+      <HerdrSessions />
       {AGENT_KINDS.map((id) => {
         const shown = !closed.has(id);
         return (
@@ -709,10 +712,7 @@ function General({ onModel }: { onModel: () => void }) {
             </button>
           ))}
         </div>
-        <ThemeColorPicker />
-        <ExtensionThemePicker />
         <TextSizeRow />
-        <FontRows />
         <LanguageRow />
         <Row label={t("settings.reply_motion")} hint={t("settings.reply_motion_hint")} wrapHint anchor="reply-motion">
           <Switch on={replyMotion} onChange={setReplyMotionEnabled} label={t("settings.reply_motion")} />
@@ -721,7 +721,6 @@ function General({ onModel }: { onModel: () => void }) {
         <Row label={t("settings.starred_messages")} hint={t("settings.starred_messages_hint")} wrapHint anchor="starred-messages">
           <Switch on={starred} onChange={setStarredEnabled} label={t("settings.starred_messages")} />
         </Row>
-        <SidebarIconsRow />
         <SidebarUsageRow />
       </Group>
 
@@ -750,6 +749,21 @@ function General({ onModel }: { onModel: () => void }) {
         <DevModeRows />
       </Group>
     </>
+  );
+}
+
+/** Settings › Advanced › Appearance (#13398): the non-default looks — theme color, extension theme, interface/code
+ *  fonts and colored sidebar icons. General keeps the default appearance (Match system / Light / Dark), text size,
+ *  language and behavior rows. These are the same components reading the same browser storage as before, so an
+ *  existing choice and the untouched default look are unchanged. */
+function Advanced() {
+  return (
+    <Group title={t("settings.appearance")} anchor="appearance">
+      <ThemeColorPicker />
+      <ExtensionThemePicker />
+      <FontRows />
+      <SidebarIconsRow />
+    </Group>
   );
 }
 

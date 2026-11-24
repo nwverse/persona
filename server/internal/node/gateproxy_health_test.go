@@ -518,6 +518,14 @@ func TestFakeCodexAppServer(t *testing.T) {
 			continue // a notification, or the node answering a request of ours
 		}
 		var result any = map[string]any{}
+		if dir := os.Getenv("PERSONA_FAKE_CODEX_TRACE"); dir != "" {
+			method := strings.ReplaceAll(m.Method, "/", "-")
+			if err := os.WriteFile(filepath.Join(dir, method), sc.Bytes(), 0o600); err != nil {
+				b, _ := json.Marshal(map[string]any{"id": m.ID, "error": map[string]any{"code": -32603, "message": "write failed"}})
+				fmt.Println(string(b))
+				continue
+			}
+		}
 		if m.Method == "thread/start" {
 			if record := os.Getenv("PERSONA_FAKE_CODEX_START"); record != "" {
 				_ = os.WriteFile(record, append([]byte(nil), sc.Bytes()...), 0o600)

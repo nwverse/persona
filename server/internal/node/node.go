@@ -405,6 +405,10 @@ type Node struct {
 	agentFilters []proto.AgentFilter
 	// agentDirsBlocked: the patterns of the Agent folder rules that block (node.configure agent_dirs_blocked, agentdirs.go)
 	agentDirsBlocked []string
+	// herdrSessionsBlocked: named herdr sessions kept out of Persona (node.configure herdr_sessions_blocked, herdrsessions.go)
+	herdrSessionsBlocked []string
+	// herdrBlockedIDs: session ID -> named herdr session for sessions seen inside a blocked herdr session (herdrsessions.go)
+	herdrBlockedIDs map[string]string
 
 	// assistantLife: a conversation's process is taken, compacted or closed by one of assistantSend,
 	// assistantCompact, compactIdle, restoreModel, a queue edit (assistantEditQueue) and a round's process retiring
@@ -499,7 +503,8 @@ func New(version string) (*Node, error) {
 	if n.uid, err = LoadMachineUID(dir); err != nil {
 		n.logger.Printf("machine uid: %v", err) // the hubs then treat this computer as theirs alone
 	}
-	n.loadBlockedAgentDirs() // before the first hook or replay: the hub tells them again once connected (agentdirs.go)
+	n.loadBlockedAgentDirs()     // before the first hook or replay: the hub tells them again once connected (agentdirs.go)
+	n.loadBlockedHerdrSessions() // before the first host scan or hook (herdrsessions.go)
 	if runtime.GOOS == "darwin" {
 		n.screenStart = n.startScreenHelper                                                                   // Persona Screen, the live screen's video helper (#3954)
 		n.inputs = &screenInputs{logf: n.logger.Printf, signed: n.screens.signedIn}                           // Persona Input (#7775)
@@ -514,6 +519,7 @@ func New(version string) (*Node, error) {
 	}
 	n.configureCodex(proto.CodexConfig{})
 	n.hosts = host.NewRegistry(nodeHosts(proto.EngineHerdr, false, n.logger.Printf)...) // herdr until engine.use, botmux until the hub says
+	n.syncHerdrHostBlocked()
 	n.resetSignals()
 	n.state = newState()
 	n.ports.kick = make(chan struct{}, 1)
@@ -1088,6 +1094,14 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		hasSelectedSkills = len(refs) > 0
 		ctx = withSkillOwner(ctx, p.SkillOwner)
 	}
+	if sessionSend {
+		// An @-quoted session's address (#13831), before any path below takes the message and records its echo: a Codex
+		// waiting for its first message, a runtime's session (Paseo's too), a stopped omp, an agy or Cursor pane, and
+		// session.send below. Those that read the text from params read it there.
+		if noted := n.withSessionMentions(ctx, p.SessionID, p.Text); noted != p.Text {
+			p.Text, params = noted, withParam(params, "text", noted)
+		}
+	}
 	if isCodexWaitID(p.SessionID) && (strings.HasPrefix(method, "session.") || strings.HasPrefix(method, "terminal.")) {
 		// A Codex opened with no first message (codex_waiting.go): the thread it became since the client looked, or
 		// what its row answers while it waits.
@@ -1345,9 +1359,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			ClaudeDirsBlocked *[]string `json:"claude_dirs_blocked"`
 			// AgentDirsBlocked: patterns of working folders whose sessions are kept out (agentdirs.go, #10053); nil
 			// leaves them as they are.
-			AgentDirsBlocked *[]string          `json:"agent_dirs_blocked"`
-			Codex            *proto.CodexConfig `json:"codex"`
-			MachineID        string             `json:"machine_id"`
+			AgentDirsBlocked *[]string `json:"agent_dirs_blocked"`
+			// HerdrSessionsBlocked: named herdr sessions kept out of Persona (herdrsessions.go, #14898); nil
+			// leaves them as they are.
+			HerdrSessionsBlocked *[]string          `json:"herdr_sessions_blocked"`
+			Codex                *proto.CodexConfig `json:"codex"`
+			MachineID            string             `json:"machine_id"`
 			// Keep: sessions always listed, however old or crowded out (the assistant's main conversation).
 			Keep *[]string `json:"keep_sessions"`
 			// Botmux: list botmux's sessions (hub.json machines[].botmux); nil (a call that says nothing of it, an
@@ -1443,6 +1460,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		}
 		if c.AgentDirsBlocked != nil {
 			n.setBlockedAgentDirs(*c.AgentDirsBlocked)
+		}
+		if c.HerdrSessionsBlocked != nil {
+			n.setBlockedHerdrSessions(*c.HerdrSessionsBlocked)
 		}
 		if c.ClaudeLiveReplies != nil {
 			n.setLiveReplies(*c.ClaudeLiveReplies)

@@ -367,9 +367,14 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		UpdateHandoffGrace:     func() time.Duration { return nodeUpdateHandoffGraceOf(svc.hello(context.Background())) },
 		PromptLanguage:         func() string { return answerLanguage(svc.hello(context.Background()).Locale) },
 		// The extensions' part of a node's connection and its events (internal/extmgr).
-		Own:         func(ctx context.Context, machine string) map[string]json.RawMessage { return ext.Own(ctx, machine) },
-		OnConnected: func(machine string) { ext.NodeConnected(machine) },
-		OnEvent:     func(machine, event string, params json.RawMessage) bool { return ext.NodeEvent(machine, event, params) },
+		Own: func(ctx context.Context, machine string) map[string]json.RawMessage { return ext.Own(ctx, machine) },
+		OnConnected: func(machine string) {
+			ext.NodeConnected(machine)
+			if svc != nil {
+				svc.NodeConnected(ctx, machine)
+			}
+		},
+		OnEvent: func(machine, event string, params json.RawMessage) bool { return ext.NodeEvent(machine, event, params) },
 		// The messages held for a machine's Agents changed (devices held.go): its rows again, nothing else of a list.
 		HeldChanged: func(machine string) { svc.publishSessions(machine) },
 		// A node's new connection gets the launchers added in Persona, with their keys (models_launchers_push.go).
@@ -446,7 +451,7 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 	svc = New(Options{Hub: bh, Store: func() Store { return assistantStore }, Logf: logf, Devices: devs,
 		ModulesOff: modulesOff, // the built-in modules switched off (modules.go)
 		KB:         &KBOptions{Dir: o.KBDir, KeyDir: o.HandlesDir}, SecretKey: o.SecretKey,
-		Trust: devs, AgentDirs: devs, ID: o.ID, Build: version, RepositoryConfig: o.ConfigFile,
+		Trust: devs, AgentDirs: devs, HerdrSessions: devs, ID: o.ID, Build: version, RepositoryConfig: o.ConfigFile,
 		RemoteImageCache: filepath.Join(home, "cache", "remote-images")})
 	svc.SetExtensions(ext) // the connectors', Cua's and ego's tools, in this process (fleet_tools.go)
 	// When the north star's recording began (north_star.go).

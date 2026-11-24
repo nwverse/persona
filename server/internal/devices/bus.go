@@ -298,6 +298,8 @@ func (d *Devices) Handler(next http.Handler) http.Handler {
 	route("GET /api/v1/machines/{mid}/herdr", d.getHerdr)
 	route("PUT /api/v1/machines/{mid}/herdr", d.putHerdr)
 	route("POST /api/v1/machines/{mid}/herdr/start", d.postHerdrStart)
+	route("GET /api/v1/machines/{mid}/herdr/sessions", d.getHerdrSessions)
+	route("PUT /api/v1/machines/{mid}/herdr/sessions/blocked", d.putHerdrSessionsBlocked)
 	route("GET /api/v1/machines/{mid}/botmux", d.getBotmux)
 	route("PUT /api/v1/machines/{mid}/botmux", d.putBotmux)
 	route("GET /api/v1/machines/{mid}/health/reports", d.listHealthReports)

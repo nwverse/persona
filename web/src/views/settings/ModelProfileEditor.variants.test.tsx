@@ -67,6 +67,7 @@ beforeEach(async () => {
   saved.mockClear();
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
+    if (path.endsWith("/candidates")) return new Response(null, { status: 404 });
     if (path.endsWith("/launchers")) return Response.json({ launchers: providers.map((provider) => ({
       name: provider.agent, source: "persona", kind: "launcher", agent: provider.agent, model: provider.model,
     })) });
