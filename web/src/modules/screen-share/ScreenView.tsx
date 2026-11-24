@@ -1,13 +1,13 @@
 // The live screen of a Mac (docs/extensions/computer-use.md "Live view"): macOS's Screen Sharing on its 127.0.0.1:5900, through the
 // hub's port relay, drawn by noVNC. View only until "Take control"; Screen Sharing asks for the Mac account's name and password
 // (Apple's ARD sign-in), which go to the Mac only and are not kept. The app shows this page in its web view.
-import { BASE } from "../lib/base";
+import { BASE } from "../../lib/base";
 import RFB from "@novnc/novnc";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError, errorText, pastHub } from "../lib/api";
-import { cx, Spinner } from "../ui/atoms";
-import { t } from "../i18n";
-import "../views/theme"; // follows the system's light / dark while open (index.html picked the first one)
+import { api, ApiError, errorText, pastHub } from "../../lib/api";
+import { cx, Spinner } from "../../ui/atoms";
+import { t } from "../../i18n";
+import "../../views/theme"; // follows the system's light / dark while open (index.html picked the first one)
 import { ensureSubtleAES } from "./aes";
 import { displayChoice, framing, keepPointerIn, layoutDisplays, machineDisplays, setDisplayChoice, type MachineDisplay, type Rect, type Size } from "./displays";
 import { accountOf, keepLabel, keysymsOf, screenSocket, toApp, type ScreenTarget } from "./screen";
@@ -91,7 +91,7 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
   useEffect(() => {
     let gone = false;
     (async () => {
-      if (!target.token) return setPhase({ kind: "blocked", why: t("screen-screenview.sign_in_first") });
+      if (!target.token) return setPhase({ kind: "blocked", why: t("screen-share-screenview.sign_in_first") });
       try {
         const { machines } = await api<{ machines: MachineRow[] }>("/machines", { token: target.token });
         const m = machines.find((x) => x.id === target.mid);
@@ -99,7 +99,7 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
           setName(m.name);
           setAccount((a) => a || accountOf(m.home));
         }
-        if (m && !m.online) throw new Error(t("screen-screenview.offline", { name: m.name }));
+        if (m && !m.online) throw new Error(t("screen-share-screenview.offline", { name: m.name }));
         const on = await sharing(target);
         if (!gone) {
           setDisplays(machineDisplays(on.displays));
@@ -110,8 +110,8 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
           setGo(true);
         }
       } catch (e) {
-        const why = e instanceof ApiError && e.status === 404 ? t("screen-screenview.not_found")
-          : e instanceof ApiError && e.status === 401 ? (target.embedded ? t("screen-screenview.unauthorized_app") : t("screen-screenview.unauthorized_web"))
+        const why = e instanceof ApiError && e.status === 404 ? t("screen-share-screenview.not_found")
+          : e instanceof ApiError && e.status === 401 ? (target.embedded ? t("screen-share-screenview.unauthorized_app") : t("screen-share-screenview.unauthorized_web"))
           : errorText(e);
         if (!gone) setPhase({ kind: "blocked", why });
       }
@@ -197,12 +197,12 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
       if (kept) setAccount(kept.account);
       setPhase({
         kind: "signin",
-        failed: kept ? t("screen-screenview.kept_password_wrong") : reason ? t("screen-screenview.sign_in_failed", { reason }) : t("screen-screenview.wrong_credentials"),
+        failed: kept ? t("screen-share-screenview.kept_password_wrong") : reason ? t("screen-share-screenview.sign_in_failed", { reason }) : t("screen-share-screenview.wrong_credentials"),
       });
     });
     r.addEventListener("disconnect", (e) => {
       const clean = (e as CustomEvent<{ clean: boolean }>).detail?.clean;
-      setPhase((p) => (p.kind === "signin" && p.failed ? p : { kind: "closed", why: clean ? t("screen-screenview.disconnected") : t("screen-screenview.connection_lost") }));
+      setPhase((p) => (p.kind === "signin" && p.failed ? p : { kind: "closed", why: clean ? t("screen-share-screenview.disconnected") : t("screen-share-screenview.connection_lost") }));
     });
     rfb.current = r;
     setLink({ rfb: r, socket });
@@ -458,12 +458,12 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line bg-surface px-3">
         {!target.embedded && (
           <a href={`${BASE}/machines/${encodeURIComponent(target.mid)}`} className="whitespace-nowrap rounded-control px-2 py-1 text-[12.5px] text-ink-2 hover:bg-hover hover:text-ink">
-            {t("screen-screenview.back")}
+            {t("screen-share-screenview.back")}
           </a>
         )}
         <p className="min-w-0 flex-1 truncate text-[13px] font-medium">
-          {t("screen-screenview.title", { name })}
-          <span className="ml-2 text-[11.5px] font-normal text-ink-3">{live ? (control ? t("screen-screenview.in_control") : t("screen-screenview.view_only")) : phaseLabel(phase)}</span>
+          {t("screen-share-screenview.title", { name })}
+          <span className="ml-2 text-[11.5px] font-normal text-ink-3">{live ? (control ? t("screen-share-screenview.in_control") : t("screen-share-screenview.view_only")) : phaseLabel(phase)}</span>
         </p>
         {offering && DisplayMenu && <DisplayMenu offered={offered} shown={shown?.id ?? null} onChoose={choose} onOpen={reask} />}
         {live && !target.embedded && playable && ScreenMenu && (
@@ -479,7 +479,7 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
         )}
         {live && Stats && <Stats.StatsToggle on={statsOn} onToggle={showStats} />}
         {live && (
-          <div role="group" aria-label={t("screen-screenview.mode_label")} className="flex shrink-0 rounded-control bg-field p-0.5">
+          <div role="group" aria-label={t("screen-share-screenview.mode_label")} className="flex shrink-0 rounded-control bg-field p-0.5">
             {[false, true].map((on) => (
               <button
                 key={String(on)}
@@ -491,7 +491,7 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
                   control === on ? "bg-surface text-ink shadow-btn" : "text-ink-2 hover:text-ink",
                 )}
               >
-                {on ? t("screen-screenview.take_control") : t("screen-screenview.view_only")}
+                {on ? t("screen-share-screenview.take_control") : t("screen-share-screenview.view_only")}
               </button>
             ))}
           </div>
@@ -544,9 +544,9 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
             {phase.kind === "signin" ? (
               <form onSubmit={signIn} className="flex w-full max-w-[340px] flex-col gap-3 rounded-card bg-surface p-5 shadow-card">
                 <div>
-                  <p className="text-[14px] font-medium">{t("screen-screenview.signin_title")}</p>
+                  <p className="text-[14px] font-medium">{t("screen-share-screenview.signin_title")}</p>
                   <p className="mt-1 text-[12.5px] text-ink-2">
-                    {canKeep && remember ? t("screen-screenview.signin_hint_kept", { name }) : t("screen-screenview.signin_hint", { name })}
+                    {canKeep && remember ? t("screen-share-screenview.signin_hint_kept", { name }) : t("screen-share-screenview.signin_hint", { name })}
                   </p>
                 </div>
                 {phase.failed && (
@@ -557,8 +557,8 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
                 <input
                   value={account}
                   onChange={(e) => setAccount(e.target.value)}
-                  placeholder={t("screen-screenview.account")}
-                  aria-label={t("screen-screenview.account")}
+                  placeholder={t("screen-share-screenview.account")}
+                  aria-label={t("screen-share-screenview.account")}
                   autoComplete="username"
                   autoCapitalize="none"
                   className="h-9 rounded-control bg-field px-3 text-[13px] outline-none focus:ring-2 focus:ring-accent/40"
@@ -566,8 +566,8 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
                 <input
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder={t("screen-screenview.password")}
-                  aria-label={t("screen-screenview.password")}
+                  placeholder={t("screen-share-screenview.password")}
+                  aria-label={t("screen-share-screenview.password")}
                   type="password"
                   autoComplete="current-password"
                   className="h-9 rounded-control bg-field px-3 text-[13px] outline-none focus:ring-2 focus:ring-accent/40"
@@ -583,7 +583,7 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
                   disabled={!account.trim() || !password}
                   className="h-9 whitespace-nowrap rounded-control bg-accent text-[13px] font-medium text-white disabled:opacity-45"
                 >
-                  {t("screen-screenview.connect")}
+                  {t("screen-share-screenview.connect")}
                 </button>
               </form>
             ) : (
@@ -592,7 +592,7 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
                 <p className="text-[13px] text-ink-2">{phaseText(phase, name)}</p>
                 {phase.kind === "closed" && (
                   <button type="button" onClick={reconnect} className="h-8 whitespace-nowrap rounded-control bg-surface px-3 text-[12.5px] font-medium shadow-btn hover:bg-hover">
-                    {t("screen-screenview.reconnect")}
+                    {t("screen-share-screenview.reconnect")}
                   </button>
                 )}
               </div>
@@ -619,9 +619,9 @@ async function sharing(target: ScreenTarget): Promise<Computer> {
   const c = await fresh("computer");
   const b = c?.enabled ? null : await fresh("browser");
   const on = c?.enabled ? c : b?.enabled ? b : null;
-  if (!c && !b) throw new Error(t("screen-screenview.no_extension"));
-  if (!on) throw new Error(t("screen-screenview.extension_off"));
-  if (!on.screen_sharing) throw new Error(t("screen-screenview.sharing_off"));
+  if (!c && !b) throw new Error(t("screen-share-screenview.no_extension"));
+  if (!on) throw new Error(t("screen-share-screenview.extension_off"));
+  if (!on.screen_sharing) throw new Error(t("screen-share-screenview.sharing_off"));
   return on;
 }
 
@@ -630,21 +630,21 @@ const place = (r: Rect) => ({ left: r.x, top: r.y, width: r.w, height: r.h });
 function phaseLabel(p: Phase): string {
   switch (p.kind) {
     case "signin":
-      return t("screen-screenview.phase_signin");
+      return t("screen-share-screenview.phase_signin");
     case "closed":
     case "blocked":
-      return t("screen-screenview.phase_failed");
+      return t("screen-share-screenview.phase_failed");
     default:
-      return t("screen-screenview.phase_connecting");
+      return t("screen-share-screenview.phase_connecting");
   }
 }
 
 function phaseText(p: Phase, name: string): string {
   switch (p.kind) {
     case "checking":
-      return t("screen-screenview.finding", { name });
+      return t("screen-share-screenview.finding", { name });
     case "connecting":
-      return t("screen-screenview.connecting", { name });
+      return t("screen-share-screenview.connecting", { name });
     case "blocked":
     case "closed":
       return p.why;

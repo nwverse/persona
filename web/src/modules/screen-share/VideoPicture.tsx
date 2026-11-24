@@ -4,9 +4,9 @@
 // (./video-link) over the hub's relay, draws each picture on a canvas over noVNC's at the display's place, and says why
 // when the page falls back to VNC. Input always stays on RFB: noVNC's canvas stays underneath at opacity 0.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { cx, Dialog } from "../ui/atoms";
-import { Icon } from "../ui/icons";
-import { t } from "../i18n";
+import { cx, Dialog } from "../../ui/atoms";
+import { Icon } from "../../ui/icons";
+import { t } from "../../i18n";
 import type { Budget, MobileData } from "./data-use";
 import type { Change } from "./tiers/policy";
 import type { ScreenQuality } from "./video";
@@ -187,10 +187,10 @@ export function VideoChannel({
 }
 
 const LINES: Record<Fallback, () => string> = {
-  lost: () => t("screen-video.fallback_lost"),
-  locked: () => t("screen-video.fallback_locked"),
-  notAllowed: () => t("screen-video.fallback_not_allowed"),
-  busy: () => t("screen-video.fallback_busy"),
+  lost: () => t("screen-share-video.fallback_lost"),
+  locked: () => t("screen-share-video.fallback_locked"),
+  notAllowed: () => t("screen-share-video.fallback_not_allowed"),
+  busy: () => t("screen-share-video.fallback_busy"),
 };
 
 /** The line that says why VNC shows while video was chosen; for `notAllowed`, with "How to turn it on": one sentence,
@@ -202,23 +202,23 @@ export function FallbackLine({ fallback, asked }: { fallback: Fallback; asked: b
     <>
       {fallback === "notAllowed" ? (
         <button type="button" onClick={() => setHow(true)} data-testid="screen-fallback-help" className="rounded-control bg-surface/90 px-3 py-1.5 text-label text-ink-2 shadow-overlay backdrop-blur-md">
-          {words} <span className="text-accent">{t("screen-video.how_to_turn_on")}</span>
+          {words} <span className="text-accent">{t("screen-share-video.how_to_turn_on")}</span>
         </button>
       ) : (
         <p role="status" data-testid="screen-fallback" className="rounded-control bg-surface/90 px-3 py-1.5 text-label text-ink-2 shadow-overlay backdrop-blur-md">
           {words}
         </p>
       )}
-      <Dialog open={how} onClose={() => setHow(false)} title={t("screen-video.turn_on_title")}>
-        <p className="text-meta text-ink-2">{asked ? t("screen-video.how_settings") : t("screen-video.how_window")}</p>
+      <Dialog open={how} onClose={() => setHow(false)} title={t("screen-share-video.turn_on_title")}>
+        <p className="text-meta text-ink-2">{asked ? t("screen-share-video.how_settings") : t("screen-share-video.how_window")}</p>
       </Dialog>
     </>
   );
 }
 
 const MOBILE_DATA: { m: MobileData; title: () => string; usage: () => string }[] = [
-  { m: "clearer", title: () => t("screen-video.mobile_data_clearer"), usage: () => t("screen-video.mobile_data_clearer_usage") },
-  { m: "saver", title: () => t("screen-video.mobile_data_saver"), usage: () => t("screen-video.mobile_data_saver_usage") },
+  { m: "clearer", title: () => t("screen-share-video.mobile_data_clearer"), usage: () => t("screen-share-video.mobile_data_clearer_usage") },
+  { m: "saver", title: () => t("screen-share-video.mobile_data_saver"), usage: () => t("screen-share-video.mobile_data_saver_usage") },
 ];
 
 /** The choices for mobile data in words, with about how much data an hour of typical use takes (the iPhone's), for the
@@ -253,20 +253,20 @@ export function MobileDataCard({ onChoose, onClose }: { onChoose: (m: MobileData
   return (
     <section
       data-testid="screen-mobile-data"
-      aria-label={t("screen-video.mobile_data_title")}
+      aria-label={t("screen-share-video.mobile_data_title")}
       className="pointer-events-auto flex w-full max-w-[420px] flex-col gap-2 rounded-card bg-surface/90 p-3 text-label text-ink shadow-overlay backdrop-blur-md"
     >
       <div className="flex items-start gap-1.5">
         <Icon name="phone" size={12} className="mt-0.5 shrink-0 text-ink-3" />
         <div className="min-w-0 flex-1">
-          <p className="font-semibold">{t("screen-video.mobile_data_title")}</p>
-          <p className="text-ink-2">{t("screen-video.mobile_data_line")}</p>
+          <p className="font-semibold">{t("screen-share-video.mobile_data_title")}</p>
+          <p className="text-ink-2">{t("screen-share-video.mobile_data_line")}</p>
         </div>
         <button
           type="button"
           onClick={onClose}
-          aria-label={t("screen-video.mobile_data_close")}
-          title={t("screen-video.mobile_data_close")}
+          aria-label={t("screen-share-video.mobile_data_close")}
+          title={t("screen-share-video.mobile_data_close")}
           data-testid="screen-mobile-data-close"
           className="touch-hit -mr-1 flex size-5 shrink-0 items-center justify-center rounded-chip text-ink-2 hover:bg-hover hover:text-ink"
         >

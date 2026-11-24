@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { t } from "../i18n";
+import { t } from "../../i18n";
 
 const rfbs = vi.hoisted(() => [] as EventTarget[]);
 vi.mock("@novnc/novnc", () => ({
@@ -17,10 +17,10 @@ vi.mock("@novnc/novnc", () => ({
     disconnect() {}
   },
 }));
-vi.mock("../views/theme", () => ({})); // follows the system theme through matchMedia, which jsdom has none of
+vi.mock("../../views/theme", () => ({})); // follows the system theme through matchMedia, which jsdom has none of
 vi.mock("./aes", () => ({ ensureSubtleAES: () => {} }));
-vi.mock("../lib/api", async (actual) => ({
-  ...(await actual<typeof import("../lib/api")>()),
+vi.mock("../../lib/api", async (actual) => ({
+  ...(await actual<typeof import("../../lib/api")>()),
   api: async (path: string) =>
     path === "/machines" ? { machines: [{ id: "mac", name: "Mac", online: true }] } : { enabled: true, screen_sharing: true },
 }));
@@ -56,13 +56,13 @@ describe("ScreenView sign-in", () => {
 
     const account = host.querySelector<HTMLInputElement>('input[autocomplete="username"]')!;
     const password = host.querySelector<HTMLInputElement>('input[type="password"]')!;
-    expect(account.getAttribute("aria-label")).toBe(t("screen-screenview.account"));
-    expect(password.getAttribute("aria-label")).toBe(t("screen-screenview.password"));
+    expect(account.getAttribute("aria-label")).toBe(t("screen-share-screenview.account"));
+    expect(password.getAttribute("aria-label")).toBe(t("screen-share-screenview.password"));
     expect(host.querySelector('[role="alert"]')).toBeNull();
 
     act(() => host.querySelector("form")!.requestSubmit());
     fire("securityfailure", { reason: "nope" });
     const alert = host.querySelector('[role="alert"]');
-    expect(alert?.textContent).toBe(t("screen-screenview.sign_in_failed", { reason: "nope" }));
+    expect(alert?.textContent).toBe(t("screen-share-screenview.sign_in_failed", { reason: "nope" }));
   });
 });

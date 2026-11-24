@@ -4,7 +4,7 @@
 // every frame (the helper's bandwidth adaptation). It ends after 3 s with no frame or heartbeat (not while capture is
 // paused: the helper sends no heartbeat then), 15 s before the first message, on a picture that doesn't decode, or when
 // the stream closes. The transport and the decoder are passed in, so it tests without a socket or WebCodecs.
-import { BASE } from "../lib/base";
+import { BASE } from "../../lib/base";
 import { decoderSetup } from "./video-bitstream";
 import { decodeOptions } from "./video-probe";
 import type { Budget } from "./data-use";

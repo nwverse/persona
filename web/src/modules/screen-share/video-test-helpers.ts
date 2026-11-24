@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { decode, encode, VideoParser, type VideoMessage } from "./video-wire";
 import type { Decoder, DecoderMaker, Picture, VideoTransport } from "./video-stream";
 
-export const fixture = new Uint8Array(readFileSync(fileURLToPath(new URL("../../../scripts/mock/screen_video/fixture.bin", import.meta.url))));
+export const fixture = new Uint8Array(readFileSync(fileURLToPath(new URL("../../../../scripts/mock/screen_video/fixture.bin", import.meta.url))));
 /** The fixture's first `n` messages, framed. */
 export function prefix(n: number): Uint8Array {
   const raws = new VideoParser().push(fixture).slice(0, n);

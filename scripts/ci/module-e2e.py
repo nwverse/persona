@@ -83,6 +83,8 @@ SERVER = {
     # So what the gate sees of it is its hello flag and the manager's module list. The web app gates nothing on it.
     "lark": {},
     "mail": {"routes": ["/api/v1/mail/accounts"]},
+    # its sessions run on the computers (internal/modules/all/node): nothing on the manager but its flag
+    "screen-share": {},
 }
 
 # What the web app shows of a module (web/e2e/module-gate.mjs). An entry:
@@ -134,6 +136,18 @@ WEB = {
              "ready": {"text": r"^Connectors$"}, "selector": "[data-settings-group='mail']"},
         ],
         "chunks": [],
+    },
+    "screen-share": {
+        "entries": [
+            # the machine page's View screen (MOCK_COMPUTER=ready: a Mac with Screen Sharing on); the live screen itself
+            # is a page of its own (standalonePages), which an off hub answers as a removed page
+            {"name": "machine page View screen", "hubs": ["mock"], "page": "/machines/macbook",
+             "ready": {"text": r"^MacBook$"}, "selector": "a[href$='/screen/macbook']",
+             "off_page": {"path": "/screen/macbook", "text": NOT_FOUND}},
+        ],
+        "chunks": [r"/assets/(standalone|ScreenView|ScreenMenu|DisplayMenu|StatsOverlay|VideoPicture)-[\w-]+\.js",
+                   r"/src/modules/screen-share/"],
+        "chunk_when_on": [],  # the button is a link that opens a new tab: nothing of it loads on the machine page
     },
     "recording": {
         "entries": [
@@ -325,7 +339,8 @@ def browser(rep, phase, base, token, hub_kind, ids, on, shots, work, schemes):
 def mock_phase(rep, phase, ids, flags, dist, shots, work, schemes, procs):
     """The web app (vite preview of the same build) against the mock hub, as an older hub or with module flags."""
     hub_port, web_port = smoke.free_port(), smoke.free_port()
-    env = dict(os.environ, PORT=str(hub_port), MOCK_VOICE="1")
+    # MOCK_COMPUTER: a Mac with Screen Sharing on, for the screen-share module's View screen
+    env = dict(os.environ, PORT=str(hub_port), MOCK_VOICE="1", MOCK_COMPUTER="ready")
     env.pop("MOCK_HUB_MODULES", None)
     if flags is not None:
         env["MOCK_HUB_MODULES"] = ",".join(flags) or "none"

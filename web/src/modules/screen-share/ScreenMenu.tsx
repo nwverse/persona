@@ -5,21 +5,21 @@
 // changes. The choice is kept per Mac in this browser (video.ts), as the Displays choice is, and as the iOS app keeps
 // it on the device (ScreenVideoUI).
 import { useState } from "react";
-import { cx, Menu } from "../ui/atoms";
-import { Icon } from "../ui/icons";
-import { t } from "../i18n";
-import type { MenuItem } from "../ui/menu-model";
+import { cx, Menu } from "../../ui/atoms";
+import { Icon } from "../../ui/icons";
+import { t } from "../../i18n";
+import type { MenuItem } from "../../ui/menu-model";
 import type { ScreenPicture, ScreenQuality } from "./video";
 import type { MobileData } from "./data-use";
 
 const PICTURES: ScreenPicture[] = ["video", "vnc"];
 const QUALITIES: ScreenQuality[] = ["auto", "sharper", "smoother"];
-const pictureLabel = (p: ScreenPicture) => (p === "video" ? t("screen-video.picture_video") : t("screen-video.picture_vnc"));
+const pictureLabel = (p: ScreenPicture) => (p === "video" ? t("screen-share-video.picture_video") : t("screen-share-video.picture_vnc"));
 const qualityLabel = (q: ScreenQuality) =>
-  q === "auto" ? t("screen-video.quality_auto") : q === "sharper" ? t("screen-video.quality_sharper") : t("screen-video.quality_smoother");
+  q === "auto" ? t("screen-share-video.quality_auto") : q === "sharper" ? t("screen-share-video.quality_sharper") : t("screen-share-video.quality_smoother");
 const MOBILE_DATA: MobileData[] = ["clearer", "saver"];
-const mobileDataLabel = (m: MobileData) => (m === "clearer" ? t("screen-video.mobile_data_clearer") : t("screen-video.mobile_data_saver"));
-const mobileDataUsage = (m: MobileData) => (m === "clearer" ? t("screen-video.mobile_data_clearer_usage") : t("screen-video.mobile_data_saver_usage"));
+const mobileDataLabel = (m: MobileData) => (m === "clearer" ? t("screen-share-video.mobile_data_clearer") : t("screen-share-video.mobile_data_saver"));
+const mobileDataUsage = (m: MobileData) => (m === "clearer" ? t("screen-share-video.mobile_data_clearer_usage") : t("screen-share-video.mobile_data_saver_usage"));
 
 /** The picture and (for video) quality the live screen uses, remembered per Mac. `onPicture` / `onQuality` persist and
  *  apply the choice; the parent holds the current value so the menu reads it back as the chosen radio. */
@@ -40,13 +40,13 @@ export default function ScreenMenu({ picture, quality, onPicture, onQuality, qua
     ...PICTURES.map((p): MenuItem => ({ key: `picture-${p}`, label: pictureLabel(p), radio: true, checked: picture === p, onSelect: () => onPicture(p) })),
     ...(picture === "video" && qualityOffered
       ? [
-          { key: "quality", label: t("screen-video.quality"), heading: true, divider: true, onSelect: () => {} } as MenuItem,
+          { key: "quality", label: t("screen-share-video.quality"), heading: true, divider: true, onSelect: () => {} } as MenuItem,
           ...QUALITIES.map((q): MenuItem => ({ key: `quality-${q}`, label: qualityLabel(q), radio: true, checked: quality === q, onSelect: () => onQuality(q) })),
         ]
       : []),
     ...(picture === "video" && mobileData && onMobileData
       ? [
-          { key: "mobile-data", label: t("screen-video.mobile_data_quality"), heading: true, divider: true, onSelect: () => {} } as MenuItem,
+          { key: "mobile-data", label: t("screen-share-video.mobile_data_quality"), heading: true, divider: true, onSelect: () => {} } as MenuItem,
           ...MOBILE_DATA.map((m): MenuItem => ({ key: `mobile-data-${m}`, label: mobileDataLabel(m), detail: mobileDataUsage(m), radio: true, checked: mobileData === m, onSelect: () => onMobileData(m) })),
         ]
       : []),
@@ -58,8 +58,8 @@ export default function ScreenMenu({ picture, quality, onPicture, onQuality, qua
         onClick={(e) => setAt(at ? null : e.currentTarget)}
         aria-haspopup="menu"
         aria-expanded={at !== null}
-        aria-label={t("screen-video.picture_current", { current: pictureLabel(picture) })}
-        title={t("screen-video.menu")}
+        aria-label={t("screen-share-video.picture_current", { current: pictureLabel(picture) })}
+        title={t("screen-share-video.menu")}
         data-testid="screen-video"
         className={cx(
           "touch-hit flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-control px-2 text-label font-medium text-ink-2 transition-colors hover:bg-hover hover:text-ink",
@@ -71,7 +71,7 @@ export default function ScreenMenu({ picture, quality, onPicture, onQuality, qua
         <span className="hidden sm:inline">{pictureLabel(picture)}</span>
         <Icon name="chevron" size={12} />
       </button>
-      {at && <Menu anchor={at} onClose={() => setAt(null)} align="right" width={200} header={t("screen-video.menu")} items={items} />}
+      {at && <Menu anchor={at} onClose={() => setAt(null)} align="right" width={200} header={t("screen-share-video.menu")} items={items} />}
     </>
   );
 }

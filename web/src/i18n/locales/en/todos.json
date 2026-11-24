@@ -327,5 +327,11 @@
   "goal_collapse": "Hide subtasks for “{title}” ({done}/{total} done)",
   "goal_blocked_one": "{count} needs you",
   "goal_blocked_other": "{count} need you",
-  "goal_parent_hint": "Part of {title}"
+  "goal_parent_hint": "Part of {title}",
+  "shared_blockers_region": "Shared external blockers",
+  "shared_blockers_title": "Shared blockers · {count}",
+  "shared_blockers_count": "{count} blocked",
+  "shared_blockers_clear": "Clear filter",
+  "shared_blockers_open_link": "Open {label}",
+  "shared_blockers_empty": "No tasks match this blocker"
 }

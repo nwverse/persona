@@ -12,9 +12,9 @@
 // into the one stylesheet the first screen sends, so a new one costs every page (startup-preload FIRST_SCREEN_BUDGET:
 // #7368's two new ones, a translucent surface and a minimum width, took the ja first screen 29 B over it).
 import { Fragment, useEffect, useRef, useState } from "react";
-import { cx } from "../ui/atoms";
-import { Icon } from "../ui/icons";
-import { t } from "../i18n";
+import { cx } from "../../ui/atoms";
+import { Icon } from "../../ui/icons";
+import { t } from "../../i18n";
 import { mbpsText, ScreenMeter } from "./meter";
 import { countBytes, countFrames, probeHub } from "./probes";
 import type { Change, TierReason } from "./tiers/policy";
@@ -31,8 +31,8 @@ export function StatsToggle({ on, onToggle }: { on: boolean; onToggle: (on: bool
       type="button"
       aria-pressed={on}
       onClick={() => onToggle(!on)}
-      aria-label={t("screen-video.stats")}
-      title={t("screen-video.stats")}
+      aria-label={t("screen-share-video.stats")}
+      title={t("screen-share-video.stats")}
       data-testid="screen-stats-toggle"
       className={cx(
         "touch-hit flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-control px-2 text-label font-medium transition-colors hover:bg-hover hover:text-ink",
@@ -41,7 +41,7 @@ export function StatsToggle({ on, onToggle }: { on: boolean; onToggle: (on: bool
     >
       <Icon name="chart" size={14} />
       {/* a narrow bar keeps the icon only; the button's name says what it is */}
-      <span className="hidden md:inline">{t("screen-video.stats")}</span>
+      <span className="hidden md:inline">{t("screen-share-video.stats")}</span>
     </button>
   );
 }
@@ -57,19 +57,19 @@ export type VideoStats = {
 };
 
 const QUALITY: Record<ScreenQuality, () => string> = {
-  auto: () => t("screen-video.quality_auto"),
-  sharper: () => t("screen-video.quality_sharper"),
-  smoother: () => t("screen-video.quality_smoother"),
+  auto: () => t("screen-share-video.quality_auto"),
+  sharper: () => t("screen-share-video.quality_sharper"),
+  smoother: () => t("screen-share-video.quality_smoother"),
 };
 
 const REASON: Record<TierReason, () => string> = {
-  start: () => t("screen-video.tier_start"),
-  link_slowed: () => t("screen-video.tier_link_slowed"),
-  link_steady: () => t("screen-video.tier_link_steady"),
-  network_changed: () => t("screen-video.tier_network_changed"),
-  phone_warm: () => t("screen-video.tier_device_warm"),
-  phone_behind: () => t("screen-video.tier_device_behind"),
-  choice: () => t("screen-video.tier_choice"),
+  start: () => t("screen-share-video.tier_start"),
+  link_slowed: () => t("screen-share-video.tier_link_slowed"),
+  link_steady: () => t("screen-share-video.tier_link_steady"),
+  network_changed: () => t("screen-share-video.tier_network_changed"),
+  phone_warm: () => t("screen-share-video.tier_device_warm"),
+  phone_behind: () => t("screen-share-video.tier_device_behind"),
+  choice: () => t("screen-share-video.tier_choice"),
 };
 
 /** The tier as the panel shows it, as the iPhone's ScreenTierText: the Quality chosen, the scale the picture really has
@@ -78,20 +78,20 @@ const REASON: Record<TierReason, () => string> = {
 export function tierParts(quality: ScreenQuality, c: Change): string[] {
   const v = Math.round(c.tier.pixelsPerPoint * 10) / 10;
   const scale = Number.isInteger(v) ? String(v) : v.toFixed(1);
-  return [QUALITY[quality](), `${scale}×`, t("screen-video.stats_fps", { fps: c.tier.fps })];
+  return [QUALITY[quality](), `${scale}×`, t("screen-share-video.stats_fps", { fps: c.tier.fps })];
 }
 export function tierReasonParts(reason: TierReason, at: number, now: number): string[] {
   const seconds = Math.max(0, Math.floor((now - at) / 1000));
-  const ago = seconds < 60 ? t("screen-video.tier_seconds_ago", { n: seconds }) : t("screen-video.tier_minutes_ago", { n: Math.floor(seconds / 60) });
+  const ago = seconds < 60 ? t("screen-share-video.tier_seconds_ago", { n: seconds }) : t("screen-share-video.tier_minutes_ago", { n: Math.floor(seconds / 60) });
   return [REASON[reason](), ago];
 }
 /** Why the computer's video isn't playing on this page, said only when the computer offers it. */
 export type NoVideoReason = "insecure" | "unsupported" | "failed";
 
 const NO_VIDEO: Record<NoVideoReason, () => string> = {
-  insecure: () => t("screen-video.stats_no_video_insecure"),
-  unsupported: () => t("screen-video.stats_no_video_unsupported"),
-  failed: () => t("screen-video.stats_no_video_failed"),
+  insecure: () => t("screen-share-video.stats_no_video_insecure"),
+  unsupported: () => t("screen-share-video.stats_no_video_unsupported"),
+  failed: () => t("screen-share-video.stats_no_video_failed"),
 };
 
 export function StatsOverlay({ rfb, socket, onClose, video = null, noVideo = null }: {
@@ -152,8 +152,8 @@ export function StatsOverlay({ rfb, socket, onClose, video = null, noVideo = nul
   const bitrate = video ? r?.mbps : stats.bitrateMbps;
   const fps = video ? r?.fps : stats.fps;
   const rates = [
-    bitrate !== undefined ? t("screen-video.stats_mbps", { mbps: mbpsText(bitrate) }) : null,
-    fps !== undefined ? t("screen-video.stats_fps", { fps: Math.round(fps) }) : null,
+    bitrate !== undefined ? t("screen-share-video.stats_mbps", { mbps: mbpsText(bitrate) }) : null,
+    fps !== undefined ? t("screen-share-video.stats_fps", { fps: Math.round(fps) }) : null,
     video?.codec ?? null,
     video?.size ? `${video.size.width}×${video.size.height}` : null,
   ].filter((x): x is string => x !== null);
@@ -161,10 +161,10 @@ export function StatsOverlay({ rfb, socket, onClose, video = null, noVideo = nul
   // total leads the first line, as on the iPhone.
   const segments = video
     ? [
-        r?.captureMs !== undefined ? t("screen-video.stats_capture", { ms: Math.round(r.captureMs) }) : null,
-        r?.encodeMs !== undefined ? t("screen-video.stats_encode", { ms: Math.round(r.encodeMs) }) : null,
-        r?.networkMs !== undefined ? t("screen-video.stats_network", { ms: Math.round(r.networkMs) }) : null,
-        r?.decodeMs !== undefined ? t("screen-video.stats_decode", { ms: Math.round(r.decodeMs) }) : null,
+        r?.captureMs !== undefined ? t("screen-share-video.stats_capture", { ms: Math.round(r.captureMs) }) : null,
+        r?.encodeMs !== undefined ? t("screen-share-video.stats_encode", { ms: Math.round(r.encodeMs) }) : null,
+        r?.networkMs !== undefined ? t("screen-share-video.stats_network", { ms: Math.round(r.networkMs) }) : null,
+        r?.decodeMs !== undefined ? t("screen-share-video.stats_decode", { ms: Math.round(r.decodeMs) }) : null,
       ].filter((x): x is string => x !== null)
     : [];
   const dotted = (parts: string[]) =>
@@ -177,7 +177,7 @@ export function StatsOverlay({ rfb, socket, onClose, video = null, noVideo = nul
   return (
     <div
       role="group"
-      aria-label={t("screen-video.stats")}
+      aria-label={t("screen-share-video.stats")}
       data-testid="screen-stats"
       onPointerDown={start}
       onPointerMove={move}
@@ -187,25 +187,25 @@ export function StatsOverlay({ rfb, socket, onClose, video = null, noVideo = nul
       className="absolute top-3 right-3 z-10 flex cursor-grab touch-none flex-col gap-1 rounded-card bg-surface/90 px-2.5 py-2 text-label text-ink shadow-overlay backdrop-blur-md select-none tabular-nums active:cursor-grabbing"
     >
       <div className="flex items-center gap-1.5 whitespace-nowrap">
-        <span className="font-semibold">{video ? t("screen-video.stats_video") : t("screen-video.stats_vnc")}</span>
+        <span className="font-semibold">{video ? t("screen-share-video.stats_video") : t("screen-share-video.stats_vnc")}</span>
         {stats.path === "relay" && (
           <>
             <span className="text-ink-3">·</span>
-            <span className="text-ink-2">{t("screen-video.stats_via_hub")}</span>
+            <span className="text-ink-2">{t("screen-share-video.stats_via_hub")}</span>
           </>
         )}
         {r?.totalMs !== undefined && (
           <>
             <span className="text-ink-3">·</span>
-            <span data-testid="screen-stats-total">{t("screen-video.stats_ms", { ms: Math.round(r.totalMs) })}</span>
+            <span data-testid="screen-stats-total">{t("screen-share-video.stats_ms", { ms: Math.round(r.totalMs) })}</span>
           </>
         )}
         <span className="flex-1" />
         <button
           type="button"
           onClick={onClose}
-          aria-label={t("screen-video.stats_hide")}
-          title={t("screen-video.stats_hide")}
+          aria-label={t("screen-share-video.stats_hide")}
+          title={t("screen-share-video.stats_hide")}
           data-testid="screen-stats-close"
           className="touch-hit -mr-1 ml-3 flex size-5 items-center justify-center rounded-chip text-ink-2 hover:bg-hover hover:text-ink"
         >
@@ -217,7 +217,7 @@ export function StatsOverlay({ rfb, socket, onClose, video = null, noVideo = nul
       {video?.tier && (
         <>
           <p className="flex items-center gap-1.5 whitespace-nowrap" data-testid="screen-stats-tier">
-            <span className="text-ink-2">{t("screen-video.stats_tier")}</span>
+            <span className="text-ink-2">{t("screen-share-video.stats_tier")}</span>
             {dotted(tierParts(video.tier.quality, video.tier.change))}
           </p>
           <p className="flex items-center gap-1.5 whitespace-nowrap text-ink-3" data-testid="screen-stats-tier-reason">
@@ -233,7 +233,7 @@ export function StatsOverlay({ rfb, socket, onClose, video = null, noVideo = nul
       )}
       {stats.hubRoundTripMs !== undefined && (
         <p className="whitespace-nowrap text-ink-2" data-testid="screen-stats-hub">
-          {t("screen-video.stats_hub_round_trip", { ms: Math.round(stats.hubRoundTripMs) })}
+          {t("screen-share-video.stats_hub_round_trip", { ms: Math.round(stats.hubRoundTripMs) })}
         </p>
       )}
       {!video && noVideo && (

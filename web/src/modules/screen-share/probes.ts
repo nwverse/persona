@@ -11,7 +11,7 @@
 //   /api/v1/health, which needs no sign-in and reads only the hub's memory: from the request going out to the first
 //   byte back, by its own Resource Timing entry. That is the browser's HTTP round trip to the hub, a little of it the
 //   hub answering; not the hub's way on to the Mac.
-import { BASE } from "../lib/base";
+import { BASE } from "../../lib/base";
 
 /** Calls `on` with the size of every message the socket receives; the returned function stops. */
 export function countBytes(socket: WebSocket, on: (n: number) => void): () => void {
