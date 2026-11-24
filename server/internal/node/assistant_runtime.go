@@ -286,7 +286,10 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	if !command {
 		n.ttft.arm(id, sentAt, "")
 	}
-	if err := h.peer.Call(cctx, "session.send", params, &said); err != nil {
+	finishAgy := n.runtimes.agyWorkBegin(h, "session.send", id)
+	err := h.peer.Call(cctx, "session.send", params, &said)
+	finishAgy(err, false)
+	if err != nil {
 		if !command && !maybeDelivered(err) {
 			n.ttft.disarm(id, sentAt)
 		}
@@ -372,7 +375,11 @@ func (n *Node) assistantInterruptRuntime(ctx context.Context, id string) error {
 	}
 	cctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
 	defer cancel()
-	return h.peer.Call(cctx, "session.interrupt", map[string]any{"session_id": id}, nil)
+	var out json.RawMessage
+	finishAgy := n.runtimes.agyWorkBegin(h, "session.interrupt", id)
+	err := h.peer.Call(cctx, "session.interrupt", map[string]any{"session_id": id}, &out)
+	finishAgy(err, runtimeAnswerFlag(out, "settled"))
+	return err
 }
 
 // runtimeStartWith starts a session on h with params (cwd and the rest) and lists it right away (runtimeStart).

@@ -79,7 +79,9 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool, star
 	c.serviceTier = codexServiceTier(res.ServiceTier)
 	c.mu.Unlock()
 	n.mu.Lock()
+	c.p.mu.Lock()
 	c.p.id = res.Thread.ID
+	c.p.mu.Unlock()
 	if res.Thread.Path != "" {
 		n.paths[res.Thread.ID] = res.Thread.Path // Codex said so (CODEX_HOME may not be ~/.codex)
 		if n.pathsAt == nil {

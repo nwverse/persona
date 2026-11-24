@@ -26,6 +26,7 @@ import (
 	"github.com/nwverse/persona/server/internal/healthhost"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/knowledgeuihost"
 	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -265,6 +266,7 @@ type Service struct {
 	captures             captureWork            // capture_sort.go: wakes the loop that sorts quick captures
 	spaceFill            spaceBackfill          // conversation_space_backfill.go
 	outcomeLines         outcomeLines           // todo_outcome.go
+	workerOutcomes       workerOutcomes         // worker_memory.go
 	conversationWrites   sync.RWMutex
 
 	modelPicks modelPickBook // model_pick.go
@@ -329,7 +331,7 @@ type Service struct {
 	reply            replyBook         // agents_reply.go: the reminders of questions left unanswered
 	chans            channelsBook      // channels.go
 	fbot             feishuBook        // feishu.go
-	tposts           threadPoster      // feishu_thread_posts.go: what a todo tells its chat thread
+	tposts           threadPoster      // the lark module's thread_posts.go: what a todo tells its chat thread
 	lark             larkLayer         // lark.go: the lark module's layer, the outbound channel port (s.chat())
 	tevents          todoEvents        // todo_events.go: what the extensions are told of the todos
 	tpush            todosPush         // todos.go: the {"type":"todos"} waiting for the rest of its write
@@ -392,8 +394,9 @@ type Service struct {
 	// rec is the recording module (recording.go, internal/recordinghost); nil without it. meetingModel stands in for
 	// the meeting.answer model in tests (nil: the configured one).
 	rec          recordingLayer
-	healthMod    healthhost.Layer // the Health module, nil without it (health_layer.go)
-	recOpts      recordingOptions // Options' recording knobs, for the module's Host
+	ui           knowledgeuihost.Layer // the knowledge pages' module (knowledge_ui.go); nil without it
+	healthMod    healthhost.Layer      // the Health module, nil without it (health_layer.go)
+	recOpts      recordingOptions      // Options' recording knobs, for the module's Host
 	meetingModel kb.Model
 	// sockets makes socketMux, ServeSocket's (sockets.go).
 	sockets   sync.Once
@@ -488,6 +491,7 @@ func New(o Options) *Service {
 	s.recOpts.now, s.recOpts.after = o.RecordingFeedNow, o.RecordingFeedAfter
 	s.lark.timings, s.lark.lists = maps.Clone(o.LarkTimings), maps.Clone(o.LarkTimingLists)
 	s.loadRecording()
+	s.loadKnowledgeUI() // the knowledge pages' module (knowledge_ui.go)
 	s.kbRoutes()
 	s.searchRoutes()
 	s.historyRoutes()
