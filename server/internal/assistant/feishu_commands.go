@@ -133,7 +133,7 @@ func (s *Service) botCommand(ctx context.Context, f FeishuFeatures, messageID, t
 			reply(oc.card, oc.fallback)
 		}
 	default:
-		if s.workbenchCommand(ctx, f, cmd) { // /home, /today, /inbox with the workbench on (feishu_workbench.go)
+		if s.larkModule().WorkbenchCommand(ctx, f, cmd) { // /home, /today, /inbox with the workbench on (feishu_workbench.go)
 			return true, ""
 		}
 		// A command the bot does not know goes on as it is (an agent's own, like /compact). A bare one a letter off

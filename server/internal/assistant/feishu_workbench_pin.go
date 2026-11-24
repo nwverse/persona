@@ -58,7 +58,7 @@ func (s *Service) workbenchLoop() {
 // standingCard is what the standing board shows: the home card with the workbench on, the waiting list without.
 func (s *Service) standingCard(ctx context.Context) (card *botcard.Card, fallback, said string) {
 	if f, ready := s.feishuFeatures(ctx); s.workbenchOn(f, ready) {
-		return s.homeCard(ctx, f)
+		return s.larkModule().HomeCard(ctx, f)
 	}
 	return s.boardCard(ctx)
 }

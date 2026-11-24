@@ -391,7 +391,7 @@ func TestWorkbenchCompanionsAreLinkedFromTheHomeCard(t *testing.T) {
 	if code, out := e.companionsCall("PUT", "/api/v1/assistant/feishu/companions", companionsBody); code != http.StatusOK {
 		t.Fatalf("companions: %d %v", code, out)
 	}
-	card, _, _ := e.s.homeCard(context.Background(), workbenchOnFeatures)
+	card, _, _ := e.s.larkModule().HomeCard(context.Background(), workbenchOnFeatures)
 	js := card.JSON()
 	if !strings.Contains(js, "appId=cli_inboxbot01") || !strings.Contains(js, "appId=cli_noticebot1") || strings.Contains(js, `"to":"inbox"`) {
 		t.Fatalf("the home card's companions: %s", js)
@@ -477,8 +477,10 @@ func TestWorkbenchInboxCardFilesAnItem(t *testing.T) {
 		UpdatedAt: now, Lark: &InboxLark{FeedID: "f2"}}
 	e.s.inbox.mu.Unlock()
 
-	card, _ := e.s.inboxCard(context.Background())
-	js := card.JSON()
+	if ok, _ := e.command("/inbox"); !ok {
+		t.Fatal("/inbox was not taken")
+	}
+	js := e.postJSON(-1)
 	if a, b := strings.Index(js, "Alex"), strings.Index(js, "Sam"); a < 0 || b < 0 || a > b {
 		t.Fatalf("what needs the owner is not first: %s", js)
 	}
@@ -498,23 +500,6 @@ func TestWorkbenchInboxCardFilesAnItem(t *testing.T) {
 	}
 }
 
-// A card names where an item came from in words: a connector's label for it, else its source's name (a subscription's
-// one row has no label, #5671), never the source's id.
-func TestWorkbenchSourceIsAName(t *testing.T) {
-	for _, c := range []struct {
-		it   InboxItem
-		want string
-	}{
-		{InboxItem{Source: "github", AccountName: "GitHub", Connector: &InboxConnector{Label: "Review requested"}}, "Review requested"},
-		{InboxItem{Source: "sub_example", AccountName: "Example group", Connector: &InboxConnector{}}, "Example group"},
-		{InboxItem{Source: "sub_example", Connector: &InboxConnector{}}, "sub_example"},
-	} {
-		if got := wbSource(i18n.En, c.it); got != c.want {
-			t.Errorf("%+v: %q, want %q", c.it, got, c.want)
-		}
-	}
-}
-
 // tokenSpanStore is the chat's store that also sums the machines' usage (db.DB's UsageSpans), with made-up spans.
 type tokenSpanStore struct {
 	Store
@@ -531,7 +516,7 @@ func TestWorkbenchHomeRowsArePressedWhole(t *testing.T) {
 	e := newWorkbenchEnv(t, workbenchOnFeatures)
 	e.s.fleet.interactions["ix_q"] = &pending{ix: proto.Interaction{ID: "ix_q", MachineID: "box", SessionID: "ag1", Kind: proto.IxQuestion,
 		Questions: []proto.Question{{Question: "用哪个库？"}}}}
-	card, _, _ := e.s.homeCard(context.Background(), workbenchOnFeatures)
+	card, _, _ := e.s.larkModule().HomeCard(context.Background(), workbenchOnFeatures)
 	js := card.JSON()
 	if !strings.Contains(js, `"tag":"interactive_container"`) || !strings.Contains(js, `"value":{"a":"nav","id":"ix_q","to":"ix"}`) ||
 		!strings.Contains(js, `"content":"等你 1"`) {
@@ -546,15 +531,5 @@ func TestWorkbenchHomeRowsArePressedWhole(t *testing.T) {
 	row = agentRowMarkdown(i18n.ZhHans, "登录", "修登录的测试", "box", sess, 70)
 	if row != "<text_tag color='blue'>工作中</text_tag> **登录** · box\n修登录的测试\n<font color='grey'>在跑测试</font>" {
 		t.Fatalf("agent row with a secondary name %q", row)
-	}
-}
-
-// Sending a draft goes out under the owner's name: its button asks first in Feishu's dialog, Redraft does not.
-func TestDraftCardSendAsksFirst(t *testing.T) {
-	s := newTestService(t, newFakeHub())
-	it := InboxItem{ID: "i1", Source: "lark", Title: "项目群", Sender: "张三", Preview: "明天能发吗？"}
-	js := s.draftCard(context.Background(), it, "可以，明早发。", nil, "").JSON()
-	if n := strings.Count(js, `"confirm":`); n != 1 || !strings.Contains(js, `"op":"send"`) || !strings.Contains(js, `"op":"redraft"`) {
-		t.Fatalf("the draft card asks first %d times: %s", n, js)
 	}
 }

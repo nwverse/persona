@@ -8,15 +8,13 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// What the Lark workbench (the lark module's workbench.go) reads of the assistant: the agents at work and the open
-// Inbox, counted for the home and Today cards.
+// What the Lark workbench (the lark module's workbench.go) reads of the assistant: the agents at work and the
+// computers, counted for the home and Today cards, and the open Inbox in its order.
 
-// wbCounts is what the home card sums up.
+// wbCounts is what the home card sums up of the agents and the computers (the module counts the Inbox).
 type wbCounts struct {
 	working, unread, idle int // agents by state
 	pending               int // questions and approvals waiting
-	inboxNeed, inboxFYI   int
-	inboxTop              []InboxItem
 	online, machines      int
 }
 
@@ -59,16 +57,6 @@ func (s *Service) workbenchCount(ctx context.Context, now time.Time) (wbCounts, 
 	order := map[string]int{proto.StateNeedsYou: 0, proto.StateWorking: 1, proto.StateUnread: 2}
 	slices.SortStableFunc(busy, func(a, b wbAgent) int { return order[a.sess.State] - order[b.sess.State] })
 	c.pending = len(s.visiblePendingInteractions())
-	for _, it := range s.workbenchInbox() {
-		if wbNeedsYou(it) {
-			c.inboxNeed++
-			if len(c.inboxTop) < wbHomeRows {
-				c.inboxTop = append(c.inboxTop, it)
-			}
-		} else {
-			c.inboxFYI++
-		}
-	}
 	return c, busy
 }
 
