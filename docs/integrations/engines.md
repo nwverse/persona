@@ -368,7 +368,7 @@ through the model, so it needs no turn of the Agent's and never enters its conte
   after it in the conversation's `messages/`, written since the pane's agy started, is a `command_input` card in the node's card list
   (`codex.interactions`). A prompt is the output's last line with no newline after it, at most 300 characters, ending in `:`, `?`, `>`, `]`
   or `)` (`proto.CommandPrompt`). The card carries the task's description from the transcript's start step, the prompt and up to 20 lines
-  before it, escapes removed.
+  before it, escapes and blank lines removed.
 - **The answer** goes back as a Codex card's does (`codex.answer`). The node checks that the task still waits on the same prompt (otherwise
   `prompt_changed`, nothing typed), finds the language server of the pane's agy in the environment agy gives the commands it runs
   (`ANTIGRAVITY_LS_ADDRESS`, `ANTIGRAVITY_CSRF_TOKEN`, read from a process under the pane's agy; a loopback address only), and posts

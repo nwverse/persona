@@ -43,7 +43,7 @@ const card = (input: Record<string, unknown> = {}): Interaction => ({
   id: "ci_0123456789abcdef", machine_id: "m", session_id: "s", session_title: "Sign in", kind: "permission", tool_name: "command_input",
   tool_title: "Command input", agent: "agy",
   tool_input: { command: "example-cli login", task: "task-7", prompt: PROMPT, masked: true,
-    output: "To sign in, visit this URL in any browser:\n\n  https://auth.example.com/authorize?client=demo.\n\nAfter approving, the page shows a code.", ...input },
+    output: "To sign in, visit this URL in any browser:\n  https://auth.example.com/authorize?client=demo.\nAfter approving, the page shows a code.", ...input },
   summary: `A command is waiting for your input: ${PROMPT}`,
   fields: [{ key: "input", label: PROMPT, secret: true }],
 });

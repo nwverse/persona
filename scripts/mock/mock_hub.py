@@ -10498,7 +10498,7 @@ COMMAND_INPUT_CARD = {
     "tool_name": "command_input", "tool_title": "Command input", "agent": "agy", "agent_label": "Antigravity",
     "tool_input": {"command": "example-cli auth login --no-browser", "task": "task-7", "prompt": COMMAND_INPUT_PROMPT,
                    "masked": True,
-                   "output": "To sign in, open this page in any browser:\n\n  https://auth.example.com/authorize?client=demo&scope=usage\n\n"
+                   "output": "To sign in, open this page in any browser:\n  https://auth.example.com/authorize?client=demo&scope=usage\n"
                              "After approving, the page shows a code."},
     "summary": "A command is waiting for your input: " + COMMAND_INPUT_PROMPT,
     "fields": [{"key": "input", "label": COMMAND_INPUT_PROMPT, "placeholder": "Type what the command asks for", "secret": True}]}

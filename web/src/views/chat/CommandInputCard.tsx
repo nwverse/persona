@@ -46,6 +46,7 @@ export function CommandInputCard({ ix }: { ix: Interaction }) {
   const [shown, setShown] = useState(!masked);
   const [busy, setBusy] = useState<"send" | "skip" | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const outputBox = useRef<HTMLPreElement>(null);
   const keys = useCardKeys();
   const tapGuard = useChatCardTapGuard(ix);
   // a field taken off the page keeps its value until collected, and Firefox offers to save a password field removed
@@ -56,6 +57,11 @@ export function CommandInputCard({ ix }: { ix: Interaction }) {
       if (el) el.value = "";
     };
   }, []);
+  // a long output scrolls in its box: its end, the lines just before the prompt, is what is in view
+  useLayoutEffect(() => {
+    const el = outputBox.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [output]);
   const field = ix.fields?.find((f) => f.key === "input");
   const label = prompt || field?.label?.trim() || t("chat-command-input.field");
   const send = async (body: Record<string, unknown>, key: "send" | "skip") => {
@@ -82,14 +88,15 @@ export function CommandInputCard({ ix }: { ix: Interaction }) {
       }
     >
       <div className="flex flex-col gap-2">
+        {/* the command on one line (all of it on hover): the card's room goes to what it printed and the field */}
         {command && (
-          <div>
-            <div className="mb-1 text-submeta font-medium text-ink-3">{t("chat-command-input.command")}</div>
-            <pre data-command-input-command className={CODE_BOX}>{command}</pre>
+          <div className="flex min-w-0 items-baseline gap-1.5 text-submeta">
+            <span className="shrink-0 font-medium text-ink-3">{t("chat-command-input.command")}</span>
+            <code data-command-input-command title={command} className="min-w-0 truncate font-mono text-ink-2">{command}</code>
           </div>
         )}
         {output && (
-          <pre data-command-input-output className={CODE_BOX}>
+          <pre ref={outputBox} data-command-input-output className={CODE_BOX}>
             <OutputLines text={output} />
           </pre>
         )}

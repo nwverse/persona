@@ -3048,7 +3048,7 @@ one field is secret and required, its value is recorded only as `<redacted>`, an
 ```
 
 - `tool_input`: `command` is what runs in the Agent's words (absent when unknown), `task` the engine's name for it, `prompt` the line it waits
-  on and `output` the lines before it (escapes removed, at most 2 KiB); `masked` says the prompt reads as secret, so the apps hide the line
+  on and `output` the lines before it (escapes and blank lines removed, at most 2 KiB); `masked` says the prompt reads as secret, so the apps hide the line
   while it is typed and offer Show. `summary` and the field's label and placeholder are in the owner's language (the manager rewrites them).
 - Answers: `{"allow": true, "values": {"input": "<line>"}}` types the line and Enter into the command; `{"allow": false}` (Not now) and
   `{"dismiss": true}` type nothing, and the same prompt is not asked again. A line is one line of text: no line break or other control

@@ -39,7 +39,8 @@ type CommandInput struct {
 	Task string `json:"task,omitempty"`
 	// Prompt is the line the command waits on, escapes removed.
 	Prompt string `json:"prompt"`
-	// Output is the output's last lines before the prompt, escapes removed, at most CommandInputMaxOutput bytes.
+	// Output is the output's last lines before the prompt, escapes and blank lines removed, at most CommandInputMaxOutput
+	// bytes.
 	Output string `json:"output,omitempty"`
 	// Masked: the prompt reads as secret (a password, a token, a code), so the apps hide what is typed until Show.
 	Masked bool `json:"masked,omitempty"`

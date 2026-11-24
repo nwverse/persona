@@ -53,7 +53,7 @@ const (
 	agyInputMaxAge = 24 * time.Hour
 	// agyInputTail is how much of a task log's end is read: the prompt and the lines before it.
 	agyInputTail = 8 << 10
-	// agyInputOutputLines: at most this many lines before the prompt go on the card.
+	// agyInputOutputLines: at most this many lines before the prompt go on the card (blank lines not counted: dropped).
 	agyInputOutputLines = 20
 	// agyInputMessageRead: a message file is read up to this many bytes (its sender and first words are at the start).
 	agyInputMessageRead = 4 << 10
@@ -232,8 +232,8 @@ func (n *Node) agyWaiting(ctx context.Context, p agyInputPane, now time.Time, qu
 var agyTaskRe = lazyre.New(`^task-[0-9]+$`)
 
 // agyLogPrompt reads the end of a task log of size bytes: the prompt its output stops at (the last line, no newline
-// after it, proto.CommandPrompt), the lines before it (at most agyInputOutputLines and proto.CommandInputMaxOutput
-// bytes), and whether the prompt reads as secret. Escapes and control characters are removed.
+// after it, proto.CommandPrompt), the lines before it (blank ones dropped, at most agyInputOutputLines and
+// proto.CommandInputMaxOutput bytes), and whether the prompt reads as secret. Escapes and control characters are removed.
 func agyLogPrompt(path string, size int64) (prompt, output string, secret, ok bool) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -269,16 +269,17 @@ func cutLast(s, sep string) (before, after string, found bool) {
 	return "", s, false
 }
 
-// agyLastLines is the end of s: at most lines lines and max bytes, cut at a line, blank lines at either end dropped.
+// agyLastLines is the end of s without its blank lines: at most lines lines and limit bytes, cut at a line. A card has
+// little room, and a command's blank lines only space out what it says.
 func agyLastLines(s string, lines, limit int) string {
-	rows := strings.Split(strings.Trim(s, "\n"), "\n")
+	rows := slices.DeleteFunc(strings.Split(s, "\n"), func(r string) bool { return strings.TrimSpace(r) == "" })
 	if len(rows) > lines {
 		rows = rows[len(rows)-lines:]
 	}
 	for len(rows) > 0 && len(strings.Join(rows, "\n")) > limit {
 		rows = rows[1:]
 	}
-	return strings.Trim(strings.Join(rows, "\n"), "\n")
+	return strings.Join(rows, "\n")
 }
 
 // agyPaneStart is when the agy running pane started, zero when that cannot be told (kept agyInputStartKeep).

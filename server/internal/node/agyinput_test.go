@@ -104,7 +104,7 @@ func (fx *agyInputFixture) message(t *testing.T, name string, m map[string]any) 
 }
 
 // A task stopped at a prompt for agyInputQuiet is one card: the reserved tool, the prompt as the one secret, required
-// field's label, the command and the lines before the prompt, the agy pane's row as its session.
+// field's label, the command and the lines before the prompt (blank ones left out), the agy pane's row as its session.
 func TestAgyTaskAtAPromptIsACard(t *testing.T) {
 	fx := newAgyInputFixture(t, agyTestSignIn)
 	now := time.Now()
@@ -118,6 +118,11 @@ func TestAgyTaskAtAPromptIsACard(t *testing.T) {
 	if len(got) != 1 || got[0].task != "task-7" || got[0].prompt != "Enter the authorization code:" || !got[0].secret ||
 		!strings.Contains(got[0].output, "https://auth.example.com/authorize?client=demo") || strings.Contains(got[0].output, "\r") {
 		t.Fatalf("waiting: %+v", got)
+	}
+	// the command's blank lines are left out: the card has little room
+	if want := "To sign in, visit this URL in any browser:\n  https://auth.example.com/authorize?client=demo\n" +
+		"After approving, the page shows a code."; got[0].output != want {
+		t.Fatalf("output %q, want %q", got[0].output, want)
 	}
 	ix := fx.card(t)
 	if !proto.IsCommandInputCard(ix) || ix.SessionID != agyTestRow || ix.Agent != agyAgent || ix.ID != commandInputID(got[0]) {
