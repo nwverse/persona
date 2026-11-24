@@ -107,7 +107,7 @@ func (n *Node) launcherModels(ctx context.Context, name, agentType string, refre
 	launcherModelsCache.Unlock()
 	ask := func() (any, error) {
 		res := proto.LauncherModels{Agent: agent, Models: []proto.AgentModel{}}
-		if agent != "claude" && agent != "codex" && agent != agyAgent {
+		if agent != "claude" && agent != "codex" && agent != agyAgent && agent != traexAgent {
 			return res, nil
 		}
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), launcherModelsTimeout)
@@ -255,7 +255,7 @@ func (n *Node) launcherModelsAgent(ctx context.Context, name, agentType string) 
 func (n *Node) agentModelsCommand(ctx context.Context, name, agent, dir string) (*exec.Cmd, error) {
 	_, managed := n.managedLauncher(name)
 	var args []string
-	if agent != "codex" && agent != agyAgent {
+	if agent == "claude" {
 		// No hooks: this claude is no session of the user's (Persona's own, or a hook of theirs, would see one start).
 		ours := filepath.Join(dir, "settings.json")
 		if err := os.WriteFile(ours, []byte(`{"disableAllHooks":true}`), 0o600); err != nil {
@@ -278,6 +278,8 @@ func (n *Node) agentModelsCommand(ctx context.Context, name, agent, dir string) 
 	switch agent {
 	case agyAgent:
 		launcher += " models"
+	case traexAgent:
+		launcher += " models --json"
 	case "codex":
 		if managed {
 			// `personad launch` runs codex itself, not the shell's codex codexShell wraps: without the subcommand
@@ -307,6 +309,13 @@ func (n *Node) listAgentModels(ctx context.Context, name, agent string) ([]proto
 	killGroupOnCancel(cmd)
 	if agent == agyAgent {
 		return discoverAgyModels(ctx, cmd, name)
+	}
+	if agent == traexAgent {
+		out, err := cmd.Output()
+		if err != nil {
+			return nil, fmt.Errorf("%s models: %w", name, err)
+		}
+		return traexModelList(out)
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -354,6 +363,28 @@ func (n *Node) listAgentModels(ctx context.Context, name, agent string) ([]proto
 	case <-ctx.Done():
 		return nil, fmt.Errorf("%s 在 %d 秒内没有给出模型列表", name, int(launcherModelsTimeout.Seconds()))
 	}
+}
+
+// TRAE CLI expects the configuration name as --model, not the display name or backend ID.
+func traexModelList(out []byte) ([]proto.AgentModel, error) {
+	var catalog []struct {
+		ID          string `json:"config_name"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(out, &catalog); err != nil {
+		return nil, fmt.Errorf("decode TRAE CLI model catalog: %w", err)
+	}
+	models := []proto.AgentModel{}
+	seen := map[string]bool{}
+	for _, m := range catalog {
+		if !proto.ValidModelID(m.ID) || seen[m.ID] {
+			continue
+		}
+		seen[m.ID] = true
+		models = append(models, proto.AgentModel{ID: m.ID, Name: firstOf(m.Name, m.ID), Description: m.Description})
+	}
+	return models, nil
 }
 
 // discoverAgyModels waits for the catalog command to exit so a failed discovery cannot cache a partial list.
