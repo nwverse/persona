@@ -588,16 +588,23 @@ on), so a stale plugin never blocks agy; `--no-media-guard` keeps the companion 
 message from Persona get the same check: a broken one is left out of the prompt with a line saying so.
 
 Native model errors can be omitted from the JSONL export even when ACP reports a completed prompt. When an idle
-summary has unexported steps, the companion reads at most the final eight native steps with `GetCascadeTrajectorySteps`.
-The result is cached against the summary and exported branch. Discovery opens the native service through read-only
-session listing. An omitted terminal error uses the shared assistant-text `API Error:` representation for the existing error card
-and populates the session's `turn_error`
+summary has unexported steps among its final eight, the companion reads them with `GetCascadeTrajectorySteps`, starting
+at the first unexported index, and puts every `ERROR_MESSAGE` back at its own index (#14627). A conversation another agy
+process created is not in the companion's service, so when the read returns no step for an unexported index the companion
+loads the conversation (`session/resume`) and reads once more; a step still absent is not in the native trajectory (a
+summary ahead of a rewind) and shows nothing. A step that came back is not read again on the same exported branch;
+inserting an error before the export's last step adds `:native-errors:<indices>` to the history token so clients
+reload. If the read or the load fails, the turn shows `Persona could not read this turn's result from Antigravity.` as
+its error and the history token gains `:native-read-failed`, so a later read that replaces or drops that error
+reloads clients and refreshes the row. The read is retried at most twice, 30 seconds apart, while the summary and export stay the same. Discovery opens the
+native service through read-only session listing. An omitted error uses the shared assistant-text `API Error:`
+representation for the existing error card, and a terminal one populates the session's `turn_error`
 fields, including a subscription reset timestamp supplied in native quota metadata. When Antigravity gives only its
 generic `Agent execution terminated due to error.`, the text is the native short error with the `ErrorInfo` reason
 (`INVALID_ARGUMENT (code 400): … (INVALID_MEDIA)`). A 4xx other than 401, 408 and 429 is a request the service refuses
 as it is (a picture in the history it cannot decode, an invalid argument): a Continue sends it again, so it is published
-as `turn_error_kind: "user"` (#11742). New input and rewinds invalidate
-that result. Rejected ACP prompts also publish their failure through the session's error state.
+as `turn_error_kind: "user"` (#11742). New input clears the session's `turn_error` while the error stays in the
+history; a rewind drops recovered errors past its cut. Rejected ACP prompts also publish their failure through the session's error state.
 The history token includes the error format so connected clients refresh items cached before this representation.
 
 **Gemini API key provider** (#13762). agy can run on a Gemini API key (`"modelProvider": "gemini"` in agy's `settings.json`, with

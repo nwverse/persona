@@ -213,6 +213,14 @@ describe("RunningStatusView", () => {
   it("is not there while nothing works", () => {
     expect(render({ live: null, working: false })).toBe("");
   });
+
+  it("renders a subtle stop button with Esc hint when onStop is provided", () => {
+    const html = render({ live: { verb: "Frosting", elapsed_s: 5 }, working: true, onStop: () => {} });
+    expect(html).toContain("中断");
+    expect(html).toContain("<kbd");
+    expect(html).toContain("Esc</kbd>");
+    expect(html).toContain("sm:inline-flex");
+  });
 });
 
 describe("model request retries (#887)", () => {
