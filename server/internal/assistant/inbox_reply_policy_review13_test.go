@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -265,6 +266,40 @@ func TestInboxReplyPolicyPostVetoConfigOutageIsRetryableKnownNone(t *testing.T) 
 	if len(lark.got) != 0 {
 		t.Fatalf("post-final-veto outage reached the physical sender: %+v", lark.got)
 	}
+
+	lang := h.lang(t.Context())
+	wantReason := i18n.T(lang, "assistant-inbox_chain.failed_send")
+	blockedReason := i18n.T(lang, "assistant-inbox.reply_policy_blocked")
+	if wantReason == "" || wantReason == "assistant-inbox_chain.failed_send" || wantReason == blockedReason {
+		t.Fatalf("failed-send reason fixture is not distinct: failed_send=%q reply_policy_blocked=%q", wantReason, blockedReason)
+	}
+	assertReason := func(label string, got *InboxItem) {
+		t.Helper()
+		var handling *InboxHandling
+		if got != nil {
+			handling = got.Handling
+		}
+		if got == nil || handling == nil || handling.State != HandlingFailed || handling.Error != wantReason || handling.Error == blockedReason {
+			t.Fatalf("post-final-veto configuration outage used the policy-blocked display reason: %s handling=%+v want_failed_send=%q", label, handling, wantReason)
+		}
+		if len(got.Chain) == 0 {
+			t.Fatalf("post-final-veto configuration outage used the policy-blocked display reason: %s chain is empty", label)
+		}
+		last := got.Chain[len(got.Chain)-1]
+		if last.Kind != ChainFailed || last.Detail != wantReason || last.Detail == blockedReason {
+			t.Fatalf("post-final-veto configuration outage used the policy-blocked display reason: %s chain=%+v want_failed_send=%q", label, last, wantReason)
+		}
+	}
+	assertReason("live", it)
+
+	restarted := New(Options{Hub: h.f, Store: func() Store { return h.st }, Logf: testLogf(t)})
+	if err := restarted.inboxReady(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	restarted.inbox.mu.Lock()
+	loaded := restarted.inbox.items[it.ID]
+	restarted.inbox.mu.Unlock()
+	assertReason("persisted", loaded)
 }
 
 func TestInboxReplyPolicyContentVersionIncludesSourcesAndTruncation(t *testing.T) {
