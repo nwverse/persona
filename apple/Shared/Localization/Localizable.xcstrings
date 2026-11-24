@@ -81167,6 +81167,12 @@
     },
     "Fold routine replies from other chats" : {
       "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fold routine replies from other chats"
+          }
+        },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
@@ -210979,6 +210985,12 @@
     },
     "When background rounds are folded, routine replies from other chats stay in an expandable row in the main chat and skip the finished notification. Questions and replies marked for you still appear." : {
       "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When background rounds are folded, routine replies from other chats stay in an expandable row in the main chat and skip the finished notification. Questions and replies marked for you still appear."
+          }
+        },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
