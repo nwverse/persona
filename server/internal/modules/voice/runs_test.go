@@ -69,7 +69,12 @@ func content(f map[string]any) string { s, _ := f["content"].(string); return s 
 // waitFor waits up to 5 s for cond.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	waitForWithin(t, 5*time.Second, what, cond)
+}
+
+func waitForWithin(t *testing.T, within time.Duration, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(within)
 	for !cond() {
 		if time.Now().After(deadline) {
 			t.Fatalf("never: %s", what)

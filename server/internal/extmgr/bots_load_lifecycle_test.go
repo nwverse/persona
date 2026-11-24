@@ -13,8 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/cliport"
+
 	"github.com/nwverse/persona/server/internal/connector"
-	larkconnector "github.com/nwverse/persona/server/internal/connector/larkcli"
 	"github.com/nwverse/persona/server/internal/lark"
 )
 
@@ -163,7 +164,7 @@ func waitFakeCLIRunsExited(t *testing.T, dir string) {
 func TestBotLoadLiveCLIProfileRecovery(t *testing.T) {
 	needsLarkModule(t)
 	w := newBotLoadWorld(t, true, false)
-	bin, err := filepath.Abs(filepath.Join("..", "larkcli", "testdata", "fake-lark-cli.sh"))
+	bin, err := filepath.Abs(filepath.Join("..", "modules", "lark", "larkcli", "testdata", "fake-lark-cli.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +187,7 @@ func TestBotLoadLiveCLIProfileRecovery(t *testing.T) {
 	}
 	w.h.connectors = w.h.newConnectors(nil)
 	w.h.startConnectors(w.ctx)
-	c := w.h.connectors.Get("larkcli").(*larkconnector.Connector)
+	c := w.h.connectors.Get("larkcli").(cliport.Connector)
 	if _, err := c.Call(w.ctx, "larkcli_chats", json.RawMessage(`{}`)); err == nil {
 		t.Error("live connector executed CLI while saved identity was unread")
 	}
@@ -237,7 +238,7 @@ func TestBotLoadCLIRecoveryPreservesConnectorSettings(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newBotLoadWorld(t, true, false)
-			bin, err := filepath.Abs(filepath.Join("..", "larkcli", "testdata", "fake-lark-cli.sh"))
+			bin, err := filepath.Abs(filepath.Join("..", "modules", "lark", "larkcli", "testdata", "fake-lark-cli.sh"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -257,7 +258,7 @@ func TestBotLoadCLIRecoveryPreservesConnectorSettings(t *testing.T) {
 			}
 			w.h.connectors = w.h.newConnectors(nil)
 			w.h.startConnectors(w.ctx)
-			old := w.h.connectors.Get("larkcli").(*larkconnector.Connector)
+			old := w.h.connectors.Get("larkcli").(cliport.Connector)
 			before := string(old.Options())
 			if tc.override != "" {
 				if _, err := old.Call(w.ctx, "larkcli_chats", json.RawMessage(`{}`)); err != nil {
@@ -275,7 +276,7 @@ func TestBotLoadCLIRecoveryPreservesConnectorSettings(t *testing.T) {
 			w.advance()
 			w.h.botAPI()
 			eventually(t, time.Second, "recovered connector profile", func() bool { c := currentRecoveryCLI(w.h); return c != nil && c.Profile() == tc.want })
-			current := w.h.connectors.Get("larkcli").(*larkconnector.Connector)
+			current := w.h.connectors.Get("larkcli").(cliport.Connector)
 			if string(current.Options()) != before {
 				t.Fatalf("options lost: before=%s after=%s", before, current.Options())
 			}
@@ -296,7 +297,9 @@ func TestBotLoadCLIRecoveryPreservesConnectorSettings(t *testing.T) {
 			if _, err := current.Call(w.ctx, "larkcli_chats", json.RawMessage(`{}`)); err != nil {
 				t.Fatal(err)
 			}
-			_, _ = current.Poll(w.ctx)
+			_, _ = current.(interface {
+				Poll(context.Context) (bool, error)
+			}).Poll(w.ctx) // the connector's Inbox poll (connector/larkcli)
 			raw, _ := os.ReadFile(log)
 			if len(raw) == 0 {
 				t.Fatal("fake CLI was not invoked")
@@ -317,7 +320,7 @@ func TestBotLoadCLIRecoveryPreservesConnectorSettings(t *testing.T) {
 func TestBotLoadManagedCLIRecoverySynchronizes(t *testing.T) {
 	needsLarkModule(t)
 	w := newBotLoadWorld(t, true, false)
-	bin, err := filepath.Abs(filepath.Join("..", "larkcli", "testdata", "fake-lark-cli.sh"))
+	bin, err := filepath.Abs(filepath.Join("..", "modules", "lark", "larkcli", "testdata", "fake-lark-cli.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}

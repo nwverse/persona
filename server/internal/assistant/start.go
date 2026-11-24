@@ -646,7 +646,7 @@ func (s *Service) startConversation(ctx context.Context, p startParams) (proto.S
 }
 
 // Start is assistant.start: a conversation one of the hub's features starts (the inbox's AI twin), or the channels'
-// (feishu_message.go, channels_plugin.go). It is named after its first turn like the app's, unless it is untitled.
+// (the lark module's message.go, channels_plugin.go). It is named after its first turn like the app's, unless it is untitled.
 func (s *Service) Start(ctx context.Context, p StartParams) (proto.Session, error) {
 	if p.Origin == "" || p.Origin == OriginUser {
 		p.Text = prompts.ProtectUserMessage(p.Text)
@@ -1477,6 +1477,9 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	}
 	s.putCacheKeepalive(ctx, machine, sid, p["is_main"] == true, p)
 	putMainCompactWindow(cfg, p)
+	if handled, err := s.larkAgentFollowsCurrentModel(ctx, machine, sid, p, lang); handled {
+		return err
+	}
 	if handled, err := s.logicalSendModel(ctx, machine, sid, p); handled {
 		return err
 	}
@@ -1495,13 +1498,15 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	// not worker Agent task conversations, whose cheaper-tier behavior stays unchanged. The node marks the protected
 	// ones so it can publish and persist the model-recovery marker only for them.
 	p["follows_setting"] = s.isLeader(ctx, sid) || s.isBackground(ctx, sid)
+	inheritedLarkModel, _ := p[larkAgentInheritedModelKey].(bool)
+	delete(p, larkAgentInheritedModelKey)
 	picked := false // a model picked with this message
 	if m, ok := p["model"].(string); ok && strings.TrimSpace(m) != "" {
 		m = strings.TrimSpace(m)
 		if err := checkModelID(m); err != nil {
 			return err
 		}
-		p["model"], picked = m, true
+		p["model"], picked = m, !inheritedLarkModel
 	}
 	l, _ := p["launcher"].(string)
 	if proto.IsExternalLauncher(l) {
@@ -1514,7 +1519,11 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		}
 	}
 	if !asked {
-		if pick, ok := s.modelPickOf(ctx, machine, sid); ok {
+		pick, ok, err := s.readModelPick(ctx, machine, sid)
+		if err != nil {
+			return err // an unreadable pick book is not permission to fall back to the default
+		}
+		if ok {
 			if proto.IsExternalLauncher(pick.Launcher) {
 				if model, _ := p["model"].(string); picked && model != pick.Model {
 					return i18n.Err("external-adapter.scope_required") // change the persisted pick, not a message's model
@@ -1523,16 +1532,6 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			}
 			if !picked {
 				return s.sendOnPick(ctx, machine, sid, p, pick, lang)
-			}
-		}
-		// An unreadable pick book is not permission to switch a conversation that
-		// already runs externally back to the global default.
-		s.modelPicks.mu.Lock()
-		known := s.modelPicks.loaded
-		s.modelPicks.mu.Unlock()
-		if !known {
-			if c, ok := s.session(ctx, machine, sid); ok && proto.IsExternalLauncher(c.Launcher) {
-				return i18n.Err("assistant-model_pick.err_unreadable")
 			}
 		}
 	}

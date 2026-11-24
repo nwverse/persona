@@ -160,6 +160,9 @@ private class RoutedAssistantManagement(
     override suspend fun launcherModels(machineId: String, launcher: String) = api().launcherModels(machineId, launcher)
     override suspend fun setModelPick(session: SessionKey, pick: persona.core.contracts.ModelPick) = api().setModelPick(session, pick)
     override suspend fun clearModelPick(session: SessionKey) = api().clearModelPick(session)
+    override suspend fun conversationSwitchState(session: SessionKey) = api().conversationSwitchState(session)
+    override suspend fun submitConversationSwitch(session: SessionKey, request: ConversationSwitchRequest) =
+        api().submitConversationSwitch(session, request)
     override suspend fun endConversation(session: SessionKey) = api().endConversation(session)
     override suspend fun compactConversation(session: SessionKey) = api().compactConversation(session)
     override suspend fun archiveConversation(session: SessionKey) = api().archiveConversation(session)
