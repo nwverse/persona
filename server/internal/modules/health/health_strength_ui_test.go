@@ -57,7 +57,7 @@ func TestStrengthPagesUndoScopeAndDeleteConfirmation(t *testing.T) {
 	for _, sec := range res.View.Sections {
 		for _, v := range sec.Items {
 			if v.Action != nil && v.Action.ID == "delete:"+e.ID {
-				confirmed = strings.Contains(v.Action.Confirm, e.Name) && strings.Contains(v.Action.Confirm, "1")
+				confirmed = v.Role == "destructive" && strings.Contains(v.Action.Confirm, e.Name) && strings.Contains(v.Action.Confirm, "1")
 			}
 		}
 	}

@@ -86,7 +86,7 @@ func drawStrengthPage(p strengthPageState, es []assistantwire.StrengthExercise, 
 				for _, key := range []string{"rename", "setting", "rule", "delete"} {
 					v := button(key, key+":"+e.ID)
 					if key == "delete" {
-						v.Style = "danger"
+						v.Role = "destructive"
 						v.Action.Confirm = tr("delete_confirm", i18n.Args{"name": e.Name, "count": len(sets)})
 					}
 					items = append(items, v)
