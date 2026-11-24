@@ -61,6 +61,7 @@ func (s *Service) healthyPlace(ctx context.Context, t *PlanTask) bool {
 	}
 	alt, note, moved := s.healthDetour(ctx, m, s.startLauncher(ctx, t.Launcher), func(alt Device) bool {
 		if t.Role == roleLeader && s.isWorkMachine(alt.ID) { // a task leader never lands on a work-trust computer
+			placementOf(ctx).hit(alt.ID, "leader_work_machine", nil)
 			return false
 		}
 		return s.taskDirectoryExists(ctx, alt.ID, rehome(t.Cwd, m, alt))
@@ -72,6 +73,8 @@ func (s *Service) healthyPlace(ctx context.Context, t *PlanTask) bool {
 		if t.Reroute == nil {
 			t.Reroute = &PlanReroute{FromMachine: firstNonEmpty(m.Name, m.ID)}
 		}
+		reroute := *t.Reroute
+		t.Reroute = &reroute
 		t.Reroute.ToMachine = firstNonEmpty(alt.Name, alt.ID)
 		t.Reroute.Reason = note
 		t.Machine, t.Cwd = alt.ID, rehome(t.Cwd, m, alt)
@@ -179,15 +182,29 @@ func (s *Service) taskDirectoryExists(ctx context.Context, machine, dir string) 
 		} `json:"stats"`
 	}
 	if err := s.call(ctx, machine, "fs.stat", map[string]any{"paths": []string{dir}}, &res); err != nil {
+		placementOf(ctx).hit(machine, "directory_unknown", nil)
 		return false
 	}
-	return len(res.Stats) == 1 && res.Stats[0].Path == dir && res.Stats[0].Kind == "dir"
+	exists := len(res.Stats) == 1 && res.Stats[0].Path == dir && res.Stats[0].Kind == "dir"
+	if !exists {
+		placementOf(ctx).hit(machine, "directory_missing", nil)
+	}
+	return exists
 }
 
 // startTaskAgent starts the agent for t on its machine (another when its launcher does not work there: t says which)
 // and answers the machine's id and the session's: the machine it reached is the one the agent is linked to (looking it
 // up again after the start could find another, or none). A failed start counts against the launcher there.
 func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (mid, sid string, err error) {
+	p := newPlacement(t.Machine, "enforce")
+	if prev := t.Placement; prev != nil && prev.TaskID == "" && t.Reroute != nil {
+		// Start on the landing shown on the plan card and retain the preview's candidate evidence.
+		p.Requested, p.ReasonKey = prev.Requested, prev.ReasonKey
+		p.Candidates = prev.cloneCandidates()
+	}
+	p.TaskID = t.TodoID
+	ctx = context.WithValue(ctx, placementKey{}, p)
+	defer func() { s.finishPlanPlacement(ctx, p, t, sid, err) }()
 	t.startedAgent = ""
 	if err := s.checkClaimedGatewayStart(ctx, *t); err != nil {
 		return "", "", err
@@ -251,33 +268,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	t.Model, _ = params["model"].(string)
 	t.Effort, _ = params["effort"].(string)
 	t.Speed, _ = params["speed"].(string)
-	s.healthyPlace(ctx, t)
-	m, ok := s.machineByName(ctx, t.Machine)
-	if !ok {
-		return "", "", fmt.Errorf("unknown machine %q", t.Machine)
-	}
-	// The last look, on the machine it will really start on (a retry, a remedy, a recovered start and a flexible task moved
-	// by the health check all pass here): a task leader never starts on a work-trust computer.
-	if assistantWorkspace(m, t.Cwd) {
-		return "", "", i18n.Err("rpc-errors.agent_assistant_workspace")
-	}
-	if err := s.leaderOnWorkMachine(t, m); err != nil {
-		return "", "", err
-	}
-	if !m.Reachable {
-		return "", "", machineOffline(m.Name)
-	}
-	if err := s.deferGatewayStart(ctx, t, m, own, params, retry); err != nil {
-		return "", "", err
-	}
-	// The resource/direction admission gate (admission.go): fixed tasks are refused here, flexible tasks may have
-	// been moved to a less loaded machine. The claim is stored on the task and held until its agent is linked or the
-	// start fails for good (runPlanTaskStart), so it still counts while metrics and the ledger catch up.
-	release, err := s.admitTaskStart(ctx, t)
-	if err != nil {
-		return "", "", err
-	}
-	t.admissionRelease = release
+	m, err := s.placePlanStart(ctx, t, own, params, retry)
 	defer func() {
 		// A failure before the caller takes ownership of the claim releases it here; the success path keeps it on the
 		// task for runPlanTaskStart to release after linking.
@@ -286,17 +277,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			t.admissionRelease = nil
 		}
 	}()
-	if m.ID != t.Machine { // a flexible reroute inside the gate: every later step must use the machine it landed on
-		m, ok = s.machineByName(ctx, t.Machine)
-		if !ok {
-			return "", "", fmt.Errorf("unknown machine %q", t.Machine)
-		}
-		if err := s.leaderOnWorkMachine(t, m); err != nil {
-			return "", "", err
-		}
-		if !m.Reachable {
-			return "", "", machineOffline(m.Name)
-		}
+	if err != nil {
+		return "", "", err
 	}
 	// On the computer it landed on (a flexible task may have moved): a default it lacks gives way to one it has, a
 	// launcher the plan named that it lacks is refused before any tab opens (#2640). Before the health check below,
@@ -578,10 +560,11 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		if err := s.checkClaimedGatewayStart(ctx, *t); err != nil {
 			return err
 		}
+		bindCtx := context.WithValue(ctx, placementBindKey{}, p)
 		if !t.backendWorkspace() {
-			return s.call(ctx, m.ID, DeviceSessionStart, params, &res)
+			return s.call(bindCtx, m.ID, DeviceSessionStart, params, &res)
 		}
-		return s.startBackendTask(ctx, t, params, &res)
+		return s.startBackendTask(bindCtx, t, params, &res)
 	}
 	sentAt := time.Now()
 	err = start()
@@ -780,6 +763,9 @@ func (s *Service) updatePlanTask(ctx context.Context, planID string, i int, t Pl
 	launch := t.storedLaunch()
 	if err := s.patchPlanTask(ctx, planID, i, func(pt *PlanTask) {
 		pt.Machine, pt.Cwd, pt.Why = t.Machine, t.Cwd, t.Why
+		if t.Placement != nil {
+			pt.Placement = t.Placement
+		}
 		pt.Reroute, pt.Ultracode = t.Reroute, launch.ultracode
 		pt.Workspace, pt.WorkspaceResolved, pt.MachinePolicy = t.Workspace, t.WorkspaceResolved, t.MachinePolicy
 		pt.WorkspaceInferred, pt.ReservedTodoID = t.WorkspaceInferred, t.ReservedTodoID
