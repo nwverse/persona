@@ -12,7 +12,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/conversationlog"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -205,17 +204,17 @@ func (r *machineFallbackTestRig) setOnline(machine string, on bool) {
 func (r *machineFallbackTestRig) seedHistory(t *testing.T, machine, sid, summary string) {
 	t.Helper()
 	ctx := context.Background()
-	tail := 2
 	err := r.d.PutConversationPage(ctx, db.ConversationPage{
-		MachineID: machine,
-		SessionID: sid,
-		History:   "pg-gen-" + sid,
-		Revision:  100,
-		TailSeq:   &tail,
-		Coverage:  []conversationlog.Range{{From: 0, Through: 2}},
-		Items: []conversationlog.Item{
-			{Complete: true, Item: proto.Item{ID: "u1", Seq: 1, Kind: proto.KindText, Role: "user", Text: "remember project alpha"}},
-			{Complete: true, Item: proto.Item{ID: "a1", Seq: 2, Kind: proto.KindText, Role: "assistant", Text: "noted project alpha"}},
+		MachineID:  machine,
+		SessionID:  sid,
+		History:    "pg-gen-" + sid,
+		Revision:   100,
+		FromSeq:    0,
+		ThroughSeq: 2,
+		Tail:       true,
+		Items: []proto.Item{
+			{ID: "u1", Seq: 1, Kind: proto.KindText, Role: "user", Text: "remember project alpha"},
+			{ID: "a1", Seq: 2, Kind: proto.KindText, Role: "assistant", Text: "noted project alpha"},
 		},
 	})
 	if err != nil {
@@ -265,8 +264,8 @@ func machineFallbackBatches(t *testing.T, s *Service) []conversationSwitchBatch 
 	return out
 }
 
-// 1. Primary offline past threshold -> automatic failover of main chat using Postgres history + summary,
-//    draining queued undelivered message so user continues chatting without interruption.
+//  1. Primary offline past threshold -> automatic failover of main chat using Postgres history + summary,
+//     draining queued undelivered message so user continues chatting without interruption.
 func TestMachineFallbackMovesMainWhenOfflinePastThresholdAndDrainsUndelivered(t *testing.T) {
 	r := newMachineFallbackRig(t)
 	ctx := context.Background()
@@ -339,8 +338,8 @@ func TestMachineFallbackMovesMainWhenOfflinePastThresholdAndDrainsUndelivered(t 
 	}
 }
 
-// 2. Direction leader failover skips machines without SupervisionPolicy, preserves supervision ownership,
-//    and drains queued relay supervision messages.
+//  2. Direction leader failover skips machines without SupervisionPolicy, preserves supervision ownership,
+//     and drains queued relay supervision messages.
 func TestMachineFallbackMovesLeaderPreservesSupervisionAndDrainsRelay(t *testing.T) {
 	r := newMachineFallbackRig(t)
 	ctx := context.Background()
@@ -404,7 +403,7 @@ func TestMachineFallbackMovesLeaderPreservesSupervisionAndDrainsRelay(t *testing
 	if !r.s.isLeader(ctx, "leader-1") {
 		t.Fatalf("leader-1 lost leader status after failover")
 	}
-	todo := Todo{ID: "todo_42", Supervision: &TodoSupervision{Supervisor: "leader-1"}}
+	todo := Todo{ID: "todo_42", Supervision: &Supervision{Supervisor: "leader-1"}}
 	if got := r.s.effectiveSupervisor(ctx, cfg, todo); got != "leader-1" {
 		t.Fatalf("expected effectiveSupervisor leader-1, got %q", got)
 	}
@@ -424,8 +423,8 @@ func TestMachineFallbackMovesLeaderPreservesSupervisionAndDrainsRelay(t *testing
 	}
 }
 
-// 3. When the original computer reconnects, there is no split-brain: the retired segment is fenced
-//    and closed via ClosePending, and manual user changes (epoch bump) are never overwritten.
+//  3. When the original computer reconnects, there is no split-brain: the retired segment is fenced
+//     and closed via ClosePending, and manual user changes (epoch bump) are never overwritten.
 func TestMachineFallbackReconnectNoSplitBrainAndEpochFenceProtectsManualChange(t *testing.T) {
 	r := newMachineFallbackRig(t)
 	ctx := context.Background()
@@ -566,8 +565,8 @@ func TestMachineFallbackBelowThresholdDoesNotMove(t *testing.T) {
 	}
 }
 
-// 6. Unbound default scheduled routines fall back to the first eligible online backup machine past threshold,
-//    while explicitly pinned routines (ExecutionMachineID or Cwd) stay pinned.
+//  6. Unbound default scheduled routines fall back to the first eligible online backup machine past threshold,
+//     while explicitly pinned routines (ExecutionMachineID or Cwd) stay pinned.
 func TestMachineFallbackScheduleRoutineFallback(t *testing.T) {
 	r := newMachineFallbackRig(t)
 	ctx := context.Background()
