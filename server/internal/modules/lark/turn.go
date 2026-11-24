@@ -35,7 +35,7 @@ func (f feishuSink) progress(ctx context.Context, r *channel.Run, took time.Dura
 	s := f.s
 	ctx = s.sendAs(ctx, "progress", r.MachineID, r.SessionID)
 	if s.runExt(r, readChatKey) != "" {
-		return // a /read shows no progress in its group: the reaction says it is being worked on (feishu_read.go)
+		return // a /read shows no progress in its group: the reaction says it is being worked on (the core's feishu_read.go)
 	}
 	if s.runExt(r, "chat") != "" {
 		// The topic's card keeps its own immediate lifecycle; the native API must not hold it back.
@@ -59,7 +59,7 @@ func (f feishuSink) progress(ctx context.Context, r *channel.Run, took time.Dura
 		if sum == prog.sentCard {
 			return // nothing new
 		}
-		if f.kitProgress(ctx, r, prog, c) { // a card entity: written into, its words streamed (feishu_stream.go)
+		if f.kitProgress(ctx, r, prog, c) { // a card entity: written into, its words streamed (stream.go)
 			prog.sentCard = sum
 			return
 		}
@@ -175,14 +175,14 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 		steps = append([]string{}, all...)
 	}
 	// A /read's answer is read by the whole group: the process (commands, paths on the computer) and the web link to
-	// the conversation stay out of it (feishu_read.go).
+	// the conversation stay out of it (the core's feishu_read.go).
 	read := readRun(r.Ext)
 	if read {
 		steps = nil
 	}
 	card := r.Ext["card"]
 	if card != "" {
-		// Its last write is as a message: the card stops streaming first (the run's lock is held, feishu_stream.go).
+		// Its last write is as a message: the card stops streaming first (the run's lock is held, stream.go).
 		var k *cardKit
 		if prog := s.live(r.ID); prog != nil {
 			k = prog.kit

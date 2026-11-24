@@ -269,3 +269,12 @@ func (h larkHost) SaveRuns() {
 	defer c.mu.Unlock()
 	h.s.saveChannelStateLocked()
 }
+
+// larkWait waits, at most d, for the lark module's background work (the Feishu agent messages' workers) to end.
+func (s *Service) larkWait(d time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+	if err := s.larkModule().Wait(ctx); err != nil {
+		s.logf("lark: background work still running at the end: %v", err)
+	}
+}

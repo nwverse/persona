@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// New private-chat turns show in the progress card (feishu_turn.go). A run that already has an agent message keeps
+// New private-chat turns show in the progress card (turn.go). A run that already has an agent message keeps
 // using it and sends its answer as a card of its own. Topic runs with topic_cot on also open a native agent message
 // (feishubot's message_cot) at their first thinking or tool event, but keep the progress card beside it for elapsed
 // time, current work, the answer and the web link. When creation or an append fails, the card's folded panel takes over.

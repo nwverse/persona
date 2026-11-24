@@ -221,6 +221,7 @@ func (b *BusHub) Serve(ctx context.Context, svc *Service) error {
 	b.svc, b.ctx = svc, ctx
 	b.mu.Unlock()
 	defer svc.kbEnd()
+	defer svc.larkWait(2 * time.Second) // the Feishu agent messages' workers end with the connection's last calls
 	go b.takeEvents(ctx)
 	go b.runOutbox(ctx) // what was made while the hub was away, once it is back (outbox.go)
 	return b.client.Run(ctx)

@@ -45,3 +45,19 @@ func TestFeishuEndCardLocales(t *testing.T) {
 		}
 	}
 }
+
+// Each piece of a /read answer has a key of its own, and a held run's later turn other keys.
+func TestReadAnswerKey(t *testing.T) {
+	turn := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	a := readAnswerKey("run1", turn, 0)
+	if a != readAnswerKey("run1", turn, 0) || len(a) > 46 || !strings.HasPrefix(a, "rd-") {
+		t.Fatalf("key %q", a)
+	}
+	seen := map[string]bool{a: true}
+	for _, k := range []string{readAnswerKey("run1", turn, 1), readAnswerKey("run1", turn.Add(time.Minute), 0), readAnswerKey("run2", turn, 0)} {
+		if seen[k] {
+			t.Fatalf("key %q repeats", k)
+		}
+		seen[k] = true
+	}
+}

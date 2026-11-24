@@ -114,7 +114,7 @@ func progressCard(l i18n.Lang, label string, took time.Duration, steps []string,
 		}
 		c.Note(strings.Join(parts, " · "))
 	}
-	// What the conversation is writing now, in an element of its own: a card entity streams it (feishu_stream.go).
+	// What the conversation is writing now, in an element of its own: a card entity streams it (the lark module's stream.go).
 	c.MarkdownID(progressLiveID, progressLive(live))
 	// The button is the /stop command on this run's conversation; it is only on the card of a run still in flight.
 	if t.Kind != "" {
