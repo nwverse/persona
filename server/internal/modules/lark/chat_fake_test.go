@@ -257,6 +257,16 @@ func (s *Service) StopConversation(_ context.Context, f assistantwire.FeishuFeat
 	return "success", "stopped " + t.Kind + " " + t.SessionID
 }
 
+func (s *Service) InterruptConversation(_ context.Context, rt assistantwire.ChatResolved) (string, string) {
+	d := s.ch()
+	s.tmu.Lock()
+	d.stopped = append(d.stopped, assistantwire.ChatTarget{MachineID: rt.Machine, SessionID: rt.Session.SessionID})
+	s.tmu.Unlock()
+	return "success", "stopped " + rt.Session.SessionID
+}
+
+func (s *Service) TurnPending(string, string) bool { return false }
+
 func (s *Service) StopProgressCard(_ context.Context, _ assistantwire.FeishuFeatures, t assistantwire.ChatTarget, _ string) (string, string) {
 	return "info", "expired"
 }

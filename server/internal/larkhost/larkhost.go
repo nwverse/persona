@@ -284,6 +284,8 @@ type Host interface {
 	// a conversation or an agent from, what a /status card shows, the standing board, and the main conversation's
 	// model.
 	StopConversation(ctx context.Context, f assistantwire.FeishuFeatures, t assistantwire.ChatTarget) (kind, message string)
+	InterruptConversation(ctx context.Context, rt assistantwire.ChatResolved) (kind, message string)
+	TurnPending(machine, session string) bool
 	StopProgressCard(ctx context.Context, f assistantwire.FeishuFeatures, t assistantwire.ChatTarget, messageID string) (kind, message string)
 	Conversations(ctx context.Context) (list []proto.Session, main string)
 	ConversationName(sess proto.Session, main string) string
