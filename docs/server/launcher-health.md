@@ -123,7 +123,7 @@ Nothing is ever taken away by a failure. "No new information" means the fold cha
 | `upstream` | Explicit upstream account-pool exhaustion (`no eligible upstream`, `no other eligible account`, `upstream attempt budget`, #13372), matched before `model_route` even when the message also names the requested model | None, however many in a row: nothing on the computer is broken |
 | `model_route` | `Bare Claude model name`, `cannot be routed`, `no account match`, model does not exist / not supported | Repair Agent (reconfigure the gateway's model) |
 | `auth` | 401 / 403, `invalid … api key`, `authentication_error`, `Not logged in`, expired token | Repair Agent (reconfigure the gateway's key) |
-| `cli_outdated` | `unknown option`, asks to upgrade / version too old / no longer supported | First the node upgrades itself (`claude update`); if that fails, a repair Agent |
+| `cli_outdated` | `unknown option`, a JSON-RPC `Method not found` (a CLI older than a method its runtime calls), asks to upgrade / version too old / no longer supported | First the node upgrades itself (`claude update`); if that fails, a repair Agent |
 | `timeout` | `context deadline exceeded`, no answer within 150 seconds (twice: a timed-out check is asked again at once) | Counts only after two in a row; handed to a repair Agent |
 | `other` | Everything else | Same: repaired only after two in a row |
 | `not_in_terminal` | A start's new terminal tab could not run the launcher or its claude (`launcher_missing` / `claude_missing` with `where: "terminal"`, #1642, `docs/integrations/launchers.md` "The terminal's shell is another environment") | None: `blocked` at once, the reason says to define the launcher where the terminal's shell reads it or add it as a model provider |

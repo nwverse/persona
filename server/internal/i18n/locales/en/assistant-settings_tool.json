@@ -122,5 +122,10 @@
   "change_supervision_batch_minutes": "Routine supervision batching per recipient: {before} → {after} minutes (0 keeps the existing cadence)",
   "bad_supervision_batch_minutes": "Choose a whole number from 0 to 1440 minutes.",
   "supervision_batch_minutes_unchanged": "The routine supervision batch interval is unchanged.",
-  "supervision_batch_minutes_saved": "Routine supervision batch interval saved as {value} minutes."
+  "supervision_batch_minutes_saved": "Routine supervision batch interval saved as {value} minutes.",
+  "title_limit_fallbacks": "Backup launchers for a usage limit",
+  "change_limit_fallbacks": "Backup launchers when a usage limit stops a conversation: {before} → {after}",
+  "bad_limit_fallbacks": "Give a list of at most 8 launcher names, first choice first; an empty list turns it off.",
+  "limit_fallbacks_unchanged": "The backup launchers are unchanged.",
+  "limit_fallbacks_saved": "Backup launchers saved: {value}. They apply from the next usage limit."
 }
