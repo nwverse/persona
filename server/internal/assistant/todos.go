@@ -16,6 +16,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistant/todo/projection"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
@@ -113,6 +114,9 @@ type Todo struct {
 	// Audience: optional routing hint distinguishing human-facing deliverables ("human") from autonomous engineering
 	// tasks ("autonomous"); omitted when unset (#14619).
 	Audience string `json:"audience,omitempty"`
+	// DirectionID: optional organizational direction membership, decoupled from runtime supervision.supervisor and
+	// origin; omitted when unset (#14660).
+	DirectionID string `json:"direction_id,omitempty"`
 	// When it is due (DueAt a moment, DueDate a day "2006-01-02" in the user's time zone; at most one), when the phone
 	// is reminded of it and whether it was, and its priority ("" normal, high, low): #1683, todo_plan.go. Clients that do
 	// not know them show the todo as ever.
@@ -600,13 +604,13 @@ func (s *Service) createTodo(ctx context.Context, title, notes, origin, planID s
 
 // createTaskTodo is createTodo for a plan's task, in the knowledge-base project the task names (a slug; "" for none).
 func (s *Service) createTaskTodo(ctx context.Context, title, notes, origin, planID, project string) (Todo, error) {
-	return s.createTaskTodoAs(ctx, "todo_"+randomHex(8), title, notes, origin, planID, project, "", "")
+	return s.createTaskTodoAs(ctx, "todo_"+randomHex(8), title, notes, origin, planID, project, "", "", "")
 }
 
-func (s *Service) createTaskTodoAs(ctx context.Context, id, title, notes, origin, planID, project, inboxItem, audience string) (Todo, error) {
+func (s *Service) createTaskTodoAs(ctx context.Context, id, title, notes, origin, planID, project, inboxItem, audience, directionID string) (Todo, error) {
 	now := time.Now().UTC()
 	return s.insertTodo(ctx, db.TodoRow{ID: id, Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now,
-		Origin: origin, PlanID: planID, Quiet: s.quietTask(ctx, origin), Project: project, InboxItem: inboxItem, Audience: audience})
+		Origin: origin, PlanID: planID, Quiet: s.quietTask(ctx, origin), Project: project, InboxItem: inboxItem, Audience: audience, DirectionID: strings.TrimSpace(directionID)})
 }
 
 // newTodo is createTodo, quiet or not as given (a launcher repair's has no conversation and is quiet,
@@ -662,6 +666,7 @@ func (s *Service) putNewTodo(ctx context.Context, row db.TodoRow, bindings ...*r
 	if err := db.ValidateTodoAudience(row.Audience); err != nil {
 		return Todo{}, err
 	}
+	row.DirectionID = strings.TrimSpace(row.DirectionID)
 	if len(bindings) > 0 && bindings[0] != nil {
 		st, ok := s.store().(todoRepositoryStore)
 		if !ok {
@@ -1030,16 +1035,21 @@ func (s *Service) todoRoutes() {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
 			return
 		}
-		if r.Header.Get(RoleHeader) == roleExtension {
+		isExtension := r.Header.Get(RoleHeader) == roleExtension
+		if isExtension {
 			list = s.extensionRows(r.Context(), list, p)
 		} else if !paged {
 			s.tagTodoRevision(w, writes, p)
 		}
+		var sharedBlockers []projection.SharedBlocker
+		if !isExtension {
+			sharedBlockers = p.sharedBlockers()
+		}
 		if paged {
-			writeTodoPage(w, list, p, limit, after)
+			writeTodoPage(w, list, p, sharedBlockers, limit, after)
 			return
 		}
-		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts()})
+		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts(), SharedBlockers: sharedBlockers})
 	})
 	s.handle("GET /api/v1/todos/revision", s.todoRevisionRead)
 

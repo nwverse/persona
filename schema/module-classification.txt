@@ -165,6 +165,8 @@ go server/internal/memtrim core
 go server/internal/modapi core
 go server/internal/modelhttp core
 go server/internal/modelretry core
+go server/internal/moduleswitch core
+go server/internal/moduleswitch/switchtest core
 go server/internal/netaddr core
 go server/internal/netproxy core
 go server/internal/netshape core

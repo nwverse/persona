@@ -211,6 +211,8 @@ export interface TodoAsk {
   outcome?: "done" | "cannot" | "decide" | string;
   verdict: string;
   recommend?: string;
+  /** Direct evidence/PR/MR URL when present and not merely the to-do's own page (#14659). */
+  link?: string;
   asked_at: string;
   /** An owner-only terminal action on this task. Older decision cards can still name it as an option. */
   resume_terminal?: { machine_id: string; session_id: string };

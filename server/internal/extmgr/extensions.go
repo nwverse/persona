@@ -19,6 +19,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/builtinext"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
+
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/connector"
@@ -241,13 +244,21 @@ type extensions struct {
 	voiceGatewaySent string
 	// hubRelay is how a relayed manager's extensions reach the hub's API (hub_relay.go).
 	hubRelay hubRelay
+	// moduleSwitch is the manager's run-time module switch (Options.Modules), given when it made the extensions.
+	moduleSwitch moduleswitch.Set
 }
 
 // newExtensions is the registry with hub.json's plugins: a bad entry is logged and skipped. Built-in and installed ones
 // join when the hub attaches its database (attachExtensions).
 func newExtensions(dir string, cfgs []ExtensionConfig, logf func(string, ...any)) *extensions {
+	return newExtensionsWith(dir, cfgs, logf, moduleswitch.Set{})
+}
+
+// newExtensionsWith is newExtensions under the manager's run-time module switch: a hub.json entry that runs a
+// switched-off module's program is not taken over by its built-in extension.
+func newExtensionsWith(dir string, cfgs []ExtensionConfig, logf func(string, ...any), modules moduleswitch.Set) *extensions {
 	root := extensionsRoot(dir, logf)
-	ps := &extensions{dir: dir, root: root, reg: extension.NewRegistry(root, nil, nil, 0), journal: logf, byID: map[string]*hubExtension{},
+	ps := &extensions{moduleSwitch: modules, dir: dir, root: root, reg: extension.NewRegistry(root, nil, nil, 0), journal: logf, byID: map[string]*hubExtension{},
 		stats: newExtensionMetrics(), resolves: checkLimiter{most: secretResolvesMost, window: secretResolveWindow}}
 	// The hub's lines about an extension go into its log too (the host's own go there through the spec's Observe).
 	ps.logf = func(format string, args ...any) {
@@ -267,7 +278,7 @@ func newExtensions(dir string, cfgs []ExtensionConfig, logf func(string, ...any)
 		case ps.reg.Get(c.ID) != nil || ps.voice != nil && ps.voice.ID == c.ID:
 			logf("plugin %q: skipped (duplicate id)", c.ID)
 			continue
-		case ps.voice == nil && takesOverVoice(c):
+		case ps.voice == nil && takesOverVoice(ps.modules(), c):
 			// `personad voice`: the built-in voice extension under this id (attachExtensions, voice_extension.go).
 			taken := c
 			ps.voice, socket, kind = &taken, filepath.Join(ps.root, c.ID+".sock"), "voice"
@@ -458,7 +469,7 @@ func (s hubSealer) Open(sealed string) (string, error) { return s.h.openKey(seal
 // registers the connectors plugins contribute (startConnectors calls it between the hub's own connectors and Start).
 func (h *Manager) attachExtensions(ctx context.Context) {
 	if h.extensions == nil {
-		h.extensions = newExtensions(h.dataDirOrTemp(), nil, h.logf)
+		h.extensions = newExtensionsWith(h.dataDirOrTemp(), nil, h.logf, h.modules())
 	}
 	ps := h.extensions
 	ps.h, ps.ctx = h, ctx
@@ -953,6 +964,9 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		if c.Command != "" {
 			command := expandHome(c.Command)
 			if extension.IsBuiltinCommand(command) {
+				if len(c.Args) > 0 && builtinext.ProgramOff(ps.modules(), c.Args[0]) {
+					return s, errModuleProgramOff(c.Args[0])
+				}
 				command = selfExecutable()
 			}
 			s.Command, s.Args, s.Dir = command, c.Args, expandHome(c.Dir)
@@ -1005,6 +1019,9 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 				return s, i18n.Err("hub-extensions.no_program", i18n.Args{"platform": runtime.GOOS + "-" + runtime.GOARCH})
 			}
 			if extension.IsBuiltinCommand(cmd) {
+				if len(rt.Args) > 0 && builtinext.ProgramOff(ps.modules(), rt.Args[0]) {
+					return s, errModuleProgramOff(rt.Args[0])
+				}
 				s.Command = selfExecutable()
 			} else {
 				s.Command = filepath.Join(p.Dir, filepath.FromSlash(cmd))
@@ -1538,4 +1555,10 @@ func (ps *extensions) connectorSwitched(ctx context.Context, id string, on bool)
 	}
 	ps.logf("plugin %s: restarted for its connector %s switched %s", owner, id, state)
 	ps.apply(ctx, owner)
+}
+
+// errModuleProgramOff: an extension runs `personad <name>`, a module's program, and the manager's `modules` setting has
+// that module switched off (builtinext.ProgramOff), so it does not start, as in a build without the module.
+func errModuleProgramOff(name string) error {
+	return i18n.Err("hub-extensions.module_program_off", i18n.Args{"name": name})
 }

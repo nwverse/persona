@@ -338,8 +338,12 @@ func (h *Manager) restartBotLocked() {
 		b.api = nil
 		return
 	}
-	if !botport.Available() { // a build without the lark module (persona_without_lark): the bot stays off
-		h.logf("bots: %v", botport.ErrUnavailable)
+	if !botport.Available(h.modules()) { // a build without the lark module (persona_without_lark), or switched off: the bot stays off
+		if botport.InBuild() {
+			h.logf("bots: the lark module is switched off in the modules setting")
+		} else {
+			h.logf("bots: %v", botport.ErrUnavailable)
+		}
 		b.api = nil
 		return
 	}
@@ -824,7 +828,7 @@ func (h *Manager) applyBotUpdateWithReceipt(ctx context.Context, enabled *bool, 
 			if plain == "" {
 				return botConfigureReceipt{}, i18n.Err("hub-bots.needs_secret")
 			}
-			if !botport.Available() {
+			if !botport.Available(h.modules()) {
 				return botConfigureReceipt{}, botport.ErrUnavailable
 			}
 			vctx, cancel := context.WithTimeout(ctx, 15*time.Second)
