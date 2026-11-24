@@ -58,9 +58,9 @@ async function fixture(t, steps, summary, options = {}) {
     const old = new Date(Date.now() - 30 * 86400_000)
     utimesSync(transcript, old, old)
   }
-  if (options.internal) {
+  if (options.internal || options.meta) {
     mkdirSync(join(agyDir, 'cache'), { recursive: true })
-    writeFileSync(join(agyDir, 'cache', 'conversation_metadata.json'), JSON.stringify({ conversations: { [ID]: { is_internal: true } } }))
+    writeFileSync(join(agyDir, 'cache', 'conversation_metadata.json'), JSON.stringify({ conversations: { [ID]: options.meta ?? { is_internal: true } } }))
   }
   const summaryFile = join(agyDir, 'conversation_summaries.db')
   let db
@@ -103,6 +103,18 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   }
   return { node, write, state, refresh, summaryFile, database: () => db, logs: lines }
 }
+
+test('untitled conversations take their title from the first line of the preview', { timeout: 15_000 }, async (t) => {
+  const first = 'Draft the release checklist for the sample project and list every open question'
+  const Preview = `<USER_REQUEST>\n\n  ${first}  \nSecond line\n</USER_REQUEST>`
+  const { node } = await fixture(t, [step('PLANNER_RESPONSE', { content: 'Done' })], idle, { meta: { summary: { Title: '', Preview } } })
+  assert.equal(node.last('runtime.sessions').sessions[0].title, first.slice(0, 60).trimEnd() + '\u2026')
+})
+
+test('a short preview is the whole title of an untitled conversation', { timeout: 15_000 }, async (t) => {
+  const { node } = await fixture(t, [step('PLANNER_RESPONSE', { content: 'Done' })], idle, { meta: { summary: { Title: '', Preview: 'Summarize brief.md' } } })
+  assert.equal(node.last('runtime.sessions').sessions[0].title, 'Summarize brief.md')
+})
 
 test('runtime inventory follows an external tool turn through its final reply', { timeout: 15_000 }, async (t) => {
   const created_at = new Date().toISOString()
