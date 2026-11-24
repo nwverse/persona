@@ -3,7 +3,7 @@
 // the core (Host), each in terms both sides name (the standard library, the contracts and the leaf libraries). The
 // composition root (internal/modules/all) provides the module in the init of its file, under the module's build
 // constraint; without it nothing is provided and the core runs with no Health intake: no intake routes, no
-// health_intake tool or capability, no water reminders.
+// health_intake tool, no health_intake or health_items capability, no water reminders.
 //
 // The module is provided while the program initializes, before main runs, and only read afterwards.
 package healthhost
@@ -28,6 +28,8 @@ const Tool = "health_intake"
 
 // Layer is what the core asks of the Health module.
 type Layer interface {
+	// Items returns the owner's added health items in order, without saving defaults.
+	Items(ctx context.Context) ([]string, error)
 	// Routes registers the module's HTTP routes through handle, in their order.
 	Routes(handle func(pattern string, fn http.HandlerFunc))
 	// Tool runs the health_intake tool; the core has checked that the caller is a Health conversation.

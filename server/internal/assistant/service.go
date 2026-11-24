@@ -455,6 +455,7 @@ func New(o Options) *Service {
 	s.startPresetRoutes()
 	s.startDefaultsRoutes() // start_defaults_routes.go
 	s.directionTreeRoutes()
+	s.organizationSnapshotRoutes()
 	s.directionSessionRoutes()
 	s.routeRoutes()
 	s.agentRouteRoutes()

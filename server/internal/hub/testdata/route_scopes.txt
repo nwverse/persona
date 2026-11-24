@@ -167,10 +167,12 @@ assistant.entries.read GET /api/v1/assistant/entries
 -                    GET /api/v1/assistant/followups
 -                    GET /api/v1/assistant/health/intake
 -                    GET /api/v1/assistant/health/intake/changes
+-                    GET /api/v1/assistant/health/items
 -                    GET /api/v1/assistant/history
 leaders.read         GET /api/v1/assistant/leaders
 -                    GET /api/v1/assistant/memory
 -                    GET /api/v1/assistant/north-star
+-                    GET /api/v1/assistant/organization/snapshot
 -                    GET /api/v1/assistant/places
 -                    GET /api/v1/assistant/readiness
 assistant.ask        GET /api/v1/assistant/reporters
@@ -770,6 +772,7 @@ dispatch.guard       PUT /api/v1/assistant/dispatch-guard
 assistant.dispatch_policy PUT /api/v1/assistant/dispatch-policy
 -                    PUT /api/v1/assistant/extension-trust/{id}
 -                    PUT /api/v1/assistant/feishu/companions
+-                    PUT /api/v1/assistant/health/items
 -                    PUT /api/v1/assistant/history
 -                    PUT /api/v1/assistant/memory/{name}
 -                    PUT /api/v1/assistant/places/{id}
