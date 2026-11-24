@@ -423,3 +423,28 @@ func TestManagedAgyLauncherPaneStartAndResumeCarryNoSecret(t *testing.T) {
 		}
 	}
 }
+
+func TestCustomAntigravityRuntimeCoexistsWithBuiltinAgy(t *testing.T) {
+	n, hub := runtimeNode(t)
+	assistantHub(hub)
+
+	builtinHello := assistantRuntimeHello()
+	builtinHello["runtime"], builtinHello["agent"], builtinHello["launcher"], builtinHello["instance"] = "agy", "agy", "agy", "builtin-1"
+	_ = dialRuntime(t, n, builtinHello)
+
+	customHello := assistantRuntimeHello()
+	customHello["runtime"], customHello["agent"], customHello["launcher"], customHello["instance"] = "agy-wrap", "agy", "agy-wrap", "custom-1"
+	customHello["name"] = "Antigravity Wrapped"
+	customHello["launchers"] = []map[string]any{{"name": "agy-wrap", "agent": "agy", "display_name": "Antigravity Wrapped"}}
+	_ = dialRuntime(t, n, customHello)
+
+	if _, external := n.runtimeHost.agyPeers("builtin-1"); external {
+		t.Fatal("custom runtime id agy-wrap must not be treated as an external agy peer that makes built-in yield")
+	}
+	if h := n.assistantRuntime("agy"); h == nil || h.hello.Runtime != "agy" {
+		t.Fatalf("assistantRuntime(agy) = %v, want agy runtime", h)
+	}
+	if h := n.assistantRuntime("agy-wrap"); h == nil || h.hello.Runtime != "agy-wrap" {
+		t.Fatalf("assistantRuntime(agy-wrap) = %v, want agy-wrap runtime", h)
+	}
+}

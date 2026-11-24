@@ -353,7 +353,15 @@ class LiveLog:
             self.fail(category)
         finally:
             self.process.stdout.close()
-            self.exit_code = self.process.poll()
+            # EOF means the writer closed stdout, not that waitpid has already
+            # reaped the command. Preserve the completed wait status so a quick
+            # nonzero exit cannot later be mistaken for a clean empty capture.
+            try:
+                self.exit_code = self.process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                # stop() retains its bounded terminate/kill fallback when the
+                # command closes stdout but keeps running.
+                self.exit_code = None
 
     def drain_stderr(self):
         try:
@@ -388,6 +396,11 @@ class LiveLog:
         if self.process is None or self.thread is None or self.stderr_thread is None:
             return
         if self.pre_stop_code is None:
+            self.pre_stop_code = self.process.poll()
+        if self.pre_stop_code is None and not self.thread.is_alive():
+            # A reader that already observed EOF may still be waiting briefly
+            # for the process's final wait status. It is not a stop-induced
+            # termination and must not turn a real command failure into success.
             self.pre_stop_code = self.process.poll()
         self.stopped = True
         if self.reaper is not None and self.reaper.poll() is None:
