@@ -26,8 +26,10 @@ func TestStartCardLateFailureKeepsNewerSlot(t *testing.T) {
 	mid := "om_card1"
 
 	s.setLarkTiming("start_card_window", 0) // both presses are past the window, so the second press re-stamps the slot
+	now := time.Unix(1000, 0)
+	s.ch().now = func() time.Time { return now } // the chat's clock: the second press comes a moment later
 	_, first := c.startCardPressed(mid)
-	time.Sleep(time.Millisecond)
+	now = now.Add(time.Millisecond)
 	if blocked, second := c.startCardPressed(mid); blocked || !second.After(first) {
 		t.Fatalf("second press after the window: blocked=%v second=%v first=%v, want it to take a fresh slot", blocked, second, first)
 	}
