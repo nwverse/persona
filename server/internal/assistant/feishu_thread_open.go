@@ -200,28 +200,6 @@ func (s *Service) openTopicTodo(ctx context.Context, ev botcard.MessageEvent, st
 	}
 }
 
-// openTarget is who takes a to-do opened from a topic or from elsewhere: the main conversation, which origin is the id
-// of. fail says why not, in the bot's language, "" when it can.
-func (s *Service) openTarget(ctx context.Context, st FeishuStatus) (target botTarget, origin, fail string) {
-	l := s.botLang(ctx)
-	failed := func(err error) string {
-		return i18n.T(l, "assistant-feishu.thread_open_failed", i18n.Args{"error": clip(oneLine(err.Error()), 200)})
-	}
-	target = botTarget{Kind: targetMain}
-	if err := botAllowed(l, st.Features, target); err != nil {
-		return target, "", failed(err)
-	}
-	rt, err := s.resolveBotTarget(ctx, target)
-	if err != nil {
-		return target, "", failed(err)
-	}
-	origin = s.settings(ctx).Main
-	if _, ok := s.session(ctx, rt.machine, origin); origin == "" || rt.isNew || !ok {
-		return target, "", i18n.T(l, "assistant-feishu.thread_open_no_main")
-	}
-	return target, origin, ""
-}
-
 // openTodoIn makes the to-do for the topic, with text (the first words, the command taken off) as its title and notes,
 // and hands the words to the main conversation. Who takes it is worked out before anything is made, and a topic that
 // turns out to be taken (db.ErrThreadTaken) leaves no to-do behind. The first words are not a decision: the to-do is made

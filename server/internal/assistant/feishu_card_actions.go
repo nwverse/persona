@@ -179,10 +179,6 @@ func (s *Service) botCardAction(ctx context.Context, a *botcard.CardAction, acti
 	return toast("info", i18n.T(l, "assistant-feishu_cards.card_expired"))
 }
 
-func toast(kind, text string) *botcard.CardResponse {
-	return &botcard.CardResponse{Toast: &botcard.Toast{Type: kind, Content: text}}
-}
-
 // cardAnswerWait is how long a press waits for its answer to go through before it says "Processing…": the hub has
 // Feishu's 3 seconds, and the press came over the bus.
 var cardAnswerWait = 1500 * time.Millisecond

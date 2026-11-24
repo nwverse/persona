@@ -12,7 +12,6 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
-	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // A message from a group chat's topic (#5279, docs/assistant/todos.md "Chat thread", docs/extensions/bots.md): the bot's chat with the
@@ -23,30 +22,6 @@ import (
 // answering the waiting card or a "Please verify" card, and never the chat's current target. It goes by the topic
 // alone: the to-do bound to {feishu, chat_id, thread_id} (Todo.Thread) takes it as a decision and its agent gets it,
 // and the answer goes back into the same topic. A topic bound to nothing open gets one short hint.
-
-// feishuTopic is the chat and thread a message was said in.
-type feishuTopic struct{ Chat, Thread string }
-
-// target is where what is sent for that topic goes: its chat, as a reply into the thread. The zero topic (nil) is the
-// private chat, where nothing changes.
-func (t *feishuTopic) target() feishuTarget {
-	if t == nil {
-		return feishuTarget{}
-	}
-	return feishuTarget{ChatID: t.Chat, InThread: true}
-}
-
-// runTo is where a run's messages go, from its channel values (Ext): under the owner's "/read" in its group
-// (feishu_read.go), the topic it was asked in, else the private chat.
-func runTo(ext map[string]string) feishuTarget {
-	if readRun(ext) {
-		return feishuTarget{ChatID: ext[readChatKey], InThread: ext[readThreadKey] != "", NoDetour: true, Read: true}
-	}
-	if ext["chat"] == "" || ext["thread"] == "" {
-		return feishuTarget{}
-	}
-	return (&feishuTopic{Chat: ext["chat"], Thread: ext["thread"]}).target()
-}
 
 // threadHintEvery is how often a topic is told again that it is tied to no open to-do.
 const threadHintEvery = 10 * time.Minute
@@ -174,18 +149,6 @@ func (s *Service) threadMessage(ctx context.Context, ev botcard.MessageEvent, st
 	notDelivered(err)
 }
 
-// todoOfThread is the todo th is bound to (open or done), from memory (the todos are loaded).
-func (s *Service) todoOfThread(th TodoThread) (Todo, bool) {
-	s.todos.mu.RLock()
-	defer s.todos.mu.RUnlock()
-	for _, t := range s.todos.todos {
-		if t.Thread != nil && sameThread(*t.Thread, th) {
-			return copyTodoLocked(t), true
-		}
-	}
-	return Todo{}, false
-}
-
 // threadHintDue says whether the topic key is to be told it has no open to-do now: once in threadHintEvery.
 func (s *Service) threadHintDue(key string) bool {
 	b := &s.fbot
@@ -208,53 +171,4 @@ func (s *Service) threadHintDue(key string) bool {
 	}
 	b.hinted[key] = now
 	return true
-}
-
-// threadRoutes are who can get what was said in the topic of open todo t, best first: the agent it has that is running
-// (the one that most needs it, pickTaskAgent; a closed one, offline or interrupted, is not counted), then the
-// conversation that opened it (for a question's to-do, which has none, the conversation that asked: its record,
-// ask_todo.go), then the main conversation. One the bot's switches do not allow, or that is not there,
-// is left out; the error is why none is left (nil when there are routes).
-func (s *Service) threadRoutes(ctx context.Context, t Todo, f FeishuFeatures) ([]botTarget, error) {
-	var tried []botTarget
-	var running []proto.Session
-	for _, a := range s.taskAgents(ctx, t) {
-		if a.Status != proto.StatusOffline && a.Status != proto.StatusInterrupted {
-			running = append(running, a)
-		}
-	}
-	if len(running) > 0 {
-		c := pickTaskAgent(running)
-		tried = append(tried, botTarget{Kind: targetAgent, MachineID: c.MachineID, SessionID: c.SessionID})
-	}
-	if t.Origin != "" {
-		tried = append(tried, botTarget{Kind: targetPersona, SessionID: t.Origin})
-	} else if a, ok := s.askTodoOf(ctx, t.ID); ok {
-		tried = append(tried, botTarget{Kind: targetPersona, SessionID: a.SessionID})
-	}
-	tried = append(tried, botTarget{Kind: targetMain})
-	l := s.botLang(ctx)
-	var out []botTarget
-	var last error
-	for _, c := range tried {
-		if err := botAllowed(l, f, c); err != nil {
-			last = err
-			continue
-		}
-		if c.Kind == targetPersona {
-			// The conversation is looked for: a todo outlives the conversation that opened it.
-			if _, ok := s.session(ctx, s.settings(ctx).MachineID, c.SessionID); !ok {
-				continue
-			}
-		}
-		if _, err := s.resolveBotTarget(ctx, c); err != nil {
-			last = err
-			continue
-		}
-		out = append(out, c)
-	}
-	if len(out) == 0 && last == nil {
-		last = errors.New(i18n.T(l, "assistant-feishu.no_assistant_machine"))
-	}
-	return out, last
 }

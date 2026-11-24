@@ -296,3 +296,7 @@ func (s *Service) companionRoutes() {
 		apierr.WriteJSON(w, map[string]any{"ok": true})
 	})
 }
+
+func toast(kind, text string) *botcard.CardResponse {
+	return &botcard.CardResponse{Toast: &botcard.Toast{Type: kind, Content: text}}
+}

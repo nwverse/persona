@@ -37,16 +37,10 @@ const (
 	readImages  = 20
 	// readDirRoot is where the downloads go on the conversation's computer, one directory per /read message.
 	readDirRoot = "~/.persona/lark-read/"
-
-	readChatKey   = "read_chat"
-	readThreadKey = "read_thread"
 )
 
 // readDirName keeps a message id usable as a directory name in a shell command unquoted.
 var readDirName = lazyre.New(`[^A-Za-z0-9_-]`)
-
-// readRun says a run answers a /read: its answer goes under the message in that group, quietly.
-func readRun(ext map[string]string) bool { return ext[readChatKey] != "" }
 
 // feishuRead takes the owner's "@bot /read …" from a group chat (FeishuFromRead): the hub's checks again, then the
 // request goes to the main conversation as a run that answers under the message. What keeps it from going is said
