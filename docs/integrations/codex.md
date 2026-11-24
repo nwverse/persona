@@ -384,6 +384,9 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
 - **Match this request**: startup is synchronous. The node waits for the Codex thread to appear before replying, and returns that thread's session, so the App opens the actual Agents entry,
   not a separate "Starting" placeholder later replaced by another. Match a rollout in this directory started after launch (`session_meta` timestamp) whose first user message exactly matches what was sent.
   During this wait `codexStarting` reserves the pane for this explicit start. Discovery leaves the pane for the start to identify.
+  The new tab first forgets every binding of its pane id, the node's and the pane an older session's record keeps (`forgetPane`, for every start's new
+  tab): herdr numbers its workspaces again after its server restarts, so the id can be a closed tab's, and that session's binding, which the hub hands
+  back, was taken for the pane's session until the thread was known. It was listed as this Codex, then left behind as an extra offline Codex row (#14682).
   Answer Codex's dialogs according to the user's intent: trust the directory (the user selected it), skip update prompts.
   The screen is read as `visible` (the blank rows under it left out): 0.167 draws its trust dialog from the top of the pane, and the last 40 `recent` rows of a 51-row pane were all blank (#2351).
   The trust dialog is known by its question asking about trust, the option by what it says ("Trust and continue", "Yes, continue"), not by its number or the other option
