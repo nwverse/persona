@@ -191,8 +191,10 @@ export struct ComputerScreenPage {
   }
 
   @Monitor('screen.videoFailed') videoFailureChanged(): void {
-    if (this.screen.videoFailed && this.isVisible()) this.getUIContext().getPromptAction()
-      .showToast({ message: tr('computer_screen_video_fallback') });
+    if (!this.screen.videoFailed || !this.isVisible()) return;
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: tr('computer_screen_video_fallback') });
+    } catch (_) { /* The toolbar still offers Retry or Stop. */ }
   }
 
   private open(): void {
