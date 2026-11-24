@@ -318,11 +318,11 @@ func TestTodosV2AudienceLosslessRollback(t *testing.T) {
 		t.Fatalf("counts changed after re-enable: got=%v want=%v", reEnabledCounts, onCounts)
 	}
 	wantAudience := map[string]string{
-		legacyID:       "",
-		mcpCleared.ID:  "",
-		httpHumanID:    db.AudienceHuman,
-		mcpAuto.ID:     db.AudienceAutonomous,
-		plannedTodo.ID: db.AudienceAutonomous,
+		legacyID:        "",
+		mcpCleared.ID:   "",
+		httpHumanID:     db.AudienceHuman,
+		mcpAuto.ID:      db.AudienceAutonomous,
+		plannedTodo.ID:  db.AudienceAutonomous,
 	}
 	for id, want := range wantAudience {
 		td, ok := s.todoNow(id)
