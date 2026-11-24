@@ -392,11 +392,14 @@ func (c *outsideChecks) adapterDecls() {
 		}
 		tps := typeParams(fd.decl)
 		for _, p := range params(fd.decl.Type.Params) {
-			for _, out := range c.handedBack(p, tps) {
+			for _, out := range c.handedBack(fd.file, p, tps) {
 				switch {
 				case out == nil:
 					c.at(fd.file, fd.decl.Name, "adapter-exported-result", c.p.Rel,
 						fd.name()+" can hand out any value through "+exprString(p))
+				case out == p && !c.handsOutOnly(fd.file, out):
+					c.at(fd.file, fd.decl.Name, "adapter-exported-result", c.p.Rel,
+						fd.name()+" can hand back what it writes into "+exprString(p)+", a type of another package")
 				case !c.handsOutOnly(fd.file, out):
 					c.at(fd.file, fd.decl.Name, "adapter-exported-result", c.p.Rel,
 						fd.name()+" hands out "+exprString(out)+" through "+exprString(p))
@@ -434,20 +437,40 @@ func (c *outsideChecks) exportedFields(t *typeDecl) {
 	}
 }
 
-// handedBack is what an adapter can hand its caller through a parameter of type p: what a pointer, slice, map or
-// channel it can send on holds, written into it (a map's keys included); what a callback takes; and what the methods
-// of an interface take, called on it. A type the adapter declares counts as the type it is declared as. A nil entry
-// stands for any value at all: a parameter of type any, interface{} or a type parameter (tps) can carry a pointer to
-// anything, which the adapter can assert and write through. A value of any other type hands nothing back, and nor
-// does an interface of another package, such as the io.Writer or http.ResponseWriter an answer is written to: what
-// goes into it is not read by the rule (docs/server/architecture.md "Data objects and adapters").
-func (c *outsideChecks) handedBack(p ast.Expr, tps map[string]bool) []ast.Expr {
+// sinks are the interfaces an adapter writes an answer to, by import path and name: what goes into one is not read by
+// the rule and is a review's to check (docs/server/architecture.md "Data objects and adapters"). They are the only
+// types of another package an adapter takes that the rule does not read as a way back to its caller.
+var sinks = map[string]bool{"io.Writer": true, "net/http.ResponseWriter": true}
+
+// handedBack is what an adapter can hand its caller through a parameter of type p of f: what a pointer, slice, map
+// or channel it can send on holds, written into it (a map's keys included); what a callback takes; and what the
+// methods of an interface take, called on it. A type the adapter declares counts as the type it is declared as. A
+// type of another package is itself what goes back: a named map or slice (http.Header, url.Values), a struct with a
+// map or pointer inside, or an interface whose methods take what the adapter passes them all reach the caller, and
+// the rule cannot see which of them a type is. So it passes only as a type an adapter may hand out (a core, shared
+// kernel, kit, contract, db or prompts type) or as one of the sinks. A nil entry stands for any value at all: a
+// parameter of type any, interface{} or a type parameter (tps) can carry a pointer to anything, which the adapter
+// can assert and write through. A value of a basic type, error or a struct the adapter declares hands nothing back.
+func (c *outsideChecks) handedBack(f *File, p ast.Expr, tps map[string]bool) []ast.Expr {
 	seen := map[string]bool{}
 	var back func(p ast.Expr) []ast.Expr
 	back = func(p ast.Expr) []ast.Expr {
 		switch x := p.(type) {
 		case *ast.ParenExpr:
 			return back(x.X)
+		case *ast.SelectorExpr, *ast.IndexExpr, *ast.IndexListExpr:
+			pkg, name := baseType(x)
+			if pkg == "" {
+				if t := c.p.decls.types[name]; t != nil && t.strct == nil && !seen[name] {
+					seen[name] = true
+					return back(t.spec.Type) // a generic type the adapter declares
+				}
+				return nil
+			}
+			if imp, ok := c.idx.imports(f)[pkg]; ok && sinks[imp.Path+"."+name] {
+				return nil
+			}
+			return []ast.Expr{x}
 		case *ast.StarExpr:
 			return []ast.Expr{x.X}
 		case *ast.ArrayType:
@@ -474,7 +497,7 @@ func (c *outsideChecks) handedBack(p ast.Expr, tps map[string]bool) []ast.Expr {
 				if ft, ok := m.Type.(*ast.FuncType); ok {
 					out = append(out, params(ft.Params)...)
 				} else {
-					out = append(out, back(m.Type)...) // an embedded interface: any, the adapter's own or a sink
+					out = append(out, back(m.Type)...) // an embedded interface: any, the adapter's own or another package's
 				}
 			}
 			return out
