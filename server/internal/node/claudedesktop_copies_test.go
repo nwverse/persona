@@ -43,6 +43,11 @@ func touchTranscript(t *testing.T, dir, id string, age time.Duration) {
 	}
 }
 
+// rowAliases and rowParent read a row of a map (its methods take a pointer).
+func rowAliases(s proto.Session) []string { return s.Aliases() }
+
+func rowParent(s proto.Session) string { return s.ParentAgentID() }
+
 // listedRows is the node's list now, by id, its offline scan read again.
 func listedRows(t *testing.T, n *Node) map[string]proto.Session {
 	t.Helper()
@@ -115,7 +120,7 @@ func TestADesktopSessionWithStaleCopiesIsListedOnce(t *testing.T) {
 			t.Errorf("%s listed = %v, want %v", id, ok, want)
 		}
 	}
-	if got := rows[now].Aliases(); !slices.Equal(got, []string{last, oldest}) {
+	if got := rowAliases(rows[now]); !slices.Equal(got, []string{last, oldest}) {
 		t.Errorf("aliases = %v", got)
 	}
 
@@ -238,11 +243,11 @@ func TestALiveClaudeOnAnEarlierDesktopTranscriptFolds(t *testing.T) {
 			t.Errorf("%s %s: the earlier transcript listed %v (%q), want %v (%q)", tc.entrypoint, tc.status, ok, s.SourceKind, tc.listed, tc.source)
 		}
 		if want := []string{before}; tc.listed {
-			if len(rows[now].Aliases()) != 0 {
-				t.Errorf("%s %s: aliases %v name a listed row", tc.entrypoint, tc.status, rows[now].Aliases())
+			if len(rowAliases(rows[now])) != 0 {
+				t.Errorf("%s %s: aliases %v name a listed row", tc.entrypoint, tc.status, rowAliases(rows[now]))
 			}
-		} else if !slices.Equal(rows[now].Aliases(), want) {
-			t.Errorf("%s %s: aliases %v, want %v", tc.entrypoint, tc.status, rows[now].Aliases(), want)
+		} else if !slices.Equal(rowAliases(rows[now]), want) {
+			t.Errorf("%s %s: aliases %v, want %v", tc.entrypoint, tc.status, rowAliases(rows[now]), want)
 		}
 	}
 }
@@ -273,8 +278,8 @@ func TestFoldDesktopEarlierKeepsWhatItDoesNotOwn(t *testing.T) {
 	if _, ok := got[gap]; !ok {
 		t.Error("an earlier transcript whose session's current one is not listed went: the session would not be listed at all")
 	}
-	if !slices.Equal(got[now].Aliases(), []string{old}) || got[now].ParentAgentID() != missing {
-		t.Errorf("aliases = %v, parent %q", got[now].Aliases(), got[now].ParentAgentID())
+	if !slices.Equal(rowAliases(got[now]), []string{old}) || rowParent(got[now]) != missing {
+		t.Errorf("aliases = %v, parent %q", rowAliases(got[now]), rowParent(got[now]))
 	}
 	if list[0].Aliases() != nil {
 		t.Error("the aliases were set on the hierarchy another copy of the row shares")
@@ -296,11 +301,17 @@ func TestFoldDesktopEarlierKeepsWhatItDoesNotOwn(t *testing.T) {
 		if _, ok := got[old]; !ok {
 			t.Errorf("%s: the row went", name)
 		}
-		if len(got[now].Aliases()) != 0 {
+		if len(rowAliases(got[now])) != 0 {
 			t.Errorf("%s: the session's row names a listed row as an alias", name)
 		}
 	}
 	if got := byID(foldDesktopEarlier([]proto.Session{rest(now), rest(old)}, folds, map[string]bool{old: true})); len(got) != 2 {
 		t.Error("a kept session went")
+	}
+	// A claude of the app still running an earlier transcript only archived sessions ran: running, it is not judged by
+	// the archive (at rest it goes, above).
+	live := proto.Session{SessionID: archivedOld, Agent: "claude", Status: proto.StatusWorking, SourceKind: proto.SourceClaudeDesktop}
+	if got := byID(foldDesktopEarlier([]proto.Session{rest(now), live}, folds, nil)); len(got) != 2 {
+		t.Error("a running claude of an archived session's earlier transcript went")
 	}
 }

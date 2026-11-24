@@ -187,9 +187,6 @@ type claudeDesktopIndex struct {
 	visible      map[string]bool                     // a session's current transcript → some entry naming it is unarchived
 	earlier      map[string][]claudeDesktopNow       // a transcript none runs now → the sessions that ran it before
 	about        map[string]claudeDesktopAbout       // an unarchived session's current transcript → its title and directory
-	// before: an unarchived session's current transcript → the transcripts it ran before that none runs now, newest
-	// first (at most maxDesktopAssociationTranscripts): its row's aliases (foldDesktopEarlier).
-	before       map[string][]string
 	environments map[string]claudeDesktopEnvironment // profile/account-qualified saved local environments
 	// parents: an unarchived session's current transcript → the current transcript of the unarchived session that
 	// started it or that it was forked from (spawnedFrom, forkedFromSessionId), for linkSideSessions.
@@ -210,6 +207,9 @@ type claudeDesktopIndex struct {
 	// deletedFromEntry: transcripts a deleted local session's previously readable entry named. A local-only tombstone
 	// hides exactly these, never every unnamed old transcript.
 	deletedFromEntry map[string]bool
+	// before: an unarchived session's current transcript → the transcripts it ran before that none runs now, newest
+	// first (at most maxDesktopAssociationTranscripts): its row's aliases (foldDesktopEarlier, #14394).
+	before map[string][]string
 }
 
 type claudeDesktopAbout struct{ title, cwd, originCwd, local, environment string }
@@ -667,14 +667,15 @@ type desktopFolds struct {
 }
 
 // foldDesktopEarlier lists each session of the desktop app once, as its sidebar does (#14394): the row of a transcript
-// one of its sessions went on from goes, live or at rest, once that session is listed through the transcript it runs
-// now, or when only archived sessions ran it (wentOn); the scan's newest-first rule (hidden) misses one written after
-// the current transcript, and the live list had none. The row of a session's current transcript names the transcripts
-// it ran before that no row lists in its aliases (on the row's own copy), so the manager shows no archive record under
-// an old id. Left as they are: the rows keep (the main conversation, Persona's branches, as the scan keeps them), an
-// assistant conversation, a row in a pane or of another source (a terminal's claude that took up an earlier
-// transcript), one Persona is starting, and one that waits on the user, whose question or prompt stays reachable. The
-// rows kept stay in order.
+// one of its sessions went on from goes, live or at rest, once an unarchived session that ran it is listed through the
+// transcript it runs now; at rest also when only archived sessions ran it (wentOn, as the scan hides it), while a
+// claude of the app still running it is not judged by the archive. The scan's newest-first rule (hidden) misses one
+// written after the current transcript, and the live list had no rule. The row of a session's current transcript names
+// the transcripts it ran before that no row lists in its aliases (on the row's own copy), so the manager shows no
+// archive record under an old id. Left as they are: the rows keep (the main conversation, Persona's branches, as the
+// scan keeps them), an assistant conversation, a row in a pane or of another source (a terminal's claude that took up
+// an earlier transcript), one Persona is starting, and one that waits on the user, whose question or prompt stays
+// reachable. The rows kept stay in order.
 func foldDesktopEarlier(list []proto.Session, f desktopFolds, keep map[string]bool) []proto.Session {
 	if len(f.earlier) == 0 {
 		return list // no session went on from a transcript: nothing goes, and no row has one to name
@@ -686,11 +687,20 @@ func foldDesktopEarlier(list []proto.Session, f desktopFolds, keep map[string]bo
 	gone := map[string]bool{}
 	for i := range list {
 		s := &list[i]
-		if keep[s.SessionID] || s.Assistant || s.PaneID != "" || s.Starting || s.Status == proto.StatusBlocked {
+		sessions := f.earlier[s.SessionID]
+		if len(sessions) == 0 || keep[s.SessionID] || s.Assistant || s.PaneID != "" || s.Starting || s.Status == proto.StatusBlocked {
 			continue
 		}
-		resting := s.SourceKind == "" && (s.Status == proto.StatusOffline || s.Status == proto.StatusInterrupted)
-		if (resting || s.SourceKind == proto.SourceClaudeDesktop) && wentOn(f.earlier[s.SessionID], listed) {
+		switch resting := s.Status == proto.StatusOffline || s.Status == proto.StatusInterrupted; {
+		case resting && (s.SourceKind == "" || s.SourceKind == proto.SourceClaudeDesktop):
+		case !resting && s.SourceKind == proto.SourceClaudeDesktop:
+			// A claude of the app still running it: only into a row its unarchived session is listed through, as the
+			// offline rules never judge a running session by the archive.
+			sessions = slices.DeleteFunc(slices.Clone(sessions), func(c claudeDesktopNow) bool { return c.archived })
+		default:
+			continue
+		}
+		if wentOn(sessions, listed) {
 			gone[s.SessionID] = true
 		}
 	}
