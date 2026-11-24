@@ -11,8 +11,11 @@ import (
 // todoRoutes are the to-dos' relayed routes listed since the central Routes literal (bus.go) closed; the hub relays
 // them like Routes.
 var todoRoutes = []string{
-	"GET /api/v1/todos/revision",    // the pushed read's cheap validator (todo_revision.go, #13804)
-	"POST /api/v1/todos/reorganize", // batch reorganization without interrupting running Agents (todo_reorganize.go, #14704)
+	"GET /api/v1/todos/revision",     // the pushed read's cheap validator (todo_revision.go, #13804)
+	"POST /api/v1/todos/reorganize",  // batch reorganization without interrupting running Agents (todo_reorganize.go, #14704)
+	"PUT /api/v1/todos/{id}/confirm", // Got it on a matter (a concern), and its Undo (todo_confirm.go, #14415)
+	"DELETE /api/v1/todos/{id}/confirm",
+	"PUT /api/v1/todos/{id}/words", // the owner files or moves one of their messages under a concern (concern_matters.go, #14415)
 }
 
 func init() { Routes = append(Routes, todoRoutes...) }

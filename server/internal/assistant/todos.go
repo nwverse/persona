@@ -137,6 +137,10 @@ type Todo struct {
 	// AutoSeenUndone: internal undo guard set when the owner explicitly calls DELETE /api/v1/todos/{id}/seen (#14639).
 	// Never emitted on the wire.
 	AutoSeenUndone bool `json:"-"`
+	// ConfirmedAt: when the owner pressed Got it on a concern closed by concern_report, or on a finished task of it
+	// (todo_confirm.go); a concern counts as confirmed when it is at or after the concern's latest report. Absent when
+	// never confirmed. Opening a to-do (SeenAt) never sets it.
+	ConfirmedAt *time.Time `json:"confirmed_at,omitempty"`
 	// RestoredAt: when the owner last brought it back from Inactive; SomedayUntil: when a to-do the owner put off to
 	// Someday comes back, the year 9999 for no date (#10226, todo_marks.go). Absent when never restored, and while not
 	// put off. Clients that do not know them show the to-do as ever.
@@ -171,6 +175,7 @@ type todoStore interface {
 	EditTodo(ctx context.Context, id string, e db.TodoEdit, updatedAt time.Time) (*db.TodoRow, error)
 	SeeTodo(ctx context.Context, id string, at *time.Time) (*db.TodoRow, error)
 	AutoSeeTodo(ctx context.Context, id string, at time.Time) (*db.TodoRow, bool, error)
+	ConfirmTodo(ctx context.Context, id string, at *time.Time) (*db.TodoRow, error)
 	RestoreTodo(ctx context.Context, id string, at time.Time) (*db.TodoRow, error)
 	SetTodoSomeday(ctx context.Context, id string, until *time.Time) (*db.TodoRow, error)
 	ClaimTodoReminder(ctx context.Context, id string, remindAt, now time.Time) (bool, error)
@@ -590,6 +595,7 @@ func (s *Service) removeTodo(ctx context.Context, id string) error {
 	}
 	s.todos.mu.Unlock()
 	s.todos.writing.Unlock()
+	s.forgetConcern(id) // concern_matters.go
 
 	s.linksChanged(ctx)
 	s.todosChanged(ctx)
@@ -1008,6 +1014,8 @@ func (s *Service) todoRoutes() {
 	s.outsideDecisionRoutes()
 	s.todoThreadRoutes()
 	s.todoSeenRoutes()
+	s.todoConfirmRoutes()
+	s.concernWordRoutes()
 	s.todoMarkRoutes()
 	s.todoRetitleRoute()
 	s.todoReorganizeRoute()
@@ -1036,6 +1044,7 @@ func (s *Service) todoRoutes() {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
 			return
 		}
+		s.enrichMatters(r.Context(), list) // matter, concern and header_card on every row (concern_matters.go)
 		isExtension := r.Header.Get(RoleHeader) == roleExtension
 		if isExtension {
 			list = s.extensionRows(r.Context(), list, p)

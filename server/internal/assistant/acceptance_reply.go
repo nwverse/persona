@@ -278,7 +278,11 @@ func (s *Service) decisionNotDelivered(ctx context.Context, id string, askedAt t
 // reach the task's agent, or errAcceptStore when the asks cannot be read or the acceptance cannot be saved: either way
 // nothing was taken, the ask still waits, and the owner can try again.
 func (s *Service) acceptTry(ctx context.Context, id, card string) (acceptResult, error) {
-	return s.acceptTryAs(ctx, id, card, false)
+	res, err := s.acceptTryAs(ctx, id, card, false)
+	if err == nil && res.taken {
+		s.confirmOnAccept(ctx, id) // the owner passed a finished to-do: confirmed too (todo_confirm.go)
+	}
+	return res, err
 }
 
 // acceptTryAs is acceptTry; byDefault: nobody answered decision id by its deadline and the hub takes its recommendation

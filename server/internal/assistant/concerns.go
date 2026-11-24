@@ -114,8 +114,9 @@ func (s *Service) toolConcernReport(ctx context.Context, machine, self string, a
 		return "", fmt.Errorf("the todos can't be read now (%v): try again later", err)
 	}
 	var a struct {
-		ID     string `json:"id"`
-		Report string `json:"report"`
+		ID       string `json:"id"`
+		Report   string `json:"report"`
+		OwnerSaw bool   `json:"owner_saw"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %w", err)
@@ -134,9 +135,31 @@ func (s *Service) toolConcernReport(ctx context.Context, machine, self string, a
 		}
 		return "", fmt.Errorf("the report could not be saved, the concern stays open: %w", err)
 	}
+	s.clearConcernAsk(ctx, t.ID) // reported: nothing waits for the owner's answer (concern_matters.go)
+	if a.OwnerSaw {
+		// answered in full right there in the chat: the owner has it already, so it does not wait at the top
+		c, err := s.confirmFinished(ctx, t.ID, true)
+		if err != nil {
+			return "", fmt.Errorf("reported and closed, but it could not be marked as seen: %w", err)
+		}
+		out = c
+	} else if !closed && out.ConfirmedAt != nil {
+		// a newer report on a matter the owner had put away: it waits for them again (done_at stays the first close)
+		c, err := s.confirmFinished(ctx, t.ID, false)
+		if err != nil {
+			return "", fmt.Errorf("the report is noted, but it could not be put back before the owner: %w", err)
+		}
+		out = c
+	}
 	now, loc := time.Now(), s.location(ctx)
 	if !closed {
-		return "Report noted; it was already closed: " + todoLine(out, now, loc), nil
+		if a.OwnerSaw {
+			return "Report noted; it was already closed: " + todoLine(out, now, loc), nil
+		}
+		return "Report noted on the closed concern; it waits at the top of the owner's screen again: " + todoLine(out, now, loc), nil
 	}
-	return "Reported and closed: " + todoLine(out, now, loc), nil
+	if a.OwnerSaw {
+		return "Reported, closed and put with what the owner has seen: " + todoLine(out, now, loc), nil
+	}
+	return "Reported and closed; it waits at the top of the owner's screen until they press Got it: " + todoLine(out, now, loc), nil
 }
