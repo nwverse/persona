@@ -5404,7 +5404,8 @@ in plan order (a task without `todo_id` did not start and has no link); no extra
 //         a reader then takes new_agent_machine / new_agent where present; otherwise the run is not known
 // report: ref is the to-do id; a supervised task's Agent reported to Persona (report_to_supervisor, #5112): {"kind":"question|blocked|done","text":"…","evidence":["…"],"step":2,"steps":5,"later"?:true};
 //         progress reports are not written here (only supervision.progress); clients that don't know it skip this entry. `later`: a question the Agent sent with urgent false (#6287): nobody was woken, it is in the briefing's "Can wait" queue (`docs/extensions/bots.md` ("Questions that can wait")); clients that don't know the field draw it as any question
-// notice: no ref; a one-line note the hub writes into the chat {"text":"…"} (already written in the hub's language); clients draw it as a centered line of small text, and clients that don't know it skip it.
+// notice: a one-line note the hub writes into the chat {"text":"…"} (already written in the hub's language); ref is the to-do id for a task notice, empty otherwise.
+//   Clients draw it as a centered line of small text. A launch notice does not count as an Agent report.
 //         There's only one kind now: after scheduled tasks were skipped because the main chat wasn't set up, once ready, before the first run the main chat gets "Computers and models are set up; scheduled tasks are running again, this time 'Morning briefing'" (#4253)
 // review: ref is the to-do id; the supervisor did one acceptance review (#3124): {"title","verdict":"accepted|rework|needs_user|parked|cancelled","round":1,"note":"…",
 //         "checks":[{"criterion","met","evidence"}]}; a parked review (#3804) also has "until" (RFC 3339) and "waiting_on", and its note is what the task waits for
