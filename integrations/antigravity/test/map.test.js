@@ -514,6 +514,10 @@ describe('antigravity transcript and tool mapping', () => {
       assert.deepEqual(seq7.usage, [{
         model: 'gemini-4-neon-high', in: 12000, out: 220, cache_read: 3000, cache_write: 500,
       }])
+      const switched = [...extended, { step_index: 7, type: 'PLANNER_RESPONSE', model: 'custom', input_tokens: 8000 }]
+      const next = stepsToItems(switched, { full, cacheKey: `usage-prefix-${full}`, immutablePrefix: switched.length })
+      assert.equal(next.usage.contextTokens, 8000)
+      assert.equal(next.usage.contextWindow, 0)
     }
   })
 })

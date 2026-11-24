@@ -348,6 +348,14 @@ describe("normalizeContextBreakdown", () => {
     expect(zero.topConsumer).toBeNull();
     expect(zero.freeTokens).toBe(100_000);
   });
+
+  it("keeps observed breakdown counts without treating their sum as the window", () => {
+    const stats = normalizeContextBreakdown({ source: "exact", conversation: 5000, auto_compact_threshold: 32_000 }, 0)!;
+    expect(stats.occupiedTokens).toBe(5000);
+    expect(stats.totalTokens).toBe(0);
+    expect(stats.freeShare).toBeNull();
+    expect(stats.autoCompactShare).toBeNull();
+  });
 });
 
 describe("formatLatencyMs & summarizeStepTelemetry", () => {
