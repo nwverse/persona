@@ -696,8 +696,9 @@ struct ExtensionPageView: View {
         .modifier(ExtensionStreamProbe(stream: page.stream,
             lifecycle: "mounted=\(pageVisible):tab=\(tabActive):phase=\(String(describing: phase))"))
         .overlay { if page.view == nil && page.error == nil && !page.unsupported { ProgressView() } }
-        .detailTitle(page.view?.title ?? title)
+        .detailTitle(headerTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .dashboardsOwnership(DashboardsUI.showsOwnership(page.plugin, ui: page.ui), title: headerTitle)
         .extensionSearch(page)
         .pluginLinks($link)
         .environment(\.extensionFieldFocus, $focusedField)
@@ -741,6 +742,14 @@ struct ExtensionPageView: View {
     private func updateVisibility() {
         let foreground = phase == .active
         page.setVisible(pageVisible && tabActive && foreground)
+    }
+
+    /// The bar's title: the View's, else the one the page was opened with; a Dashboards page never shows its raw id
+    /// (`DashboardsUI.title`).
+    private var headerTitle: String { Self.headerTitle(plugin: page.plugin, ui: page.ui, view: page.view?.title, opened: title) }
+
+    static func headerTitle(plugin: String, ui: String, view: String?, opened: String) -> String {
+        DashboardsUI.owns(plugin) ? DashboardsUI.title(view: view, place: opened, ui: ui) : view ?? opened
     }
 
     private var form: some View {

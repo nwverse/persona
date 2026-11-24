@@ -680,13 +680,13 @@ func (e *Engine) photosRemake(r *Recording) bool { return e.remakeQuiet(r) }
 // Nothing for a trimmed recording (no transcript to make them from) or before the transcript is complete (the first
 // minutes read it then).
 func (e *Engine) remakeQuiet(r *Recording) bool {
-	if r.Trimmed() || !r.Complete || r.Chars == 0 || !r.isMeeting() {
+	if r.Trimmed() || !r.Complete || r.Chars == 0 || !isMeeting(r) {
 		return false
 	}
 	switch r.MinutesState {
 	case MinutesPending:
 		// Only so that minutes read before the change don't settle them: their failures and waits stay as they are.
-		quiet := r.quietMinutes()
+		quiet := quietMinutes(r)
 		r.MinutesAsks++
 		if quiet {
 			r.MinutesQuiet = r.MinutesAsks
@@ -695,7 +695,7 @@ func (e *Engine) remakeQuiet(r *Recording) bool {
 		if !e.Store.hasMinutes(r.ID) {
 			return false // never written: nothing to make again
 		}
-		r.remakeMinutes()
+		remakeMinutes(r)
 		r.MinutesQuiet = r.MinutesAsks
 	default:
 		return false

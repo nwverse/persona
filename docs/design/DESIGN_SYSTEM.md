@@ -3057,6 +3057,25 @@ A declared list of extension accounts, gateways or similar entries (#9504) belon
 - **Add entry** appends one empty entry and is disabled at the manifest's maximum. All field edits and additions remain drafts until the page's existing **Save**. The host owns saved entry identity; an unsaved browser key must survive immutable field edits without becoming a visible value or part of the JSON payload.
 - Removal uses the shared confirmation `Dialog`, names the entry, and says that the entry and its saved secret are deleted **when Save succeeds**. Cancel leaves the draft untouched. A required list keeps only its declared minimum; an optional list can always return to its valid absent state even when a present array would have a positive minimum. If an address participates in configured-network permission, a nearby hint says that saving a changed address clears that entry's secret. These are consequences of the pending configuration write, not claims that merely opening or dismissing the dialog changed hub state.
 - Text and explanations wrap at phone width and the largest accessibility text size; buttons stay on one line using the existing button behavior. Destructive actions remain reachable without horizontal scrolling. Dark and light themes use the same semantic roles as every other settings card.
+
+## Dashboards (#15017)
+
+Dashboards are pages a conversation drafts and the owner keeps with one tap on Keep; where they live is 4.1, the line under
+a page's title is "Ownership line (#15017)" below. What the iPhone and iPad do of their own:
+
+- **No new host.** The hub lists Dashboards as ordinary extension places under the reserved id `-pages` (the index, then up
+  to three pinned pages); the drawer and the iPad sidebar draw them with the extension rows they have, and a page opens in
+  `ExtensionNavPage` / `ExtensionPageView` like any extension page. Settings › Extensions leaves them out: they are the
+  assistant's, not an extension's.
+- **The switch.** "Let Persona make dashboards" in Settings › Assistant, with its footnote, only when the hub's hello lists
+  `assistant_pages` and the default assistant is shown. Its label wraps rather than truncating (it is a label, not a
+  button).
+- **The ownership line.** The bar's subtitle on iOS 26 and later (`navigationSubtitle`, as other pages say where a thing is).
+  iOS 18 has no bar subtitle: there the title and the line together are the bar's title (`Theme.Font.heading` over
+  `Theme.Font.label`, secondary), as Knowledge's day page draws its chat.
+- **Over HTTP only.** Every extension id that starts with "-" is a manager's and is drawn over HTTP, never the native page
+  stream. `assistant_pages` (no payload) reads the places again, coalesced, and a reconnect reads them once more.
+
 ## Sidebar icon colors (#10822)
 
 Who it serves: anyone whose sidebar lists many pages and who finds it quicker to scan when each page has a color. It is

@@ -19,14 +19,8 @@ import (
 // minutes are written exactly as before); normalizeOverview keeps it whole once items leave it (a photo deleted);
 // renderOverview is its Markdown.
 
-// MinutesOverview is the minutes as one summary card: optional, present only when every point and decision is a
-// bullet of one of its topics.
-type MinutesOverview struct {
-	Headline    string              `json:"headline,omitempty"`
-	Conclusions []MinutesConclusion `json:"conclusions,omitempty"`
-	// Groups: one titled "" (no heading), or 2 to 4 with distinct titles; never empty, and no group or topic is.
-	Groups []MinutesGroup `json:"groups"`
-}
+// MinutesOverview is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type MinutesOverview = recordingwire.MinutesOverview
 
 // MinutesConclusion is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
 type MinutesConclusion = recordingwire.MinutesConclusion
@@ -57,39 +51,6 @@ const (
 // minutesTopicIcons is what a topic's icon may be; anything else is general (clients do the same, so the list can grow).
 var minutesTopicIcons = []string{"progress", "schedule", "release", "performance", "metrics", "tooling", "quality", "design",
 	"people", "customer", "budget", "risk", "general"}
-
-// UnmarshalJSON reads Minutes with its overview decoded on its own: one this hub cannot read (another hub's shape, a
-// hand edit) or that has no bullet counts as absent, as on the clients, and never makes the rest unreadable.
-func (m *Minutes) UnmarshalJSON(data []byte) error {
-	type plain Minutes
-	var aux struct {
-		*plain
-		Overview json.RawMessage `json:"overview"` // shallower than plain's: it takes the field
-	}
-	aux.plain = (*plain)(m)
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	m.Overview = nil
-	if len(aux.Overview) > 0 {
-		var o MinutesOverview
-		if json.Unmarshal(aux.Overview, &o) == nil && o.hasBullet() {
-			m.Overview = &o
-		}
-	}
-	return nil
-}
-
-func (o *MinutesOverview) hasBullet() bool {
-	for _, g := range o.Groups {
-		for _, t := range g.Topics {
-			if len(t.Bullets) > 0 {
-				return true
-			}
-		}
-	}
-	return false
-}
 
 // modelText is a string the model wrote; anything else (a number, an object) is "" rather than an unusable answer:
 // a malformed headline or topic title costs only itself.

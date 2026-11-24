@@ -267,6 +267,6 @@ func (s *Store) commitRecording(r *Recording, segs []RecordingSegment) (err erro
 	conv := r.Conv // meeting.json's, never in meta.json
 	*r = Recording{}
 	_ = json.Unmarshal(meta, r)
-	r.persisted, r.Conv = true, conv
+	r.Persisted, r.Conv = true, conv
 	return nil
 }

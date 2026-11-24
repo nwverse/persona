@@ -351,6 +351,7 @@ machines.read        GET /api/v1/machines/{mid}/stat
 -                    GET /api/v1/model-config/providers/{id}/models
 -                    GET /api/v1/model-config/purposes/{id}
 -                    GET /api/v1/model-profiles
+-                    GET /api/v1/model-profiles/{id}/candidates
 -                    GET /api/v1/mutes
 -                    GET /api/v1/navigation
 -                    GET /api/v1/ops/{id}
