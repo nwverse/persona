@@ -826,7 +826,7 @@
         },
         "tier": {
           "type": "string",
-          "description": "Agent preset from the snapshot's 模型档位 line; choose by purpose; resolved before approval and shown on the card; explicit launcher/model/effort/speed overrides"
+          "description": "Agent preset from the 模型档位 line, by kind of work (old names work); picked before approval, shown on the card; explicit launcher/model/effort/speed overrides"
         },
         "host": {
           "type": "string",
@@ -2280,7 +2280,7 @@
         },
         "tier": {
           "type": "string",
-          "description": "Active profile preset; unknown or assistant-incompatible presets are refused"
+          "description": "Active profile preset or old name; unknown/assistant-incompatible: refused"
         },
         "pin": {
           "type": "boolean",
@@ -2671,7 +2671,7 @@
               },
               "tier": {
                 "type": "string",
-                "description": "Agent preset from the snapshot's 模型档位 line; choose by purpose; resolved at task start with its profile; explicit launcher/model/effort/speed overrides"
+                "description": "Agent preset from the 模型档位 line, by kind of work (old names work); its candidate is picked at start; explicit launcher/model/effort/speed overrides"
               },
               "speed": {
                 "type": "string",

@@ -26,11 +26,13 @@ import (
 // An Antigravity CLI without session/set_mode: checks skip the switch and starts say to update agy (#14533), 149 B (261,091 B).
 // Antigravity Gemini API-key gateway model discovery routes through HTTP(S)_PROXY and honors NO_PROXY (#14552), 1,497 B (262,588 B).
 // Keeping Antigravity steps at a reused lower index when the export goes on past them, dropping them again once the run re-covers them (#14626), adds 230 B (262,818 B).
-// Leaving conversations the agy CLI has open to it (#13451) adds 973 B (main measured 262,790 B after #14829,
-// 263,763 B with it).
+// Antigravity native error backfill at every unexported index, loading conversations another agy process created, with read failures in the history token (#14627), 427 B (263,245 B).
+// Antigravity subagent reports and background task results as task notices, invoke_subagent Role / Prompt (#14625), 749 B (263,994 B).
+// Untitled Antigravity conversations take a short title from their first prompt line (#14629), 218 B (264,212 B).
+// Leaving conversations the agy CLI has open to it (#13451) adds 1,062 B (main measured 264,207 B, 265,269 B with it).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 263_763
+	const budget = 265_269
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
