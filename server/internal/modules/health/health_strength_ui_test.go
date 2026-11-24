@@ -164,3 +164,65 @@ func TestStrengthPagesLanguagesVersionsAndStates(t *testing.T) {
 	}
 	strengthPageHTTP(t, s, strengthPageState{Page: "strength.overview", Days: 30, Metric: "weight"}, "", nil, 11)
 }
+
+func TestStrengthPageManageChoiceCancelAndPagination(t *testing.T) {
+	s, d, ctx := strengthHarness(t)
+	e := createStrengthExercise(t, s, ctx, "stack")
+	p := strengthPageState{Page: "strength.overview", Manage: true, Days: 30, Metric: "weight"}
+	for _, edit := range []struct{ field, value string }{{"rename", "Machine press"}, {"setting", "Seat 3"}, {"rule", "per_hand"}} {
+		res := strengthPageHTTP(t, s, p, edit.field+":"+e.ID, nil, 11)
+		strengthPageHTTP(t, s, strengthState(t, res), "update", map[string]string{"value": edit.value}, 11)
+	}
+	es, err := d.HealthStrengthExercises(ctx, false)
+	if err != nil || len(es) != 1 || es[0].Name != "Machine press" || es[0].Setting != "Seat 3" || es[0].WeightRule != "per_hand" {
+		t.Fatal(es, err)
+	}
+	other := e
+	other.ID = healthIntakeUUID("choice-other")
+	other.Name = "Row"
+	if _, _, err = d.HealthStrengthExerciseSave(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	out, err := strengthCall(s, ctx, fmt.Sprintf(`{"action":"draft","sets":[{"exercise":%q,"weight":40,"reps":10}]}`, e.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids struct{ Draft string }
+	if err = json.Unmarshal([]byte(out), &ids); err != nil {
+		t.Fatal(err)
+	}
+	p = strengthPageState{Page: "strength.edit", Draft: ids.Draft, Rev: 1, Days: 30, Metric: "weight"}
+	res := strengthPageHTTP(t, s, p, "cancel", nil, 11)
+	if !res.Pop {
+		t.Fatal("cancel did not pop")
+	}
+	draft, _ := d.HealthStrengthDraft(ctx, ids.Draft)
+	if draft.Revision != 1 {
+		t.Fatal("cancel wrote draft")
+	}
+	res = strengthPageHTTP(t, s, p, "save", map[string]string{"exercise_0": other.ID}, 11)
+	if !res.Pop {
+		t.Fatal("choice save did not pop")
+	}
+	draft, _ = d.HealthStrengthDraft(ctx, ids.Draft)
+	if !strings.Contains(string(draft.Body), other.ID) {
+		t.Fatal("exercise choice not saved")
+	}
+	// More than one page of managed exercises must still fit the shared 300-item protocol bound.
+	es = nil
+	rows := []assistantwire.StrengthSet{}
+	now := time.Now()
+	for i := range 80 {
+		id := healthIntakeUUID(fmt.Sprintf("many-%d", i))
+		es = append(es, assistantwire.StrengthExercise{ID: id, Name: fmt.Sprintf("Exercise %d", i), WeightRule: "stack", Primary: []string{fmt.Sprintf("Muscle %d", i)}})
+		rows = append(rows, assistantwire.StrengthSet{ExerciseID: id, At: now, Weight: 40, Reps: 10})
+	}
+	p = strengthPageState{Page: "strength.overview", Manage: true, Days: 30, Metric: "weight"}
+	for _, offset := range []int{0, 30, 60, 10000} {
+		p.ExercisesOffset = offset
+		view := drawStrengthPage(p, es, rows, nil, nil, now, time.UTC, "en", 11)
+		if err = wire.CheckView(&view); err != nil {
+			t.Fatal(offset, err)
+		}
+	}
+}

@@ -54,7 +54,7 @@ func drawStrengthPage(p strengthPageState, es []assistantwire.StrengthExercise, 
 	switch p.Page {
 	case "strength.overview":
 		pending, plans := []wire.Component{}, []wire.Component{}
-		for _, d := range drafts {
+		for _, d := range strengthSlice(drafts, p.DraftsOffset, 40) {
 			title := tr("pending")
 			if d.Kind == "plan" {
 				title = tr("plan")
@@ -65,15 +65,21 @@ func drawStrengthPage(p strengthPageState, es []assistantwire.StrengthExercise, 
 				plans = append(plans, v)
 			}
 		}
+		if p.DraftsOffset+40 < len(drafts) {
+			pending = append(pending, button("more", "more_drafts"))
+		}
+		if p.DraftsOffset > 0 {
+			pending = append(pending, button("first", "first_drafts"))
+		}
 		if len(pending) > 0 {
 			page.Sections = append(page.Sections, section("waiting", pending))
 		}
 		items := []wire.Component{}
-		for _, e := range es {
+		for _, e := range strengthSlice(es, p.ExercisesOffset, 30) {
 			sets := strengthExerciseSets(rows, e.ID)
 			summary := tr("empty")
 			if len(sets) > 0 {
-				summary = tr("last_best", i18n.Args{"last": sets[0].At.In(loc).Format("2006-01-02"), "best": strengthBest(sets)["weight"]})
+				summary = tr("last_best", i18n.Args{"last": sets[0].At.In(loc).Format("2006-01-02") + " · " + strengthSetLabel(sets[0].Weight, sets[0].Reps), "best": strengthBest(sets)["weight"]})
 			}
 			items = append(items, row(e.Name, summary, "exercise:"+e.ID))
 			if p.Manage {
@@ -86,6 +92,12 @@ func drawStrengthPage(p strengthPageState, es []assistantwire.StrengthExercise, 
 					items = append(items, v)
 				}
 			}
+		}
+		if p.ExercisesOffset+30 < len(es) {
+			items = append(items, button("more", "more_exercises"))
+		}
+		if p.ExercisesOffset > 0 {
+			items = append(items, button("first", "first_exercises"))
 		}
 		page.Sections = append(page.Sections, section("exercises", items))
 		if p.Manage && p.Field != "" {
@@ -130,11 +142,23 @@ func drawStrengthPage(p strengthPageState, es []assistantwire.StrengthExercise, 
 		}
 		sort.Strings(keys)
 		items = nil
-		for _, m := range keys {
+		for _, m := range strengthSlice(keys, p.MusclesOffset, 30) {
 			items = append(items, row(m, tr("set_count", i18n.Args{"count": muscles[m]}), ""))
+		}
+		if p.MusclesOffset+30 < len(keys) {
+			items = append(items, button("more", "more_muscles"))
+		}
+		if p.MusclesOffset > 0 {
+			items = append(items, button("first", "first_muscles"))
 		}
 		page.Sections = append(page.Sections, section("muscles", items))
 		page.Sections = append(page.Sections, section("last_session", strengthSessionRows(rows, es, loc, l)))
+		for _, d := range drafts {
+			if d.Kind == "plan" {
+				plans = []wire.Component{row(tr("plan"), d.PlanDay.Format("2006-01-02"), "draft:"+d.ID)}
+				break
+			}
+		}
 		if len(plans) > 0 {
 			page.Sections = append(page.Sections, section("next_plan", plans[:1]))
 		}
@@ -316,9 +340,17 @@ func strengthSessionRows(rows []assistantwire.StrengthSet, es []assistantwire.St
 	for _, e := range es {
 		if n := counts[e.ID]; n > 0 {
 			out = append(out, wire.Component{Type: "row", Title: e.Name, Value: strengthText(l, "set_count", i18n.Args{"count": n})})
+			if len(out) == 31 {
+				break
+			}
 		}
 	}
 	return out
+}
+
+func strengthSlice[T any](vs []T, offset, limit int) []T {
+	offset = min(offset, len(vs))
+	return vs[offset:min(offset+limit, len(vs))]
 }
 func strengthRecentRecords(rows []assistantwire.StrengthSet, es []assistantwire.StrengthExercise, now time.Time, loc *time.Location, l i18n.Lang) []wire.Component {
 	out := []wire.Component{}

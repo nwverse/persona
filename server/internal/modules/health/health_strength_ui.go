@@ -3,6 +3,7 @@ package health
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"slices"
 	"strconv"
@@ -17,16 +18,19 @@ import (
 )
 
 type strengthPageState struct {
-	Page     string     `json:"page"`
-	Exercise string     `json:"exercise,omitempty"`
-	Metric   string     `json:"metric,omitempty"`
-	Days     int        `json:"days,omitempty"`
-	Offset   int        `json:"offset,omitempty"`
-	Manage   bool       `json:"manage,omitempty"`
-	Field    string     `json:"field,omitempty"`
-	Draft    string     `json:"draft,omitempty"`
-	Rev      int64      `json:"rev,omitempty"`
-	Work     []draftSet `json:"work,omitempty"`
+	Page            string     `json:"page"`
+	Exercise        string     `json:"exercise,omitempty"`
+	Metric          string     `json:"metric,omitempty"`
+	Days            int        `json:"days,omitempty"`
+	Offset          int        `json:"offset,omitempty"`
+	ExercisesOffset int        `json:"exercises_offset,omitempty"`
+	DraftsOffset    int        `json:"drafts_offset,omitempty"`
+	MusclesOffset   int        `json:"muscles_offset,omitempty"`
+	Manage          bool       `json:"manage,omitempty"`
+	Field           string     `json:"field,omitempty"`
+	Draft           string     `json:"draft,omitempty"`
+	Rev             int64      `json:"rev,omitempty"`
+	Work            []draftSet `json:"work,omitempty"`
 }
 
 func readStrengthPage(raw string) (strengthPageState, bool) {
@@ -34,7 +38,7 @@ func readStrengthPage(raw string) (strengthPageState, bool) {
 	if len(raw) > 16384 || json.Unmarshal([]byte(raw), &p) != nil {
 		return p, false
 	}
-	if !slices.Contains([]string{"strength.overview", "strength.exercise", "strength.edit", "strength.home"}, p.Page) || !slices.Contains([]int{30, 90, 365}, p.Days) || !slices.Contains([]string{"weight", "e1rm"}, p.Metric) || p.Offset < 0 || len(p.Work) > 40 {
+	if !slices.Contains([]string{"strength.overview", "strength.exercise", "strength.edit", "strength.home"}, p.Page) || !slices.Contains([]int{30, 90, 365}, p.Days) || !slices.Contains([]string{"weight", "e1rm"}, p.Metric) || p.Offset < 0 || p.ExercisesOffset < 0 || p.DraftsOffset < 0 || p.MusclesOffset < 0 || len(p.Work) > 40 {
 		return p, false
 	}
 	if p.Page == "strength.exercise" && !intakeUUIDPattern.MatchString(p.Exercise) || p.Page == "strength.edit" && (!intakeUUIDPattern.MatchString(p.Draft) || p.Rev < 0) {
@@ -148,6 +152,25 @@ func (s *Service) healthStrengthUI(w http.ResponseWriter, r *http.Request, req w
 		}
 		p.Manage = action == "manage"
 		p.Field = ""
+	case "more_exercises", "first_exercises", "more_drafts", "first_drafts", "more_muscles", "first_muscles":
+		if p.Page != "strength.overview" {
+			bad()
+			return
+		}
+		switch action {
+		case "more_exercises":
+			p.ExercisesOffset = min(p.ExercisesOffset, len(es)) + 30
+		case "first_exercises":
+			p.ExercisesOffset = 0
+		case "more_drafts":
+			p.DraftsOffset = min(p.DraftsOffset, len(drafts)) + 40
+		case "first_drafts":
+			p.DraftsOffset = 0
+		case "more_muscles":
+			p.MusclesOffset = min(p.MusclesOffset, math.MaxInt-30) + 30
+		case "first_muscles":
+			p.MusclesOffset = 0
+		}
 	case "rename", "setting", "rule", "delete":
 		i := findExercise(id)
 		if p.Page != "strength.overview" || !p.Manage || i < 0 {
