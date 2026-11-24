@@ -276,6 +276,7 @@ class HubChatRepository(
             recordAction(session, action, result, verified = true)
             return result
         }
+        override suspend fun continueStart(session: Session, choice: String): Session = delegate.continueStart(session, choice)
         override suspend fun editQueue(session: Session, keep: List<Int>) = delegate.editQueue(session, keep)
         override suspend fun sendQueuedNow(session: Session) = delegate.sendQueuedNow(session)
         override suspend fun retryUndelivered(session: Session, messageId: String) = delegate.retryUndelivered(session, messageId)
@@ -293,6 +294,12 @@ class HubChatRepository(
             return delegate.fork(session, entry?.lock?.withLock { entry.realtime.canonicalId(atItemId) } ?: atItemId)
         }
         override suspend fun rewind(session: Session, target: RewindTarget, restore: RewindRestore) = delegate.rewind(session, target, restore)
+        override suspend fun codexTakeoverInfo(session: Session) = delegate.codexTakeoverInfo(session)
+        override suspend fun codexTakeover(session: Session, token: String, confirmStop: Boolean) = delegate.codexTakeover(session, token, confirmStop)
+        override suspend fun startCodexContinuation(session: Session, info: CodexTakeoverInfo, operationId: String) =
+            delegate.startCodexContinuation(session, info, operationId)
+        override suspend fun codexContinuationOperation(session: Session, operationId: String) =
+            delegate.codexContinuationOperation(session, operationId)
     }
 
     /** The composer shares interruption state with menu actions. Failed requests leave it unchanged. */

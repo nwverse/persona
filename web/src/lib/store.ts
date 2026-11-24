@@ -39,7 +39,7 @@ import type { OutboxEntry } from "./outbox";
 import { NO_LINK, RESTARTING_MS, type ConnLink } from "./connection";
 import { unreachable } from "./shell";
 import { setOfflineProbe } from "./feedback";
-import { readDirectionTree } from "./direction-names";
+import { isExternalDirection, readDirectionTree } from "./direction-names";
 import { unlistedConversations } from "./conversation-origins";
 import { directionTreeAwaitsHello } from "./direction-tree";
 import { configureMessageFeedback, resetMessageFeedback } from "./message-send";
@@ -288,7 +288,7 @@ const SUMMARY_FLAGS = ["quiet", "awaits_reply", "starting", "awaiting_first_mess
  *  carries (state, last words, markers), and the details it never carries (items' arrays, queued) stay. */
 function listedOver(row: Session, listed: Session): Session {
   if (typeof listed.waiting !== "boolean") return sameValue(listed, row) ? row : listed;
-  const next: Session = { ...row, ...listed, background_working: listed.background_working, background_waiting: listed.background_waiting };
+  const next: Session = { ...row, ...listed, background_working: listed.background_working, background_waiting: listed.background_waiting, background_stalled_since: listed.background_stalled_since };
   for (const key of SUMMARY_FLAGS) if (!(key in listed)) delete next[key];
   return sameValue(next, row) ? row : next;
 }
@@ -973,7 +973,9 @@ export function checkSocket() {
 setInterval(() => checkSocket(), 5_000);
 if (typeof document !== "undefined") {
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && !stopped && (!ws || Date.now() - lastMessage > 40_000)) connect();
+    if (!pageInFront()) return;
+    if (pushedHidden) todosPushed();
+    if (!stopped && (!ws || Date.now() - lastMessage > 40_000)) connect();
   });
 }
 if (typeof window !== "undefined") {
@@ -994,7 +996,7 @@ async function followDirections(changed = false) {
   const a = state.assistant;
   if (!ids || !a) return;
   const known = new Set(a.conversations.map((c) => c.session_id));
-  if (ids.some((id) => !known.has(id))) void refreshAssistant().catch(() => {});
+  if (ids.some((id) => !known.has(id) && !isExternalDirection(id))) void refreshAssistant().catch(() => {});
   else if (JSON.stringify(ids) !== JSON.stringify((a.leaders ?? []).filter((id) => id !== a.main))) set({ assistant: { ...a, leaders: ids } });
 }
 
@@ -1321,6 +1323,7 @@ export function upsertSession(s: Session, opts: { undelivered?: boolean } = {}) 
     else if (!x.assistant) merged.undelivered = opts.undelivered ? s.undelivered : x.undelivered; // an Agent's (#10661)
     merged.background_working = s.background_working;
     merged.background_waiting = s.background_waiting;
+    merged.background_stalled_since = s.background_stalled_since;
     // An optimistic action can start from getSession's summary fallback. A later complete info response must
     // drop its scalar summary markers, or they keep overriding the complete task arrays indefinitely.
     if (typeof s.waiting !== "boolean") {
@@ -1556,14 +1559,14 @@ export function dropDelegated(id: string) {
 // Every request for a list the page keeps whole (/todos, /assistant), numbered: an answer to a request sent before the
 // one already applied is older than what the page shows (refresh() waits for /sessions too, seconds on a busy hub) and
 // must not put the old list back.
-function numbered<T>(path: string) {
+function numbered<T>(path: string, read: () => Promise<T> = () => api<T>(path)) {
   let asked = 0;
   let applied = 0;
   return {
     ask() {
       const n = ++asked;
       const owner = credentialOwner();
-      const answer = api<T>(path);
+      const answer = read();
       /** Whether this answer may be applied (no later request's answer is in place); if so it is the one in place now. */
       const fresh = () => {
         if (n < applied || owner !== credentialOwner()) return false;
@@ -1579,7 +1582,34 @@ function numbered<T>(path: string) {
   };
 }
 
-const todosAsked = numbered<{ todos: Todo[] }>("/todos");
+// The last to-do list the hub answered and its validator (#9590; the `GET /api/v1/todos` row in docs/assistant/todos.md):
+// the hub tags its merged list with `ETag: W/"t1-<hash of its bytes>"` and answers a read naming that tag with a 304 and
+// no body. Most {"type":"todos"} pushes change nothing the list holds, and the whole list is hundreds of KB on a busy
+// hub, so a read sends the tag and a 304 applies the kept answer again, as a 200 with those same bytes would. Memory
+// only, one login's: reset() drops it, and a tag kept under another login is not sent.
+let keptTodos: { owner: string; etag: string; revision: string; answer: { todos: Todo[] } } | null = null;
+
+async function readTodos(): Promise<{ todos: Todo[] }> {
+  const owner = credentialOwner();
+  const kept = keptTodos?.owner === owner ? keptTodos : null;
+  let status = 0;
+  let reply: Headers | undefined;
+  const answer = await api<{ todos: Todo[] }>("/todos", {
+    headers: kept?.etag ? { "If-None-Match": kept.etag } : undefined,
+    onResponse: (headers, code) => { status = code; reply = headers; },
+  });
+  const etag = reply?.get("ETag") ?? "";
+  const revision = reply?.get("X-Persona-Todos-Revision") ?? "";
+  if (status === 304 && kept) {
+    if (revision) kept.revision = revision;
+    return kept.answer;
+  }
+  // a hub without either validator keeps nothing, and the next read is whole as before
+  if (owner === credentialOwner()) keptTodos = etag || revision ? { owner, etag, revision, answer } : null;
+  return answer;
+}
+
+const todosAsked = numbered<{ todos: Todo[] }>("/todos", readTodos);
 const assistantAsked = numbered<AssistantInfo>("/assistant");
 
 // refresh() calls, numbered the same way: one that started before the last one applied, or before reset(), is older
@@ -1686,24 +1716,33 @@ export function dropTodo(id: string) {
   set({ todos: state.todos.filter((t) => t.id !== id) });
 }
 
-// A push that says the to-dos changed ({"type":"todos"}, a task's feed item) comes in bursts: the hub sends one per write,
-// and a supervised task's report, stage and links land within the same second. Every GET /todos is the whole list (tens
-// of KB on a busy hub), so pushes read it one at a time: one that lands while such a read is out asks for one more read
-// after it, however many land meanwhile. What this page itself just changed still reads at once (refreshTodos).
-let pushedRead = false;
-let pushedAgain = false;
+// A push that says the to-dos changed ({"type":"todos"}, a task's feed item) comes in bursts. Settle 200 ms, then ask
+// the hub's cheap merged revision when every manager supports it (#13804). Only a changed revision reads the complete
+// list. Hidden pages leave the pending push until they become visible; old hubs keep the original full-read path.
+// What this page itself just changed still reads at once (refreshTodos).
+// The loop itself loads on the first push, not with the first screen. The epoch drops a load that reset beat.
+let pushedEpoch = 0;
+let pushedHidden = false; // only a failed hidden import; the loaded loop owns its own pending push
+let resetPushedTodos: () => void = () => {};
 
 export function todosPushed() {
-  if (pushedRead) {
-    pushedAgain = true;
-    return;
-  }
-  pushedRead = true;
-  void refreshTodos().finally(() => {
-    pushedRead = false;
-    if (!pushedAgain) return;
-    pushedAgain = false;
-    todosPushed();
+  const epoch = pushedEpoch;
+  void import("./todo-pushes").catch(() => null).then((m) => {
+    if (epoch !== pushedEpoch) return;
+    pushedHidden = false;
+    if (!m) {
+      if (pageInFront()) void refreshTodos();
+      else pushedHidden = true;
+      return;
+    }
+    resetPushedTodos = m.reset;
+    // Positional hooks keep their property names out of the first-screen chunk; the lazy module names the tuple.
+    m.push([
+      () => hubHas(state.features, "todo_revision") && keptTodos?.owner === credentialOwner() ? keptTodos.revision : "",
+      refreshTodos,
+      pageInFront,
+      api,
+    ]);
   });
 }
 
@@ -1951,7 +1990,10 @@ export function reset() {
   endedHere.clear();
   // a /todos or /assistant answer still on its way belongs to the old login
   todosAsked.forget();
-  pushedAgain = false; // the next login reads its own list
+  keptTodos = null; // and its list's validators
+  pushedEpoch++;
+  pushedHidden = false;
+  resetPushedTodos();
   assistantAsked.forget();
   assistantByManager.clear();
   restoredAssistant = null;

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/nwverse/persona/server/internal/compat"
 	"net/http"
 	"slices"
 	"sort"
@@ -13,11 +12,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/compat"
+
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/larkhost"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -280,9 +282,9 @@ func sessionSpaceKey(machineID string, c proto.Session) string {
 func (s *Service) ensureTodosLoaded(ctx context.Context) error {
 	loaded, err := s.loadTodoInventory(ctx)
 	if loaded {
-		s.rehomeSupervisedTodos(ctx)
+		s.backfillPlanSupervisors(ctx)
 		s.restoreSupervisePending(ctx)
-		s.retryOwnerWaits(ctx) // crash recovery resumes only explicitly undelivered owner pushes
+		s.migrateOwnerWaits(ctx) // waits earlier versions pushed straight to the owner go to the supervisor
 		// The links as read are the ones the marks go by from now on: one that goes away later syncs its machine
 		// again (syncLinkedTodoTokens), even before any of the links changed.
 		s.syncLinkedTodoTokens()
@@ -467,6 +469,7 @@ func (s *Service) todosLoaded() bool {
 // todosChanged tells the apps to read the todos again ({"type":"todos"}), once the rest of the write is in
 // (todosPushSoon).
 func (s *Service) todosChanged(ctx context.Context) {
+	s.trevision.changed() // seen/restored/Someday come through here too, without moving updated_at
 	s.todosPushSoon()
 	s.todoChangedSoon()
 	s.remindSoon()        // a reminder set, moved or done (todo_plan.go)
@@ -1001,6 +1004,7 @@ func (s *Service) todoRoutes() {
 	// view, and the list its counts (todo_view_routes.go); to an extension's token without the to-dos it is not shown
 	// (todo_scope.go)
 	s.handle("GET /api/v1/todos", func(w http.ResponseWriter, r *http.Request) {
+		writes := s.trevision.writes.Load()
 		list, p, err := s.todosViewed(r.Context(), true)
 		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
@@ -1008,9 +1012,12 @@ func (s *Service) todoRoutes() {
 		}
 		if r.Header.Get(RoleHeader) == roleExtension {
 			list = s.extensionRows(r.Context(), list, p)
+		} else {
+			s.tagTodoRevision(w, writes, p)
 		}
 		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts()})
 	})
+	s.handle("GET /api/v1/todos/revision", s.todoRevisionRead)
 
 	// POST /api/v1/todos: create todo {title, notes, due_at | due_date, remind_at, priority, project, kind}; kind concern
 	// records one of the owner's concerns (concerns.go): it closes only once its outcome is reported (…/decisions
@@ -1322,7 +1329,7 @@ func (s *Service) todoRoutes() {
 		if found {
 			title, cwd, agent = c.Title, c.Cwd, c.Agent
 		}
-		// An extension's token takes no run it cannot be shown (todo_scope.go): one in the health space or one off a
+		// An extension's token takes no run it cannot be shown (todo_scope.go): one in a hidden space or one off a
 		// to-do it is not shown answers 404; one the computer does not list yet, whose space cannot be told, 409
 		// agent_not_listed, to be tried again (a session just started is answered before its computer lists it).
 		if r.Header.Get(RoleHeader) == roleExtension {
@@ -1434,14 +1441,14 @@ func (s *Service) linkTodoSpace(ctx context.Context, todoID, mid, space string) 
 	spKey := spaceKey(mid, space)
 
 	var oldTodoID string
-	// The links in the health space of the to-do it takes the space from stay (healthLinksOf), in the same write: memory
+	// The links in an assistant space of the to-do it takes the space from stay (spaceLinksOf), in the same write: memory
 	// is the store's while todoBook.writing is held.
 	s.todos.mu.RLock()
 	holder := s.todos.spacesByKey[spKey]
 	s.todos.mu.RUnlock()
 	var keep db.KeptLinks
 	if holder != "" && holder != todoID {
-		keep = s.healthLinksOf(holder, mid, spKey, now)
+		keep = s.spaceLinksOf(holder, mid, spKey, now)
 	}
 	if st := s.todoDB(); st != nil {
 		var err error
@@ -1598,7 +1605,7 @@ func (s *Service) setTodoRow(id string, row db.TodoRow, guard func(*Todo) bool) 
 		s.workEvent("", "", todoReopenedEvent, reopenedEvent) // a wrong "done" in the work stats (agents_work_wrong_done.go)
 	}
 	if closing != nil {
-		s.threadPost(id, *closing) // after the lock: it looks the todo up again
+		s.chat().ThreadPost(id, *closing) // after the lock: it looks the todo up again
 		s.sourceReportSoon(id, sourceReportWait)
 	}
 	return out, doneKeys, true
@@ -1636,7 +1643,7 @@ func (s *Service) unlinkTodoSpace(ctx context.Context, todoID, mid, space string
 		return db.ErrTodoNotFound
 	}
 	now := time.Now().UTC()
-	keep := s.healthLinksOf(todoID, mid, spKey, now) // they stay, in the same write
+	keep := s.spaceLinksOf(todoID, mid, spKey, now) // they stay, in the same write
 
 	if st := s.todoDB(); st != nil {
 		if err := st.UnlinkTodoSpace(ctx, todoID, mid, space, keep); err != nil {
@@ -1694,11 +1701,11 @@ func (s *Service) TodoSpaceRenamed(ctx context.Context, r TodoSpaceRenamed) {
 	_, voided := s.todos.spacesByKey[spaceKey(r.MachineID, r.New)]
 	holder := s.todos.spacesByKey[oldKey]
 	s.todos.mu.RUnlock()
-	// The holder's links in the health space stay when the rename voids the space, in the same write (the store
+	// The holder's links in an assistant space stay when the rename voids the space, in the same write (the store
 	// decides whether it does).
 	var keep db.KeptLinks
 	if holder != "" {
-		keep = s.healthLinksOf(holder, r.MachineID, oldKey, time.Now().UTC())
+		keep = s.spaceLinksOf(holder, r.MachineID, oldKey, time.Now().UTC())
 	}
 	if st := s.todoDB(); st != nil {
 		var err error
@@ -1852,13 +1859,13 @@ func (s *Service) linkTodoSpaceAgent(ctx context.Context, todoID, mid, key strin
 // Callers release it before notifying the hub or contacting nodes.
 func (s *Service) writeTodoAgentLink(ctx context.Context, todoID, mid, sid, title, cwd, agent, startError, source, via string, allowDone bool) error {
 	now := time.Now().UTC()
-	// A link keeps a directory in the health space: a run's directory follows its shell's cd, and where it worked tells
-	// the to-do's history as the space's for good (todosHidden, #10941).
-	if cwd != "" && !identity.InHealthSpace(cwd) {
+	// A link keeps a directory in a space (identity.InSpace): a run's directory follows its shell's cd, and where it
+	// worked tells the to-do's history as the space's for good (todosHidden, #10941).
+	if cwd != "" && !identity.InSpace(cwd) {
 		s.todos.mu.RLock()
 		if t := s.todos.todos[todoID]; t != nil {
 			for _, a := range t.Agents {
-				if a.MachineID == mid && a.SessionID == sid && identity.InHealthSpace(a.Cwd) {
+				if a.MachineID == mid && a.SessionID == sid && identity.InSpace(a.Cwd) {
 					cwd = a.Cwd
 				}
 			}
@@ -1976,7 +1983,7 @@ func (s *Service) failTodoIf(ctx context.Context, id, reason string, keep func(T
 	t := s.todos.todos[id]
 	var before Todo
 	var failKeys [][2]string
-	var closing *threadEvent
+	var closing *larkhost.ThreadEvent
 	if t != nil {
 		before = copyTodoLocked(t)
 		closing = threadClosing(t.DoneAt == nil, reason, "")
@@ -1999,7 +2006,7 @@ func (s *Service) failTodoIf(ctx context.Context, id, reason string, keep func(T
 		return false, db.ErrTodoNotFound
 	}
 	if closing != nil {
-		s.threadPost(id, *closing)
+		s.chat().ThreadPost(id, *closing)
 		s.sourceReportSoon(id, threadPostSettle) // no outcome is coming for a start that failed
 	}
 	if len(failKeys) > 0 {
@@ -2219,4 +2226,16 @@ func cleanPromptTitle(prompt string) string {
 		}
 	}
 	return ""
+}
+
+// threadClosing is what the topic is told when a todo became done (nil when it did not): why, when the hub's judge
+// closed it or its agent never started.
+func threadClosing(becameDone bool, startError, doneReason string) *larkhost.ThreadEvent {
+	switch {
+	case !becameDone:
+		return nil
+	case startError != "":
+		return &larkhost.ThreadEvent{Kind: larkhost.ThreadTodoFailed, Text: clip(oneLine(startError), 80)}
+	}
+	return &larkhost.ThreadEvent{Kind: larkhost.ThreadTodoDone, Text: clip(oneLine(doneReason), 80)}
 }

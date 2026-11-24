@@ -31,9 +31,11 @@ func newQuietServiceOn(t testing.TB, st Store) (*Service, *fakeHub) {
 	t.Cleanup(func() { agentReachAttempts, agentReachBackoff, agentReachMax = reachA, reachB, reachM })
 	s, f := newTaskServiceOn(t, st)
 	shortSupervise(t, s)
+	f.mu.Lock()
 	f.hello.Assistant.MachineID = "server"
-	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	f.known["conv1"] = true
+	f.mu.Unlock()
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
 	return s, f
 }
@@ -78,7 +80,7 @@ func agentTurn(s *Service, f *fakeHub, status, text string, pending int) {
 	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: status, State: st,
 		LastText: text, PendingInteractions: pending, UpdatedAt: time.Now()})
 	if status == proto.StatusWorking {
-		s.taskWorking(ctx, "box", "s1")
+		s.taskWorking(ctx, "box", "s1", startRow{})
 	} else {
 		s.taskTurnEnded(ctx, "box", "s1")
 	}

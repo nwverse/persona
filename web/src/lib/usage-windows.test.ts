@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { initI18n } from "../i18n";
 import { balanceAccounts, balanceEmpty, balanceText } from "./usage-balance";
-import { accountPace, countdown, fullest, groupByProvider, isBalanceAccount, liveAccounts, pace, planNote, providerTitle, resetLabel, sampleAge, sortedWindows, sortForCard, sourceNames, providerTimeline, remainingText, timelinePosition, topAccounts, windowKey, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
+import { countdown, fullest, groupByProvider, isBalanceAccount, isPinnableUsageAccount, liveAccounts, parsePinnedUsageAccounts, planNote, providerTimeline, providerTitle, remainingText, resetLabel, sampleAge, selectSidebarUsageAccounts, sortedWindows, sortForCard, sourceNames, timelinePosition, topAccounts, windowKey, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
+import { accountPace, pace } from "./usage-pace";
 
 const NOW = new Date(2026, 10, 5, 10, 0, 0).getTime(); // local time, so same-day checks do not depend on the zone
 const at = (ms: number) => new Date(NOW + ms).toISOString();
@@ -127,6 +128,17 @@ describe("which accounts show", () => {
     expect(got.map((a) => a.id)).toEqual(["ok", "mixed"]);
     expect(got[1].windows.map((w) => w.label)).toEqual(["7d"]);
   });
+  it("keeps notice-only accounts in liveAccounts while excluding them from topAccounts bars and pinning", () => {
+    const noticeOnly: UsageAccount = { id: "cool", provider: "claude", name: "Cooldown seat", windows: [], sampled_at: at(-60_000), notice: "Cooldown · resumes in 20m" };
+    const blankNotice: UsageAccount = { id: "blank", provider: "claude", name: "Blank", windows: [], sampled_at: at(-60_000), notice: "   " };
+    const ok = account("ok", 40);
+    const got = liveAccounts([noticeOnly, blankNotice, ok], NOW);
+    expect(got.map((a) => a.id)).toEqual(["cool", "ok"]);
+    expect(isPinnableUsageAccount(noticeOnly)).toBe(false);
+    expect(isPinnableUsageAccount(ok)).toBe(true);
+    expect(topAccounts(got).map((a) => a.id)).toEqual(["ok"]);
+    expect(selectSidebarUsageAccounts(got, ["cool"])).toEqual({ bars: [expect.objectContaining({ id: "ok" })], balances: [], custom: false });
+  });
   it("ages kept numbers by stale_at, whatever the hub said when it answered (#1905)", () => {
     const kept = account("kept", 10, { stale_at: at(-H) }); // fresh when the hub answered, an hour past its time now
     const fresh = account("fresh", 10, { stale_at: at(H) });
@@ -141,6 +153,22 @@ describe("which accounts show", () => {
     expect(topAccounts(list).map((a) => a.id)).toEqual(["c", "d"]);
     expect(topAccounts([account("a", 20), account("b", 90, { stale: true })]).map((a) => a.id)).toEqual(["a", "b"]);
     expect(fullest({ ...account("x", 1), windows: [win("5h", 300, 30), win("7d", 10080, 70)] })).toBe(70);
+  });
+  it("keeps tied sidebar percentages in provider and ID order across polls", () => {
+    const first = [
+      account("third", 38.1),
+      account("second", 38.4, { provider: "agy" }),
+      account("first", 38, { provider: "antigravity" }),
+    ];
+    const next = [
+      account("first", 38.4, { provider: "agy" }),
+      account("third", 38.4),
+      account("second", 38, { provider: "antigravity" }),
+    ];
+    for (const poll of [first, next]) {
+      expect(topAccounts(poll).map((a) => a.id)).toEqual(["first", "second"]);
+    }
+    expect(topAccounts([account("low", 38), account("high", 39)]).map((a) => a.id)).toEqual(["high", "low"]);
   });
 });
 
@@ -198,18 +226,73 @@ describe("prepaid balances (#11825)", () => {
   });
 });
 
+describe("pinned sidebar usage accounts (#12418)", () => {
+  const bal = (id: string, amount: string): UsageAccount => ({ id, provider: "deepseek", name: "DeepSeek", windows: [], sampled_at: at(-60_000), balance: { amount, currency: "CNY" } });
+  const live = (): UsageAccount[] => [
+    account("codex", 85, { provider: "codex", name: "Codex Pro" }),
+    account("claude", 60, { provider: "claude", name: "Claude Max" }),
+    account("agy", 15, { provider: "agy", name: "Antigravity" }),
+    bal("ds", "12.34"),
+  ];
+
+  it("parses stored IDs with deduplication and tolerates malformed JSON", () => {
+    expect(parsePinnedUsageAccounts(null)).toEqual([]);
+    expect(parsePinnedUsageAccounts("")).toEqual([]);
+    expect(parsePinnedUsageAccounts("{not-json")).toEqual([]);
+    expect(parsePinnedUsageAccounts('{"a":1}')).toEqual([]);
+    expect(parsePinnedUsageAccounts('["agy", "codex", "agy", "", "  ", 42, " ds "]')).toEqual(["agy", "codex", "ds"]);
+  });
+
+  it("keeps automatic top-2 + balance behavior when nothing is pinned", () => {
+    const picked = selectSidebarUsageAccounts(live(), []);
+    expect(picked.custom).toBe(false);
+    expect(picked.bars.map((a) => a.id)).toEqual(["codex", "claude"]);
+    expect(picked.balances.map((a) => a.id)).toEqual(["ds"]);
+  });
+
+  it("selects pinned window and balance accounts in pinned order", () => {
+    const onlyAgy = selectSidebarUsageAccounts(live(), ["agy"]);
+    expect(onlyAgy.custom).toBe(true);
+    expect(onlyAgy.bars.map((a) => a.id)).toEqual(["agy"]);
+    expect(onlyAgy.balances).toEqual([]);
+
+    const mixed = selectSidebarUsageAccounts(live(), ["agy", "ds", "codex"]);
+    expect(mixed.custom).toBe(true);
+    expect(mixed.bars.map((a) => a.id)).toEqual(["agy", "codex"]);
+    expect(mixed.balances.map((a) => a.id)).toEqual(["ds"]);
+
+    const onlyBalance = selectSidebarUsageAccounts(live(), ["ds"]);
+    expect(onlyBalance.custom).toBe(true);
+    expect(onlyBalance.bars).toEqual([]);
+    expect(onlyBalance.balances.map((a) => a.id)).toEqual(["ds"]);
+  });
+
+  it("shows surviving pinned accounts on partial loss and falls back cleanly when all pinned accounts are offline", () => {
+    const partial = selectSidebarUsageAccounts(live(), ["gone", "agy"]);
+    expect(partial.custom).toBe(true);
+    expect(partial.bars.map((a) => a.id)).toEqual(["agy"]);
+    expect(partial.balances).toEqual([]);
+
+    const fallback = selectSidebarUsageAccounts(live(), ["gone-1", "gone-2"]);
+    expect(fallback.custom).toBe(false);
+    expect(fallback.bars.map((a) => a.id)).toEqual(["codex", "claude"]);
+    expect(fallback.balances.map((a) => a.id)).toEqual(["ds"]);
+  });
+});
+
 describe("provider cards and the reset timeline (#13173)", () => {
   const acct = (id: string, name: string, provider: string, windows: UsageWindow[], sampled = at(-60_000)): UsageAccount => ({ id, name, provider, windows, sampled_at: sampled });
   it("lists the 5h window, then 7d, then the rest, per-model allowances last", () => {
     const a = acct("a", "A", "claude", [{ ...win("7d", 10080, 1, 3 * H), model: "Fable" }, win("1d", 1440, 1, H), win("7d", 10080, 1, 5 * H), win("5h", 300, 1, H)]);
     expect(sortedWindows(a).map((w) => `${w.label}${w.model ? "*" : ""}`)).toEqual(["5h", "7d", "1d", "7d*"]);
   });
-  it("sorts a card's accounts by the 7d reset, soonest first, those without one last, then by name", () => {
+  it("sorts a card's accounts by the 7d reset, soonest first, those without one last, then case-insensitive name and id", () => {
     const a1 = acct("1", "Zed", "claude", [win("5h", 300, 1, H), win("7d", 10080, 1, 48 * H)]);
     const a2 = acct("2", "Amy", "claude", [win("7d", 10080, 1, 5 * H)]);
-    const a3 = acct("3", "Bob", "claude", [win("5h", 300, 1, H)]);
+    const a3 = acct("3", "bob", "claude", [win("5h", 300, 1, H)]);
     const a4 = acct("4", "Abe", "claude", [win("7d", 10080, 1)]); // no reset time
-    expect(sortForCard([a1, a3, a4, a2]).map((a) => a.name)).toEqual(["Amy", "Zed", "Abe", "Bob"]);
+    const a5 = acct("5", "Abe", "claude", [win("7d", 10080, 1)]); // same name, tie-broken by id
+    expect(sortForCard([a1, a3, a5, a4, a2]).map((a) => `${a.name}:${a.id}`)).toEqual(["Amy:2", "Zed:1", "Abe:4", "Abe:5", "bob:3"]);
   });
   it("groups by provider in the hub's order, with the newest sample of each", () => {
     const g = groupByProvider([acct("1", "A", "claude", [], at(-5 * H)), acct("2", "B", "codex", [], at(-H)), acct("3", "C", "claude", [], at(-2 * H))]);

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -44,6 +44,7 @@ type todoReminderSend struct {
 	owner                   string
 	pairedAt                time.Time
 	private                 bool
+	space                   string // the track the notice is said for when private
 	noticeTitle, noticeBody string
 	botAttempted            bool
 }
@@ -51,7 +52,11 @@ type todoReminderSend struct {
 // feishuTodoReminder keeps the claimed reminder's Feishu copy alive within the mirror's existing retry bounds.
 // Each attempt rechecks readiness in feishuTodoPush; the phone push and reminder claim are never repeated.
 func (s *Service) feishuTodoReminder(machine, session, title, body string, todo Todo) {
-	send := &todoReminderSend{}
+	s.feishuTodoReminderSend(machine, session, title, body, todo, &todoReminderSend{})
+}
+
+// feishuTodoReminderSend is feishuTodoReminder starting from send (a privacy decision the reminder already took).
+func (s *Service) feishuTodoReminderSend(machine, session, title, body string, todo Todo, send *todoReminderSend) {
 	// A delayed callback must not replay an ambiguous send after the provider's one-hour UUID retention.
 	expires := time.Now().Add(time.Hour).Round(0)
 	for attempt := 0; ; attempt++ {
@@ -61,7 +66,7 @@ func (s *Service) feishuTodoReminder(machine, session, title, body string, todo 
 		ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), todoReminderSendKey{}, send), 30*time.Second)
 		err := s.feishuTodoPush(ctx, machine, session, title, body, todo)
 		cancel()
-		if err == nil || feishubot.Refused(err) {
+		if err == nil || botcard.Refused(err) {
 			return
 		}
 		if attempt >= feishuMirrorRetries || todo.RemindAt == nil {
@@ -96,25 +101,28 @@ func (s *Service) feishuTodoPush(ctx context.Context, machine, session, title, b
 // keeps its conversation link, context-free reply routing and body exactly as before.
 func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, title, body, key string, r *copyReport, todo *Todo) error {
 	reminder, _ := ctx.Value(todoReminderSendKey{}).(*todoReminderSend)
-	private := false
+	private, space := false, ""
 	if todo != nil {
-		private = reminder != nil && reminder.private
+		if reminder != nil {
+			private, space = reminder.private, reminder.space // as the reminder decided for every copy (todo_plan.go)
+		}
 		if !private && todo.Origin != "" {
-			space, known := s.selfSpace(ctx, todo.Origin)
-			private = !known || space == SpaceHealth
+			var known bool
+			space, known = s.selfSpace(ctx, todo.Origin)
+			private = !known || s.trackPolicy(ctx, space).Redact
 		}
 		if reminder != nil {
-			reminder.private = private // once hidden, a missing source can never restore the notes
+			reminder.private, reminder.space = private, space // once hidden, a missing source can never restore the notes
 		}
 	}
 	if private {
 		if reminder != nil {
 			if reminder.noticeTitle == "" {
-				reminder.noticeTitle, reminder.noticeBody = healthNotice(s.botLang(ctx))
+				reminder.noticeTitle, reminder.noticeBody = s.redactedNotice(ctx, s.botLang(ctx), space)
 			}
 			title, body = reminder.noticeTitle, reminder.noticeBody
 		} else {
-			title, body = healthNotice(s.botLang(ctx))
+			title, body = s.redactedNotice(ctx, s.botLang(ctx), space)
 		}
 	}
 	st, err := s.feishuStatus(ctx)
@@ -145,20 +153,20 @@ func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, titl
 	l := s.botLang(ctx)
 	ctx = feishuSendAs(ctx, "push", machine, session)
 	cards := answerCards(l, s.linkNamer(ctx), body, false, nil, "")
-	head := feishubot.NewCard("", "", title)
+	head := botcard.NewCard("", "", title)
 	for i, ac := range cards {
 		if i == 0 {
 			// The push's title heads the card, blue (only to know), its kind as a tag; the body's own heading and status
 			// ("Please verify" / "No changes") are kept (Retitle).
-			ac.card.Retitle("", title, feishubot.Blue)
+			ac.card.Retitle("", title, botcard.Blue)
 			ac.card.Config = head.Config
 			kind := "assistant-feishu_cards.tag_notice"
 			if todo != nil {
 				kind = "assistant-feishu_cards.tag_todo"
 			}
-			ac.card.Tag(i18n.T(l, kind), feishubot.Neutral)
+			ac.card.Tag(i18n.T(l, kind), botcard.Neutral)
 		}
-		// A generic health notice must not identify the private to-do through its navigation metadata.
+		// A generic space notice must not identify the private to-do through its navigation metadata.
 		if i == len(cards)-1 && session != "" && !private {
 			if todo != nil {
 				web := todoLink(strings.TrimRight(st.PublicURL, "/"), todo.ID)
@@ -189,7 +197,7 @@ func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, titl
 			if reminder != nil && refusedWith(err, CodeChatDenied) {
 				return nil // the actual route definitively rejected the original pairing; nothing was sent
 			}
-			if again == nil && !feishubot.Refused(err) {
+			if again == nil && !botcard.Refused(err) {
 				again = err
 			}
 			if i == 0 {
@@ -241,7 +249,7 @@ func (s *Service) feishuMirror(ctx context.Context, machine, session string) {
 		return // its notify_user already went to Feishu
 	}
 	sess, ok := s.session(ctx, machine, session)
-	if !ok || sess.WokeByTask && !main || spaceOf(sess) == SpaceHealth { // a health task's runs stay off Feishu (health.go)
+	if !ok || sess.WokeByTask && !main || s.trackPolicy(ctx, spaceOf(sess)).Redact { // the runs of a space that redacts stay off Feishu (health.go)
 		return
 	}
 	if s.transientRetryTurn(ctx, sess) {
@@ -353,7 +361,7 @@ func (s *Service) feishuMirrorPost(ctx context.Context, m *mirrorSend, attempt i
 			s.logf("bots: mirror: %v", err)
 			if i == 0 {
 				// Nothing went out: the rest would read as an answer without its beginning. Tried again later.
-				if feishubot.Refused(err) || attempt >= feishuMirrorRetries {
+				if botcard.Refused(err) || attempt >= feishuMirrorRetries {
 					s.logf("bots: mirror: given up after %d tries", attempt+1)
 					return
 				}
@@ -406,13 +414,13 @@ const (
 func agentDoneState(head string, sess proto.Session) (title, color, tag string) {
 	switch {
 	case strings.HasPrefix(head, "⚠️"):
-		return strings.TrimSpace(strings.TrimPrefix(head, "⚠️")), feishubot.Red, "assistant-feishu_cards.agent_tag_failed"
+		return strings.TrimSpace(strings.TrimPrefix(head, "⚠️")), botcard.Red, "assistant-feishu_cards.agent_tag_failed"
 	case strings.HasPrefix(head, "⏳"):
-		return strings.TrimSpace(strings.TrimPrefix(head, "⏳")), feishubot.Orange, "assistant-feishu_cards.agent_tag_blocked"
+		return strings.TrimSpace(strings.TrimPrefix(head, "⏳")), botcard.Orange, "assistant-feishu_cards.agent_tag_blocked"
 	case sess.AwaitsReply:
-		return head, feishubot.Orange, "assistant-feishu_cards.agent_tag_asks"
+		return head, botcard.Orange, "assistant-feishu_cards.agent_tag_asks"
 	}
-	return head, feishubot.Green, "assistant-feishu_cards.agent_tag_done"
+	return head, botcard.Green, "assistant-feishu_cards.agent_tag_done"
 }
 
 // agentDoneHead is the finished card's head for an agent that works on a task: the task's direction and title first,
@@ -465,8 +473,9 @@ func leadAndRest(md string, n int) (lead, rest string) {
 // seen, muted, a recent notify_user, a turn asked from the bot, an inbox agent's, a quiet task's, a supervision turn's
 // and the turn of a supervised task's Agent (#8270) are all dropped before this is called. The sender still leaves out
 // the conversations that have their own Feishu path: the main conversation (the sync mirror), a scheduled task's own
-// conversation (its pushes mirror) and health, and posts nothing without the pushes switch.
-func (s *Service) feishuAgentDone(machine string, sess proto.Session, head, text, place string) {
+// conversation (its pushes mirror) and a turn notifyFinished redacted (redact), and posts nothing without the pushes
+// switch.
+func (s *Service) feishuAgentDone(machine string, sess proto.Session, head, text, place string, redact bool) {
 	ctx, cancel := context.WithTimeout(feishuSendAs(context.Background(), "agent_done", machine, sess.SessionID), 30*time.Second)
 	defer cancel()
 	f, ready := s.feishuFeatures(ctx)
@@ -474,8 +483,7 @@ func (s *Service) feishuAgentDone(machine string, sess proto.Session, head, text
 		return
 	}
 	session := sess.SessionID
-	if sess.Assistant || s.mainSessionRep(machine, session) || s.taskSessionRep(machine, session) ||
-		spaceOf(sess) == SpaceHealth {
+	if sess.Assistant || s.mainSessionRep(machine, session) || s.taskSessionRep(machine, session) || redact {
 		return
 	}
 	l := s.botLang(ctx)
@@ -499,7 +507,7 @@ func (s *Service) feishuAgentDone(machine string, sess proto.Session, head, text
 // agentDoneCard is a background agent's finished card and its plain-text fallback: the push's head and text, the
 // place it ran, the session's other name (feishuSessionNames' secondary, "" for none), and open (the conversation's
 // button, nil without a web address) as its one button.
-func agentDoneCard(l i18n.Lang, head, text, place, secondary string, sess proto.Session, open feishubot.Button) (*feishubot.Card, string) {
+func agentDoneCard(l i18n.Lang, head, text, place, secondary string, sess proto.Session, open botcard.Button) (*botcard.Card, string) {
 	title, color, tag := agentDoneState(head, sess)
 	note := func(clipped bool) string {
 		n := i18n.T(l, "assistant-feishu_cards.agent_done_note", i18n.Args{"place": place})
@@ -514,10 +522,10 @@ func agentDoneCard(l i18n.Lang, head, text, place, secondary string, sess proto.
 	limit := agentDoneClip
 	hint := i18n.T(l, "assistant-feishu_cards.agent_done_reply_hint")
 	if open != nil {
-		open["type"] = feishubot.Primary // the one thing to do with it, besides replying
+		open["type"] = botcard.Primary // the one thing to do with it, besides replying
 	}
 	var (
-		card    *feishubot.Card
+		card    *botcard.Card
 		body    string
 		clipped bool
 	)
@@ -525,12 +533,12 @@ func agentDoneCard(l i18n.Lang, head, text, place, secondary string, sess proto.
 		body = clip(text, limit)
 		clipped = len([]rune(text)) > limit
 		lead, rest := leadAndRest(body, agentDoneLead)
-		card = feishubot.NewCard(title, color, title).Subtitle(dotJoin(i18n.T(l, "assistant-feishu_cards.agent_done_note", i18n.Args{"place": place}), secondary)).
-			Tag(i18n.T(l, tag), color).Markdown(feishubot.CardMarkdown(lead)).
-			Panel(i18n.T(l, "assistant-feishu_cards.agent_done_more"), false, feishubot.CardMarkdown(rest))
-		meta := []string{feishubot.EscapeMarkdown(hint)}
+		card = botcard.NewCard(title, color, title).Subtitle(dotJoin(i18n.T(l, "assistant-feishu_cards.agent_done_note", i18n.Args{"place": place}), secondary)).
+			Tag(i18n.T(l, tag), color).Markdown(botcard.CardMarkdown(lead)).
+			Panel(i18n.T(l, "assistant-feishu_cards.agent_done_more"), false, botcard.CardMarkdown(rest))
+		meta := []string{botcard.EscapeMarkdown(hint)}
 		if clipped {
-			meta = append([]string{feishubot.EscapeMarkdown(i18n.T(l, "assistant-feishu_cards.only_beginning"))}, meta...)
+			meta = append([]string{botcard.EscapeMarkdown(i18n.T(l, "assistant-feishu_cards.only_beginning"))}, meta...)
 		}
 		card.Meta(meta...).Buttons(open)
 		if len(card.JSON()) <= answerCardMaxBytes || limit <= agentDoneClip/8 {

@@ -165,7 +165,7 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 		b.chainAdd(it, confirmedEntry(l, text, edited, now))
 	}
 	if !enabled && !execute {
-		b.releaseInboxAgent(it, HandlingFailed, i18n.T(b.userLang(), "assistant-inbox_agent.disabled"), now)
+		b.releaseInboxAgent(it, HandlingFailed, i18n.T(b.userLang(), "assistant-inbox_agent.disabled"), now, false)
 		b.settle(w)
 	}
 	last := it.Last
@@ -269,7 +269,7 @@ func (s *Service) confirmAgent(ctx context.Context, it *InboxItem, g *InboxSugge
 		cwd = "~"
 	}
 	args, _ := json.Marshal(map[string]string{"machine": machine, "cwd": cwd, "prompt": text})
-	res, err := s.runTool(ctx, s.settings(ctx).MachineID, self, "agent_start", args)
+	res, err := s.runTool(ownerConfirmed(ctx), s.settings(ctx).MachineID, self, "agent_start", args)
 	enabled := s.inboxConfig(ctx).Agent.Enabled
 	now := time.Now()
 	b.mu.Lock()
@@ -291,7 +291,7 @@ func (s *Service) confirmAgent(ctx context.Context, it *InboxItem, g *InboxSugge
 		_ = res
 	}
 	if !enabled {
-		b.releaseInboxAgent(it, HandlingFailed, i18n.T(b.userLang(), "assistant-inbox_agent.disabled"), now)
+		b.releaseInboxAgent(it, HandlingFailed, i18n.T(b.userLang(), "assistant-inbox_agent.disabled"), now, false)
 	}
 	out := it.listed()
 	b.mu.Unlock()

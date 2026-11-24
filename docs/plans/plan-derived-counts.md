@@ -504,6 +504,14 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
   PR pins it counted, and step 5 gives it no held Why. A confirmation, or a decided bound on the hold, is a new line
   here; the state path then also leaves out a session whose needs_you comes only from a terminal dialog with a held
   screen card.
+  *2026-11-23 owner confirmed: routed terminal questions are held.* A card a task's supervisor holds (`delegating` on
+  any kind but `question`: a permission, a plan, or a routed terminal question of kind `screen`) is the supervisor's
+  until `ask_escalate` hands it to the owner: it is not listed in the owner's Needs you and counts nowhere (list, header,
+  filter and badges), the clients offer no way to answer it, and a session whose pending cards are all so held is no
+  row, the terminal dialog behind a held screen card included. A `delegating` question (the assistant deciding whether
+  it may answer for the owner) stays as decided above. `spec/fixtures/needs-you` pins it in
+  `a_routed_terminal_question_is_held` and `a_supervisor_held_card_beside_an_open_one_leaves_the_row`; iOS follows,
+  Android carries D11 marks until its own change.
 - **D12** Numbers outside the running app. *Decided 2026-11-22:* never a plain `aps.badge` (the relay's alert
   template carries none, and one push group's badge would overwrite the others' share); Android sets no notification
   number; the watch reads no views (`answerReads` unchanged; the phone fills WatchSummary from views at step 9). Numbers
@@ -552,6 +560,12 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
   accepted, since the built-in manager updates with the hub and diagnostics name an external manager's build. A change
   of unit, such as unread against action items, is a new id. Under D5 clients name their ids, so a new id for every
   refinement would cost a client release each time.
+- **D19** The main conversation's waiting count and its exact list (new with the owner's 2026-11-22 scope revision):
+  only current questions the user must answer, authorizations only the user can give and deliveries explicitly
+  requiring user acceptance count. Unstarted or failed-start tasks, agent permission requests, terminal dialogs and
+  superseded questions stay with the supervisor and do not inflate this number. Selecting it opens exactly those
+  counted items on iPhone and the shared web/Mac UI. This surface does not change D1's Agents-list badge, D8's To-dos
+  count or their rows, and it does not settle D11's open routed-terminal case for those other surfaces.
 
 ### 6.2 What the decisions change in the steps
 

@@ -31,6 +31,8 @@ export interface Machine {
   deploy_reason?: string;
   deploy_phase?: "waiting_idle" | "transferring" | "restarting" | "confirming";
   deploy_error?: string;
+  /** Where the owning assistant obtained the program for this deployment, when known. */
+  deploy_source?: "hub_package" | "local_build";
   system?: { name?: string; model?: string; cpu?: string; cores?: number; memory?: number };
   /** The terminal engine its sessions come from (herdr when absent); `engines`: what its node found, empty while offline. */
   engine?: string;
@@ -456,6 +458,9 @@ export interface Session {
   /** Working only because of background commands that only wait (sleep, a check loop, gh … --watch; #6045): shown
    *  as "Waiting in the background", lighter, and not counted as Working. An older hub never sends it. */
   background_waiting?: boolean;
+  /** Working on background commands that have used no CPU and written no output since this time (#13744; a known
+   *  worker, set once that has lasted ten minutes, omitted otherwise). The state is still Working: a hint, not a state. */
+  background_stalled_since?: string;
   rev?: number;
   suggestion?: string;
   /** The suggestion names a command, a path, a link, a secret-looking string or a risky action (#4644): it is filled
@@ -887,6 +892,9 @@ export interface SessionChildren {
 }
 
 export const SESSION_REVIEW_FEATURE = "session_review";
+/** The hub feature that says it has git/review (lib/session-review.ts). Here, not there, so the chat's check for it
+ *  keeps session-review.ts off the first screen. */
+export const REVIEW_FEATURE = "git_review";
 export const SESSION_REVIEW_TOOL = "persona_session_review";
 
 export function isSessionReview(ix: Pick<Interaction, "kind" | "tool_name">): boolean {
@@ -1044,8 +1052,8 @@ export interface AssistantInfo {
   timezone?: string;
   notes?: string;
   notes_effective?: string;
-  /** The side conversations the user made leaders (docs/assistant/unified-entry.md "Leader conversations"): absent
-   *  when there are none or from an older hub. The sidebar shows them first among the Persona chats, as pinned. */
+  /** The current directions' opaque ids, in hub order: a conversation-backed id indexes `conversations`; an external
+   *  one has no Persona conversation and gets its target from the direction tree or `/assistant/leaders` (#8236). */
   leaders?: string[];
   /** "Fold background rounds" in effect (#4314, docs/assistant/assistant.md "Background rounds"); absent from an older hub, which means on. */
   main_background_folded?: boolean;

@@ -17,9 +17,17 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/ci"))
 import apple_build_watch as watch
+sys.path.insert(0, str(ROOT / "scripts/test"))
+import test_apple_offline_project as offline_project
 
 
 class CompilerResourceTests(unittest.TestCase):
+    @staticmethod
+    def offline_project_fixture():
+        case = offline_project.AppleOfflineProjectTests()
+        case.setUp()
+        return case.project
+
     def test_only_compiler_names_and_resource_counts_are_recorded(self):
         result = subprocess.CompletedProcess([], 0, "\n".join([
             "  10  2 80.5 123456 00:10 00:02.50 /Toolchain/usr/bin/swift-frontend -module-name Example -primary-file /build/Example.swift -o /build/Example.o",
@@ -147,8 +155,28 @@ class CompilerResourceTests(unittest.TestCase):
         self.assertEqual(parsed["unavailable"], "TimeoutExpired")
         self.assertIsNotNone(process.poll())
 
+    def test_valid_darwin_duration_forms_keep_their_existing_values(self):
+        for value, expected in (
+            ("00:00", 0.0),
+            ("00:00.25", 0.25),
+            ("01:02", 62.0),
+            ("01:02:03.50", 3723.5),
+            ("1-00:00", 86400.0),
+            ("1-02:03:04", 93784.0),
+            ("0001-0002:0003", 86523.0),
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(watch.duration(value), expected)
+
     def test_invalid_frontend_durations_fail_closed_in_both_collectors(self):
-        for value in ("invalid", "00:invalid", "invalid:00", "nan", "inf"):
+        for value in (
+            "invalid", "00:invalid", "invalid:00", "nan", "inf",
+            "1--01:02", "00:1e2", "9" * 400 + "-00:00",
+            "1-2-03:04", "00::01", "00:01:02:03",
+            "00:1_2", "00:+1", "00:-1", "00:01.", "00:.01",
+            "1.5:02", "01:2.5:03", "00:NaN", "00:Infinity",
+            "00:０１", "０１:02", "٠١:02", "00:٠٢", "１-00:00",
+        ):
             with self.subTest(value=value):
                 self.assertIsNone(watch.duration(value))
                 line = (f"42 2 90.0 6000 00:05 {value} Sun Nov 22 10:00:00 2026 "
@@ -933,14 +961,27 @@ class CompilerResourceTests(unittest.TestCase):
                 printf '%s\\n' "$@" > "$FIXTURE_XCODE_ARGS"
             '''))
             (fixture / "xcodebuild").chmod(0o755)
+            (fixture / "xcodegen").write_text(textwrap.dedent('''\
+                #!/bin/bash
+                printf '%s\\n' "$*" >> "$FIXTURE_XCODEGEN_ARGS"
+                if [[ "$*" == *dump* ]]; then
+                  /usr/bin/python3 -c 'import json,os;from pathlib import Path;p=json.loads(Path(os.environ["FIXTURE_WHOLE"]).read_text());print(json.dumps(p))'
+                fi
+            '''))
+            (fixture / "xcodegen").chmod(0o755)
+            (fixture / "whole.json").write_text(json.dumps(self.offline_project_fixture()))
             for lane, budget in expected_build.items():
                 with self.subTest(lane=lane):
                     output = fixture / ("output " + lane)
+                    if budget is not None:
+                        output.mkdir()
                     watch_args = fixture / ("watch-" + lane)
                     xcode_args = fixture / ("xcode-" + lane)
                     calls = fixture / ("calls-" + lane)
                     env = {**os.environ, "PATH": str(fixture) + ":/usr/bin:/bin",
                            "FIXTURE_WATCH_ARGS": str(watch_args), "FIXTURE_XCODE_ARGS": str(xcode_args),
+                           "FIXTURE_WHOLE": str(fixture / "whole.json"),
+                           "FIXTURE_XCODEGEN_ARGS": str(fixture / ("xcodegen-" + lane)),
                            "FIXTURE_CALLS": str(calls)}
                     prefix = '''set -euo pipefail
                     ci_run() {
@@ -950,6 +991,9 @@ class CompilerResourceTests(unittest.TestCase):
                     }
                     CI_ROOT=''' + shlex.quote(str(ROOT)) + '''
                     OUTPUT=''' + shlex.quote(str(output)) + '''
+                    OFFLINE_PROJECT=/fixture/PersonaOfflineUnitTests.xcodeproj
+                    SOURCE=/fixture
+                    SPM=/fixture/cache
                     XCODE=(xcodebuild -project /fixture/Persona.xcodeproj -configuration Debug
                       -clonedSourcePackagesDirPath /fixture/cache)
                     TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual
@@ -964,13 +1008,20 @@ class CompilerResourceTests(unittest.TestCase):
                         self.assertFalse(xcode_args.exists())
                         self.assertFalse(output.exists())
                         continue
-                    self.assertEqual(calls.read_text(), str(budget) + "\n")
+                    self.assertEqual(calls.read_text(), "120\n120\n" + str(budget) + "\n")
+                    generated = json.loads((output / "PersonaOfflineUnitTests.json").read_text())
+                    self.assertEqual(set(generated["targets"]), {
+                        "Persona", "PersonaTests", "PersonaWidgets", "PersonaNotify",
+                    })
+                    self.assertEqual(generated["targets"]["Persona"]["dependencies"],
+                                     self.offline_project_fixture()["targets"]["Persona"]["dependencies"][2:])
+                    self.assertIn("dump", (fixture / ("xcodegen-" + lane)).read_text())
                     self.assertIn(f"--seconds {budget}", watch_args.read_text())
                     self.assertIn(f"--derived-data {output / 'ios-tests'}", watch_args.read_text())
                     expected_args = [
-                        "-project", "/fixture/Persona.xcodeproj",
+                        "-project", "/fixture/PersonaOfflineUnitTests.xcodeproj",
                         "-configuration", "Debug",
-                        "-clonedSourcePackagesDirPath", "/fixture/cache",
+                        "-clonedSourcePackagesDirPath", "/fixture/cache/SourcePackages",
                         "-scheme", "PersonaOfflineUnitTests",
                         "-derivedDataPath", str(output / "ios-tests"),
                         "-parallel-testing-enabled", "NO",

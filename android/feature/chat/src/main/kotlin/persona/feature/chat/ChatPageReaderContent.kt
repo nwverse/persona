@@ -99,6 +99,7 @@ internal fun ChatPageReaderContent(
     lastUserId: String?,
     turnFix: TurnErrorFix?,
     fixModel: ((persona.core.designsystem.ReadinessActionId) -> Unit)?,
+    turnModelActions: TurnErrorModelActions?,
     openRecap: OpenRecap?,
     taskHost: AssistantTaskHost?,
     folding: Set<String>,
@@ -216,7 +217,8 @@ internal fun ChatPageReaderContent(
                     item(key = line.contentKey, contentType = line.contentType()) {
                         ChatSearchHighlight(search, line.contentKey) {
                             androidx.compose.runtime.CompositionLocalProvider(LocalAssistantTaskHost provides taskHost,
-                                LocalTurnErrorFixAction provides fixModel, LocalOpenRecap provides openRecap) {
+                                LocalTurnErrorFixAction provides fixModel, LocalTurnErrorModelActions provides turnModelActions,
+                                LocalOpenRecap provides openRecap) {
                                 val pictures = contentUserImages[line.id].orEmpty()
                                 val isOpening = opening != null && when (line) {
                                     is ChatLine.Row -> line.row.item?.id == opening.id || pictures.any { it.id == opening.id }
@@ -342,6 +344,6 @@ private fun ChatPageReaderNavigation(
         }
         if (showJump) ChatJumpToLatest(
             timeline, timelineVersion.value, items, newestVisibleItem, readThrough,
-            deferCount = deferCount, onClick = chatList::returnToLatest)
+            deferCount = deferCount, agentChat = agentChat, onClick = chatList::returnToLatest)
     }
 }
