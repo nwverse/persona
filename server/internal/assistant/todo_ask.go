@@ -83,7 +83,7 @@ func (s *Service) todoAsks(ctx context.Context) map[string]todoAsk {
 	l, loc := s.botLang(ctx), s.location(ctx)
 	out := map[string]todoAsk{}
 	for _, w := range s.awaitingAcceptance(ctx) {
-		a := todoAsk{Outcome: w.ask.Outcome, Verdict: verdictText(l, &w.ask), AskedAt: w.ask.AskedAt, Risk: askRisk(&w.ask)}
+		a := todoAsk{Outcome: w.ask.Outcome, Verdict: verdictText(l, &w.ask, w.delivery), AskedAt: w.ask.AskedAt, Risk: askRisk(&w.ask)}
 		if decideAsk(&w.ask) {
 			a.Recommend = w.ask.Recommend
 			if w.ask.OutsideID == "" {
@@ -181,7 +181,7 @@ func (s *Service) pushDecisionAbout(ctx context.Context, id, reason string) (boo
 	l := s.lang(ctx)
 	n := Notification{ID: "ntf_" + randomHex(8), Kind: assistantwire.NotifyDecide, Subtitle: "Persona", DeviceID: here, SessionID: sessionID,
 		Title: i18n.T(l, "assistant-reports.verdict_title", i18n.Args{"task": clip(oneLine(t.Title), 30)}),
-		Body:  verdictText(l, &a) + "\n" + recommendText(l, &a),
+		Body:  verdictText(l, &a, nil) + "\n" + recommendText(l, &a),
 		// The level goes by why it is the owner's (decisionPushLevel): one that cannot wait interrupts even with the
 		// hub's push tiering on, every time it is pushed (its reminders too); the hub keys it by to-do and round.
 		Level: decisionPushLevel(a.WhyOwner),
