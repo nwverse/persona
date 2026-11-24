@@ -6,7 +6,7 @@
 // while the page scrolls, and does not wait for Cua Driver, which the screen does not use. The screen is the screen-share
 // module's page of its own (core/module-host.ts `standalonePages`): while that module is off there is no button.
 import { MoveToManager } from "../ManagerParts";
-import { offlineManagerOf, useRoster } from "../../lib/managers";
+import { hostedManagersForMachine, offlineManagerOf, useRoster } from "../../lib/managers";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, enc, errorText, isAbort } from "../../lib/api";
 import { ago } from "../../lib/format";
@@ -52,6 +52,7 @@ import { AgentRow } from "./AgentRow";
 import { Icon } from "../../ui/icons";
 import { ProviderName } from "../../ui/ProviderName";
 import { MetricChart, type ChartSeries } from "./MetricChart";
+import { HostedManagersList } from "./HostedManagersList";
 import { MachineDeploy } from "./MachineDeploy";
 import { homeUser, LinkSwitch } from "./LinkSwitch";
 import { BrowserSection } from "./BrowserSection";
@@ -217,6 +218,7 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
   // its manager offline (several managers): that is why, and Reconnect would go through it
   const roster = useRoster();
   const goneWith = m ? offlineManagerOf(roster, m) : null;
+  const hostedManagers = useMemo(() => (m ? hostedManagersForMachine(roster, m) : []), [roster, m]);
   // a linked hub's computer is that hub's to give (`not_movable`): in a mesh every computer names its hub
   const selfHub = useStore((s) => s.mesh.find((x) => x.self)?.hub_id);
   const ownHub = !m?.hub_id || !selfHub || m.hub_id === selfHub; // one of this hub's own computers
@@ -344,7 +346,8 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
           user={homeUser(m.home)}
           className="mx-4 mb-3.5"
         />
-        <MachineDeploy machine={m} className="mb-3.5" />
+        <MachineDeploy machine={m} hostedManagers={hostedManagers} className="mb-3.5" />
+        <HostedManagersList managers={hostedManagers} nodeVersion={m.node_version} className="border-t border-line px-4 py-3" />
       </section>
 
       {/* agents */}
