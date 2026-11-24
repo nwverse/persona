@@ -28,6 +28,9 @@ final class DashboardsUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-pairURL", pair, "-AppleLanguages", "(\(language))", "-ui.scheme", appearance] + args
         app.launchPinned(navigation: false)
+        // The app follows the look with its icon; the first launch after a change has the system's notice over it.
+        let notice = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+        if notice.waitForExistence(timeout: 4) { notice.buttons.firstMatch.tap() }
         return app
     }
 
