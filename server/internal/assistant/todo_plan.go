@@ -34,6 +34,7 @@ func (t *Todo) setPlan(row db.TodoRow) {
 	t.Project = row.Project
 	t.Kind = row.Kind
 	t.SeenAt = row.SeenAt
+	t.AutoSeenUndone = row.AutoSeenUndone
 	t.RestoredAt, t.SomedayUntil = row.RestoredAt, row.SomedayUntil
 	t.InboxItem = row.InboxItem
 	t.PartOf, t.After = row.PartOf, slices.Clone(row.After)
@@ -53,6 +54,7 @@ func (t *Todo) keepPlan(row *db.TodoRow) {
 	row.Project = t.Project
 	row.Kind = t.Kind
 	row.SeenAt = t.SeenAt
+	row.AutoSeenUndone = t.AutoSeenUndone
 	row.RestoredAt, row.SomedayUntil = t.RestoredAt, t.SomedayUntil
 	row.InboxItem = t.InboxItem
 	row.PartOf, row.After = t.PartOf, slices.Clone(t.After)

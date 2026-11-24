@@ -55,6 +55,7 @@ type Facts struct {
 	Kind            string       `json:"kind,omitempty"`
 	SeenAt          *time.Time   `json:"seen_at,omitempty"`
 	PartOf          string       `json:"part_of,omitempty"`
+	After           []string     `json:"after,omitempty"`
 	// Ask is the to-do's own open ask, DecisionReview its decision round and whether the owner chose Don't handle on it.
 	Ask            *Ask            `json:"ask,omitempty"`
 	DecisionReview *DecisionReview `json:"decision_review,omitempty"`
