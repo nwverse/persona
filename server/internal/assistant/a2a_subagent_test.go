@@ -470,7 +470,13 @@ func TestA2ADefaultSubagentFlowWithoutPostgres(t *testing.T) {
 // bypass permits acceptEdits, prompting permits default and rejects acceptEdits, missing/mismatched fails closed.
 func TestA2ASendNodeRequestLiveSourcePermission(t *testing.T) {
 	ctx := context.Background()
-	s, _, _, parent, _ := memA2AFixture(t)
+	s, h, _, parent, _ := memA2AFixture(t)
+	d := newFleetDevs()
+	d.add("mac", "Mac")
+	d.add("box", "Box")
+	d.setSessions("mac", h.sessions["mac"])
+	d.setSessions("box", h.sessions["box"])
+	s.devs = d
 	call := func(args map[string]any, proof proto.SourcePermission) proto.ToolResult {
 		t.Helper()
 		rawArgs, _ := json.Marshal(args)

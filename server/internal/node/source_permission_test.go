@@ -263,13 +263,25 @@ func TestSourcePermissionA2ASendEndToEndMCPTransport(t *testing.T) {
 	if got = ask(req); got["source_permission"] != nil {
 		t.Fatalf("a2a_send in plan mode must omit source_permission: %v", got)
 	}
-	// Claiming another session produces no attestation (fail closed).
+	// Claiming another session on a2a_send is pinned to the verified local process session (sidA, never sidB).
 	p.mu.Lock()
 	p.mode = proto.ModeBypass
 	p.mu.Unlock()
 	req["session_id"] = sidB
+	got = ask(req)
+	raw, _ = json.Marshal(got["source_permission"])
+	proof = proto.SourcePermission{}
+	if got["session_id"] != sidA || json.Unmarshal(raw, &proof) != nil || proof.Session != sidA {
+		t.Fatalf("a2a_send claiming sidB must pin to verified peer session sidA (never sidB): %v", got)
+	}
+	if n.sourcePermissionIn([]int{os.Getpid()}, sidB, "a2a_send", args).Valid() {
+		t.Fatal("sourcePermissionIn attested a2a_send for another session")
+	}
+	// Exited process omits source_permission (fail closed).
+	close(p.exited)
+	req["session_id"] = sidA
 	if got = ask(req); got["source_permission"] != nil {
-		t.Fatalf("a2a_send claiming another session must omit source_permission: %v", got)
+		t.Fatalf("a2a_send from exited process must omit source_permission: %v", got)
 	}
 }
 
