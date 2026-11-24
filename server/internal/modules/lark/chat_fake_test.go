@@ -246,17 +246,6 @@ func (s *Service) ApproveOwnerAction(context.Context, botcard.MessageEvent, stri
 	return false
 }
 
-func (s *Service) StopConversation(_ context.Context, f assistantwire.FeishuFeatures, t assistantwire.ChatTarget) (string, string) {
-	if err := s.Allowed("", f, t); err != nil {
-		return "error", err.Error()
-	}
-	d := s.ch()
-	s.tmu.Lock()
-	d.stopped = append(d.stopped, t)
-	s.tmu.Unlock()
-	return "success", "stopped " + t.Kind + " " + t.SessionID
-}
-
 func (s *Service) InterruptConversation(_ context.Context, rt assistantwire.ChatResolved) (string, string) {
 	d := s.ch()
 	s.tmu.Lock()
