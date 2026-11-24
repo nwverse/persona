@@ -11,7 +11,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // The workbench (#1961, docs/extensions/bots.md "The workbench"): with the bot's `workbench` switch on, the chat gets a
@@ -29,10 +28,6 @@ const (
 	// wbFilled is Card 2.0's filled primary button: the one action a card is about.
 	wbFilled = "primary_filled"
 )
-
-func wbT(l i18n.Lang, key string, args ...i18n.Args) string {
-	return i18n.T(l, "assistant-feishu_workbench."+key, args...)
-}
 
 // workbenchCommand answers /home, /today and /inbox with the switch on; false when cmd is none of them (or the switch
 // is off), so the message goes on as it always did.
@@ -134,89 +129,6 @@ func (s *Service) workbenchNav(ctx context.Context, a *botcard.CardAction) *botc
 
 func wbNavButton(label, style, to string) botcard.Button {
 	return botcard.Btn(label, style, map[string]any{"a": "nav", "to": to})
-}
-
-// wbCounts is what the home card sums up.
-type wbCounts struct {
-	working, unread, idle int // agents by state
-	pending               int // questions and approvals waiting
-	inboxNeed, inboxFYI   int
-	inboxTop              []InboxItem
-	online, machines      int
-}
-
-// wbAgent is an agent at work, as the home card lists it.
-type wbAgent struct {
-	d    Device
-	sess proto.Session
-}
-
-// wbIdleFor is how recently an idle agent must have moved to count as one of the owner's.
-const wbIdleFor = 48 * time.Hour
-
-func (s *Service) workbenchCount(ctx context.Context, now time.Time) (wbCounts, []wbAgent) {
-	var c wbCounts
-	var busy []wbAgent
-	for _, d := range s.devices(ctx) {
-		c.machines++
-		if d.Online {
-			c.online++
-		}
-		list, _ := s.sessions(ctx, d.ID)
-		for _, sess := range list {
-			if sess.Assistant || sess.HiddenByDirectory() {
-				continue
-			}
-			switch sess.State {
-			case proto.StateNeedsYou, proto.StateWorking:
-				c.working++
-				busy = append(busy, wbAgent{d, sess})
-			case proto.StateUnread:
-				c.unread++
-				busy = append(busy, wbAgent{d, sess})
-			case proto.StateIdle:
-				if now.Sub(sess.UpdatedAt) < wbIdleFor {
-					c.idle++
-				}
-			}
-		}
-	}
-	order := map[string]int{proto.StateNeedsYou: 0, proto.StateWorking: 1, proto.StateUnread: 2}
-	slices.SortStableFunc(busy, func(a, b wbAgent) int { return order[a.sess.State] - order[b.sess.State] })
-	c.pending = len(s.visiblePendingInteractions())
-	for _, it := range s.workbenchInbox() {
-		if wbNeedsYou(it) {
-			c.inboxNeed++
-			if len(c.inboxTop) < wbHomeRows {
-				c.inboxTop = append(c.inboxTop, it)
-			}
-		} else {
-			c.inboxFYI++
-		}
-	}
-	return c, busy
-}
-
-func wbNeedsYou(it InboxItem) bool { return it.Tier == TierAction || it.Urgent }
-
-// workbenchInbox is the open Inbox without its noise, what needs the owner first, newest first within.
-func (s *Service) workbenchInbox() []InboxItem {
-	var open []InboxItem
-	for _, it := range s.inboxList(true) {
-		if it.DoneAt == nil && it.Tier != TierNoise {
-			open = append(open, it)
-		}
-	}
-	slices.SortStableFunc(open, func(a, b InboxItem) int {
-		if na, nb := wbNeedsYou(a), wbNeedsYou(b); na != nb {
-			if na {
-				return -1
-			}
-			return 1
-		}
-		return b.UpdatedAt.Compare(a.UpdatedAt)
-	})
-	return open
 }
 
 // homeCard is the workbench: where messages go (its subtitle), what waits for the owner (each a row that brings its card
@@ -339,37 +251,6 @@ func (s *Service) homeCard(ctx context.Context, f FeishuFeatures) (card *botcard
 	said = card.JSON()
 	card.Note(wbT(l, "home_note_pinned", i18n.Args{"time": now.In(loc).Format("15:04")}))
 	return card, clip(strings.TrimSpace(fb.String()), reportFallbackMax), said
-}
-
-// agentStateTags are the tags an agent's state is shown with in a list: what the owner is to act on orange, at work
-// blue, done and not yet read green, the rest grey.
-var agentStateTags = map[string]struct{ key, color string }{
-	proto.StateNeedsYou: {"assistant-feishu_cards.state_needs_you", botcard.Orange},
-	proto.StateWorking:  {"assistant-feishu_cards.state_working", botcard.Blue},
-	proto.StateUnread:   {"assistant-feishu_cards.state_unread", botcard.Green},
-	proto.StateIdle:     {"assistant-feishu_cards.state_idle", botcard.Neutral},
-}
-
-// agentRowMarkdown is an agent as a list row shows it: its state as a tag, its label and computer, the session's other
-// name (feishuSessionNames' secondary) under them, and its last words (up to last runes) in grey.
-func agentRowMarkdown(l i18n.Lang, label, secondary, machine string, sess proto.Session, last int) string {
-	line := "**" + botcard.EscapeMarkdown(label) + "** · " + botcard.EscapeMarkdown(machine)
-	if st, ok := agentStateTags[sess.State]; ok {
-		line = botcard.InlineTag(i18n.T(l, st.key), st.color) + " " + line
-	}
-	if secondary != "" {
-		line += "\n" + botcard.EscapeMarkdown(secondary)
-	}
-	if sess.LastText != "" {
-		line += "\n<font color='grey'>" + botcard.EscapeMarkdown(clip(oneLine(stripMarkdownMarks(sess.LastText)), last)) + "</font>"
-	}
-	return line
-}
-
-// stripMarkdownMarks is a line without its Markdown marks (an agent's last words on one line, not a renderer).
-func stripMarkdownMarks(s string) string {
-	r := strings.NewReplacer("```", "", "**", "", "`", "", "## ", "", "# ", "", "> ", "")
-	return r.Replace(s)
 }
 
 func wbWho(it InboxItem) string {
@@ -569,19 +450,6 @@ func inboxCanReply(it InboxItem) bool {
 	return it.Lark != nil || it.Mail != nil
 }
 
-// workbenchItem is the item a card's button names, as listed, while it is open or done within inboxKeepDone (the list
-// carries only the newest of those, inbox_list_done.go, so it is looked up by id rather than in a list).
-func (s *Service) workbenchItem(id string) (InboxItem, bool) {
-	b := &s.inbox
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	it, ok := b.items[id]
-	if !ok || it.DoneAt != nil && it.DoneAt.Before(time.Now().Add(-inboxKeepDone)) {
-		return InboxItem{}, false
-	}
-	return it.listed(), true
-}
-
 // workbenchInboxAction answers an Inbox button ({a: ib, op, id}): done and mute change the list card in place;
 // drafting posts a draft card (the model takes longer than the callback may), and sending it updates that card. The
 // hub checked the owner pressed it; sending is the same reply the app's Send makes, once per draft card.
@@ -712,15 +580,6 @@ func (s *Service) draftCard(ctx context.Context, it InboxItem, text string, err 
 	}
 	card.Note(botcard.EscapeMarkdown(reply))
 	return card
-}
-
-// wbModeSelect is the /start form's permission field: one of proto.PermissionModes, or none (the launcher's own).
-func wbModeSelect(l i18n.Lang) map[string]any {
-	opts := make([]botcard.Option, 0, len(proto.PermissionModes))
-	for _, m := range proto.PermissionModes {
-		opts = append(opts, botcard.Option{Label: wbT(l, "mode_"+m), Value: m})
-	}
-	return botcard.Select("mode", wbT(l, "mode_placeholder"), opts, false)
 }
 
 // wbClock is when, as a time that stays true on a card nobody redraws: the clock today, the date before.

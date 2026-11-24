@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/botcard"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -165,4 +166,8 @@ func (s *Service) workbenchBringCard(ctx context.Context, id string) {
 		}
 	}
 	s.postInteractionCard(ctx, ix)
+}
+
+func wbT(l i18n.Lang, key string, args ...i18n.Args) string {
+	return i18n.T(l, "assistant-feishu_workbench."+key, args...)
 }

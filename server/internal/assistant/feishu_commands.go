@@ -535,3 +535,43 @@ func (s *Service) startAgentCard(ctx context.Context, prompt string) *botcard.Ca
 	}
 	return c.Form("start", fields, botcard.Submit(i18n.T(l, "assistant-feishu_cards.start"), botcard.Primary, "start_submit", map[string]any{"a": "start"}))
 }
+
+// agentStateTags are the tags an agent's state is shown with in a list: what the owner is to act on orange, at work
+// blue, done and not yet read green, the rest grey.
+var agentStateTags = map[string]struct{ key, color string }{
+	proto.StateNeedsYou: {"assistant-feishu_cards.state_needs_you", botcard.Orange},
+	proto.StateWorking:  {"assistant-feishu_cards.state_working", botcard.Blue},
+	proto.StateUnread:   {"assistant-feishu_cards.state_unread", botcard.Green},
+	proto.StateIdle:     {"assistant-feishu_cards.state_idle", botcard.Neutral},
+}
+
+// agentRowMarkdown is an agent as a list row shows it: its state as a tag, its label and computer, the session's other
+// name (feishuSessionNames' secondary) under them, and its last words (up to last runes) in grey.
+func agentRowMarkdown(l i18n.Lang, label, secondary, machine string, sess proto.Session, last int) string {
+	line := "**" + botcard.EscapeMarkdown(label) + "** · " + botcard.EscapeMarkdown(machine)
+	if st, ok := agentStateTags[sess.State]; ok {
+		line = botcard.InlineTag(i18n.T(l, st.key), st.color) + " " + line
+	}
+	if secondary != "" {
+		line += "\n" + botcard.EscapeMarkdown(secondary)
+	}
+	if sess.LastText != "" {
+		line += "\n<font color='grey'>" + botcard.EscapeMarkdown(clip(oneLine(stripMarkdownMarks(sess.LastText)), last)) + "</font>"
+	}
+	return line
+}
+
+// stripMarkdownMarks is a line without its Markdown marks (an agent's last words on one line, not a renderer).
+func stripMarkdownMarks(s string) string {
+	r := strings.NewReplacer("```", "", "**", "", "`", "", "## ", "", "# ", "", "> ", "")
+	return r.Replace(s)
+}
+
+// wbModeSelect is the /start form's permission field: one of proto.PermissionModes, or none (the launcher's own).
+func wbModeSelect(l i18n.Lang) map[string]any {
+	opts := make([]botcard.Option, 0, len(proto.PermissionModes))
+	for _, m := range proto.PermissionModes {
+		opts = append(opts, botcard.Option{Label: wbT(l, "mode_"+m), Value: m})
+	}
+	return botcard.Select("mode", wbT(l, "mode_placeholder"), opts, false)
+}
