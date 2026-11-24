@@ -663,6 +663,11 @@ nonisolated enum Theme {
         static let maxPitch: Double = 90
         static let minZoom: Double = 0.5
         static let maxZoom: Double = 4.0
+        /// A full-screen view taller than it is wide (an upright iPhone) opens at least this steep (#14335): a wide home
+        /// fills the width either way, and looking down more lets the floor plan take more of the height.
+        static let tallViewPitch: Double = 60
+        /// A pin whose spot is on screen keeps its pill at least this far inside the viewport's edges (#14335).
+        static let pinEdgeInset: CGFloat = 4
         /// The cutaway (#13036): the outer walls between the camera and the rooms are drawn this high (metres above
         /// their bottom); a wall counts as facing the camera from this cosine on, and as an outer wall when the ground
         /// this far past its camera-side face is not a floor (a prism no higher than the floor top); a shape within

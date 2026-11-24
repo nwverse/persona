@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -32,6 +33,11 @@ func TestMain(m *testing.M) {
 	// The tests make, commit to and add worktrees to repositories of their own: none of that may reach the repository
 	// this run was started from (`git bisect run` exports GIT_DIR; #13610).
 	testhome.ClearGit()
+	if os.Getenv("NODE_TEST_TASK_TERMINAL_IDLE") == "1" {
+		fmt.Println("ready")
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		os.Exit(0)
+	}
 	if os.Getenv("NODE_TEST_LAUNCH") == "1" { // the real managed-launch path, before the test harness clears its environment
 		if err := Launch(context.Background(), os.Args[2], os.Args[3:], ""); err != nil {
 			panic(err)
@@ -102,18 +108,31 @@ func TestMain(m *testing.M) {
 	for _, k := range []string{"PERSONA_HOME", legacyEnv("PERSONA_HOME")} {
 		os.Unsetenv(k)
 	}
+	// Nor the user's herdr or herdr-core: their sockets point nowhere, and no session named in the environment picks
+	// another. These tests run from inside a herdr pane, whose HERDR_SOCKET_PATH names the user's running server, and
+	// the tests that build a node's default hosts (engineHostsFor) pinged it, listed its Agents and subscribed to its
+	// events (#13549); without it the default socket is the one under the real home. A test that wants a herdr gives its
+	// client the fake's socket.
+	os.Setenv("HERDR_SOCKET_PATH", noHerdrSocket)
+	os.Unsetenv("HERDR_SESSION")
+	os.Setenv("HC_SOCKET", noHerdrCoreSocket)
+	os.Unsetenv("HC_SESSION")
 	// Nor the user's login shell: herdr's panes run zsh, whatever the machine's is (a test that wants another sets it).
 	herdrPaneShell = func() string { return "/bin/zsh" }
 	// A send looks at the box once after typing and confirms nothing: most fakes never write what was typed into the
 	// transcript, and would wait out the window (#6428). sendconfirm_test.go turns it on (withSubmitWindow).
 	submitWindow = 0
-	// Nor the Mac's Agent rules (#13393): a start's task instructions are what the test sent, on any platform. The test
-	// that wants them sets darwin (agent_dispatch_guard_test.go).
-	agentGOOS = "linux"
 	os.Exit(m.Run())
 }
 
 const orcaCwd = "/tmp/orcaproj"
+
+// noHerdrSocket and noHerdrCoreSocket are where the package's tests find the user's herdr and herdr-core: nowhere
+// (TestMain).
+const (
+	noHerdrSocket     = "/tmp/persona-test-no-herdr/herdr.sock"
+	noHerdrCoreSocket = "/tmp/persona-test-no-herdr-core/default.sock"
+)
 
 // fakeProcs is the process table the Orca host scans: agent processes by pane key.
 type fakeProcs struct {

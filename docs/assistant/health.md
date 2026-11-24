@@ -14,7 +14,7 @@ With a separate directory, Claude Code's per-directory auto memory, CLAUDE.md an
 | What ChatGPT Health does | What Persona v1 does | Later |
 | --- | --- | --- |
 | A separate Health entry in the sidebar (desktop) / menu (phone), opening an independent space ([1]) | A separate **Health** entry in the web sidebar, `/health`; **Health** in the iOS, Mac and Android assistant sidebar | Android: the rest of the Health home (memory, reports, sources) |
-| Health home: recent data and trends, synced records, suggested questions, past health chats, connected accounts ([2]) | `/health` page: a one-line privacy note, data sources (Apple Health / Health Connect via the phone), suggested questions, past health chats, health memory | Recent trend cards on the home page (using the structured cards from #886) |
+| Health home: recent data and trends, synced records, suggested questions, past health chats, connected accounts ([2]) | Health home: Today with water and protein, Activity rings on iPhone, trends on iPhone and iPad with Apple Health data, data sources, suggested questions, past health chats and health memory | More connected data sources |
 | Health memory is stored separately and does not flow back into regular chats; users can view and delete it ([3]) | The Health space has its own directory and its auto memory belongs only to it; viewable and deletable on the web; the main chat's tools cannot see health chats | Give the Health space only health-related tools |
 | Talking about health in a regular chat suggests moving to Health ([4]) | Not done | Suggest "Continue in Health" when the main chat touches on health |
 | Connected data is not used for training, with extra encryption and isolation ([5]) | All data stays on your own hub and computers; `kb_update` from a health chat is rejected (blocked in code); not sending to other chats relies on chat tools only accepting the same space; push and `phone_notify` notifications carry no health content; handing to an Agent, sending email and Lark each need confirmation on the phone ("outbound") | More data sources: medical records, checkup report uploads, heart rate / HRV from recordings (#1950) |
@@ -35,7 +35,7 @@ Sources:
   `identity.HealthDir`, `identity.SpaceHealth`, `identity.SpaceOf` are in `server/internal/identity/paths.go`; `IsAssistantDir` also holds for the health directory,
   so health chats, like assistant chats, are "assistant chats" (`assistant: true`) and use the same tools, authorization and questions.
 - **CLAUDE.md**: the Health space has its own `server/internal/prompts/assistant/health_claude_md.md` (golden: `server/internal/assistant/testdata/prompts/health_claude_md.golden`):
-  talk only about health; read data with `phone_health_summary`, record data with `phone_health_write_sample` (confirmed on the phone); do not write to the knowledge base or send health content to other chats; when the user wants to share with someone (doctor, coach, family), help send it, with the send confirmed on the phone;
+  talk only about health; read system data with `phone_health_summary`; log Persona water and protein with `health_intake`, and other data such as weight and sleep with `phone_health_write_sample` (confirmed on the phone); do not write to the knowledge base or send health content to other chats; when the user wants to share with someone (doctor, coach, family), help send it, with the send confirmed on the phone;
   no diagnosis, no prescribing; on danger signs, tell the user to seek medical care first; when discussing numbers, attach a chart card by default ("Charts" below). Connector and plugin skills are installed the same way as in the assistant directory, but the instructions plugins give the assistant (`plugins.Instructions`) are not added to the health CLAUDE.md: those were written for the main chat's work scenarios, and v1 deliberately leaves them out.
 - **Memory**: Claude Code's auto memory is per working directory (`~/.claude/projects/<encoded dir>/memory/`). Only health chats read and write the health directory's memory; it is not in the main chat's context, and vice versa.
 - **Files** (#3282): the main chat's Claude can read files on the computer with Read / Bash; separate directories do not mean unreadable. So the main chat (not the Health space's assistant chat) starts with deny rules:
@@ -123,7 +123,7 @@ A track is of a kind (#13472): a config whose every field picks one of the optio
 - **Recordings in a track** (#13501): a recording upload with `space` (`PUT /api/v1/recordings/{id}`, `docs/protocol/protocol.md` "Recording sync") goes to that track instead of the knowledge base. The manager renders its transcript as `recordings/<day>-<id>.md` (front matter with the recording and the track's default categories, then one timed line per sentence) and has the assistant's machine write it there (`assistant.space_recording`, capability `track_recordings_v1`; `server/internal/node/assistant_space_recordings.go`); `assistant_space_recordings` keeps its revision and tombstone. Such a recording is never in the knowledge base (`kb_list`, `kb_search`, summaries, minutes): the track's conversations read the file. Once in a track a recording stays there, whatever a later upload names, and one the knowledge base holds stays in it (409 `recording_in_kb`); an all-day recording cannot go to a track (400). `recording_days` applies to it too: past it, or when deleted, its file is removed (later, when the computer was away) and a tombstone kept until the window ends (`server/internal/assistant/space_recordings.go`).
 - **Reading and writing SPACE.md**: the apps read a track's `SPACE.md` with `GET /api/v1/assistant/tracks/{slug}/space-md` and the user saves it with `PUT` (`content` and the `base_digest` it was read at; a stale one is refused, so two edits never overwrite each other). The user's write may change anything but the blocks between `persona:managed` markers and the markers themselves, compared byte for byte. The track's own conversations, and only they (`spaceTools` in `server/internal/assistant/track_space_md.go`; the main chat's and the health space's tool lists are unchanged), get the MCP tool `space_state_update {text}`, which replaces the text of the state block alone, at most 2048 bytes; the model never edits that block itself. Both go to the node on the assistant's computer (`assistant.space_md`, capability `track_space_md_v1`, `server/internal/node/assistant_space_md.go`), which reads the file without following a link, keeps the file it replaces in `.space/history/` (the latest 20) and writes atomically. After the user's write the track's `CLAUDE.md` and `AGENTS.md` are written again at once; after the state's, at the next refresh.
 - **Who changes them**: `GET` / `POST /api/v1/assistant/tracks`, `PUT /api/v1/assistant/tracks/{slug}`, `GET` / `POST /api/v1/assistant/track-kinds` and `PUT /api/v1/assistant/track-kinds/{slug}` are for full-access clients only; writes check that the caller is the user (403 otherwise), and a built-in track or kind is never changed (403). A change names the revision it was made against (409 when another came first), and a kind change that would leave one of its tracks invalid is refused (409).
-- **In the apps**: the web lists the tracks of the `spaces` sidebar group in a Spaces section, opens each at `/tracks/<slug>`, edits its `SPACE.md` and creates and archives spaces (`docs/web/web.md`, "Domain spaces"). The health space keeps its own entry and pages.
+- **In the apps**: the web lists the tracks of the `spaces` sidebar group in a Spaces section, opens each at `/tracks/<slug>`, edits its `SPACE.md` and creates and archives spaces (`docs/web/web.md`, "Domain spaces"); the iOS and iPadOS app does the same from its sidebar and drawer, and sets which personal information an extension may read on its page (`docs/apple/ios.md`, "Domain spaces"). Android does the same in the drawer's Spaces section (`docs/android/android.md`, "Domain spaces (#13500)"). The health space keeps its own entry and pages.
 
 ## Quick capture
 
@@ -160,6 +160,7 @@ The `conversation*` tools in a chat only see chats in the same space (`server/in
 - Calls not made from a chat (no caller session id) count as the assistant's own space.
 
 - `kb_update` from a health chat fails outright: health information does not go into the knowledge base (`assistant/tools.go` `runTool`). Knowledge base reads (`kb_search` etc.) work as usual.
+- `health_intake` logs, lists and deletes only in a known Health conversation. `runTool` checks `agentCallerSpace` using the caller's machine and session, including Health subdirectories; main-space and unknown callers are refused before storage access. Health chats on another computer work too. The tool appears in both spaces' discovery lists, but discovery grants no access.
 - Scheduled follow-ups and scheduled tasks created in a health chat (`schedule_followup`, `schedule_routine`) record their space (`Task.space`); when one fires and needs a new chat, it opens in the Health space.
   The space owns the task's working directory: a nonempty task `cwd` is rejected when saving and before dispatch,
   including an older stored override. Clear it to restore the canonical Health directory. Launcher, model, effort
@@ -196,19 +197,19 @@ Known limit: a gate proxy address does not know who calls it. A process in a hea
 
 ## Entering Health (#4329)
 
-Entering Health goes straight back to the latest health chat, with its context, as Codex does; **New** starts another. One rule on every client:
+The original rule from #4329 (implemented in #4385) resumed the latest health chat when one existed, falling back to the home when there was no history.
+#13273 changes the entry to open the **Health home** directly. The home is the first screen for the daily overview (#13176), with previous chats one tap away, and opens without waiting for the chat list. Returning to the latest chat takes one extra tap.
 
-- **Has history**: the sidebar's **Health** opens the open (not archived) health chat with the newest last activity (`updated_at`, the order the Health lists already use).
-  The list is `GET /api/v1/assistant?space=health` with the pushed sessions carrying `space: "health"` over it; no endpoint of its own.
-- **No history**: it opens the new health chat page (the Health home: input box, suggested questions, reports, memory, sources, privacy); the first message starts the chat, as **New Chat** does in the main space.
-  A list that cannot be read lands here too, where the list section says why.
-- **New**: a health chat's header has a **New** button that opens the new health chat page, whose **Health Chats** list has every past one; on the web a clock button next to it lists them as a menu as well.
+- **Health**: opens the home whether or not there are previous chats. Its **Health Chats** list keeps open (not archived) chats newest first by last activity (`updated_at`), and tapping a row opens that chat.
+  The list is `GET /api/v1/assistant?space=health` with the pushed sessions carrying `space: "health"` over it; no endpoint of its own. Loading the list does not hold up entry; on the web a failed list says why in its section.
+- **First message**: the home's input box starts a new health chat when sent, as **New Chat** does in the main space; merely opening the home creates no chat.
+- **New**: a health chat's header returns to the home. On the web a clock button next to it also lists past chats as a menu.
 
 | Client | Where |
 | --- | --- |
-| Web | `/health` resumes and replaces itself (Back skips it); `/health/new` is the new chat page; `views/health/entry.ts` `healthEntry`, header buttons `HealthChatActions` in `views/health/Health.tsx`. Tests: `entry.test.ts`, `Health.conversation.test.tsx` |
-| iOS / Mac | the sidebar's **Health** runs `AssistantView.enterHealth` (`HealthModel.entry`); the top bar's **New Chat** in a health chat pushes the Health page (`HealthModel.newOpensHealth`). `-openAssistantPage health` / `-openShellPage health` still show the page itself. Tests: `HealthModelTests` |
-| Android | the assistant sidebar's **Health** (`HealthEntry.resolve`), see "Android entry point" below |
+| Web | `/health` stays on the home; `/health/new` remains an alias for it. `HealthPage` / `Health` and the header buttons `HealthChatActions` are in `modules/health/Health.tsx`. Tests: `entry.test.ts`, `Health.conversation.test.tsx` |
+| iOS (iPhone and iPad) | the sidebar's **Health** opens the home, with all open health conversations listed newest first. `AssistantView.enterHealth()` synchronously returns to the root and presents the home; the embedded Sidebar layout selects Health as its page root. Entry does not wait for the conversation list. **New Chat** in a health conversation still returns to the home (`HealthModel.newOpensHealth`); the first message in its composer starts a new health conversation. `-openAssistantPage health` / `-openShellPage health` still open the home. Tests: `HealthModelTests`, `HealthEntryUITests`, the Health upload case in `TreeSwapFoldTests` |
+| Android | the assistant sidebar's **Health** opens the home immediately (`AssistantScreen.openHealth`); `HealthEntry.history` keeps its chat list ordered. See "Android entry point" below |
 
 ## Water and protein
 
@@ -231,6 +232,7 @@ The hub forwards the manager's routes under `/api/v1/assistant/health/`:
 | `GET intake/changes` | Current row states after a change number, including undo markers, in sequence order |
 | `POST intake/ui` | Draw a detail page or handle its actions with the extension-page UI envelope |
 | `POST water/reminder` | Handle a water notification's buttons and return a localized toast |
+| `POST intake/import` | Import the legacy water extension and switch it off; full-access devices only |
 
 Omit the selected manager header and `manager` query so the hub uses the default manager.
 `space=health` may be sent for context, but the hub does not use it to select a manager.
@@ -241,6 +243,25 @@ settings, pages and scheduling; the hub only authenticates, forwards and deliver
 A content-free `health_intake` WebSocket event makes open apps reload. The hub wakes closed
 iPhone widgets for intake changes at most once per 15 minutes, without changing Live Activity
 content. Clients show these capabilities only when hello includes `health_intake`.
+
+**Today on the Health home.** iPhone, iPad and the web show separate water and protein
+rings with today's amount and goal. Water offers **Drank a Glass** (the configured cup)
+and **Other Amount**; protein offers **Log Grams**. Logging updates the total locally at
+once, then reconciles it with the hub. A successful log offers Undo; a failed write rolls
+back and offers Retry with the same record UUID. A record already undone elsewhere stays
+undone on retry. These totals come from Persona's intake records in the default manager,
+not from Apple Health or other apps. Goals and the day boundary come from the same intake
+response. Open pages reload after a `health_intake` event, a reconnect and a return to the
+foreground, waiting for pending writes to settle.
+
+Tapping either ring opens its detail page: a sheet with a close button on iPhone and iPad,
+or a full page on the web using the existing extension-page route. iPhone also shows
+Activity rings and health trends; iPad shows trends when Apple Health data can be read,
+without Activity rings. The web shows neither Activity rings nor Apple Health trends.
+Without the `health_intake` feature, iOS shows **Update your hub first** in Today and the
+web omits the block without requesting intake data. Demo mode supplies sample intake
+records and both detail pages through the in-app demo hub; page actions return sample
+pages rather than saving detail-page edits.
 
 **Details.** Water and Protein reuse the Subscriptions page's declarative renderer under
 reserved extension id `-health-intake`, page `pages`. Initial state selects `kind:"water"`
@@ -277,7 +298,85 @@ are in [protocol.md](../protocol/protocol.md) ("Health intake"). No language mod
 in the pages, settings or scheduling, and none of these routes grants an extension access to
 Health chats or memory.
 
+### Moving from the water extension
+
+A full-access device can request `POST /api/v1/assistant/health/intake/import` (#13636).
+Nothing moves merely by opening Health. Before import, Today counts only Health's built-in
+records; the extension continues to record and remind independently. GET intake includes
+`water_extension:"pending"` while the extension is enabled, or installed without a receipt,
+including one manually disabled before import. After a successful import it is omitted;
+re-enabling the extension makes it pending again. An uninstalled extension never shows pending.
+
+Import validates the complete extension file first, including old records. A corrupt file
+returns its reason without changing records, settings, reminders or the source file. It then
+commits the records in one transaction, switches the extension off using its normal dependent
+checks, and reads the file again after shutdown to catch a drink recorded just before the
+switch. UUIDv5 identities include the extension's storage key, record ID and UTC timestamp,
+so a reset's repeated IDs remain distinct and retrying never duplicates or revives an undone
+entry. A failed switch leaves Health settings and reminder timing unchanged; already imported
+records remain and the same request can be retried.
+
+After stopping the extension, import copies its saved water settings over built-in defaults.
+The built-in reminder turns on only if both the extension and its reminder switch were on;
+an untouched extension reminder switch means on. Last-reminder and snooze timing carry over,
+with a later drink or existing Health reminder time retained to avoid an immediate reminder.
+Protein uses its built-in default. The resulting settings, timing and migration receipt commit
+together. The receipt is `settings` key `health.intake.water_import`, containing migration time,
+newly imported count and extension version. The response returns that request's new-record
+count, whether the extension is disabled, and the resulting settings. A completed import
+retried while the extension remains off retains current Health settings and timing.
+
+The extension remains installed with its data directory. **Migrate before uninstalling**:
+uninstall deletes that directory. Afterwards, replace extension water widgets and watch-face
+rings with the built-in ones; the old surfaces show their empty choose-an-extension state.
+Rebuild shortcuts that used Run Extension Action with the built-in Log Water action. The
+extension's Android water page disappears when it is off. The iPhone/iPad migration card
+warns about these changes before the user requests import; web and Android do not offer the card.
+
+On iPhone and iPad, a notice card above **Today** offers **Move into Health** only when the
+intake response includes `water_extension:"pending"`. Demo mode and responses without that
+field show no card. It explains that records and settings move into Health, the extension
+is turned off, and its Android water page disappears. Nothing imports automatically.
+Tapping the single-line button sends `POST /api/v1/assistant/health/intake/import?space=health`
+through the default manager. Intake actions are disabled while it runs. Success refreshes
+Today, removes the card and shows the imported count and extension-disabled confirmation,
+with a reminder to replace widgets, watch faces and shortcuts. A failed import shows the
+reason in a toast and keeps the card available for a safe retry.
+
+The mock hub's intake domain starts with `water_extension:"pending"`. POST import adds two
+synthetic drinks (200 ml and 250 ml) once, alongside its seeded intake records, and removes the
+flag. `MOCK_WATER_EXTENSION=none` or `migrated` starts without it; `none` returns 404 on import,
+while `migrated` returns zero new records. `MOCK_HEALTH_INTAKE=off` still disables the feature.
+Both `/mock/reset` and `/mock/health-intake?reset=1` restore the seeded records, default settings
+and initial migration state. This fixture contains no real records.
+
+## Activity rings
+
+On iPhone, the Health home shows an **Activity** section between Today and health trends
+when HealthKit is available. It reads today's local Apple Health activity summary,
+including Move, Exercise and Stand values and goals. Apple's Activity ring view draws the
+rings on black with their standard colors. When both Exercise and Stand goals are absent, only Move is
+shown; a paused summary is identified. The tile does not open another app.
+
+The foreground **Allow Reading** button requests only the activity-summary read type when
+it has not yet been requested. Loading the page checks whether a request is needed but
+never opens the authorization sheet itself. The type is also part of the existing health
+tool's read-permission set. Background readers do not request permission. When HealthKit
+is unavailable the section is hidden. An empty result says there may be no data or reading
+may not be allowed, and points to iOS Settings > Health > Data Access & Devices > Persona;
+a query error says today's summary could not be read. An empty result is never treated as
+proof that access was denied.
+
+Activity rings are absent on iPad, Vision Pro and the web. Demo mode supplies intake data,
+not a simulated activity summary: the iPhone tile follows the device's HealthKit availability
+and authorization state. DEBUG screenshot examples can supply Allow Reading, unreadable,
+Move-only and three-ring states without reading real health data.
+
 ## Dietary intake and resting energy
+
+`health_intake` is authoritative for Persona's own water and protein records (see "Water and protein" above). Its `list` action returns every active record, with IDs, for 1–366 days including today (default 7), plus daily totals and goals; `delete` accepts a returned ID and repeated deletion succeeds. Each `log` generates a new server UUID, so an uncertain write must be checked with `list` before logging again. Explicit ml or protein grams can be logged directly; photos and other estimates first need an `ask_user` confirmation, with food and portion saved in the note. Repeatedly confirmed foods, or an explicit request to remember one, belong in Health memory; "the usual" still gets a confirmation card. Water reminders are configured on the water detail page.
+
+When Apple Health synchronization is enabled, its protein total already includes the samples Persona wrote. Never add Persona's protein total to the Apple Health total: they overlap. Persona's own progress uses its intake records; the phone summary describes the system total from all available sources.
 
 The Health space uses `phone_health_summary` for system health data, including dietary intake written by apps such as 薄荷健康. Its requested metrics are:
 
@@ -295,10 +394,30 @@ For today's intake, call `phone_health_summary` with `{"metrics":["dietary_energ
 
 On iOS, `HealthTool` reads the corresponding HealthKit quantity types and requests their read permissions alongside the existing metrics. An existing installation may need authorization for these newly added categories. Open Persona, grant access, and reconnect it to the hub so the registered tool description and schema refresh (`docs/apple/phone-tools.md`, "Daily health summaries").
 
+## Every health type and sample (#13740)
+
+Data a band, ring, scale, glucose meter, ECG or hearing test saves to Apple Health or Health Connect is reachable sample by sample, with
+the app and device that saved it, through `phone_health_types`, `phone_health_samples`, `phone_health_sources` and
+`phone_health_request_access` (iPhone and Android), plus `phone_health_watch` on the iPhone. The audience is everyday users who ask
+about the data they already keep, and Agents that analyse it for them; nothing in the Health page changes, and Apple Health stays named
+where the app uses it (App Review 2.5.1, #13118).
+
+- Start with `phone_health_types` to find the type name and whether Persona was asked for it; ask once with
+  `phone_health_request_access` while Persona is open. A type without access answers its status, not an error, and empty results on an
+  iPhone can still mean the user refused (HealthKit never tells).
+- Read with `phone_health_samples`, keep its `anchor`, and pass it back later to get only what changed. Match samples by `id`.
+- On an iPhone that may be locked when the question comes (an evening review, a scheduled task), watch the types first with
+  `phone_health_watch`; locked answers then come from the phone's snapshot (`source: snapshot`, `as_of`), the last 7 days at most.
+  A build without HealthKit background delivery refreshes those snapshots only when Persona opens or is woken while unlocked.
+- Health data goes back only to the hub that asked and is not written to logs on the phone or the hub; it reaches the model that
+  called the tool like every other tool result.
+
+Details, anchors and platform differences: `docs/apple/phone-tools.md`, "Every health type, sample by sample".
+
 ## Web entry point
 
-- A separate **Health** item in the sidebar opens `/health`, which resumes the latest health chat ("Entering Health" above).
-- Home (`/health/new`, the new health chat page): a one-line privacy note (chats and memory stay in the Health space, data is on your own hub, not a substitute for a doctor), data sources (Apple Health / Health Connect, via the phone's `phone_health_summary` / `phone_health_write_sample`; Persona must be open on the phone and authorized),
+- A separate **Health** item in the sidebar opens the home at `/health` immediately ("Entering Health" above). `/health/new` remains an alias; a health chat's **New** goes to `/health`.
+- Home (`/health`, also `/health/new`): a one-line privacy note (chats and memory stay in the Health space, data is on your own hub, not a substitute for a doctor), data sources (Apple Health / Health Connect, via the phone's `phone_health_summary` / `phone_health_write_sample`; Persona must be open on the phone and authorized),
   suggested questions (tap one to start a health chat with it), past health chats, health memory (view, delete).
 - Tapping a chat opens `/health/<id>`, the same chat page as other assistant chats; its input box asks health questions as the home's does ("Ask a health question…", `ChatView`'s `placeholder`), not the main chat's line.
 - Health chats no longer appear in the main chat's history list.
@@ -310,18 +429,18 @@ Verification image removed; see the associated PR.
 
 ## iOS and Mac entry points (#2901)
 
-- Entry: a **Health** row below **Knowledge** in the assistant sidebar (in the new shell's drawer it sits between **Knowledge** and **Machines**; in the Mac split-view list it is below **Scheduled Tasks**), opening the latest health chat, or the Health page when there is none ("Entering Health" above; `apple/Persona/Views/Assistant/HealthView.swift`, shared by iOS and Mac).
+- Entry on iPhone and iPad: the sidebar's **Health** opens the Health home immediately, with its open conversations listed newest first ("Entering Health" above). `AssistantView.enterHealth()` synchronously calls `backToRoot(); present(.health)`; the embedded Sidebar layout selects Health as its page root. Opening the home does not wait for the conversation list. **New Chat** in a health conversation still returns to the home, and the first message in its composer starts a new health conversation (`apple/Modules/Health/HealthView.swift`).
 - Health page: a one-line note; **Works with Apple Health** (#13118), the Health app's icon and what is read and saved, which on an iPhone or iPad opens Settings › Connectors › This iPhone (App Review 2.5.1 wants HealthKit named Apple Health where it is used; the phone data row is **Apple Health** too); suggested questions (tap one to start a health chat with it), health chats (`GET /api/v1/assistant?space=health`, merged with pushed ones carrying `space: "health"`; swipe / right-click to archive),
   health memory (pushes the memory page `AssistantMemoryView(space: "health")`; view, edit and delete all carry `?space=health`), data sources, privacy. At the bottom is an input box; sending does `POST /api/v1/assistant/conversations` with `"space":"health"`, never set as the main chat.
 - iOS input box (#3825): Persona's new conversation's composer in every style (`StarterComposer` in the shell's composer): + opens the attach panel on the iPhone (touch and hold, or the iPad's tap: the + menu), and the model button picks the launcher and one of its models (#11472; Health's, the default manager's, until one is picked), the effort and, a level down, the permission mode. The effort and mode are the ones Persona's new conversation picks (a health conversation already started with them). Files still go to `reports/`. The Mac keeps its input line (BeautifulUI: the prompt bar with its launcher menu).
 - Health chats that are started or tapped open in the Persona page's chat, the same chat page as other assistant chats; go back to the Health page via **Health** in the sidebar.
 - The sidebar's **Recent**, **Archived** and search do not list health chats (`AssistantLists` splits by `Session.assistantSpace`; health ones are in `AppModel.healthConversations`).
-- Screenshot arguments: `-tab assistant -openAssistantPage health` (new shell: `-openShellPage health`). Unit tests: `PersonaTests/HealthModelTests`.
+- Screenshot arguments: `-tab assistant -openAssistantPage health` (new shell: `-openShellPage health`); both still open the home. Tests: `PersonaTests/HealthModelTests`, `PersonaUITests/HealthEntryUITests`, and the Health upload case in `TreeSwapFoldTests`.
 
 ## Android entry point (#4329)
 
-- Entry: **Health** below **Knowledge** in the assistant drawer (not in demo mode). It opens the latest health chat or, with none, the new health chat page ("Entering Health" above; `feature/assistant/.../HealthEntry.kt`, `AssistantScreen.kt` `openHealth`).
-- New health chat page: the hero line, the input box and the space's past chats (newest first, tap to open). The first message starts the chat with `POST /api/v1/assistant/conversations?space=health` and `"space":"health"`, never `main`. The box takes no files (they would go to the main chat's machine, outside the Health space) and has no launcher picker.
+- Entry: **Health** below **Knowledge** in the assistant drawer (not in demo mode). It opens the Health home immediately, whether or not there are previous chats ("Entering Health" above; `AssistantScreen.kt` `openHealth`). The page loads its history in the background.
+- Health home (the new health chat page): the hero line, the input box and the space's past chats (`HealthEntry.history`, newest first, tap to open). The first message starts the chat with `POST /api/v1/assistant/conversations?space=health` and `"space":"health"`, never `main`. The box takes no files (they would go to the main chat's machine, outside the Health space) and has no launcher picker.
 - In a health chat the top bar's new chat button reads **New health chat** and opens that page. Health chats pushed live (`space: "health"`) stay out of the main chat lists.
 - Requests carry `?space=health` on the URL, so the hub client sends no manager header: the space is the default manager's, as on the web.
 - Tests: `HealthEntryTest`, `HealthEntryScreenTest` (feature/assistant), `InboxAssistantTransportTest.theHealthSpaceListsAndStartsItsChatsByName`, `HubManagerHeaderTest`, `SpaceConversationsTest`.
@@ -366,11 +485,11 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
 - iOS / Mac (#4587): files picked via the Health page's input box (both interface styles) and via **Files** in a health chat's input box, as well as files dragged in on Mac, all carry `dest=health` (`FileUploads.start(…, dest:)`);
   photos are still sent as images, and videos still go to the temporary directory. A hub / node older than #4546 returns 400 / "unknown upload destination"; the App reports the upload failed, which goes away after updating the hub.
 - **Entry point (#4656)**: with only the input box's `+`, it is not obvious you can upload, so the Health page has an explicit **Upload a Checkup Report**: on the web below the home input box, on iOS / Mac at the front of **Try Asking**.
-  Tapping it picks a PDF or images (images are also uploaded as files, with the original kept in `reports/` as well). Once everything is uploaded, a health chat starts automatically (`views/health/reports.ts`, `FileUploads.startAll`) with the paths in the first message;
+  Tapping it picks a PDF or images (images are also uploaded as files, with the original kept in `reports/` as well). Once everything is uploaded, a health chat starts automatically (`modules/health/reports.ts`, `FileUploads.startAll`) with the paths in the first message;
   it still starts if you leave the page mid-upload. To test the whole path: iOS launch argument `-showReportUpload <file name>[,<file name>…]` (on the mock hub, look for `POST …/files?dest=health` and `POST /api/v1/assistant/conversations`); with `-showReportUploadMB <n>` each file is that big and stays on its way a while.
 - **View and delete (#4998)**: **Checkup Reports** on the Health page lists reports in `reports/` (`server/internal/node/healthreports.go`): an original and its same-named `.md` record count as one report; record-only reports (photos sent in chat) count too.
   View the structured record, open the original or delete. Deletion is permanent and removes both original and record; **content already mentioned in chats and health memory is not deleted with them**, as the confirmation explains. Names must identify a single regular file in `reports/`; symlinks, directories and `../` are rejected.
-  On the web it is on the home page (`views/health/HealthReports.tsx`); iOS / Mac use a separate page (`HealthReportsView.swift`). An old node returns 409 `node_outdated`, which the page displays. APIs live in `server/internal/devices/healthreports.go`, forwarded by hub (`devicewire.Routes`).
+  On the web it is on the home page (`modules/health/HealthReports.tsx`); iOS / Mac use a separate page (`HealthReportsView.swift`). An old node returns 409 `node_outdated`, which the page displays. APIs live in `server/internal/devices/healthreports.go`, forwarded by hub (`devicewire.Routes`).
   Screenshot arguments: `-openReportRecord YES` (open the first report's record directly), `-showReportDelete YES` (show delete confirmation directly), both starting from the reports page.
 - Not yet: Android (its Health entry has no reports section and its box takes no files, #4329).
 
@@ -382,14 +501,13 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
 
 ## Health trends on iOS (#3272)
 
-- `apple/Persona/Views/Health/HealthTrendsSection.swift`: **Health Trends**, steps (`bar`), sleep and weight (`line`; `stat` when there is only one day) over the last 7 / 30 days, drawn as `persona-card` with the same renderer as cards in health answers (`AssistantViewCard`).
-- Data is read from Apple Health directly on the phone (`HealthTool.daily`, the same queries as `phone_health_summary`), not via the hub. If health permission has not been requested, it shows **Allow Access**; if it cannot read, it explains where to turn it on.
-- It is just a component; the Health space entry point and past chats are in #2901, whose Health home page includes this section directly.
+- `apple/Modules/Health/HealthTrendsSection.swift`: **Health Trends**, steps (`bar`), sleep and weight (`line`; `stat` when there is only one day) over the last 7 / 30 days, drawn as `persona-card` with the same renderer as cards in health answers (`AssistantViewCard`).
+- Data is read directly from Apple Health on the iPhone or iPad (`HealthTool.daily`, the same queries as `phone_health_summary`), not via the hub. The reusable section can offer **Allow Access** before permission has been requested, or explain how to allow reading when it has no data; the home hides these empty states as described below.
+- On the Health home, trends follow Today and, on iPhone, Activity rings. iPhone and iPad show the section only when at least one metric has data; unavailable, unreadable or not-yet-authorized data leaves it hidden. Home reads do not request access. Vision Pro and the web do not include this section.
 - Screenshots: `-showHealthTrends sample` (the simulator has no health data, so sample data is used), `empty`, `ask`, `YES` (reads the device).
 
 ## Later
 
-- A Health tab on the phone (#2901), with **Health Trends** above on its home page.
 - Suggest "Continue in Health" when the main chat touches on health.
 - diet-advice push notifications go into the Health space.
 - The main chat reading the health directory via Bash or via Codex: block it fully with a sandbox or OS-level isolation (after #3282).
@@ -399,7 +517,7 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
 
 - Server (inside `server/`): `go test ./internal/assistant -run Health` (`server/internal/assistant/health_test.go`: starting health chats, separate lists, `main` and unknown `space` rejected, tools do not cross spaces, outbound, golden),
   `go test ./internal/hub -run Health` (push without body), `go test ./internal/connector -run ConfirmEach`, `go test ./internal/node -run LarkGateHealth`, `go test ./internal/identity` (health directory, `SpaceOf`, `IsAssistantDir`).
-  After changing `health_claude_md.md`, update the golden and review the diff (`docs/assistant/prompts.md`). Charts: `go test ./internal/assistant -run HealthClaudeMDTeachesCharts`, `go test ./internal/feishubot -run PersonaCards`.
+  After changing `health_claude_md.md`, update the golden and review the diff (`docs/assistant/prompts.md`). Charts: `go test ./internal/assistant -run HealthClaudeMDTeachesCharts`, `go test ./internal/modules/lark/feishubot -run PersonaCards`.
 - Web: `cd web && npm test && npm run build`.
 - iOS / Mac: `PersonaTests/HealthModelTests` (lists and memory carry `space`, merging pushes, sidebar does not list health chats, new chats carry `space`); build `Persona` and `PersonaMac`.
 - iPhone dietary intake acceptance (real device; not covered by server or simulator tests):
@@ -408,6 +526,41 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
   3. In the Health space, request today's intake, or call `phone_health_summary` with `{"metrics":["dietary_energy","protein","carbs","fat","resting_energy"],"days":1}`. Verify that the hub's advertised metric enum includes all five names and the returned `date` is today in the phone's time zone.
   4. Compare the four dietary values against the entries written to Health (kcal / g, rounded to one decimal). If other sources also wrote entries, compare with the relevant Health totals. `resting_energy` should match available basal-energy data; it may be absent when no source recorded it. A missing value stays absent, rather than becoming zero.
   5. Add another food entry in 薄荷健康, wait until it is visible in Health, and query again. The day's total should include both entries; no previous-day entry should enter today's total. This check verifies the source app → Health → Persona → hub path.
+
+## Syncing to Apple Health
+
+On iPhone, **Settings › Health › Sync to Apple Health** is off by default. It is hidden in demo mode and on other
+devices, and requires a hub with `health_intake`. Turning it on requests write access to water and protein, then
+backfills all records, including imported history, at their original times. Turning it off stops sync and keeps
+samples already written. This is one-way: Apple Health edits do not change Persona's intake records.
+
+Each record writes one sample with its record UUID as `HKMetadataKeySyncIdentifier`, sync version 1, and
+`HKMetadataKeyWasUserEntered`. Replaying history uses the same identifier and version. Undoing a record deletes the
+sample with that identifier; HealthKit permits deletion only of samples Persona itself saved. Other apps' samples
+are untouched. This opt-in sync is separate from the AI's `phone_health_write_sample` tool, which still requires
+confirmation for each sample and never writes water or protein or deletes data.
+
+The device stores a protected, backup-excluded cursor bound to the group and actual hub identity selected when sync was enabled. Another hub
+does not inherit consent or progress; explicitly enabling sync there starts from zero. A missing cursor also starts
+from zero. The client reads the full-device-only changes stream, including tombstones, in sequence order. It saves
+progress only after each HealthKit operation succeeds and stops on the first write, delete, network or checkpoint
+failure. The next trigger retries that entry. Settings shows the last completed sync, missing write permissions,
+or the last failure. After allowing write access in system settings, the next trigger continues from that cursor.
+
+Triggers are foreground entry, a successful local record or undo, `health_intake` broadcasts, and the existing hub
+wake for widgets. The phone must be unlocked before each operation. No new background task or delivery entitlement
+is added; a closed app without a widget catches up when next opened. Turning sync off does not remove past samples.
+
+Simulator verification establishes storage behavior, not physical-device lock, iCloud or background delivery.
+The iOS 27.2 simulator's Health app does not expose the nutrition views used for visual acceptance. As part of
+rollout, the user verifies visible water/protein entries, replay and undo in the Health app on their physical iPhone
+using the TestFlight build, before enabling sync on real records.
+
+`HealthIntakeSyncTests` uses a fake writer for cursor, failure and hub-scope cases. The opt-in
+`HealthIntakeHealthKitTests` integration suite (`TEST_RUNNER_PERSONA_HEALTH_LIVE=1`, after granting the system write
+sheet on a disposable simulator) checks both types against the real HealthKit store: same-version replay stays at
+one sample; deletion and repeated deletion of a missing identifier succeed and leave zero. With Xcode 27.2 and the
+iOS 27.2 simulator these checks pass; repeat them on a physical iPhone before release.
 
 ## Automatic workout reports (iOS)
 
