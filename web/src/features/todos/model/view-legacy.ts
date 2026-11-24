@@ -9,12 +9,16 @@ import type { SessionLookup, Todo } from "../../../lib/todos";
 import { stateOf } from "../../../lib/format";
 import { usageLimitAgent } from "../../../lib/usage-limit";
 
+/** lib/todo-view-wire.ts TODO_PHASES, kept local so the shared first-screen todo-view-wire chunk stays unchanged
+ *  (view-legacy.test.ts keeps the two equal). */
+export const KNOWN_PHASES: readonly string[] = ["needs_you", "working", "waiting", "ready", "todo", "someday", "done"];
+const PHASES: ReadonlySet<string> = new Set(KNOWN_PHASES);
 const SECTIONS: ReadonlySet<string> = new Set(TODO_LIST_SECTIONS);
 const REASONS: ReadonlySet<string> = new Set(TODO_REASONS);
 
-/** A view this web can read: a row with a newer hub's section or reason is drawn as if it had none, and counted apart. */
+/** A view this web can read: a row with a newer hub's phase, section or reason is drawn as if it had none, and counted apart. */
 export function knownView(view: TodoSummary | undefined): view is TodoSummary {
-  return !!view && SECTIONS.has(view.section) && REASONS.has(view.reason);
+  return !!view && PHASES.has(view.phase) && SECTIONS.has(view.section) && REASONS.has(view.reason);
 }
 
 /** Today's section for each of the view's: Waiting is the web's Parked (a parked hold and an open PR wait there, 6.3

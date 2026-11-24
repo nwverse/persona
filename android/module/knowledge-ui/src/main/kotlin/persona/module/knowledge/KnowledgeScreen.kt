@@ -90,36 +90,36 @@ internal fun KnowledgeScreen(model: KnowledgeViewModel, navigator: Navigator) {
     val search = page.filter.query.isNotBlank()
     val shown = if (search) page.groups.isNotEmpty() else page.entries.isNotEmpty()
     // A regular-width root draws the sidebar button (LocalIsSidebarRoot); elsewhere this Back stays (iOS sidebarRootPage).
-    JListPage(stringResource(R.string.knowledge_title), onBack = if (LocalIsSidebarRoot.current) null else navigator::back, largeTitle = true,
+    JListPage(stringResource(R.string.knowledge_ui_title), onBack = if (LocalIsSidebarRoot.current) null else navigator::back, largeTitle = true,
         refreshing = page.loading && shown, onRefresh = model::refresh,
         actions = {
-            JIconButton(PersonaIcons.knowledgeMap, stringResource(R.string.knowledge_map_open), { navigator.navigate(KnowledgeMapRoute(owner)) })
-            if (!search) JIconButton(PhIcons.FunnelSimple, page.filter.tag?.let { stringResource(R.string.knowledge_filter_tag_current, it) }
-                ?: stringResource(R.string.knowledge_filter_tag), { tagMenu = true },
+            JIconButton(PersonaIcons.knowledgeMap, stringResource(R.string.knowledge_ui_map_open), { navigator.navigate(KnowledgeMapRoute(owner)) })
+            if (!search) JIconButton(PhIcons.FunnelSimple, page.filter.tag?.let { stringResource(R.string.knowledge_ui_filter_tag_current, it) }
+                ?: stringResource(R.string.knowledge_ui_filter_tag), { tagMenu = true },
                 badge = page.filter.tag != null)
-            JIconButton(PhIcons.ArrowClockwise, stringResource(R.string.knowledge_refresh), model::refresh, enabled = !page.loading)
+            JIconButton(PhIcons.ArrowClockwise, stringResource(R.string.knowledge_ui_refresh), model::refresh, enabled = !page.loading)
         }) {
         item("search") {
-            JSearchField(page.filter.query, model::query, stringResource(R.string.knowledge_search), Modifier.padding(vertical = Tokens.Space.s))
+            JSearchField(page.filter.query, model::query, stringResource(R.string.knowledge_ui_search), Modifier.padding(vertical = Tokens.Space.s))
         }
         // Search covers every kind: the chips (one of them lit) would say otherwise.
         if (!search) item("kinds") {
             KindChips(page.filter.kind, page.entries.size.takeIf { page.loaded }, model::kind)
-            page.filter.tag?.let { JTag(stringResource(R.string.knowledge_tag_chip, it), Modifier.padding(top = Tokens.Space.s)) }
+            page.filter.tag?.let { JTag(stringResource(R.string.knowledge_ui_tag_chip, it), Modifier.padding(top = Tokens.Space.s)) }
         }
         // A reload that failed over what is still shown says so above it (the whole-page error is for an empty page, #3991).
         if (page.paired && shown) page.message?.let { message -> item("reload-error") { JNotice(stringResource(message), Modifier.padding(vertical = Tokens.Space.s), status = Status.NeedsYou) } }
         when {
             !page.paired -> item("unpaired") {
-                JEmptyState(stringResource(R.string.knowledge_unpaired_title), stringResource(R.string.knowledge_unpaired_text))
+                JEmptyState(stringResource(R.string.knowledge_ui_unpaired_title), stringResource(R.string.knowledge_ui_unpaired_text))
             }
             search -> searchResults(page, navigator, owner)
             else -> listContent(page, ignored, { ignored = !ignored }, navigator, model::refresh, owner)
         }
     }
-    if (tagMenu) JActionSheet(listOf(JAction(stringResource(R.string.knowledge_all), checked = page.filter.tag == null) { model.tag(null) }) +
+    if (tagMenu) JActionSheet(listOf(JAction(stringResource(R.string.knowledge_ui_all), checked = page.filter.tag == null) { model.tag(null) }) +
         page.tags.map { tag -> JAction("#$tag", checked = page.filter.tag == tag) { model.tag(tag) } },
-        { tagMenu = false }, stringResource(R.string.knowledge_filter_tag))
+        { tagMenu = false }, stringResource(R.string.knowledge_ui_filter_tag))
 }
 
 /** The six kinds as chips; the chosen one says how many it holds once loaded. */
@@ -140,11 +140,11 @@ private fun LazyListScope.listContent(page: KnowledgePage, showIgnored: Boolean,
     owner: String) {
     val kind = page.filter.kind
     when {
-        page.entries.isEmpty() && page.message != null -> item("error") { KnowledgeFailure(R.string.knowledge_error_title, requireNotNull(page.message), retry) }
+        page.entries.isEmpty() && page.message != null -> item("error") { KnowledgeFailure(R.string.knowledge_ui_error_title, requireNotNull(page.message), retry) }
         page.entries.isEmpty() && !page.loaded -> item("loading") { JLoading() }
         page.entries.isEmpty() -> item("empty") {
             JEmptyState(page.filter.tag?.let { stringResource(kind.words.emptyTag, it) } ?: stringResource(kind.words.empty),
-                stringResource(R.string.knowledge_empty_text), icon = kind.words.icon)
+                stringResource(R.string.knowledge_ui_empty_text), icon = kind.words.icon)
         }
         else -> {
             val sections = if (kind == KnowledgeKind.Projects) projectSections(page.entries) else kindSections(page.entries, page.filter.tag)
@@ -152,7 +152,7 @@ private fun LazyListScope.listContent(page: KnowledgePage, showIgnored: Boolean,
                 item(key = "section/${section.key}", contentType = "section") {
                     JSectionHeader(section.tag?.let { "#$it" } ?: stringResource(section.title), count = section.entries.size,
                         onClick = if (section.collapsed) toggleIgnored else null, open = showIgnored, trailingIsFoldAction = true,
-                        trailing = if (section.collapsed) stringResource(if (showIgnored) R.string.knowledge_collapse else R.string.knowledge_expand) else null)
+                        trailing = if (section.collapsed) stringResource(if (showIgnored) R.string.knowledge_ui_collapse else R.string.knowledge_ui_expand) else null)
                 }
                 if (!section.collapsed || showIgnored) items(section.entries, key = { "entry/${it.key}" }, contentType = { "entry" }) {
                     KnowledgeRow(it, onClick = { navigator.open(it, owner) })
@@ -166,16 +166,16 @@ private fun LazyListScope.listContent(page: KnowledgePage, showIgnored: Boolean,
 private fun LazyListScope.searchResults(page: KnowledgePage, navigator: Navigator, owner: String) {
     val query = page.filter.query.trim()
     when {
-        page.groups.isEmpty() && page.message != null -> item("error") { KnowledgeFailure(R.string.knowledge_search_error, requireNotNull(page.message), null) }
+        page.groups.isEmpty() && page.message != null -> item("error") { KnowledgeFailure(R.string.knowledge_ui_search_error, requireNotNull(page.message), null) }
         page.groups.isEmpty() && !page.loaded -> item("searching") { JLoading() }
         page.groups.isEmpty() -> item("nothing") {
-            JEmptyState(stringResource(R.string.knowledge_nothing_found), stringResource(R.string.knowledge_nothing_found_text, query), icon = PhIcons.MagnifyingGlass)
+            JEmptyState(stringResource(R.string.knowledge_ui_nothing_found), stringResource(R.string.knowledge_ui_nothing_found_text, query), icon = PhIcons.MagnifyingGlass)
         }
         else -> searchSections(page.groups).forEach { (kind, groups) ->
             item(key = "hits/${kind.wire}", contentType = "section") { JSectionHeader(kind.label(), count = groups.size) }
             items(groups, key = { "hit/${it.key}" }, contentType = { "hit" }) { group ->
                 KnowledgeRow(group.entry, metadata = group.named, name = if (group.named) group.entry.name else kind.label(), onClick = { navigator.open(group.entry, owner) }, trailing = {
-                    if (group.hits.size > 2) Text(pluralStringResource(R.plurals.knowledge_hits, group.hits.size, group.hits.size), style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3, maxLines = 1)
+                    if (group.hits.size > 2) Text(pluralStringResource(R.plurals.knowledge_ui_hits, group.hits.size, group.hits.size), style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3, maxLines = 1)
                 }) {
                     group.hits.take(2).forEach { hit ->
                         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
@@ -279,7 +279,7 @@ private fun KnowledgeImportedAvatar(entry: KnowledgeEntry) {
 
 @Composable
 private fun importedNotesTitle(source: String?): String = stringResource(
-    if (connectorBrand(source.orEmpty()) == null) R.string.knowledge_imported_original else R.string.knowledge_imported_lark)
+    if (connectorBrand(source.orEmpty()) == null) R.string.knowledge_ui_imported_original else R.string.knowledge_ui_imported_lark)
 
 /** Importance in its tone (P0 needs you, P1 is busy), the project's kind and status, relevance, the first tags. */
 @OptIn(ExperimentalLayoutApi::class)
@@ -288,11 +288,11 @@ private fun EntryMetadata(entry: KnowledgeEntry, allTags: Boolean = false) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s - Tokens.Space.xxs), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s - Tokens.Space.xxs)) {
         entry.importance?.takeIf { it.isNotBlank() }?.let { JTag(it, status = importanceStatus(it)) }
         if (entry.isProject) {
-            JTag(stringResource(if (entry.projectKind == "long") R.string.knowledge_project_long else R.string.knowledge_project_short))
+            JTag(stringResource(if (entry.projectKind == "long") R.string.knowledge_ui_project_long else R.string.knowledge_ui_project_short))
             entry.projectStatusLabel?.let { JTag(stringResource(it)) }
         }
         if (entry.isRecording) recordingDevice(entry.extra)?.let { JTag(it.label()) }
-        if (entry.relevance > 0) JTag(stringResource(R.string.knowledge_relevance, entry.relevance.coerceIn(0, 100)), status = relevanceStatus(entry.relevance))
+        if (entry.relevance > 0) JTag(stringResource(R.string.knowledge_ui_relevance, entry.relevance.coerceIn(0, 100)), status = relevanceStatus(entry.relevance))
         entry.tags.orEmpty().let { if (allTags) it else it.take(3) }.forEach { JTag("#$it") }
     }
     val locale = currentLocale
@@ -300,7 +300,7 @@ private fun EntryMetadata(entry: KnowledgeEntry, allTags: Boolean = false) {
         runCatching { OffsetDateTime.parse(entry.updated).takeIf { it.year > 1970 }
             ?.let { LocalizedFormats.format(it.toInstant(), LocalizedFormats.DATE_TIME, locale) } }.getOrNull()
     }
-    updated?.let { Text(stringResource(if (entry.isRecording) R.string.knowledge_recorded else R.string.knowledge_updated, it), style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }
+    updated?.let { Text(stringResource(if (entry.isRecording) R.string.knowledge_ui_recorded else R.string.knowledge_ui_updated, it), style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }
 }
 
 /** P0 in the "Needs you" tone, P1 in the "Working" tone (iOS `ImportanceBadge`); P2 and P3 quiet. */
@@ -344,7 +344,7 @@ internal fun KnowledgeDetailScreen(
     var openLinks by rememberSaveable(page.scope?.path) { mutableStateOf(listOf<String>()) }
     var editing by rememberSaveable(page.scope?.path) { mutableStateOf(false) }
     var openPoint by remember(page.scope) { mutableStateOf<Pair<TopicPoint, List<String>>?>(null) }
-    val defaultQuestion = stringResource(R.string.knowledge_question_default)
+    val defaultQuestion = stringResource(R.string.knowledge_ui_question_default)
     var question by rememberSaveable(page.scope?.path) { mutableStateOf(defaultQuestion) }
     var linkMessage by remember(page.scope) { mutableStateOf<String?>(null) }
     val currentOpenLink by rememberUpdatedState(openLinkInApp)
@@ -356,7 +356,7 @@ internal fun KnowledgeDetailScreen(
                 val parsed = runCatching { URI(uri) }.getOrNull()
                 if (parsed != null && parsed.scheme?.lowercase() in setOf("http", "https") && !parsed.host.isNullOrBlank() && parsed.userInfo == null) {
                     currentOpenLink(uri)
-                } else linkMessage = resources.getString(R.string.knowledge_link_unsupported)
+                } else linkMessage = resources.getString(R.string.knowledge_ui_link_unsupported)
             }
         }
     }
@@ -379,7 +379,7 @@ internal fun KnowledgeDetailScreen(
             while (true) { delay(MinutesPollMillis); model.refresh() }
         }
     }
-    val minutesCopied = stringResource(R.string.knowledge_minutes_copied)
+    val minutesCopied = stringResource(R.string.knowledge_ui_minutes_copied)
     val copyText = rememberCopy()
     val detail = page.detail
     val entry = detail?.entry()
@@ -392,24 +392,24 @@ internal fun KnowledgeDetailScreen(
         val start = agentStart(detail, kindName)
         if (onNewAgent != null) { onNewAgent(start); return }
         // Until the shell can open "New session" with these filled in: the context goes on the clipboard and Agents opens.
-        copyText(start.prompt, start.cwd?.let { resources.getString(R.string.knowledge_context_copied_dir, pathTail(it)) }
-            ?: resources.getString(R.string.knowledge_context_copied))
+        copyText(start.prompt, start.cwd?.let { resources.getString(R.string.knowledge_ui_context_copied_dir, pathTail(it)) }
+            ?: resources.getString(R.string.knowledge_ui_context_copied))
         navigator.selectTab(AppTab.Agents)
     }
     CompositionLocalProvider(LocalUriHandler provides uriHandler) {
-        JListPage(entry?.name ?: stringResource(R.string.knowledge_detail_title), onBack = navigator::back,
+        JListPage(entry?.name ?: stringResource(R.string.knowledge_ui_detail_title), onBack = navigator::back,
             refreshing = page.loading && detail != null, onRefresh = model::refresh, state = listState,
             actions = {
-                if (canHand) JIconButton(PersonaIcons.handToAI, stringResource(R.string.knowledge_handoff_title), { showHandoff(null) })
-                JIconButton(PhIcons.Hash, stringResource(R.string.knowledge_tag_action), { model.dismissTagError(); editing = true }, enabled = detail != null)
-                JIconButton(PhIcons.ArrowClockwise, stringResource(R.string.knowledge_refresh_detail), model::refresh, enabled = !page.loading)
+                if (canHand) JIconButton(PersonaIcons.handToAI, stringResource(R.string.knowledge_ui_handoff_title), { showHandoff(null) })
+                JIconButton(PhIcons.Hash, stringResource(R.string.knowledge_ui_tag_action), { model.dismissTagError(); editing = true }, enabled = detail != null)
+                JIconButton(PhIcons.ArrowClockwise, stringResource(R.string.knowledge_ui_refresh_detail), model::refresh, enabled = !page.loading)
             }) {
             when {
                 !page.paired -> item("unpaired") {
-                    JEmptyState(stringResource(R.string.knowledge_unpaired_title), stringResource(R.string.knowledge_unpaired_detail))
+                    JEmptyState(stringResource(R.string.knowledge_ui_unpaired_title), stringResource(R.string.knowledge_ui_unpaired_detail))
                 }
                 detail == null && page.message != null -> item("error") {
-                    KnowledgeFailure(R.string.knowledge_entry_error, requireNotNull(page.message), model::refresh)
+                    KnowledgeFailure(R.string.knowledge_ui_entry_error, requireNotNull(page.message), model::refresh)
                 }
                 detail == null || entry == null -> item("loading") { JLoading() }
                 else -> {
@@ -421,11 +421,11 @@ internal fun KnowledgeDetailScreen(
                             entry.oneLine?.takeIf { it.isNotBlank() }?.let { Text(it, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
                             // A field of the page: the chat's composer frame brings its own inset (and the board's rule
                             // across the page), so it stood out of line with the tags and the buttons.
-                            JTextField(question, { question = it }, placeholder = stringResource(R.string.knowledge_ask_placeholder), enabled = !sending.busy)
+                            JTextField(question, { question = it }, placeholder = stringResource(R.string.knowledge_ui_ask_placeholder), enabled = !sending.busy)
                             Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
-                                JButton(stringResource(R.string.knowledge_ask), { model.ask(question, kindName) }, Modifier.weight(1f), icon = PhIcons.Sparkle,
-                                    enabled = question.isNotBlank(), loading = sending.busy, loadingText = stringResource(R.string.knowledge_asking))
-                                if (entry.isProject) JButton(stringResource(R.string.knowledge_start_agent), { startAgent(detail) }, Modifier.weight(1f),
+                                JButton(stringResource(R.string.knowledge_ui_ask), { model.ask(question, kindName) }, Modifier.weight(1f), icon = PhIcons.Sparkle,
+                                    enabled = question.isNotBlank(), loading = sending.busy, loadingText = stringResource(R.string.knowledge_ui_asking))
+                                if (entry.isProject) JButton(stringResource(R.string.knowledge_ui_start_agent), { startAgent(detail) }, Modifier.weight(1f),
                                     kind = JButtonKind.Secondary, icon = PhIcons.Robot)
                             }
                             sending.message?.let { JNotice(stringResource(it)) }
@@ -456,7 +456,7 @@ internal fun KnowledgeDetailScreen(
                     val profileText = profile(detail.summary, entry.oneLine)
                     // A card like the other sections (and iOS): bare text sat at the card edge, left of every heading.
                     if (profileText.isNotBlank()) item("profile", contentType = "markdown") {
-                        JSectionHeader(stringResource(if (recording) R.string.knowledge_recording_summary else R.string.knowledge_profile))
+                        JSectionHeader(stringResource(if (recording) R.string.knowledge_ui_recording_summary else R.string.knowledge_ui_profile))
                         JGroupItem(GroupPosition.Single) {
                             Box(Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.m)) {
                                 ReadingContent { KnowledgeMarkdown(profileText) }
@@ -487,10 +487,10 @@ internal fun KnowledgeDetailScreen(
                     // A recording's `recent` is its transcript as text: the transcript below shows it line by line.
                     facts?.let { recordingTranscript(it, lines) }
                     if (!recording && !detail.recent.isNullOrBlank()) {
-                        item("recent-header", contentType = "section") { JSectionHeader(stringResource(R.string.knowledge_chat_history)) }
+                        item("recent-header", contentType = "section") { JSectionHeader(stringResource(R.string.knowledge_ui_chat_history)) }
                         item("recent-toggle", contentType = "row") {
                             JGroupItem(GroupPosition(first = true, last = !recent)) {
-                                JRow(stringResource(R.string.knowledge_recent_messages), leadingIcon = PhIcons.ChatCircleDots, onClick = { recent = !recent }, chevron = false,
+                                JRow(stringResource(R.string.knowledge_ui_recent_messages), leadingIcon = PhIcons.ChatCircleDots, onClick = { recent = !recent }, chevron = false,
                                     trailing = { JIcon(if (recent) PhIcons.CaretUp else PhIcons.CaretDown, null, tint = PersonaTheme.palette.ink3) })
                             }
                         }
@@ -504,14 +504,14 @@ internal fun KnowledgeDetailScreen(
                         }
                     }
                     item("path", contentType = "text") {
-                        JSectionHeader(stringResource(R.string.knowledge_directory))
+                        JSectionHeader(stringResource(R.string.knowledge_ui_directory))
                         JGroupItem(GroupPosition.Single) {
                             SelectionContainer {
                                 Text(detail.path, style = PersonaTheme.type.code, color = PersonaTheme.palette.ink2,
                                     modifier = Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.m))
                             }
                         }
-                        Note(stringResource(R.string.knowledge_directory_note))
+                        Note(stringResource(R.string.knowledge_ui_directory_note))
                     }
                 }
             }
@@ -531,7 +531,7 @@ internal fun KnowledgeDetailScreen(
 /** "Agents on this project": the hub's live sessions in the project's code directories; a tap opens the conversation. */
 private fun LazyListScope.agents(agents: List<Session>, navigator: Navigator) {
     if (agents.isEmpty()) return
-    item("agents-header", contentType = "section") { JSectionHeader(stringResource(R.string.knowledge_agents), count = agents.size) }
+    item("agents-header", contentType = "section") { JSectionHeader(stringResource(R.string.knowledge_ui_agents), count = agents.size) }
     itemsIndexed(agents, key = { _, session -> "agent/${session.key.path}" }, contentType = { _, _ -> "agent" }) { index, session ->
         val status = session.agentState.status()
         AgentRow(session.displayTitle, status, onClick = { navigator.navigate(ChatRoute(session.machineId, session.sessionId, ConversationKind.Agent)) },
@@ -556,14 +556,14 @@ private fun LazyListScope.timeline(lines: List<KnowledgeLogLine>, all: Boolean, 
     val more = lines.size > LOG_SHOWN
     val shown = if (all) lines else lines.take(LOG_SHOWN)
     val count = shown.size + if (more) 1 else 0
-    item("timeline-header", contentType = "section") { JSectionHeader(stringResource(R.string.knowledge_timeline), count = lines.size) }
+    item("timeline-header", contentType = "section") { JSectionHeader(stringResource(R.string.knowledge_ui_timeline), count = lines.size) }
     itemsIndexed(shown, key = { index, _ -> "log/$index" }, contentType = { _, _ -> "log" }) { index, line ->
         JGroupItem(GroupPosition.of(index, count)) { TimelineLine(line, newest = index == 0) }
     }
     if (more) item("timeline-more", contentType = "row") {
         JGroupItem(GroupPosition(first = false, last = true)) {
-            JRow(if (all) stringResource(R.string.knowledge_collapse)
-                else pluralStringResource(R.plurals.knowledge_show_all, lines.size, lines.size), onClick = toggle, chevron = false)
+            JRow(if (all) stringResource(R.string.knowledge_ui_collapse)
+                else pluralStringResource(R.plurals.knowledge_ui_show_all, lines.size, lines.size), onClick = toggle, chevron = false)
         }
     }
 }
@@ -592,16 +592,16 @@ private fun TimelineLine(line: KnowledgeLogLine, newest: Boolean) {
 
 /** "Recording": when it started, how long, on which device, in which language; "Transcribing" until the transcript is done. */
 private fun LazyListScope.recordingFacts(facts: RecordingFacts) {
-    item("recording-header", contentType = "section") { JSectionHeader(stringResource(R.string.knowledge_recording_info)) }
+    item("recording-header", contentType = "section") { JSectionHeader(stringResource(R.string.knowledge_ui_recording_info)) }
     item("recording-facts", contentType = "facts") {
         val locale = currentLocale
         val started = remember(facts.startedAt, locale) { facts.startedAt?.let { LocalizedFormats.format(it, LocalizedFormats.DATE_TIME, locale) } }
         val language = remember(facts.language, locale) { languageName(facts.language, locale) }
         val rows = buildList<Pair<String, String>> {
-            started?.let { add(stringResource(R.string.knowledge_recording_started) to it) }
-            facts.length?.let { add(stringResource(R.string.knowledge_recording_duration) to it.label()) }
-            recordingDevice(facts.device)?.let { add(stringResource(R.string.knowledge_recording_device) to it.label()) }
-            language?.let { add(stringResource(R.string.knowledge_recording_language) to it) }
+            started?.let { add(stringResource(R.string.knowledge_ui_recording_started) to it) }
+            facts.length?.let { add(stringResource(R.string.knowledge_ui_recording_duration) to it.label()) }
+            recordingDevice(facts.device)?.let { add(stringResource(R.string.knowledge_ui_recording_device) to it.label()) }
+            language?.let { add(stringResource(R.string.knowledge_ui_recording_language) to it) }
         }
         val count = rows.size + if (facts.complete) 0 else 1
         Column {
@@ -609,7 +609,7 @@ private fun LazyListScope.recordingFacts(facts: RecordingFacts) {
                 JGroupItem(GroupPosition.of(index, count)) { JRow(title, value = value) }
             }
             if (!facts.complete) JGroupItem(GroupPosition.of(rows.size, count)) {
-                JRow(stringResource(R.string.knowledge_recording_transcribing), subtitle = stringResource(R.string.knowledge_recording_transcribing_note),
+                JRow(stringResource(R.string.knowledge_ui_recording_transcribing), subtitle = stringResource(R.string.knowledge_ui_recording_transcribing_note),
                     leading = { JStatusDot(Status.Working) })
             }
         }
@@ -619,10 +619,10 @@ private fun LazyListScope.recordingFacts(facts: RecordingFacts) {
 /** "Bookmarks": the marks set while recording, at the time they were set. */
 private fun LazyListScope.recordingBookmarks(facts: RecordingFacts) {
     if (facts.bookmarks.isEmpty()) return
-    item("bookmarks-header", contentType = "section") { JSectionHeader(stringResource(R.string.knowledge_recording_bookmarks), count = facts.bookmarks.size) }
+    item("bookmarks-header", contentType = "section") { JSectionHeader(stringResource(R.string.knowledge_ui_recording_bookmarks), count = facts.bookmarks.size) }
     itemsIndexed(facts.bookmarks, key = { index, _ -> "bookmark/$index" }, contentType = { _, _ -> "bookmark" }) { index, mark ->
         JGroupItem(GroupPosition.of(index, facts.bookmarks.size)) {
-            JRow(mark.label ?: stringResource(R.string.knowledge_recording_bookmark), leadingIcon = PhIcons.BookmarkSimple,
+            JRow(mark.label ?: stringResource(R.string.knowledge_ui_recording_bookmark), leadingIcon = PhIcons.BookmarkSimple,
                 value = clockText(facts, mark.at))
         }
     }
@@ -631,11 +631,11 @@ private fun LazyListScope.recordingBookmarks(facts: RecordingFacts) {
 /** The whole transcript, a row per line with its wall-clock time; each line's text can be selected and copied. */
 private fun LazyListScope.recordingTranscript(facts: RecordingFacts, segments: List<KnowledgeSegment>) {
     item("transcript-header", contentType = "section") {
-        JSectionHeader(stringResource(R.string.knowledge_recording_transcript), count = segments.size.takeIf { it > 0 })
+        JSectionHeader(stringResource(R.string.knowledge_ui_recording_transcript), count = segments.size.takeIf { it > 0 })
     }
     if (segments.isEmpty()) {
         item("transcript-empty", contentType = "row") {
-            JGroupItem(GroupPosition.Single) { JRow(stringResource(R.string.knowledge_recording_no_transcript), leadingIcon = PhIcons.Microphone) }
+            JGroupItem(GroupPosition.Single) { JRow(stringResource(R.string.knowledge_ui_recording_no_transcript), leadingIcon = PhIcons.Microphone) }
         }
         return
     }
@@ -672,15 +672,15 @@ private fun languageName(tag: String, locale: java.util.Locale): String? {
 
 @Composable
 private fun RecordingDevice.label(): String = stringResource(when (this) {
-    RecordingDevice.Phone -> R.string.knowledge_recording_phone
-    RecordingDevice.Watch -> R.string.knowledge_recording_watch
+    RecordingDevice.Phone -> R.string.knowledge_ui_recording_phone
+    RecordingDevice.Watch -> R.string.knowledge_ui_recording_watch
 })
 
 @Composable
 private fun RecordingLength.label(): String = when (this) {
-    is RecordingLength.Hours -> stringResource(R.string.knowledge_duration_hours, hours.toInt(), minutes.toInt())
-    is RecordingLength.Minutes -> stringResource(R.string.knowledge_duration_minutes, minutes.toInt(), seconds.toInt())
-    is RecordingLength.Seconds -> stringResource(R.string.knowledge_duration_seconds, seconds.toInt())
+    is RecordingLength.Hours -> stringResource(R.string.knowledge_ui_duration_hours, hours.toInt(), minutes.toInt())
+    is RecordingLength.Minutes -> stringResource(R.string.knowledge_ui_duration_minutes, minutes.toInt(), seconds.toInt())
+    is RecordingLength.Seconds -> stringResource(R.string.knowledge_ui_duration_seconds, seconds.toInt())
 }
 
 /** Related entries by kind, a few each with "All" for the rest. */
@@ -699,8 +699,8 @@ private fun LazyListScope.links(groups: List<Pair<KnowledgeKind, List<KnowledgeE
         }
         if (more) item("links-more/${kind.wire}", contentType = "row") {
             JGroupItem(GroupPosition(first = false, last = true)) {
-                JRow(if (all) stringResource(R.string.knowledge_collapse)
-                else pluralStringResource(R.plurals.knowledge_all_count, entries.size, entries.size), onClick = { toggle(kind.wire) }, chevron = false)
+                JRow(if (all) stringResource(R.string.knowledge_ui_collapse)
+                else pluralStringResource(R.plurals.knowledge_ui_all_count, entries.size, entries.size), onClick = { toggle(kind.wire) }, chevron = false)
             }
         }
     }
@@ -709,7 +709,7 @@ private fun LazyListScope.links(groups: List<Pair<KnowledgeKind, List<KnowledgeE
 /** A project's code directories: the path's last folders, and the machine they are on. */
 private fun LazyListScope.dirs(dirs: List<String>) {
     if (dirs.isEmpty()) return
-    item("dirs-header", contentType = "section") { JSectionHeader(stringResource(R.string.knowledge_code_dirs), count = dirs.size) }
+    item("dirs-header", contentType = "section") { JSectionHeader(stringResource(R.string.knowledge_ui_code_dirs), count = dirs.size) }
     itemsIndexed(dirs, key = { index, _ -> "dir/$index" }, contentType = { _, _ -> "dir" }) { index, dir ->
         val (machine, path) = dirParts(dir)
         JGroupItem(GroupPosition.of(index, dirs.size)) { JRow(path, subtitle = machine, leadingIcon = PhIcons.FolderSimple) }
@@ -767,13 +767,13 @@ internal fun Navigator.open(entry: KnowledgeEntry, manager: String?) {
 
 @Composable
 internal fun KnowledgeFailure(title: Int, message: Int, retry: (() -> Unit)?) {
-    val disabled = message == R.string.knowledge_disabled_text
-    RetryState(stringResource(if (disabled) R.string.knowledge_disabled_title else title),
+    val disabled = message == R.string.knowledge_ui_disabled_text
+    RetryState(stringResource(if (disabled) R.string.knowledge_ui_disabled_title else title),
         stringResource(message), retry.takeUnless { disabled })
 }
 
 @Composable internal fun RetryState(title: String, message: String, retry: (() -> Unit)?) {
-    JEmptyState(title, message, action = retry?.let { { JButton(stringResource(R.string.knowledge_retry), it, kind = JButtonKind.Secondary) } })
+    JEmptyState(title, message, action = retry?.let { { JButton(stringResource(R.string.knowledge_ui_retry), it, kind = JButtonKind.Secondary) } })
 }
 
 /** A kind's words: its name, and the empty list and the related entries that say it. */
@@ -782,22 +782,22 @@ private class KindWords(@StringRes val name: Int, @StringRes val empty: Int, @St
 
 private val KnowledgeKind.words: KindWords
     get() = when (this) {
-        KnowledgeKind.Projects -> KindWords(R.string.knowledge_kind_projects, R.string.knowledge_empty_projects,
-            R.string.knowledge_empty_tag_projects, R.string.knowledge_linked_projects)
-        KnowledgeKind.Topics -> KindWords(R.string.knowledge_kind_topics, R.string.knowledge_empty_topics,
-            R.string.knowledge_empty_tag_topics, R.string.knowledge_linked_topics, icon = PersonaIcons.topic)
-        KnowledgeKind.Chats -> KindWords(R.string.knowledge_kind_chats, R.string.knowledge_empty_chats,
-            R.string.knowledge_empty_tag_chats, R.string.knowledge_linked_chats)
-        KnowledgeKind.People -> KindWords(R.string.knowledge_kind_people, R.string.knowledge_empty_people,
-            R.string.knowledge_empty_tag_people, R.string.knowledge_linked_people)
-        KnowledgeKind.Docs -> KindWords(R.string.knowledge_kind_docs, R.string.knowledge_empty_docs,
-            R.string.knowledge_empty_tag_docs, R.string.knowledge_linked_docs)
-        KnowledgeKind.Meetings -> KindWords(R.string.knowledge_kind_meetings, R.string.knowledge_empty_meetings,
-            R.string.knowledge_empty_tag_meetings, R.string.knowledge_linked_meetings)
-        KnowledgeKind.Events -> KindWords(R.string.knowledge_kind_events, R.string.knowledge_empty_events,
-            R.string.knowledge_empty_tag_events, R.string.knowledge_linked_events)
-        KnowledgeKind.Recordings -> KindWords(R.string.knowledge_kind_recordings, R.string.knowledge_empty_recordings,
-            R.string.knowledge_empty_tag_recordings, R.string.knowledge_linked_recordings, icon = PhIcons.Microphone)
+        KnowledgeKind.Projects -> KindWords(R.string.knowledge_ui_kind_projects, R.string.knowledge_ui_empty_projects,
+            R.string.knowledge_ui_empty_tag_projects, R.string.knowledge_ui_linked_projects)
+        KnowledgeKind.Topics -> KindWords(R.string.knowledge_ui_kind_topics, R.string.knowledge_ui_empty_topics,
+            R.string.knowledge_ui_empty_tag_topics, R.string.knowledge_ui_linked_topics, icon = PersonaIcons.topic)
+        KnowledgeKind.Chats -> KindWords(R.string.knowledge_ui_kind_chats, R.string.knowledge_ui_empty_chats,
+            R.string.knowledge_ui_empty_tag_chats, R.string.knowledge_ui_linked_chats)
+        KnowledgeKind.People -> KindWords(R.string.knowledge_ui_kind_people, R.string.knowledge_ui_empty_people,
+            R.string.knowledge_ui_empty_tag_people, R.string.knowledge_ui_linked_people)
+        KnowledgeKind.Docs -> KindWords(R.string.knowledge_ui_kind_docs, R.string.knowledge_ui_empty_docs,
+            R.string.knowledge_ui_empty_tag_docs, R.string.knowledge_ui_linked_docs)
+        KnowledgeKind.Meetings -> KindWords(R.string.knowledge_ui_kind_meetings, R.string.knowledge_ui_empty_meetings,
+            R.string.knowledge_ui_empty_tag_meetings, R.string.knowledge_ui_linked_meetings)
+        KnowledgeKind.Events -> KindWords(R.string.knowledge_ui_kind_events, R.string.knowledge_ui_empty_events,
+            R.string.knowledge_ui_empty_tag_events, R.string.knowledge_ui_linked_events)
+        KnowledgeKind.Recordings -> KindWords(R.string.knowledge_ui_kind_recordings, R.string.knowledge_ui_empty_recordings,
+            R.string.knowledge_ui_empty_tag_recordings, R.string.knowledge_ui_linked_recordings, icon = PhIcons.Microphone)
     }
 
 /** The kind's name in the page's language ("Projects" in English, the Chinese or Japanese word otherwise). */
@@ -806,11 +806,11 @@ internal fun KnowledgeKind.label(): String = stringResource(words.name)
 
 @Composable
 private fun KnowledgeHitSource.label(): String = when (this) {
-    is KnowledgeHitSource.Messages -> stringResource(R.string.knowledge_source_messages, day)
-    KnowledgeHitSource.Profile -> stringResource(R.string.knowledge_profile)
-    KnowledgeHitSource.Timeline -> stringResource(R.string.knowledge_timeline)
-    KnowledgeHitSource.Details -> stringResource(R.string.knowledge_source_info)
-    KnowledgeHitSource.Transcript -> stringResource(R.string.knowledge_recording_transcript)
+    is KnowledgeHitSource.Messages -> stringResource(R.string.knowledge_ui_source_messages, day)
+    KnowledgeHitSource.Profile -> stringResource(R.string.knowledge_ui_profile)
+    KnowledgeHitSource.Timeline -> stringResource(R.string.knowledge_ui_timeline)
+    KnowledgeHitSource.Details -> stringResource(R.string.knowledge_ui_source_info)
+    KnowledgeHitSource.Transcript -> stringResource(R.string.knowledge_ui_recording_transcript)
     is KnowledgeHitSource.File -> name
 }
 

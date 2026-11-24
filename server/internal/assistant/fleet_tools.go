@@ -47,6 +47,7 @@ func (s *Service) mcpTools(ctx context.Context, assistant bool) []proto.Tool {
 		tools = append(tools, s.Tools(ctx)...)
 		tools = append(tools, assistantOnly...)
 	}
+	tools = append(tools, s.fileTransferTools(ctx)...) // file_transfer, unless agents.file_transfer is off (file_transfer.go)
 	return localizedMCPTools(tools, s.toolLanguage(ctx))
 }
 
@@ -164,7 +165,7 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 		cfg := s.a2aConfig(ctx)
 		_, hasA2A := s.a2aStore()
 		if hasA2A == nil && (session == "" && s.a2aMachineAllowed(ctx, cfg, s.canonical(machine)) ||
-			s.a2aAllowed(ctx, cfg, a2aRef{s.canonical(machine), session})) {
+			s.a2aToolAllowed(ctx, cfg, a2aRef{s.canonical(machine), session})) {
 			tools = append(tools, toolsNamed(assistantwire.A2AToolNames)...)
 		}
 		if assistant && toolSetOf(ctx) == toolSetSupervise {
@@ -228,6 +229,9 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 	}
 	if assistantwire.IsA2ATool(name) {
 		return s.a2aTool(ctx, a2aRef{s.canonical(machine), session}, name, args)
+	}
+	if name == fileTransferTool { // Agents' and assistant conversations' alike (file_transfer.go)
+		return s.fileTransferToolCall(ctx, machine, session, args, assistant)
 	}
 	if isKnowledgeFolderTool(name) && !assistant {
 		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})

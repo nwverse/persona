@@ -1039,10 +1039,14 @@ final class LiveConnection {
     /// `persona_card_ring` (```persona-card rings, `PersonaCard.swift`) from the apps that build the chat (iOS, Mac,
     /// visionOS), not the watch or the extensions: a client without it gets each ring as a stacked bar (the hub's
     /// card_compat.go), which every build before the ring draws.
+    /// `tool_views` (out-of-band declarative UI views on tool results, e.g. UI version 12 maps) from the iOS app alone
+    /// in this release; watch, widgets, extensions and un-updated apps omit it so hubs filter those fields out.
     nonisolated static func helloFeatures(_ client: RequestClientMetadata) -> [String] {
         let iOSApp = RequestClientMetadata.Platform.iOS.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue
         let chatApps = [RequestClientMetadata.Platform.iOS, .macOS, .visionOS].map { $0.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue }
-        return [HubNaming.feature] + (client.platform == iOSApp ? ["elicitation", UndeliveredMessage.agentHoldFeature, SendReceipt.todoFeature] : []) + (chatApps.contains(client.platform) ? [cardRingFeature, "closeout.markdown.v1"] : [])
+        return [HubNaming.feature]
+            + (client.platform == iOSApp ? ["elicitation", UndeliveredMessage.agentHoldFeature, SendReceipt.todoFeature, toolViewsFeature] : [])
+            + (chatApps.contains(client.platform) ? [cardRingFeature, "closeout.markdown.v1"] : [])
     }
 
     /// Whether this app asks for `todo_send_state` (`helloFeatures`), which the socket's URL then says as well.
@@ -1052,6 +1056,8 @@ final class LiveConnection {
 
     /// The client_hello feature that says this app draws ```persona-card rings (#3068).
     nonisolated static let cardRingFeature = "persona_card_ring"
+    /// The client_hello / X-Persona-Features feature that says this app draws `tool_views` inline in chats.
+    nonisolated static let toolViewsFeature = "tool_views"
 
     func send(_ object: [String: Any]) {
         if let local {

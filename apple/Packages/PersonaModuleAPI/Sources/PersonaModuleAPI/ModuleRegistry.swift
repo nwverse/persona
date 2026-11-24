@@ -9,6 +9,11 @@ public struct ModuleRegistrar<Host: ModuleHost> {
     var launchHooks: [() -> Void] = []
     var urlHandlers: [(URL) -> Bool] = []
     var composerActions: [ComposerAction<Host>] = []
+    var views: [(Host.Place, ModuleView<Host>)] = []
+    var settingsEntries: [ModuleSettingsEntry<Host>] = []
+    var shellPages: [ModuleShellPage<Host>] = []
+    var capabilities: [ObjectIdentifier: Any] = [:]
+    var audioLeases: [ModuleAudioLease] = []
     var problems: [String] = []
 
     init(module: ModuleDescriptor) { self.module = module }
@@ -41,6 +46,44 @@ public struct ModuleRegistrar<Host: ModuleHost> {
             AnyView(sheet(deliver))
         })
     }
+
+    /// Draws a view at one of the host's places (the place's slot: `ModuleHost.slot(for:)`): a menu item, a chat's
+    /// accessory, an entry under a tool call. `when` says whether it has anything to draw for a context, so the host can
+    /// leave its spacing out; by default it always has.
+    public mutating func view<Content: View>(at place: Host.Place, when shows: @escaping @MainActor (Host.PlaceContext) -> Bool = { _ in true },
+                                             @ViewBuilder _ make: @escaping @MainActor (Host.PlaceContext) -> Content) {
+        guard allows(Host.slot(for: place)) else { return }
+        let entry = ModuleView<Host>(id: "\(module.id)#\(views.count)", module: module.id, shows: shows) { AnyView(make($0)) }
+        views.append((place, entry))
+    }
+
+    /// Adds an entry to the host's Settings (`ModuleSlot.settings`), with its page; `row` draws the module's own row
+    /// instead of the host's plain link.
+    public mutating func settingsEntry<Page: View>(id: String, info: Host.SettingsInfo, row: (@MainActor () -> AnyView)? = nil,
+                                                   @ViewBuilder page: @escaping @MainActor () -> Page) {
+        guard allows(.settings) else { return }
+        settingsEntries.append(ModuleSettingsEntry(id: id, module: module.id, info: info, row: row) { AnyView(page()) })
+    }
+
+    /// Adds a page to the host's shell (`ModuleSlot.shellPlaces`), which the host routes to by `id`.
+    public mutating func shellPage<Page: View>(id: String, @ViewBuilder _ page: @escaping @MainActor (Host.ShellContext) -> Page) {
+        guard allows(.shellPlaces) else { return }
+        shellPages.append(ModuleShellPage(id: id, module: module.id) { AnyView(page($0)) })
+    }
+
+    /// Provides an interface the core declares and asks for (`ModuleSlot.capabilities`): the core does without it when
+    /// no active module provides one. One provider per interface.
+    public mutating func provide<Capability>(_ type: Capability.Type, _ value: Capability) {
+        guard allows(.capabilities) else { return }
+        capabilities[ObjectIdentifier(type)] = value
+    }
+
+    /// Declares a lease on the shared audio session (`ModuleSlot.audioLeases`), ranked by `kind` for the core's
+    /// `AudioSessionBroker` (#13849, #13431).
+    public mutating func audioLease(id: String, kind: AudioLeaseKind) {
+        guard allows(.audioLeases) else { return }
+        audioLeases.append(ModuleAudioLease(id: id, module: module.id, kind: kind))
+    }
 }
 
 /// The active modules and their entries, built from the app's module list. A module is active when it is in the list,
@@ -62,8 +105,16 @@ public struct ModuleRegistry<Host: ModuleHost> {
     /// Registrations that were refused: an undeclared slot, a duplicate module id or composer action id, a composer
     /// action id the core uses itself, a malformed id. Empty in a correct build; the app asserts it in DEBUG and the tests check it.
     public let problems: [String]
+    /// Every settings entry of the active modules, in list order, then registration order.
+    public let settingsEntries: [ModuleSettingsEntry<Host>]
+    /// Every shell page of the active modules, in list order.
+    public let shellPages: [ModuleShellPage<Host>]
+    /// Every audio-session lease declared by the active modules, in list order, then registration order.
+    public let audioLeases: [ModuleAudioLease]
     private let launchHooks: [(ModuleID, () -> Void)]
     private let urlHandlers: [(URL) -> Bool]
+    private let placeViews: [Host.Place: [ModuleView<Host>]]
+    private let capabilities: [ObjectIdentifier: Any]
     private let modules: [any PersonaModule<Host>]
     private let isEnabled: @MainActor (any PersonaModule<Host>) -> Bool
 
@@ -82,6 +133,14 @@ public struct ModuleRegistry<Host: ModuleHost> {
         var problems: [String] = []
         var hooks: [(ModuleID, () -> Void)] = []
         var handlers: [(URL) -> Bool] = []
+        var placeViews: [Host.Place: [ModuleView<Host>]] = [:]
+        var settings: [ModuleSettingsEntry<Host>] = []
+        var settingIDs = Set<String>()
+        var shellPages: [ModuleShellPage<Host>] = []
+        var shellIDs = Set<String>()
+        var capabilities: [ObjectIdentifier: Any] = [:]
+        var audioLeases: [ModuleAudioLease] = []
+        var audioLeaseIDs = Set<String>()
         var seen = Set<ModuleID>()
         var actionIDs = Set<String>()
         for module in modules {
@@ -116,6 +175,31 @@ public struct ModuleRegistry<Host: ModuleHost> {
             }
             hooks += registrar.launchHooks.map { (descriptor.id, $0) }
             handlers += registrar.urlHandlers
+            for (place, view) in registrar.views { placeViews[place, default: []].append(view) }
+            for page in registrar.shellPages {
+                if shellIDs.insert(page.id).inserted { shellPages.append(page) } else {
+                    problems.append("\(descriptor.id): shell page \(page.id) is already taken")
+                }
+            }
+            for entry in registrar.settingsEntries {
+                if settingIDs.insert(entry.id).inserted { settings.append(entry) } else {
+                    problems.append("\(descriptor.id): settings entry \(entry.id) is already taken")
+                }
+            }
+            for (key, value) in registrar.capabilities {
+                if capabilities[key] == nil { capabilities[key] = value } else {
+                    problems.append("\(descriptor.id): provides a capability another module provides")
+                }
+            }
+            for lease in registrar.audioLeases {
+                if lease.id.isEmpty {
+                    problems.append("\(descriptor.id): audio lease id is empty")
+                } else if audioLeaseIDs.insert(lease.id).inserted {
+                    audioLeases.append(lease)
+                } else {
+                    problems.append("\(descriptor.id): audio lease \(lease.id) is already taken")
+                }
+            }
             active.append(descriptor)
         }
         self.active = active
@@ -125,6 +209,11 @@ public struct ModuleRegistry<Host: ModuleHost> {
         self.problems = problems
         self.launchHooks = hooks
         self.urlHandlers = handlers
+        self.placeViews = placeViews
+        self.settingsEntries = settings
+        self.shellPages = shellPages
+        self.audioLeases = audioLeases
+        self.capabilities = capabilities
         self.modules = modules
         self.isEnabled = isEnabled
     }
@@ -155,4 +244,24 @@ public struct ModuleRegistry<Host: ModuleHost> {
     public func composerAction(id: String) -> ComposerAction<Host>? {
         composerActions.first { $0.id == id }
     }
+
+    /// The active modules' views at a place, in list order: a dictionary read.
+    public func views(at place: Host.Place) -> [ModuleView<Host>] { placeViews[place] ?? [] }
+
+    /// The shell page with this id, nil when no active module provides it.
+    public func shellPage(id: String) -> ModuleShellPage<Host>? { shellPages.first { $0.id == id } }
+
+    /// The settings entry with this id, nil when no active module offers it.
+    public func settingsEntry(id: String) -> ModuleSettingsEntry<Host>? { settingsEntries.first { $0.id == id } }
+
+    /// The active module's implementation of a core interface, nil when none provides it.
+    public func capability<Capability>(_ type: Capability.Type) -> Capability? {
+        capabilities[ObjectIdentifier(type)] as? Capability
+    }
+
+    /// The declared audio lease with this id, nil when no active module declares it.
+    public func audioLease(id: String) -> ModuleAudioLease? { audioLeases.first { $0.id == id } }
+
+    /// The active modules' declared audio leases of `kind`, in list order.
+    public func audioLeases(of kind: AudioLeaseKind) -> [ModuleAudioLease] { audioLeases.filter { $0.kind == kind } }
 }

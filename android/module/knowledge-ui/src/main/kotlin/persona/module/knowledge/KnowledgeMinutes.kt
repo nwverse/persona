@@ -178,9 +178,9 @@ internal class MinutesActions(
 /** The "Minutes" section, above the transcript; [clock] says an item's time as the transcript does. */
 internal fun LazyListScope.recordingMinutes(view: MinutesView, actions: MinutesActions, clock: @Composable (Double) -> String?) {
     item("minutes-header", contentType = "section") {
-        JSectionHeader(stringResource(R.string.knowledge_minutes), action = {
-            if (view.canMake) JButton(stringResource(if (view.minutes != null || view.phase == MinutesPhase.Failed) R.string.knowledge_minutes_regenerate
-                else R.string.knowledge_minutes_make), actions.make, kind = JButtonKind.Secondary, size = JButtonSize.Small,
+        JSectionHeader(stringResource(R.string.knowledge_ui_minutes), action = {
+            if (view.canMake) JButton(stringResource(if (view.minutes != null || view.phase == MinutesPhase.Failed) R.string.knowledge_ui_minutes_regenerate
+                else R.string.knowledge_ui_minutes_make), actions.make, kind = JButtonKind.Secondary, size = JButtonSize.Small,
                 enabled = !actions.busy, modifier = Modifier.testTag("minutes-make"))
         })
     }
@@ -189,10 +189,10 @@ internal fun LazyListScope.recordingMinutes(view: MinutesView, actions: MinutesA
             actionLabel = stringResource(persona.core.designsystem.R.string.designsystem_close), onAction = actions.dismiss, inlineAction = true)
     } }
     val note: Int? = when {
-        view.trimmed -> R.string.knowledge_minutes_transcript_expired
-        view.phase == MinutesPhase.Waiting -> R.string.knowledge_minutes_waiting
-        view.phase == MinutesPhase.Failed || view.failed -> R.string.knowledge_minutes_failed
-        view.phase == MinutesPhase.Offer -> R.string.knowledge_minutes_offer
+        view.trimmed -> R.string.knowledge_ui_minutes_transcript_expired
+        view.phase == MinutesPhase.Waiting -> R.string.knowledge_ui_minutes_waiting
+        view.phase == MinutesPhase.Failed || view.failed -> R.string.knowledge_ui_minutes_failed
+        view.phase == MinutesPhase.Offer -> R.string.knowledge_ui_minutes_offer
         else -> null
     }
     if (view.phase == MinutesPhase.Checking || view.phase == MinutesPhase.Writing || view.updating) item("minutes-writing", contentType = "row") {
@@ -201,18 +201,18 @@ internal fun LazyListScope.recordingMinutes(view: MinutesView, actions: MinutesA
             val checking = view.phase == MinutesPhase.Checking
             val progress = view.progress
             val title = when {
-                view.updating -> stringResource(R.string.knowledge_minutes_updating)
-                checking && progress != null -> stringResource(R.string.knowledge_minutes_checking_progress, progress.done, progress.total)
-                checking -> stringResource(R.string.knowledge_minutes_checking)
-                else -> stringResource(R.string.knowledge_minutes_writing)
+                view.updating -> stringResource(R.string.knowledge_ui_minutes_updating)
+                checking && progress != null -> stringResource(R.string.knowledge_ui_minutes_checking_progress, progress.done, progress.total)
+                checking -> stringResource(R.string.knowledge_ui_minutes_checking)
+                else -> stringResource(R.string.knowledge_ui_minutes_writing)
             }
             JRow(title, titleLines = if (checking) 3 else 1,
-                subtitle = if (checking) null else stringResource(R.string.knowledge_minutes_writing_note), subtitleLines = 3,
+                subtitle = if (checking) null else stringResource(R.string.knowledge_ui_minutes_writing_note), subtitleLines = 3,
                 leading = { JSpinner(Modifier.padding(end = Tokens.Space.xxs)) }, modifier = Modifier.testTag("minutes-writing"))
         }
     }
     note?.let { id -> item("minutes-note", contentType = "text") {
-        Text(stringResource(id), style = PersonaTheme.type.caption, color = if (id == R.string.knowledge_minutes_failed) PersonaTheme.palette.danger.text else PersonaTheme.palette.ink3,
+        Text(stringResource(id), style = PersonaTheme.type.caption, color = if (id == R.string.knowledge_ui_minutes_failed) PersonaTheme.palette.danger.text else PersonaTheme.palette.ink3,
             modifier = Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.xs).testTag("minutes-note"))
     } }
     val minutes = view.minutes ?: return
@@ -226,27 +226,27 @@ internal fun LazyListScope.recordingMinutes(view: MinutesView, actions: MinutesA
                     About(PhIcons.CalendarBlank, it)
                 }
                 if (minutes.attendees.isNotEmpty()) About(PhIcons.User, minutes.attendees.joinToString(" · "))
-                if (minutes.partial) Text(stringResource(R.string.knowledge_minutes_partial), style = PersonaTheme.type.caption, color = PersonaTheme.palette.cautionText)
-                if (minutes.isEmpty) Text(stringResource(R.string.knowledge_minutes_empty), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
+                if (minutes.partial) Text(stringResource(R.string.knowledge_ui_minutes_partial), style = PersonaTheme.type.caption, color = PersonaTheme.palette.cautionText)
+                if (minutes.isEmpty) Text(stringResource(R.string.knowledge_ui_minutes_empty), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
                 // Copy and Share, as on iOS: the minutes as Markdown, with their clock times.
                 minutes.markdown.takeIf { it.isNotBlank() }?.let { markdown ->
                     Row(Modifier.padding(top = Tokens.Space.xs), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                        JButton(stringResource(R.string.knowledge_minutes_copy), { actions.copy(markdown) }, kind = JButtonKind.Secondary,
+                        JButton(stringResource(R.string.knowledge_ui_minutes_copy), { actions.copy(markdown) }, kind = JButtonKind.Secondary,
                             size = JButtonSize.Small, icon = PhIcons.Copy, modifier = Modifier.testTag("minutes-copy"))
-                        JButton(stringResource(R.string.knowledge_minutes_share), { actions.share(markdown) }, kind = JButtonKind.Secondary,
+                        JButton(stringResource(R.string.knowledge_ui_minutes_share), { actions.share(markdown) }, kind = JButtonKind.Secondary,
                             size = JButtonSize.Small, icon = PhIcons.ShareNetwork, modifier = Modifier.testTag("minutes-share"))
                     }
                 }
             }
         }
     }
-    items(minutes.points, R.string.knowledge_minutes_points, PhIcons.Lightbulb, "points", actions, clock)
-    items(minutes.decisions, R.string.knowledge_minutes_decisions, PhIcons.CheckCircle, "decisions", actions, clock)
+    items(minutes.points, R.string.knowledge_ui_minutes_points, PhIcons.Lightbulb, "points", actions, clock)
+    items(minutes.decisions, R.string.knowledge_ui_minutes_decisions, PhIcons.CheckCircle, "decisions", actions, clock)
     if (minutes.actions.isNotEmpty()) {
         val remaining = minutes.actions.filter { !it.added }.map { it.id }
         item("minutes-actions-header", contentType = "section") {
-            JSectionHeader(stringResource(R.string.knowledge_minutes_actions), count = minutes.actions.size, sub = true, action = {
-                if (remaining.size > 1) JButton(stringResource(R.string.knowledge_minutes_add_all), { actions.add(remaining) }, kind = JButtonKind.Quiet,
+            JSectionHeader(stringResource(R.string.knowledge_ui_minutes_actions), count = minutes.actions.size, sub = true, action = {
+                if (remaining.size > 1) JButton(stringResource(R.string.knowledge_ui_minutes_add_all), { actions.add(remaining) }, kind = JButtonKind.Quiet,
                     size = JButtonSize.Small, enabled = !actions.busy, modifier = Modifier.testTag("minutes-add-all"))
             })
         }
@@ -256,7 +256,7 @@ internal fun LazyListScope.recordingMinutes(view: MinutesView, actions: MinutesA
             }
         }
     }
-    items(minutes.open, R.string.knowledge_minutes_open, PhIcons.Question, "open", actions, clock)
+    items(minutes.open, R.string.knowledge_ui_minutes_open, PhIcons.Question, "open", actions, clock)
 }
 
 private fun LazyListScope.items(list: List<MinutesItem>, title: Int, icon: PhIcon, key: String, actions: MinutesActions, clock: @Composable (Double) -> String?) {
@@ -299,12 +299,12 @@ private fun ActionRow(action: MinutesAction, actions: MinutesActions, clock: @Co
         JIcon(PhIcons.ListChecks, null, size = Tokens.Space.l, tint = PersonaTheme.palette.accent, modifier = Modifier.padding(top = Tokens.Space.xxs))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
             SelectionContainer { ReadingContent { Text(action.what, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) } }
-            val due = action.dueDate?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.knowledge_minutes_due, it) }
+            val due = action.dueDate?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.knowledge_ui_minutes_due, it) }
             listOfNotNull(action.who, action.by, due).filter { it.isNotBlank() }.joinToString(" · ").takeIf { it.isNotEmpty() }?.let {
                 Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
             }
-            if (action.added) JTag(stringResource(R.string.knowledge_minutes_added), Tone.Positive, Modifier.testTag("minutes-added"))
-            else JButton(stringResource(R.string.knowledge_minutes_add_todo), { actions.add(listOf(action.id)) }, kind = JButtonKind.Secondary,
+            if (action.added) JTag(stringResource(R.string.knowledge_ui_minutes_added), Tone.Positive, Modifier.testTag("minutes-added"))
+            else JButton(stringResource(R.string.knowledge_ui_minutes_add_todo), { actions.add(listOf(action.id)) }, kind = JButtonKind.Secondary,
                 size = JButtonSize.Small, enabled = !actions.busy && action.id.isNotBlank(), modifier = Modifier.testTag("minutes-add"))
         }
         action.at?.let { Time(it, actions, clock) }
@@ -314,7 +314,7 @@ private fun ActionRow(action: MinutesAction, actions: MinutesActions, clock: @Co
 @Composable
 private fun Time(at: Double, actions: MinutesActions, clock: @Composable (Double) -> String?) {
     val label = clock(at) ?: return
-    val spoken = stringResource(R.string.knowledge_minutes_jump, label)
+    val spoken = stringResource(R.string.knowledge_ui_minutes_jump, label)
     Box(Modifier.semantics { contentDescription = spoken }) {
         JChip(label, onClick = { actions.jump(at) }, role = Role.Button, modifier = Modifier.testTag("minutes-time"))
     }

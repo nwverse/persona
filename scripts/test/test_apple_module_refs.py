@@ -34,17 +34,35 @@ BASELINE = Path(__file__).resolve().with_name("apple_module_refs_baseline.json")
 # (#13843), the one list of what is core and what is a module. A module joins here once its references from the core
 # are worth counting; the other classified modules (about 700 references today) would only make every move churn the
 # baseline.
-GUARDED = ("glasses",)
+GUARDED = ("glasses", "screen-share", "health", "voice")
 _DIRS = module_classification.apple_module_dirs()
-MODULES = {module: _DIRS.get(module, []) for module in GUARDED}
+
+
+def guarded_dirs(dirs):
+    """A module's directories as this ratchet counts them. Once a module has a home of its own (apple/Modules/<Name>), the
+    directories the classification still gives it inside the app's core tree (apple/Persona/...) are its future homes,
+    not yet moved: they count as the core until they move, so the core may still call them (#13431: voice's engine,
+    calls and CarPlay stay in apple/Persona while its views live in apple/Modules/Voice)."""
+    if any(d.startswith("apple/Modules/") for d in dirs):
+        return [d for d in dirs if not d.startswith("apple/Persona/")]
+    return list(dirs)
+
+
+MODULES = {module: guarded_dirs(_DIRS.get(module, [])) for module in GUARDED}
 # The one core file allowed to name module types: the module list (the seed of PersonaHostApp).
 MODULE_LIST = "apple/Persona/App/Modules.swift"
 # Tests and tooling are not the core.
 SKIP_PARTS = {"PersonaTests", "PersonaUITests", "PersonaWatchTests", "Tests", "verify"}
 
 DECLARATION = re.compile(
-    r"^(?:(?:@\w+(?:\([^)\n]*\))?|public|internal|fileprivate|private|final|nonisolated|indirect)\s+)*"
+    r"^((?:(?:@\w+(?:\([^)\n]*\))?|public|internal|fileprivate|private|final|nonisolated|indirect)\s+)*)"
     r"(?:struct|class|enum|protocol|actor|typealias)\s+([A-Z]\w*)", re.M)
+
+
+def declared(code):
+    """The type names a file declares at its top level for other files: a `private` or `fileprivate` one is the file's
+    own (no other file can name it), so a core type of the same name is not a reference to it."""
+    return [name for mods, name in DECLARATION.findall(code) if not re.search(r"\b(?:private|fileprivate)\b", mods)]
 
 
 def blank(src):
@@ -116,7 +134,7 @@ def symbols(files):
     for rel in files:
         module = owner(rel)
         if module:
-            out[module].update(DECLARATION.findall(blank((ROOT / rel).read_text(encoding="utf-8", errors="replace"))))
+            out[module].update(declared(blank((ROOT / rel).read_text(encoding="utf-8", errors="replace"))))
     return out
 
 
@@ -212,7 +230,14 @@ class AppleModuleRefsTests(unittest.TestCase):
     def test_declarations(self):
         src = ("nonisolated struct GlassesError: Error {}\n@Observable\n@MainActor\nfinal class MetaGlasses {\n"
                "    enum Inner {}\n}\nprivate struct Helper {}\n// struct Commented {}\n")
-        self.assertEqual(DECLARATION.findall(blank(src)), ["GlassesError", "MetaGlasses", "Helper"])
+        self.assertEqual(declared(blank(src)), ["GlassesError", "MetaGlasses"])  # a private type is the file's own
+
+    def test_guarded_dirs(self):
+        # Before a home: every classified directory counts as the module's (glasses).
+        self.assertEqual(guarded_dirs(["apple/Persona/Glasses"]), ["apple/Persona/Glasses"])
+        # With a home: what is still inside apple/Persona counts as the core until it moves (voice).
+        self.assertEqual(guarded_dirs(["apple/Modules/Voice", "apple/Persona/Calls", "apple/Persona/Voice", "apple/PersonaCallIntents"]),
+                         ["apple/Modules/Voice", "apple/PersonaCallIntents"])
 
     def test_compare(self):
         self.assertEqual(compare({"a": {"x": 2}}, {"a": {"x": 1}}), (["a: x 1 -> 2"], []))

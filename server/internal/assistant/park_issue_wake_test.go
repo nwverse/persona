@@ -50,7 +50,7 @@ func TestParkOnAnIssueIsWokenWhenItCloses(t *testing.T) {
 }
 
 // An open linked issue refuses acceptance with the ways out named; set to reference, it no longer blocks (#14050).
-func TestReferenceIssueDoesNotBlockAcceptance(t *testing.T) {
+func TestOpenIssueRefusalNamesTheWaysOut(t *testing.T) {
 	s, todo, _ := linkRoleTask(t)
 	ctx := context.Background()
 	if err := s.importReportedLinks(ctx, todo.ID, []string{parkedIssue}, "issue", nil); err != nil {

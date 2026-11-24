@@ -452,6 +452,7 @@ func (s *Service) advanceLogicalConversation(ctx context.Context, st logicalSwit
 		params := map[string]any{"operation_id": logicalNodeOperation(c, op.OperationID), "launcher": p.Launcher, "model": p.Model, "effort": p.Effort, "permission_mode": p.PermissionMode, "is_main": c.SessionID == s.settings(ctx).Main}
 		if method == "assistant.segment.prepare" {
 			row, _ := s.session(ctx, c.MachineID, c.SessionID)
+			params["title"] = row.Title
 			cwd, err := s.prepareSpace(ctx, p.MachineID, row.Space)
 			if err != nil {
 				_ = st.ResolveConversationSwitch(ctx, c.MachineID, c.SessionID, op.OperationID, "rejected", "preparation unavailable")
@@ -665,13 +666,20 @@ func (s *Service) drainLogicalInput(ctx context.Context, st logicalSwitchStore, 
 			delete(queued.Params, assistantwire.DefaultPermissionModeParam)
 		}
 	}
+	var handoff json.RawMessage
 	if c.Switch != nil {
-		raw, _, err := st.ConversationPreparation(ctx, c.MachineID, c.SessionID, c.Switch.OperationID)
-		if err != nil {
+		if handoff, _, err = st.ConversationPreparation(ctx, c.MachineID, c.SessionID, c.Switch.OperationID); err != nil {
 			return err
 		}
+	} else if c.Epoch > 1 {
+		// An idle acceptance kept it for this input (#14488); accepting the input discards it.
+		if handoff, err = st.ConversationPendingHandoff(ctx, c.MachineID, c.SessionID, a.ID); err != nil {
+			return err
+		}
+	}
+	if c.Switch != nil || len(handoff) > 0 {
 		var h mainHandoff
-		if err = json.Unmarshal(raw, &h); err != nil {
+		if err = json.Unmarshal(handoff, &h); err != nil {
 			return err
 		}
 		text, _ := queued.Params["text"].(string)
