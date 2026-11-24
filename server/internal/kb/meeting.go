@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -53,23 +52,8 @@ const (
 	PartHighlights = recordingwire.PartHighlights
 )
 
-// Meeting is meeting.json.
-type Meeting struct {
-	// Room is the room meeting's: nil when no upload ever carried room (a #2981 meeting, or not attended).
-	Room *MeetingRoom `json:"room,omitempty"`
-	// Private is the private mark: nil until chosen.
-	Private  *bool            `json:"private,omitempty"`
-	Followup *MeetingFollowup `json:"followup,omitempty"`
-	// Transcription is the meeting's transcription mode and, in hub mode, its state and timeline (#3862 phase 5,
-	// transcription.go): nil until an upload named a mode.
-	Transcription *MeetingTranscription `json:"transcription,omitempty"`
-	// Handoffs are the meeting's hand-offs to Agents after it (#8852, POST …/handoff), oldest first, the last
-	// MeetingHandoffsKept: whether each went, and why not. No part of their own: the apps read them with the detail and
-	// from the hand-off's answer.
-	Handoffs []MeetingHandoff `json:"handoffs,omitempty"`
-	// Revs are the parts' revisions (PartRoom, PartPrivate, PartFollowup, PartTranscription): each only goes up.
-	Revs map[string]int64 `json:"revs,omitempty"`
-}
+// Meeting is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type Meeting = recordingwire.Meeting
 
 // MeetingHandoff is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
 type MeetingHandoff = recordingwire.MeetingHandoff
@@ -80,14 +64,6 @@ const (
 	HandoffFailed       = recordingwire.HandoffFailed
 	MeetingHandoffsKept = recordingwire.MeetingHandoffsKept
 )
-
-// AddHandoff appends h, keeping the last MeetingHandoffsKept.
-func (m *Meeting) AddHandoff(h MeetingHandoff) {
-	m.Handoffs = append(m.Handoffs, h)
-	if n := len(m.Handoffs); n > MeetingHandoffsKept {
-		m.Handoffs = slices.Clone(m.Handoffs[n-MeetingHandoffsKept:])
-	}
-}
 
 // MeetingRoom is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
 type MeetingRoom = recordingwire.MeetingRoom
@@ -107,48 +83,6 @@ type MeetingFollowup = recordingwire.MeetingFollowup
 var (
 	ErrNotMeeting = recordingwire.ErrNotMeeting
 )
-
-// Clone is a deep copy of m.
-func (m Meeting) Clone() Meeting {
-	out := Meeting{Private: m.Private, Revs: maps.Clone(m.Revs)}
-	if m.Room != nil {
-		r := *m.Room
-		out.Room = &r
-	}
-	if m.Private != nil {
-		p := *m.Private
-		out.Private = &p
-	}
-	if m.Followup != nil {
-		f := *m.Followup
-		out.Followup = &f
-	}
-	out.Transcription = m.Transcription.clone()
-	out.Handoffs = slices.Clone(m.Handoffs)
-	return out
-}
-
-// RoomMeeting: an upload of r carried room once: its room conversation attends it, never another session.
-func (r Recording) RoomMeeting() bool { return r.Conv != nil && r.Conv.Room != nil }
-
-// Attending: r is attended now (its role is not off): the phone sends its live sentences and a room meeting's room is
-// fed them, notes included.
-func (r Recording) Attending() bool { return r.AttendanceRole() != AttendanceOff }
-
-// Answering: Persona answers in r's meeting now (listener or participant): not while it is off, nor while its room only
-// takes notes (#8851), when …/ask answers not_attending.
-func (r Recording) Answering() bool {
-	role := r.AttendanceRole()
-	return role == AttendanceListener || role == AttendanceParticipant
-}
-
-// IsMeeting: r is a meeting as #2981 counts them: uploaded as one, or its minutes asked for.
-func (r Recording) IsMeeting() bool { return r.Kind == RecordingMeeting || r.MinutesAsked }
-
-// MarkedNotPrivate: r's private mark is false, chosen. A meeting with no mark counts as private.
-func (r Recording) MarkedNotPrivate() bool {
-	return r.Conv != nil && r.Conv.Private != nil && !*r.Conv.Private
-}
 
 // readMeeting is recording id's meeting.json, read from disk (an upload's undo journal never holds it); false when
 // there is none.
@@ -335,47 +269,13 @@ func (e *Engine) SetPrivate(rawID string, private bool) (Meeting, error) {
 	})
 }
 
-// roomUpload is an upload's room: the role its room conversation attends in.
-type roomUpload struct {
-	Attendance string
-	bad        bool // attendance was not a string
-}
-
-// readRoomAndPrivate reads an upload's room and private (unmarshalRecordingUpload): a room that is not an object
-// counts as absent, a private that is not a boolean is ignored.
-func (u *RecordingUpload) readRoomAndPrivate(room, private json.RawMessage) {
-	u.room, u.Private = nil, nil
-	if !jsonNull(room) {
-		var keys map[string]json.RawMessage
-		if json.Unmarshal(room, &keys) == nil && keys != nil {
-			ru := &roomUpload{}
-			if v := keys["attendance"]; !jsonNull(v) && json.Unmarshal(v, &ru.Attendance) != nil {
-				ru.bad = true
-			}
-			u.room = ru
-		}
-	}
-	if !jsonNull(private) {
-		var b bool
-		if json.Unmarshal(private, &b) == nil {
-			u.Private = &b
-		}
-	}
-}
-
-// SetRoom gives an upload a room in role (tests and the HTTP layer build uploads in Go).
-func (u *RecordingUpload) SetRoom(role string) { u.room = &roomUpload{Attendance: role} }
-
-// HasRoom: the upload carries room.
-func (u *RecordingUpload) HasRoom() bool { return u.room != nil }
-
-// roomRole is the role an upload's room asks for, normalized as #2981's attendance is (normalizeAttendance), with
+// uploadRoomRole is the role an upload's room asks for, normalized as #2981's attendance is (normalizeAttendance), with
 // notes besides (#8851): a value that is not one of the four is off with AttendanceUnknownRole, a role on a recording
 // that is not a meeting off with AttendanceNotMeeting. The upload is cleaned (its Kind set).
-func (u *RecordingUpload) roomRole() (role, problem string) {
-	role = strings.ToLower(strings.TrimSpace(u.room.Attendance))
+func uploadRoomRole(u *RecordingUpload) (role, problem string) {
+	role = strings.ToLower(strings.TrimSpace(u.Room.Attendance))
 	switch {
-	case u.room.bad:
+	case u.Room.Bad:
 		return "", AttendanceUnknownRole
 	case role == "" || role == AttendanceOff:
 		return "", ""
@@ -408,9 +308,9 @@ func (e *Engine) putMeetingFields(id string, u *RecordingUpload, now time.Time) 
 	}
 	m := before.Clone()
 	switch {
-	case u.room != nil:
-		role, problem := u.roomRole()
-		u.roomProblem = problem
+	case u.Room != nil:
+		role, problem := uploadRoomRole(u)
+		u.RoomProblem = problem
 		if m.Room == nil {
 			m.Room = &MeetingRoom{State: RoomNone}
 		}
@@ -473,34 +373,6 @@ type RoomView = recordingwire.RoomView
 
 // ConvView is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
 type ConvView = recordingwire.ConvView
-
-// RoomView is m's room as the apps read it; nil when the recording is not a room meeting.
-func (m Meeting) RoomView() *RoomView {
-	if m.Room == nil {
-		return nil
-	}
-	rm := m.Room
-	v := &RoomView{State: rm.State}
-	if v.State == "" {
-		v.State = RoomNone
-	}
-	if v.State == RoomUnavailable {
-		v.Problem = rm.Problem
-	}
-	if v.State != RoomNone && v.State != RoomDeleted && rm.Started && rm.SessionID != "" {
-		v.MachineID, v.SessionID = rm.MachineID, rm.SessionID
-	}
-	return v
-}
-
-// FollowupView is m's follow-up as the apps read it; nil before it is made.
-func (m Meeting) FollowupView() *ConvView {
-	f := m.Followup
-	if f == nil || f.Pending || f.SessionID == "" {
-		return nil
-	}
-	return &ConvView{MachineID: f.MachineID, SessionID: f.SessionID}
-}
 
 // metaWithMeeting is a recording's meta.json as detail.meta shows it: with its meeting.json's private mark, room,
 // follow-up and transcription (its mode, and in hub mode its state and gaps); a room meeting's attendance is its

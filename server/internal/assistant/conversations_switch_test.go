@@ -522,6 +522,14 @@ func TestConversationSwitchesRefuseIndependentChanges(t *testing.T) {
 		started := conversationSwitchTestDecode(t, code, raw)
 		conversationSwitchTestDrive(t, r.s, started.BatchID, map[string]string{"fresh-chat": "switched"})
 
+		// The batch projection can be saved just before the operation's accepted commit. An independent
+		// operation may start only after that real commit, not merely after its batch says switched.
+		waitFor(t, "the original operation to accept", func() bool {
+			op, err := r.d.ConversationSwitch(context.Background(), "server", "fresh-chat",
+				conversationSwitchTestItemFor(t, started, "fresh-chat").OperationID)
+			return err == nil && op != nil && op.Phase == "accepted"
+		})
+
 		// This deliberately independent operation has no batch before-image. The
 		// fixture's durable-before-prepare gate applies only to batch operations.
 		r.mu.Lock()
