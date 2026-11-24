@@ -5,6 +5,7 @@
   "kind_merge_review": "Review or merge",
   "kind_external_event": "External change",
   "kind_date": "Date",
+  "recheck": "Next check {time}",
   "kind_legacy": "Earlier wait",
   "target": ": {target}",
   "target_unknown": "waiting target not recorded",

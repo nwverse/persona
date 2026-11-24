@@ -520,12 +520,13 @@ Free-text triage rules (`inbox.rules`, a source's `triage_rules`) still exist fo
 
 `inbox.reply_policy` in `manager.json` (`docs/operations/config.md`) adds an opt-in, server-side category gate for AI owner reply drafts (`server/internal/assistant/inbox_reply_policy.go`). It serves people who explicitly configure advanced Inbox AI handling; it adds no everyday-facing UI control and is **disabled by default** (`enabled: false`, or omitted/empty), preserving existing queue, suggestion, and confirmation behavior byte-for-byte.
 
-- **Server-side routing**: the classifier (`inbox.triage`, prompts `prompts/inbox/reply_policy.md` and `reply_policy_input.md`) outputs only a category name and short reason. The server maps that category to one of four routes — `owner_draft`, `bot`, `owner_only`, or `no_reply` — ignoring any model-supplied route field. Only `owner_draft` allows creating or confirming an AI owner reply suggestion.
+- **Server-side routing**: the classifier (`inbox.triage`, prompts `prompts/inbox/reply_policy.md` and `reply_policy_input.md`) outputs only a category name and short reason. The server maps that category to one of four routes — `owner_draft`, `bot`, `owner_only`, or `no_reply`. A model-supplied `route` or any other undocumented field is rejected rather than treated as authorization. Only `owner_draft` allows creating or confirming an AI owner reply suggestion.
 - **Default category table** (used when `enabled: true` and `categories` is omitted; a non-empty `categories` map replaces it):
   - `owner_draft`: `routine_reply`.
   - Four `owner_only` categories: `approval_commitment`, `sensitive_personal`, `external_public`, `escalation_decision`.
   - Five `bot` categories: `bot_notification`, `system_alert`, `workflow_notice`, `automated_digest`, `bot_command`.
   - `no_reply`: `no_reply`.
+- **Scope and independent review**: `sources` limits the policy to the named sources (an empty list covers every source), and `require_independent_review` requires a second classifier to agree before an owner draft is authorized. The effective revision digest binds the sources, categories, rules, timeout, and review requirement, so changing any of them invalidates older authorization snapshots.
 - **Fail-closed on every uncertainty**: unknown categories, invalid routes in configuration, ambiguous normalized category keys, classification failures or timeouts, missing snapshots, and stale content versions or policy revisions always fail closed and never produce or send an owner draft.
 - **Three independent gates**:
   1. **Queue gate** (before AI handling in `handPass`, `escalateWithPolicy`, `startInboxAgents`, `retryInboxHandling`, and manual `draftReply`): classifies candidate items and refuses to queue or start AI handling unless the live server route is `owner_draft`; pre-queued items whose policy revision or content changed are released without starting a conversation.

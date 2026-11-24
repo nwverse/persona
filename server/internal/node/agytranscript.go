@@ -401,6 +401,9 @@ func agyUserText(text string) string {
 }
 
 func agyToolOutput(text string) string {
+	if stripped := transcript.StripToolResultTimestampHeaders(text); stripped != text {
+		return stripped
+	}
 	if strings.HasPrefix(text, "Created At:") {
 		if _, output, ok := strings.Cut(text, "\nOutput:\n"); ok {
 			return output

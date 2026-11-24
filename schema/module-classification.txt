@@ -177,6 +177,7 @@ go server/internal/netproxy core
 go server/internal/netshape core
 go server/internal/node core
 go server/internal/node/clipshare core
+go server/internal/node/diskmap core
 go server/internal/node/imessageport core
 go server/internal/node/iphoneport core
 go server/internal/node/machdiag core
@@ -276,6 +277,8 @@ apple apple/Modules/ScreenShare screen-share
 apple apple/Modules/Voice voice
 apple apple/PersonaCallIntents voice
 apple apple/PersonaLink screen-share
+# The independent pairing/menu-bar UI belongs to the core, not the optional screen-sharing feature.
+apple apple/PersonaLink/App core
 apple apple/PersonaNotify core
 apple apple/PersonaShare core
 apple apple/PersonaTests core

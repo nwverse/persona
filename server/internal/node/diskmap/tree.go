@@ -59,10 +59,11 @@ func (b *builder) itemNodes(f *folder, prefetch bool) []proto.StorageUsageNode {
 		if adj.hide[it.path] {
 			continue
 		}
-		if a, ok := b.adjust[it.path]; ok {
+		a, adjusted := b.adjust[it.path]
+		if adjusted {
 			it.bytes = max(it.bytes-a.minus, 0)
 		}
-		if it.bytes <= 0 {
+		if it.bytes <= 0 && (adjusted || it.kind != kindFile) {
 			continue
 		}
 		n := b.pathNode(it)

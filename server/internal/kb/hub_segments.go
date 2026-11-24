@@ -126,7 +126,7 @@ func (e *Engine) HubTranscriptPut(rawID, pass string, segs []RecordingSegment) (
 	}
 	if chars := recordChars(record); chars != r.Chars {
 		r.Chars = chars
-		r.planMinutes()
+		planMinutes(r)
 		if err := st.putEntity(KindRecording, r.ID, r, &r.Tagging, false); err != nil {
 			return h.Rev, err
 		}
@@ -241,7 +241,7 @@ func recordChars(segs []RecordingSegment) int {
 }
 
 // hubMode: m says the recording is transcribed on the hub.
-func hubMode(m *Meeting) bool { return m != nil && m.Transcription.hub() }
+func hubMode(m *Meeting) bool { return m != nil && m.Transcription.Hub() }
 
 // recordSnapshot is recording id's committed files (recordingSnapshot: an upload's undo journal while one is pending),
 // its meeting.json (nil without one, or when it cannot be read: device mode) and its hub transcript, read together.
@@ -353,7 +353,7 @@ func (e *Engine) repairRecord(r *Recording) (bool, error) {
 	st.recFilesMu.Unlock()
 	if chars := recordChars(record); chars != r.Chars {
 		r.Chars = chars
-		r.planMinutes()
+		planMinutes(r)
 		if err := st.putRecordingMeta(r); err != nil {
 			return changed, err
 		}

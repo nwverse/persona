@@ -266,6 +266,10 @@ class AppleCIPreparationTests(unittest.TestCase):
         # So did the module registry's package tests (#13432), pinned on their own as well.
         modules = script[script.index('  # The module contract and registry (#13432'):script.index("  ci_run 'Persona Input build'")]
         self.assertIn("ci_run 'PersonaModuleAPI unit tests'", modules)
+        # The restored menu bar App has its own SwiftPM tests (#15026), outside apple/project.yml.
+        link_app = script[script.index('  # The Persona Link menu bar App'):script.index("  ci_run 'Persona Screen build'")]
+        self.assertIn("ci_run 'Persona Link menu bar unit tests'", link_app)
+        self.assertIn('apple/PersonaLink/App', link_app)
         # And the core-only build without the moved feature modules (#14017), split into its own lane in #14496.
         core_only = script[script.index('  fi\n  if [ "$LANE" = all ] || [ "$LANE" = ios-core-only ]; then'):script.index('fi\nif [ "$LANE" = ios18 ]; then')]
         self.assertIn("ci_run 'Generate core-only Apple project' 120 env PERSONA_CORE_ONLY=YES xcodegen generate", core_only)
@@ -274,6 +278,9 @@ class AppleCIPreparationTests(unittest.TestCase):
         for lane in ('ios', 'ios-focused', 'ios-regressions'):
             current = script.replace('      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" \\\n      --derived-data "$output/ios-tests" &',
                                      '      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" &')
+            current = current.replace(link_app, '''  # The independent Link package contains only Persona Screen, built as mac-link.sh builds it; PersonaScreenCore's tests
+  # cover its capture decisions. There is no menu-bar app or separate Link UI test target to build.
+''')
             offline_generation = script[script.index('  OFFLINE_PROFILE=full'):
                                        script.index("  # A generic destination must retain the host's single runnable architecture.")]
             current = current.replace(offline_generation, '')

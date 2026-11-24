@@ -166,8 +166,8 @@ describe("side by side", () => {
   it("still shows the first row's page beside the list", async () => {
     screen.width = 1280;
     await mount("/todos");
-    expect(current()).toEqual(["a"]);
-    // its page reads them once it has drawn, which a loaded machine can take past settle()
+    // Selection and its page reads can settle after the fixed loop on a loaded machine.
+    await vi.waitFor(() => expect(current()).toEqual(["a"]), { timeout: 5000 });
     await vi.waitFor(() => expect(loaded()).toEqual(["a"]), { timeout: 5000 });
   });
 });

@@ -730,7 +730,9 @@ describe("Assistant Needs you / In progress trays", () => {
   it("puts a task waiting on the user and a draft in Needs you only, without sending anything", async () => {
     const draft: FeedItem = { id: "tray-draft", conversation, at, kind: "message", ref: "draft-ref", body: { draft: "Demo reply", text: "Demo message" } };
     getFeedState().feeds[conversation] = [...feed, draft];
-    act(() => putTodo({ ...todo, supervision: { ...todo.supervision!, state: "needs_user" } }));
+    // Keep the mocked hub in the same state: putTodo's lazy push setup may refresh it.
+    todo = { ...todo, supervision: { ...todo.supervision!, state: "needs_user" } };
+    act(() => putTodo(todo));
     expect(entries().map((button) => button.textContent)).toEqual([`${label.needs}2`, label.running]);
     await act(async () => {
       entry("needs").click();

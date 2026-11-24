@@ -1,7 +1,10 @@
 package recordingwire
 
 import (
+	"cmp"
 	"errors"
+	"maps"
+	"slices"
 	"time"
 )
 
@@ -155,3 +158,101 @@ var (
 	// ErrNotMeeting: the recording is not a meeting as #2981 counts them (neither kind meeting nor minutes asked).
 	ErrNotMeeting = errors.New("this recording is not a meeting")
 )
+
+// Meeting is meeting.json.
+type Meeting struct {
+	// Room is the room meeting's: nil when no upload ever carried room (a #2981 meeting, or not attended).
+	Room *MeetingRoom `json:"room,omitempty"`
+	// Private is the private mark: nil until chosen.
+	Private  *bool            `json:"private,omitempty"`
+	Followup *MeetingFollowup `json:"followup,omitempty"`
+	// Transcription is the meeting's transcription mode and, in hub mode, its state and timeline (#3862 phase 5,
+	// transcription.go): nil until an upload named a mode.
+	Transcription *MeetingTranscription `json:"transcription,omitempty"`
+	// Handoffs are the meeting's hand-offs to Agents after it (#8852, POST …/handoff), oldest first, the last
+	// MeetingHandoffsKept: whether each went, and why not. No part of their own: the apps read them with the detail and
+	// from the hand-off's answer.
+	Handoffs []MeetingHandoff `json:"handoffs,omitempty"`
+	// Revs are the parts' revisions (PartRoom, PartPrivate, PartFollowup, PartTranscription): each only goes up.
+	Revs map[string]int64 `json:"revs,omitempty"`
+}
+
+// AddHandoff appends h, keeping the last MeetingHandoffsKept.
+func (m *Meeting) AddHandoff(h MeetingHandoff) {
+	m.Handoffs = append(m.Handoffs, h)
+	if n := len(m.Handoffs); n > MeetingHandoffsKept {
+		m.Handoffs = slices.Clone(m.Handoffs[n-MeetingHandoffsKept:])
+	}
+}
+
+// Clone is a deep copy of m.
+func (m Meeting) Clone() Meeting {
+	out := Meeting{Private: m.Private, Revs: maps.Clone(m.Revs)}
+	if m.Room != nil {
+		r := *m.Room
+		out.Room = &r
+	}
+	if m.Private != nil {
+		p := *m.Private
+		out.Private = &p
+	}
+	if m.Followup != nil {
+		f := *m.Followup
+		out.Followup = &f
+	}
+	out.Transcription = m.Transcription.Clone()
+	out.Handoffs = slices.Clone(m.Handoffs)
+	return out
+}
+
+// RoomView is m's room as the apps read it; nil when the recording is not a room meeting.
+func (m Meeting) RoomView() *RoomView {
+	if m.Room == nil {
+		return nil
+	}
+	rm := m.Room
+	v := &RoomView{State: rm.State}
+	if v.State == "" {
+		v.State = RoomNone
+	}
+	if v.State == RoomUnavailable {
+		v.Problem = rm.Problem
+	}
+	if v.State != RoomNone && v.State != RoomDeleted && rm.Started && rm.SessionID != "" {
+		v.MachineID, v.SessionID = rm.MachineID, rm.SessionID
+	}
+	return v
+}
+
+// FollowupView is m's follow-up as the apps read it; nil before it is made.
+func (m Meeting) FollowupView() *ConvView {
+	f := m.Followup
+	if f == nil || f.Pending || f.SessionID == "" {
+		return nil
+	}
+	return &ConvView{MachineID: f.MachineID, SessionID: f.SessionID}
+}
+
+// TranscriptionView is m's transcription as the apps read it; nil while no mode was decided. gaps are the spans the
+// hub holds no audio for now; nil takes those meeting.json keeps (the audio writes keep them up to date). Once the
+// final pass has started, or the audio is gone, they are the ones meeting.json keeps whatever gaps says (a trimmed
+// recording's: none).
+func (m Meeting) TranscriptionView(gaps [][2]float64) *TranscriptionView {
+	t := m.Transcription
+	if t == nil || t.Mode == "" {
+		return nil
+	}
+	if !t.Hub() {
+		return &TranscriptionView{Mode: t.Mode}
+	}
+	if gaps == nil || t.AudioClosed() {
+		gaps = t.Gaps
+	}
+	shown := append([][2]float64{}, gaps...)
+	state := cmp.Or(t.State, TranscriptionLive)
+	v := &TranscriptionView{Mode: t.Mode, State: state, Gaps: &shown, Problem: t.Problem, Fallback: t.Fallback}
+	if done, end, ok := t.FinalProgress(); ok {
+		v.FinalDone, v.End = &done, &end
+	}
+	return v
+}

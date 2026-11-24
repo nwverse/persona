@@ -11,9 +11,10 @@ import { ApiError, credentialOwner, errorText, getToken, onCredentialChange } fr
 import { extIdOf } from "../../lib/extension-api";
 import { openLink } from "../../lib/links";
 import {
-  actUI, fieldValues, isReservedUI, isUnsupported, numberProblem, outcome, pushPage, refreshDelay, renderUI, submitValues, uiPlaces, UI_VERSION,
+  actUI, fieldValues, httpOnlyUI, isUnsupported, numberProblem, outcome, pushPage, refreshDelay, renderUI, submitValues, uiPlaces, UI_VERSION,
   type UIAction, type UIContext, type UIFilter, type UIItem, type UIMore, type UIPage, type UIPlace, type UIPush, type UISearch, type UITabs, type UIView,
 } from "../../lib/extension-ui";
+import { takeOverlayEntry, withoutOverlayState } from "../../lib/back-close";
 import { navigate } from "../../lib/router";
 import { isResumed } from "../../lib/reconnect";
 import { appSocketReady, onAppSocket, onHubEvent } from "../../lib/store";
@@ -180,8 +181,10 @@ export function ExtensionUI({ remember, ...props }: Parameters<typeof LegacyExte
   if (ready) negotiated.current = true;
   // System/embedded slots remain full fitted snapshots. Old hubs keep the exact existing component.
   // Another manager's extension draws over HTTP, which names its manager on each request (docs/assistant/managers.md "Clients").
-  // The subscription pages (#2041) are the manager's, drawn over HTTP only.
-  const baseHttp = legacyNegotiation || !supported || props.embedded || props.compact || otherManager(props.manager) || isReservedUI(props.extension);
+  // The manager's own pages (an id starting with "-": the subscription pages #2041, Dashboards #15017) are drawn over HTTP
+  // only, so they have nothing to wait for the hello for either.
+  const managerPage = httpOnlyUI(props.extension);
+  const baseHttp = legacyNegotiation || !supported || props.embedded || props.compact || otherManager(props.manager) || managerPage;
   // The page's last view, until it is drawn again: one drawn with a UI version it may be drawn with now (before the hello
   // either; over the socket also HTTP's, which a page the socket cannot draw falls back to) by the default's extension
   // (before the roster, the last one drawn).
@@ -200,13 +203,13 @@ export function ExtensionUI({ remember, ...props }: Parameters<typeof LegacyExte
   const httpLocked = useRef("");
   const lockedHttp = httpLocked.current === mountKey;
   const http = lockedHttp || baseHttp || knownHttp;
-  const waitingHello = !lockedHttp && !knownHttp && !props.embedded && !props.compact && typeof localStorage !== "undefined" && !!getToken() && !ready && !negotiated.current;
+  const waitingHello = !lockedHttp && !knownHttp && !managerPage && !props.embedded && !props.compact && typeof localStorage !== "undefined" && !!getToken() && !ready && !negotiated.current;
   useEffect(() => {
     if (!waitingHello || legacyNegotiation) return;
     const timer = setTimeout(() => setLegacyNegotiation(true), HELLO_NEGOTIATION_MS);
     return () => clearTimeout(timer);
   }, [waitingHello, legacyNegotiation]);
-  const placeholder = kept ? <KeptView view={kept.view} native={kept.key.version === NATIVE_UI_VERSION} compact={props.compact} bare={props.bare} title={props.title} onWide={props.onWide} /> : undefined;
+  const placeholder = kept ? <KeptView view={kept.view} native={kept.key.version === NATIVE_UI_VERSION} compact={props.compact} bare={props.bare} title={props.title} onWide={props.onWide} onTitle={props.onTitle} /> : undefined;
   const onView = useCallback((view: UIView, version: number, manager = defaultId || (defaultKnown() ? defaultManager() : "")) => {
     if (!page || !manager) return;
     const [extension, ui, state, language] = JSON.parse(page) as string[];
@@ -238,9 +241,10 @@ export function ExtensionUI({ remember, ...props }: Parameters<typeof LegacyExte
  *  "Updating" in the page's top margin, so nothing moves when the drawing replaces it. `native`: drawn over the socket,
  *  which titles the page itself. `compact`: a card's (#11091), its sections laid out as the drawing's own in the card's
  *  column (`contents`), "Updating" for screen readers only: the card's heading marks it (OverviewCard, by `data-kept-view`). */
-function KeptView({ view, native, compact, bare, title, onWide }: { view: UIView; native: boolean; compact?: boolean; bare?: boolean; title?: string; onWide?: (wide: boolean) => void }) {
+function KeptView({ view, native, compact, bare, title, onWide, onTitle }: { view: UIView; native: boolean; compact?: boolean; bare?: boolean; title?: string; onWide?: (wide: boolean) => void; onTitle?: (title: string | undefined) => void }) {
   const wide = wideView(view);
   useEffect(() => onWide?.(wide), [wide, onWide]);
+  useEffect(() => onTitle?.(view.title), [view.title, onTitle]);
   const values = useMemo(() => fieldValues(view), [view]);
   const first = view.sections[0]?.items[0];
   const titled = view.title || title;
@@ -315,7 +319,7 @@ function KeptView({ view, native, compact, bare, title, onWide }: { view: UIView
 }
 export function LegacyExtensionUI({
   extension, ui, context, embedded, compact, bare, title, onUnsupported, onMissing, onFailed, revision, onOpenSource, pages, history: withHistory, state: firstState, onWide, onDepth, navigation, active = true, manager,
-  placeholder, onView,
+  placeholder, onView, onTitle, openPage,
 }: {
   extension: string; ui: string; context?: UIContext; embedded?: boolean; compact?: boolean; bare?: boolean; title?: string;
   /** Whose extension it is (another manager's inbox item or computer, docs/assistant/managers.md "Clients"); none: the default's. */
@@ -333,6 +337,11 @@ export function LegacyExtensionUI({
   placeholder?: ReactNode;
   /** The first page drew a view not typed into, asked with UI `version` (by `manager`'s extension; none: the default's). */
   onView?: (view: UIView, version: number, manager?: string) => void;
+  /** The first page's title as its view (or the kept one) says it, each time it is drawn: the page around it titles its
+   *  header with it (a Dashboards page, whose place is not listed unless pinned, #15017). */
+  onTitle?: (title: string | undefined) => void;
+  /** A push the page around opens itself, as a page of its own; true when it did (Dashboards' index opening a page, #15017). */
+  openPage?: (page: UIPush) => boolean;
 }) {
   const [stack, setStack] = useState<UIPage[]>(() => [{ ui, ...(firstState ? { state: firstState } : {}) }]);
   const linkManager = useLinkManager();
@@ -421,6 +430,10 @@ export function LegacyExtensionUI({
   useEffect(() => {
     if (view) onWide?.(wide);
   }, [wide, view, onWide]);
+  const viewTitle = view && depth === 1 ? view.title : null;
+  useEffect(() => {
+    if (viewTitle !== null) onTitle?.(viewTitle);
+  }, [viewTitle, onTitle]);
   // the first page as the extension drew it, unless its fields hold what was typed and not sent (a redraw keeps them)
   const valuesNow = useRef(values);
   valuesNow.current = values;
@@ -460,13 +473,20 @@ export function LegacyExtensionUI({
   }, [historied]);
 
   const push = (p: UIPush) => {
+    if (openPage?.(p)) return;
     if (navigation) { navigation.push(p); return; }
     if (mode === "open") {
       navigate(pageHref(extension, p.ui || top.ui, p.state));
       return;
     }
     const next = pushPage(stack, p, top.ui);
-    if (historied && next.length > stack.length) history.pushState({ ...(history.state ?? {}), extPage: next.length }, "", location.href);
+    if (historied && next.length > stack.length) {
+      // Pushing onto this stack from inside an open overlay (e.g. a Full screen map/graph stop) replaces the
+      // overlay's entry without its markers so closing the overlay does not immediately history.back() off the new page.
+      const nextState = { ...(withoutOverlayState(history.state) ?? {}), extPage: next.length };
+      if (takeOverlayEntry()) history.replaceState(nextState, "", location.href);
+      else history.pushState(nextState, "", location.href);
+    }
     setStack(next);
   };
   const pop = () => {

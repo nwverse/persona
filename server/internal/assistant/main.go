@@ -413,6 +413,12 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 	// provider seam (moduleswitch) get the same list, so a module switched off is absent as one built out.
 	assistantStore := repositorystore.New(database)
 	modulesOff := ReadModuleSwitch(ctx, assistantStore, logf)
+	// The assistant's pages (Dashboards, #15017) are the built-in manager's: the hub relays the extensions' routes to
+	// the default manager, and no other has pages (pages_ui.go).
+	var pages extmgr.Pages
+	if o.ID == assistantwire.AssistantID {
+		pages = pagesHook{svc: func() *Service { return svc }}
+	}
 	// The extensions, connectors and bots (internal/extmgr): the data directory here, its own sections in manager.json
 	// (as moveConfig read and checked them) and its own secret.key.
 	ext = extmgr.New(extmgr.Options{Modules: moduleswitch.Off(modulesOff...), Dir: home, ConfigFile: o.ConfigFile, Config: o.ExtConfig, SecretKey: o.SecretKey,
@@ -454,7 +460,8 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 			return nil
 		},
 		Lang:     func() i18n.Lang { return svc.lang(context.Background()) },
-		Timezone: func() string { return svc.userTZ() }})
+		Timezone: func() string { return svc.userTZ() },
+		Pages:    pages})
 	o.Errors.ext.Store(ext)
 	bh = NewBusHub(BusOptions{ID: o.ID, Hub: hub, Token: token, HTTPClient: httpClient, Version: version, Deploy: deploy,
 		HostDataDir: o.HostDataDir, ConfigFile: o.ConfigFile, Outbox: database, Features: func() []string { return svc.moduleFeatures() },

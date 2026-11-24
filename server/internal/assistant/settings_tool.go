@@ -447,6 +447,13 @@ func (s *Service) allOwnSettings() []ownSetting {
 			Value: "the full AdmissionSettings JSON object from get; a nil pointer keeps the code default, every set line must be positive"},
 			get: s.getAdmission,
 			set: s.setAdmission},
+		// Dashboards (#15017, pages_tool.go): read only. The owner turns it on in Settings › Assistant; a change from
+		// here would be a phone card the card ledger counts as a bug.
+		{Setting: Setting{Key: dashboardsSettingKey, Title: i18n.T(i18n.Default, "assistant-settings_tool.title_dashboards"), Actions: []string{"get"},
+			About: "whether conversations may draft dashboards with the page tool (pages the owner keeps in the sidebar with Keep on a preview card); " +
+				"off by default; only the owner changes it, in Settings › Assistant",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.dashboardsOn(ctx)), nil }},
 		s.trustSetting(),
 		s.urgentRulesSetting(), // urgent_call_rules.go
 	}
@@ -678,7 +685,12 @@ var settingTitles = map[string]string{modulesKey: "title_modules", standingAutho
 	"assistant.kb_topics": "title_kb_topics", "assistant.main_background_folded": "title_main_background_folded",
 	"assistant.fold_routine_relay_replies": "title_fold_routine_relay_replies",
 	"assistant.main_compact_window":        "title_main_compact_window",
-	"assistant.recent_task_chats":          "title_recent_task_chats", admissionSettingsKey: "title_admission", trustSetting: "title_task_trust"}
+	"assistant.recent_task_chats":          "title_recent_task_chats", admissionSettingsKey: "title_admission", trustSetting: "title_task_trust",
+	dashboardsSettingKey: "title_dashboards"}
+
+// dashboardsSettingKey is the Dashboards switch as persona_settings names it (Settings.Dashboards, `dashboards` in
+// GET/PUT /api/v1/assistant).
+const dashboardsSettingKey = "assistant.dashboards"
 
 // clipped is a value as the card shows it, in l.
 func clipped(l i18n.Lang, s string) string {

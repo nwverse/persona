@@ -1736,8 +1736,12 @@ nonisolated struct APIClient: Sendable {
         var ownerReplyApproval: Bool?
         var persistentOwnerActionCards: Bool?
         var ownerReplyApprovalPhrases: [String]?
+        /// Let Persona make dashboards (#15017): the conversations may draft pages the owner keeps. Off by default; an
+        /// absent field (a hub without Dashboards, or one that never had it on) is off. The switch is shown by the hub's
+        /// `assistant_pages` feature, not by this field.
+        var dashboards: Bool?
         enum CodingKeys: String, CodingKey {
-            case launcher, cwd, conversations, timezone, main, leaders, manager
+            case launcher, cwd, conversations, timezone, main, leaders, manager, dashboards
             case defaultPermissionMode = "default_permission_mode"
             case machineID = "machine_id", mainMachineID = "main_machine_id", notes = "notes_effective", mainTasksQuiet = "main_tasks_quiet"
             case foldRoutineRelayReplies = "fold_routine_relay_replies"
@@ -1909,8 +1913,10 @@ nonisolated struct APIClient: Sendable {
         var ownerReplyApproval: Bool?
         var persistentOwnerActionCards: Bool?
         var ownerReplyApprovalPhrases: [String]?
+        /// Dashboards (#15017): `{"dashboards": true}` turns them on.
+        var dashboards: Bool?
         enum CodingKeys: String, CodingKey {
-            case launcher, timezone, notes
+            case launcher, timezone, notes, dashboards
             case machineID = "machine_id", mainTasksQuiet = "main_tasks_quiet", meetingAttendanceDefault = "meeting_attendance_default"
             case foldRoutineRelayReplies = "fold_routine_relay_replies"
             case mainBackgroundFolded = "main_background_folded", mainSupervisesOwnTasks = "main_supervises_own_tasks"
