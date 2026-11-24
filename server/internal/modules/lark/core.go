@@ -26,6 +26,8 @@ type turns struct {
 	kitDown time.Time
 	// workers are the agent messages' workers still running (Layer.Wait).
 	workers sync.WaitGroup
+	// posts are the to-do topic lines waiting to be said (thread_posts.go).
+	posts threadPoster
 }
 
 // wait waits for the workers, or ctx.

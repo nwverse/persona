@@ -246,6 +246,9 @@ func (p *assistantProc) idleCompactable() bool {
 // compactIdle sends /compact to an idle process. It is not a turn: the conversation stays as it was in the app (the
 // transcript shows a notice), and the process is let go when idle again.
 func (n *Node) compactIdle(p *assistantProc) {
+	if n.reload.Preparing() {
+		return
+	}
 	// Not while a send, a restore or the user's compaction has this conversation (assistantLife), and only on the same
 	// process, still idle: the next sweep tries again.
 	unlock, ok := n.assistantLife.tryLock(p.id)
@@ -265,7 +268,14 @@ func (n *Node) compactIdle(p *assistantProc) {
 	}
 	n.forgetCacheWarm(p.id)
 	line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": n.assistantCompactCommand(p.id)}})
+	if n.reload.Preparing() {
+		return
+	}
 	p.mu.Lock()
+	if !p.alive() || p.busy || p.compacting || p.manual {
+		p.mu.Unlock()
+		return
+	}
 	tokens := p.context
 	p.compacting, p.compacted = true, true
 	p.lastActive = time.Now()
@@ -322,6 +332,7 @@ func (n *Node) sweepAssistants() {
 	}
 	n.mu.Unlock()
 	release := n.assistantReleases(ids)
+	reloading := n.reload.Preparing()
 	n.mu.Lock()
 	var stale *assistantProc
 	if n.spare != nil && time.Since(n.spare.born) > assistantSpareMaxAge {
@@ -338,7 +349,7 @@ func (n *Node) sweepAssistants() {
 			timedOut = append(timedOut, id)
 		}
 		if p.reapable(time.Now()) {
-			if p.idleCompactable() {
+			if !reloading && p.idleCompactable() {
 				compact = append(compact, p)
 			} else {
 				idle = append(idle, id)

@@ -258,7 +258,8 @@ export function draftToProfileInput(draft: ProfileDraft, revision: number): Mode
     if (model) out.model = model;
     if (effort) out.effort = effort;
     if (permissionMode) out.permission_mode = permissionMode;
-    if (speed) out.speed = speed;
+    // Omit default/standard speed so older hubs using strict JSON decoding accept saves without newer optional fields.
+    if (speed && speed !== "standard") out.speed = speed;
     if (description) out.description = description;
     tiers[tierName] = out;
   }

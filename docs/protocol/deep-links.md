@@ -108,6 +108,7 @@ checks; none of them is ever written by the hub's link builder.
 | `persona://ask?text=`, `persona://sources-graph` | the subscriptions pages' actions | only from those pages |
 | `persona://widget/<kind>`, `persona://record…`, `persona://allday?action=` | Home Screen widgets, Live Activities, watch complications | Persona's own surfaces |
 | `persona://inbox/<id>/source` | an extension's link back to the Inbox item it is drawn for | only that item (`checkOpenURL`) |
+| `persona://tracks/<machine>/<space>/<session>` | the `space-conversations` extension opens an existing assistant conversation | only that extension; bounded ASCII path segments, no query, fragment or credentials; Health and arbitrary internal routes refused |
 | `persona://file/<machine>/<path>` | a file in a card | cards only |
 
 ## Security
@@ -119,9 +120,9 @@ checks; none of them is ever written by the hub's link builder.
   password is an outside link (a link with a user name or password is not opened as a page at all).
 - **A malformed app link is refused**: a route that does not start with a single `/`, holds a backslash or a control
   character, or would leave the hub when resolved against it.
-- **Extensions stay limited.** An extension's `open_url` is still only https, its own settings or the Inbox item it is
-  drawn for (`docs/extensions/extensions.md`). An https link to the user's hub that is in the table opens that page in
-  the app, which only shows a page.
+- **Extensions stay limited.** An extension's `open_url` is still only https, its own settings, the Inbox item it is
+  drawn for, or the `space-conversations` extension's one narrow conversation handoff (`docs/extensions/extensions.md`).
+  An https link to the user's hub that is in the table opens that page in the app, which only shows a page.
 - **The assistant's links.** The model is told to copy the links it is given, never to build its own; an assistant
   view's `open` is still checked against https and Persona's own forms (`CheckAssistantOpen`).
 
