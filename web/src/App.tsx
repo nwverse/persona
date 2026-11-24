@@ -19,11 +19,12 @@ import { stripBase } from "./lib/base";
 import { useSessionPanels } from "./lib/panel-memory";
 import { paneRoute, resolveTab, tabOfSessionLink, tabPagePane } from "./lib/herdr-tree";
 import { askTeamWorker, isWorker } from "./lib/team";
+import { foldsUnderMachine } from "./lib/child-sessions";
 import { foldsUnder, isSide, sideFoldOn } from "./lib/side-fold";
 import { askSide } from "./lib/side-panel";
 import { resolveSessionLink, sessionLinkRoute, type SessionLink } from "./lib/session-link";
 import { engineSwitchHome } from "./lib/engine-switch";
-import { followChildSession, followSubagentLink, splitSubagentLink } from "./lib/subagent-link";
+import { askSubagentPanel, followChildSession, splitSubagentLink } from "./lib/subagent-link";
 import { href, inWorkView, navigate, onLinkClick, type Route, routePath, useRoute, withWorkView } from "./lib/router";
 import { agentChatKey, noteChatShown, personaChatKey } from "./lib/recent-chats";
 import { ago, sessionTitle, shortPath } from "./lib/format";
@@ -63,6 +64,7 @@ import { useExtensionPlace } from "./lib/extension-slots";
 import { AttentionSignals } from "./lib/attention-signals";
 import { clearDesktopIsland, DesktopIslandSignals } from "./lib/desktop-island";
 import { openStartPage } from "./lib/start-page";
+import { conversationRoute } from "./lib/conversation-page";
 import { useTrackTitle } from "./lib/tracks";
 import { connectModuleHub, moduleExtensionAt, moduleTitle, useModuleStates } from "./core/module-host";
 import { ModuleExtensionPage, ModulePage } from "./core/ModulePage";
@@ -269,6 +271,8 @@ interface PageTarget {
    *  `parent`) shows in its Side sessions panel; `child`, the row of the side's own that the link named. */
   side?: string;
   child?: string;
+  /** The link is a subagent's (`<parent>@<agent>` or folded child session): opens the parent page + subagent detail panel. */
+  subagent?: { mid: string; sid: string };
 }
 
 /** A side session's link (#7944), or a link to a row of a side's own (`folded_side`): the parent's page, its Side
@@ -307,23 +311,40 @@ function pageTarget(s: State, route: Route): PageTarget | undefined {
     return { link: undefined, to: "", mid: route.mid, sid: pane?.sid };
   }
   if (route.name !== "session") return undefined;
-  // A compact card or another engine's conversation cannot land on this transcript's message.
+  // A compact card, explicit standalone page ("Open as page"), or message link opens this conversation directly.
   const exact = (): PageTarget => ({ link: "exact", to: "", mid: route.mid, sid: route.sid });
-  // a link to a subagent's own conversation (#5030): its parent's chat, which shows the subagent's card (lib/subagent-link.ts)
+  // Deep link to an embedded subagent (`<parent>@<agent>`): open its parent session + subagent detail panel (#14323).
   const sub = splitSubagentLink(route.sid);
-  if (sub) return route.at ? exact() : { link: undefined, to: routePath({ ...route, sid: sub.parent }), mid: route.mid, sid: undefined };
+  if (sub) {
+    if (route.at || route.standalone) return exact();
+    const parentRow = pageRows(s, route.mid).find((r) => r.session_id === sub.parent);
+    const dest = parentRow?.assistant
+      ? conversationRoute(route.mid, sub.parent, s.sessions, s.assistant, parentRow.manager)
+      : { ...route, sid: sub.parent };
+    return { link: undefined, to: routePath(dest), mid: route.mid, sid: undefined, parent: sub.parent, subagent: { mid: route.mid, sid: route.sid } };
+  }
   const rows = pageRows(s, route.mid);
   const row = rows.find((r) => r.session_id === route.sid);
+  // a Persona conversation's `/s/…` link (a push, a copied address): its own page, which draws its plan cards, questions
+  // and tasks; the agent chat here shows none of them
+  if (row?.assistant && !route.at) return { link: undefined, to: routePath(conversationRoute(route.mid, route.sid, s.sessions, s.assistant, row.manager)), mid: route.mid, sid: undefined };
   // a lead's worker's (#5180): the lead's page, the worker in its Team panel
   const worker = workerTarget(rows, route.mid, row, inWorkView(route));
-  if (worker) return worker;
+  if (worker && !route.standalone) return worker;
   // a side session's (#7944): its parent's page, the side in its Side sessions panel
   const side = sideTarget(rows, route.mid, row, inWorkView(route));
-  if (side) return route.at && side.child ? exact() : side;
-  // a child session's (#5120): its parent's chat, which shows the child's card; known once its row is (a listed one, or
-  // the lookup of an unlisted chat), the session itself until then
+  if (side && !route.standalone) return route.at && side.child ? exact() : side;
+  // a child session's (#5120, #14323): open its parent's page + subagent detail panel unless opened standalone
   const parent = row ? foldsUnder(row) : undefined;
-  if (parent && parent !== route.sid) return route.at ? exact() : { link: undefined, to: routePath(withWorkView({ name: "session", mid: route.mid, sid: parent }, inWorkView(route))), mid: route.mid, sid: undefined, parent };
+  const parentMid = row ? foldsUnderMachine(row) : route.mid;
+  if (parent && !(parentMid === route.mid && parent === route.sid)) {
+    if (route.at || route.standalone) return exact();
+    const parentRow = pageRows(s, parentMid).find((r) => r.session_id === parent);
+    const dest = parentRow?.assistant
+      ? conversationRoute(parentMid, parent, s.sessions, s.assistant, parentRow.manager)
+      : withWorkView({ name: "session", mid: parentMid, sid: parent }, inWorkView(route));
+    return { link: undefined, to: routePath(dest), mid: parentMid, sid: undefined, parent, subagent: { mid: route.mid, sid: route.sid } };
+  }
   // an earlier session of a conversation that moved between Claude Code and Codex (#5054): the conversation's own row,
   // whose chat reads that session's stretch in its place
   const home = engineSwitchHome(rows, route.sid);
@@ -354,13 +375,13 @@ function Shell() {
   const target = useStore((s) => pageTarget(s, route));
   const loaded = useStore((s) => s.loaded);
   const tabLinkPath = target?.to ?? "";
-  const linkMid = route.name === "session" ? route.mid : "";
-  const linkSid = route.name === "session" ? route.sid : "";
   const linkAt = route.name === "session" || route.name === "tab" ? route.at : undefined;
   const linkParent = target?.parent;
   const linkWorker = target?.worker;
   const linkSide = target?.side;
   const linkChild = target?.child;
+  const linkSubagentMid = target?.subagent?.mid;
+  const linkSubagentSid = target?.subagent?.sid;
   const targetMid = target?.mid ?? "";
   useEffect(() => {
     if (!tabLinkPath) return;
@@ -369,9 +390,11 @@ function Shell() {
       askSide(targetMid, linkParent, linkSide, linkAt);
       // a row of the side's own (its Codex child): the side's chat opens at its card
       if (linkChild) followChildSession(targetMid, linkChild, linkSide);
-    } else if (linkSid) followSubagentLink(linkMid, linkSid, linkParent);
+    } else if (linkSubagentMid && linkSubagentSid && linkParent) {
+      askSubagentPanel(targetMid, linkParent, { mid: linkSubagentMid, sid: linkSubagentSid, from: "link" });
+    }
     navigate(tabLinkPath, true);
-  }, [tabLinkPath, linkMid, linkSid, linkAt, linkParent, linkWorker, linkSide, linkChild, targetMid]);
+  }, [tabLinkPath, linkAt, linkParent, linkWorker, linkSide, linkChild, linkSubagentMid, linkSubagentSid, targetMid]);
   // a tab not among the page's rows (a paged hub lists only active and pinned ones): asked of the hub before it is gone
   const tabRoute = route.name === "tab" ? route : undefined;
   const lookup = useTabLookup(tabRoute, !!tabRoute && loaded && !target?.sid);
