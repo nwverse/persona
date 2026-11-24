@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -58,6 +59,10 @@ func viewKey(v wire.View) string {
 }
 
 func TestToolViewsStrippedBeforeModelRuntimeAcrossAllCallPaths(t *testing.T) {
+	launchKeyHome(t)
+	if _, err := ensureLaunchKey(nodeclient.LaunchKeyPath()); err != nil {
+		t.Fatal(err)
+	}
 	n, hub := runtimeNode(t)
 	mapView := testMapView("v-route", "Drive Home")
 	hub.mu.Lock()
