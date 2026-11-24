@@ -312,7 +312,11 @@ func (h *Hub) pagedTodoList(w http.ResponseWriter, r *http.Request, key string, 
 	}
 	bw := newBufferedWriter()
 	ask(bw, r, id)
-	writeMerged(w, key, []listAnswer{{id: id, status: cmp.Or(bw.status, http.StatusOK), header: bw.header, body: bw.body.Bytes(), localize: bw.localize}})
+	ans := listAnswer{id: id, status: cmp.Or(bw.status, http.StatusOK), header: bw.header, body: bw.body.Bytes(), localize: bw.localize}
+	if ans.ok() {
+		h.noteTodoOwners(&ans) // a page teaches the hub its rows' manager as a complete list does
+	}
+	writeMerged(w, key, []listAnswer{ans})
 }
 
 // writeMerged writes answers merged (see mergeList): the top level of the first answer that is a JSON object (the
