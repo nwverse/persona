@@ -26,6 +26,7 @@ import (
 	"github.com/nwverse/persona/server/internal/healthhost"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/knowledgeuihost"
 	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -393,8 +394,9 @@ type Service struct {
 	// rec is the recording module (recording.go, internal/recordinghost); nil without it. meetingModel stands in for
 	// the meeting.answer model in tests (nil: the configured one).
 	rec          recordingLayer
-	healthMod    healthhost.Layer // the Health module, nil without it (health_layer.go)
-	recOpts      recordingOptions // Options' recording knobs, for the module's Host
+	ui           knowledgeuihost.Layer // the knowledge pages' module (knowledge_ui.go); nil without it
+	healthMod    healthhost.Layer      // the Health module, nil without it (health_layer.go)
+	recOpts      recordingOptions      // Options' recording knobs, for the module's Host
 	meetingModel kb.Model
 	// sockets makes socketMux, ServeSocket's (sockets.go).
 	sockets   sync.Once
@@ -489,6 +491,7 @@ func New(o Options) *Service {
 	s.recOpts.now, s.recOpts.after = o.RecordingFeedNow, o.RecordingFeedAfter
 	s.lark.timings, s.lark.lists = maps.Clone(o.LarkTimings), maps.Clone(o.LarkTimingLists)
 	s.loadRecording()
+	s.loadKnowledgeUI() // the knowledge pages' module (knowledge_ui.go)
 	s.kbRoutes()
 	s.searchRoutes()
 	s.historyRoutes()

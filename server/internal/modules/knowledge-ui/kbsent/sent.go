@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/kb"
 )
 
@@ -18,7 +18,7 @@ import (
 const kbSentSlack = 2 * time.Minute
 
 type kbSentStore interface {
-	SentAsUsersForArchive(context.Context, string, time.Time, time.Time) ([]db.SentAsUser, error)
+	SentAsUsersForArchive(context.Context, string, time.Time, time.Time) ([]connectorwire.SentAsUser, error)
 }
 
 type kbSentLine struct {
@@ -119,7 +119,7 @@ func kbSentLines(messages []kb.DayMessage, identity kb.DayIdentity, day string) 
 // entire text. A clipped ledger prefix must never claim a longer human message.
 func kbSentText(s string) string { return strings.Join(strings.Fields(s), "") }
 
-func kbMarkSent(lines []kbSentLine, chat *kb.Chat, rows []db.SentAsUser) {
+func kbMarkSent(lines []kbSentLine, chat *kb.Chat, rows []connectorwire.SentAsUser) {
 	byRef := map[string][]int{}
 	byText := map[string][]int{}
 	ambiguousText := map[string]bool{}
@@ -199,7 +199,7 @@ func kbMarkSent(lines []kbSentLine, chat *kb.Chat, rows []db.SentAsUser) {
 
 // Generic destinations must equal the archive source ID, without lossy ID or
 // display-name conversions. Unknown target shapes deliberately do not match.
-func kbSentTarget(chat *kb.Chat, row db.SentAsUser) bool {
+func kbSentTarget(chat *kb.Chat, row connectorwire.SentAsUser) bool {
 	connector := chat.Connector
 	if connector == "" {
 		connector = chat.Source
@@ -223,7 +223,7 @@ func kbSentTarget(chat *kb.Chat, row db.SentAsUser) bool {
 	return false
 }
 
-func kbSentRef(row db.SentAsUser) string {
+func kbSentRef(row connectorwire.SentAsUser) string {
 	if row.MessageRef == "" {
 		return ""
 	}
@@ -265,7 +265,7 @@ func kbSentRepeatedMinute(at time.Time, zone *time.Location) bool {
 
 // These providers issue globally unique message IDs (GitHub's resource kind is
 // included by kbSentRef). Other connectors must also establish the destination.
-func kbSentExactTarget(chat *kb.Chat, row db.SentAsUser) bool {
+func kbSentExactTarget(chat *kb.Chat, row connectorwire.SentAsUser) bool {
 	connector := chat.Connector
 	if connector == "" {
 		connector = chat.Source

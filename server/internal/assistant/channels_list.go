@@ -31,13 +31,16 @@ func (s *Service) channelsNow(ctx context.Context) ([]channel.View, error) {
 func (s *Service) channelsFresh(ctx context.Context) ([]channel.View, error) {
 	c := &s.chans
 	var res struct {
-		Channels []channel.View `json:"channels"`
+		Channels        []channel.View                     `json:"channels"`
+		TargetOverrides map[string]*channel.TargetOverride `json:"target_overrides"`
 	}
 	if err := s.appCall(ctx, AppChannels, ChannelsList, map[string]any{}, &res); err != nil {
 		return nil, err
 	}
 	c.mu.Lock()
 	c.list, c.listAt = res.Channels, time.Now()
+	c.overrides = res.TargetOverrides
+	c.hasOverrides = res.TargetOverrides != nil
 	c.mu.Unlock()
 	return res.Channels, nil
 }
@@ -46,6 +49,8 @@ func (s *Service) channelsFresh(ctx context.Context) ([]channel.View, error) {
 func (s *Service) forgetChannelList() {
 	s.chans.mu.Lock()
 	s.chans.list = nil
+	s.chans.overrides = nil
+	s.chans.hasOverrides = false
 	s.chans.mu.Unlock()
 }
 
@@ -177,7 +182,19 @@ func (s *Service) channelDetail(ctx context.Context, id string) (channel.Detail,
 	if p := c.prefs[id]; p != nil {
 		d.Conversations = slices.Clone(p.Recent)
 	}
+	ov, hasOverrides := c.overrides[id], c.hasOverrides
 	c.mu.Unlock()
+	if !d.ReadOnly && d.Source != channel.SourceMarket && d.Target != nil {
+		switch {
+		case hasOverrides:
+			if ov != nil {
+				cp := *ov
+				d.TargetOverride = &cp
+			}
+		case v.Source == channel.SourcePlugin && v.Installed && v.Capabilities.Threads:
+			d.TargetOverride = &channel.TargetOverride{Mode: channel.TargetOverrideThreads}
+		}
+	}
 	for i := range d.Conversations {
 		if t := s.conversationTitle(ctx, d.Conversations[i].MachineID, d.Conversations[i].SessionID); t != "" {
 			d.Conversations[i].Title = t

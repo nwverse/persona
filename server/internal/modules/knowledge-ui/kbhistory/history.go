@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
@@ -41,7 +40,7 @@ type historySource interface {
 	Chats(ctx context.Context, id string) ([]connectorwire.HistoryChat, error)
 	Page(ctx context.Context, id string, q connectorwire.HistoryQuery) (connectorwire.HistoryPage, error)
 	Anchors(ctx context.Context, id string, q connectorwire.HistoryAnchorsQuery) (connectorwire.HistoryAnchors, error)
-	Media(ctx context.Context, id, ref string) (connector.Media, error)
+	Media(ctx context.Context, id, ref string) (connectorwire.Media, error)
 }
 
 // historyDriver is one import: its dependencies, and the state of the run it is in.

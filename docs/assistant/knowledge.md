@@ -442,7 +442,7 @@ The manager hands the document to the engine (`Engine.Selection`); an engine wit
 
 A chat source that can read a conversation backwards hands its older history to the knowledge base page by page: the live archive only reads forward from each connector's cursor,
 so a chat's messages from before it began come in through this separate, read-only import (connector side: `docs/protocol/connector-protocol.md` "History"). The writing is
-`server/internal/kb/history.go`; the driver that picks chats, paces the reads and stops on errors is `server/internal/assistant/kb_history*.go`, and the assistant's
+`server/internal/kb/history.go`; the driver that picks chats, paces the reads and stops on errors is the knowledge-ui module's `server/internal/modules/knowledge-ui/kbhistory` (docs/architecture/core-and-modules.md "Knowledge UI"), and the assistant's
 `kb_history_*` tools control it. It is **off by default**.
 
 #### Writing
