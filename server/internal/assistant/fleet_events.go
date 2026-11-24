@@ -217,11 +217,13 @@ func (s *Service) nodeRequest(ctx context.Context, machine, method string, param
 		var p struct {
 			Assistant  bool   `json:"assistant"`
 			SessionID  string `json:"session_id"`
+			CallerCwd  string `json:"caller_cwd"`
 			Guest      bool   `json:"guest"` // the node's word that it is a guest conversation (guest.go)
 			Revision   string `json:"revision"`
 			LeaderOnly bool   `json:"leader_only"`
 		}
 		_ = json.Unmarshal(params, &p)
+		ctx = withNodeCallerCwd(ctx, machine, p.SessionID, p.CallerCwd)
 		if p.LeaderOnly {
 			return map[string]any{"tools": s.runtimeLeaderTools(ctx, machine, p.SessionID, p.Guest)}, true, nil
 		}
@@ -239,6 +241,7 @@ func (s *Service) nodeRequest(ctx context.Context, machine, method string, param
 			Name             string                 `json:"name"`
 			Args             json.RawMessage        `json:"args"`
 			SessionID        string                 `json:"session_id"`
+			CallerCwd        string                 `json:"caller_cwd"`
 			Origin           string                 `json:"origin"` // the node's attested origin, including during assistant startup
 			Assistant        bool                   `json:"assistant"`
 			Guest            bool                   `json:"guest"`
@@ -249,6 +252,7 @@ func (s *Service) nodeRequest(ctx context.Context, machine, method string, param
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, true, err
 		}
+		ctx = withNodeCallerCwd(ctx, machine, p.SessionID, p.CallerCwd)
 		ctx = devicewire.WithSourcePermission(ctx, proto.SourcePermission{})
 		if p.SourcePermission.Matches(p.SessionID, p.Name, p.Args) {
 			ctx = devicewire.WithSourcePermission(ctx, p.SourcePermission)

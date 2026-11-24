@@ -23,6 +23,27 @@ import { upsertTaskCards, type TaskCardMetadata } from "./task-cards";
 export type TaskWorkspace = "new" | "none" | { existing: string } | { new: { branch?: string } };
 export interface TaskWorkspaceResolved { machine: string; path: string; branch?: string; workspace_id?: string; created?: boolean }
 
+export type PlanTaskDispatchReason =
+  | "only"
+  | "first"
+  | "score"
+  | "quota"
+  | "unavailable"
+  | "kept"
+  | "switched"
+  | "over_pace"
+  | (string & {});
+
+export interface PlanTaskDispatch {
+  tier?: string;
+  candidate?: number;
+  of?: number;
+  launcher?: string;
+  model?: string;
+  reason: PlanTaskDispatchReason;
+  args?: Record<string, string | number | boolean>;
+}
+
 export interface PlanTask {
   title: string;
   prompt: string;
@@ -61,6 +82,8 @@ export interface PlanTask {
    *  kind of task by itself next time. Every task of such a plan carries the same; absent everywhere else. */
   schedule?: string;
   schedule_title?: string;
+  /** Hub-owned candidate selection metadata for multi-candidate tiers; absent on older hubs. */
+  dispatch?: PlanTaskDispatch;
 }
 
 export interface TaskPlan {

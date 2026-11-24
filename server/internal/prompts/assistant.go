@@ -112,8 +112,11 @@ type AssistantHealthClaudeMD struct {
 	StateDir string
 	// HealthDir is the health space's directory name in StateDir: "" is the built-in manager's "health", another's
 	// "health-<id>" (identity.HealthDirName).
-	HealthDir string
-	Language  string
+	HealthDir      string
+	Language       string
+	Water          bool // The owner's added intake items; false when the Health module is absent or unavailable.
+	Protein        bool
+	ItemsAvailable bool // The module can add items, including when neither intake item is added yet.
 }
 
 func RenderAssistantHealthClaudeMD(d AssistantHealthClaudeMD) string {
@@ -934,6 +937,7 @@ type SuperviseEntry struct {
 	Ask             string              // needs_you: what it asks
 	Recommend       string              // escalated: the option the leader recommends
 	LeaderGone      bool                // decide: its task leader agent cannot be reached, so the supervisor takes the task over
+	SupervisorGone  bool                // decide: its assigned Assistant supervisor cannot receive the relay, so main takes over
 	Background      bool                // escalated: by the background supervisor, not a leader conversation (#4927)
 	DoneWhen        []string            // what done means
 	Round           int                 // reworks so far

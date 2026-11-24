@@ -53,7 +53,7 @@ Query keys not listed for a row are dropped (not passed on, not acted on). Fragm
   `/kb/meetings/<id>` and a recording `/kb/recordings/<id>`. An id that holds `/` is one escaped segment (`%2F`).
 - `at` names one message to land on (`?at=<item id>`; Claude's ids hold `#`, written `%23`).
 - Settings tabs are the web's (`web/src/views/settings/nav.ts`): `general`, `persona`, `prompts`, `notifications`,
-  `models`, `agents`, `channels`, `connectors`, `sources`, `extensions`, `shortcuts`, `devices`, `hub`, `managers`,
+  `models`, `agents`, `channels`, `connectors`, `sources`, `extensions`, `shortcuts`, `advanced`, `devices`, `hub`, `managers`,
   `knowledge`, `avatar`, `labs`. Four have an item key: `models` → `purpose`, `channels` → `channel`, `extensions` →
   `extension`, `connectors` → `connector`. An extension's settings are `/settings?tab=extensions&extension=<id>`. An
   unknown tab opens Settings. The iPhone opens the page it has for a tab, else Settings.

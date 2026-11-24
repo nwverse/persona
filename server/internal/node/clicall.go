@@ -265,8 +265,10 @@ func (n *Node) cliCall(ctx context.Context, c net.Conn, req sockRequest) proto.T
 				return proto.ErrorResult(proto.ToolErrorUnavailable, "Persona hub error: not connected", 0)
 			}
 			var res proto.ToolResult
-			if err := n.peer.Call(ctx, "mcp.call", map[string]any{"name": req.Name, "args": req.Args, "session_id": session,
-				"assistant": assistant, "guest": n.guestOf(session) != nil}, &res); err != nil {
+			params := map[string]any{"name": req.Name, "args": req.Args, "session_id": session,
+				"assistant": assistant, "guest": n.guestOf(session) != nil}
+			n.putMCPCallerCwd(c, params, session)
+			if err := n.peer.Call(ctx, "mcp.call", params, &res); err != nil {
 				return proto.ErrorResult(proto.ToolErrorUnavailable, "Persona hub error: "+err.Error(), 0)
 			}
 			return res
@@ -306,6 +308,7 @@ func (n *Node) cliCall(ctx context.Context, c net.Conn, req sockRequest) proto.T
 	}
 	var res proto.ToolResult
 	params := map[string]any{"name": req.Name, "args": req.Args, "session_id": session, "assistant": true}
+	n.putMCPCallerCwd(c, params, session)
 	n.putSourcePermission(c, params, session, req.Name, req.Args)
 	if origin := n.assistantOrigin(session); origin != "" {
 		params["origin"] = origin

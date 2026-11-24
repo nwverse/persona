@@ -99,6 +99,7 @@ func (s *Service) allOwnSettings() []ownSetting {
 	getSet := []string{"get", "set"}
 	return []ownSetting{
 		s.hiddenDirSetting(),
+		s.blockedHerdrSessionsSetting(),
 		{Setting: Setting{Key: modulesKey, Title: "Built-in modules", Actions: getSet,
 			About: "built-in feature modules switched off; a change applies when the manager next starts, not to the running process",
 			Value: `{"disabled": ["<module id>", …]}; null or an empty list restores every compiled-in module`},
