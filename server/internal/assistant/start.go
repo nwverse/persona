@@ -646,7 +646,7 @@ func (s *Service) startConversation(ctx context.Context, p startParams) (proto.S
 }
 
 // Start is assistant.start: a conversation one of the hub's features starts (the inbox's AI twin), or the channels'
-// (feishu_message.go, channels_plugin.go). It is named after its first turn like the app's, unless it is untitled.
+// (the lark module's message.go, channels_plugin.go). It is named after its first turn like the app's, unless it is untitled.
 func (s *Service) Start(ctx context.Context, p StartParams) (proto.Session, error) {
 	if p.Origin == "" || p.Origin == OriginUser {
 		p.Text = prompts.ProtectUserMessage(p.Text)
@@ -1477,6 +1477,9 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	}
 	s.putCacheKeepalive(ctx, machine, sid, p["is_main"] == true, p)
 	putMainCompactWindow(cfg, p)
+	if handled, err := s.larkAgentFollowsCurrentModel(ctx, machine, sid, p, lang); handled {
+		return err
+	}
 	if handled, err := s.logicalSendModel(ctx, machine, sid, p); handled {
 		return err
 	}
@@ -1495,13 +1498,15 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	// not worker Agent task conversations, whose cheaper-tier behavior stays unchanged. The node marks the protected
 	// ones so it can publish and persist the model-recovery marker only for them.
 	p["follows_setting"] = s.isLeader(ctx, sid) || s.isBackground(ctx, sid)
+	inheritedLarkModel, _ := p[larkAgentInheritedModelKey].(bool)
+	delete(p, larkAgentInheritedModelKey)
 	picked := false // a model picked with this message
 	if m, ok := p["model"].(string); ok && strings.TrimSpace(m) != "" {
 		m = strings.TrimSpace(m)
 		if err := checkModelID(m); err != nil {
 			return err
 		}
-		p["model"], picked = m, true
+		p["model"], picked = m, !inheritedLarkModel
 	}
 	l, _ := p["launcher"].(string)
 	if proto.IsExternalLauncher(l) {

@@ -108,6 +108,7 @@ type fakeHub struct {
 	replies        []string      // the model's answers, in turn (the last one again when they run out)
 	answers        []fakeAnswer  // how each of those answers comes, in turn (none: at once and whole)
 	modelDown      bool          // the model's gateway answers 502 to the calls replies would answer: asked, never answering
+	modelRequests  int           // every model HTTP request, across all purposes
 	noModel        bool
 	asked          []modelCall
 	pushes         []Notification
@@ -1129,6 +1130,8 @@ type memStore struct {
 	failPut error
 	// failKeys: what reading one key fails with, the other keys still reading (set through failKey).
 	failKeys map[string]error
+	// routing: the model_routing rows written (PutModelRouting).
+	routing []db.ModelRoutingRow
 }
 
 // rawSetting returns a cloned copy of the raw JSON bytes stored for key under m.mu.
@@ -1197,6 +1200,22 @@ func (m *memStore) PutPlacement(ctx context.Context, p db.PlacementRow) error {
 }
 
 func (noPlans) PutPlacement(context.Context, db.PlacementRow) error { return nil }
+
+func (m *memStore) PutModelRouting(_ context.Context, r db.ModelRoutingRow) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.routing = append(m.routing, r)
+	return nil
+}
+
+// modelRoutings are the model_routing rows written so far.
+func (m *memStore) modelRoutings() []db.ModelRoutingRow {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.routing)
+}
+
+func (noPlans) PutModelRouting(context.Context, db.ModelRoutingRow) error { return nil }
 
 func (noPlans) CreateTaskPlan(context.Context, db.TaskPlanRow) error {
 	return errors.New("no task_plans here")
@@ -1681,6 +1700,9 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 	jsonOnly := strings.TrimSpace(prompts.RenderJSONOnly(""))
 	tabName := prompts.RenderTabName()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.modelRequests++
+		f.mu.Unlock()
 		if r.Method == http.MethodGet && r.URL.Path == "/" { // a node's port probe (node/ports.go), not this test's client
 			http.NotFound(w, r)
 			return

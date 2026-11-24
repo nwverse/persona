@@ -244,9 +244,14 @@ asked for it) and uses it only on the detour path (`healthDetour`, the chokepoin
   "no schedulable `<provider>` account in the pool right now" and, when known, "the nearest one recovers …". Stale data or any schedulable account
   says nothing, and no pool configured means the original wording, unchanged.
 - The launcher's provider is its health record's `agent`, falling back to a Persona-managed launcher's `agent`; an unknown provider gets no note.
-- This first cut never reorders machines or blocks a start: one launcher maps to one provider, so every machine offering it sees the same
+- Capacity never reorders machines or blocks a start: one launcher maps to one provider, so every machine offering it sees the same
   provider-level capacity, and two different providers are not equivalent (an explicit model configuration is never silently changed,
-  `docs/assistant/model-config.md`). Deferring starts until recovery, per-machine gateway attribution and the App/Lark entries are later work.
+  `docs/assistant/model-config.md`). Per-machine gateway attribution and the App/Lark entries are later work.
+- **Choosing among a tier's candidates** (#14701) is where quota does reorder: only among the candidates the user listed on one Agent preset,
+  in their order. The pace-based headroom there reads the merged usage accounts (`Devices.UsageAccounts`, the cache this snapshot uses) and
+  maps a launcher to a provider the same way, or through its admission group's `quota_pool`; a candidate whose launcher this computer lacks or
+  whose health check failed is passed over before any score (`docs/assistant/model-profiles.md` "Choosing a candidate"). A continuation keeps
+  its previous candidate while it is healthy; three failed starts in a row on it re-pick (`docs/assistant/model-profiles.md` "Continuations keep the candidate").
 
 ## Execution-agent admission gate
 

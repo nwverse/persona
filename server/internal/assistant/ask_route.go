@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -27,10 +28,11 @@ import (
 // spending, what cannot be undone, and what only they can do). It answers a question itself (interaction_answer; the
 // answer becomes the task's decision), and allows or denies a tool permission or a plan itself too (interaction_answer
 // with allow; answeredApproval): the agent gets it marked as the assistant's answer (AnsweredBy), never as the user's.
-// What stays the user's — a card with a form or a secret, or an approval that would send, reply or comment in the
-// user's name, spend money or delete (userApproval) — the supervisor hands up with ask_escalate: every card of the task
-// still waiting then rings the user once, with the supervisor's reason and recommendation, and a leader's escalation
-// is an escalated entry in the main conversation, so the layers above know.
+// Allowing what stays the user's — a card with a form or a secret, or an approval that would send, reply or comment in
+// the user's name, spend money or delete (userApproval) — needs ask_escalate: every card of the task still waiting
+// then rings the user once, with the supervisor's reason and recommendation, and a leader's escalation is an escalated
+// entry in the main conversation, so the layers above know. Denying any permission or plan remains the supervisor's:
+// denial executes nothing and returns its reason to the agent.
 //
 // Nothing reaches the user on a timeout. A card nobody handles within askHoldFor moves one rung up (leader, then the
 // main conversation; one rung, the background supervisor or the main conversation, for a task no leader supervises),
@@ -715,15 +717,30 @@ func (s *Service) askAnswered(ctx context.Context, todo, self string, ix proto.I
 // merging and deploying are not among them: those are the supervisor's within the task the user asked for.
 var userApprovalWords = []string{"发消息", "回复", "评论", "comment", "send", "发送", "删除", "delete", "购买", "付费", "续费", "充值"} // i18n-ignore: matched against the card
 
-// userApproval says why permission or plan card ix is the user's to decide, not its supervisor's ("" when the
-// supervisor may allow or deny it): it asks for a form or a secret, it is an owner-action proposal or a secret
-// hand-off, or what it would do goes out in the user's name, spends money or deletes (userApprovalWords).
+// userApprovalActionVerbs are tool-name verbs, normalized by connector.WriteVerb, that delete or spend even when the
+// payload has no risk word. Outward verbs use the connector gate's existing list (outboundVerbs in card_layers.go).
+var userApprovalActionVerbs = []string{"delete", "remove", "destroy", "erase", "purge", "trash", "buy", "purchase", "pay", "charge"}
+
+// userApproval says why permission or plan card ix is the user's to allow, not its supervisor's ("" when the
+// supervisor may allow it; either may always deny it): it asks for a form or a secret, it is an owner-action proposal
+// or a secret hand-off, or its actual action goes out in the user's name, spends money or deletes. A local file edit's
+// payload is data, not an outward or destructive action; known tool actions are classified structurally before the
+// remaining text falls back to userApprovalWords.
 func userApproval(ix proto.Interaction) string {
 	switch {
 	case len(ix.Fields) > 0, ix.Secret, ix.Elicitation != nil:
 		return "asks for a form or a secret, which only the user fills in"
 	case ix.OwnerProposal, ix.ApprovalBatchID != "", ix.ToolName == proto.SecretHandoffTool:
 		return "is an owner action"
+	}
+	if ix.Kind == proto.IxPermission {
+		switch ix.ToolName {
+		case "Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch":
+			return ""
+		}
+	}
+	if verb := connector.WriteVerb(ix.ToolName); slices.Contains(outboundVerbs, verb) || slices.Contains(userApprovalActionVerbs, verb) {
+		return fmt.Sprintf("would send, reply or comment in the user's name, spend money or delete (tool action %s)", verb)
 	}
 	text := strings.ToLower(strings.Join([]string{ix.ToolName, ix.ToolTitle, ix.Summary, ix.Reason, ix.Plan, ix.EditableText,
 		string(ix.ToolInput)}, "\n"))
