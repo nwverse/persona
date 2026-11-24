@@ -30,6 +30,7 @@ import { UltraMark } from "./chat/Ultracode";
 import { contextMenuProps } from "../ui/context-menu";
 import type { MenuAt } from "../ui/menu-model";
 import { rowDetail, useAgentDetails } from "../lib/context-usage";
+import { ContextUsageBar } from "../ui/ContextUsageBar";
 import { AgentMark, SessionMark } from "../ui/AgentMark";
 import { AgentAvatar } from "./agents/AgentAvatar";
 import { useFolded } from "../lib/use-folded";
@@ -531,10 +532,11 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
               <span className="truncate tabular-nums"><Rolling value={workflow} /></span>
             </span>
           )}
-          {detail.length > 0 && <span className="flex h-4 min-w-0 flex-wrap gap-x-1 overflow-hidden whitespace-nowrap text-[11px] leading-4 text-ink-3">
+          {detail.length > 0 && <span className="flex h-4 min-w-0 flex-wrap gap-x-1 overflow-hidden whitespace-nowrap text-submeta leading-4 text-ink-3">
             {detail.map((d, i) => (
               <span key={i} title={d.title} className={cx("flex shrink-0 items-center gap-1 tabular-nums", d.danger ? "font-medium text-orange" : d.warn && "font-medium text-orange")}>
                 {i > 0 && <span aria-hidden="true">·</span>}
+                {d.usage && <ContextUsageBar usage={d.usage} className="h-1 w-5" />}
                 {d.text}
               </span>
             ))}

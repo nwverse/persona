@@ -1606,7 +1606,9 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   Rows outside any family (the Default entry, unknown models) have no header. Why: one family's versions read as one
   choice and the newest is the one most people want, while older ones stay one tap (or a search) away (2026-11-17).
 - Usage placement (#5056): the Agent's context meter is a separate, right-aligned row below the composer card, not part of
-  the header or the model-pill container. Unknown context mounts no row. Quota bars use the established accent / orange /
+  the header or the model-pill container. The composer, Session Insights and enabled sidebar details use the same
+  context share and progress bar. When only the current context size is available, the composer and Session Insights
+  show that token count. Cumulative usage from loaded messages has its own total. Quota bars use the established accent / orange /
   red quota tones (≤ 30% left warning, ≤ 10% or exhausted critical); price marks use neutral `ink-2`, one to three `$` by
   standard output price, and the flyout's values use tabular numerals. Unknown data never creates placeholder marks.
 - Header strip (Persona chats, #5033, `PickStrip` in `web/src/views/chat/AssistantModelPanel.tsx`): one line above the

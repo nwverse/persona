@@ -2056,15 +2056,15 @@ Requests carry only these fields (anything else is dropped) and cannot specify a
   Verification image removed; see the associated PR.
 
 - **Show agent details** (#2430, **Settings › General › Appearance**, off by default for this browser;
-  `lib/context-usage.ts`): with this setting on, each Agent row in the sidebar gets a second line: "model · context ·
-  idle time · folder" (what doesn't fit is clipped from the end). The sidebar and the thin context meter under the
+  `lib/context-usage.ts`): with this setting on, each Agent row in the sidebar gets a second line with the context
+  share, model, idle time and folder. The context bar comes first so a long model name leaves it visible. The sidebar and the thin context meter under the
   Agent chat's composer (#5056) both show **Context N%**, the share used (#9155). The bar fills as usage grows and
   uses amber from 80% because a nearly full window is a caution. The hover text and accessible name explain the used
   and remaining shares. Clicking opens the same explanation with the used and total token counts and a note about
   automatic compaction. When close to full, the note suggests sending /compact or starting a new Agent. The
   percentages come from `context_tokens` / `context_window` (the node reads them from the transcript, see
-  `../protocol/protocol.md`). The meter is omitted when usage is unknown, such as before the first reply or on an
-  older node.
+  `../protocol/protocol.md`). If only the current context size is known, the composer shows the count and Session
+  Insights gives the exact number of tokens. With only per-message usage, the composer shows the loaded messages' cumulative total.
   When off, this line is absent ("Needs you" and "Unread" rows have a separate line saying what it is asking / what it did; see "Second line on Agent rows" above, #3195).
 - **Command palette**: `lib/node-palette.ts` registers with `registerContextCommands` and lists the current node's menu items first in `>` command mode (sections named for what the node is and drawn as written: "Pane · <pane title>", "Tab · <tab name>" or "Space · <space name>");
   rename opens a small dialog asking for the name, dangerous items ask for confirmation once more, and failures show a toast. The current node comes from the session page's chat (`ctx.pane`) or the terminal page's pane (the terminal page hands it the tree it read).
