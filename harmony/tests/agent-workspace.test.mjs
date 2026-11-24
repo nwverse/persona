@@ -626,3 +626,33 @@ test('machine idle rows expand, survive a directory update, and collapse again',
   workspace.toggleIdleRows(group.id);
   assert.deepEqual(workspace.visibleRows().map(item=>item.id),['busy']);
 });
+
+test('Needs you sits above computers and spaces, even when their folds hide the row, and counts match', async () => {
+  const asking = agent('asking', { state: 'needs_you', status: 'needs_you', machine_id: 'm2' });
+  const { workspace } = await opened({ sessions: [agent('busy'), asking, agent('quiet', { state: 'idle', status: 'idle' })],
+    machines: [machine('m1'), machine('m2')] });
+  assert.ok(!workspace.groups.some((group) => group.id === 'needs'), 'By Status has its own Needs you section');
+  assert.equal(workspace.counts.needsYou, 1);
+  assert.equal(workspace.counts.working, 1);
+  workspace.setGroupingMode('machine');
+  const folded = workspace.groups.find((group) => group.id === 'machine/work|m2');
+  workspace.toggleFold(folded.id);
+  const needs = workspace.groups[0];
+  assert.equal(needs.id, 'needs');
+  assert.deepEqual(needs.rows.map((row) => row.id), ['asking']);
+  const machineGroup = workspace.groups.find((group) => group.id === 'machine/work|m2');
+  assert.equal(machineGroup.folded, true);
+  assert.equal(machineGroup.rows.length, 0);
+  assert.equal(machineGroup.stateCounts.needs_you, 1, 'the folded computer still says what it hides');
+  assert.deepEqual(workspace.groups.find((group) => group.id === 'machine/work|m1').stateCounts, { working: 1, idle: 1 });
+  assert.equal(workspace.counts.needsYou, needs.rows.length, 'the chip and the section show one number');
+  assert.deepEqual(workspace.visibleRows().map((row) => row.id), ['busy', 'asking'], 'each row once');
+  workspace.setGroupingMode('space');
+  assert.equal(workspace.groups[0].id, 'needs');
+  workspace.setQuickFilter('working');
+  assert.ok(!workspace.groups.some((group) => group.id === 'needs'), 'another quick filter shows only its own rows');
+  assert.equal(workspace.counts.needsYou, 1, 'chip counts are taken before the filter narrows the list');
+  workspace.setQuickFilter('all');
+  workspace.setSearch('busy');
+  assert.ok(!workspace.groups.some((group) => group.id === 'needs'), 'search results stand alone, as iOS');
+});

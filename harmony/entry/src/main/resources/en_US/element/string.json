@@ -6235,6 +6235,98 @@
     {
       "name": "devices_this",
       "value": "This device"
+    },
+    {
+      "name": "agent_subagents_running",
+      "value": "Subagents running: {count}"
+    },
+    {
+      "name": "agent_preview_first_message",
+      "value": "Waiting for its first message"
+    },
+    {
+      "name": "agent_preview_blocked_on",
+      "value": "Blocked on: {waiting}"
+    },
+    {
+      "name": "agent_preview_blocked",
+      "value": "Blocked"
+    },
+    {
+      "name": "agent_preview_not_done_missing",
+      "value": "Not done: {missing}"
+    },
+    {
+      "name": "agent_preview_not_done",
+      "value": "Not done"
+    },
+    {
+      "name": "agent_preview_reported_done",
+      "value": "Reported done"
+    },
+    {
+      "name": "agent_preview_merged_checked",
+      "value": "merged ✓"
+    },
+    {
+      "name": "agent_preview_deployed_checked",
+      "value": "deployed ✓"
+    },
+    {
+      "name": "agent_preview_not_merged",
+      "value": "not merged"
+    },
+    {
+      "name": "agent_preview_not_deployed",
+      "value": "not deployed"
+    },
+    {
+      "name": "agent_preview_merged",
+      "value": "merged"
+    },
+    {
+      "name": "agent_preview_deployed",
+      "value": "deployed"
+    },
+    {
+      "name": "agent_preview_claim_merged_false",
+      "value": "✗ says merged, isn't"
+    },
+    {
+      "name": "agent_preview_claim_deployed_false",
+      "value": "✗ says deployed, isn't"
+    },
+    {
+      "name": "agent_preview_retrying_now",
+      "value": "retrying now"
+    },
+    {
+      "name": "agent_preview_waking_now",
+      "value": "waking now"
+    },
+    {
+      "name": "agent_preview_retrying_in",
+      "value": "retrying in {time}"
+    },
+    {
+      "name": "agent_preview_waking_in",
+      "value": "waking in {time}"
+    },
+    {
+      "name": "agent_preview_minutes",
+      "value": "{minutes} min"
+    },
+    {
+      "name": "agent_preview_hours",
+      "value": "{hours} hr"
+    },
+    {
+      "name": "agent_preview_hours_minutes",
+      "value": "{hours} hr {minutes} min"
+    },
+    {
+      "name": "agent_preview_line_when",
+      "value": "{line} ({when})"
     }
   ]
 }

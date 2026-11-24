@@ -13,6 +13,13 @@ export class Tokens {
   static readonly symbolFont: string = String(Tokens.symbol) + 'vp';
   static readonly chromeFontMaxScale: number = 2;
   static readonly avatar: number = 40;
+  /** The state mark on an Agent's avatar corner, its ring in the page colour, and Needs you's breath. */
+  static readonly stateMark: number = 10;
+  static readonly stateMarkRing: number = 2;
+  static readonly breath: number = 1100;
+  static readonly breathFloor: number = 0.35;
+  /** A muted Agent row stays readable but steps back. */
+  static readonly mutedOpacity: number = 0.6;
   static readonly avatarChoice: number = 56;
   static readonly caption: number = 13;
   static readonly readingMax: number = 680;

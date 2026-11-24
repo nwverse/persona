@@ -6235,6 +6235,98 @@
     {
       "name": "devices_this",
       "value": "このデバイス"
+    },
+    {
+      "name": "agent_subagents_running",
+      "value": "サブエージェント {count} 件が実行中"
+    },
+    {
+      "name": "agent_preview_first_message",
+      "value": "最初のメッセージ待ち"
+    },
+    {
+      "name": "agent_preview_blocked_on",
+      "value": "ブロック中：{waiting}"
+    },
+    {
+      "name": "agent_preview_blocked",
+      "value": "ブロック中"
+    },
+    {
+      "name": "agent_preview_not_done_missing",
+      "value": "未完了：{missing}"
+    },
+    {
+      "name": "agent_preview_not_done",
+      "value": "未完了"
+    },
+    {
+      "name": "agent_preview_reported_done",
+      "value": "完了と報告"
+    },
+    {
+      "name": "agent_preview_merged_checked",
+      "value": "マージ済み ✓"
+    },
+    {
+      "name": "agent_preview_deployed_checked",
+      "value": "デプロイ済み ✓"
+    },
+    {
+      "name": "agent_preview_not_merged",
+      "value": "未マージ"
+    },
+    {
+      "name": "agent_preview_not_deployed",
+      "value": "未デプロイ"
+    },
+    {
+      "name": "agent_preview_merged",
+      "value": "マージ済み"
+    },
+    {
+      "name": "agent_preview_deployed",
+      "value": "デプロイ済み"
+    },
+    {
+      "name": "agent_preview_claim_merged_false",
+      "value": "✗ マージ済みと報告、実際は未マージ"
+    },
+    {
+      "name": "agent_preview_claim_deployed_false",
+      "value": "✗ デプロイ済みと報告、実際は未デプロイ"
+    },
+    {
+      "name": "agent_preview_retrying_now",
+      "value": "すぐに再試行"
+    },
+    {
+      "name": "agent_preview_waking_now",
+      "value": "すぐに起こします"
+    },
+    {
+      "name": "agent_preview_retrying_in",
+      "value": "{time}後に再試行"
+    },
+    {
+      "name": "agent_preview_waking_in",
+      "value": "{time}後に起こします"
+    },
+    {
+      "name": "agent_preview_minutes",
+      "value": "{minutes}分"
+    },
+    {
+      "name": "agent_preview_hours",
+      "value": "{hours}時間"
+    },
+    {
+      "name": "agent_preview_hours_minutes",
+      "value": "{hours}時間{minutes}分"
+    },
+    {
+      "name": "agent_preview_line_when",
+      "value": "{line}（{when}）"
     }
   ]
 }

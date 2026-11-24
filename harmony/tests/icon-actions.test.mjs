@@ -48,8 +48,11 @@ test('Agent quick filters retain full names using native Select when the measure
   Tokens:{meta:14,touch:48,inset:12,page:16,fine:4},QUICK_LABELS:['all','needs_you','working','unread','agent_group_background'],QUICK_FILTERS:['all','needsYou','working','unread','backgroundWaiting'],FontWeight:{Medium:'medium'},tr:key=>key
  });
  const view=new Filters();view.environment={fontScale:1};view.getUIContext=()=>({px2vp:p=>p/3,getMeasureUtils:()=>({measureText:()=>labelPixels})});
+ let shown=['all','needsYou','working','unread','backgroundWaiting'];view.quickFilters=()=>shown;view.quickLabel=key=>key;
  for(const width of [0,280,320,420]){view.filterWidth=width;assert.equal(view.quickFilterUsesSelect(),true,String(width));}
  view.filterWidth=713;assert.equal(view.quickFilterUsesSelect(),false);
  labelPixels=420;assert.equal(view.quickFilterUsesSelect(),true,'long localized label');
  labelPixels=210;view.environment.fontScale=1.5;assert.equal(view.quickFilterUsesSelect(),true,'enlarged system text');
+ view.environment.fontScale=1;shown=['all','needsYou','unread'];view.filterWidth=420;assert.equal(view.quickFilterUsesSelect(),false,'empty states are hidden, so three chips fit');
+ view.filterWidth=320;assert.equal(view.quickFilterUsesSelect(),true);
 });

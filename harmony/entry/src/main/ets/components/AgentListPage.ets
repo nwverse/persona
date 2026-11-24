@@ -2,9 +2,10 @@ import { agentBrand, agentBrandColor } from '../design/AgentBrand';
 import { IconActions } from '../design/IconActions';
 import { ColorMetrics, LengthMetrics } from '@kit.ArkUI';
 import { util } from '@kit.ArkTS';
-import { CapsuleSegmentButtonV2, SegmentButtonV2Items } from '@kit.ArkUI';
+import { CapsuleSegmentButtonV2, SegmentButtonV2ItemOptions, SegmentButtonV2Items } from '@kit.ArkUI';
 import { ClientModel } from '../models/ClientModel';
-import { AgentWorkspace, AgentWorkspaceGroup } from '../models/AgentWorkspace';
+import { AgentWorkspace, AgentWorkspaceGroup, NEEDS_GROUP } from '../models/AgentWorkspace';
+import { agentRowPreview, agentRowTone, runningSubagents } from '../core/AgentRowPreview';
 import { ResourceRow, Wire } from '../models/Wire';
 import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { Tokens } from '../design/Tokens';
@@ -17,10 +18,13 @@ import { nativeSheetInset } from '../platform/NativeInsets';
 import { DeviceLook, deviceLook } from '../models/DeviceLook';
 
 const QUICK_FILTERS: string[] = ['all', 'needsYou', 'working', 'unread', 'backgroundWaiting'];
-const QUICK_LABELS: string[] = ['all', 'needs_you', 'working', 'unread', 'agent_group_background'];
+const QUICK_LABELS: Record<string, string> = {'all': 'all', 'needsYou': 'needs_you', 'working': 'working', 'unread': 'unread',
+  'backgroundWaiting': 'agent_group_background'};
+const STATE_TOTAL_GROUPS: string[] = ['pinned', NEEDS_GROUP];
+const ROW_TIME_REFRESH_MS: number = 30000;
 const GROUPINGS: string[] = ['state', 'machine', 'space'];
 const GROUP_LABELS: Record<string, string> = {'state': 'agent_group_state', 'machine': 'agent_filter_machine', 'space': 'agent_group_space'};
-const STATE_LABELS: Record<string, string> = {'pinned': 'agent_group_pinned', 'state/needs': 'needs_you',
+const STATE_LABELS: Record<string, string> = {'pinned': 'agent_group_pinned', 'needs': 'needs_you', 'state/needs': 'needs_you',
   'state/unread': 'agent_group_unread', 'state/awaiting': 'agent_group_awaiting', 'state/working': 'working',
   'state/background': 'agent_group_background', 'state/just_finished': 'agent_group_just_finished',
   'state/waiting': 'agent_group_waiting', 'state/muted': 'agent_group_muted',
@@ -41,6 +45,12 @@ class AgentRowPresentation {
   @Trace spaceName: string = '';
   @Trace recentContent: string = '';
   @Trace status: string = '';
+  /** needs_you, working, background or unread: the mark on the avatar corner; empty for none. */
+  @Trace tone: string = '';
+  @Trace muted: boolean = false;
+  @Trace subagents: number = 0;
+  @Trace place: string = '';
+  data: Record<string, Object> = {};
   @Trace metadata: string[] = [];
   @Trace selectionKey: string = '';
 }
@@ -67,6 +77,38 @@ class BoundAgentGroup {
   constructor(identity: string, key: string, value: AgentWorkspaceGroup) { this.identity = identity; this.key = key; this.value = value; }
 }
 
+/** The state mark on an Agent's avatar: Needs you breathes unless Reduce Motion is on. */
+@ComponentV2
+struct AgentStateMark {
+  @Param tone: string = '';
+  @Param breathing: boolean = false;
+  @Local faded: boolean = false;
+
+  @Monitor('breathing') breathingChanged(): void { this.syncBreath(); }
+  private syncBreath(): void {
+    if (this.breathing && !this.faded) {
+      this.getUIContext().animateTo({ duration: Tokens.breath, iterations: -1, playMode: PlayMode.Alternate, curve: Curve.EaseInOut },
+        () => { this.faded = true; });
+    } else if (!this.breathing && this.faded) this.getUIContext().animateTo({ duration: 0 }, () => { this.faded = false; });
+  }
+  private fill(): ResourceColor {
+    if (this.tone === 'needs_you') return Colors.needs;
+    if (this.tone === 'unread') return Colors.unread;
+    return Colors.working;
+  }
+
+  build() {
+    if (this.tone === 'background') {
+      SymbolGlyph(Symbols.waiting).fontSize(Tokens.stateMark).fontColor([Colors.working])
+        .width(Tokens.stateMark).height(Tokens.stateMark).backgroundColor(Colors.canvas).borderRadius(Tokens.stateMark / 2)
+    } else {
+      Circle().width(Tokens.stateMark).height(Tokens.stateMark).fill(this.fill())
+        .stroke(Colors.canvas).strokeWidth(Tokens.stateMarkRing)
+        .opacity(this.faded ? Tokens.breathFloor : 1).onAppear(() => this.syncBreath())
+    }
+  }
+}
+
 @ComponentV2
 export struct AgentListPage {
   @Require @Param model: ClientModel;
@@ -85,6 +127,11 @@ export struct AgentListPage {
   @Local look: DeviceLook = deviceLook;
   @Local groupBindings: BoundAgentGroup[] = [];
   @Local mixedMachines: boolean = false;
+  @Local mixedHubs: boolean = false;
+  /** Row times read this, so they move on every 30 s while the list is on screen. */
+  @Local clock: number = Date.now();
+  private clockTimer: number = -1;
+  private rowVisibility: Map<string, number> = new Map();
   @Local filterWidth: number = 0;
   private rowBindingOwner: Object | undefined;
   private rowBindingScope: string = '';
@@ -105,10 +152,16 @@ export struct AgentListPage {
     if (Math.abs(value - this.filterInset) > 0.1) this.filterInset = value;
   }
 
-  aboutToAppear(): void { this.syncRowBindings(); if (this.active) this.activateWorkspace(); }
-  aboutToDisappear(): void { this.editorOpen = false; this.filterSheetOpen = false; this.editingAdmission = undefined; this.workspace.revokeRowActions(); if (!this.retainWorkspace) this.workspace.hide(); }
+  aboutToAppear(): void { this.syncRowBindings(); if (this.active) { this.activateWorkspace(); this.startClock(); } }
+  aboutToDisappear(): void { this.stopClock(); this.editorOpen = false; this.filterSheetOpen = false; this.editingAdmission = undefined; this.workspace.revokeRowActions(); if (!this.retainWorkspace) this.workspace.hide(); }
 
-  @Monitor('active') visibleChanged(): void { if (!this.active) { this.editorOpen = false; this.filterSheetOpen = false; this.editingRow = undefined; this.editingAdmission = undefined; this.workspace.revokeRowActions(); if (!this.retainWorkspace) this.workspace.hide(); } else this.activateWorkspace(); }
+  private startClock(): void {
+    this.clock = Date.now();
+    if (this.clockTimer === -1) this.clockTimer = setInterval(() => { this.clock = Date.now(); }, ROW_TIME_REFRESH_MS);
+  }
+  private stopClock(): void { if (this.clockTimer !== -1) { clearInterval(this.clockTimer); this.clockTimer = -1; } }
+
+  @Monitor('active') visibleChanged(): void { if (this.active) this.startClock(); else this.stopClock(); if (!this.active) { this.editorOpen = false; this.filterSheetOpen = false; this.editingRow = undefined; this.editingAdmission = undefined; this.workspace.revokeRowActions(); if (!this.retainWorkspace) this.workspace.hide(); } else this.activateWorkspace(); }
   @Monitor('model.forgottenEpoch') forgottenChanged(): void { this.workspace.forgetHub(this.model.forgottenProfile); if (this.editingRow?.group === this.model.forgottenProfile) { this.editorOpen = false; this.editingRow = undefined; this.editingAdmission = undefined; } }
   @Monitor('model.profile') profileChanged(): void { this.editorOpen = false; this.editingAdmission = undefined; this.syncRowBindings(); if (!this.active) return; this.activateWorkspace(); }
   @Monitor('selectedRow') externalSelectionChanged(): void { this.workspace.selectExternal(this.selectedRow); }
@@ -152,6 +205,7 @@ export struct AgentListPage {
 
   private syncRowBindings(): void {
     this.mixedMachines = new Set(this.workspace.visibleRows().map((row: ResourceRow) => JSON.stringify([row.group, row.manager, row.machine]))).size > 1;
+    this.mixedHubs = new Set(this.workspace.visibleRows().map((row: ResourceRow) => row.group)).size > 1;
     const scope = JSON.stringify([this.model.scope(), this.model.profile.id, this.model.profile.manager]);
     const sameOwnerScope = this.rowBindingOwner === this.model && this.rowBindingScope === scope;
     const previous = sameOwnerScope ? this.groupBindings : [];
@@ -203,7 +257,7 @@ export struct AgentListPage {
   private updateAgentRowPresentation(presentation: AgentRowPresentation, row: ResourceRow): void {
     if (presentation.raw !== row.raw) {
       const data = Wire.parse(row.raw);
-      presentation.raw = row.raw;
+      presentation.raw = row.raw; presentation.data = data;
       presentation.lastText = Wire.text(data, 'last_text');
       presentation.rawStatus = Wire.text(data, 'status');
       presentation.brand = Wire.text(data, 'agent') || Wire.text(data, 'agent_type') || (Wire.text(data, 'source_kind').startsWith('codex') ? 'codex' : 'claude');
@@ -216,23 +270,41 @@ export struct AgentListPage {
       presentation.spaceName = Wire.text(data, 'space_name');
     }
     const state = row.state || presentation.rawStatus;
-    const content = presentation.lastText || row.detail;
+    const muted = this.workspace.isMuted(row);
+    const content = agentRowPreview(presentation.data, state, muted, Date.now(), tr) || row.detail;
     const machineId = row.machine || presentation.machineId;
     const sessionId = row.session || presentation.sessionId || row.id;
     const path = row.path || presentation.worktree || presentation.repositoryRoot || presentation.cwd;
     const owner = this.model.directoryOwnerFor(row);
     const machine = machineId ? owner?.machineName(machineId) || machineId : '';
-    const identity = [this.model.groupName(row), row.manager].filter((value: string) => !!value).join(' · ');
+    // The Hub name, never its manager ID: primary screens show names (DESIGN_SYSTEM 5.6).
+    const hub = this.model.groupName(row);
     const shortPath = path ? this.model.shortPath(path) : '';
     presentation.status = state;
+    presentation.muted = muted;
+    presentation.tone = agentRowTone(presentation.data, state, muted);
+    presentation.subagents = runningSubagents(presentation.data);
     presentation.recentContent = content;
-    presentation.metadata = [identity, machine, shortPath, state, content];
+    presentation.place = [this.mixedHubs ? hub : '', machine].filter((value: string) => !!value).join(' · ');
+    presentation.metadata = [hub, machine, shortPath, state, content];
     presentation.selectionKey = JSON.stringify(row.group ? [row.group, row.kind, row.manager, machineId, sessionId] : [row.kind, row.manager, machineId, sessionId]);
   }
 
+  /** All, the states that have agents now, and the chosen one while it empties so it can be left (as iOS). */
+  private quickFilters(): string[] {
+    return QUICK_FILTERS.filter((key: string) => key === 'all' || key === this.workspace.quickFilter || (this.workspace.counts[key] || 0) > 0);
+  }
+  private quickLabel(key: string): string {
+    const count = key === 'all' ? 0 : this.workspace.counts[key] || 0;
+    return tr(QUICK_LABELS[key]) + (count ? ' ' + String(count) : '');
+  }
   private quickIndex(): number {
-    const index = QUICK_FILTERS.indexOf(this.workspace.quickFilter);
+    const index = this.quickFilters().indexOf(this.workspace.quickFilter);
     return index < 0 ? 0 : index;
+  }
+  private chooseQuick(index: number): void {
+    const key = this.quickFilters()[index];
+    if (key && key !== this.workspace.quickFilter) this.workspace.setQuickFilter(key);
   }
 
   private machineOptions(): ResourceRow[] {
@@ -254,7 +326,8 @@ export struct AgentListPage {
 
   private machineSelectOptions(): SelectOption[] {
     const options: SelectOption[] = [{ value: tr('agent_filter_all_machines') }];
-    this.machineOptions().forEach((row: ResourceRow) => options.push({ value: [this.model.groupName(row), row.manager, row.title || row.id].filter((value: string) => !!value).join(' · ') }));
+    const hubs = new Set(this.machineOptions().map((row: ResourceRow) => row.group)).size > 1;
+    this.machineOptions().forEach((row: ResourceRow) => options.push({ value: [hubs ? this.model.groupName(row) : '', row.title || row.id].filter((value: string) => !!value).join(' · ') }));
     return options;
   }
 
@@ -346,27 +419,49 @@ export struct AgentListPage {
       }
       Row({ space: Tokens.gap }) {
         Column({ space: Tokens.fine }) {
-          Text(tr(STATE_LABELS[binding.value.id] || '') || binding.value.machineName).fontSize(Tokens.meta).fontWeight(FontWeight.Medium)
-            .fontColor(Colors.secondary).maxLines(2)
-          Text(this.groupCounts(binding.value)).fontSize(Tokens.caption).fontColor(Colors.secondary)
+          Row({ space: Tokens.gap }) {
+            Text(this.groupTitle(binding.value)).fontSize(Tokens.meta).fontWeight(FontWeight.Medium)
+              .fontColor(binding.value.id === NEEDS_GROUP ? Colors.needs : Colors.secondary).maxLines(2).flexShrink(1)
+            if (this.groupTotal(binding.value)) Text(this.groupTotal(binding.value)).fontSize(Tokens.caption).fontWeight(FontWeight.Medium)
+              .fontColor(binding.value.id === NEEDS_GROUP ? Colors.needs : Colors.secondary)
+          }.alignItems(VerticalAlign.Center)
+          if (this.groupNeeds(binding.value) || this.groupCounts(binding.value)) Text() {
+            if (this.groupNeeds(binding.value)) Span(this.groupNeeds(binding.value)).fontColor(Colors.needs).fontWeight(FontWeight.Medium)
+            if (this.groupNeeds(binding.value) && this.groupCounts(binding.value)) Span(' · ').fontColor(Colors.secondary)
+            if (this.groupCounts(binding.value)) Span(this.groupCounts(binding.value)).fontColor(Colors.secondary)
+          }.fontSize(Tokens.caption)
         }.alignItems(HorizontalAlign.Start).layoutWeight(1).constraintSize({minHeight:Tokens.touch}).justifyContent(FlexAlign.Center)
-          .onClick(() => { if (!this.workspace.search) this.workspace.toggleFold(binding.value.id); })
-        Button({ type: ButtonType.Circle }) {
+          .onClick(() => { if (!this.workspace.search && binding.value.id !== NEEDS_GROUP) this.workspace.toggleFold(binding.value.id); })
+          .accessibilityGroup(true).accessibilityText([this.groupTitle(binding.value), this.groupTotal(binding.value), this.groupNeeds(binding.value),
+            this.groupCounts(binding.value)].filter((value: string) => !!value).join(' · '))
+        if (binding.value.id !== NEEDS_GROUP) Button({ type: ButtonType.Circle }) {
           SymbolGlyph(binding.value.folded ? Symbols.down : Symbols.up).fontSize(Tokens.symbolFont).fontColor([Colors.link])
         }.attributeModifier(ButtonStyles.icon).enabled(!this.workspace.search)
-          .accessibilityText((tr(STATE_LABELS[binding.value.id] || '') || binding.value.machineName) + ' ' +
-            tr(binding.value.folded ? 'agent_expand' : 'agent_collapse'))
+          .accessibilityText(this.groupTitle(binding.value) + ' ' + tr(binding.value.folded ? 'agent_expand' : 'agent_collapse'))
           .onClick(() => this.workspace.toggleFold(binding.value.id)).id('agents.group.toggle.' + binding.value.id)
       }.width('100%').alignItems(VerticalAlign.Center)
     }.alignItems(HorizontalAlign.Start)
       .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.fine }).width('100%')
   }
 
+  private groupTitle(group: AgentWorkspaceGroup): string { return tr(STATE_LABELS[group.id] || '') || group.machineName; }
+
+  /** By Status sections, Pinned and Needs you say how many rows they hold, as iOS's section headers. */
+  private groupTotal(group: AgentWorkspaceGroup): string {
+    return (STATE_TOTAL_GROUPS.includes(group.id) || group.id.startsWith('state/')) && group.totalRowCount ? String(group.totalRowCount) : '';
+  }
+
+  /** What waits for the user in a computer or space, on its header even while it is folded (DESIGN_SYSTEM 3.4). */
+  private groupNeeds(group: AgentWorkspaceGroup): string {
+    const count = Wire.number(group.stateCounts, 'needs_you');
+    return count ? String(count) + ' ' + tr('needs_you') : '';
+  }
+
   private groupCounts(group: AgentWorkspaceGroup): string {
     const values: string[] = [];
-    const labels: Record<string, string> = {'needs_you': 'needs_you', 'working': 'working', 'unread': 'agent_group_unread',
+    const labels: Record<string, string> = {'working': 'working', 'unread': 'agent_group_unread',
       'idle': 'agent_group_idle', 'unknown': 'unknown'};
-    ['needs_you', 'working', 'unread', 'idle', 'unknown'].forEach((key) => {
+    ['working', 'unread', 'idle', 'unknown'].forEach((key) => {
       const count = Wire.number(group.stateCounts, key);
       if (count) values.push(String(count) + ' ' + tr(labels[key]));
     });
@@ -375,11 +470,13 @@ export struct AgentListPage {
   }
 
   private rowStatus(presentation: AgentRowPresentation): string {
+    if (presentation.tone === 'background') return tr('agent_group_background');
     return presentation.status ? tr(presentation.status) : '';
   }
 
   private rowStatusColor(presentation: AgentRowPresentation): ResourceColor {
     const state = presentation.status;
+    if (presentation.tone === 'background') return Colors.working;
     if (state === 'needs_you') return Colors.needs;
     if (state === 'working') return Colors.working;
     if (state === 'unread') return Colors.unread;
@@ -388,8 +485,9 @@ export struct AgentListPage {
 
   private rowTime(presentation: AgentRowPresentation): string {
     if (!Number.isFinite(presentation.updatedAt)) return '';
-    const elapsed = Math.floor((Date.now() - presentation.updatedAt) / 1000);
-    if (elapsed < 0) return '';
+    const elapsed = Math.floor(((this.clock || Date.now()) - presentation.updatedAt) / 1000);
+    // A row newer than the last tick reads as just now; only a clock far behind the hub hides the time.
+    if (elapsed < -60) return '';
     if (elapsed < 60) return tr('agent_time_just_now');
     if (elapsed < 3600) return String(Math.floor(elapsed / 60)) + tr('agent_time_minute_suffix');
     if (elapsed < 86400) return String(Math.floor(elapsed / 3600)) + tr('agent_time_hour_suffix');
@@ -428,45 +526,71 @@ export struct AgentListPage {
   private isRowSelected(binding: BoundAgentRow): boolean {
     return this.selectionVisible && this.workspace.selectedKey === binding.presentation.selectionKey;
   }
-  @Builder agentRow(binding: BoundAgentRow) {
+  /** A row can show twice (its group and Needs you); the list reports the larger of the two. */
+  private reportVisible(row: ResourceRow, copy: string, ratio: number): void {
+    const key = row.key();
+    this.rowVisibility.set(copy + '\n' + key, ratio);
+    this.onVisible(row, Math.max(this.rowVisibility.get('list\n' + key) || 0, this.rowVisibility.get(NEEDS_GROUP + '\n' + key) || 0));
+  }
+
+  private rowSpoken(binding: BoundAgentRow): string {
+    const presentation = binding.presentation;
+    return [binding.bound.value.title || tr('agent_untitled'), presentation.metadata.slice(0, 2).filter((value: string) => !!value).join(' · '),
+      this.rowStatus(presentation), presentation.muted ? tr('agent_group_muted') : '', this.subagentLine(presentation)]
+      .filter((value: string) => !!value).join(' · ');
+  }
+
+  private subagentLine(presentation: AgentRowPresentation): string {
+    return presentation.subagents > 0 ? tr('agent_subagents_running').replace('{count}', String(presentation.subagents)) : '';
+  }
+
+  @Builder agentRow(binding: BoundAgentRow, groupId: string) {
     ListItem() {
       Row({ space: Tokens.gap }) {
-        Column() {
-          if (agentBrand(binding.presentation.brand)) Image(agentBrand(binding.presentation.brand)).width(Tokens.section).height(Tokens.section)
-            .objectFit(ImageFit.Contain).fillColor(agentBrandColor(binding.presentation.brand)).accessibilityText(binding.presentation.brand)
-          else SymbolGlyph(Symbols.agent).fontSize(Tokens.symbolFont).fontColor([Colors.teal]).accessibilityText(binding.presentation.brand)
-        }.width(Tokens.avatar).height(Tokens.avatar).alignItems(HorizontalAlign.Center).justifyContent(FlexAlign.Center)
-          .backgroundColor(Colors.control).borderRadius(Tokens.avatar / 2)
+        Stack({ alignContent: Alignment.BottomEnd }) {
+          Column() {
+            if (agentBrand(binding.presentation.brand)) Image(agentBrand(binding.presentation.brand)).width(Tokens.section).height(Tokens.section)
+              .objectFit(ImageFit.Contain).fillColor(agentBrandColor(binding.presentation.brand)).accessibilityText(binding.presentation.brand)
+            else SymbolGlyph(Symbols.agent).fontSize(Tokens.symbolFont).fontColor([Colors.teal]).accessibilityText(binding.presentation.brand)
+          }.width(Tokens.avatar).height(Tokens.avatar).alignItems(HorizontalAlign.Center).justifyContent(FlexAlign.Center)
+            .backgroundColor(Colors.control).borderRadius(Tokens.avatar / 2).opacity(binding.presentation.muted ? Tokens.mutedOpacity : 1)
+          if (binding.presentation.tone) AgentStateMark({ tone: binding.presentation.tone,
+            breathing: binding.presentation.tone === 'needs_you' && this.active && !this.environment.reduceMotion })
+        }.width(Tokens.avatar).height(Tokens.avatar)
         if (!this.rail) Column({ space: Tokens.fine }) {
           Row({ space: Tokens.gap }) {
-            Text(binding.bound.value.title || tr('agent_untitled')).fontSize(Tokens.body).fontWeight(FontWeight.Medium)
+            Text(binding.bound.value.title || tr('agent_untitled')).fontSize(Tokens.body)
+              .fontWeight(binding.presentation.status === 'unread' && !binding.presentation.muted ? FontWeight.Bold : FontWeight.Medium)
               .fontColor(Colors.ink).layoutWeight(1).maxLines(this.environment.fontScale >= 1.5 ? 2 : 1).textOverflow({ overflow: TextOverflow.Ellipsis })
+            if (binding.presentation.muted) SymbolGlyph(Symbols.muted).fontSize(Tokens.caption).fontColor([Colors.secondary])
             if (this.environment.fontScale < 1.5 && this.rowTime(binding.presentation)) Text(this.rowTime(binding.presentation)).fontSize(Tokens.caption).fontColor(Colors.secondary)
           }.width('100%').alignItems(VerticalAlign.Center)
           if (this.environment.fontScale >= 1.5 && this.rowTime(binding.presentation)) Text(this.rowTime(binding.presentation)).fontSize(Tokens.caption).fontColor(Colors.secondary)
-          if (this.mixedMachines && this.workspace.groupingMode !== 'machine') Text(binding.presentation.metadata.slice(0, 2).filter((value: string) => !!value).join(' · ') || binding.bound.value.machine).fontSize(Tokens.caption).fontColor(Colors.secondary).width('100%').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          if (this.mixedMachines && this.workspace.groupingMode !== 'machine' && binding.presentation.place) Text(binding.presentation.place).fontSize(Tokens.caption).fontColor(Colors.secondary).width('100%').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           if (binding.presentation.recentContent) Text(binding.presentation.recentContent).fontSize(Tokens.meta)
-            .fontColor(Colors.secondary).width('100%').maxLines(this.look.density === 'compact' || this.rail ? 1 : 2)
-          if (binding.presentation.status === 'working') {
+            .fontColor(Colors.secondary).width('100%').maxLines(this.look.density === 'compact' || this.rail ? 1 : 2).textOverflow({ overflow: TextOverflow.Ellipsis })
+          if (this.subagentLine(binding.presentation)) Text(this.subagentLine(binding.presentation)).fontSize(Tokens.caption)
+            .fontColor(Colors.secondary).width('100%').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          if (binding.presentation.status === 'working' && binding.presentation.tone !== 'background') {
             Row({ space: Tokens.fine }) {
               if (this.active && !this.environment.reduceMotion) LoadingProgress().width(Tokens.caption).height(Tokens.caption).color(Colors.working)
-              else Circle().width(7).height(7).fill(Colors.working)
+              else Circle().width(Tokens.stateMark).height(Tokens.stateMark).fill(Colors.working)
               Text(tr('working')).fontSize(Tokens.caption).fontWeight(FontWeight.Medium).fontColor(Colors.working)
             }.padding({left:Tokens.gap, right:Tokens.gap, top:2, bottom:2}).backgroundColor(Colors.control).borderRadius(Tokens.capsule)
           } else if (this.rowStatus(binding.presentation)) Text(this.rowStatus(binding.presentation)).fontSize(Tokens.meta).fontWeight(FontWeight.Medium)
             .fontColor(this.rowStatusColor(binding.presentation)).width('100%')
-        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1).opacity(binding.presentation.muted ? Tokens.mutedOpacity : 1)
       }.width('100%').alignItems(VerticalAlign.Center).justifyContent(this.rail ? FlexAlign.Center : FlexAlign.Start)
         .padding({ left: this.rail ? Tokens.inset : Tokens.page, right: this.rail ? Tokens.inset : Tokens.page, top: this.look.density === 'compact' ? Tokens.gap : Tokens.inset,
           bottom: this.look.density === 'compact' ? Tokens.gap : Tokens.inset })
-    }.accessibilityGroup(true).accessibilityText((binding.bound.value.title || tr('agent_untitled')) + ' · ' + binding.presentation.metadata.slice(0, 2).filter((value: string) => !!value).join(' · ') + ' · ' + this.rowStatus(binding.presentation))
+    }.accessibilityGroup(true).accessibilityText(this.rowSpoken(binding))
       .selectable(true).selected(this.isRowSelected(binding))
       .backgroundColor(this.isRowSelected(binding) ? Colors.selection : Colors.canvas)
       .onClick(() => this.openRow(binding.bound.value))
-      .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => this.onVisible(binding.bound.value, visible ? ratio : 0))
-      .onDisAppear(() => this.onVisible(binding.bound.value, 0))
+      .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => this.reportVisible(binding.bound.value, groupId === NEEDS_GROUP ? NEEDS_GROUP : 'list', visible ? ratio : 0))
+      .onDisAppear(() => this.reportVisible(binding.bound.value, groupId === NEEDS_GROUP ? NEEDS_GROUP : 'list', 0))
       .bindContextMenu(this.rowMenu(binding), ResponseType.LongPress)
-      .id('agent.' + binding.bound.value.group + '.' + binding.bound.value.manager + '.' + binding.bound.value.machine + '.' + binding.bound.value.id)
+      .id('agent.' + (groupId === NEEDS_GROUP ? 'needs.' : '') + binding.bound.value.group + '.' + binding.bound.value.manager + '.' + binding.bound.value.machine + '.' + binding.bound.value.id)
   }
 
   @Builder searchControl() {
@@ -483,13 +607,14 @@ export struct AgentListPage {
     if (this.environment.fontScale >= 1.5 || this.filterWidth <= 0) return true;
     const context = this.getUIContext();
     let labelWidth = 0;
-    QUICK_LABELS.forEach((key: string) => {
+    const filters = this.quickFilters();
+    filters.forEach((key: string) => {
       labelWidth = Math.max(labelWidth, context.px2vp(context.getMeasureUtils().measureText({
-        textContent: tr(key), fontSize: String(Tokens.meta) + 'fp', fontWeight: FontWeight.Medium
+        textContent: this.quickLabel(key), fontSize: String(Tokens.meta) + 'fp', fontWeight: FontWeight.Medium
       })));
     });
     const slotWidth = Math.max(Tokens.touch, labelWidth + Tokens.inset * 2);
-    return this.filterWidth - Tokens.page * 2 - Tokens.fine * 2 < slotWidth * QUICK_FILTERS.length;
+    return this.filterWidth - Tokens.page * 2 - Tokens.fine * 2 < slotWidth * filters.length;
   }
 
   @Builder filters() {
@@ -504,14 +629,12 @@ export struct AgentListPage {
         }.width('100%')
       }
       if (this.quickFilterUsesSelect()) {
-        Select([{ value: tr('all') }, { value: tr('needs_you') }, { value: tr('working') }, { value: tr('unread') },
-          { value: tr('agent_group_background') }])
-          .selected(this.quickIndex()).value(tr(QUICK_LABELS[this.quickIndex()])).attributeModifier(SelectStyles.inline).width('100%').constraintSize({ minHeight: Tokens.touch })
-          .onSelect((index: number) => this.workspace.setQuickFilter(QUICK_FILTERS[index])).id('agents.quick')
+        Select(this.quickFilters().map((key: string) => ({ value: this.quickLabel(key) } as SelectOption)))
+          .selected(this.quickIndex()).value(this.quickLabel(this.quickFilters()[this.quickIndex()])).attributeModifier(SelectStyles.inline).width('100%').constraintSize({ minHeight: Tokens.touch })
+          .onSelect((index: number) => this.chooseQuick(index)).id('agents.quick')
       } else {
-        CapsuleSegmentButtonV2({ items: new SegmentButtonV2Items([
-          { text: tr('all') }, { text: tr('needs_you') }, { text: tr('working') }, { text: tr('unread') }, { text: tr('agent_group_background') }
-        ]), selectedIndex: this.quickIndex(), $selectedIndex: (index: number) => this.workspace.setQuickFilter(QUICK_FILTERS[index]),
+        CapsuleSegmentButtonV2({ items: new SegmentButtonV2Items(this.quickFilters().map((key: string) => ({ text: this.quickLabel(key) } as SegmentButtonV2ItemOptions))),
+          selectedIndex: this.quickIndex(), $selectedIndex: (index: number) => this.chooseQuick(index),
           itemSelectedBackgroundColor: ColorMetrics.resourceColor(Colors.action), itemSelectedFontColor: ColorMetrics.resourceColor(Colors.onAction),
           itemFontColor: ColorMetrics.resourceColor(Colors.secondary), buttonBackgroundColor: ColorMetrics.resourceColor(Colors.control),
           itemFontSize: LengthMetrics.fp(Tokens.meta), itemSelectedFontSize: LengthMetrics.fp(Tokens.meta),
@@ -548,7 +671,7 @@ export struct AgentListPage {
         if (this.workspace.loading && !this.workspace.hasRows()) ListItem() { LoadingProgress().height(Tokens.touch).width(Tokens.touch).padding(Tokens.page) }
         ForEach(this.groupBindings, (binding: BoundAgentGroup) => {
             ListItemGroup({ header: () => this.groupHeader(binding) }) {
-              Repeat<BoundAgentRow>(binding.rows).each((entry: RepeatItem<BoundAgentRow>) => this.agentRow(entry.item))
+              Repeat<BoundAgentRow>(binding.rows).each((entry: RepeatItem<BoundAgentRow>) => this.agentRow(entry.item, binding.value.id))
                 .key((rowBinding: BoundAgentRow) => rowBinding.key)
                 .virtualScroll({ totalCount: binding.rows.length, reusable: false })
             }.id('agents.group.' + binding.value.id)

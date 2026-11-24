@@ -6235,6 +6235,98 @@
     {
       "name": "devices_this",
       "value": "本机"
+    },
+    {
+      "name": "agent_subagents_running",
+      "value": "子 Agent {count} 个在跑"
+    },
+    {
+      "name": "agent_preview_first_message",
+      "value": "等第一条消息"
+    },
+    {
+      "name": "agent_preview_blocked_on",
+      "value": "卡在：{waiting}"
+    },
+    {
+      "name": "agent_preview_blocked",
+      "value": "卡住了"
+    },
+    {
+      "name": "agent_preview_not_done_missing",
+      "value": "没做完：{missing}"
+    },
+    {
+      "name": "agent_preview_not_done",
+      "value": "没做完"
+    },
+    {
+      "name": "agent_preview_reported_done",
+      "value": "自述已完成"
+    },
+    {
+      "name": "agent_preview_merged_checked",
+      "value": "已合并 ✓"
+    },
+    {
+      "name": "agent_preview_deployed_checked",
+      "value": "已部署 ✓"
+    },
+    {
+      "name": "agent_preview_not_merged",
+      "value": "未合并"
+    },
+    {
+      "name": "agent_preview_not_deployed",
+      "value": "未部署"
+    },
+    {
+      "name": "agent_preview_merged",
+      "value": "已合并"
+    },
+    {
+      "name": "agent_preview_deployed",
+      "value": "已部署"
+    },
+    {
+      "name": "agent_preview_claim_merged_false",
+      "value": "✗ 说已合并，实际没有"
+    },
+    {
+      "name": "agent_preview_claim_deployed_false",
+      "value": "✗ 说已部署，实际没有"
+    },
+    {
+      "name": "agent_preview_retrying_now",
+      "value": "马上重试"
+    },
+    {
+      "name": "agent_preview_waking_now",
+      "value": "马上叫醒"
+    },
+    {
+      "name": "agent_preview_retrying_in",
+      "value": "{time}后重试"
+    },
+    {
+      "name": "agent_preview_waking_in",
+      "value": "{time}后叫醒"
+    },
+    {
+      "name": "agent_preview_minutes",
+      "value": "{minutes} 分钟"
+    },
+    {
+      "name": "agent_preview_hours",
+      "value": "{hours} 小时"
+    },
+    {
+      "name": "agent_preview_hours_minutes",
+      "value": "{hours} 小时 {minutes} 分"
+    },
+    {
+      "name": "agent_preview_line_when",
+      "value": "{line}（{when}）"
     }
   ]
 }

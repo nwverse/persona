@@ -53,6 +53,10 @@ export class AgentWorkspaceGroup {
   }
 }
 
+/** The Needs you section above every grouping but By Status, which has its own (DESIGN_SYSTEM 3.4). */
+export const NEEDS_GROUP: string = 'needs';
+const STATE_COUNT_KEYS: string[] = ['needs_you', 'working', 'unread', 'idle'];
+
 function segment(value: string): string { return encodeURIComponent(value); }
 function rowSession(row: ResourceRow): string { return row.session || Wire.text(row.data(), 'session_id') || row.id; }
 function rowMachine(row: ResourceRow): string { return row.machine || Wire.text(row.data(), 'machine_id'); }
@@ -86,6 +90,8 @@ class AgentPreferences {
 @ObservedV2
 export class AgentWorkspace {
   @Trace groups: AgentWorkspaceGroup[] = [];
+  /** The quick filters' counts, before the filter narrows the list; Needs you counts the section's rows. */
+  @Trace counts: Record<string, number> = {};
   @Trace quickFilter: string = 'all';
   @Trace groupingMode: string = 'state';
   @Trace machineFilter: string = '';
@@ -129,9 +135,12 @@ export class AgentWorkspace {
   historySupported(): boolean { return !!this.client?.directoryOwners().some((owner: ClientModel) => owner.features.includes('agent_session_archives')); }
   rowOnline(row: ResourceRow): boolean { return this.ownerFor(row)?.connected === true; }
   hasRows(): boolean { return this.groups.some((group: AgentWorkspaceGroup) => group.totalRowCount > 0); }
+  /** Each row on screen once, though Needs you repeats a row from its group. */
   visibleRows(): ResourceRow[] {
-    const rows: ResourceRow[] = [];
-    this.groups.forEach((group: AgentWorkspaceGroup) => group.rows.forEach((row: ResourceRow) => rows.push(row)));
+    const rows: ResourceRow[] = [], seen = new Set<string>();
+    const add = (row: ResourceRow): void => { const key = rowKey(row); if (!seen.has(key)) { seen.add(key); rows.push(row); } };
+    this.groups.forEach((group: AgentWorkspaceGroup) => { if (group.id !== NEEDS_GROUP) group.rows.forEach(add); });
+    this.groups.forEach((group: AgentWorkspaceGroup) => { if (group.id === NEEDS_GROUP) group.rows.forEach(add); });
     return rows;
   }
   isSelected(row: ResourceRow): boolean { return this.selectedKey === rowKey(row); }
@@ -687,8 +696,10 @@ export class AgentWorkspace {
 
   private rebuild(): void {
     let groups: CoreAgentListGroup[];
+    let counts: Record<string, Object>;
     try {
-      groups = this.adapter.project(this.makeListInput()).groups;
+      const projection = this.adapter.project(this.makeListInput());
+      groups = projection.groups; counts = projection.counts || {};
     } catch (_) {
       // Preserve both rows and action authority from the same successful snapshot.
       this.error = 'failed';
@@ -698,6 +709,11 @@ export class AgentWorkspace {
     if (this.client) this.syncSelected(this.client);
     const byId = new Map<string, ResourceRow>();
     this.sourceRows.forEach((row) => byId.set(coreRowId(row), row));
+    const needs = this.needsGroup(groups, byId);
+    const nextCounts: Record<string, number> = {};
+    ['needsYou', 'unread', 'working', 'backgroundWaiting'].forEach((key: string) => nextCounts[key] = Wire.number(counts, key));
+    if (needs) nextCounts['needsYou'] = needs.rows.length;
+    if (JSON.stringify(nextCounts) !== JSON.stringify(this.counts)) this.counts = nextCounts;
     if (this.readingDetail && !this.freezeSuppressed && this.frozenGroups) {
       const frozenIds = new Set<string>(this.frozenGroups.flatMap((group) => group.memberIds));
       const rowsById = new Map<string, ResourceRow>();
@@ -710,21 +726,55 @@ export class AgentWorkspace {
         const projected = groups.find((entry) => entry.id === group.id);
         if (projected) copy.folded = projected.folded;
         copy.rows = [];
-        group.memberIds.forEach((id: string) => { const row = rowsById.get(id); if (row) copy.rows.push(row); });
+        group.memberIds.forEach((id: string) => {
+          const row = group.id === NEEDS_GROUP ? byId.get(id) : rowsById.get(id);
+          if (row) copy.rows.push(row);
+        });
         return copy;
       }).filter((group) => group.rows.length > 0 || group.totalRowCount > 0);
       return;
     }
     this.groups = groups.map((group) => {
       const native = new AgentWorkspaceGroup(group.id, '', group.title, '', '', '', '', '');
-      native.folded = group.folded; native.parent = group.parent || ''; native.stateCounts = group.state_counts || {};      native.spoken = group.spoken || ''; native.totalRowCount = group.rows.length;
+      native.folded = group.folded; native.parent = group.parent || '';
+      native.stateCounts = group.state_counts || (group.id.startsWith('machine/') ? this.stateCounts(group.rows, byId) : {});
+      native.spoken = group.spoken || ''; native.totalRowCount = group.rows.length;
       native.memberIds = group.rows.slice();
       native.showMachine = group.id.startsWith('machine/');
       native.rows = [];
       group.visible_rows.forEach((id: string) => { const row = byId.get(id); if (row) native.rows.push(row); });
       return native;
     });
+    if (needs) this.groups.unshift(needs);
     if (this.readingDetail && this.sourceReady() && !this.freezeSuppressed && !this.frozenGroups) this.frozenGroups = this.copyGroups(this.groups);
+  }
+
+  /** Every agent that waits for the user, once, above the computers and spaces whose folds could hide it. */
+  private needsGroup(groups: CoreAgentListGroup[], byId: Map<string, ResourceRow>): AgentWorkspaceGroup | undefined {
+    if (this.groupingMode === 'state' || this.search.trim() || (this.quickFilter !== 'all' && this.quickFilter !== 'needsYou')) return undefined;
+    const ids: string[] = [], rows: ResourceRow[] = [], seen = new Set<string>();
+    groups.forEach((group: CoreAgentListGroup) => group.rows.forEach((id: string) => {
+      const row = byId.get(id);
+      if (!row || row.state !== 'needs_you' || seen.has(id)) return;
+      seen.add(id); ids.push(id); rows.push(row);
+    }));
+    if (!rows.length) return undefined;
+    const group = new AgentWorkspaceGroup(NEEDS_GROUP, '', '', '', '', '', '', '', rows);
+    group.memberIds = ids;
+    return group;
+  }
+
+  /** A computer's header counts what its folded rows hide, as the core does for spaces. */
+  private stateCounts(ids: string[], byId: Map<string, ResourceRow>): Record<string, Object> {
+    const counts: Record<string, Object> = {};
+    let unknown = 0;
+    ids.forEach((id: string) => {
+      const state = byId.get(id)?.state || '';
+      if (STATE_COUNT_KEYS.includes(state)) counts[state] = Wire.number(counts, state) + 1;
+      else unknown++;
+    });
+    if (unknown) counts['unknown'] = unknown;
+    return counts;
   }
 
   private makeListInput(): AgentListInput {

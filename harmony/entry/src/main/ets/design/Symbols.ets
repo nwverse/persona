@@ -25,4 +25,6 @@ export class Symbols {
   static readonly up: Resource = $r('sys.symbol.chevron_up');
   static readonly down: Resource = $r('sys.symbol.chevron_down');
   static readonly check: Resource = $r('sys.symbol.checkmark');
+  static readonly waiting: Resource = $r('sys.symbol.clock');
+  static readonly muted: Resource = $r('sys.symbol.bell_slash');
 }
