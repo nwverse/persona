@@ -6187,6 +6187,7 @@ and `/items/{iid}/full` all carry the metadata. Old messages and those written b
 | A scheduled task or follow-up is due (`assistant/task_run.md`) | `⏰ 标题（你之前安排的跟进）` / `（定时任务）` / `（定时任务，每 30 分钟）` ("title (a follow-up you scheduled)" / "(scheduled task)" / "(scheduled task, every 30 minutes)") | `followup` | `once` / `daily` / `interval` | Follow-up "x" is due / Scheduled task "x" starts running |
 | Wake an Agent that is waiting (`agents/wake.md`, Agents chats) | Localized: `<persona-wake>{"title":"…"}</persona-wake>`; legacy Chinese: `⏰（Persona 叫醒你，第 N 次）` | `followup` | `wake` | Persona woke it: check whether "what it's waiting for" is ready |
 | Continue an Agent once its subscription usage limit reset (`agents/limit_continue.md`, Agents chats, #1710; only the hub marks it) | `⏰（Persona 叫你接着做）订阅的用量额度已经重置了` ("Persona asks you to go on: the subscription's usage limit has reset") | `followup` | `limit_continue` | Usage limit reset: Persona told it to go on |
+| Continue an Assistant conversation a usage limit moved to a backup launcher (`agents/limit_fallback_continue.md`, #14435; [agent-work.md](../assistant/agent-work.md) "Usage limits: a backup launcher") | `<persona-limit-fallback />` on its own first line, then the localized body | `followup` | `limit_fallback` | Usage limit reached: Persona moved it to another launcher to go on |
 | An Assistant conversation is asked to give a missing reply (`assistant/answer_again.md`) | `<persona-answer-again />` | `system` | `answer_again` | Persona is asking for a reply again |
 | A node restart lost background tasks (`assistant/lost_tasks.md`) | `⚠️ 运行你的 node 刚重启过` ("The node running you just restarted") | `system` | `lost_tasks` | The node restarted; N background tasks stopped |
 | A supervision message in the main chat (`assistant/supervise.md`, #3124) | `📋 督办：你派出去的任务有 N 个要你处理` ("Supervision: N tasks you dispatched need your attention"), with `这是 Persona 的督办消息` ("This is a Persona supervision message") on the second line | `system` | `supervise` | Supervision: N dispatched tasks need attention |
@@ -6577,9 +6578,12 @@ closed only after first-turn acceptance. Full/image requests and scoped subscrip
 Logical seq values remain signed-int32-safe integers. Each later segment starts at the previous segment's offset plus
 its frozen physical end. First-segment item IDs and history remain unchanged; later item IDs have a segment namespace.
 Frozen-range backfill and retired-tail appends do not rewrite logical history. A real source-generation rewrite does.
-Live spans, empty boundary bridges, history pages and reconnect backlog follow the same projection. The manager may
-report `devices.state` machine `transport_for` to retain a bus identity after a source computer is removed; the hub
-validates manager ownership and forwards only, without resolving segments.
+Live spans, empty boundary bridges, history pages and reconnect backlog follow the same projection. A source batch
+with `from_seq` past `to_seq` (a cursor from an earlier numbering of a source that renumbered under a new history, as
+agy does when a turn's export replaces its live steps) is an empty span at the source's end: the page, live event or
+backlog still reaches the reader with the logical history the rewrite changed, and the reader starts over (#14354).
+The manager may report `devices.state` machine `transport_for` to retain a bus identity after a source computer is
+removed; the hub validates manager ownership and forwards only, without resolving segments.
 
 The logical-segment client first reads
 `GET /api/v1/assistant/conversations/{id}/segments?machine_id=...` to obtain the
