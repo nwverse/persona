@@ -455,7 +455,8 @@ nonisolated struct AgentListProjection: Sendable {
             }
             result.tree = RepoTree.build(result.unpinned.filter { $0.archived != true && ($0.state.isLive || inPinnedWorkspace($0)) }, machines: input.machines.map(\.ref),
                                          workspaces: catalog, includeEmpty: settings.filter == .all,
-                                         showEmptyWorkspaces: settings.showEmptyWorkspaces, search: settings.query)
+                                         showEmptyWorkspaces: settings.showEmptyWorkspaces, search: settings.query,
+                                         navigationSessions: result.pinnedAgents.filter { $0.archived != true })
             result.byHost = settings.machine.isEmpty && result.tree.count > 1
             for host in result.tree {
                 for repo in host.repos {

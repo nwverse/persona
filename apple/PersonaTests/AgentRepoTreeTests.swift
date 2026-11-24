@@ -468,17 +468,30 @@ struct AgentRepoTreeTests {
         #expect(byName[0].repos[0].worktrees[0].children[0].children[0].name == "leaf")
     }
 
-    @Test func unavailableOfflineAndHiddenEmptyWorkspacesStayFilteredEvenWhenOptedIn() {
-        var dead = workspace("dead"); dead.available = false; dead.pinnedAt = Date(timeIntervalSince1970: 10)
-        var offline = workspace("offline"); offline.online = false; offline.pinnedAt = Date(timeIntervalSince1970: 10)
-        var hidden = workspace("hidden"); hidden.hiddenByDirectory = true; hidden.pinnedAt = Date(timeIntervalSince1970: 10)
+    @Test func unavailableOfflineAndHiddenEmptyWorkspacesHonorHostPinsAndNavigationSessions() {
+        var deadUnpinned = workspace("dead-unpinned"); deadUnpinned.available = false
+        var offlineUnpinned = workspace("offline-unpinned"); offlineUnpinned.online = false
+        var deadPinned = workspace("dead-pinned"); deadPinned.available = false; deadPinned.pinnedAt = Date(timeIntervalSince1970: 10)
+        var offlinePinned = workspace("offline-pinned"); offlinePinned.online = false; offlinePinned.pinnedAt = Date(timeIntervalSince1970: 10)
+        var hiddenPinned = workspace("hidden-pinned"); hiddenPinned.hiddenByDirectory = true; hiddenPinned.pinnedAt = Date(timeIntervalSince1970: 10)
+        var hiddenUnpinned = workspace("hidden-unpinned"); hiddenUnpinned.hiddenByDirectory = true
         let live = workspace("live")
-        let shown = RepoTree.build([], machines: machines, workspaces: [dead, offline, hidden, live], showEmptyWorkspaces: true)
-        #expect(shown.flatMap(\.repos).map(\.name) == ["live"])
-        #expect(RepoTree.build([], machines: machines, workspaces: [dead, offline, hidden, live]).isEmpty)
+        let all = [deadUnpinned, offlineUnpinned, deadPinned, offlinePinned, hiddenPinned, hiddenUnpinned, live]
+        // Default keeps host-pinned non-hidden empties across disconnects/unavailability, while hiding unpinned and hidden empties.
+        #expect(RepoTree.build([], machines: machines, workspaces: all).flatMap(\.repos).map(\.name).sorted() == ["dead-pinned", "offline-pinned"])
+        // Opting in adds live available non-hidden empties while keeping unpinned dead/offline and all hidden empties filtered.
+        #expect(RepoTree.build([], machines: machines, workspaces: all, showEmptyWorkspaces: true).flatMap(\.repos).map(\.name).sorted() == ["dead-pinned", "live", "offline-pinned"])
+        // Filters and search still apply to host-pinned empties.
+        #expect(RepoTree.build([], machines: machines, workspaces: all, includeEmpty: false).isEmpty)
+        #expect(RepoTree.build([], machines: machines, workspaces: all, search: "offline-pinned").flatMap(\.repos).map(\.name) == ["offline-pinned"])
         // A workspace with an actual session stays visible even if marked hiddenByDirectory (e.g. supervised task).
-        let withSession = RepoTree.build([orca("supervised", "/work/hidden", space: "hidden")], machines: machines, workspaces: [hidden])
-        #expect(withSession.flatMap(\.repos).map(\.name) == ["hidden"])
+        let withSession = RepoTree.build([orca("supervised", "/work/hidden", space: "hidden-unpinned")], machines: machines, workspaces: [hiddenUnpinned])
+        #expect(withSession.flatMap(\.repos).map(\.name) == ["hidden-unpinned"])
+        // A workspace whose only Agent is pinned (navigation-only) stays visible with zero duplicate rows.
+        let navTree = RepoTree.build([], machines: machines, workspaces: [live, workspace("empty")],
+                                     navigationSessions: [orca("pinned", "/work/live", space: "live")])
+        #expect(navTree.flatMap(\.repos).map(\.name) == ["live"])
+        #expect(navTree[0].repos[0].worktrees[0].sessions.isEmpty)
     }
 
     @Test func catalogIdentityIsNotTheDirectoryAndParentsNeverCrossMachineOrHub() {

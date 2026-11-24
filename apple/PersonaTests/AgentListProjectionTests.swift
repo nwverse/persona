@@ -271,12 +271,18 @@ import PersonaWire
         #expect(AgentListProjection.build(captured).tree.flatMap(\.repos).flatMap(\.worktrees).map(\.workspace?.key) == [root.key])
         captured.settings.filter = .unread
         #expect(AgentListProjection.build(captured).tree.isEmpty, "empty worktrees do not populate a quick filter")
-        // Offline computers never emit empty workspace snapshots even when opted in.
+        // Offline computers drop unpinned empty snapshots even when opted in, while preserving host-pinned non-hidden empties.
         var offline = machine
         offline.online = false
+        var pinned = root
+        pinned.sourceID = "pinned-root"
+        pinned.title = "Pinned"
+        pinned.pinnedAt = Date(timeIntervalSince1970: 10)
         captured.settings.filter = .all
         captured.machines = [offline]
-        #expect(AgentListProjection.build(captured).tree.isEmpty, "offline machine empties stay filtered")
+        captured.workspaces = [root, pinned]
+        #expect(AgentListProjection.build(captured).tree.flatMap(\.repos).flatMap(\.worktrees).map(\.workspace?.key) == [pinned.key],
+                "offline machine drops unpinned empties while retaining host-pinned empties")
     }
 
     @Test func emptyWorktreesOnAnotherMachineStillRequireHostHeadings() throws {

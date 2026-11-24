@@ -340,7 +340,7 @@ function legacyNavigationRepos(sessions: Session[], machineId: string, options: 
 function projectRootNames(catalog: readonly HostWorkspace[], keyOf: (w: HostWorkspace) => string): Map<string, string> {
   const byProject = new Map<string, { key: string; cwd: string; segs: string[]; depth: number }[]>();
   for (const w of catalog) {
-    if (!w.project_id || !w.project_name || w.title !== w.project_name || !w.cwd) continue;
+    if (!["codex_app", "claude_desktop"].includes(w.source) || !w.project_id || !w.project_name || w.title !== w.project_name || !w.cwd) continue;
     const cwd = trimmed(w.cwd);
     const id = `${w.source}\u0000${w.project_id}`;
     const item = { key: keyOf(w), cwd, segs: cwd.split("/").filter(Boolean), depth: 1 };
@@ -429,8 +429,9 @@ function catalogRepos(sessions: Session[], machineId: string, options: RepoCatal
       if (state === "needs_you" || state === "working") node.childStates[state]++;
       else if (state === "unread" || state === "idle") node.childStates.done++;
     }
-    const usableEmpty = machineOnline && w.available !== false && w.online !== false && !w.hidden_by_directory;
-    const keepEmpty = !options.hideEmpty && usableEmpty && matches && (workspacePinTime(w) !== undefined || Boolean(options.showEmptyWorkspaces));
+    const pinnedEmpty = workspacePinTime(w) !== undefined;
+    const liveEmpty = Boolean(options.showEmptyWorkspaces) && machineOnline && w.available !== false && w.online !== false;
+    const keepEmpty = !options.hideEmpty && !w.hidden_by_directory && matches && (pinnedEmpty || liveEmpty);
     return node.children.length > 0 || node.directSessions!.length > 0 || keepEmpty;
   };
   // A host that names no project for a workspace (herdr) leaves it to Git: the repository its Agents agree on, else the
@@ -553,7 +554,7 @@ export function buildRepoMachineTree(all: Session[], machines: Machine[], option
   const out: RepoMachine[] = [];
   for (const m of machines) {
     const sessions = byMachine.get(m.id);
-    const workspaces = m.online && options?.workspaces.some((w) => w.machine_id === m.id && w.source !== "session-directory");
+    const workspaces = options?.workspaces.some((w) => w.machine_id === m.id && w.source !== "session-directory" && (m.online || workspacePinTime(w) !== undefined));
     const navigation = m.online && options?.navigationSessions?.some((s) => !s.assistant && s.machine_id === m.id);
     if ((!sessions || sessions.length === 0) && !workspaces && !navigation) continue;
     const known = [...(sessions ?? []), ...(options?.navigationSessions ?? []).filter((s) => s.machine_id === m.id)];

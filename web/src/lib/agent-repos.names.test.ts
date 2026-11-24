@@ -94,6 +94,14 @@ describe("By repo names a repository once", () => {
     // One folder alone is not marked either; a host's own is_main still is.
     expect(marks(only([], [folder("c-app", "codex_app", "codex-project:p1", "/code/app")], { showEmptyWorkspaces: true }))).toEqual([["/code/app", "app", false]]);
     expect(marks(only([], [folder("c-app", "codex_app", "codex-project:p1", "/code/app", { is_main: true })], { showEmptyWorkspaces: true }))).toEqual([["/code/app", "app", true]]);
+    // Non-desktop hosts (orca, paseo) preserve their native workspace titles even when two titles match project_name.
+    for (const source of ["orca", "paseo"]) {
+      const host = only([], [
+        herdr("w1", "/work/dir-one", { source, project_id: "prj-1", project_name: "app", title: "app" }),
+        herdr("w2", "/work/dir-two", { source, project_id: "prj-1", project_name: "app", title: "app" }),
+      ], { showEmptyWorkspaces: true });
+      expect(host.worktrees.map((w) => w.name)).toEqual(["app", "app"]);
+    }
   });
 
   it("does not mark a workspace whose folder it cannot tell", () => {

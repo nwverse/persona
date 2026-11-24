@@ -20,7 +20,7 @@ import { pagedFilterOf, resetAgentListFilters, setAgentListFilters, useAgentList
 import { AgentChatListRow, AgentFilterButton, AgentFilterChips } from "./agents/AgentChatListControls";
 import { agentGrouping, AGENT_GROUPINGS, type AgentGrouping, buildAgentGroups, buildSpaces, hostsOf, isQuiet, sessionHost, splitAgentSessions, type AgentGroup, type Space } from "../lib/agent-groups";
 import { reportBoundary } from "../lib/error-reports";
-import { isChunkError } from "./PageBoundary";
+import { isChunkError, reloadForStaleChunk } from "./PageBoundary";
 import { useWorkspaceCatalog } from "../lib/workspace-catalog";
 import { keyedRefs } from "../lib/keyed-refs";
 import { buildMachineTree, machineSessionOrder, machineSessionPresentation } from "../lib/herdr-tree";
@@ -941,17 +941,43 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
 // Undefined means no stored membership; a stored empty set is a deliberate all-Idle layout, not a new browser tab.
 const ACTIVE_SPACES_KEY = "persona.agentActiveSpaces";
 const SHOW_EMPTY_WORKSPACES_KEY = "persona.showEmptyWorkspaces";
+const emptyWorkspaceListeners = new Set<() => void>();
+let emptyWorkspacesFallback: boolean | null = null;
 function readShowEmptyWorkspaces(): boolean {
-  try { return localStorage.getItem(SHOW_EMPTY_WORKSPACES_KEY) === "1"; } catch { return false; }
+  try {
+    const stored = localStorage.getItem(SHOW_EMPTY_WORKSPACES_KEY);
+    if (stored !== null) return stored === "1";
+    return emptyWorkspacesFallback ?? false;
+  } catch { return emptyWorkspacesFallback ?? false; }
+}
+function toggleShowEmptyWorkspacesPref() {
+  const next = !readShowEmptyWorkspaces();
+  try {
+    localStorage.setItem(SHOW_EMPTY_WORKSPACES_KEY, next ? "1" : "0");
+    emptyWorkspacesFallback = null;
+  } catch {
+    emptyWorkspacesFallback = next;
+  }
+  emptyWorkspaceListeners.forEach((fn) => fn());
+}
+function subscribeShowEmptyWorkspaces(listener: () => void): () => void {
+  emptyWorkspaceListeners.add(listener);
+  const onStorage = (e: StorageEvent) => { if (e.key === SHOW_EMPTY_WORKSPACES_KEY || e.key === null) listener(); };
+  window.addEventListener("storage", onStorage);
+  return () => { emptyWorkspaceListeners.delete(listener); window.removeEventListener("storage", onStorage); };
+}
+function useShowEmptyWorkspaces(): boolean {
+  return useSyncExternalStore(subscribeShowEmptyWorkspaces, readShowEmptyWorkspaces, () => false);
 }
 // By repo's catalog projection lives in its own chunk so cold first screens (which default to By to-do) do not pay for
-// it. Loaded once on demand without Suspense; failures report through reportBoundary and offer Retry instead of loading forever.
+// it. Loaded once on demand without Suspense; stale-hash chunk failures reload once via PageBoundary's recovery and offer
+// Reload on repeat failure instead of retrying a deleted hash forever.
 type AgentReposMod = typeof import("../lib/agent-repos");
 let loadedAgentRepos: AgentReposMod | null = null;
 let loadingAgentRepos: Promise<AgentReposMod> | null = null;
-function useAgentReposModule(enabled: boolean): { mod: AgentReposMod | null; error: string | null; retry: () => void } {
+function useAgentReposModule(enabled: boolean): { mod: AgentReposMod | null; error: { message: string; chunk: boolean } | null; retry: () => void } {
   const [mod, setMod] = useState<AgentReposMod | null>(() => loadedAgentRepos);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message: string; chunk: boolean } | null>(null);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (!enabled || mod) return;
@@ -961,8 +987,10 @@ function useAgentReposModule(enabled: boolean): { mod: AgentReposMod | null; err
       (m) => { if (live) { setError(null); setMod(m); } },
       (err: unknown) => {
         if (loadingAgentRepos === req) loadingAgentRepos = null;
-        reportBoundary(err, "sidebar_agent_repos", isChunkError(err));
-        if (live) setError(err instanceof Error ? err.message : String(err));
+        if (reloadForStaleChunk(err)) return;
+        const chunk = isChunkError(err);
+        reportBoundary(err, "sidebar_agent_repos", chunk);
+        if (live) setError({ message: err instanceof Error ? err.message : String(err), chunk });
       },
     );
     return () => { live = false; };
@@ -1048,14 +1076,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   // the quick filter ("All" / "Needs you" / "Unread" / "Working"), stacked on any grouping; what it showed when chosen stays (`kept`)
   const [savedFilter, setFilter] = useState(() => agentFilter(storedValue("persona.agentFilter")));
   const [kept, setKept] = useState<ReadonlySet<string>>(() => new Set());
-  const [showEmptyWorkspaces, setShowEmptyWorkspaces] = useState(readShowEmptyWorkspaces);
-  const toggleShowEmptyWorkspaces = useCallback(() => {
-    setShowEmptyWorkspaces((prev) => {
-      const next = !prev;
-      try { localStorage.setItem(SHOW_EMPTY_WORKSPACES_KEY, next ? "1" : "0"); } catch { /* blocked or full store keeps this mount's choice */ }
-      return next;
-    });
-  }, []);
+  const showEmptyWorkspaces = useShowEmptyWorkspaces();
   const botmuxHidden = useBotmuxHidden();
   // The activity order (Settings › Agents), held still while the pointer or the keyboard is in the sidebar; off, the
   // stable structural order of #11801. By status keeps its own order either way.
@@ -1122,7 +1143,11 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   // can already be shown while the first GET /sessions is still in flight (#2812).
   const listNote = hubUnreachable ? <p className="px-2 py-1 text-xs leading-normal text-ink-3">{t("sidebar.agents_offline")}</p>
     : !loaded && listError ? <ListError text={agentsReadFailed(listError)} onRetry={retryFullAgentSessions} />
-    : shownGrouping === "repo" && !chatList && agentRepos.error ? <ListError text={agentsReadFailed(agentRepos.error)} onRetry={agentRepos.retry} />
+    : shownGrouping === "repo" && !chatList && agentRepos.error ? (
+      agentRepos.error.chunk
+        ? <ListError text={t("pageboundary.chunk_title")} action={t("pageboundary.reload")} onRetry={() => location.reload()} />
+        : <ListError text={agentsReadFailed(agentRepos.error.message)} onRetry={agentRepos.retry} />
+    )
     : todosPending || (shownGrouping === "repo" && !chatList && !agentRepos.mod) || (!loaded && every.length === 0) ? <p className="px-2 py-1 text-[12px] text-ink-3">{t("sidebar.loading")}</p>
     : null;
   // Only inputs the tree reads rebuild it; unchanged nodes keep their objects so their rows' memo holds.
@@ -1239,7 +1264,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const listItems = agentListItems({
     archives, hover, onNavigate,
     display: { value: displayValue, sort: sortByActivity, filter: showFilter },
-    emptyWorkspaces: shownGrouping === "repo" && !chatList ? { show: showEmptyWorkspaces, onToggle: toggleShowEmptyWorkspaces } : undefined,
+    emptyWorkspaces: shownGrouping === "repo" && !chatList ? { show: showEmptyWorkspaces, onToggle: toggleShowEmptyWorkspacesPref } : undefined,
   });
 
   return (

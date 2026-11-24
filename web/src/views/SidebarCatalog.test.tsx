@@ -18,7 +18,7 @@ import { getState, refresh, reset } from "../lib/store";
 import { credentialOwner, setToken } from "../lib/api";
 import { refreshWorkspaceCatalog, workspaceTarget, type HostWorkspace } from "../lib/workspace-catalog";
 import type { Machine, Session } from "../lib/types";
-import { Sidebar } from "./Sidebar";
+import { Sidebar, AgentsList } from "./Sidebar";
 import { t } from "../i18n";
 import type { WorkspaceTreeActions } from "./SidebarTree";
 import { defaultManager } from "../lib/manager-choice";
@@ -279,6 +279,52 @@ describe("By repo catalog integration", () => {
     expect(localStorage.getItem("persona.showEmptyWorkspaces")).toBe("0");
     expect(title("empty")).toBeUndefined();
     expect(title("codex-empty")).toBeUndefined();
+  });
+
+  it("auto-expands an untouched empty workspace when a new Agent arrives while respecting explicit user folds", async () => {
+    inventory = [
+      workspace("untouched", { pinned_at: "2026-11-16T10:00:00Z" }),
+      workspace("explicitly-folded", { pinned_at: "2026-11-16T09:00:00Z" }),
+    ];
+    sessions = [];
+    await render();
+    expect(disclosure("untouched").getAttribute("aria-expanded")).toBe("false");
+    expect(disclosure("explicitly-folded").getAttribute("aria-expanded")).toBe("false");
+    // User opens then explicitly folds `explicitly-folded`, storing an explicit fold choice.
+    click(disclosure("explicitly-folded"));
+    expect(disclosure("explicitly-folded").getAttribute("aria-expanded")).toBe("true");
+    click(disclosure("explicitly-folded"));
+    expect(disclosure("explicitly-folded").getAttribute("aria-expanded")).toBe("false");
+    // A new Agent starts in both workspaces from another device.
+    sessions = [agent("Fresh A", "untouched"), agent("Fresh B", "explicitly-folded")];
+    await act(() => refresh());
+    await flush();
+    expect(disclosure("untouched").getAttribute("aria-expanded")).toBe("true");
+    expect(disclosure("explicitly-folded").getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("synchronizes Show empty workspaces across simultaneously mounted Sidebar and AgentsList views", async () => {
+    await act(() => refresh());
+    act(() => root.render(
+      <div>
+        <div data-dual="sidebar"><Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} /></div>
+        <div data-dual="page"><AgentsList route={{ name: "agent-list" }} onNewAgent={() => {}} /></div>
+      </div>,
+    ));
+    await flush();
+    const sidebarBox = host.querySelector<HTMLElement>('[data-dual="sidebar"]')!;
+    const pageBox = host.querySelector<HTMLElement>('[data-dual="page"]')!;
+    const hasEmpty = (box: HTMLElement) => [...box.querySelectorAll("[data-workspace-key]")]
+      .some((el) => JSON.parse(el.getAttribute("data-workspace-key")!)[4] === "empty");
+    expect(hasEmpty(sidebarBox)).toBe(false);
+    expect(hasEmpty(pageBox)).toBe(false);
+    click(sidebarBox.querySelector<HTMLButtonElement>(`button[aria-label="${t("sidebar.list_menu")}"]`)!);
+    await flush();
+    const toggleItem = [...document.querySelectorAll<HTMLElement>('[role^="menuitem"]')].find((el) => el.textContent?.includes(t("sidebar.show_empty_workspaces")))!;
+    click(toggleItem);
+    await flush();
+    expect(hasEmpty(sidebarBox)).toBe(true);
+    expect(hasEmpty(pageBox)).toBe(true);
   });
 
   it("keeps matching Agent ancestors and hides standalone empties under a state filter", async () => {

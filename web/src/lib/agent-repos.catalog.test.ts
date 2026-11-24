@@ -390,26 +390,33 @@ describe("catalog-backed By repo projection", () => {
     expect(sessionWorkspace(chat, [home])).toBeUndefined();
   });
 
-  it("always filters unavailable, offline-machine, offline-workspace and hidden empty workspaces and uses session-only fallback when discovery is absent", () => {
-    const dead = workspace("dead", { available: false, pinned_at: "2026-11-16T10:00:00Z" });
-    const offlineRow = workspace("offline-row", { online: false, pinned_at: "2026-11-16T10:00:00Z" });
-    const hidden = workspace("hidden", { hidden_by_directory: true, pinned_at: "2026-11-16T10:00:00Z" });
+  it("always filters unpinned unavailable/offline and any hidden empty workspaces while preserving host-pinned empties across disconnects", () => {
+    const deadUnpinned = workspace("dead-unpinned", { available: false });
+    const offlineUnpinned = workspace("offline-unpinned", { online: false });
+    const deadPinned = workspace("dead-pinned", { available: false, pinned_at: "2026-11-16T10:00:00Z" });
+    const offlinePinned = workspace("offline-pinned", { online: false, pinned_at: "2026-11-16T10:00:00Z" });
+    const hiddenPinned = workspace("hidden-pinned", { hidden_by_directory: true, pinned_at: "2026-11-16T10:00:00Z" });
+    const hiddenUnpinned = workspace("hidden-unpinned", { hidden_by_directory: true });
     const codexEmpty = workspace("codex-empty", { source: "codex_app", cwd: "/code/codex" });
     const claudeEmpty = workspace("claude-empty", { source: "claude_desktop", cwd: "/code/claude" });
     const dirEmpty = workspace("dir-empty", { source: "directory", cwd: "/code/dir" });
     const live = workspace("live", { source: "herdr", cwd: "/code/live" });
-    const catalog = [dead, offlineRow, hidden, codexEmpty, claudeEmpty, dirEmpty, live];
-    // Default hides every unpinned empty workspace and always drops dead/offline/hidden empties.
-    expect(rows([], options(catalog))).toEqual([]);
-    // Opting in shows only live, available, non-hidden empty workspaces.
+    const catalog = [deadUnpinned, offlineUnpinned, deadPinned, offlinePinned, hiddenPinned, hiddenUnpinned, codexEmpty, claudeEmpty, dirEmpty, live];
+    // Default hides every unpinned empty workspace and any hidden empty workspace, while keeping host-pinned empties across temporary unavailability/disconnects.
+    expect(rows([], options(catalog)).map((w) => w.workspace?.source_id).sort()).toEqual(["dead-pinned", "offline-pinned"]);
+    // Opting in adds live available non-hidden empty workspaces while still dropping unpinned dead/offline and all hidden empties.
     expect(rows([], options(catalog, { showEmptyWorkspaces: true })).map((w) => w.workspace?.source_id).sort())
-      .toEqual(["claude-empty", "codex-empty", "dir-empty", "live"]);
-    // An offline computer's empty snapshots are filtered even when opted in.
+      .toEqual(["claude-empty", "codex-empty", "dead-pinned", "dir-empty", "live", "offline-pinned"]);
+    // Filters and search still apply to host-pinned empties.
+    expect(rows([], options(catalog, { hideEmpty: true }))).toEqual([]);
+    expect(rows([], options(catalog, { search: "offline-pinned" })).map((w) => w.workspace?.source_id)).toEqual(["offline-pinned"]);
+    // An offline computer filters unpinned snapshots even when opted in, while preserving host-pinned non-hidden empties.
     const offlineMachines = machines.map((m) => ({ ...m, online: false }));
-    expect(buildRepoMachineTree([], offlineMachines, options([live, workspace("pinned", { pinned_at: "2026-11-16T10:00:00Z" })], { showEmptyWorkspaces: true }))).toEqual([]);
+    expect(buildRepoMachineTree([], offlineMachines, options([live, offlinePinned, hiddenPinned], { showEmptyWorkspaces: true }))
+      .flatMap((m) => m.repos.flatMap((r) => r.worktrees.map((w) => w.workspace?.source_id)))).toEqual(["offline-pinned"]);
     // A visible session (for example a supervised task in a hidden directory) still keeps its workspace visible.
-    const supervised = session("supervised", "hidden");
-    expect(rows([supervised], options([hidden])).map((w) => w.workspace?.source_id)).toEqual(["hidden"]);
+    const supervised = session("supervised", "hidden-unpinned");
+    expect(rows([supervised], options([hiddenUnpinned])).map((w) => w.workspace?.source_id)).toEqual(["hidden-unpinned"]);
     const agent = session("legacy", "", { cwd: "/code/legacy", space_kind: undefined });
     expect(buildRepoMachineTree([agent], machines, options([]))).toEqual(buildRepoMachineTree([agent], machines));
   });
