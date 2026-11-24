@@ -301,6 +301,9 @@ class HealthStrengthMockTests(unittest.TestCase):
         home = self.page({"page": "strength.home"})
         self.assertEqual((home.status, home.result["view"]["title"]), (200, "Strength training"))
         self.assertEqual(self.page({"page": "strength.home"}, locale="zh-Hans").result["view"]["title"], "力量训练")
+        # the hub's home card charts the last seven days' working sets (#14713), one bar a day, today last
+        charts = [i for s in home.result["view"]["sections"] for i in s["items"] if i["type"] == "chart"]
+        self.assertEqual([(c["kind"], len(c["series"][0]["points"])) for c in charts], [("bar", 7)])
         overview = self.page({"page": "strength.overview"}).result
         self.assertNotIn('"manage":true', overview["view"]["state"])
         managed = self.page({"page": "strength.overview"}, "manage").result

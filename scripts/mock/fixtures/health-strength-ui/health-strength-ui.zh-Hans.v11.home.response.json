@@ -27,42 +27,48 @@
         ]
       },
       {
-        "title": "本周",
+        "title": "最近 7 天",
         "items": [
           {
-            "type": "row",
-            "title": "2026-11-23",
-            "subtitle": "无记录"
-          },
-          {
-            "type": "row",
-            "title": "2026-11-24",
-            "subtitle": "练过"
-          },
-          {
-            "type": "row",
-            "title": "2026-11-25",
-            "subtitle": "无记录"
-          },
-          {
-            "type": "row",
-            "title": "2026-11-26",
-            "subtitle": "无记录"
-          },
-          {
-            "type": "row",
-            "title": "2026-11-27",
-            "subtitle": "无记录"
-          },
-          {
-            "type": "row",
-            "title": "2026-11-28",
-            "subtitle": "无记录"
-          },
-          {
-            "type": "row",
-            "title": "2026-11-29",
-            "subtitle": "无记录"
+            "type": "chart",
+            "title": "最近 7 天",
+            "kind": "bar",
+            "series": [
+              {
+                "name": "正式组",
+                "points": [
+                  {
+                    "label": "11-19",
+                    "value": 0
+                  },
+                  {
+                    "label": "11-20",
+                    "value": 8
+                  },
+                  {
+                    "label": "11-21",
+                    "value": 0
+                  },
+                  {
+                    "label": "11-22",
+                    "value": 6
+                  },
+                  {
+                    "label": "11-23",
+                    "value": 0
+                  },
+                  {
+                    "label": "11-24",
+                    "value": 8
+                  },
+                  {
+                    "label": "11-25",
+                    "value": 0
+                  }
+                ]
+              }
+            ],
+            "unit": "组"
           }
         ]
       },

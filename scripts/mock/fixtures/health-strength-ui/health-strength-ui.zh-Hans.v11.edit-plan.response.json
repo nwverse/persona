@@ -297,6 +297,6 @@
         ]
       }
     ],
-    "state": "{\"page\":\"strength.edit\",\"metric\":\"weight\",\"days\":30,\"draft\":\"f8af2ed3-552f-5821-bfa7-aa160f4b4978\",\"rev\":1,\"work\":[{\"exercise\":\"414be15a-052b-5d21-958f-ea019279e657\",\"weight\":52.5,\"reps\":10,\"at\":\"2026-11-24T17:59:41.370836682Z\"},{\"exercise\":\"414be15a-052b-5d21-958f-ea019279e657\",\"weight\":52.5,\"reps\":10,\"at\":\"2026-11-24T17:59:41.370836682Z\"},{\"exercise\":\"8a13204f-ca7f-58bb-9548-f40fba0d0dd7\",\"weight\":85,\"reps\":6,\"at\":\"2026-11-24T17:59:41.370836682Z\"}]}"
+    "state": "{\"page\":\"strength.edit\",\"metric\":\"weight\",\"days\":30,\"draft\":\"f8af2ed3-552f-5821-bfa7-aa160f4b4978\",\"rev\":1,\"work\":[{\"exercise\":\"414be15a-052b-5d21-958f-ea019279e657\",\"weight\":52.5,\"reps\":10,\"at\":\"2026-11-24T18:43:58.219939938Z\"},{\"exercise\":\"414be15a-052b-5d21-958f-ea019279e657\",\"weight\":52.5,\"reps\":10,\"at\":\"2026-11-24T18:43:58.219939938Z\"},{\"exercise\":\"8a13204f-ca7f-58bb-9548-f40fba0d0dd7\",\"weight\":85,\"reps\":6,\"at\":\"2026-11-24T18:43:58.219939938Z\"}]}"
   }
 }

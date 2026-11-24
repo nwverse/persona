@@ -1,8 +1,9 @@
 // Strength training on the Health home (#14713, #14716; docs/protocol/protocol.md, strength training): the hub's own
-// home card (`strength.home`: the latest session, this week and recent records), drawn by the extension pages' renderer
-// under the reserved id, as the water and protein pages are, so the web has no second drawing of it. Its heading and its
-// View open the overview (`/extension/-health-intake/pages?state={"page":"strength.overview"}`), where the exercises'
-// and the drafts' pages are pushed. The renderer draws it again on the hub's `health_strength` message (ExtensionView.tsx).
+// home card (`strength.home`: the latest session, a chart of the last seven days' working sets and recent records),
+// drawn by the extension pages' renderer under the reserved id, as the water and protein pages are, so the web has no
+// second drawing of it. Its heading and its View open the overview
+// (`/extension/-health-intake/pages?state={"page":"strength.overview"}`), where the exercises' and the drafts' pages are
+// pushed. The renderer draws it again on the hub's `health_strength` message (ExtensionView.tsx).
 import { Suspense } from "react";
 import { t } from "../../i18n";
 import { BASE } from "../../lib/base";

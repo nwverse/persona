@@ -75,9 +75,11 @@ vi.hoisted(() => {
 });
 
 const FIXTURES = join(__dirname, "../../../../scripts/mock/fixtures/health-strength-ui");
-const HOME = JSON.parse(readFileSync(join(FIXTURES, "health-strength-ui.en.v11.home.response.json"), "utf8")) as { view: { sections: { items: { title?: string }[] }[] } };
+const HOME = JSON.parse(readFileSync(join(FIXTURES, "health-strength-ui.en.v11.home.response.json"), "utf8")) as { view: { sections: { title?: string; items: { type: string; title?: string }[] }[] } };
 // a name the hub's home card draws (its latest session)
 const DRAWN = HOME.view.sections[0].items.find((i) => i.title)!.title!;
+// the section its chart of the last seven days' working sets is in (#14713)
+const CHART = HOME.view.sections.find((s) => s.items.some((i) => i.type === "chart"))!.title!;
 
 let host: HTMLDivElement;
 let root: Root;
@@ -135,6 +137,18 @@ beforeEach(() => {
   owner(["water", "strength", "protein", "activity", "trends"], true, 2);
   hub.home = HOME;
   history.replaceState(null, "", "/health/new");
+  // the card's chart draws once it knows its width
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(private cb: ResizeObserverCallback) {}
+      observe() {
+        this.cb([{ contentRect: { width: 320 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -143,6 +157,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   act(() => root.unmount());
   host.remove();
   document.body.innerHTML = "";
@@ -176,6 +191,7 @@ describe("Strength training: the home card", () => {
     await vi.waitFor(() => expect(card()!.textContent).toContain(DRAWN), { timeout: 20000 });
     expect(pageReads()[0].json).toMatchObject({ state: strengthState("strength.home") });
     expect(card()!.textContent).toContain(STRENGTH());
+    expect(card()!.textContent).toContain(CHART);
     // first in the list, first on the page; alone, the only thing Today draws
     owner(["strength", "water", "activity"], true, 3);
     await emit("health_items");
