@@ -295,6 +295,10 @@ class AppleCIPreparationTests(unittest.TestCase):
         sleep 0.1
       done
       : > "$watch_log/observer.stop"
+      # This observer has its own process group, so the readiness timeout does
+      # not kill its evidence. Send the stop to that group explicitly: waiting
+      # without it would leave the observer collecting until the full horizon.
+      kill -TERM "-$watcher" 2>/dev/null || kill -TERM "$watcher" 2>/dev/null || true
       # The observer stops polling after its bounded product phase, then
       # completes final evidence. The outer 900-second deadline still owns a
       # stuck watcher; never kill it before that final collection.
@@ -363,6 +367,9 @@ class AppleCIPreparationTests(unittest.TestCase):
           sleep 0.1
         done
         : > "$watch_log/observer.stop"
+        # Signal the independent observer group explicitly; otherwise the
+        # stop-file cannot end its polling after the readiness shell is gone.
+        kill -TERM "-$watcher" 2>/dev/null || kill -TERM "$watcher" 2>/dev/null || true
         # Let the stop-aware observer finish bounded final evidence. The
         # existing readiness deadline remains the hard outer bound.
         wait "$watcher" || true

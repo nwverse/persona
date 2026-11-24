@@ -439,7 +439,7 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
         # its log in this writable fixture, not at a machine-level fixture path.
         observer = textwrap.dedent('''\
             #!/usr/bin/env python3
-            import json, os, sys, time
+            import json, os, sys, time, signal
             from pathlib import Path
             root = Path(os.environ["READINESS_FIXTURE"])
             arguments = sys.argv[1:]
@@ -449,6 +449,7 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
             root.joinpath("observer-arguments.json").write_text(json.dumps(arguments))
             destination = Path(arguments[arguments.index("--output") + 1])
             root.joinpath("observer-ready").write_text("ready")
+            signal.signal(signal.SIGTERM, lambda *_: destination.joinpath("observer.stop").touch())
             print("observer-ready", flush=True)
             log.close()
             os.close(1)
