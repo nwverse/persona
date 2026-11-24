@@ -18,7 +18,18 @@ const (
 	// topicAnchorsKeep and topicAnchorsKeepFor bound the topic messages remembered to reply to.
 	topicAnchorsKeep    = 200
 	topicAnchorsKeepFor = 30 * 24 * time.Hour
+	// threadPostSettle is how long the lark module lets a quiet to-do's first topic line wait (its thread_posts.go), so
+	// what comes right behind it is one line; a source report planned at a start that failed waits as long.
+	threadPostSettle = 3 * time.Second
 )
+
+// threadPoster is the clock and the timer a to-do's topic lines and its source report wait on; tests replace them.
+type threadPoster struct {
+	now   func() time.Time
+	after func(d time.Duration, f func())
+	// asked, when set, is called when threadAgentAsks has decided (tests: the decision runs on its own goroutine).
+	asked func()
+}
 
 // topicAnchor is a message of the topic the bot can reply into it with: the latest one the owner said there.
 // Feishu replies into a thread by a message in it; the todo only keeps the thread's id.
@@ -121,7 +132,7 @@ func (s *Service) forgetTopicMessage(ctx context.Context, chatID, threadID, id s
 // the todo it works on.
 func (s *Service) threadAgentDone(machine string, sess proto.Session) {
 	if id := s.activeTodoOf(machine, sess.SessionID); id != "" {
-		s.threadPost(id, threadEvent{kind: threadAgentFinished, agent: threadName(agentLabel(sess))})
+		s.chat().ThreadPost(id, larkhost.ThreadEvent{Kind: larkhost.ThreadAgentFinished, Agent: threadName(agentLabel(sess))})
 	}
 }
 
@@ -148,18 +159,18 @@ func (s *Service) threadAgentAsks(ix proto.Interaction) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	ev := threadEvent{kind: threadAgentNeeds, agent: threadName(firstNonEmpty(ix.SessionTitle, ix.TaskTitle))}
+	ev := larkhost.ThreadEvent{Kind: larkhost.ThreadAgentNeeds, Agent: threadName(firstNonEmpty(ix.SessionTitle, ix.TaskTitle))}
 	switch {
 	case !s.feishuCardWanted(ctx, ix):
 		// No card anywhere: the line is the notice, and says what is asked, except for a permission: what a tool is about
 		// to do (a command, a path) is not for a group chat, only that the Agent needs the user.
 		if ix.Kind != proto.IxPermission {
-			ev.text = clip(oneLine(ix.Summary), 80)
+			ev.Text = clip(oneLine(ix.Summary), 80)
 		}
 	case private != nil || topic == nil:
-		ev.dm = true
+		ev.DM = true
 	}
-	s.threadPost(id, ev)
+	s.chat().ThreadPost(id, ev)
 }
 
 // threadName is an agent's name as a line quotes it: one short line, "" when there is none (a bare directory mark is none).

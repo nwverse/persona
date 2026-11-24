@@ -414,25 +414,12 @@ func TestThreadPostsNeedsYouNotHiddenByAnotherTopicsRun(t *testing.T) {
 	}
 }
 
-// An agent with no name is "an agent", not two spaces; a bare directory mark is no name.
-func TestThreadPostTextWithoutAnAgentName(t *testing.T) {
+// An agent with no name is "an agent", not two spaces: a bare directory mark is no name (the line's wording is the lark
+// module's, TestThreadPostTextWithoutAnAgentName there).
+func TestThreadNameOfAnAgentWithoutOne(t *testing.T) {
 	for _, name := range []string{"", ".", "/", "  "} {
 		if got := threadName(name); got != "" {
 			t.Fatalf("threadName(%q) = %q", name, got)
-		}
-	}
-	for _, c := range []struct {
-		ev   threadEvent
-		want string
-	}{
-		{threadEvent{kind: threadAgentNeeds, dm: true}, "有个 Agent 需要你，已发到私聊"},
-		{threadEvent{kind: threadAgentNeeds}, "有个 Agent 需要你"},
-		{threadEvent{kind: threadAgentNeeds, text: "删缓存吗"}, "有个 Agent 需要你：删缓存吗"},
-		{threadEvent{kind: threadAgentFinished}, "有个 Agent 这一轮结束了"},
-	} {
-		got := threadPostText("", []threadEvent{c.ev}, "")
-		if got != c.want || strings.Contains(got, "  ") {
-			t.Errorf("%+v: %q, want %q", c.ev, got, c.want)
 		}
 	}
 }
@@ -785,3 +772,10 @@ func TestThreadPostsFirstProgressRepliesUnderTheRootMessage(t *testing.T) {
 	}
 	mustContain(t, "line", textOf(p), "先发安卓", testWeb+"/todos/"+todo.ID)
 }
+
+// The lark module's topic-line pacing these tests run against (its thread_posts.go): a line a minute at most, quoting
+// three decisions.
+const (
+	threadPostEvery = time.Minute
+	threadPostShown = 3
+)
