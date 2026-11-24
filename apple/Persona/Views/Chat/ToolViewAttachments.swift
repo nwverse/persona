@@ -43,7 +43,7 @@ struct ToolViewAttachmentsRow: View, Equatable {
         let items = drawable
         if !items.isEmpty {
             VStack(alignment: .leading, spacing: Theme.Space.s) {
-                ForEach(Array(items.enumerated()), id: \.offset) { index, view in
+                ForEach(Array(items.enumerated()), id: \.element) { index, view in
                     VStack(alignment: .leading, spacing: Theme.Space.s) {
                         if let title = view.title, !title.isEmpty {
                             Text(title)

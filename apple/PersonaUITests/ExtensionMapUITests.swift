@@ -19,6 +19,9 @@ final class ExtensionMapUITests: XCTestCase {
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         let app = XCUIApplication()
         app.launchArguments = ["-pairURL", pair, "-tab", tab, "-dev.openChat", "", "-demo.on", "NO", "-ui.scheme", scheme] + extraArgs
+        if let textSize = env["PERSONA_MAP_TEXT_SIZE"], !textSize.isEmpty {
+            app.launchArguments += ["-UIPreferredContentSizeCategoryName", textSize]
+        }
         app.launchPinned()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         for _ in 0..<2 where springboard.alerts.firstMatch.waitForExistence(timeout: 2) {

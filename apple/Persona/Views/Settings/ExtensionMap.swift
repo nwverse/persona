@@ -555,6 +555,8 @@ struct ExtensionMap: View {
                                                  lineWidth: Theme.Size.hairline)
                             )
                             .foregroundStyle(selected ? Theme.accent : Color.primary)
+                            .tapTargetHeight()
+                            .contentShape(.rect)
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("extension-map-route-\(route.id)")
@@ -656,6 +658,8 @@ struct ExtensionMap: View {
                                 .background(Theme.Fill.chip, in: .capsule)
                         }
                         .buttonStyle(.plain)
+                        .tapTargetHeight()
+                        .contentShape(.rect)
                         .accessibilityIdentifier("extension-map-link-\(index)")
                     }
                 }
@@ -919,6 +923,8 @@ private struct ExtensionMapCover: View {
                                         .padding(.vertical, Theme.Space.xs)
                                         .background(selected ? Theme.accentTint : Theme.Fill.chip, in: .capsule)
                                         .foregroundStyle(selected ? Theme.accent : Color.primary)
+                                        .tapTargetHeight()
+                                        .contentShape(.rect)
                                     }
                                     .buttonStyle(.plain)
                                     .accessibilityIdentifier("extension-map-cover-route-\(route.id)")
@@ -967,6 +973,8 @@ private struct ExtensionMapCover: View {
                                                     .padding(.horizontal, Theme.Space.m)
                                                     .padding(.vertical, Theme.Space.xs)
                                                     .background(Theme.Fill.chip, in: .capsule)
+                                                    .tapTargetHeight()
+                                                    .contentShape(.rect)
                                             }
                                             .buttonStyle(.plain)
                                             .accessibilityIdentifier("extension-map-cover-link-\(index)")
@@ -1273,7 +1281,9 @@ private struct ExtensionMapAnnotationButton: View {
             }
         }
         .fixedSize()
-        .tapTargetHeight()
+        .scaledFrame(minWidth: Theme.Size.tapTarget, minHeight: Theme.Size.tapTarget)
+        .frame(minWidth: Theme.Size.tapTarget, minHeight: Theme.Size.tapTarget)
+        .contentShape(.rect)
     }
 }
 
@@ -1299,10 +1309,12 @@ private struct ExtensionMapMarkerDetailCard: View {
             if let action = marker.action, let controller {
                 ExtensionActionButton(action: action, title: marker.label, model: controller, link: $link) {
                     ThemedIcon(Theme.Icon.open).font(Theme.Font.labelStrong)
+                        .tapTargetOutset(.all)
                 }
             }
             Button(action: onDismiss) {
                 ThemedIcon(Theme.Icon.close).font(Theme.Font.labelStrong).foregroundStyle(.secondary)
+                    .tapTargetOutset(.all)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(String(localized: "Close"))
@@ -1392,6 +1404,7 @@ private struct ExtensionMapStopRow: View {
         .padding(.vertical, Theme.Space.s)
         .background(selected ? Theme.accentTint : Theme.Fill.well,
                     in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
+        .tapTargetHeight()
         .contentShape(.rect)
     }
 }
