@@ -164,6 +164,10 @@ type Node struct {
 	files   map[string]*transcript.File // session id -> parsed transcript
 	paths   map[string]string           // session id -> transcript path
 	pathsAt map[string]time.Time        // when a path was last reported or chosen (transcriptPath looks again after 30 s)
+	// agyShown: agy pane row -> the conversation it showed when it was last listed (agyaliases.go).
+	agyShown map[string]agyShown
+	// agyStopped: agy conversation -> the pane the user closed or stopped it in, and when (agystopped.go).
+	agyStopped map[string]agyStop
 	// projectGlobs counts globProjects calls, each a read of every projects directory: one per row looked up again
 	// was a few hundred a list on a computer with many parked sessions, past the half minute a found path is trusted for.
 	projectGlobs  atomic.Int64
