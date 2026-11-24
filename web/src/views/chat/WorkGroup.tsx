@@ -353,12 +353,12 @@ export const ClusterRow = memo(function ClusterRow({ cluster, p, live }: { clust
         <span className="min-w-0 truncate text-[length:var(--chat-secondary)] font-medium text-tool-ink">{cluster.label}</span>
         <span className="flex-1" />
         {running && (
-          <span className="shrink-0 rounded-[4px] bg-field px-1.5 py-[1px] text-[11px] font-medium whitespace-nowrap text-ink-2" data-cluster-badge="running">
+          <span className="shrink-0 rounded-[4px] bg-field px-1.5 py-[1px] text-submeta font-medium whitespace-nowrap text-ink-2" data-cluster-badge="running">
             {t("chat-workgroup.cluster_running")}
           </span>
         )}
         {hasError && (
-          <span className="shrink-0 rounded-[4px] bg-red-tint px-1.5 py-[1px] text-[11px] font-medium whitespace-nowrap text-red" data-cluster-badge="error">
+          <span className="shrink-0 rounded-[4px] bg-red-tint px-1.5 py-[1px] text-submeta font-medium whitespace-nowrap text-red" data-cluster-badge="error">
             {t("chat-workgroup.cluster_error")}
           </span>
         )}

@@ -524,21 +524,21 @@ function buildDiffRows(diffs: Op[][]): NumberedRow[] {
 export function DiffBlocks({ diffs }: { diffs: Op[][] }) {
   const rows = useMemo(() => buildDiffRows(diffs), [diffs]);
   return (
-    <div className="min-w-fit overflow-hidden rounded-[8px] py-1 font-mono text-[12px] leading-[1.6] shadow-hairline">
+    <div className="min-w-fit overflow-hidden rounded-[8px] py-1 font-mono text-xs leading-[1.6] shadow-hairline">
       {rows.map((r, i) =>
         r.kind === "gap" ? (
-          <div key={i} className="flex min-w-fit items-center bg-inset/80 py-0.5 text-[11px] text-ink-3 select-none" data-diff-gap>
+          <div key={i} className="flex min-w-fit items-center bg-inset/80 py-0.5 text-submeta text-ink-3 select-none" data-diff-gap>
             <span className="w-9 shrink-0 pr-1.5 text-right tabular-nums">⋯</span>
             <span className="w-9 shrink-0 border-r border-line/60 pr-1.5 text-right tabular-nums">⋯</span>
             <span className="w-6 shrink-0 text-center">⋯</span>
-            {r.skipped ? <span className="pr-3 text-[11px] text-ink-3">{t("chat-actionrow.diff_skipped", { count: r.skipped })}</span> : null}
+            {r.skipped ? <span className="pr-3 text-submeta text-ink-3">{t("chat-actionrow.diff_skipped", { count: r.skipped })}</span> : null}
           </div>
         ) : (
           <div key={i} className={cx("flex min-w-fit pr-3", r.kind === "add" && "bg-diff-add-bg", r.kind === "del" && "bg-diff-del-bg")} data-diff-line={r.kind}>
-            <span className={cx("w-9 shrink-0 pr-1.5 text-right text-[11px] tabular-nums select-none", r.kind === "add" ? "text-diff-add-fg/75" : r.kind === "del" ? "text-diff-del-fg/75" : "text-ink-3/70")}>
+            <span className={cx("w-9 shrink-0 pr-1.5 text-right text-submeta tabular-nums select-none", r.kind === "add" ? "text-diff-add-fg/75" : r.kind === "del" ? "text-diff-del-fg/75" : "text-ink-3/70")}>
               {r.oldLine ?? ""}
             </span>
-            <span className={cx("w-9 shrink-0 border-r border-line/60 pr-1.5 text-right text-[11px] tabular-nums select-none", r.kind === "add" ? "text-diff-add-fg/75" : r.kind === "del" ? "text-diff-del-fg/75" : "text-ink-3/70")}>
+            <span className={cx("w-9 shrink-0 border-r border-line/60 pr-1.5 text-right text-submeta tabular-nums select-none", r.kind === "add" ? "text-diff-add-fg/75" : r.kind === "del" ? "text-diff-del-fg/75" : "text-ink-3/70")}>
               {r.newLine ?? ""}
             </span>
             <span className={cx("w-6 shrink-0 text-center select-none", r.kind === "add" ? "text-diff-add-fg" : r.kind === "del" ? "text-diff-del-fg" : "text-ink-3")}>

@@ -297,10 +297,10 @@ export function RunningStatusView({ live, working, done: finished, startedAt, cl
             onClick={onStop}
             aria-label={t("chat-runningstatusbar.interrupt")}
             title={t("chat-runningstatusbar.interrupt_hint")}
-            className="ml-1 hidden items-center gap-1 rounded-[6px] border border-line bg-surface/80 px-1.5 py-0.5 text-[11.5px] font-medium text-ink-2 transition-colors hover:border-line-strong hover:bg-hover hover:text-ink sm:inline-flex"
+            className="ml-1 hidden items-center gap-1 rounded-[6px] border border-line bg-surface/80 px-1.5 py-0.5 text-label font-medium text-ink-2 transition-colors hover:border-line-strong hover:bg-hover hover:text-ink sm:inline-flex"
           >
             <span>{t("chat-runningstatusbar.interrupt")}</span>
-            <kbd className="rounded-[4px] bg-inset px-1 py-px font-mono text-[10px] leading-tight text-ink-3">Esc</kbd>
+            <kbd className="rounded-[4px] bg-inset px-1 py-px font-mono text-submeta leading-tight text-ink-3">Esc</kbd>
           </button>
         )}
       </div>

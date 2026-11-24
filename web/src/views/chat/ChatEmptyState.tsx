@@ -39,9 +39,9 @@ export function ChatEmptyState({
       <div className="size-10 rounded-[12px] bg-inset border border-line flex items-center justify-center text-ink-2 mb-3">
         <Icon name={assistant ? "sparkles" : "chat"} size={18} />
       </div>
-      <h2 className="text-[15px] font-semibold text-ink">{title}</h2>
+      <h2 className="text-[length:var(--chat-body)] font-semibold text-ink">{title}</h2>
       <p
-        className={`text-[12.5px] text-ink-3 mt-1 max-w-[440px] ${shortenedCwd ? "font-mono truncate" : ""}`}
+        className={`text-xs text-ink-3 mt-1 max-w-[440px] ${shortenedCwd ? "font-mono truncate" : ""}`}
         title={shortenedCwd ? cwd : undefined}
       >
         {subtitle}
@@ -53,7 +53,7 @@ export function ChatEmptyState({
               key={prompt}
               type="button"
               onClick={() => onPick(prompt)}
-              className="rounded-full border border-line bg-surface px-3 py-1.5 text-[12.5px] text-ink-2 shadow-hairline transition-colors hover:bg-hover hover:text-ink whitespace-nowrap cursor-pointer"
+              className="rounded-full border border-line bg-surface px-3 py-1.5 text-xs text-ink-2 shadow-hairline transition-colors hover:bg-hover hover:text-ink whitespace-nowrap cursor-pointer"
             >
               {prompt}
             </button>

@@ -499,7 +499,7 @@ function CodeBlock({ children, lang = "" }: { children: React.ReactNode; lang?: 
       data-code-block=""
       data-wrap={wrapped ? "true" : undefined}
     >
-      <div className="flex h-8 items-center gap-2 bg-ink/[0.05] pr-1.5 pl-3 text-[12px] text-ink-3 select-none" data-code-bar>
+      <div className="flex h-8 items-center gap-2 bg-ink/[0.05] pr-1.5 pl-3 text-xs text-ink-3 select-none" data-code-bar>
         {label && <span className="min-w-0 truncate font-mono font-medium">{label}</span>}
         <div className="ml-auto flex shrink-0 flex-row-reverse items-center gap-1">
           <button

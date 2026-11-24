@@ -1050,7 +1050,7 @@ export const Composer = memo(function Composer({
       >
         {dragging && (
           <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[14px] bg-surface/80 backdrop-blur-[2px]">
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/30 bg-surface px-3 py-1 text-[12.5px] font-medium text-accent shadow-card">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/30 bg-surface px-3 py-1 text-xs font-medium text-accent shadow-card">
               <Icon name="image" size={14} />
               {t("chat-composer.drop_here")}
             </span>
@@ -1106,7 +1106,7 @@ export const Composer = memo(function Composer({
                     <span
                       key={b.id}
                       className={cx(
-                        "inline-flex h-6.5 max-w-full items-center gap-1 rounded-[8px] border px-2 text-[11.5px] transition-colors",
+                        "inline-flex h-6.5 max-w-full items-center gap-1 rounded-[8px] border px-2 text-label transition-colors",
                         open ? "border-accent/40 bg-accent-tint text-accent-ink" : "border-line bg-inset text-ink-2 hover:bg-hover",
                       )}
                     >
@@ -1139,7 +1139,7 @@ export const Composer = memo(function Composer({
               const allLines = previewPaste.text.split(/\r?\n/);
               const snippet = allLines.slice(0, 6).join("\n") + (allLines.length > 6 ? "\n…" : "");
               return (
-                <div className="rounded-[8px] border border-line bg-inset p-2 text-[11.5px]">
+                <div className="rounded-[8px] border border-line bg-inset p-2 text-label">
                   <div className="mb-1 flex items-center justify-between gap-2 text-ink-3">
                     <span>{t("chat-composer.pasted_stats", { lines: allLines.length, chars: previewPaste.text.length })}</span>
                     <button
@@ -1155,7 +1155,7 @@ export const Composer = memo(function Composer({
                       {t("chat-composer.pasted_expand")}
                     </button>
                   </div>
-                  <pre className="max-h-28 overflow-hidden font-mono text-[11px] leading-[1.45] whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">{snippet}</pre>
+                  <pre className="max-h-28 overflow-hidden font-mono text-submeta leading-[1.45] whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">{snippet}</pre>
                 </div>
               );
             })()}
@@ -1488,7 +1488,7 @@ export const Composer = memo(function Composer({
             </>
           }
         >
-          <p className="text-[13px] leading-relaxed text-ink-2">{confirmState.message}</p>
+          <p className="text-[length:var(--chat-secondary)] leading-relaxed text-ink-2">{confirmState.message}</p>
         </Dialog>
       )}
     </div>
