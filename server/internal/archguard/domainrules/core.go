@@ -3,7 +3,6 @@ package domainrules
 import (
 	"go/ast"
 	"go/token"
-	"maps"
 	"strings"
 )
 
@@ -991,7 +990,7 @@ func (c *coreChecks) methodResults(f *File) map[string]bool {
 			}
 		}
 	}
-	names := methodNames{with: maps.Clone(c.ownMethods.with), without: maps.Clone(c.ownMethods.without)}
+	names := c.ownMethods.copy()
 	for _, imp := range f.Imports {
 		if p := c.idx.pkg(imp.Path); p != nil && p != c.p && core(c.idx.layer(imp.Path)) {
 			names.add(p.decls)
@@ -1005,6 +1004,18 @@ func (c *coreChecks) methodResults(f *File) map[string]bool {
 
 // methodNames is method names by whether a declaration of each has results.
 type methodNames struct{ with, without map[string]bool }
+
+// copy is m with maps of its own, so that adding to it leaves m as it was.
+func (m methodNames) copy() methodNames {
+	out := methodNames{with: map[string]bool{}, without: map[string]bool{}}
+	for n := range m.with {
+		out.with[n] = true
+	}
+	for n := range m.without {
+		out.without[n] = true
+	}
+	return out
+}
 
 // add records d's methods and interface methods; a package not parsed in full adds nothing.
 func (m methodNames) add(d *decls) {
