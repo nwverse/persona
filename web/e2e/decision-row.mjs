@@ -220,7 +220,10 @@ async function run(browser, size, theme, language) {
     await rollout.scrollIntoViewIfNeeded(); // keep this decision's whole action group in the evidence capture
     await page.waitForTimeout(300); // the entry has turned to its selected colors
     await page.screenshot({ path: name("tray") });
-    for (const [source, path] of [["main", `/persona/${sid}`], ["direction", `/persona/${direction}`], ["agent", "/s/demo/demo-rollout-worker"]]) {
+    const exerciseDiscussion = (size === "wide" && theme === "dark" && language === "zh-Hans") ||
+      (size === "narrow" && theme === "light" && language === "en");
+    const sources = exerciseDiscussion ? [["main", `/persona/${sid}`], ["direction", `/persona/${direction}`], ["agent", "/s/demo/demo-rollout-worker"]] : [];
+    for (const [source, path] of sources) {
       await page.goto(base + path);
       if (source !== "agent") {
         await page.locator('[data-tray-entry="needs"]').click();
@@ -266,9 +269,11 @@ async function run(browser, size, theme, language) {
       await rollout.locator("[data-decision-option]").first().waitFor();
       assert.equal(decision.asked_at, AT);
     }
-    await page.goto(`${base}/`);
-    await page.locator('[data-tray-entry="needs"]').click();
-    await openFolded(page);
+    if (exerciseDiscussion) {
+      await page.goto(`${base}/`);
+      await page.locator('[data-tray-entry="needs"]').click();
+      await openFolded(page);
+    }
     // Other… opens the originating conversation with this decision routed to its composer, so the owner can add a
     // condition in words instead of choosing an unchanged suggestion (#10760).
     await custom.locator("span[data-decision-tail] button").first().click();

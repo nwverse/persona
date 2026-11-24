@@ -1230,7 +1230,6 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
     };
   }, [conversation]);
   const labels: Record<AssistantTray, string> = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running"), parked: t("todos.section_parked"), review: t("assistant-tasks.tray_review"), finished: t("assistant-tasks.tray_finished") };
-  const closeTray = () => setTray(null);
   // Parked is a peer, not folded inside In progress; keep an emptied tray reachable until it closes. Finished comes last,
   // as what just finished comes after the unfinished work on the To-dos page (#10922).
   const entryKeys: AssistantTray[] = ["needs", "running", ...(entries.parked.length > 0 || tray === "parked" ? ["parked" as const] : []), ...(entries.review.length > 0 || tray === "review" ? ["review" as const] : []), ...(entries.finished.length > 0 || tray === "finished" ? ["finished" as const] : [])];
@@ -1250,6 +1249,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
     setTray(null);
     entry?.focus();
   };
+  const closeTray = () => setTray(null);
   return (
     // shrinks with the dock (ChatView's DOCK_MAX): an open tray gives up its height and scrolls inside, instead of
     // standing taller than the dock and leaving its bottom (a card's answer row) and the entries under the composer;

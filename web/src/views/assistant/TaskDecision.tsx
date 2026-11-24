@@ -9,9 +9,8 @@ import { askRow, later } from "../../lib/feed";
 import { defaultManager, MANAGER_HEADER, shownManager } from "../../lib/manager-choice";
 import { getState, putTodo, refreshTodos } from "../../lib/store";
 import { latestReview } from "../../lib/supervision";
-import { askOptions, openAsk, taskReviewDecisionAsk, type Todo } from "../../lib/todos";
+import { askOptions, openAsk, type Todo } from "../../lib/todos";
 import { Button, toast } from "../../ui/atoms";
-import { AskAboutDecision } from "./AskAboutDecision";
 import { AcceptRow } from "./Brief";
 import { BriefingMark } from "./BriefingMark";
 import { DecisionRow } from "./DecisionRow";
@@ -19,6 +18,7 @@ import { ExpiredQuestion } from "./ExpiredQuestion";
 import { FailedTaskRow } from "./FailedTaskRow";
 import RuleSuggestionLine from "./RuleSuggestionLine";
 import type { RuleCard } from "../../lib/rule-suggestion";
+import { AskAboutDecision } from "./AskAboutDecision";
 
 type Review = NonNullable<Todo["decision_review"]>;
 
@@ -90,7 +90,7 @@ export function TaskDecision({ todo, rowKey, hideTitle = false, onOpenChat }: { 
   </>;
   const controls = <div data-decision-actions className={`${ask && askOptions(ask).length ? "" : "sticky -bottom-2.5 "}-mx-3 -mb-2.5 mt-1 flex flex-wrap items-center gap-2 border-t border-line bg-field px-3 py-2.5`}>
     {buttons}
-    {ask && askOptions(ask).length > 0 && taskReviewDecisionAsk(todo) && <AskAboutDecision key={ask.asked_at} todo={todo} ask={ask} disabled={busy} onOpenChat={onOpenChat} />}
+    {ask && askOptions(ask).length > 0 && <AskAboutDecision key={ask.asked_at} todo={todo} ask={ask} disabled={busy} onOpenChat={onOpenChat} />}
   </div>;
   // a decision that offers a go-ahead the owner gave three times carries a suggested rule: its line goes under the
   // row (#5802; always mounted here), answered through the to-do's manager as the row's own answers are

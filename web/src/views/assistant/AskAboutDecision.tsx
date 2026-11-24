@@ -3,7 +3,7 @@ import { t } from "../../i18n";
 import { errorText } from "../../lib/api";
 import { withQuoteBlock } from "../../lib/drafts";
 import { askPersonaOf } from "../../lib/outbox";
-import { askOptions, type Todo, type TodoAsk } from "../../lib/todos";
+import { askOptions, taskReviewDecisionAsk, type Todo, type TodoAsk } from "../../lib/todos";
 import { Button, Dialog } from "../../ui/atoms";
 
 export function AskAboutDecision({ todo, ask, disabled, onOpenChat }: { todo: Todo; ask: TodoAsk; disabled: boolean; onOpenChat?: () => void }) {
@@ -52,6 +52,7 @@ export function AskAboutDecision({ todo, ask, disabled, onOpenChat }: { todo: To
     }
   };
 
+  if (!taskReviewDecisionAsk(todo)) return null;
   return <>
     <Button tone="quiet" className="min-h-11" disabled={disabled} onClick={() => setOpen(true)}>
       {t("assistant-decisionrow.ask_in_main_chat")}
@@ -73,7 +74,7 @@ export function AskAboutDecision({ todo, ask, disabled, onOpenChat }: { todo: To
         onChange={(e) => setText(e.target.value)}
         className="block w-full resize-y rounded-control bg-field px-3 py-2 text-label text-ink shadow-inset-field outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)]"
       />
-      {error && <p role="alert" className="mt-2 text-label text-danger">{error}</p>}
+      {error && <p role="alert" className="mt-2 text-label text-red">{error}</p>}
     </Dialog>
   </>;
 }
