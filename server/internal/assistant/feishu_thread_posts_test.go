@@ -15,7 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// A todo bound to a chat topic tells it what happens (feishu_thread_posts.go, #5279): a decision, an Agent's turn
+// A todo bound to a chat topic tells it what happens (the lark module's thread_posts.go, #5279): a decision, an Agent's turn
 // ending or needing the user, the todo accepted or closed, in one short line a minute at most. All ids are placeholders.
 
 // fakeClock is the poster's clock and timer: nothing fires until advance runs it, in order.
