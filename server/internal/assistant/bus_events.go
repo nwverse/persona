@@ -39,7 +39,7 @@ func (b *BusHub) queueEvent(event string, params json.RawMessage) {
 	default:
 	}
 	switch event {
-	case assistantwire.EventSessionDelta, assistantwire.EventSessionItems:
+	case assistantwire.EventSessionDelta, assistantwire.EventSessionItems, assistantwire.EventInlineViewPage:
 		if event == assistantwire.EventSessionDelta {
 			b.takeDelta(params)
 		}

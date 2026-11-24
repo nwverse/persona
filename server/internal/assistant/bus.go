@@ -1071,6 +1071,12 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 			return err
 		}
 		s.followedItems(p.MachineID, ev.params)
+	case assistantwire.EventInlineViewPage:
+		var p SessionItems
+		if err := decode(&p); err != nil {
+			return err
+		}
+		go s.repairInlineViewPage(context.WithoutCancel(ctx), p)
 	case assistantwire.EventSessionDelta:
 		var p SessionDelta
 		if err := decode(&p); err != nil {

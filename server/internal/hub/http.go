@@ -20,6 +20,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
@@ -721,6 +722,9 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("chatexport.node_version"))
 		return
 	}
+	if !strict {
+		h.noteInlineViewPage(m.cfg.ID, r.PathValue("sid"), res.Items)
+	}
 	res.Items = clientItemsCompat(h.requestLang(r), h.requestWants(r, featureCardRing), h.requestWants(r, featureMarkdownCloseout), h.requestWants(r, proto.FeatureToolViews), localizedItems(h.requestLang(r), h.withInjected(res.Items)))
 	// Allow binding a pending live Hub TTFT on latest-page / incremental reads while keeping historical pages read-only.
 	allowBind := atoi(q.Get("before_seq")) == 0 && atoi(q.Get("through_seq")) == 0 && principalOf(r.Context()).Role != roleReadOnly
@@ -729,6 +733,26 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 		res.Items = proto.WithoutImageData(res.Items)
 	}
 	writeItemsJSON(w, res)
+}
+
+// Pass only potential cards from the trusted node response, before compatibility rewrites for the client.
+func (h *Hub) noteInlineViewPage(machine, sid string, items []proto.Item) {
+	var cards []proto.Item
+	for _, it := range items {
+		if it.ID == "" || it.Role != "assistant" || it.Kind != proto.KindText || (it.FullSize == 0 && !wire.HasAssistantView(it.Text)) {
+			continue
+		}
+		text := it.Text
+		if it.FullSize > 0 {
+			text = "" // the manager must read and validate the complete item
+		}
+		cards = append(cards, proto.Item{ID: it.ID, Role: it.Role, Kind: it.Kind, Text: text, TS: it.TS, FullSize: it.FullSize})
+	}
+	if len(cards) > 0 {
+		h.asstOf(h.sessionOwner(machine, sid)).notify(assistantwire.EventInlineViewPage, assistantwire.SessionItems{
+			MachineID: machine, SessionID: sid, Items: cards,
+		})
+	}
 }
 
 // sessionItemFull serves one item whole: pages cut long text (the item says full_size), the app fetches the rest when
