@@ -678,7 +678,7 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("chatexport.node_version"))
 		return
 	}
-	res.Items = cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), h.requestWants(r, featureMarkdownCloseout), localizedItems(h.requestLang(r), h.withInjected(res.Items)))
+	res.Items = clientItemsCompat(h.requestLang(r), h.requestWants(r, featureCardRing), h.requestWants(r, featureMarkdownCloseout), h.requestWants(r, proto.FeatureToolViews), localizedItems(h.requestLang(r), h.withInjected(res.Items)))
 	// Allow binding a pending live Hub TTFT on latest-page / incremental reads while keeping historical pages read-only.
 	allowBind := atoi(q.Get("before_seq")) == 0 && atoi(q.Get("through_seq")) == 0
 	h.ttft.annotate(m.cfg.ID, r.PathValue("sid"), res.Items, allowBind)
@@ -717,7 +717,7 @@ func (h *Hub) sessionItemFull(w http.ResponseWriter, r *http.Request, m *Machine
 		h.asstOf(h.sessionOwner(m.cfg.ID, r.PathValue("sid"))).notify(assistantwire.EventSessionItems, assistantwire.SessionItems{MachineID: m.cfg.ID, SessionID: r.PathValue("sid"),
 			Items: []proto.Item{it}})
 	}
-	full.Item = cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), h.requestWants(r, featureMarkdownCloseout), localizedItems(h.requestLang(r), h.withInjected([]proto.Item{it})))[0]
+	full.Item = clientItemsCompat(h.requestLang(r), h.requestWants(r, featureCardRing), h.requestWants(r, featureMarkdownCloseout), h.requestWants(r, proto.FeatureToolViews), localizedItems(h.requestLang(r), h.withInjected([]proto.Item{it})))[0]
 	writeItemsJSON(w, full)
 }
 
@@ -1524,6 +1524,7 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 		lazy             bool
 		markdownCloseout bool
 		ring             bool // draws ```persona-card rings (card_compat.go)
+		toolViews        bool // draws Item.ToolViews / Fold.ToolViews (proto.FeatureToolViews)
 	}
 	msgs := map[form][]byte{}
 	key := [2]string{machineID, sessionID}
@@ -1536,10 +1537,10 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 		if !sub {
 			continue
 		}
-		f := form{lang: c.lang(), lazy: wantsLazy, ring: c.has(featureCardRing), markdownCloseout: c.has(featureMarkdownCloseout)}
+		f := form{lang: c.lang(), lazy: wantsLazy, ring: c.has(featureCardRing), markdownCloseout: c.has(featureMarkdownCloseout), toolViews: c.has(proto.FeatureToolViews)}
 		b, ok := msgs[f]
 		if !ok {
-			its := cardCompatItems(f.lang, f.ring, f.markdownCloseout, localizedItems(f.lang, items))
+			its := clientItemsCompat(f.lang, f.ring, f.markdownCloseout, f.toolViews, localizedItems(f.lang, items))
 			if f.lazy {
 				its = proto.WithoutImageData(its)
 			}
@@ -1937,7 +1938,7 @@ func (h *Hub) sendBacklog(ctx context.Context, c *client, m *Machine, sid string
 			c.sendJSON(failure)
 			return
 		}
-		res.Items = cardCompatItems(c.lang(), c.has(featureCardRing), c.has(featureMarkdownCloseout), localizedItems(c.lang(), h.withInjected(res.Items)))
+		res.Items = clientItemsCompat(c.lang(), c.has(featureCardRing), c.has(featureMarkdownCloseout), c.has(proto.FeatureToolViews), localizedItems(c.lang(), h.withInjected(res.Items)))
 		if lazy {
 			res.Items = proto.WithoutImageData(res.Items)
 		}

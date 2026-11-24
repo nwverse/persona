@@ -1124,12 +1124,18 @@ nonisolated struct APIClient: Sendable {
         return index
     }
 
+    /// Tells the hub's REST item endpoints that the iOS app renders out-of-band `tool_views` inline in chats.
+    private var toolViewsHeaders: [String: String] {
+        let iOSApp = RequestClientMetadata.Platform.iOS.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue
+        return clientMetadata.platform == iOSApp ? ["X-Persona-Features": LiveConnection.toolViewsFeature] : [:]
+    }
+
     /// A page of history going back `turns` whole exchanges (user prompt + answer) before beforeSeq (nil: the latest
     /// page, with no before_seq at all: an empty one reached runtimes as 0, which some refuse).
     func items(_ k: SessionKey, beforeSeq: Int?, turns: Int = 2) async throws -> ItemsResponse {
         var query = ["turns": String(turns), "limit": "80", "lazy_images": "1", "fold_work": "1"]
         if let beforeSeq { query["before_seq"] = String(beforeSeq) }
-        let data = try await request("GET", sp(k) + "/items", query: query)
+        let data = try await request("GET", sp(k) + "/items", query: query, extraHeaders: toolViewsHeaders)
         // Images come without their bytes (`image(ref:)` fetches one when it is shown); a page is still worth
         // decoding off the main thread, which called us.
         return try await Task.detached(priority: .userInitiated) { try JSON.decoder.decode(ItemsResponse.self, from: data) }.value
@@ -1140,7 +1146,8 @@ nonisolated struct APIClient: Sendable {
     func itemRange(_ k: SessionKey, from: Int, through: Int) async throws -> [Item] {
         struct Range: Decodable, Sendable { var items: [Item] }
         let data = try await request("GET", sp(k) + "/items",
-                                     query: ["from_seq": String(from), "through_seq": String(through), "lazy_images": "1"])
+                                     query: ["from_seq": String(from), "through_seq": String(through), "lazy_images": "1"],
+                                     extraHeaders: toolViewsHeaders)
         let page = try await Task.detached(priority: .userInitiated) { try JSON.decoder.decode(Range.self, from: data) }.value
         return page.items
     }
@@ -1153,7 +1160,8 @@ nonisolated struct APIClient: Sendable {
         var from = fold.seq
         for _ in 0..<100 {
             let data = try await request("GET", sp(k) + "/items",
-                                         query: ["from_seq": String(from), "through_seq": String(through), "lazy_images": "1"])
+                                         query: ["from_seq": String(from), "through_seq": String(through), "lazy_images": "1"],
+                                         extraHeaders: toolViewsHeaders)
             let page = try await Task.detached(priority: .userInitiated) { try JSON.decoder.decode(Range.self, from: data) }.value
             out += page.items
             guard page.more == true, let last = page.items.last else { break }
@@ -1231,7 +1239,8 @@ nonisolated struct APIClient: Sendable {
 
     /// Everything after `afterSeq` (background sync of a session the app has not opened).
     func items(_ k: SessionKey, afterSeq: Int) async throws -> NewerResponse {
-        let data = try await request("GET", sp(k) + "/items", query: ["after_seq": String(afterSeq), "lazy_images": "1"])
+        let data = try await request("GET", sp(k) + "/items", query: ["after_seq": String(afterSeq), "lazy_images": "1"],
+                                     extraHeaders: toolViewsHeaders)
         return try await Task.detached(priority: .utility) { try JSON.decoder.decode(NewerResponse.self, from: data) }.value
     }
 

@@ -125,7 +125,7 @@ func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, titl
 			title, body = s.redactedNotice(ctx, s.botLang(ctx), space)
 		}
 	}
-	st, err := s.feishuStatus(ctx)
+	st, err := s.chat().Status(ctx)
 	ready := err == nil && st.Ready
 	s.workbenchOn(st.Features, ready) // as feishuFeatures
 	if err != nil && !answered(err) {
@@ -216,7 +216,7 @@ func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, titl
 			if todo != nil && !private {
 				target.TodoID = todo.ID
 			}
-			s.rememberBotThread(mid, target, title)
+			s.larkModule().RememberThread(mid, target, title)
 		}
 	}
 	if reminder == nil && len(missing) > 0 && (key == "" || again == nil) {
@@ -233,7 +233,7 @@ func (s *Service) feishuMirror(ctx context.Context, machine, session string) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	f, ready := s.feishuFeatures(ctx)
+	f, ready := s.chat().Features(ctx)
 	if !ready || !(f.Sync || f.Pushes) {
 		return
 	}
@@ -313,7 +313,7 @@ type mirrorSend struct {
 // mirrorStillDue: a retry of m may go now: the switch its conversation needs is on, its notify_user did not go to Feishu
 // meanwhile, and its turn is still the conversation's last (an old morning brief must not land under a newer answer).
 func (s *Service) mirrorStillDue(ctx context.Context, m *mirrorSend) (bool, error) {
-	st, err := s.feishuStatus(ctx)
+	st, err := s.chat().Status(ctx)
 	ready, f := err == nil && st.Ready, st.Features
 	s.workbenchOn(f, ready)
 	if err != nil && !answered(err) {
@@ -371,7 +371,7 @@ func (s *Service) feishuMirrorPost(ctx context.Context, m *mirrorSend, attempt i
 			missing = append(missing, i+1)
 			continue
 		}
-		s.rememberBotThread(mid, m.target, m.label) // a reply to any of them goes to this conversation
+		s.larkModule().RememberThread(mid, m.target, m.label) // a reply to any of them goes to this conversation
 		if i == 0 && m.sent != nil {
 			m.sent()
 		}
@@ -478,7 +478,7 @@ func leadAndRest(md string, n int) (lead, rest string) {
 func (s *Service) feishuAgentDone(machine string, sess proto.Session, head, text, place string, redact bool) {
 	ctx, cancel := context.WithTimeout(feishuSendAs(context.Background(), "agent_done", machine, sess.SessionID), 30*time.Second)
 	defer cancel()
-	f, ready := s.feishuFeatures(ctx)
+	f, ready := s.chat().Features(ctx)
 	if !ready || !f.Pushes {
 		return
 	}
@@ -500,7 +500,7 @@ func (s *Service) feishuAgentDone(machine string, sess proto.Session, head, text
 		return
 	}
 	// A reply to the card talks to that agent, as with one picked with /agents.
-	s.rememberBotThread(mid, botTarget{Kind: targetAgent, MachineID: machine, SessionID: session},
+	s.larkModule().RememberThread(mid, botTarget{Kind: targetAgent, MachineID: machine, SessionID: session},
 		label+" · "+s.machineName(machine))
 }
 

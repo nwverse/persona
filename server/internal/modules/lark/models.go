@@ -1,18 +1,17 @@
-package assistant
+package lark
 
 import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// botModels uses the main conversation's persistent model pick, shared with the apps.
-func (s *Service) botModels(ctx context.Context, f FeishuFeatures, messageID, cmd, model, root, parent string) {
-	ctx = withLauncherPurpose(ctx, "assistant")
+// botModels uses the main conversation's persistent model pick, shared with the apps. What it reads and changes is the
+// core's, asked for the assistant (its launcher purpose).
+func (s core) botModels(ctx context.Context, f FeishuFeatures, messageID, cmd, model, root, parent string) {
 	l := s.botLang(ctx)
 	note := func(key string, args ...i18n.Args) {
 		s.botNote(ctx, messageID, i18n.T(l, "assistant-feishu_cards."+key, args...))
@@ -21,13 +20,13 @@ func (s *Service) botModels(ctx context.Context, f FeishuFeatures, messageID, cm
 		note("main_off")
 		return
 	}
-	cfg := s.settings(ctx)
+	main, machine := s.h.MainChat(ctx)
 	t := s.botTargetFor(root, parent)
-	if t.Kind != targetMain && !(t.Kind == targetPersona && cfg.Main != "" && t.SessionID == cfg.Main && (t.MachineID == "" || t.MachineID == cfg.mainRouteMachine())) {
+	if t.Kind != targetMain && !(t.Kind == targetPersona && main != "" && t.SessionID == main && (t.MachineID == "" || t.MachineID == machine)) {
 		note("model_main_only")
 		return
 	}
-	if cfg.Main == "" {
+	if main == "" {
 		note("model_no_main")
 		return
 	}
@@ -35,29 +34,22 @@ func (s *Service) botModels(ctx context.Context, f FeishuFeatures, messageID, cm
 		note("model_change_usage")
 		return
 	}
-	machine := cfg.mainRouteMachine()
-	params := map[string]any{}
-	if err := s.sendModel(ctx, machine, cfg.Main, params, l); err != nil {
-		note("model_error", i18n.Args{"error": err.Error()})
-		return
-	}
-	launcher, _ := params["launcher"].(string)
-	current, _ := params["model"].(string)
-	effort, _ := params["effort"].(string)
-	listCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	res, err := s.askLauncherModels(listCtx, machine, launcher, false)
+	launcher, current, effort, err := s.h.MainModel(ctx, machine, main, l)
 	if err != nil {
 		note("model_error", i18n.Args{"error": err.Error()})
 		return
 	}
-	res = s.withCustomModels(ctx, machine, launcher, res)
+	res, err := s.h.LauncherModels(ctx, machine, launcher)
+	if err != nil {
+		note("model_error", i18n.Args{"error": err.Error()})
+		return
+	}
 	if cmd == "/modelchange" {
-		if !listsModel(res, model) {
+		if !s.h.ListsModel(res, model) {
 			note("model_change_unknown", i18n.Args{"model": model})
 			return
 		}
-		_, err = s.pickModel(ctx, cfg.Main, machine, proto.ModelPick{Launcher: launcher, Model: model, Effort: effort}, l)
+		err = s.h.PickModel(ctx, main, machine, proto.ModelPick{Launcher: launcher, Model: model, Effort: effort}, l)
 		if err != nil {
 			note("model_error", i18n.Args{"error": err.Error()})
 			return

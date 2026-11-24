@@ -1,4 +1,4 @@
-package assistant
+package lark
 
 import (
 	"context"
@@ -10,7 +10,6 @@ import (
 	"unicode"
 
 	"github.com/nwverse/persona/server/internal/botcard"
-	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -59,7 +58,7 @@ func parseBotCommand(text string) (cmd, rest string, ok bool) {
 // not know (it may be the agent's own, like /compact), without the command for "/new <message>". root and parent are
 // the message's thread root and the message it replies to: the commands that act on a conversation follow the target
 // the thread binds, like a normal message does.
-func (s *Service) botCommand(ctx context.Context, f FeishuFeatures, messageID, text, root, parent string) (bool, string) {
+func (s core) botCommand(ctx context.Context, f FeishuFeatures, messageID, text, root, parent string) (bool, string) {
 	l := s.botLang(ctx)
 	cmd, rest, ok := parseBotCommand(text)
 	if !ok {
@@ -112,12 +111,12 @@ func (s *Service) botCommand(ctx context.Context, f FeishuFeatures, messageID, t
 		}
 		reply(s.startAgentCard(ctx, rest), "")
 	case "/stop", "/停止", "/停":
-		out := s.stopConversation(ctx, f, s.botTargetFor(root, parent))
-		s.botNote(ctx, messageID, out.message)
+		_, message := s.h.StopConversation(ctx, f, s.botTargetFor(root, parent))
+		s.botNote(ctx, messageID, message)
 		return true, ""
 	case "/status", "/状态":
 		t := s.botTargetFor(root, parent)
-		if err := botAllowed(l, f, t); err != nil {
+		if err := s.botAllowed(l, f, t); err != nil {
 			s.botNote(ctx, messageID, err.Error())
 			return true, ""
 		}
@@ -126,14 +125,15 @@ func (s *Service) botCommand(ctx context.Context, f FeishuFeatures, messageID, t
 	case "/modellist", "/modelchange":
 		s.botModels(ctx, f, messageID, cmd, rest, root, parent)
 	case "/tasks", "/进展", "/总览": // i18n-ignore: command aliases typed by the user; the catalogs describe them in /help
-		if f.Board && s.standingBoardCommand(ctx) {
+		if f.Board && s.h.StandingBoardCommand(ctx) {
 			break
 		}
-		for _, oc := range s.tasksOverview(ctx) {
-			reply(oc.card, oc.fallback)
+		cards, fallbacks := s.h.TasksOverview(ctx)
+		for i, c := range cards {
+			reply(c, fallbacks[i])
 		}
 	default:
-		if s.larkModule().WorkbenchCommand(ctx, f, cmd) { // /home, /today, /inbox with the workbench on (feishu_workbench.go)
+		if s.workbenchCommand(ctx, f, cmd) { // /home, /today, /inbox with the workbench on (workbench.go)
 			return true, ""
 		}
 		// A command the bot does not know goes on as it is (an agent's own, like /compact). A bare one a letter off
@@ -142,7 +142,7 @@ func (s *Service) botCommand(ctx context.Context, f FeishuFeatures, messageID, t
 		// message; an agent's may be the project's own (/lint), so it goes. A doubled slash (//stpo) sends the text
 		// itself, one slash off, but only before a bot command or a slip of one and outside an agent: other text that
 		// starts with // (a "// TODO" note, "//example.com/x") goes as written.
-		toAgent := s.botTargetFor(root, parent).agent()
+		toAgent := s.botTargetFor(root, parent).Agent()
 		if word, ok := strings.CutPrefix(cmd, "/"); ok && strings.HasPrefix(word, "/") {
 			if literal, ok := strings.CutPrefix(strings.TrimLeftFunc(text, unicode.IsSpace), "/"); ok && !toAgent && (slices.Contains(botCommandNames, word) || botCommandTypo(word) != "") {
 				return false, literal
@@ -158,56 +158,40 @@ func (s *Service) botCommand(ctx context.Context, f FeishuFeatures, messageID, t
 	return true, ""
 }
 
-// statusPendingMax bounds a /status card's pending rows so a long queue can't get the card refused.
-const statusPendingMax = 5
-
-// pendingQuestion is one line saying what a pending interaction waits for; "" when it says nothing.
-func pendingQuestion(ix proto.Interaction) string {
-	switch ix.Kind {
-	case proto.IxQuestion:
-		return strings.TrimSpace(questionSummary(ix))
-	case proto.IxPlan:
-		return strings.TrimSpace(planTitle(ix.Plan))
-	case proto.IxPermission:
-		return strings.TrimSpace(ixToolName(ix) + " " + oneLine(ix.Summary))
-	}
-	return strings.TrimSpace(oneLine(ix.Summary))
-}
-
 // statusCard is /status plus the same content as plain text (the fallback when Feishu refuses the card): the
 // target's work state (offline / unknown never reads as idle), last activity, goal and pending questions. With the
 // fleet online both sources are local; the web button is built once and is nil without a public_url.
-func (s *Service) statusCard(ctx context.Context, t botTarget) (*botcard.Card, string) {
+func (s core) statusCard(ctx context.Context, t botTarget) (*botcard.Card, string) {
 	l := s.botLang(ctx)
 	card := botcard.NewCard("", "", i18n.T(l, "assistant-feishu_cards.status_title"))
 	rt, err := s.resolveBotTarget(ctx, t) // one resolve: the target line reuses its label, not targetLabel's
 	label := i18n.T(l, "assistant-feishu.not_found")
 	switch {
-	case err == nil && t.Kind == targetPersona && rt.isNew:
+	case err == nil && t.Kind == targetPersona && rt.IsNew:
 		label = i18n.T(l, "assistant-feishu.new_chat_next")
 	case err == nil:
-		label = rt.label
+		label = rt.Label
 	}
 	var head, fb strings.Builder
 	to := i18n.T(l, "assistant-feishu_cards.status_to", i18n.Args{"target": botcard.EscapeMarkdown(label)})
 	head.WriteString(to)
 	fb.WriteString(fallbackText.Replace(i18n.T(l, "assistant-feishu_cards.status_to", i18n.Args{"target": label}))) // ends its own line
-	if rt.secondary != "" {
-		head.WriteString(botcard.EscapeMarkdown(rt.secondary) + "\n")
-		fb.WriteString(fallbackText.Replace(rt.secondary) + "\n")
+	if rt.Secondary != "" {
+		head.WriteString(botcard.EscapeMarkdown(rt.Secondary) + "\n")
+		fb.WriteString(fallbackText.Replace(rt.Secondary) + "\n")
 	}
-	if running := len(s.channelRuns(channel.Feishu)); running > 0 {
+	if running := s.h.FeishuRuns(); running > 0 {
 		waiting := i18n.T(l, "assistant-feishu_cards.status_waiting", i18n.Args{"count": running})
 		head.WriteString(waiting)
 		fb.WriteString(fallbackText.Replace(waiting))
 	}
 	card.Markdown(strings.TrimSpace(head.String()))
-	if err != nil || rt.isNew || rt.session.SessionID == "" {
+	if err != nil || rt.IsNew || rt.Session.SessionID == "" {
 		return card, strings.TrimSpace(fb.String())
 	}
 
-	sess := rt.session
-	if list, err := s.sessions(ctx, rt.machine); err == nil {
+	sess := rt.Session
+	if list, err := s.h.Sessions(ctx, rt.Machine); err == nil {
 		for _, x := range list {
 			if x.SessionID == sess.SessionID {
 				sess = x
@@ -240,8 +224,8 @@ func (s *Service) statusCard(ctx context.Context, t botTarget) (*botcard.Card, s
 	card.Markdown(line)
 
 	var pending []proto.Interaction
-	for _, ix := range s.visiblePendingInteractions() {
-		if ix.MachineID == rt.machine && ix.SessionID == sess.SessionID && pendingQuestion(ix) != "" {
+	for _, ix := range s.h.VisiblePending() {
+		if ix.MachineID == rt.Machine && ix.SessionID == sess.SessionID && s.h.PendingQuestion(ix) != "" {
 			pending = append(pending, ix)
 		}
 	}
@@ -254,15 +238,15 @@ func (s *Service) statusCard(ctx context.Context, t botTarget) (*botcard.Card, s
 		fb.WriteString(none + "\n")
 		return card, strings.TrimSpace(fb.String())
 	}
-	open := s.openButton(ctx, rt.machine, sess.SessionID) // every row is the same conversation: one link under them
+	open := s.openButton(ctx, rt.Machine, sess.SessionID) // every row is the same conversation: one link under them
 	shown := pending
 	if len(pending) > statusPendingMax {
 		shown = pending[:statusPendingMax]
 	}
 	for _, ix := range shown {
-		q := clip(pendingQuestion(ix), 120)
+		q := clip(s.h.PendingQuestion(ix), 120)
 		kind := ""
-		if key := ixKindTags[ix.Kind]; key != "" {
+		if key := s.h.IxKindTag(ix.Kind); key != "" {
 			kind = i18n.T(l, key)
 		}
 		md := "**" + botcard.EscapeMarkdown(q) + "**"
@@ -283,58 +267,6 @@ func (s *Service) statusCard(ctx context.Context, t botTarget) (*botcard.Card, s
 		fb.WriteString(note + "\n")
 	}
 	return card, strings.TrimSpace(fb.String())
-}
-
-// stopOutcome is what interrupting a conversation's current turn came to; the caller renders it as a command note
-// (/stop) or a card toast (the progress card's Stop button).
-type stopOutcome struct {
-	kind    string // toast kind: success | info | error
-	message string
-}
-
-// turnOver says whether the conversation's last turn ended (its result unseen or already seen) and nothing is being
-// opened: no turn to stop. An interrupt there would only press Escape into an idle agent's terminal (the node's
-// session.interrupt sends that key, node/node.go) and the owner would be told a turn was stopped that had already
-// finished. A state that cannot be told is not over: the owner asked to stop, so it is tried.
-func turnOver(s proto.Session) bool {
-	return !s.Starting && (s.State == proto.StateUnread || s.State == proto.StateIdle)
-}
-
-// turnPending says whether this chat sent a message into the conversation that has not been seen working, or seen to
-// end a turn, since: the conversation may still be read as quiet (channel.Run.Seen), so its state cannot say the turn
-// is over. A /stop right after the message is exactly the case it is sent for.
-func (s *Service) turnPending(machine, session string) bool {
-	if session == "" {
-		return false
-	}
-	for _, r := range s.channelRuns(channel.Feishu) {
-		if r.MachineID == machine && r.SessionID == session && !r.Seen {
-			return true
-		}
-	}
-	return false
-}
-
-// stopConversation is typed /stop: it targets the conversation's current turn, independently of any progress card.
-// The progress-card path checks its own exact ownership before using the same interrupt call.
-func (s *Service) stopConversation(ctx context.Context, f FeishuFeatures, t botTarget) stopOutcome {
-	l := s.botLang(ctx)
-	if err := botAllowed(l, f, t); err != nil {
-		return stopOutcome{kind: "error", message: err.Error()}
-	}
-	rt, err := s.resolveBotTarget(ctx, t)
-	if err != nil || rt.isNew || (turnOver(rt.session) && !s.turnPending(rt.machine, rt.session.SessionID)) {
-		return stopOutcome{kind: "info", message: i18n.T(l, "assistant-feishu_cards.nothing_running")}
-	}
-	return s.interruptBotConversation(ctx, rt)
-}
-
-func (s *Service) interruptBotConversation(ctx context.Context, rt resolvedTarget) stopOutcome {
-	l := s.botLang(ctx)
-	if err := s.call(ctx, rt.machine, "session.interrupt", map[string]any{"session_id": rt.session.SessionID}, nil); err != nil {
-		return stopOutcome{kind: "error", message: i18n.T(l, "assistant-feishu_cards.not_stopped", i18n.Args{"error": clip(oneLine(err.Error()), 200)})}
-	}
-	return stopOutcome{kind: "success", message: i18n.T(l, "assistant-feishu_cards.stopped", i18n.Args{"label": rt.label})}
 }
 
 // botCommandNames are the bot's own commands a typo is matched against (the Chinese ones are too short to mistype).
@@ -395,8 +327,8 @@ var fallbackText = strings.NewReplacer("`", "", "*", "", "_", "", "[", "", "]", 
 
 // conversationsCard lists recent Persona conversations with a button to switch to each. It also returns the same
 // list as plain text: the card goes with it as fallback, so a refused card still shows every conversation.
-func (s *Service) conversationsCard(ctx context.Context) (*botcard.Card, string) {
-	list, main := s.conversations(ctx, false, "")
+func (s core) conversationsCard(ctx context.Context) (*botcard.Card, string) {
+	list, main := s.h.Conversations(ctx)
 	sort.SliceStable(list, func(i, j int) bool { return list[i].UpdatedAt.After(list[j].UpdatedAt) })
 	l := s.botLang(ctx)
 	title := i18n.T(l, "assistant-feishu_cards.recent_chats")
@@ -413,7 +345,7 @@ func (s *Service) conversationsCard(ctx context.Context) (*botcard.Card, string)
 		if i == 8 {
 			break
 		}
-		name := clip(oneLine(conversationName(sess, main)), botListNameMost)
+		name := clip(oneLine(s.h.ConversationName(sess, main)), botListNameMost)
 		line := "**" + botcard.EscapeMarkdown(name) + "**"
 		if !sess.UpdatedAt.IsZero() {
 			line += " · " + botAgo(l, sess.UpdatedAt)
@@ -427,7 +359,7 @@ func (s *Service) conversationsCard(ctx context.Context) (*botcard.Card, string)
 		}
 		switchBtn := botcard.Btn(i18n.T(l, "assistant-feishu_cards.chat_here"), botcard.Default, map[string]any{"a": "switch", "k": kind, "m": sess.MachineID, "s": sess.SessionID, "t": name})
 		// The rows are Persona conversations (conversations lists Assistant sessions), so the link is /persona/<id>.
-		openBtn := s.openLinkButton(ctx, sessionLink(web, sess.MachineID, sess.SessionID, sess.Assistant))
+		openBtn := s.h.OpenLinkButton(ctx, s.h.SessionLink(web, sess.MachineID, sess.SessionID, sess.Assistant))
 		c.Markdown(line).Buttons(switchBtn, openBtn)
 		fmt.Fprintf(&b, "- %s\n", fallbackText.Replace(name))
 	}
@@ -450,15 +382,15 @@ func botAgo(l i18n.Lang, t time.Time) string {
 
 // agentsCard lists the agents worth talking to: needing you, working, finished unseen, then the ones idle lately.
 // It also returns the same list as plain text, used as the card's fallback when Feishu refuses the card.
-func (s *Service) agentsCard(ctx context.Context, query string) (*botcard.Card, string) {
+func (s core) agentsCard(ctx context.Context, query string) (*botcard.Card, string) {
 	type row struct {
 		d    Device
 		sess proto.Session
 	}
 	var rows []row
 	q := strings.ToLower(query)
-	for _, d := range s.devices(ctx) {
-		list, _ := s.sessions(ctx, d.ID)
+	for _, d := range s.h.Devices(ctx) {
+		list, _ := s.h.Sessions(ctx, d.ID)
 		for _, sess := range list {
 			if sess.Assistant || sess.HiddenByDirectory() || sess.State == proto.StateOffline || sess.State == proto.StateUnknown {
 				continue
@@ -490,7 +422,7 @@ func (s *Service) agentsCard(ctx context.Context, query string) (*botcard.Card, 
 	}
 	var b strings.Builder
 	b.WriteString(title + "\n")
-	preferTab := s.useHerdrTabName(ctx)
+	preferTab := s.h.UseHerdrTabName(ctx)
 	for i, r := range rows {
 		if i == 10 {
 			more := i18n.T(l, "assistant-feishu_cards.more_agents", i18n.Args{"count": len(rows) - 10})
@@ -498,7 +430,7 @@ func (s *Service) agentsCard(ctx context.Context, query string) (*botcard.Card, 
 			b.WriteString(more + "\n")
 			break
 		}
-		primary, secondary := feishuSessionNames(r.sess, preferTab)
+		primary, secondary := s.h.SessionNamesAs(r.sess, preferTab)
 		label := clip(oneLine(primary), botListNameMost)
 		name := clip(oneLine(r.d.Name), botListNameMost)
 		// The row is pressed whole: the chat's messages go to that agent from then on.
@@ -510,9 +442,9 @@ func (s *Service) agentsCard(ctx context.Context, query string) (*botcard.Card, 
 }
 
 // startAgentCard is a form to start a coding agent on a machine.
-func (s *Service) startAgentCard(ctx context.Context, prompt string) *botcard.Card {
+func (s core) startAgentCard(ctx context.Context, prompt string) *botcard.Card {
 	var opts []botcard.Option
-	for _, d := range s.devices(ctx) {
+	for _, d := range s.h.Devices(ctx) {
 		if d.Online {
 			opts = append(opts, botcard.Option{Label: d.Name, Value: d.ID})
 		}
@@ -530,7 +462,7 @@ func (s *Service) startAgentCard(ctx context.Context, prompt string) *botcard.Ca
 	if prompt != "" {
 		fields[2].(map[string]any)["default_value"] = prompt
 	}
-	if s.workbench.on.Load() { // the workbench's permission field, before what to do (feishu_workbench.go)
+	if s.h.WorkbenchActive() { // the workbench's permission field, before what to do (workbench.go)
 		fields = append(fields[:2], wbModeSelect(l), fields[2])
 	}
 	return c.Form("start", fields, botcard.Submit(i18n.T(l, "assistant-feishu_cards.start"), botcard.Primary, "start_submit", map[string]any{"a": "start"}))
@@ -575,3 +507,6 @@ func wbModeSelect(l i18n.Lang) map[string]any {
 	}
 	return botcard.Select("mode", wbT(l, "mode_placeholder"), opts, false)
 }
+
+// statusPendingMax bounds a /status card's pending rows so a long queue can't get the card refused.
+const statusPendingMax = 5

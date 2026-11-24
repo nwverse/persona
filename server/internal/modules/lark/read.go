@@ -1,4 +1,4 @@
-package assistant
+package lark
 
 import (
 	"context"
@@ -37,21 +37,15 @@ const (
 	readImages  = 20
 	// readDirRoot is where the downloads go on the conversation's computer, one directory per /read message.
 	readDirRoot = "~/.persona/lark-read/"
-
-	readChatKey   = "read_chat"
-	readThreadKey = "read_thread"
 )
 
 // readDirName keeps a message id usable as a directory name in a shell command unquoted.
 var readDirName = lazyre.New(`[^A-Za-z0-9_-]`)
 
-// readRun says a run answers a /read: its answer goes under the message in that group, quietly.
-func readRun(ext map[string]string) bool { return ext[readChatKey] != "" }
-
 // feishuRead takes the owner's "@bot /read …" from a group chat (FeishuFromRead): the hub's checks again, then the
 // request goes to the main conversation as a run that answers under the message. What keeps it from going is said
 // under the message, and nothing else is said in the group.
-func (s *Service) feishuRead(ev botcard.MessageEvent, st FeishuStatus) {
+func (s core) feishuRead(ev botcard.MessageEvent, st FeishuStatus) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	msg := ev.Message
@@ -82,7 +76,7 @@ func (s *Service) feishuRead(ev botcard.MessageEvent, st FeishuStatus) {
 	l := s.botLang(ctx)
 	where := feishuTarget{ChatID: msg.ChatID, InThread: msg.ThreadID != "", NoDetour: true, Read: true}
 	t := botTarget{Kind: targetMain}
-	if err := botAllowed(l, st.Features, t); err != nil {
+	if err := s.botAllowed(l, st.Features, t); err != nil {
 		s.botNoteTo(ctx, where, msg.MessageID, err.Error())
 		return
 	}
@@ -94,7 +88,7 @@ func (s *Service) feishuRead(ev botcard.MessageEvent, st FeishuStatus) {
 
 // readSend sends the request into the main conversation (or starts it) and starts the run that answers under the
 // message. The reaction says it was taken; nothing more is posted until the answer.
-func (s *Service) readSend(ctx context.Context, ev botcard.MessageEvent, task string, t botTarget) error {
+func (s core) readSend(ctx context.Context, ev botcard.MessageEvent, task string, t botTarget) error {
 	rt, err := s.resolveBotTarget(ctx, t)
 	if err != nil {
 		return err
@@ -105,12 +99,12 @@ func (s *Service) readSend(ctx context.Context, ev botcard.MessageEvent, task st
 		s.logf("bots: /read: react: %v", err)
 	}
 	hello := s.hello(ctx)
-	text := prompts.RenderBotReadGroup(readPrompt(strings.TrimSpace(hello.Owner), answerLanguage(hello.Locale), msg.ChatID, msg.MessageID, msg.ThreadID, task))
+	text := prompts.RenderBotReadGroup(readPrompt(strings.TrimSpace(hello.Owner), s.h.AnswerLanguage(hello.Locale), msg.ChatID, msg.MessageID, msg.ThreadID, task))
 	ext := map[string]string{readChatKey: msg.ChatID}
 	if msg.ThreadID != "" {
 		ext[readThreadKey] = msg.ThreadID
 	}
-	if err := s.startBotRun(ctx, rt, t, msg.MessageID, text, nil, channelProbe(task, msg.MessageID), reaction, ext); err != nil {
+	if err := s.h.StartRun(ctx, rt, t, msg.MessageID, text, nil, channelProbe(task, msg.MessageID), reaction, ext); err != nil {
 		if reaction != "" {
 			s.botUnreact(context.WithoutCancel(ctx), msg.MessageID, reaction)
 		}

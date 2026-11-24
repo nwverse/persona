@@ -191,7 +191,7 @@ func (s *Service) loadChannelStateLocked(ctx context.Context) {
 		s.saveChannelStateLocked()
 		s.logf("channels: %d runs and %d asks started while the state was unreadable kept", kept, asks)
 	}
-	if old := s.takeLegacyBotRuns(ctx); len(old) > 0 {
+	if old := s.larkModule().LegacyRuns(ctx); len(old) > 0 {
 		c.st.Runs = append(c.st.Runs, old...)
 		s.saveChannelStateLocked()
 		s.logf("channels: %d waiting turns of the Feishu bot moved to the channels' runs", len(old))

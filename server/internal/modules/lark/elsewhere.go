@@ -1,4 +1,4 @@
-package assistant
+package lark
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -25,7 +26,7 @@ import (
 // message it replied to) and does not care who received it. The bot's gate (feishuElsewhere, below) is the first caller;
 // a channel that sees the owner's own chats as the owner (an extension, where the bot is not a member) is the next, and
 // hands the same Source over the bus when the bus method for it exists. How the outcome goes back is the Source's
-// channel (sendSourceReport in todo_source.go).
+// channel (the core's sendSourceReport in todo_source.go).
 
 // Source is where a request to open a to-do came from. Channel is a channel id (internal/channel: "feishu"); ChatID and
 // MessageID are the chat and the message of the request in that channel, which the report back is a reply to. Text is the
@@ -55,29 +56,29 @@ const (
 // started does (openTodoIn): a to-do made of the words, bound to the topic, handed to the main conversation, with src
 // recorded on it so the outcome can be told there. With no home topic group the request is not turned away: its first
 // message goes into the owner's private chat with the bot instead and the to-do is bound to no topic (openInOwnerChat).
-// The error says why not; errNoWords is the one the caller answers in its own words, every other error's text is fit to
-// show.
-func (s *Service) openFromElsewhere(ctx context.Context, src Source) (Todo, error) {
+// It answers the to-do's id. The error says why not; errNoWords is the one the caller answers in its own words, every
+// other error's text is fit to show.
+func (s core) openFromElsewhere(ctx context.Context, src Source) (string, error) {
 	l := s.botLang(ctx)
-	if !slices.Contains(sourceChannels, src.Channel) || src.ChatID == "" || src.MessageID == "" {
-		return Todo{}, errors.New(i18n.T(l, "assistant-feishu.elsewhere_channel", i18n.Args{"channel": src.Channel}))
+	if !slices.Contains(s.h.SourceChannels(), src.Channel) || src.ChatID == "" || src.MessageID == "" {
+		return "", errors.New(i18n.T(l, "assistant-feishu.elsewhere_channel", i18n.Args{"channel": src.Channel}))
 	}
 	text := strings.TrimSpace(src.Text)
 	if text == "" {
-		return Todo{}, errNoWords
+		return "", errNoWords
 	}
-	if err := s.ensureTodosLoaded(ctx); err != nil {
-		return Todo{}, err
+	if err := s.h.EnsureTodosLoaded(ctx); err != nil {
+		return "", err
 	}
 	st, err := s.feishuStatus(ctx)
 	if err != nil {
-		return Todo{}, err
+		return "", err
 	}
 	if !st.Ready || st.Owner == "" {
-		return Todo{}, errors.New(i18n.T(l, "assistant-feishu.elsewhere_not_ready"))
+		return "", errors.New(i18n.T(l, "assistant-feishu.elsewhere_not_ready"))
 	}
-	if _, _, why := s.openTarget(ctx, st); why != "" {
-		return Todo{}, errors.New(why) // before anything is posted: no stray topic when there is no one to take it
+	if _, _, why := s.h.OpenTarget(ctx, st); why != "" {
+		return "", errors.New(why) // before anything is posted: no stray topic when there is no one to take it
 	}
 
 	home := st.HomeChat
@@ -101,19 +102,19 @@ func (s *Service) openFromElsewhere(ctx context.Context, src Source) (Todo, erro
 		MessageID string `json:"message_id"`
 	}
 	// The key makes the same request, made again, land once.
-	err = s.appCall(ctx, AppFeishu, FeishuText, map[string]any{"chat_id": home, "text": rootText, "uuid": rootKey(src)}, &posted)
+	err = s.appCall(ctx, FeishuText, map[string]any{"chat_id": home, "text": rootText, "uuid": rootKey(src)}, &posted)
 	if err != nil || posted.MessageID == "" {
 		if err == nil {
 			err = errors.New("no message id")
 		}
-		return Todo{}, errors.New(i18n.T(l, "assistant-feishu.thread_open_failed", i18n.Args{"error": clip(oneLine(err.Error()), 200)}))
+		return "", errors.New(i18n.T(l, "assistant-feishu.thread_open_failed", i18n.Args{"error": clip(oneLine(err.Error()), 200)}))
 	}
 	thread, err := s.topicOfMessage(ctx, posted.MessageID)
 	if err != nil {
 		s.logf("bots: elsewhere: topic of %s: %v", posted.MessageID, err)
-		return Todo{}, errors.New(i18n.T(l, "assistant-feishu.elsewhere_no_topic"))
+		return "", errors.New(i18n.T(l, "assistant-feishu.elsewhere_no_topic"))
 	}
-	// Any message of the topic will do for the bot's lines into it (the lark module's thread_posts.go).
+	// Any message of the topic will do for the bot's lines into it (thread_posts.go).
 	s.rememberTopicMessage(ctx, home, thread, posted.MessageID)
 	topic := &feishuTopic{Chat: home, Thread: thread}
 
@@ -125,10 +126,10 @@ func (s *Service) openFromElsewhere(ctx context.Context, src Source) (Todo, erro
 	ev.Message.Content = string(c)
 	ev.Sender.SenderType, ev.Sender.SenderID.OpenID = "app", ""
 	todo, fail := s.openTodoIn(ctx, ev, st, botcard.Content{Text: text}, text, quote, topic,
-		&TodoSource{Channel: src.Channel, ChatID: src.ChatID, MessageID: src.MessageID})
+		&assistantwire.ChatTodoSource{Channel: src.Channel, ChatID: src.ChatID, MessageID: src.MessageID})
 	if fail != "" {
 		s.botNoteTo(ctx, topic.target(), posted.MessageID, fail) // the topic was opened: it says why nothing came of it
-		return Todo{}, errors.New(fail)
+		return "", errors.New(fail)
 	}
 	return todo, nil
 }
@@ -138,19 +139,19 @@ func (s *Service) openFromElsewhere(ctx context.Context, src Source) (Todo, erro
 // with a topic (openTodoIn): the to-do, its supervision, the hand-over to the main conversation, the run answering under
 // the first message, and src recorded so the outcome is told where it was asked. The first message is the to-do's
 // anchor (TodoSource.Anchor): the report's notice is shown under it and "/noreply" said as a reply to anything under it
-// stops the report (chatNoReply, todo_source.go).
-func (s *Service) openInOwnerChat(ctx context.Context, st FeishuStatus, src Source, text, quote, rootText string) (Todo, error) {
+// stops the report (the core's chatNoReply, todo_source.go).
+func (s core) openInOwnerChat(ctx context.Context, st FeishuStatus, src Source, text, quote, rootText string) (string, error) {
 	l := s.botLang(ctx)
 	var posted struct {
 		MessageID string `json:"message_id"`
 	}
 	// No chat id: the owner's private chat. The key makes the same request, made again, land once.
-	err := s.appCall(ctx, AppFeishu, FeishuText, map[string]any{"text": rootText, "uuid": rootKey(src)}, &posted)
+	err := s.appCall(ctx, FeishuText, map[string]any{"text": rootText, "uuid": rootKey(src)}, &posted)
 	if err != nil || posted.MessageID == "" {
 		if err == nil {
 			err = errors.New("no message id")
 		}
-		return Todo{}, errors.New(i18n.T(l, "assistant-feishu.thread_open_failed", i18n.Args{"error": clip(oneLine(err.Error()), 200)}))
+		return "", errors.New(i18n.T(l, "assistant-feishu.thread_open_failed", i18n.Args{"error": clip(oneLine(err.Error()), 200)}))
 	}
 	// The run that answers goes under the bot's own first message, in the private chat.
 	var ev botcard.MessageEvent
@@ -159,10 +160,10 @@ func (s *Service) openInOwnerChat(ctx context.Context, st FeishuStatus, src Sour
 	ev.Message.Content = string(c)
 	ev.Sender.SenderType = "app"
 	todo, fail := s.openTodoIn(ctx, ev, st, botcard.Content{Text: text}, text, quote, nil,
-		&TodoSource{Channel: src.Channel, ChatID: src.ChatID, MessageID: src.MessageID, Anchor: posted.MessageID})
+		&assistantwire.ChatTodoSource{Channel: src.Channel, ChatID: src.ChatID, MessageID: src.MessageID, Anchor: posted.MessageID})
 	if fail != "" {
 		s.botNoteTo(ctx, feishuTarget{}, posted.MessageID, fail) // the first message was posted: it says why nothing came of it
-		return Todo{}, errors.New(fail)
+		return "", errors.New(fail)
 	}
 	return todo, nil
 }
@@ -175,11 +176,8 @@ func rootKey(src Source) string {
 
 // topicOfMessage is the topic a message of the bot's in the home group opened: its thread_id, read back from the message
 // (the send answers only with its id). A message may not show its topic the moment it is sent, so it is read a few times.
-func (s *Service) topicOfMessage(ctx context.Context, id string) (string, error) {
-	wait := s.fbot.lookupWait
-	if wait <= 0 {
-		wait = topicLookupWait
-	}
+func (s core) topicOfMessage(ctx context.Context, id string) (string, error) {
+	wait := s.timing("topic_lookup_wait")
 	var last error
 	for i := 0; i < topicLookupTries; i++ {
 		if i > 0 {
@@ -209,7 +207,7 @@ func (s *Service) topicOfMessage(ctx context.Context, id string) (string, error)
 // or in the owner's private chat when there is none (openFromElsewhere), and puts an emoji on the message so the owner
 // sees it was taken; what keeps it from opening is answered under the message, in that group, and nowhere else. Anything
 // that is not the owner's "/ai" is dropped.
-func (s *Service) feishuElsewhere(ev botcard.MessageEvent, st FeishuStatus) {
+func (s core) feishuElsewhere(ev botcard.MessageEvent, st FeishuStatus) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	msg := ev.Message
@@ -261,7 +259,7 @@ func (s *Service) feishuElsewhere(ev botcard.MessageEvent, st FeishuStatus) {
 // elsewhereQuote is the text of the message a request replied to, to go with it as context: only a text or rich-text
 // message has any (a merged forward is not expanded, and a picture, a card or the like is no text), clipped. "" when
 // there is none or it cannot be read.
-func (s *Service) elsewhereQuote(ctx context.Context, id string) string {
+func (s core) elsewhereQuote(ctx context.Context, id string) string {
 	items, err := s.botMessages(ctx, id)
 	if err != nil || len(items) == 0 {
 		return ""

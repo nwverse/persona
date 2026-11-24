@@ -517,8 +517,8 @@ on-demand model panel, not the everyday Assistant home (#6887).
 `RunningTokenRatePopover`, and cindy wins over what this document said before; `web/src/views/chat/RunningStatusBar.tsx`,
 `docs/web/web.md` "Live status and streaming"). One row above the composer while a turn runs, 13 px medium, 8 px side and
 6 px vertical padding, its two sides 12 px apart:
-- Left: a 14 px mark and a short state in `--status-accent`, truncating. The sparkle (layers while compacting, activity for
-  background subtasks, a 2.5-stroke check for **Done**). An Agent session says what the turn does in cindy's words
+- Left: a 14 px mark (`--accent-ink` for normal work, `--ai` for background workflows, `--status-working` for retries) and a short state in `--ink-2` (or `--status-working` for retry headlines), truncating. The sparkle (layers while compacting, activity for
+  background subtasks, retry while retrying, a 2.5-stroke check for **Done**). An Agent session says what the turn does in cindy's words
   ("Thinking…", "Generating…", "Editing files…", "Searching the web…", "Spawning a subagent…", "Bash running…",
   "Compacting context…", "Working…"); a Persona conversation says it in cindy's plain phases ("Thinking…", "Replying…",
   "Reading files…", "Updating files…", "Searching files…", "Searching the web…", "Reading web pages…", "Organizing the
@@ -2262,6 +2262,8 @@ that was denied, refused before it ran or interrupted gets a gray mark with its 
 for VoiceOver, as section 4.8.1 keeps red for what is still wrong; one that timed out says Timed out. Under an output the
 page cut, the result shows the output's end (End of output), where a build or test run says why it failed, before View
 full text. Without an outcome (an older node) a row draws as before.
+
+**Tool views (`tool_views`) and Map component (UI version 12, #14730)**. Out-of-band declarative views returned by connector tools (`Item.tool_views` / `Fold.tool_views`) render **outside** the collapsed tool work summary, beside "Images viewed this turn" and above the final reply, so visual routes and locations are immediately visible without opening raw tool calls (while Super Rule 2 keeps them out of model context). `map` components follow platform map styling matching the shell's current light/dark scheme, preserve semantic `tone` or the 11 named `Hue` colors (never both) alongside plain text labels/metrics rather than conveying meaning by color alone, keep `wide` (16:9) / `square` (1:1) / `tall` aspect frames bounded in chat cards, and use standard `>= 44 pt` / `48 dp` tap targets for expanding interactive map detail sheets (with route/marker inspection and verified `https://` map links). UI copy ships in English, Simplified Chinese and Japanese.
 
 ### 4.7.1 Opening and closing in a chat keeps the tapped row in place
 
