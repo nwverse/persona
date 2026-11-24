@@ -51,10 +51,11 @@ export function HealthIntakePage({ onToggleSidebar }: { onToggleSidebar: () => v
   const state = useMemo(() => new URLSearchParams(location.search).get("state") ?? healthIntakeState("water"), []);
   const strength = isStrength(state);
   const kind = strength ? "strength" : kindOf(state);
-  // the hub's page names itself; until it has, the page's kind
+  // the hub's page names itself (the renderer's onTitle, each time the first page is drawn); until it has, or when it
+  // names none, the page's kind
   const [drawn, setDrawn] = useState("");
   const title = drawn || (kind === "strength" ? t("health.strength_title") : kind === "protein" ? t("health.today_protein") : t("health.today_water"));
-  const onTitle = useCallback((x: string) => setDrawn(x), []);
+  const onTitle = useCallback((x: string | undefined) => setDrawn(x ?? ""), []);
   const [n, setN] = useState(0);
   return (
     <div className="flex h-full flex-col">

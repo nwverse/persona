@@ -59,6 +59,7 @@ func TestFeishuAnswerSaysWhichPieceIsMissing(t *testing.T) {
 }
 
 func TestMissingPiecesNote(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	if got := missingPiecesNote("en", []int{2, 4}); !strings.Contains(got, "2 parts") || !strings.Contains(got, "2, 4") {
 		t.Fatalf("en %q", got)
 	}
@@ -99,6 +100,7 @@ const longBody = "今天做完了很多事情，这一段很长。\n\n"
 
 // A long notify_user push whose second card fails: the others go, and a line in the chat names the missing part.
 func TestFeishuPushSaysWhichPieceIsMissing(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, _ := feishuHub("ou_a", time.Unix(100, 0))
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_a", PairedAt: time.Unix(100, 0), Features: FeishuFeatures{Main: true, Pushes: true}}, nil
@@ -117,6 +119,7 @@ func TestFeishuPushSaysWhichPieceIsMissing(t *testing.T) {
 
 // The same for a synced turn of the main conversation (feishuMirror).
 func TestFeishuMirrorSaysWhichPieceIsMissing(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f, _ := feishuHub("ou_a", time.Unix(100, 0))
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_a", PairedAt: time.Unix(100, 0), Features: FeishuFeatures{Main: true, Sync: true}}, nil

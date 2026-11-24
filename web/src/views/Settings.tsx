@@ -68,7 +68,7 @@ import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type La
 import { TerminalModeRow } from "./settings/TerminalModeSetting";
 import { AgentOpenRow } from "./settings/AgentOpenSetting";
 import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, isCoreTab, isModuleTab, itemIsPage, itemState, navGroups, openedFromSub, redirectLegacySettings, resolveSettingsTarget, settingsAt, settingsHref, SENT_SUB, stepsToList, tabInfo, TAB_INFO, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
-import { formatIntegrationsSub, isLegacyIntegrationTab, normalizeIntegrationFilter, parseIntegrationsSub } from "./settings/integrations-route";
+import { formatIntegrationsSub, isIntegrationDetailRoute, isLegacyIntegrationTab, normalizeIntegrationFilter, parseIntegrationsSub } from "./settings/integrations-route";
 import { moduleFeaturesSource } from "../core/module-features";
 import { useModuleStates } from "../core/module-host";
 import { ModuleSettingsPage } from "../core/ModuleSettingsPage";
@@ -353,6 +353,14 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     pick(g.tab, g.sub ?? null, agent);
     setScrollAnchor(g.anchor);
   };
+  const integrationsSplit =
+    !listed &&
+    !phone &&
+    twoCol &&
+    tab === "integrations" &&
+    integrationsKnown &&
+    integrationsV2 &&
+    isIntegrationDetailRoute(parseIntegrationsSub(sub));
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
       <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-line px-3 py-2 sm:px-4">
@@ -372,14 +380,34 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         {!phone && (
           <SettingsNav tab={tab} query={query} onQuery={setQuery} search={search} shown={shown} integrationsV2={integrationsV2} onPick={pick} onGroup={goGroup} contentId={contentId} />
         )}
-        <div ref={scroller} id={contentId} role={listed ? undefined : "region"} aria-label={listed ? undefined : tabInfo(tab).label} tabIndex={0} className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent">
+        <div
+          ref={scroller}
+          id={contentId}
+          role={listed ? undefined : "region"}
+          aria-label={listed ? undefined : tabInfo(tab).label}
+          tabIndex={0}
+          data-integrations-split-host={integrationsSplit ? "" : undefined}
+          className={cx(
+            "min-h-0 min-w-0 flex-1 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
+            integrationsSplit ? "flex h-full overflow-hidden" : "overflow-y-auto overscroll-contain",
+          )}
+        >
           {listed ? (
             <div className="px-4 py-5" style={{ animation: `fade-up 320ms ${EASE} both` }}>
               <SettingsList shown={shown} integrationsV2={integrationsV2} onPick={pick} />
             </div>
           ) : (
-            <div key={ASSISTANT_TABS.has(tab) ? `${tab}@${picked ?? ""}` : tab} className={cx("mx-auto px-5 py-6 sm:px-8", tab === "integrations" || tab === "channels" || tab === "connectors" || tab === "extensions" || (tab === "sources" && sourcesGraph) ? "max-w-[1120px]" : "max-w-[760px]")} style={{ animation: `fade-up 320ms ${EASE} both` }}>
+            <div
+              key={ASSISTANT_TABS.has(tab) ? `${tab}@${picked ?? ""}` : tab}
+              className={
+                integrationsSplit
+                  ? "flex h-full min-h-0 min-w-0 flex-1 overflow-hidden"
+                  : cx("mx-auto px-5 py-6 sm:px-8", tab === "integrations" || tab === "channels" || tab === "connectors" || tab === "extensions" || (tab === "sources" && sourcesGraph) ? "max-w-[1120px]" : "max-w-[760px]")
+              }
+              style={{ animation: `fade-up 320ms ${EASE} both` }}
+            >
               {tab === "general" && <General onModel={() => pick("models", "translate", "model-config")} />}
+              {tab === "advanced" && <Advanced />}
               {tab === "persona" && <AssistantProfile onTriageModel={() => pick("models", "agent.triage", "model-config")} />}
               {tab === "avatar" && (
                 <Group title={t("settings.avatar")} footer={t("settings.avatar_footer")} anchor="avatar">
@@ -405,7 +433,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                 <AgentSections section={at.section} />
               </>}
               {tab === "integrations" && (integrationsKnown ? (
-                <Suspense fallback={<Loading />}>
+                <Suspense fallback={integrationsSplit ? <div className="p-6"><Loading /></div> : <Loading />}>
                   <Integrations
                     open={sub}
                     twoCol={twoCol}
@@ -711,10 +739,7 @@ function General({ onModel }: { onModel: () => void }) {
             </button>
           ))}
         </div>
-        <ThemeColorPicker />
-        <ExtensionThemePicker />
         <TextSizeRow />
-        <FontRows />
         <LanguageRow />
         <Row label={t("settings.reply_motion")} hint={t("settings.reply_motion_hint")} wrapHint anchor="reply-motion">
           <Switch on={replyMotion} onChange={setReplyMotionEnabled} label={t("settings.reply_motion")} />
@@ -723,7 +748,6 @@ function General({ onModel }: { onModel: () => void }) {
         <Row label={t("settings.starred_messages")} hint={t("settings.starred_messages_hint")} wrapHint anchor="starred-messages">
           <Switch on={starred} onChange={setStarredEnabled} label={t("settings.starred_messages")} />
         </Row>
-        <SidebarIconsRow />
         <SidebarUsageRow />
       </Group>
 
@@ -752,6 +776,21 @@ function General({ onModel }: { onModel: () => void }) {
         <DevModeRows />
       </Group>
     </>
+  );
+}
+
+/** Settings › Advanced › Appearance (#13398): the non-default looks — theme color, extension theme, interface/code
+ *  fonts and colored sidebar icons. General keeps the default appearance (Match system / Light / Dark), text size,
+ *  language and behavior rows. These are the same components reading the same browser storage as before, so an
+ *  existing choice and the untouched default look are unchanged. */
+function Advanced() {
+  return (
+    <Group title={t("settings.appearance")} anchor="appearance">
+      <ThemeColorPicker />
+      <ExtensionThemePicker />
+      <FontRows />
+      <SidebarIconsRow />
+    </Group>
   );
 }
 

@@ -56,7 +56,10 @@ func (c A2AConfig) LaunchAllowed() bool { return c.Launch == nil || *c.Launch }
 
 const ScopeA2A = "agents.a2a"
 
-var A2AToolNames = []string{"a2a_sessions", "a2a_send", "a2a_get", "a2a_report", "a2a_cancel"}
+// A2AToolNames are the A2A tools every session in scope gets, whatever its harness: the node binds their caller
+// (node.callerTools) and the A2A-only catalogs (session MCP tickets, daemons, `personad tool`) keep exactly these.
+// a2a_read reads another session's recent conversation (#13831).
+var A2AToolNames = []string{"a2a_sessions", "a2a_read", "a2a_send", "a2a_get", "a2a_report", "a2a_cancel"}
 
 func IsA2ATool(name string) bool {
 	return slices.Contains(A2AToolNames, name)

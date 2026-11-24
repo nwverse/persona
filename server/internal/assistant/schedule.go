@@ -1586,7 +1586,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.superviseLoop(ctx)                // the tasks the main conversation follows up (supervise_signals.go)
 	go s.workLoop(ctx)                     // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)
 	go s.replyLoop(ctx)                    // questions the user looked at and left unanswered (agents_reply.go)
-	go s.nudgeLoop(ctx)                    // the Lark bot's cards left unanswered (feishu_nudge.go)
+	go s.nudgeLoop(ctx)                    // the Lark bot's cards left unanswered (the lark module's nudge.go)
 	go s.sourceReportLoop(ctx)             // the reports back to where a todo was asked (todo_source.go)
 	go s.remindLoop(ctx)                   // the todos' reminders (todo_plan.go)
 	go s.urgentLoop(ctx)                   // urgent calls' retries and reminders (urgent_call_loop.go)
@@ -2142,6 +2142,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		if err != nil {
 			return s.failTaskRun(ctx, t, run, err, false)
 		}
+		ex.Cwd = s.resolvedTaskCwd(ctx, here, ex.Cwd)
 	}
 	run.Execution = &ex
 	if clean && s.launcherAgent(ctx, here, launcher) != "claude" {

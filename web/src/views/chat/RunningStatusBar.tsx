@@ -181,15 +181,59 @@ function BackgroundWords({ line }: { line: BackgroundLine }) {
   );
 }
 
+const CRON_WHAT = /^Cron:\s*([^,\n]+?)(?:,\s*Prompt:\s*([\s\S]*))?$/i;
+
+function formatCronSchedule(expr: string): string {
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) return "";
+  const [min, hour, dom, mon, dow] = parts;
+  if (dom !== "*" || mon !== "*" || dow !== "*") return "";
+  const everyMin = /^\*\/(\d+)$/.exec(min);
+  if (everyMin && hour === "*") {
+    const count = Number(everyMin[1]);
+    if (count > 0) return t("chat-runningstatusbar.every_minutes", { count });
+  }
+  if (min === "*" && hour === "*") return t("chat-runningstatusbar.every_minutes", { count: 1 });
+  if (min === "0" && hour === "*") return t("chat-runningstatusbar.hourly");
+  const everyHour = /^\*\/(\d+)$/.exec(hour);
+  if (min === "0" && everyHour) {
+    const count = Number(everyHour[1]);
+    if (count === 1) return t("chat-runningstatusbar.hourly");
+    if (count > 0) return t("chat-runningstatusbar.every_hours", { count });
+  }
+  if (/^\d{1,2}$/.test(min) && /^\d{1,2}$/.test(hour)) {
+    const h = Number(hour);
+    const m = Number(min);
+    if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
+      return t("chat-runningstatusbar.daily_at", { time: `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}` });
+    }
+  }
+  return "";
+}
+
+/** Cleans raw `Cron: ..., Prompt: ...` strings into a concise single-line summary. */
+export function formatBackgroundWhat(raw: string): string {
+  const trimmed = raw.trim();
+  const match = CRON_WHAT.exec(trimmed);
+  if (!match) return raw;
+  const schedule = formatCronSchedule(match[1]);
+  const prompt = (match[2] ?? "").replace(/\s+/g, " ").trim();
+  if (schedule && prompt) return `${schedule} · ${prompt}`;
+  if (prompt) return prompt;
+  if (schedule) return schedule;
+  return match[1].trim();
+}
+
 function BackgroundCommandWords({ line, now }: { line: WaitLine; now: number }) {
   const stalled = stalledText(line.stalled, now);
+  const what = line.what ? formatBackgroundWhat(line.what) : "";
   return (
     <span className="flex min-w-0 items-center whitespace-pre" data-running-verb>
       <span className="shrink-0">{t("chat-runningstatusbar.background_task")}</span>
-      {line.what && (
+      {what && (
         <>
           <span className="shrink-0" data-running-command-separator>{` · `}</span>
-          <span className="min-w-0 truncate">{line.what}</span>
+          <span className="min-w-0 truncate">{what}</span>
         </>
       )}
       {line.more > 0 && <span className="shrink-0">{` · ${t("chat-runningstatusbar.more_waits", { count: line.more })}`}</span>}
@@ -240,7 +284,7 @@ export function RunningStatusView({ live, working, done: finished, startedAt, cl
   const tokens = useCountUp(shown?.tokens_down ?? 0);
   const done = !working && Boolean(finished) && !behind && !usage && !task;
   const state = statusWords(shown, kept.step, plain);
-  const commandWords = task ? [t("chat-runningstatusbar.background_task"), task.what, task.more > 0 ? t("chat-runningstatusbar.more_waits", { count: task.more }) : ""].filter(Boolean).join(" · ") : "";
+  const commandWords = task ? [t("chat-runningstatusbar.background_task"), task.what ? formatBackgroundWhat(task.what) : "", task.more > 0 ? t("chat-runningstatusbar.more_waits", { count: task.more }) : ""].filter(Boolean).join(" · ") : "";
   const words = retry ? t("chat-runningstatusbar.retrying", { attempt: formatNumber(retry.attempt), max: formatNumber(retry.max), reason: retry.info?.reason ?? t("lib-api-errors.failed") }) : behind ? "" : usage ? t("chat-runningstatusbar.background_subtasks") : task ? commandWords : done ? t("chat-runningstatusbar.done") : state.text;
   const compacting = !retry && !behind && !usage && !task && !done && state.compacting;
   const breath = useBreath(useMoves(`${words}\n${shown?.tokens_down ?? ""}`), phase === "on");
@@ -251,7 +295,8 @@ export function RunningStatusView({ live, working, done: finished, startedAt, cl
   const hidden = phase === "off";
   // each side fades on its own: a pinned card's button stays as it is (cindy)
   const fade: CSSProperties | undefined = hidden ? undefined : { opacity: phase === "fading" ? 0 : 1, transition: `opacity ${FADE_OUT_MS}ms ease-out` };
-  const icon: IconName = behind ? "workflow" : usage ? "activity" : task ? "terminal" : done ? "check" : compacting ? "layers" : "sparkles";
+  const icon: IconName = retry ? "retry" : behind ? "workflow" : usage ? "activity" : task ? "terminal" : done ? "check" : compacting ? "layers" : "sparkles";
+  const iconTone = retry ? "text-status-working" : behind ? "text-ai" : "text-accent-ink";
   const count = own && shown?.tokens_down ? (
     <>
       <Icon name="arrowDown" size={13} className="shrink-0" />
@@ -268,16 +313,16 @@ export function RunningStatusView({ live, working, done: finished, startedAt, cl
       <div
         onAnimationEnd={done ? undefined : breath.ended}
         aria-hidden={hidden || undefined}
-        className={`flex min-w-0 items-center gap-1.5 ${behind ? "text-ai" : "text-status-accent"} ${hidden ? "invisible" : done ? "status-done" : breath.cycle ? "status-breath" : ""}`}
+        className={`flex min-w-0 items-center gap-1.5 text-ink-2 ${hidden ? "invisible" : done ? "status-done" : breath.cycle ? "status-breath" : ""}`}
         data-running-done={done || undefined}
         style={breath.cycle && !done && !hidden && !(breath.cycle % 2) ? { ...fade, animationName: "status-breath-again" } : fade}
       >
-        <Icon name={icon} size={14} stroke={done ? 2.5 : undefined} className={`shrink-0 ${done ? "" : "-translate-y-px"}`} />
+        <Icon name={icon} size={14} stroke={done ? 2.5 : undefined} className={`shrink-0 ${iconTone} ${done ? "" : "-translate-y-px"}`} />
         {offline && <Disconnected />}
         {behind ? <BackgroundWords line={bg} /> : task ? <BackgroundCommandWords line={task} now={now} /> : retry ? (
-          <span className="flex min-w-0 flex-col" data-running-verb>
-            <span className="truncate">{words}</span>
-            <span className="truncate text-ink-3 font-normal" data-running-retry-detail>{retry.error}</span>
+          <span className="flex min-w-0 items-center whitespace-pre" data-running-verb>
+            <span className="min-w-0 shrink truncate text-status-working">{words}</span>
+            <span className="min-w-0 truncate font-normal text-ink-3" data-running-retry-detail>{` · ${retry.error}`}</span>
           </span>
         ) : <span className={phase === "on" && !done ? "chat-shimmer truncate" : "truncate"} data-running-verb>{words}</span>}
       </div>

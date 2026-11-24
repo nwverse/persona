@@ -33,6 +33,7 @@ const (
 	sigReport        = "report"         // its agent reported to the supervisor (report_to_supervisor, agent_control.go)
 	sigEscalated     = "escalated"      // its leader conversation judged it needs the user (supervise_leader.go): told the main one
 	sigOrphaned      = "orphaned"       // nobody works on it: its agents are closed or offline and nothing brings one back (tasks_orphan.go)
+	sigRecovered     = "recovered"      // a node reconnected after an outage or reboot and left affected work unresumable (node_recovery.go, #14781)
 	sigAsk           = "ask"            // its agent's card came to the supervisor before the user (ask_route.go)
 	sigDecide        = "decide"         // a task leader's worker needs a decision its leader cannot make: told the conversation above the leader (task_leader.go)
 	sigDecisionReply = "decision_reply" // the owner wrote in a task's Agent chat; its pending decision needs confirmation
@@ -92,8 +93,9 @@ type superviseSignal struct {
 	// An ACK removes exactly its own Key; a still-present predecessor's dedup reservation is not delivery proof.
 	PendingPredecessors []string
 	PRURL               string // draft_pr: the current or earlier followed PR, revalidated before delivery
-	// Unreachable: this decision exists because the task leader's agent could not be reached, not because the worker
-	// waits for the user. It stays a decision even though the worker's ledger is not needs_user (task_leader.go).
+	// Unreachable: this decision exists because its assigned task leader Agent or Assistant supervisor could not be
+	// reached, not because the worker waits for the user. It stays a decision even when the worker is not needs_user.
+	// Recipient distinguishes an unreachable Assistant supervisor from the existing task-leader-Agent escalation.
 	Unreachable      bool
 	At               time.Time
 	Machine, Session string
@@ -223,7 +225,7 @@ func (g superviseSignal) urgent() bool {
 		// that needs the supervisor soon: every stopped task says the same until the model is back, and each used to
 		// wake the main conversation on its own. They go out together, on the ordinary schedule.
 		return !g.JudgeDown
-	case sigNeedsYou, sigIdle, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
+	case sigNeedsYou, sigIdle, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigRecovered, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigDeliveryHold, sigOwnerCannot, sigEstimateDue, sigTimedOut, // the owner, an automatic deadline or a stopped task waits
 		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigCardlessWait, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo:
 		return true

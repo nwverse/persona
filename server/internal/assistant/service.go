@@ -95,6 +95,8 @@ type Service struct {
 	moduleSwitch    moduleswitch.Set
 	modulesOff      []string // the ids the modules setting switched off at start (loadModules): built-in and client-only
 	compactRecovery compactRecoveryCache
+	// nodeRecovery tracks node online/boot timestamps to run recovery sweeps after outages or reboots (#14781).
+	nodeRecovery nodeRecoveryBook
 	// sendFanout: whom each conversation woke with conversation_send lately (conversation_fanout.go).
 	sendFanout       sendFanout
 	logical          logicalDeviceState
@@ -150,8 +152,9 @@ type Service struct {
 	// startCandidates lists the presets a start-defaults rule can pick on a machine (start_candidates.go); nil: the
 	// built-in model-profile source. A dynamic candidates source is injected here without touching matching or retries.
 	startCandidates startCandidateSource
-	// tierRank orders the usable candidates of a tier with several (tier_pick.go); nil: the user's order. Scoring
-	// (#14701) sets it; a trial of a profile not in use (#14702) calls pickTierCandidateIn with that profile.
+	// tierRank orders the usable candidates of a tier with several (tier_pick.go); nil: the scorer (candidate_score.go,
+	// #14701), which keeps the user's order without data. A trial of a profile not in use (#14702) calls
+	// pickTierCandidateIn with that profile.
 	tierRank tierRanker
 	// refs is the provider extensions' values for launcher keys that are references (launcher_secrets.go); nil: none.
 	refs launcherSecrets
@@ -337,7 +340,7 @@ type Service struct {
 	work             workBook          // agents_work.go: the Agents business
 	reply            replyBook         // agents_reply.go: the reminders of questions left unanswered
 	chans            channelsBook      // channels.go
-	fbot             feishuBook        // feishu.go
+	fdetached        detachedCards     // the Feishu cards closed when their node went away (lark_chat.go)
 	tposts           threadPoster      // the lark module's thread_posts.go: what a todo tells its chat thread
 	lark             larkLayer         // lark.go: the lark module's layer, the outbound channel port (s.chat())
 	tevents          todoEvents        // todo_events.go: what the extensions are told of the todos
@@ -1204,6 +1207,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	if f := s.sessionsSeen; f != nil {
 		f(d)
 	}
+	s.noteNodeOnline(d.MachineID, time.Now())
 	s.toolLoopsChanged(d)
 	s.progressSessions(d, time.Now()) // what the working agents do, for no_progress (supervise_progress.go)
 	if s.retractConfirmedStartUnknowns(ctx, d.Sessions) {

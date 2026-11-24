@@ -282,7 +282,7 @@ struct ExtensionCard: View {
         model.view?.sections.contains { section in
             section.items.contains { item in
                 switch item {
-                case .graph, .scene: true
+                case .graph, .scene, .map: true
                 default: false
                 }
             }
