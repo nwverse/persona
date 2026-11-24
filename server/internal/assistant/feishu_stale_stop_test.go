@@ -56,17 +56,17 @@ func TestFeishuStaleStopAfterRefusedFinalEdit(t *testing.T) {
 	}
 	a := stopCardAction(botTargetOf(r))
 	a.Context.MessageID = old
-	result := s.botCardAction(ctx, a, "")
+	result := s.larkModule().Action(ctx, a, "")
 	if got := f.interrupted(); len(got) != 0 {
 		t.Fatalf("stale progress card interrupted the newer working turn: %v (toast %+v)", got, result.Toast)
 	}
 	a = stopCardAction(botTargetOf(next))
 	a.Context.MessageID = "om_current"
-	result = s.botCardAction(ctx, a, "")
+	result = s.larkModule().Action(ctx, a, "")
 	if result.Toast == nil || result.Toast.Type != "success" {
 		t.Fatalf("current progress card rejected: %+v", result)
 	}
-	s.botCardAction(ctx, a, "") // redelivery of the current card is harmless too
+	s.larkModule().Action(ctx, a, "") // redelivery of the current card is harmless too
 	if got := f.interrupted(); len(got) != 1 || got[0] != "server/c1" {
 		t.Fatalf("current card interrupts %v", got)
 	}
@@ -146,7 +146,7 @@ func TestFeishuStaleStopOwnership(t *testing.T) {
 				sess.Status = proto.StatusIdle
 			}
 			f.setSessions("server", sess)
-			out := s.botCardAction(context.Background(), a, "")
+			out := s.larkModule().Action(context.Background(), a, "")
 			want := 0
 			if name == "current" || name == "held continuation" {
 				want = 1
@@ -193,7 +193,7 @@ func TestFeishuStaleStopRechecksAfterResolution(t *testing.T) {
 					p.finished = true
 				}
 			}
-			out := s.botCardAction(context.Background(), a, "")
+			out := s.larkModule().Action(context.Background(), a, "")
 			if got := f.interrupted(); len(got) != 0 {
 				t.Fatalf("changed owner interrupted %v; toast=%+v", got, out.Toast)
 			}
@@ -208,7 +208,7 @@ func TestFeishuStaleStopConcurrentCurrentPresses(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 16 {
 		wg.Add(1)
-		go func() { defer wg.Done(); <-start; s.botCardAction(context.Background(), a, "") }()
+		go func() { defer wg.Done(); <-start; s.larkModule().Action(context.Background(), a, "") }()
 	}
 	close(start)
 	wg.Wait()
@@ -308,7 +308,7 @@ func testFeishuStopBeforeTheRunWatcher(t *testing.T, delivered chan struct{}, ho
 		t.Fatal("progress was not posted")
 	}
 	a := staleStopAction(botTargetOf(r), r.Ext["card"])
-	out := e.s.botCardAction(ctx, a, "")
+	out := e.s.larkModule().Action(ctx, a, "")
 	wantExpired := i18n.T(e.s.botLang(ctx), "assistant-feishu_cards.card_expired")
 	if out.Toast == nil || out.Toast.Content != wantExpired || len(e.f.interrupted()) != 0 {
 		t.Fatalf("unwatched current card acted: %+v / %v", out.Toast, e.f.interrupted())
@@ -320,7 +320,7 @@ func testFeishuStopBeforeTheRunWatcher(t *testing.T, delivered chan struct{}, ho
 		t.Fatal("topic delivery did not finish after the watcher was released")
 	}
 	waitFor(t, "registered topic run watcher", func() bool { _, prog := e.s.channelRunByID(r.ID); return prog != nil })
-	out = e.s.botCardAction(ctx, a, "")
+	out = e.s.larkModule().Action(ctx, a, "")
 	if out.Toast == nil || out.Toast.Type != "success" || len(e.f.interrupted()) != 1 {
 		t.Fatalf("watched current card did not interrupt once: %+v / %v", out.Toast, e.f.interrupted())
 	}
@@ -357,16 +357,16 @@ func TestFeishuStaleStopFailedInterruptCanRetry(t *testing.T) {
 	s, f := stopCardHub(t, FeishuFeatures{Main: true})
 	a := currentStopCard(s, botTarget{Kind: targetPersona, MachineID: "server", SessionID: "conv0001"})
 	f.failInterrupt = errors.New("synthetic node refusal")
-	if out := s.botCardAction(context.Background(), a, ""); out.Toast == nil || out.Toast.Type != "error" {
+	if out := s.larkModule().Action(context.Background(), a, ""); out.Toast == nil || out.Toast.Type != "error" {
 		t.Fatalf("failure=%+v", out.Toast)
 	}
 	f.mu.Lock()
 	f.failInterrupt = nil
 	f.mu.Unlock()
-	if out := s.botCardAction(context.Background(), a, ""); out.Toast == nil || out.Toast.Type != "success" {
+	if out := s.larkModule().Action(context.Background(), a, ""); out.Toast == nil || out.Toast.Type != "success" {
 		t.Fatalf("retry=%+v", out.Toast)
 	}
-	s.botCardAction(context.Background(), a, "")
+	s.larkModule().Action(context.Background(), a, "")
 	if got := f.interrupted(); len(got) != 2 {
 		t.Fatalf("want one failed attempt and one successful attempt, got %v", got)
 	}
@@ -386,7 +386,7 @@ func TestFeishuStaleStopRestoredOwnership(t *testing.T) {
 	s.chans.st.Runs = nil
 	s.chans.mu.Unlock()
 	a := staleStopAction(target, "om_restored")
-	s.botCardAction(context.Background(), a, "")
+	s.larkModule().Action(context.Background(), a, "")
 	if s.chans.stLoaded || len(f.interrupted()) != 0 {
 		t.Fatal("callback restored historical state")
 	}
@@ -394,7 +394,7 @@ func TestFeishuStaleStopRestoredOwnership(t *testing.T) {
 	s.loadChannelStateLocked(context.Background())
 	r = s.chans.st.Runs[0]
 	s.chans.mu.Unlock()
-	s.botCardAction(context.Background(), a, "")
+	s.larkModule().Action(context.Background(), a, "")
 	if len(f.interrupted()) != 0 {
 		t.Fatal("unwatched stored run acted")
 	}
@@ -410,7 +410,7 @@ func TestFeishuStaleStopRestoredOwnership(t *testing.T) {
 			t.Error("restored watcher did not exit")
 		}
 	}()
-	out := s.botCardAction(context.Background(), a, "")
+	out := s.larkModule().Action(context.Background(), a, "")
 	if out.Toast == nil || out.Toast.Type != "success" || len(f.interrupted()) != 1 {
 		t.Fatalf("restored current owner: %+v / %v", out.Toast, f.interrupted())
 	}
@@ -428,18 +428,18 @@ func TestFeishuStaleStopAcrossHeldContinuation(t *testing.T) {
 	if !r.Held || r.Ext["card"] != "" {
 		t.Fatal("hold did not retire the answered card")
 	}
-	s.botCardAction(ctx, staleStopAction(botTargetOf(r), old), "")
+	s.larkModule().Action(ctx, staleStopAction(botTargetOf(r), old), "")
 	if len(f.interrupted()) != 0 {
 		t.Fatal("answered held card interrupted work")
 	}
 	f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) { return map[string]any{"message_id": "om_continuation"}, nil })
 	feishuSink{s}.progress(ctx, r, time.Second, nil, "")
 	a := staleStopAction(botTargetOf(r), "om_continuation")
-	if out := s.botCardAction(ctx, a, ""); out.Toast == nil || out.Toast.Type != "success" {
+	if out := s.larkModule().Action(ctx, a, ""); out.Toast == nil || out.Toast.Type != "success" {
 		t.Fatalf("continuation toast %+v", out.Toast)
 	}
-	s.botCardAction(ctx, staleStopAction(botTargetOf(r), old), "")
-	s.botCardAction(ctx, a, "")
+	s.larkModule().Action(ctx, staleStopAction(botTargetOf(r), old), "")
+	s.larkModule().Action(ctx, a, "")
 	if got := f.interrupted(); len(got) != 1 {
 		t.Fatalf("held continuation interrupts %v", got)
 	}
@@ -461,7 +461,7 @@ func TestFeishuStaleStopFeaturePolicy(t *testing.T) {
 			s, f := stopCardHub(t, tc.features)
 			f.setSessions("server", proto.Session{MachineID: "server", SessionID: tc.target.SessionID, Assistant: tc.target.Kind == targetPersona, State: proto.StateWorking, Status: proto.StatusWorking})
 			a := currentStopCard(s, tc.target)
-			out := s.botCardAction(context.Background(), a, "")
+			out := s.larkModule().Action(context.Background(), a, "")
 			if out.Toast == nil || out.Toast.Type != tc.want {
 				t.Fatalf("toast %+v want %s", out.Toast, tc.want)
 			}

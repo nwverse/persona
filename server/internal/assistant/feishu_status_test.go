@@ -128,7 +128,7 @@ func TestStatusCommandFollowsThreadTarget(t *testing.T) {
 	f.setSessions("server",
 		proto.Session{SessionID: "main0", MachineID: "server", Assistant: true, State: proto.StateIdle, LastText: "主对话最近一句"},
 		proto.Session{SessionID: "agent0001", MachineID: "server", Agent: "claude", State: proto.StateWorking, LastText: "正在跑测试"})
-	s.rememberBotThread("om_root", statusAgent, "agent work")
+	s.larkModule().RememberThread("om_root", statusAgent, "agent work")
 	feats := FeishuFeatures{Main: true, Agents: true, Cards: true}
 	if h, _ := s.botCommand(ctx, feats, "om", "/status", "om_root", ""); !h {
 		t.Fatal("/status not handled")

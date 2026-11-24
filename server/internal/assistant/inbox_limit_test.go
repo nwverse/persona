@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/nwverse/persona/server/internal/prompts"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/prompts"
 
 	"github.com/nwverse/persona/server/internal/ai"
 )

@@ -109,7 +109,7 @@ func (e *briefRunEnv) features(f FeishuFeatures) {
 	e.mu.Lock()
 	e.feat = &f
 	e.mu.Unlock()
-	e.s.feishuForgetStatus()
+	e.s.larkModule().ForgetStatus()
 }
 
 // mirror ends the routine's turn: the answer goes to Feishu.
@@ -270,7 +270,7 @@ func TestBriefAcceptButtonIsForItsRoundOnly(t *testing.T) {
 	e.s.accept.mu.Lock()
 	e.s.accept.asks["todo_v1"].AskedAt = time.Now().Add(-time.Minute)
 	e.s.accept.mu.Unlock()
-	if r := e.s.botCardAction(ctx, press(value), ""); r == nil || r.Toast == nil || !strings.Contains(r.Toast.Content, "已经处理过了") {
+	if r := e.s.larkModule().Action(ctx, press(value), ""); r == nil || r.Toast == nil || !strings.Contains(r.Toast.Content, "已经处理过了") {
 		t.Fatalf("an old round's button was not answered as handled: %+v", r)
 	}
 	if !askOf(e.s, "todo_v1").AcceptedAt.IsZero() {
@@ -279,7 +279,7 @@ func TestBriefAcceptButtonIsForItsRoundOnly(t *testing.T) {
 
 	// The button of the round that waits now works.
 	now := map[string]any{"a": "accept", "id": "todo_v1", "asked_at": askOf(e.s, "todo_v1").AskedAt.UTC().Format(timeKeyLayout)}
-	if r := e.s.botCardAction(ctx, press(now), ""); r == nil || r.Toast == nil || !strings.Contains(r.Toast.Content, "已验收") {
+	if r := e.s.larkModule().Action(ctx, press(now), ""); r == nil || r.Toast == nil || !strings.Contains(r.Toast.Content, "已验收") {
 		t.Fatalf("the current round's button did not verify it: %+v", r)
 	}
 	if askOf(e.s, "todo_v1").AcceptedAt.IsZero() {

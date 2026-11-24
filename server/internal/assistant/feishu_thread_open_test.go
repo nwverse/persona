@@ -133,7 +133,7 @@ func TestIsTopicRoot(t *testing.T) {
 func TestReplyInAnUnboundTopicOpensNothing(t *testing.T) {
 	e := newThreadEnv(t, nil)
 	now := time.Unix(10_000_000, 0)
-	e.s.fbot.now = func() time.Time { return now }
+	e.s.setLarkNow(func() time.Time { return now })
 	e.deliver(topicEvent("om_a1", "随便说说"))
 	e.deliver(topicEvent("om_a2", "再说一句"))
 	if todoCount(e.s) != 0 || len(handoffs(e.f)) != 0 {

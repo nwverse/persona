@@ -51,13 +51,13 @@ func newWorkbenchEnv(t *testing.T, f FeishuFeatures) *workbenchEnv {
 		return map[string]any{}, e.recallErr
 	})
 	e.setFeatures(f)
-	_, _ = e.s.feishuFeatures(context.Background())
+	_, _ = e.s.chat().Features(context.Background())
 	return e
 }
 
 func (e *workbenchEnv) command(cmd string) (bool, string) {
 	e.t.Helper()
-	f, _ := e.s.feishuFeatures(context.Background())
+	f, _ := e.s.chat().Features(context.Background())
 	return e.s.botCommand(context.Background(), f, "om_cmd", cmd, "", "")
 }
 
@@ -175,7 +175,7 @@ func TestWorkbenchButtonOnEveryCard(t *testing.T) {
 		t.Fatalf("the workbench button on a card: %s", js)
 	}
 	e.setFeatures(FeishuFeatures{Main: true, Agents: true})
-	_, _ = e.s.feishuFeatures(context.Background())
+	_, _ = e.s.chat().Features(context.Background())
 	if _, err := e.s.botPost(context.Background(), "", botcard.NewCard("t", botcard.Blue, "t").Markdown("later"), ""); err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +457,7 @@ func TestWorkbenchNoticesGoToAPollingCompanion(t *testing.T) {
 
 	// Switched off, pushes go to the chat again.
 	e.setFeatures(FeishuFeatures{Main: true, Pushes: true})
-	_, _ = e.s.feishuFeatures(context.Background())
+	_, _ = e.s.chat().Features(context.Background())
 	before, _, _, _ = e.counts()
 	e.s.feishuPush("", "", "Off again", "to the chat")
 	if after, _, _, _ := e.counts(); after != before+1 {
@@ -494,7 +494,7 @@ func TestWorkbenchInboxCardFilesAnItem(t *testing.T) {
 	var a botcard.CardAction
 	a.Action.Value = map[string]any{"a": "ib", "op": "done", "id": "lark:f1:1"}
 	a.Context.MessageID = "om_inbox"
-	resp := e.s.botCardAction(context.Background(), &a, "")
+	resp := e.s.larkModule().Action(context.Background(), &a, "")
 	if resp == nil || resp.Card == nil {
 		t.Fatalf("Done: %+v", resp)
 	}

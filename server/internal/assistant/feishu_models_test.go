@@ -22,7 +22,7 @@ func TestFeishuModelCommands(t *testing.T) {
 		note = p.Text
 		return map[string]any{}, nil
 	})
-	s.setBotCurrent(botTarget{Kind: targetMain})
+	s.larkModule().SetTarget(botTarget{Kind: targetMain})
 	command := func(text string) {
 		t.Helper()
 		note = ""
@@ -47,13 +47,13 @@ func TestFeishuModelCommands(t *testing.T) {
 	if err != nil || p["model"] != "m2" {
 		t.Fatalf("next message: %v %v", p, err)
 	}
-	s.setBotCurrent(botTarget{Kind: targetAgent, MachineID: "server", SessionID: "agent"})
+	s.larkModule().SetTarget(botTarget{Kind: targetAgent, MachineID: "server", SessionID: "agent"})
 	command("/modelchange m1")
 	pick, _ = s.modelPickOf(ctx, "server", "main")
 	if pick.Model != "m2" {
 		t.Fatalf("agent target changed main: %+v", pick)
 	}
-	s.setBotCurrent(botTarget{Kind: targetPersona, MachineID: "server", SessionID: "side"})
+	s.larkModule().SetTarget(botTarget{Kind: targetPersona, MachineID: "server", SessionID: "side"})
 	command("/modelchange m1")
 	pick, _ = s.modelPickOf(ctx, "server", "main")
 	if pick.Model != "m2" {

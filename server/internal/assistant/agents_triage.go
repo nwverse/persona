@@ -3,12 +3,13 @@ package assistant
 import (
 	"context"
 	"errors"
-	"github.com/nwverse/persona/server/internal/closeout"
 	"slices"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/nwverse/persona/server/internal/closeout"
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"

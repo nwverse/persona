@@ -3,8 +3,9 @@ package assistant
 import (
 	"context"
 	"encoding/json"
-	"github.com/nwverse/persona/server/internal/devicewire"
 	"path/filepath"
+
+	"github.com/nwverse/persona/server/internal/devicewire"
 
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"

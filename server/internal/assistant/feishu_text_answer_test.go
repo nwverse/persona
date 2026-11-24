@@ -35,7 +35,7 @@ func textAnswerBot(t *testing.T, resolve appAnswer, ixs ...proto.Interaction) (*
 		return map[string]any{"ok": true}, nil
 	})
 	s := newTestService(t, f)
-	_, _ = s.feishuStatus(context.Background())
+	_, _ = s.chat().Status(context.Background())
 	s.fbot.cards = map[string]botCard{}
 	return s, f, posts, &notes, &resolves
 }
@@ -187,7 +187,7 @@ func TestFeishuMessageTypedAnswer(t *testing.T) {
 	var ev botcard.MessageEvent
 	ev.Message.ChatType = "p2p"
 	ev.Message.MessageID, ev.Message.MessageType, ev.Message.Content = "om_in", "text", `{"text":"第二个"}`
-	st, _ := s.feishuStatus(context.Background())
+	st, _ := s.chat().Status(context.Background())
 	s.feishuMessage(ev, st, "oa_1")
 	if len(*rs) != 1 || (*rs)[0]["interaction_id"] != "ix_q" || sendOnceText(f) != "" {
 		t.Fatalf("resolves %v, leaked into chat %q", *rs, sendOnceText(f))
@@ -205,7 +205,7 @@ func TestTypedAnswerToACardEndedElsewhereIsNotForwarded(t *testing.T) {
 	var ev botcard.MessageEvent
 	ev.Message.ChatType = "p2p"
 	ev.Message.MessageID, ev.Message.MessageType, ev.Message.Content = "om_in", "text", `{"text":"上海"}`
-	st, _ := s.feishuStatus(context.Background())
+	st, _ := s.chat().Status(context.Background())
 	s.feishuMessage(ev, st, "oa_1")
 	if got := sendOnceText(f); got != "" || len(*rs) != 0 {
 		t.Fatalf("the late answer went into the conversation: %q, resolves %v", got, *rs)
@@ -237,7 +237,7 @@ func TestTypedAnswerToACardEndedElsewhereIsNotForwarded(t *testing.T) {
 	}
 	s, _, _, _, _ = textAnswerBot(t, nil)
 	now := time.Unix(5000, 0)
-	s.fbot.now = func() time.Time { return now }
+	s.setLarkNow(func() time.Time { return now })
 	seedCard(s, ix)
 	s.feishuInteractionDone(ix, "已在 App 中回答")
 	now = now.Add(endedAskFor + time.Second)
@@ -298,7 +298,7 @@ func TestTypedFreeAnswerInTopic(t *testing.T) {
 	ev.Message.ChatType = "p2p"
 	ev.Message.MessageID, ev.Message.RootID, ev.Message.MessageType, ev.Message.Content =
 		"om_in", "om_topic", "text", `{"text":"想换个方案"}`
-	st, _ := s.feishuStatus(context.Background())
+	st, _ := s.chat().Status(context.Background())
 	s.feishuMessage(ev, st, "oa_1")
 	if len(*rs) != 1 || (*rs)[0]["interaction_id"] != "ix_free" || sendOnceText(f) != "" {
 		t.Fatalf("resolves %v, leaked into chat %q", *rs, sendOnceText(f))

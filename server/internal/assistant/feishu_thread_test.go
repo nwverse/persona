@@ -87,7 +87,7 @@ func privateEvent(id, text string) botcard.MessageEvent {
 // deliver hands ev to the handler the way FeishuMessage does once it has taken it.
 func (e *threadEnv) deliver(ev botcard.MessageEvent) {
 	e.t.Helper()
-	st, err := e.s.feishuStatus(context.Background())
+	st, err := e.s.chat().Status(context.Background())
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func TestTopicReplyDeliveredTwiceIsHandledOnce(t *testing.T) {
 func TestTopicWithoutAnOpenTodoIsToldOnce(t *testing.T) {
 	e := newThreadEnv(t, nil)
 	now := time.Unix(10_000_000, 0)
-	e.s.fbot.now = func() time.Time { return now }
+	e.s.setLarkNow(func() time.Time { return now })
 	l := e.s.botLang(context.Background())
 	unbound, done := i18n.T(l, "assistant-feishu.thread_unbound"), i18n.T(l, "assistant-feishu.thread_done")
 
@@ -372,14 +372,14 @@ func TestTopicMessageNeverTakesThePrivateChatsRoad(t *testing.T) {
 	e := newThreadEnv(t, nil)
 	e.topicTodo("发版")
 	elsewhere := botTarget{Kind: targetAgent, MachineID: "box", SessionID: "agent01"}
-	e.s.setBotCurrent(elsewhere)
+	e.s.larkModule().SetTarget(elsewhere)
 
 	e.deliver(topicEvent("om_c1", "/new 帮我写点东西"))
 	h := onlyHandoff(t, e.f)
 	if h.machine != "server" || h.session != "m1" || !strings.Contains(h.text, "/new 帮我写点东西") {
 		t.Fatalf("went to %+v", h)
 	}
-	if got := e.s.botTargetFor("", ""); got != elsewhere {
+	if got := e.s.larkModule().Route("", ""); got != elsewhere {
 		t.Fatalf("the current target became %+v", got)
 	}
 	e.f.mu.Lock()
@@ -404,7 +404,7 @@ func TestTopicMessageNeverTakesThePrivateChatsRoad(t *testing.T) {
 	s.accept.loaded = true
 	s.accept.asks = map[string]*acceptAsk{"todo_other": {MessageID: "om_accept", Messages: []string{"om_accept"}, AskedAt: time.Now()}}
 	s.accept.mu.Unlock()
-	s.rememberBotThread("om_agent_card", elsewhere, "Agent")
+	s.larkModule().RememberThread("om_agent_card", elsewhere, "Agent")
 	for i, parent := range []string{"om_accept", "om_agent_card"} {
 		ev := topicEvent("om_k"+string(rune('1'+i)), "通过")
 		ev.Message.ParentID, ev.Message.RootID = parent, parent
@@ -424,7 +424,7 @@ func TestTopicMessageNeverTakesThePrivateChatsRoad(t *testing.T) {
 	if got := handoffs(e.f); len(got) != 4 {
 		t.Fatalf("an unbound topic's message was sent on: %+v", got)
 	}
-	if got := e.s.botTargetFor("", ""); got != elsewhere {
+	if got := e.s.larkModule().Route("", ""); got != elsewhere {
 		t.Fatalf("the current target became %+v", got)
 	}
 
@@ -765,7 +765,7 @@ func TestStopButtonOnATopicsProgressCard(t *testing.T) {
 	var a botcard.CardAction
 	a.Action.Value = map[string]any{"a": "stop", "k": targetPersona, "m": r.MachineID, "s": r.SessionID}
 	a.Context.MessageID, a.Context.ChatID = mid, testChat
-	if res := e.s.botCardAction(ctx, &a, ""); res.Toast == nil {
+	if res := e.s.larkModule().Action(ctx, &a, ""); res.Toast == nil {
 		t.Fatalf("no answer to the press: %+v", res)
 	}
 	interrupts := 0

@@ -40,11 +40,11 @@ func TestFeishuNewFirstMessageIgnoresOldReply(t *testing.T) {
 				})
 				f.answerApp(AppFeishu, FeishuUserName, func(json.RawMessage) (any, error) { return map[string]any{"name": "Previous author"}, nil })
 				s := newTestService(t, f)
-				if _, err := s.feishuStatus(context.Background()); err != nil {
+				if _, err := s.chat().Status(context.Background()); err != nil {
 					t.Fatal(err)
 				}
-				s.setBotCurrent(old)
-				s.rememberBotThread("om_old", old, "Previous conversation")
+				s.larkModule().SetTarget(old)
+				s.larkModule().RememberThread("om_old", old, "Previous conversation")
 				ev := privateEvent("om_new", "/new 2")
 				switch binding {
 				case "parent":
@@ -80,7 +80,7 @@ func TestFeishuNewFirstMessageIgnoresOldReply(t *testing.T) {
 				if len(runs) != 1 || runs[0].SessionID == "oldchat01" || runs[0].ReplyTo != "om_new" {
 					t.Fatalf("new run: %+v", runs)
 				}
-				cur := s.botTargetFor("", "")
+				cur := s.larkModule().Route("", "")
 				if cur.SessionID != runs[0].SessionID || cur.Kind != targetPersona {
 					t.Fatalf("new current: %+v", cur)
 				}
@@ -162,12 +162,12 @@ func newCommandReplyBot(t *testing.T, features FeishuFeatures) (*Service, *fakeH
 		f.answerApp(AppFeishu, m, func(json.RawMessage) (any, error) { return map[string]any{}, nil })
 	}
 	s := newTestService(t, f)
-	if _, err := s.feishuStatus(context.Background()); err != nil {
+	if _, err := s.chat().Status(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	old := botTarget{Kind: targetPersona, MachineID: "server", SessionID: "oldchat01"}
-	s.setBotCurrent(old)
-	s.rememberBotThread("om_old", old, "Previous conversation")
+	s.larkModule().SetTarget(old)
+	s.larkModule().RememberThread("om_old", old, "Previous conversation")
 	return s, f
 }
 
@@ -180,10 +180,10 @@ func TestFeishuNewBareCommandDefersStart(t *testing.T) {
 	if starts != 0 || len(handoffs(f)) != 0 || len(f.appParams(AppFeishu, FeishuText)) != 1 {
 		t.Fatal("bare /new did not only confirm")
 	}
-	if got := s.botTargetFor("", ""); got.Kind != targetPersona || got.SessionID != "" {
+	if got := s.larkModule().Route("", ""); got.Kind != targetPersona || got.SessionID != "" {
 		t.Fatalf("next unbound message target: %+v", got)
 	}
-	if got := s.botTargetFor("om_old", "om_old"); got.SessionID != "oldchat01" {
+	if got := s.larkModule().Route("om_old", "om_old"); got.SessionID != "oldchat01" {
 		t.Fatalf("bare /new erased the old binding: %+v", got)
 	}
 	deliverNewReplyDM(t, s, "om_followup", "First request", "", "", "oa_test")
@@ -217,7 +217,7 @@ func TestFeishuNewReplyControls(t *testing.T) {
 			if len(f.sends) != 0 || f.made != 0 {
 				t.Fatalf("control started a conversation: %+v", f.sends)
 			}
-			if got := s.botTargetFor("", ""); got.SessionID != "oldchat01" {
+			if got := s.larkModule().Route("", ""); got.SessionID != "oldchat01" {
 				t.Fatalf("control changed current: %+v", got)
 			}
 		})

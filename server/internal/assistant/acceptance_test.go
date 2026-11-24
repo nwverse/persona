@@ -396,7 +396,7 @@ func TestAcceptanceReplyWithMedia(t *testing.T) {
 			card := askOf(s, id).MessageID
 			ev := dmReply("om_reply", "", card, card)
 			ev.Message.MessageType, ev.Message.Content = c.msgType, c.content
-			st, err := s.feishuStatus(context.Background())
+			st, err := s.chat().Status(context.Background())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -486,7 +486,7 @@ func TestAcceptanceReopenRound(t *testing.T) {
 			a.Context.MessageID = mid
 			return &a
 		}
-		s.botCardAction(ctx, press(old), "")
+		s.larkModule().Action(ctx, press(old), "")
 		if a := askOf(s, id); !a.AcceptedAt.IsZero() || onlyTodo(s).Stage == "verify" {
 			t.Fatalf("the first round's button verified the second round: %+v stage=%q", a, onlyTodo(s).Stage)
 		}
@@ -500,7 +500,7 @@ func TestAcceptanceReopenRound(t *testing.T) {
 			len(got) != 2 || !strings.Contains(got[0], "已经处理过了") || !strings.Contains(got[1], "已经处理过了") {
 			t.Fatalf("routed=%d notes=%q ask=%+v stage=%q", len(f.agentSent)-before, got, a, onlyTodo(s).Stage)
 		}
-		s.botCardAction(ctx, press("om_round2"), "")
+		s.larkModule().Action(ctx, press("om_round2"), "")
 		if askOf(s, id).AcceptedAt.IsZero() || onlyTodo(s).Stage != "verify" {
 			t.Fatal("the second round's own button did not accept it")
 		}

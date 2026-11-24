@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/nwverse/persona/server/internal/assistant/kbhistory"
 	"io"
 	"net/http"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/assistant/kbhistory"
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"

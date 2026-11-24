@@ -525,7 +525,7 @@ func TestThreadPostsAnchorGone(t *testing.T) {
 	id := e.bound("发版", testThread)
 	e.decide(id, "先发安卓")
 	e.clk.advance(threadPostEvery)
-	if got := e.s.topicMessage(context.Background(), testChat, testThread); got != "" {
+	if got := e.s.larkModule().TopicAnchor(context.Background(), testChat, testThread); got != "" {
 		t.Fatalf("the withdrawn anchor %q is still remembered", got)
 	}
 	n := len(e.posts()) // the one failed call
@@ -545,7 +545,7 @@ func TestThreadPostsAnchorGone(t *testing.T) {
 	e.s.rememberTopicMessage(context.Background(), testChat, testThread, "om_old")
 	e.s.rememberTopicMessage(context.Background(), testChat, testThread, "om_newer")
 	e.s.forgetTopicMessage(context.Background(), testChat, testThread, "om_old")
-	if got := e.s.topicMessage(context.Background(), testChat, testThread); got != "om_newer" {
+	if got := e.s.larkModule().TopicAnchor(context.Background(), testChat, testThread); got != "om_newer" {
 		t.Fatalf("anchor %q", got)
 	}
 }
@@ -668,14 +668,14 @@ func TestThreadPostsNothingToAChatNotInTheList(t *testing.T) {
 	// The same todo's topic, once its chat is on the list, is said into (the list is read when the line goes out).
 	id2 := e.bound("在名单里", "omt_listed")
 	e.chats = nil
-	e.s.feishuForgetStatus()
+	e.s.larkModule().ForgetStatus()
 	e.decide(id2, "先发安卓")
 	e.clk.advance(time.Hour)
 	if got := e.posts(); len(got) != 0 {
 		t.Fatalf("said with no chat on the list: %v", got)
 	}
 	e.chats = []string{testChat}
-	e.s.feishuForgetStatus()
+	e.s.larkModule().ForgetStatus()
 	e.decide(id2, "再发 iOS")
 	e.clk.advance(time.Hour)
 	mustContain(t, "line", textOf(e.onlyPost(t)), "再发 iOS")
@@ -728,7 +728,7 @@ func TestThreadPostsGoIntoTheTopicByItsLatestMessage(t *testing.T) {
 	}
 
 	// It survives a restart: the message is kept with the chat's state.
-	e2 := e.s.topicMessage(context.Background(), testChat, testThread)
+	e2 := e.s.larkModule().TopicAnchor(context.Background(), testChat, testThread)
 	if e2 != "om_t2" {
 		t.Fatalf("anchor %q", e2)
 	}

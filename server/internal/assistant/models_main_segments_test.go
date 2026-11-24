@@ -3,11 +3,12 @@ package assistant
 import (
 	"encoding/json"
 	"errors"
+	"strings"
+	"testing"
+
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
-	"strings"
-	"testing"
 )
 
 func TestMainOverrideDoesNotRebindAnExplicitLogicalSegment(t *testing.T) {

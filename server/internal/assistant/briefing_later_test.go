@@ -155,7 +155,7 @@ func TestBriefHandledButtonOfTheCard(t *testing.T) {
 		var a botcard.CardAction
 		a.Action.Value = map[string]any{"a": "later_done", "id": id}
 		a.Context.MessageID = "om_brief_1"
-		return e.s.botCardAction(ctx, &a, "")
+		return e.s.larkModule().Action(ctx, &a, "")
 	}
 	if r := press(first.Later[0].id); r == nil || r.Toast == nil || r.Toast.Type != "success" || !strings.Contains(r.Toast.Content, "已标记为处理过") {
 		t.Fatalf("the press: %+v", r)
@@ -284,7 +284,7 @@ func TestBriefLaterRouteOnAStoreFailure(t *testing.T) {
 	press := func(s *Service, id string) *botcard.CardResponse {
 		var c botcard.CardAction
 		c.Action.Value = map[string]any{"a": "later_done", "id": id}
-		return s.botCardAction(ctx, &c, "")
+		return s.larkModule().Action(ctx, &c, "")
 	}
 	unavailable := i18n.T(e.s.botLang(ctx), "http-status.unavailable")
 	failed := func(s *Service, what string) {

@@ -34,7 +34,7 @@ func TestFeishuRecalledMessageIsNotSent(t *testing.T) {
 	ev.Message.MessageID = "om_y"
 	content := botcard.ParseContent(ev.Message.MessageType, ev.Message.Content, nil)
 	s.FeishuRecalled(FeishuRecalled{MessageID: "om_y"})
-	if err := s.botSend(context.Background(), &ev, content, botTarget{Kind: targetMain}); err != nil {
+	if err := s.larkModule().Send(context.Background(), &ev, content, botTarget{Kind: targetMain}); err != nil {
 		t.Fatal(err)
 	}
 	if text := sendOnceText(f); text != "" || unreacted != 1 {
@@ -42,7 +42,7 @@ func TestFeishuRecalledMessageIsNotSent(t *testing.T) {
 	}
 	// Another message goes as before.
 	ev.Message.MessageID = "om_z"
-	if err := s.botSend(context.Background(), &ev, content, botTarget{Kind: targetMain}); err != nil || sendOnceText(f) == "" {
+	if err := s.larkModule().Send(context.Background(), &ev, content, botTarget{Kind: targetMain}); err != nil || sendOnceText(f) == "" {
 		t.Fatalf("an ordinary message: %v", err)
 	}
 }

@@ -63,7 +63,7 @@ func TestStopCardPressMakesTheSameInterruptCallAsStopCommand(t *testing.T) {
 	ctx := context.Background()
 	target := botTarget{Kind: targetPersona, MachineID: "server", SessionID: "conv0001"}
 
-	r := s.botCardAction(ctx, currentStopCard(s, target), "")
+	r := s.larkModule().Action(ctx, currentStopCard(s, target), "")
 	want := i18n.T("", "assistant-feishu_cards.stopped", i18n.Args{"label": s.targetLabel(ctx, target)})
 	if r.Toast == nil || r.Toast.Type != "success" || r.Toast.Content != want {
 		t.Fatalf("press toast %+v, want success %q", r.Toast, want)
@@ -72,7 +72,7 @@ func TestStopCardPressMakesTheSameInterruptCallAsStopCommand(t *testing.T) {
 		t.Fatalf("press interrupted %v, want [server/conv0001]", got)
 	}
 
-	s.rememberBotThread("om_topic", target, "修 bug")
+	s.larkModule().RememberThread("om_topic", target, "修 bug")
 	if h, _ := s.botCommand(ctx, FeishuFeatures{Main: true}, "om", "/stop", "om_topic", ""); !h {
 		t.Fatal("/stop was not handled")
 	}
@@ -99,7 +99,7 @@ func TestStopCardPressInterruptFailureSaysWhy(t *testing.T) {
 	ctx := context.Background()
 	target := botTarget{Kind: targetPersona, MachineID: "server", SessionID: "conv0001"}
 
-	r := s.botCardAction(ctx, currentStopCard(s, target), "")
+	r := s.larkModule().Action(ctx, currentStopCard(s, target), "")
 	want := i18n.T("", "assistant-feishu_cards.not_stopped", i18n.Args{"error": "node is down"})
 	if r.Toast == nil || r.Toast.Type != "error" || r.Toast.Content != want {
 		t.Fatalf("toast %+v, want error %q", r.Toast, want)
@@ -137,7 +137,7 @@ func TestStopCardPressWithNothingToStopSaysSo(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			feats.Agents = c.agents
 			before := len(f.interrupted())
-			r := s.botCardAction(ctx, stopCardAction(c.target), "")
+			r := s.larkModule().Action(ctx, stopCardAction(c.target), "")
 			if r.Toast == nil || r.Toast.Type != c.wantKind || r.Toast.Content != c.wantToast {
 				t.Fatalf("toast %+v, want %s %q", r.Toast, c.wantKind, c.wantToast)
 			}
@@ -199,7 +199,7 @@ func TestStopWithNoTurnRunningSaysSo(t *testing.T) {
 			if !c.sent {
 				s.chans.st.Runs[len(s.chans.st.Runs)-1].Seen = true
 			}
-			r := s.botCardAction(ctx, a, "")
+			r := s.larkModule().Action(ctx, a, "")
 			want := map[bool]int{true: 2, false: 0}[c.runs] // /stop and the press, each with its own call
 			if got := f.interrupted(); len(got) != want {
 				t.Fatalf("interrupts %v, want %d", got, want)

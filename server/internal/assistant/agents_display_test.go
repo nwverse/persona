@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/nwverse/persona/server/internal/db"
 	"net/http"
 	"os"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/db"
 )
 
 type agentsDisplayStore struct {

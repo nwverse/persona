@@ -1,15 +1,13 @@
-package assistant
+package lark
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
-	"github.com/nwverse/persona/server/internal/channel"
-	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
@@ -30,7 +28,7 @@ const threadHintEvery = 10 * time.Minute
 const threadHintsKeep = 200
 
 // threadMessage takes a message from a group chat: the to-do bound to its topic records it and its agent gets it.
-func (s *Service) threadMessage(ctx context.Context, ev botcard.MessageEvent, st FeishuStatus, content botcard.Content) {
+func (s core) threadMessage(ctx context.Context, ev botcard.MessageEvent, st FeishuStatus, content botcard.Content) {
 	msg := ev.Message
 	// Only the owner's own words count here, whatever reaches this far: the hub checks it too (a later step), and the
 	// words go to an agent that acts on them.
@@ -47,22 +45,22 @@ func (s *Service) threadMessage(ctx context.Context, ev botcard.MessageEvent, st
 	l := s.botLang(ctx)
 	topic := &feishuTopic{Chat: msg.ChatID, Thread: msg.ThreadID}
 	to := topic.target()
-	if err := s.ensureTodosLoaded(ctx); err != nil {
+	if err := s.h.EnsureTodosLoaded(ctx); err != nil {
 		s.logf("bots: topic message: todos not loaded: %v", err)
 		s.botNoteTo(ctx, to, msg.MessageID, i18n.T(l, "assistant-feishu.not_sent", i18n.Args{"error": clip(oneLine(err.Error()), 200)}))
 		return
 	}
-	t, bound := s.todoOfThread(TodoThread{Channel: channel.Feishu, ChatID: msg.ChatID, ThreadID: msg.ThreadID})
+	t, bound := s.h.TodoOfThread(msg.ChatID, msg.ThreadID)
 	if !bound && s.openTopicIfAsked(ctx, ev, st, content, topic) {
-		return // a topic bound to nothing that starts one, or "/ai …" in one: a to-do is opened (feishu_thread_open.go)
+		return // a topic bound to nothing that starts one, or "/ai …" in one: a to-do is opened (thread_open.go)
 	}
-	if bound && !content.Forward && noReplyCommand(openingCommandWords(ev, content)) { // after the bot's @, which a group that only sends what @s the bot starts every message with
+	if bound && !content.Forward && s.h.NoReplyCommand(openingCommandWords(ev, content)) { // after the bot's @, which a group that only sends what @s the bot starts every message with
 		// "Don't report back": a command of its own, also for a todo that is done and not yet reported, and never passed on
-		// as words (todo_source.go).
-		s.threadNoReply(ctx, ev, t, topic)
+		// as words (the core's todo_source.go).
+		s.h.ThreadNoReply(ctx, ev, t.ID, topic.Chat, topic.Thread)
 		return
 	}
-	if !bound || t.DoneAt != nil {
+	if !bound || t.Done {
 		key := "assistant-feishu.thread_unbound"
 		if bound {
 			key = "assistant-feishu.thread_done"
@@ -80,28 +78,21 @@ func (s *Service) threadMessage(ctx context.Context, ev botcard.MessageEvent, st
 		return
 	}
 	// Who gets it is settled before anything is written; with no one, the words are still recorded and the user is told so.
-	routes, routeErr := s.threadRoutes(ctx, t, st.Features)
+	routes, routeErr := s.h.ThreadRoutes(ctx, t.ID, st.Features)
 	recorded := false
 	if text != "" {
-		if store := s.todoDB(); store != nil {
-			at := decisionNow()
-			inserted, err := s.insertDecision(ctx, store, db.TodoDecisionRow{ID: "dec_" + randomHex(8), TodoID: t.ID,
-				Question: i18n.T(l, "assistant-feishu.thread_question"), Choice: decisionText(text), Source: db.DecisionThread,
-				SourceMessage: "feishu-" + msg.MessageID, CreatedAt: at})
-			switch {
-			case errors.Is(err, db.ErrTodoNotFound): // deleted since it was looked up
-				if s.threadHintDue(msg.ChatID + "/" + msg.ThreadID) {
-					s.botNoteTo(ctx, to, msg.MessageID, i18n.T(l, "assistant-feishu.thread_unbound"))
-				}
-				return
-			case err != nil:
-				s.logf("todo %s: topic decision: %v", t.ID, err) // as an acceptance's: the words still go to the agent
-			case !inserted:
-				return // this message was handed over before: once is all
-			default:
-				recorded = true
-				s.decisionsChanged(ctx, t.ID, at)
+		// Noted as the to-do's decision (the core's ledger; a failure there is only logged: the words still go to the
+		// agent).
+		switch s.h.TopicDecision(ctx, t.ID, i18n.T(l, "assistant-feishu.thread_question"), text, msg.MessageID) {
+		case assistantwire.DecisionTodoGone: // deleted since it was looked up
+			if s.threadHintDue(msg.ChatID + "/" + msg.ThreadID) {
+				s.botNoteTo(ctx, to, msg.MessageID, i18n.T(l, "assistant-feishu.thread_unbound"))
 			}
+			return
+		case assistantwire.DecisionSeen:
+			return // this message was handed over before: once is all
+		case assistantwire.DecisionNoted:
+			recorded = true
 		}
 	}
 	notDelivered := func(err error) {
@@ -111,24 +102,24 @@ func (s *Service) threadMessage(ctx context.Context, ev botcard.MessageEvent, st
 		}
 		s.botNoteTo(ctx, to, msg.MessageID, i18n.T(l, key, i18n.Args{"error": clip(oneLine(err.Error()), 200)}))
 	}
-	if text != "" && needsUserWakeEligible(t) {
+	if text != "" {
 		label := msg.ThreadID
-		if t.Thread != nil && strings.TrimSpace(t.Thread.Title) != "" {
-			label = t.Thread.Title
+		if strings.TrimSpace(t.ThreadTitle) != "" {
+			label = t.ThreadTitle
 		}
-		s.emitNeedsUserExternalInfo(ctx, t, "feishu thread "+label, text, "feishu_thread:"+msg.ChatID+"/"+msg.ThreadID+"@"+msg.MessageID)
+		s.h.TopicWake(ctx, t.ID, "feishu thread "+label, text, "feishu_thread:"+msg.ChatID+"/"+msg.ThreadID+"@"+msg.MessageID)
 	}
 	if len(routes) == 0 {
 		s.logf("bots: topic message of todo %s: no one to give it to: %v", t.ID, routeErr)
 		notDelivered(routeErr)
 		return
 	}
-	content.Text = prompts.RenderTodoThreadReply(prompts.TodoThreadReply{Language: answerLanguage(s.hello(ctx).Locale), Title: contextText(clip(oneLine(t.Title), 80)), Text: text, Recorded: recorded})
-	// A to-do that came from a question nobody answered (ask_todo.go): the reply is the owner's call, and goes to the
+	content.Text = prompts.RenderTodoThreadReply(prompts.TodoThreadReply{Language: s.h.AnswerLanguage(s.hello(ctx).Locale), Title: contextText(clip(oneLine(t.Title), 80)), Text: text, Recorded: recorded})
+	// A to-do that came from a question nobody answered (the core's ask_todo.go): the reply is the owner's call, and goes to the
 	// conversation that asked (not to an Agent) as the answer; the to-do then closes.
 	asked := false
 	if convs := slices.DeleteFunc(slices.Clone(routes), func(r botTarget) bool { return r.Kind == targetAgent }); text != "" && len(convs) > 0 {
-		if answer, ok := s.askTodoTopicAnswer(ctx, t, text); ok {
+		if answer, ok := s.h.AskTodoTopicAnswer(ctx, t.ID, text); ok {
 			content.Text, routes, asked = answer, convs, true
 		}
 	}
@@ -136,22 +127,22 @@ func (s *Service) threadMessage(ctx context.Context, ev botcard.MessageEvent, st
 	for _, target := range routes { // one that cannot take it (offline, gone, refusing) leaves it to the next
 		if err = s.botSendIn(ctx, &ev, content, target, topic); err == nil {
 			if asked {
-				s.settleAskClaim(ctx, t.ID, true)
-				s.closeAskTodo(ctx, t.ID)
+				s.h.SettleAskClaim(ctx, t.ID, true)
+				s.h.CloseAskTodo(ctx, t.ID)
 			}
 			return
 		}
 		s.logf("bots: topic message of todo %s to %s: %v", t.ID, target.Kind, err)
 	}
 	if asked {
-		s.settleAskClaim(ctx, t.ID, false)
+		s.h.SettleAskClaim(ctx, t.ID, false)
 	}
 	notDelivered(err)
 }
 
 // threadHintDue says whether the topic key is to be told it has no open to-do now: once in threadHintEvery.
-func (s *Service) threadHintDue(key string) bool {
-	b := &s.fbot
+func (s core) threadHintDue(key string) bool {
+	b := s.fbot()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := b.clock()

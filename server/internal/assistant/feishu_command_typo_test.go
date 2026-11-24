@@ -54,7 +54,7 @@ func TestBotCommandTypoIsAsked(t *testing.T) {
 			t.Fatalf("%q: handled=%v rest=%q", plain, h, rest)
 		}
 	}
-	s.rememberBotThread("om_agent", botTarget{Kind: targetAgent, MachineID: "server", SessionID: "a1"}, "Claude")
+	s.larkModule().RememberThread("om_agent", botTarget{Kind: targetAgent, MachineID: "server", SessionID: "a1"}, "Claude")
 	for _, in := range []string{"/stpo", "//stpo"} {
 		if h, rest := s.botCommand(ctx, FeishuFeatures{Main: true, Agents: true}, "om", in, "om_agent", "om_agent"); h || rest != in {
 			t.Fatalf("%q to an agent: handled=%v rest=%q", in, h, rest)

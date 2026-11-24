@@ -14,10 +14,11 @@ import (
 	"strings"
 	"testing"
 
+	"time"
+
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
-	"time"
 )
 
 // The converged wire names (#11719): applies_when and candidates, with priority. The old names still decode, reads

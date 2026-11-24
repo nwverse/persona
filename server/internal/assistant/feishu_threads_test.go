@@ -11,19 +11,19 @@ import (
 func TestFeishuOldCardStillRoutesItsReply(t *testing.T) {
 	s := newTestService(t, newFakeHub().withMachine())
 	now := time.Unix(10_000_000, 0)
-	s.fbot.now = func() time.Time { return now }
+	s.setLarkNow(func() time.Time { return now })
 	agent := botTarget{Kind: targetAgent, MachineID: "server", SessionID: "a1"}
-	s.rememberBotThread("om_first", agent, "Claude")
+	s.larkModule().RememberThread("om_first", agent, "Claude")
 	for i := 0; i < 150; i++ {
 		now = now.Add(time.Hour)
-		s.rememberBotThread(fmt.Sprintf("om_%d", i), botTarget{Kind: targetPersona, MachineID: "server", SessionID: "m1"}, "主对话")
+		s.larkModule().RememberThread(fmt.Sprintf("om_%d", i), botTarget{Kind: targetPersona, MachineID: "server", SessionID: "m1"}, "主对话")
 	}
-	if got := s.botTargetFor("om_first", "om_first"); got != agent {
+	if got := s.larkModule().Route("om_first", "om_first"); got != agent {
 		t.Fatalf("a card of six days ago routes to %+v", got)
 	}
 	now = now.Add(botThreadsKeepFor)
-	s.rememberBotThread("om_new", agent, "Claude")
-	if got := s.botTargetFor("om_first", "om_first"); got.Kind != targetMain {
+	s.larkModule().RememberThread("om_new", agent, "Claude")
+	if got := s.larkModule().Route("om_first", "om_first"); got.Kind != targetMain {
 		t.Fatalf("a card past the keep still routes to %+v", got)
 	}
 

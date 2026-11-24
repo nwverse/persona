@@ -85,7 +85,7 @@ func TestFailedAnswerRestoresOnlyAPendingCard(t *testing.T) {
 			seedCard(s, ix)
 			ctx := context.Background()
 			if c.press {
-				r := s.botCardAction(ctx, ixPress(ix.ID, "上海"), "oa_1")
+				r := s.larkModule().Action(ctx, ixPress(ix.ID, "上海"), "oa_1")
 				if r == nil || r.Toast == nil {
 					t.Fatalf("no toast: %+v", r)
 				}
@@ -165,7 +165,7 @@ func TestLatePressOutcomeIsSaidInTheChat(t *testing.T) {
 		endingQueue(f, ix, new(atomic.Bool), "resolved")
 		notes := record(f, AppFeishu, FeishuText)
 		seedCard(s, ix)
-		r := s.botCardAction(context.Background(), ixPress(ix.ID, "上海"), "oa_1")
+		r := s.larkModule().Action(context.Background(), ixPress(ix.ID, "上海"), "oa_1")
 		if r == nil || r.Toast == nil || r.Toast.Content != "正在处理…" {
 			t.Fatalf("toast %+v", r)
 		}
@@ -195,7 +195,7 @@ func TestLatePressOutcomeIsSaidInTheChat(t *testing.T) {
 		endingQueue(f, ix, &ended, "resolved")
 		closed := record(f, AppFeishu, FeishuUpdateCard)
 		seedCard(s, ix)
-		r := s.botCardAction(context.Background(), ixPress(ix.ID, "上海"), "oa_1")
+		r := s.larkModule().Action(context.Background(), ixPress(ix.ID, "上海"), "oa_1")
 		if r == nil || r.Toast == nil || r.Toast.Content != "正在处理…" {
 			t.Fatalf("toast %+v", r)
 		}
@@ -232,7 +232,7 @@ func TestEndedCardSaysWhy(t *testing.T) {
 			s, f, _, _, rs := textAnswerBot(t, nil, ix)
 			endingQueue(f, ix, ended, c.status)
 			seedCard(s, ix)
-			r := s.botCardAction(context.Background(), ixPress(ix.ID, "上海"), "oa_1")
+			r := s.larkModule().Action(context.Background(), ixPress(ix.ID, "上海"), "oa_1")
 			if r == nil || r.Toast == nil || r.Toast.Content != c.toast || len(*rs) != 0 {
 				t.Fatalf("press toast %+v resolves %v, want %q", r, *rs, c.toast)
 			}

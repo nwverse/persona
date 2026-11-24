@@ -82,7 +82,7 @@ func newAskRig(t *testing.T) *askRig {
 	mem := newFleetMem()
 	s := withSettings(t, r.f, New(Options{Hub: r.f, Store: func() Store { return mem }, Logf: testLogf(t), Devices: hookDevs{r.d, r}}))
 	s.fleet.interactions = map[string]*pending{}
-	s.fbot.now = func() time.Time { return r.now }
+	s.setLarkNow(func() time.Time { return r.now })
 	var mu sync.Mutex
 	updates := []string{}
 	r.f.answerApp(AppFeishu, FeishuUpdateCard, func(p json.RawMessage) (any, error) {

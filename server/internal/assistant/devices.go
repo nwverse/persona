@@ -3,9 +3,10 @@ package assistant
 import (
 	"context"
 	"encoding/json"
-	"github.com/nwverse/persona/server/internal/devicewire"
 	"net/http"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/devicewire"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devices"

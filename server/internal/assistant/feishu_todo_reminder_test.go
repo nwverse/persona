@@ -123,7 +123,7 @@ func TestFeishuTodoReminderReplyCarriesTodoContext(t *testing.T) {
 	if len(*posts) != 1 {
 		t.Fatalf("posts %d", len(*posts))
 	}
-	target := s.botTargetFor("", "om_1")
+	target := s.larkModule().Route("", "om_1")
 	if target.Kind != targetPersona || target.MachineID != "server" || target.SessionID != "m1" || target.TodoID != todo.ID {
 		t.Fatalf("reply target %+v", target)
 	}
@@ -136,7 +136,7 @@ func TestFeishuTodoReminderReplyCarriesTodoContext(t *testing.T) {
 	ev.Message.MessageID, ev.Message.ParentID, ev.Message.RootID = "om_answer", "om_1", "om_1"
 	ev.Message.ChatType, ev.Message.MessageType, ev.Message.Content = "p2p", "text", `{"text":"这件事继续办"}`
 	content := botcard.ParseContent(ev.Message.MessageType, ev.Message.Content, nil)
-	if err := s.botSend(context.Background(), ev, content, target); err != nil {
+	if err := s.larkModule().Send(context.Background(), ev, content, target); err != nil {
 		t.Fatal(err)
 	}
 	text := sendOnceText(f)
@@ -175,7 +175,7 @@ func TestFeishuTodoReminderHealthContentStaysOffChannels(t *testing.T) {
 	if !strings.Contains(cards, wantTitle) || !strings.Contains(cards, wantBody) {
 		t.Fatalf("generic health notice missing: %s", cards)
 	}
-	if target := s.botTargetFor("", "om_1"); target.TodoID != "" {
+	if target := s.larkModule().Route("", "om_1"); target.TodoID != "" {
 		t.Fatalf("health reminder reply carries todo id %q", target.TodoID)
 	}
 	channelTitle, channelBody := s.reminderChannelText(context.Background(), todo, todo.Title, todo.Notes)
@@ -217,7 +217,7 @@ func TestFeishuOrdinaryPushUnchangedByTodoReminders(t *testing.T) {
 	if !strings.Contains(card, "普通正文") || !strings.Contains(card, "https://hub.example.com/persona/m1") || strings.Contains(card, "/todos/") {
 		t.Fatalf("ordinary push changed: %s", card)
 	}
-	if target := s.botTargetFor("", "om_1"); target.TodoID != "" || target.SessionID != "m1" {
+	if target := s.larkModule().Route("", "om_1"); target.TodoID != "" || target.SessionID != "m1" {
 		t.Fatalf("ordinary reply target %+v", target)
 	}
 }

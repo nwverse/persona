@@ -114,7 +114,7 @@ func TestFeishuClarifyRequiresFreshCardBoundOwnerActionAndRoutesAnswerHome(t *te
 		a.Action.FormValue = map[string]any{"question": question, "password": "must-not-travel"}
 		a.Context.ChatID = "oc_owner_private"
 		a.Context.MessageID = "om_original_card"
-		return ft.s.botCardAction(context.Background(), &a, action)
+		return ft.s.larkModule().Action(context.Background(), &a, action)
 	}
 	res := press("callback-token-1", "owner-action-1", "  Why this change?  ")
 	if res == nil || res.Toast == nil || res.Card != nil || res.Toast.Type != "success" {
@@ -176,7 +176,7 @@ func TestFeishuTokenlessCallbacksDoNotCollapseDistinctQuestions(t *testing.T) {
 		a.Action.Value = map[string]any{"a": "ix", "id": "ix_lark_tokenless", "clarify": "1"}
 		a.Action.FormValue = map[string]any{"question": question}
 		a.Context.ChatID, a.Context.MessageID = "oc_owner", "om_card"
-		if res := ft.s.botCardAction(context.Background(), &a, action); res == nil || res.Toast == nil || res.Toast.Type != "success" {
+		if res := ft.s.larkModule().Action(context.Background(), &a, action); res == nil || res.Toast == nil || res.Toast.Type != "success" {
 			t.Fatalf("tokenless callback = %+v", res)
 		}
 	}

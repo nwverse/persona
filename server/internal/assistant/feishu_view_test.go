@@ -13,22 +13,22 @@ import (
 func TestFeishuViewListsEachAgentOnce(t *testing.T) {
 	s := newTestService(t, newFakeHub().withMachine())
 	now := time.Unix(10_000_000, 0)
-	s.fbot.now = func() time.Time { return now }
+	s.setLarkNow(func() time.Time { return now })
 	ctx := context.Background()
 	first := botTarget{Kind: targetAgent, MachineID: "server", SessionID: "agent01"}
 	second := botTarget{Kind: targetAgent, MachineID: "server", SessionID: "agent02"}
 	third := botTarget{Kind: targetAgent, MachineID: "server", SessionID: "agent03"}
-	s.rememberBotThread("om_agents", first, "old name · server") // the list card "Chat here" was pressed on
+	s.larkModule().RememberThread("om_agents", first, "old name · server") // the list card "Chat here" was pressed on
 	now = now.Add(time.Hour)
-	s.rememberBotThread("om_progress1", first, "fix the login · server") // each card posted about the conversation
+	s.larkModule().RememberThread("om_progress1", first, "fix the login · server") // each card posted about the conversation
 	now = now.Add(time.Hour)
-	s.rememberBotThread("om_answer1", first, "fix the login · server")
+	s.larkModule().RememberThread("om_answer1", first, "fix the login · server")
 	now = now.Add(time.Hour)
-	s.rememberBotThread("om_second", second, "run the tests · server")
+	s.larkModule().RememberThread("om_second", second, "run the tests · server")
 	now = now.Add(time.Hour)
-	s.rememberBotThread("om_third", third, "write the report · server")
+	s.larkModule().RememberThread("om_third", third, "write the report · server")
 	now = now.Add(time.Hour)
-	s.rememberBotThread("om_persona", botTarget{Kind: targetPersona, MachineID: "server", SessionID: "m1"}, "Main chat")
+	s.larkModule().RememberThread("om_persona", botTarget{Kind: targetPersona, MachineID: "server", SessionID: "m1"}, "Main chat")
 
 	// Newest first, named by the agent's newest thread, and the same on every load — the map the threads live in has
 	// no order, so a list built from it as it comes out changes on every reload.
@@ -54,10 +54,10 @@ func TestFeishuViewListsEachAgentOnce(t *testing.T) {
 // those rows still keep one order on every load.
 func TestFeishuViewOrdersRowsWithoutATime(t *testing.T) {
 	s := newTestService(t, newFakeHub().withMachine())
-	s.fbot.now = func() time.Time { return time.Time{} } // the bindings carry no time
+	s.setLarkNow(func() time.Time { return time.Time{} }) // the bindings carry no time
 	ctx := context.Background()
 	for _, id := range []string{"agent02", "agent01", "agent03"} {
-		s.rememberBotThread("om_"+id, botTarget{Kind: targetAgent, MachineID: "server", SessionID: id}, id+" · server")
+		s.larkModule().RememberThread("om_"+id, botTarget{Kind: targetAgent, MachineID: "server", SessionID: id}, id+" · server")
 	}
 
 	for i := 0; i < 10; i++ {

@@ -7,9 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/db"
 	"testing"
 	"testing/synctest"
+
+	"github.com/nwverse/persona/server/internal/db"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"

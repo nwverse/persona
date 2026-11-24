@@ -97,7 +97,7 @@ func (e *boardEnv) setFeatures(f FeishuFeatures) {
 	e.mu.Lock()
 	e.features = f
 	e.mu.Unlock()
-	e.s.feishuForgetStatus()
+	e.s.larkModule().ForgetStatus()
 }
 
 func (e *boardEnv) failUpdates(err error) {
@@ -109,11 +109,11 @@ func (e *boardEnv) failUpdates(err error) {
 // tasks is the owner sending /tasks (or an alias) to the bot.
 func (e *boardEnv) tasks(cmd string) {
 	e.t.Helper()
-	e.s.feishuForgetStatus()
+	e.s.larkModule().ForgetStatus()
 	e.mu.Lock()
 	f := e.features
 	e.mu.Unlock()
-	_, _ = e.s.feishuStatus(context.Background()) // what a message from the owner does first: the pairing is kept
+	_, _ = e.s.chat().Status(context.Background()) // what a message from the owner does first: the pairing is kept
 	if h, rest := e.s.botCommand(context.Background(), f, "om_cmd", cmd, "", ""); !h || rest != "" {
 		e.t.Fatalf("botCommand(%q) = %v, %q", cmd, h, rest)
 	}
@@ -825,7 +825,7 @@ func TestBoardOfAnOldPairingIsNotEdited(t *testing.T) {
 	e.mu.Lock()
 	e.pairedAt = time.Unix(200, 0) // paired again while the assistant was away
 	e.mu.Unlock()
-	e.s.feishuForgetStatus()
+	e.s.larkModule().ForgetStatus()
 	e.s.boardChanged()
 	e.card("ix1", "box", "ag1", "新主人的问题", 0)
 	e.clk.advance(boardSettle)
@@ -937,7 +937,7 @@ func TestBoardTodoChangesCostNoStatusCalls(t *testing.T) {
 // board up to date, so the row is marked without anyone asking for the board.
 func TestBoardMarksANudgedRow(t *testing.T) {
 	e := newBoardEnv(t)
-	e.s.fbot.now = e.clk.Now
+	e.s.setLarkNow(e.clk.Now)
 	e.f.answerApp(AppNotify, NotifyQuietGet, func(json.RawMessage) (any, error) { return map[string]bool{"quiet": false}, nil })
 	rowOf := func(card, q string) string {
 		for _, row := range strings.Split(bodyOf(t, card), "\n**") {
@@ -962,7 +962,7 @@ func TestBoardMarksANudgedRow(t *testing.T) {
 
 	e.clk.advance(boardSettle) // whatever the first board scheduled has run
 	_, before := e.counts()
-	e.s.feishuForgetStatus()
+	e.s.larkModule().ForgetStatus()
 	e.s.nudgeTick(context.Background()) // ix_old waited 61 minutes, ix_new one
 	if len(e.texts) != 1 || e.texts[0]["reply_to"] != "om_ix_old" {
 		t.Fatalf("nudges: %v", e.texts)

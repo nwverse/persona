@@ -99,7 +99,7 @@ func TestGoldenChannelPromptDeliveries(t *testing.T) {
 				ev.Message.MessageID, ev.Message.ParentID, ev.Message.ChatType, ev.Message.MessageType = "owner_42", "quoted_42", "p2p", "text"
 				content := botcard.Content{Text: "Respuesta en español, por favor."}
 				target := botTarget{Kind: targetPersona, MachineID: "server", SessionID: "m1", TodoID: todo.ID}
-				if err := bot.botSend(ctx, ev, content, target); err != nil {
+				if err := bot.larkModule().Send(ctx, ev, content, target); err != nil {
 					t.Fatal(err)
 				}
 				calls := sendOnces(f)
@@ -215,7 +215,7 @@ func TestChannelOwnerAndAudienceAcrossLocales(t *testing.T) {
 				}}, nil
 			})
 			ev.Message.MessageID, ev.Message.ParentID = "forward_42", ""
-			if err := s.botSend(ctx, &ev, botcard.Content{Forward: true}, botTarget{Kind: targetMain}); err != nil {
+			if err := s.larkModule().Send(ctx, &ev, botcard.Content{Forward: true}, botTarget{Kind: targetMain}); err != nil {
 				t.Fatal(err)
 			}
 			text = sendOnceText(f)

@@ -98,19 +98,19 @@ func TestSwitchBindsPressedCard(t *testing.T) {
 	var a botcard.CardAction
 	a.Action.Value = map[string]any{"a": "switch", "k": targetAgent, "m": "box", "s": "agent01", "t": "修登录 · box"}
 	a.Context.MessageID = "om_agents"
-	r := s.botCardAction(ctx, &a, "")
+	r := s.larkModule().Action(ctx, &a, "")
 	wantToast := i18n.T("", "assistant-feishu_cards.now_to_reply", i18n.Args{"title": "修登录 · box"})
 	if r.Toast == nil || r.Toast.Content != wantToast {
 		t.Fatalf("toast %+v, want %q", r.Toast, wantToast)
 	}
 	want := botTarget{Kind: targetAgent, MachineID: "box", SessionID: "agent01"}
-	if got := s.botTargetFor("", "om_agents"); got != want { // a quote reply to the list card
+	if got := s.larkModule().Route("", "om_agents"); got != want { // a quote reply to the list card
 		t.Fatalf("reply to the card routes to %+v, want %+v", got, want)
 	}
-	if got := s.botTargetFor("om_agents", "om_agents"); got != want { // a topic started on the card
+	if got := s.larkModule().Route("om_agents", "om_agents"); got != want { // a topic started on the card
 		t.Fatalf("topic on the card routes to %+v, want %+v", got, want)
 	}
-	if got := s.botTargetFor("", ""); got != want {
+	if got := s.larkModule().Route("", ""); got != want {
 		t.Fatalf("current target %+v, want %+v", got, want)
 	}
 }
@@ -123,7 +123,7 @@ func TestStartFormCallbackPostsStartCard(t *testing.T) {
 	var a botcard.CardAction
 	a.Action.Value = map[string]any{"a": "start_form"}
 	a.Context.MessageID = "om_agents"
-	r := s.botCardAction(ctx, &a, "")
+	r := s.larkModule().Action(ctx, &a, "")
 	if r.Toast == nil || r.Toast.Content != i18n.T("", "assistant-feishu_cards.start_form_opening") {
 		t.Fatalf("toast %+v", r.Toast)
 	}
@@ -241,8 +241,8 @@ func TestStartCardDoublePressStartsOneAgent(t *testing.T) {
 	ctx := context.Background()
 	want := i18n.T("", "assistant-feishu_cards.starting")
 
-	first := s.botCardAction(ctx, startCardAction("om_card1"), "")
-	second := s.botCardAction(ctx, startCardAction("om_card1"), "")
+	first := s.larkModule().Action(ctx, startCardAction("om_card1"), "")
+	second := s.larkModule().Action(ctx, startCardAction("om_card1"), "")
 	if first.Toast == nil || second.Toast == nil || first.Toast.Content != want || second.Toast.Content != want {
 		t.Fatalf("toasts %+v %+v, want both %q", first.Toast, second.Toast, want)
 	}
@@ -259,7 +259,7 @@ func TestStartCardDoublePressStartsOneAgent(t *testing.T) {
 	default:
 	}
 
-	s.botCardAction(ctx, startCardAction("om_card2"), "")
+	s.larkModule().Action(ctx, startCardAction("om_card2"), "")
 	waitForStart(t, f, posts, says, 2, 1)
 }
 
@@ -271,12 +271,12 @@ func TestStartCardInvalidFormDoesNotTakeSlot(t *testing.T) {
 
 	bad := startCardAction("om_card1")
 	bad.Action.FormValue["cwd"] = "   "
-	r := s.botCardAction(ctx, bad, "")
+	r := s.larkModule().Action(ctx, bad, "")
 	want := i18n.T("", "assistant-feishu_cards.pick_machine_dir")
 	if r.Toast == nil || r.Toast.Content != want {
 		t.Fatalf("toast %+v, want %q", r.Toast, want)
 	}
-	s.botCardAction(ctx, startCardAction("om_card1"), "")
+	s.larkModule().Action(ctx, startCardAction("om_card1"), "")
 	waitForStart(t, f, posts, says, 1, 1)
 }
 
@@ -287,7 +287,7 @@ func TestStartCardFailedStartLetsNextPressThrough(t *testing.T) {
 	ctx := context.Background()
 	f.failStart = errors.New("node is down")
 
-	s.botCardAction(ctx, startCardAction("om_card1"), "")
+	s.larkModule().Action(ctx, startCardAction("om_card1"), "")
 	select {
 	case <-says:
 	case <-time.After(2 * time.Second):
@@ -304,7 +304,7 @@ func TestStartCardFailedStartLetsNextPressThrough(t *testing.T) {
 		t.Fatalf("started agents after failure = %d, want 0", got)
 	}
 	f.failStart = nil
-	s.botCardAction(ctx, startCardAction("om_card1"), "")
+	s.larkModule().Action(ctx, startCardAction("om_card1"), "")
 	waitForStart(t, f, posts, says, 1, 1)
 }
 
@@ -315,11 +315,11 @@ func TestStartCardPressAgainAfterWindow(t *testing.T) {
 	s, f, posts, says := startCardHub(t)
 	ctx := context.Background()
 
-	s.botCardAction(ctx, startCardAction("om_card1"), "")
+	s.larkModule().Action(ctx, startCardAction("om_card1"), "")
 	waitForStart(t, f, posts, says, 1, 1)
 	botStartCardWindow = 0 // the first press is now older than the window
 	t.Cleanup(func() { botStartCardWindow = 60 * time.Second })
-	s.botCardAction(ctx, startCardAction("om_card1"), "")
+	s.larkModule().Action(ctx, startCardAction("om_card1"), "")
 	waitForStart(t, f, posts, says, 2, 1)
 }
 
@@ -329,8 +329,8 @@ func TestStartCardWithoutMessageIDIsNotDeduped(t *testing.T) {
 	s, f, posts, says := startCardHub(t)
 	ctx := context.Background()
 
-	s.botCardAction(ctx, startCardAction(""), "")
-	s.botCardAction(ctx, startCardAction(""), "")
+	s.larkModule().Action(ctx, startCardAction(""), "")
+	s.larkModule().Action(ctx, startCardAction(""), "")
 	waitForStart(t, f, posts, says, 2, 2)
 }
 
@@ -368,7 +368,7 @@ func pressStartForm(t *testing.T, s *Service, mid string) {
 	a.Action.Value = map[string]any{"a": "start_form"}
 	a.Context.MessageID = mid
 	want := i18n.T("", "assistant-feishu_cards.start_form_opening")
-	if r := s.botCardAction(context.Background(), &a, ""); r.Toast == nil || r.Toast.Content != want {
+	if r := s.larkModule().Action(context.Background(), &a, ""); r.Toast == nil || r.Toast.Content != want {
 		t.Fatalf("press of %s: toast %+v, want %q", mid, r.Toast, want)
 	}
 }

@@ -399,7 +399,7 @@ func TestRecommendationThatCannotReachTheAgentIsNotTaken(t *testing.T) {
 	notTaken := i18n.T(s.botLang(ctx), "assistant-reports.accept_not_taken", i18n.Args{"error": "node down"})
 	press := &botcard.CardAction{}
 	press.Action.Value = map[string]any{"a": "accept", "id": todo.ID}
-	if r := s.botCardAction(ctx, press, ""); r == nil || r.Toast == nil ||
+	if r := s.larkModule().Action(ctx, press, ""); r == nil || r.Toast == nil ||
 		r.Toast.Type != "error" || r.Toast.Content != notTaken {
 		t.Fatalf("the Lark button: %+v", r)
 	}
@@ -693,7 +693,7 @@ func TestFeishuConclusionQuestionGoesToSupervisorWithoutAnswering(t *testing.T) 
 	waitsForReview(t, s, f, todo.ID, "Two options: start with ten percent or defer the rollout.")
 	reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "Which rollout do you want?", "recommend": "Start with ten percent"})
 	a := askOf(s, todo.ID)
-	status, err := s.feishuStatus(ctx)
+	status, err := s.chat().Status(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

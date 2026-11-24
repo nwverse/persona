@@ -63,7 +63,7 @@ func (e *threadEnv) readLive(id string) *channel.Run {
 // read hands ev over the way FeishuMessage does for a message marked FeishuFromRead.
 func (e *threadEnv) read(ev botcard.MessageEvent) {
 	e.t.Helper()
-	st, err := e.s.feishuStatus(context.Background())
+	st, err := e.s.chat().Status(context.Background())
 	if err != nil {
 		e.t.Fatal(err)
 	}

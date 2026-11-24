@@ -98,7 +98,7 @@ func TestFeishuReplyDeletedQuote(t *testing.T) {
 							e.deliver(ev)
 						} else {
 							content := botcard.ParseContent(ev.Message.MessageType, ev.Message.Content, nil)
-							if err := e.s.botSend(context.Background(), &ev, content, botTarget{Kind: targetMain}); err != nil {
+							if err := e.s.larkModule().Send(context.Background(), &ev, content, botTarget{Kind: targetMain}); err != nil {
 								t.Fatal(err)
 							}
 						}

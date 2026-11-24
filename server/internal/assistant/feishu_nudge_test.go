@@ -100,7 +100,7 @@ func (h hookDevs) SessionsWhere(id string, keep func(*proto.Session) bool) ([]pr
 func (r *nudgeRig) service() *Service {
 	s := withSettings(r.t, r.f, New(Options{Hub: r.f, Store: func() Store { return r.st }, Logf: testLogf(r.t), Devices: hookDevs{r.d, r}}))
 	s.fleet.interactions = map[string]*pending{}
-	s.fbot.now = func() time.Time { return r.now }
+	s.setLarkNow(func() time.Time { return r.now })
 	return s
 }
 
@@ -154,7 +154,7 @@ func (r *nudgeRig) askExpiring(s *Service, id string, lifetime time.Duration) pr
 func (r *nudgeRig) tick(s *Service, d time.Duration) {
 	r.t.Helper()
 	r.now = r.now.Add(d)
-	s.feishuForgetStatus() // the status is kept a few seconds of real time
+	s.larkModule().ForgetStatus() // the status is kept a few seconds of real time
 	s.nudgeTick(context.Background())
 }
 
@@ -304,8 +304,8 @@ func TestNudgeOffAtZero(t *testing.T) {
 	r.setAfter(60)
 	r.tick(r.s, time.Minute)
 	wantNudges(t, r, 0, "just turned on, the old card is let go")
-	if c, _ := r.cardOf(r.s, "ix_a"); c.SkippedAt.IsZero() || !c.NudgedAt.IsZero() || r.s.cardNudged("ix_a") {
-		t.Errorf("a card let go is recorded as %+v and shown as nudged: %v", c, r.s.cardNudged("ix_a"))
+	if c, _ := r.cardOf(r.s, "ix_a"); c.SkippedAt.IsZero() || !c.NudgedAt.IsZero() || r.s.larkModule().CardNudged("ix_a") {
+		t.Errorf("a card let go is recorded as %+v and shown as nudged: %v", c, r.s.larkModule().CardNudged("ix_a"))
 	}
 	r.ask(r.s, "ix_b", "")
 	r.tick(r.s, 59*time.Minute)
@@ -569,8 +569,8 @@ func TestNudgeBacklogLetGoAcrossARestartWhileOff(t *testing.T) {
 	r.tick(s2, time.Minute)
 	r.tick(s2, time.Hour)
 	wantNudges(t, r, 0, "turned on after a restart")
-	if c, _ := r.cardOf(s2, "ix_a"); c.SkippedAt.IsZero() || s2.cardNudged("ix_a") {
-		t.Errorf("card %+v, shown as nudged %v", c, s2.cardNudged("ix_a"))
+	if c, _ := r.cardOf(s2, "ix_a"); c.SkippedAt.IsZero() || s2.larkModule().CardNudged("ix_a") {
+		t.Errorf("card %+v, shown as nudged %v", c, s2.larkModule().CardNudged("ix_a"))
 	}
 }
 
@@ -594,8 +594,8 @@ func TestNudgeGivesUpAfterThreeTries(t *testing.T) {
 	}
 	r.tick(r.s, time.Minute)
 	wantNudges(t, r, 0, "after it gave up")
-	if c, _ := r.cardOf(r.s, "ix_a"); c.SkippedAt.IsZero() || !c.NudgedAt.IsZero() || r.s.cardNudged("ix_a") {
-		t.Errorf("card %+v, shown as nudged %v", c, r.s.cardNudged("ix_a"))
+	if c, _ := r.cardOf(r.s, "ix_a"); c.SkippedAt.IsZero() || !c.NudgedAt.IsZero() || r.s.larkModule().CardNudged("ix_a") {
+		t.Errorf("card %+v, shown as nudged %v", c, r.s.larkModule().CardNudged("ix_a"))
 	}
 }
 
@@ -615,8 +615,8 @@ func TestNudgeDoesNotRetryPastTheKeyWindow(t *testing.T) {
 	if tries != 1 {
 		t.Fatalf("%d sends, want the one that failed", tries)
 	}
-	if c, _ := r.cardOf(r.s, "ix_a"); c.SkippedAt.IsZero() || r.s.cardNudged("ix_a") {
-		t.Errorf("card %+v, shown as nudged %v", c, r.s.cardNudged("ix_a"))
+	if c, _ := r.cardOf(r.s, "ix_a"); c.SkippedAt.IsZero() || r.s.larkModule().CardNudged("ix_a") {
+		t.Errorf("card %+v, shown as nudged %v", c, r.s.larkModule().CardNudged("ix_a"))
 	}
 }
 
@@ -628,8 +628,8 @@ func TestNudgeRefusedIsNotShownAsNudged(t *testing.T) {
 	r.sendErr = &rpc.Error{Code: CodeChatDenied, Message: "chat denied"}
 	r.mu.Unlock()
 	r.tick(r.s, 61*time.Minute)
-	if c, _ := r.cardOf(r.s, "ix_a"); c.SkippedAt.IsZero() || !c.NudgedAt.IsZero() || r.s.cardNudged("ix_a") {
-		t.Errorf("card %+v, shown as nudged %v", c, r.s.cardNudged("ix_a"))
+	if c, _ := r.cardOf(r.s, "ix_a"); c.SkippedAt.IsZero() || !c.NudgedAt.IsZero() || r.s.larkModule().CardNudged("ix_a") {
+		t.Errorf("card %+v, shown as nudged %v", c, r.s.larkModule().CardNudged("ix_a"))
 	}
 }
 
@@ -715,7 +715,7 @@ func TestNudgeDeadlineBeforeExpiry(t *testing.T) {
 	if c.DeadlineNudge.NudgedAt.IsZero() || !c.NudgedAt.IsZero() {
 		t.Errorf("ordinary and deadline progress are not independent: %+v", c)
 	}
-	if !r.s.cardNudged("ix_deadline") {
+	if !r.s.larkModule().CardNudged("ix_deadline") {
 		t.Error("the waiting-for-you board does not show the deadline nudge that went out")
 	}
 	r.tick(r.s, 6*time.Minute)

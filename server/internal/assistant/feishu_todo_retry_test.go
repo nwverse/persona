@@ -142,7 +142,7 @@ func TestFeishuTodoReminderRecovery(t *testing.T) {
 					}
 				}
 				if accepted > 0 && (tc.postErr == nil || !tc.always) {
-					target := s.botTargetFor("", "om_todo_retry_1")
+					target := s.larkModule().Route("", "om_todo_retry_1")
 					wantTodo := todo.ID
 					if tc.health {
 						wantTodo = ""
@@ -189,7 +189,7 @@ func TestFeishuTodoReminderMultipartRecovery(t *testing.T) {
 				t.Fatalf("card %d changed its key or payload on retry", i)
 			}
 			mid := fmt.Sprintf("om_todo_retry_%d", i+1)
-			if target := s.botTargetFor("", mid); target.TodoID != todo.ID || target.SessionID != "m1" {
+			if target := s.larkModule().Route("", mid); target.TodoID != todo.ID || target.SessionID != "m1" {
 				t.Fatalf("card %d lost reply routing: %+v", i, target)
 			}
 		}

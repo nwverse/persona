@@ -134,7 +134,7 @@ func TestAssistantBotModelMenuUsesAssistantCatalog(t *testing.T) {
 		note = p.Text
 		return map[string]any{}, nil
 	})
-	s.setBotCurrent(botTarget{Kind: targetMain})
+	s.larkModule().SetTarget(botTarget{Kind: targetMain})
 	s.botModels(context.Background(), FeishuFeatures{Main: true}, "message", "/modellist", "", "", "")
 	if !strings.Contains(note, "shell-model") || strings.Contains(note, "engine-model") {
 		t.Fatalf("assistant bot listed the Agent catalog: %q", note)

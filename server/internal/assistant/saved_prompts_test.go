@@ -3,9 +3,10 @@ package assistant
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/nwverse/persona/server/internal/assistant/saved"
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/assistant/saved"
 )
 
 const savedPromptsPath = "/api/v1/assistant/saved-prompts"

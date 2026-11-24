@@ -17,9 +17,9 @@ import (
 // botAllowed says, in l, why the chat may not send to t now (nil: it may).
 func botAllowed(l i18n.Lang, f FeishuFeatures, t botTarget) error {
 	switch {
-	case t.agent() && !f.Agents:
+	case t.Agent() && !f.Agents:
 		return errors.New(i18n.T(l, "assistant-feishu.agents_off"))
-	case !t.agent() && !f.Main:
+	case !t.Agent() && !f.Main:
 		if f.Agents {
 			return errors.New(i18n.T(l, "assistant-feishu.main_off_agents_on"))
 		}
@@ -113,7 +113,7 @@ func (s *Service) startBotRun(ctx context.Context, rt resolvedTarget, t botTarge
 		}
 		run.MachineID, run.SessionID, run.TargetKind, run.Probe = sess.MachineID, sess.SessionID, targetPersona, ""
 		if t.Kind == targetPersona { // /new: the chat goes on in it
-			s.setBotCurrent(botTarget{Kind: targetPersona, MachineID: sess.MachineID, SessionID: sess.SessionID})
+			s.larkModule().SetTarget(botTarget{Kind: targetPersona, MachineID: sess.MachineID, SessionID: sess.SessionID})
 		}
 	} else {
 		sid := rt.session.SessionID
@@ -128,7 +128,7 @@ func (s *Service) startBotRun(ctx context.Context, rt resolvedTarget, t botTarge
 		if len(images) > 0 {
 			p["images"] = images
 		}
-		if !t.agent() {
+		if !t.Agent() {
 			s.UserSpoke(ctx, SessionRef{MachineID: rt.machine, SessionID: sid})
 			var err error
 			if p, err = s.SendParams(ctx, SendParams{MachineID: rt.machine, SessionID: sid, Params: p}); err != nil {

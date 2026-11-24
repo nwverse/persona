@@ -163,7 +163,7 @@ func TestFeishuImageFailureMessages(t *testing.T) {
 			ev := &botcard.MessageEvent{}
 			ev.Message.MessageID, ev.Message.ChatType = "om_image", "p2p"
 			content := botcard.ParseContent("image", `{"image_key":"img_failure"}`, nil)
-			err := s.botSend(context.Background(), ev, content, botTarget{Kind: targetMain})
+			err := s.larkModule().Send(context.Background(), ev, content, botTarget{Kind: targetMain})
 			rt, resolveErr := s.resolveBotTarget(context.Background(), botTarget{Kind: targetMain})
 			if resolveErr != nil {
 				t.Fatal(resolveErr)
@@ -201,7 +201,7 @@ func TestFeishuQuotedImageFileFallback(t *testing.T) {
 	})
 	ev := quoteReply()
 	content := botcard.ParseContent(ev.Message.MessageType, ev.Message.Content, nil)
-	if err := s.botSend(context.Background(), ev, content, botTarget{Kind: targetMain}); err != nil {
+	if err := s.larkModule().Send(context.Background(), ev, content, botTarget{Kind: targetMain}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(sendOnceText(f), "/tmp/img_q.webp") || len(sentImages(f)) != 0 || len(f.appParams(AppFeishu, FeishuSave)) != 0 {

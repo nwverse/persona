@@ -130,7 +130,7 @@ func ownerAsk(id, text string) botcard.MessageEvent {
 // ask hands ev to the assistant the way the hub does for such a message (FeishuFromElsewhere).
 func (e *askEnv) ask(ev botcard.MessageEvent) {
 	e.t.Helper()
-	st, err := e.s.feishuStatus(context.Background())
+	st, err := e.s.chat().Status(context.Background())
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func TestElsewhereOpensATopicAndATodo(t *testing.T) {
 			t.Fatalf("a home group is not bypassed: the private chat was written to (%v) or the source is anchored (%+v)", got, todo.Source)
 		}
 		// The topic's later messages come back to the to-do as any topic's do, and the topic is where the bot posts.
-		if e.s.topicMessage(context.Background(), askHome, "omt_home") != "om_root1" {
+		if e.s.larkModule().TopicAnchor(context.Background(), askHome, "omt_home") != "om_root1" {
 			t.Fatal("the topic's first message is not known as the one to reply under")
 		}
 	})
@@ -1390,7 +1390,7 @@ func TestSourceReportWaitsForTheBot(t *testing.T) {
 	e.ask(ownerAsk("om_rb1", "/ai 修登录崩溃"))
 	id := onlyTodo(e.s).ID
 	e.f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) { return FeishuStatus{Ready: false}, nil })
-	e.s.feishuForgetStatus()
+	e.s.larkModule().ForgetStatus()
 	e.closeDone(id)
 	e.clock.advance(sourceReportWait)
 	if todo := onlyTodo(e.s); todo.Source.ReportedAt != "" || todo.Source.ReportDueAt != "" || len(reportsTo(e.f, askSrc, "om_rb1")) != 0 {
