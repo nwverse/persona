@@ -608,11 +608,19 @@ func TestAutoSupervisionOffBackgroundMigrationTellsNothing(t *testing.T) {
 // withdrawn), the same as the PUT the web settings page uses.
 func TestAutoSupervisionPersonaSettingsToolSwitchesAtOnce(t *testing.T) {
 	ctx := context.Background()
-	s, f, tasks := queuedDigestFixture(t, "Queued example")
-	s.updateSupervisePending(func(p map[string]superviseSignal) {
-		g := superviseSignal{Todo: tasks[0].ID, Kind: sigStalled, Key: "pending", Minutes: 50}
-		p[g.id()] = g
-	})
+	s, f := newQuietServiceOn(t, &memStore{})
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusWorking})
+	task, err := s.createTodo(ctx, "Switch example", "Verify", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, task.ID, "conv1", []string{"Verified"}, 0)
+	g := superviseSignal{Todo: task.ID, Kind: sigInterrupted, Key: "queued", Detail: "cut off"}
+	s.updateSupervisePending(func(p map[string]superviseSignal) { p[g.id()] = g })
+	if !s.deliverDigest(ctx, s.settings(ctx), "conv1", []superviseSignal{g}, "", time.Now(), time.Time{}) {
+		t.Fatal("not queued")
+	}
 	tool := func(args string) (string, bool) {
 		r := s.Tool(ctx, ToolCall{Name: "persona_settings", Arguments: json.RawMessage(args), MachineID: "server", SessionID: "c1"})
 		return r.Content[0].Text, r.IsError
@@ -644,8 +652,8 @@ func TestAutoSupervisionPersonaSettingsToolSwitchesAtOnce(t *testing.T) {
 
 	// Declined: nothing changes and what waits stays.
 	decide(false, "")
-	if out, isErr := tool(`{"action":"set","key":"assistant.auto_supervision_messages","value":false}`); !isErr {
-		t.Fatalf("a declined change reported success: %q", out)
+	if out, _ := tool(`{"action":"set","key":"assistant.auto_supervision_messages","value":false}`); !strings.Contains(out, "declined") {
+		t.Fatalf("a declined change did not say so: %q", out)
 	}
 	if !s.autoSupervisionOn(ctx) {
 		t.Fatal("a declined card turned the switch off")
@@ -655,7 +663,7 @@ func TestAutoSupervisionPersonaSettingsToolSwitchesAtOnce(t *testing.T) {
 	}
 
 	// Approved: it reads back off, the queue is withdrawn, and the web view agrees.
-	decide(true, i18n.T(i18n.Default, "assistant-settings_tool.change_auto_supervision_messages", i18n.Args{"before": "on", "after": "off"}))
+	decide(true, i18n.T(i18n.Default, "assistant-settings_tool.change_auto_supervision_messages", i18n.Args{"before": i18n.T(i18n.Default, "assistant-settings_tool.on"), "after": i18n.T(i18n.Default, "assistant-settings_tool.off")}))
 	if out, isErr := tool(`{"action":"set","key":"assistant.auto_supervision_messages","value":false}`); isErr {
 		t.Fatalf("approved change: %q", out)
 	}
