@@ -2094,7 +2094,7 @@ Imported when merging main line 2026-11-02: pitfalls from the old single-module 
 - `adb shell am start` with an intent identical to current task root only foregrounds it ("Activity not started"), no onNewIntent;
   verify shortcuts through launcher long-press, or leave App on another page first.
 - Application-context WebView always stays light: application context lacks App theme (`isLightTheme` true); WebView only supplies
-  `prefers-color-scheme: dark` / algorithmic darkening when outer theme is dark. Pool WebViews use `ContextThemeWrapper(app, Theme.Persona)`; `values-night` `Theme.Persona` is dark with `isLightTheme=false`.
+  `prefers-color-scheme: dark` when the outer theme is dark. Pool WebViews use `ContextThemeWrapper(app, Theme.Persona)`; `values-night` `Theme.Persona` is dark with `isLightTheme=false`, while algorithmic darkening and view-level force dark stay off so pages that do not declare dark mode are not heuristically inverted.
 - Adding WebView selection actions: Chromium fills menu in `onPrepareActionMode` on every selection change, all its items demand button display, which floating toolbar prioritizes;
   custom items also need `SHOW_AS_ACTION_ALWAYS` and lower order to precede Copy. Read selection with `evaluateJavascript` before `mode.finish()`; finishing first clears it and returns empty.
 - `scripts/mock/mock_hub.py` with `MOCK_RICH=1 MOCK_LINKS=1` adds links to chat, Persona main chat and Inbox.

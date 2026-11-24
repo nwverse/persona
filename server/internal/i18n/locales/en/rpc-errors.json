@@ -109,5 +109,6 @@
   "omp_stopped": "This omp session has stopped, so this can’t be done. Send a message to continue it on the computer.",
   "conversation_retired": "This session no longer runs the conversation.",
   "agent_assistant_workspace": "Cannot start an agent in the assistant workspace. Choose the project folder or a separate worktree; no agent was started.",
-  "codex_writable_symlink": "Cannot start Codex in workspace-write mode: {name} is a symlink under a writable root, so its sandbox cannot enforce the read-only path. Choose a project folder as cwd or use read-only mode. Nothing was started; the symlink was not changed."
+  "codex_writable_symlink": "Cannot start Codex in workspace-write mode: {name} is a symlink under a writable root, so its sandbox cannot enforce the read-only path. Choose a project folder as cwd or use read-only mode. Nothing was started; the symlink was not changed.",
+  "agy_in_terminal": "This Antigravity conversation is open in agy in a terminal on that computer, and Persona can’t reach that terminal. Nothing was sent. Answer in the terminal, or close agy there and try again."
 }

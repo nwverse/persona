@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/larkhost"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -601,7 +602,7 @@ func (s *Service) sendReports() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	f, ready := s.feishuFeatures(ctx)
+	f, ready := s.chat().Features(ctx)
 	if !ready || !f.Reports {
 		return
 	}
@@ -673,7 +674,7 @@ func (s *Service) sendReports() {
 	}
 	// Every card must land: a failure after some went out requeues the whole batch (reposts early ones, retry-capped).
 	for i, c := range cards {
-		if _, err := s.botPost(ctx, "", c, fallbacks[i]); err != nil {
+		if _, err := s.chat().Post(ctx, larkhost.Target{}, "", c, fallbacks[i], ""); err != nil {
 			s.logf("bots: report: %v", err)
 			s.requeueReports(append(keep, asks...)) // the decisions held back from the card are not lost with it
 			return

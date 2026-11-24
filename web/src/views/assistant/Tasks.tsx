@@ -93,7 +93,7 @@ import type { TaskWorkspace } from "../../lib/feed";
 import { machineStartBlocked, ULTRACODE_FEATURE } from "../../lib/ultracode";
 import { UltracodeChip } from "../chat/Ultracode";
 import { byTime } from "../../lib/times";
-import { requestHome } from "../../lib/child-sessions";
+import { requestHome, requestHomeMachine } from "../../lib/child-sessions";
 import { stateName, type WaitReason } from "../../lib/state-labels";
 import { statusWord, waitOf } from "../../lib/todo-wait-reason";
 import { EDITABLE } from "../../lib/shortcuts";
@@ -221,9 +221,9 @@ export function progressOf(lead: Session | undefined) {
 /** The card a task's agents wait on: its lead agent's first, else any of its other active agents'. */
 export function taskInteraction(todo: Todo, interactions: Interaction[], lead?: Session): Interaction | undefined {
   // a card of a child session one of its agents started is that agent's (#5120)
-  const mine = (ix: Interaction) => (todo.agents ?? []).some((a) => !a.released_at && a.machine_id === ix.machine_id && a.session_id === requestHome(ix));
+  const mine = (ix: Interaction) => (todo.agents ?? []).some((a) => !a.released_at && a.machine_id === requestHomeMachine(ix) && a.session_id === requestHome(ix));
   return (lead && (interactions.find((ix) => ix.machine_id === lead.machine_id && ix.session_id === lead.session_id)
-    ?? interactions.find((ix) => ix.machine_id === lead.machine_id && requestHome(ix) === lead.session_id))) ?? interactions.find(mine);
+    ?? interactions.find((ix) => requestHomeMachine(ix) === lead.machine_id && requestHome(ix) === lead.session_id))) ?? interactions.find(mine);
 }
 
 /** What a waiting task needs, in a line (#3301): "Has a question: which framework?", "Waiting for your approval: swift test", "Plan awaiting approval", the words

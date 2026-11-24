@@ -1,6 +1,7 @@
 // Package lark is the Feishu / Lark module (docs/architecture/core-and-modules.md, #13404): the bot's client
-// (feishubot), which the extension host drives through internal/botport. internal/modules/all provides it; the module
-// adds nothing to the assistant yet, so Register adds nothing.
+// (feishubot), which the extension host drives through internal/botport, and the assistant's layer (Layer), which the
+// assistant reaches through internal/larkhost. internal/modules/all provides both; the module registers nothing with
+// the kernel, so Register adds nothing.
 package lark
 
 import (
@@ -25,5 +26,6 @@ func (Module) Info() modapi.Info {
 	return info
 }
 
-// Register adds nothing: the extension host reaches the bot's client through internal/botport.
+// Register adds nothing: the extension host reaches the bot's client through internal/botport, the assistant the
+// layer through internal/larkhost.
 func (Module) Register(modapi.Host) error { return nil }

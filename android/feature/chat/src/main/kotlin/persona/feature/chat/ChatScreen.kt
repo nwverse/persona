@@ -451,7 +451,9 @@ private fun ChatPage(
     }).collectAsStateWithLifecycle()
     // The chat jumps to a task's notice through the task host's navigation.
     // The message a hub link named (`?at=`, #2194) while it is being landed on: like a search hit, its drawer opens.
-    val childCards = rememberChatChildren(key, session, sessionList, chrome, repository)
+    var overviewOpen by remember(key) { mutableStateOf(false) }
+    var openSubagentsPending by rememberSaveable(key.path, chrome.openSubagents) { mutableStateOf(chrome.openSubagents) }
+    val childCards = rememberChatChildren(key, session, sessionList, chrome, repository, forceRead = overviewOpen)
     val modeChangeStore = remember(key, repository, scope) { ModeChangeStore(scope) { repository.modeChanges(it) } }
     DisposableEffect(modeChangeStore) { onDispose(modeChangeStore::close) }
     LaunchedEffect(key, repository, renderStyle, session != null, session?.permissionMode, session?.bypassPending) {
@@ -459,7 +461,7 @@ private fun ChatPage(
     }
     val modeChangesUntil = remember(timelineVersion, projection) { modeChangesCutoff(timeline.isFrozen(), projection.lines) }
     val pageLines = rememberChatPageLines(key, renderStyle, snapshot, session, foldsBackground, supervisingConversation, tasks, taskTodos, search,
-        openWork, projection, feed, taskPlans, taskCardProjection, childCards.rows.values.toList(), modeChanges = modeChangeStore.changes,
+        openWork, projection, feed, taskPlans, taskCardProjection, childCards.list, modeChanges = modeChangeStore.changes,
         modeChangesUntil = modeChangesUntil)
     var jumpItem by pageLines.jumpItem
     val assistantPresentation = pageLines.assistantPresentation
@@ -1027,7 +1029,17 @@ private fun ChatPage(
                                         onForkSession = if (onFork != null && session?.canFork == true) ({ onFork("") }) else null,
                                         forking = forking,
                                         takeover = pageTakeover,
-                                        menuOpen = headerMenuOpen)
+                                        menuOpen = headerMenuOpen,
+                                        machines = machines,
+                                        childRows = childCards.list,
+                                        onOpenSubagent = chrome.onOpenSubagent ?: chrome.onOpenSession,
+                                        onOpenBackgroundDestination = openBackground,
+                                        onStopLoop = if (readOnly || !canSend) null else ({ send(ChatActivity.STOP_LOOP) }),
+                                        overviewActions = chrome.actions,
+                                        overviewConnection = chrome.connection,
+                                        openSubagentsRequested = openSubagentsPending,
+                                        onOpenSubagentsHandled = { openSubagentsPending = false },
+                                        onOverviewVisible = { overviewOpen = it })
                                     // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
                                     if (tabs && session != null && onOpenSibling != null) {
                                         ChatSiblingTabs(session, siblingSessions, onOpenSibling, trailing = activityPill)
@@ -1225,6 +1237,16 @@ private fun ChatPage(
                                         else -> null
                                     },
                                     modeHint = if (glass) null else chatModeHint(session, includeModes = modeSheet),
+                                    // Brief and Board share one wrapping row for the launcher and mode chips; Glass's pill does its work (#5055).
+                                    hintChips = if (!glass && renderStyle == ChatRenderStyle.Assistant && chrome.assistantManagement != null &&
+                                        !readOnly && (canSend || turnFix == TurnErrorFix.ModelRoute)) ({
+                                        ConversationLauncherChip(chrome.assistantManagement, key.machineId, key.sessionId, session?.launcher,
+                                            conversationLauncher, conversationModel, openRequested = openModes || openModelRoutePicker,
+                                            onOpenHandled = { openModes = false; openModelRoutePicker = false }) { launcher, model ->
+                                            conversationLauncher = launcher
+                                            conversationModel = model
+                                        }
+                                    }) else null,
                                     // The model pill (#5055, the web's ModelPill): Glass's, in an Agent's chat and a Persona chat.
                                     modelPill = if (!glass || switchSession == null) null else ({ width ->
                                         val online = connection == null || connection == ConnectionState.Online
@@ -1252,16 +1274,6 @@ private fun ChatPage(
                                             clearRequested = clearModelPick, onClearHandled = { clearModelPick = false })
                                     }),
                                     accessory = {
-                                        // Brief and Board keep the launcher chip; Glass's pill does its work (#5055).
-                                        if (!glass && renderStyle == ChatRenderStyle.Assistant && chrome.assistantManagement != null &&
-                                            !readOnly && (canSend || turnFix == TurnErrorFix.ModelRoute)) {
-                                            ConversationLauncherChip(chrome.assistantManagement, key.machineId, key.sessionId, session?.launcher,
-                                                conversationLauncher, conversationModel, openRequested = openModes || openModelRoutePicker,
-                                                onOpenHandled = { openModes = false; openModelRoutePicker = false }) { launcher, model ->
-                                                conversationLauncher = launcher
-                                                conversationModel = model
-                                            }
-                                        }
                                         if (linkContexts.isEmpty()) ComposerSuggestion(session, composer, onSend = { text -> send(text) })
                                         // One line each while the link card peeks: the whole cards left no room for the composer.
                                         if (linkContexts.isNotEmpty()) ComposerContextCards(linkContexts, compact = linkInset.value > 0f) { removed ->

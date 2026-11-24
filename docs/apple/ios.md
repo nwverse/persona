@@ -1771,8 +1771,10 @@ every platform are described from #13430; this section is the Apple side.
   has anything to draw so the host leaves its spacing out), `settings` (`settingsEntry(id:info:row:page:)`: an entry
   listed, searched and routed as the core's own through `SettingsPage.module(<id>)`) and the client-side
   `capabilities` (`provide(_:_:)`: an interface the core declares and asks for, such as `LiveScreen`; nil when no
-  active module provides it, and the core then offers none of it). Declared but **not yet served**, with no API until a
-  module needs one: `shell_places`, `hello_hooks`, `frame_handlers`, `hub_session_lifecycle`, `phone_tools`, `intents`,
+  active module provides it, and the core then offers none of it), and, since #14278, `shell_places`
+  (`shellPage(id:_:)`: a page the core routes to by id, handed `PersonaHostApp.ShellContext`; the core lists its row and
+  opens its route only while a module provides it). Declared but **not yet served**, with no API until a module needs
+  one: `hello_hooks`, `frame_handlers`, `hub_session_lifecycle`, `phone_tools`, `intents`,
   `push_categories` and `audio_leases` (the core's `AudioSessionBroker` does not exist yet). Each gets its registrar
   method and registry reader with the first module that needs it (#13849).
 - **The module list** (`apple/Persona/App/Modules.swift`) is the seed of the `PersonaHostApp` layer (#13430 decision 4;
@@ -1813,7 +1815,8 @@ every platform are described from #13430; this section is the Apple side.
   its types 8 times in 4 files; now 0.
 - **Module homes and the core-only build** (#14017). A module that has left `apple/Persona/` lives in
   `apple/Modules/<Name>/`. `apple/modules.yml` (included by `project.yml`) compiles each home into the iPhone and Vision
-  apps and sets its condition (`PERSONA_MODULE_SCREEN_SHARE`), under which `Modules.builtIn` lists it;
+  apps and sets its condition (`PERSONA_MODULE_SCREEN_SHARE`, `PERSONA_MODULE_HEALTH`), under which `Modules.builtIn`
+  lists it;
   `apple/modules-core-only.yml`, enabled by `PERSONA_CORE_ONLY=YES` at `xcodegen generate`, leaves every home out, as
   the server's `persona_core_only` tag does. `scripts/ci/apple.sh` builds that core-only app ("Core-only iOS build").
   The watch, widgets and extensions never compile a module home. Source-scanning PersonaTests (token, icon, motion,
@@ -1825,6 +1828,14 @@ every platform are described from #13430; this section is the Apple side.
   module they offer no VNC, One-Tap Unlock or kept sign-in, and the lock line stands alone. Its DEBUG switches
   (`-openScreenFresh`, `-openScreenDemo`) and runtime-CLI state run from its launch hook. Its wire and capture packages
   (`PersonaScreenCore`, `PersonaScreenKit`) stay where they are.
+- **`health`** (`apple/Modules/Health/`, #14278, `feature` = `module.health`): the Health home (Today, Activity, trends,
+  the space's conversations, memory, sources). It provides the shell page `health` (`SidebarRoute.healthPage`), which
+  the drawer, the sidebar and the iPad and Sidebar layouts open; without it there is no Health row, `enterHealth()` and
+  `-openShellPage health` open nothing, and New in a health conversation starts Persona's. Its DEBUG sample
+  (`-showHealthTrends`) is applied through `ModuleDebugSamples` in `Modules.swift`. The health space's conversations
+  (`AppModel`, `Session.isHealth`), the phone's Health tools, the widgets and Health's settings stay in the core until
+  their slots (`phone_tools`, widgets, `settings`) are served. The ratchet counts type names only: a core call to a
+  module's method (a `View` extension) is caught by the core-only build, not by the ratchet.
 - **Adding a module.** Give its sources a directory of their own, classify that directory with the module id in
   `schema/module-classification.txt` (`docs/architecture/core-and-modules.md`, "Classification") and add the id to
   `GUARDED` in the ratchet; write a type

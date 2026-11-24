@@ -221,6 +221,7 @@ func (b *BusHub) Serve(ctx context.Context, svc *Service) error {
 	b.svc, b.ctx = svc, ctx
 	b.mu.Unlock()
 	defer svc.kbEnd()
+	defer svc.larkWait(2 * time.Second) // the Feishu agent messages' workers end with the connection's last calls
 	go b.takeEvents(ctx)
 	go b.runOutbox(ctx) // what was made while the hub was away, once it is back (outbox.go)
 	return b.client.Run(ctx)
@@ -530,7 +531,7 @@ func (b *BusHub) httpHandler(s *Service) http.Handler {
 	return b.httpH
 }
 
-func (b *BusHub) request(ctx context.Context, method string, params json.RawMessage) (any, error) {
+func (b *BusHub) request(ctx context.Context, method string, params json.RawMessage) (reply any, requestErr error) {
 	b.waitHello(ctx)
 	s := b.service()
 	decode := func(v any) error {
@@ -630,7 +631,14 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 			s.notesOwnerRefused(ctx, carry) // an approval is not a model turn or a conversation message
 			return map[string]any{"params": params}, nil
 		}
+		laterDone, err := s.withOwnerRelayLater(ctx, p.MachineID, p.SessionID, msg, params, true)
+		if err != nil {
+			s.notesOwnerRefused(ctx, carry)
+			s.appSendRefused(p.MachineID, p.SessionID, err)
+			return nil, err
+		}
 		s.notesOwnerSent(ctx, carry, msg)
+		s.relayLaterOwnerSent(p.SessionID, msg, laterDone)
 		if *note != "" {
 			return map[string]any{"params": params, "launcher_note": *note}, nil
 		}
@@ -735,6 +743,10 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 				if err := s.conversationParamsAvailable(ctx, d.Canonical(p.MachineID), p.Params); err != nil {
 					return nil, err
 				}
+			}
+			if devicewire.IsSessionStart(p.Method) {
+				finish := s.beginPlacementBind(ctx, d.Canonical(p.MachineID), p.Params)
+				defer func() { raw, _ := reply.(json.RawMessage); finish(raw) }()
 			}
 			if out, handled, err := s.logicalCall(context.WithValue(ctx, logicalTransportKey{}, p), d.Canonical(p.MachineID), p.Method, p.Params); handled {
 				return out, err

@@ -341,11 +341,7 @@ struct AssistantView: View {
             DirectionPage(id: $0.id)
                 .modifier(InboxDestinationEnvironment(chat: inboxChatPush, openFeishu: { navPath.wrappedValue.append($0) }))
         }
-        .navigationDestination(isPresented: $showHealth) {
-            HealthView(disabled: shownStart != nil, launcher: healthLauncherPick, launcherModel: healthModelPick, mode: $starterMode, effort: $starterEffort) { text, images in
-                Task { await start(text, images, space: Session.healthSpace) }
-            }
-        }
+        .navigationDestination(isPresented: $showHealth) { healthPage }
         .navigationDestination(item: $openedSpace) { spacePage($0) }
         .modifier(ShellDestinations(path: $path, enabled: placesByValue && !embedded, inboxChat: inboxChatPush))
         .modifier(ClassicDestinations(path: $path, enabled: shell == nil && !padPlaces && !embedded))
@@ -499,7 +495,7 @@ struct AssistantView: View {
                 case "avatars": showAvatars = true
                 case "knowledge": showKnowledge = true
                 case "todos": showTodos = true
-                case "health": showHealth = true
+                case "health": showHealth = healthShellPage != nil
                 // `-openAssistantPage space:<slug>`: that space's home; `space-new`: the new space form (screenshots).
                 case .some(let p) where p.hasPrefix("space:"): present(.space(String(p.dropFirst("space:".count))))
                 case "space-new": present(.newSpace)
@@ -515,7 +511,7 @@ struct AssistantView: View {
                 case "routines": show(.routines)
                 case "knowledge": show(.knowledge)
                 case "profile": show(.profile)
-                case "health": backToRoot(); showHealth = true // the page itself, for its screenshots
+                case "health": backToRoot(); showHealth = healthShellPage != nil // the page itself, for its screenshots
                 case "recordings": show(.recordings)
                 default: break
                 }
@@ -781,11 +777,27 @@ struct AssistantView: View {
     }
 
     /// The open conversation is the health space's.
-    private var currentIsHealth: Bool { HealthModel.newOpensHealth(current.flatMap { model.session($0) }) }
+    private var currentIsHealth: Bool { current.flatMap { model.session($0) }?.isHealth == true }
 
-    /// Health from the sidebar or the shell opens its home, with the space's conversations listed (#13273).
+    /// Health's page, from the `health` module (`ModuleSlot.shellPlaces`, #14278); nil while it is off.
+    private var healthShellPage: ModuleShellPlace? { Modules.registry.shellPage(id: SidebarRoute.healthPage) }
+
+    /// Health's home with what it shares with Persona's new conversation: the launcher, model, mode and effort picked in
+    /// the shell composer, and a start in the health space.
+    @ViewBuilder private var healthPage: some View {
+        if let page = healthShellPage {
+            page.page(PersonaHostApp.ShellContext(disabled: shownStart != nil, launcher: healthLauncherPick, launcherModel: healthModelPick,
+                                                  mode: $starterMode, effort: $starterEffort) { text, images in
+                Task { await start(text, images, space: Session.healthSpace) }
+            })
+        }
+    }
+
+    /// Health from the sidebar or the shell opens its home, with the space's conversations listed (#13273); nothing
+    /// while the health module is off.
     private func enterHealth() {
         backToRoot()
+        guard healthShellPage != nil else { return }
         present(.health)
     }
 
@@ -799,7 +811,7 @@ struct AssistantView: View {
     /// (#4329); in a domain space's, that space's home (#13500); elsewhere the assistant's.
     private var newFromTopBar: () -> Void {
         if let slug = currentSpace { return { backToRoot(); present(.space(slug)) } }
-        if currentIsHealth { return { backToRoot(); present(.health) } }
+        if currentIsHealth, healthShellPage != nil { return { backToRoot(); present(.health) } }
         return newConversation
     }
 
@@ -868,9 +880,7 @@ struct AssistantView: View {
         case .messages:
             LarkConversationsView().modifier(InboxDestinationEnvironment(chat: inboxChatPush, openFeishu: { navPath.wrappedValue.append($0) }))
         case .health:
-            HealthView(disabled: shownStart != nil, launcher: healthLauncherPick, launcherModel: healthModelPick, mode: $starterMode, effort: $starterEffort) { text, images in
-                Task { await start(text, images, space: Session.healthSpace) }
-            }
+            healthPage
             .modifier(InboxDestinationEnvironment(chat: inboxChatPush, openFeishu: { navPath.wrappedValue.append($0) }))
         case .space(let slug):
             spacePage(.home(slug))

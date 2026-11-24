@@ -1717,7 +1717,7 @@ answer reached Persona through the Inbox alone, and none of the Inbox's routes l
   told is remembered in memory: after a manager restart, a batch not yet in an event may be told once more; one still
   queued is not, since the queued message keeps its message ids (`chat` in `assistant.relay`).
 - **Unchanged.** The Inbox's own handling of the batch (triage, the AI twin, `inbox_signals`), the connector's
-  hand-over timing, the gate and its cards. There is no setting: the window and the spacing are fixed.
+  hand-over timing, the gate and its cards. The window and the spacing are fixed. One setting, `assistant.chat_reply_relay` (`persona_settings`, owner's phone approval; **off by default**), turns the whole thing on, for every chat, not chat by chat. While it is off nothing is queued or told; turning it off drops the chat_replies still queued (one going in right then is dropped by the drain). To make the feature findable, the first conversation that wrote into a chat as the user and has others' replies there gets one hint, once ever (`chat_reply_hinted`, no one's words, no push of its own): it tells the owner in one sentence that replies are not passed on and that they can ask to turn it on.
 - **Not covered.** Task Agents that write as the user (#9763 wakes a task's Agent on follow-ups in a topic bound to the
   task; they are left out here so that one answer does not wake the same Agent twice), a single topic within a chat,
   replies to one message, and the lark-cli source, whose ledger rows name a different chat id.
@@ -1783,18 +1783,24 @@ operation then read as accepted and the bubble waited for the transcript and wen
 - **Device signed out** (#10708). The hub gives the manager the sending device's credential ID when it keeps a
   message. Signing out that device fails its kept messages. Their rows say why and offer Delete. Messages kept
   before the hub recorded the sending credential have no device to match.
-- **Messages that need no reply** (#11614, `server/internal/assistant/relay_later.go`). `conversation_send` with
+- **Messages that need no reply** (#11614, #12867, `server/internal/assistant/relay_later.go`). `conversation_send` with
   `wake: false` is for acknowledgements and information the receiver does not have to act on. The message is kept
   for the receiver (`relayState.Later`, kept across a restart, at most 20 per conversation and 7 days) and goes in,
-  as a context block in front (`prompts/assistant/relay_later.md`), with the next message the manager delivers to
-  that conversation for anything else: a supervision message, another conversation's message, a scheduled follow-up,
-  a notice. It starts no turn of its own, costs no hop and no place in the relay rate, and is dropped only once the
-  message carrying it went in. Before a send with a `once_id`, its quiet-message context (including an empty one) is
-  saved and reused on retries, including after restart. A retry clears only that original context; later arrivals wait
-  for a new send ID. These reservations expire after seven days, beyond the node's ten-minute send-ID memory.
-  Nothing is guessed from the words: only the explicit argument decides. A `quote` (the
-  owner's request) always wakes, so the two together are refused. A turn the owner starts from an app does not carry
-  it; it shows above the composer meanwhile.
+  as a context block in front (`prompts/assistant/relay_later.md`), with the next message delivered to that
+  conversation for anything else: a supervision message, another conversation's message, a scheduled follow-up,
+  a notice, or an owner message sent from an app or web client (`assistant.send_params` and `session.assistant_sent`,
+  or kept undelivered retries). It starts no turn of its own, costs no hop and no place in the relay rate, and is
+  dropped (publishing the refreshed queue state immediately) only once the message carrying it went in. Before a manager
+  send with a `once_id`, its quiet-message context (including an empty one) is saved in `relayState.LaterSends` for
+  seven days and reused on retries, including after restart. For an owner send (`client_msg_id`), a reservation is saved
+  only when quiet messages are actually waiting to be carried (empty queues do zero relay writes), is deleted in the
+  same save once delivery is confirmed (or when a kept undelivered message is deleted), and expires after 24 hours
+  (`ownerLaterKeep`, matching `undeliveredGiveUp`) if never settled; an owner Retry of an earlier in-doubt kept send
+  only reuses an existing reservation without picking up later arrivals. If the relay state cannot be read on an owner
+  send, the send degrades and delivers the owner's own message without quiet context (leaving `Later` untouched), while
+  saving a carry reservation for waiting quiet messages stays fail-closed. Nothing is guessed from
+  the words: only the explicit argument decides. A `quote` (the owner's request) always wakes, so the two together are
+  refused. While kept, the message shows above the composer (`queuedRelays`) and disappears once consumed.
 - **Between conversations.** `conversation_send` to a conversation that cannot take the message now no longer fails:
   the message goes into its relay queue and is tried again under the same `once_id`. A conversation that failed to
   take a relayed message is tried again after `relayRetryGap` (30 s), not on every session list.
@@ -2319,10 +2325,16 @@ Assistant MCP tools (`assistant/conversations.go`, descriptions `prompts/mcp/ass
   - **Queue while running**: if target is running, already queued, or the owner is talking in it, persist in hub settings `assistant.relay` (survives restart), displayed above the input like typed queues
     (session `queued`). After its turn ends (no longer working) and the owner's hold is over, hub sends one at a time, by rank ("Messages from the system wait for the owner"). Don't write into running processes: Codex merges through `turn/steer`, not queueing.
     They come after the user's own queued messages, and `queued_relayed` counts them: the apps only show and copy them.
-  - **A queued send in doubt (#10690).** The manager saves the attempt time before sending. If the answer is lost or
+  - **A queued send in doubt (#10690) and direct supervision confirmation (#12567).** The manager saves the attempt time before sending. If the answer is lost or
     the manager stops, it checks the most recent three turns for the relay before sending again. It makes up to
     three checks, each with a 15-second timeout, and waits 10 seconds between checks. A match removes the relay
     from the queue. If the last check fails or still finds no match, the manager retries with the same `once_id`.
+    Direct and queued supervision sends apply the same transcript-confirmation boundary even when `assistant.send`
+    returns success: if the rendered supervision user item is not visible or the transcript cannot be read, the
+    relay (including tried PR, decision-reply, and unhandled-inbox digests) is persisted with its exact rendered
+    payload and attempt state under the same `once_id` for bounded reconciliation and retry. Untried special digests
+    continue to restore for revalidation, and an unresolved supervision relay (tried, durable-doubt, or withdrawn)
+    keeps decision-reply interjections pending until that relay is reconciled.
     An uncertain supervision digest stays queued if rechecking its tasks would change the text or destination.
     The node keeps that id for ten minutes or until it restarts. When there is no owner to ask, a possible duplicate
     is preferable to silently losing the relay.

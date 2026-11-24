@@ -164,7 +164,7 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 		cfg := s.a2aConfig(ctx)
 		_, hasA2A := s.a2aStore()
 		if hasA2A == nil && (session == "" && s.a2aMachineAllowed(ctx, cfg, s.canonical(machine)) ||
-			s.a2aAllowed(ctx, cfg, a2aRef{s.canonical(machine), session})) {
+			s.a2aToolAllowed(ctx, cfg, a2aRef{s.canonical(machine), session})) {
 			tools = append(tools, toolsNamed(assistantwire.A2AToolNames)...)
 		}
 		if assistant && toolSetOf(ctx) == toolSetSupervise {

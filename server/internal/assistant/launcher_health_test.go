@@ -476,6 +476,25 @@ func TestLauncherHealthMovesPlannedTasks(t *testing.T) {
 	}
 }
 
+// A refusal on the detour happens before bind can fill in the chosen machine.
+func TestAgentStartRecordsRefusedHealthDetour(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	ctx := context.Background()
+	f.checks["server/work"] = proto.LauncherCheck{Error: "unavailable"}
+	s.healthRound(ctx, true)
+	s.devs = &resourceDevs{
+		fleetDevs: newFleetDevs(),
+		machines:  map[string]*proto.Machine{"box": admissionMachine(8)},
+		samples:   map[string]*proto.MetricSample{"box": admissionSample(99, 16<<30, 2<<30, 1)},
+	}
+	_, err := s.runTool(ctx, "server", "conv9", "agent_start", json.RawMessage(`{"machine":"l4","cwd":"/home/me/code/app","prompt":"Check CI"}`))
+	if !isAdmissionDenied(err) || len(f.starts) != 0 {
+		t.Fatalf("expected admission refusal on the detour, got %v, starts %v", err, f.starts)
+	}
+	p := onlyStoredPlacement(t, s.store().(settingsPrefixStore))
+	checkPlacementGolden(t, &p, "v1 enforce l4 -> box (assistant-tasks.admission_load) | l4 launcher_unhealthy no_resources | server launcher_unhealthy no_resources | box assistant-tasks.admission_load health=0")
+}
+
 func TestAgentStartDetourRecomputesLauncherPermission(t *testing.T) {
 	s, f := launcherHealthHub(t)
 	f.zshrc = map[string][]proto.Launcher{

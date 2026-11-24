@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/node/imessageport"
+	"github.com/nwverse/persona/server/internal/node/iphoneport"
+	"github.com/nwverse/persona/server/internal/node/screenport"
 	"github.com/nwverse/persona/server/internal/nodecmd/commandport"
 )
 
@@ -23,5 +25,23 @@ func TestIMessageFollowsTheBuildTags(t *testing.T) {
 func TestOfficeFollowsTheBuildTags(t *testing.T) {
 	if _, got := commandport.LookupCommand("office"); got != slices.Contains(want, "office") {
 		t.Fatalf("personad office provided: %v, want %v for this build's tags", got, !got)
+	}
+}
+
+// The node's screen sessions come from the screen-share module exactly when the build tags keep it.
+func TestScreenShareFollowsTheBuildTags(t *testing.T) {
+	if got := screenport.New() != nil; got != slices.Contains(want, "screen-share") {
+		t.Fatalf("screen sessions provided to the node: %v, want %v for this build's tags", got, !got)
+	}
+}
+
+// The iphone program and `personad iphone` come from the phone-extra module exactly when the build tags keep it.
+func TestPhoneExtraFollowsTheBuildTags(t *testing.T) {
+	want := slices.Contains(want, "phone-extra")
+	if got := iphoneport.Get() != nil; got != want {
+		t.Fatalf("the iphone program provided to the node: %v, want %v for this build's tags", got, want)
+	}
+	if _, got := commandport.LookupCommand("iphone"); got != want {
+		t.Fatalf("personad iphone provided: %v, want %v for this build's tags", got, want)
 	}
 }

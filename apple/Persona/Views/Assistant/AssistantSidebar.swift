@@ -800,6 +800,9 @@ struct AssistantSidebar: View {
     var onOpenExtension: ((ExtensionNavRoute) -> Void)? = nil
     /// Health: the health space's page (docs/assistant/health.md); nil leaves the row out.
     var openHealth: (() -> Void)? = nil
+    /// The `health` module provides Health's page (#14278); while it is off the row is left out. Observed: a hello that
+    /// turns it on or off draws the sidebar again.
+    private var hasHealth: Bool { Modules.registry.shellPage(id: SidebarRoute.healthPage) != nil }
     /// A domain space (#13500, docs/apple/ios.md "Domain spaces"): its latest conversation, else its home; and New
     /// space. nil leaves the Spaces section out.
     var openSpace: ((String) -> Void)? = nil
@@ -1383,7 +1386,7 @@ extension AssistantSidebar {
                 }
                 action(String(localized: "Scheduled Tasks"), Theme.Icon.schedule, place: .routines, run: openRoutines)
                 action(String(localized: "Knowledge"), Theme.Icon.knowledge, place: .knowledge, run: openKnowledge)
-                if let openHealth { action(String(localized: "Health"), Theme.Icon.health, id: "sidebar-health", place: .health, run: openHealth) }
+                if let openHealth, hasHealth { action(String(localized: "Health"), Theme.Icon.health, id: "sidebar-health", place: .health, run: openHealth) }
                 action(String(localized: "Machines"), Theme.Icon.machines, id: "sidebar-machines", place: .machines, run: onMachines)
                 if let openMessages {
                     action(String(localized: "Messages [Quote Views 4da199]"), Theme.Icon.feishuChats, id: "sidebar-messages", place: .messages, run: openMessages)
@@ -1402,7 +1405,7 @@ extension AssistantSidebar {
             starredRow
             action(String(localized: "Scheduled Tasks"), Theme.Icon.schedule, run: openRoutines)
             action(String(localized: "Knowledge"), Theme.Icon.knowledge, run: openKnowledge)
-            if let openHealth { action(String(localized: "Health"), Theme.Icon.health, id: "sidebar-health", run: openHealth) }
+            if let openHealth, hasHealth { action(String(localized: "Health"), Theme.Icon.health, id: "sidebar-health", run: openHealth) }
             extensionRows
         }
     }
