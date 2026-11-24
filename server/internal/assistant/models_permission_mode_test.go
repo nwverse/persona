@@ -683,6 +683,9 @@ func TestModelProfilePermissionModeValidationAndCapture(t *testing.T) {
 	if len(tiers) != 2 || tiers["core"].PermissionMode != "" || tiers["dev"].PermissionMode != "" {
 		t.Fatalf("captureModels leaked permission_mode into seeded tiers: %+v", tiers)
 	}
+	if !slices.Equal(tiers["core"].Aliases, []string{"strong"}) || !slices.Equal(tiers["dev"].Aliases, []string{"standard"}) {
+		t.Fatalf("captured tiers do not answer to their older names: %+v", tiers)
+	}
 }
 
 func TestHeadlessStartDropsUnsupportedPerMachinePermissionMode(t *testing.T) {

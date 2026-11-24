@@ -866,7 +866,7 @@ function SupervisorHeldCard({ ix }: { ix: Interaction }) {
         </p>
       }
     >
-      {detail && detail !== title && <p className="text-label leading-snug break-words whitespace-pre-wrap text-ink-2">{detail}</p>}
+      {detail && detail !== title && <p className="text-meta leading-snug break-words whitespace-pre-wrap text-ink-2">{detail}</p>}
     </Card>
   );
 }

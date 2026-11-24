@@ -317,13 +317,25 @@ export function Integrations({
   const builtins = useMemo(() => filtered.filter((it) => it.kind === "builtin"), [filtered]);
   const installedExtensions = useMemo(() => filtered.filter((it) => it.kind === "extension"), [filtered]);
 
+  const showDetail = isIntegrationDetailRoute(route);
+  const compactList = showDetail && twoCol;
+  const listScrollRef = useRef<HTMLDivElement>(null);
+  const detailScrollRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (compactList && detailScrollRef.current) {
+      detailScrollRef.current.scrollTop = 0;
+    }
+  }, [compactList, open]);
+
   // Full-width subviews (Market catalog, Market item, Manage markets, Extension UI page, Sent records).
   if (route.kind === "catalog") {
     return (
       <MarketCatalog
+        backLabel={t("settings-integrations.back")}
         onBack={headerBack ? undefined : () => onOpen(null)}
         onOpen={(it) => go({ kind: "item", market: it.market, id: it.id })}
-        onMarkets={() => go({ kind: "markets" })}
+        onManageMarkets={() => go({ kind: "markets" })}
       />
     );
   }
@@ -371,8 +383,6 @@ export function Integrations({
     );
   }
 
-  const showDetail = isIntegrationDetailRoute(route);
-  const compactList = showDetail && twoCol;
   const resolvedTarget = showDetail ? resolveIntegrationTarget(route, items, picked) : null;
 
   const renderRow = (item: IntegrationItem) => {
@@ -430,60 +440,69 @@ export function Integrations({
     );
   };
 
-  const listPane = (
-    <div data-integrations-list>
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        {!headerBack && (
-          <div className="min-w-0 flex-1">
-            <h1 className="truncate text-card-title font-semibold text-ink">{t("settings-integrations.list_title")}</h1>
-          </div>
-        )}
-        {headerBack && <span className="flex-1" />}
-        {markets && !compactList && (
-          <Button tone="secondary" icon="search" onClick={() => go({ kind: "catalog" })}>
-            {t("settings-integrations.browse_market_action")}
-          </Button>
-        )}
-        <IconButton icon="retry" label={t("settings-integrations.refresh")} onClick={() => void loadAll()} disabled={loading} />
-      </div>
-
-      {!compactList && (
-        <p className="mb-4 px-1 text-meta leading-relaxed text-ink-3">
-          {t("settings-integrations.list_intro")}
-        </p>
+  const listHeader = (
+    <div className={cx(compactList ? "mb-2.5 flex items-center gap-1.5" : "mb-3 flex flex-wrap items-center gap-2")}>
+      {!headerBack && (
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-card-title font-semibold text-ink">{t("settings-integrations.list_title")}</h1>
+        </div>
       )}
+      {headerBack && <span className="flex-1" />}
+      {markets && (
+        <Button
+          tone="secondary"
+          size={compactList ? "sm" : undefined}
+          icon="search"
+          title={compactList ? t("settings-integrations.browse_market_action") : undefined}
+          testId="integrations-market-entry"
+          onClick={() => go({ kind: "catalog" })}
+        >
+          {t(compactList ? "settings-integrations.browse_market_compact" : "settings-integrations.browse_market_action")}
+        </Button>
+      )}
+      <IconButton icon="retry" label={t("settings-integrations.refresh")} onClick={() => void loadAll()} disabled={loading} />
+    </div>
+  );
 
-      {/* Capability filter chips */}
-      <div
-        role="group"
-        aria-label={t("settings-integrations.filter_label")}
-        data-integrations-filters
-        className="mb-4 flex flex-wrap items-center gap-1.5"
-      >
-        {FILTER_CHIPS.map((chip) => {
-          const active = filter === chip.id;
-          const count = counts[chip.id];
-          return (
-            <button
-              key={chip.id}
-              type="button"
-              data-integration-filter={chip.id}
-              aria-pressed={active}
-              onClick={() => setFilter(chip.id)}
-              className={cx(
-                "inline-flex h-7 items-center gap-1.5 rounded-full px-3 text-label whitespace-nowrap transition-colors",
-                active
-                  ? "bg-ink font-medium text-surface"
-                  : "bg-surface text-ink-2 shadow-hairline hover:bg-hover hover:text-ink",
-              )}
-            >
-              <span>{t(chip.labelKey)}</span>
-              {loaded && <span className={cx("tabular-nums", active ? "opacity-80" : "text-ink-3")}>{count}</span>}
-            </button>
-          );
-        })}
-      </div>
+  const filterBar = (
+    <div
+      role="group"
+      aria-label={t("settings-integrations.filter_label")}
+      data-integrations-filters
+      className={cx(
+        compactList
+          ? "-mx-1 -my-0.5 flex flex-nowrap items-center gap-1 overflow-x-auto overscroll-x-contain px-1 py-0.5 scrollbar-none"
+          : "mb-4 flex flex-wrap items-center gap-1.5",
+      )}
+    >
+      {FILTER_CHIPS.map((chip) => {
+        const active = filter === chip.id;
+        const count = counts[chip.id];
+        return (
+          <button
+            key={chip.id}
+            type="button"
+            data-integration-filter={chip.id}
+            aria-pressed={active}
+            onClick={() => setFilter(chip.id)}
+            className={cx(
+              "inline-flex shrink-0 items-center rounded-full whitespace-nowrap transition-colors",
+              compactList ? "h-6 gap-1 px-1.5 text-submeta" : "h-7 gap-1.5 px-3 text-label",
+              active
+                ? "bg-ink font-medium text-surface"
+                : "bg-surface text-ink-2 shadow-hairline hover:bg-hover hover:text-ink",
+            )}
+          >
+            <span>{t(chip.labelKey)}</span>
+            {loaded && <span className={cx("tabular-nums", active ? "opacity-80" : "text-ink-3")}>{count}</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
 
+  const listBody = (
+    <>
       {partialErrors.length > 0 && (
         <div className="mb-4">
           <Group>
@@ -560,40 +579,18 @@ export function Integrations({
         </Group>
       )}
 
-      {markets && (
-        <Group title={t("settings-extensions.market_title")} footer={t("settings-extensions.market_footer")} anchor="market">
-          <Row
-            label={
-              <span className="flex items-center gap-2">
-                <Icon name="search" size={13} className="shrink-0 text-ink-3" />
-                {t("settings-extensions.browse_market")}
-              </span>
-            }
-            onClick={() => go({ kind: "catalog" })}
-          />
-          <Row
-            label={
-              <span className="flex items-center gap-2">
-                <Icon name="gear" size={13} className="shrink-0 text-ink-3" />
-                {t("settings-extensions.manage_markets")}
-              </span>
-            }
-            onClick={() => go({ kind: "markets" })}
-          />
-        </Group>
-      )}
-
       <Group anchor="sent">
         <Row icon="send" label={t("settings-sent.entry_label")} hint={t("settings-sent.hint")} onClick={() => go({ kind: "sent" })} />
       </Group>
-    </div>
+    </>
   );
 
   const detailPane = showDetail && resolvedTarget ? (
     <IntegrationDetail
       target={resolvedTarget}
       integrationsV2={true}
-      onBack={headerBack && !twoCol ? undefined : () => onOpen(null)}
+      onBack={headerBack || twoCol ? undefined : () => onOpen(null)}
+      onUninstalled={() => onOpen(null)}
       onPage={(extId, uiId, manager) => go({ kind: "page", id: extId, ui: uiId, manager })}
       onUpgrade={(market, extId, manager) => go({ kind: "item", market, id: extId, manager })}
       onSettings={onSettings}
@@ -605,10 +602,52 @@ export function Integrations({
     return detailPane;
   }
 
+  if (compactList && detailPane) {
+    return (
+      <div
+        className="flex h-full min-h-0 min-w-0 flex-1 overflow-hidden"
+        data-integrations-split=""
+      >
+        <div
+          data-integrations-list
+          className="flex h-full min-h-0 w-[300px] shrink-0 flex-col border-r border-line"
+        >
+          <div
+            data-integrations-list-header
+            className="shrink-0 border-b border-line px-3 pt-4 pb-3"
+          >
+            {listHeader}
+            {filterBar}
+          </div>
+          <div
+            ref={listScrollRef}
+            data-integrations-list-scroll
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pt-3 pb-8"
+          >
+            {listBody}
+          </div>
+        </div>
+        <div
+          ref={detailScrollRef}
+          data-integrations-detail-scroll
+          className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain"
+        >
+          <div className="mx-auto max-w-[820px] px-6 pt-4 pb-12 sm:px-8">
+            {detailPane}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className={cx(detailPane && "flex gap-6")} data-integrations-split={detailPane ? "" : undefined}>
-      <div className={cx(detailPane && "w-[300px] shrink-0")}>{listPane}</div>
-      {detailPane && <div className="min-w-0 flex-1">{detailPane}</div>}
+    <div data-integrations-list>
+      {listHeader}
+      <p className="mb-4 px-1 text-meta leading-relaxed text-ink-3">
+        {t("settings-integrations.list_intro")}
+      </p>
+      {filterBar}
+      {listBody}
     </div>
   );
 }

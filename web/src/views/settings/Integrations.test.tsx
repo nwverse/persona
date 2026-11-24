@@ -89,13 +89,28 @@ vi.mock("./IntegrationDetail", () => ({
 }));
 
 vi.mock("./ExtensionMarket", () => ({
-  MarketCatalog: ({ onBack, onOpen, onMarkets }: { onBack?: () => void; onOpen: (it: { market: string; id: string }) => void; onMarkets: () => void }) => (
-    <div data-mock-market-catalog>
-      {onBack && <button type="button" data-mock-market-back onClick={onBack}>Back</button>}
-      <button type="button" data-mock-market-open onClick={() => onOpen({ market: "official", id: "demo-ext" })}>Open item</button>
-      <button type="button" data-mock-markets-open onClick={onMarkets}>Manage markets</button>
-    </div>
-  ),
+  MarketCatalog: ({
+    onBack,
+    backLabel,
+    onOpen,
+    onMarkets,
+    onManageMarkets,
+  }: {
+    onBack?: () => void;
+    backLabel?: string;
+    onOpen: (it: { market: string; id: string }) => void;
+    onMarkets?: () => void;
+    onManageMarkets?: () => void;
+  }) => {
+    const manage = onManageMarkets ?? onMarkets;
+    return (
+      <div data-mock-market-catalog data-back-label={backLabel ?? ""}>
+        {onBack && <button type="button" data-mock-market-back onClick={onBack}>Back</button>}
+        <button type="button" data-mock-market-open onClick={() => onOpen({ market: "official", id: "demo-ext" })}>Open item</button>
+        {manage && <button type="button" data-mock-markets-open onClick={manage}>Manage markets</button>}
+      </div>
+    );
+  },
   MarketItem: ({ market, id, onBack, onInstalled }: { market: string; id: string; onBack?: () => void; onInstalled: (id: string) => void }) => (
     <div data-mock-market-item data-market={market} data-id={id}>
       {onBack && <button type="button" data-mock-item-back onClick={onBack}>Back</button>}
@@ -307,19 +322,26 @@ const flush = async () => {
   }
 };
 
-function stubFullHubFetch(overrides?: { markets?: boolean; failMail?: boolean; failBot?: boolean }) {
+function stubFullHubFetch(overrides?: {
+  markets?: boolean;
+  failMail?: boolean;
+  failBot?: boolean;
+  extensions?: HubExtension[];
+  channels?: Channel[];
+  connectors?: HubConnector[];
+}) {
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL) => {
       const path = new URL(String(input), "http://hub.example.com").pathname;
       if (path === "/api/v1/extensions" || path === "/api/v1/plugins") {
-        return Promise.resolve(json({ extensions: SAMPLE_EXTENSIONS, markets: overrides?.markets ?? true }));
+        return Promise.resolve(json({ extensions: overrides?.extensions ?? SAMPLE_EXTENSIONS, markets: overrides?.markets ?? true }));
       }
       if (path === "/api/v1/channels") {
-        return Promise.resolve(json({ channels: SAMPLE_CHANNELS }));
+        return Promise.resolve(json({ channels: overrides?.channels ?? SAMPLE_CHANNELS }));
       }
       if (path === "/api/v1/connectors") {
-        return Promise.resolve(json({ connectors: SAMPLE_CONNECTORS }));
+        return Promise.resolve(json({ connectors: overrides?.connectors ?? SAMPLE_CONNECTORS }));
       }
       if (path === "/api/v1/mail/accounts") {
         return overrides?.failMail
@@ -399,23 +421,25 @@ describe("Integrations unified list view", () => {
     stubFullHubFetch();
     let currentSub: string | null = null;
     const render = async (sub: string | null, twoCol = true) => {
-      currentSub = sub;
+      const mount = (next: string | null) => {
+        currentSub = next;
+        root.render(<Integrations open={next} twoCol={twoCol} onOpen={mount} />);
+      };
       await act(async () => {
-        root.render(
-          <Integrations
-            open={sub}
-            twoCol={twoCol}
-            onOpen={(next) => {
-              currentSub = next;
-              root.render(<Integrations open={next} twoCol={twoCol} onOpen={(n) => (currentSub = n)} />);
-            }}
-          />,
-        );
+        mount(sub);
       });
       await flush();
     };
 
     await render(null, true);
+
+    // Single persistent header Market button in single-column list view; no duplicate bottom Extension Market group (#14958).
+    const singleHeaderMarket = host.querySelector<HTMLButtonElement>('[data-testid="integrations-market-entry"]')!;
+    expect(singleHeaderMarket).not.toBeNull();
+    expect(singleHeaderMarket.textContent).toContain(t("settings-integrations.browse_market_action"));
+    expect(host.querySelector('[data-settings-group="market"]')).toBeNull();
+    expect(host.textContent).not.toContain(t("settings-extensions.browse_market"));
+    expect(host.textContent).not.toContain(t("settings-extensions.manage_markets"));
 
     // Deduplicated rows: larkx appears once, feishu-bot once, mail/lark/github/apps/wechat/nord-theme once each.
     const rows = () => [...host.querySelectorAll<HTMLButtonElement>("[data-integration-row]")];
@@ -440,31 +464,139 @@ describe("Integrations unified list view", () => {
     await act(async () => chip("all").click());
     expect(rows()).toHaveLength(8);
 
-    // Clicking larkx opens IntegrationDetail in desktop two-column split pane with larkx highlighted.
+    // Clicking larkx opens IntegrationDetail in desktop two-column split pane with larkx highlighted,
+    // independent left/right scroll containers, single-row filter chips, and no redundant Back button.
     const larkxRow = rows().find((r) => r.dataset.integrationId === "larkx")!;
     await act(async () => larkxRow.click());
     await flush();
     expect(currentSub).toBe("ext:larkx");
-    expect(host.querySelector("[data-integrations-split]")).not.toBeNull();
+    const split = host.querySelector<HTMLElement>("[data-integrations-split]")!;
+    expect(split).not.toBeNull();
+    expect(split.classList.contains("overflow-hidden")).toBe(true);
+    expect(split.classList.contains("h-full")).toBe(true);
+    const listHeader = host.querySelector<HTMLElement>("[data-integrations-list-header]")!;
+    expect(listHeader).not.toBeNull();
+    expect(listHeader.classList.contains("shrink-0")).toBe(true);
+    // Split-pane narrow header keeps the single persistent compact Market button and no bottom market group (#14958).
+    const compactHeaderMarket = listHeader.querySelector<HTMLButtonElement>('[data-testid="integrations-market-entry"]')!;
+    expect(compactHeaderMarket).not.toBeNull();
+    expect(compactHeaderMarket.textContent).toContain(t("settings-integrations.browse_market_compact"));
+    expect(compactHeaderMarket.getAttribute("title")).toBe(t("settings-integrations.browse_market_action"));
+    expect(compactHeaderMarket.classList.contains("whitespace-nowrap")).toBe(true);
+    expect(compactHeaderMarket.classList.contains("shrink-0")).toBe(true);
+    expect(host.querySelector('[data-settings-group="market"]')).toBeNull();
+    const listScroll = host.querySelector<HTMLElement>("[data-integrations-list-scroll]")!;
+    expect(listScroll.classList.contains("overflow-y-auto")).toBe(true);
+    expect(listScroll.classList.contains("overscroll-contain")).toBe(true);
+    expect(listScroll.classList.contains("pb-8")).toBe(true);
+    const detailScroll = host.querySelector<HTMLElement>("[data-integrations-detail-scroll]")!;
+    expect(detailScroll.classList.contains("overflow-y-auto")).toBe(true);
+    expect(detailScroll.classList.contains("overscroll-contain")).toBe(true);
+    // Filter chips stay single-row non-wrapping in the 300px compact list header.
+    const compactFilters = listHeader.querySelector<HTMLElement>("[data-integrations-filters]")!;
+    expect(compactFilters).not.toBeNull();
+    expect(compactFilters.classList.contains("flex-nowrap")).toBe(true);
+    expect(compactFilters.classList.contains("flex-wrap")).toBe(false);
+    expect(compactFilters.classList.contains("overflow-x-auto")).toBe(true);
+    expect(compactFilters.classList.contains("scrollbar-none")).toBe(true);
+    for (const btn of compactFilters.querySelectorAll<HTMLButtonElement>("button")) {
+      expect(btn.classList.contains("shrink-0")).toBe(true);
+      expect(btn.classList.contains("whitespace-nowrap")).toBe(true);
+    }
     const detail = host.querySelector<HTMLElement>("[data-mock-integration-detail]")!;
     expect(detail.dataset.kind).toBe("extension");
     expect(detail.dataset.id).toBe("larkx");
     expect(detail.dataset.channelId).toBe("larkx-bot");
     expect(detail.dataset.connectorId).toBe("larkx");
+    // Desktop split-pane hides redundant Back button in right pane.
+    expect(host.querySelector("[data-mock-detail-back]")).toBeNull();
     expect(host.querySelector('[data-integration-id="larkx"]')?.getAttribute("aria-current")).toBe("true");
 
-    // Phone layout (twoCol=false) drills down into full-width IntegrationDetail without split pane.
+    // Switching items in split-pane resets the right detail scroll without touching the left list scroll.
+    listScroll.scrollTop = 180;
+    detailScroll.scrollTop = 320;
+    await render("builtin:mail", true);
+    expect(host.querySelector<HTMLElement>("[data-integrations-list-scroll]")?.scrollTop).toBe(180);
+    expect(host.querySelector<HTMLElement>("[data-integrations-detail-scroll]")?.scrollTop).toBe(0);
+
+    // Narrow single-column layout (twoCol=false, headerBack=false) drills down without nested scrollers and keeps Back.
     await render("ext:larkx", false);
     expect(host.querySelector("[data-integrations-split]")).toBeNull();
     expect(host.querySelector("[data-integrations-list]")).toBeNull();
+    expect(host.querySelector("[data-integrations-list-scroll]")).toBeNull();
+    expect(host.querySelector("[data-integrations-detail-scroll]")).toBeNull();
     expect(host.querySelector("[data-mock-integration-detail]")?.getAttribute("data-id")).toBe("larkx");
+    expect(host.querySelector("[data-mock-detail-back]")).not.toBeNull();
 
-    // Extension Market entry opens MarketCatalog and Manage Markets cleanly.
-    await render(null, true);
-    const marketRow = [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
-      b.textContent?.includes(t("settings-extensions.browse_market")),
+    // Phone layout (twoCol=false, headerBack=true) omits inner Back because the top bar provides Back.
+    await act(async () => {
+      root.render(<Integrations open="ext:larkx" twoCol={false} headerBack={true} onOpen={(n) => (currentSub = n)} />);
+    });
+    await flush();
+    expect(host.querySelector("[data-integrations-split]")).toBeNull();
+    expect(host.querySelector("[data-mock-detail-back]")).toBeNull();
+
+    // Clicking the compact header Market button in split-pane opens MarketCatalog and exposes Manage Markets inside it.
+    await render("ext:larkx", true);
+    const splitMarketBtn = host.querySelector<HTMLButtonElement>('[data-testid="integrations-market-entry"]')!;
+    await act(async () => splitMarketBtn.click());
+    await flush();
+    expect(currentSub).toBe("-market");
+    const catalog = host.querySelector<HTMLElement>("[data-mock-market-catalog]")!;
+    expect(catalog).not.toBeNull();
+    expect(catalog.dataset.backLabel).toBe(t("settings-integrations.back"));
+
+    const manageMarketsBtn = host.querySelector<HTMLButtonElement>("[data-mock-markets-open]")!;
+    expect(manageMarketsBtn).not.toBeNull();
+    await act(async () => manageMarketsBtn.click());
+    await flush();
+    expect(currentSub).toBe("-markets");
+    expect(host.querySelector("[data-mock-markets]")).not.toBeNull();
+
+    // Clicking the header Market button in single-column mode also opens MarketCatalog.
+    await render(null, false);
+    const singleMarketBtn = host.querySelector<HTMLButtonElement>('[data-testid="integrations-market-entry"]')!;
+    expect(singleMarketBtn.textContent).toContain(t("settings-integrations.browse_market_action"));
+    await act(async () => singleMarketBtn.click());
+    await flush();
+    expect(currentSub).toBe("-market");
+    expect(host.querySelector("[data-mock-market-catalog]")).not.toBeNull();
+  });
+
+  it("keeps empty-state CTA to browse Extension Market while omitting the duplicate bottom market group", async () => {
+    state.features = ["extension_manager"];
+    stubFullHubFetch({ markets: true, extensions: [], channels: [], connectors: [], failMail: true, failBot: true });
+    let currentSub: string | null = null;
+    const render = async (sub: string | null) => {
+      currentSub = sub;
+      await act(async () => {
+        root.render(
+          <Integrations
+            open={sub}
+            twoCol={false}
+            onOpen={(next) => {
+              currentSub = next;
+              root.render(<Integrations open={next} twoCol={false} onOpen={(n) => (currentSub = n)} />);
+            }}
+          />,
+        );
+      });
+      await flush();
+    };
+
+    await render(null);
+    // Filter to tools (empty) and verify empty state CTA navigates to MarketCatalog without any bottom market group.
+    const toolsChip = host.querySelector<HTMLButtonElement>('[data-integration-filter="tools"]')!;
+    await act(async () => toolsChip.click());
+    await flush();
+    const empty = host.querySelector<HTMLElement>("[data-integrations-empty]")!;
+    expect(empty).not.toBeNull();
+    expect(host.querySelector('[data-settings-group="market"]')).toBeNull();
+    const emptyCta = [...empty.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
+      b.textContent?.includes(t("settings-integrations.browse_market_action")),
     )!;
-    await act(async () => marketRow.click());
+    expect(emptyCta).not.toBeNull();
+    await act(async () => emptyCta.click());
     await flush();
     expect(currentSub).toBe("-market");
     expect(host.querySelector("[data-mock-market-catalog]")).not.toBeNull();
@@ -477,18 +609,19 @@ describe("Integrations unified list view", () => {
       root.render(<Integrations open={null} onOpen={() => {}} />);
     });
     await flush();
-    // Still renders Mail built-in without crashing, hides Extension Market, and shows filter chips.
+    // Still renders Mail built-in without crashing, hides Extension Market header button, and shows filter chips.
     expect(host.querySelector("[data-integrations-filters]")).not.toBeNull();
+    expect(host.querySelector('[data-testid="integrations-market-entry"]')).toBeNull();
     expect(host.querySelector('[data-settings-group="market"]')).toBeNull();
     expect(host.querySelector('[data-integration-id="mail"]')).not.toBeNull();
   });
 
-  it.each(["en", "zh-Hans", "ja"])("renders localized labels and capability chips in %s", async (lang) => {
+  it.each(["en", "zh-Hans", "ja"])("renders localized labels, compact Market entry, and single-row narrow capability chips in %s", async (lang) => {
     stubFullHubFetch();
     try {
       await initI18n(lang);
       await act(async () => {
-        root.render(<Integrations open={null} onOpen={() => {}} />);
+        root.render(<Integrations open="ext:larkx" twoCol={true} onOpen={() => {}} />);
       });
       await flush();
       expect(host.textContent).toContain(t("settings-integrations.list_title"));
@@ -496,6 +629,19 @@ describe("Integrations unified list view", () => {
       expect(host.textContent).toContain(t("settings-integrations.filter_channels"));
       expect(host.textContent).toContain(t("settings-integrations.filter_data"));
       expect(host.textContent).toContain(t("settings-integrations.filter_tools"));
+      const compactMarket = host.querySelector<HTMLButtonElement>('[data-testid="integrations-market-entry"]')!;
+      expect(compactMarket.textContent).toContain(t("settings-integrations.browse_market_compact"));
+      expect(host.querySelector('[data-settings-group="market"]')).toBeNull();
+      const filters = host.querySelector<HTMLElement>("[data-integrations-filters]")!;
+      expect(filters.classList.contains("flex-nowrap")).toBe(true);
+      expect(filters.classList.contains("overflow-x-auto")).toBe(true);
+
+      await act(async () => {
+        root.render(<Integrations open={null} twoCol={true} onOpen={() => {}} />);
+      });
+      await flush();
+      const singleMarket = host.querySelector<HTMLButtonElement>('[data-testid="integrations-market-entry"]')!;
+      expect(singleMarket.textContent).toContain(t("settings-integrations.browse_market_action"));
     } finally {
       await initI18n("zh-Hans");
     }
@@ -563,5 +709,75 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     expect(location.pathname + location.search).toBe("/settings?tab=extensions&extension=larkx");
     const opens = [...host.querySelectorAll('[data-page="legacy-extensions"]')].map((el) => el.getAttribute("data-open"));
     expect(opens).toContain("larkx");
+    // Legacy Extensions stays on the original single outer scroller (zero split-host change).
+    const region = host.querySelector<HTMLElement>('[role="region"]')!;
+    expect(region.hasAttribute("data-integrations-split-host")).toBe(false);
+    expect(region.classList.contains("overflow-y-auto")).toBe(true);
+  });
+
+  it("locks the Settings content host to viewport height only in desktop integrations_v2 split-pane detail state", async () => {
+    state.integrationsV2 = true;
+    state.twoCol = true;
+    state.phone = false;
+    stubFullHubFetch();
+
+    // 1. Desktop list-only view: single natural scroll container (not viewport-locked split host).
+    history.replaceState(null, "", "/settings?tab=integrations");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    const listRegion = host.querySelector<HTMLElement>('[role="region"]')!;
+    expect(listRegion.hasAttribute("data-integrations-split-host")).toBe(false);
+    expect(listRegion.classList.contains("overflow-y-auto")).toBe(true);
+    expect(listRegion.classList.contains("overflow-hidden")).toBe(false);
+    expect(host.querySelector("[data-integrations-list-scroll]")).toBeNull();
+    expect(host.querySelector("[data-integrations-detail-scroll]")).toBeNull();
+
+    // 2. Clicking a row enters desktop split-pane: outer region locks height, two independent scrollers mount, no redundant Back.
+    const larkxRow = host.querySelector<HTMLButtonElement>('[data-integration-id="larkx"]')!;
+    await act(async () => larkxRow.click());
+    await flush();
+    const splitRegion = host.querySelector<HTMLElement>('[role="region"]')!;
+    expect(splitRegion.hasAttribute("data-integrations-split-host")).toBe(true);
+    expect(splitRegion.classList.contains("flex")).toBe(true);
+    expect(splitRegion.classList.contains("h-full")).toBe(true);
+    expect(splitRegion.classList.contains("min-h-0")).toBe(true);
+    expect(splitRegion.classList.contains("overflow-hidden")).toBe(true);
+    expect(splitRegion.classList.contains("overflow-y-auto")).toBe(false);
+    expect(host.querySelector("[data-integrations-list-scroll]")).not.toBeNull();
+    expect(host.querySelector("[data-integrations-detail-scroll]")).not.toBeNull();
+    expect(host.querySelector("[data-mock-detail-back]")).toBeNull();
+
+    // 3. Narrow desktop (< 900px, twoCol=false, phone=false): single natural scroller, Back button kept.
+    state.twoCol = false;
+    await act(async () => root.render(null));
+    history.replaceState(null, "", "/settings?tab=integrations&integration=ext%3Alarkx");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    const narrowRegion = host.querySelector<HTMLElement>('[role="region"]')!;
+    expect(narrowRegion.hasAttribute("data-integrations-split-host")).toBe(false);
+    expect(narrowRegion.classList.contains("overflow-y-auto")).toBe(true);
+    expect(host.querySelector("[data-integrations-list-scroll]")).toBeNull();
+    expect(host.querySelector("[data-integrations-detail-scroll]")).toBeNull();
+    expect(host.querySelector("[data-mock-detail-back]")).not.toBeNull();
+
+    // 4. Phone (twoCol=false, phone=true): single natural scroller, top-bar Back present, no inner Back.
+    state.phone = true;
+    await act(async () => root.render(null));
+    history.replaceState(null, "", "/settings?tab=integrations&integration=ext%3Alarkx");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    const phoneRegion = host.querySelector<HTMLElement>('[role="region"]')!;
+    expect(phoneRegion.hasAttribute("data-integrations-split-host")).toBe(false);
+    expect(phoneRegion.classList.contains("overflow-y-auto")).toBe(true);
+    expect(host.querySelector("[data-integrations-list-scroll]")).toBeNull();
+    expect(host.querySelector("[data-integrations-detail-scroll]")).toBeNull();
+    expect(host.querySelector("[data-mock-detail-back]")).toBeNull();
+    expect(host.querySelector("header button:first-child")).not.toBeNull();
   });
 });

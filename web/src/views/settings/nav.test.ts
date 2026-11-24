@@ -88,7 +88,7 @@ describe("settings sidebar groups", () => {
     expect(NAV_GROUPS.map((g) => g.key)).toEqual(["assistant", "device", "hub", "labs"]);
     expect(NAV_GROUPS.map((g) => g.tabs)).toEqual([
       ["models", "persona", "prompts", "integrations", "channels", "connectors", "sources", "extensions", "knowledge", "agents"],
-      ["general", "notifications", "shortcuts"],
+      ["general", "notifications", "shortcuts", "advanced"],
       ["hub", "managers", "avatar", "devices"],
       ["labs"],
     ]);
@@ -102,6 +102,25 @@ describe("settings sidebar groups", () => {
     expect(navGroups(true)[0]!.tabs).toEqual([
       "models", "persona", "prompts", "integrations", "sources", "knowledge", "agents",
     ]);
+  });
+
+  it("keeps the default appearance in General and the non-default looks under Advanced (#13398)", () => {
+    expect(NAV_GROUPS.find((g) => g.key === "device")!.tabs).toEqual(["general", "notifications", "shortcuts", "advanced"]);
+    expect(settingsHref("advanced", null, false)).toBe("/settings?tab=advanced");
+    // the default look (Match system / Light / Dark) and text size stay in General
+    expect(searchSettings(t("settings.theme_dark")).groups).toContainEqual(expect.objectContaining({ tab: "general", anchor: "theme" }));
+    expect(searchSettings(t("ui-look.text_size")).groups).toContainEqual(expect.objectContaining({ tab: "general", anchor: "text-size" }));
+    // every opt-in look is reachable only from Advanced › Appearance
+    for (const [query, anchor] of [
+      [t("ui-look.accent"), "theme-color"],
+      [t("ui-extensionthemepicker.label"), "extension-theme"],
+      [t("ui-look.font"), "font"],
+      [t("ui-look.sidebar_icons"), "sidebar-icons"],
+    ]) {
+      const groups = searchSettings(query).groups;
+      expect(groups).toContainEqual(expect.objectContaining({ tab: "advanced", group: query, anchor }));
+      expect(groups.some((g) => g.tab === "general" && g.anchor === anchor)).toBe(false);
+    }
   });
 
   it("redirects legacy connectors/channels/extensions routes into integrations when integrations_v2 is on", () => {
@@ -228,7 +247,9 @@ describe("settings search", () => {
     const finds = (q: string, tab: string, anchor: string) => expect(searchSettings(q).groups).toContainEqual(expect.objectContaining({ tab, anchor }));
     finds(t("language.label"), "general", "language");
     finds(t("ui-look.text_size"), "general", "text-size");
-    finds(t("ui-look.accent"), "general", "theme-color");
+    finds(t("ui-look.accent"), "advanced", "theme-color");
+    finds(t("ui-look.font"), "advanced", "font");
+    finds(t("ui-look.sidebar_icons"), "advanced", "sidebar-icons");
     finds(t("settings.theme_dark"), "general", "theme");
     finds(t("settings.reply_motion"), "general", "reply-motion");
     finds(t("settings.disconnect_browser"), "general", "disconnect");

@@ -3,7 +3,6 @@ package assistant
 import (
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"strings"
 	"testing"
 
@@ -30,6 +29,7 @@ func cardTags(t *testing.T, c botAnswerCard) ([]string, string) {
 }
 
 func TestAnswerCards(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	if got := answerCards(i18n.ZhHans, nil, "# 标题\n正文", true, []string{"step"}, "foot"); got != nil {
 		t.Fatalf("quiet: %v", got)
 	}
@@ -63,6 +63,7 @@ func TestAnswerCards(t *testing.T) {
 
 // The panel is outside RenderAnswer's body byte budget: on a packed first card it shrinks until measured card.JSON() fits, oldest hidden first.
 func TestAnswerCardsPanelBudget(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	// '<' expands to "&#60;" in card Markdown, packing the first card's answer near its byte budget.
 	packed := "# H\n" + strings.Repeat("<", 2400) + strings.Repeat("字", 3600)
 	t.Run("pathological on packed card", func(t *testing.T) {
@@ -102,6 +103,7 @@ func TestAnswerCardsPanelBudget(t *testing.T) {
 // A chart in an answer (persona-card, #3140) is written as numbers before the answer is cut into cards: one longer
 // than a card's budget does not vanish into an empty card, and one across the cut does not show its JSON.
 func TestAnswerCardsWriteChartsAsNumbersBeforeCutting(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	var pts []string
 	for i := 1; i <= 300; i++ {
 		pts = append(pts, fmt.Sprintf(`{"label":"d%d","value":%d}`, i, 8000+i))
@@ -132,27 +134,5 @@ func TestAnswerCardsWriteChartsAsNumbersBeforeCutting(t *testing.T) {
 				t.Errorf("the chart is not written as numbers:\n%s", all)
 			}
 		})
-	}
-}
-
-// A link's button says what it opens: a page of the hub's web app by the page, a Feishu document as one, any other
-// site by its name.
-func TestLinkNamer(t *testing.T) {
-	name := linkNamer(i18n.ZhHans, "https://hub.example.com")
-	for _, c := range []struct{ u, want string }{
-		{"https://hub.example.com/persona/c1", "打开会话"},
-		{"https://hub.example.com/s/server/a1", "打开会话"},
-		{"https://hub.example.com/todos/t1", "打开待办"},
-		{"https://hub.example.com/inbox", "打开收件箱"},
-		{"https://hub.example.com/kb/people/p1", "打开知识库"},
-		{"https://hub.example.com/machines", "打开网页版"},
-		{"https://example.feishu.cn/docx/AbC", "打开飞书文档"},
-		{"https://example.feishu.cn/calendar", "打开 example.feishu.cn"},
-		{"https://www.github.com/nwverse/persona", "打开 github.com"},
-	} {
-		u, _ := url.Parse(c.u)
-		if got := name(u); got != c.want {
-			t.Errorf("%s: %q, want %q", c.u, got, c.want)
-		}
 	}
 }

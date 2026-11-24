@@ -1586,7 +1586,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.superviseLoop(ctx)                // the tasks the main conversation follows up (supervise_signals.go)
 	go s.workLoop(ctx)                     // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)
 	go s.replyLoop(ctx)                    // questions the user looked at and left unanswered (agents_reply.go)
-	go s.nudgeLoop(ctx)                    // the Lark bot's cards left unanswered (feishu_nudge.go)
+	go s.nudgeLoop(ctx)                    // the Lark bot's cards left unanswered (the lark module's nudge.go)
 	go s.sourceReportLoop(ctx)             // the reports back to where a todo was asked (todo_source.go)
 	go s.remindLoop(ctx)                   // the todos' reminders (todo_plan.go)
 	go s.urgentLoop(ctx)                   // urgent calls' retries and reminders (urgent_call_loop.go)
@@ -1597,6 +1597,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.memoryDreamLoop(ctx)              // consolidating assistant memory, off by default
 	go s.memoryMergeLoop(ctx)              // telling the user what the node merged into the one memory (memory_merge.go)
 	go s.viewActionLoop(ctx)               // durable card reply outbox
+	go s.pagesLoop(ctx)                    // the taps on pages and the pages' upkeep (pages_actions.go)
 	go s.acceptLoop(ctx)                   // "Please verify" cards that did not go out, and reminders each morning (acceptance.go)
 	go s.admissionQueueLoop(ctx)           // plan tasks the admission gate parked: timed retries until they start or time out (task_queue.go)
 	// The leaders' tasks that got stuck (leader_reports.go).
@@ -2142,6 +2143,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		if err != nil {
 			return s.failTaskRun(ctx, t, run, err, false)
 		}
+		ex.Cwd = s.resolvedTaskCwd(ctx, here, ex.Cwd)
 	}
 	run.Execution = &ex
 	if clean && s.launcherAgent(ctx, here, launcher) != "claude" {
@@ -2251,19 +2253,54 @@ func (s *Service) resumeOwn(ctx context.Context, machine, sid string, params map
 	return err
 }
 
+// notifyScheduleFailed hands a failed non-briefing scheduled run to its supervisor or the main conversation
+// instead of pushing to the owner. Owner-subscribed briefings (Facts/Report) and environments with no
+// supervisor or main conversation keep pushing to the owner.
+func (s *Service) notifyScheduleFailed(ctx context.Context, t Task, run ScheduleRun, m *Device, body string) {
+	l := s.lang(ctx)
+	name := t.labelIn(l)
+	if !t.Facts && !t.Report {
+		if to, ok := s.scheduleFailureTarget(ctx, t); ok {
+			title := i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name})
+			text := fmt.Sprintf("%s (task=%s run=%s)\n%s", title, t.ID, run.ID, body)
+			if _, kept := s.keepRelayLater(to, relayMsg{
+				From:      cardScheduleFailed,
+				FromTitle: title,
+				Tool:      cardScheduleFailed,
+				Text:      text,
+				At:        time.Now().UTC(),
+			}); kept {
+				s.publish(ctx)
+			}
+			return
+		}
+	}
+	// the lock screen does not name a task whose push says something sensitive (usage.go, scene 4)
+	if s.exitPolicy(ctx, name+"\n"+body, run.SessionID, t.Space).Redact {
+		name, _ = s.redactedNotice(ctx, l, t.Space)
+	}
+	n := Notification{
+		SessionID: run.SessionID,
+		Title:     i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name}),
+		Body:      body,
+	}
+	if m != nil {
+		n.Subtitle, n.DeviceID = m.Name, m.ID
+	}
+	src := cardScheduleFailed
+	if t.Facts || t.Report {
+		src = cardBriefFallback
+	}
+	s.push(withCard(ctx, src), n)
+}
+
 // oneOffFailed keeps the failure notice even when delivery is unknown and retrying is unsafe.
 func (s *Service) oneOffFailed(ctx context.Context, t Task, run ScheduleRun) {
 	if t.Repeat != repeatOnce || run.Manual {
 		return
 	}
-	l := s.lang(ctx)
-	name := t.labelIn(l)
 	body := clip(oneLine(run.Error), 300)
-	// the lock screen does not name a task whose push says something sensitive (usage.go, scene 4)
-	if s.exitPolicy(ctx, name+"\n"+body, run.SessionID, t.Space).Redact {
-		name, _ = s.redactedNotice(ctx, l, t.Space)
-	}
-	s.push(withCard(ctx, cardScheduleFailed), Notification{Title: i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name}), Body: body})
+	s.notifyScheduleFailed(ctx, t, run, nil, body)
 }
 
 // oneOffNotStarted handles confirmed pre-delivery failures; Facts/Report runs use the fixed-facts fallback first.
@@ -2450,12 +2487,7 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	if briefing {
 		s.briefFallback(ctx, run, t, m)
 	} else if !streak { // the streak notice already said it failed, with this reason
-		name := t.labelIn(s.lang(ctx))
-		// the lock screen does not name a task whose push says something sensitive (usage.go, scene 4)
-		if s.exitPolicy(ctx, name+"\n"+text, run.SessionID, t.Space).Redact {
-			name, _ = s.redactedNotice(ctx, s.lang(ctx), t.Space)
-		}
-		s.push(withCard(ctx, cardScheduleFailed), Notification{Subtitle: m.Name, DeviceID: m.ID, SessionID: run.SessionID, Title: i18n.T(s.lang(ctx), "assistant-schedule.run_failed", i18n.Args{"name": name}), Body: text})
+		s.notifyScheduleFailed(ctx, t, run, &m, text)
 	}
 	if run.Retried {
 		return

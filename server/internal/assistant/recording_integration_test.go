@@ -96,6 +96,7 @@ func TestEveningFactsDayIsBounded(t *testing.T) {
 // which the knowledge base keeps) sends it to the others, with the same id and keys; a refusal that sending again
 // cannot help counts as taken: the hub's, a channel with nowhere to send it, a channel's own coded refusal.
 func TestDayRecapPushTakenByAll(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	d := newDayFixture(t)
 	setEvening(t, d.s, "06:30", true)
 	larkFails, chanFails := 1, 1 // the answers run under d.f.mu
@@ -209,6 +210,7 @@ func TestDayRecapPushTakenByAll(t *testing.T) {
 // After a restart the push goes only to the destinations that did not take it: the knowledge base keeps those that
 // did with the recording (the assistant keeps nothing), so the phone and a channel that took it get no second copy.
 func TestDayRecapPushAfterRestart(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	d := newDayFixture(t)
 	setEvening(t, d.s, "06:30", true)
 	larkFails := 1

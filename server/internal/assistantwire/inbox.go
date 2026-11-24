@@ -421,6 +421,10 @@ type InboxReplyPolicyConfig struct {
 	Rules string `json:"rules,omitempty"`
 	// TimeoutSeconds bounds each classification call (default 30 seconds).
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	// Sources limits the policy to these sources; an empty list applies it to every source.
+	Sources []string `json:"sources,omitempty"`
+	// RequireIndependentReview requires a second classifier to confirm an owner-draft category.
+	RequireIndependentReview bool `json:"require_independent_review,omitempty"`
 }
 
 // InboxRepoMutes is MethodInboxRepoMutes's params.

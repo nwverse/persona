@@ -559,7 +559,7 @@ func (s *Service) quietTask(ctx context.Context, origin string) bool {
 
 // removeTodo deletes todo id from the store and from memory (its agents' and spaces' links with it) and tells the
 // apps; db.ErrTodoNotFound when it is not there. The DELETE route and the code that must take back a todo it just
-// made (a topic that turned out to be taken, feishu_thread_open.go) both go through it.
+// made (a topic that turned out to be taken, the lark module's thread_open.go) both go through it.
 func (s *Service) removeTodo(ctx context.Context, id string) error {
 	s.todos.writing.Lock()
 	if st := s.todoDB(); st != nil {

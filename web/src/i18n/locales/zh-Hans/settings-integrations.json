@@ -20,6 +20,7 @@
   "empty_all_detail": "前往扩展市场安装对话频道、数据源连接器、工具或外观主题。",
   "show_all": "查看全部",
   "browse_market_action": "扩展市场",
+  "browse_market_compact": "市场",
   "list_partial_error": "部分集成未能加载：{error}",
   "status_not_configured": "未配置",
   "status_connected": "已连接",

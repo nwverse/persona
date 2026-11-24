@@ -40,7 +40,8 @@ import { runtimeIdentity } from "../lib/runtime-list";
 import { heldSeen } from "../lib/seen-outbox";
 import { heldLaunchWorking, launchForSession } from "../lib/launch-handoff";
 import { childRollup } from "../lib/child-sessions";
-import { childCards, foldedRow, ownRow } from "../lib/folded-rows";
+import { foldedRow, ownRow } from "../lib/folded-rows";
+import { rowCards } from "../lib/supervisor-held";
 import { countSides, foldedStateWith, hubSides, unreadSides } from "../lib/side-fold";
 import { useChildSessions, useHeldSides } from "../lib/use-child-sessions";
 import { askSide } from "../lib/side-panel";
@@ -196,8 +197,8 @@ export const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon
 // The list's one-line notes (loading, no match), as each writes it.
 const NOTE = "px-2 py-1 text-label text-ink-3";
 
-// two shapes as well as two colors, so they tell apart without color: a bare prompt (no frame) and a window with a title bar
-const SOURCE_ICON = { terminal: { name: "run", tone: "text-source-terminal" }, desktop: { name: "appWindow", tone: "text-source-desktop" } } as const;
+// two shapes as well as two tones, so they tell apart without color: a framed terminal prompt and a window with a title bar
+const SOURCE_ICON = { terminal: { name: "terminal", tone: "text-ink-3" }, desktop: { name: "appWindow", tone: "text-source-desktop" } } as const;
 
 /** Where the agent was opened (#2526), as a mark: a terminal or a desktop app's window in its own color, Lark's mark for a
  *  Lark group (a click opens its Feishu topic). Nothing for other sources. Its name is the tooltip and what a screen reader
@@ -316,12 +317,10 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   const sides = useHeldSides(row.machine_id, row.session_id, Boolean(row.children?.sides));
   const given = foldedRow(row, sides && countSides(sides));
   // what it asks you, or what it did, under its title (#3195): no hover or click needed to see why it is red or green;
-  // its own card first, else what one of its child sessions asks (the card's home is this row's page)
-  const own = useStore((st) => st.interactions.find((i) => i.machine_id === given.machine_id && i.session_id === given.session_id));
-  // its child sessions' cards wait here too: the row's count holds them (one count per session, DESIGN_SYSTEM 4.8)
-  const kidCards = useStore((st) => childCards(st.interactions, given.machine_id, given.session_id));
-  const ix = own ?? kidCards[0];
-  const pendingCount = (given.pending_interactions ?? 0) + kidCards.length;
+  // its own card first, else what one of its child sessions asks (the card's home is this row's page). Cards a task's
+  // supervisor holds (lib/supervisor-held.ts) are not the user's yet: left out of the line, the count and the dot.
+  const { ix, kidCount, ownHeld, heldOnly } = useStore((st) => rowCards(st.interactions, given.machine_id, given.session_id));
+  const pendingCount = Math.max(0, (given.pending_interactions ?? 0) - ownHeld) + kidCount;
   // a card answered here takes its red dot and "Has a question" line away at once, not at the hub's next push (#4286)
   const justAnswered = useStore((st) => lastAnsweredAt(st.answered, given.machine_id, given.session_id));
   const pending = useStore((st) => answerPending(st.answered, given.machine_id, given.session_id));
@@ -335,7 +334,8 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   const ownSeen = heldSeen(ownRow(row), seenMark, nowHandoff);
   const marked = heldSeen(answeredSession(given, Boolean(ix), justAnswered, pending), seenMark, nowHandoff);
   const keptBySide = marked.state !== given.state && stateOf(given) === "unread" && foldedStateWith(ownSeen, sides && countSides(sides)) === "unread";
-  const s = heldLaunchWorking(keptBySide ? { ...marked, state: "unread" } : marked, launch, nowHandoff);
+  const base = heldLaunchWorking(keptBySide ? { ...marked, state: "unread" } : marked, launch, nowHandoff);
+  const s = heldOnly && stateOf(base) === "needs_you" ? { ...base, state: "working" as const } : base;
   const preferTab = useHerdrTabName();
   const title = sessionTitle(s, preferTab);
   const titleDetail = sessionTitleDetail(s, preferTab);
