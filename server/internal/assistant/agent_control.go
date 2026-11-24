@@ -87,10 +87,10 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	if then != "" {
 		summary += "\n\n" + then
 	}
-	if ok, err := s.confirmOutbound(ctx, machine, self, "agent_interrupt", then, summary, args); err != nil {
+	if ok, outcome, err := s.confirmOutbound(ctx, machine, self, "agent_interrupt", then, summary, args); err != nil {
 		return "", err
 	} else if !ok {
-		return "The user declined on the phone: the agent goes on as it was.", nil
+		return outboundNotDone(outcome, "The user declined on the phone: the agent goes on as it was.", "the agent goes on as it was"), nil
 	}
 	// Again after the phone: the agent may have become another conversation's task while the user was asked.
 	if err := s.exitAllowed(ctx, self, am, c, then, 0); err != nil {
@@ -209,6 +209,7 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 		Machine       string   `json:"machine"`
 		SessionID     string   `json:"session_id"`
 		Title         string   `json:"title"`
+		Role          string   `json:"role"`
 		DoneWhen      []string `json:"done_when"`
 		ExpectMinutes int      `json:"expect_minutes"`
 	}
@@ -217,6 +218,9 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 	}
 	if !s.supervises(ctx, self) {
 		return "", fmt.Errorf("only the main conversation and a direction's lead supervise agents: from here, send it without a task")
+	}
+	if a.Role != "" && a.Role != roleLeader {
+		return "", errors.New(`role must be "leader" or omitted for a worker`)
 	}
 	am, c, err := s.findAgent(ctx, a.Machine, a.SessionID)
 	if err != nil {
@@ -228,16 +232,30 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 	if err := s.leadTakeAllowed(ctx, self, am, c); err != nil {
 		return "", fmt.Errorf("%w. Nothing changed", err)
 	}
-	todo, made, err := s.adoptAgent(ctx, self, am, c, a.Title, "", i18n.T(s.lang(ctx), "assistant-tasks.adopt_notes",
-		i18n.Args{"agent": agentLabel(c), "machine": am.Name, "cwd": c.Cwd}), a.DoneWhen, a.ExpectMinutes, true)
+	if err := s.leaderOnWorkMachine(&PlanTask{Role: a.Role}, am); err != nil {
+		return "", err
+	}
+	todo, made, err := s.adoptAgentFor(ctx, self, self, am, c, a.Title, "", i18n.T(s.lang(ctx), "assistant-tasks.adopt_notes",
+		i18n.Args{"agent": agentLabel(c), "machine": am.Name, "cwd": c.Cwd}), a.DoneWhen, a.ExpectMinutes, adoptionOptions{update: true, role: a.Role})
 	if err != nil {
 		return "", err
+	}
+	if made {
+		s.taskCard(ctx, self, todo.ID, wakeActive)
+	}
+	if a.Role == roleLeader {
+		entry := s.adoptedTaskEntry(ctx, am.ID, c)
+		note := strings.Join([]string{prompts.RenderTaskHandoff(entry), prompts.RenderTaskLeader(prompts.TaskLeader{Terminal: entry.Terminal()})}, "\n\n")
+		params := map[string]any{"session_id": c.SessionID, "text": note, "client_msg_id": "leader-note:" + todo.ID}
+		if err := s.call(ctx, am.ID, DeviceSessionSendOnce, params, nil); err != nil {
+			return "", fmt.Errorf("task %s has its leader, but delivery of the leader instructions was not confirmed: %w. Retry agent_supervise with the same role", todo.ID, err)
+		}
+		return fmt.Sprintf("%s leads task %s (%q), supervised by %s. Its leader instructions were sent. done_when %s.", agentLabel(c), todo.ID, todo.Title, s.conversationWords(ctx, todo.Supervision.Supervisor), criteriaWords(nil, todo.Supervision)), nil
 	}
 	if !made {
 		return fmt.Sprintf("%s already works for your task %s (%q): you supervise it, done_when %s.", agentLabel(c), todo.ID, todo.Title,
 			criteriaWords(nil, todo.Supervision)), nil
 	}
-	s.taskCard(ctx, self, todo.ID, wakeActive)
 	return fmt.Sprintf("%s on %s is now your task %s (%q, its card is in the conversation): %s. done_when %s. The agent was not told: "+
 		"if it should work to these criteria or report to its supervisor (report_to_supervisor), tell it with agent_send.",
 		agentLabel(c), am.Name, todo.ID, todo.Title, s.followUpWords(ctx, self), criteriaWords(nil, todo.Supervision)), nil
@@ -260,13 +278,18 @@ func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c prot
 // (assistantsConversation, #10801).
 func (s *Service) adoptAgentAs(ctx context.Context, self string, am Device, c proto.Session, title, prompt, notes string, doneWhen []string,
 	expect int, update, quiet bool) (Todo, bool, error) {
-	return s.adoptAgentFor(ctx, self, self, am, c, title, prompt, notes, doneWhen, expect, update, quiet)
+	return s.adoptAgentFor(ctx, self, self, am, c, title, prompt, notes, doneWhen, expect, adoptionOptions{update: update, quiet: quiet})
+}
+
+type adoptionOptions struct {
+	update, quiet bool
+	role          string
 }
 
 // adoptAgentFor is adoptAgentAs with the todo's origin and supervisor kept separate (#5732). A side conversation
 // keeps its dispatch origin while the main conversation supervises the new task.
 func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am Device, c proto.Session, title, prompt, notes string, doneWhen []string,
-	expect int, update, quiet bool) (Todo, bool, error) {
+	expect int, opts adoptionOptions) (Todo, bool, error) {
 	if s.assistantsConversation(ctx, am.ID, c) {
 		return Todo{}, false, errors.New("that is an assistant conversation, not a coding agent")
 	}
@@ -281,7 +304,12 @@ func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am
 		if err := othersTask(c, t, self); err != nil {
 			return Todo{}, false, err
 		}
-		if !update {
+		if opts.role == roleLeader {
+			if _, _, leads := s.leaderTask(ctx, am.ID, c.SessionID); !leads {
+				return Todo{}, false, fmt.Errorf("the Agent already works on open task %s as a worker; the leader role is assigned when adopting an Agent on no open task", t.ID)
+			}
+		}
+		if !opts.update {
 			return t, false, nil
 		}
 		// Its criteria change only through the brief's log (task_brief_scope.go): the same rules as task_scope.
@@ -293,17 +321,21 @@ func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am
 		s.restage(ctx, t.ID, nil) // by its new criteria; a read-only start still holds
 		return t, false, nil
 	}
+	// Adoption does not start the Agent with a read-only constraint.
+	if opts.role == roleLeader && len(doneWhen) == 0 {
+		return Todo{}, false, errors.New("a writable task leader needs done_when with at least one checkable result")
+	}
 	previous, continuing := s.closedTodoOfAgent(am.ID, c.SessionID)
 	// Only an explicit adoption/takeover continues the closed card's brief. A newly titled agent_send task is new work,
 	// even when it reuses the same Agent; it must not rewrite the old card's scope or lineage (#5732).
-	continuing = continuing && update
+	continuing = continuing && opts.update
 	if continuing {
 		if succ, ok := s.openSuccessor(previous.ID); ok {
 			return Todo{}, false, errContinued(previous.ID, succ)
 		}
 	}
 	title, retitle := s.adoptedTitle(ctx, c, title, prompt)
-	todo, err := s.newTodo(ctx, title, notes, self, "", quiet || s.quietTask(ctx, self))
+	todo, err := s.newTodo(ctx, title, notes, self, "", opts.quiet || s.quietTask(ctx, self))
 	if err != nil {
 		return Todo{}, false, err
 	}
@@ -323,6 +355,9 @@ func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am
 	} else {
 		v, _, err = s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
 			v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, doneWhen, expect
+			if s.isLeader(ctx, supervisor) {
+				v.SupervisorSource = "plan"
+			}
 			return true
 		})
 		if err != nil {
@@ -333,7 +368,8 @@ func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am
 	}
 	s.restage(ctx, todo.ID, nil)
 	todo.Supervision = &v
-	if err := s.linkTodoAgent(ctx, todo.ID, am.ID, c.SessionID, title, c.Cwd, c.Agent); err != nil {
+	source, via := (PlanTask{Role: opts.role}).linkSource()
+	if err := s.linkTodoAgentWithSource(ctx, todo.ID, am.ID, c.SessionID, title, c.Cwd, c.Agent, "", source, via); err != nil {
 		if continuing {
 			s.dropContinuation(ctx, todo.ID, rollback, err)
 		} else {
@@ -548,10 +584,12 @@ func (s *Service) adoptedTitle(ctx context.Context, c proto.Session, given, prom
 // todo's notes, and its title when task has none. An agent on a task of self's stays on it, unchanged until the send.
 func (s *Service) handTask(ctx context.Context, self string, am Device, c proto.Session, task sendTask, text string) (*handedTask, error) {
 	// Decided under adoptMu (adoptAgent): another hand-off may have put the agent on a task since sendTaskAllowed.
-	// Only the configured main supervises an assistant hand-off. With no main, keep the origin but leave Supervisor
-	// empty: the calling leader must not become the acceptance authority for its own assistant-dispatched task (#5732).
+	// The calling direction lead owns its hand-off; ordinary side conversations use main.
 	supervisor := s.settings(ctx).Main
-	todo, made, err := s.adoptAgentFor(ctx, self, supervisor, am, c, task.Title, text, text, task.DoneWhen, task.ExpectMinutes, false, false)
+	if s.isLeader(ctx, self) {
+		supervisor = self
+	}
+	todo, made, err := s.adoptAgentFor(ctx, self, supervisor, am, c, task.Title, text, text, task.DoneWhen, task.ExpectMinutes, adoptionOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("%w; nothing was sent", err)
 	}
@@ -952,9 +990,13 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 		step = min(step, steps)
 	}
 	// A task leader's worker has no owner briefing to wait for: its report goes to the leader at once, urgent or not.
-	notUrgent := a.Urgent != nil && !*a.Urgent && !s.agentSupervised(t)
+	// Immersive attention mode takes a question that set no urgent and is not about the matter in focus as one that
+	// can wait (attention.go); an explicit urgent:true always goes at once.
+	saidLater := a.Urgent != nil && !*a.Urgent
+	byMode := a.Urgent == nil && a.Kind == upReportQuestion && s.attentionDefersQuestion(ctx, t, machine, session)
+	notUrgent := (saidLater || byMode) && !s.agentSupervised(t)
 	if notUrgent && a.Kind == upReportQuestion {
-		answer, queued := s.reportLater(ctx, t, machine, session, text, evidence, now)
+		answer, queued := s.reportLater(ctx, t, machine, session, text, evidence, byMode, now)
 		if queued {
 			return answer, nil
 		}
@@ -972,8 +1014,21 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 // reportLater keeps a question the agent said can wait without waking its supervisor. An active reporting conversation
 // gets the deferred report in its own feed, never the main briefing queue. Otherwise the question waits in the queue of
 // questions for the next briefing (later.go). queued false: it could not be kept (no morning or evening briefing would
-// list it, or the queue is full), and the answer says why; the report then goes as an urgent one.
-func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, text string, evidence []string, now time.Time) (answer string, queued bool) {
+// list it, or the queue is full), and the answer says why; the report then goes as an urgent one. byMode: the agent
+// set no urgent and immersive attention mode deferred it, so the answers speak of the mode, not of urgent:false, and
+// tell the agent to ask again with urgent:true when it is blocked.
+func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, text string, evidence []string, byMode bool, now time.Time) (answer string, queued bool) {
+	// notKept is the prefix when the question could not be kept: it goes as an urgent one after all.
+	notKept := func(why string) string {
+		if byMode {
+			return "" // it goes as usual: the agent asked nothing special, so there is nothing to explain
+		}
+		return "urgent:false was ignored: " + why + ", so it is sent as an urgent question. "
+	}
+	retry := "If you cannot go on without the answer, ask it again without urgent:false."
+	if byMode {
+		retry = "The user is in a focus block on other work. If you cannot go on without the answer, ask it again with urgent:true."
+	}
 	if t.Supervision != nil && t.Supervision.Supervisor == t.Origin {
 		if _, reporting := s.reporterOf(ctx, t.Origin); reporting {
 			if s.reporterStopped(ctx, t.Origin) {
@@ -982,19 +1037,19 @@ func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, tex
 			body := reportBody{Kind: upReportQuestion, Text: text, Evidence: evidence, Later: true}
 			if _, err := s.appendFeed(ctx, t.Origin, feedReport, t.ID, body); err != nil {
 				s.logf("task %s: reporting question feed: %v", t.ID, err)
-				return "urgent:false was ignored: the reporting conversation could not keep the question, so it is sent as an urgent question. ", false
+				return notKept("the reporting conversation could not keep the question"), false
 			}
 			s.logf("task %s: %s reports a question deferred in its reporting conversation", t.ID, short(session))
 			return "Queued without waking your reporting conversation; it can answer there when it next runs. Go on with other work. " +
-				"If you cannot go on without an answer, ask it again without urgent:false.", true
+				retry, true
 		}
 	}
 	if !s.laterBriefed(ctx) {
-		return "urgent:false was ignored: no morning or evening briefing is switched on to list it, so it is sent as an urgent question. ", false
+		return notKept("no morning or evening briefing is switched on to list it"), false
 	}
 	_, ok, again := s.laterQueue(ctx, t.ID, machine, session, text, now)
 	if !ok {
-		return "urgent:false was ignored: the queue of questions that can wait could not take it, so it is sent as an urgent question. ", false
+		return notKept("the queue of questions that can wait could not take it"), false
 	}
 	if again {
 		return "Already queued: the owner sees this question in the next morning or evening briefing. Go on with other work.", true
@@ -1005,7 +1060,7 @@ func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, tex
 	}
 	s.logf("task %s: %s reports a question that can wait", t.ID, short(session))
 	return "Queued: the owner sees it in the next morning or evening briefing, under \"Can wait\", and answers it in your chat when they get to it. " +
-		"Nobody is woken and nobody answers right away: go on with other work. If you cannot go on without the answer, ask it again without urgent:false.", true
+		"Nobody is woken and nobody answers right away: go on with other work. " + retry, true
 }
 
 // reportNow sends a report to the supervisor of task t as a signal, and shows it in its conversation.
@@ -1016,6 +1071,9 @@ func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind,
 	s.progressReported(machine, session, len(evidence), step, now) // evidence or a later step is progress (supervise_progress.go)
 	g := superviseSignal{Todo: t.ID, Kind: sigReport, Key: now.UTC().Format(time.RFC3339Nano), At: now, Machine: machine,
 		Session: session, Report: kind, Detail: text, Evidence: evidence, Step: step, Steps: steps, SourcePermission: devicewire.SourcePermissionFrom(ctx)}
+	if kind != upReportProgress && s.reportsMidTurn(ctx, machine, session) {
+		g.NotBefore = now.Add(reportStopHold) // it waits for its Agent's stop, to go out with it (releaseReportsLocked)
+	}
 	if !s.deliverReportingReport(ctx, t, g) {
 		s.signal(g)
 	}
@@ -1044,6 +1102,16 @@ func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind,
 	}
 	return "Sent to your supervisor: it reads it within minutes and answers you by message. Don't wait idle for it if there is " +
 		"other work in the task; stop when you cannot go on.", nil
+}
+
+// reportsMidTurn: the Agent that reports is in the middle of a turn, so the turn's end signal follows its report
+// (reportStopHold). One that is not working, or not known, has no stop coming: its report goes out as it always did.
+func (s *Service) reportsMidTurn(ctx context.Context, machine, session string) bool {
+	if machine == "" || session == "" || s.noReportHold {
+		return false
+	}
+	c, ok := s.session(ctx, machine, session)
+	return ok && c.State == proto.StateWorking
 }
 
 // deliverReportingReport sends g to an active reporting conversation through the same notice path as its quiet tasks:

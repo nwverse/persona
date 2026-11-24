@@ -2072,6 +2072,8 @@ LN = {"on": bool(os.environ.get("MOCK_LN"))}
 # Delete conversation (DELETE /api/v1/sessions/{mid}/{sid}): what was taken out, so /mock/reset puts it back.
 SESSION_DELETED = []
 PINS = {"spaces": ["macbook/weather"], "sessions": []}  # GET / PUT /api/v1/pins: what the Agents list keeps on top
+# GET / PUT /api/v1/agents/display-settings (server/internal/assistant/agents_display.go): both new switches are off by default
+AGENTS_DISPLAY = {"show_botmux": True, "configured": False, "use_herdr_tab_name": False, "sort_by_activity": False, "show_filter": False}
 
 
 def mark_seen(sid):
@@ -2285,6 +2287,8 @@ ASSISTANT += [] if os.environ.get("MOCK_HEALTH_EMPTY") else [
 # The health space's reports/ (docs/assistant/health.md"Health reports"): originals with their records, an original not summarized yet,
 # a record alone (a photo sent in a conversation).
 HEALTH_REPORT_RECORD = "报告日期：2026-10-28\n机构：示例体检中心\n类型：年度体检\n\n| 项目 | 结果 | 单位 | 参考范围 | 异常 |\n| --- | --- | --- | --- | --- |\n| 总胆固醇 | 5.8 | mmol/L | < 5.2 | 偏高 |\n| 低密度脂蛋白 | 3.6 | mmol/L | < 3.4 | 偏高 |\n| 空腹血糖 | 5.1 | mmol/L | 3.9–6.1 | |\n\n结论：血脂略高，建议三个月后复查。\n"
+
+
 HEALTH_REPORTS_DIR = "/home/me/.persona/health/reports/"
 HEALTH_REPORTS = [
     {"name": "2026 年度体检-20261106-093000.pdf", "title": "2026 年度体检", "path": HEALTH_REPORTS_DIR + "2026 年度体检-20261106-093000.pdf",
@@ -2648,6 +2652,8 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # prefers (#3659); fixing unhelpful session names (#4965): on, at most once, no regular updates.
                     # Left out with MOCK_LEGACY_HUB (Agent Follow-Up, #7005).
                     "start_requested_tasks": True, "task_workspace_preference": "prefer-existing",
+                    # New conversations without an explicit choice start in Ask First until the owner changes this.
+                    "default_permission_mode": "default",
                     "agent_auto_naming": True, "agent_auto_naming_max": 1, "agent_auto_naming_interval_hours": 0,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off"),
@@ -2684,6 +2690,7 @@ def assistant_state(space="", archived=False):
                    main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"],
                    claude_interactive=cfg["claude_interactive"],
                    start_requested_tasks=cfg["start_requested_tasks"], task_workspace_preference=cfg["task_workspace_preference"],
+                   default_permission_mode=cfg["default_permission_mode"],
                    agent_auto_naming=cfg["agent_auto_naming"], agent_auto_naming_max=cfg["agent_auto_naming_max"],
                    agent_auto_naming_interval_hours=cfg["agent_auto_naming_interval_hours"],
                    **({} if os.environ.get("MOCK_RECENT_TASK_CHATS") == "absent" else {"recent_task_chats": cfg["recent_task_chats"]}))
@@ -5193,7 +5200,7 @@ def meeting_ask(h, st, body, rec):
 
 
 # The meeting conversation (#3862, docs/assistant/meeting-minutes.md "Phase 1: the meeting conversation"), as the hub
-# branch has it (server/internal/assistant/meeting_*.go, server/internal/kb/meeting.go, hub/meeting_receipts.go): the
+# branch has it (server/internal/modules/recording/meeting_*.go, server/internal/kb/meeting.go, hub/meeting_receipts.go): the
 # feature `meeting_conversation` (only beside meeting_attendance); the upload's `room` and `private`, kept apart from the
 # #2981 fields as meeting.json is (a recording that once had `room` stays a room meeting, its role the room's); one room
 # conversation per attended room meeting (an assistant conversation, origin `meeting`, header first); …/ask answered in
@@ -5845,7 +5852,7 @@ def meeting_receipt(h, kind, raw, run):
     return h.send_json(out, status) or True
 
 
-# Handing a meeting to an Agent after it (#8852, assistant/meeting_handoff.go): POST /api/v1/recordings/{id}/handoff sends
+# Handing a meeting to an Agent after it (#8852, modules/recording/meeting_handoff.go): POST /api/v1/recordings/{id}/handoff sends
 # the meeting to an Agent listed here as the owner's own message, after its checks (503, 404 / 410, 400, 409
 # meeting_running, 409 no_material), and keeps each try in MEETING_HANDOFFS (oldest first, the last 20), shown as
 # detail.meta.handoffs. As attending's rules: a Persona conversation is not_agent; Allow All or a machine not listed
@@ -6731,6 +6738,9 @@ MEETING_TRANSCRIPTION = os.environ.get("MOCK_NO_MEETING_TRANSCRIPTION") != "1"
 TRANSCRIPTION_MODE = {"ready": os.environ.get("MOCK_MEETING_TRANSCRIPTION_READY") != "0", "upstream": "ok",
                       "fatal": "", "line_seconds": 4, "final_seconds": 2}
 TRANSCRIPTIONS = {}  # Protected by RECORDINGS_LOCK, including socket callbacks and final-pass timers.
+# The final pass's progress (#13461, docs/assistant/meeting-minutes.md "Gaps and the final pass"): while the mock's own
+# pass runs, transcription carries final_done (0: it replays in one step) and end. A pass in progress on a recording without
+# a transcription of its own, for shots of the minutes line, is MOCK_MEETING_FINISHING's (meeting_finishing_mock.py).
 TRANSCRIPTION_SCRIPT = ("我们先把 export cap 保持在 4 MB。", "Let's revisit pricing next week.",  # i18n-ignore: synthetic speech, never translated
                         "Alice 负责检查 export test。", "Bo will share the notes tomorrow.")  # i18n-ignore: synthetic speech
 
@@ -6875,11 +6885,14 @@ def transcription_gaps(t):
 
 def transcription_view(rid):
     t = TRANSCRIPTIONS.get(rid)
-    if not meeting_transcription_on() or not t: return None
+    if not meeting_transcription_on(): return None
+    if not t: return None
     if t["mode"] == "device": return {"mode": "device"}
     out = {"mode": "hub", "state": t["state"], "gaps": transcription_gaps(t) if rid not in RECORDINGS_TRIMMED else []}
     if t.get("problem"): out["problem"] = t["problem"]
     if t.get("fallback"): out["fallback"] = True
+    if t["state"] == "finishing" and t.get("final_started") and transcription_number(t.get("end")) and t["end"] > 0:
+        out["final_done"], out["end"] = min(t.get("final_done", 0), t["end"]), t["end"]
     return out
 
 
@@ -7100,11 +7113,13 @@ def transcription_finish_start(rid, force=False):
     if not t or t["mode"] != "hub" or t.get("final_started") or not t.get("complete_at"): return
     if not force and (t.get("socket") or transcription_gaps(t)): return
     t["final_started"] = True
+    t["final_done"] = 0
     t["final_gaps"] = transcription_gaps(t)
     if t.get("socket"): t["socket"]["fail"]("transcription_final")
     if not t["held"]:
         transcription_finish(rid, t)
         return
+    transcription_changed(rid)  # the pass's progress (final_done) from its start
     timer = threading.Timer(TRANSCRIPTION_MODE["final_seconds"], transcription_finish, args=(rid, t))
     timer.daemon = True; timer.start()
 
@@ -7134,7 +7149,9 @@ def transcription_finish(rid, expected):
 def transcription_configured():
     """What the switches make of the upstream now: the problem a job would have."""
     upstream = TRANSCRIPTION_MODE["upstream"]
+    # The kinds the hub passes on (#13446, spec/fixtures/meeting-transcription-problems): refused, busy, out of reach, failed.
     return ("upstream_unavailable" if not transcription_ready() or upstream == "unavailable" else
+            "upstream_forbidden" if upstream == "forbidden" else "upstream_busy" if upstream == "busy" else
             "upstream_failed" if upstream == "failed" else "no_interim" if upstream == "no_interim" else None)
 
 
@@ -7264,7 +7281,7 @@ def transcription_control(h, method):
         except ValueError: body = None
         if not isinstance(body, dict): return h.send_json({"code": "bad_request"}, 400) or True
         if any(k in body and type(body[k]) is not bool for k in ("on", "ready")) or \
-                ("upstream" in body and body["upstream"] not in ("ok", "unavailable", "failed", "no_interim")) or \
+                ("upstream" in body and body["upstream"] not in ("ok", "forbidden", "busy", "unavailable", "failed", "no_interim")) or \
                 ("fatal" in body and not isinstance(body["fatal"], str)) or \
                 any(k in body and (not transcription_number(body[k]) or body[k] < (1 / 16000 if k == "line_seconds" else 0)) for k in ("line_seconds", "final_seconds")):
             return h.send_json({"code": "bad_request"}, 400) or True
@@ -7371,7 +7388,7 @@ def transcription_socket(h, rid):
                     if end <= edge:
                         state["sentence"] = max(state["sentence"], edge)
                         continue
-                    if configured in ("upstream_unavailable", "upstream_failed"):
+                    if configured in ("upstream_forbidden", "upstream_busy", "upstream_unavailable", "upstream_failed"):
                         state["sentence"] = end
                         continue
                     if at < edge: state["sentence"] = max(state["sentence"], edge)
@@ -8594,6 +8611,12 @@ def live_step_page_sent(sid):
 # receipt, an answered card, a message routed straight to a task, a reminder done on the phone, and an open plan at the
 # end. Served at /api/v1/assistant/conversations/{id}/feed and /api/v1/task-plans/…; the tasks are todos with origin.
 MOCK_TASKS = os.environ.get("MOCK_TASKS") == "1"
+# MOCK_START_REMEDIES=1 (with MOCK_TASKS=1, #10365): coded start failures, a launcher alternative and both kinds of
+# startup question. The hello features and routes are wired below with the task area; the fixtures live here with the plans.
+START_REMEDIES = os.environ.get("MOCK_START_REMEDIES") == "1"
+TOOL_SEARCH = os.environ.get("MOCK_TOOL_SEARCH") == "1"
+START_REMEDY_LOG = []
+START_QUESTION_SESSION = "a1f3c2d4-0000-4000-8000-000000000104"
 TASK_PLANS = {}
 TASK_FEED = {}
 if MOCK_TASKS:
@@ -8790,6 +8813,41 @@ if MOCK_TASKS:
             "progress": [{"id": "todo_task_widget", "title": "小组件横屏崩溃", "stage": "develop"}, {"id": "todo_task_tests", "title": "补齐网络层的单元测试"}],
             "progress_total": 2}),
     ]
+    if START_REMEDIES:
+        # Three failed starts: a terminal launcher with another launcher suggested, a kept worktree on a to-do whose
+        # own plan_id is empty (the plan still names its todo_id), and a shell question answered by the task route.
+        _remedy_specs = [
+            ("launcher", "Start the release checks", "plan_remedy_launcher", "plan_remedy_launcher",
+             "launcher_missing", {"launcher": "cc_glm", "where": "terminal"}, ["codex"]),
+            ("worktree", "Open the release workspace", "plan_remedy_worktree", "",
+             "worktree_path_taken", {"path": "/Users/me/code/weather-release"}, []),
+            ("question", "Prepare the demo workspace", "plan_remedy_question", "plan_remedy_question",
+             "shell_waiting", {"line": "Run zsh-newuser-install now?", "choices": "y,n,q", "kind": "zsh_newuser",
+                               "default": "n", "kept_until": later(hours=2), "screen": "zsh-newuser-install: (y/n/q)"}, []),
+        ]
+        for _n, (_slug, _title, _pid, _todo_pid, _code, _args, _retry) in enumerate(_remedy_specs):
+            _tid = "todo_remedy_" + _slug
+            _raw = {"launcher_missing": "zsh:1: command not found: cc_glm",
+                    "worktree_path_taken": "worktree path already exists: /Users/me/code/weather-release",
+                    "shell_waiting": "the terminal is waiting for an answer"}[_code]
+            _todo = dict(_task_todo(_tid, _title, "Synthetic start remedy fixture.", "macbook", "",
+                                    "/Users/me/code/weather", 1 + _n / 10, _todo_pid),
+                         done_at=ago(minutes=1 + _n / 10), start_error=_raw, agents=[])
+            TODOS_INIT.append(_todo)
+            TODOS.append(copy.deepcopy(_todo))
+            _pt = dict(_ptask(_title, False, "Start-remedy visual fixture.", _tid), error=_raw,
+                       error_code=_code, error_args=_args)
+            if _retry:
+                _pt["retry_with"] = _retry
+            TASK_PLANS[_pid] = _plan(_pid, "started", 2 + _n / 10, [_pt])
+            TASK_FEED[ASK1] += [_feed("feed_remedy_plan_" + _slug, 0.31 - _n / 100, "plan", _pid),
+                                _feed("feed_remedy_task_" + _slug, 0.30 - _n / 100, "task", _tid)]
+        SESSIONS.append(sess("macbook", START_QUESTION_SESSION, "Answer the terminal setup question", "/Users/me/code/weather",
+                             "offline", "offline", "weather", 9, "remedy", 9, 1, "",
+                             start_error="the terminal is waiting for an answer", start_error_code="shell_waiting",
+                             start_error_args={"line": "Trust this new host key?", "choices": "yes,no", "kind": "ssh_host_key",
+                                               "kept_until": later(hours=2), "screen": "Host key fingerprint: SHA256:example"}))
+        ITEMS[START_QUESTION_SESSION] = []
     # MOCK_BRIEF_SETUP=1 (#5085, #5804, docs/assistant/assistant.md "Recommended setup"): the briefing is the week's
     # first, so its `brief` item carries the computed setup lines, in the hub's own words
     # (server/internal/i18n/locales/en/assistant-setup_suggest.json): one with a settings page in every app (the triage's
@@ -9221,6 +9279,14 @@ if MOCK_TASKS:
             it("user", "text", 4.8, text=_quiet, injected={"kind": "system", "state": "supervise", "level": "triage", "line": "督办：检查示例任务"}),
             it("assistant", "tool_use", 4.7, tool_use_id="mock-supervision-read", tool_name="Bash", tool_input={"command": "printf 'synthetic checks passed'", "description": "Inspect synthetic task checks"}),
             it("user", "tool_result", 4.6, tool_use_id="mock-supervision-read", text="synthetic checks passed"),
+        ]
+        ITEMS[ASK1] += tool("mcp__persona__agent_send", {"machine": "server", "session_id": TESTS, "text": "Continue the synthetic checks.", "task": {"title": "整理发布说明"}},
+                            "It is now your task todo_task_release.", 4.65)
+        ITEMS[ASK1] += tool("mcp__persona__conversation_send", {"id": "example-conversation", "text": "Synthetic checks are complete."},
+                            "Sent to the example conversation.", 4.62)
+        ITEMS[ASK1] += tool("mcp__persona__interaction_answer", {"interaction_id": "mock-supervision-question", "approve": True},
+                            "Answered on behalf of the user.", 4.58)
+        ITEMS[ASK1] += [
             it("assistant", "text", 4.5, text="示例任务的测试通过，无需你处理。"),
             it("assistant", "tool_use", 4.4, tool_use_id="mock-supervision-finish", tool_name="mcp__persona__supervision_finish", tool_input={"visibility": "silent", "summary": "Synthetic checks passed"}),
             it("user", "tool_result", 4.3, tool_use_id="mock-supervision-finish", text='{"visibility":"silent"}'),
@@ -9234,6 +9300,13 @@ if MOCK_TASKS:
         ITEMS[ASK1].sort(key=lambda x: x["ts"])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _i + 1
+        TASK_FEED[ASK1] += [
+            _feed("feed_supervision_task", 4.64, "task", "todo_task_release", {"wake": "active"}),
+            _feed("feed_supervision_routed", 4.63, "routed", "todo_task_release", {"text": "Continue the synthetic checks.", "from": "assistant"}),
+            _feed("feed_supervision_answered", 4.57, "answered", "todo_task_release", {
+                "question": "Run the synthetic checks?", "answer": "Approved by the assistant.", "by": "assistant", "reason": "Routine review"}),
+        ]
+        TASK_FEED[ASK1].sort(key=lambda x: x["at"])
     # MOCK_RELAYED=1: a message another Persona conversation sent with conversation_send (prompts/assistant/relay.md),
     # then one you typed: only yours is the pale blue bubble (#2643).
     if os.environ.get("MOCK_RELAYED") == "1":
@@ -9454,6 +9527,18 @@ def retry_task(h, tid):
     t = next((x for x in TODOS if x["id"] == tid), None)
     if not t:
         return h.send_json({"error": "todo not found"}, 404)
+    raw_body = (h.last_body or b"").decode("utf-8", errors="replace")
+    try:
+        request_body = json.loads(raw_body) if raw_body else {}
+    except ValueError:
+        return h.send_json({"error": "invalid JSON", "code": "bad_request"}, 400)
+    if not isinstance(request_body, dict):
+        return h.send_json({"error": "a JSON object is required", "code": "bad_request"}, 400)
+    launcher = request_body.get("launcher")
+    if launcher is not None and (not isinstance(launcher, str) or not launcher.strip()):
+        return h.send_json({"error": "launcher must be a non-empty string", "code": "bad_request"}, 400)
+    launcher = launcher.strip() if launcher else ""
+    START_REMEDY_LOG.append({"route": "retry", "id": tid, "raw_body": raw_body, "body": request_body})
     mode = RETRY_MODE["mode"]
     cut = [x for x in SESSIONS if x.get("turn_error") and any(a["session_id"] == x["session_id"] for a in t.get("agents", []))]
     if cut and not t.get("done_at"):
@@ -9471,13 +9556,17 @@ def retry_task(h, tid):
 
         threading.Thread(target=finished, daemon=True).start()
         return h.send_json({"todo": format_todo(t)})
-    if not t.get("start_error"):
-        if t.get("done_at") or not t.get("plan_id"):
+    plan = TASK_PLANS.get(t.get("plan_id")) or next(
+        (p for p in TASK_PLANS.values() if p.get("state") != "dismissed"
+         and any(pt.get("todo_id") == tid for pt in p.get("tasks", []))), None)
+    plan_task = next((pt for pt in (plan or {}).get("tasks", []) if pt.get("todo_id") == tid), None)
+    if not t.get("start_error") and not (plan_task or {}).get("error"):
+        # A failed start is retryable through its plan's todo_id even when the to-do has no plan_id (#10365).
+        if t.get("done_at"):
             return h.send_json({"error": "只有助手派出、没开起来的任务能重试"}, 409)
         return h.send_json({"todo": format_todo(t)})
     if mode == "offline":
         return h.send_json({"error": "「MacBook」现在离线，等它连上再重试"}, 409)
-    plan = TASK_PLANS.get(t.get("plan_id"))
 
     def plan_error(err):
         if not plan:
@@ -9485,6 +9574,10 @@ def retry_task(h, tid):
         for pt in plan["tasks"]:
             if pt.get("todo_id") == tid:
                 pt["error"] = err
+                if not err:
+                    pt.pop("error_code", None)
+                    pt.pop("error_args", None)
+                    pt.pop("retry_with", None)
         for send, _ in list(LIVE):
             try: send(from_default({"type": "task_plan", "plan": plan}))
             except Exception: pass
@@ -9500,17 +9593,75 @@ def retry_task(h, tid):
             t.update(done_at=ago(), start_error=err, updated_at=ago())
             plan_error(err)
         else:
-            if not any(x["session_id"] == RETRY_TASK_STARTED for x in SESSIONS):
-                SESSIONS.append(sess("macbook", RETRY_TASK_STARTED, t["title"], "/Users/me/code/weather", "working", "working",
-                                     "weather", 1, "align", 9, 0, "在看设置页底部两个按钮的布局约束。"))
-            t["agents"] = [{"machine_id": "macbook", "session_id": RETRY_TASK_STARTED, "linked_at": ago(), "released_at": None,
-                            "title": t["title"], "cwd": "/Users/me/code/weather", "agent": "claude", "start_error": "",
-                            "source": "manual", "via": ""}]
+            sid = RETRY_TASK_STARTED if tid == "todo_task_align" else str(uuid.uuid5(uuid.NAMESPACE_URL, "persona mock retry " + tid))
+            if not any(x["session_id"] == sid for x in SESSIONS):
+                SESSIONS.append(sess("macbook", sid, t["title"], "/Users/me/code/weather", "working", "working",
+                                     "weather", 1, "align", 9, 0, "The retry started the agent.",
+                                     agent="codex" if launcher == "codex" else "claude", launcher=launcher or "claude"))
+            t["agents"] = [{"machine_id": "macbook", "session_id": sid, "linked_at": ago(), "released_at": None,
+                            "title": t["title"], "cwd": "/Users/me/code/weather", "agent": "codex" if launcher == "codex" else "claude",
+                            "start_error": "", "source": "manual", "via": ""}]
             push_machine("macbook")
         push_todos()
 
     threading.Thread(target=started, daemon=True).start()
     h.send_json({"todo": format_todo(t)})
+
+
+def answer_task_start(h, tid):
+    """POST /api/v1/todos/{id}/start/answer: accept only an offered choice, then restart the failed planned task."""
+    t = next((x for x in TODOS if x["id"] == tid), None)
+    if not t:
+        return h.send_json({"error": "todo not found"}, 404)
+    raw_body = (h.last_body or b"").decode("utf-8", errors="replace")
+    try:
+        body = json.loads(raw_body)
+    except ValueError:
+        return h.send_json({"error": "invalid JSON", "code": "bad_request"}, 400)
+    choice = body.get("choice") if isinstance(body, dict) else None
+    START_REMEDY_LOG.append({"route": "task_answer", "id": tid, "raw_body": raw_body, "body": body})
+    plan = TASK_PLANS.get(t.get("plan_id")) or next(
+        (p for p in TASK_PLANS.values() if any(pt.get("todo_id") == tid for pt in p.get("tasks", []))), None)
+    pt = next((pt for pt in (plan or {}).get("tasks", []) if pt.get("todo_id") == tid), None)
+    offered = (pt or {}).get("error_args", {}).get("choices", "").split(",")
+    if (pt or {}).get("error_code") != "shell_waiting" or choice not in offered:
+        return h.send_json({"error": "this startup answer is no longer available", "code": "start_answer_closed"}, 409)
+    t.update(done_at=None, start_error="", reopened_at=ago(), updated_at=ago())
+    for key in ("error", "error_code", "error_args", "retry_with"):
+        pt.pop(key, None)
+    sid = str(uuid.uuid5(uuid.NAMESPACE_URL, "persona mock start answer " + tid))
+    if not any(s["session_id"] == sid for s in SESSIONS):
+        SESSIONS.append(sess("macbook", sid, t["title"], "/Users/me/code/weather", "working", "working",
+                             "weather", 9, "answered", 9, 0, "The startup answer started the task."))
+        ITEMS[sid] = []
+    t["agents"] = [{"machine_id": "macbook", "session_id": sid, "linked_at": ago(), "released_at": None,
+                    "title": t["title"], "cwd": "/Users/me/code/weather", "agent": "claude", "start_error": "",
+                    "source": "manual", "via": ""}]
+    push_todos()
+    push_machine("macbook")
+    return h.send_json({"todo": format_todo(t)})
+
+
+def continue_session_start(h, mid, sid):
+    """POST /api/v1/sessions/{mid}/{sid}/start/continue: keep the session and answer its kept terminal question."""
+    s = next((x for x in SESSIONS if x["machine_id"] == mid and x["session_id"] == sid), None)
+    if not s:
+        return h.send_json({"error": "session not found"}, 404)
+    raw_body = (h.last_body or b"").decode("utf-8", errors="replace")
+    try:
+        body = json.loads(raw_body)
+    except ValueError:
+        return h.send_json({"error": "invalid JSON", "code": "bad_request"}, 400)
+    choice = body.get("choice") if isinstance(body, dict) else None
+    START_REMEDY_LOG.append({"route": "session_continue", "machine": mid, "id": sid, "raw_body": raw_body, "body": body})
+    offered = s.get("start_error_args", {}).get("choices", "").split(",")
+    if s.get("start_error_code") != "shell_waiting" or choice not in offered:
+        return h.send_json({"error": "this startup answer is no longer available", "code": "start_answer_closed"}, 409)
+    s.update(status="working", state="working", last_text="The terminal answer started the agent.", updated_at=ago())
+    for key in ("start_error", "start_error_code", "start_error_args"):
+        s.pop(key, None)
+    push_machine(mid)
+    return h.send_json({"session": decorated_session(s)})
 
 
 
@@ -9602,6 +9753,18 @@ def tasks_area(h, method, p, raw):
     """The unified entry's endpoints (MOCK_TASKS=1): the feed, starting / dismissing a plan, routing to a task."""
     if not MOCK_TASKS:
         return False
+    if START_REMEDIES and method == "GET" and p == "/mock/start-remedies":
+        h.send_json({"requests": START_REMEDY_LOG})
+        return True
+    if START_REMEDIES and method == "POST":
+        m = re.fullmatch(r"/api/v1/todos/([^/]+)/start/answer", p)
+        if m:
+            answer_task_start(h, unquote(m.group(1)))
+            return True
+        m = re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/start/continue", p)
+        if m:
+            continue_session_start(h, unquote(m.group(1)), unquote(m.group(2)))
+            return True
     if method == "GET" and p.startswith("/api/v1/assistant/conversations/") and p.endswith("/feed"):
         conv = p.split("/")[5]
         items = TASK_FEED.get(conv, [])
@@ -17633,6 +17796,11 @@ ITEMS["hlth0001-0000-4000-8000-000000000001"] = (
                 "points": [{"label": d, "value": v} for d, v in zip(_hdays, [6.9, 6.4, 7.1, 6.2, 6.8, 6.5, 7.0])]}),
         "差得不多，但连着几天少于 7 小时白天容易犯困。可以先试两件事：每天同一时间起床（周末也是），睡前一小时把手机放远一点。"]))]
 )
+# Keep the report conversation listed above readable when the bundled demo is regenerated.
+ITEMS["hlth0002-0000-4000-8000-000000000002"] = [
+    it("user", "text", 60 * 26 + 1, text="帮我逐项看看这份体检报告。"),
+    it("assistant", "text", 60 * 26, text=HEALTH_REPORT_RECORD),
+]
 ITEMS["hlth0003-0000-4000-8000-000000000003"] = (
     [it("user", "text", 71, text="最近 7 天步数和上周比怎么样")]
     + tool("mcp__persona__phone_health_summary", {"metrics": ["steps"], "days": 14}, "14 天的步数（按天）", 71)
@@ -17701,7 +17869,7 @@ if os.environ.get("MOCK_TAB_PANES"):
              "summary": "go test ./auth/...", "tool_input": {"command": "go test ./auth/..."}})
 if MOCK_SIDE_SESSIONS:
     # #7944: the /btw question's card (with side folding the hub sends it folded_under the review, folded_as "side"), and
-    # what each side session said
+    # what each side session said (MOCK_SIDE_UNREAD, side_unread_mock.py, answers the card)
     INTERACTIONS.append(
         {"id": "ix_side_btw", "machine_id": "macbook", "session_id": SIDE_BTW, "session_title": "btw: 这个 PR 现在能合吗",
          "cwd": "/Users/me/code/weather", "kind": "question", "created_at": ago(minutes=4), "expires_at": later(minutes=26),
@@ -17807,10 +17975,12 @@ if os.environ.get("MOCK_CHAT_CONTENT") == "1":
     ]
 
 # MOCK_LONG_HISTORY=1 (or "oldest": the work line first): the weather chat with fifteen earlier exchanges in front, so its work line and thought sit in
-# the middle of a long chat and the list can scroll both ways around them (opening and closing them in place).
-if os.environ.get("MOCK_LONG_HISTORY") in ("1", "oldest"):
+# the middle of a long chat and the list can scroll both ways around them (opening and closing them in place). A number
+# above one chooses that many exchanges instead (90 exercises the web's deferred long-chat window).
+_long_history = os.environ.get("MOCK_LONG_HISTORY", "")
+if _long_history in ("1", "oldest") or (_long_history.isdigit() and int(_long_history) > 1):
     _hist = []
-    for _k in range(15):
+    for _k in range(15 if _long_history in ("1", "oldest") else int(_long_history)):
         _hist.append(it("user", "text", 600 - _k * 30, text="第 %d 个问题：顺便看一下这一块的写法有没有问题？" % (_k + 1)))
         _hist.append(it("assistant", "text", 599 - _k * 30, text="看过了，第 %d 块没有问题。命名可以再统一一点，"
                                                             "测试也覆盖到了主要的分支，我顺手把两处重复的判断合并了。" % (_k + 1)))
@@ -20312,8 +20482,9 @@ def case_route(h, method, p, q, body):
     return True
 # /mock/paging?on=1: pages of history as the hub cuts them (node.go PageTurns): the latest page and the backlog of a
 # first subscribe hold the last 2 whole turns, an older page `turns` more; otherwise the whole history comes at once.
+# `first=60` gives the browser an already-windowed first page, while older pages still arrive two turns at a time.
 # ChatFollowTests' cold start at a saved place far up needs it (#597). /mock/reset turns it off.
-PAGING = {"on": False}
+PAGING = {"on": False, "first": 2}
 
 
 # MOCK_CHAT_SEARCH=1 (#6281, docs/design/proposals/assistant-search.md): the long Persona conversation (ASK4) is one whose
@@ -26523,6 +26694,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(mesh_state())
         if p == "/mock/paging":
             PAGING["on"] = q.get("on", ["0"])[0] == "1"
+            PAGING["first"] = int(q.get("first", ["2"])[0])
             return self.send_json({"ok": True, **PAGING})
         if p == "/mock/replay":
             n = int((parse_qs(urlparse(self.path).query).get("n") or ["1"])[0])
@@ -26547,7 +26719,7 @@ class H(BaseHTTPRequestHandler):
             HERDR_STOPPED.clear(); HERDR_STOPPED.update(herdr_env()); HERDR_STARTS.clear()  # the herdr row (#1916)
             HERDR_MODE["start"] = os.environ.get("MOCK_HERDR_START", ""); HERDR_MODE["gen"] += 1
             # A test that died before putting them back: the start-up delay (MOCK_DELAY), no paging.
-            NET["delay"], PAGING["on"] = float(os.environ.get("MOCK_DELAY", "0")), os.environ.get("MOCK_CHAT_SEARCH") == "1"
+            NET["delay"], PAGING["on"], PAGING["first"] = float(os.environ.get("MOCK_DELAY", "0")), os.environ.get("MOCK_CHAT_SEARCH") == "1", 2
             HISTORY_NOW["token"] = HISTORY
             # ExtensionMarketTests' update installed (#2988): example-gateway at 1.0.0 again, its newer version waiting.
             PLUGINS.pop("example-gateway-next", None); _UPGRADE_WHILE_ON.pop("example-gateway", None)
@@ -26682,6 +26854,7 @@ class H(BaseHTTPRequestHandler):
             if PREFS_FAIL[0]: return self.send_json({"error": "mock: prefs unavailable"}, 503)  # #1860
             return self.send_json(PREFS)
         if p == "/api/v1/pins": return self.send_json(PINS)
+        if p == "/api/v1/agents/display-settings": return self.send_json(AGENTS_DISPLAY)
         if p == "/api/v1/mutes": return self.send_json({"spaces": [], "sessions": TREE_MUTED, "allowed": []})
         if p.startswith("/api/v1/assistant") and (other := assistant_for_manager(self)) is not None:
             if p == "/api/v1/assistant" or other[1] != 200: return self.send_json(*other)
@@ -27124,7 +27297,10 @@ class H(BaseHTTPRequestHandler):
             if b: items = [x for x in items if x["seq"] < int(b)]
             more = False
             if PAGING["on"]:
-                items, more = last_turns(items, int(q.get("turns", ["2"])[0] or 2))
+                # The web asks for two turns explicitly, so a configured long first page must override that value;
+                # older before_seq pages keep the requested (normally two-turn) size.
+                turns = PAGING["first"] if not b and PAGING["first"] != 2 else int(q.get("turns", ["2"])[0] or 2)
+                items, more = last_turns(items, turns)
             out = {"items": lazy_images(fold_work(items) if q.get("fold_work") == ["1"] else items), "has_more": more,
                    **span(items, None, int(b) - 1 if b else last)}
             served(sid, "page", out)
@@ -28705,6 +28881,13 @@ class H(BaseHTTPRequestHandler):
                 MOCK_LEADERS.remove(lead)
                 ENDED_LEADERS.add(lead)
             return self.send_json({"ended": ended})
+        if p == "/api/v1/agents/display-settings" and self.command == "PUT":  # exactly one boolean per request
+            body = json.loads(self.last_body or b"{}")
+            sent = [k for k in ("show_botmux", "use_herdr_tab_name", "sort_by_activity", "show_filter") if isinstance(body.get(k), bool)]
+            if len(sent) != 1: return self.send_json({"error": "send exactly one switch"}, 400)
+            AGENTS_DISPLAY[sent[0]] = body[sent[0]]
+            if sent[0] == "show_botmux": AGENTS_DISPLAY["configured"] = True
+            return self.send_json(AGENTS_DISPLAY)
         if p == "/api/v1/pins" and self.command == "PUT":  # the hub keeps them (the reply is what it kept)
             body = json.loads(self.last_body or b"{}")
             PINS.update(spaces=list(body.get("spaces") or []), sessions=list(body.get("sessions") or []))
@@ -28762,6 +28945,11 @@ class H(BaseHTTPRequestHandler):
                     return self.send_json({"error": "%s must be %d–%d" % (key, low, high)}, 400)
             if "task_workspace_preference" in body and body["task_workspace_preference"] not in ("prefer-existing", "prefer-new"):
                 return self.send_json({"error": "task_workspace_preference must be prefer-existing or prefer-new"}, 400)
+            if "default_permission_mode" in body:
+                mode = body["default_permission_mode"]
+                if mode not in ("default", "acceptEdits", "plan", "auto", "bypassPermissions"):
+                    return self.send_json({"error": "bad default_permission_mode"}, 400)
+                ASSISTANT_CONFIG["default_permission_mode"] = mode
             for key in ("start_requested_tasks", "agent_auto_naming"):
                 if isinstance(body.get(key), bool):
                     ASSISTANT_CONFIG[key] = body[key]
@@ -31428,6 +31616,17 @@ MOCK_HELP.append("MOCK_ADD_COMPUTER=1|seed  机器 › 添加电脑（#287）：
                  "add.manager 把电脑加到那个助手名下（回包 manager；助手离线时 /machines 先不列它），MOCK_ADD_COMPUTER_NO_MANAGER=1 模拟不认它的旧 hub（回包没有 manager）")
 
 # ---------- area: the main conversation's readiness (#287, docs/assistant/onboarding.md 4.4–4.6, 5.1–5.4) ----------
+# MOCK_TOOL_SEARCH=1: the current main chat's turn failed because this gateway cannot load deferred tool references.
+# It is separate from the new-user readiness scenarios so the ordinary populated chat can show its dedicated Retry card.
+if TOOL_SEARCH:
+    _tool_search_text = ('API Error: 400 {"type":"error","error":{"type":"invalid_request_error",'
+                         '"message":"tool_reference blocks with defer_loading are not representable for this model"}}')
+    _tool_main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
+    if _tool_main is not None:
+        _tool_main.update(turn_error=_tool_search_text, turn_error_code="tool_search_unsupported", turn_error_kind="user",
+                          last_text=_tool_search_text)
+        ITEMS[ASK1] = ITEMS.get(ASK1, []) + [it("assistant", "text", 0.2, text=_tool_search_text)]
+
 # MOCK_READINESS=<scenario> (docs/operations/testing.md "Readiness scenarios", scripts/mock/readiness_mock.py): a new user's hub in one of
 # the states the setup card shows, in the hub's shapes and words (its own catalogs, by Accept-Language): the features
 # assistant_readiness, machines_add, machine_trust, builtin_presets and launcher_auto_name; GET /api/v1/assistant/readiness[?probe=1],
@@ -32174,6 +32373,21 @@ _features_without_model_pick = features
 
 def features():
     return _features_without_model_pick() + (["assistant_model_pick", "assistant_start_service_tier"] if MODEL_PICK_MODE else [])
+
+
+_features_without_start_remedies = features
+
+
+def features():
+    base = _features_without_start_remedies()
+    extra = ("task_retry_launcher", "start_continue", "todo_start_answer") if START_REMEDIES else ()
+    return base + [f for f in extra if f not in base]
+
+
+MOCK_HELP.append("MOCK_START_REMEDIES=1  配合 MOCK_TASKS=1（#10365）：features 带 task_retry_launcher / start_continue / todo_start_answer；"
+                 "末尾三个失败任务分别是 launcher_missing + retry_with、无 plan_id 的 worktree_path_taken、todo_start_answer 的 shell_waiting；"
+                 "另有一个 start_continue 的 Agent 会话。Retry 记录空 body 或 launcher，回答两个 start 路由；GET /mock/start-remedies 看请求")
+MOCK_HELP.append("MOCK_TOOL_SEARCH=1  普通主对话的 tool_search_unsupported 原始 400 turn error，看专用 Retry 卡（#10365）")
 
 
 MOCK_HELP.append("MOCK_MODEL_PICK=1|picked|otherkind  Persona 对话自己的模型（#5033）：features 带 assistant_model_pick；主对话的启动器（?purpose=assistant）带默认和 unavailable"

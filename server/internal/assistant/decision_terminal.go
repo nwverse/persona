@@ -7,9 +7,11 @@ import (
 )
 
 // Terminal recovery on a decision (#13087, docs/assistant/todos.md "Decisions the owner can answer"). Only the owner can
-// resume an Agent whose stop was theirs or has no known cause, with Resume on its terminal page. A decision never does it:
-// a new one keeps that instruction in its reason and its row links the Agent's terminal; an older one that still offers
-// it as an option opens the terminal when that option is pressed, and the hub never takes it as an answer.
+// resume an Agent the assistant may not (resumeAllowed: the user's own stop, a stop cause the hub does not recognize, an
+// archived Agent without a recorded non-user stop, a node that reports no stop cause), with Resume on its terminal page.
+// A decision never does it: a new one keeps that instruction in its reason and its row links the Agent's terminal; an
+// older one that still offers it as an option opens the terminal when that option is pressed, and the hub never takes
+// it as an answer.
 
 // manualResumeKeep: how long a refused resume can still give the next decision on the Agent's task its terminal link.
 const manualResumeKeep = 24 * time.Hour
@@ -43,7 +45,7 @@ func decisionTerminal(t Todo, label string) *SessionRef {
 }
 
 // manualResumeBook remembers, by machine and session, when resumeAllowed last refused a supervisor's resume because
-// the Agent's stop cause leaves Resume on its terminal page to the owner. The next decision raised on that Agent's task
+// only the owner's Resume on the Agent's terminal page may restart it. The next decision raised on that Agent's task
 // links its terminal (manualResumeTarget): the hub's own refusal decides the link, never the wording of the decision's
 // reason, so a reason that merely mentions a terminal or says not to resume links nothing. It is kept in memory: after
 // a restart a decision simply has no link, and its reason still tells the owner what to do.

@@ -80,8 +80,12 @@ func TestExitUse(t *testing.T) {
 	if got := s.exitPolicy(ctx, "qa: new text 2", "qa-plain-1", "qa-plain"); got != (TrackPolicy{}) {
 		t.Errorf("failed, conversation tagged with none = %+v, want all off", got)
 	}
-	if got := s.exitPolicy(ctx, "qa: new text 3", "qa-main", ""); got != strictPolicy {
-		t.Errorf("failed, conversation tagged finance = %+v, want strict", got)
+	if got := s.exitPolicy(ctx, "qa: new text 3", "qa-main", ""); got != (TrackPolicy{}) {
+		t.Errorf("failed, main-space conversation tagged finance = %+v, want all off (general)", got)
+	}
+	s.infoTagTurnEnded(ctx, "qa-main")
+	if got := s.exitPolicy(ctx, "qa: new text 3b", "qa-main", ""); got != (TrackPolicy{}) {
+		t.Errorf("failed, main-space conversation with a turn waiting = %+v, want all off (general)", got)
 	}
 	s.infoTagTurnEnded(ctx, "qa-plain-1")
 	if got := s.exitPolicy(ctx, "qa: new text 4", "qa-plain-1", "qa-plain"); got != strictPolicy {
@@ -151,7 +155,7 @@ func TestSensitiveTextOutsideHealth(t *testing.T) {
 		t.Fatalf("pushes: %+v", p)
 	}
 	// Words the owner just confirmed on the phone (an Inbox suggestion's instruction) are not asked about again.
-	if ok, err := s.confirmOutbound(ownerConfirmed(context.Background()), "server", "work-0000-0000", "agent_start", "qa invoice total",
+	if ok, _, err := s.confirmOutbound(ownerConfirmed(context.Background()), "server", "work-0000-0000", "agent_start", "qa invoice total",
 		"qa", nil); err != nil || !ok {
 		t.Fatalf("owner-confirmed words: %v %v", ok, err)
 	}

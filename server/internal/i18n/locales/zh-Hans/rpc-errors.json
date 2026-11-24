@@ -109,5 +109,6 @@
   "omp_stopped": "这个 omp 会话已停止，没有这个操作：发一条消息会在电脑上接着它运行。",
   "conversation_retired": "此会话已不再运行该对话。",
   "agent_assistant_workspace": "不能在助手工作区派出 Agent。请选择项目目录或独立的 worktree；尚未启动 Agent。",
-  "codex_writable_symlink": "无法以 workspace-write 模式启动 Codex：可写根目录下的 {name} 是符号链接，沙箱无法保护该只读路径。请改用项目目录作为 cwd，或选择只读模式。尚未启动，也未修改符号链接。"
+  "codex_writable_symlink": "无法以 workspace-write 模式启动 Codex：可写根目录下的 {name} 是符号链接，沙箱无法保护该只读路径。请改用项目目录作为 cwd，或选择只读模式。尚未启动，也未修改符号链接。",
+  "agy_in_terminal": "这个 Antigravity 对话正在那台电脑的终端里由 agy 打开，Persona 连不到那个终端，所以没有发送。请在终端里回复，或者先在那边退出 agy 再试。"
 }

@@ -505,6 +505,8 @@
     <string name="chat_turn_fix_model_route">モデル未接続：このモデルは使えません</string>
     <string name="chat_turn_fix_model_route_launcher">%1$sでモデルを使えません</string>
     <string name="chat_turn_fix_model_route_detail">モデル名が正しくないか、このモデルは今使えません。別のモデルを試してください。</string>
+    <string name="chat_turn_fix_tool_search_unsupported">モデル未接続：このゲートウェイはツールの必要時読み込みに対応していません</string>
+    <string name="chat_turn_fix_tool_search_unsupported_detail">再試行してください。</string>
     <string name="chat_turn_fix_action">直す</string>
     <string name="chat_slash_saved_prompts">保存済みプロンプト</string>
 </resources>
