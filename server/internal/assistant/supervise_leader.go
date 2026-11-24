@@ -269,7 +269,8 @@ func (s *Service) rehomeQueuedSupervision(ctx context.Context, old string, ids m
 func (s *Service) digestTo(ctx context.Context, cfg Settings, g superviseSignal) string {
 	// Explicit escalations keep their destination; needs_user alone is not an escalation.
 	if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil && t.Supervision.assigned() &&
-		g.Kind != sigAsk && g.Kind != sigEscalated {
+		g.Kind != sigAsk && g.Kind != sigEscalated &&
+		!(g.Kind == sigDecide && g.Unreachable && g.Recipient != "" && g.To == cfg.Main) {
 		return s.effectiveSupervisor(ctx, cfg, t)
 	}
 	own := s.ownSupervisor(cfg)

@@ -144,13 +144,13 @@
 {{else if .Language}}- Use `task_plan` for code changes and other multi-step work. Start there with `readonly: true` for codebase research, root-cause analysis, architecture or performance reviews, and multi-step log or binary inspection. Use the computer and directory with the source checkout, even on another connected computer.
 {{else}}- 改代码或多步工作用 `task_plan`。查代码库、故障根因、架构、性能，或多步查日志、二进制，一开始就派只读任务（`readonly: true`），到源码所在的电脑和目录查。
 {{end}}{{if not .WorkGuide}}  Plan independent work separately and keep continuations on the original to-do (`continues`). Use the knowledge base and `agents_list` to choose the computer, directory and model. Explain in `why`.
-  任务用哪一档模型、多大的思考档位按活来选（`tier` / `model` / `effort`）。日常主力是用户平时给 Agent 用的模型档：
-  范围清楚的活（修一个 bug、照着规格做一个功能、只读的调查）从比日常主力低一档起步，思考档位 `medium`；开放的活（原因不明的排查、跨几个 PR 的工作、操控电脑）用日常主力那一档；
-  由任务 leader（`role: "leader"`）带的大迁移、大重构用最高一档。同一个任务返工一轮以后，先提高 `effort`，还不够再升一档。
-  有哪几档只按你确实知道的来：实时快照「模型档位」里的 Agent 预设（照每个预设的说明挑，填 `tier`），或者用户说过、知识库里记着的。
-  预设是用户自己配的：选了它，任务就用它的模型和思考档位，而不是「模型设置」里 Agents 的默认，所以只在预设的说明写明它是哪一档、适合这类活时才选；预设自带思考档位时 `effort` 留空，它没带、或返工后要提高时才填。
-  分不清哪个模型是哪一档、没有合适的预设时，`tier`、`model`、`effort` 都留空，任务照用户在「模型设置」里配好的模型和思考档位跑，不要猜型号，也不要替用户改思考档位。
-  用户给这个任务点名的模型或思考档位永远优先；默认和预设都是用户配的，你只在其中挑，不改它们，也不填用户没给过的型号。选了哪一档、为什么，写进 `why`。
+  任务用哪个 Agent 预设、多大的思考档位按活的类型来选（`tier` / `model` / `effort`），不按强弱排档：预设按活的类型命名（例如 `dev` 开发、排查、调研整理，`core` 核心设计与实现，`deploy` 照手册部署），
+  照每个预设的说明找和这件活同类的那个；一个预设可以列几个候选，派出时由 hub 按用户排的顺序挑这台电脑能用的，你不用自己挑候选。
+  范围清楚的活思考档位从 `medium` 起步；同一个任务返工一轮以后先提高 `effort`，不要因为返工就换成别类的预设。
+  有哪些预设只按你确实知道的来：实时快照「模型档位」里的 Agent 预设（填 `tier`，旧名也认），或者用户说过、知识库里记着的。
+  预设是用户自己配的：选了它，任务就用它的模型和思考档位，而不是「模型设置」里 Agents 的默认，所以只在预设的说明写明它适合这类活时才选；预设自带思考档位时 `effort` 留空，它没带、或返工后要提高时才填。
+  没有和这件活同类的预设时，`tier`、`model`、`effort` 都留空，任务照用户在「模型设置」里配好的模型和思考档位跑，不要猜型号，也不要替用户改思考档位。
+  用户给这个任务点名的模型或思考档位永远优先；默认和预设都是用户配的，你只在其中挑，不改它们，也不填用户没给过的型号。选了哪个预设、为什么，写进 `why`。
   用户这条消息亲口要你做的（直接下令、说「让 Agent 去做」等）`user_requested` 填 true，你推断的填 false。
   主对话和主管派的活直接开始，其他对话只直接开只读、用户亲口要的和已放行的。花钱、以用户名义对外、没同意过的不可逆操作填 `owner_step`（money/outward/irreversible），等用户点「开始」。交出去就接着聊，不要等；
   任务进展在实时快照里（「从对话开的任务」），用户在卡片上看进度、答 Agent 的提问，不用你转述。

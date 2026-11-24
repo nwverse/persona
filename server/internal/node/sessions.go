@@ -338,6 +338,10 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	var rowIDs map[string]bool // the runtimes' rows, where the line of a fork stops (aliasesOf)
 	for i := from; i < len(out); i++ {
 		s := &out[i]
+		if sess := n.paneHerdrSession(n.ownPane(s.PaneID)); n.herdrSessionBlocked(sess) && !n.isAssistantSession(s.SessionID) && !n.keptSessions()[s.SessionID] {
+			n.noteHerdrSessionID(s.SessionID, sess)
+			continue
+		}
 		if seen[s.SessionID] {
 			continue
 		}
@@ -429,6 +433,10 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			n.noteGatewayRunning(s)
 		}
 		if earlier[s.SessionID] || n.isRoundFork(s.SessionID) || !n.sessionScopeAllows(s.Cwd) {
+			continue
+		}
+		if sess := n.paneHerdrSession(s.PaneID); n.herdrSessionBlocked(sess) && !n.isAssistantSession(s.SessionID) && !n.keptSessions()[s.SessionID] {
+			n.noteHerdrSessionID(s.SessionID, sess)
 			continue
 		}
 		if n.listBlocked(s.SessionID, s.Cwd) {
@@ -748,6 +756,9 @@ func (n *Node) revsChanged(list []proto.Session) map[string]int64 {
 // listBlocked: the live list leaves session sid out for its working folder cwd: a blocked Agent folder or Claude config
 // folder, except the assistant's own conversations and the sessions the hub keeps.
 func (n *Node) listBlocked(sid, cwd string) bool {
+	if n.herdrSessionIDBlocked(sid) {
+		return true
+	}
 	return cwd != "" && n.cwdBlocked(cwd) && !n.isAssistantSession(sid) && !n.keptSessions()[sid]
 }
 

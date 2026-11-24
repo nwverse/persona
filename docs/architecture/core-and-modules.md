@@ -189,7 +189,7 @@ What switched off means, by seam (each port follows `Set.On`; a build without th
 | `server/internal/cliport` | `lark` | `lark.cli` is not read (logged at start) and the extension host's lark-cli integration is off |
 | `server/internal/larkhost` | `lark` | The outbound channel port is `larkhost.None`, as without the module |
 | `server/internal/knowledgeuihost` | `knowledge-ui` | No layer: no `kb_history_*` tool or import, the selection page's chat list answers as a source without history, days carry no sent marks |
-| `server/internal/healthhost` | `health` | No layer: the intake routes answer 404, no `health_intake` tool or capability, no water reminders |
+| `server/internal/healthhost` | `health` | No layer: the intake and items routes answer 404, no `health_intake` tool, no `health_intake` or `health_items` capability, no water reminders |
 | `server/internal/recordinghost` | `recording` | No layer: the recording routes answer 404, no audio socket, room tools, final passes or meeting capabilities |
 | `server/internal/node/imessageport` | `imessage` | The node answers as a computer without Messages; the manager sends it no `connector.*` call and drops `imessage` from the node's built-in programs |
 | `server/internal/node/iphoneport` | `phone-extra` | The node lists no `iphone` program and has none of its methods; the manager drops `iphone` from the node's built-in programs, so it offers and calls no phone control |
@@ -490,12 +490,12 @@ manifest declares `feature: module.recording`, which the kernel announces while 
 ### Health
 
 `health` (`server/internal/modules/health`, #14406) is the manager's Health intake (docs/assistant/health.md "Water
-and protein"): the `/api/v1/assistant/health/intake…` and `…/water/reminder` routes, the water reminders, the intake
+and protein"): the `/api/v1/assistant/health/intake…`, `…/items` and `…/water/reminder` routes, the water reminders, the intake
 page, the legacy water extension's import and the `health_intake` tool. Its manifest declares `feature: module.health`,
 which the kernel announces while it is loaded (it left `modapi.ClientModules` with this move).
 
 - **The seam**: `server/internal/healthhost`, in recording's shape: `Layer` (core -> module: `Routes`, `Tool`,
-  `ReminderLoop`) and `Host` (module -> core: the settings rows, the intake store, the water extension's migration, the
+  `ReminderLoop`, `Items`) and `Host` (module -> core: the settings rows, the intake store, the water extension's migration, the
   apps' events, the language and time zone, standby and quiet push, the push with its card, and the extension page's
   fitting). The module declares its own `Host` with the same methods and types (`server/internal/modules/health/host.go`),
   so it imports no core service; `server/internal/modules/all/health.go` provides its layer under
@@ -511,9 +511,11 @@ which the kernel announces while it is loaded (it left `modapi.ClientModules` wi
   the manager (the tool's space guard, the intake page fitted for older apps, the push outbox, the module's absence)
   stay in `server/internal/assistant/health_module_test.go` and skip without the module (`needsHealthModule`).
 - **With the module absent** (`persona_without_health`, `persona_core_only`, or switched off in the `modules` row) the
-  seven routes answer 404, the hello names no `health_intake` capability (so the hub announces no `health_intake`
-  feature and the apps show their "update your hub" state), the `health_intake` tool is not listed and refuses, and no
+  nine routes (including health items GET/PUT) answer 404, the hello names neither `health_items` nor `health_intake`
+  (so the hub announces neither feature), the `health_intake` tool is not listed and refuses, and no
   water reminder runs (`TestHealthFollowsItsModule`). The entries already stored stay in the database.
+  Health chat retains phone-data guidance but omits intake-item instructions. The `Items` seam reads the ordered
+  `health.items` setting (or computed defaults); item saves, tool logging and reminder planning share the module lock.
 
 ### Knowledge UI
 

@@ -919,6 +919,7 @@ export interface Interaction {
   cwd?: string;
   kind: "question" | "plan" | "permission" | "screen" | "elicitation";
   created_at?: string;
+  expires_at?: string;
   tool_name?: string;
   questions?: Question[];
   plan?: string;

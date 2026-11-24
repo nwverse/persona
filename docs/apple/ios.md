@@ -1828,7 +1828,7 @@ every platform are described from #13430; this section is the Apple side.
   its types 8 times in 4 files; now 0.
 - **Module homes and the core-only build** (#14017). A module that has left `apple/Persona/` lives in
   `apple/Modules/<Name>/`. `apple/modules.yml` (included by `project.yml`) compiles each home into the iPhone and Vision
-  apps and sets its condition (`PERSONA_MODULE_SCREEN_SHARE`, `PERSONA_MODULE_HEALTH`), under which `Modules.builtIn`
+  apps and sets its condition (`PERSONA_MODULE_SCREEN_SHARE`, `PERSONA_MODULE_HEALTH`, `PERSONA_MODULE_VOICE`), under which `Modules.builtIn`
   lists it;
   `apple/modules-core-only.yml`, enabled by `PERSONA_CORE_ONLY=YES` at `xcodegen generate`, leaves every home out, as
   the server's `persona_core_only` tag does. `scripts/ci/apple.sh ios-core-only` (and the local `all` lane) builds
@@ -1852,6 +1852,18 @@ every platform are described from #13430; this section is the Apple side.
   (`AppModel`, `Session.isHealth`), the phone's Health tools, the widgets and Health's settings stay in the core until
   their slots (`phone_tools`, widgets, `settings`) are served. The ratchet counts type names only: a core call to a
   module's method (a `View` extension) is caught by the core-only build, not by the ratchet.
+- **`voice`** (`apple/Modules/Voice/`, #13431, `feature` = `module.voice`): full-duplex voice in a conversation's page —
+  the composer's phone icon and Voice Chat, the call's bar in the composer's place, the line a call that ended by itself
+  leaves, its captions as the thread's last rows, Asking by Voice on a card, the voice settings on the voice extension's
+  page (`VoiceTimbreSection`) and the DEBUG switches `-showVoiceSample` / `-openVoice`. It provides `ConversationVoice`
+  (`apple/Persona/App/ConversationVoice.swift`), which the chat, the meeting page's follow-up, the question cards and
+  Settings ask for through `AppModel.voice`; without it the page offers no call, no Voice Chat row, no bar and no
+  captions, and the composer's microphone (dictation, core) is all there is. What a call runs on stays in the core for
+  now, because system calls, CarPlay and recording share it: the engine (`VoiceCalls`, `VoiceConversation`, the audio,
+  the socket; `apple/Persona/Voice`), the starts and refusals (`VoiceEntry`), the call screens (`apple/Persona/Calls`,
+  `apple/Persona/CarPlay`) and the call intents. `-openVoice silent`'s audio (`SilentVoiceAudio`) is core, since a call to
+  Persona takes it too. The ratchet counts `apple/Modules/Voice` (and `apple/PersonaCallIntents`); the voice directories
+  still in `apple/Persona` count as the core until they move (`guarded_dirs` in `scripts/test/test_apple_module_refs.py`).
 - **Adding a module.** Give its sources a directory of their own, classify that directory with the module id in
   `schema/module-classification.txt` (`docs/architecture/core-and-modules.md`, "Classification") and add the id to
   `GUARDED` in the ratchet; write a type
