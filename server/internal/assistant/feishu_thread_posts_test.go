@@ -325,6 +325,7 @@ func (p *fleetPost) askKind(t *testing.T, id, kind, summary string) {
 
 // 4. The agent's turn ends: a line; it needs the user: a line.
 func TestThreadPostsAgentFinishedAndNeedsYou(t *testing.T) {
+	needsLarkLayer(t)
 	p := newFleetPost(t)
 	driveAgentDone(p.ft, agentSession())
 	p.clk.waitPending(t, 1)
@@ -355,6 +356,7 @@ func TestThreadPostsAgentFinishedAndNeedsYou(t *testing.T) {
 
 // With the cards switch off there is no card anywhere: the line is the notice, and carries what is asked.
 func TestThreadPostsNeedsYouWithNoCardCarriesTheAsk(t *testing.T) {
+	needsLarkLayer(t)
 	p := newFleetPost(t)
 	p.ft.f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_a", PairedAt: time.Unix(100, 0), PublicURL: testWeb, Chats: []string{testChat},
@@ -372,6 +374,7 @@ func TestThreadPostsNeedsYouWithNoCardCarriesTheAsk(t *testing.T) {
 
 // ... but what a permission asks (a command, a path) is not for a group: the line only says the Agent needs the user.
 func TestThreadPostsNeedsYouWithNoCardNeverQuotesAPermission(t *testing.T) {
+	needsLarkLayer(t)
 	p := newFleetPost(t)
 	p.ft.f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_a", PairedAt: time.Unix(100, 0), PublicURL: testWeb, Chats: []string{testChat},
@@ -393,6 +396,7 @@ func TestThreadPostsNeedsYouWithNoCardNeverQuotesAPermission(t *testing.T) {
 // The card is where the run was asked, and the topic is compared by chat and thread: a topic run of another thread of the
 // same chat does not hide the line of this one.
 func TestThreadPostsNeedsYouNotHiddenByAnotherTopicsRun(t *testing.T) {
+	needsLarkLayer(t)
 	p := newFleetPost(t)
 	c := &p.ft.s.chans
 	c.mu.Lock()
