@@ -12,10 +12,10 @@ import (
 
 func TestInteractionSeenRouteRequiresFullDevice(t *testing.T) {
 	h, mgr := handoffBusHub(t)
-	h.takeFleetInteraction(proto.Interaction{
+	h.takeFleetInteractions([]proto.Interaction{{
 		ID: "ix_seen_route", MachineID: "box", SessionID: "s1",
 		Kind: proto.IxPermission, ToolName: proto.SecretRunTool,
-	})
+	}})
 	mux := http.NewServeMux()
 	h.fleetRoutesRelayed(mux)
 
