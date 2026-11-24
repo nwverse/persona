@@ -206,7 +206,7 @@ func (h *entriesAccessHub) EntriesReadAccess(id string) (bool, bool) {
 	return h.allowed, h.personal
 }
 
-func entryIDs(entries []proto.AssistantEntry) []string {
+func entryIDList(entries []proto.AssistantEntry) []string {
 	ids := make([]string, len(entries))
 	for i, e := range entries {
 		ids[i] = e.ID
@@ -260,11 +260,11 @@ func TestEntriesHTTPPersonalGrantRevocationAndCategories(t *testing.T) {
 
 	// Third-party extension with personal grant but no category grants reads only general entries.
 	code, out := get("example-reader")
-	if code != 200 || !slices.Equal(entryIDs(out.Entries), []string{"entry-general"}) {
-		t.Fatalf("third-party without category grants (HTTP): %d %v", code, entryIDs(out.Entries))
+	if code != 200 || !slices.Equal(entryIDList(out.Entries), []string{"entry-general"}) {
+		t.Fatalf("third-party without category grants (HTTP): %d %v", code, entryIDList(out.Entries))
 	}
-	if got := rpcList(); !slices.Equal(entryIDs(got.Entries), []string{"entry-general"}) {
-		t.Fatalf("third-party without category grants (RPC): %v", entryIDs(got.Entries))
+	if got := rpcList(); !slices.Equal(entryIDList(got.Entries), []string{"entry-general"}) {
+		t.Fatalf("third-party without category grants (RPC): %v", entryIDList(got.Entries))
 	}
 
 	// Granting only health opens the health-space floor entry, but not entries also carrying finance.
@@ -273,11 +273,11 @@ func TestEntriesHTTPPersonalGrantRevocationAndCategories(t *testing.T) {
 	}
 	wantHealth := []string{"entry-general", "entry-health-floor"}
 	code, out = get("example-reader")
-	if code != 200 || !slices.Equal(entryIDs(out.Entries), wantHealth) {
-		t.Fatalf("third-party with health only (HTTP): %d %v", code, entryIDs(out.Entries))
+	if code != 200 || !slices.Equal(entryIDList(out.Entries), wantHealth) {
+		t.Fatalf("third-party with health only (HTTP): %d %v", code, entryIDList(out.Entries))
 	}
-	if got := rpcList(); !slices.Equal(entryIDs(got.Entries), wantHealth) {
-		t.Fatalf("third-party with health only (RPC): %v", entryIDs(got.Entries))
+	if got := rpcList(); !slices.Equal(entryIDList(got.Entries), wantHealth) {
+		t.Fatalf("third-party with health only (RPC): %v", entryIDList(got.Entries))
 	}
 
 	// Granting both health and finance opens known-space entries carrying both, while unknown spaces remain hidden.
@@ -286,11 +286,11 @@ func TestEntriesHTTPPersonalGrantRevocationAndCategories(t *testing.T) {
 	}
 	wantHealthFinance := []string{"entry-general", "entry-health-floor", "entry-space-", "entry-space-health"}
 	code, out = get("example-reader")
-	if code != 200 || !slices.Equal(entryIDs(out.Entries), wantHealthFinance) {
-		t.Fatalf("third-party with health+finance (HTTP): %d %v", code, entryIDs(out.Entries))
+	if code != 200 || !slices.Equal(entryIDList(out.Entries), wantHealthFinance) {
+		t.Fatalf("third-party with health+finance (HTTP): %d %v", code, entryIDList(out.Entries))
 	}
-	if got := rpcList(); !slices.Equal(entryIDs(got.Entries), wantHealthFinance) {
-		t.Fatalf("third-party with health+finance (RPC): %v", entryIDs(got.Entries))
+	if got := rpcList(); !slices.Equal(entryIDList(got.Entries), wantHealthFinance) {
+		t.Fatalf("third-party with health+finance (RPC): %v", entryIDList(got.Entries))
 	}
 
 	// The owner's own extension reads every space, including unregistered spaces.
@@ -299,11 +299,11 @@ func TestEntriesHTTPPersonalGrantRevocationAndCategories(t *testing.T) {
 	}
 	wantAll := []string{"entry-general", "entry-health-floor", "entry-space-", "entry-space-health", "entry-space-finance", "entry-space-relationship"}
 	code, out = get("example-reader")
-	if code != 200 || !slices.Equal(entryIDs(out.Entries), wantAll) || !reflect.DeepEqual(out.Entries[2].Category, []string{"health", "finance"}) {
-		t.Fatalf("owner extension (HTTP): %d %v", code, entryIDs(out.Entries))
+	if code != 200 || !slices.Equal(entryIDList(out.Entries), wantAll) || !reflect.DeepEqual(out.Entries[2].Category, []string{"health", "finance"}) {
+		t.Fatalf("owner extension (HTTP): %d %v", code, entryIDList(out.Entries))
 	}
-	if got := rpcList(); !slices.Equal(entryIDs(got.Entries), wantAll) {
-		t.Fatalf("owner extension (RPC): %v", entryIDs(got.Entries))
+	if got := rpcList(); !slices.Equal(entryIDList(got.Entries), wantAll) {
+		t.Fatalf("owner extension (RPC): %v", entryIDList(got.Entries))
 	}
 
 	// Owner HTTP request (not an extension) also reads every space.
@@ -311,8 +311,8 @@ func TestEntriesHTTPPersonalGrantRevocationAndCategories(t *testing.T) {
 	e.s.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/assistant/entries?by=user", nil))
 	var ownerOut proto.AssistantEntriesResult
 	_ = json.Unmarshal(w.Body.Bytes(), &ownerOut)
-	if w.Code != 200 || !slices.Equal(entryIDs(ownerOut.Entries), wantAll) {
-		t.Fatalf("owner HTTP read: %d %v", w.Code, entryIDs(ownerOut.Entries))
+	if w.Code != 200 || !slices.Equal(entryIDList(ownerOut.Entries), wantAll) {
+		t.Fatalf("owner HTTP read: %d %v", w.Code, entryIDList(ownerOut.Entries))
 	}
 
 	code, _ = get("unapproved-reader")
@@ -335,15 +335,15 @@ func TestEntriesHTTPPersonalGrantRevocationAndCategories(t *testing.T) {
 		return []byte(`{"ok":true,"machine_id":"` + owner + `"}`), nil
 	}
 	code, out = get("example-reader")
-	if code != 200 || !slices.Equal(entryIDs(out.Entries), wantAll) {
-		t.Fatalf("local alternative for owner extension: %d %v", code, entryIDs(out.Entries))
+	if code != 200 || !slices.Equal(entryIDList(out.Entries), wantAll) {
+		t.Fatalf("local alternative for owner extension: %d %v", code, entryIDList(out.Entries))
 	}
 	if err := database.SetExtensionTrust(ctx, "example-reader", assistantwire.ExtensionTrustThirdParty, nil, "user"); err != nil {
 		t.Fatal(err)
 	}
 	code, out = get("example-reader")
-	if code != 200 || !slices.Equal(entryIDs(out.Entries), []string{"entry-general"}) {
-		t.Fatalf("local alternative for ungranted third-party extension: %d %v", code, entryIDs(out.Entries))
+	if code != 200 || !slices.Equal(entryIDList(out.Entries), []string{"entry-general"}) {
+		t.Fatalf("local alternative for ungranted third-party extension: %d %v", code, entryIDList(out.Entries))
 	}
 }
 
@@ -386,13 +386,13 @@ func TestEntriesExtensionCategoryFilteringPaginationAndUnknowns(t *testing.T) {
 
 	// Page 1: skips e1/e2/e4, returns e3 and e5, HasMore=true because e7 exists.
 	p1 := list(2, "")
-	if !slices.Equal(entryIDs(p1.Entries), []string{"e3-gen-1", "e5-gen-2"}) || !p1.HasMore {
-		t.Fatalf("page 1: ids=%v has_more=%v", entryIDs(p1.Entries), p1.HasMore)
+	if !slices.Equal(entryIDList(p1.Entries), []string{"e3-gen-1", "e5-gen-2"}) || !p1.HasMore {
+		t.Fatalf("page 1: ids=%v has_more=%v", entryIDList(p1.Entries), p1.HasMore)
 	}
 	// Page 2: skips e6 and trailing e8, returns e7 with HasMore=false.
 	p2 := list(2, p1.After)
-	if !slices.Equal(entryIDs(p2.Entries), []string{"e7-gen-3"}) || p2.HasMore {
-		t.Fatalf("page 2: ids=%v has_more=%v", entryIDs(p2.Entries), p2.HasMore)
+	if !slices.Equal(entryIDList(p2.Entries), []string{"e7-gen-3"}) || p2.HasMore {
+		t.Fatalf("page 2: ids=%v has_more=%v", entryIDList(p2.Entries), p2.HasMore)
 	}
 	// Page 3: empty, retains p2.After without leaking hidden e8's id in the cursor.
 	p3 := list(2, p2.After)
@@ -410,8 +410,8 @@ func TestEntriesExtensionCategoryFilteringPaginationAndUnknowns(t *testing.T) {
 	}
 	appendRule("e9-gen-after-pad", "", nil, true)
 	p4 := list(2, p2.After)
-	if !slices.Equal(entryIDs(p4.Entries), []string{"e9-gen-after-pad"}) || p4.HasMore {
-		t.Fatalf("multi-batch scan: ids=%v has_more=%v", entryIDs(p4.Entries), p4.HasMore)
+	if !slices.Equal(entryIDList(p4.Entries), []string{"e9-gen-after-pad"}) || p4.HasMore {
+		t.Fatalf("multi-batch scan: ids=%v has_more=%v", entryIDList(p4.Entries), p4.HasMore)
 	}
 
 	// Granting all known categories still hides unknown category e4-hidden-unknown-cat, while opening non-personal finance e2.
@@ -419,12 +419,12 @@ func TestEntriesExtensionCategoryFilteringPaginationAndUnknowns(t *testing.T) {
 		t.Fatal(err)
 	}
 	allKnown := list(100, "")
-	if slices.Contains(entryIDs(allKnown.Entries), "e4-hidden-unknown-cat") {
-		t.Fatalf("unknown category leaked to third party: %v", entryIDs(allKnown.Entries))
+	if slices.Contains(entryIDList(allKnown.Entries), "e4-hidden-unknown-cat") {
+		t.Fatalf("unknown category leaked to third party: %v", entryIDList(allKnown.Entries))
 	}
 	for _, want := range []string{"e1-hidden-health", "e2-hidden-nonpersonal-fin", "e3-gen-1", "e5-gen-2", "e6-hidden-fin", "e7-gen-3", "e8-hidden-tail", "e9-gen-after-pad"} {
-		if !slices.Contains(entryIDs(allKnown.Entries), want) {
-			t.Fatalf("all known categories missing %s: %v", want, entryIDs(allKnown.Entries))
+		if !slices.Contains(entryIDList(allKnown.Entries), want) {
+			t.Fatalf("all known categories missing %s: %v", want, entryIDList(allKnown.Entries))
 		}
 	}
 
@@ -433,7 +433,7 @@ func TestEntriesExtensionCategoryFilteringPaginationAndUnknowns(t *testing.T) {
 		t.Fatal(err)
 	}
 	ownerAll := list(100, "")
-	if len(ownerAll.Entries) != 8+55+1 || !slices.Contains(entryIDs(ownerAll.Entries), "e4-hidden-unknown-cat") {
+	if len(ownerAll.Entries) != 8+55+1 || !slices.Contains(entryIDList(ownerAll.Entries), "e4-hidden-unknown-cat") {
 		t.Fatalf("owner extension should see all 64 entries, got %d", len(ownerAll.Entries))
 	}
 
@@ -442,8 +442,8 @@ func TestEntriesExtensionCategoryFilteringPaginationAndUnknowns(t *testing.T) {
 	if err := askConversations(t, e.s, assistantwire.MethodAssistantEntriesList, `{"limit":100}`, &unnamed); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(entryIDs(unnamed.Entries), []string{"e5-gen-2"}) {
-		t.Fatalf("unnamed RPC read: got %v", entryIDs(unnamed.Entries))
+	if !slices.Equal(entryIDList(unnamed.Entries), []string{"e5-gen-2"}) {
+		t.Fatalf("unnamed RPC read: got %v", entryIDList(unnamed.Entries))
 	}
 }
 
