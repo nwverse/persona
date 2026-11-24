@@ -11,12 +11,23 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/healthhost"
 )
 
 func strengthReportTestID(seed string) string {
 	v := sha256.Sum256([]byte(seed))
 	return fmt.Sprintf("%x-%x-%x-%x-%x", v[:4], v[4:6], v[6:8], v[8:10], v[10:16])
+}
+
+func strengthReportTestDB(t *testing.T) *db.DB {
+	t.Helper()
+	d, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Close)
+	return d
 }
 
 type workoutReportFault struct {
@@ -41,7 +52,7 @@ func (f *workoutReportFault) WorkoutReceived(ctx context.Context, w assistantwir
 
 func TestStrengthWorkoutReceiptLinksBothOrdersAndOtherActivities(t *testing.T) {
 	needsHealthModule(t)
-	d := scheduleStore(t)
+	d := strengthReportTestDB(t)
 	s := newServiceOn(t, newFakeHub(), d)
 	ctx := context.Background()
 	e := assistantwire.StrengthExercise{ID: strengthReportTestID("workout-core-exercise"), Name: "Workout press " + randomHex(4), WeightRule: "stack"}
@@ -73,7 +84,7 @@ func TestStrengthWorkoutReceiptLinksBothOrdersAndOtherActivities(t *testing.T) {
 			add()
 		}
 		rows, err := d.HealthStrengthSets(ctx, assistantwire.StrengthSetFilter{Workout: v.ID})
-		if err != nil || len(rows) != 1 {
+		if err != nil || len(rows) != 1 || rows[0].ID != strengthReportTestID("locker-"+v.ID) {
 			t.Fatal("arrival order failed", first, rows, err)
 		}
 		if err := s.acceptWorkout(ctx, v); err != nil {
@@ -109,7 +120,7 @@ func TestStrengthWorkoutReceiptLinksBothOrdersAndOtherActivities(t *testing.T) {
 
 func TestStrengthWorkoutTaskAssemblesAtExecutionAndFallsBack(t *testing.T) {
 	needsHealthModule(t)
-	d := scheduleStore(t)
+	d := strengthReportTestDB(t)
 	s, f, _ := healthExecutionService(t)
 	s.store = func() Store { return d }
 	ctx := context.Background()
