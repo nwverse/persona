@@ -740,6 +740,7 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(host.querySelector('[data-testid="message-card"]')).toBeNull(); // folded until opened
     await openRows();
     await expect.poll(() => host.querySelector('[data-testid="message-card"]')).not.toBeNull();
+    await expect.poll(() => host.textContent).toContain(t("assistant-tasks.review_needs_user"));
     expect(host.textContent).toContain(t("assistant-tasks.review_needs_user"));
     const draftCard = host.querySelector('[data-testid="message-card"]')!;
     const actions = [...draftCard.querySelectorAll("button")];

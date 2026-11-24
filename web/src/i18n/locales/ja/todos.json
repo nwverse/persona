@@ -319,5 +319,10 @@
   "kind_filter_todos": "ToDoのみ",
   "kind_filter_tasks": "タスクのみ",
   "kind_empty_todos": "個人のToDoはありません",
-  "kind_empty_tasks": "タスクはありません"
+  "kind_empty_tasks": "タスクはありません",
+  "goal_progress": "{done}/{total}",
+  "goal_expand": "「{title}」のサブタスクを表示（{done}/{total} 完了）",
+  "goal_collapse": "「{title}」のサブタスクを折りたたむ（{done}/{total} 完了）",
+  "goal_blocked": "{count}件が対応待ち",
+  "goal_parent_hint": "親目標：{title}"
 }

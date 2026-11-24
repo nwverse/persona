@@ -103,6 +103,7 @@ import {
   type TodoListSort,
 } from "../lib/todo-list-filter";
 import type { MenuItem } from "../ui/menu-model";
+import { foldGoalTasks, type GoalFoldResult, type GoalSummary } from "../lib/todo-goal-fold";
 import { useRestoredTodos } from "../lib/todo-restore";
 import { stepsWords } from "../lib/todo-steps";
 import { useOwnerNeeds, useTodoLookup, useTodoMinute } from "../lib/todo-owner-needs";
@@ -345,6 +346,10 @@ export function TodosView({
     },
     [todos, lookup, restored, search, listFilter, effectiveKindFilter, superseded, tick, fromView],
   );
+  // Under todos_v2 (#14661), fold non-urgent `part_of` child tasks under their top-level parent goal while surfacing
+  // `needs_you` / active-ask child blockers in `waiting`; when todos_v2 is off, keep `triaged` untouched.
+  const goalFold = useMemo(() => (todosV2 ? foldGoalTasks(triaged) : undefined), [todosV2, triaged]);
+  const displayTriaged = goalFold ? goalFold.triaged : triaged;
   // the header's counts: what the filter shows, whatever is searched
   const triageAll = useMemo(
     () => {
@@ -509,13 +514,13 @@ export function TodosView({
     if (requestMode || !split) return undefined;
     if (byStatus) {
       // the first row of an open section; none rather than one that would unfold a folded section (Shelved, Done)
-      for (const sec of TRIAGE_SECTIONS) if (!sectionStartsFolded(sec, triaged.sections[sec], tick) && triaged.sections[sec].length) return triaged.sections[sec][0].lead;
+      for (const sec of TRIAGE_SECTIONS) if (!sectionStartsFolded(sec, displayTriaged.sections[sec], tick) && displayTriaged.sections[sec].length) return displayTriaged.sections[sec][0].lead;
       return undefined;
     }
     // by 常驻: the first row shown (a direction's, else an unfolded status section's below them), else history
     if (grouping === "direction") return directionSections[0]?.todos[0] ?? directionRest.find((s) => !FOLDED_SECTIONS.has(s.sec))?.groups[0].lead ?? filteredCompleted[0] ?? filteredCancelled[0];
     return filteredUncompleted[0] ?? filteredCompleted[0] ?? filteredCancelled[0];
-  }, [activeId, selectedId, todos, filteredUncompleted, filteredCompleted, filteredCancelled, byStatus, requestMode, split, triaged, grouping, directionSections, directionRest]);
+  }, [activeId, selectedId, todos, filteredUncompleted, filteredCompleted, filteredCancelled, byStatus, requestMode, split, displayTriaged, grouping, directionSections, directionRest, tick]);
 
   // The to-do open beside the calendar: the address's, while it is there.
   const selectedTodo = calendarOn && selectedId ? todos.find((td) => td.id === selectedId) : undefined;
@@ -936,15 +941,16 @@ export function TodosView({
               <div className="flex flex-col gap-1" data-testid="todos-sections" data-todo-source={fromView ? "view" : undefined}>
                 {hiddenWaitingCount > 0 && <HiddenWaitingLine count={hiddenWaitingCount} filter={listFilter} onShowAll={() => chooseFilter("all")} />}
                 {TRIAGE_SECTIONS.map((sec) =>
-                  triaged.sections[sec].length === 0 ? null : (
+                  displayTriaged.sections[sec].length === 0 ? null : (
                     <TodoTriageSection
                       key={sec}
                       section={sec}
                       // Fresh accepted, ticked and cancelled outcomes stay visible; older history keeps the folded default.
-                      folded={sectionStartsFolded(sec, triaged.sections[sec], tick)}
-                      groups={sortTriageGroups(triaged.sections[sec], listSort)}
-                      count={sectionSize(triaged, sec)}
+                      folded={sectionStartsFolded(sec, displayTriaged.sections[sec], tick)}
+                      groups={sortTriageGroups(displayTriaged.sections[sec], listSort)}
+                      count={sectionSize(displayTriaged, sec)}
                       views={views}
+                      goalFold={goalFold}
                       selectedId={activeTodo?.id}
                       onSelect={openFromList}
                       onToggleDone={toggleDone}
@@ -1467,6 +1473,7 @@ const TodoTriageSection = memo(function TodoTriageSection({
   groups,
   count,
   views,
+  goalFold,
   selectedId,
   onSelect,
   onToggleDone,
@@ -1481,6 +1488,8 @@ const TodoTriageSection = memo(function TodoTriageSection({
   /** To-dos its rows list (a merged row holds several): the number its title shows (#3712, the same on iOS). */
   count: number;
   views: ReadonlyMap<string, TodoRowView>;
+  /** Goal folding summary when todos_v2 is active (#14661); undefined otherwise. */
+  goalFold?: GoalFoldResult;
   selectedId: string | undefined;
   onSelect: (id: string) => void;
   onToggleDone: (todo: Todo, open?: boolean) => void;
@@ -1489,7 +1498,11 @@ const TodoTriageSection = memo(function TodoTriageSection({
   onSeen?: (id: string) => void;
   onMenu: TodoRowMenuOpener;
 }) {
-  const holds = groups.some((g) => g.members.some((m) => m.id === selectedId));
+  const holds = groups.some(
+    (g) =>
+      g.members.some((m) => m.id === selectedId) ||
+      Boolean(goalFold?.goals.get(g.lead.id)?.children.some((c) => c.todo.id === selectedId)),
+  );
   const [folded, toggle] = useFolded(`todos-section:${section}`, foldedFirst, { follow: true, holds });
   const title = sectionTitle(section, groups.flatMap((g) => [...g.triage.values()].map((t) => t.rule)));
   return (
@@ -1504,7 +1517,19 @@ const TodoTriageSection = memo(function TodoTriageSection({
       {!folded && (
         <div className="flex flex-col gap-1 pt-0.5">
           {groups.map((g) => (
-            <TodoTriageRow key={g.key} group={g} views={views} selectedId={selectedId} onSelect={onSelect} onToggleDone={onToggleDone} onRestore={onRestore} onSeen={onSeen} onMenu={onMenu} />
+            <TodoTriageRow
+              key={g.key}
+              group={g}
+              views={views}
+              goalInfo={goalFold?.goals.get(g.lead.id)}
+              surfacedParent={goalFold?.surfacedParent}
+              selectedId={selectedId}
+              onSelect={onSelect}
+              onToggleDone={onToggleDone}
+              onRestore={onRestore}
+              onSeen={onSeen}
+              onMenu={onMenu}
+            />
           ))}
         </div>
       )}
@@ -1525,6 +1550,8 @@ function mergePinnedOrder(pinned: readonly string[], members: readonly Todo[]): 
 function TodoTriageRow({
   group,
   views,
+  goalInfo,
+  surfacedParent,
   selectedId,
   onSelect,
   onToggleDone,
@@ -1534,6 +1561,8 @@ function TodoTriageRow({
 }: {
   group: TriageGroup;
   views: ReadonlyMap<string, TodoRowView>;
+  goalInfo?: GoalSummary;
+  surfacedParent?: ReadonlyMap<string, Todo>;
   selectedId: string | undefined;
   onSelect: (id: string) => void;
   onToggleDone: (todo: Todo, open?: boolean) => void;
@@ -1556,6 +1585,16 @@ function TodoTriageRow({
       setPinnedOrder(group.members.map((m) => m.id));
     }
   }
+
+  // Under todos_v2 (#14661), expand folded goal children on demand or when deep-linked directly to a folded child.
+  const selectedFoldedChildId = goalInfo?.children.some((c) => c.todo.id === selectedId && !c.blocker) ? selectedId : undefined;
+  const [goalExpanded, setGoalExpanded] = useState(selectedFoldedChildId !== undefined);
+  const [seenFoldedChildId, setSeenFoldedChildId] = useState(selectedFoldedChildId);
+  if (selectedFoldedChildId !== seenFoldedChildId) {
+    setSeenFoldedChildId(selectedFoldedChildId);
+    if (selectedFoldedChildId !== undefined && !goalExpanded) setGoalExpanded(true);
+  }
+  const toggleGoalExpanded = useCallback(() => setGoalExpanded((v) => !v), []);
 
   if (opened && pinnedOrder) {
     const nextOrder = mergePinnedOrder(pinnedOrder, group.members);
@@ -1590,7 +1629,7 @@ function TodoTriageRow({
       setPinnedOrder(group.members.map((m) => m.id));
     }
   };
-  const item = (td: Todo) => (
+  const item = (td: Todo, isLead = false) => (
     <TodoListItem
       key={td.id}
       todo={td}
@@ -1602,11 +1641,45 @@ function TodoTriageRow({
       onRestore={onRestore}
       onSeen={onSeen}
       onMenu={onMenu}
+      goalSummary={
+        isLead && goalInfo
+          ? {
+              done: goalInfo.done,
+              total: goalInfo.total,
+              blockedCount: goalInfo.blockedCount,
+              expanded: goalExpanded,
+              onToggle: toggleGoalExpanded,
+            }
+          : undefined
+      }
+      parentGoalTitle={surfacedParent?.get(td.id)?.title}
     />
   );
   return (
     <div data-testid="todo-triage-row" data-id={lead.id} data-group-key={group.key} data-members={displayMembers.length}>
-      {item(lead)}
+      {item(lead, true)}
+      {goalExpanded && goalInfo && goalInfo.children.length > 0 && (
+        <div
+          data-testid="todo-goal-children"
+          data-parent={lead.id}
+          className="ml-6 mt-1 flex flex-col gap-1 border-l border-line pl-2"
+        >
+          {goalInfo.children.map((child) => (
+            <TodoListItem
+              key={child.todo.id}
+              todo={child.todo}
+              view={views.get(child.todo.id)!}
+              selected={selectedId === child.todo.id}
+              onSelect={onSelect}
+              onToggleDone={onToggleDone}
+              section={child.section}
+              onRestore={onRestore}
+              onSeen={onSeen}
+              onMenu={onMenu}
+            />
+          ))}
+        </div>
+      )}
       {others.length > 0 && (
         <button
           type="button"
@@ -1619,7 +1692,7 @@ function TodoTriageRow({
           {!opened && <OwnerMarkCount count={ownerCount(others, views)} />}
         </button>
       )}
-      {opened && others.length > 0 && <div className="ml-6 flex flex-col gap-1 border-l border-line pl-2">{others.map(item)}</div>}
+      {opened && others.length > 0 && <div className="ml-6 flex flex-col gap-1 border-l border-line pl-2">{others.map((m) => item(m))}</div>}
     </div>
   );
 }
@@ -1782,6 +1855,14 @@ const TONE_CLASS = TODO_TONE_CLASS;
 /** Opens a row's menu (#4429) where `at` says, for the to-do the row's checkbox shows open (`open`) or done. */
 type TodoRowMenuOpener = (todo: Todo, at: MenuAt, open: boolean) => void;
 
+interface TodoGoalRowControl {
+  done: number;
+  total: number;
+  blockedCount: number;
+  expanded: boolean;
+  onToggle: () => void;
+}
+
 const TodoListItem = memo(function TodoListItem({
   todo,
   view,
@@ -1792,6 +1873,8 @@ const TodoListItem = memo(function TodoListItem({
   onRestore,
   onSeen,
   onMenu,
+  goalSummary,
+  parentGoalTitle,
 }: {
   todo: Todo;
   view: TodoRowView;
@@ -1804,6 +1887,10 @@ const TodoListItem = memo(function TodoListItem({
   /** Got it (#5707), on a row in Just finished (`section`, else the view's). */
   onSeen?: (id: string) => void;
   onMenu?: TodoRowMenuOpener;
+  /** Under todos_v2 (#14661), compact child-task progress & inline expand toggle on a top-level parent goal row. */
+  goalSummary?: TodoGoalRowControl;
+  /** Under todos_v2 (#14661), parent goal title shown on a surfaced `needs_you` child blocker. */
+  parentGoalTitle?: string;
 }) {
   const { status, dotState, activeCount } = view;
   const showWait = (section ?? view.section) === "parked";
@@ -1812,7 +1899,7 @@ const TodoListItem = memo(function TodoListItem({
   // its state word and tone; a waiting one's say what it waits on, attention only on the owner (#11090)
   const look = todoLook(todo, status, view.wait);
   // its steps as the hub counts them (#11858, lib/todo-steps.ts): in place of Not started, or after its Agent count
-  const steps = stepsWords(todo, status);
+  const steps = goalSummary ? undefined : stepsWords(todo, status);
   const held = heldDelivery(todo);
   const responsible = responsibleOf(todo);
   const thread = useStore((s) => todoThreadsOn(s.features)) ? boundThread(todo) : undefined;
@@ -1889,6 +1976,49 @@ const TodoListItem = memo(function TodoListItem({
             {view.age}
           </span>
         </div>
+
+        {/* Surfaced blocker parent goal context under todos_v2 (#14661) */}
+        {parentGoalTitle && (
+          <div className="mt-0.5 flex min-w-0 items-center gap-1 text-xs text-ink-3" data-testid="todo-parent-goal">
+            <Icon name="target" size={11} stroke={2} className="shrink-0" />
+            <span className="truncate">{t("todos.goal_parent_hint", { title: parentGoalTitle })}</span>
+          </div>
+        )}
+
+        {/* Parent goal progress & accessible inline fold toggle under todos_v2 (#14661) */}
+        {goalSummary && (
+          <div className="mt-1 flex flex-wrap items-center gap-1.5" data-testid="todo-goal-summary">
+            <button
+              type="button"
+              data-testid="todo-goal-toggle"
+              aria-expanded={goalSummary.expanded}
+              aria-label={t(goalSummary.expanded ? "todos.goal_collapse" : "todos.goal_expand", {
+                title: todo.title,
+                done: goalSummary.done,
+                total: goalSummary.total,
+              })}
+              onClick={(e) => {
+                e.stopPropagation();
+                goalSummary.onToggle();
+              }}
+              className="touch-hit inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-field px-2 text-xs font-medium whitespace-nowrap text-ink-2 tabular-nums transition-colors hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              <Icon
+                name="chevron"
+                size={10}
+                stroke={2.4}
+                className="shrink-0 opacity-70 transition-transform"
+                style={{ transform: goalSummary.expanded ? "none" : "rotate(-90deg)" }}
+              />
+              <span data-testid="todo-goal-progress">{t("todos.goal_progress", { done: goalSummary.done, total: goalSummary.total })}</span>
+            </button>
+            {goalSummary.blockedCount > 0 && (
+              <span data-testid="todo-goal-blocked" className="inline-flex shrink-0">
+                <Tag tone="accent">{t("todos.goal_blocked", { count: goalSummary.blockedCount })}</Tag>
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Status Line (parked rows collapse to title + concise TaskWaitInfo summary line) */}
         {!showWait && (
@@ -2740,7 +2870,7 @@ function TodoDetail({
       <TodoImages todo={todo} owner={owner} />
 
       <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id}
-        prStatus={todo.pr_status} otherPRs={todo.other_prs} legacyPRs={legacyPR ? [legacyPR] : []} version={todo.updated_at} />
+        prStatus={todo.pr_status} otherPRs={todo.other_prs} legacyPRs={legacyPR ? [legacyPR] : []} version={todo.updated_at} todosV2={todosV2} />
       <PageBoundary page="workspace-naming">
         <Suspense fallback={<Loading />}>
           <WorkspaceNaming manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id} />

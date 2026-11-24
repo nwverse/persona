@@ -48,9 +48,13 @@
         ],
         "description": "Optional: human or autonomous."
       },
+      "direction_id": {
+        "type": "string",
+        "description": "Optional direction id."
+      },
       "project": {
         "type": "string",
-        "description": "Existing kb_list project slug/name; prefer long-term work. Only when clear; no near-duplicates."
+        "description": "Existing kb_list project slug/name; only when clear, no near-duplicates."
       },
       "part_of": {
         "type": "string",

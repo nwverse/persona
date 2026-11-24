@@ -196,7 +196,7 @@ Workspace: "new" isolates; {"new":{"branch":"task/my-change"}} names its branch.
             "items": {
               "type": "string"
             },
-            "description": "abs paths of pictures/files user gave in this chat (Claude Code path or app attachment); copied to agent with updated mentions; others refused"
+            "description": "Abs paths of chat pictures/files (Claude/app); copied with updated mentions; others refused."
           },
           "expect_minutes": {
             "type": "integer",
@@ -215,9 +215,13 @@ Workspace: "new" isolates; {"new":{"branch":"task/my-change"}} names its branch.
             ],
             "description": "Optional to-do audience."
           },
+          "direction_id": {
+            "type": "string",
+            "description": "Direction id."
+          },
           "part_of": {
             "type": "string",
-            "description": "Optional request todo this is a piece of."
+            "description": "Request todo this is a piece of."
           },
           "after": {
             "type": "array",

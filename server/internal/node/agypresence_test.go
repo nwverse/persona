@@ -134,6 +134,7 @@ func TestAgyCompanionRowCallsGoToItsPane(t *testing.T) {
 	acpRow := "agy-" + agyTestID
 	n.runtimes.setSessions(companion, []proto.Session{{SessionID: acpRow, Agent: agyAgent, Cwd: home, Status: proto.StatusIdle}})
 	seedAgents(t, n, f, agyTestAgent(agyTestPane, home, agyTestID))
+	stubAgyNativePrompt(t, n, f, agyTestPane, agyTestID)
 
 	agyTestCall(t, n, "session.send", acpRow, map[string]any{"text": "给 ppe_dev 补 LF"})
 	agyTestCall(t, n, "session.interrupt", acpRow, nil)
