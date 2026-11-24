@@ -305,7 +305,7 @@ func (s *Service) botNudge(ctx context.Context, c botCard, ix proto.Interaction,
 		to.ChatID, to.InThread = c.ChatID, true
 		text = feishuMention(owner) + " " + text
 	}
-	p := to.params(map[string]any{"reply_to": c.MessageID, "text": text, "uuid": nudgeKey(ix.ID, kind)})
+	p := targetParams(to, map[string]any{"reply_to": c.MessageID, "text": text, "uuid": nudgeKey(ix.ID, kind)})
 	return s.appCall(ctx, AppFeishu, FeishuText, p, nil)
 }
 

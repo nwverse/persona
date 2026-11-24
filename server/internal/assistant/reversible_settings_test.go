@@ -564,6 +564,7 @@ func TestAutomaticReversibleSettingLeavesOutcomeUnknownWhenMarkingFails(t *testi
 }
 
 func TestAutomaticReversibleSettingMarksJustMeHistoryPrivate(t *testing.T) {
+	needsRecordingModule(t) // a path of the recording module's
 	s, st := newReversibleSettingService(t, true)
 	s.justMeSent("server", "conv1")
 	s.justMeStarted("server", "conv1", true, false)
@@ -660,6 +661,7 @@ func TestSensitiveSettingsStillRequireApprovalWhenSwitchOn(t *testing.T) {
 		{key: "assistant.task_lessons", value: `true`},
 		{key: "assistant.close_ended_terminals", value: `true`},
 		{key: "assistant.inbox_signals", value: `true`},
+		{key: "assistant.auto_supervision_messages", value: `false`},
 		{key: "assistant.main_supervises_own_tasks", value: `false`},
 		{key: "assistant.supervision_batch_minutes", value: `45`},
 	} {

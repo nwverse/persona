@@ -56,9 +56,20 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	}
 	n.mu.Lock()
 	agents := make(map[string]host.Agent, len(n.agents))
+	curTraexLive := map[string]bool{}
 	for id, agent := range n.agents {
 		agents[id] = agent
+		if agent.Agent == traexAgent {
+			curTraexLive[id] = true
+		}
 	}
+	var stoppedTraex []string
+	for id := range n.traexLive {
+		if !curTraexLive[id] {
+			stoppedTraex = append(stoppedTraex, id)
+		}
+	}
+	n.traexLive = curTraexLive
 	onList := n.onAgentsList // replaced whole with n.agents (setAgentsAt), never changed in place
 	n.mu.Unlock()
 
@@ -164,6 +175,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		var textAt, promptAt time.Time
 		var rollout quickMeta
 		var rolloutPath string
+		if a.Agent == traexAgent && s.Status != proto.StatusWorking {
+			n.traexRefreshHistory(id)
+		}
 		if p := n.transcriptPath(id); p != "" {
 			if st, err := os.Stat(p); err == nil {
 				m := n.meta(p, st)
@@ -202,6 +216,24 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.Subagents = n.subagents(id)
 			}
 		}
+		if a.Agent == traexAgent {
+			if t, ok := n.traexThread(id); ok {
+				if s.Title == "" && t.Title != "" {
+					s.Title = t.Title
+				}
+				if s.Model == "" {
+					s.Model = t.Model
+				}
+				if updated := t.updated(); !updated.IsZero() {
+					if rollout.activity.IsZero() && (s.UpdatedAt.IsZero() || rolloutPath != "") {
+						// Projected history with no turns yet has a synthetic file mtime; keep the database timestamp.
+						s.UpdatedAt = updated
+					} else if s.UpdatedAt.IsZero() || updated.After(s.UpdatedAt) {
+						s.UpdatedAt = updated
+					}
+				}
+			}
+		}
 		if a.Agent != "codex" && a.Agent != traexAgent {
 			n.terminalModesRow(&s, rollout)
 		}
@@ -226,16 +258,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			s.AsksRead = true
 		}
 		if a.Agent == "codex" {
-			if _, thread, err := n.codexOwner(id); err == nil && thread.model != "" {
-				s.Model = thread.model
-			}
-			n.codexRewindRow(id, &s)
-			if c, thread, driven := n.codexEffortThread(id); driven {
-				s.Model = n.codexModelNow(id, c, thread, s.Model)
-				s.Capabilities.Model = proto.Bool(true)
-			}
-			n.codexEffortRow(id, &s.Efforts, &s.Effort, rollout) // joined on its app-server: its effort (codex_effort.go)
-			n.codexSpeedRow(&s)
+			n.codexPaneControls(&s, rollout)
 		}
 		if piFamily(a.Agent) {
 			n.mergePiRow(&s) // its conversation is the extension's (pi.go)
@@ -268,11 +291,16 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 					if s.OutputTokens == 0 && runtimeRow.OutputTokens > 0 {
 						s.OutputTokens = runtimeRow.OutputTokens
 					}
+					if bd := runtimeRow.ContextBreakdown(); bd != nil {
+						if existing := s.ContextBreakdown(); existing == nil || existing.Source != proto.ContextBreakdownExact {
+							s.SetContextBreakdown(bd)
+						}
+					}
 				}
 			}
 			if a.Agent == agyAgent {
 				if hasRuntimeRow {
-					n.resolveAgyContextWindow(&s)
+					n.resolveAgyContext(&s, agyConversations[id])
 				} else {
 					n.mergeAgyTranscript(&s, agyConversations[id])
 				}
@@ -310,6 +338,10 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	var rowIDs map[string]bool // the runtimes' rows, where the line of a fork stops (aliasesOf)
 	for i := from; i < len(out); i++ {
 		s := &out[i]
+		if sess := n.paneHerdrSession(n.ownPane(s.PaneID)); n.herdrSessionBlocked(sess) && !n.isAssistantSession(s.SessionID) && !n.keptSessions()[s.SessionID] {
+			n.noteHerdrSessionID(s.SessionID, sess)
+			continue
+		}
 		if seen[s.SessionID] {
 			continue
 		}
@@ -357,6 +389,11 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		out = append(out, s)
 		seen[s.SessionID] = true
 	}
+	for _, id := range stoppedTraex {
+		if !seen[id] {
+			n.traexRefreshHistory(id)
+		}
+	}
 	for _, s := range n.traexSessions(seen) {
 		out = append(out, s)
 		seen[s.SessionID] = true
@@ -396,6 +433,10 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			n.noteGatewayRunning(s)
 		}
 		if earlier[s.SessionID] || n.isRoundFork(s.SessionID) || !n.sessionScopeAllows(s.Cwd) {
+			continue
+		}
+		if sess := n.paneHerdrSession(s.PaneID); n.herdrSessionBlocked(sess) && !n.isAssistantSession(s.SessionID) && !n.keptSessions()[s.SessionID] {
+			n.noteHerdrSessionID(s.SessionID, sess)
 			continue
 		}
 		if n.listBlocked(s.SessionID, s.Cwd) {
@@ -635,9 +676,15 @@ func (n *Node) pollAgents(ctx context.Context) {
 				backoff.record(h.Kind(), failed[h.Kind()], now)
 			}
 		}
+		gen := n.outsideListGen.Load()
 		list := n.sessionList(ctx, false)
 		listed = time.Now()
-		if revs := n.publish(list); len(revs) > 0 {
+		if n.outsideListGen.Load() != gen {
+			gen = n.outsideListGen.Load()
+			list = n.sessionList(ctx, false)
+			listed = time.Now()
+		}
+		if revs := n.publishGen(list, gen); len(revs) > 0 {
 			n.kickPorts() // a tool call ran: it may have started (or stopped) a server (ports.go)
 		}
 	}
@@ -649,7 +696,20 @@ func (n *Node) pollAgents(ctx context.Context) {
 // has yet to say whether botmux's sessions are listed (botmuxPending), nor a list the manager holds already, byte for
 // byte (sessions_sent.go).
 func (n *Node) publish(list []proto.Session) map[string]int64 {
+	return n.publishChecked(list, false, 0)
+}
+
+// publishGen is publish that drops a pollAgents snapshot if outsideListGen advanced while the list was being built or
+// before it reached the wire, preventing a stale Approve=false snapshot from overwriting a freshly flushed list.
+func (n *Node) publishGen(list []proto.Session, gen uint64) map[string]int64 {
+	return n.publishChecked(list, true, gen)
+}
+
+func (n *Node) publishChecked(list []proto.Session, checkGen bool, gen uint64) map[string]int64 {
 	if n.botmuxPending() {
+		return nil
+	}
+	if checkGen && n.outsideListGen.Load() != gen {
 		return nil
 	}
 	n.mu.Lock()
@@ -657,6 +717,10 @@ func (n *Node) publish(list []proto.Session) map[string]int64 {
 	n.mu.Unlock()
 	key := listKeySized(list, size)
 	n.mu.Lock()
+	if checkGen && n.outsideListGen.Load() != gen {
+		n.mu.Unlock()
+		return nil
+	}
 	changed := key != n.lastList
 	n.lastList = key
 	revs := n.revsChanged(list)
@@ -665,7 +729,7 @@ func (n *Node) publish(list []proto.Session) map[string]int64 {
 		return revs
 	}
 	if changed {
-		n.sendSessions(list)
+		n.sendSessionsChecked(list, checkGen, gen)
 	} else if len(revs) > 0 {
 		n.sendRevs(revs)
 	}
@@ -692,5 +756,23 @@ func (n *Node) revsChanged(list []proto.Session) map[string]int64 {
 // listBlocked: the live list leaves session sid out for its working folder cwd: a blocked Agent folder or Claude config
 // folder, except the assistant's own conversations and the sessions the hub keeps.
 func (n *Node) listBlocked(sid, cwd string) bool {
+	if n.herdrSessionIDBlocked(sid) {
+		return true
+	}
 	return cwd != "" && n.cwdBlocked(cwd) && !n.isAssistantSession(sid) && !n.keptSessions()[sid]
+}
+
+// Keep the start response and later inventory snapshots in step with the owning daemon.
+func (n *Node) codexPaneControls(s *proto.Session, rollout quickMeta) {
+	id := s.SessionID
+	if _, thread, err := n.codexOwner(id); err == nil && thread.model != "" {
+		s.Model = thread.model
+	}
+	n.codexRewindRow(id, s)
+	if c, thread, driven := n.codexEffortThread(id); driven {
+		s.Model = n.codexModelNow(id, c, thread, s.Model)
+		s.Capabilities.Model = proto.Bool(true)
+	}
+	n.codexEffortRow(id, &s.Efforts, &s.Effort, rollout) // joined on its app-server: its effort (codex_effort.go)
+	n.codexSpeedRow(s)
 }

@@ -13,10 +13,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botport"
+
 	"github.com/nwverse/persona/server/internal/agents"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -163,10 +164,10 @@ type botHub struct {
 	// pairLifecycle advances after a committed unpair, including an already-unpaired cancellation.
 	pairLifecycle uint64
 	set           FeishuBotSettings
-	api           *feishubot.Client
-	conn          *feishubot.Conn
+	api           botport.Client
+	conn          botport.Conn
 	stop          context.CancelFunc
-	info          feishubot.BotInfo
+	info          botcard.BotInfo
 	base          context.Context
 	told          map[string]time.Time // sender -> when the bot last refused them (10-minute window)
 	pairTold      map[string]time.Time // sender -> when the pairing path last answered (short redelivery window)
@@ -190,7 +191,7 @@ type botHub struct {
 	now func() time.Time
 	// registrar is the accounts site's client for app registration, regDomain where a registered app's calls go
 	// (bots_register.go); both replaced in tests.
-	registrar *feishubot.Registrar
+	registrar botport.Registrar
 	regDomain func(region string) string
 	// bindGate serializes Feishu binding, including registration network calls, independently of mu.
 	// A channel lets a waiting client's context cancel without waiting for the current bind.
@@ -319,7 +320,7 @@ func (h *Manager) restartBot() {
 // restartBotLocked uses only the successfully loaded settings; b.mu is held.
 func (h *Manager) restartBotLocked() {
 	b := &h.bots
-	b.info = feishubot.BotInfo{} // the bot may be another app now: its own id is read again
+	b.info = botcard.BotInfo{} // the bot may be another app now: its own id is read again
 	if b.stop != nil {
 		b.stop()
 		b.stop, b.conn = nil, nil
@@ -337,8 +338,17 @@ func (h *Manager) restartBotLocked() {
 		b.api = nil
 		return
 	}
-	b.api = feishubot.New(appID, secret, domain)
-	b.conn = feishubot.NewConn(b.api, h.botEventHandler(b.api), h.logf)
+	if !botport.Available(h.modules()) { // a build without the lark module (persona_without_lark), or switched off: the bot stays off
+		if botport.InBuild() {
+			h.logf("bots: the lark module is switched off in the modules setting")
+		} else {
+			h.logf("bots: %v", botport.ErrUnavailable)
+		}
+		b.api = nil
+		return
+	}
+	b.api = botport.New(appID, secret, domain)
+	b.conn = botport.NewConn(b.api, h.botEventHandler(b.api), h.logf)
 	ctx, cancel := context.WithCancel(b.base)
 	b.stop = cancel
 	conn, api := b.conn, b.api
@@ -360,7 +370,7 @@ func (h *Manager) restartBotLocked() {
 }
 
 // botAPI is the client while the bot is on and paired (nil otherwise), with the settings it runs under (a copy).
-func (h *Manager) botAPI() (*feishubot.Client, FeishuBotSettings) {
+func (h *Manager) botAPI() (botport.Client, FeishuBotSettings) {
 	b := &h.bots
 	b.mu.Lock()
 	defer func() {
@@ -467,7 +477,7 @@ func (h *Manager) botView(ctx context.Context) feishuBotView {
 	loadErr := h.loadBotsLocked(ctx)
 	s := b.set
 	appID, _, domain, fromConfig, _ := h.botCredentialsLocked()
-	v := feishuBotView{Enabled: s.Enabled, AppID: appID, Domain: feishubot.ResolveDomain(domain), HasSecret: appID != "",
+	v := feishuBotView{Enabled: s.Enabled, AppID: appID, Domain: botcard.ResolveDomain(domain), HasSecret: appID != "",
 		FromConfig: fromConfig, Features: s.Features, BotName: b.info.Name, NudgeAfter: s.nudgeAfter(),
 		SourceReportDelayMinutes: s.sourceReportDelayMinutes(), SourceReportFullReply: s.SourceReportFullReply}
 	if loadErr != nil {
@@ -818,8 +828,11 @@ func (h *Manager) applyBotUpdateWithReceipt(ctx context.Context, enabled *bool, 
 			if plain == "" {
 				return botConfigureReceipt{}, i18n.Err("hub-bots.needs_secret")
 			}
+			if !botport.Available(h.modules()) {
+				return botConfigureReceipt{}, botport.ErrUnavailable
+			}
 			vctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			_, err := feishubot.New(id, plain, dom).BotInfo(vctx)
+			_, err := botport.New(id, plain, dom).BotInfo(vctx)
 			cancel()
 			if err != nil {
 				return botConfigureReceipt{}, errors.New(i18n.T(h.botLang(ctx), "hub-bots.cannot_reach_app", i18n.Args{"error": err.Error()}))

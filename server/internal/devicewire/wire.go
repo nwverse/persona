@@ -472,6 +472,9 @@ var Routes = []string{
 	"GET /api/v1/machines/{mid}/herdr",
 	"PUT /api/v1/machines/{mid}/herdr",
 	"POST /api/v1/machines/{mid}/herdr/start",
+	// Named herdr sessions kept out of Persona (#14898, internal/devices herdrsessions.go).
+	"GET /api/v1/machines/{mid}/herdr/sessions",
+	"PUT /api/v1/machines/{mid}/herdr/sessions/blocked",
 	"GET /api/v1/machines/{mid}/botmux",
 	"PUT /api/v1/machines/{mid}/botmux",
 	"GET /api/v1/machines/{mid}/health/reports",
@@ -509,6 +512,8 @@ var TransferRoutes = []string{
 	"POST /api/v1/files/transfer",
 	"GET /api/v1/files/transfer/{id}",
 	"DELETE /api/v1/files/transfer/{id}",
+	// The audit of the Agents' file_transfer calls (internal/devices agent_transfer.go), full devices only.
+	"GET /api/v1/files/transfer-audit",
 }
 
 // MetricsRoutes are the machines' monitoring's routes (internal/devices metrics.go), relayed the same way: every

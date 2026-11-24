@@ -212,10 +212,7 @@ struct TodoFoundText: View {
     static func marked(_ line: TodoFoundLine, lead: Int) -> AttributedString {
         var base = AttributeContainer()
         base.foregroundColor = .secondary
-        var mark = AttributeContainer()
-        mark.foregroundColor = .primary
-        mark.backgroundColor = Theme.accentTint
-        return AssistantSearchMerge.marked(line.text, line.marks, lead: lead, base: base, mark: mark)
+        return AssistantSearchMerge.marked(line.text, line.marks, lead: lead, base: base, mark: AssistantSearchMerge.tint)
     }
 }
 

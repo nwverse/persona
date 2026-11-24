@@ -194,7 +194,7 @@ const (
 	CodeStaleSnapshot    = "stale_snapshot"    // ErrStaleSnapshot
 	CodeAssistantOffline = "assistant_offline" // the hub has no connection from the assistant
 	// CodeFeishuAPI: Feishu answered the bot's call with an error code (Data: {"code": n}): a refusal or a passing
-	// failure the assistant tells apart (the agent messages, feishu_cot.go).
+	// failure the assistant tells apart (the agent messages, internal/modules/lark/cot.go).
 	CodeFeishuAPI = "feishu_api"
 	// CodeFeishuSave: the image downloaded, but saving its bytes on the selected machine failed.
 	CodeFeishuSave = "feishu_save"
@@ -479,6 +479,9 @@ var Routes = []string{
 	"GET /api/v1/assistant/conversations/{id}/segments",
 	"POST /api/v1/assistant/conversations/{id}/switch",
 	"GET /api/v1/assistant/conversations/{id}/switch/{operation}",
+	// A batch of those switches (conversations_switch.go there, docs/assistant/assistant.md, #14222).
+	"POST /api/v1/assistant/conversation-switches",
+	"GET /api/v1/assistant/conversation-switches/{batch}",
 	// The selection: what the knowledge base brings in and keeps (kb_selection.go there).
 	"GET /api/v1/kb/selection",
 	"PUT /api/v1/kb/selection",

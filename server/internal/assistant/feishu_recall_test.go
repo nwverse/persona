@@ -75,6 +75,7 @@ func recallHub(t *testing.T) (s *Service, f *fakeHub, r *channel.Run, prog *chan
 // The owner recalls the one message a turn is answering (#5248): the turn is interrupted as /stop does, the progress
 // card ends as recalled with no answer, and the OnIt reaction goes without a DONE.
 func TestFeishuRecallStopsTheTurnAnsweringIt(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, r, prog, posts, reacts, unreacts := recallHub(t)
 	prog.from = 3 // its message is in the conversation
 	s.FeishuRecalled(FeishuRecalled{MessageID: "om_m1"})
@@ -98,6 +99,7 @@ func TestFeishuRecallStopsTheTurnAnsweringIt(t *testing.T) {
 
 // An answer read just before the recall, finished after it, does not go out either.
 func TestFeishuRecalledRunSendsNoAnswer(t *testing.T) {
+	needsLarkLayer(t)
 	s, _, r, _, posts, _, _ := recallHub(t)
 	s.chans.mu.Lock()
 	r.Recalled = true
@@ -111,6 +113,7 @@ func TestFeishuRecalledRunSendsNoAnswer(t *testing.T) {
 // Recalled while its message waits behind another turn of the conversation: the run ends with no answer, but nothing
 // is interrupted (that would stop the other turn).
 func TestFeishuRecallOfAQueuedMessageInterruptsNothing(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, r, _, posts, _, unreacts := recallHub(t)
 	f.setItems(proto.Item{Seq: 1, Role: "user", Kind: proto.KindText, Text: "上一条", ClientMsgID: "feishu-om_before"})
 	s.recallChannelRun(channel.Feishu, "om_m1", channel.ClientMsgID(channel.Feishu, "om_m1"))
@@ -125,6 +128,7 @@ func TestFeishuRecallOfAQueuedMessageInterruptsNothing(t *testing.T) {
 // Answered together with another message (folded): the turn goes on, only the recalled one is taken out; the answer
 // then marks just the other one done.
 func TestFeishuRecallOfAFoldedMessageKeepsTheTurn(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, r, prog, posts, reacts, unreacts := recallHub(t)
 	prog.from = 3
 	s.chans.mu.Lock()

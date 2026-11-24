@@ -202,6 +202,9 @@ nonisolated struct APIClient: Sendable {
     /// The hub's hello has `sessions_hierarchy`: windowed lists and counts send `roots=1`. Older hubs do not, so a
     /// child stays a row of its own. A parent-session page is a separate request and never sends `roots`.
     var sessionsHierarchy = false
+    /// The hub's hello has `sessions_cross_machine_hierarchy`: windowed root lists send `cross_machine_hierarchy=1`
+    /// and child queries send `parent_machine_id` + `parent_session_id` to retrieve cross-machine and archived-parent children.
+    var sessionsCrossMachineHierarchy = false
     /// Execution surface is diagnostic only; authorization still uses the paired hub credential.
     var clientMetadata: RequestClientMetadata = .current
     /// Answers the demo config's requests (DemoHub registers it at launch); every endpoint goes through `request`.
@@ -684,6 +687,37 @@ nonisolated struct APIClient: Sendable {
         var machineID: String
         enum CodingKeys: String, CodingKey { case launcher, model, effort, machineID = "machine_id" }
     }
+
+    /// The optimistic-concurrency token for an explicit logical-conversation switch.
+    struct ConversationSwitchState: Decodable, Sendable {
+        var enabled: Bool
+        var epoch: Int
+        var supervisionRequired: Bool?
+        enum CodingKeys: String, CodingKey {
+            case enabled, epoch
+            case supervisionRequired = "supervision_required"
+        }
+    }
+
+    /// One idempotent switch operation. Retrying after an uncertain answer keeps this exact body.
+    struct ConversationSwitchRequest: Encodable, Sendable, Equatable {
+        var operationID: String
+        var expectedEpoch: Int
+        var sourceMachineID: String
+        var machineID: String
+        var launcher: String
+        var model: String?
+        var effort: String?
+        var permissionMode: String?
+        enum CodingKeys: String, CodingKey {
+            case launcher, model, effort
+            case operationID = "operation_id"
+            case expectedEpoch = "expected_epoch"
+            case sourceMachineID = "source_machine_id"
+            case machineID = "machine_id"
+            case permissionMode = "permission_mode"
+        }
+    }
     nonisolated struct SessionsResponse: Decodable, Sendable { var sessions: [Session] }
     struct SessionResponse: Decodable { var session: Session }
     struct ItemsResponse: Decodable, Sendable {
@@ -900,6 +934,19 @@ nonisolated struct APIClient: Sendable {
     /// The conversation follows Model configuration › Main chat again (DELETE …/conversations/{id}/model, #5033).
     func deleteConversationModel(machine: String, conversation: String) async throws {
         try await delete("/api/v1/assistant/conversations/\(conversation.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? conversation)/model")
+    }
+    private func conversationSwitchPath(_ conversation: String, suffix: String) -> String {
+        let id = conversation.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? conversation
+        return "/api/v1/assistant/conversations/\(id)/\(suffix)"
+    }
+    /// Reads the current epoch without writing or sending a message to either engine.
+    func conversationSwitchState(machine: String, conversation: String) async throws -> ConversationSwitchState {
+        try await get(conversationSwitchPath(conversation, suffix: "segments"), query: ["machine_id": machine],
+                      as: ConversationSwitchState.self)
+    }
+    /// Submits the explicit operation prepared from `conversationSwitchState`; the response may only acknowledge staging.
+    func switchConversation(machine: String, conversation: String, request body: ConversationSwitchRequest) async throws {
+        _ = try await post(conversationSwitchPath(conversation, suffix: "switch"), body: body, timeout: 60)
     }
     /// The models the launcher's agent lists in its /model menu (New Agent's model picker). The node starts the CLI to
     /// ask (a few seconds, kept 10 minutes); refresh asks it again. Assistant purpose asks the shell launcher's list,
@@ -1617,6 +1664,7 @@ nonisolated struct APIClient: Sendable {
         /// conversation, a scheduled task or a follow-up started into one line. The value in effect; nil from a hub
         /// without the setting, which hides the switch and folds as if on (`backgroundFolded`).
         var mainBackgroundFolded: Bool?
+        var foldRoutineRelayReplies: Bool?
         /// Show Scheduled Task Chats in the sidebar's Recent (#8324): the chats a scheduled task or the background
         /// supervisor started are listed there too. The value in effect, one for all of the user's devices; nil from a
         /// hub without the setting, which hides the switch and keeps them out of Recent, as before.
@@ -1683,6 +1731,7 @@ nonisolated struct APIClient: Sendable {
             case launcher, cwd, conversations, timezone, main, leaders, manager
             case defaultPermissionMode = "default_permission_mode"
             case machineID = "machine_id", mainMachineID = "main_machine_id", notes = "notes_effective", mainTasksQuiet = "main_tasks_quiet"
+            case foldRoutineRelayReplies = "fold_routine_relay_replies"
             case mainBackgroundFolded = "main_background_folded", recentTaskChats = "recent_task_chats"
             case meetingAttendanceDefault = "meeting_attendance_default", timezonePicked = "timezone_picked"
             case mainSupervisesOwnTasks = "main_supervises_own_tasks", backgroundSupervisor = "background_supervisor"
@@ -1759,7 +1808,7 @@ nonisolated struct APIClient: Sendable {
     func makeDirection(_ id: String) async throws {
         _ = try await request("POST", "/api/v1/assistant/directions/\(id)/make", body: [String: String]())
     }
-    /// Ends a direction (#4331, `POST /api/v1/assistant/directions/{id}/end`): its tasks keep their supervisor.
+    /// Ends a direction (#4331, `POST /api/v1/assistant/directions/{id}/end`): its open tasks go to the main chat's supervision.
     func endDirection(_ id: String) async throws {
         _ = try await request("POST", "/api/v1/assistant/directions/\(id)/end")
     }
@@ -1828,6 +1877,7 @@ nonisolated struct APIClient: Sendable {
         var notes: String?
         var mainTasksQuiet: Bool?
         var mainBackgroundFolded: Bool?
+        var foldRoutineRelayReplies: Bool?
         var recentTaskChats: Bool?
         var meetingAttendanceDefault: String?
         var mainSupervisesOwnTasks: Bool?
@@ -1853,6 +1903,7 @@ nonisolated struct APIClient: Sendable {
         enum CodingKeys: String, CodingKey {
             case launcher, timezone, notes
             case machineID = "machine_id", mainTasksQuiet = "main_tasks_quiet", meetingAttendanceDefault = "meeting_attendance_default"
+            case foldRoutineRelayReplies = "fold_routine_relay_replies"
             case mainBackgroundFolded = "main_background_folded", mainSupervisesOwnTasks = "main_supervises_own_tasks"
             case recentTaskChats = "recent_task_chats"
             case meetingTranscriptionDefault = "meeting_transcription_default", meetingGlossary = "meeting_glossary"
@@ -2639,6 +2690,41 @@ extension APIClient {
     /// Archives an assistant conversation (out of the sidebar, under Archived) or brings it back.
     func archiveConversation(_ id: String, archived: Bool) async throws {
         try await post("/api/v1/assistant/conversations/\(id)/" + (archived ? "archive" : "unarchive"), body: [String: String]())
+    }
+
+    /// Hub-wide Agents display settings (`GET`/`PUT /api/v1/agents/display-settings`,
+    /// `server/internal/assistant/agents_display.go`, #13899).
+    nonisolated struct AgentsDisplaySettings: Codable, Equatable, Sendable {
+        var showBotmux: Bool
+        var configured: Bool
+        var useHerdrTabName: Bool? = nil
+        var sortByActivity: Bool? = nil
+        var showFilter: Bool? = nil
+
+        enum CodingKeys: String, CodingKey {
+            case showBotmux = "show_botmux"
+            case configured
+            case useHerdrTabName = "use_herdr_tab_name"
+            case sortByActivity = "sort_by_activity"
+            case showFilter = "show_filter"
+        }
+    }
+
+    /// Reads the hub's Agents display settings (`GET /api/v1/agents/display-settings`). 404 on older hubs.
+    func agentsDisplaySettings() async throws -> AgentsDisplaySettings {
+        try JSON.decoder.decode(AgentsDisplaySettings.self, from: await request("GET", "/api/v1/agents/display-settings"))
+    }
+
+    /// Persists `use_herdr_tab_name` on the hub (`PUT /api/v1/agents/display-settings`), returning the acknowledged values.
+    func setAgentsUseHerdrTabName(_ enabled: Bool) async throws -> AgentsDisplaySettings {
+        struct Body: Encodable {
+            var useHerdrTabName: Bool
+            enum CodingKeys: String, CodingKey { case useHerdrTabName = "use_herdr_tab_name" }
+        }
+        return try JSON.decoder.decode(
+            AgentsDisplaySettings.self,
+            from: await request("PUT", "/api/v1/agents/display-settings", body: Body(useHerdrTabName: enabled))
+        )
     }
 
     /// Renames the session's herdr tab and / or the Claude session (`/rename`).

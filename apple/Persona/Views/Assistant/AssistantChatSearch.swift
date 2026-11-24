@@ -73,12 +73,18 @@ nonisolated enum AssistantSearchMerge {
         return 2
     }
 
-    /// The snippet with its matches strongly emphasized (the ranges clipped to it, in order), starting `lead`
+    /// The snippet with the accent tint behind each match (the ranges clipped to it, in order), starting `lead`
     /// characters before the first match.
     static func snippet(_ hit: AssistantSearchAnswer.Hit, lead: Int = lead) -> AttributedString {
-        var bold = AttributeContainer()
-        bold.inlinePresentationIntent = .stronglyEmphasized
-        return marked(hit.snippet, hit.ranges, lead: lead, mark: bold)
+        marked(hit.snippet, hit.ranges, lead: lead, mark: tint)
+    }
+
+    /// How a search marks what it found: the accent tint behind the words, the words in the primary color over it.
+    static var tint: AttributeContainer {
+        var mark = AttributeContainer()
+        mark.backgroundColor = Theme.accentTint
+        mark.foregroundColor = .primary
+        return mark
     }
 
     /// `s` from `lead` characters before its first match (`led`), in `base`, each match (UTF-16 `[start, end)`, clipped
@@ -113,7 +119,7 @@ nonisolated enum AssistantSearchMerge {
     }
 }
 
-/// A found row's second line (#6284): the sentence that matched, its match bold, from `AssistantSearchMerge.lead(for:)`
+/// A found row's second line (#6284): the sentence with the match highlighted, from `AssistantSearchMerge.lead(for:)`
 /// characters before it at this text size. Its own view, so only it reads the text size.
 struct SearchSaidLine: View {
     @Environment(\.dynamicTypeSize) private var size
