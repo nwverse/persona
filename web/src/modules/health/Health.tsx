@@ -140,6 +140,10 @@ function HealthHome({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // what Health tracks (#14716): only on a hub that keeps the list; without it Today is drawn as it always was
   const items = useHealthItems();
   const [editing, setEditing] = useState(false);
+  // the list went (the default manager moved): an open edit of it ends rather than coming back by itself on the new one
+  useEffect(() => {
+    if (!items.state) setEditing(false);
+  }, [items.state]);
 
   // one conversation per message: the box empties at once (Composer), so a second send would start a second one
   const [starting, setStarting] = useState(false);

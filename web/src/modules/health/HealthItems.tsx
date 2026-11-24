@@ -1,13 +1,13 @@
 // Choosing what the Health home tracks (#14716, docs/web/web.md "Health Today"): the editor behind the header's button,
 // and the card that asks an owner who never chose. Both save the whole list through useHealthItems, which keeps the
 // items only phones show where they were; a save that lost to one made elsewhere shows the hub's list and says so.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
 import { t } from "../../i18n";
 import { Button, Dialog, IconButton, Switch, toast } from "../../ui/atoms";
 import type { IntakeKind } from "./intake";
 import { offeredItems, shownItems, StaleItemsError } from "./items";
-import type { HealthItems } from "./useHealthItems";
+import type { HealthItems, ItemsBase } from "./useHealthItems";
 
 const nameOf = (kind: IntakeKind) => (kind === "water" ? t("health.today_water") : t("health.today_protein"));
 
@@ -21,9 +21,13 @@ export function HealthItemsEditor({ items, open, onClose }: { items: HealthItems
   const [rows, setRows] = useState(() => rowsOf(items.shown ?? [], items.offered));
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ tone: "stale" | "failed"; text: string } | null>(null);
+  // the list this edit started from: Save merges into it and names its revision, so a change made elsewhere meanwhile
+  // (read again in the background for the home) is a 409 here, never overwritten by the older edit
+  const base = useRef<ItemsBase | null>(items.state);
   // opened afresh: the list as the hub has it now
   useEffect(() => {
     if (!open) return;
+    base.current = items.state;
     setRows(rowsOf(items.shown ?? [], items.offered));
     setNote(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only on opening: the edits are the owner's until Save
@@ -39,11 +43,12 @@ export function HealthItemsEditor({ items, open, onClose }: { items: HealthItems
     setBusy(true);
     setNote(null);
     try {
-      await items.save(rows.filter((r) => r.on).map((r) => r.kind));
+      await items.save(rows.filter((r) => r.on).map((r) => r.kind), base.current ?? undefined);
       onClose();
     } catch (e) {
       if (e instanceof StaleItemsError) {
-        // the hub's list wins: show it, and the owner decides again
+        // the hub's list wins: show it, and the owner decides again from it
+        base.current = e.current;
         setRows(rowsOf(shownItems(e.current), offeredItems(e.current)));
         setNote({ tone: "stale", text: t("health.items_stale") });
       } else {

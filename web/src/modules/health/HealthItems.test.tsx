@@ -21,6 +21,8 @@ const hub = vi.hoisted(() => ({
   revision: 0,
   saved: false,
   failPut: "",
+  /** Holds the next items read: it answers with the list as it was when asked, once this settles. */
+  readGate: null as Promise<void> | null,
 }));
 const state = () => ({ catalog: hub.catalog, items: [...hub.items], revision: hub.revision, saved: hub.saved });
 
@@ -38,7 +40,13 @@ vi.mock("../../lib/api", async (orig) => {
         return { water: { today: 750, goal: 2000, entries: [] }, protein: { today: 20, goal: 60, entries: [] }, days: [], zone: "UTC" };
       }
       if (!path.startsWith("/assistant/health/items")) return {};
-      if (method === "GET") return state();
+      if (method === "GET") {
+        const gate = hub.readGate;
+        hub.readGate = null;
+        const snapshot = state();
+        if (gate) await gate;
+        return snapshot;
+      }
       if (hub.failPut) throw new Error(hub.failPut);
       const body = init.json as { items: string[]; revision: number };
       if (body.revision !== hub.revision) throw new real.ApiError(409, "stale", state());
@@ -63,6 +71,7 @@ vi.mock("../../lib/store", async (orig) => {
 vi.mock("../../views/chat/ChatView", () => ({ ChatView: () => null }));
 
 import { Toasts } from "../../ui/atoms";
+import { setRosterDefault } from "../../lib/manager-choice";
 import { Health } from "./Health";
 import { mergeItems } from "./items";
 import { t } from "../../i18n";
@@ -121,6 +130,7 @@ beforeEach(() => {
   ];
   owner(["water", "protein", "activity", "trends"]);
   hub.failPut = "";
+  hub.readGate = null;
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -258,6 +268,72 @@ describe("Health items: the editor", () => {
     await press(editButton());
     expect(rows()).toEqual(["water:true", "protein:true"]);
     expect(puts()).toEqual([]);
+  });
+});
+
+// From the independent review of #14944: the list an edit saves at, and which of crossing answers is taken.
+describe("Health items: crossing changes", () => {
+  it("saves an edit at the list it started from, so a change that reached the page meanwhile is a 409, not overwritten", async () => {
+    owner(["water", "protein", "activity", "trends"], true, 2);
+    await render();
+    await press(editButton());
+    await press(sw(dialog()!, t("health.today_water")));
+    // a phone removes protein; its message reaches the page, which reads the list again for the home
+    owner(["water", "activity", "trends"], true, 3);
+    await emit("health_items");
+    expect(rings()).toEqual(["water"]);
+    await press(byText(dialog()!, t("health.items_save")));
+    expect(puts().map((c) => c.json)).toEqual([{ items: ["protein", "activity", "trends"], revision: 2 }]);
+    expect(hub.items).toEqual(["water", "activity", "trends"]);
+    expect(dialog()!.querySelector('[role="status"]')?.textContent).toBe(t("health.items_stale"));
+    expect(rows()).toEqual(["water:true", "protein:false"]);
+    // decided again from the hub's list: saved at its revision
+    await press(sw(dialog()!, t("health.today_water")));
+    await press(byText(dialog()!, t("health.items_save")));
+    expect(puts().at(-1)!.json).toEqual({ items: ["activity", "trends"], revision: 3 });
+  });
+
+  it("takes a lower revision read after a reconnect: another default manager's list, saved at its own revision", async () => {
+    owner(["water", "activity", "trends"], true, 10);
+    await render();
+    owner(["protein", "activity", "trends"], true, 1);
+    await emit("hello");
+    expect(rings()).toEqual(["protein"]);
+    await press(editButton());
+    await press(byText(dialog()!, t("health.items_save")));
+    expect(puts().map((c) => c.json)).toEqual([{ items: ["protein", "activity", "trends"], revision: 1 }]);
+    expect(dialog()).toBeNull();
+  });
+
+  it("drops the list and reads the new one when the default manager moves", async () => {
+    act(() => setRosterDefault("health-items-a"));
+    owner(["water", "activity", "trends"], true, 10);
+    await render();
+    await press(editButton());
+    owner(["protein", "activity", "trends"], true, 1);
+    act(() => setRosterDefault("health-items-b"));
+    await flush();
+    expect(dialog()).toBeNull();
+    expect(rings()).toEqual(["protein"]);
+    expect(itemReads()).toHaveLength(2);
+    await press(editButton());
+    expect(rows()).toEqual(["protein:true", "water:false"]);
+    await press(byText(dialog()!, t("health.items_save")));
+    expect(puts().at(-1)!.json).toEqual({ items: ["protein", "activity", "trends"], revision: 1 });
+  });
+
+  it("does not let a read that answers late undo a newer one", async () => {
+    owner(["water", "activity", "trends"], true, 2);
+    await render();
+    let release!: () => void;
+    hub.readGate = new Promise((resolve) => { release = resolve; });
+    await emit("health_items"); // answers with revision 2, late
+    owner(["protein", "activity", "trends"], true, 3);
+    await emit("health_items");
+    expect(rings()).toEqual(["protein"]);
+    await act(async () => { release(); });
+    await flush();
+    expect(rings()).toEqual(["protein"]);
   });
 });
 
