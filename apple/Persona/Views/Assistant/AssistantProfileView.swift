@@ -216,8 +216,9 @@ struct AssistantProfileView: View {
             #endif
             if let dashboards {
                 Section {
+                    // Wraps rather than truncates: the Japanese and English names are long, and this is a label, not a button.
                     Toggle(isOn: dashboards) {
-                        Label(DashboardsUI.switchTitle, systemImage: Theme.Icon.pluginChart).lineLimit(1)
+                        Label(DashboardsUI.switchTitle, systemImage: Theme.Icon.pluginChart)
                     }
                     .accessibilityIdentifier("assistant-dashboards")
                 } footer: {

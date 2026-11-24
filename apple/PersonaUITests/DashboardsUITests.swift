@@ -4,8 +4,8 @@ import XCTest
 /// switch on, Morning run pinned): `TEST_RUNNER_PERSONA_DASHBOARDS_HUB=http://127.0.0.1:<port>`. The drawer (the iPad's
 /// sidebar) lists the Dashboards place and the pinned page; the pinned page opens with its View's title and the
 /// ownership line under it; a tap answers Received; Settings › Assistant has the switch. `TEST_RUNNER_PERSONA_SHOTS=<dir>`
-/// keeps the screenshots, named by `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE` (light|dark, the look it asks for) and
-/// `TEST_RUNNER_PERSONA_UI_LANGUAGE` (en|zh-Hans|ja).
+/// keeps the screenshots, named by `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE` (light|dark: set the look itself with
+/// `xcrun simctl ui <udid> appearance`, the app on Match System) and `TEST_RUNNER_PERSONA_UI_LANGUAGE` (en|zh-Hans|ja).
 final class DashboardsUITests: XCTestCase {
     private var env: [String: String] { ProcessInfo.processInfo.environment }
     private var language: String { env["PERSONA_UI_LANGUAGE"] ?? "zh-Hans" }
@@ -26,7 +26,7 @@ final class DashboardsUITests: XCTestCase {
         guard let hub = env["PERSONA_DASHBOARDS_HUB"] else { throw XCTSkip("needs mock_hub.py with MOCK_DASHBOARDS=1 (PERSONA_DASHBOARDS_HUB)") }
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         let app = XCUIApplication()
-        app.launchArguments = ["-pairURL", pair, "-AppleLanguages", "(\(language))", "-ui.scheme", appearance] + args
+        app.launchArguments = ["-pairURL", pair, "-AppleLanguages", "(\(language))", "-ui.scheme", "system"] + args
         app.launchPinned(navigation: false)
         // The app follows the look with its icon; the first launch after a change has the system's notice over it.
         let notice = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
@@ -51,7 +51,11 @@ final class DashboardsUITests: XCTestCase {
         let iPad = UIDevice.current.userInterfaceIdiom == .pad
         let app = try launch(["-tab", "assistant"] + (iPad ? [] : ["-openAssistantSidebar", "YES"]))
         let index = app.descendants(matching: .any)["sidebar-extension--pages-index"].firstMatch
-        XCTAssertTrue(index.waitForExistence(timeout: 30), "no Dashboards place:\n\(app.debugDescription)")
+        let notice = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+        for _ in 0..<15 where !index.waitForExistence(timeout: 2) {
+            if notice.exists { notice.buttons.firstMatch.tap() } // a late icon notice over the drawer
+        }
+        XCTAssertTrue(index.waitForExistence(timeout: 5), "no Dashboards place:\n\(app.debugDescription)")
         let row = app.descendants(matching: .any)["sidebar-extension--pages-\(Self.pinned)"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10), "no pinned page in the sidebar")
         sleep(1) // the drawer settles
@@ -79,8 +83,16 @@ final class DashboardsUITests: XCTestCase {
         for _ in 0..<12 where !(toggle.exists && toggle.isHittable) { app.swipeUp() }
         XCTAssertTrue(toggle.waitForExistence(timeout: 20), "no Dashboards switch:\n\(app.debugDescription)")
         XCTAssertTrue(app.staticTexts[words.switchTitle].exists || toggle.label.contains(words.switchTitle))
-        app.swipeUp() // the footnote in sight
-        if !toggle.isHittable { app.swipeDown() }
+        // The switch and its footnote in the middle of the screen: slow drags, no fling past them.
+        let window = app.windows.firstMatch
+        func drag(_ from: CGFloat, _ to: CGFloat) {
+            window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: from))
+                .press(forDuration: 0.1, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: to)),
+                       withVelocity: .slow, thenHoldForDuration: 0.3)
+        }
+        for _ in 0..<6 where toggle.frame.midY > window.frame.height * 0.55 { drag(0.7, 0.5) }
+        for _ in 0..<6 where toggle.frame.midY < window.frame.height * 0.3 { drag(0.4, 0.6) }
+        XCTAssertTrue(toggle.isHittable)
         sleep(1)
         shot(app, "settings")
     }
