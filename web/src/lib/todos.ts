@@ -274,6 +274,12 @@ export function openAsk(todo: Pick<Todo, "ask">): TodoAsk | undefined {
   return a && a.verdict && a.asked_at ? a : undefined;
 }
 
+/** The current Pass round of a task its supervisor explicitly asked the owner to verify. */
+export function personalVerificationAsk(todo: Todo): TodoAsk | undefined {
+  const ask = openAsk(todo);
+  return reviewState(todo) === "user_check" && ask && !ask.outcome ? ask : undefined;
+}
+
 /** What the ask's button does; none for a decision that recommends nothing: nothing for one tap to take, so it is
  *  answered in its conversation (or on its Lark card). */
 export function askTake(ask: TodoAsk): AskTake | undefined {

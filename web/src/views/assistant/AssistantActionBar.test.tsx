@@ -99,6 +99,30 @@ const opened = () => location.pathname + location.search;
 const trays = () => host.querySelector("[data-assistant-actionbar]")!.textContent;
 
 describe("Assistant Needs you / In progress trays", () => {
+  it.each([false, true])("puts a quiet verification with Pass in its current supervisor's Needs you (main=%s)", async (main) => {
+    const title = "Check the new layout";
+    const verification: Todo = {
+      id: "verify-task", title, quiet: true, origin: "previous-supervisor", created_at: at, updated_at: at,
+      supervision: { state: "user_check", supervisor: conversation },
+      ask: { verdict: "Please verify the result", asked_at: at },
+      view: { phase: "needs_you", section: "needs_you", reason: "verify", rank: 0 },
+    };
+    moreTodos = [verification, { ...verification, id: "other-verify", supervision: { state: "user_check", supervisor: "another-supervisor" } }];
+    mainChat = main ? conversation : undefined;
+    await act(async () => refresh());
+    expect(entry("needs")).not.toBeNull();
+    await act(async () => entry("needs").click());
+    await openRows("task:verify-task");
+    const row = host.querySelector('[data-needs-row="task:verify-task"][data-needs-open]');
+    expect(row).not.toBeNull();
+    expect(row?.textContent).toContain("Please verify the result");
+    expect(host.querySelector('[data-needs-row="task:other-verify"]')).toBeNull();
+    const pass = row?.querySelector<HTMLButtonElement>(`button[title="${t("assistant-brief.accept_row", { title })}"]`);
+    expect(pass).toBeDefined();
+    await act(async () => pass!.click());
+    expect(writes).toContain("/api/v1/todos/verify-task/accept");
+  });
+
   it("Parked grouping: shows explicit waits and multi-PR waits once, outside active work, including on All", async () => {
     const pr = "https://github.com/example/demo/pull/52";
     const checked_at = new Date(now.getTime() - 60_000).toISOString();

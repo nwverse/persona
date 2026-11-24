@@ -1,6 +1,6 @@
 import { decisionDismissed, reviewState } from "./supervision";
 import { decisionLaterKey, type NeedsYouItem } from "./assistant-entries";
-import { heldDelivery, openAsk } from "./todos";
+import { heldDelivery, openAsk, personalVerificationAsk } from "./todos";
 import { hubNeedsYou } from "./todo-triage";
 import type { Interaction } from "./types";
 
@@ -57,7 +57,8 @@ export function directUserWaiting(items: NeedsYouItem[], deferred: Record<string
     // already left out a step its parent carries): the tray, the To-dos badge and the hub say one number
     const hub = item.kind === "task" ? hubNeedsYou(item.todo, () => false) : undefined;
     if (item.kind === "task" && hub !== undefined) {
-      if (hub) {
+      // assistantEntries already scopes quiet verifications to the conversation that supervises them.
+      if (hub || item.todo.quiet && item.todo.view?.section === "needs_you" && personalVerificationAsk(item.todo)) {
         out.push({ ...item, asks: item.asks.filter((ix) => hubTaskInteraction(item.todo, ix)) });
         continue;
       }
