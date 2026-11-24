@@ -298,7 +298,8 @@ The server draws the following pages with existing declarative components, under
   weight and reps, including warm-up and drop sets. History ranges are 30/90/365 days; Undo only accepts a listed set.
 - Adjust has kg steppers (2.5 per tap), reps steppers, an exercise choice, warm-up switch and add/remove controls for
   up to 40 sets. Below UI version 6 it displays a read-only list and an update hint.
-- Home shows today's or the latest session, seven days of training, and up to three records in the last 30 days.
+- Home shows today's or the latest session, a bar chart of working sets over the last seven owner-local days
+  including today (excluding warm-ups and undone sets, with zero bars on empty days), and up to three records in the last 30 days.
   A record requires an earlier non-warm-up set and exceeds its best weight or estimated one-rep max
   (`weight × (1 + reps / 30)`).
 

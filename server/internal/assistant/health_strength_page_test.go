@@ -24,3 +24,24 @@ func TestHealthStrengthPageCoreFitsAndModuleAbsent(t *testing.T) {
 		t.Fatal("absent module served page", w.Code)
 	}
 }
+
+func TestHealthStrengthHomeChartFitsVersions(t *testing.T) {
+	s, _, _, _, _ := strengthCardHarness(t)
+	for _, version := range []int{1, 2, 5, 6, 11} {
+		res := intakePageResult(t, intakePageHTTP(s, "", "", nil, `{"page":"strength.home"}`, version, "full"))
+		charts := 0
+		for _, section := range res.View.Sections {
+			for _, item := range section.Items {
+				if item.Type == "chart" {
+					charts++
+					if item.Kind != "bar" || len(item.Series) != 1 || len(item.Series[0].Points) != 7 {
+						t.Fatalf("v%d: invalid recent-days chart: %+v", version, item)
+					}
+				}
+			}
+		}
+		if version == 1 && charts != 0 || version >= 2 && charts != 1 {
+			t.Fatalf("v%d: got %d charts after fitting", version, charts)
+		}
+	}
+}

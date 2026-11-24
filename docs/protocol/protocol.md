@@ -2694,7 +2694,7 @@ The extension-style entry is `/extension/-health-intake/pages?state=<JSON>`. Str
 | `strength.overview` | `manage`, `exercises_offset`, `drafts_offset`, `muscles_offset`, optional `exercise`, `field` (`rename`, `setting`, `rule`) and `edit_value` (a rejected name retained for correction) | Pending drafts, exercises with last/best, weekly primary-muscle working sets, latest session, next open plan and exercise management |
 | `strength.exercise` | `exercise` UUID, `metric` (`weight` or `e1rm`), `days` (30/90/365), `offset` | Daily best chart, individual sets and Undo; only currently listed sets may be undone |
 | `strength.edit` | `draft` UUID, `rev`, optional `work` (at most 40 sets) | Working copy; Save updates the draft and card in one transaction, Cancel writes nothing, stale revisions reload; actions after settlement redraw the read-only result |
-| `strength.home` | None | Latest session, seven days of training and up to three recent personal records; opens the overview |
+| `strength.home` | None | Latest session, a bar chart of working sets over the last seven owner-local days including today (excluding warm-ups and undone sets; empty days are zero), and up to three recent personal records; opens the overview |
 
 Omitted `days` / `metric` default to 30 / `weight`. The client returns state opaquely. Page rendering negotiates
 `min(context.ui_version, hub UI version)` and uses the normal page fitting; clients below UI version 6 get a read-only

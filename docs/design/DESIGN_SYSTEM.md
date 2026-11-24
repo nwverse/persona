@@ -62,7 +62,9 @@ Cancel leaves both unchanged, and a conflicting revision reloads the saved draft
 settles while Adjust is open, further edits redraw a read-only page with its saved or discarded status. A duplicate
 exercise name keeps the entered name in the form and shows a toast so the owner can correct it. Clients below
 UI version 6 show the sets read-only with an update hint. Deleting an exercise names it and the number of active sets
-in the confirmation; each saved set has Undo on its exercise page. No new visual token or client component is added.
+in the confirmation; each saved set has Undo on its exercise page. The home card reuses the intake pages' bar chart
+for working sets over the last seven owner-local days including today, excluding warm-ups and undone sets; empty
+days remain zero bars, with no future days. No new visual token or client component is added.
 
 ## 1. Purpose, scope and sources of truth
 

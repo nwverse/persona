@@ -277,23 +277,22 @@ func drawStrengthPage(p strengthPageState, es []assistantwire.StrengthExercise, 
 		items := strengthSessionRows(rows, es, loc, l)
 		if len(rows) == 0 {
 			items = []wire.Component{text(tr("start_hint"))}
-		} else {
-			trained := map[string]bool{}
-			for _, v := range rows {
-				if !v.At.Before(week) && !v.At.After(now) {
-					trained[v.At.In(loc).Format("2006-01-02")] = true
-				}
+		}
+		from := strengthDay(now, loc).AddDate(0, 0, -6)
+		counts := map[string]float64{}
+		for _, v := range rows {
+			if !v.Warmup && v.DeletedAt == nil && !v.At.Before(from) && !v.At.After(now) {
+				counts[v.At.In(loc).Format("2006-01-02")]++
 			}
-			days := []wire.Component{}
-			for i := range 7 {
-				day := week.AddDate(0, 0, i).Format("2006-01-02")
-				key := "rest"
-				if trained[day] {
-					key = "trained"
-				}
-				days = append(days, row(day, tr(key), ""))
-			}
-			page.Sections = append(page.Sections, section("week", days))
+		}
+		points := []wire.ChartPoint{}
+		for i := range 7 {
+			day := from.AddDate(0, 0, i)
+			points = append(points, wire.ChartPoint{Label: day.Format("01-02"), Value: counts[day.Format("2006-01-02")]})
+		}
+		chart := wire.Component{Type: "chart", Kind: "bar", Title: tr("recent_days"), Unit: tr("sets_unit"), Series: []wire.ChartSeries{{Name: tr("sets"), Points: points}}}
+		page.Sections = append(page.Sections, section("recent_days", []wire.Component{chart}))
+		if len(rows) > 0 {
 			records := strengthRecentRecords(rows, es, now, loc, l)
 			if len(records) > 0 {
 				page.Sections = append(page.Sections, section("records", records))
