@@ -4625,7 +4625,8 @@
           "task:t-invalid"
         ],
         "running": [],
-        "shelved": []
+        "shelved": [],
+        "just_finished": []
       }
     },
     {
@@ -4692,7 +4693,8 @@
         "running": [
           "task:t-invalid"
         ],
-        "shelved": []
+        "shelved": [],
+        "just_finished": []
       }
     },
     {
@@ -4771,7 +4773,8 @@
         "shelved": [],
         "activity": {
           "task:t-invalid": null
-        }
+        },
+        "just_finished": []
       }
     },
     {
@@ -4839,7 +4842,8 @@
         "shelved": [],
         "web_parked": [
           "task:t-invalid"
-        ]
+        ],
+        "just_finished": []
       }
     },
     {
@@ -4897,7 +4901,8 @@
         ],
         "finished_new": [
           "task:t-invalid"
-        ]
+        ],
+        "just_finished": []
       }
     },
     {
@@ -4966,7 +4971,8 @@
         ],
         "finished_new": [
           "task:closed"
-        ]
+        ],
+        "just_finished": []
       }
     },
     {
@@ -5080,7 +5086,8 @@
         ],
         "web_review": [
           "task:t-held"
-        ]
+        ],
+        "just_finished": []
       }
     },
     {
@@ -5146,7 +5153,8 @@
           "task:t-personal-check"
         ],
         "running": [],
-        "shelved": []
+        "shelved": [],
+        "just_finished": []
       }
     },
     {
@@ -5216,7 +5224,8 @@
           "task:t-personal-check"
         ],
         "running": [],
-        "shelved": []
+        "shelved": [],
+        "just_finished": []
       }
     },
     {
@@ -5352,7 +5361,8 @@
         ],
         "finished_new": [
           "task:t-verified"
-        ]
+        ],
+        "just_finished": []
       }
     }
   ]

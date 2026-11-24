@@ -356,7 +356,8 @@ nonisolated enum AssistantEntries {
             let work = execution(todo, lookup: lookup)
             let settled = todo.doneAt != nil || todo.acceptanceStands
             let external = work.waiting || externallyWaiting(todo, status: status, last: triage.last, now: now)
-            let unfinished = !held && own.count == active.count && !settled && !todo.activeAgents.isEmpty && !work.running && !external
+            let deliveryHeldBySupervisor = todo.delivery?.heldForSupervisor == true
+            let unfinished = !held && !deliveryHeldBySupervisor && own.count == active.count && !settled && !todo.activeAgents.isEmpty && !work.running && !external
                 && status != .usageLimit && work.closeout?.status != "done"
             let unattended = unfinished && work.unattendedSince > .distantPast
                 && now.timeIntervalSince(work.unattendedSince) > stoppedFollowupAfter
@@ -382,11 +383,11 @@ nonisolated enum AssistantEntries {
                 listed()
             }
             // Acceptance belongs to Just finished, not to a peer tray or an overdue owner decision (#10174).
-            else if !settled && !work.running && !external && work.closeout?.status == "done" {
+            else if !settled && !deliveryHeldBySupervisor && !work.running && !external && work.closeout?.status == "done" {
                 justFinished.append((row, work.unattendedSince)); listed()
             }
             else if unfinished { listed() }
-            else if !settled && !work.running && !external && supervisorReviewing(todo, now: now) {
+            else if !settled && !deliveryHeldBySupervisor && !work.running && !external && supervisorReviewing(todo, now: now) {
                 justFinished.append((row, triage.last)); listed()
             }
             else if !settled && work.running {

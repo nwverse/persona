@@ -200,7 +200,8 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     const settled = !!todo.done_at || acceptanceStands(todo);
     const external = !settled && (execution.waiting || reviewState(todo) !== "pending_review"
       && triage(todo, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id)).section === "parked");
-    const supervisorHold = held || heldForSupervisor(todo) || status === "failed" && supervised;
+    const deliveryHeldBySupervisor = heldForSupervisor(todo);
+    const supervisorHold = held || deliveryHeldBySupervisor || status === "failed" && supervised;
     const unfinished = !supervisorHold && own.length === active.length && !settled && !!todo.agents?.some((a) => !a.released_at && !a.start_error)
       && !execution.running && !external && status !== "usage_limit" && execution.closeout?.status !== "done";
     const unattended = unfinished && execution.unattendedSince > 0 && now - execution.unattendedSince > STOP_FOLLOWUP_MS;
@@ -213,13 +214,13 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
       }
     }
     // #10174: a reported finish awaits acceptance in Just finished, never in a peer acceptance group.
-    else if (!settled && !execution.running && !external && execution.closeout?.status === "done") justFinished.push({ item: { kind: "task", key, card, todo, status, countsOpen: false }, at: execution.unattendedSince });
+    else if (!settled && !deliveryHeldBySupervisor && !execution.running && !external && execution.closeout?.status === "done") justFinished.push({ item: { kind: "task", key, card, todo, status, countsOpen: false }, at: execution.unattendedSince });
     // A recent unfinished stop remains on To-dos during the supervisor's follow-up window, not among finished work.
     else if (unfinished) {
       for (const agent of active) folded.add(sessionKey(agent.machine_id, agent.session_id));
       continue;
     }
-    else if (!external && !todo.done_at && reviewState(todo) === "pending_review" && awaitsReview(todo, status) && !execution.running) justFinished.push({ item: { kind: "task", key, card, todo, status, countsOpen: false }, at: execution.unattendedSince });
+    else if (!external && !deliveryHeldBySupervisor && !todo.done_at && reviewState(todo) === "pending_review" && awaitsReview(todo, status) && !execution.running) justFinished.push({ item: { kind: "task", key, card, todo, status, countsOpen: false }, at: execution.unattendedSince });
     else if (!settled && execution.running) open.push({ item: { kind: "task", key, card, todo, status: "working", activity: taskBackgroundWork(todo, lookup), countsOpen: true }, rank: todoRank(todo, status), at: card.at });
     // Use the To-dos page's wait classification. Live work and owner decisions outrank a hold or an open PR.
     else if (external) parked.push({ item: { kind: "task", key, card, todo, status, countsOpen: countsOpen || execution.waiting }, at: card.at });

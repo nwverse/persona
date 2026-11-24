@@ -416,7 +416,7 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                                         todo.ask?.outcome == "decide" -> TaskDecisionCard(todo, host, enabled) { openTask(host, todo) }
                                         entry.status == TriageStatus.Failed || entry.status == TriageStatus.Interrupted ->
                                             TrayOutcomeRow(entry, host, enabled, taskBusy)
-                                        !todo.awaitsDecision(clock) && todo.hold?.unblock != HoldUnblock.User && row != null -> Column {
+                                        !todo.awaitsDecision() && todo.hold?.unblock != HoldUnblock.User && row != null -> Column {
                                             Text(stringResource(R.string.chat_tray_unattended),
                                                 Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs),
                                                 style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3)

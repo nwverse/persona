@@ -110,7 +110,7 @@ fun Todo.supervisorReviewing(now: Long): Boolean {
 }
 
 /** An open ask or a review explicitly addressed to the owner. A closed to-do cannot ask for another decision (#12974). */
-fun Todo.awaitsDecision(now: Long): Boolean {
+fun Todo.awaitsDecision(): Boolean {
     if (isDone) return false
     if (openAsk != null) return true
     return supervision?.state == "user_check" || supervision?.state == "needs_user"
@@ -246,14 +246,15 @@ fun assistantEntries(
         // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
         val waits = if (status == TriageStatus.Failed) bucket == TodoBucket.Open
             else !todo.isDone && (status == TriageStatus.NeedsYou || status == TriageStatus.Interrupted)
-        val decision = todo.awaitsDecision(now)
+        val decision = todo.awaitsDecision()
         val deliveryApproval = todo.hold?.unblock == HoldUnblock.User
+        val deliveryHeldBySupervisor = todo.hold?.unblock == HoldUnblock.Supervisor
         // its supervisor's review is under way (not the owner's yet): in progress, whatever the To-dos page files it under
         val reviewing = !decision && !deliveryApproval && todo.supervisorReviewing(now)
         val execution = todo.execution(lookup)
         val settled = todo.isDone || todo.acceptanceStands
         val external = execution.waiting || todo.externallyWaiting(now, status, todo.triage(lookup, now, restored[todo.id] ?: 0L).last, lookup)
-        val unfinished = !hasAgentsElsewhere && !settled && todo.activeAgents.isNotEmpty() && !execution.running && !external &&
+        val unfinished = !deliveryHeldBySupervisor && !hasAgentsElsewhere && !settled && todo.activeAgents.isNotEmpty() && !execution.running && !external &&
             status != TriageStatus.UsageLimit && execution.closeout?.status != "done"
         val unattended = unfinished && execution.unattendedSince > 0 && now - execution.unattendedSince > STOP_FOLLOWUP_MS
         when {
@@ -263,10 +264,10 @@ fun assistantEntries(
                 val dismissed = status != TriageStatus.NeedsYou && decision && todo.decisionDismissed()
                 if (deliveryApproval || !dismissed) deciding += NeedsYouEntry.Task(todo, status, asks) to todo.entryRank(status)
             }
-            !settled && !execution.running && !external && execution.closeout?.status == "done" ->
+            !settled && !deliveryHeldBySupervisor && !execution.running && !external && execution.closeout?.status == "done" ->
                 justFinished += RunningEntry.Task(todo, status) to execution.unattendedSince
             unfinished -> Unit
-            !settled && !execution.running && !external && reviewing -> justFinished += RunningEntry.Task(todo, status) to
+            !settled && !deliveryHeldBySupervisor && !execution.running && !external && reviewing -> justFinished += RunningEntry.Task(todo, status) to
                 todo.triage(lookup, now, restored[todo.id] ?: 0L).last
             bucket == TodoBucket.Open || reviewing || !settled && (external || execution.running) -> {
                 val activity = todo.backgroundWork(lookup)
