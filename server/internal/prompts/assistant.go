@@ -1101,7 +1101,7 @@ type EstimateDue struct {
 
 func RenderEstimateDue(p EstimateDue) string { return render("assistant/estimate_due", p) }
 
-// AgyUnlinked is the supervisor's word on a task whose agy Agents run in herdr panes not linked to their agy
+// AgyUnlinked is the supervisor's word on a task whose agy Agents run in terminal panes not linked to their agy
 // conversations, so their replies could not be read (#13456): each pane, and the agy conversations on its computer
 // that may hold its reply, newest first.
 type AgyUnlinked struct {

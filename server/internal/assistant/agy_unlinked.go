@@ -11,11 +11,13 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// A task's agy Agent in a herdr pane is read through the agy conversation the pane runs, which only herdr's Antigravity
-// integration names (node/agypane.go). Without that report the pane's history is one placeholder notice, while the
-// computer lists the same conversation as a runtime row of its own (agy-<conversation id>): the task's judgment had no
-// reply to go by and told its supervisor only "couldn't read the reply", and the supervisor had to find that row by
-// hand (#13456). agyUnlinked says which pane it is and which rows may hold its reply; it links and reads none of them.
+// A task's agy Agent in a terminal pane is read through the agy conversation the pane runs, which agy reports for the
+// pane through Persona's own agy hooks or herdr's Antigravity integration (node/agypane.go, node/agyhooks.go). Without
+// that report (no hooks installed, the two reports disagree, one conversation open in two panes) the pane's history is
+// one placeholder notice, while the computer lists the same conversation as a runtime row of its own
+// (agy-<conversation id>): the task's judgment had no reply to go by and told its supervisor only "couldn't read the
+// reply", and the supervisor had to find that row by hand (#13456). agyUnlinked says which pane it is and which rows
+// may hold its reply; it links and reads none of them.
 
 // agyPaneNoticeID is the id of the placeholder an agy pane's history holds while its conversation is not known
 // (node/agypane.go agyNotice).
@@ -24,7 +26,7 @@ const agyPaneNoticeID = "agy#0"
 // agyUnlinkedMax: the candidate conversations named for one pane.
 const agyUnlinkedMax = 3
 
-// agyUnlinked is the supervisor's localized word on t's live agy Agents whose herdr panes are not linked to their
+// agyUnlinked is the supervisor's localized word on t's live agy Agents whose terminal panes are not linked to their
 // conversations, with the conversations that may hold their replies; "" when t has none.
 func (s *Service) agyUnlinked(ctx context.Context, t Todo) string {
 	panes := s.agyUnlinkedPanes(ctx, t)
@@ -34,8 +36,8 @@ func (s *Service) agyUnlinked(ctx context.Context, t Todo) string {
 	return strings.TrimSpace(prompts.RenderAgyUnlinked(prompts.AgyUnlinked{Language: answerLanguage(s.hello(ctx).Locale), Panes: panes}))
 }
 
-// agyUnlinkedPanes are t's live agents (the most recently linked first) that run agy in a herdr pane whose history is
-// still only the placeholder notice, each with its candidates: agy runtime rows on its computer in its directory,
+// agyUnlinkedPanes are t's live agents (the most recently linked first) that run agy in a terminal pane whose history
+// is still only the placeholder notice, each with its candidates: agy runtime rows on its computer in its directory,
 // active after it was linked and on no other open to-do, newest first.
 func (s *Service) agyUnlinkedPanes(ctx context.Context, t Todo) []prompts.AgyUnlinkedPane {
 	var out []prompts.AgyUnlinkedPane

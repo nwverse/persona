@@ -17,7 +17,7 @@ func agyRuntimeRow(id, title, cwd string, at time.Time) proto.Session {
 		Cwd: cwd, Status: proto.StatusDone, UpdatedAt: at}
 }
 
-// An agy pane whose conversation herdr never reported has only the placeholder notice to read. Its task's judgment
+// An agy pane whose conversation was never reported for it has only the placeholder notice to read. Its task's judgment
 // says so (agy_unlinked) and names the agy conversations that may hold its reply: on the same computer, in the same
 // directory, active since the pane was linked, on no other open to-do, newest first. It links none of them; the
 // to-do's check says it in the owner's language and the outcome log names the same. A pane whose conversation reads,
