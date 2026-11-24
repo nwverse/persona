@@ -257,11 +257,11 @@ export interface ModuleDescriptor {
   navItems?: readonly ModuleNavItem[];
   /** Pages it draws on their own, without the app shell: no sign-in flow, no sidebar (#14404, #13430 `shell_places`),
    *  each the first segment of its addresses (`screen` for `/screen/<machine>`). Before App loads, main.tsx asks
-   *  src/modules/standalone.ts (the modules that have one) and draws `ModuleCode.Standalone`; that is read before any
-   *  hello, so there only this browser's switch can turn the module off. Inside the app, standaloneAt / standaloneOn. The code comes from the module's `standalone.tsx`, which the build
-   *  preloads on these addresses and lets load without waiting for the rest of the catalog (vite.config.ts): that file
-   *  and what it imports statically read only the first screen's core strings, and the module's own. Not a core
-   *  address, nor another module's page. */
+   *  src/modules/standalone.ts (the modules that have one) and draws `ModuleCode.Standalone`; there the hub's flag is
+   *  read from one hello of its own (hubServesHere). Inside the app, standaloneAt / standaloneOn. The code comes from
+   *  the module's `standalone.tsx`, which the build preloads on these addresses and lets load without waiting for the
+   *  rest of the catalog (vite.config.ts): that file and what it imports statically read only the first screen's core
+   *  strings, and the module's own. Not a core address, nor another module's page. */
   standalonePages?: readonly string[];
   /** Knowledge entry kinds whose page it adds parts to (`kb.detail`, #13430 `shell_places`): `ModuleCode.KBDetail`.
    *  One module per kind. */

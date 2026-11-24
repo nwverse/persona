@@ -2463,10 +2463,10 @@ one are also listed in `web/src/modules/standalone.ts`, the part of the module l
 the module's strings, then its code, and returns what `ModuleCode.Standalone(address)` draws, which `main.tsx` renders
 as the whole page; that function takes from the address what must not stay there (the app's token in the fragment)
 before App could read it, and returns null for an address that is not its page after all, which then opens the app.
-While the module is off the address is absent: its fragment is dropped, so a token meant for the page is never taken
-for a sign-in, the app routes it as an unknown address, and the module's chunk and strings are never requested. Such a
-page draws before any hello, so there only this browser's switch can turn the module off (the hub's own module answers
-the page's API). That file reaches the descriptors, the switch and the strings loader, never the host or the whole
+Before it loads anything of the module it reads one hello on a socket of its own (`hubServesHere`, at most 2.5 s; none
+in time is "no hello yet", so on). While the module is off (this browser's switch, or a hello with the `modules`
+marker and without its flag) the address is absent: its fragment is dropped, so a token meant for the page is never
+taken for a sign-in, the app routes it as an unknown address, and the module's chunk and strings are never requested. That file reaches the descriptors, the switch and the strings loader, never the host or the whole
 list: what `main.tsx` reaches is split out of App's chunks, and the whole list made the first screen about 30 KB
 heavier (so `moduleFeature` and `MODULES_FEATURE` live in `web/src/core/module-flags.ts`, which the host re-exports).
 Inside the app the host serves the field like the others: `registerModule` refuses a segment that is a core address,
