@@ -6,8 +6,49 @@ import Observation
 /// on the stored row; list copies show `foldedState`.
 nonisolated enum ChildSessions {
     static let feature = "sessions_hierarchy"
+    /// Hub capability for cross-machine folding (`folded_under_machine_id`, `parent_machine_id`, `cross_machine_hierarchy=1`).
+    static let crossMachineFeature = "sessions_cross_machine_hierarchy"
     /// The synthetic work-step id prefix. Not an Agent or Task call, so it is not a subagent grid card.
     static let callPrefix = "child:"
+
+    /// Unified parent-row rollup for subagents (#27): Needs you > Running > quiet when all ended.
+    struct Rollup: Equatable, Hashable, Sendable {
+        enum Kind: Equatable, Hashable, Sendable {
+            case needsYou(Int)
+            case running(Int)
+            case quiet
+        }
+
+        var kind: Kind
+        var needsYouCount: Int
+        var runningCount: Int
+
+        var isQuiet: Bool { kind == .quiet }
+
+        /// Localized single-line subtitle for the parent row, or nil when quiet.
+        var subtitle: String? {
+            switch kind {
+            case .needsYou(let n):
+                String(localized: "\(n) need you [Child Rollup]")
+            case .running(let n):
+                String(localized: "\(n) running [Child Rollup]")
+            case .quiet:
+                nil
+            }
+        }
+
+        /// Accessible spoken label using unified terminology.
+        var spoken: String? {
+            switch kind {
+            case .needsYou(let n):
+                String(localized: "Subagents: \(n) need you [Child Rollup]")
+            case .running(let n):
+                String(localized: "Subagents: \(n) running [Child Rollup]")
+            case .quiet:
+                nil
+            }
+        }
+    }
 
     struct Home: Equatable {
         var key: SessionKey
@@ -23,10 +64,29 @@ nonisolated enum ChildSessions {
         return Home(key: parent.key, childID: row.sessionID)
     }
 
-    /// The listed parent this row folds under, on its own machine and hub. A blank or self reference folds nothing.
+    /// The listed parent this row folds under, resolving `folded_under_machine_id` (defaulting to the child's own
+    /// machine when nil/empty) on the same hub group. A blank or self reference folds nothing.
     static func parentKey(_ row: Session) -> SessionKey? {
-        guard let under = row.foldedUnder, !under.isEmpty, under != row.sessionID else { return nil }
-        return SessionKey(group: row.group, machineID: row.machineID, sessionID: under)
+        guard let under = row.foldedUnder, !under.isEmpty else { return nil }
+        let targetMachine = (row.foldedUnderMachineID?.isEmpty == false) ? row.foldedUnderMachineID! : row.machineID
+        if targetMachine == row.machineID && under == row.sessionID { return nil }
+        return SessionKey(group: row.group, machineID: targetMachine, sessionID: under)
+    }
+
+    /// The immediate parent declared by `parent_session_id` (with `parent_machine_id` defaulting to `machineID`),
+    /// falling back to `asking_parent_session_id` and `folded_under`. Used to associate archived-parent orphans and
+    /// compute subagent nesting depth in Session Overview.
+    static func directParentKey(_ row: Session) -> SessionKey? {
+        let targetMachine = (row.parentMachineID?.isEmpty == false) ? row.parentMachineID! : row.machineID
+        if let parent = row.parentSessionID, !parent.isEmpty,
+           !(targetMachine == row.machineID && parent == row.sessionID) {
+            return SessionKey(group: row.group, machineID: targetMachine, sessionID: parent)
+        }
+        if let asking = row.askingParentSessionID, !asking.isEmpty,
+           !(targetMachine == row.machineID && asking == row.sessionID) {
+            return SessionKey(group: row.group, machineID: targetMachine, sessionID: asking)
+        }
+        return parentKey(row)
     }
 
     /// Needs You if the row or any folded child needs the user. Working if a child is working, unless this row's own
@@ -39,18 +99,34 @@ nonisolated enum ChildSessions {
         return row.state
     }
 
-    /// Subagents running on the parent row: the row's own reported count and its working children, once (web
+    /// Subagents running on the parent row: the row's own reported count and its non-side working children, once (web
     /// `runningChildren`). A lead that also lists them as background agents is not counted twice.
     static func shownRunning(_ row: Session) -> Int {
         let reported = row.listRunningSubagents ?? row.subagents?.filter(\.running).count ?? 0
-        return max(reported, row.children?.working ?? 0)
+        let childrenWorking = max(0, (row.children?.working ?? 0) - (row.children?.sidesWorking ?? 0))
+        return max(reported, childrenWorking)
     }
 
-    /// Drop children whose parent this list holds, and show folded state on the rows that stay. `asks` is the line a
-    /// waiting child puts on its parent when the parent itself is not waiting.
+    /// Pure unified parent-row rollup (#27): Needs you priority > Running > quiet when all ended.
+    static func childRollup(_ row: Session) -> Rollup {
+        let needsYou = max(0, (row.children?.needsYou ?? 0) - (row.children?.sidesNeedsYou ?? 0))
+        let running = max(0, shownRunning(row))
+        if needsYou > 0 {
+            return Rollup(kind: .needsYou(needsYou), needsYouCount: needsYou, runningCount: running)
+        }
+        if running > 0 {
+            return Rollup(kind: .running(running), needsYouCount: 0, runningCount: running)
+        }
+        return Rollup(kind: .quiet, needsYouCount: 0, runningCount: 0)
+    }
+
+    /// Drop ALL `is_subagent` rows (client-side fallback so no orphan, embedded, same-machine or cross-machine subagent
+    /// leaks into the main Agents list) as well as any row whose folded parent this list holds, and show folded state
+    /// on the rows that stay. `asks` is the line a waiting child puts on its parent when the parent itself is not waiting.
     static func fold(_ sessions: [Session], asks: [SessionKey: String] = [:]) -> [Session] {
         let listed = Set(sessions.map(\.key))
         return sessions.compactMap { row in
+            if row.isSubagent == true { return nil }
             if let parent = parentKey(row), listed.contains(parent) { return nil }
             var copy = row
             if (row.children?.needsYou ?? 0) > 0, row.state != .needsYou, let ask = asks[row.key] {
@@ -62,18 +138,22 @@ nonisolated enum ChildSessions {
         }
     }
 
-    /// Children folded under `parent`, oldest first. A later copy of the same session replaces an older `rev`.
+    /// Children folded under `parent` (same-machine, cross-machine, and archived-parent orphans), oldest first.
+    /// A later copy of the same session replaces an older `rev`.
     static func children(of parent: SessionKey, in rows: [Session]) -> [Session] {
-        var best: [String: Session] = [:]
-        for row in rows where row.group == parent.group && row.machineID == parent.machineID
-            && row.foldedUnder == parent.sessionID && row.sessionID != parent.sessionID {
-            if let old = best[row.sessionID], (old.rev ?? -1) > (row.rev ?? -1) { continue }
-            best[row.sessionID] = row
+        var best: [SessionKey: Session] = [:]
+        for row in rows where row.key != parent {
+            let matchesFold = parentKey(row) == parent
+            let matchesOrphan = row.isSubagent == true && directParentKey(row) == parent
+            guard matchesFold || matchesOrphan else { continue }
+            if let old = best[row.key], (old.rev ?? -1) > (row.rev ?? -1) { continue }
+            best[row.key] = row
         }
         return best.values.sorted { a, b in
             let left = a.startedAt ?? a.updatedAt ?? .distantPast
             let right = b.startedAt ?? b.updatedAt ?? .distantPast
             if left != right { return left < right }
+            if a.machineID != b.machineID { return a.machineID < b.machineID }
             return a.sessionID < b.sessionID
         }
     }
@@ -102,14 +182,15 @@ nonisolated enum ChildSessions {
         return Array(by.values)
     }
 
-    /// The parent's own card wins. Otherwise the first child card's words, for the row the card is shown on.
+    /// The parent's own card wins. Otherwise the first child card's words, for the row the card is shown on
+    /// (respecting `folded_under_machine_id` for cross-machine subagents).
     static func asks(_ cards: [Interaction]) -> [SessionKey: String] {
         var own: [SessionKey: String] = [:]
         var child: [SessionKey: String] = [:]
         for card in cards {
             guard let text = card.askPreview else { continue }
-            let home = SessionKey(group: card.group, machineID: card.machineID, sessionID: card.requestHome)
-            if card.sessionID == card.requestHome {
+            let home = card.requestHomeKey
+            if card.sessionKey == home {
                 if own[home] == nil { own[home] = text }
             } else if child[home] == nil {
                 child[home] = text
@@ -268,8 +349,16 @@ struct FetchHint: Equatable {
         return nil
     }
 
+    /// Unobserved lookup across all held children (safe from actions and non-UI code, P5).
+    func rowNow(_ key: SessionKey) -> Session? {
+        for rows in heldNow.values {
+            if let found = rows.first(where: { $0.key == key }) { return found }
+        }
+        return nil
+    }
+
     func hold(_ child: Session) {
-        guard let parent = ChildSessions.parentKey(child) else { return }
+        guard let parent = ChildSessions.parentKey(child) ?? (child.isSubagent == true ? ChildSessions.directParentKey(child) : nil) else { return }
         put(parent, ChildSessions.merge(held: heldNow[parent] ?? [], changes: [child], removals: [], baseline: false))
     }
 

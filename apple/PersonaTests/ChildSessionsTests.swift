@@ -35,17 +35,137 @@ import Testing
 
     @Test func hierarchyFieldsDecodeAndABadRollupDoesNotDropTheSession() throws {
         let row = try sessionRow("parent", extra: [
-            "asking_parent_session_id": "lead", "folded_under": "lead", "folded_as": "worker",
+            "asking_parent_session_id": "lead", "folded_under": "lead", "folded_under_machine_id": "box-a",
+            "parent_machine_id": "box-a", "a2a_task_id": "a2a-42", "subagent_origin": "a2a",
+            "folded_as": "worker",
             "started_at": "2026-11-01T00:00:00Z", "status": "interrupted",
             "children": ["total": 2, "needs_you": 1],
         ])
         #expect(row.askingParentSessionID == "lead")
-        #expect(row.foldedUnder == "lead" && row.foldedAs == "worker")
+        #expect(row.foldedUnder == "lead" && row.foldedUnderMachineID == "box-a")
+        #expect(row.parentMachineID == "box-a" && row.a2aTaskID == "a2a-42" && row.subagentOrigin == "a2a")
+        #expect(row.foldedAs == "worker")
         #expect(row.wasInterrupted)
         #expect(row.children?.total == 2 && row.children?.working == 0 && row.children?.needsYou == 1)
         #expect(row.startedAt != nil)
-        let odd = try sessionRow("odd", extra: ["children": "nope", "folded_under": ""])
-        #expect(odd.children == nil && odd.foldedUnder == nil)
+        let odd = try sessionRow("odd", extra: [
+            "children": "nope", "folded_under": "", "folded_under_machine_id": 7,
+            "parent_machine_id": "", "a2a_task_id": false, "subagent_origin": "",
+        ])
+        #expect(odd.children == nil && odd.foldedUnder == nil && odd.foldedUnderMachineID == nil)
+        #expect(odd.parentMachineID == nil && odd.a2aTaskID == nil && odd.subagentOrigin == nil)
+    }
+
+    @Test func crossMachineFoldAndOrphanSubagentFallbackFilter() throws {
+        let parent = try sessionRow("parent", machine: "box-a", state: "idle",
+                                    extra: ["children": ["total": 1, "needs_you": 1]])
+        let remoteChild = try childRow("remote-child", under: "parent", state: "needs_you", machine: "box-b",
+                                       extra: ["folded_under_machine_id": "box-a", "is_subagent": true,
+                                               "parent_machine_id": "box-a", "parent_session_id": "parent",
+                                               "subagent_origin": "a2a", "a2a_task_id": "task-1"])
+        let orphanSubagent = try sessionRow("orphan-sub", machine: "box-b", state: "working",
+                                            extra: ["is_subagent": true, "parent_session_id": "archived-parent"])
+        let remoteAsk = try JSON.decoder.decode(Interaction.self, from: JSONSerialization.data(withJSONObject: [
+            "id": "ix-remote", "machine_id": "box-b", "session_id": "remote-child",
+            "folded_under": "parent", "folded_under_machine_id": "box-a",
+            "kind": "question", "session_title": "remote-child",
+            "questions": [["question": "Approve cross-machine deploy?"]],
+        ]))
+
+        #expect(ChildSessions.parentKey(remoteChild) == parent.key)
+        #expect(remoteAsk.foldedUnderMachineID == "box-a")
+        #expect(remoteAsk.requestHomeMachineID == "box-a")
+        #expect(remoteAsk.requestHome == "parent")
+        #expect(remoteAsk.requestHomeKey == parent.key)
+
+        let asks = ChildSessions.asks([remoteAsk])
+        #expect(asks[parent.key] == "Approve cross-machine deploy?")
+
+        let folded = ChildSessions.fold([parent, remoteChild, orphanSubagent], asks: asks)
+        #expect(folded.map(\.sessionID) == ["parent"])
+        #expect(folded.first?.state == .needsYou)
+        #expect(folded.first?.attentionReason == "Approve cross-machine deploy?")
+
+        // Cross-machine child lookup returns remote folded children as well as archived-parent orphans.
+        let kids = ChildSessions.children(of: parent.key, in: [parent, remoteChild, orphanSubagent])
+        #expect(kids.map(\.key) == [remoteChild.key])
+        let archivedParent = SessionKey(group: "", machineID: "box-b", sessionID: "archived-parent")
+        let archivedKids = ChildSessions.children(of: archivedParent, in: [orphanSubagent])
+        #expect(archivedKids.map(\.key) == [orphanSubagent.key])
+
+        // Cross-machine interaction folds under parent in Needs You; orphan subagent interaction stays reachable.
+        let orphanAsk = try JSON.decoder.decode(Interaction.self, from: JSONSerialization.data(withJSONObject: [
+            "id": "ix-orphan", "machine_id": "box-b", "session_id": "orphan-sub",
+            "kind": "question", "session_title": "orphan-sub",
+            "questions": [["question": "Need confirmation"]],
+        ]))
+        let waiting = AgentsNeedsYou.waiting([parent, remoteChild, orphanSubagent])
+        #expect(waiting.map(\.key) == [parent.key])
+        let needsRows = AgentsNeedsYou.rows(cards: [remoteAsk, orphanAsk], waiting: waiting)
+        #expect(needsRows.map(\.key) == [parent.key, orphanSubagent.key])
+        #expect(needsRows.first?.cards.map(\.id) == ["ix-remote"])
+        #expect(needsRows.last?.cards.map(\.id) == ["ix-orphan"])
+    }
+
+    @Test func childRollupPrefersNeedsYouThenRunningThenQuiet() throws {
+        let needs = try sessionRow("p1", extra: ["running_subagents": 2, "children": ["total": 3, "working": 2, "needs_you": 1]])
+        #expect(needs.childRollup.kind == .needsYou(1))
+        #expect(needs.childRollup.subtitle != nil)
+
+        let running = try sessionRow("p2", extra: ["running_subagents": 2, "children": ["total": 2, "working": 2]])
+        #expect(running.childRollup.kind == .running(2))
+        #expect(running.childRollup.subtitle != nil)
+
+        let ended = try sessionRow("p3", extra: ["children": ["total": 4, "working": 0, "needs_you": 0]])
+        #expect(ended.childRollup.kind == .quiet)
+        #expect(ended.childRollup.isQuiet)
+        #expect(ended.childRollup.subtitle == nil)
+
+        // Side sessions are counted on their own Side Sessions chip and do not trigger subagent rollup.
+        let sidesOnly = try sessionRow("p4", extra: ["children": ["total": 1, "working": 1, "needs_you": 1, "sides": 1, "sides_working": 1, "sides_needs_you": 1]])
+        #expect(sidesOnly.childRollup.kind == .quiet)
+    }
+
+    @Test func crossMachineHierarchyWireParametersAndChildQueryFallback() async throws {
+        let window = SessionListQuery()
+        let modern = window.wireParameters(hierarchy: true, crossMachineHierarchy: true)
+        #expect(modern["roots"] == "1")
+        #expect(modern["cross_machine_hierarchy"] == "1")
+        let legacy = window.wireParameters(hierarchy: true, crossMachineHierarchy: false)
+        #expect(legacy["roots"] == "1")
+        #expect(legacy["cross_machine_hierarchy"] == nil)
+
+        let crossParent = SessionListQuery(parentMachineID: "box-a", parentSessionID: "parent")
+        let crossParams = crossParent.wireParameters(hierarchy: false, crossMachineHierarchy: true)
+        #expect(crossParams["parent_machine_id"] == "box-a")
+        #expect(crossParams["parent_session_id"] == "parent")
+        #expect(crossParams["machine_id"] == nil)
+        #expect(crossParams["roots"] == nil)
+
+        // Verify APIClient.childSessionPage sends parent_machine_id on modern hubs and falls back to machine_id on legacy hubs,
+        // while preserving multi-hub group stamping.
+        final class Capture: @unchecked Sendable {
+            var queries: [[String: String]] = []
+        }
+        let capture = Capture()
+        var client = APIClient(config: ServerConfig(url: URL(string: "http://127.0.0.1:18660")!, token: "t"), group: "hub-2")
+        client.sessionsHierarchy = true
+        client.sessionsCrossMachineHierarchy = true
+        client.transport = { req in
+            capture.queries.append(req.query)
+            return Data(#"{"sessions":[{"machine_id":"box-b","session_id":"c1","title":"Child","cwd":"/tmp","status":"idle","state":"working","folded_under":"parent","folded_under_machine_id":"box-a"}],"remove":[],"has_more":false,"revision":"r1","total":1}"#.utf8)
+        }
+        let pageModern = try await client.childSessionPage(machine: "box-a", parent: "parent", cursor: nil, since: nil)
+        #expect(capture.queries.last?["parent_machine_id"] == "box-a")
+        #expect(capture.queries.last?["parent_session_id"] == "parent")
+        #expect(capture.queries.last?["machine_id"] == nil)
+        #expect(pageModern.sessions.first?.group == "hub-2")
+
+        client.sessionsCrossMachineHierarchy = false
+        _ = try await client.childSessionPage(machine: "box-a", parent: "parent", cursor: nil, since: nil)
+        #expect(capture.queries.last?["machine_id"] == "box-a")
+        #expect(capture.queries.last?["parent_session_id"] == "parent")
+        #expect(capture.queries.last?["parent_machine_id"] == nil)
     }
 
     @Test func foldedStatePrefersNeedsYouThenWorkingUnlessTheReplyWaits() throws {

@@ -155,6 +155,11 @@ final class AppModel {
         for s in sampleSides where index[s.key] == nil { index[s.key] = s }
         #endif
         for s in indexedSides where index[s.key] == nil { index[s.key] = s }
+        // Folded & cross-machine child rows stay out of `allSessions` (never leaking into the Agents list), while
+        // joining `sessionIndex` so opening a subagent detail page or answering its card resolves its live metadata.
+        for rows in childIndex.heldNow.values {
+            for s in rows where index[s.key] == nil { index[s.key] = s }
+        }
         sessionIndex = index
         for (key, cell) in sideCells {
             let now = SideSessions(fold, parent: key)
@@ -1922,10 +1927,12 @@ final class AppModel {
     func interactions(for key: SessionKey) -> [Interaction] {
         pendingInteractions.filter { ix in
             if ix.sessionKey == key { return true }
-            // A folded child's card is shown on the parent, and only when that parent row is in hand. A row of a side
-            // session's chat (`folded_side`, #7944) is shown in that side's chat too.
-            guard ix.machineID == key.machineID, ix.group == key.group,
-                  ix.requestHome == key.sessionID || ix.foldedSide == key.sessionID else { return false }
+            // A folded child's card is shown on the parent (same-machine or cross-machine via `folded_under_machine_id`),
+            // and only when that parent row is in hand. A row of a side session's chat (`folded_side`, #7944) is shown
+            // in that side's chat too.
+            let matchesParent = ix.requestHomeKey == key
+            let matchesSide = ix.group == key.group && ix.machineID == key.machineID && ix.foldedSide == key.sessionID
+            guard matchesParent || matchesSide else { return false }
             return session(key) != nil
         }
     }
@@ -1957,11 +1964,33 @@ final class AppModel {
         if cell.rows != rows { cell.rows = rows }
     }
 
-    /// The child index read `parent`'s children: its child cards, and when the read holds side sessions the lists, which
-    /// fold them behind its Side Sessions chip (#7944).
+    /// The child index read `parent`'s children: its child cards, per-child metadata cells (for full subagent detail
+    /// without adding children to `allSessions`), and when the read holds side sessions the lists, which fold them
+    /// behind its Side Sessions chip (#7944).
     private func childRowsRead(_ parent: SessionKey) {
+        let rows = childIndex.knownNow(parent)
+        for child in rows {
+            if sessionIndex[child.key] == nil || (sessionIndex[child.key]?.rev ?? -1) <= (child.rev ?? -1) {
+                sessionIndex[child.key] = child
+            }
+            if let cell = sessionCells[child.key], !Session.sameForItsPage(cell.value, sessionIndex[child.key]) {
+                cell.value = sessionIndex[child.key]
+            }
+            if let cell = sessionLineCells[child.key], !Session.sameApartFromTicks(cell.value, sessionIndex[child.key]) {
+                cell.value = sessionIndex[child.key]
+            }
+        }
         refreshChildFold(parent)
-        if sideFoldGroups.contains(parent.group), childIndex.knownNow(parent).contains(where: SideFold.isSideRow) { sessionsChanged() }
+        if sideFoldGroups.contains(parent.group), rows.contains(where: SideFold.isSideRow) { sessionsChanged() }
+    }
+
+    /// Reads all folded / cross-machine / archived-parent children of `parent` for Session Overview.
+    func refreshOverviewChildren(_ parent: SessionKey) async {
+        guard features(parent.group).contains(ChildSessions.feature),
+              let api = api(parent.group),
+              socket(parent.group)?.state == .connected else { return }
+        await childIndex.refresh(parent: parent, api: api)
+        childRowsRead(parent)
     }
 
     private func refreshChildFolds() {

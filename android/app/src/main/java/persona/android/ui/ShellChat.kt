@@ -60,7 +60,7 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
     val routingState by routingConnection.state.collectAsStateWithLifecycle()
     val routingFeatures = routingConnection.lastHello?.features.orEmpty()
     val home = rememberChildSessionHome(SessionKey(route.machineId, route.sessionId), sessions, actions,
-        routingFeatures, routingState == ConnectionState.Online, side = route.side)
+        routingFeatures, routingState == ConnectionState.Online, side = route.side, directSubagent = route.subagentDetail)
     // A link to a side session (#7944: a notification, Needs you, a search hit) opens its parent, then the side over it,
     // once: Back from the side comes to the parent.
     val landedSide = remember(home, sessions, routingFeatures) { home.shownSide(sessions, routingFeatures) }
@@ -131,6 +131,8 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                     mainConversation = assistantSnapshot.mainSession?.sessionId,
                     leaderConversations = assistantSnapshot.leaders.toSet(),
                     onOpenSession = { navigator.navigate(ChatRoute(it.machineId, it.sessionId)) },
+                    onOpenSubagent = { navigator.navigate(ChatRoute(it.machineId, it.sessionId, ConversationKind.Agent, subagentDetail = true)) },
+                    openSubagents = route.openSubagents,
                     onOpenSide = { navigator.navigate(ChatRoute(it.machineId, it.sessionId, ConversationKind.Agent, side = true)) },
                     onFollowSession = { onGroupGone(route, route.copy(machineId = it.machineId, sessionId = it.sessionId)) },
                     waiting = waiting,

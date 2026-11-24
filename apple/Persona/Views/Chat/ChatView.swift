@@ -45,9 +45,11 @@ struct ChatView: View {
     @State private var file: FileRef?
     /// A knowledge note's block from Add as Context (#3721), opened from the bubble.
     @State private var openedKnowledge: KBEntry?
-    @State private var showActivity = false
-    /// "All subagents" opened, from the header's status line or ⋯ (`SubagentTreeSheet`).
-    @State private var showSubagents = false
+    /// Unified Session Overview sheet (iPhone) / inspector (iPad) and full Subagent Detail navigation (#27, #14322).
+    /// Held as one reference so `ChatView` stays small on the stack (`MainPagesStackTests`).
+    @State private var overviewUI = SessionOverviewUI()
+    /// Opens a folded child's full detail from an inline `ChildSessionCard` (P5, reference object).
+    @State private var childOpener = ChildSessionOpener()
     /// Its side sessions' sheet and the side shown over it (#7944, `SideSessionsPresentation`): one reference, so the
     /// page's value stays as small as it was (`MainPagesStackTests`).
     @State private var sideUI: SideSessionsUI
@@ -62,7 +64,6 @@ struct ChatView: View {
     /// A mode change on its way to the node: the header's mode draws a spinner in place of its symbol.
     @State private var modeChanging = false
     @State private var debugImages: [ImagePayload]?
-    @State private var showInfo = false
     @State private var showTodoDetail = false
     /// A task a hub link in this chat opened (`/todos?id=…`, #2696): its detail rises like a link.
     @State private var linkedTodo: TodoDetailRoute?
@@ -236,13 +237,14 @@ struct ChatView: View {
     /// Offered once this chat's pending card was answered and another conversation needs you (#4348); nil until then.
     @State private var offeredNext: SessionKey?
 
-    /// `sidePage`: the page is a side session's own (`SideSessionPage`), which shows that side; any other Agents page given
-    /// a folded side (a Needs You card, a link, a restored chat) opens its parent with the side shown over it (#7944).
+    /// `sidePage`: the page is a side session's or subagent's own (`SideSessionPage`, `SubagentDetailPage`), which shows
+    /// that session directly without redirecting to its parent. `initialSubagent`: an embedded `parent@agent` subagent to
+    /// show immediately when hosted by `SubagentDetailPage`.
     init(key: SessionKey, style: ChatStyle = .dev, itemManager: String? = nil, sidePage: Bool = false,
-         backgroundActivity: Bool = false) {
+         backgroundActivity: Bool = false, initialSubagent: Subagent? = nil) {
         // Built again for the same path (a tree swap): the agent its header switched to, not the one it opened with.
         #if os(iOS)
-        var start = style == .dev ? AppModel.shared.chatSwitched[key] ?? key : key
+        var start = style == .dev && !sidePage ? AppModel.shared.chatSwitched[key] ?? key : key
         #else
         var start = key
         #endif
@@ -253,6 +255,7 @@ struct ChatView: View {
         }
         _sideUI = State(initialValue: SideSessionsUI(shown: landing))
         _key = State(initialValue: start)
+        _viewing = State(initialValue: initialSubagent)
         opened = key
         self.style = style
         self.itemManager = itemManager
@@ -494,13 +497,21 @@ struct ChatView: View {
 
     private var chatPresentation: some View {
         AnyView(chatSurface) // see chatActivity
-        // The session's details come up from the bottom (2026-10-31: the card that dropped from the title covered the
-        // chat and needed a second tap on the title; a sheet closes with a swipe or a tap above it).
-        .sheet(isPresented: $showInfo) {
-            SessionInfoSheet(key: key, session: session)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-        }
+        // Unified Session Overview sheet (iPhone .medium/.large) / inspector (iPad) + full Subagent Detail navigation (#27, #14322).
+        .modifier(SessionOverviewPresentation(
+            parent: key,
+            session: session,
+            assistant: style == .assistant,
+            on: !backgroundActivity,
+            ui: overviewUI,
+            onOpenOutput: { t in
+                if let out = t.outputFile { file = FileRef(group: key.group, machineID: key.machineID, path: out, cwd: session?.cwd) }
+            },
+            onShowInChat: { target in
+                showSubagentInChat(target)
+            }
+        ))
+        .stackSegment()
         .sheet(isPresented: Binding(get: { style == .assistant && TasksStore.shared.showBoard },
                                     set: { TasksStore.shared.showBoard = $0 }),
                onDismiss: {
@@ -554,7 +565,7 @@ struct ChatView: View {
             scratch.lastActivity = .now
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(500))
-                if chrome.collapse == 0, !showInfo, !scratch.userDragging, !Self.somethingPresented,
+                if chrome.collapse == 0, !overviewUI.showOverview, !scratch.userDragging, !Self.somethingPresented,
                    Date.now.timeIntervalSince(scratch.lastActivity) >= Self.chromeIdleSeconds {
                     hideChrome()
                 }
@@ -1155,7 +1166,13 @@ struct ChatView: View {
                 return try await api.fullItem(shownKey, id: id).text ?? ""
             },
             openSubagent: { toolUseID in
-                if let a = session?.subagents?.first(where: { $0.toolUseID == toolUseID }) { view(a) }
+                if let a = session?.subagents?.first(where: { $0.toolUseID == toolUseID }) {
+                    if host == nil {
+                        overviewUI.openDetail(.embedded(parent: key, agent: a), fromOverview: false)
+                    } else {
+                        view(a)
+                    }
+                }
             },
             openWorkflowAgent: { openWorkflowAgent($0) },
             openPlan: { planOpen = true },
@@ -2212,6 +2229,9 @@ struct ChatView: View {
             }))
         .stackSegment()
         .environment(\.openSubagent, actions.openSubagent)
+        .environment(\.openChildSession, childOpener.set { childKey in
+            overviewUI.openDetail(.session(childKey), fromOverview: false)
+        })
         .environment(\.openPlan, actions.openPlan)
         .environment(\.subagentsByCall, subagentsByCall)
         .environment(\.childSessionRows, Dictionary(uniqueKeysWithValues: scratch.childRows.map { ($0.sessionID, $0) }))
@@ -2515,7 +2535,9 @@ struct ChatView: View {
         if backgroundActivity {
             EmptyView()
         } else if let a = viewedAgent {
-            SubagentFooter(agent: a) { view(nil) }
+            SubagentFooter(agent: a) {
+                if let host { host.leave() } else { view(nil) }
+            }
                 .padding(.horizontal, Theme.Space.m)
                 .padding(.vertical, Theme.Space.s)
         } else {
@@ -3387,7 +3409,7 @@ struct ChatView: View {
         let folded = min(max(chrome.collapse - delta, 0), chrome.maxCollapse)
         guard folded != chrome.collapse else { return }
         chrome.collapse = folded
-        if folded > 0, showInfo { showInfo = false } // the sheet goes with the chrome
+        if folded > 0, overviewUI.showOverview { overviewUI.showOverview = false } // the sheet goes with the chrome
     }
 
     /// The finger lifted: never stay half folded. At the newest the chrome folds (the page is all chat); elsewhere
@@ -3405,7 +3427,7 @@ struct ChatView: View {
     private func hideChrome() {
         guard style == .dev, pane == .chat, chrome.collapse < chrome.maxCollapse else { return }
         withAnimation(.smooth(duration: 0.35)) { chrome.collapse = chrome.maxCollapse }
-        showInfo = false
+        overviewUI.showOverview = false
     }
 
     private func showChrome() {
@@ -3485,7 +3507,7 @@ struct ChatView: View {
                     .sheet(isPresented: $showGoal) { GoalSheet(goal: goal) }
                 }
                 if session?.loop != nil || !(session?.background ?? []).isEmpty {
-                    Button { Haptics.tap(); showActivity = true } label: { activityMark }
+                    Button { Haptics.tap(); overviewUI.openOverview(focus: .background) } label: { activityMark }
                         .buttonStyle(.plain)
                         .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.wellM)
                         .accessibilityLabel("Loop and background tasks, tap to view")
@@ -3609,11 +3631,13 @@ struct ChatView: View {
                     Button { previewing = true } label: { Label("Preview", systemImage: Theme.Icon.servedPage).lineLimit(1) }
                         .accessibilityIdentifier("chat-preview")
                 }
-                // The header's status line shows only running subagents: finished and nested ones are here (a hosted
-                // one still has its own "All subagents").
-                if host == nil, let n = session?.subagents?.count, n > 0 {
-                    Button { showSubagents = true } label: {
-                        Label(String(localized: "All Subagents (\(n))"), systemImage: Theme.Icon.list).lineLimit(1)
+                // The header's status line shows only running subagents: finished, folded and cross-machine ones live in
+                // Session Overview's Subagents section (a hosted sheet still keeps its own strip).
+                let nonSideChildren = max(0, (session?.children?.total ?? 0) - (session?.children?.sides ?? 0))
+                let subagentTotal = max(session?.subagents?.count ?? 0, nonSideChildren)
+                if host == nil, subagentTotal > 0 {
+                    Button { overviewUI.openOverview(focus: .subagents) } label: {
+                        Label(String(localized: "Subagents (\(subagentTotal)) [Session Overview]"), systemImage: Theme.Icon.subagent).lineLimit(1)
                     }
                 }
                 // Its side sessions (#7944), as the header's chip opens them.
@@ -3682,7 +3706,7 @@ struct ChatView: View {
             case .preview:
                 previewing = true
             case .subagents:
-                showSubagents = true
+                overviewUI.openOverview(focus: .subagents)
             case .sideSessions:
                 sideUI.showList = true
             case .space:
@@ -3741,7 +3765,7 @@ struct ChatView: View {
                 if model.connection.shown != .online {
                     Button { showLink = true } label: { Label("Connection Details", systemImage: Theme.Icon.info) }
                 } else {
-                    Button { showInfo = true } label: { Label("Session Info", systemImage: Theme.Icon.info) }
+                    Button { overviewUI.openOverview() } label: { Label("Session overview [Session Overview]", systemImage: Theme.Icon.info) }
                 }
             } label: {
                 titleLabel(chevron: true)
@@ -3793,7 +3817,7 @@ struct ChatView: View {
         let link = model.connection.shown
         return Button {
             Haptics.tap()
-            if link != .online { showLink = true } else { showInfo = true }
+            if link != .online { showLink = true } else { overviewUI.openOverview() }
         } label: {
             titleLabel(chevron: false)
         }
@@ -3964,16 +3988,9 @@ struct ChatView: View {
         } compact: {
             compactChrome
         }
-        .sheet(isPresented: $showSubagents) { subagentTree }
         #if os(iOS)
         .sheet(item: $reviewRequest) { r in reviewPage(r) }
         #endif
-        .sheet(isPresented: $showActivity) {
-            ActivitySheet(loop: session?.loop, background: session?.background ?? [], stopLoop: { model.stopLoop(key) }) { t in
-                showActivity = false
-                if let out = t.outputFile { file = FileRef(group: key.group, machineID: key.machineID, path: out, cwd: session?.cwd) }
-            }
-        }
         // Its side sessions' sheet, a side's page over it, and a landing that names a side (#7944). On the chain behind
         // AnyView: one more modifier on it would hold a second copy of the whole header on the page's stack, which an
         // unoptimized build lays out by value (`MainPagesStackTests`).
@@ -4107,16 +4124,9 @@ struct ChatView: View {
         }
         .animation(Theme.Motion.layout, value: composerTyping)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { sideHeaderHeight = $0 }
-        .sheet(isPresented: $showSubagents) { subagentTree }
         #if os(iOS)
         .sheet(item: $reviewRequest) { r in reviewPage(r) }
         #endif
-        .sheet(isPresented: $showActivity) {
-            ActivitySheet(loop: session?.loop, background: session?.background ?? [], stopLoop: { model.stopLoop(key) }) { t in
-                showActivity = false
-                if let out = t.outputFile { file = FileRef(group: key.group, machineID: key.machineID, path: out, cwd: session?.cwd) }
-            }
-        }
         // Its side sessions' sheet, a side's page over it, and a landing that names a side (#7944). On the chain behind
         // AnyView: one more modifier on it would hold a second copy of the whole header on the page's stack, which an
         // unoptimized build lays out by value (`MainPagesStackTests`).
@@ -4159,7 +4169,7 @@ struct ChatView: View {
                 HStack(spacing: Theme.Space.s) {
                     if !sides.isEmpty { SideSessionsChip(sides: sides) { sideUI.showList = true } }
                     if activity {
-                        ActivityChips(loop: session?.loop, background: session?.background ?? []) { showActivity = true }
+                        ActivityChips(loop: session?.loop, background: session?.background ?? []) { overviewUI.openOverview(focus: .background) }
                     }
                     if let mode { HeaderModeButton(session: mode, changing: modeChanging, pick: requestMode).equatable() }
                 }
@@ -4226,7 +4236,12 @@ struct ChatView: View {
     /// The header's third row (`HeaderStatusLine`): what its subagents are doing, when that is worth a line.
     @ViewBuilder private var statusLine: some View {
         if let status = HeaderStatus.pick(subagents, viewing: viewing) {
-            HeaderStatusLine(status: status, open: { a in view(a) }, openAll: { Haptics.tap(); showSubagents = true })
+            HeaderStatusLine(status: status, open: { a in
+                overviewUI.openDetail(.embedded(parent: key, agent: a), fromOverview: false)
+            }, openAll: {
+                Haptics.tap()
+                overviewUI.openOverview(focus: .subagents)
+            })
         }
     }
 
@@ -4239,11 +4254,18 @@ struct ChatView: View {
         }
     }
 
-    /// "All subagents": every subagent by who launched whom; a tap reads it.
-    private var subagentTree: some View {
-        SubagentTreeSheet(rows: Subagent.tree(subagents), viewing: viewing?.id) { a in
-            showSubagents = false
-            view(a)
+    /// Scrolls the parent chat to the launch call or folded child card for `target` ("Show in chat").
+    private func showSubagentInChat(_ target: SubagentOverview.Target) {
+        switch target {
+        case .embedded(_, let agent):
+            if let callID = agent.toolUseID {
+                jumpToCall(callID)
+            }
+        case .session(let childKey):
+            if let group = ChildSessionLines.group(of: childKey.sessionID, in: currentLines()) {
+                openWork.insert(group)
+            }
+            model.open(key, reveal: childKey.sessionID)
         }
     }
 
@@ -4623,9 +4645,9 @@ struct ChatView: View {
                     }
                 }
             }
-            if UserDefaults.standard.bool(forKey: "showInfo") { showInfo = true }
-            // `-showAgentInfo YES`: an Agent chat's own info sheet (`-showInfo` also opens the assistant's, which is mounted too).
-            if UserDefaults.standard.bool(forKey: "showAgentInfo"), session?.assistant != true { showInfo = true }
+            if UserDefaults.standard.bool(forKey: "showInfo") { overviewUI.openOverview() }
+            // `-showAgentInfo YES`: an Agent chat's own overview sheet (`-showInfo` also opens the assistant's, which is mounted too).
+            if UserDefaults.standard.bool(forKey: "showAgentInfo"), session?.assistant != true { overviewUI.openOverview() }
             if UserDefaults.standard.bool(forKey: "openTodoDetail") { showTodoDetail = true }
             // `-openSendMessage <text>`: refusals (SendSafety). Once per launch: the chat appears, goes and appears again
             // while the app starts (three times in 0.2 s), and each one wrote the message anew, with its own id
@@ -7216,198 +7238,25 @@ struct CameraPicker: UIViewControllerRepresentable {
     }
 }
 
-/// Developer facts about a session, shown under the title: model, context in use, git branch, Claude Code version…
-/// Session Info, from the bottom: who and where at the top, then what it runs, how far it has got, its settings and where
-/// its files are; copying the id or the resume command last. Settings-app grouping, values on the right.
+/// Unified Session Overview wrapper retaining the `SessionInfoSheet` type name for existing call sites (e.g.
+/// `AssistantTopBar`), ordered **Environment → Context → Subagents → Background tasks** (#27, #14322).
 struct SessionInfoSheet: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
     let key: SessionKey
     var session: Session?
     /// Opened from the Persona tab, where the conversation may not be in the fleet's list yet (`session` is nil then).
     var assistant = false
-    @State private var info: APIClient.SessionInfo?
-    @State private var error: String?
-    @State private var showTodo = false
-    @State private var grants = AlwaysGrantsModel()
-    @State private var delegatedHistory = DelegatedHistoryModel()
-
-    /// Only assistant conversations remember "always allow" (docs/assistant/assistant.md); Agents sessions keep theirs in Claude.
-    private var isAssistant: Bool { assistant || (model.session(key) ?? session)?.assistant == true }
+    @State private var endedExpanded = false
 
     var body: some View {
-        InfoContainer {
-            List {
-                Section { header }
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 4, trailing: 4))
-                if let link = session?.externalLink { Section { FeishuLink(url: link) } }
-                if isAssistant {
-                    AlwaysGrantsSection(page: grants, conversation: key.sessionID, api: model.api(key.group))
-                } else {
-                    DelegatedHistorySection(page: delegatedHistory, key: key, manager: session?.manager, api: model.api(key.group))
-                }
-                if let info {
-                    Section("Runtime") {
-                        row(Theme.Icon.model, String(localized: "Model [Assistant View c98e11]"), Fmt.model(info.model) ?? info.model)
-                        if let l = info.launcher ?? session?.launcher, !l.isEmpty { row("bolt", String(localized: "Launcher"), l) }
-                        if let r = AssistantRuntime.status(runtime: session?.runtime, fallback: session?.runtimeFallback) {
-                            row(Theme.Icon.terminal, String(localized: "How It Runs"), r)
-                        }
-                        row("shippingbox", agent, info.version)
-                        if let route = session?.codexRoute { routeRow(route, note: session?.codexRouteNote) }
-                        // A session that lists its own modes (#8261) in its own words: no mode is its own approval.
-                        row("lock.open", String(localized: "Permissions"), SessionModes.infoLabel(info.permissionMode, session: model.session(key) ?? session))
-                        row(Theme.Icon.effort, String(localized: "Thinking Effort"), SessionModes.effortLabel(info.effort))
-                        // Claude Code's ultracode (#1307): on, off, or unknown (no evidence yet, an older node).
-                        if let s = model.session(key) ?? session, Ultracode.infoShown(s, features: model.features(key.group)) {
-                            row(Theme.Icon.workflow, Ultracode.name, Ultracode.stateWord(s.ultracode))
-                                .accessibilityIdentifier("session-ultracode")
-                        }
-                    }
-                    // Counts nobody gives (#8261, `usage_unknown`: Paseo's agents that are not Claude Code's) are left out,
-                    // not shown as zeros; the section goes when nothing is left in it.
-                    let counted = info.usageUnknown != true
-                    // The share of the window, live from the session list (#3289); nil while the window is unknown.
-                    let usage = ContextUsage(model.session(key) ?? session)
-                    let started = info.startedAt.flatMap { $0.isMeaningful ? $0 : nil }
-                    if counted || usage != nil || started != nil {
-                        Section("Usage") {
-                            // The context is left out while unknown: 0 before the first reply and right after a compaction (#9207).
-                            if counted, info.contextTokens > 0 { row(Theme.Icon.context, String(localized: "Context"), Self.tokens(info.contextTokens)) }
-                            if let usage { ContextUsageRow(usage: usage) }
-                            if counted, info.compactions > 0 { row(Theme.Icon.collapseAll, String(localized: "Compactions"), String(localized: "\(info.compactions) times")) }
-                            if counted {
-                                row(Theme.Icon.conversation, String(localized: "Chat"), String(localized: "\(info.turns) turns"))
-                                row("text.word.spacing", String(localized: "Output"), Self.tokens(info.outputTokens))
-                            }
-                            if let started {
-                                row(Theme.Icon.time, String(localized: "Started"), started.formatted(date: .abbreviated, time: .shortened))
-                            }
-                        }
-                    }
-                    Section("Location") {
-                        if let s = session, let todo = s.todo,
-                            TodosLogic.isOnTodosHub(sessionGroup: s.key.group, hubGroup: model.hub?.group) {
-                            Button { showTodo = true } label: {
-                                row(Theme.Icon.todo, String(localized: "To-dos"), todo.title)
-                            }
-                            .sheet(isPresented: $showTodo) {
-                                NavigationStack { TodoDetailView(todoID: todo.id).sheetDone { showTodo = false } }
-                                    #if os(iOS)
-                                    // Over the info sheet there is no stack to push onto: on an iPad at least a
-                                    // page's size, not the small form (#2816). A phone's sheet is the same either way.
-                                    .presentationSizing(.page)
-                                    #endif
-                            }
-                        }
-                        row(Theme.Icon.folder, String(localized: "Folder [Task Views 52daa7]"), Fmt.path(info.cwd ?? session?.cwd ?? "", home: model.namedMachine(key.machineRef)?.home), mono: true)
-                        if let b = info.gitBranch, !b.isEmpty { row(Theme.Icon.gitBranch, String(localized: "Branch"), b, mono: true) }
-                    }
-                    Section {
-                        copyButton(String(localized: "Copy Session ID [Chat View e63671]"), symbol: Theme.Icon.id, text: info.sessionID, toast: String(localized: "Session ID copied"))
-                        if session?.canTerminal == true {
-                            copyButton(String(localized: "Copy Resume Command"), symbol: Theme.Icon.terminal, text: Session.resumeLine(cwd: info.cwd ?? session?.cwd, command: session?.resumeCommand ?? "claude --resume", id: session?.sourceThreadID ?? info.sessionID), toast: String(localized: "Resume command copied"))
-                        }
-                    } footer: {
-                        Text(info.sessionID).font(Theme.Font.label.monospaced()).textSelection(.enabled)
-                    }
-                } else if let error {
-                    Section { Label(error, systemImage: Theme.Icon.error).font(Theme.Font.caption).foregroundStyle(Theme.danger) }
-                } else {
-                    Section { ProgressView().frame(maxWidth: .infinity).padding(.vertical, Theme.Space.xl) }.listRowBackground(Color.clear)
-                }
-            }
-            .listStyle(.insetGrouped)
-            .listSectionSpacing(.compact)
-            .navigationTitle("Session Info")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                SheetClose { dismiss() }
-            }
-        }
-        .task(id: key) {
-            do { info = try await model.api(key.group)?.sessionInfo(key) } catch { self.error = error.shown }
-        }
-        // Keyed on `isAssistant` too: on a cold open the session arrives after this sheet does.
-        .task(id: isAssistant ? key : nil) {
-            if isAssistant { await grants.load(conversation: key.sessionID, api: model.api(key.group)) }
-        }
-        // The questions the assistant answered for an agent (#544); its own conversations have none.
-        .task(id: isAssistant ? nil : key) {
-            if !isAssistant { await delegatedHistory.load(key, manager: session?.manager, api: model.api(key.group)) }
+        NavigationStack {
+            SessionOverviewSheet(
+                key: key,
+                session: session,
+                assistant: assistant,
+                endedExpanded: $endedExpanded
+            )
         }
     }
-
-    /// A sheet of its own on iOS; on the Mac an inspector column inside the chat page, where a second
-    /// NavigationStack would take over the page's (the chat is a pushed page of the Agents split view) and the title
-    /// would replace the window's.
-    private struct InfoContainer<Content: View>: View {
-        @ViewBuilder var content: Content
-        var body: some View {
-            NavigationStack { content }
-        }
-    }
-
-    /// The title, its state in words (the one place they still show) and where it runs.
-    private var header: some View {
-        let s = session
-        let place = [model.namedMachine(key.machineRef)?.title ?? key.machineID, s?.spaceName, s?.slotLabel]
-            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " › ")
-        return VStack(alignment: .leading, spacing: Theme.Space.sm) {
-            Text(s?.displayTitle ?? String(localized: "Session")).font(Theme.Font.title).lineLimit(2)
-            HStack(spacing: Theme.Space.sm) {
-                if let st = s?.state {
-                    HStack(spacing: Theme.Space.xs) {
-                        StatusDot(state: st, size: 7)
-                        Text(st.label).font(Theme.Font.labelStrong)
-                            .foregroundStyle(ChatView.quiet(st) ? Color.secondary : st.tone.text)
-                    }
-                    .padding(.horizontal, Theme.Space.s).padding(.vertical, Theme.Space.xs)
-                    .background(Color.primary.opacity(0.06), in: .capsule)
-                }
-                Text(place).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func row(_ symbol: String, _ label: String, _ value: String?, mono: Bool = false) -> some View {
-        LabeledContent {
-            Text(value.flatMap { $0.isEmpty ? nil : $0 } ?? "—")
-                .font(mono ? .subheadline.monospaced() : .subheadline)
-                .lineLimit(2)
-                .truncationMode(.middle)
-                .multilineTextAlignment(.trailing)
-                .textSelection(.enabled)
-        } label: {
-            Label(label, systemImage: symbol).lineLimit(1)
-        }
-    }
-
-    /// How Persona reaches this Codex (docs/integrations/codex.md「守护进程上的会话」): its shared app-server, or the terminal and why.
-    private func routeRow(_ route: String, note: String?) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            row(Theme.Icon.link, String(localized: "Connect [V N C Page a55741]"), route == "app_server" ? String(localized: "app-server (structured)") : String(localized: "Terminal (screen reading)"))
-            if route != "app_server", let note, !note.isEmpty {
-                Text(note).font(Theme.Font.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .accessibilityIdentifier("session-codex-route")
-    }
-
-    private func copyButton(_ title: String, symbol: String, text: String, toast: String) -> some View {
-        Button {
-            UIPasteboard.general.string = text
-            Haptics.success()
-            model.toast = Toast(toast, style: .success)
-        } label: {
-            Label(title, systemImage: symbol).lineLimit(1)
-        }
-    }
-
-    /// The coding agent in the pane: Claude Code unless the session names another agent.
-    private var agent: String { session.map { $0.isClaude ? "Claude Code" : $0.agentLabel } ?? "Claude Code" }
 
     /// "1.25K tokens": the count as the Machines page and the web write it (TokenFormat), with a localized unit (#9205).
     static func tokens(_ n: Int) -> String { String(localized: "\(TokenFormat.count(n)) tokens") }

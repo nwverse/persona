@@ -38,8 +38,8 @@ class ChildSessionsTest {
         val orphan = Session("m", "orphan", agent = "codex", sourceKind = "codex_app_server", isSubagent = true,
             parentSessionId = "gone", state = "working")
         val listed = buildAgentList(listOf(AgentSession(orphan)), settings = AgentListSettings(hierarchy = true))
-        assertEquals(1, listed.counts[AgentQuickFilter.Working])
-        assertEquals("orphan", listed.groups.flatMap { it.rows }.single().session.sessionId)
+        assertEquals(0, listed.counts[AgentQuickFilter.Working])
+        assertTrue(listed.groups.flatMap { it.rows }.isEmpty())
     }
 
     @Test fun listsDockCountsProjectsAndRequestsHaveOneParentHome() {
@@ -86,6 +86,71 @@ class ChildSessionsTest {
         assertEquals(setOf(modern.key, legacyParent.key), list.groups.flatMap { it.rows }.map { it.session.key }.toSet())
         assertEquals(listOf(legacyChild.key), list.children[legacyParent.key.path].orEmpty().map { it.session.key })
         val cycle = listOf(legacyParent.copy(parentSessionId = "child", sourceKind = "runtime", agent = "claude", isSubagent = true), legacyChild)
-        assertEquals(2, dockAgents("main", "main", cycle, emptyList(), hierarchy = true).size)
+        assertEquals(0, dockAgents("main", "main", cycle, emptyList(), hierarchy = true).size)
+        assertEquals(1, dockAgents("main", "main", cycle, emptyList(), hierarchy = false).size)
+    }
+
+    @Test fun crossMachineFoldingHidesRemoteChildrenAndClientFallbackBlocksSubagentLeaks() {
+        val parentA = Session("box-a", "p", title = "Lead", state = "idle", children = SessionChildren(2, working = 1, needsYou = 1))
+        val remoteWorking = Session(
+            "box-b", "sub-work", title = "Remote Codex", state = "working", agent = "codex",
+            isSubagent = true, parentMachineId = "box-a", parentSessionId = "p",
+            foldedUnder = "p", foldedUnderMachineId = "box-a", a2aTaskId = "a2a-1", subagentOrigin = "a2a",
+        )
+        val remoteAsking = Session(
+            "box-c", "sub-ask", title = "Remote Review", state = "needs_you",
+            isSubagent = true, parentMachineId = "box-a", parentSessionId = "p",
+            foldedUnder = "p", foldedUnderMachineId = "box-a", subagentOrigin = "a2a",
+        )
+        val orphanA2a = Session(
+            "box-d", "orphan-a2a", title = "Orphan A2A", state = "working",
+            isSubagent = true, parentMachineId = "box-a", parentSessionId = "archived-parent", subagentOrigin = "a2a",
+        )
+        val unrelatedSameId = Session("box-b", "other-child", state = "working", foldedUnder = "p")
+        val all = listOf(parentA, remoteWorking, remoteAsking, orphanA2a, unrelatedSameId)
+
+        val folded = foldedSessions(all, hierarchy = true)
+        assertEquals(setOf(parentA.key, unrelatedSameId.key), folded.map { it.key }.toSet())
+
+        val kids = childSessions(all, parentA.key)
+        assertEquals(setOf(remoteWorking.key, remoteAsking.key), kids.map { it.key }.toSet())
+        assertTrue(childSessions(listOf(orphanA2a), SessionKey("box-a", "archived-parent")).single().key == orphanA2a.key)
+
+        // Cross-machine NeedsYou interaction resolves to parent on box-a.
+        val remoteCard = Interaction(
+            "q-remote", machineId = "box-c", sessionId = "sub-ask", kind = "permission",
+            foldedUnder = "p", foldedUnderMachineId = "box-a",
+        )
+        assertEquals(listOf(parentA.key), needsYouRows(listOf(remoteCard), needsYouWaiting(listOf(remoteAsking))).map { it.key })
+    }
+
+    @Test fun childRollupPrioritizesNeedsYouOverRunningAndStaysQuietWhenAllEnded() {
+        val base = Session("box-a", "p", state = "idle")
+        // All ended -> quiet (null)
+        assertNull(childRollup(base.copy(subagents = listOf(Subagent("s1", running = false)), children = SessionChildren(total = 2))))
+
+        // NeedsYou wins over Running (embedded + folded)
+        val needs = base.copy(
+            runningSubagents = 3,
+            children = SessionChildren(total = 4, working = 2, needsYou = 1),
+        )
+        assertEquals(ChildRollup(ChildRollupKind.NeedsYou, 1), childRollup(needs))
+
+        // Running combines embedded + folded non-side working without counting side sessions
+        val runningOnly = base.copy(
+            runningSubagents = 2,
+            children = SessionChildren(total = 4, working = 3, sides = 1, sidesWorking = 1),
+        )
+        assertEquals(ChildRollup(ChildRollupKind.Running, 4), childRollup(runningOnly))
+
+        // Sides needing you do not trigger subagent rollup
+        val sideNeeds = base.copy(
+            children = SessionChildren(total = 1, needsYou = 1, sides = 1, sidesNeedsYou = 1),
+        )
+        assertNull(childRollup(sideNeeds))
+
+        // Held cross-machine children also drive NeedsYou rollup
+        val remoteAsk = Session("box-b", "sub-1", state = "needs_you", isSubagent = true, foldedUnder = "p", foldedUnderMachineId = "box-a")
+        assertEquals(ChildRollup(ChildRollupKind.NeedsYou, 1), childRollup(base, listOf(remoteAsk)))
     }
 }
