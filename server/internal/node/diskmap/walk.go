@@ -221,6 +221,10 @@ func (j *job) walk(ctx context.Context) {
 		more := j.list(ctx, w)
 
 		j.qmu.Lock()
+		w.at.open(-1)
+		if w.own {
+			w.at.listed.Store(true)
+		}
 		j.active--
 		for _, m := range more {
 			if m.own && m.at.track {
@@ -231,10 +235,6 @@ func (j *job) walk(ctx context.Context) {
 		}
 		j.qcond.Broadcast()
 		j.qmu.Unlock()
-		w.at.open(-1)
-		if w.own {
-			w.at.listed.Store(true)
-		}
 	}
 }
 

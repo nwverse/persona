@@ -1386,6 +1386,40 @@ An extension's sidebar entries and its full page are drawn from what this browse
 
 To see it in a browser: `web/e2e/extension-first-paint.mjs` (`web/e2e/README.md`) against the mock hub with `MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1`, the relayed requests delayed.
 
+### Dashboards (#15017)
+
+Pages the assistant keeps up to date are drawn as the default manager's extension pages under the reserved id `-pages`
+(the index `index`, each page `pg_` and 16 hex), at the extensions' own path (`POST /api/v1/extensions/-pages/-/ui/<id>`),
+so the sidebar entry, the full page (`/extension/-pages/<id>`), the deep link, the sidebar ordering key
+(`p:-pages/<id>`) and the first-paint caches above work as for any extension page. What is particular to them:
+
+- **HTTP only**: an id that starts with `-` is a manager's own and never opens the native UI stream, nor waits for the
+  hello to decide (`lib/extension-ui.ts` `httpOnlyUI`, `views/settings/ExtensionView.tsx`); the subscription and health
+  pages were already drawn that way through `RESERVED_UI_PATHS`, which `-pages` is not in.
+- **Places**: the hub lists the index while a page is kept or one waits in Recently removed, then each pinned page (at most
+  three), after the extensions' places; `assistant_pages` (a page kept, pinned, unpinned, renamed, removed or restored, or
+  the switch turned) asks for the list again (`lib/extension-slots.ts`). A page's content change is the ordinary
+  `extension_ui {extension: "-pages", id, invalidate: true}`.
+- **Sidebar**: the index and pinned pages are extension pages in `useNavPages`. The hub puts their keys in the navigation
+  record's `shown` on the first Keep and on a pin, so `EXTENSION_CAP` never sends them under More: they count toward the
+  cap first, and with three extension nav pages installed the extensions' pages past it wait there instead (two of the
+  three beside the index and one pinned page).
+- **Top bar** (`views/extensions/ExtensionSlots.tsx`): titled by the drawn View's `title` (the page's title, written by the
+  hub), then the place's, then **Dashboards**, never the `pg_…` id, so an unpinned page opened by a deep link reads right.
+  Every page but the index has the ownership line under its title at every width (`docs/design/DESIGN_SYSTEM.md`
+  "Ownership line (#15017)"); the extension's name is not written beside it. A row of the index that pushes a page opens it
+  as a page of its own (its address, title and line), not on the index's stack; a push within a page (Rename) stays on its stack.
+- **Settings › Assistant**: **Let Persona make dashboards**, off by default, shown only when the hello lists
+  `assistant_pages` and only for the default manager; it reads and writes `dashboards` of `/api/v1/assistant` and shows
+  the value the hub confirmed.
+- With the switch off, or on with nothing kept, nothing on the sidebar, the phone's page grid or Overview changes.
+
+To see it: the mock hub with `MOCK_DASHBOARDS=1` (`scripts/mock/dashboards_mock.py`; `off`, `empty`, `removed` and `pinned`
+for the other states) and `npx vite`. `node web/e2e/dashboards.mjs` (its header says how to start both) checks all of the
+above in light and dark at 1280 and 390 wide in each language, compares the sidebar with the switch off and on with
+nothing kept against a build of `origin/main` pixel by pixel (`--before`), and, with `--extensions`, that Dashboards stays
+in the list beside three extension nav pages.
+
 ### Message sources (#2125)
 
 Relayed conversations, scheduled patrols, follow-ups and supervision use the optional `Item.source` contract in
