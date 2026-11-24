@@ -385,9 +385,9 @@ func (s *Service) allOwnSettings() []ownSetting {
 			},
 			set: s.setBackgroundSupervisorKeepsContext},
 		{Setting: Setting{Key: "assistant.chat_reply_relay", Title: "Tell chats where it wrote as me about new replies", Actions: getSet,
-			About: "on (the default): after a conversation wrote into a Lark chat as the user, other people's new messages in that chat " +
-				"are told to that conversation (once, at most every 10 minutes per chat). off: none are told, and those still waiting " +
-				"in a conversation's queue are dropped",
+			About: "off (the default): nothing is passed on. on: after a conversation wrote into a Lark chat as the user, other " +
+				"people's new messages in that chat are told to that conversation (once, at most every 10 minutes per chat), for all " +
+				"chats, not one by one. Turning it off drops those still waiting in a conversation's queue",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) {
 				return fmt.Sprint(chatReplyRelayOn(s.settings(ctx))), nil
