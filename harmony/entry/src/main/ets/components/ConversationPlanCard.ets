@@ -87,6 +87,8 @@ export struct ConversationPlanCard {
   @Require @Param scope: string;
   @Param active: boolean = true;
   @Param running: boolean = false;
+  /** Shown above the plan, as the desktop app says a plan is from before the last message of the owner. */
+  @Param note: string = '';
   @Event onExpansion: (open: boolean) => void = (_open: boolean): void => {};
   @Event hold: (change: () => void) => void = (change: () => void): void => change();
   @Event read: (plan: ConversationPlan, valid: () => boolean) => Promise<ConversationPlan | undefined> =
@@ -171,18 +173,22 @@ export struct ConversationPlanCard {
       }.width('100%')
     }.width('100%').constraintSize({ minHeight: Tokens.touch }).padding({ left: 13, right: 13, top: 8, bottom: 8 })
       .backgroundColor(Color.Transparent)
-      .accessibilityText([tr('chat_execution_plan'), this.headline, this.countLabel].filter(Boolean).join(' · '))
+      .accessibilityText([tr('chat_execution_plan'), this.note, this.headline, this.countLabel].filter(Boolean).join(' · '))
       .accessibilityStateDescription(tr(this.expanded ? 'work_expanded' : 'work_collapsed'))
       .onClick(() => this.toggle()).id('chat.plan.toggle')
   }
   build() {
     Column() {
+      if (this.note) {
+        Text(this.note).fontSize(Tokens.caption).fontColor(Colors.secondary).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%').padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset }).id('chat.plan.note')
+      }
       if (this.expanded && this.shown.complete) {
         Column() {
           ForEach(this.rows, (row: BoundRow<PlanStep>) => { PlanStepLine({ binding: row, running:this.active && this.running }) }, (row: BoundRow<PlanStep>) => row.key)
         }.width('100%').alignItems(HorizontalAlign.Start).padding({ left: 16, right: 16, top: 11, bottom: 11 })
           .accessibilityRole(AccessibilityRoleType.BUTTON)
-          .accessibilityText([tr('chat_execution_plan'), this.countLabel].filter(Boolean).join(' · '))
+          .accessibilityText([tr('chat_execution_plan'), this.note, this.countLabel].filter(Boolean).join(' · '))
           .accessibilityStateDescription(tr('work_expanded')).onClick(() => this.toggle()).id('chat.plan.steps')
       } else {
         this.header()

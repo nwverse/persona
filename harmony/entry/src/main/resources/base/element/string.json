@@ -6327,6 +6327,10 @@
     {
       "name": "agent_preview_line_when",
       "value": "{line} ({when})"
+    },
+    {
+      "name": "plan_before_last_message",
+      "value": "Plan from before your last message"
     }
   ]
 }
