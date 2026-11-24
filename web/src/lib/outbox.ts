@@ -243,7 +243,7 @@ function failedWith(err: unknown): Pick<OutboxEntry, "state" | "error" | "code" 
 
 /** A message this conversation's own composer sent that did not go (ChatView): from now on a failed bubble here, with
  *  why, "Retry" and "Delete", where it was sent; the box stays empty (#1122). */
-export function keepFailed(mid: string, sid: string, sent: Pick<OutboxEntry, "id" | "text" | "images" | "at" | "launcher" | "model">, err: unknown) {
+export function keepFailed(mid: string, sid: string, sent: Pick<OutboxEntry, "id" | "text" | "images" | "at" | "launcher" | "model" | "queueNextTurn">, err: unknown) {
   const key = outboxKey(mid, sid);
   write(key, [...list(key).filter((e) => e.id !== sent.id), { ...sent, ...failedWith(err) }]);
 }
