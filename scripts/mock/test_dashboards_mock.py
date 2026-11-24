@@ -208,6 +208,10 @@ class SwitchOnTests(Domain):
         self.view("index", {"action": "persona.pin", "values": {"page": READING}})
         self.ok("GET", "/mock/dashboards?mode=empty")
         self.assertEqual(self.places(), [])
+        self.namespace["NAVIGATION"].clear()
+        self.ok("GET", "/mock/dashboards?mode=pinned")
+        self.assertEqual(self.namespace["NAVIGATION"]["pages"]["shown"],
+                         ["p:-pages/index", "p:-pages/" + RUN, "p:-pages/" + READING, "p:-pages/" + TRIP])
         self.ok("GET", "/mock/dashboards?mode=removed")
         self.assertEqual(self.places(), [("-pages", "index", "Dashboards")])
         self.registry.reset()

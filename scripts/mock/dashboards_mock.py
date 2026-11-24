@@ -77,8 +77,8 @@ WORDS = {
     },
     "zh-Hans": {
         "dashboards": "仪表盘", "pinned": "已固定", "all": "全部", "removed": "最近移除",
-        "updated_today": "今天 {t} 更新", "updated_yesterday": "昨天 {t} 更新", "updated_on": "{d} 更新",
-        "removed_on": "{d} 移除 · 30 天内可恢复",
+        "updated_today": "今天 {t} 更新", "updated_yesterday": "昨天 {t} 更新", "updated_on": "{d}更新",
+        "removed_on": "{d}移除 · 30 天内可恢复",
         "pin": "固定到侧边栏", "unpin": "从侧边栏取消固定", "rename": "改名", "remove": "移除", "restore": "恢复",
         "delete": "立即删除", "save": "保存", "title_field": "标题",
         "remove_confirm": "移除这个页面？30 天内可以在仪表盘里恢复。",
@@ -100,8 +100,8 @@ WORDS = {
     },
     "ja": {
         "dashboards": "ダッシュボード", "pinned": "固定済み", "all": "すべて", "removed": "最近削除した項目",
-        "updated_today": "今日 {t} に更新", "updated_yesterday": "昨日 {t} に更新", "updated_on": "{d} に更新",
-        "removed_on": "{d} に削除 · 30 日間は復元できます",
+        "updated_today": "今日 {t} に更新", "updated_yesterday": "昨日 {t} に更新", "updated_on": "{d}に更新",
+        "removed_on": "{d}に削除 · 30 日間は復元できます",
         "pin": "サイドバーに固定", "unpin": "サイドバーの固定を解除", "rename": "名前を変更", "remove": "削除", "restore": "復元",
         "delete": "今すぐ完全に削除", "save": "保存", "title_field": "タイトル",
         "remove_confirm": "このページを削除しますか？30 日間はダッシュボードから復元できます。",
@@ -123,9 +123,18 @@ WORDS = {
     },
 }
 
+for _lang, _words in WORDS.items():
+    _words["lang"] = _lang
+
 # Thirty days of minutes run, the oldest first (0: no run that day); today is the last and still open.
 _MINUTES = [32, 0, 28, 35, 30, 0, 41, 33, 29, 0, 36, 38, 0, 31, 34, 30, 27, 0, 40, 35, 33, 29, 31, 36, 30, 34, 32, 37, 35, 0]
-_DAY_LABELS = ["Oct %d" % d for d in range(26, 32)] + ["Nov %d" % d for d in range(1, 25)]
+_DAYS = [(10, d) for d in range(26, 32)] + [(11, d) for d in range(1, 25)]  # (month, day), the last one today
+
+
+def _date(lang, month_day):
+    """A month and day the way `lang` writes it: Nov 20, 11月20日."""
+    month, day = month_day
+    return "%s %d" % (("Oct", "Nov")[month - 10], day) if lang == "en" else "%d月%d日" % (month, day)
 
 STATE = {}
 
@@ -141,9 +150,9 @@ def seed(mode):
     if mode in ("1", "off", "pinned"):
         pages[RUN] = _page(RUN, "run", "heart", ("today", "8:02"), pinned=True)
         pages[READING] = _page(READING, "reading", "list", ("yesterday", "21:40"), pinned=mode == "pinned")
-        pages[TRIP] = _page(TRIP, "trip", "location", ("on", "Nov 20"), pinned=mode == "pinned")
+        pages[TRIP] = _page(TRIP, "trip", "location", ("on", (11, 20)), pinned=mode == "pinned")
     if mode in ("1", "off", "removed", "pinned"):
-        pages[GROCERY] = _page(GROCERY, "grocery", "list", ("on", "Nov 19"), removed="Nov 21")
+        pages[GROCERY] = _page(GROCERY, "grocery", "list", ("on", (11, 19)), removed=(11, 21))
     STATE.clear()
     STATE.update(mode=mode, on=mode != "off", pages=pages, minutes=list(_MINUTES), streak=12, week=3, taps=[], renders=[])
 
@@ -159,7 +168,7 @@ def _title(p, w):
 
 def _updated(p, w):
     kind, at = p["updated"]
-    return w["updated_" + kind].format(t=at, d=at)
+    return w["updated_" + kind].format(t=at, d=_date(w["lang"], at) if kind == "on" else at)
 
 
 def _kept():
@@ -189,7 +198,7 @@ def places(lang, new_keys=True):
 def _row(p, w):
     if p["removed"]:
         return {"type": "row", "key": "removed:" + p["id"], "title": _title(p, w), "icon": p["icon"],
-                "subtitle": w["removed_on"].format(d=p["removed"]),
+                "subtitle": w["removed_on"].format(d=_date(w["lang"], p["removed"])),
                 "actions": [{"title": w["restore"], "icon": "refresh", "swipe": True,
                              "action": {"id": "persona.restore:" + p["id"]}},
                             {"title": w["delete"], "icon": "trash", "role": "destructive",
@@ -247,7 +256,7 @@ def _body(p, w):
                 {"label": w["goal"], "value": w["goal_value"]}]},
             {"type": "chart", "key": "minutes", "kind": "bar", "title": w["minutes"], "unit": w["series"],
              "series": [{"name": w["series"], "tone": "positive",
-                         "points": [{"label": d, "value": m} for d, m in zip(_DAY_LABELS, minutes)]}]},
+                         "points": [{"label": d, "value": m} for d, m in zip([_date(w["lang"], x) for x in _DAYS], minutes)]}]},
             {"type": "button", "key": "done", "title": w["done"], "action": {"id": "done_today"}},
             {"type": "button", "key": "skip", "title": w["skip"], "action": {"id": "skip_today"}},
         ]}]
@@ -332,7 +341,7 @@ def _act(hub, ui, action, values, lang):
         _changed(hub, p["id"])
         return {"pop": True, "toast": w["renamed"]}, 200
     elif action == "persona.remove":
-        p.update(removed="Nov 24", pinned=False, status=None)
+        p.update(removed=_DAYS[-1], pinned=False, status=None)
         _changed(hub, p["id"])
         toast = w["removed_toast"]
     elif action == "persona.restore":
@@ -470,6 +479,7 @@ def control(d, h, req):
         if mode not in MODES:
             return h.send_json({"error": "mode is one of " + ", ".join(MODES)}, 400)
         seed(mode)
+        _keep_sidebar_keys(d.hub)
         _changed(d.hub)
     if (q.get("advance") or [""])[0] == "1":
         advance(d.hub)
