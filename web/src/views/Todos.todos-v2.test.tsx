@@ -735,7 +735,7 @@ describe("TodosView batch reorganize mode under todos_v2 (#14758)", () => {
   });
 });
 
-describe("TodoDetail dual template & dynamic action bar under todos_v2 (#14777)", () => {
+describe("TodoDetail dual template, default-expanded sections & status summary under todos_v2 (#14777, #14851)", () => {
   const longNotes =
     "Line 1: Context about the migration plan.\nLine 2: Ensure backward compatibility.\nLine 3: Keep first screen bundle within budget.\nLine 4: Verify rollback path.\nLine 5: Validate i18n keys.\nLine 6: Ship clean PR.";
 
@@ -762,9 +762,13 @@ describe("TodoDetail dual template & dynamic action bar under todos_v2 (#14777)"
       title: "Implement dual-template detail page",
       part_of: "goal_parent",
       direction_id: "dir-platform",
+      priority: "high",
       notes: longNotes,
       pr_url: "https://github.com/nwverse/persona/pull/14777",
-      agents: [{ machine_id: "m1", session_id: "s-active", linked_at: iso(2 * HOUR), title: "Frontend worker" }],
+      agents: [
+        { machine_id: "m1", session_id: "s-active", linked_at: iso(2 * HOUR), title: "Frontend worker" },
+        { machine_id: "m1", session_id: "s-past", linked_at: iso(4 * HOUR), released_at: iso(3 * HOUR), title: "Earlier planner", cwd: "/repo/web" },
+      ],
       created_at: iso(4 * HOUR),
       updated_at: iso(1 * HOUR),
       view: view("working", "agent_running", "working", 1),
@@ -806,11 +810,16 @@ describe("TodoDetail dual template & dynamic action bar under todos_v2 (#14777)"
       conversations: [{ machine_id: "m1", session_id: "dir-platform", title: "Platform Direction" }],
     });
     expect(host.querySelector("[data-testid=todo-detail-ownership]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-status-summary]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-priority-subtle]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-summary-open-active-agent]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-detail-personal-fields-toggle]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-detail-notes-collapsed]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-open-active-agent]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-open-pr]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-add-agent]")).toBeNull();
+    // Released agent history remains collapsed by default in legacy view
+    expect(host.querySelector("[data-testid=todo-detail]")?.textContent).not.toContain("Earlier planner");
     const legacyDetailHtml = host.querySelector("[data-testid=todo-detail]")?.innerHTML;
 
     await act(async () => root.unmount());
@@ -829,14 +838,41 @@ describe("TodoDetail dual template & dynamic action bar under todos_v2 (#14777)"
   it("keeps personal to-dos on the lightweight template under todos_v2=true", async () => {
     await render({ todos: dualTodos, todosV2: true, selectedId: "personal_note" });
     expect(host.querySelector("[data-testid=todo-detail-ownership]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-status-summary]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-detail-personal-fields-toggle]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-detail-subtasks]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-plan]")).toBeTruthy();
+    expect(host.querySelector("[data-testid=todo-plan-priority]")?.className).toContain("text-ink-3");
     expect(host.querySelector("[data-testid=todo-open-active-agent]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-add-agent]")).toBeNull();
   });
 
-  it("renders ownership strip, collapsible empty personal fields & long notes, subtasks, and dynamic CTA for work goals under todos_v2=true", async () => {
+  it("keeps all sections expanded by default, renders subtle priority & status summary strip, and dynamic CTA for work goals under todos_v2=true", async () => {
+    api.mockImplementation(async (path: string) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path.startsWith("/todos/work_goal_active/decisions")) {
+        return {
+          decisions: [
+            {
+              id: "d1",
+              todo_id: "work_goal_active",
+              question: "Keep sections expanded by default?",
+              choice: "Yes, expand all sections",
+              reason: "Avoid hiding schedule, notes, and decisions behind toggles",
+              source: "manual",
+              source_machine: "",
+              source_session: "",
+              source_message: "",
+              supersedes_id: "",
+              superseded_by: "",
+              created_at: iso(1 * HOUR),
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
     await render({
       todos: dualTodos,
       sessions: activeSessions,
@@ -846,33 +882,38 @@ describe("TodoDetail dual template & dynamic action bar under todos_v2 (#14777)"
       conversations: [{ machine_id: "m1", session_id: "dir-platform", title: "Platform Direction" }],
     });
 
-    // Ownership strip shows template badge, readable direction name, and clickable parent goal link
+    // Ownership strip shows template badge, readable direction name, clickable parent goal link, and subtle secondary priority
     const ownership = host.querySelector("[data-testid=todo-detail-ownership]");
     expect(ownership).toBeTruthy();
     expect(host.querySelector("[data-testid=todo-detail-template-badge]")?.textContent).toBe(t("todos.detail_template_work_goal"));
     expect(host.querySelector("[data-testid=todo-detail-direction]")?.textContent).toContain("Platform Direction");
     const parentLink = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-parent-link]")!;
     expect(parentLink.textContent).toContain("Ship Todos V2");
+    const subtlePriority = host.querySelector<HTMLElement>("[data-testid=todo-detail-priority-subtle]")!;
+    expect(subtlePriority).toBeTruthy();
+    expect(subtlePriority.textContent).toContain(t("todos.priority_high"));
+    expect(subtlePriority.className).toContain("text-ink-3");
 
-    // Empty schedule & reminder fields start collapsed, and expand on click
-    const personalToggle = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-personal-fields-toggle]")!;
-    expect(personalToggle.getAttribute("aria-expanded")).toBe("false");
-    expect(host.querySelector("[data-testid=todo-plan]")).toBeNull();
-    await act(async () => personalToggle.click());
-    await flush();
-    expect(personalToggle.getAttribute("aria-expanded")).toBe("true");
+    // Concise status summary strip uses semantic tokens and surfaces active Agent primary CTA
+    const statusSummary = host.querySelector<HTMLElement>("[data-testid=todo-detail-status-summary]")!;
+    expect(statusSummary).toBeTruthy();
+    expect(statusSummary.className).toContain("bg-inset");
+    expect(statusSummary.className).toContain("border-line");
+    expect(statusSummary.className).toContain("rounded-control");
+    expect(host.querySelector("[data-testid=todo-detail-summary-status]")?.textContent).toBeTruthy();
+    const summaryOpenAgentBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-summary-open-active-agent]")!;
+    expect(summaryOpenAgentBtn.textContent).toBe(t("todos.detail_open_active_agent"));
+
+    // Schedule & reminder fields, priority selector (muted), long notes, decisions, and participated history are ALL expanded by default
+    expect(host.querySelector("[data-testid=todo-detail-personal-fields-toggle]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-plan]")).toBeTruthy();
-
-    // Long notes start collapsed and expand to full editable textarea on click
-    expect(host.querySelector("[data-testid=todo-detail-notes-collapsed]")).toBeTruthy();
-    const notesToggle = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-notes-toggle]")!;
-    expect(notesToggle.getAttribute("aria-expanded")).toBe("false");
-    await act(async () => notesToggle.click());
-    await flush();
+    expect(host.querySelector("[data-testid=todo-plan-priority]")?.className).toContain("text-ink-3");
     expect(host.querySelector("[data-testid=todo-detail-notes-collapsed]")).toBeNull();
     expect(host.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(longNotes);
+    expect(host.querySelector("[data-testid=todo-decisions]")?.textContent).toContain("Keep sections expanded by default?");
+    expect(host.querySelector("[data-testid=todo-detail]")?.textContent).toContain("Earlier planner");
 
-    // Dynamic action bar: Open active Agent primary CTA + safe Open PR link + demoted Add Agent button
+    // Dynamic footer action bar: Open active Agent primary CTA + safe Open PR link + demoted Add Agent button
     const openAgentBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-open-active-agent]")!;
     expect(openAgentBtn.textContent).toBe(t("todos.detail_open_active_agent"));
     const openPrLink = host.querySelector<HTMLAnchorElement>("[data-testid=todo-open-pr]")!;
@@ -882,9 +923,10 @@ describe("TodoDetail dual template & dynamic action bar under todos_v2 (#14777)"
     const addAgentBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-add-agent]")!;
     expect(addAgentBtn.textContent).toBe(t("todos.detail_add_agent"));
 
-    // Clicking parent link navigates to parent goal, which displays its subtasks checklist
+    // Clicking parent link navigates to parent goal, which displays its subtasks summary & checklist expanded by default
     await act(async () => parentLink.click());
     await flush();
+    expect(host.querySelector("[data-testid=todo-detail-summary-subtasks]")?.textContent).toContain("0/2");
     const subtasks = host.querySelector("[data-testid=todo-detail-subtasks]");
     expect(subtasks).toBeTruthy();
     const subtaskIds = [...subtasks!.querySelectorAll<HTMLElement>("[data-testid=todo-detail-subtask-item]")].map(
@@ -892,7 +934,7 @@ describe("TodoDetail dual template & dynamic action bar under todos_v2 (#14777)"
     );
     expect(subtaskIds).toEqual(["work_goal_active", "work_goal_with_due"]);
 
-    // Clicking a subtask with due_date keeps personal fields expanded (never hides set dates)
+    // Clicking a subtask with due_date keeps schedule/reminder expanded
     await act(async () =>
       subtasks!.querySelector<HTMLButtonElement>('[data-subtask-id="work_goal_with_due"]')!.click(),
     );
@@ -904,6 +946,7 @@ describe("TodoDetail dual template & dynamic action bar under todos_v2 (#14777)"
     await act(async () => patchAssistant({ todos_v2: false }));
     await flush();
     expect(host.querySelector("[data-testid=todo-detail-ownership]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-status-summary]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-detail-subtasks]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-open-active-agent]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-add-agent]")).toBeNull();

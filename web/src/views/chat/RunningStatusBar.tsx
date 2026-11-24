@@ -122,6 +122,7 @@ export interface RunningStatusProps {
   subtasks?: boolean;
   /** A real background command after the turn, with its own optional start (#7341). */
   command?: WaitLine | null;
+  onStop?: () => void;
 }
 
 export function RunningStatusBar({ mid, sid, wait, ...props }: RunningStatusProps & { mid: string; sid: string; wait?: WaitLine | null }) {
@@ -201,7 +202,7 @@ type Phase = "on" | "linger" | "fading" | "off";
 
 /** The bar for a given status line (RunningStatusBar subscribes; tests render this). `speedKey`: the conversation its
  *  speed history is kept for while the page is open. */
-export function RunningStatusView({ live, working, done: finished, startedAt, clock = true, plain, step, background, subtasks, command, offline, speedKey = "" }: RunningStatusProps & { live: SessionLive | null; offline?: boolean; speedKey?: string }) {
+export function RunningStatusView({ live, working, done: finished, startedAt, clock = true, plain, step, background, subtasks, command, onStop, offline, speedKey = "" }: RunningStatusProps & { live: SessionLive | null; offline?: boolean; speedKey?: string }) {
   const phase = usePhase(working);
   const [pinned, setPinned] = useState(false);
   // after the turn: what it last said, while it lingers and fades. Its status line goes a moment before the turn ends,
@@ -278,7 +279,7 @@ export function RunningStatusView({ live, working, done: finished, startedAt, cl
             <span className="truncate">{words}</span>
             <span className="truncate text-ink-3 font-normal" data-running-retry-detail>{retry.error}</span>
           </span>
-        ) : <span className="truncate" data-running-verb>{words}</span>}
+        ) : <span className={phase === "on" && !done ? "chat-shimmer truncate" : "truncate"} data-running-verb>{words}</span>}
       </div>
       <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-ink-3 tabular-nums" style={pinned ? undefined : fade}>
         {usage || (task && !commandTimed) ? null : own && SpeedView ? (
@@ -289,6 +290,18 @@ export function RunningStatusView({ live, working, done: finished, startedAt, cl
             {count && <span aria-hidden>·</span>}
             {count}
           </>
+        )}
+        {working && onStop && (
+          <button
+            type="button"
+            onClick={onStop}
+            aria-label={t("chat-runningstatusbar.interrupt")}
+            title={t("chat-runningstatusbar.interrupt_hint")}
+            className="ml-1 hidden items-center gap-1 rounded-[6px] border border-line bg-surface/80 px-1.5 py-0.5 text-label font-medium text-ink-2 transition-colors hover:border-line-strong hover:bg-hover hover:text-ink sm:inline-flex"
+          >
+            <span>{t("chat-runningstatusbar.interrupt")}</span>
+            <kbd className="rounded-[4px] bg-inset px-1 py-px font-mono text-submeta leading-tight text-ink-3">Esc</kbd>
+          </button>
         )}
       </div>
     </div>
