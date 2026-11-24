@@ -23,6 +23,7 @@ internal/assistant/todo/timeline imports internal/proto
 internal/assistant/todo/timeline imports time
 internal/conversationlog imports encoding/json
 internal/conversationlog imports errors
+internal/conversationlog imports github.com/nwverse/persona/sdk/go/wire
 internal/conversationlog imports internal/proto
 internal/db (test) imports internal/conversationlog
 internal/db imports internal/conversationlog

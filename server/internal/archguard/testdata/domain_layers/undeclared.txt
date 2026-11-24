@@ -23,13 +23,14 @@ internal/approval
 internal/archguard
 internal/assistant
 internal/assistant/archiverecovery
-internal/assistant/kbhistory
-internal/assistant/kbsent
 internal/assistant/kernel
 internal/assistant/repository
 internal/assistant/repositorystore
 internal/assistant/saved
+internal/assistant/todo/conflict
+internal/assistant/todo/mergetrain
 internal/assistant/todo/projection
+internal/assistant/todo/stagegate
 internal/assistantskills
 internal/assistantwire
 internal/botcard
@@ -80,6 +81,7 @@ internal/extmgr/mailport
 internal/extmgr/storage
 internal/extwire
 internal/githubwire
+internal/healthhost
 internal/herdr
 internal/herdrcore
 internal/host
@@ -94,6 +96,7 @@ internal/imessagewire
 internal/jsonsubset
 internal/kb
 internal/kbwire
+internal/knowledgeuihost
 internal/lark
 internal/larkhost
 internal/lazyre
@@ -118,7 +121,11 @@ internal/modules/all
 internal/modules/all/node
 internal/modules/briefing
 internal/modules/github
+internal/modules/health
 internal/modules/imessage
+internal/modules/knowledge-ui
+internal/modules/knowledge-ui/kbhistory
+internal/modules/knowledge-ui/kbsent
 internal/modules/lark
 internal/modules/lark/connector/larkcli
 internal/modules/lark/feishubot
@@ -138,11 +145,14 @@ internal/modules/voice
 internal/modules/voice/voicetest
 internal/modules/volc
 internal/modules/volc/volctest
+internal/moduleswitch
+internal/moduleswitch/switchtest
 internal/netaddr
 internal/netproxy
 internal/netshape
 internal/node
 internal/node/clipshare
+internal/node/diskmap
 internal/node/imessageport
 internal/node/iphoneport
 internal/node/machdiag
@@ -175,6 +185,7 @@ internal/proxyproto
 internal/pushcrypto
 internal/quota
 internal/recordinghost
+internal/recordingwire
 internal/relay
 internal/relayproto
 internal/remoteimage
@@ -227,10 +238,12 @@ scripts/fleetsoak
 scripts/pushrec
 
 # Pending: the names the PRs open when this freeze landed were adding, each with its PRs
-# (python3 scripts/test/name_freezes.py pending --write, 2026-11-24; drafts idle more than 14 days left out).
+# (python3 scripts/test/name_freezes.py pending --write, 2026-11-25; drafts idle more than 14 days left out).
 # A name stays when its PR merges; a rerun of --write drops one whose PRs have all closed. No PR opened later gets a
 # line here.
 internal/assistant/kblark #13449
 internal/larkperson #13145
 internal/operations/recovery #12876
 internal/rpcio #1507
+internal/startdir #14411
+internal/startdir/settle #14411

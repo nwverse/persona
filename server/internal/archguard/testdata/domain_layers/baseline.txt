@@ -25,15 +25,19 @@ internal/ai app-exported-record 6
 internal/ai app-named-primitive 1
 internal/apns app-exported-record 4
 internal/approval app-exported-record 2
-internal/assistant app-exported-record 158
+internal/assistant app-exported-record 159
 internal/assistant app-exported-record HandoffDiffRef #14334
 internal/assistant app-exported-record HandoffGap #14334
 internal/assistant app-exported-record HandoffSourceRange #14334
 internal/assistant app-exported-record InboxFeedback #4512
 internal/assistant app-exported-record InboxProgress #4512
-internal/assistant app-exported-record InboxReplyPolicySnapshot #14333
 internal/assistant app-exported-record MessageAuthorization #9782
+internal/assistant app-exported-record ModelCandidateHeadroom #14908
+internal/assistant app-exported-record ModelCandidateStats #14908
+internal/assistant app-exported-record ModelCandidateStatus #14908
+internal/assistant app-exported-record ModelProfileCandidatesView #14908
 internal/assistant app-exported-record ModelProfilePermissionChange #12042
+internal/assistant app-exported-record ModelProfileTrial #14908
 internal/assistant app-exported-record PlanContinuationRecovery #13587
 internal/assistant app-exported-record TaskDistinctFrom #9744 #12524
 internal/assistant app-exported-record TodoContextHandoff #14334
@@ -44,18 +48,17 @@ internal/assistant app-exported-record TodoUsageSummary #13027 #14147
 internal/assistant app-exported-record UsagePrice #13027 #14147
 internal/assistant app-exported-record UsagePrices #13027 #14147
 internal/assistant app-exported-record UsageTokens #13027 #14147
-internal/assistant app-exported-record Watch #13882 #13914 #14029 #14104
-internal/assistant app-exported-record WatchAlert #13882 #13914 #14029 #14104
-internal/assistant app-exported-record WatchPoint #13882 #13914 #14029 #14104
-internal/assistant app-exported-record WatchReading #13882 #13914 #14029 #14104
-internal/assistant app-exported-record WatchSchedule #13882 #13914 #14029 #14104
-internal/assistant app-exported-record WatchTable #13882 #13914 #14029 #14104
-internal/assistant app-exported-record WatchView #13882 #13914 #14029 #14104
+internal/assistant app-exported-record Watch #13882 #13914 #14029 #14104 #14362 #14995
+internal/assistant app-exported-record WatchAlert #13882 #13914 #14029 #14104 #14362 #14995
+internal/assistant app-exported-record WatchPoint #13882 #13914 #14029 #14104 #14362 #14995
+internal/assistant app-exported-record WatchReading #13882 #13914 #14029 #14104 #14362 #14995
+internal/assistant app-exported-record WatchSchedule #13882 #13914 #14029 #14104 #14362 #14995
+internal/assistant app-exported-record WatchTable #13882 #13914 #14029 #14104 #14362 #14995
+internal/assistant app-exported-record WatchView #13882 #13914 #14029 #14104 #14362 #14995
 internal/assistant app-lifecycle-write 30
-internal/assistant app-named-primitive 25
+internal/assistant app-named-primitive 26
 internal/assistant app-named-primitive ModelPurposeStatusCode #12300 #12307
 internal/assistant app-named-primitive launcherFit #12300 #12307
-internal/assistant app-named-primitive placementStage #13436
 internal/assistant app-named-primitive scopeHeadingKind #13820 #13912
 internal/assistant app-named-primitive spawnDecision #13760
 internal/assistant app-named-primitive taskWorkflowKind #12286
@@ -67,8 +70,6 @@ internal/assistant/chatsearch core-package-var 15
 internal/assistant/chatsearch core-primitive-field 1
 internal/assistant/chatsearch core-primitive-signature 11
 internal/assistant/chatsearch core-test-package 1
-internal/assistant/kbhistory app-exported-record 9
-internal/assistant/kbhistory app-named-primitive 1
 internal/assistant/kblark app-exported-record Config #13449
 internal/assistant/kblark app-exported-record Doc #13449
 internal/assistant/kblark app-exported-record Minute #13449
@@ -78,8 +79,13 @@ internal/assistant/repository app-exported-record 10
 internal/assistant/repositorystore app-exported-record 2
 internal/assistant/saved app-exported-record 8
 internal/assistant/saved app-named-primitive 1
-internal/assistant/todo/projection app-exported-record 11
+internal/assistant/todo/conflict app-exported-record 2
+internal/assistant/todo/mergetrain app-exported-record 4
+internal/assistant/todo/mergetrain app-named-primitive 3
+internal/assistant/todo/projection app-exported-record 12
 internal/assistant/todo/projection app-named-primitive 1
+internal/assistant/todo/stagegate app-exported-record 4
+internal/assistant/todo/stagegate app-named-primitive 3
 internal/assistant/todo/timeline core-any 2
 internal/assistant/todo/timeline core-collection 3
 internal/assistant/todo/timeline core-constructor 2
@@ -104,8 +110,8 @@ internal/botcard app-named-primitive 1
 internal/botport app-exported-record 1
 internal/builtinext app-exported-record 3
 internal/bus app-exported-record 3
-internal/channel app-exported-record 24
-internal/channel app-named-primitive 8
+internal/channel app-exported-record 25
+internal/channel app-named-primitive 10
 internal/claudeplugin app-exported-record 4
 internal/claudeplugin app-named-primitive 1
 internal/cliport app-exported-record 1
@@ -127,13 +133,13 @@ internal/conversationlog core-primitive-signature 17
 internal/conversationlog core-tag 2
 internal/conversationlog core-test-package 2
 internal/conversationlog core-zero-doc 3
-internal/conversationlog out-literal 14
+internal/conversationlog out-literal 16
 internal/db app-lifecycle-write 6
 internal/db app-named-primitive 3
-internal/devices app-exported-record 19
-internal/devices app-named-primitive 4
+internal/devices app-exported-record 22
+internal/devices app-named-primitive 5
 internal/errreport app-exported-record 2
-internal/extension app-exported-record 106
+internal/extension app-exported-record 108
 internal/extension/conformance app-exported-record 1
 internal/extension/denohost app-exported-record 1
 internal/extension/egress app-exported-record 5
@@ -145,10 +151,9 @@ internal/extmgr app-exported-record 64
 internal/extmgr app-named-primitive 3
 internal/extmgr/storage app-exported-record 21
 internal/herdr app-exported-record 20
-internal/herdr app-exported-record Integration #13462
 internal/herdrcore app-exported-record 7
 internal/host app-exported-record 12
-internal/hub app-exported-record 23
+internal/hub app-exported-record 28
 internal/hub app-exported-record PartnersConfig #13379
 internal/hub app-named-primitive 9
 internal/hubclient app-exported-record 1
@@ -156,13 +161,13 @@ internal/hubedge app-exported-record 4
 internal/i18n app-exported-record 1
 internal/i18n app-named-primitive 2
 internal/imageorient app-exported-record 1
-internal/kb app-exported-record 108
-internal/kb app-exported-record Milestone #13784 #13891 #13914 #14029 #14104
-internal/kb app-exported-record MilestoneEdit #13784 #13891 #13914 #14029 #14104
-internal/kb app-exported-record ProjectRef #13784 #13891 #13914 #14029 #14104
-internal/kb app-exported-record ProjectTree #13784 #13891 #13914 #14029 #14104
-internal/kb app-exported-record TreeError #13784 #13891 #13914 #14029 #14104
-internal/kb app-exported-record TreeMove #13784 #13891 #13914 #14029 #14104
+internal/kb app-exported-record 70
+internal/kb app-exported-record Milestone #13784 #13891 #13914 #14029 #14104 #14362 #14934
+internal/kb app-exported-record MilestoneEdit #13784 #13891 #13914 #14029 #14104 #14362 #14934
+internal/kb app-exported-record ProjectRef #13784 #13891 #13914 #14029 #14104 #14362 #14934
+internal/kb app-exported-record ProjectTree #13784 #13891 #13914 #14029 #14104 #14362 #14934
+internal/kb app-exported-record TreeError #13784 #13891 #13914 #14029 #14104 #14362 #14934
+internal/kb app-exported-record TreeMove #13784 #13891 #13914 #14029 #14104 #14362 #14934
 internal/kb app-named-primitive 4
 internal/lark app-exported-record 2
 internal/larkperson app-exported-record ConversationScope #13145
@@ -181,14 +186,20 @@ internal/lcuconfirm app-named-primitive 1
 internal/link app-exported-record 20
 internal/link app-exported-record CloudflareAccess #12022
 internal/link app-named-primitive 1
-internal/linktray app-exported-record 1
+internal/linktray app-exported-record 14
+internal/linktray app-named-primitive 2
 internal/manager app-exported-record 2
+internal/manager app-named-primitive 1
 internal/managerconf app-exported-record 6
 internal/managerupdate app-exported-record 7
 internal/mdns app-exported-record 3
 internal/modelhttp app-exported-record 1
 internal/modules/briefing app-exported-record 1
 internal/modules/imessage app-exported-record 12
+internal/modules/knowledge-ui/kbhistory app-exported-record 9
+internal/modules/knowledge-ui/kbhistory app-named-primitive 1
+internal/modules/lark app-exported-record 1
+internal/modules/lark app-named-primitive 1
 internal/modules/lark/connector/larkcli app-exported-record 2
 internal/modules/lark/feishubot app-exported-record 2
 internal/modules/lark/larkcli app-exported-record 2
@@ -207,13 +218,15 @@ internal/modules/voice app-named-primitive 4
 internal/modules/voice/voicetest app-exported-record 2
 internal/modules/volc app-exported-record 3
 internal/modules/volc/volctest app-exported-record 6
+internal/moduleswitch app-exported-record 1
 internal/netaddr app-exported-record 1
 internal/netaddr app-named-primitive 2
 internal/netproxy app-exported-record 1
 internal/netshape app-exported-record 1
 internal/netshape app-named-primitive 1
 internal/node app-exported-record 25
-internal/node app-named-primitive 13
+internal/node app-named-primitive 14
+internal/node/diskmap app-exported-record 1
 internal/nodeclient app-exported-record 13
 internal/nodecmd app-exported-record 1
 internal/nodesign app-exported-record 1
@@ -304,6 +317,7 @@ internal/transcript app-exported-record BotmuxTurnReply #10770 #12114 #12161 #12
 internal/transcript app-exported-record BotmuxTurnSender #10770 #12114 #12161 #12344
 internal/transcript app-exported-record BotmuxTurnsResponse #10770 #12114 #12161 #12344
 internal/transcript app-exported-record CodexThreadSettings #13294
+internal/transcript app-exported-record SpeedObservation #14495
 internal/transcript app-named-primitive 2
 internal/transcript app-named-primitive botmuxSendFlag #10770 #12114 #12161 #12344
 internal/transcript app-named-primitive fileFingerprint #11629
