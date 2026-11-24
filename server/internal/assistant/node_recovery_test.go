@@ -198,10 +198,22 @@ func TestNodeRecoveryDisconnectReconnect(t *testing.T) {
 	}
 }
 
+func flushRecoveryDigest(ctx context.Context, s *Service) {
+	s.supervise.mu.Lock()
+	past := time.Now().Add(-time.Minute)
+	for id, g := range s.supervise.pending {
+		g.At = past
+		s.supervise.pending[id] = g
+	}
+	s.supervise.mu.Unlock()
+	s.superviseTimes = superviseTimings{gather: time.Millisecond, every: time.Millisecond, urgent: time.Millisecond}
+	s.sendDigest(ctx)
+}
+
 func TestNodeRecoveryReboot(t *testing.T) {
 	ctx := context.Background()
 	s, f := newQuietService(t)
-	s.superviseTimes = superviseTimings{gather: time.Millisecond, every: time.Millisecond, urgent: time.Millisecond}
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
 	nodes := attachRecoveryNodes(s)
 
 	base := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
@@ -273,7 +285,7 @@ func TestNodeRecoveryReboot(t *testing.T) {
 	}
 
 	// Deliver digest and confirm signals go to supervisor silently (holdPushesParam=true, no owner push).
-	s.sendDigest(ctx)
+	flushRecoveryDigest(ctx, s)
 	notices := f.notices()
 	if len(notices) != 1 {
 		t.Fatalf("expected 1 supervision digest notice, got %d: %v", len(notices), notices)
@@ -308,7 +320,7 @@ func TestNodeRecoveryReboot(t *testing.T) {
 func TestNodeRecoveryMovedToAnotherNode(t *testing.T) {
 	ctx := context.Background()
 	s, f := newQuietService(t)
-	s.superviseTimes = superviseTimings{gather: time.Millisecond, every: time.Millisecond, urgent: time.Millisecond}
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
 	nodes := attachRecoveryNodes(s)
 
 	base := time.Date(2026, 11, 24, 14, 0, 0, 0, time.UTC)
@@ -434,7 +446,7 @@ func TestNodeRecoveryMovedToAnotherNode(t *testing.T) {
 	}
 
 	// Supervision digest records "taken over by new-node/s-new" silently.
-	s.sendDigest(ctx)
+	flushRecoveryDigest(ctx, s)
 	notices := f.notices()
 	if len(notices) != 1 || !strings.Contains(notices[0], "taken over by new-node/s-new") {
 		t.Fatalf("expected takeover record in supervision digest, got %v", notices)
@@ -447,7 +459,7 @@ func TestNodeRecoveryMovedToAnotherNode(t *testing.T) {
 func TestNodeRecoveryBothSidesPushedConflict(t *testing.T) {
 	ctx := context.Background()
 	s, f := newQuietService(t)
-	s.superviseTimes = superviseTimings{gather: time.Millisecond, every: time.Millisecond, urgent: time.Millisecond}
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
 	nodes := attachRecoveryNodes(s)
 
 	base := time.Date(2026, 11, 24, 15, 0, 0, 0, time.UTC)
@@ -535,7 +547,7 @@ func TestNodeRecoveryBothSidesPushedConflict(t *testing.T) {
 	}
 
 	// Conflict is handed to the supervisor via supervision digest (no owner push).
-	s.sendDigest(ctx)
+	flushRecoveryDigest(ctx, s)
 	notices := f.notices()
 	if len(notices) != 1 {
 		t.Fatalf("expected 1 conflict supervision digest, got %d: %v", len(notices), notices)
