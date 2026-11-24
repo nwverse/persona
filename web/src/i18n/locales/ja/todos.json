@@ -349,5 +349,15 @@
   "reorganize_apply": "適用",
   "reorganize_select_item": "「{title}」を選択",
   "reorganize_success": "{count}件を更新しました",
-  "reorganize_success_transferred": "{count}件を更新しました（監督権を{transferred}件移譲）"
+  "reorganize_success_transferred": "{count}件を更新しました（監督権を{transferred}件移譲）",
+  "detail_template_work_goal": "作業目標",
+  "detail_ownership_region": "作業目標の所属",
+  "detail_parent_label": "親タスク：{title}",
+  "detail_schedule_reminder": "期限とリマインダー",
+  "detail_notes_expand": "メモを展開",
+  "detail_notes_collapse": "メモを折りたたむ",
+  "detail_subtasks_section": "サブタスク · {done}/{total}",
+  "detail_open_active_agent": "稼働中のエージェントを開く",
+  "detail_open_pr": "PR を開く",
+  "detail_add_agent": "エージェントを追加"
 }

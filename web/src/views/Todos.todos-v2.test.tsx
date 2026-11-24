@@ -127,6 +127,7 @@ afterEach(async () => {
 const render = async ({
   todos = sampleTodos,
   sharedBlockers = [],
+  sessions = {},
   todosV2,
   assistantManager,
   leaders,
@@ -136,6 +137,7 @@ const render = async ({
 }: {
   todos?: Todo[];
   sharedBlockers?: unknown[];
+  sessions?: Record<string, unknown[]>;
   todosV2?: boolean;
   assistantManager?: string;
   leaders?: string[];
@@ -148,7 +150,7 @@ const render = async ({
     todos,
     sharedBlockers,
     todosLoaded: true,
-    sessions: {},
+    sessions,
     interactions: [],
     answered: {},
     features: ["todo_view"],
@@ -742,5 +744,180 @@ describe("TodosView batch reorganize mode under todos_v2 (#14758)", () => {
     expect(toggleBtn()).toBeNull();
     expect(barEl()).toBeNull();
     expect(checkboxes()).toHaveLength(0);
+  });
+});
+
+describe("TodoDetail dual template & dynamic action bar under todos_v2 (#14777)", () => {
+  const longNotes =
+    "Line 1: Context about the migration plan.\nLine 2: Ensure backward compatibility.\nLine 3: Keep first screen bundle within budget.\nLine 4: Verify rollback path.\nLine 5: Validate i18n keys.\nLine 6: Ship clean PR.";
+
+  const dualTodos: Todo[] = [
+    {
+      id: "personal_note",
+      title: "Pick up groceries",
+      audience: "human",
+      notes: "Milk and eggs",
+      created_at: iso(5 * HOUR),
+      updated_at: iso(4 * HOUR),
+      view: view("todo", "rest", "todo", 0),
+    },
+    {
+      id: "goal_parent",
+      title: "Ship Todos V2",
+      direction_id: "dir-platform",
+      created_at: iso(8 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("working", "agent_running", "working", 0),
+    },
+    {
+      id: "work_goal_active",
+      title: "Implement dual-template detail page",
+      part_of: "goal_parent",
+      direction_id: "dir-platform",
+      notes: longNotes,
+      pr_url: "https://github.com/nwverse/persona/pull/14777",
+      agents: [{ machine_id: "m1", session_id: "s-active", linked_at: iso(2 * HOUR), title: "Frontend worker" }],
+      created_at: iso(4 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("working", "agent_running", "working", 1),
+    },
+    {
+      id: "work_goal_with_due",
+      title: "Prepare launch notes",
+      part_of: "goal_parent",
+      due_date: "2026-12-01",
+      supervision: { supervisor: "main", state: "needs_user" },
+      created_at: iso(3 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("working", "agent_running", "working", 2),
+    },
+  ];
+
+  const activeSessions = {
+    m1: [
+      {
+        id: "s-active",
+        machine_id: "m1",
+        session_id: "s-active",
+        agent: "claude",
+        title: "Frontend worker",
+        cwd: "/repo/web",
+        state: "working",
+        updated_at: iso(10 * 60_000),
+      },
+    ],
+  };
+
+  it("keeps TodoDetail DOM 100% identical when todos_v2 is false or omitted by an older Hub", async () => {
+    await render({
+      todos: dualTodos,
+      sessions: activeSessions,
+      todosV2: undefined,
+      selectedId: "work_goal_active",
+      leaders: ["dir-platform"],
+      conversations: [{ machine_id: "m1", session_id: "dir-platform", title: "Platform Direction" }],
+    });
+    expect(host.querySelector("[data-testid=todo-detail-ownership]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-personal-fields-toggle]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-notes-collapsed]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-open-active-agent]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-open-pr]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-add-agent]")).toBeNull();
+    const legacyDetailHtml = host.querySelector("[data-testid=todo-detail]")?.innerHTML;
+
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render({
+      todos: dualTodos,
+      sessions: activeSessions,
+      todosV2: false,
+      selectedId: "work_goal_active",
+      leaders: ["dir-platform"],
+      conversations: [{ machine_id: "m1", session_id: "dir-platform", title: "Platform Direction" }],
+    });
+    expect(host.querySelector("[data-testid=todo-detail]")?.innerHTML).toBe(legacyDetailHtml);
+  });
+
+  it("keeps personal to-dos on the lightweight template under todos_v2=true", async () => {
+    await render({ todos: dualTodos, todosV2: true, selectedId: "personal_note" });
+    expect(host.querySelector("[data-testid=todo-detail-ownership]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-personal-fields-toggle]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-subtasks]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-plan]")).toBeTruthy();
+    expect(host.querySelector("[data-testid=todo-open-active-agent]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-add-agent]")).toBeNull();
+  });
+
+  it("renders ownership strip, collapsible empty personal fields & long notes, subtasks, and dynamic CTA for work goals under todos_v2=true", async () => {
+    await render({
+      todos: dualTodos,
+      sessions: activeSessions,
+      todosV2: true,
+      selectedId: "work_goal_active",
+      leaders: ["dir-platform"],
+      conversations: [{ machine_id: "m1", session_id: "dir-platform", title: "Platform Direction" }],
+    });
+
+    // Ownership strip shows template badge, readable direction name, and clickable parent goal link
+    const ownership = host.querySelector("[data-testid=todo-detail-ownership]");
+    expect(ownership).toBeTruthy();
+    expect(host.querySelector("[data-testid=todo-detail-template-badge]")?.textContent).toBe(t("todos.detail_template_work_goal"));
+    expect(host.querySelector("[data-testid=todo-detail-direction]")?.textContent).toContain("Platform Direction");
+    const parentLink = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-parent-link]")!;
+    expect(parentLink.textContent).toContain("Ship Todos V2");
+
+    // Empty schedule & reminder fields start collapsed, and expand on click
+    const personalToggle = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-personal-fields-toggle]")!;
+    expect(personalToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector("[data-testid=todo-plan]")).toBeNull();
+    await act(async () => personalToggle.click());
+    await flush();
+    expect(personalToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(host.querySelector("[data-testid=todo-plan]")).toBeTruthy();
+
+    // Long notes start collapsed and expand to full editable textarea on click
+    expect(host.querySelector("[data-testid=todo-detail-notes-collapsed]")).toBeTruthy();
+    const notesToggle = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-notes-toggle]")!;
+    expect(notesToggle.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => notesToggle.click());
+    await flush();
+    expect(host.querySelector("[data-testid=todo-detail-notes-collapsed]")).toBeNull();
+    expect(host.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(longNotes);
+
+    // Dynamic action bar: Open active Agent primary CTA + safe Open PR link + demoted Add Agent button
+    const openAgentBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-open-active-agent]")!;
+    expect(openAgentBtn.textContent).toBe(t("todos.detail_open_active_agent"));
+    const openPrLink = host.querySelector<HTMLAnchorElement>("[data-testid=todo-open-pr]")!;
+    expect(openPrLink.getAttribute("href")).toBe("https://github.com/nwverse/persona/pull/14777");
+    expect(openPrLink.getAttribute("target")).toBe("_blank");
+    expect(openPrLink.getAttribute("rel")).toBe("noopener noreferrer");
+    const addAgentBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-add-agent]")!;
+    expect(addAgentBtn.textContent).toBe(t("todos.detail_add_agent"));
+
+    // Clicking parent link navigates to parent goal, which displays its subtasks checklist
+    await act(async () => parentLink.click());
+    await flush();
+    const subtasks = host.querySelector("[data-testid=todo-detail-subtasks]");
+    expect(subtasks).toBeTruthy();
+    const subtaskIds = [...subtasks!.querySelectorAll<HTMLElement>("[data-testid=todo-detail-subtask-item]")].map(
+      (el) => el.dataset.subtaskId,
+    );
+    expect(subtaskIds).toEqual(["work_goal_active", "work_goal_with_due"]);
+
+    // Clicking a subtask with due_date keeps personal fields expanded (never hides set dates)
+    await act(async () =>
+      subtasks!.querySelector<HTMLButtonElement>('[data-subtask-id="work_goal_with_due"]')!.click(),
+    );
+    await flush();
+    expect(host.querySelector("[data-testid=todo-detail-personal-fields-toggle]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-plan]")).toBeTruthy();
+
+    // Turning todos_v2 off immediately reverts TodoDetail to legacy layout
+    await act(async () => patchAssistant({ todos_v2: false }));
+    await flush();
+    expect(host.querySelector("[data-testid=todo-detail-ownership]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-subtasks]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-open-active-agent]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-add-agent]")).toBeNull();
   });
 });

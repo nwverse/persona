@@ -354,5 +354,15 @@
   "reorganize_success_one": "Updated {count} item",
   "reorganize_success_other": "Updated {count} items",
   "reorganize_success_transferred_one": "Updated {count} item ({transferred} supervision transferred)",
-  "reorganize_success_transferred_other": "Updated {count} items ({transferred} supervision transferred)"
+  "reorganize_success_transferred_other": "Updated {count} items ({transferred} supervision transferred)",
+  "detail_template_work_goal": "Work goal",
+  "detail_ownership_region": "Work goal ownership",
+  "detail_parent_label": "Goal: {title}",
+  "detail_schedule_reminder": "Schedule & reminder",
+  "detail_notes_expand": "Expand notes",
+  "detail_notes_collapse": "Collapse notes",
+  "detail_subtasks_section": "Subtasks · {done}/{total}",
+  "detail_open_active_agent": "Open active Agent",
+  "detail_open_pr": "Open PR",
+  "detail_add_agent": "Add Agent"
 }

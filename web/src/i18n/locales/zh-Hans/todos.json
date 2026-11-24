@@ -349,5 +349,15 @@
   "reorganize_apply": "应用",
   "reorganize_select_item": "选择「{title}」",
   "reorganize_success": "已更新 {count} 项",
-  "reorganize_success_transferred": "已更新 {count} 项（已移交 {transferred} 项督办权）"
+  "reorganize_success_transferred": "已更新 {count} 项（已移交 {transferred} 项督办权）",
+  "detail_template_work_goal": "工作目标",
+  "detail_ownership_region": "工作目标归属",
+  "detail_parent_label": "主任务：{title}",
+  "detail_schedule_reminder": "日程与提醒",
+  "detail_notes_expand": "展开备注",
+  "detail_notes_collapse": "收起备注",
+  "detail_subtasks_section": "子任务 · {done}/{total}",
+  "detail_open_active_agent": "打开活跃 Agent",
+  "detail_open_pr": "打开 PR",
+  "detail_add_agent": "追加 Agent"
 }
