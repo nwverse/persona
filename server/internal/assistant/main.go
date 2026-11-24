@@ -51,10 +51,15 @@ func Main(ctx context.Context, build update.Build, stdin io.Reader) error {
 	return MainWith(ctx, build, stdin, MainHooks{})
 }
 
-// MainHooks are what a caller of MainWith gets of the running manager besides.
+// MainHooks are what a caller of MainWith / RunManagerWith gets of the running manager besides.
 type MainHooks struct {
 	// Ready is given the manager's Idle once it is made (before it connects to the hub).
 	Ready func(Idle)
+	// PendingRestart is given a setter to report pending_restart to the hub once BusHub is made.
+	PendingRestart func(func(bool))
+	// HostDataDir is the host's Persona data directory (~/.persona) captured before PERSONA_HOME is redirected to an
+	// independent manager's directory, so manager.hello can read the co-located node's machine-uid.
+	HostDataDir string
 }
 
 // MainWith is Main with h.
@@ -130,7 +135,11 @@ func MainWith(ctx context.Context, build update.Build, stdin io.Reader, h MainHo
 	// itself again): nothing of it runs next to the one that has the token (manager.RunBuiltin waits for a new one).
 	o.Fingerprint, o.StopWhenRevoked, o.TokenFirst = fingerprint, deploy == DeployService, deploy == DeployService
 	o.RotateSecretKey = true
-	o.Logf, o.ExtConfig, o.Ready = logger.Printf, ext, h.Ready
+	o.Logf, o.ExtConfig, o.Ready, o.PendingRestart = logger.Printf, ext, h.Ready, h.PendingRestart
+	o.HostDataDir = h.HostDataDir
+	if o.HostDataDir == "" {
+		o.HostDataDir = home
+	}
 	// Its own database, its data moved there once (owndb.go); the hub's while that cannot be yet.
 	if o.DatabaseURL, o.OnHubDatabase, err = builtinDatabase(ctx, home, cfg.DatabaseURL, provisionOwn, logger.Printf); err != nil {
 		return err
@@ -258,6 +267,10 @@ type runOptions struct {
 	Logf       func(format string, args ...any)
 	// Ready is given the manager's Idle once its service is made (MainHooks.Ready); nil: nobody asks.
 	Ready func(Idle)
+	// PendingRestart is given BusHub.SetPendingRestart once BusHub is made (MainHooks.PendingRestart); nil: nobody asks.
+	PendingRestart func(func(bool))
+	// HostDataDir is the host's Persona data directory (~/.persona) used to read machine-uid for manager.hello.
+	HostDataDir string
 	// Errors is the process's log writer that reports its error lines (newErrorTee); nil: run makes one.
 	Errors *errorTee
 }
@@ -444,8 +457,11 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		Timezone: func() string { return svc.userTZ() }})
 	o.Errors.ext.Store(ext)
 	bh = NewBusHub(BusOptions{ID: o.ID, Hub: hub, Token: token, HTTPClient: httpClient, Version: version, Deploy: deploy,
-		ConfigFile: o.ConfigFile, Outbox: database, Features: func() []string { return svc.moduleFeatures() },
+		HostDataDir: o.HostDataDir, ConfigFile: o.ConfigFile, Outbox: database, Features: func() []string { return svc.moduleFeatures() },
 		Logf: logf, Devices: devs, Extensions: ext, StopWhenRevoked: o.StopWhenRevoked, StopWhenRejected: o.TokenFirst})
+	if o.PendingRestart != nil {
+		o.PendingRestart(bh.SetPendingRestart)
+	}
 	// The knowledge base in its directory, kept as its manager.json's kb section says (over the hub's hello). The model
 	// providers' keys are sealed with its own secret.key.
 	svc = New(Options{Hub: bh, Store: func() Store { return assistantStore }, Logf: logf, Devices: devs,

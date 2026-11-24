@@ -450,9 +450,13 @@ describe("Settings category navigation", () => {
     expect(new URLSearchParams(location.search).get("extension")).toBe(to);
   });
 
-  it("keeps a connector page's own Back on a wide screen", async () => {
+  it("keeps a connector page's own Back on a wide screen and leaves legacy scroll container unchanged", async () => {
     await mount("/settings?tab=connectors&connector=github");
     expect(host.querySelector("[data-own-back]")).not.toBeNull();
+    const region = host.querySelector<HTMLElement>('[role="region"]')!;
+    expect(region.hasAttribute("data-integrations-split-host")).toBe(false);
+    expect(region.classList.contains("overflow-y-auto")).toBe(true);
+    expect(region.classList.contains("overscroll-contain")).toBe(true);
   });
 
   it.each(["/settings?tab=sent", "/settings/sent", "/settings/sent/"])("redirects %s to the secondary Sent page", async (url) => {
