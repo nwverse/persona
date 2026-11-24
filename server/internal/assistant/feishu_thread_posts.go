@@ -12,10 +12,8 @@ import (
 
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
-	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/larkhost"
-	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // Posting into a todo's chat thread (#5279, docs/assistant/todos.md "Chat thread", docs/extensions/bots.md): a todo bound to a Lark topic
@@ -41,9 +39,6 @@ const (
 	threadPostEvents = 50
 	// threadPostShown is how many decisions a line quotes.
 	threadPostShown = 3
-	// topicAnchorsKeep and topicAnchorsKeepFor bound the topic messages remembered to reply to.
-	topicAnchorsKeep    = 200
-	topicAnchorsKeepFor = 30 * 24 * time.Hour
 )
 
 type threadEventKind int
@@ -82,106 +77,6 @@ type threadQueue struct {
 	last   time.Time // the last time a line was due (sent or left out)
 	events []threadEvent
 	armed  bool // a flush is scheduled
-}
-
-func (p *threadPoster) clock() time.Time {
-	if p.now != nil {
-		return p.now()
-	}
-	return time.Now()
-}
-
-func (p *threadPoster) later(d time.Duration, f func()) {
-	if p.after != nil {
-		p.after(d, f)
-		return
-	}
-	time.AfterFunc(d, f)
-}
-
-// topicAnchor is a message of the topic the bot can reply into it with: the latest one the owner said there.
-// Feishu replies into a thread by a message in it; the todo only keeps the thread's id.
-type topicAnchor struct {
-	MessageID string    `json:"message_id"`
-	At        time.Time `json:"at"`
-}
-
-// rememberTopicMessage notes message id as the latest of the topic, kept with the chat's state (a restart does not
-// lose where to reply).
-func (s *Service) rememberTopicMessage(ctx context.Context, chatID, threadID, id string) {
-	if chatID == "" || threadID == "" || id == "" {
-		return
-	}
-	b := &s.fbot
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	s.loadBotLocked(ctx)
-	if !b.loaded {
-		return
-	}
-	if b.st.Topics == nil {
-		b.st.Topics = map[string]*topicAnchor{}
-	}
-	b.st.Topics[chatID+"/"+threadID] = &topicAnchor{MessageID: id, At: b.clock()}
-	s.saveBotStateLocked()
-}
-
-// topicMessage is the message to reply to in the topic, "" when none is known.
-func (s *Service) topicMessage(ctx context.Context, chatID, threadID string) string {
-	b := &s.fbot
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	s.loadBotLocked(ctx)
-	if a := b.st.Topics[chatID+"/"+threadID]; a != nil {
-		return a.MessageID
-	}
-	return ""
-}
-
-// pruneTopicAnchors drops the anchors older than topicAnchorsKeepFor, then the oldest beyond topicAnchorsKeep.
-func pruneTopicAnchors(m map[string]*topicAnchor, now time.Time) {
-	for k, a := range m {
-		if a == nil || now.Sub(a.At) > topicAnchorsKeepFor {
-			delete(m, k)
-		}
-	}
-	for len(m) > topicAnchorsKeep {
-		oldest := ""
-		for k, a := range m {
-			if oldest == "" || a.At.Before(m[oldest].At) {
-				oldest = k
-			}
-		}
-		delete(m, oldest)
-	}
-}
-
-// threadOf is the thread todo id is bound to, from memory; nil when it has none (or is gone).
-func (s *Service) threadOf(id string) *TodoThread {
-	s.todos.mu.RLock()
-	defer s.todos.mu.RUnlock()
-	if t, ok := s.todos.todos[id]; ok && t.Thread != nil {
-		th := *t.Thread
-		return &th
-	}
-	return nil
-}
-
-// insertDecision is InsertTodoDecision, and tells the todo's topic of a decision that was written (postable says
-// which). Every writer of decisions goes through it, so a new source cannot forget the topic.
-func (s *Service) insertDecision(ctx context.Context, st todoStore, row db.TodoDecisionRow) (bool, error) {
-	ok, err := st.InsertTodoDecision(ctx, row)
-	if err == nil && ok {
-		s.todoDecisionEvent(row)
-		if row.Source == db.DecisionManual {
-			s.askTodoDecided(context.WithoutCancel(ctx), row) // the owner's call on a question's to-do (ask_todo.go)
-		}
-		s.parkDecided(context.WithoutCancel(ctx), row) // what a parked task waited for may have come (parked.go)
-	}
-	if err == nil && ok && postable(row) {
-		s.chat().ThreadPost(row.TodoID, larkhost.ThreadEvent{Kind: larkhost.ThreadDecision, Text: decisionLine(row)})
-	}
-	return ok, err
 }
 
 // threadPost queues ev for todo id's topic: nothing for a todo bound to none. The line goes out when the minute since
@@ -290,18 +185,6 @@ func (s *Service) threadPostKey(id string) string {
 	return "tp:" + hex.EncodeToString(sum[:])[:32]
 }
 
-// forgetTopicMessage drops the anchor of the topic when it is still the one given (a newer message may have come).
-func (s *Service) forgetTopicMessage(ctx context.Context, chatID, threadID, id string) {
-	b := &s.fbot
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	s.loadBotLocked(ctx)
-	if a := b.st.Topics[chatID+"/"+threadID]; a != nil && a.MessageID == id {
-		delete(b.st.Topics, chatID+"/"+threadID)
-		s.saveBotStateLocked()
-	}
-}
-
 // threadPostText is the one line for events, with the link to the todo at the end when there is one.
 func threadPostText(l i18n.Lang, events []threadEvent, link string) string {
 	var decisions, finished, parts []string
@@ -380,65 +263,4 @@ func threadPostText(l i18n.Lang, events []threadEvent, link string) string {
 		text += " " + link
 	}
 	return text
-}
-
-// threadAgentDone: an agent's finished turn (the one the phone is pushed, notifyFinished) is told to the topic of
-// the todo it works on.
-func (s *Service) threadAgentDone(machine string, sess proto.Session) {
-	if id := s.activeTodoOf(machine, sess.SessionID); id != "" {
-		s.threadPost(id, threadEvent{kind: threadAgentFinished, agent: threadName(agentLabel(sess))})
-	}
-}
-
-// threadAgentAsks: a card an agent put to the user (the one the phone is pushed, tell) is told to the topic of the
-// todo it works on, unless that topic knows already: the card went into it (its run was asked there, same chat and
-// thread), or a line there says the card went to the DM (a private run of the conversation wins). Where the card is
-// decides what the line says: in the DM, the line only says so (the summary of an approval is not for a group); no card
-// at all (the cards switch is off), the line is the notice and carries the summary, but never a permission's.
-func (s *Service) threadAgentAsks(ix proto.Interaction) {
-	if f := s.tposts.asked; f != nil {
-		defer f()
-	}
-	id := s.activeTodoOf(ix.MachineID, ix.SessionID)
-	th := s.threadOf(id)
-	if th == nil {
-		return
-	}
-	private, topic := s.interactionRuns(ix)
-	if topic != nil {
-		ext := s.runExts(topic, "chat", "thread")
-		if ext["chat"] == th.ChatID && ext["thread"] == th.ThreadID {
-			return // the card is in this topic, or this topic was told it went to the DM
-		}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	ev := threadEvent{kind: threadAgentNeeds, agent: threadName(firstNonEmpty(ix.SessionTitle, ix.TaskTitle))}
-	switch {
-	case !s.feishuCardWanted(ctx, ix):
-		// No card anywhere: the line is the notice, and says what is asked, except for a permission: what a tool is about
-		// to do (a command, a path) is not for a group chat, only that the Agent needs the user.
-		if ix.Kind != proto.IxPermission {
-			ev.text = clip(oneLine(ix.Summary), 80)
-		}
-	case private != nil || topic == nil:
-		ev.dm = true
-	}
-	s.threadPost(id, ev)
-}
-
-// threadName is an agent's name as a line quotes it: one short line, "" when there is none (a bare directory mark is none).
-func threadName(s string) string {
-	s = strings.TrimSpace(clip(oneLine(s), 40))
-	if s == "." || s == "/" {
-		return ""
-	}
-	return s
-}
-
-// activeTodoOf is the open todo the agent machine/session works for, "" when it works for none.
-func (s *Service) activeTodoOf(machine, session string) string {
-	s.todos.mu.RLock()
-	defer s.todos.mu.RUnlock()
-	return s.todos.activeBySession[[2]string{machine, session}]
 }
