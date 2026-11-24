@@ -87,3 +87,17 @@ func (e DayFullError) As(target any) bool {
 	}
 	return false
 }
+
+// RecordingCoverage is the phone's view of a day recording, sent whole every time: To is the seconds since started_at
+// up to which everything it holds is transcribed and appended, Gaps the time with no text and why.
+type RecordingCoverage struct {
+	To   float64       `json:"to"`
+	Gaps []CoverageGap `json:"gaps,omitempty"`
+}
+
+// CoverageGap is a stretch of the day with no text: seconds since started_at, and why (Gap*).
+type CoverageGap struct {
+	From   float64 `json:"from"`
+	To     float64 `json:"to"`
+	Reason string  `json:"reason"`
+}

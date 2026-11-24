@@ -119,65 +119,6 @@ var (
 // LiveGapError is declared in recordingwire.
 type LiveGapError = recordingwire.LiveGapError
 
-// AttendanceRole is the role r is attended in: AttendanceOff, AttendanceNotes (a room meeting's only),
-// AttendanceListener or AttendanceParticipant. A room
-// meeting's is its room's (meeting.json), never meta.json's; a trimmed recording is attended no more.
-func (r Recording) AttendanceRole() string {
-	role := r.Attendance
-	if r.RoomMeeting() {
-		role = r.Conv.Room.Attendance
-	}
-	if role == "" || r.TrimmedAt != nil {
-		return AttendanceOff
-	}
-	return role
-}
-
-// UnmarshalJSON reads an upload like the default does, except that a value of the wrong type for attendance or
-// attending_session does not fail it (the same request carries the transcript): normalizeAttendance turns attending
-// off for it. Nor does one for room, private, transcription or timeline (readRoomAndPrivate, readTranscription), nor
-// a malformed spoken (readSpoken).
-func (u *RecordingUpload) UnmarshalJSON(data []byte) error {
-	type plain RecordingUpload
-	aux := struct {
-		*plain
-		Attendance       json.RawMessage `json:"attendance"`
-		AttendingSession json.RawMessage `json:"attending_session"`
-		Room             json.RawMessage `json:"room"`
-		Private          json.RawMessage `json:"private"`
-		Transcription    json.RawMessage `json:"transcription"`
-		Timeline         json.RawMessage `json:"timeline"`
-		Spoken           json.RawMessage `json:"spoken"`
-	}{plain: (*plain)(u)}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	u.Spoken = readSpoken(aux.Spoken)
-	u.readRoomAndPrivate(aux.Room, aux.Private)
-	u.readTranscription(aux.Transcription, aux.Timeline)
-	u.Attendance, u.AttendingSession, u.BadRole, u.BadSession = "", nil, false, false
-	if raw := aux.Attendance; !jsonNull(raw) {
-		u.BadRole = json.Unmarshal(raw, &u.Attendance) != nil
-	}
-	if raw := aux.AttendingSession; !jsonNull(raw) {
-		var keys map[string]json.RawMessage
-		if json.Unmarshal(raw, &keys) != nil {
-			u.BadSession = true
-			return nil
-		}
-		ref := &SessionRef{}
-		for key, dst := range map[string]*string{"machine_id": &ref.MachineID, "session_id": &ref.SessionID} {
-			if v := keys[key]; !jsonNull(v) && json.Unmarshal(v, dst) != nil {
-				u.BadSession = true
-			}
-		}
-		if !u.BadSession {
-			u.AttendingSession = ref
-		}
-	}
-	return nil
-}
-
 // jsonNull: a field absent or null.
 func jsonNull(raw json.RawMessage) bool {
 	raw = bytes.TrimSpace(raw)

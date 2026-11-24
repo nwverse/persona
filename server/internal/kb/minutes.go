@@ -29,36 +29,8 @@ import (
 // words only; the model cites line or photo numbers, which become seconds here, and an item citing no line or photo it
 // read is dropped. Long transcripts are read in chunks whose notes one more call merges.
 
-// Minutes is minutes.json, and detail.minutes of GET /api/v1/kb/recordings/{id}.
-type Minutes struct {
-	Version     int             `json:"version"`  // counts the minutes written for this recording
-	Revision    int64           `json:"revision"` // the recording revision they were made from
-	GeneratedAt time.Time       `json:"generated_at"`
-	Title       string          `json:"title"`
-	When        string          `json:"when"` // Start–End in one fixed format, for older clients and the Markdown
-	Where       string          `json:"where,omitempty"`
-	Attendees   []string        `json:"attendees,omitempty"`
-	Points      []MinutesPoint  `json:"points,omitempty"`
-	Decisions   []MinutesItem   `json:"decisions,omitempty"`
-	Actions     []MinutesAction `json:"actions,omitempty"`
-	Open        []MinutesItem   `json:"open,omitempty"`
-	// Overview is the same minutes as one summary card (#6563, minutes_overview.go): only when every point and
-	// decision is a bullet of one of its topics. Minutes from before it, or from an older hub, have none.
-	Overview *MinutesOverview `json:"overview,omitempty"`
-	Partial  bool             `json:"partial,omitempty"` // the transcript's end was not read
-	// Language is what they are written in, their Markdown's headings too (language.go): an i18n code (zh-Hans, en,
-	// ja); minutes written before it was kept have none, and are Chinese.
-	Language string `json:"language,omitempty"`
-	Markdown string `json:"markdown"`
-	// Start and End are the recording's span When says, in the user's zone (#4713). Clients format them with their own
-	// localized dates and show When only without them (minutes from an older hub).
-	Start time.Time `json:"start,omitzero"`
-	End   time.Time `json:"end,omitzero"`
-
-	// modelTitle is the title the model wrote for them (titleLine; "" none), which settles the recording's AITitle
-	// when they are stored (#8873); never in minutes.json.
-	ModelTitle string
-}
+// Minutes is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type Minutes = recordingwire.Minutes
 
 // MinutesItem is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
 type MinutesItem = recordingwire.MinutesItem
@@ -687,15 +659,7 @@ func untitledMinutes(r *Recording, zone *time.Location, lang i18n.Lang) string {
 }
 
 // calendarTitle is the phone calendar's title of r, else the matched calendar item's ("" without either).
-func calendarTitle(r *Recording) string {
-	if r.Calendar != nil && r.Calendar.Title != "" {
-		return r.Calendar.Title
-	}
-	if r.Meeting != nil {
-		return r.Meeting.Name
-	}
-	return ""
-}
+func calendarTitle(r *Recording) string { return r.CalendarTitle() }
 
 // chunkLines cuts lines into chunks of about size runes at line boundaries: one chunk when all of them fit in one,
 // at most max chunks (partial: lines were left out).
