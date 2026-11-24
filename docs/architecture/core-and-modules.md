@@ -130,7 +130,7 @@ Because a missing flag means off, every flag a client gates on has to be announc
 - **Every built-in module declares `feature`** (`module.<id>`), also one that registers nothing with the kernel
   (`voice`, `volc`, `mail`): `TestEveryBuiltinModuleAnnouncesItsFlag` in `server/internal/modules/all`. Built out or
   switched off, its flag is gone and the clients hide their half.
-- **Client-only modules** (`modapi.ClientModules`: `glasses`, `health`, `knowledge-ui`, `screen-share`)
+- **Client-only modules** (`modapi.ClientModules`: `glasses`)
   have no server half, so the manager announces their flags itself. The `modules` settings row switches one off the
   same way (`{"disabled": ["health"]}`), which is how the owner turns a client module off from the hub without a new
   build. An id leaves the list in the PR that gives the module a server half (`TestNoBuiltinModuleIsListedAsClientOnly`).
@@ -188,6 +188,8 @@ What switched off means, by seam (each port follows `Set.On`; a build without th
 | `server/internal/botport` | `lark` | No bot client is made: the bot cannot be bound, registered or started |
 | `server/internal/cliport` | `lark` | `lark.cli` is not read (logged at start) and the extension host's lark-cli integration is off |
 | `server/internal/larkhost` | `lark` | The outbound channel port is `larkhost.None`, as without the module |
+| `server/internal/knowledgeuihost` | `knowledge-ui` | No layer: no `kb_history_*` tool or import, the selection page's chat list answers as a source without history, days carry no sent marks |
+| `server/internal/healthhost` | `health` | No layer: the intake routes answer 404, no `health_intake` tool or capability, no water reminders |
 | `server/internal/recordinghost` | `recording` | No layer: the recording routes answer 404, no audio socket, room tools, final passes or meeting capabilities |
 | `server/internal/node/imessageport` | `imessage` | The node answers as a computer without Messages; the manager sends it no `connector.*` call and drops `imessage` from the node's built-in programs |
 | `server/internal/node/iphoneport` | `phone-extra` | The node lists no `iphone` program and has none of its methods; the manager drops `iphone` from the node's built-in programs, so it offers and calls no phone control |
@@ -391,9 +393,10 @@ platform compiles cannot hide a violation (`TestModuleGuardsSeeEveryBuild` prove
   Known exceptions are debt in `testdata/module_services.txt`, which only shrinks (a stale line fails): `<module id>
   <core package>` for any of the module's files, `<module id> (test) <core package>` for its tests only, no wildcards.
   The lines are the GitHub and iMessage connectors' tests, which run them through the connector registry and gate, the
-  conformance suite and the subscription service with the modules' own fixtures, and `recording internal/kb`: the recordings'
+  conformance suite and the subscription service with the modules' own fixtures, the Health module's water import
+  test on the real SQL (`health (test) internal/db`), `recording internal/kb`: the recordings'
   storage (the `kb.Recording` model with its `Engine` and `Store`) stays in the knowledge base until it offers a
-  recording port. A declared core-service dependency is a known debt, not a precedent: the assistant, the hub and the
+  recording port, and `knowledge-ui internal/kb`: the history import writes into the knowledge base, the core's memory. A declared core-service dependency is a known debt, not a precedent: the assistant, the hub and the
   extension host are never listed.
 - **`TestLibrariesAreLeaves`**: the leaf libraries (`testdata/libraries.txt`) are the core's packages a module may use
   that hold no state and own no feature (localization, the extension SDK, small helpers). Each depends only on the
@@ -484,6 +487,62 @@ manifest declares `feature: module.recording`, which the kernel announces while 
   the hub announces none of their feature flags), no room tool is offered and no final pass or attending feeder runs
   (`TestRecordingFollowsItsModule`). The recordings already stored stay in the knowledge base.
 
+### Health
+
+`health` (`server/internal/modules/health`, #14406) is the manager's Health intake (docs/assistant/health.md "Water
+and protein"): the `/api/v1/assistant/health/intake…` and `…/water/reminder` routes, the water reminders, the intake
+page, the legacy water extension's import and the `health_intake` tool. Its manifest declares `feature: module.health`,
+which the kernel announces while it is loaded (it left `modapi.ClientModules` with this move).
+
+- **The seam**: `server/internal/healthhost`, in recording's shape: `Layer` (core -> module: `Routes`, `Tool`,
+  `ReminderLoop`) and `Host` (module -> core: the settings rows, the intake store, the water extension's migration, the
+  apps' events, the language and time zone, standby and quiet push, the push with its card, and the extension page's
+  fitting). The module declares its own `Host` with the same methods and types (`server/internal/modules/health/host.go`),
+  so it imports no core service; `server/internal/modules/all/health.go` provides its layer under
+  `!persona_without_health && !persona_core_only`; its port is a `moduleswitch.Port`, so the `modules` row switches it
+  off as the other seams. The assistant makes the layer where it registered the routes before
+  (`server/internal/assistant/health_layer.go`), so routes, the tool's place in the list and the hello stay as they were.
+- **Shared with the core**: the entry's type is a contract (`assistantwire.HealthIntakeRow`, which `db.HealthIntakeRow`
+  aliases); the `health_intake` table and its SQL stay in `internal/db`; the tool's description stays in
+  `server/internal/prompts/mcp/health`. The Health *space* (its conversations' directory, policies and outbound
+  confirmation, `server/internal/assistant/health.go`) is core: every core tool's space check reads it.
+- **Tests**: the module's tests run on a fake core (`fakecore_test.go`); the water import's acceptance also runs on the
+  real SQL (`health (test) internal/db` in `module_services.txt`). The core's tests of how the module meets the rest of
+  the manager (the tool's space guard, the intake page fitted for older apps, the push outbox, the module's absence)
+  stay in `server/internal/assistant/health_module_test.go` and skip without the module (`needsHealthModule`).
+- **With the module absent** (`persona_without_health`, `persona_core_only`, or switched off in the `modules` row) the
+  seven routes answer 404, the hello names no `health_intake` capability (so the hub announces no `health_intake`
+  feature and the apps show their "update your hub" state), the `health_intake` tool is not listed and refuses, and no
+  water reminder runs (`TestHealthFollowsItsModule`). The entries already stored stay in the database.
+
+### Knowledge UI
+
+`knowledge-ui` (`server/internal/modules/knowledge-ui`, Go package `knowledgeui`, #14407) is the knowledge pages'
+pipelines that are not the core's memory (#13430 section 2): the import of the connectors' older chat history
+(`kbhistory`: the `kb_history_plan`, `kb_history_status`, `kb_history_stop` and `kb_history_resume` tools, the driver
+its loop runs, the chat lists of the selection page) and the marks of the lines a knowledge base day shows that the
+owner sent from Persona (`kbsent`, by the sent-as-user ledger). Its manifest declares `feature: module.knowledge-ui`,
+so the flag the clients gate the knowledge pages on is the kernel's to announce, no longer `modapi.ClientModules`'.
+
+- **The seam**: `server/internal/knowledgeuihost`, as recording's (`Layer`: core -> module; `Host`: module -> core,
+  in the standard library's, the knowledge base's and the contracts' types). `server/internal/modules/all/knowledgeui.go`
+  provides it under `!persona_without_knowledge_ui && !persona_core_only`, through a `moduleswitch.Port`; the assistant makes one layer per manager
+  (`internal/assistant/knowledge_ui.go`, `loadKnowledgeUI`) unless the `modules` row switches it off. The layer keeps
+  the import's shared state (one call in flight, the source running, the process's instance); the core keeps the
+  loop that wakes it on the knowledge base's schedule (`kbhistory_service.go`), the selection itself and its
+  candidates route, which asks the layer for the chats and what each would be read as.
+- **Shared with the core**: the knowledge base (`knowledge-ui internal/kb`, "Guards" above) and the sent-as-user row,
+  `connectorwire.SentAsUser` (`db.SentAsUser` is an alias). Prompts (`mcp/kb_history_*`) and strings stay where
+  they were.
+- **Tests**: the import's and the marks' own tests moved with them (`kbhistory`, `kbsent`); the assistant's tests of
+  the tools, the candidates route and the marked days through the Service stay in `internal/assistant`, read the
+  import's files from the knowledge base's directory and skip without the module (`needsKnowledgeUIModule`).
+- **With the module absent** (`persona_without_knowledge_ui`, `persona_core_only`, or switched off) the four
+  `kb_history_*` tools are not offered and answer as unknown, no import runs, `GET /api/v1/kb/selection/candidates`
+  answers that the source has no history (404) without asking it, a knowledge base day comes without sent marks
+  (`sent_origin` "unavailable"), and `module.knowledge-ui` is not announced (`TestKnowledgeUIFollowsItsModule`). What
+  an import wrote stays in the knowledge base.
+
 ### Lark
 
 The assistant's Feishu / Lark layer (`server/internal/assistant/feishu*.go`: the chat's turns, cards, commands,
@@ -520,6 +579,12 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
   mute an Inbox item, draft and send a reply, switch the chat's target, the other cards). The Inbox item a button names
   is read by the Inbox core (`server/internal/assistant/inbox_workbench.go`); the counts by
   `server/internal/assistant/workbench_view.go`.
+- **A to-do's topic lines are the module's** (`server/internal/modules/lark/thread_posts.go`): the queue (a line a
+  minute at most, what came meanwhile joined), the wording and the post under the topic's latest message. The module
+  implements the port's `ThreadPost`, so the host no longer serves it. It reads the to-do's Feishu thread, the bot's
+  status, the topic anchors (kept with the chat's state in the core, `server/internal/assistant/todo_thread_topics.go`),
+  the to-do's link, and the core's clock and timer (`PostNow`, `PostLater`, which a to-do's source report waits on
+  too).
 - **Tests**: the turns' own tests run in the module on a fake core (`server/internal/modules/lark/service_test.go`:
   the channels' runs, their finishing, folding and dropping, and the hub's transport); the assistant's tests of the
   turns through the channels' pipeline stay in `internal/assistant` and skip without the module (`needsLarkLayer`).

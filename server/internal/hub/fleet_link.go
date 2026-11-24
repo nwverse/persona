@@ -826,16 +826,16 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) (out *p
 			// The same to-do's push about the same reason rang and the to-do still waits on the owner for it.
 			return &pushOutcome{held: interceptReasonDedup}, nil
 		}
-		policy := pushPolicy{level: levelFor(n.Kind, n.Level), relatedKey: n.RelatedKey, todoID: relatedTodoID(n.RelatedKey, !n.Asked),
+		policy := pushPolicy{kind: assistantwire.NotifyPush, level: levelFor(n.Kind, n.Level), relatedKey: n.RelatedKey, todoID: relatedTodoID(n.RelatedKey, !n.Asked),
 			depth: n.Depth, track: n.Track, cardID: n.CardID}
-		policy.level = h.pushGradingNotifyLevel(n, policy.level)
+		policy.level = h.pushGradingNotifyLevel(from, n, policy.level)
 		o := h.notifyDoneUnder(from, "assistant", n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, pushWants{}, managerPushCollapseID(from, n.ID),
 			pushRecordingID(n.RecordingID), policy)
 		out = &o
 	case assistantwire.NotifyDone:
 		o := h.notifyDoneUnder(from, "done", n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body,
 			pushWants{Kind: "done", Took: time.Duration(n.TookMS) * time.Millisecond, Long: time.Duration(n.LongMS) * time.Millisecond},
-			"", "", pushPolicy{level: levelFor(n.Kind, n.Level), relatedKey: n.RelatedKey, todoID: relatedTodoID(n.RelatedKey, false),
+			"", "", pushPolicy{kind: assistantwire.NotifyDone, level: levelFor(n.Kind, n.Level), relatedKey: n.RelatedKey, todoID: relatedTodoID(n.RelatedKey, false),
 				done: true, track: n.Track})
 		out = &o
 	case assistantwire.NotifyReply:
@@ -858,8 +858,8 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) (out *p
 // owner talking to Persona directly keeps its alerts. Every other conversation's ordinary notice is P1 — held for the
 // "Needs you" list and the briefing instead of alerting. With the switch off the level the caller named stands, so
 // delivery is exactly as before.
-func (h *Hub) pushGradingNotifyLevel(n assistantwire.Notification, derived string) string {
-	if h.push == nil || !h.push.filtering() { // hub.ln_mode on, or an attention mode in force (push_attention.go)
+func (h *Hub) pushGradingNotifyLevel(manager string, n assistantwire.Notification, derived string) string {
+	if h.push == nil || !h.push.filteringFor(manager) { // hub.ln_mode on, attention mode in force, or active extension layer
 		return derived
 	}
 	if n.Level != "" {

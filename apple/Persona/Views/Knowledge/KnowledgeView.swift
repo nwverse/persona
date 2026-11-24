@@ -829,7 +829,7 @@ struct KnowledgeDetailView: View {
                     Section {
                         ForEach(agents) { s in
                             Button { openAgent(s.key) } label: {
-                                SessionRow(session: s, machine: model.machine(s.machineRef))
+                                SessionRow(session: s, machine: model.machine(s.machineRef), preferHerdrTabName: model.prefersHerdrTabName(for: s))
                             }
                             .buttonStyle(.plain)
                         }

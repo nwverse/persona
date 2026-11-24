@@ -83,6 +83,10 @@ type Devices interface {
 	// found is false when no machine holds such a message; err is an *rpc.Error coded for the app otherwise.
 	HeldRetry(ctx context.Context, sid, msg string) (found bool, err error)
 	HeldDelete(ctx context.Context, sid, msg string) (found bool, err error)
+	// AgentTransfer moves a file or a folder from one computer to another for file_transfer (devices agent_transfer.go,
+	// file_transfer.go here), answering once the target has it; the error is a *devices.AgentTransferError when it
+	// did not happen.
+	AgentTransfer(ctx context.Context, t devices.AgentTransfer) (devices.AgentTransferResult, error)
 }
 
 // localDeviceCall is a device.call the manager answers itself: a node's method on a machine it has. The hub still

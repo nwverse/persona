@@ -66,6 +66,15 @@ const server = createServer(async (req, res) => {
     while (JSON.parse(readFileSync(`${directory}/trajectory.json`, 'utf8')).holdErrors) {
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
+    if (snapshot.stepsUnavailable) {
+      res.writeHead(503).end('{"message":"Native service unavailable"}')
+      return
+    }
+    // Like agy for a conversation another process created: no steps until it is loaded.
+    if (snapshot.stepsRequireLoad && !loaded.has(params.cascadeId)) {
+      res.end('{}')
+      return
+    }
     res.end(JSON.stringify({ steps: (snapshot.trajectory.steps || []).slice(params.stepOffset) }))
     return
   }

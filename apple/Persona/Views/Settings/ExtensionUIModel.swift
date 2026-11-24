@@ -853,6 +853,7 @@ extension APIClient {
     /// (`InboxSourceLink`), never another item's.
     static func opens(_ url: URL, item: String?, owner: String? = nil) -> Bool {
         if url.scheme?.lowercased() == "https" { return url.host()?.isEmpty == false && url.user == nil && url.password == nil }
+        if owner == "space-conversations" && ExtensionConversationLink.session(url) != nil { return true }
         // the subscription pages' Set Up with … (#5278): their text to the assistant, never an extension's
         if SubscriptionsUI.askText(url) != nil || SubscriptionsUI.isGraph(url) { return owner == SubscriptionsUI.id }
         if let settings = ExtensionSettingsLink.extensionID(url) { return owner != nil && settings == owner }

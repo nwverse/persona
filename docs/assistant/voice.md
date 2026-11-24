@@ -1283,7 +1283,7 @@ struct VoiceDeps { var api: () -> APIClient?                 // Refetch each con
 ### 6.6 Design system (add missing tokens first; `Shared/` must compile for watchOS 10)
 
 - **Tokens**: new apple/Shared/Design/VoiceTokens.swift, `extension Theme`, avoiding #1931's `Theme.swift` edits.
-  - `Theme.Motion.voiceBreath` (listening, about 1.6 s), `voiceBeat` (speaking, about 0.42 s), matching Android `Voice.kt`;
+  - `Theme.Motion.voiceBreath` (listening, about 1.6 s), `voiceBeat` (speaking, about 0.42 s), matching Android `VoiceComponents.kt` (`:module:voice`);
   - `Theme.Size.voiceOrb` and level-bar dimensions;
   - tones/haptics (#3508): `Theme.VoiceCue` (`ready` connected, `attention` a new card, `reconnecting`: the notes' frequencies, each note's length, the gap, the ramp, the gain) and the `Theme.VoiceHaptic` that goes with each. The app's `VoiceCueTone` synthesizes PCM16 at the output rate and plays it through the call's own player (`VoiceConversation.play(_:)`), so echo cancellation removes it. A call that ended by itself has no player left: endings only tap (`VoiceEndNote.haptic`).
 - **Icons**: existing `voiceChannel` entry. Add `voiceMute`, `voiceUnmute`, `voiceEnd`, `voiceCaptions`, `voiceTimbre`; pass `IconVocabularyTests`, avoid #1931 collisions.
