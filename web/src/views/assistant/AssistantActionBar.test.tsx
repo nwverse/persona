@@ -123,6 +123,39 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(writes).toContain("/api/v1/todos/verify-task/accept");
   });
 
+  it.each([
+    { main: conversation, supervisor: conversation },
+    { main: conversation, supervisor: "direction-lead" },
+    { main: "main-chat", supervisor: conversation },
+  ])("shows a quiet task review decision in Needs you ($main, $supervisor)", async ({ main, supervisor }) => {
+    const release: Todo = {
+      id: "release-review", title: "Release review", origin: "dispatch-chat", quiet: true, created_at: at, updated_at: at,
+      supervision: { state: "needs_user", supervisor },
+      ask: { outcome: "decide", asked_at: at, verdict: "Needs your decision", question: "How should the fix be released?",
+        recommend: "Release and verify", options: [{ label: "Release and verify" }, { label: "Release only" }, { label: "Wait" }] },
+      view: { phase: "needs_you", section: "needs_you", reason: "owner_decides", rank: 0 },
+    };
+    moreTodos = [release, { ...release, id: "dismissed-review", decision_review: { review_at: at, dismissal_id: "dismissed" } },
+      { ...release, id: "held-review", ask: { ...release.ask!, for_briefing: true }, view: { ...release.view!, section: "can_wait", reason: "can_wait" } }];
+    mainChat = main;
+    await act(async () => refresh());
+    expect(entry("needs")).not.toBeNull();
+    await act(async () => { entry("needs").click(); await import("./TaskDecision"); });
+    await openRows("task:release-review");
+    const opened = () => host.querySelector('[data-needs-row="task:release-review"][data-needs-open]');
+    await expect.poll(() => opened()?.querySelector("[data-decision-question]")?.textContent).toBe(release.ask?.question);
+    const row = opened()!;
+    expect(row.closest("[data-needs-supervisor]")?.getAttribute("data-needs-supervisor")).toBe(supervisor === conversation ? undefined : supervisor);
+    expect(host.querySelector('[data-needs-row="task:dismissed-review"]')).toBeNull();
+    expect(host.querySelector('[data-needs-row="task:held-review"]')).toBeNull();
+    const option = [...row.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Release only");
+    expect(option).toBeDefined();
+    await act(async () => option!.click());
+    const sends = vi.mocked(fetch).mock.calls.filter(([url, init]) => String(url).endsWith("/todos/release-review/accept") && init?.method === "POST");
+    expect(sends).toHaveLength(1);
+    expect(JSON.parse(String(sends[0][1]?.body))).toEqual({ asked_at: at, option: "Release only" });
+  });
+
   it("Parked grouping: shows explicit waits and multi-PR waits once, outside active work, including on All", async () => {
     const pr = "https://github.com/example/demo/pull/52";
     const checked_at = new Date(now.getTime() - 60_000).toISOString();

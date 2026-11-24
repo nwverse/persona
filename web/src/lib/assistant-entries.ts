@@ -3,7 +3,7 @@ import { cardDismissed, cardFiled, cardSent, startFailure, type FeedItem, type T
 import { cardBucket, taskCardSlots, type TaskCardMetadata } from "./task-cards";
 import { decisionDismissed, linkedParkInteraction, parkInteractionID, reviewState, withoutParkInteraction } from "./supervision";
 import { finishedAt, hubNeedsYou, JUST_DONE_MS, openByView, supersededFailedStarts, triage } from "./todo-triage";
-import { awaitsReview, dockAgents, heldDelivery, heldForSupervisor, makeSessionLookup, openAsk, personalVerificationAsk, todoRank, todoStatus, withInteractionLookup, type SessionLookup, type Todo, type TodoStatus } from "./todos";
+import { awaitsReview, dockAgents, heldDelivery, heldForSupervisor, makeSessionLookup, openAsk, personalVerificationAsk, taskReviewDecisionAsk, todoRank, todoStatus, withInteractionLookup, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
 import { homeKey } from "./folded-rows";
 import type { Interaction, Session } from "./types";
@@ -205,9 +205,11 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     const waits = status === "failed" ? bucket === "open" && !supervised : !todo.done_at && WAITS_ON_YOU.has(status) && !held;
     const decision = taskAwaitsDecision(todo);
     const deliveryApproval = heldDelivery(todo)?.unblock === "user";
-    // Quiet tasks leave the global badge alone. The supervising conversation still has their explicit verification.
-    const quietVerificationHere = todo.quiet && todo.supervision?.supervisor === conversation && personalVerificationAsk(todo);
-    const hub = hubNeedsYou(quietVerificationHere ? { ...todo, quiet: false } : todo, openOf);
+    // The global badge skips quiet tasks. Explicit reviews can still ask the owner in the conversation tray.
+    const supervisesHere = todo.supervision?.supervisor === conversation;
+    const quietOwnerAskHere = todo.quiet && (supervisesHere && personalVerificationAsk(todo) ||
+      (isMain || supervisesHere) && taskReviewDecisionAsk(todo) && !input.deferred?.[decisionLaterKey(todo)]);
+    const hub = hubNeedsYou(quietOwnerAskHere ? { ...todo, quiet: false } : todo, openOf);
     if (asks.length) asking.push({ kind: "task", key, todo, status, asks, countsOpen });
     else if (hub ?? (waits || decision || deliveryApproval)) {
       // Only the review decision is hidden; a live Agent question above still has its home.
@@ -273,14 +275,15 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   };
 }
 
-/** Needs you's rows by conversation (#4314, docs/assistant/assistant.md "Background rounds"): a personal verification
- *  follows its supervisor, other tasks use their origin. This conversation's group comes
+/** Needs you's rows by conversation (#4314, docs/assistant/assistant.md "Background rounds"): an explicit owner ask
+ *  from a review follows its supervisor, other tasks use their origin. This conversation's group comes
  *  first, then the others in the order their first row appears; the rows and their order within a group are as given,
  *  so the entry's count is unchanged. One group when every row is this conversation's. */
 export function needsYouBySupervisor(items: readonly NeedsYouItem[], conversation: string): { supervisor: string; items: NeedsYouItem[] }[] {
   const groups = new Map<string, NeedsYouItem[]>([[conversation, []]]);
   for (const item of items) {
-    const supervisor = item.kind === "task" ? (personalVerificationAsk(item.todo) && item.todo.supervision?.supervisor) || item.todo.origin || conversation :
+    const supervisor = item.kind === "task" ?
+      ((personalVerificationAsk(item.todo) || taskReviewDecisionAsk(item.todo)) && item.todo.supervision?.supervisor) || item.todo.origin || conversation :
       item.kind === "plan" ? item.plan.conversation || conversation : conversation;
     const group = groups.get(supervisor);
     if (group) group.push(item);

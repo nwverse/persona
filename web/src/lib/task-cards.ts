@@ -1,6 +1,6 @@
 import type { FeedItem, TaskPlan } from "./feed";
 import { todoBucket, type TodoBucket } from "./todo-triage";
-import { personalVerificationAsk, type SessionLookup, type Todo } from "./todos";
+import { personalVerificationAsk, taskReviewDecisionAsk, type SessionLookup, type Todo } from "./todos";
 import type { Session } from "./types";
 
 /** Feed upserts identify a plan slot before and after a to-do is attached to it. */
@@ -80,8 +80,8 @@ export function taskCardSlots(conversation: string, metadata: TaskCardMetadata[]
     });
   }
   for (const todo of todos) {
-    const verification = todo.supervision?.supervisor === conversation && personalVerificationAsk(todo);
-    if ((!everyTodo && todo.origin !== conversation && !verification) || linked.has(todo.id)) continue;
+    const ownerAsk = todo.supervision?.supervisor === conversation && (personalVerificationAsk(todo) || taskReviewDecisionAsk(todo));
+    if ((!everyTodo && todo.origin !== conversation && !ownerAsk) || linked.has(todo.id)) continue;
     const id = `task:${todo.id}`;
     if (!slots.has(id)) slots.set(id, { id, todo_id: todo.id, plan_id: todo.plan_id, at: todo.created_at, updated_at: todo.updated_at, state: "not_started" });
   }
