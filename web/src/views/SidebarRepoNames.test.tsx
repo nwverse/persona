@@ -38,7 +38,7 @@ const row = (id: string) => host.querySelector<HTMLAnchorElement>(`a[href="/s/${
 const sectionOf = (id: string) => row(id).closest("[data-sidebar-group]")!;
 const headingOf = (id: string) => sectionOf(id).querySelector<HTMLElement>("[data-sidebar-group-heading]")!;
 const words = (el: Element) => `${el.textContent ?? ""}\n${el.getAttribute("title") ?? ""}`;
-let home = "";
+let home = "", branch = "";
 
 beforeEach(() => {
   localStorage.clear(); reset(); setToken("repo-names-fixture");
@@ -55,9 +55,11 @@ beforeEach(() => {
   }));
   history.replaceState(null, "", "/");
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
-  // The home mark as Icon draws it, to find it in a row.
+  // The main and non-main marks as Icon draws them, to find them in their rows.
   const icon = document.createElement("div"); const iconRoot = createRoot(icon);
-  act(() => iconRoot.render(<Icon name="home" />)); home = icon.querySelector("svg")!.innerHTML; act(() => iconRoot.unmount());
+  act(() => iconRoot.render(<><Icon name="home" /><Icon name="branch" /></>));
+  const marks = icon.querySelectorAll("svg"); home = marks[0]!.innerHTML; branch = marks[1]!.innerHTML;
+  act(() => iconRoot.unmount());
 });
 afterEach(() => {
   act(() => root.unmount()); host.remove(); reset(); setToken(""); vi.unstubAllGlobals();
@@ -106,14 +108,16 @@ describe("By repo says a repository's name once", () => {
     }
   });
 
-  it("lists the main checkout herdr does not name first, with the home mark", async () => {
+  it("keeps the main checkout's home mark and labels only the non-main worktree", async () => {
     inventory = [herdr("w-alpha", "/code/zeta/.worktrees/alpha"), herdr("w-zeta", "/code/zeta")];
     sessions = [agent("lead", "Plan the release", "w-zeta", "/code/zeta", { repo_root: "/code/zeta", worktree: "/code/zeta" }),
       agent("fix", "Fix the login", "w-alpha", "/code/zeta/.worktrees/alpha", { repo_root: "/code/zeta", worktree: "/code/zeta/.worktrees/alpha", branch: "alpha" })];
     await render();
     const rows = [...host.querySelectorAll("[data-workspace-key]")];
     expect(rows.map((el) => JSON.parse(el.getAttribute("data-workspace-key")!)[4])).toEqual(["w-zeta", "w-alpha"]);
-    const hasHome = (el: Element) => [...el.firstElementChild!.querySelectorAll("svg")].some((svg) => svg.innerHTML === home);
-    expect(rows.map(hasHome)).toEqual([true, false]);
+    const hasIcon = (el: Element, icon: string) => [...el.firstElementChild!.querySelectorAll("svg")].some((svg) => svg.innerHTML === icon);
+    expect(rows.map((el) => hasIcon(el, home))).toEqual([true, false]);
+    expect(rows.map((el) => hasIcon(el, branch))).toEqual([false, true]);
+    expect(rows.map((el) => el.textContent?.includes(t("workspace-tree.worktree_kind")))).toEqual([false, true]);
   });
 });
