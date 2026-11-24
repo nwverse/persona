@@ -1,15 +1,21 @@
 // A command an Agent runs that stopped at a prompt (`command_input`, #14527): a sign-in waiting for its code, a login
 // for its password, a CLI for a pasted token. The owner types the line here and it goes straight into the command (the
 // computer's node types it, never the model), so it is answered without waiting for the Agent's turn. Not part of the
-// chat's first screen: its own chunk, loaded with the first such card inside PermissionCardFrame, as PermissionCard is.
+// chat's first screen: PermissionCard (its lazy chunk, inside PermissionCardFrame) hands it such a card.
 import { useLayoutEffect, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { clickLink, linkHref } from "../../lib/links";
-import { commandInputInput } from "../../lib/tool-detail";
 import type { Interaction } from "../../lib/types";
 import { Button, IconButton, SECRET_INPUT } from "../../ui/atoms";
 import { useChatCardTapGuard } from "./card-tap-guard";
 import { Card, CODE_BOX, resolve, useCardKeys } from "./Interactions";
+
+/** A command-input card's command, prompt and the output before it (untrimmed, as the command wrote it), and whether the
+ *  prompt reads as secret, so the line is hidden until Show. */
+export function commandInputInput(input: Record<string, unknown> | undefined): { command: string; prompt: string; output: string; masked: boolean } {
+  const text = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  return { command: text(input?.command), prompt: text(input?.prompt), output: typeof input?.output === "string" ? input.output : "", masked: input?.masked === true };
+}
 
 /** A web address in the command's output: up to a space, a quote or a closing bracket. */
 const URL_RE = /https?:\/\/[^\s<>"'`)\]]+/g;

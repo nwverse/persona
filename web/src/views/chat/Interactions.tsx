@@ -560,9 +560,6 @@ function PlanCard({ ix }: { ix: Interaction }) {
 // and permission editor out of the first screen. Its slot stays identifiable while the chunk loads or cannot load.
 const PermissionCard = lazyPage(() => import("./PermissionCard").then((m) => m.PermissionCard));
 
-// A command waiting for a line (#14527) loads with the first such card, in the same frame as a tool approval.
-const CommandInputCard = lazyPage(() => import("./CommandInputCard").then((m) => m.CommandInputCard));
-
 export function PermissionCardLoading({ ix }: { ix: Interaction }) {
   return (
     <Card kicker={t("chat-interactions.permission_kicker")} title={t("chat-interactions.permission_title", { tool: cardToolName(ix) })} footer={null}>
@@ -1432,7 +1429,6 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
     : ix.kind === "plan" ? <PlanCard ix={ix} />
     : isSecretRun(ix) ? <SecretRunCard key={ix.id} ix={ix} />
     : isSecretHandoff(ix) ? <SecretHandoffCard key={ix.id} ix={ix} />
-    : isCommandInput(ix) ? <PermissionCardFrame key={ix.id} ix={ix}><CommandInputCard ix={ix} /></PermissionCardFrame>
     : ix.kind === "permission" ? <PermissionCardFrame key={ix.id} ix={ix} />
     : ix.kind === "elicitation" ? <ElicitationCard ix={ix} />
     // a kind the core has no card for, drawn by the module that names it (core/module-host.ts `cardRenderers`)
