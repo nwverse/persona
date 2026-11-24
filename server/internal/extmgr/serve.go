@@ -60,7 +60,8 @@ func (h *Manager) Run(ctx context.Context) error {
 	h.startTokenRecord(ctx) // before any extension starts with a token (extension_scopes.go)
 	h.startConnectors(ctx)  // the extensions' connectors join here (attachExtensions)
 	h.startExtensions(ctx)
-	h.startSubscriptions(ctx) // after the connectors it pulls from
+	h.startSpacesMigration(ctx) // existing users only; an installed/disabled choice wins
+	h.startSubscriptions(ctx)   // after the connectors it pulls from
 	go h.extensionUpgradeLoop(ctx)
 	go h.extensionMetricsLoop(ctx)
 	go h.pageLoop(ctx)

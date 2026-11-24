@@ -320,6 +320,9 @@ without opening sockets. JVM Native-rendered component captures are separate evi
 
 The Android client of the web's domain spaces (`docs/web/web.md`, "Domain spaces"; `docs/assistant/health.md`). Everything reads the tracks of the default manager; a hub without them shows nothing new.
 
+- **Optional extension (#14574)**: the surface belongs to `space-conversations`, not the schema-driven `spaces` extension. Root derives `LocalSpaceConversationsEnabled` from that extension's enabled `home` navigation contribution. Both `rememberSpaces` calls require it, so Core does not display or fetch domain Spaces without the extension. An existing installation with tracks receives the extension once; fresh installations do not. Existing records remain after disabling it.
+- **Conversation handoff** (`ExtensionViewText.spaceConversation`): a `space-conversations` page can return only a bounded `persona://tracks/<machine>/<space>/<session>` link. It goes to the existing `ChatRoute` through the Settings navigator; Health, arbitrary internal links and links from other extensions are refused. No WebView or extension code runs in the app.
+
 - **Model**: `core/contracts/.../api/AssistantTracks.kt` (tracks, kinds, `SPACE.md`, conversation categories, extension trust; unknown fields are ignored) and `SpaceMdParts.kt` (the `SPACE.md` split into the user's text and Persona's kept blocks, a port of the web's).
 - **Drawer**: a Spaces section after the pages, in the sidebar group's order, ending with New space (`SpacesSidebar.kt`, `SpacesModel.kt`). A space opens its newest chat, else its home; the health space keeps its own entry and pages unchanged.
 - **Space home** (`SpaceHome.kt`): name, one line, a plain privacy line, its conversations, About this space (the kept blocks and a leading title equal to the name left out, folded at six lines) and where things stand. The composer starts a conversation in the space, never in the main chat or the health space.

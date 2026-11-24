@@ -131,6 +131,8 @@ type Service struct {
 	mcpChanges mcpToolChanges
 	// ext is the extensions' tools in this process (extensions.go SetExtensions); nil: none (tests).
 	ext ExtensionTools
+	// trackKindsExt supplies declarative domain-space kinds from enabled extensions.
+	trackKindsExt domainTrackKinds
 	// extOwners keeps the extensions the user marked as their own for the profile (extension_trust.go).
 	extOwners extensionOwnerCache
 	// startDefaultsFor answers a task start's defaults from the extension layer (start_defaults.go); nil: no defaults.

@@ -2459,6 +2459,10 @@ Who it serves: everyday people who keep one part of their life (family, money, a
 health space does. The iOS / iPadOS app follows the web (`docs/web/web.md`, "Domain spaces"); the server side is in
 `docs/assistant/health.md` ("Tracks and kinds").
 
+- **Optional extension (#14574)**: the domain-space product surface belongs to `space-conversations`, not the schema-driven `spaces` extension. Core has no default Spaces entry. `ExtensionSlots.spaceConversationsEnabled` is true only while that extension's `home` navigation contribution is enabled; the sidebar shows its Spaces section only then. A hub with no spaces or no extension installs nothing automatically. Existing tracks and conversations are retained when the extension is off.
+- **Upgrade**: an installation with existing non-health tracks gets the extension once from the signed official marketplace and starts it. An installed or disabled extension is never replaced by migration. The health space's own entry and pages are unchanged.
+- **Extension handoff** (`ExtensionConversationLink`): the extension page can open only a bounded `persona://tracks/<machine>/<space>/<session>` link. It resolves to the existing `openAssistantConversation` host, with no WebView or general internal-link grant; Health and arbitrary app links are refused.
+
 - **Model**: `apple/Shared/Tracks.swift` decodes tracks, kinds, `SPACE.md`, a conversation's categories and the extension
   grants; every field is optional and unknown ones are ignored. Every call goes to the default manager (no
   `X-Persona-Manager`), as spaces are the default manager's. A hub without `GET /api/v1/assistant/tracks` (404 / 405, or an

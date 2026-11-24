@@ -64,7 +64,8 @@ fun EntryProviderScope<NavKey>.settingsDetailEntries(navigator: Navigator, servi
             shown = LocalExtensionPageVisible.current && (persona.core.navigation.LocalDetailKey.current == null || persona.core.navigation.LocalDetailKey.current == route),
             onPush = { navigator.navigate(it.copy(manager = it.manager ?: route.manager)) }, manager = route.manager,
             notificationActionToken = route.notificationActionToken,
-            onAsk = if (route.extensionId == persona.core.contracts.api.SUBSCRIPTIONS_UI) askPersona?.let { ask -> { text -> ask(navigator, text) } } else null)
+            onAsk = if (route.extensionId == persona.core.contracts.api.SUBSCRIPTIONS_UI) askPersona?.let { ask -> { text -> ask(navigator, text) } } else null,
+            onConversation = { machine, session -> navigator.navigate(persona.core.navigation.ChatRoute(machine, session)) })
     }
     // The market of the current assistant's Extensions (docs/assistant/managers.md "Clients"): what it installs is that one's.
     entry<ExtensionMarketRoute> {
