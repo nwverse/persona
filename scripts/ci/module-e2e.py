@@ -117,8 +117,12 @@ WEB = {
     },
 }
 # Console lines that are not the app's errors. The test hub has no computer, so the assistant's memory (kept on the
-# assistant's computer) answers 409; the mock hub answers 404 for what it does not script.
-IGNORE_CONSOLE = {"test": [r"status of 409 .*/api/v1/assistant/memory"], "mock": [r"status of 404", r"status of 501"]}
+# assistant's computer) answers 409; the mock hub answers 404 for what it does not script. Chrome cancels loads in
+# flight with ERR_NETWORK_CHANGED when the machine's interfaces change (another Docker container starting or stopping);
+# the page checks around it still have to pass.
+NETWORK_CHANGED = r"net::ERR_NETWORK_CHANGED"
+IGNORE_CONSOLE = {"test": [r"status of 409 .*/api/v1/assistant/memory", NETWORK_CHANGED],
+                  "mock": [r"status of 404", r"status of 501", NETWORK_CHANGED]}
 
 PROGRAMS = smoke.PROGRAMS
 DEADLINE = [0.0]
