@@ -1226,7 +1226,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             }
             moduleEntries(modules) { module ->
                 persona.core.moduleapi.ModuleNavContext(navigator, session.modules[module.id],
-                    unavailable = { message -> UnavailablePage(message, navigator) }, shell = moduleShell)
+                    unavailable = { message -> UnavailablePage(message, navigator) }, audioFocus = shell.audioFocus.forModule(module),
+                    shell = moduleShell)
             }
             tools?.run { register(navigator) }
         }

@@ -13,6 +13,7 @@ import { api, ApiError, enc, errorText } from "../../lib/api";
 import { listConnectors, setConnector, type HubConnector } from "../../lib/connectors";
 import { ago } from "../../lib/format";
 import { accountTitle, type LarkAccount, type LarkAccountList } from "../../lib/lark-accounts";
+import { hubServes, moduleFeature } from "../../core/module-host";
 import { useLarkOn, useStore } from "../../lib/store";
 import { Button, copyText, cx, Dialog, IconButton, Loading, Spinner, toast } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
@@ -38,6 +39,8 @@ interface LarkStatus {
 export function Connectors({ open, onOpen, onChannel, headerBack, openBeside }: { open: string | null; onOpen: (id: string | null) => void; onChannel?: (id: string, manager?: string) => void; headerBack?: boolean; openBeside?: string | null }) {
   // An older hub has no connectors API (feature "connectors"): only mail and Feishu, as before.
   const hasConnectors = useStore((s) => s.features.includes("connectors"));
+  // Mail only on a hub that has the mail module (its flag module.mail; an older hub without module flags has it).
+  const mail = useStore((s) => hubServes(moduleFeature("mail"), s));
   // Lark (the Lark gateway through /api/v1/lark/…) only on a hub that has it (feature `lark`); "Lark bot" is the hub's own.
   const lark = useLarkOn();
   const picked = useChosenManager();
@@ -61,7 +64,7 @@ export function Connectors({ open, onOpen, onChannel, headerBack, openBeside }: 
       <p className="mb-5 px-1 text-[12.5px] leading-relaxed text-ink-3">
         {t("settings-connectors.intro")}
       </p>
-      <Mail />
+      {mail && <Mail />}
       {lark && <Feishu />}
       <FeishuBot onChannel={onChannel} larkcli={larkcli} onOpen={onOpen} />
       {hasConnectors && <ConnectorList onOpen={onOpen} onLarkCli={setLarkcli} openBeside={openBeside} />}

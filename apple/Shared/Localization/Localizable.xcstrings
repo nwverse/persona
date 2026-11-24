@@ -229548,6 +229548,29 @@
         }
       }
     },
+    "This connection cannot receive separate task follow-up instructions." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This connection cannot receive separate task follow-up instructions."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此连接无法接收独立的任务跟进指令。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この接続は独立したタスクのフォローアップ指示を受け取れません。"
+          }
+        }
+      }
+    },
     "The switch result is unconfirmed. Retrying uses the same request; it will not start another switch. %@" : {
       "extractionState" : "manual",
       "localizations" : {

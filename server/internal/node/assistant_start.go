@@ -31,6 +31,7 @@ const assistantShellReady = "__PERSONA_ASSISTANT_SHELL_READY__"
 const (
 	assistantEarlyExit  = 30 * time.Second
 	assistantStderrTail = 5
+	assistantGroupSweep = time.Second
 )
 
 // assistantStartWait: how long a send that started a fresh process waits for its first output before answering. A
@@ -556,21 +557,26 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	if tui {
 		p.mode, p.effort = tuiMode, tuiEffort // its start flags: nothing to set by control request (syncAssistantModes)
 	}
+	p.owner.Store(n)
+	liveAssistants.Store(p, struct{}{})
 	if !spare {
 		n.mu.Lock()
 		n.procs[id] = p
 		n.mu.Unlock()
 	}
 	go watchAssistantStderr(n.logger, p, stderr)
-	liveAssistants.Store(p, struct{}{})
 	go n.readAssistant(p, stdout)
 	go func() {
 		_ = cmd.Wait()
 		if cacheProxy != nil {
 			cacheProxy.CloseListener()
 		}
-		if proto.IsExternalLauncher(launcher) && !osproc.SweepGroup(cmd.Process.Pid, externalAdapterGroupSweep) {
-			n.logger.Printf("assistant %s: external process group cleanup budget exhausted", short(id))
+		if proto.IsExternalLauncher(launcher) {
+			if !osproc.SweepGroup(cmd.Process.Pid, externalAdapterGroupSweep) {
+				n.logger.Printf("assistant %s: external process group cleanup budget exhausted", short(id))
+			}
+		} else if p.stopped.Load() {
+			osproc.SweepGroup(cmd.Process.Pid, assistantGroupSweep)
 		}
 		cleanupMCP()
 		cleanupAdapter()

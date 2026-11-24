@@ -1386,6 +1386,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if c.ExtraPath != nil { // before herdr_autostart: a herdr server the node starts next has them too
 			n.setExtraPath(*c.ExtraPath)
 		}
+		if c.HubFeatures != nil { // the modules the hub's manager switched off (modules.go); a partial update says nothing of them
+			setHubModules(*c.HubFeatures)
+		}
 		if c.HubFeatures != nil || c.MachineID != "" {
 			n.hubPersonaContracts.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.PersonaContracts))
 			n.hubMCPWait.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.MCPWait))
@@ -2892,9 +2895,6 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "assistant.cache_clear":
 		n.forgetCacheWarm(p.SessionID)
 		return ok(nil)
-	case "assistant.cancel_supervision": // the switch for automatic supervision messages (assistant_queue.go)
-		cancelled, err := n.assistantCancelSupervision(ctx, p.SessionID)
-		return map[string]any{"cancelled": cancelled}, err
 	case "session.close":
 		n.forgetCacheWarm(p.SessionID)
 		var closeParams struct {
