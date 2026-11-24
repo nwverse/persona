@@ -286,10 +286,22 @@ func (h *Manager) inboxConfigView(ctx context.Context) assistantwire.InboxConfig
 	slices.Sort(out.Extensions)
 	if h.cfg != nil {
 		out.Agent = h.cfg.Inbox.Agent
+		out.ReplyPolicy = cloneReplyPolicyConfig(h.cfg.Inbox.ReplyPolicy)
 	}
 	out.LarkAccount = h.inboxLarkAccount(ctx)
 	if h.mail != nil {
 		out.Translate = h.mailTargets(ctx)
+	}
+	return out
+}
+
+func cloneReplyPolicyConfig(in assistantwire.InboxReplyPolicyConfig) assistantwire.InboxReplyPolicyConfig {
+	out := in
+	if len(in.Categories) > 0 {
+		out.Categories = make(map[string]string, len(in.Categories))
+		for k, v := range in.Categories {
+			out.Categories[k] = v
+		}
 	}
 	return out
 }

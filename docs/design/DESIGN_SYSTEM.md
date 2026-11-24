@@ -1606,7 +1606,9 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   Rows outside any family (the Default entry, unknown models) have no header. Why: one family's versions read as one
   choice and the newest is the one most people want, while older ones stay one tap (or a search) away (2026-11-17).
 - Usage placement (#5056): the Agent's context meter is a separate, right-aligned row below the composer card, not part of
-  the header or the model-pill container. Unknown context mounts no row. Quota bars use the established accent / orange /
+  the header or the model-pill container. The composer, Session Insights and enabled sidebar details use the same
+  context share and progress bar. When only the current context size is available, the composer and Session Insights
+  show that token count. Cumulative usage from loaded messages has its own total. Quota bars use the established accent / orange /
   red quota tones (≤ 30% left warning, ≤ 10% or exhausted critical); price marks use neutral `ink-2`, one to three `$` by
   standard output price, and the flyout's values use tabular numerals. Unknown data never creates placeholder marks.
 - Header strip (Persona chats, #5033, `PickStrip` in `web/src/views/chat/AssistantModelPanel.tsx`): one line above the
@@ -2962,6 +2964,7 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 
 **Rules**
 
+- [ ] Web sidebar page arrangement: Settings remains the fixed recovery entry; when More is explicitly hidden, its pages keep their arrangement and stay in quick search, but their badges are not promoted into the shell (principles 2, 3 and 7; `docs/web/web.md` "The sidebar's pages", #13798).
 - [ ] Only tokens and design-system components: no literal sizes, colors, fonts, SF Symbol names, `glassEffect` or lookalike components. The token ratchets did not go up (sections 1.2, 1.3).
 - [ ] Existing styles and theme colors look pixel-identical, except for a change that brings a screen in line with this document (section 1.2).
 - [ ] Hit areas at least 44 x 44 pt (Android 48 dp); every control has a spoken label; gesture-only actions also have a visible control or an accessibility action (section 6.3).

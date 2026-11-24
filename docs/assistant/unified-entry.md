@@ -1453,6 +1453,12 @@ Add two columns to `todos`:
 
 ### Plans
 
+The manager records how each Agent start was placed (#13355). The owner or trust gate and any quota wait come before
+reservation. Admission and workspace waits use the existing task queue. A flexible task can move to a healthy
+launcher or to a computer with lower load per core, with available memory breaking a tie. Its task keeps the reason
+shown on the card. Starts from other entries such as New Agent and Resume report placement on the requested computer.
+See `docs/server/launcher-health.md`, “Execution-agent admission gate”.
+
 Table `task_plans`: `id`, `conversation`, `tasks` (JSON: each item's `title`, `notes`, `machine`, `machine_policy`, `cwd`, `launcher`, `model`, `permission`, `ultracode`, `readonly`, `user_requested`, `why`, `role` and `parent` for task leaders and their workers),
 `state` (`open` / `started` / `dismissed`), `created_at`, `updated_at`. A task also carries its brief's fields (`goal`, `out_of_bounds`,
 `continues`, `continues_why`, `started_why`, and the hub's `brief`): "Briefs" above.

@@ -1113,6 +1113,12 @@ func (m *memStore) failKey(key string, err error) {
 // noPlans is a store without the task_plans and assistant_feed tables.
 type noPlans struct{}
 
+func (m *memStore) PutPlacement(ctx context.Context, p db.PlacementRow) error {
+	return m.PutSetting(ctx, "placement."+p.ID, p.Decision)
+}
+
+func (noPlans) PutPlacement(context.Context, db.PlacementRow) error { return nil }
+
 func (noPlans) CreateTaskPlan(context.Context, db.TaskPlanRow) error {
 	return errors.New("no task_plans here")
 }

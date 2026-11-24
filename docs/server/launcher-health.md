@@ -245,25 +245,29 @@ asked for it) and uses it only on the detour path (`healthDetour`, the chokepoin
 
 ## Execution-agent admission gate
 
-The hub machine once ran 40+ claude processes at load 160 and timed out, so starting an execution Agent is now gated on the target computer's
-reported resources (`server/internal/assistant/admission.go`, #6608). The gate runs on the two execution-Agent start paths only — a task plan's
-`startTaskAgent` and the `agent_start` tool — both of which use `session.start`. The assistant's own conversations (main, leaders, scheduled) start
-through `assistant.send` and never pass it.
+Every execution-Agent start goes through manager placement (#13355). Task plans and `agent_start` enforce admission.
+Other starts, including dispatch, successors, repair, reviewers, New Agent and resumes, report the applicable lines and
+bind to the requested computer. They take no admission claim. Assistant conversations use `assistant.send`.
 
-The data is the manager's retained 10-second node sample (`machines` monitoring, `docs/server/machines.md`): available memory
-(`MemTotal − MemUsed`), load1, the system's core count, and the node-reported `claude_procs` count (Linux only; nil skips the process condition).
-A start is refused when any line is hit: free memory below the threshold, the claude process count at its cap, load1 above cores × the multiplier,
-or the task's direction already at its running-Agent cap. Thresholds live in the `assistant.admission` setting with code defaults (hub machine 2.5
-GiB free / 20 processes, other machines 2 GiB, load multiplier 4, direction cap 3 with a per-project override map); machine-specific lines are keyed
-by machine id, never hard-coded. A managed machine whose sample is missing, stale (older than 30 s) or lacks a load reading is refused (unknown
-load denies); a computer the resource layer does not retain is skipped, and a hub without a devices manager leaves the gate inert.
+Available memory (total minus used), load1 and core count come from the retained node sample. The concurrency line
+counts working sessions in the latest fleet snapshot on every platform, including a snapshot with zero working sessions.
+Only when the manager has no session snapshot does the node's optional `claude_procs` reading stand in.
+In-flight claims count toward concurrency. Defaults in `assistant.admission` are 2.5 GiB free on the hub computer,
+2 GiB elsewhere, 20 working sessions, load1 at most four times the core count and eight running Agents per direction.
+A direction override takes precedence over a project override. A retained computer with missing or stale metrics
+(older than 30 seconds), unknown cores or ambiguous memory fails admission. Missing optional load or process readings
+skip their respective lines. A computer outside the resource layer skips machine checks.
 
 A refused `machine_policy=fixed` task stays put and gets the reason plus the least-loaded reachable alternative. A `flexible` task is moved to that
 alternative when its launcher runs there and its directory exists (the same `fs.stat` and reroute-trail rules as the launcher detour); no alternative means refusal. The
 direction cap refuses either policy, since moving machines does not free a direction slot. The check and the slot reservation happen in one critical section
 (`claimIfAllowed`), so concurrent admits cannot both take the last slot; a task's claim is held from the decision until its agent is linked into the todo or the start
-fails for good (an `agent_start` tool call has no todo, so its claim ends with the call), covering both the RPC race and the 10-second metrics/ledger gap. Other
-`session.start` callers (dispatch, self-heal, successor Agents, Feishu cards) are intentionally not wired in this first cut.
+fails for good. The `agent_start` tool holds its claim across the start attempt.
+
+The manager keeps each decision in `agent_placements`, including the requested machine, candidates, filter keys and
+readings, scores used to pick an alternative, choice and built-in policy version. A queued attempt has no bound machine.
+Task and session IDs link the decision to the work, including starts with no plan. The plan also carries its current
+decision for the card and receipt. Directory and leader-trust checks on alternatives apply when a plan can move.
 
 A plan task the gate refuses is not failed: it waits in the admission queue (`server/internal/assistant/task_queue.go`), its card reads waiting
 with the reason, and the hub retries it every 90 seconds. The queue record is stored in the plan, so a hub restart resumes the wait. After 10

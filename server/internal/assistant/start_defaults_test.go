@@ -1271,6 +1271,30 @@ func TestCodexTerminalFallbackPublishedBeforeStart(t *testing.T) {
 	}
 }
 
+func TestAgentStartCodexFallbackKeepsPlacement(t *testing.T) {
+	s, f := launcherFitHub(t)
+	f.zshrc["box"] = append(f.zshrc["box"], proto.Launcher{Name: "cx", Source: "zshrc", Agent: "codex"})
+	f.onStart = func(f *fakeHub, params map[string]any) {
+		f.failStart = nil
+		if params["codex_effort_fallback"] == proto.CodexFallbackNotify {
+			f.failStart = &rpc.Error{Code: proto.CodeCodexEffortTerminal}
+		}
+	}
+	_, err := s.runTool(t.Context(), "server", "owner", "agent_start", json.RawMessage(
+		`{"machine":"box","cwd":"/Users/me/code","launcher":"cx","effort":"high","prompt":"Check the build"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if starts := startsOf(f); len(starts) != 2 || starts[1]["codex_effort_fallback"] != proto.CodexFallbackAnnounced {
+		t.Fatalf("expected the announced retry, got %v", starts)
+	}
+	task := onlyTodo(s)
+	p := onlyStoredPlacement(t, s.store().(settingsPrefixStore))
+	if len(task.Agents) != 1 || p.Mode != "enforce" || p.Choice != "box" || p.TaskID != task.ID || p.SessionID == "" || p.SessionID != task.Agents[0].SessionID {
+		t.Fatalf("placement %+v for task %s, agents %+v", p, task.ID, task.Agents)
+	}
+}
+
 func TestCodexFallbackReportOnTaskCard(t *testing.T) {
 	ctx := t.Context()
 	s, _ := newTaskService(t)
