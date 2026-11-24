@@ -179,6 +179,7 @@ Every new Agent is now held to what its target computer can start before anythin
 
 ## Automatic repair
 
+- Only launchers covered by the periodic check are eligible for automatic repair. The latest failure must still be in effect. Other listed runtime launchers keep their records for inspection and can be checked with **Test again**.
 - One repair round per computer at a time (several launchers on one computer usually share one cause: the gateway config is broken and every launcher returns 400); at most two repairs per round, then it is recorded as `blocked` and waits for a person.
   Blocked launchers are still retested at the normal interval and recover on their own when they pass.
 - **Upgrade the CLI**: the node's `launchers.repair {name, action: "upgrade_cli"}` does only a fixed thing: for Claude launchers it runs `claude update` (login shell, 5-minute timeout);
