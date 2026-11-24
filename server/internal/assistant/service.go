@@ -95,6 +95,8 @@ type Service struct {
 	moduleSwitch    moduleswitch.Set
 	modulesOff      []string // the ids the modules setting switched off at start (loadModules): built-in and client-only
 	compactRecovery compactRecoveryCache
+	// nodeRecovery tracks node online/boot timestamps to run recovery sweeps after outages or reboots (#14781).
+	nodeRecovery nodeRecoveryBook
 	// sendFanout: whom each conversation woke with conversation_send lately (conversation_fanout.go).
 	sendFanout       sendFanout
 	logical          logicalDeviceState
@@ -1204,6 +1206,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	if f := s.sessionsSeen; f != nil {
 		f(d)
 	}
+	s.noteNodeOnline(d.MachineID, time.Now())
 	s.toolLoopsChanged(d)
 	s.progressSessions(d, time.Now()) // what the working agents do, for no_progress (supervise_progress.go)
 	if s.retractConfirmedStartUnknowns(ctx, d.Sessions) {
