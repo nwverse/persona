@@ -958,11 +958,14 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			params["client_msg_id"] = inputID
 		}
 		sctx = context.WithValue(sctx, placementBindKey{}, decision)
-		err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
+		start := func() error {
+			return s.startWithCodexRouteNotice(sctx, task.ID, fit.agent, params, func() error { return s.call(sctx, am.ID, DeviceSessionStart, params, &res) })
+		}
+		err = start()
 		if reason, refused := s.ultracodeRefusal(ctx, err, params); refused {
 			delete(params, "ultracode")                                  // an extra the agent it landed on cannot have: it starts without it (#3596)
 			note += " Note: started without ultracode (" + reason + ")." // an answer lost on the way still says so
-			err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
+			err = start()
 			// Refused before the node took the ticket, the same ticket starts it; one the refused start took and
 			// dropped is gone, and the values are staged once more for this start.
 			if values != nil && refusedWith(err, proto.CodeSecretEnvGone) {
@@ -971,7 +974,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 					failBeforeStart(err.Error())
 					return "", err
 				}
-				err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
+				err = start()
 			}
 		}
 		values.wipe()

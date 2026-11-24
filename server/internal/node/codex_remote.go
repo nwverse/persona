@@ -66,6 +66,7 @@ type remoteThread struct {
 	pinnedSeq uint64
 	buffer    *strings.Builder
 	lastDelta time.Time
+	created   time.Time // local thread/start completed while a loaded-list snapshot was in flight
 	revision  uint64
 	files     map[string][]string
 }
@@ -419,6 +420,7 @@ type remoteThreadData struct {
 }
 
 func (c *codexRemote) refresh() error {
+	snapshot := time.Now()
 	c.mu.Lock()
 	wait, budget := cmp.Or(c.readWait, codexReadWait), cmp.Or(c.refreshWait, codexRefreshWait)
 	c.refreshSeq++
@@ -638,9 +640,11 @@ dispatch:
 			next[raw] = t
 		}
 	}
-	// Preserve any thread cold-resumed after this refresh took its loaded-list snapshot (or still in flight).
+	// A local start after this snapshot owns the first turn and its settings. A cold resume also
+	// stays in the registry when an older loaded list omits it or the resume is still provisional.
 	for raw, old := range c.threads {
-		if _, ok := next[raw]; !ok && (old.provisional || old.pinnedSeq > snapSeq) {
+		_, listed := next[raw]
+		if old.created.After(snapshot) || (!listed && (old.provisional || old.pinnedSeq > snapSeq)) {
 			next[raw] = old
 		}
 	}
