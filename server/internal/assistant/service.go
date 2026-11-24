@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/moduleswitch"
+
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/kernel"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
@@ -84,7 +86,9 @@ type Options struct {
 // Service is the assistant. It implements Handler.
 type Service struct {
 	// modules are the feature modules loaded (modules.go); nil, none.
-	modules         *kernel.Kernel
+	modules *kernel.Kernel
+	// moduleSwitch is the same list as the provider seams read it (moduleswitch): recording's and Lark's layers.
+	moduleSwitch    moduleswitch.Set
 	modulesOff      []string // the ids the modules setting switched off at start (loadModules): built-in and client-only
 	compactRecovery compactRecoveryCache
 	// sendFanout: whom each conversation woke with conversation_send lately (conversation_fanout.go).
@@ -400,7 +404,7 @@ var _ Handler = (*Service)(nil)
 
 // New makes the assistant; nothing runs until the hub calls it.
 func New(o Options) *Service {
-	s := &Service{hub: o.Hub, store: o.Store, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
+	s := &Service{moduleSwitch: moduleswitch.Off(o.ModulesOff...), hub: o.Hub, store: o.Store, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
 		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1),
 		a2aWake: make(chan struct{}, 1), a2aLogicalWrites: make(chan struct{}, 4)}
 	s.inbox.lang = func() i18n.Lang { return s.lang(context.Background()) }
@@ -481,7 +485,7 @@ func New(o Options) *Service {
 	s.recOpts.timings, s.recOpts.lists = maps.Clone(o.RecordingTimings), maps.Clone(o.RecordingTimingLists)
 	s.recOpts.now, s.recOpts.after = o.RecordingFeedNow, o.RecordingFeedAfter
 	s.lark.timings, s.lark.lists = maps.Clone(o.LarkTimings), maps.Clone(o.LarkTimingLists)
-	s.loadRecording(o.ModulesOff)
+	s.loadRecording()
 	s.kbRoutes()
 	s.searchRoutes()
 	s.historyRoutes()
@@ -1142,6 +1146,8 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 		s.afterSettle(context.WithoutCancel(ctx), s.inboxAgentTurnSettled, r.MachineID, r.SessionID)
 		// What the turn said is tagged with its information categories (info_tag.go).
 		s.afterSettle(context.WithoutCancel(ctx), s.infoTagTurnSettled, r.MachineID, r.SessionID)
+		// A usage limit moves a conversation the owner relies on to a backup launcher (limit_fallback.go).
+		s.afterSettle(context.WithoutCancel(ctx), s.limitFallbackTurnSettled, r.MachineID, r.SessionID)
 	}
 	if !meeting {
 		s.spawnPinAfterTurn(ctx, r.MachineID, r.SessionID)

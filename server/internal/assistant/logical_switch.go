@@ -665,13 +665,20 @@ func (s *Service) drainLogicalInput(ctx context.Context, st logicalSwitchStore, 
 			delete(queued.Params, assistantwire.DefaultPermissionModeParam)
 		}
 	}
+	var handoff json.RawMessage
 	if c.Switch != nil {
-		raw, _, err := st.ConversationPreparation(ctx, c.MachineID, c.SessionID, c.Switch.OperationID)
-		if err != nil {
+		if handoff, _, err = st.ConversationPreparation(ctx, c.MachineID, c.SessionID, c.Switch.OperationID); err != nil {
 			return err
 		}
+	} else if c.Epoch > 1 {
+		// An idle acceptance kept it for this input (#14488); accepting the input discards it.
+		if handoff, err = st.ConversationPendingHandoff(ctx, c.MachineID, c.SessionID, a.ID); err != nil {
+			return err
+		}
+	}
+	if c.Switch != nil || len(handoff) > 0 {
 		var h mainHandoff
-		if err = json.Unmarshal(raw, &h); err != nil {
+		if err = json.Unmarshal(handoff, &h); err != nil {
 			return err
 		}
 		text, _ := queued.Params["text"].(string)

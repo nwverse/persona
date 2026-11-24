@@ -643,9 +643,8 @@ nonisolated enum Theme {
         static let scenePinCharWidth: CGFloat = 9
         static let scenePinBaseWidth: CGFloat = 40
         static let scenePinHeight: CGFloat = 32
-        // A pin pill's estimated width, for keeping pins apart: its icon, the gap before its state, the widest its
+        // A pin pill's estimated width, for keeping pins apart: the gap before its state, the widest its
         // text may grow, and the width of one wide (CJK) character.
-        static let scenePinIconWidth: CGFloat = 18
         static let scenePinStateGap: CGFloat = 6
         static let scenePinTextMaxWidth: CGFloat = 180
         static let scenePinWideCharWidth: CGFloat = 13.5

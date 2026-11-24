@@ -29,6 +29,7 @@
   "evidence_note": "督办方的记录；本页不核验来源或监听事件。",
   "missing_evidence_note": "未记录等待证据；状态或链接不能证明请求已发出。",
   "details": "等待详情",
+  "hide_details": "收起详情",
   "follow_up_due": "该跟进了",
   "draft_reminder": "催一下",
   "reminder": "{target}，你好，「{title}」有进展吗？\n\n上次问的是：{request}",
