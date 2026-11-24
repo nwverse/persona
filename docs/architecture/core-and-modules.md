@@ -550,6 +550,12 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
   mute an Inbox item, draft and send a reply, switch the chat's target, the other cards). The Inbox item a button names
   is read by the Inbox core (`server/internal/assistant/inbox_workbench.go`); the counts by
   `server/internal/assistant/workbench_view.go`.
+- **A to-do's topic lines are the module's** (`server/internal/modules/lark/thread_posts.go`): the queue (a line a
+  minute at most, what came meanwhile joined), the wording and the post under the topic's latest message. The module
+  implements the port's `ThreadPost`, so the host no longer serves it. It reads the to-do's Feishu thread, the bot's
+  status, the topic anchors (kept with the chat's state in the core, `server/internal/assistant/todo_thread_topics.go`),
+  the to-do's link, and the core's clock and timer (`PostNow`, `PostLater`, which a to-do's source report waits on
+  too).
 - **Tests**: the turns' own tests run in the module on a fake core (`server/internal/modules/lark/service_test.go`:
   the channels' runs, their finishing, folding and dropping, and the hub's transport); the assistant's tests of the
   turns through the channels' pipeline stay in `internal/assistant` and skip without the module (`needsLarkLayer`).

@@ -126,9 +126,31 @@ func (h larkHost) UpdateCard(ctx context.Context, messageID string, card *botcar
 	return h.s.botUpdateCard(ctx, messageID, card)
 }
 
-func (h larkHost) ThreadPost(todoID string, ev larkhost.ThreadEvent) {
-	h.s.threadPost(todoID, threadEvent{kind: threadEventKind(ev.Kind), agent: ev.Agent, text: ev.Text, dm: ev.DM})
+// ---- a to-do's topic lines (the lark module's thread_posts.go) ----
+
+func (h larkHost) ThreadOf(todoID string) (string, string, bool) {
+	th := h.s.threadOf(todoID)
+	if th == nil || th.Channel != channel.Feishu {
+		return "", "", false
+	}
+	return th.ChatID, th.ThreadID, true
 }
+
+func (h larkHost) StatusKept(ctx context.Context) (FeishuStatus, error) {
+	return h.s.feishuStatusKept(ctx)
+}
+
+func (h larkHost) TopicMessage(ctx context.Context, chatID, threadID string) string {
+	return h.s.topicMessage(ctx, chatID, threadID)
+}
+
+func (h larkHost) ForgetTopicMessage(ctx context.Context, chatID, threadID, messageID string) {
+	h.s.forgetTopicMessage(ctx, chatID, threadID, messageID)
+}
+
+func (h larkHost) TodoLink(web, todoID string) string  { return todoLink(web, todoID) }
+func (h larkHost) PostNow() time.Time                  { return h.s.tposts.clock() }
+func (h larkHost) PostLater(d time.Duration, f func()) { h.s.tposts.later(d, f) }
 
 func (h larkHost) Logf(format string, args ...any) { h.s.logf(format, args...) }
 func (h larkHost) RunCtx() context.Context         { return h.s.runCtx() }
