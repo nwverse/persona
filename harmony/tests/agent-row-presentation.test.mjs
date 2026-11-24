@@ -46,7 +46,7 @@ const BoundAgentGroup = new Function('return ' + stripTypeScriptTypes(classCode(
 function pageClass(wire, translate) {
   return new Function('BoundAgentRow', 'AgentRowPresentation', 'BoundAgentGroup', 'Wire', 'tr', 'Colors', 'reconcileBoundRows',
     'agentRowPreview', 'agentRowTone', 'runningSubagents',
-    stripTypeScriptTypes('class Page {\n' + ['isRowSelected','syncRowBindings', 'bindAgentRows', 'updateAgentRowPresentation', 'rowTime', 'rowStatus', 'rowStatusColor']
+    stripTypeScriptTypes('class Page {\n' + ['isRowSelected','syncRowBindings', 'bindAgentRows', 'updateAgentRowPresentation', 'rowTime', 'rowStatus', 'rowStatusColor', 'rowSpoken', 'subagentLine']
       .map(methodCode).join('\n') + '\n}\n') + '\nreturn Page;')(
         BoundAgentRow, AgentRowPresentation, BoundAgentGroup, wire, translate,
         { needs: 'needs', working: 'working', unread: 'unread', secondary: 'secondary' }, reconcileBoundRows,
@@ -64,6 +64,10 @@ function row(raw, fields = {}) {
   return value;
 }
 
+const family = {
+  relations: {root:()=>undefined,children:()=>[]},
+  foldFamilies:()=>true, foldedChildren:()=>[], isPinned:()=>false, familyExpanded:()=>false, displayRows:group=>group.rows, familyState:row=>row.state
+};
 function fixture() {
   let parseCount = 0;
   const translations = { language: 'en', en: { just: 'just now', minute: 'm', hour: 'h', day: 'd' }, zh: { just: '现在', minute: '分', hour: '时', day: '天' } };
@@ -77,7 +81,7 @@ function fixture() {
       key === 'agent_time_hour_suffix' ? words.hour : key === 'agent_time_day_suffix' ? words.day : key;
   };
   const page = new (pageClass(wire, translate))();
-  page.workspace = { isMuted: () => false };
+  page.workspace = { ...family, isMuted: () => false };
   page.mixedHubs = false;
   page.model = {
     directoryOwnerFor: () => ({ machineName: id => 'Computer ' + id }),
@@ -93,7 +97,7 @@ test('identity changes refresh selection without decoding an unchanged payload',
   const bound = { identity: 'retained-binding', key: 'retained-key', value };
   const bindings = page.bindAgentRows([], [bound], true), binding = bindings[0];
   page.selectionVisible = true;
-  page.workspace = { isMuted: () => false, selectedKey: binding.presentation.selectionKey };
+  page.workspace = { ...family, isMuted: () => false, selectedKey: binding.presentation.selectionKey };
   assert.equal(page.isRowSelected(binding), true);
   for (const [field, replacement] of [['group', 'other-hub'], ['kind', 'conversation'],
     ['manager', 'other-manager'], ['machine', 'other-machine'], ['session', 'other-session']]) {
@@ -118,7 +122,7 @@ test('same-key session changes move the native highlight through iOS group recon
  for(const groupingMode of ['state','machine','space']){
   const context=fixture(),{page}=context;
   const value=row({machine_id:'m1',session_id:'s1',last_text:'Same payload'},{machine:'m1',session:'s1'});
-  const group={id:'machines',rows:[value]},workspace={isMuted:()=>false,groupingMode,selectedKey:JSON.stringify(['hub','session','work','m1','s1']),
+  const group={id:'machines',rows:[value]},workspace={...family,isMuted:()=>false,groupingMode,selectedKey:JSON.stringify(['hub','session','work','m1','s1']),
    groups:[group],visibleRows(){return this.groups.flatMap(item=>item.rows);}};
   Object.assign(page,{workspace,selectionVisible:true,groupBindings:[],rowBindingOwner:undefined,rowBindingScope:'',groupBindingSequence:0});
   page.model.profile={id:'hub',manager:'work'};page.model.scope=()=> 'hub/work';
@@ -183,7 +187,7 @@ test('full row binding decodes missing machine and session once and updates acro
   const context = fixture(), { page } = context;
   const initialRow = row({ machine_id: 'm1', session_id: 's1', status: 'working', last_text: 'Current' });
   const group = { id: 'machines', rows: [initialRow] };
-  const workspace = {
+  const workspace = { ...family,
     isMuted: () => false, groupingMode: 'state', selectedKey: JSON.stringify(['hub', 'session', 'work', 'm1', 's1']),
     groups: [group], visibleRows() { return this.groups.flatMap(item => item.rows); }
   };
@@ -295,7 +299,7 @@ test('row times read the page clock and a row newer than the last tick reads jus
 test('a muted row keeps Needs you but drops other marks and the bold unread title', () => {
   const context = fixture(), { page } = context;
   let muted = false;
-  page.workspace = { isMuted: () => muted };
+  page.workspace = { ...family, isMuted: () => muted };
   const bound = { identity: 's1', key: 'k', value: row({ status: 'unread', last_text: 'Done.' }, { state: 'unread' }) };
   const binding = page.bindAgentRows([], [bound], true)[0];
   assert.equal(binding.presentation.tone, 'unread');
@@ -360,4 +364,21 @@ test('group headers count what folds hide, in the Needs color, and Needs you nev
   const header = source.slice(source.indexOf('  @Builder groupHeader('), source.indexOf('  private groupTitle('));
   assert.match(header, /if \(binding\.value\.id !== NEEDS_GROUP\) Button/);
   assert.match(header, /Span\(this\.groupNeeds\(binding\.value\)\)\.fontColor\(Colors\.needs\)/);
+});
+
+test('a parent row shows its family state and running count once, and a child says whose it is', () => {
+  const context = fixture(), { page } = context;
+  const parent = row({ status: 'idle', session_id: 'p', subagents: [{ id: 'a', running: true }] }, { state: 'idle', id: 'p' });
+  const kids = [row({ status: 'working' }, { state: 'working', id: 'k1' }), row({ status: 'needs_you' }, { state: 'needs_you', id: 'k2' })];
+  page.workspace = { ...family, isMuted: () => false, foldedChildren: (r) => r === parent ? kids : [],
+    relations: { root: (r) => kids.includes(r) ? parent : undefined, children: () => kids, kind: (r) => r === kids[1] ? 'side' : 'subtask' },
+    familyState: (r) => r === parent ? 'needs_you' : r.state };
+  const binding = page.bindAgentRows([], [{ identity: 'p', key: 'p', value: parent }], true)[0];
+  assert.equal(binding.presentation.status, 'needs_you');
+  assert.equal(binding.presentation.tone, 'needs_you');
+  assert.equal(binding.presentation.familySummary, 'relation_side_count · relation_task_count · relation_needs_count · relation_running_count');
+  assert.equal(page.subagentLine(binding.presentation), '', 'the family line already counts what runs');
+  assert.match(page.rowSpoken(binding), /relation_running_count/);
+  const child = page.bindAgentRows([], [{ identity: 'k2', key: 'k2', value: kids[1] }], true)[0];
+  assert.match(page.rowSpoken(child), /relation_side · relation_root/);
 });

@@ -15,15 +15,15 @@ function sourceTextBetween(start, end) {
 class Frame {constructor(action){this.action=action;}onFrame(){this.action();}}
 const Reading = new Function('ConversationMarkdownCache', 'ConversationFrame', 'Edge', 'ScrollAlign', 'LengthMetrics',
   'return ' + stripTypeScriptTypes('class Reading {' + ['readingPrefix', 'retirePhoto', 'finishPhoto', 'syncReading',
-    'followReading', 'jumpToLatest', 'visibleReadingAnchor', 'loadEarlier', 'feedContextChanged'].map(method).join('\n') + '}')
+    'relatedReadingPosition', 'restoreRelationAnchor', 'reachedLatest', 'followReading', 'jumpToLatest', 'visibleReadingAnchor', 'loadEarlier', 'feedContextChanged'].map(method).join('\n') + '}')
 )(class Cache {}, Frame, { Bottom: 1 }, { START: 1 }, { vp: value => value });
 function fixture() {
   const v = new Reading(), frames = [], scrolls = [], readKeys = [];
-  Object.assign(v, { active: true, hiddenProcessAnchors: new Map(), readingKey: '', readingEpoch: 0,
+  Object.assign(v, { takeReturnAnchor:()=>undefined, active: true, hiddenProcessAnchors: new Map(), readingKey: '', readingEpoch: 0,
     readingMotion: 0, inspectionRevision: 0, followEpoch: -1, lines: [], feed: { error: '', nextCursor: '' },
     model: { selected: { kind: 'session' }, scope: () => 'owner', target: () => 'chat', hasMoreMessages: false,
       connected: true, captureView: key => { readKeys.push(key); return {read: async () => '', valid: () => true}; } },
-    scroller: { scrollEdge: () => scrolls.push('bottom') },
+    scroller: { scrollEdge: () => scrolls.push('bottom'), scrollBy: () => {} },
     getUIContext: () => ({ postFrameCallback: frame => frames.push(frame) }) });
   return {v, scrolls, readKeys, flush: async () => { while (frames.length) frames.shift().onFrame(); await Promise.resolve(); }};
 }
@@ -218,4 +218,102 @@ test('prefetched rows keep the old anchor while a manual tap reads through hidde
 test('unchanged cursor stops the pager and leaves a retryable status',async()=>{
   const {v,flush}=manualFixture();let calls=0;v.model.loadOlder=async()=>{calls++;return true;};
   await v.loadEarlier();await flush();assert.equal(calls,1);assert.equal(v.earlierFailed,true);
+});
+
+test('returning from a linked chat restores the stable message and viewport offset after paging', async () => {
+  const {v, calls, flush} = manualFixture();
+  v.model.transcriptHistoryReady = true;
+  v.model.oldestTranscriptSeq = 40;
+  v.scroller.isAtEnd = () => true;
+  v.relationAnchor = {id:'message20', offset:-18};
+  const page = v.model.loadOlder;
+  v.model.loadOlder = async () => { await page(); v.model.oldestTranscriptSeq = 20; return true; };
+  v.syncTimeline = () => v.restoreRelationAnchor();
+  v.restoreRelationAnchor();
+  v.reachedLatest();
+  assert.equal(v.atEnd, false);
+  await new Promise(resolve => setImmediate(resolve));
+  await flush();
+  assert.deepEqual(calls, [[0,false,1,{extraOffset:18}]]);
+  assert.equal(v.relationAnchor, undefined);
+  assert.equal(v.atEnd, false);
+});
+
+test('tapping latest supersedes a queued return to a related-chat reading anchor', async () => {
+  const {v,calls,scrolls,flush} = manualFixture();
+  v.model.transcriptHistoryReady = true;
+  v.relationAnchor = {id:'message40', offset:-8};
+  v.restoreRelationAnchor();
+  v.jumpToLatest();
+  await flush();
+  assert.deepEqual(calls, []);
+  assert.equal(v.atEnd, true);
+  assert.equal(scrolls.at(-1), 'bottom');
+});
+
+test('returning to an expanded process restores its tool line and offset without paging through history', async () => {
+  const {v,calls,flush,scrolls}=manualFixture();
+  const result={id:'result',itemId:'result',processIds:['tool'],leadIds:['tool']};
+  const rows=[{readingId:'message:tool',message:{id:'tool',itemId:'tool',work:{}}},
+    {readingId:'message:result',message:result}];
+  const Project=new Function('ConversationLine','return '+stripTypeScriptTypes('class Project {'+method('processLines')+'}'))(
+    class { constructor(id){ this.id=id; this.readingId=id; } });
+  const project=()=>Project.prototype.processLines.call(v,rows);
+  v.model.messages=rows.map(row=>row.message);
+  v.model.transcriptHistoryReady=true;
+  v.model.loadOlder=async()=>assert.fail('the tool message is already loaded');
+  v.openProcesses=['result']; v.expanded=['tool']; v.closedSoloGroups=[]; v.atEnd=false;
+  v.lines=project(); v.firstVisibleIndex=v.readingPrefix()+v.lines.findIndex(row=>row.readingId==='message:tool');
+  v.scroller.getItemRect=()=>({y:-17,height:100});
+  const saved=v.relatedReadingPosition();
+  v.openProcesses.length=0; v.expanded.length=0;
+  v.readingKey=''; v.takeReturnAnchor=()=>saved;
+  v.syncReading();
+  v.lines=project();
+  v.restoreRelationAnchor();
+  await flush();
+  assert.deepEqual(v.openProcesses,['result']);
+  assert.deepEqual(v.expanded,['tool']);
+  assert.deepEqual(calls, [[v.readingPrefix()+1,false,1,{extraOffset:17}]]);
+  assert.deepEqual(scrolls,[]);
+});
+
+test('a tool line now folded into a process restores its visible header without loading more history', async () => {
+  const {v,calls,flush}=manualFixture();
+  v.model.transcriptHistoryReady=true;
+  v.model.loadOlder=async()=>assert.fail('the header is already visible');
+  v.hiddenProcessAnchors.set('message:tool','process:finished');
+  v.lines=[{id:'process:finished',readingId:'process:finished'}];
+  v.relationAnchor={id:'message:tool',offset:-90};
+  v.restoreRelationAnchor(); await flush();
+  assert.deepEqual(calls,[[v.readingPrefix(),false,1,{extraOffset:0}]]);
+  assert.equal(v.atEnd,false);
+});
+
+
+test('a related return waits for history and corrects the measured drift after virtual rows are laid out', async () => {
+  const {v,calls,flush}=manualFixture(), adjustments=[];
+  v.model.transcriptHistoryReady=true;
+  v.model.chatHistoryLoading=true;
+  v.relationAnchor={id:'message40',offset:-80};
+  v.scroller.getItemRect=()=>({height:460,y:-48});
+  v.scroller.scrollBy=(x,y)=>adjustments.push([x,y]);
+  v.restoreRelationAnchor(); await flush();
+  assert.deepEqual(calls,[]);
+  v.model.chatHistoryLoading=false;
+  v.restoreRelationAnchor(); await flush();
+  assert.equal(calls.length,1);
+  assert.deepEqual(adjustments,[[0,32]]);
+  assert.equal(v.relationAnchor,undefined);
+});
+
+test('a user motion between the initial lookup and the layout correction cancels the correction', async () => {
+  const {v,flush}=manualFixture(), adjustments=[];
+  v.model.transcriptHistoryReady=true;
+  v.relationAnchor={id:'message40',offset:-45};
+  v.scroller.scrollToIndex=()=>v.jumpToLatest();
+  v.scroller.scrollBy=(x,y)=>adjustments.push([x,y]);
+  v.restoreRelationAnchor(); await flush();
+  assert.deepEqual(adjustments,[]);
+  assert.equal(v.atEnd,true);
 });

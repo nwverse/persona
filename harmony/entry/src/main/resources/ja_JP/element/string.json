@@ -6327,6 +6327,42 @@
     {
       "name": "agent_preview_line_when",
       "value": "{line}（{when}）"
+    },
+    {
+      "name": "relation_transcript_notice",
+      "value": "読み取り専用のサブタスク記録 · メインチャットが管理"
+    },
+    {
+      "name": "relation_side",
+      "value": "サイドチャット"
+    },
+    {
+      "name": "relation_task",
+      "value": "サブタスク"
+    },
+    {
+      "name": "relation_root",
+      "value": "元のチャット"
+    },
+    {
+      "name": "relation_chats",
+      "value": "関連チャット"
+    },
+    {
+      "name": "relation_side_count",
+      "value": "サイドチャット {n} 件"
+    },
+    {
+      "name": "relation_task_count",
+      "value": "サブタスク {n} 件"
+    },
+    {
+      "name": "relation_needs_count",
+      "value": "{n} 件が入力待ち"
+    },
+    {
+      "name": "relation_running_count",
+      "value": "{n} 件が実行中"
     }
   ]
 }

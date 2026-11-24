@@ -71,7 +71,11 @@ type subagentMeta struct {
 // subagents lists a session's subagents, newest first; finished ones older than a day are left out (each on its own:
 // a nested one stays listed when its parent is left out).
 func (n *Node) subagents(parent string) []proto.Subagent {
-	dir := n.subagentDir(parent)
+	return subagentsIn(parent, n.subagentDir(parent))
+}
+
+// subagentsIn also serves offline rows, for which the directory scan already located the parent transcript.
+func subagentsIn(parent, dir string) []proto.Subagent {
 	if dir == "" {
 		return nil
 	}

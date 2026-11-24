@@ -23,6 +23,8 @@ import { util } from '@kit.ArkTS';
 import { HubTransport, EndpointConfig, HttpFailure } from '../platform/HubTransport';
 import { CredentialVault } from '../platform/CredentialVault';
 import { LocalStore } from '../platform/LocalStore';
+import { sessionRelations, SessionRelations, unavailableSessionSources } from './SessionRelations';
+import { SessionArchive } from './SessionArchive';
 import { HubRepository, segment } from './HubRepository';
 import { groupUserImages } from '../core/MessageImageGallery';
 import { Wire, ResourceRow, ChatMessage, Decision, HubProfile, HeldAgentMessage } from './Wire';
@@ -99,6 +101,7 @@ export class ClientModel {
   @Trace section: number = 0;
   @Trace sessions: ResourceRow[] = [];
   @Trace sessionsReady: boolean = false;
+  @Trace archives: SessionArchive = new SessionArchive();
   @Trace conversations: ResourceRow[] = [];
   @Trace machines: ResourceRow[] = [];
   @Trace directorySessions: ResourceRow[] = [];
@@ -192,14 +195,16 @@ export class ClientModel {
   private viewTasks: Map<string, Promise<ClientModel>> = new Map();
 
   // A detail context retains its paired Hub and manager without changing the workspace selection.
-  async viewFor(row: ResourceRow): Promise<ClientModel> {
+  async viewFor(row: ResourceRow, allowCachedSession: boolean = false): Promise<ClientModel> {
     const group = row.group || this.profile.id;
     if (group === this.profile.id && (!row.manager || row.manager === this.profile.manager)) return this;
     if (this.retired || !this.profile.id || this.demo || this.forgettingProfiles.has(group) || this.cleanupProfiles.has(group)) throw new Error('request_updated');
     const source = group === this.profile.id ? this.profile : this.profiles.find((profile: HubProfile) => profile.id === group);
     if (!source) throw new Error('request_updated');
     const manager = row.manager || source.manager, key = JSON.stringify([group, manager]), existing = this.views.get(key);
-    if (existing && !existing.retired && existing.connected) return existing;
+    const cached = allowCachedSession && row.kind === 'session' && row.state === 'offline' &&
+      existing?.profile.id === group && existing.profile.manager === manager;
+    if (existing && !existing.retired && (existing.connected || cached)) return existing;
     const taskKey = JSON.stringify([this.generation, key]), pending = this.viewTasks.get(taskKey); if (pending) return pending;
     const generation = this.generation, scope = this.scope();
     const task = this.connectView(manager, key, generation, scope, source);
@@ -608,7 +613,7 @@ export class ClientModel {
     this.local.allowHub(profile.id); ChatAttachments.allowHub(profile.hubId || profile.id);
     this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); const keep = preserve && profile.id === this.profile.id && profile.manager === this.profile.manager;
     this.reconnectPaused = false; this.pairingRequired = false;
-    if (!keep) this.reconnectAttempt = 0;
+    if (!keep) { this.reconnectAttempt = 0; this.archives = new SessionArchive(); }
     const saved = this.persistDraft();
     const generation = ++this.generation; this.selectionGeneration++; const selection = this.selected;
     this.closeTranscript(); this.releaseTerminal(); this.repository?.close(); this.repository = undefined;
@@ -728,7 +733,7 @@ export class ClientModel {
       this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.releaseTerminal();
       this.repository?.close(); this.repository = undefined; this.generation++; this.selectionGeneration++;
       this.profile = new HubProfile(); this.connected = false; this.selected = new ResourceRow();
-      this.sessionsReady = false; this.sessions = []; this.conversations = []; this.machines = []; this.managers = []; this.todos = []; this.knowledge = []; this.inbox = [];
+      this.archives = new SessionArchive(); this.sessionsReady = false; this.sessions = []; this.conversations = []; this.machines = []; this.managers = []; this.todos = []; this.knowledge = []; this.inbox = [];
       this.clearPendingDecisions();
       this.messages = []; this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); this.detail = ''; this.reply = ''; this.mainId = ''; this.mainMachineId = '';
       this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.draftLoading = false; this.features = []; this.error = '';
@@ -833,8 +838,11 @@ export class ClientModel {
       });
       this.publishDirectory();
       if (this.selected.kind === 'session') {
-        const selected = this.sessions.find((item: ResourceRow) => item.id === this.selected.id && item.machine === this.selected.machine);
+        const archived = Wire.bool(this.selected.data(), 'archived');
+        const selected = this.sessions.find((item: ResourceRow) => item.id === this.selected.id && item.machine === this.selected.machine) ||
+          (archived || this.selected.session.includes('@') ? this.sessionFamily(this.selected).find(this.selected) : undefined);
         if (selected) this.selected = selected;
+        else if (archived) this.clearPendingDecisions();
         else { this.selected.raw = JSON.stringify(Wire.payload(['read_only'], [true])); this.selected.state = 'unknown'; this.clearPendingDecisions(); }
         this.reconcileMessageCopies();
       }
@@ -1152,12 +1160,21 @@ export class ClientModel {
     finally { this.seenPending.delete(key); }
   }
 
+  sessionFamily(row: ResourceRow): SessionRelations {
+    return sessionRelations(Wire.bool(row.data(), 'archived') ? this.archives.rows : this.sessions, unavailableSessionSources([this]));
+  }
+
   async loadChat(row: ResourceRow): Promise<void> {
     if (this.demo && this.demoRepository) { this.publishTranscript(this.demoRepository.historyItems(row) as Object as TranscriptItem[], this.turnWorking(), true); this.hasMoreMessages = false; this.transcriptHistoryReady = true; void this.acknowledgeVisibleSession(row); await this.refreshDecisions(); return; }
     const generation = this.generation, scope = this.scope(), target = this.target(row);
     if (!this.connected) { await this.cachedChat(row); return; }
     const visibility = this.chatVisibilityRevision;
     const current = (): boolean => this.owns(generation, scope) && this.target() === target && this.chatVisibilityRevision === visibility;
+    // A restored archive route may open before the history list has been visited.
+    if (Wire.bool(row.data(), 'archived') && this.features.includes('agent_session_archives') && !this.archives.has(row.machine)) {
+      void this.archives.read(path => this.repo().call(path), this.profile.id, this.profile.manager, row.machine, current)
+        .catch((error: Error) => { if (current()) this.failure(error); });
+    }
     const sequence = ++this.decisionRefreshSequence;
     let interactions: Record<string, Object>[] = [], decisionsRead = false;
     try { interactions = await this.repo().decisions(); decisionsRead = true; }
@@ -1660,6 +1677,8 @@ export class ClientModel {
     const source = Wire.text(data, 'source_kind'), status = Wire.text(data, 'status', row.state);
     if ((!source || source === 'codex_history') && ['offline', 'interrupted'].includes(status) &&
       Wire.bool(caps, 'read') && Wire.bool(caps, 'terminal') && !Wire.bool(caps, 'send')) return 'agent_stopped';
+    if (source === 'subagent_transcript') return 'relation_transcript_notice';
+    if (Wire.bool(data, 'archived')) return 'read_only';
     if (Wire.bool(data, 'deleted') || this.coldHeldPlaceholder(row, data) || !this.capabilities().canSend ||
       (Wire.has(data, 'capabilities') && !Wire.bool(caps, 'send'))) return 'read_only';
     const machine = this.machines.find((item: ResourceRow) => item.id === row.machine);
@@ -1874,6 +1893,7 @@ export class ClientModel {
   }
   useDemo(): void {
     this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.releaseTerminal(); this.retireViews(); this.repository?.close(); this.generation++; this.selectionGeneration++;
+    this.archives = new SessionArchive();
     this.demo = true; this.pairingRequired = false; this.connected = true; this.profile = new HubProfile('demo', tr('local_demo')); this.profile.hubId = 'demo'; this.profile.manager = 'demo';
     this.demoRepository = new DemoRepository(this.local); this.repository = this.demoRepository;
     this.selected = new ResourceRow(); this.messages = []; this.publishedSource = undefined; this.revisionItems = []; this.revisionItemsVersion++; this.clearPendingDecisions(); this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.draftLoading = false;

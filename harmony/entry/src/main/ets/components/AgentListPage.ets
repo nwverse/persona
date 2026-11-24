@@ -7,11 +7,13 @@ import { ClientModel } from '../models/ClientModel';
 import { AgentWorkspace, AgentWorkspaceGroup, NEEDS_GROUP } from '../models/AgentWorkspace';
 import { agentRowPreview, agentRowTone, runningSubagents } from '../core/AgentRowPreview';
 import { ResourceRow, Wire } from '../models/Wire';
+import { unavailableSessionSources } from '../models/SessionRelations';
 import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { Tokens } from '../design/Tokens';
 import { Colors } from '../design/Colors';
 import { ButtonStyles, SelectStyles } from '../design/Controls';
 import { Symbols } from '../design/Symbols';
+import { ToolGlyph } from '../design/ToolGlyph';
 import { tr } from '../design/Strings';
 import { nativeEnvironment, NativeEnvironment } from '../platform/NativeEnvironment';
 import { nativeSheetInset } from '../platform/NativeInsets';
@@ -28,13 +30,19 @@ const STATE_LABELS: Record<string, string> = {'pinned': 'agent_group_pinned', 'n
   'state/unread': 'agent_group_unread', 'state/awaiting': 'agent_group_awaiting', 'state/working': 'working',
   'state/background': 'agent_group_background', 'state/just_finished': 'agent_group_just_finished',
   'state/waiting': 'agent_group_waiting', 'state/muted': 'agent_group_muted',
-  'state/idle': 'agent_group_idle'};
+  'state/idle': 'agent_group_idle', 'state/offline': 'offline'};
 
 @ObservedV2
 class AgentRowPresentation {
   @Trace raw: string = '';
   @Trace lastText: string = '';
   @Trace brand: string = '';
+  @Trace rootTitle: string = '';
+  @Trace relativeKind: string = '';
+  @Trace familySummary: string = '';
+  @Trace familyHasTasks: boolean = false;
+  @Trace familyExpanded: boolean = false;
+  @Trace indented: boolean = false;
   @Trace rawStatus: string = '';
   @Trace updatedAt: number = Number.NaN;
   @Trace worktree: string = '';
@@ -166,9 +174,10 @@ export struct AgentListPage {
   @Monitor('model.profile') profileChanged(): void { this.editorOpen = false; this.editingAdmission = undefined; this.syncRowBindings(); if (!this.active) return; this.activateWorkspace(); }
   @Monitor('selectedRow') externalSelectionChanged(): void { this.workspace.selectExternal(this.selectedRow); }
   @Computed get machineRosterKey(): string {
-    // Metrics and last_seen change frequently. The Agent sorter only consumes the scoped machine IDs and labels.
+    // Ignore metrics and last_seen updates. A reachability change also invalidates cached child activity.
     const machines = this.model.directoryReady ? this.model.directoryMachines : this.model.machines;
-    return JSON.stringify(machines.map((row: ResourceRow) => [row.group, row.manager, row.id, row.title, row.state]));
+    return JSON.stringify([machines.map((row: ResourceRow) => [row.group, row.manager, row.id, row.title, row.state]),
+      unavailableSessionSources(this.model.directoryOwners())]);
   }
   @Monitor('model.directorySessions', 'model.directoryReady', 'model.sessionsReady', 'model.sessions', 'machineRosterKey')
   catalogChanged(): void {
@@ -217,6 +226,7 @@ export struct AgentListPage {
     });
     const occurrences = new Map<string, number>(), next: BoundAgentGroup[] = [];
     this.workspace.groups.forEach((group: AgentWorkspaceGroup) => {
+      const displayed = this.workspace.displayRows(group);
       const occurrence = occurrences.get(group.id) || 0;
       occurrences.set(group.id, occurrence + 1);
       const identity = JSON.stringify([group.id, occurrence]);
@@ -225,13 +235,13 @@ export struct AgentListPage {
       let binding: BoundAgentGroup;
       if (existing) {
         binding = existing; binding.value = group;
-        const groupRows = reconcileBoundRows(binding.rows.map((rowBinding: BoundAgentRow) => rowBinding.bound), group.rows,
+        const groupRows = reconcileBoundRows(binding.rows.map((rowBinding: BoundAgentRow) => rowBinding.bound), displayed,
           (row: ResourceRow) => row.key(), this.model, this.model, scope, scope);
         binding.rows = this.bindAgentRows(binding.rows, groupRows, true);
       } else {
         this.groupBindingSequence++;
         binding = new BoundAgentGroup(identity, 'agent-group-binding.' + String(this.groupBindingSequence), group);
-        const groupRows = reconcileBoundRows([], group.rows, (row: ResourceRow) => row.key(), undefined, this.model, '', scope);
+        const groupRows = reconcileBoundRows([], displayed, (row: ResourceRow) => row.key(), undefined, this.model, '', scope);
         binding.rows = this.bindAgentRows([], groupRows, true);
       }
       next.push(binding);
@@ -269,7 +279,30 @@ export struct AgentListPage {
       presentation.sessionId = Wire.text(data, 'session_id');
       presentation.spaceName = Wire.text(data, 'space_name');
     }
-    const state = row.state || presentation.rawStatus;
+    const root = this.workspace.relations.root(row), kids = this.workspace.foldedChildren(row);
+    presentation.rootTitle = root?.title || root?.id || '';
+    presentation.relativeKind = root ? this.workspace.relations.kind(row) : '';
+    presentation.indented = !!root && this.workspace.foldFamilies() && !this.workspace.isPinned(row);
+    presentation.familyExpanded = this.workspace.familyExpanded(row);
+    presentation.familySummary = '';
+    presentation.familyHasTasks = false;
+    if (kids.length && this.workspace.foldFamilies()) {
+      const sides = kids.filter(child => this.workspace.relations.kind(child) === 'side').length;
+      const needs = kids.filter(child => child.state === 'needs_you').length;
+      const parts: string[] = [];
+      if (sides) parts.push(tr('relation_side_count').replace('{n}',String(sides)));
+      if (kids.length > sides) {
+        parts.push(tr('relation_task_count').replace('{n}', String(kids.length - sides)));
+        presentation.familyHasTasks = true;
+      }
+      if (needs) parts.push(tr('relation_needs_count').replace('{n}',String(needs)));
+      // The family line already counts its subtasks, so it says how many run instead of a second subagent line.
+      const running = kids.filter(child => child.state === 'working').length;
+      if (running) parts.push(tr('relation_running_count').replace('{n}', String(running)));
+      presentation.familySummary = parts.join(' · ');
+    }
+    // A folded family also shows the state of its children, as the core sorts it and the Needs you section lists it.
+    const state = this.workspace.familyState(row) || presentation.rawStatus;
     const muted = this.workspace.isMuted(row);
     const content = agentRowPreview(presentation.data, state, muted, Date.now(), tr) || row.detail;
     const machineId = row.machine || presentation.machineId;
@@ -535,17 +568,20 @@ export struct AgentListPage {
 
   private rowSpoken(binding: BoundAgentRow): string {
     const presentation = binding.presentation;
-    return [binding.bound.value.title || tr('agent_untitled'), presentation.metadata.slice(0, 2).filter((value: string) => !!value).join(' · '),
-      this.rowStatus(presentation), presentation.muted ? tr('agent_group_muted') : '', this.subagentLine(presentation)]
+    const relation = presentation.rootTitle ? tr(presentation.relativeKind === 'side' ? 'relation_side' : 'relation_task') + ' · ' +
+      tr('relation_root') + ' · ' + presentation.rootTitle : '';
+    return [binding.bound.value.title || tr('agent_untitled'), relation, presentation.metadata.slice(0, 2).filter((value: string) => !!value).join(' · '),
+      this.rowStatus(presentation), presentation.muted ? tr('agent_group_muted') : '', presentation.familySummary || this.subagentLine(presentation)]
       .filter((value: string) => !!value).join(' · ');
   }
 
   private subagentLine(presentation: AgentRowPresentation): string {
-    return presentation.subagents > 0 ? tr('agent_subagents_running').replace('{count}', String(presentation.subagents)) : '';
+    return presentation.subagents > 0 && !presentation.familySummary ? tr('agent_subagents_running').replace('{count}', String(presentation.subagents)) : '';
   }
 
   @Builder agentRow(binding: BoundAgentRow, groupId: string) {
     ListItem() {
+      Column() {
       Row({ space: Tokens.gap }) {
         Stack({ alignContent: Alignment.BottomEnd }) {
           Column() {
@@ -566,6 +602,14 @@ export struct AgentListPage {
             if (this.environment.fontScale < 1.5 && this.rowTime(binding.presentation)) Text(this.rowTime(binding.presentation)).fontSize(Tokens.caption).fontColor(Colors.secondary)
           }.width('100%').alignItems(VerticalAlign.Center)
           if (this.environment.fontScale >= 1.5 && this.rowTime(binding.presentation)) Text(this.rowTime(binding.presentation)).fontSize(Tokens.caption).fontColor(Colors.secondary)
+          if (binding.presentation.rootTitle) {
+            Row({space:Tokens.fine}) {
+              if (binding.presentation.relativeKind === 'subtask') ToolGlyph({name:'agent', glyphSize:Tokens.meta, ink:Colors.teal})
+              Text(tr(binding.presentation.relativeKind === 'side' ? 'relation_side' : 'relation_task') +
+                (binding.presentation.indented ? '' : ' · ' + tr('relation_root') + ' · ' + binding.presentation.rootTitle))
+                .fontSize(Tokens.caption).fontColor(Colors.secondary).layoutWeight(1).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
+            }.width('100%')
+          }
           if (this.mixedMachines && this.workspace.groupingMode !== 'machine' && binding.presentation.place) Text(binding.presentation.place).fontSize(Tokens.caption).fontColor(Colors.secondary).width('100%').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           if (binding.presentation.recentContent) Text(binding.presentation.recentContent).fontSize(Tokens.meta)
             .fontColor(Colors.secondary).width('100%').maxLines(this.look.density === 'compact' || this.rail ? 1 : 2).textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -581,12 +625,26 @@ export struct AgentListPage {
             .fontColor(this.rowStatusColor(binding.presentation)).width('100%')
         }.alignItems(HorizontalAlign.Start).layoutWeight(1).opacity(binding.presentation.muted ? Tokens.mutedOpacity : 1)
       }.width('100%').alignItems(VerticalAlign.Center).justifyContent(this.rail ? FlexAlign.Center : FlexAlign.Start)
-        .padding({ left: this.rail ? Tokens.inset : Tokens.page, right: this.rail ? Tokens.inset : Tokens.page, top: this.look.density === 'compact' ? Tokens.gap : Tokens.inset,
+        .padding({ left: this.rail ? Tokens.inset : binding.presentation.indented ? Tokens.page + Tokens.section : Tokens.page, right: this.rail ? Tokens.inset : Tokens.page, top: this.look.density === 'compact' ? Tokens.gap : Tokens.inset,
           bottom: this.look.density === 'compact' ? Tokens.gap : Tokens.inset })
-    }.accessibilityGroup(true).accessibilityText(this.rowSpoken(binding))
+        .onClick(() => this.openRow(binding.bound.value))
+        .accessibilityGroup(true).accessibilityText(this.rowSpoken(binding))
+      if (!this.rail && binding.presentation.familySummary) {
+        Button({type:ButtonType.Normal,buttonStyle:ButtonStyleMode.TEXTUAL}) {
+          Row({space:Tokens.fine}) {
+            if (binding.presentation.familyHasTasks) ToolGlyph({name:'agent', glyphSize:Tokens.meta, ink:Colors.teal})
+            Text(binding.presentation.familySummary).fontSize(Tokens.caption).fontColor(Colors.secondary)
+            SymbolGlyph(binding.presentation.familyExpanded ? Symbols.up : Symbols.down).fontSize(Tokens.caption).fontColor([Colors.secondary])
+          }
+        }.alignSelf(ItemAlign.Start).margin({left:Tokens.page + Tokens.avatar}).padding({left:Tokens.gap,right:Tokens.gap})
+          .constraintSize({minHeight:Tokens.touch}).backgroundColor(Color.Transparent)
+          .accessibilityText(binding.presentation.familySummary + ' ' + tr(binding.presentation.familyExpanded ? 'agent_collapse' : 'agent_expand'))
+          .onClick(() => this.workspace.toggleFamily(binding.bound.value)).id('agents.family.' + binding.bound.value.key())
+      }
+      }.width('100%')
+    }
       .selectable(true).selected(this.isRowSelected(binding))
       .backgroundColor(this.isRowSelected(binding) ? Colors.selection : Colors.canvas)
-      .onClick(() => this.openRow(binding.bound.value))
       .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => this.reportVisible(binding.bound.value, groupId === NEEDS_GROUP ? NEEDS_GROUP : 'list', visible ? ratio : 0))
       .onDisAppear(() => this.reportVisible(binding.bound.value, groupId === NEEDS_GROUP ? NEEDS_GROUP : 'list', 0))
       .bindContextMenu(this.rowMenu(binding), ResponseType.LongPress)

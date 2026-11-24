@@ -15,7 +15,7 @@ function method(name){
  for(;i<source.length&&depth;i++){const c=source[i];if(quote){if(escape)escape=false;else if(c==='\\')escape=true;else if(c===quote)quote='';}else if(c==='"'||c==="'"||c==='`')quote=c;else if(c==='{')depth++;else if(c==='}')depth--;}
  assert.equal(depth,0,name);return source.slice(start,i);
 }
-const names=['consumeNotification','deviceTitleGap','destinationBackHidden','chatSelectionShown','activeModule','readingAgentDetail','routeTarget','openRow','mainDestination','openMain','hideChatTitle','newConversation','resolveMainDestination','ensureMainDestination','pushChat','pairingCurrent','trustPairing','pairingError','connect','childKey','routeRow','openSettings','settingsKind','settingsModel','targetReady','openMachineChat','openLinkedResource','openFrom','openComputer','handoffResource','restoreTarget','routeShown','dismissChatActions','markDetailReady'];
+const names=['takeRelatedAnchor','openRelated','consumeNotification','deviceTitleGap','destinationBackHidden','chatSelectionShown','activeModule','readingAgentDetail','routeTarget','openRow','mainDestination','openMain','hideChatTitle','newConversation','resolveMainDestination','ensureMainDestination','pushChat','pairingCurrent','trustPairing','pairingError','connect','childKey','routeRow','openSettings','settingsKind','settingsModel','targetReady','openMachineChat','openLinkedResource','openFrom','openComputer','handoffResource','restoreTarget','routeShown','dismissChatActions','markDetailReady'];
 let inspectedPair;
 const testPairing = { parse: () => inspectedPair, manual: () => inspectedPair };
 const NativeNavigation=new Function('NavigationContext','ResourceRow','mainConversationData','Wire','Tokens','Pairing','return '+stripTypeScriptTypes('class NativeNavigation {'+names.map(method).join('\n')+'}'))(NavigationContext,ResourceRow,mainConversationData,Wire,Tokens,testPairing);
@@ -24,7 +24,7 @@ function deferred(){let resolve;const promise=new Promise(r=>resolve=r);return {
 function fixture(){const shell=new NativeNavigation(),pushed=[];let gen=1;
  const primary={profile:{id:'hub'},selected:row('primary','owner-a'),connected:true,error:'',connectionGeneration:()=>gen,scope:()=> 'hub/owner-a',owns:(g,s)=>g===gen&&s==='hub/owner-a',reportError(e){this.error=e.message;},hideConversation(){},showConversation(){},async listResources(){}};
  const detail={selected:row('previous'),connected:true,scope:()=> 'hub/owner-b',connectionGeneration:()=>gen,async select(r){this.selected=r;},hideConversation(){},showConversation(){},watchDecisions(){}};
- primary.viewFor=async()=>detail;shell.mainReadWaiters=[];shell.model=primary;shell.detailModel=primary;shell.activeChild='';shell.routeRevision=0;shell.creatingConversations=new Map();shell.chatReady=false;shell.detailRoute='';shell.stack={size:()=>pushed.length,clear:()=>pushed.splice(0),pushPath:r=>pushed.push(r),getAllPathName:()=>pushed.map(r=>r.name),getParamByIndex:i=>pushed[i]?.param};shell.savePath=()=>{};
+ primary.viewFor=async()=>detail;shell.relatedAnchors=new Map();shell.mainReadWaiters=[];shell.model=primary;shell.detailModel=primary;shell.activeChild='';shell.routeRevision=0;shell.creatingConversations=new Map();shell.chatReady=false;shell.detailRoute='';shell.stack={size:()=>pushed.length,clear:()=>pushed.splice(0),pushPath:r=>pushed.push(r),getAllPathName:()=>pushed.map(r=>r.name),getParamByIndex:i=>pushed[i]?.param};shell.savePath=()=>{};
  return {shell,primary,detail,pushed,bump:()=>gen++};
 }
 function machineChatFixture() {
@@ -403,3 +403,15 @@ test('split root title spacing follows the visible path and keeps child Back con
  assert.equal(shell.destinationBackHidden('resources','inbox'),false,'a single-pane first destination returns to its primary list');
 });
 
+test('return to the already-open main chat pops the child route and consumes only the saved parent anchor',()=>{
+ const {shell,detail,pushed}=fixture();detail.profile={id:'hub',manager:'owner-b'};
+ const main=row('main','owner-b','session'),side=row('side','owner-b','session');main.group=side.group='hub';
+ const p=JSON.stringify(main),c=JSON.stringify(side);
+ pushed.push({name:'session',param:p},{name:'session',param:c});shell.detailModel=detail;detail.selected=side;
+ shell.activeChild=shell.childKey('session',c);shell.targetReady=()=>true;shell.savePath=()=>{};
+ shell.stack.popToIndex=i=>pushed.splice(i+1);
+ const anchor={id:'message:stable',offset:-13};shell.relatedAnchors.set(shell.childKey('session',p),anchor);
+ const foreign=main.copy('foreign');shell.openRelated('session',c,foreign);assert.equal(pushed.length,2);
+ shell.openRelated('session',c,main);assert.deepEqual(pushed,[{name:'session',param:p}]);
+ assert.equal(shell.takeRelatedAnchor('session',p),anchor);assert.equal(shell.takeRelatedAnchor('session',p),undefined);
+});

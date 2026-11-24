@@ -51,6 +51,7 @@ import { Tokens } from '../design/Tokens';
 import { Colors } from '../design/Colors';
 import { Symbols } from '../design/Symbols';
 import { agentBrand, agentBrandColor } from '../design/AgentBrand';
+import type { RelatedReadingPosition } from '../core/ConversationReading';
 import { ButtonStyles, SelectStyles } from '../design/Controls';
 import { AgentWorkspace } from '../models/AgentWorkspace';
 import { nativeEnvironment, NativeEnvironment } from '../platform/NativeEnvironment';
@@ -383,13 +384,13 @@ struct Index {
   }
   private openRow(row: ResourceRow, root: boolean = true): void {
     const name = NavigationContext.destination(row);
-    if (row.kind === 'session') { this.stack.clear(); this.tool = 0; }
+    if (row.kind === 'session') { this.relatedAnchors.clear(); this.stack.clear(); this.tool = 0; }
     this.stack.pushPath({ name: name, param: JSON.stringify(this.routeTarget(row, root || !this.stack.size())) }); this.savePath();
   }
   private async openLinkedResource(row: ResourceRow): Promise<void> {
     const generation = this.model.connectionGeneration(), scope = this.model.scope(), source = this.activeChild;
     try {
-      if (!['inbox', 'todo', 'knowledge', 'file', 'todo_source', 'todo_thread'].includes(row.kind)) await this.model.viewFor(row);
+      if (!['inbox', 'todo', 'knowledge', 'file', 'todo_source', 'todo_thread'].includes(row.kind)) await this.model.viewFor(row, row.kind === 'session');
       if (!this.model.owns(generation, scope) || this.activeChild !== source) return;
       const target = this.routeTarget(row, false), name = NavigationContext.destination(target), data = target.data();
       const handoff = target.kind === 'inbox' && Wire.bool(data, 'open_handoff');
@@ -427,6 +428,25 @@ struct Index {
       this.markDetailReady(this.childKey('session', next));
       stack.pushPath({ name: 'session', param: next }); this.savePath();
     } catch (error) { if (current()) root.reportError(error as Error); }
+  }
+  private relatedAnchors = new Map<string,RelatedReadingPosition>();
+  private takeRelatedAnchor(name: string, param: Object): RelatedReadingPosition | undefined {
+    const key = this.childKey(name,param), anchor = this.relatedAnchors.get(key);
+    this.relatedAnchors.delete(key); return anchor;
+  }
+  private openRelated(name: string, param: Object, row: ResourceRow, anchor?: RelatedReadingPosition): void {
+    const key = this.childKey(name,param);
+    if (this.activeChild !== key || !this.targetReady(name,param)) return;
+    const current = this.detailModel.selected;
+    if (row.machine !== current.machine || row.manager !== this.detailModel.profile.manager || row.group !== this.detailModel.profile.id) return;
+    const routes = this.stack.getAllPathName();
+    for (let i=routes.length-2;i>=0;i--) {
+      if (routes[i] === 'session' && this.routeRow(this.stack.getParamByIndex(i) as string).key() === row.key()) {
+        this.stack.popToIndex(i); this.savePath(); return;
+      }
+    }
+    if (anchor) this.relatedAnchors.set(key,anchor);
+    this.openLinkedResource(row);
   }
   private openFrom(name: string, param: Object, row: ResourceRow): void {
     if (this.activeChild === this.childKey(name, param)) { if (!row.group) row.group = NavigationContext.from(name, param as string).row.group || this.model.profile.id; this.openLinkedResource(row); }
@@ -1125,7 +1145,7 @@ struct Index {
     const keepContent = this.targetReady(name, param);
     if (!keepContent) { this.chatReady = false; this.detailRoute = ''; }
     try {
-      let row = descriptor.row; const view = await this.model.viewFor(row);
+      let row = descriptor.row; const view = await this.model.viewFor(row, name === 'session');
       if (['session', 'conversation'].includes(row.kind) && !row.machine) {
         let resolved = view.conversations.concat(view.sessions).find((item: ResourceRow) => item.id === row.id || item.session === row.session && !!row.session);
         if (!resolved && view.connected) { await view.refresh(); resolved = view.conversations.concat(view.sessions).find((item: ResourceRow) => item.id === row.id || item.session === row.session && !!row.session); }
@@ -1215,7 +1235,8 @@ struct Index {
       if (name === 'session' || name === 'conversation') {
         if (this.targetReady(name, param)) Conversation({ model: this.detailModel, onOpenComputer: (row: ResourceRow) => {
           if (this.activeChild === this.childKey(name, param) && this.targetReady(name, param) && this.selectedComputer()?.key() === row.key()) this.openComputer(row);
-        }, admission: (): boolean => this.activeChild === this.childKey(name, param) && this.targetReady(name, param), onOpenFile: (path: string) => this.openTools(path), active: this.activeChild === this.childKey(name, param), onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address), showContextMenu: this.mainDestination(name, param) || this.hideChatTitle(name, param), onOpenCard: (itemId: string, kind: string) => { if (this.activeChild === this.childKey(name, param) && this.targetReady(name, param)) this.openAssistantCard(itemId, kind); }, onPrimaryStop: (shown: boolean) => { if (this.activeChild === this.childKey(name, param) && this.targetReady(name, param)) this.inlineStopIdentity = shown ? JSON.stringify([this.detailModel.scope(), this.detailModel.connectionGeneration(), this.detailModel.target()]) : ''; }, onShowActions: () => this.showChatActions(name, param), actionItems: this.chatMenuActions, actionsVisible: this.chatBodyMenuVisible && this.activeChild === this.childKey(name, param), actionsRequest: this.chatMenuRevision, onHideActions: (request: number) => this.closeChatActions(request) })
+        }, onRelated: (row: ResourceRow, anchor?: RelatedReadingPosition) => this.openRelated(name,param,row,anchor),
+          takeReturnAnchor: () => this.takeRelatedAnchor(name,param), admission: (): boolean => this.activeChild === this.childKey(name, param) && this.targetReady(name, param), onOpenFile: (path: string) => this.openTools(path), active: this.activeChild === this.childKey(name, param), onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address), showContextMenu: this.mainDestination(name, param) || this.hideChatTitle(name, param), onOpenCard: (itemId: string, kind: string) => { if (this.activeChild === this.childKey(name, param) && this.targetReady(name, param)) this.openAssistantCard(itemId, kind); }, onPrimaryStop: (shown: boolean) => { if (this.activeChild === this.childKey(name, param) && this.targetReady(name, param)) this.inlineStopIdentity = shown ? JSON.stringify([this.detailModel.scope(), this.detailModel.connectionGeneration(), this.detailModel.target()]) : ''; }, onShowActions: () => this.showChatActions(name, param), actionItems: this.chatMenuActions, actionsVisible: this.chatBodyMenuVisible && this.activeChild === this.childKey(name, param), actionsRequest: this.chatMenuRevision, onHideActions: (request: number) => this.closeChatActions(request) })
         else this.targetLoading(name, param)
       } else if (name === 'history') {
         if (this.targetReady(name, param)) InteractionHistoryPage({ model: this.detailModel, active: this.activeChild === this.childKey(name, param), onLink: (address: string) => this.openReader(address) })

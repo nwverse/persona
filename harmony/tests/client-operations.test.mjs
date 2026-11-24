@@ -7,7 +7,7 @@ registerHooks({
   resolve(specifier, context, next) {
     if (specifier === '@kit.ArkTS') return {url:'client-boundary:'+specifier,shortCircuit:true};
     if (context.parentURL?.endsWith('/ClientModel.ets')) {
-      if (['./Wire', './AssistantView', './DemoRepository', './NavigationContext', './ChatDraftStore', './HubRepository', './MutationStore', './Compatibility', './InteractionDecision', '../core/ClientLocale', '../core/ClientLocale', '../core/Domain', '../core/AgentEvents', '../core/ConversationPlan', '../core/ScopePolicy', '../core/StorageOwnership', '../core/MessageContent', '../core/MessageImageGallery', '../core/TranscriptCache'].includes(specifier)) {
+      if (['./SessionArchive', './SessionRelations', './Wire', './AssistantView', './DemoRepository', './NavigationContext', './ChatDraftStore', './HubRepository', './MutationStore', './Compatibility', './InteractionDecision', '../core/ClientLocale', '../core/ClientLocale', '../core/Domain', '../core/AgentEvents', '../core/ConversationPlan', '../core/ScopePolicy', '../core/StorageOwnership', '../core/MessageContent', '../core/MessageImageGallery', '../core/TranscriptCache'].includes(specifier)) {
         const base = new URL(specifier, context.parentURL);
         return {url: base.href + (existsSync(new URL(base.href + '.ts')) ? '.ts' : '.ets'), shortCircuit: true};
       }
@@ -27,7 +27,7 @@ registerHooks({
       if (specifier === '@kit.ArkTS' || specifier === '../platform/HubTransport') return {url:'client-boundary:'+specifier,shortCircuit:true};
       if (specifier.startsWith('.')) return {url:new URL(specifier.endsWith('.ets') || specifier.endsWith('.ts') ? specifier : specifier + '.ets',context.parentURL).href,shortCircuit:true};
     }
-    if((context.parentURL?.endsWith('/NavigationContext.ets')||context.parentURL?.endsWith('/ChatDraftStore.ets')||context.parentURL?.endsWith('/Compatibility.ets'))&&specifier==='./Wire')return {url:new URL('./Wire.ets',context.parentURL).href,shortCircuit:true};
+    if((context.parentURL?.endsWith('/SessionArchive.ets') || context.parentURL?.endsWith('/SessionRelations.ets')||context.parentURL?.endsWith('/NavigationContext.ets')||context.parentURL?.endsWith('/ChatDraftStore.ets')||context.parentURL?.endsWith('/Compatibility.ets'))&&specifier==='./Wire')return {url:new URL('./Wire.ets',context.parentURL).href,shortCircuit:true};
     if(context.parentURL?.endsWith('/QuestionWorkspace.ets') && specifier==='./Wire')return {url:new URL('./Wire.ets',context.parentURL).href,shortCircuit:true};
     if(context.parentURL?.endsWith('/InteractionDecision.ets')&&specifier.startsWith('.'))return {url:new URL(specifier+'.ets',context.parentURL).href,shortCircuit:true};
     return next(specifier, context);
@@ -1783,4 +1783,47 @@ test('the Codex start catalog exposes a named default and forwards the exact cho
   for (const id of ['gpt-6.2-astra','~provider/model-v2','opus[1m]']) assert.ok(SessionModelCatalog.validTypedId(id));
   for (const id of ['-m','a b','a\nb','a'.repeat(257),'']) assert.equal(SessionModelCatalog.validTypedId(id),false);
   assert.equal(new SessionModelCatalog({locked:'owned by desktop',models:[]}).locked,true);
+});
+
+test('a cold archived deep link restores its own family, including after the active directory refreshes', async () => {
+  const {model}=fixture();
+  delete model.loadChat;
+  const child={session_id:'child',machine_id:'m',parent_session_id:'root',manager:'personal',archived:true,status:'offline',capabilities:{read:true}};
+  const root={...child,session_id:'root',parent_session_id:''};
+  model.selected=ResourceRow.from(child,'session'); model.selected.group=model.profile.id;
+  model.features=['agent_session_archives'];
+  model.transcript={latest:async()=>{}}; model.transcriptKey=model.target();
+  const reads=[];
+  model.repository={
+    decisions:async()=>[], sessions:async()=>[],machines:async()=>[],
+    call:async path=>{
+      if (path==='/api/v1/assistant') return {conversations:[]};
+      reads.push(path);
+      return {sessions:[root,child]};
+    }
+  };
+  await model.loadChat(model.selected);
+  assert.deepEqual(reads,['/api/v1/sessions/archived?machine_id=m&manager=personal']);
+  await model.refresh();
+  const graph=model.sessionFamily(model.selected);
+  assert.equal(model.selected.data().archived,true);
+  const parent=graph.root(model.selected);
+  assert.equal(parent.id,'root');
+  assert.deepEqual(graph.children(parent).map(row=>row.key()),[model.selected.key()]);
+  await model.loadChat(model.selected);
+  assert.equal(reads.length,1);
+});
+
+test('an offline search result can open the cached transcript of its own paired manager', async () => {
+  const {model}=fixture();
+  const owner=new ClientModel();
+  owner.profile=new HubProfile(model.profile.id); owner.profile.manager='other'; owner.connected=false;
+  model.views.set(JSON.stringify([owner.profile.id,'other']),owner);
+  const row=ResourceRow.from({session_id:'old',machine_id:'desk',manager:'other',state:'offline'},'session');
+  row.group=owner.profile.id;
+  model.connectView=async()=>{throw new Error('connection unavailable');};
+  assert.equal(await model.viewFor(row,true),owner);
+  await assert.rejects(model.viewFor(row),/connection unavailable/);
+  owner.retired=true;
+  await assert.rejects(model.viewFor(row,true),/connection unavailable/);
 });

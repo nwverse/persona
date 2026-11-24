@@ -1,4 +1,5 @@
 import type { ClientModel } from './ClientModel';
+import { SessionRelations, sessionRelations, unavailableSessionSources } from './SessionRelations';
 import { ResourceRow, Wire } from './Wire';
 import type { AgentListAdapter } from '../core/AgentListAdapter';
 import type { AgentListInput, AgentListRow, AgentListPreferences, CoreAgentListGroup } from '../core/AgentListProjection';
@@ -115,6 +116,28 @@ export class AgentWorkspace {
   private revision: number = 0;
   private actionEpoch: number = 0;
   revokeRowActions(): void { this.actionEpoch++; this.busy = false; }
+  relations: SessionRelations = new SessionRelations([]);
+  private expandedFamilies = new Set<string>();
+  foldFamilies(): boolean { return this.quickFilter === 'all' && !this.search.trim(); }
+  foldedChildren(row: ResourceRow, graph: SessionRelations = this.relations): ResourceRow[] {
+    return graph.children(row).filter(child => !this.isPinned(child));
+  }
+  familyExpanded(row: ResourceRow): boolean { return this.expandedFamilies.has(row.key()); }
+  toggleFamily(row: ResourceRow): void {
+    if (!this.foldFamilies() || !this.foldedChildren(row).length) return;
+    if (!this.expandedFamilies.delete(row.key())) this.expandedFamilies.add(row.key());
+    this.groups = this.groups.slice();
+  }
+  /** A group's rows with each opened family under its parent; Needs you lists parents only, so no child shows twice. */
+  displayRows(group: AgentWorkspaceGroup): ResourceRow[] {
+    if (group.id === NEEDS_GROUP || !this.foldFamilies() || !this.expandedFamilies.size) return group.rows;
+    const rows: ResourceRow[] = [];
+    for (const row of group.rows) {
+      rows.push(row);
+      if (this.familyExpanded(row)) rows.push(...this.foldedChildren(row));
+    }
+    return rows;
+  }
   private sourceRows: ResourceRow[] = [];
   private latestSourceRows: ResourceRow[] = [];
   private externalSelection: ResourceRow | undefined;
@@ -139,7 +162,7 @@ export class AgentWorkspace {
   visibleRows(): ResourceRow[] {
     const rows: ResourceRow[] = [], seen = new Set<string>();
     const add = (row: ResourceRow): void => { const key = rowKey(row); if (!seen.has(key)) { seen.add(key); rows.push(row); } };
-    this.groups.forEach((group: AgentWorkspaceGroup) => { if (group.id !== NEEDS_GROUP) group.rows.forEach(add); });
+    this.groups.forEach((group: AgentWorkspaceGroup) => { if (group.id !== NEEDS_GROUP) this.displayRows(group).forEach(add); });
     this.groups.forEach((group: AgentWorkspaceGroup) => { if (group.id === NEEDS_GROUP) group.rows.forEach(add); });
     return rows;
   }
@@ -171,7 +194,7 @@ export class AgentWorkspace {
     this.client = client; this.scope = client.scope(); this.owner = client.profile.manager;
     this.viewScope = JSON.stringify([this.scope, this.owner]);
     this.openingView = true; this.loading = true; this.busy = false; this.error = '';
-    this.externalSelection = undefined; this.groups = []; this.sourceRows = []; this.latestSourceRows = []; this.historyRows = []; this.historyLoaded = false; this.frozenGroups = undefined;
+    this.externalSelection = undefined; this.groups = []; this.expandedFamilies.clear(); this.relations = new SessionRelations([]); this.sourceRows = []; this.latestSourceRows = []; this.historyRows = []; this.historyLoaded = false; this.frozenGroups = undefined;
     this.quickFilter = 'all'; this.groupingMode = 'state'; this.machineFilter = ''; this.search = ''; this.history = false; this.selectedKey = '';
     this.readingDetail = false; this.freezeSuppressed = false;
     this.preferences.clear(); this.pinsSpaces = []; this.pinsSessions = []; this.mutesSpaces = []; this.mutesSessions = []; this.mutesAllowed = [];
@@ -207,7 +230,7 @@ export class AgentWorkspace {
   }
 
   hide(): void {
-    this.revision++; this.openingView = false; this.client = undefined; this.groups = []; this.sourceRows = []; this.latestSourceRows = []; this.historyRows = []; this.historyLoaded = false;
+    this.revision++; this.openingView = false; this.client = undefined; this.groups = []; this.expandedFamilies.clear(); this.relations = new SessionRelations([]); this.sourceRows = []; this.latestSourceRows = []; this.historyRows = []; this.historyLoaded = false;
     this.frozenGroups = undefined; this.readingDetail = false;
     if (this.persistTimer !== -1) clearTimeout(this.persistTimer);
     this.persistTimer = -1;
@@ -331,7 +354,7 @@ export class AgentWorkspace {
   forgetHub(group: string): void {
     this.historyRequest++; this.loading = false;
     const keep = (row: ResourceRow): boolean => row.group !== group;
-    this.latestSourceRows = this.sourceRows.filter(keep); this.historyRows = this.historyRows.filter(keep);
+    this.latestSourceRows = this.latestSourceRows.filter(keep); this.historyRows = this.historyRows.filter(keep);
     if (this.externalSelection?.group === group) { this.externalSelection = undefined; this.selectedKey = ''; }
     if (this.frozenGroups) this.frozenGroups = this.frozenGroups.map((source: AgentWorkspaceGroup) => { const copy = this.copyGroup(source); copy.rows = copy.rows.filter(keep); return copy; }).filter((source: AgentWorkspaceGroup) => source.rows.length > 0);
     this.preferences.clear(); this.rebuild();
@@ -340,14 +363,18 @@ export class AgentWorkspace {
 
   selectRow(row: ResourceRow): void {
     if (row.kind !== 'session' || !this.groups.some((group: AgentWorkspaceGroup) =>
-      group.rows.some((item: ResourceRow) => rowKey(item) === rowKey(row)))) return;
+      this.displayRows(group).some((item: ResourceRow) => rowKey(item) === rowKey(row)))) return;
     this.externalSelection = row; this.selectedKey = rowKey(row);
     this.heldSession = row.state === 'unread' ? (row.group ? row.group + '|' : '') + (row.manager ? row.manager + '|' : '') +
       rowMachine(row) + '|' + rowSession(row) : '';
     this.saveViewLater();
   }
 
-  isPinned(row: ResourceRow): boolean { return this.preferencesFor(row).pinsSessions.includes(this.sessionKey(row)); }
+  private sessionPins(row: ResourceRow, pins: string[]): string[] {
+    const key = this.sessionKey(row);
+    return pins.filter(pin => pin === key || pin === (row.manager || row.group) + '|' + key);
+  }
+  isPinned(row: ResourceRow): boolean { return this.sessionPins(row, this.preferencesFor(row).pinsSessions).length > 0; }
   isSpacePinned(row: ResourceRow): boolean { const key = rowSpaceKey(row); return !!key && this.preferencesFor(row).pinsSpaces.includes(key); }
   isSpaceMuted(row: ResourceRow): boolean { const key = rowSpaceKey(row); return !!key && this.preferencesFor(row).mutesSpaces.includes(key); }
   isMuted(row: ResourceRow): boolean {
@@ -583,12 +610,16 @@ export class AgentWorkspace {
       const spaces = stringsFrom(current, 'spaces'), sessions = stringsFrom(current, 'sessions');
       if (kind === 'pins') {
         const nextSpaces = space ? toggleKey(spaces, key) : spaces;
-        const nextSessions = space ? sessions : toggleKey(sessions, key);
+        const existing = this.sessionPins(row, sessions);
+        const nextSessions = space ? sessions : existing.length ? sessions.filter(pin => !existing.includes(pin)) : sessions.concat([key]);
         const body = Wire.payload(['spaces', 'sessions'], [nextSpaces, nextSessions]);
         if (!this.active(snapshot) || this.blocked(snapshot, path)) return false;
         await snapshot.repo.call(path, 'PUT', body, '', (): boolean => this.active(snapshot));
         if (!this.ownerActive(snapshot)) return false;
-        this.applyPins(nextSpaces, nextSessions, snapshot.client); return true;
+        this.releaseFreeze();
+        this.applyPins(nextSpaces, nextSessions, snapshot.client);
+        this.refreezeAfterFilter();
+        return true;
       }
       const allowed = stringsFrom(current, 'allowed', true);
       const nextSpaces = space ? toggleKey(spaces, key) : spaces;
@@ -627,7 +658,7 @@ export class AgentWorkspace {
       }
       data['state'] = state; next.raw = JSON.stringify(data); next.state = state; return next;
     });
-    this.latestSourceRows = patch(this.sourceRows); this.historyRows = patch(this.historyRows); this.rebuild();
+    this.latestSourceRows = patch(this.latestSourceRows); this.historyRows = patch(this.historyRows); this.rebuild();
   }
 
   private async loadHistory(client: ClientModel, revision: number, refreezeAfterLoad: boolean = false): Promise<void> {
@@ -640,21 +671,18 @@ export class AgentWorkspace {
         if (!this.loadCurrent(client, revision) || request !== this.historyRequest || machine !== this.machineFilter) return;
         if (!owner.features.includes('agent_session_archives')) continue;
         const snapshot = this.capture(owner); if (!snapshot) continue;
-        const filters = owner.profile.manager ? ['manager=' + segment(owner.profile.manager)] : [];
-        if (machine) {
-          if (machine.startsWith('[')) {
-            const match = owner.machines.find((row: ResourceRow) => this.machineIdentity(row) === machine); if (!match) continue;
-            filters.unshift('machine_id=' + segment(match.id));
-          } else filters.unshift('machine_id=' + segment(machine));
+        let machineId = machine;
+        if (machine.startsWith('[')) {
+          const match = owner.machines.find((row: ResourceRow) => this.machineIdentity(row) === machine);
+          if (!match) continue;
+          machineId = match.id;
         }
-        const path = '/api/v1/sessions/archived' + (filters.length ? '?' + filters.join('&') : '');
+        const current = (): boolean => this.loadCurrent(client, revision) && this.ownerActive(snapshot) &&
+          request === this.historyRequest && machine === this.machineFilter;
         try {
-          const data = await snapshot.repo.call(path);
-          if (!this.loadCurrent(client, revision) || !this.ownerActive(snapshot) || request !== this.historyRequest || machine !== this.machineFilter) return;
-          for (const item of Wire.rows(data, 'sessions')) {
-            const row = ResourceRow.from(item, 'session'); if (!row.manager) row.manager = owner.profile.manager;
-            row.group = owner.profile.id || ''; if (row.manager === owner.profile.manager && !Wire.bool(row.data(), 'assistant')) rows.push(row);
-          }
+          const archived = await owner.archives.read(path => snapshot.repo.call(path), owner.profile.id || '', owner.profile.manager, machineId, current);
+          if (!current()) return;
+          rows.push(...archived);
         } catch (failure) { if (this.ownerActive(snapshot)) this.fail(failure as Error); }
       }
       if (!this.loadCurrent(client, revision) || request !== this.historyRequest || machine !== this.machineFilter) return;
@@ -697,18 +725,31 @@ export class AgentWorkspace {
   private rebuild(): void {
     let groups: CoreAgentListGroup[];
     let counts: Record<string, Object>;
+    const byId = new Map<string, ResourceRow>();
     try {
-      const projection = this.adapter.project(this.makeListInput());
+      const relations = sessionRelations(this.latestSourceRows, unavailableSessionSources(this.client?.directoryOwners() || []));
+      relations.rows.forEach(row => byId.set(coreRowId(row), row));
+      const projection = this.adapter.project(this.makeListInput(relations));
       groups = projection.groups; counts = projection.counts || {};
+      // The core matches the query (including machine and quick filters) before it hides
+      // offline rows from its ordinary groups. Offer those readable matches once.
+      if (this.search.trim() && projection.filtered) {
+        const grouped = new Set(groups.flatMap(group => group.rows));
+        const offline = projection.filtered.filter(id => {
+          const row = byId.get(id);
+          if (!row || row.state !== 'offline' || grouped.has(id) || !relations.find(row)) return false;
+          return Wire.bool(Wire.object(row.data(), 'capabilities'), 'read', true);
+        });
+        if (offline.length) groups = groups.concat([{id:'state/offline', title:'', rows:offline, visible_rows:offline, folded:false}]);
+      }
+      this.relations = relations;
     } catch (_) {
       // Preserve both rows and action authority from the same successful snapshot.
       this.error = 'failed';
       return;
     }
-    this.sourceRows = this.latestSourceRows;
+    this.sourceRows = this.relations.rows;
     if (this.client) this.syncSelected(this.client);
-    const byId = new Map<string, ResourceRow>();
-    this.sourceRows.forEach((row) => byId.set(coreRowId(row), row));
     const needs = this.needsGroup(groups, byId);
     const nextCounts: Record<string, number> = {};
     ['needsYou', 'unread', 'working', 'backgroundWaiting'].forEach((key: string) => nextCounts[key] = Wire.number(counts, key));
@@ -749,13 +790,27 @@ export class AgentWorkspace {
     if (this.readingDetail && this.sourceReady() && !this.freezeSuppressed && !this.frozenGroups) this.frozenGroups = this.copyGroups(this.groups);
   }
 
-  /** Every agent that waits for the user, once, above the computers and spaces whose folds could hide it. */
+  /** The state a row shows in the list: a folded family shows its children's too (protocol "Folded state"). */
+  familyState(row: ResourceRow, relations: SessionRelations = this.relations): string {
+    if (!this.foldFamilies()) return row.state;
+    const children = this.foldedChildren(row, relations);
+    if (!children.length) return row.state;
+    if (children.some(child => child.state === 'needs_you')) return 'needs_you';
+    const quiet = ['idle', 'offline', 'unknown'].includes(row.state);
+    if (quiet && children.some(child => child.state === 'working')) return 'working';
+    if (quiet && children.some(child => child.state === 'unread')) return 'unread';
+    if (row.state === 'offline' && children.some(child => child.state === 'idle')) return 'idle';
+    return row.state;
+  }
+
+  /** Every agent that waits for the user, once, above the computers and spaces whose folds could hide it.
+   * A family whose folded side chat or subtask waits is listed by its parent row, as the core sorts it. */
   private needsGroup(groups: CoreAgentListGroup[], byId: Map<string, ResourceRow>): AgentWorkspaceGroup | undefined {
     if (this.groupingMode === 'state' || this.search.trim() || (this.quickFilter !== 'all' && this.quickFilter !== 'needsYou')) return undefined;
     const ids: string[] = [], rows: ResourceRow[] = [], seen = new Set<string>();
     groups.forEach((group: CoreAgentListGroup) => group.rows.forEach((id: string) => {
       const row = byId.get(id);
-      if (!row || row.state !== 'needs_you' || seen.has(id)) return;
+      if (!row || this.familyState(row) !== 'needs_you' || seen.has(id)) return;
       seen.add(id); ids.push(id); rows.push(row);
     }));
     if (!rows.length) return undefined;
@@ -769,7 +824,7 @@ export class AgentWorkspace {
     const counts: Record<string, Object> = {};
     let unknown = 0;
     ids.forEach((id: string) => {
-      const state = byId.get(id)?.state || '';
+      const row = byId.get(id), state = row ? this.familyState(row) : '';
       if (STATE_COUNT_KEYS.includes(state)) counts[state] = Wire.number(counts, state) + 1;
       else unknown++;
     });
@@ -777,11 +832,14 @@ export class AgentWorkspace {
     return counts;
   }
 
-  private makeListInput(): AgentListInput {
-    const rows: AgentListRow[] = this.latestSourceRows.map((row: ResourceRow): AgentListRow => {
+  private makeListInput(relations: SessionRelations = this.relations): AgentListInput {
+    const fold = this.foldFamilies();
+    const displayed = fold ? relations.rows.filter(row => !relations.root(row) || this.isPinned(row)) : relations.rows;
+    const rows: AgentListRow[] = displayed.map((row: ResourceRow): AgentListRow => {
       const raw = row.data();
       raw['machine_id'] = rowMachine(row); raw['session_id'] = rowSession(row); raw['title'] = row.title;
       raw['cwd'] = row.path; raw['state'] = row.state; raw['manager'] = row.manager; raw['app_hub_group'] = row.group;
+      if (fold) raw['state'] = this.familyState(row, relations);
       return {id: row.id, raw, source: row};
     });
     return {rows, history: this.history, grouping: this.groupingMode, quick: this.quickFilter,
@@ -799,7 +857,7 @@ export class AgentWorkspace {
           });
         return current;
       }) || [],
-      coreSettings: { 'sort': 'state', 'folded': this.folded, 'expanded_idle': this.expandedIdle, 'expanded_quiet': this.expandedQuiet,
+      coreSettings: { 'inventory': !!this.search.trim(), 'sort': 'state', 'folded': this.folded, 'expanded_idle': this.expandedIdle, 'expanded_quiet': this.expandedQuiet,
         'compact': false, 'history': this.history, 'now': new Date().toISOString(), 'held': this.heldSession },
       preferencesFor: (row: AgentListRow): AgentListPreferences => this.preferencesFor(row.source as ResourceRow),
       machineIdentity: (row: AgentListRow): string => this.machineIdentity(row.source as ResourceRow),

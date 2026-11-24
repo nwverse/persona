@@ -7,13 +7,13 @@ registerHooks({
   resolve(specifier, context, next) {
     if (specifier === '@kit.ArkTS') return { url: 'persona-question-test:arkts', shortCircuit: true };
     if (context.parentURL?.endsWith('/ClientModel.ets')) {
-      if (['./Wire', './InteractionDecision', './ChatDraftStore', '../core/MessageImageGallery', '../core/Domain', '../core/AgentEvents', '../core/ConversationPlan'].includes(specifier)) {
+      if (['./SessionArchive', './SessionRelations', './Wire', './InteractionDecision', './ChatDraftStore', '../core/MessageImageGallery', '../core/Domain', '../core/AgentEvents', '../core/ConversationPlan'].includes(specifier)) {
         const base = new URL(specifier, context.parentURL);
         return { url: base.href + (existsSync(new URL(base.href + '.ts')) ? '.ts' : '.ets'), shortCircuit: true };
       }
       return { url: 'persona-question-test:' + specifier, shortCircuit: true };
     }
-    if (context.parentURL?.endsWith('/InteractionDecision.ets') || context.parentURL?.endsWith('/ChatDraftStore.ets')) {
+    if (context.parentURL?.endsWith('/SessionArchive.ets') || context.parentURL?.endsWith('/SessionRelations.ets') || context.parentURL?.endsWith('/InteractionDecision.ets') || context.parentURL?.endsWith('/ChatDraftStore.ets')) {
       if (specifier.startsWith('.')) return { url: new URL(specifier + '.ets', context.parentURL).href, shortCircuit: true };
     }
     if (context.parentURL?.endsWith('/Domain.ts') && specifier.startsWith('.'))

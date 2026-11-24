@@ -22,6 +22,7 @@ import { AgentEventLine } from './AgentEventLine';
 import { agentEventDisplay, AgentEventDisplay, eventClock, recordedDuration, sessionIssueDisplay } from '../core/AgentEvents';
 import { transcriptRecord } from '../core/Domain';
 import type { JsonObject, ToolInspectionStep, TranscriptItem } from '../core/Domain';
+import { SessionLinks } from './SessionLinks';
 import { NextStepCard } from './NextStepCard';
 import { ConversationPlanCard } from './ConversationPlanCard';
 import { onlyPlanUpdates, planPosition } from '../core/ConversationPlan';
@@ -56,7 +57,7 @@ import { ButtonStyles } from '../design/Controls';
 import { nativeSheetInset } from '../platform/NativeInsets';
 import { ContextPicker } from './ContextPicker';
 import type { ClientViewLease } from '../models/ClientModel';
-import type { ReadingAnchor } from '../core/ConversationReading';
+import type { ReadingAnchor, RelatedReadingPosition } from '../core/ConversationReading';
 
 class ConversationFrame extends FrameCallback {
   private action: () => void;
@@ -162,6 +163,10 @@ export struct Conversation {
   @Event onPrimaryStop: (shown: boolean) => void = () => {};
   @Event onOpenFile: (path: string) => void = () => {};
   @Event onLink: (address: string) => void = () => {};
+  @Event onRelated: (row: ResourceRow, anchor?: RelatedReadingPosition) => void = () => {};
+  @Event takeReturnAnchor: () => RelatedReadingPosition | undefined = () => undefined;
+  private relationAnchor: ReadingAnchor | undefined;
+  private relationLoading: boolean = false;
   @Event onOpenResource: (row: ResourceRow) => void = () => {};
   @Local feed: AssistantFeedModel = new AssistantFeedModel();
   @Local look: DeviceLook = deviceLook;
@@ -266,7 +271,13 @@ export struct Conversation {
     this.readingKey = key;
     this.inspectionRevision++; this.inspectingWork = false; this.readingPlan = ''; this.beforePlan = '';
     this.followEpoch = -1; this.userScrolling = false; this.unseenLatest = false; this.tailMarker = '';
-    this.openProcesses = []; this.closedSoloGroups = []; this.hiddenProcessAnchors.clear();
+    const position = this.takeReturnAnchor();
+    this.relationAnchor = position;
+    this.relationLoading = false;
+    this.openProcesses = position?.openProcesses || [];
+    this.expanded = position?.expandedTools || [];
+    this.closedSoloGroups = position?.closedSoloGroups || [];
+    this.hiddenProcessAnchors.clear();
     this.autoPageCursor = -1; this.earlierFailed = false; this.readingLoading = false; this.revealOlder = false;
     this.retirePhoto();
     this.timeMessageId = '';
@@ -283,7 +294,67 @@ export struct Conversation {
       } else this.dismissedNextStep = value;
       this.syncTimeline();
     }).catch(() => {}).finally(() => { if (current()) this.nextStepStateReady = true; });
+    if (this.relationAnchor) this.atEnd = false;
     this.followReading();
+  }
+  @Monitor('model.chatHistoryLoading') chatHistoryLoaded(): void {
+    if (!this.model.chatHistoryLoading) this.restoreRelationAnchor();
+  }
+  private restoreRelationAnchor(): void {
+    const anchor = this.relationAnchor;
+    if (!anchor || !this.active || this.relationLoading || this.model.chatHistoryLoading) return;
+    const epoch = this.readingEpoch;
+    this.atEnd = false;
+    const current = (): boolean => this.active && epoch === this.readingEpoch && this.relationAnchor === anchor;
+    const visibleId = this.hiddenProcessAnchors.get(anchor.id) || anchor.id;
+    const found = this.lines.some(line => line.readingId === visibleId);
+    if (!found && !this.model.transcriptHistoryReady) return;
+    if (!found && this.model.connected && this.model.hasMoreMessages) {
+      const before = this.model.oldestTranscriptSeq;
+      this.relationLoading = true;
+      this.model.loadOlder().then((ok: boolean) => {
+        if (!current()) return;
+        if (!ok || before === this.model.oldestTranscriptSeq) this.jumpToLatest();
+      }).finally(() => {
+        if (epoch !== this.readingEpoch) return;
+        this.relationLoading = false;
+        if (current()) this.syncTimeline();
+      });
+      return;
+    }
+    if (!found) { this.jumpToLatest(); return; }
+    this.relationLoading = true;
+    this.getUIContext().postFrameCallback(new ConversationFrame(() => {
+      if (epoch !== this.readingEpoch) return;
+      if (!current()) { this.relationLoading = false; return; }
+      const targetId = this.hiddenProcessAnchors.get(anchor.id) || anchor.id;
+      const target = this.lines.findIndex(line => line.readingId === targetId);
+      if (target < 0) { this.relationLoading = false; this.restoreRelationAnchor(); return; }
+      const wantedY = targetId === anchor.id ? anchor.offset : 0;
+      this.scroller.scrollToIndex(target + this.readingPrefix(), false, ScrollAlign.START,
+        {extraOffset:LengthMetrics.vp(targetId === anchor.id ? -anchor.offset : 0)});
+      // Virtual rows before the target can still have estimated heights at scrollToIndex.
+      // Once it is laid out, correct its measured position without overriding a new gesture.
+      this.getUIContext().postFrameCallback(new ConversationFrame(() => {
+        if (epoch !== this.readingEpoch) return;
+        this.relationLoading = false;
+        if (!current()) return;
+        this.relationAnchor = undefined;
+        const index = this.lines.findIndex(line => line.readingId === targetId);
+        if (index < 0) return;
+        try {
+          const rect = this.scroller.getItemRect(index + this.readingPrefix());
+          const delta = rect.y - wantedY;
+          if (rect.height > 0 && Number.isFinite(delta) && Math.abs(delta) > 0.5) this.scroller.scrollBy(0, delta);
+        } catch (_) { /* The list may have detached before the layout callback. */ }
+      }));
+    }));
+  }
+  private relatedReadingPosition(): RelatedReadingPosition | undefined {
+    const anchor = this.atEnd ? undefined : this.visibleReadingAnchor();
+    if (!anchor) return undefined;
+    return {id:anchor.id, offset:anchor.offset, openProcesses:this.openProcesses.slice(),
+      expandedTools:this.expanded.slice(), closedSoloGroups:this.closedSoloGroups.slice()};
   }
   private visibleReadingAnchor(): ReadingAnchor | undefined {
     const prefix = this.readingPrefix(), index = Math.max(prefix, this.firstVisibleIndex), line = this.lines[index - prefix];
@@ -350,13 +421,15 @@ export struct Conversation {
     if (!offset || ![ScrollSource.DRAG, ScrollSource.FLING, ScrollSource.OTHER_USER_INPUT,
       ScrollSource.SCROLL_BAR, ScrollSource.SCROLL_BAR_FLING].includes(source)) return;
     if (!this.userScrolling) { this.readingMotion++; this.userScrolling = true; }
+    this.relationAnchor = undefined;
     if (offset < 0) this.atEnd = false;
   }
   private reachedLatest(): void {
-    if (!this.active || this.photoOpen || !this.scroller.isAtEnd()) return;
+    if (!this.active || this.relationAnchor || this.photoOpen || !this.scroller.isAtEnd()) return;
     this.atEnd = true; this.unseenLatest = false;
   }
   private jumpToLatest(): void {
+    this.relationAnchor = undefined;
     this.readingMotion++; this.inspectionRevision++; this.inspectingWork = false; this.userScrolling = false;
     this.followEpoch = -1;
     this.atEnd = true; this.unseenLatest = false;
@@ -646,7 +719,7 @@ export struct Conversation {
     }));
   }
   private followReading(): void {
-    if (!this.active || !this.atEnd || this.userScrolling || this.inspectingWork || this.photoOpen || this.followEpoch === this.readingEpoch) return;
+    if (this.relationAnchor || !this.active || !this.atEnd || this.userScrolling || this.inspectingWork || this.photoOpen || this.followEpoch === this.readingEpoch) return;
     const epoch = this.readingEpoch, inspection = this.inspectionRevision;
     this.followEpoch = epoch;
     this.getUIContext().postFrameCallback(new ConversationFrame(() => {
@@ -863,6 +936,7 @@ export struct Conversation {
     this.markLatest(visible);
     const display = this.virtualWorkLines(this.processLines(visible, plan));
     reconcileTimelineRows(this.lines, display, ConversationLine.same);
+    this.restoreRelationAnchor();
     this.followReading();
   }
   @Monitor('expanded', 'closedSoloGroups') expandedWorkChanged(): void {
@@ -1688,6 +1762,8 @@ export struct Conversation {
 
   build() {
     Column() {
+      if (this.active && this.model.selected.kind === 'session') SessionLinks({model:this.model,active:this.active,
+        navigate:(row: ResourceRow) => { if (this.sendCurrent()) this.onRelated(row,this.relatedReadingPosition()); }})
       if (this.useNativeHover) {
       FoldSplitContainer({ primary: (): void => this.readingContent(), secondary: (): void => this.interactionContent(),
         expandedLayoutOptions: { verticalSplitRatio: this.ordinarySplitRatio() },

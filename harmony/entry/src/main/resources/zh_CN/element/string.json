@@ -6327,6 +6327,42 @@
     {
       "name": "agent_preview_line_when",
       "value": "{line}（{when}）"
+    },
+    {
+      "name": "relation_transcript_notice",
+      "value": "只读子任务记录 · 由主会话调度"
+    },
+    {
+      "name": "relation_side",
+      "value": "旁聊"
+    },
+    {
+      "name": "relation_task",
+      "value": "子任务"
+    },
+    {
+      "name": "relation_root",
+      "value": "主会话"
+    },
+    {
+      "name": "relation_chats",
+      "value": "关联会话"
+    },
+    {
+      "name": "relation_side_count",
+      "value": "{n} 个旁聊"
+    },
+    {
+      "name": "relation_task_count",
+      "value": "{n} 个子任务"
+    },
+    {
+      "name": "relation_needs_count",
+      "value": "{n} 项待处理"
+    },
+    {
+      "name": "relation_running_count",
+      "value": "{n} 个运行中"
     }
   ]
 }

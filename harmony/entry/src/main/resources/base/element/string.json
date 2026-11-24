@@ -6327,6 +6327,42 @@
     {
       "name": "agent_preview_line_when",
       "value": "{line} ({when})"
+    },
+    {
+      "name": "relation_transcript_notice",
+      "value": "Read-only subtask transcript · Managed by the main chat"
+    },
+    {
+      "name": "relation_side",
+      "value": "Side chats"
+    },
+    {
+      "name": "relation_task",
+      "value": "Subtasks"
+    },
+    {
+      "name": "relation_root",
+      "value": "Main chat"
+    },
+    {
+      "name": "relation_chats",
+      "value": "Related chats"
+    },
+    {
+      "name": "relation_side_count",
+      "value": "Side chats: {n}"
+    },
+    {
+      "name": "relation_task_count",
+      "value": "Subtasks: {n}"
+    },
+    {
+      "name": "relation_needs_count",
+      "value": "{n} need input"
+    },
+    {
+      "name": "relation_running_count",
+      "value": "{n} running"
     }
   ]
 }
