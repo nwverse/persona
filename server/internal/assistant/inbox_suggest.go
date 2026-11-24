@@ -253,9 +253,9 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		if instruction != nil {
 			instructionID = instruction.ID
 		}
-		// Ordinary owner replies keep upstream's always-classify boundary. Agent instructions and handbacks enter it
-		// only for a replacement whose active rewrite has not already authorized the identical text.
-		reviewGenerated := in.Kind == SuggestReply && !in.Handback || instruction != nil && needsInstructionReview
+		// Every policy-applicable reply, Agent instruction, and handback needs a snapshot bound to its exact text.
+		// An active rewrite adds its instruction to the classifier input; it never substitutes for that snapshot.
+		reviewGenerated := in.Kind == SuggestReply || in.Kind == SuggestAgent
 		if reviewGenerated {
 			itemData := snapshotItemForReplyPolicyLocked(it)
 			classifierItem := itemData

@@ -113,7 +113,7 @@ func TestInboxReplyPolicyIdenticalNonOrdinaryReplacementNeedsNewReview(t *testin
 		t.Run(tc.name, func(t *testing.T) {
 			h, lark, it := handledHub(t)
 			replyPolicyReview8OrdinaryItem(h, it)
-			if _, err := suggestTool(t, h, tc.initial); err != nil {
+			if _, err := suggestOrdinaryReplyForFixture(t, h, tc.initial); err != nil {
 				t.Fatal(err)
 			}
 			instruction := "Synthetic owner rewrite instruction for an identical non-ordinary replacement"

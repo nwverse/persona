@@ -52,7 +52,7 @@ func checkReplyPolicyReleased(t *testing.T, it *InboxItem, lang i18n.Lang) {
 	}
 }
 
-// suggestOrdinaryReplyForFixture supplies the ordinary classification needed only while constructing an initial mirror.
+// suggestOrdinaryReplyForFixture supplies the ordinary classification needed while constructing an initial suggestion.
 // The prior model is restored before the operation under test, whose own classifier and generation fixtures are unchanged.
 func suggestOrdinaryReplyForFixture(t *testing.T, h *inboxHub, args string) (string, error) {
 	t.Helper()

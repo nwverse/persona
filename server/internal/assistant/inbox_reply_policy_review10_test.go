@@ -447,7 +447,7 @@ func TestInboxReplyPolicyInstructedAgentReplacementRequiresTextReview(t *testing
 	h, _, it := handledHub(t)
 	replyPolicyReview8OrdinaryItem(h, it)
 	original := it.Context
-	if _, err := suggestTool(t, h, `{"kind":"agent","text":"Original ordinary Agent instruction"}`); err != nil {
+	if _, err := suggestOrdinaryReplyForFixture(t, h, `{"kind":"agent","text":"Original ordinary Agent instruction"}`); err != nil {
 		t.Fatal(err)
 	}
 	instruction := "Synthetic owner rewrite instruction for an Agent replacement"
