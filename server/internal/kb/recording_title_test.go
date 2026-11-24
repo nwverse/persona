@@ -195,11 +195,11 @@ func TestLiveTitleNeverOverTheOwnersOrTheCalendars(t *testing.T) {
 		t.Fatalf("renamed: %+v", put)
 	}
 	// An all-day recording keeps its day's name.
-	if liveTitleDue((&Recording{Kind: RecordingDay, AITitle: "x", Chars: 5000}), now) {
+	if liveTitleDue(&Recording{Kind: RecordingDay, AITitle: "x", Chars: 5000}, now) {
 		t.Error("a day recording is due a live title")
 	}
 	// A lost phone's recording is left as it is.
-	if liveTitleDue((&Recording{Chars: 5000, Updated: now.Add(-13 * time.Hour)}), now) {
+	if liveTitleDue(&Recording{Chars: 5000, Updated: now.Add(-13 * time.Hour)}, now) {
 		t.Error("a recording with no upload for 13 hours is due a live title")
 	}
 }
