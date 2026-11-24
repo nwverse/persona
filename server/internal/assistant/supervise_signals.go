@@ -144,6 +144,9 @@ type superviseSignal struct {
 	BreakerNote string `json:"breaker_note,omitempty"`
 	// ExternalSource names the source of external information arriving during reviewNeedsUser (#13112).
 	ExternalSource string `json:"external_source,omitempty"`
+	// JudgeDown: an unjudged stop because the judge itself failed (no model set up, or the service kept failing), not
+	// because it read the turn and could not tell. It is not urgent (urgent): such stops are told together.
+	JudgeDown bool `json:"judge_down,omitempty"`
 }
 
 // breakerFallback is what a circuit-breaker fallback note says (prompts.BreakerNote): its kind and their facts.
@@ -215,7 +218,12 @@ func (g superviseSignal) id() string {
 // urgent: a signal that waits on a decision goes out sooner than the rest.
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
-	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
+	case sigUnjudged:
+		// A stop the judge could not look at because it is down (no model set up, or it kept failing) is not news
+		// that needs the supervisor soon: every stopped task says the same until the model is back, and each used to
+		// wake the main conversation on its own. They go out together, on the ordinary schedule.
+		return !g.JudgeDown
+	case sigNeedsYou, sigIdle, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigDeliveryHold, sigOwnerCannot, sigEstimateDue, sigTimedOut, // the owner, an automatic deadline or a stopped task waits
 		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigCardlessWait, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo:
 		return true
@@ -234,12 +242,10 @@ func (g superviseSignal) immediate() bool { return supervisionBatchImmediate(g) 
 type superviseBook struct {
 	routingMu   sync.RWMutex // moves and card creation exclude routing/delivery; ordinary deliveries may run concurrently
 	mu          sync.Mutex
-	writeMu     sync.Mutex          // one ledger write at a time (updateSupervision)
-	roundEpochs map[string]uint64   // by todo, protected by writeMu; distinguishes a new round from a scope's state reset
-	ownerPushMu sync.Mutex          // ownerPushes only; never held across RPC, todo or database calls
-	ownerPushes map[string]struct{} // todo + work currently being pushed and receipted
-	digestMu    sync.Mutex          // one whole digest, including todo and durable-pending restoration; teardown drains it
-	dedupMu     sync.Mutex          // serializes digest reservations and delivery
+	writeMu     sync.Mutex        // one ledger write at a time (updateSupervision)
+	roundEpochs map[string]uint64 // by todo, protected by writeMu; distinguishes a new round from a scope's state reset
+	digestMu    sync.Mutex        // one whole digest, including todo and durable-pending restoration; teardown drains it
+	dedupMu     sync.Mutex        // serializes digest reservations and delivery
 	dedup       map[string]superviseFingerprint
 	// failedBatchMu serializes the durable leader-failure cooldown document. failedBatches is its memory-only
 	// fallback when this manager has no store; failedBatchesLoaded says whether deferred members were restored.
@@ -1222,6 +1228,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.recoverTaskInboxEvents(ctx)
 	// Only the open tasks: everything below passes the finished ones by, and there can be thousands of them.
 	tasks := s.todosWhere(ctx, "*", func(t *Todo) bool { return t.DoneAt == nil })
+	s.recoverOutsideDirectionDigests(ctx)
 	s.pruneAllStoppedDedup(ctx)
 	s.prunePRMergeWakes(ctx)
 	s.sweepTodoAfterReady(ctx)

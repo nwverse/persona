@@ -433,6 +433,10 @@ Lark tokens and gates. node drives it with calls the protocol already has:
 | `session.send {session_id, text, images, client_msg_id, assistant: true, context, mode, memory_dir, supervision_instructions?}` | `context`: a `<persona-context>` block given to the model before the user's text (the live snapshot; the first message of a new chat also has memory and Lark notes), not shown in the chat, and left out of a message that is only a slash command (`/compact`, one line, no picture) so the runtime can run it: the snapshot goes with the next message, and after `/compact` in full; `mode`: Persona's permission mode (`default` / `acceptEdits` / `auto` / `plan` / `bypassPermissions`); `memory_dir`: the memory directory; `client_msg_id`: the id the message came with (the App's, a channel's), absent when it came without one: put it on the message's item, or leave the item without one, never another (`docs/protocol/protocol.md` "Matching pending messages"); `supervision_instructions`: sent only when the runtime declared `caps.supervision_policy` (always present, including explicit `""` to clear a prior role on demotion) |
 | `session.interrupt` | Stop on the phone; closing the assistant chat = stopping the running turn, the chat stays in the runtime |
 
+A **local** runtime can opt into `caps.assistant_environment`. Node then supplies `env` as an object mapping environment variable names to values on `session.start`, `session.send`, `session.modes`, and an assistant `session.fork`. This is the existing generic Assistant environment: the generated `assistant-bin` / `assistant-bins` command directory first on `PATH`, `PERSONA_ASSISTANT_BIN`, `PERSONA_SPACE`, and the approved non-proxied gate environment. It never contains Auth-held credentials, a direct upstream replacing their proxy address, or raw secret references; those commands continue through the node gate tools / proxy. Missing credentials stay absent rather than substituting the raw configuration.
+
+Apply a snapshot only when spawning that conversation's **dedicated Assistant worker**. Keep it with the conversation for an idle/crash replacement and use the newest supplied snapshot for the next worker; changing an already-running process's environment is neither required nor possible. Never put it on the companion, model probes, or the shared ordinary-Agent worker, and never log its values. Runtimes without the capability and daemon / remote runtimes receive no `env` field. Their wire contract and gate-only credential boundary stay unchanged.
+
 Antigravity sends `context` as an ACP embedded text resource before the separate user text block. Plain text blocks
 are subject to native slash-command expansion, so auxiliary context must not use that channel, even in its own block.
 An explicit standalone command still uses a plain text block without context.
@@ -462,7 +466,7 @@ A runtime that declares `caps.assistant` must:
    must start that server in its own process tree: node takes the server's word only from a descendant of the process connected to its runtime socket with `caps.assistant` (`node/clicall.go` `mcpAssistantOf`),
    and only for a session id of the runtime's own shape (not empty, not a Claude or Codex uuid) that, once the runtime lists it, is this runtime's assistant chat.
 3. Lark always goes through tools declared by extension command gates (`proto.CommandGate.Tool`): node first passes the Lark gate (reads allowed, writes others will see confirmed on the phone, configured rules deny), then runs
-   the skill's script on node; credentials live only in node's proxy, never in the runtime. The tools carry `shell` (the command name and the skill script's path); when the runtime sees them in the assistant chat's shell
+   the skill's script on node; Auth-held credentials live only in node's proxy, never in the runtime. The generic opt-in snapshot above excludes those credentials and their proxy address. The tools carry `shell` (the command name and the skill script's path); when the runtime sees them in the assistant chat's shell
    it blocks them and says which tool to use (DSH's `onPreExecute`).
 4. Give `context` to the model before the user's text and don't show it in the chat (a `<persona-context>` block without attributes; context quoted from the phone has attributes and is shown as usual).
 5. Set its own permissions per `mode` (plan = read-only); changes inside `memory_dir` aren't asked about outside plan mode.
@@ -589,6 +593,27 @@ as it is (a picture in the history it cannot decode, an invalid argument): a Con
 as `turn_error_kind: "user"` (#11742). New input and rewinds invalidate
 that result. Rejected ACP prompts also publish their failure through the session's error state.
 The history token includes the error format so connected clients refresh items cached before this representation.
+
+**Gemini API key provider** (#13762). agy can run on a Gemini API key (`"modelProvider": "gemini"` in agy's `settings.json`, with
+`GEMINI_API_KEY` and, for a self-hosted gateway, `GOOGLE_GEMINI_BASE_URL`) instead of a Google sign-in. The companion is in this mode when
+`PERSONA_AGY_MODEL_PROVIDER=gemini` is in its environment, or, when that is unset, when `<agy config>/settings.json` says `modelProvider: gemini`
+(`PERSONA_AGY_MODEL_PROVIDER=oauth` forces the sign-in). The key and address come from the companion's environment, which
+the node fills from a Persona-managed Antigravity launcher that carries a key (`docs/integrations/launchers.md`; the first such launcher by name
+when there are several, because one companion serves every agy session on the computer): the node starts the companion with that launcher's
+`GOOGLE_GEMINI_BASE_URL` / `GEMINI_API_KEY` plus `PERSONA_AGY_MODEL_PROVIDER=gemini` and restarts it when the launcher's provider changes.
+In this mode:
+
+- Every `agy acp` process is authenticated with the ACP method `gemini-api-key` right after `initialize` (when agy offers it), which reads the key from
+  its environment. `--settings` is not needed for `agy acp`; without that `authenticate`, `session/new` answers `Authentication required`.
+- The model list is agy's ids that the provider serves. `agy --settings '{"modelProvider":"gemini"}' models` lists agy's whole built-in catalog
+  without a sign-in, and `session/set_model` refuses ids that catalog does not have, so the companion keeps an id when `GET {base}/v1beta/models`
+  (header `x-goog-api-key`; the Google endpoint when no base is set) has a model of that name or of that name without agy's effort suffix
+  (`-low`, `-medium`, `-high`, `-xhigh`, `-max`). The models agy's own sessions report are not published in this mode. A provider that cannot be
+  reached or has none of agy's ids is an error in the model list, never the built-in catalog.
+- There are no account quota windows: the native quota read is skipped, and one line (`agy usage windows: not available with a Gemini API key provider`)
+  is logged.
+- The key is passed in the environment of the agy child only; log lines (the companion's own and agy's stderr) have it replaced by `***`, and
+  provider errors carry neither the key nor the address. It is in no item, in no `runtime.hello` and in no file the companion writes.
 
 The CLI companion runs the **Antigravity CLI (`agy`)**. When `personad node`
 runs (`--attach` or `--stdio`), `agy` is installed, Node.js 22.5+ (`node:sqlite`) is available, and no external `agy`
