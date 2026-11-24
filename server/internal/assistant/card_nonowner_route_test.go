@@ -105,7 +105,7 @@ func TestAgentQuestionNonOwnerRoutedAndSixClassesStillPush(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Unsupervised ordinary IxQuestion -> main conversation, no push.
-	q := askQuestion("ix_q_unsupervised", "standalone-agent")
+	q := askQuestion("ix_q_unsupervised", "standalone-q")
 	qDone := e.raise(q)
 	waitFor(t, "unsupervised question routed to main", func() bool {
 		return hasRelayFrom(e.s, "conv1", cardAgentQuestion, "interaction_id="+q.ID)
@@ -113,7 +113,7 @@ func TestAgentQuestionNonOwnerRoutedAndSixClassesStillPush(t *testing.T) {
 
 	// Unsupervised ordinary parsed IxScreen (e.g. default permission mode prompt) -> main conversation, no push.
 	scr := proto.Interaction{
-		ID: "scr_auto_mode", MachineID: "mac", SessionID: "standalone-agent",
+		ID: "scr_auto_mode", MachineID: "mac", SessionID: "standalone-scr",
 		Kind: proto.IxScreen, CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 		Dialog: &screen.Dialog{
 			Question: "Make auto mode your default permission mode?",
@@ -131,7 +131,7 @@ func TestAgentQuestionNonOwnerRoutedAndSixClassesStillPush(t *testing.T) {
 
 	// Six-class IxScreen (folder trust) -> still pushed to the owner.
 	trust := proto.Interaction{
-		ID: "scr_trust_folder", MachineID: "mac", SessionID: "standalone-agent",
+		ID: "scr_trust_folder", MachineID: "mac", SessionID: "standalone-trust",
 		Kind: proto.IxScreen, CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 		Dialog: &screen.Dialog{
 			Question: "Quick safety check: Is this a project you trust?",
@@ -150,7 +150,7 @@ func TestAgentQuestionNonOwnerRoutedAndSixClassesStillPush(t *testing.T) {
 	e.s.fleet.clients.Elicitation = true
 	e.s.fleet.mu.Unlock()
 	elicit := proto.Interaction{
-		ID: "ix_elicit", MachineID: "mac", SessionID: "standalone-agent",
+		ID: "ix_elicit", MachineID: "mac", SessionID: "standalone-elicit",
 		Kind: proto.IxElicitation, Summary: "Sign in form",
 		CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 	}
@@ -170,7 +170,7 @@ func TestAgentQuestionNonOwnerRoutedAndSixClassesStillPush(t *testing.T) {
 		res proto.Resolution
 		ch  <-chan proto.Resolution
 	}{
-		{q.ID, proto.Resolution{Answers: map[string]string{"用哪个库？": "A"}}, qDone},
+		{q.ID, proto.Resolution{Answers: map[string]string{"用哪个分支？": "main"}}, qDone},
 		{scr.ID, proto.Resolution{Option: "2"}, scrDone},
 		{trust.ID, proto.Resolution{Option: "2"}, trustDone},
 		{elicit.ID, proto.Resolution{Action: "decline"}, elicitDone},
