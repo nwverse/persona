@@ -19,10 +19,10 @@ vi.mock("@novnc/novnc", () => ({
     disconnect() {}
   },
 }));
-vi.mock("../views/theme", () => ({}));
+vi.mock("../../views/theme", () => ({}));
 vi.mock("./aes", () => ({ ensureSubtleAES: () => {} }));
-vi.mock("../lib/api", async (actual) => ({
-  ...(await actual<typeof import("../lib/api")>()),
+vi.mock("../../lib/api", async (actual) => ({
+  ...(await actual<typeof import("../../lib/api")>()),
   api: async (path: string) =>
     path === "/machines"
       ? { machines: [{ id: "macbook", name: "MacBook", online: true }] }

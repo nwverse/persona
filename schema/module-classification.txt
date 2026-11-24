@@ -355,8 +355,6 @@ web web/src/lib core
 web web/src/lib/configuration core
 web web/src/lib/html-runtime core
 web web/src/modules core
-web web/src/screen screen-share
-web web/src/screen/tiers screen-share
 web web/src/sharing core
 web web/src/showcase core
 web web/src/showcase/images core

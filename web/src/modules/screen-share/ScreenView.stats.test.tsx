@@ -6,7 +6,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { t } from "../i18n";
+import { t } from "../../i18n";
 
 type FakeRFB = EventTarget & { canvas: HTMLCanvasElement; channel: unknown };
 const rfbs = vi.hoisted(() => [] as FakeRFB[]);
@@ -49,10 +49,10 @@ vi.mock("./probes", () => ({
     return () => probes.stopped.push("hub");
   },
 }));
-vi.mock("../views/theme", () => ({}));
+vi.mock("../../views/theme", () => ({}));
 vi.mock("./aes", () => ({ ensureSubtleAES: () => {} }));
-vi.mock("../lib/api", async (actual) => ({
-  ...(await actual<typeof import("../lib/api")>()),
+vi.mock("../../lib/api", async (actual) => ({
+  ...(await actual<typeof import("../../lib/api")>()),
   api: async (path: string) =>
     path === "/machines" ? { machines: [{ id: "macbook", name: "MacBook", online: true }] } : { enabled: true, screen_sharing: true, displays: [] },
 }));
@@ -128,12 +128,12 @@ describe("connection stats on the live screen", () => {
     await connect();
     await toggleAppears();
     expect(toggle()!.getAttribute("aria-pressed")).toBe("false");
-    expect(toggle()!.getAttribute("aria-label")).toBe(t("screen-video.stats"));
+    expect(toggle()!.getAttribute("aria-label")).toBe(t("screen-share-video.stats"));
     expect(panel()).toBeNull();
     act(() => toggle()!.click());
     expect(toggle()!.getAttribute("aria-pressed")).toBe("true");
-    expect(panel()?.textContent).toContain(t("screen-video.stats_vnc"));
-    expect(panel()?.textContent).toContain(t("screen-video.stats_via_hub"));
+    expect(panel()?.textContent).toContain(t("screen-share-video.stats_vnc"));
+    expect(panel()?.textContent).toContain(t("screen-share-video.stats_via_hub"));
     expect(statsShown("macbook")).toBe(true);
     // the next page for this Mac opens with it on
     act(() => root.unmount());
@@ -156,11 +156,11 @@ describe("connection stats on the live screen", () => {
       for (let i = 0; i < 24; i++) probes.frames!();
     });
     second();
-    expect(lines()).toEqual([`${t("screen-video.stats_mbps", { mbps: "2.0" })}·${t("screen-video.stats_fps", { fps: 24 })}`]);
+    expect(lines()).toEqual([`${t("screen-share-video.stats_mbps", { mbps: "2.0" })}·${t("screen-share-video.stats_fps", { fps: 24 })}`]);
     expect(host.querySelector('[data-testid="screen-stats-hub"]')).toBeNull();
     act(() => probes.hub!(23.4));
     second();
-    expect(host.querySelector('[data-testid="screen-stats-hub"]')?.textContent).toBe(t("screen-video.stats_hub_round_trip", { ms: 23 }));
+    expect(host.querySelector('[data-testid="screen-stats-hub"]')?.textContent).toBe(t("screen-share-video.stats_hub_round_trip", { ms: 23 }));
     // the round trip never joins the first line, where the picture's own latency would go
     expect(panel()!.firstElementChild!.textContent).not.toContain("23");
   });
@@ -173,7 +173,7 @@ describe("connection stats on the live screen", () => {
     act(() => toggle()!.click());
     act(() => probes.bytes!(125_000));
     second();
-    expect(panel()!.querySelector("p")?.textContent).toBe(t("screen-video.stats_mbps", { mbps: "1.0" }));
+    expect(panel()!.querySelector("p")?.textContent).toBe(t("screen-share-video.stats_mbps", { mbps: "1.0" }));
   });
 
   it("measures only while shown: closing the panel stops every probe and turns it off for this Mac", async () => {

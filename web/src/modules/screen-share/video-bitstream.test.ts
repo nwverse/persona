@@ -9,7 +9,7 @@ import { decode, VideoParser, type Format, type Hello } from "./video-wire";
 
 const hex = (b: Uint8Array) => [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
 function fixture(name: string): { hello: Hello; format: Format } {
-  const raws = new VideoParser().push(readFileSync(fileURLToPath(new URL(`../../../scripts/mock/screen_video/${name}`, import.meta.url))));
+  const raws = new VideoParser().push(readFileSync(fileURLToPath(new URL(`../../../../scripts/mock/screen_video/${name}`, import.meta.url))));
   return { hello: decode(raws[0].type, raws[0].body) as Hello, format: decode(raws[1].type, raws[1].body) as Format };
 }
 

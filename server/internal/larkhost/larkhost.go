@@ -13,6 +13,7 @@ package larkhost
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"time"
@@ -96,11 +97,20 @@ type Turns interface {
 	Wait(ctx context.Context) error
 }
 
-// Layer is what the core asks of the lark module: the outbound port and the Feishu turns. It grows as the
-// assistant's Feishu files move into the module (#13404).
+// Workbench is the Lark workbench (/home, /today, /inbox and their buttons, the home card).
+type Workbench interface {
+	WorkbenchCommand(ctx context.Context, f assistantwire.FeishuFeatures, cmd string) bool
+	WorkbenchNav(ctx context.Context, a *botcard.CardAction) *botcard.CardResponse
+	WorkbenchInboxAction(ctx context.Context, a *botcard.CardAction) *botcard.CardResponse
+	HomeCard(ctx context.Context, f assistantwire.FeishuFeatures) (card *botcard.Card, fallback, said string)
+}
+
+// Layer is what the core asks of the lark module: the outbound port, the Feishu turns and the workbench. It grows as
+// the assistant's Feishu files move into the module (#13404).
 type Layer interface {
 	Outbound
 	Turns
+	Workbench
 }
 
 // Host is what the lark module asks of the core. While the outbound port's implementation still lives in the core
@@ -146,6 +156,39 @@ type Host interface {
 	RunSteps(id string) []string
 	PersistRunExt(id string, state any, still func() bool, ext map[string]string) (live, kept bool)
 	SaveRuns()
+
+	// What the workbench (workbench.go) reads of the core and asks it to do.
+	WebBase(ctx context.Context) string
+	Location(ctx context.Context) *time.Location
+	// StandingNow is the standing board's clock (the home card's "updated at").
+	StandingNow() time.Time
+	ClipFallback(text string) string
+	ChatTargetLabel(ctx context.Context) string
+	// SetChatTarget makes the chat's messages go to the main conversation (main) or to a new conversation.
+	SetChatTarget(main bool)
+	WorkbenchAgents(ctx context.Context, now time.Time) (assistantwire.WorkbenchCounts, []assistantwire.WorkbenchAgent)
+	WorkbenchInbox() []assistantwire.WorkbenchItem
+	WorkbenchItem(id string) (assistantwire.WorkbenchItem, bool)
+	WorkbenchBoard(ctx context.Context, l i18n.Lang, web string, now time.Time) []assistantwire.WorkbenchBoardRow
+	SessionNames(ctx context.Context, sess proto.Session) (primary, secondary string)
+	AgentRowMarkdown(l i18n.Lang, label, secondary, machine string, sess proto.Session, last int) string
+	NextMeeting(ctx context.Context, now time.Time) *assistantwire.WorkbenchMeeting
+	Companions(ctx context.Context) []assistantwire.WorkbenchCompanion
+	TodayBody(ctx context.Context) json.RawMessage
+	SummonWorkbench(ctx context.Context)
+	WorkbenchRefresh(ctx context.Context)
+	WorkbenchBringCard(ctx context.Context, id string)
+	AgentsCard(ctx context.Context, query string) (*botcard.Card, string)
+	StartAgentCard(ctx context.Context, prompt string) *botcard.Card
+	ConversationsCard(ctx context.Context) (*botcard.Card, string)
+	TasksOverview(ctx context.Context) (cards []*botcard.Card, fallbacks []string)
+	// InboxDone files an item (dismissed: muted along with it); InboxMute mutes what is tagged tag = value in source.
+	InboxDone(ctx context.Context, id string, dismissed bool) error
+	InboxMute(ctx context.Context, source, tag, value, name string) error
+	DraftReply(ctx context.Context, id, instruction string) (string, error)
+	// ReplyInbox sends text as the owner's reply to item id, once per clientID; filed: the item was filed meanwhile
+	// and nothing was sent.
+	ReplyInbox(ctx context.Context, id, text, clientID string) (filed bool, err error)
 }
 
 // The Feishu turns without a channel: nothing is shown and an answer has nowhere to go (a run of the bot kept from a
@@ -159,6 +202,18 @@ func (None) TurnAnswer(context.Context, *channel.Run, string, string, time.Durat
 func (None) TurnProgressAfter(*channel.Run) time.Duration { return channel.ProgressAfter }
 func (None) TurnProgressIdle() time.Duration              { return channel.ProgressIdle }
 func (None) Wait(context.Context) error                   { return nil }
+
+// The workbench without a channel: no command is one of its, no button answers, no home card.
+func (None) WorkbenchCommand(context.Context, assistantwire.FeishuFeatures, string) bool {
+	return false
+}
+func (None) WorkbenchNav(context.Context, *botcard.CardAction) *botcard.CardResponse { return nil }
+func (None) WorkbenchInboxAction(context.Context, *botcard.CardAction) *botcard.CardResponse {
+	return nil
+}
+func (None) HomeCard(context.Context, assistantwire.FeishuFeatures) (*botcard.Card, string, string) {
+	return botcard.NewCard("", "", ""), "", ""
+}
 
 var port = moduleswitch.NewPort[func(Host) Layer]("larkhost")
 
