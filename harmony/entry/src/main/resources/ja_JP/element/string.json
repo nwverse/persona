@@ -6363,6 +6363,10 @@
     {
       "name": "relation_running_count",
       "value": "{n} 件が実行中"
+    },
+    {
+      "name": "plan_before_last_message",
+      "value": "最新のメッセージより前の計画"
     }
   ]
 }

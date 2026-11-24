@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ConversationPlanReplay, planPosition, onlyPlanUpdates, samePlanSummary } from '../entry/src/main/ets/core/ConversationPlan.ts';
+import { readFileSync } from 'node:fs';
+import { ConversationPlanReplay, planPinned, planPosition, onlyPlanUpdates, samePlanSummary } from '../entry/src/main/ets/core/ConversationPlan.ts';
 
 function pair(seq, tool, input, output = 'ok', result = {}) {
   const id = 'call-' + seq;
@@ -173,4 +174,37 @@ test('Claude desktop full list, advance, then ordinal done/start replay in recei
   // A history page containing only relative advances cannot invent the preceding steps.
   const partial=new ConversationPlanReplay();partial.accept(pair(2,name,{advance:true},'Plan updated.'));
   assert.equal(partial.view(),undefined);
+});
+
+test('a message sent mid-turn moves the unfinished plan under it, above the work still running, as on desktop', () => {
+  const earlier = {agent:'claude',turnId:'turn',latestExchange:false,running:false,inspectionSteps:[{id:'plan'},{id:'save'}]};
+  const current = {agent:'claude',turnId:'turn',latestExchange:true,running:true,inspectionSteps:[{id:'edit'}]};
+  const lines = [{message:{role:'user'}}, {message:{role:'assistant'}}, {message:{role:'work',work:earlier}},
+    {message:{role:'assistant'}}, {message:{role:'user'}}, {message:{role:'work',work:current}}, {message:{role:'live_activity'}}];
+  const plan = {sourceId:'plan', done:0, total:5};
+  assert.equal(planPinned(lines, plan, true), true);
+  assert.equal(planPosition(lines, 'plan', true), 5, 'after the newest message, before the running rows');
+  assert.equal(planPosition(lines, 'plan'), 2, 'unpinned, it stays beside its update');
+  assert.equal(planPinned(lines, plan, false), false, 'once the Agent stops, the plan goes back to its update');
+  assert.equal(planPinned(lines, {...plan, done:5}, true), false, 'a finished plan stays where it finished');
+  assert.equal(planPinned(lines.slice(0, 4), plan, true), false, 'no message since the update');
+  assert.equal(planPinned(lines, {...plan, sourceId:''}, true), false, 'a summary without its update keeps its own place');
+  const answered = [...lines.slice(0, 5), {message:{role:'assistant'}}];
+  assert.equal(planPosition(answered, 'plan', true), 6, 'below a reply the Agent already wrote');
+});
+
+test('the pinned plan says where it is from and keeps its progress mark running', () => {
+  const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
+  const page = read('../entry/src/main/ets/components/Conversation.ets');
+  assert.ok(page.includes("card.planPinned = planPinned(lines, plan, this.model.turnWorking());"));
+  assert.ok(page.includes("planPosition(lines, plan.sourceId, card.planPinned)"));
+  assert.ok(page.includes("(line.plan && !line.planPinned ? planOwner?.id || '' : '')"), 'it does not fold with the earlier turn');
+  assert.ok(page.includes("running: this.planRunning(entry.item.plan!, entry.item.planPinned)"));
+  assert.ok(page.includes("note: entry.item.planPinned ? tr('plan_before_last_message') : ''"));
+  const card = read('../entry/src/main/ets/components/ConversationPlanCard.ets');
+  assert.ok(card.includes(".id('chat.plan.note')"));
+  for (const [locale, text] of [['base', 'Plan from before your last message'], ['zh_CN', '你最新消息之前的计划'], ['ja_JP', '最新のメッセージより前の計画']]) {
+    const strings = JSON.parse(read('../entry/src/main/resources/' + locale + '/element/string.json')).string;
+    assert.equal(strings.find((entry) => entry.name === 'plan_before_last_message')?.value, text);
+  }
 });

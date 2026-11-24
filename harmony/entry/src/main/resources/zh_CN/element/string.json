@@ -6363,6 +6363,10 @@
     {
       "name": "relation_running_count",
       "value": "{n} 个运行中"
+    },
+    {
+      "name": "plan_before_last_message",
+      "value": "你最新消息之前的计划"
     }
   ]
 }
