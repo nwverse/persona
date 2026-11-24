@@ -420,7 +420,9 @@ func TestRenamedTiersPairs(t *testing.T) {
 	core := ModelTier{Launcher: "first", Model: "m-first", Description: "Core",
 		Candidates: []TierCandidate{{Launcher: "first", Model: "m-first"}, {Launcher: "second"}}, Aliases: []string{"strong"}}
 	dev := ModelTier{Launcher: "codex", Description: "Dev", Aliases: []string{"standard"}}
-	flat := func(t ModelTier) ModelTier { return ModelTier{Launcher: t.Launcher, Model: t.Model, Description: t.Description} }
+	flat := func(t ModelTier) ModelTier {
+		return ModelTier{Launcher: t.Launcher, Model: t.Model, Description: t.Description}
+	}
 	for _, tc := range []struct {
 		name    string
 		was, in map[string]ModelTier
