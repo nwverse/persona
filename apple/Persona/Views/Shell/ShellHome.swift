@@ -502,6 +502,10 @@ struct ShellDestinations: ViewModifier {
                         MachineDetailView(ref: r.ref)
                             .modifier(InboxDestinationEnvironment(chat: chat, openFeishu: openFeishu))
                     }
+                    .navigationDestination(for: MachineUsageMapRoute.self) { r in
+                        UsageMapView(route: r)
+                            .modifier(InboxDestinationEnvironment(chat: chat, openFeishu: openFeishu))
+                    }
                     .navigationDestination(for: TerminalsRoute.self) { r in
                         TerminalsView(only: r.machine)
                             .modifier(InboxDestinationEnvironment(chat: chat, openFeishu: openFeishu))
