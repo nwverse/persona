@@ -12,7 +12,7 @@ import apple_launch_diagnostics
 LOGS = ("simulator.log", "simulator-boot.log", "simulator-readiness.log",
         "regular-simulator.log", "regular-simulator-boot.log", "regular-readiness.log", "native-ssh-trace.log",
         "ios-unit.log", "ios-html-card.log", "ios-html-security.log",
-        "ios-visual-compact.log", "ios-visual-regular.log")
+        "ios-visual-compact.log", "ios-visual-regular.log", "ios-about-regular.log")
 
 
 def collect(output, destination, runner=subprocess.run, scope="all"):
@@ -28,7 +28,7 @@ def collect(output, destination, runner=subprocess.run, scope="all"):
             shutil.copytree(bundle, destination / bundle.name, dirs_exist_ok=True,
                             ignore=lambda directory, names: [name for name in names
                                 if (Path(directory) / name).is_symlink()])
-    for name in ("live-readiness", "live-regular-readiness"):
+    for name in ("live-readiness", "live-regular-readiness", "live-regular-visual"):
         if scope == "regular" and name != "live-regular-readiness":
             continue
         source = output / "diagnostics" / name

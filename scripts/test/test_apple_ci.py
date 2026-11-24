@@ -387,7 +387,31 @@ class AppleCIPreparationTests(unittest.TestCase):
             current = current.replace('      "$OUTPUT" "$DIAGNOSTICS" --scope "$scope"', '      "$OUTPUT" "$DIAGNOSTICS"')
             current = current.replace('  else\n    # pipefail keeps the bounded command\'s failure status. The existing failure\n    # collector retains this allowlisted console log with its xcresult.\n    ci_run "$@" 2>&1 | tee "$OUTPUT/$name.log"\n  fi\n}', '  else\n    ci_run "$@"\n  fi\n}')
             current = current.replace('    if [ "$LANE" = ios-ipad-diagnostic ]; then\n      # A deliberate app-host diagnostic stops after its own strict probe and\n      # observer cleanup; it neither runs nor substitutes for the visual suite.\n      exit 0\n    fi\n', '')
+            # This issue intentionally replaces only the ordinary visual command
+            # with its observation-only wrapper; every other lane stays exact.
+            visual_start = current.index('    mkdir -p "$OUTPUT/regular-shots"\n    # Observe the actual visual invocation')
+            visual_end = current.index('    result ios-about-regular', visual_start)
+            original_start = original_script.index('    mkdir -p "$OUTPUT/regular-shots"',
+                                                    original_script.index('if [ "$LANE" = ios18 ]; then',
+                                                                          original_script.index('REGULAR_SIM=')))
+            original_end = original_script.index('    result ios-about-regular', original_start)
+            current = current[:visual_start] + original_script[original_start:original_end] + current[visual_end:]
             self.assertEqual(current, original_script)
+
+    def test_regular_visual_observer_wraps_only_the_existing_visual_command(self):
+        script = SCRIPT.read_text()
+        start = script.index('    # Observe the actual visual invocation')
+        end = script.index('    result ios-about-regular', start)
+        visual = script[start:end]
+        self.assertIn("ci_run 'iOS regular-width About visual test on real iPad' 600 bash -c '", visual)
+        self.assertIn('--output "$watch_log" --seconds 600 &', visual)
+        self.assertIn('--record "$output/regular-visual-context.json"', visual)
+        self.assertIn('"$OUTPUT/diagnostics/live-regular-visual" "$REGULAR_SIM" "$CI_BUNDLE_ID"', visual)
+        self.assertIn('-only-testing:PersonaTests/AboutVersionRegularVisualTests', visual)
+        self.assertIn('test-without-building', visual)
+        self.assertNotIn('simctl boot', visual)
+        self.assertNotIn('simctl shutdown', visual)
+        self.assertNotIn('parallel-testing', visual)
 
     def test_regression_lane_stops_after_two_strict_suites(self):
         script = SCRIPT.read_text()
@@ -810,7 +834,7 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
             result.mkdir()
             (result / 'summary.json').write_text('test results')
             (result / 'external-key').symlink_to(output / 'private.key')
-            for name in ("live-readiness", "live-regular-readiness"):
+            for name in ("live-readiness", "live-regular-readiness", "live-regular-visual"):
                 observer = output / "diagnostics" / name
                 observer.mkdir(parents=True)
                 (observer / "observer.status.txt").write_text(name)
@@ -832,7 +856,7 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
                 'simulator.log', 'simulator-boot.log', 'simulator-readiness.log', 'runtimes-iOS-before.json',
                 'regular-simulator.log', 'regular-simulator-boot.log', 'regular-readiness.log', 'native-ssh-trace.log',
                 'ios-unit.xcresult', 'simctl-list.json', 'simctl-list.stderr.txt', 'simctl-list.status.txt',
-                'live-readiness', 'live-regular-readiness',
+                'live-readiness', 'live-regular-readiness', 'live-regular-visual',
                 'disk-space.txt', 'disk-space.stderr.txt', 'disk-space.status.txt',
                 'simulator-launch.status.txt',
             })
