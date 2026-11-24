@@ -597,6 +597,7 @@ agents.control       POST /api/v1/interactions/{id}/choose
 -                    POST /api/v1/interactions/{id}/clarify
 agents.control       POST /api/v1/interactions/{id}/reanswer
 agents.control       POST /api/v1/interactions/{id}/resolve
+-                    POST /api/v1/interactions/{id}/seen
 -                    POST /api/v1/iphone/try
 -                    POST /api/v1/kb-trash/{id}/restore
 -                    POST /api/v1/later/{id}/handled
