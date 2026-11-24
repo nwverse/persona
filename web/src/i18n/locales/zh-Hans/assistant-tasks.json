@@ -26,7 +26,7 @@
   "tray_expand": "放大",
   "tray_restore": "还原",
   "background_tasks_running": "后台任务 {count} 个在跑",
-  "subagents_count_running": "子 Agent {count} 个在跑",
+  "subagents_count_running": "子智能体 {count} 个运行中",
   "background_running": "后台工作在跑",
   "tray_empty_pending": "没有等你处理的事",
   "tray_shelved_other": "暂无进展 {count}",

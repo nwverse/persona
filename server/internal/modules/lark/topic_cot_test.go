@@ -1,4 +1,4 @@
-package assistant
+package lark
 
 import (
 	"context"
@@ -126,7 +126,6 @@ func TestFeishuTopicAgentMessageStreamsNativeEvents(t *testing.T) {
 func TestFeishuTopicNativeProcessKeepsProgressAndSingleAnswerCard(t *testing.T) {
 	s, posts, calls := cotHub(t, false)
 	withWebBot(s.hub.(*fakeHub), "https://hub.example.com")
-	s.hub.(*fakeHub).setSessions("server", proto.Session{SessionID: "m1", MachineID: "server", Assistant: true})
 	r, _ := topicCotRun(s)
 	withCot(s, r) // isolate the card/native coexistence from creation, covered above
 	topicCotProgress(t, s, r, 4*time.Second, []string{"运行 `ls`"}, "")
@@ -245,7 +244,7 @@ func measureTopicCotProgressTiming(t *testing.T, native bool, nativeDelay time.D
 
 	done := make(chan struct{})
 	go func() {
-		feishuSink{s}.progress(context.Background(), r, time.Second, []string{"运行 `ls`"}, "")
+		s.sink().progress(context.Background(), r, time.Second, []string{"运行 `ls`"}, "")
 		close(done)
 	}()
 	if nativeDelay > 0 {
@@ -305,7 +304,7 @@ func waitTopicCot(t *testing.T, s *Service, r *channel.Run) {
 	p := s.chans.live[r.ID]
 	var w *cotWorker
 	if p != nil {
-		w = p.native
+		w = p.native()
 	}
 	s.chans.mu.Unlock()
 	if w == nil {
@@ -325,7 +324,7 @@ func waitCotWorker(t *testing.T, w *cotWorker) {
 
 func topicCotProgress(t *testing.T, s *Service, r *channel.Run, took time.Duration, steps []string, live string) {
 	t.Helper()
-	feishuSink{s}.progress(context.Background(), r, took, steps, live)
+	s.sink().progress(context.Background(), r, took, steps, live)
 	waitTopicCot(t, s, r)
 }
 
@@ -338,7 +337,7 @@ func finishTopicCot(t *testing.T, s *Service, r *channel.Run, result *channel.Re
 	s.finishChannelRun(r, result)
 	if p != nil {
 		s.chans.mu.Lock()
-		w := p.native
+		w := p.native()
 		s.chans.mu.Unlock()
 		if w != nil {
 			select {

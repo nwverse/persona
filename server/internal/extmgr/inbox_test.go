@@ -491,6 +491,11 @@ func TestInboxSourcesAnswerTheManager(t *testing.T) {
 	_ = h.addConnector(g)
 	h.cfg.Inbox.Rules = "  示例规则  "
 	h.cfg.Inbox.Agent = InboxAgentConfig{Enabled: true, Concurrency: 2}
+	h.cfg.Inbox.ReplyPolicy = InboxReplyPolicyConfig{
+		Enabled:    true,
+		Revision:   "rp-1",
+		Categories: map[string]string{"routine_reply": assistantwire.ReplyRouteOwnerDraft},
+	}
 	h.cfg.Lark.Account = 3
 	app := func(app, method string, params any) (json.RawMessage, error) {
 		raw, _ := json.Marshal(params)
@@ -556,6 +561,7 @@ func TestInboxSourcesAnswerTheManager(t *testing.T) {
 	var cfg assistantwire.InboxConfig
 	out, err = inbox(assistantwire.InboxConfigMethod, map[string]any{})
 	if err != nil || json.Unmarshal(out, &cfg) != nil || cfg.Rules != "示例规则" || !cfg.Agent.Enabled || cfg.Agent.Concurrency != 2 || cfg.LarkAccount != 3 ||
+		!cfg.ReplyPolicy.Enabled || cfg.ReplyPolicy.Revision != "rp-1" || cfg.ReplyPolicy.Categories["routine_reply"] != assistantwire.ReplyRouteOwnerDraft ||
 		!slices.Contains(cfg.Extensions, "examplechat") {
 		t.Fatalf("the settings: %s %v", out, err)
 	}

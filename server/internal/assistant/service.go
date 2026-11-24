@@ -75,6 +75,10 @@ type Options struct {
 	RecordingTimingLists map[string][]time.Duration
 	RecordingFeedNow     func() time.Time
 	RecordingFeedAfter   func(time.Duration, func()) func() bool
+	// LarkTimings and LarkTimingLists override the lark module's times by name (its timings.go): a test and tuning
+	// knob as RecordingTimings is. Unset, the module runs with its defaults.
+	LarkTimings     map[string]time.Duration
+	LarkTimingLists map[string][]time.Duration
 }
 
 // Service is the assistant. It implements Handler.
@@ -481,6 +485,7 @@ func New(o Options) *Service {
 	// The recording module's layer, before its routes (kbRoutes) and its hello capabilities (recording.go).
 	s.recOpts.timings, s.recOpts.lists = maps.Clone(o.RecordingTimings), maps.Clone(o.RecordingTimingLists)
 	s.recOpts.now, s.recOpts.after = o.RecordingFeedNow, o.RecordingFeedAfter
+	s.lark.timings, s.lark.lists = maps.Clone(o.LarkTimings), maps.Clone(o.LarkTimingLists)
 	s.loadRecording(o.ModulesOff)
 	s.kbRoutes()
 	s.searchRoutes()
