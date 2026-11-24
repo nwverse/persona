@@ -26,31 +26,31 @@ internal fun KnowledgeTagEditor(entry: KnowledgeEntry, tagging: KnowledgeTagging
     var projectKind by rememberSaveable(entry.key) { mutableStateOf(start.projectKind) }
     var status by rememberSaveable(entry.key) { mutableStateOf(start.status) }
     val palette = PersonaTheme.palette
-    JSheet(onDismiss = onDismiss, title = stringResource(R.string.knowledge_tag_title, entry.name), dismissible = !tagging.busy, scrollable = true) {
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.knowledge_ui_tag_title, entry.name), dismissible = !tagging.busy, scrollable = true) {
         Column(Modifier.fillMaxWidth().imePadding()) {
-            Label(stringResource(R.string.knowledge_importance))
+            Label(stringResource(R.string.knowledge_ui_importance))
             Choices(KnowledgeTagForm.IMPORTANCE.map { it to it }, importance, enabled = !tagging.busy, status = ::importanceStatus) { importance = it }
-            Label(stringResource(R.string.knowledge_relevance_value, relevance))
+            Label(stringResource(R.string.knowledge_ui_relevance_value, relevance))
             JSlider(relevance.toFloat(), { relevance = it.roundToInt() }, valueRange = 0f..100f, step = 5f,
-                enabled = !tagging.busy, contentDescription = stringResource(R.string.knowledge_relevance_label))
-            Label(stringResource(R.string.knowledge_tags))
-            JTextField(tags, { tags = it }, placeholder = stringResource(R.string.knowledge_tags_placeholder), singleLine = true, enabled = !tagging.busy)
+                enabled = !tagging.busy, contentDescription = stringResource(R.string.knowledge_ui_relevance_label))
+            Label(stringResource(R.string.knowledge_ui_tags))
+            JTextField(tags, { tags = it }, placeholder = stringResource(R.string.knowledge_ui_tags_placeholder), singleLine = true, enabled = !tagging.busy)
             if (entry.isProject) {
-                Label(stringResource(R.string.knowledge_type))
+                Label(stringResource(R.string.knowledge_ui_type))
                 Choices(KnowledgeTagForm.PROJECT_KINDS.map { (key, label) -> key to stringResource(label) }, projectKind, enabled = !tagging.busy) { projectKind = it }
-                Label(stringResource(R.string.knowledge_status))
+                Label(stringResource(R.string.knowledge_ui_status))
                 Choices(KnowledgeTagForm.PROJECT_STATUSES.map { (key, label) -> key to stringResource(label) }, status, enabled = !tagging.busy) { status = it }
             }
             Spacer(Modifier.height(Tokens.Space.m))
-            Text(stringResource(R.string.knowledge_tag_locked), style = PersonaTheme.type.caption, color = palette.ink3)
+            Text(stringResource(R.string.knowledge_ui_tag_locked), style = PersonaTheme.type.caption, color = palette.ink3)
             tagging.error?.let {
                 Spacer(Modifier.height(Tokens.Space.m))
-                JNotice(stringResource(R.string.knowledge_not_saved, it.text()), status = Status.NeedsYou)
+                JNotice(stringResource(R.string.knowledge_ui_not_saved, it.text()), status = Status.NeedsYou)
             }
             Spacer(Modifier.height(Tokens.Space.section))
-            JButton(stringResource(R.string.knowledge_save), {
+            JButton(stringResource(R.string.knowledge_ui_save), {
                 onSave(KnowledgeTagForm(importance, relevance, tags, projectKind, status).update(entry.isProject))
-            }, Modifier.fillMaxWidth(), loading = tagging.busy, loadingText = stringResource(R.string.knowledge_saving))
+            }, Modifier.fillMaxWidth(), loading = tagging.busy, loadingText = stringResource(R.string.knowledge_ui_saving))
         }
     }
 }

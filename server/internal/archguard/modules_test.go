@@ -21,7 +21,9 @@ const (
 	repoPath   = "github.com/nwverse/persona/"
 	modulesDir = "internal/modules"
 	modulesAll = "internal/modules/all"
-	modulesDoc = `see docs/architecture/core-and-modules.md "Guards"`
+	// modulesNode is the node's composition root: the modules that also run on the user's computers.
+	modulesNode = "internal/modules/all/node"
+	modulesDoc  = `see docs/architecture/core-and-modules.md "Guards"`
 )
 
 // goFile is one .go file's package (its directory under the server module), whether it is a test, and its imports.
@@ -87,9 +89,9 @@ func coreModuleImports(files []goFile, roots []string) (violations []string, roo
 				continue
 			}
 			switch {
-			case rel == modulesAll && f.test:
+			case (rel == modulesAll || rel == modulesNode) && f.test:
 			case f.test && standIn(rel): // a fake of the outside service a module talks to (standInProblems)
-			case rel == modulesAll && slices.Contains(roots, f.pkg):
+			case (rel == modulesAll || rel == modulesNode) && slices.Contains(roots, f.pkg):
 				rootsUsed[f.pkg] = true
 			case f.test:
 				violations = append(violations, f.pkg+" (test) "+rel)
@@ -112,8 +114,8 @@ func TestCoreImportsNoModule(t *testing.T) {
 	for _, v := range violations {
 		if !slices.Contains(baseline, v) {
 			t.Errorf("%s: the core never imports a module; ask the kernel (internal/assistant/kernel) for what the module "+
-				"added through modapi, or, for a binary's composition root, import %s and list the package in "+
-				"testdata/module_roots.txt; %s", v, modulesAll, modulesDoc)
+				"added through modapi, or, for a binary's composition root, import %s (the node: %s) and list the package in "+
+				"testdata/module_roots.txt; %s", v, modulesAll, modulesNode, modulesDoc)
 		}
 	}
 	for _, b := range baseline {
@@ -123,7 +125,7 @@ func TestCoreImportsNoModule(t *testing.T) {
 	}
 	for _, r := range roots {
 		if !used[r] {
-			t.Errorf("testdata/module_roots.txt lists %s, which does not import %s: delete the line", r, modulesAll)
+			t.Errorf("testdata/module_roots.txt lists %s, which imports neither %s nor %s: delete the line", r, modulesAll, modulesNode)
 		}
 	}
 }
@@ -237,6 +239,8 @@ func TestModuleGuardsSeeEveryBuild(t *testing.T) {
 	write("internal/assistant/core_only.go", "//go:build persona_core_only\n\npackage assistant\n\nimport _ "+imp("internal/modules/briefing")+"\n")
 	write("internal/assistant/x_test.go", "package assistant\n\nimport _ "+imp("internal/modules/all")+"\n")
 	write("internal/manager/modules.go", "package manager\n\nimport _ "+imp("internal/modules/all")+"\n")
+	write("internal/nodecmd/modules.go", "package nodecmd\n\nimport _ "+imp("internal/modules/all/node")+"\n")
+	write("internal/node/modules.go", "package node\n\nimport _ "+imp("internal/modules/all/node")+"\n")
 	write("internal/extmgr/v_test.go", "package extmgr\n\nimport _ "+imp("internal/modules/voice/voicetest")+"\n")
 	write("internal/extmgr/w_test.go", "package extmgr\n\nimport _ "+imp("internal/modules/voice")+"\n")
 	write("internal/modules/voice/voicetest/fake.go", "package voicetest\n\nimport _ "+imp("internal/modules/voice")+"\n")
@@ -248,8 +252,9 @@ func TestModuleGuardsSeeEveryBuild(t *testing.T) {
 	write("internal/modules/voice/v.go", "//go:build !persona_without_voice\n\npackage voice\n")
 	files := scanGoFiles(t, root)
 
-	violations, used := coreModuleImports(files, []string{"internal/manager"})
-	if want := []string{"internal/assistant internal/modules/briefing", "internal/extmgr (test) internal/modules/voice"}; !slices.Equal(violations, want) || !used["internal/manager"] {
+	violations, used := coreModuleImports(files, []string{"internal/manager", "internal/nodecmd"})
+	if want := []string{"internal/assistant internal/modules/briefing", "internal/extmgr (test) internal/modules/voice",
+		"internal/node internal/modules/all/node"}; !slices.Equal(violations, want) || !used["internal/manager"] || !used["internal/nodecmd"] {
 		t.Fatalf("core imports %v (roots %v), want %v", violations, used, want)
 	}
 	problems, checked, _ := moduleImportProblems(t, root, files, []string{"internal/modapi"}, nil, nil)

@@ -36,13 +36,13 @@ public enum ModuleSlot: String, CaseIterable, Sendable {
 
     /// Pages in the shell: sidebar / drawer rows and their routes (`ShellPage`, `ShellRoute`). Declared, not served.
     case shellPlaces = "shell_places"
-    /// Entries in Settings (#13400 `settings_section`, #13395's settings registry). Declared, not served.
+    /// Entries in Settings (#13400 `settings_section`, #13395's settings registry), each with its page. Served.
     case settings = "settings"
-    /// Renderers for chat cards of a kind. Declared, not served.
+    /// What a chat draws for an item of a kind: views at the host's tool-call places. Served (`view(at:)`).
     case chatCardKinds = "chat_card_kinds"
-    /// Views next to a conversation (bars, banners above the composer). Declared, not served.
+    /// Views next to a conversation (bars, banners above the composer, the task dock). Served (`view(at:)`).
     case chatAccessories = "chat_accessories"
-    /// Items in a page's toolbar. Declared, not served.
+    /// Items in a page's toolbar and menus (a chat's ··· menu). Served (`view(at:)`).
     case toolbarItems = "toolbar_items"
     /// Fields a module adds to, or reads from, the hub's hello. Declared, not served.
     case helloHooks = "hello_hooks"
@@ -57,6 +57,9 @@ public enum ModuleSlot: String, CaseIterable, Sendable {
     case intents = "intents"
     /// Notification categories and their actions. Declared, not served.
     case pushCategories = "push_categories"
+    /// Interfaces the core declares and asks for, which a module implements (`ModuleRegistrar.provide`): the core does
+    /// without one when no active module provides it. A client-side slot, as `launch_hooks`. Served.
+    case capabilities = "capabilities"
     /// Leases on the shared audio session through the core's `AudioSessionBroker` (#13432's remaining work). Declared,
     /// not served.
     case audioLeases = "audio_leases"
@@ -64,7 +67,8 @@ public enum ModuleSlot: String, CaseIterable, Sendable {
     /// True when the core reads this slot today.
     public var isServed: Bool {
         switch self {
-        case .launchHooks, .deepLinks, .composerActions: true
+        case .launchHooks, .deepLinks, .composerActions, .settings, .chatCardKinds, .chatAccessories, .toolbarItems,
+             .capabilities: true
         default: false
         }
     }

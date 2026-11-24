@@ -26,10 +26,10 @@ object KnowledgeModule : PersonaModule {
         val shell = context.shell
         if (shell == null) {
             // Demo mode: the pages are there, saying why they cannot work.
-            entries.entry<KnowledgeRoute> { context.unavailable(stringResource(R.string.knowledge_demo_unavailable)) }
-            entries.entry<KnowledgeKindRoute> { context.unavailable(stringResource(R.string.knowledge_demo_unavailable)) }
-            entries.entry<KnowledgeMapRoute> { context.unavailable(stringResource(R.string.knowledge_demo_unavailable)) }
-            entries.entry<KnowledgeDetailRoute> { context.unavailable(stringResource(R.string.knowledge_demo_unavailable)) }
+            entries.entry<KnowledgeRoute> { context.unavailable(stringResource(R.string.knowledge_ui_demo_unavailable)) }
+            entries.entry<KnowledgeKindRoute> { context.unavailable(stringResource(R.string.knowledge_ui_demo_unavailable)) }
+            entries.entry<KnowledgeMapRoute> { context.unavailable(stringResource(R.string.knowledge_ui_demo_unavailable)) }
+            entries.entry<KnowledgeDetailRoute> { context.unavailable(stringResource(R.string.knowledge_ui_demo_unavailable)) }
         } else {
             entries.knowledgeEntries(context.navigator, shell.knowledge, shell.assistant, shell.sender, shell::mainConversationSender, shell.sessions,
                 shell.knowledgeNamespace, shell::openLink,

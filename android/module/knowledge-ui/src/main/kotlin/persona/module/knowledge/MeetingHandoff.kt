@@ -121,17 +121,17 @@ internal fun newerMeetingHandoff(made: MeetingHandoff?, kept: MeetingHandoff?): 
 
 @StringRes
 internal fun meetingHandoffProblem(problem: String?): Int = when (problem) {
-    "not_agent" -> R.string.knowledge_handoff_problem_not_agent
-    "not_allowed" -> R.string.knowledge_handoff_problem_not_allowed
-    "unavailable" -> R.string.knowledge_handoff_problem_unavailable
-    else -> R.string.knowledge_handoff_problem_send_failed
+    "not_agent" -> R.string.knowledge_ui_handoff_problem_not_agent
+    "not_allowed" -> R.string.knowledge_ui_handoff_problem_not_allowed
+    "unavailable" -> R.string.knowledge_ui_handoff_problem_unavailable
+    else -> R.string.knowledge_ui_handoff_problem_send_failed
 }
 
 internal fun meetingHandoffCallError(error: Exception): UiText {
     val failure = persona.core.contracts.api.hubCodedFailure(error)
     return when (failure?.code) {
-        "meeting_running" -> UiText.Res(R.string.knowledge_handoff_running)
-        "no_material" -> UiText.Res(R.string.knowledge_handoff_no_material)
+        "meeting_running" -> UiText.Res(R.string.knowledge_ui_handoff_running)
+        "no_material" -> UiText.Res(R.string.knowledge_ui_handoff_no_material)
         else -> operationFeedback(error).text
     }
 }
@@ -145,10 +145,10 @@ internal fun MeetingHandoffRow(
     onRetry: (() -> Unit)? = null,
 ) {
     val failed = handoff.state == "failed"
-    val name = handoff.title?.takeIf { it.isNotBlank() } ?: stringResource(R.string.knowledge_handoff_agent)
+    val name = handoff.title?.takeIf { it.isNotBlank() } ?: stringResource(R.string.knowledge_ui_handoff_agent)
     JGroupItem(GroupPosition.Single, modifier = modifier) {
         JRow(
-            stringResource(if (failed) R.string.knowledge_handoff_row_failed else R.string.knowledge_handoff_row_sent, name),
+            stringResource(if (failed) R.string.knowledge_ui_handoff_row_failed else R.string.knowledge_ui_handoff_row_sent, name),
             subtitle = if (failed) stringResource(meetingHandoffProblem(handoff.problem)) else null,
             leadingIcon = if (failed) PersonaIcons.error else PersonaIcons.handToAI,
             chevron = false,
@@ -156,9 +156,9 @@ internal fun MeetingHandoffRow(
             subtitleLines = Int.MAX_VALUE,
             trailing = {
                 if (failed) {
-                    onRetry?.let { JTextButton(stringResource(R.string.knowledge_handoff_retry), it) }
+                    onRetry?.let { JTextButton(stringResource(R.string.knowledge_ui_handoff_retry), it) }
                 } else {
-                    JTextButton(stringResource(R.string.knowledge_handoff_open), onClick = {
+                    JTextButton(stringResource(R.string.knowledge_ui_handoff_open), onClick = {
                         navigator.navigate(ChatRoute(handoff.machineId, handoff.sessionId, ConversationKind.Agent))
                     })
                 }
@@ -195,9 +195,9 @@ internal fun MeetingHandoffSheet(
         failed?.state == "failed" -> stringResource(meetingHandoffProblem(failed.problem))
         else -> null
     }
-    JSheet(onDismiss = onDismiss, title = stringResource(R.string.knowledge_handoff_title), dismissible = !work.busy, scrollable = true) {
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.knowledge_ui_handoff_title), dismissible = !work.busy, scrollable = true) {
         Column(Modifier.fillMaxWidth().imePadding()) {
-            JSectionHeader(stringResource(R.string.knowledge_handoff_pick))
+            JSectionHeader(stringResource(R.string.knowledge_ui_handoff_pick))
             choices.forEachIndexed { index, agent ->
                 JGroupItem(GroupPosition.of(index, choices.size)) {
                     JRow(agent.displayTitle, subtitle = names[agent.machineId] ?: agent.machineId, leadingIcon = PersonaIcons.handToAI,
@@ -206,27 +206,27 @@ internal fun MeetingHandoffSheet(
                 }
             }
             Spacer(Modifier.height(Tokens.Space.m))
-            Text(stringResource(R.string.knowledge_handoff_ask_label), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
-            JTextField(instruction, { instruction = it }, placeholder = stringResource(R.string.knowledge_handoff_ask_placeholder),
+            Text(stringResource(R.string.knowledge_ui_handoff_ask_label), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
+            JTextField(instruction, { instruction = it }, placeholder = stringResource(R.string.knowledge_ui_handoff_ask_placeholder),
                 minLines = 2, maxLines = 5, enabled = !work.busy)
             if (transcriptOffered) {
                 Spacer(Modifier.height(Tokens.Space.s))
                 JGroupItem(GroupPosition.Single) {
-                    JSwitchRow(stringResource(R.string.knowledge_handoff_transcript), includeTranscript,
+                    JSwitchRow(stringResource(R.string.knowledge_ui_handoff_transcript), includeTranscript,
                         { includeTranscript = it }, enabled = !work.busy)
                 }
             }
             Spacer(Modifier.height(Tokens.Space.s))
-            Text(stringResource(R.string.knowledge_handoff_gets), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
+            Text(stringResource(R.string.knowledge_ui_handoff_gets), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
             error?.let {
                 Spacer(Modifier.height(Tokens.Space.m))
                 JNotice(it, status = Status.NeedsYou)
             }
             Spacer(Modifier.height(Tokens.Space.section))
-            JButton(stringResource(R.string.knowledge_handoff_send), {
+            JButton(stringResource(R.string.knowledge_ui_handoff_send), {
                 picked?.let { onSend(it, instruction, includeTranscript && transcriptOffered) }
             }, Modifier.fillMaxWidth(), icon = PersonaIcons.handToAI, enabled = picked != null && !work.busy,
-                loading = work.busy, loadingText = stringResource(R.string.knowledge_handoff_send))
+                loading = work.busy, loadingText = stringResource(R.string.knowledge_ui_handoff_send))
         }
     }
 }

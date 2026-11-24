@@ -37,7 +37,7 @@ module phone-extra
 module computer-use
 module engines-extra
 module github
-module connectors-extra
+module imessage
 module appearance-styles
 module glasses
 module code-viewer
@@ -47,6 +47,7 @@ module briefing
 # Module roots: each directory below them is the module of that name.
 go server/internal/modules/*/... *
 go server/internal/modules/all core
+go server/internal/modules/all/node core
 web web/src/modules/* *
 gradle :module:* *
 
@@ -127,11 +128,13 @@ go server/internal/extension/sourcevalidate core
 go server/internal/extension/uistream core
 go server/internal/extmgr core
 go server/internal/extmgr/githubport core
+go server/internal/extmgr/imessageport core
 go server/internal/extmgr/mailport core
 go server/internal/extmgr/storage core
 go server/internal/extwire core
 go server/internal/fleetsoak core
 go server/internal/githubwire core
+go server/internal/imessagewire core
 go server/internal/herdr core
 go server/internal/herdrcore core
 go server/internal/host core
@@ -145,6 +148,7 @@ go server/internal/imageorient core
 go server/internal/jsonsubset core
 go server/internal/kb core
 go server/internal/kbwire core
+go server/internal/larkhost core
 go server/internal/lazyre core
 go server/internal/lcuconfirm core
 go server/internal/link core
@@ -168,11 +172,14 @@ go server/internal/netproxy core
 go server/internal/netshape core
 go server/internal/node core
 go server/internal/node/clipshare core
+go server/internal/node/imessageport core
 go server/internal/node/machdiag core
 go server/internal/node/nodekit core
+go server/internal/node/screenport core
 go server/internal/node/transcripttail core
 go server/internal/nodeclient core
 go server/internal/nodecmd core
+go server/internal/nodecmd/commandport core
 go server/internal/nodeproto core
 go server/internal/nodesign core
 go server/internal/nodeupdate core
@@ -243,18 +250,14 @@ go server/plugins core
 # Module code still in core paths.
 go server/internal/transcribelive voice
 go server/internal/lark lark
-go server/internal/office office
-go server/internal/screen screen-share
-go server/internal/screenlink screen-share
+go server/internal/screen core
 go server/internal/iphone phone-extra
 go server/internal/iphonectl phone-extra
 go server/internal/node/iphone phone-extra
 go server/internal/protectedapps computer-use
 go server/internal/orcart/... engines-extra
 go server/internal/terncli engines-extra
-go server/cmd/vncbench screen-share
 go server/internal/rexcli engines-extra
-go server/internal/connector/imessage connectors-extra
 go server/internal/assistant/kbhistory knowledge-ui
 go server/internal/assistant/kbsent knowledge-ui
 
@@ -263,6 +266,8 @@ apple apple/AboutVersionAccessibilityHost core
 apple apple/AboutVersionAccessibilityUITests core
 apple apple/IslandPeer core
 apple apple/LiveActivity core
+apple apple/Modules core
+apple apple/Modules/ScreenShare screen-share
 apple apple/PersonaCallIntents voice
 apple apple/PersonaLink screen-share
 apple apple/PersonaNotify core
@@ -292,7 +297,6 @@ apple apple/Persona/Persona core
 apple apple/Persona/PhoneTools core
 apple apple/Persona/Recording recording
 apple apple/Persona/Resources core
-apple apple/Persona/Screen screen-share
 apple apple/Persona/Views core
 apple apple/Persona/Voice voice
 apple apple/Persona/Views/Feishu lark

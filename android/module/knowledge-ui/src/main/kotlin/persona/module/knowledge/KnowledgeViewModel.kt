@@ -243,11 +243,11 @@ internal class KnowledgeDetailViewModel(
                 }
                 checkCurrent(repository)
                 attempt = null
-                _sending.value = KnowledgeSending(message = R.string.knowledge_handed)
+                _sending.value = KnowledgeSending(message = R.string.knowledge_ui_handed)
                 opened.send(KnowledgeHandoff(owner, main))
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) {
-                _sending.value = KnowledgeSending(message = R.string.knowledge_hand_failed)
+                _sending.value = KnowledgeSending(message = R.string.knowledge_ui_hand_failed)
             }
         }
     }
@@ -307,8 +307,8 @@ internal class KnowledgeDetailViewModel(
                 throw cancelled
             } catch (error: Exception) {
                 val failure = hubCodedFailure(error)
-                message = if (failure?.status == 409 && failure.code == "minutes_stale") UiText.Res(R.string.knowledge_minutes_stale)
-                    else UiText.Res(R.string.knowledge_minutes_request_failed, listOf(operationFeedback(error).text))
+                message = if (failure?.status == 409 && failure.code == "minutes_stale") UiText.Res(R.string.knowledge_ui_minutes_stale)
+                    else UiText.Res(R.string.knowledge_ui_minutes_request_failed, listOf(operationFeedback(error).text))
             }
             try {
                 checkCurrent(repository)
@@ -376,18 +376,18 @@ internal data class KnowledgeHandoff(val owner: String?, val main: SessionKey?)
 internal fun loadMessage(error: Exception): Int {
     val failure = hubCodedFailure(error)
     return when {
-        failure?.code == "kb_disabled" -> R.string.knowledge_disabled_text
-        failure?.code == "kb_unavailable" -> R.string.knowledge_opening
+        failure?.code == "kb_disabled" -> R.string.knowledge_ui_disabled_text
+        failure?.code == "kb_unavailable" -> R.string.knowledge_ui_opening
         failure?.code == "kb_read_only" -> persona.core.designsystem.R.string.designsystem_knowledge_read_only
         failure?.code == "assistant_offline" -> persona.core.designsystem.R.string.designsystem_feedback_assistant_restarting
         failure?.code == "node_unreachable" -> persona.core.designsystem.R.string.designsystem_feedback_computer_offline
-        failure?.code == "timeout" || failure?.status == 504 -> R.string.knowledge_timeout
+        failure?.code == "timeout" || failure?.status == 504 -> R.string.knowledge_ui_timeout
         failure?.status == 401 -> persona.core.designsystem.R.string.designsystem_feedback_pairing_expired
-        failure?.status == 403 -> R.string.knowledge_forbidden
-        failure?.status == 404 -> R.string.knowledge_missing
-        failure?.status != null -> R.string.knowledge_unreadable
-        error is IOException -> R.string.knowledge_unreachable
-        else -> R.string.knowledge_unreadable
+        failure?.status == 403 -> R.string.knowledge_ui_forbidden
+        failure?.status == 404 -> R.string.knowledge_ui_missing
+        failure?.status != null -> R.string.knowledge_ui_unreadable
+        error is IOException -> R.string.knowledge_ui_unreachable
+        else -> R.string.knowledge_ui_unreadable
     }
 }
 

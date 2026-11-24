@@ -194117,7 +194117,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "会结束终端里正在跑的这一轮"
+            "value" : "会结束终端里正在跑的这一轮。"
           }
         }
       }
@@ -229342,6 +229342,46 @@
             "value" : "分"
           }
         }
+      }
+    },
+    "Switch this conversation?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "Switch this conversation?"}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "切换此对话的连接？"}},
+        "ja" : {"stringUnit" : {"state" : "translated", "value" : "このチャットの接続を切り替えますか？"}}
+      }
+    },
+    "Switch connection" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "Switch connection"}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "切换连接"}},
+        "ja" : {"stringUnit" : {"state" : "translated", "value" : "接続を切り替える"}}
+      }
+    },
+    "Continue with %@ using recent messages and a summary. The conversation and its tasks stay here. Some details may be summarized. The new connection will take over with your next message." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "Continue with %1$@ using recent messages and a summary. The conversation and its tasks stay here. Some details may be summarized. The new connection will take over with your next message."}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "使用最近的消息和摘要，在 %1$@ 上继续。对话及其任务仍留在这里，部分细节会被概括。新连接将在你发送下一条消息时接手。"}},
+        "ja" : {"stringUnit" : {"state" : "translated", "value" : "最近のメッセージと要約を使い、%1$@ で続けます。チャットとタスクはここに残ります。一部の詳細は要約されます。次のメッセージを送ると新しい接続が引き継ぎます。"}}
+      }
+    },
+    "Switching connections is unavailable. Refresh the conversation and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "Switching connections is unavailable. Refresh the conversation and try again."}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "暂时无法切换连接，请刷新对话后重试。"}},
+        "ja" : {"stringUnit" : {"state" : "translated", "value" : "接続を切り替えられません。チャットを更新して再試行してください。"}}
+      }
+    },
+    "The switch result is unconfirmed. Retrying uses the same request; it will not start another switch. %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "The switch result is unconfirmed. Retrying uses the same request; it will not start another switch. %1$@"}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "尚未确认切换结果。重试会使用同一请求，不会再次发起切换。%1$@"}},
+        "ja" : {"stringUnit" : {"state" : "translated", "value" : "切り替え結果を確認できません。再試行では同じリクエストを使い、新たな切り替えは開始しません。%1$@"}}
       }
     }
   },

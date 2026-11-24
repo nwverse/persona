@@ -479,6 +479,9 @@ var Routes = []string{
 	"GET /api/v1/assistant/conversations/{id}/segments",
 	"POST /api/v1/assistant/conversations/{id}/switch",
 	"GET /api/v1/assistant/conversations/{id}/switch/{operation}",
+	// A batch of those switches (conversations_switch.go there, docs/assistant/assistant.md, #14222).
+	"POST /api/v1/assistant/conversation-switches",
+	"GET /api/v1/assistant/conversation-switches/{batch}",
 	// The selection: what the knowledge base brings in and keeps (kb_selection.go there).
 	"GET /api/v1/kb/selection",
 	"PUT /api/v1/kb/selection",

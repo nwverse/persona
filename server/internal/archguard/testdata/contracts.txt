@@ -11,6 +11,7 @@ internal/devicewire
 internal/dialogwire
 internal/extwire
 internal/githubwire
+internal/imessagewire
 internal/kbwire
 internal/mailwire
 internal/modapi
