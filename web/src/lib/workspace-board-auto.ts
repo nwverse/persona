@@ -3,7 +3,7 @@
 // Needs you → Working → To review → Idle; reviewing and clearing a card is the existing Archive action.
 import { stateOf } from "./format";
 import { justFinished } from "./agent-groups";
-import { sameDirectory } from "./workspace-board";
+import { sameDirectory } from "./workspace-directory";
 import { acceptedAtRest, awaitsReview, shownStatus, todoStatus, type SessionLookup, type Todo } from "./todos";
 import type { BoardCard } from "./workspace-board";
 import type { Session } from "./types";

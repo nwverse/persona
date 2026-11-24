@@ -138,7 +138,7 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 		if s.isWorkMachine(machine) {
 			return []proto.Tool{}, nil
 		}
-		return guestTools(meetingRoomTools(), allowed), nil
+		return guestTools(s.meetingRoomTools(), allowed), nil
 	}
 	if !guest {
 		if guestHint {
@@ -155,6 +155,7 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 		tools := s.mcpTools(ctx, assistant)
 		if assistant {
 			tools = s.guardTools(ctx, machine, session, tools)
+			tools = append(tools, s.spaceTools(ctx, machine, session)...) // space_state_update (track_space_md.go)
 		}
 		if !assistant {
 			tools = append(tools, s.leaderTools(ctx, machine, session)...)
@@ -163,7 +164,7 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 		cfg := s.a2aConfig(ctx)
 		_, hasA2A := s.a2aStore()
 		if hasA2A == nil && (session == "" && s.a2aMachineAllowed(ctx, cfg, s.canonical(machine)) ||
-			s.a2aAllowed(ctx, cfg, a2aRef{s.canonical(machine), session})) {
+			s.a2aToolAllowed(ctx, cfg, a2aRef{s.canonical(machine), session})) {
 			tools = append(tools, toolsNamed(assistantwire.A2AToolNames)...)
 		}
 		if assistant && toolSetOf(ctx) == toolSetSupervise {
@@ -257,6 +258,9 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 	}
 	if !assistant && isDispatchTool(name) {
 		return s.dispatchTool(ctx, machine, session, name, args)
+	}
+	if assistant && name == spaceStateTool { // listed per conversation (spaceTools), so not in Tools: its handler checks
+		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})
 	}
 	if assistant && s.isOwnTool(ctx, name) {
 		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})
