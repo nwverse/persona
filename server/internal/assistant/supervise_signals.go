@@ -1248,6 +1248,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	history := s.planHistoryOnce() // and the plans read once, when a task's start needs them (start_remedy.go)
 	s.backfillBriefs(ctx, tasks)   // tasks from before briefs get one from what they still have (task_brief.go)
 	groups := allStoppedTaskGroups(tasks)
+	todosV2 := s.settings(ctx).todosV2On()
 	backfilled := 0
 	for _, t := range tasks {
 		if t.Supervision == nil && t.DoneAt == nil {
@@ -1325,6 +1326,9 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 				s.signal(g)
 			}
 			s.signalCardlessWait(ctx, t, agents, lists, now) // a review the owner cannot answer (#12648)
+			if todosV2 {
+				s.signalPendingReviewNudge(ctx, t, agents, lists, now) // todos_v2 >2h lightweight supervisor nudge (#14620)
+			}
 		}
 		if g, ok := s.deliveryHoldSignal(ctx, t, now); ok { // an owner hold with no card goes to its supervisor first
 			s.signal(g)

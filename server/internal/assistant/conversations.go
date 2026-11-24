@@ -1727,6 +1727,11 @@ func (s *Service) toolConversationSend(ctx context.Context, self string, args js
 	if c.SessionID == self {
 		return "", errors.New("that is this conversation: you can't send a message to yourself")
 	}
+	if c.LogicalPlaceholder {
+		// Its active physical segment is gone. Keep the durable conversation readable, but never manufacture a new
+		// execution segment or queue a message for an identity that no longer exists.
+		return "", logicalRefusal(ctx, "unavailable")
+	}
 	// The dispatch policy runs after the target is known and before relayAllowed, whose rate-limit bookkeeping a
 	// refused send must not consume.
 	if err := s.dispatchSendGuard(ctx, self, c.MachineID, c.SessionID, a.Text); err != nil {

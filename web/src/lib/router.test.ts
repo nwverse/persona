@@ -69,9 +69,9 @@ describe("the core's addresses (core/module-host.ts CORE_PATHS)", () => {
     const source = readFileSync(new URL("./router.ts", import.meta.url), "utf8");
     const parse = source.slice(source.indexOf("export function parse("), source.indexOf("export function routeAt("));
     const segments = new Set([...parse.matchAll(/p\[0\] === "([^"]+)"/g)].map((m) => m[1]!));
-    // assistantPath's segments, and the hub's own addresses next to the app's (its API, sign-in, screen sharing, shared
-    // pages, the admin UI, static files)
-    const beside = new Set(["persona", "j", "api", "login", "screen", "share", "admin", "assets"]);
+    // assistantPath's segments, and the hub's own addresses next to the app's (its API, sign-in, shared pages, the admin
+    // UI, static files). The live screen's /screen is the screen-share module's page of its own (standalonePages).
+    const beside = new Set(["persona", "j", "api", "login", "share", "admin", "assets"]);
     expect([...CORE_PATHS].filter((x) => !segments.has(x) && !beside.has(x))).toEqual([]);
   });
 });

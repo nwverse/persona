@@ -150,7 +150,7 @@ assistant.ask        GET /api/v1/assistant/capabilities
 -                    GET /api/v1/assistant/captures
 -                    GET /api/v1/assistant/conversation-switches/{batch}
 -                    GET /api/v1/assistant/conversations/{id}/always
--                    GET /api/v1/assistant/conversations/{id}/categories
+spaces               GET /api/v1/assistant/conversations/{id}/categories
 assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
 -                    GET /api/v1/assistant/conversations/{id}/segments
 -                    GET /api/v1/assistant/conversations/{id}/switch/{operation}
@@ -189,9 +189,9 @@ assistant.ask        GET /api/v1/assistant/reporters
 assistant.start_defaults GET /api/v1/assistant/start-defaults
 -                    GET /api/v1/assistant/tasks
 -                    GET /api/v1/assistant/tasks/cron
--                    GET /api/v1/assistant/track-kinds
--                    GET /api/v1/assistant/tracks
--                    GET /api/v1/assistant/tracks/{slug}/space-md
+spaces               GET /api/v1/assistant/track-kinds
+spaces               GET /api/v1/assistant/tracks
+spaces               GET /api/v1/assistant/tracks/{slug}/space-md
 -                    GET /api/v1/assistant/urgent-call
 assistant.start_defaults GET /api/v1/assistant/worker-presets
 -                    GET /api/v1/auth/password/state
@@ -513,7 +513,7 @@ assistant.start_defaults POST /api/v1/assistant/start-defaults/preview
 -                    POST /api/v1/assistant/tasks/{id}/run
 -                    POST /api/v1/assistant/tasks/{id}/skip-next
 -                    POST /api/v1/assistant/track-kinds
--                    POST /api/v1/assistant/tracks
+spaces               POST /api/v1/assistant/tracks
 -                    POST /api/v1/assistant/urgent-call/test
 -                    POST /api/v1/assistant/warm
 todos.write          POST /api/v1/assistant/workspace-naming/preview
@@ -714,6 +714,7 @@ agents.control       POST /api/v1/sessions/{mid}/{sid}/seen
 -                    POST /api/v1/task-plans/{id}/workspace-preview
 todos.write          POST /api/v1/todos
 -                    POST /api/v1/todos/import/reminders
+-                    POST /api/v1/todos/reorganize
 -                    POST /api/v1/todos/retitle
 -                    POST /api/v1/todos/{id}/accept
 -                    POST /api/v1/todos/{id}/asks/{ask}/answer
@@ -754,7 +755,7 @@ todos.write          POST /api/v1/todos/{id}/workspace-naming/preview
 -                    PUT /api/v1/agents/triage
 -                    PUT /api/v1/assistant
 -                    PUT /api/v1/assistant/attention
--                    PUT /api/v1/assistant/conversations/{id}/categories
+spaces               PUT /api/v1/assistant/conversations/{id}/categories
 -                    PUT /api/v1/assistant/conversations/{id}/model
 -                    PUT /api/v1/assistant/conversations/{id}/tags
 -                    PUT /api/v1/assistant/directions/{id}/name
@@ -776,8 +777,8 @@ assistant.dispatch_policy PUT /api/v1/assistant/dispatch-policy
 assistant.start_defaults PUT /api/v1/assistant/start-defaults
 -                    PUT /api/v1/assistant/tasks/{id}
 -                    PUT /api/v1/assistant/track-kinds/{slug}
--                    PUT /api/v1/assistant/tracks/{slug}
--                    PUT /api/v1/assistant/tracks/{slug}/space-md
+spaces               PUT /api/v1/assistant/tracks/{slug}
+spaces               PUT /api/v1/assistant/tracks/{slug}/space-md
 -                    PUT /api/v1/assistant/urgent-call
 -                    PUT /api/v1/bots/feishu
 -                    PUT /api/v1/channels/{id}

@@ -324,7 +324,8 @@ fun AssistantScreen(
     val healthPage = active == null && newChat?.space == persona.core.contracts.api.AssistantSpace.HEALTH
     // The domain spaces (#13500, docs/android/android.md "Domain spaces"): the tracks as last read (shared with the
     // sidebar), each space's chats as last read, and every chat known to be one's, so New on it opens its home.
-    val spaces = rememberSpaces(managerChoice.hubId, management, enabled = conversationsOf != null && !demo)
+    val spacesEnabled = LocalSpaceConversationsEnabled.current?.collectAsStateWithLifecycle()?.value == true
+    val spaces = rememberSpaces(managerChoice.hubId, management, enabled = spacesEnabled && conversationsOf != null && !demo)
     val spacesApi = remember(management, managerChoice.hubId) { management?.forManager(null) }
     val spaceChatsState = remember(managerChoice.hubId) { mutableStateOf<Map<String, List<Session>>>(emptyMap()) }
     var spaceChats by spaceChatsState

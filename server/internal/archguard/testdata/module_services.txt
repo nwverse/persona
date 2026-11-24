@@ -15,6 +15,10 @@ imessage (test) internal/connector
 imessage (test) internal/connector/conformance
 imessage (test) internal/subscriptions
 #
+# The Health module's water import runs its acceptance on the real SQL of the health_intake table too
+# (health_water_import_test.go, TestHealthWaterImportDatabase), which stays in internal/db.
+health (test) internal/db
+#
 # Meeting recording keeps the recordings' storage in the knowledge base (the kb.Recording model with its Engine and
 # Store), which stays in the core until kb offers a recording port (#13407).
 recording internal/kb

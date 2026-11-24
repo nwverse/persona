@@ -130,7 +130,7 @@ Because a missing flag means off, every flag a client gates on has to be announc
 - **Every built-in module declares `feature`** (`module.<id>`), also one that registers nothing with the kernel
   (`voice`, `volc`, `mail`): `TestEveryBuiltinModuleAnnouncesItsFlag` in `server/internal/modules/all`. Built out or
   switched off, its flag is gone and the clients hide their half.
-- **Client-only modules** (`modapi.ClientModules`: `glasses`, `health`, `knowledge-ui`, `screen-share`)
+- **Client-only modules** (`modapi.ClientModules`: `glasses`, `knowledge-ui`)
   have no server half, so the manager announces their flags itself. The `modules` settings row switches one off the
   same way (`{"disabled": ["health"]}`), which is how the owner turns a client module off from the hub without a new
   build. An id leaves the list in the PR that gives the module a server half (`TestNoBuiltinModuleIsListedAsClientOnly`).
@@ -153,8 +153,51 @@ Because a missing flag means off, every flag a client gates on has to be announc
   or duplicate ids (compiled-in modules and the client-only ones of `modapi.ClientModules`) before showing the existing owner approval card; `null` or an empty disabled list
   restores the default. The manager reads the row once where it starts (`server/internal/assistant/main.go`,
   `ReadModuleSwitch`) and hands it to `assistant.New` as `Options.ModulesOff`, so the saved change takes effect at the
-  next manager start, never as a hot switch in the running process. A built-in module switched off is absent exactly as one left
-  out of the build; a client-only one loses its hub flag, so the clients hide it. There is no settings screen yet; the settings registry of #13395 remains its intended UI home.
+  next manager start, never as a hot switch in the running process. The manager reads it before it makes the extension
+  manager, and the kernel and every provider seam get the same list (below). A built-in module switched off is absent
+  exactly as one left out of the build; a client-only one loses its hub flag, so the clients hide it. There is no settings screen yet; the settings registry of #13395 remains its intended UI home.
+- **One predicate for the seams** (#14405): `server/internal/moduleswitch`. A module that reaches the core through a
+  provider seam (a port its file in a composition root fills in `init`, "Provider seams" below) is switched off by that
+  port: the port is a `moduleswitch.Port`, which keeps the provider under the module's id and hands it out (`Get`)
+  only to a caller whose `moduleswitch.Set` has the module on (`Set.On`). The `Set` is a value each manager carries
+  (`extmgr.Options.Modules`), never process state: one process can run several managers (`internal/manager`). A node
+  has no settings row; it reads the switch from the hub's features it gets in `node.configure` (`hub_features`), by
+  the clients' rule (`moduleswitch.FromFeatures`: with the `modules` marker, a module whose `module.<id>` flag is
+  missing is off), and keeps it for the process (a node serves one hub). Before its first `node.configure`, or from a
+  hub without the marker, every module is on.
+- **Tested for every module**: `TestEverySeamFollowsTheSwitch` in `server/internal/modules/all` and in
+  `server/internal/modules/all/node` runs `server/internal/moduleswitch/switchtest` over the root: every seam each
+  module of the build recorded must hand out its provider with the module on and nothing with it switched off, and every
+  call the root's `init` makes must be such a seam. The only calls allowed otherwise are the root's own
+  (`kernel.Provide`) and the binary-only ones below; an entry no longer called fails.
+- **Checked on a running hub**: `python3 scripts/ci/core-only-smoke.py --switched-off <ids>` builds by default, starts
+  a hub on a disposable Postgres, writes the row, restarts and checks the ids are gone (the manager's loaded modules,
+  their flags, programs' extensions, connectors, routes) while every other module stays, then clears the row,
+  restarts and checks they return.
+
+What switched off means, by seam (each port follows `Set.On`; a build without the module provides nothing at all):
+
+| Seam | Module | Switched off at the next manager start |
+| --- | --- | --- |
+| Kernel slots (`settings`, `feature`, `hub_routes`, `mcp_tools`, `background_jobs`, schedule facts) | every module | Not loaded: no setting, route, tool or job, and its `module.<id>` flag is gone from the hello |
+| `server/internal/extmgr/githubport` | `github` | No built-in GitHub connector: not registered, listed or polled; `/api/v1/connectors/github/auth` answers 404 |
+| `server/internal/extmgr/imessageport` | `imessage` | No Messages connector or built-in `imessage` extension; `/api/v1/imessage` answers that it is not configured |
+| `server/internal/extmgr/mailport` | `mail` | Mail is not opened: the mail routes answer 404, no `mail_*` tool or mail connector, no `mail.accounts` setting |
+| `server/internal/builtinext` (`ProvideVolc`, `ProvideVoice`) | `volc`, `voice` | The built-in extension is not registered or started; no meeting transcribes with it |
+| `server/internal/builtinext` (`AddProgram`) | `volc`, `voice` | The extension host starts no `personad volc` / `personad voice`, a `hub.json` entry's included (`ProgramOff`: it fails as the unknown subcommand would). The subcommand stays in the binary |
+| `server/internal/botport` | `lark` | No bot client is made: the bot cannot be bound, registered or started |
+| `server/internal/cliport` | `lark` | `lark.cli` is not read (logged at start) and the extension host's lark-cli integration is off |
+| `server/internal/larkhost` | `lark` | The outbound channel port is `larkhost.None`, as without the module |
+| `server/internal/healthhost` | `health` | No layer: the intake routes answer 404, no `health_intake` tool or capability, no water reminders |
+| `server/internal/recordinghost` | `recording` | No layer: the recording routes answer 404, no audio socket, room tools, final passes or meeting capabilities |
+| `server/internal/node/imessageport` | `imessage` | The node answers as a computer without Messages; the manager sends it no `connector.*` call and drops `imessage` from the node's built-in programs |
+| `server/internal/node/iphoneport` | `phone-extra` | The node lists no `iphone` program and has none of its methods; the manager drops `iphone` from the node's built-in programs, so it offers and calls no phone control |
+| `server/internal/node/screenport` | `screen-share` | The node offers no screen session: a live screen is the plain relayed stream; the clients hide screen sharing (flag gone) |
+| `server/internal/nodecmd/commandport` (`AddCommand`) | `office`, `phone-extra` | **Binary-only**: `personad office` / `personad iphone` run as their own process with no hub, so they stay until a build without the module. The `persona-office` skill still ships to agents, as it does in a build without `office` |
+
+A node learns the switch at its next `node.configure` (on every connection): its first `node.info` is answered before
+that, which is why the manager filters the node's built-in programs itself. Client-only modules (`modapi.ClientModules`)
+have no seam; their flag goes and the clients hide them.
 
 ### How to build and run the core alone
 
@@ -233,8 +276,8 @@ The port is a package of its own so the composition root need not import `extmgr
 (`persona_without_mail`, `persona_core_only`) nothing is provided and the manager runs as with a mail service that
 failed to open: the mail routes answer 404, no `mail_*` tool or mail connector is offered, `persona_settings` has no
 `mail.accounts`, and everything else runs (`TestManagerWithoutMail`). The module registers nothing with the kernel and
-its `module.json` declares no slot; the run-time switch (the `modules` row) does not cover it until the kernel serves
-`hub_routes` and `mcp_tools` (#13844). Its prompts (`server/internal/prompts/mcp/mail`) and locales (`mail-*`) stay in
+its `module.json` declares no slot; the run-time switch (the `modules` row) covers it through `mailport` ("The
+switch"). Its prompts (`server/internal/prompts/mcp/mail`) and locales (`mail-*`) stay in
 the core's trees until `prompt_sections` and `i18n_namespaces` are served. `scripts/ci/server.sh build` builds and
 tests the core, the modules, the guards and the manager's mail, inbox, connector and settings tests with
 `persona_core_only` and with `persona_without_mail`.
@@ -252,9 +295,9 @@ an extension's GitHub connector can still take the id (`TestManagerWithoutGitHub
 (`server/internal/prompts/mcp/github`, `prompts/inbox/kinds/github.md`) stay in the core's trees as mail's do.
 `scripts/ci/server.sh build` runs "Builds without the connector modules" with both tags, and
 `scripts/ci/core-only-smoke.py` checks that a core-only hub lists no GitHub connector.
-Its `module.json` declares `feature` = `module.github`, so a hub whose manager loaded the module announces it. The
-run-time `modules` switch drops the flag, but the extension manager still registers the connector until it reads the
-switch too (only a build without the module leaves the connector out today).
+Its `module.json` declares `feature` = `module.github`, so a hub whose manager loaded the module announces it.
+Switched off in the `modules` row, `githubport` hands the manager no factory, so the connector is absent as in a build
+without it (`TestManagerWithoutGitHub` runs both ways).
 
 The iMessage connector (`server/internal/modules/imessage`, #13936) is the same kind of connector, with a second side:
 the reader of a Mac's Messages runs in that Mac's node. The manager reaches the connector through the contract
@@ -267,7 +310,9 @@ list), so `personad node`, persona-node and the manager's local node all have it
 of the manager. With the module left out (`persona_without_imessage`, `persona_core_only`) the manager has no Messages
 connector or built-in Messages extension, `/api/v1/imessage` answers that it is not configured
 (`TestManagerWithoutIMessage`), and the node answers as a computer without Messages does. Its `module.json` declares
-`feature` = `module.imessage`, with the same caveat on the run-time switch as GitHub's. "Builds without the connector
+`feature` = `module.imessage`. Switched off in the `modules` row, both ports hand out nothing: the manager registers no
+Messages connector or extension (`TestManagerWithoutIMessage` runs both ways), so it sends the node no `connector.*`
+call, and a node whose hub announces no `module.imessage` answers as a computer without Messages. "Builds without the connector
 modules" in `scripts/ci/server.sh` runs with `persona_without_imessage` too, and `scripts/ci/core-only-smoke.py`
 checks that a core-only hub has no `imessage` extension.
 
@@ -309,7 +354,9 @@ the node's root imports, so the manager does not link it. With the module left o
 unknown and missing from the usage (`TestOfficeFollowsTheBuildTags` in the node's root), and
 `scripts/ci/core-only-smoke.py` builds `persona-node` as well and checks that a core-only `personad` and `persona-node`
 lack every command the node's root provides. `scripts/ci/server.sh build` runs "Builds without the node modules" with
-each such module's tag and `persona_core_only`, Windows' node included.
+each such module's tag and `persona_core_only`, Windows' node included. Switched off in the `modules` row, the node's
+ports hand out nothing once the node has the hub's features, and the manager drops the module's built-in programs
+from the node's info; a device command stays in the binary ("The switch").
 
 The modules of this kind:
 
@@ -345,7 +392,8 @@ platform compiles cannot hide a violation (`TestModuleGuardsSeeEveryBuild` prove
   Known exceptions are debt in `testdata/module_services.txt`, which only shrinks (a stale line fails): `<module id>
   <core package>` for any of the module's files, `<module id> (test) <core package>` for its tests only, no wildcards.
   The lines are the GitHub and iMessage connectors' tests, which run them through the connector registry and gate, the
-  conformance suite and the subscription service with the modules' own fixtures, and `recording internal/kb`: the recordings'
+  conformance suite and the subscription service with the modules' own fixtures, the Health module's water import
+  test on the real SQL (`health (test) internal/db`), and `recording internal/kb`: the recordings'
   storage (the `kb.Recording` model with its `Engine` and `Store`) stays in the knowledge base until it offers a
   recording port. A declared core-service dependency is a known debt, not a precedent: the assistant, the hub and the
   extension host are never listed.
@@ -438,6 +486,34 @@ manifest declares `feature: module.recording`, which the kernel announces while 
   the hub announces none of their feature flags), no room tool is offered and no final pass or attending feeder runs
   (`TestRecordingFollowsItsModule`). The recordings already stored stay in the knowledge base.
 
+### Health
+
+`health` (`server/internal/modules/health`, #14406) is the manager's Health intake (docs/assistant/health.md "Water
+and protein"): the `/api/v1/assistant/health/intake…` and `…/water/reminder` routes, the water reminders, the intake
+page, the legacy water extension's import and the `health_intake` tool. Its manifest declares `feature: module.health`,
+which the kernel announces while it is loaded (it left `modapi.ClientModules` with this move).
+
+- **The seam**: `server/internal/healthhost`, in recording's shape: `Layer` (core -> module: `Routes`, `Tool`,
+  `ReminderLoop`) and `Host` (module -> core: the settings rows, the intake store, the water extension's migration, the
+  apps' events, the language and time zone, standby and quiet push, the push with its card, and the extension page's
+  fitting). The module declares its own `Host` with the same methods and types (`server/internal/modules/health/host.go`),
+  so it imports no core service; `server/internal/modules/all/health.go` provides its layer under
+  `!persona_without_health && !persona_core_only`; its port is a `moduleswitch.Port`, so the `modules` row switches it
+  off as the other seams. The assistant makes the layer where it registered the routes before
+  (`server/internal/assistant/health_layer.go`), so routes, the tool's place in the list and the hello stay as they were.
+- **Shared with the core**: the entry's type is a contract (`assistantwire.HealthIntakeRow`, which `db.HealthIntakeRow`
+  aliases); the `health_intake` table and its SQL stay in `internal/db`; the tool's description stays in
+  `server/internal/prompts/mcp/health`. The Health *space* (its conversations' directory, policies and outbound
+  confirmation, `server/internal/assistant/health.go`) is core: every core tool's space check reads it.
+- **Tests**: the module's tests run on a fake core (`fakecore_test.go`); the water import's acceptance also runs on the
+  real SQL (`health (test) internal/db` in `module_services.txt`). The core's tests of how the module meets the rest of
+  the manager (the tool's space guard, the intake page fitted for older apps, the push outbox, the module's absence)
+  stay in `server/internal/assistant/health_module_test.go` and skip without the module (`needsHealthModule`).
+- **With the module absent** (`persona_without_health`, `persona_core_only`, or switched off in the `modules` row) the
+  seven routes answer 404, the hello names no `health_intake` capability (so the hub announces no `health_intake`
+  feature and the apps show their "update your hub" state), the `health_intake` tool is not listed and refuses, and no
+  water reminder runs (`TestHealthFollowsItsModule`). The entries already stored stay in the database.
+
 ### Lark
 
 The assistant's Feishu / Lark layer (`server/internal/assistant/feishu*.go`: the chat's turns, cards, commands,
@@ -467,6 +543,13 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
   `feishu_answer.go`, which the core's own cards use too). The module's times (`timings.go`) come through
   `Host.Timings` from `assistant.Options.LarkTimings` and `LarkTimingLists`, a test and tuning knob as recording's;
   `Layer.Wait` waits for the agent messages' workers (the service waits for them when its connection ends).
+- **The workbench is the module's** (`server/internal/modules/lark/workbench.go`): `/home`, `/today` and `/inbox`,
+  their buttons and the home card, reached through `larkhost.Workbench`. The core gives it what it shows, in the
+  contract's terms (`assistantwire.WorkbenchItem`, `WorkbenchCounts`, `WorkbenchAgent`, `WorkbenchBoardRow`,
+  `WorkbenchCompanion`, `WorkbenchMeeting`; the Today card's JSON as stored), and does what its buttons ask (file or
+  mute an Inbox item, draft and send a reply, switch the chat's target, the other cards). The Inbox item a button names
+  is read by the Inbox core (`server/internal/assistant/inbox_workbench.go`); the counts by
+  `server/internal/assistant/workbench_view.go`.
 - **Tests**: the turns' own tests run in the module on a fake core (`server/internal/modules/lark/service_test.go`:
   the channels' runs, their finishing, folding and dropping, and the hub's transport); the assistant's tests of the
   turns through the channels' pipeline stay in `internal/assistant` and skip without the module (`needsLarkLayer`).
@@ -474,7 +557,8 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
   off: its status reads without an error as neither on nor ready (so an acceptance ask is card-less and a briefing
   goes out by push, as with the bot off), it supports nothing, a post or a reply answers `larkhost.ErrNoChannel`, and
   notes and thread lines are dropped.
-  The run-time `modules` switch does not cover it yet, as for mail.
+  Switched off in the `modules` row it is the same: `larkhost`, `botport` and `cliport` all follow the switch ("The
+  switch").
 
 ### How to add a module
 

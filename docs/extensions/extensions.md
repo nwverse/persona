@@ -101,6 +101,14 @@ That decides whether it can be removed. Removal gets its own issue: drop the ite
 The `persona-plugin.json` generated in packages follows the same deadline: after 2027-05-05, and once nobody runs a pre-rename hub anymore, `personad extension pack` and the package.sh packaging scripts of the two extension repositories stop generating it.
 Removing `tags` from packages and indexes must wait longer, until the marketplace is no longer used by hubs from before `tags` was added (also its own issue).
 
+## Domain Spaces migration (#14574)
+
+The optional `space-conversations` extension owns the domain-space list, creation, detail and `SPACE.md` product surface. It is distinct from the existing schema-driven `spaces` extension, whose identity and data are unchanged. The assistant retains the headless track registry, directories, execution and information policy.
+
+After extensions are ready, a hub with at least one non-health track record installs `space-conversations` once from the signed official marketplace and starts it. A fresh or unused hub receives no extension or entry. An already installed extension, including a disabled one, always wins over migration; disabling or uninstalling it never causes a background reinstall. The migration records its decision in the `spaces.extension_migration_v1` setting, exposes failures through ordinary extension operations and retries them. It never bypasses official catalog signature verification.
+
+An extension-provided kind is read-only through the custom-kind API. Disabling the extension hides the surface without deleting track rows, directories or conversations. Web keeps old conversation links working and routes space-home and creation links to the extension, or to extension settings when absent. Apple and Android expose their existing native surface only while the extension's navigation contribution is enabled. The narrow `persona://tracks/<machine>/<space>/<session>` handoff opens only an ordinary assistant conversation; Health and arbitrary internal links are refused on every client.
+
 ## Extension points
 
 What an extension contributes where is written in the manifest's `contributes`: keys are extension points, values are lists of contributions, and each item has an `id`. IDs must be unique within that extension point across installed extensions, except for `ui`: a UI ID belongs to its extension, so `volc/status` and `example/status` can coexist whether either extension is enabled or disabled. A duplicate UI ID inside one manifest is still refused. Other contribution points and the hub's reserved IDs keep their existing conflict checks, both in preview and when committing an install or upgrade.
@@ -138,6 +146,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `secret_providers` (version 1, #3962) | `secrets.` | `id`, `name` (1–80 characters: the settings say "From <name>"), `schemes` (1–4 of `^[a-z][a-z0-9+.-]{0,15}$`, not `http`, `https`, `file`, `data`, `persona`, `about`, `javascript`) | Process speaks the protocol; a scheme another installed extension claims fails the install | Values for references of its schemes (`op://vault/item/field`), asked by the manager only (`secrets.describe`, `secrets.resolve`, the event `secrets.used`), each resolution recorded on it; see [secret-providers.md](secret-providers.md) |
 | `repository_providers` (version 1, #10330) | `repo.` | `id`, `name` (1–80 characters: what the catalog and a to-do's repositories call the source), `hosts` (1–16 exact lowercase host names, no IP address; not `github.com`, `gitlab.com` or the other hosts the built-in providers read), `link_kinds?` (`[{kind: issue / pull_request, label}]`, each kind once, a label of 1–24 characters; only relabels), `capabilities?` (`["pr_status"]`: it answers `repo.pr_status`, #11584) | Process speaks the protocol; a host another installed extension claims (even one that is off), or one host in two items, fails the install | A code-hosting source for **Settings › Repositories** and a to-do's repositories and links on its hosts, asked by the manager only (`repo.parse`, `repo.check`, `repo.link`, the optional `repo.describe` and `repo.pr_status`; `schema/extension/repository.schema.json`), each answer re-checked; the install page lists its hosts, and they are in the permission digest |
 | `memory_sources` (version 1, #13532, #13586) | `memory.` | `id`, `name` (1–80 characters, not only spaces, no control characters: what settings call the source); one per extension | Process speaks the protocol | The extension's memory, entry by entry: the manager reads it with `memory.entries` (`schema/extension/memory.schema.json`) and grades each entry by scene itself, and stops delivering the extension's own text outlets directly; the install page says so, the permission digest does not change; see "Memory sources" below |
+| `track_kinds` (version 1, #14574) | `track_kinds.` | `id`, `title`, `config` (`schema: 1`, the declarative `assistantwire.TrackKindConfig`: template, context, categories, rhythms, attention, supervision, usage, assembly, capture target, channels and sidebar) | Declarative only; the manager validates every field and option | The headless assistant track registry and execution policy. The optional `space-conversations` extension contributes the `space` kind. An extension-provided kind is read-only through the custom-kind API; disabling its provider hides its surface but preserves existing records and conversations. |
 
 Extension points the hub doesn't know: the extension still installs (it may be written for a newer hub), that item has no effect, and the preview and list show a warning. When adding extension points later (knowledge base sources, link recognition…), add a row to this table.
 
@@ -494,6 +503,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `todos.write` | Create and edit to-dos, attach chats to to-dos | `POST /api/v1/todos`, `PATCH /api/v1/todos/{id}`, a to-do's `agents/{mid}/{sid}` and `spaces/{mid}/{space…}` (`PUT` / `DELETE`), `POST /api/v1/todos/{id}/decisions` (outcome decisions only, see [todos.md](../assistant/todos.md) "API overview"), `PUT /api/v1/todos/{id}/repositories` and `PUT /api/v1/todos/{id}/repositories/{repo_id}/links` (replace repository associations and issue/PR links); creating and editing to-dos and adding decisions not with terminal control characters (see below); deleting to-dos, superseding decisions, completion checks and retries still require full access; none of a to-do it is not shown, nor a run or space it may not take onto one (404, see "Never shown to extensions") |
 | `decisions.raise` | Ask the owner for a decision | `POST /api/v1/decisions`, `GET /api/v1/decisions/{id}`, `POST /api/v1/decisions/{id}/withdraw`; raise a rich pending Needs-you decision, poll only the caller's own answer and withdraw it ([todos.md](../assistant/todos.md) "Decisions raised outside a supervisor"). It does not open any owner answer route and is never included in legacy every-scope access |
 | `assistant.read` | Read your Persona chats (your messages and its replies) | No HTTP route: the `assistant.conversations` / `assistant.messages` RPC (see "Assistant conversations"). `assistant.ask` does not include it |
+| `spaces` (#14574) | Manage domain-space metadata and SPACE.md | List and create tracks, change a track and its `SPACE.md`, and read or change a visible conversation's categories; no custom-kind writes. Explicit by name only, never included in the legacy every-scope grant. Conversation listing and starts still require `assistant.ask`; sensitive tracks remain hidden by their existing policy. |
 | `assistant.entries.read` | Read unified ledger entries | `assistant.entries.list` RPC and `GET /api/v1/assistant/entries`; see "Unified entries ledger" |
 | `assistant.memory.read` | Read what Persona remembers about you (read-only; another track's memory only as the user lets this extension read it) | No HTTP route: the `assistant.memory` RPC (see "Assistant memory"). Writing and deleting memory stay with full credentials; `assistant.read` does not include it |
 | `models` | Use the model you pick for it in Settings › Model configuration (never the key) | No HTTP route: the `model.complete` RPC (see "Model calls"). Not covered by the legacy `hub_api` full access |
@@ -924,13 +934,15 @@ extension authors and integrations; this increment adds no client screen. RPC `a
 All filters are ANDed. Scope dimensions are ANDed too: `executor=any` entries match either execution audience;
 machine/project restrictions match an overlapping requested ID, or every ID if the stored list is empty. A personal
 filter never grants permission. An installed extension whose manifest declares `assistant.entries.read` and whose
-current per-extension grant includes it may read all personal entries over HTTP or RPC, regardless of source space
-or content category. The manager checks the live registry by authenticated extension ID on every request and again
-when delivering events: disabling the extension or revoking the scope takes effect without renewing its credential.
-An allowed reader may alternatively prove co-location through the same-user Node socket. Legacy full-hub permission
-alone does not opt into remote personal reads; an upgrade that first declares the scope requires fresh consent. No space or privacy-tier exclusion applies; `origin_space` and `category` are
-metadata reserved for later labeling and use-time policy. Secret input fields and automated answers are not owner
-question answers.
+current per-extension grant includes it may read personal entries over HTTP or RPC; what it is shown is then filtered
+by its extension trust and category grants (scene 6 in `docs/assistant/health.md`, #13548): an owner-trusted extension
+reads entries across every space, while a third-party extension reads only entries whose source-track floor and
+`category` values are all known and granted to it; source-track usage rules tightening `extension` apply on top. The manager checks the live
+registry by authenticated extension ID on every request and again when delivering events: disabling the extension or
+revoking the scope takes effect without renewing its credential. An allowed reader may alternatively prove co-location
+through the same-user Node socket for personal entries; co-location does not bypass category grants. Legacy full-hub
+permission alone does not opt into remote personal reads; an upgrade that first declares the scope requires fresh
+consent. Secret input fields and automated answers are not owner question answers.
 
 The response is `{entries: [...], after: "<opaque continuation>", has_more: false}`. Entries are ordered by increasing,
 server-assigned publication `at`, then `id`. Keep the filters unchanged while paging. At the end, retain `after` for
@@ -938,7 +950,7 @@ future increments; an empty result retains the incoming cursor. Source timestamp
 
 | Entry field | Type and meaning |
 | --- | --- |
-| `origin_space`, `category` | Source-space string (`""` means main) and content-category string array (`[]` means general); for example `health`, `finance`, `relationships`, `emotion`, `legal_id`; neither restricts authorized reads |
+| `origin_space`, `category` | Source-space string (`""` means main) and content-category string array (`[]` means general); for example `health`, `finance`, `relationships`, `emotion`, `legal_id`; third-party extension reads require category grants covering both the source track's default categories and every entry category |
 | `id`, `type`, `text` | Stable ID, one of the four persisted types, one-line judgment; hot state is not stored |
 | `quote` | Source wording; model-supplied quotes stay inferred until later verification |
 | `source` | `{machine, session, msg_uuid?, card_id?, file?, line?}`; original source pointer |

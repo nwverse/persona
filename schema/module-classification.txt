@@ -79,7 +79,10 @@ go server/internal/assistant/kernel core
 go server/internal/assistant/repository core
 go server/internal/assistant/repositorystore core
 go server/internal/assistant/saved core
+go server/internal/assistant/todo/conflict core
+go server/internal/assistant/todo/mergetrain core
 go server/internal/assistant/todo/projection core
+go server/internal/assistant/todo/stagegate core
 go server/internal/assistant/todo/timeline core
 go server/internal/assistantskills core
 go server/internal/assistantwire core
@@ -133,6 +136,7 @@ go server/internal/extmgr/storage core
 go server/internal/extwire core
 go server/internal/githubwire core
 go server/internal/imessagewire core
+go server/internal/healthhost core
 go server/internal/herdr core
 go server/internal/herdrcore core
 go server/internal/host core
@@ -165,6 +169,8 @@ go server/internal/memtrim core
 go server/internal/modapi core
 go server/internal/modelhttp core
 go server/internal/modelretry core
+go server/internal/moduleswitch core
+go server/internal/moduleswitch/switchtest core
 go server/internal/netaddr core
 go server/internal/netproxy core
 go server/internal/netshape core
@@ -344,6 +350,7 @@ gradle :platform:shortcuts core
 # --- Web (web/src) ----------------------------------------------------------------------------------------------
 web web/src/admin core
 web web/src/admin/pages core
+web web/src/components core
 web web/src/core core
 web web/src/features core
 web web/src/features/todos core
@@ -353,8 +360,6 @@ web web/src/lib core
 web web/src/lib/configuration core
 web web/src/lib/html-runtime core
 web web/src/modules core
-web web/src/screen screen-share
-web web/src/screen/tiers screen-share
 web web/src/sharing core
 web web/src/showcase core
 web web/src/showcase/images core
