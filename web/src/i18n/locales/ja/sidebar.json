@@ -170,5 +170,7 @@
   "module_screen_share": "画面共有",
   "module_screen_share_hint": "マシンのコンピュータのページからライブ画面を開き、ブラウザで操作します。",
   "subagents_running": "{count} 件が実行中",
-  "subagents_need_you": "{count} 件が確認待ち"
+  "subagents_need_you": "{count} 件が確認待ち",
+  "sort_activity": "最近の更新順に並べる",
+  "show_list_filter": "フィルターを表示"
 }

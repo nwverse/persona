@@ -170,5 +170,7 @@
   "module_screen_share": "屏幕共享",
   "module_screen_share_hint": "在「机器」里的电脑页面打开它的实时屏幕，并在浏览器里操作。",
   "subagents_running": "{count} 个运行中",
-  "subagents_need_you": "{count} 个等你确认"
+  "subagents_need_you": "{count} 个等你确认",
+  "sort_activity": "按最近更新排序",
+  "show_list_filter": "显示筛选"
 }
