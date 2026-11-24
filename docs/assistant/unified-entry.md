@@ -1140,14 +1140,18 @@ to its supervising conversation in either configuration (#11195). Code: `server/
   not said, and what only they can do). It answers a question that is the agent's own call with `interaction_answer`
   (with `reason`), and allows or denies a tool permission or a plan the same way (`interaction_answer` with `allow`):
   the agent gets the answer marked as the assistant's (`answered_by: assistant`, with the reason), never as the user's,
-  and it is kept as the task's decision (`source: agent`, the supervisor's conversation). What stays the user's — a card
-  with a form, a password or a secret, an owner action, a permission or plan that would send, reply or comment in the
-  user's name, spend money or delete (the matching `riskyWords`; pushing, merging and deploying are the supervisor's),
-  a goal change, a conflict with a decision already made — the supervisor cannot answer (`interaction_answer` refuses
-  it and names `ask_escalate`) and hands up with `ask_escalate {todo_id, reason, recommend}`: every card of the task
-  the user has not been told of rings at once, as one push (the first card pushes; the others go to the apps and
-  channels without one), each carrying `delegate.reason` / `delegate.recommend`. Only the task's supervisor and the
-  main chat may. A leader's or the background supervisor's escalation adds an `escalated` entry to the main chat with
+  and it is kept as the task's decision (`source: agent`, the supervisor's conversation). Denying any permission or plan
+  remains the supervisor's: it executes nothing and returns the reason to the agent. Only allowing an owner-only
+  permission or plan is refused (`interaction_answer` on `allow: true` names `ask_escalate`). What stays the user's for
+  an affirmative answer — a card with a form, a password or a secret, an owner action, a permission or plan that would
+  send, reply or comment in the user's name, spend money or delete (the matching `userApprovalWords`; pushing, merging and
+  deploying are the supervisor's) — and a goal change or a conflict with a decision already made are handed up with
+  `ask_escalate {todo_id, reason, recommend}`: every card of the task the user has not been told of rings at once, as
+  one push (the first card pushes; the others go to the apps and channels without one), each carrying
+  `delegate.reason` / `delegate.recommend`. `userApproval` also recognizes outward, deletion and spending tool actions
+  structurally with neutral payloads; known local file-edit tools (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`,
+  `apply_patch`) never classify their file contents as the requested action. Only the task's supervisor and the main
+  chat may escalate. A leader's or the background supervisor's escalation adds an `escalated` entry to the main chat with
   the cards, the reason and the recommendation, so it does not ask again. The main chat may answer a card either of
   them still holds, and its answer is kept as the task's decision too.
 - **Answers**: the user's answers go to the agents as any card's; a question's is kept as every card's is
