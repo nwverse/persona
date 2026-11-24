@@ -101,8 +101,8 @@ func TestOtherAgentStartTypesForThePaneShell(t *testing.T) {
 // the command is typed with the message on one line.
 func TestOtherAgentStartFlattensForAGuessedShell(t *testing.T) {
 	for shell, want := range map[string]string{
-		"/bin/zsh":  "traex 'a\nb'",
-		"/bin/tcsh": "traex 'a b'",
+		"/bin/zsh":  "traex --model example-fast -- 'a\nb'",
+		"/bin/tcsh": "traex --model example-fast -- 'a b'",
 	} {
 		t.Run(shell, func(t *testing.T) {
 			withPaneShell(t, shell)
@@ -113,7 +113,7 @@ func TestOtherAgentStartFlattensForAGuessedShell(t *testing.T) {
 			starts := orcaTypedStarts(o)
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) // until the agent would show up
 			defer cancel()
-			_, _ = n.start(ctx, projDir, traexAgent, "a\nb", "", "", "", "", "", "", "")
+			_, _ = n.start(ctx, projDir, traexAgent, "a\nb", "", "", "", "", "", "", "", modelExecution{Model: "example-fast"})
 			ran := starts()
 			for _, p := range o.Params("terminal.send") {
 				if text, _ := p["text"].(string); strings.Contains(text, traexAgent+" ") {
