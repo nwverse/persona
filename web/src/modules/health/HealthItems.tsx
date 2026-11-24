@@ -5,14 +5,13 @@ import { useEffect, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
 import { t } from "../../i18n";
 import { Button, Dialog, IconButton, Switch, toast } from "../../ui/atoms";
-import type { IntakeKind } from "./intake";
-import { offeredItems, shownItems, StaleItemsError } from "./items";
+import { offeredItems, shownItems, StaleItemsError, type WebItem } from "./items";
 import type { HealthItems, ItemsBase } from "./useHealthItems";
 
-const nameOf = (kind: IntakeKind) => (kind === "water" ? t("health.today_water") : t("health.today_protein"));
+const nameOf = (kind: WebItem) => (kind === "water" ? t("health.today_water") : kind === "protein" ? t("health.today_protein") : t("health.strength_title"));
 
 /** Every offered item in the editor's order: the added ones in their order, then the rest. */
-function rowsOf(shown: readonly IntakeKind[], offered: readonly IntakeKind[]): { kind: IntakeKind; on: boolean }[] {
+function rowsOf(shown: readonly WebItem[], offered: readonly WebItem[]): { kind: WebItem; on: boolean }[] {
   return [...shown, ...offered.filter((k) => !shown.includes(k))].map((kind) => ({ kind, on: shown.includes(kind) }));
 }
 
@@ -49,7 +48,7 @@ export function HealthItemsEditor({ items, open, onClose }: { items: HealthItems
       if (e instanceof StaleItemsError) {
         // the hub's list wins: show it, and the owner decides again from it
         base.current = e.current;
-        setRows(rowsOf(shownItems(e.current), offeredItems(e.current)));
+        setRows(rowsOf(shownItems(e.current, items.web), offeredItems(e.current, items.web)));
         setNote({ tone: "stale", text: t("health.items_stale") });
       } else {
         setNote({ tone: "failed", text: t("health.items_save_failed", { error: errorText(e) }) });
@@ -91,10 +90,10 @@ export function HealthItemsEditor({ items, open, onClose }: { items: HealthItems
   );
 }
 
-/** Asked once, of an owner who never chose and has neither water nor protein on: what to track. Add saves the ones
+/** Asked once, of an owner who never chose and has none of the web's items on: what to track. Add saves the ones
  *  picked, Not now saves the list as it is; either way the hub's list is then saved and the card does not come back. */
 export function HealthItemsAsk({ items }: { items: HealthItems }) {
-  const [picked, setPicked] = useState<IntakeKind[]>([]);
+  const [picked, setPicked] = useState<WebItem[]>([]);
   const [busy, setBusy] = useState<"add" | "later" | null>(null);
   const answer = async (which: "add" | "later") => {
     setBusy(which);
@@ -111,7 +110,7 @@ export function HealthItemsAsk({ items }: { items: HealthItems }) {
   return (
     <section className="mb-7 rounded-card bg-surface p-4 shadow-card" data-testid="health-items-ask" aria-labelledby="health-items-ask-title">
       <h2 id="health-items-ask-title" className="text-card-title font-semibold text-ink">{t("health.ask_title")}</h2>
-      <p className="mt-1 text-meta leading-relaxed text-ink-2">{t("health.ask_body")}</p>
+      <p className="mt-1 text-meta leading-relaxed text-ink-2">{items.offered.includes("strength") ? t("health.ask_body_strength") : t("health.ask_body")}</p>
       <div className="mt-3 divide-y divide-line">
         {items.offered.map((kind) => (
           <label key={kind} className="flex min-h-11 items-center gap-3">

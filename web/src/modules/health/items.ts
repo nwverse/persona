@@ -21,9 +21,16 @@ export interface HealthItemsState {
   saved: boolean;
 }
 
-/** The items the web draws, in the catalog's order: water and protein. Activity rings and trends are the phone's. */
-export const WEB_ITEMS: readonly IntakeKind[] = INTAKE_KINDS;
-const isWebItem = (id: string): id is IntakeKind => (WEB_ITEMS as readonly string[]).includes(id);
+/** An item the web can draw: water and protein (Today's rings), and strength training (the hub's home card, #14713). */
+export type WebItem = IntakeKind | "strength";
+
+/** The items the web draws: water and protein. Activity rings and trends are the phone's. */
+export const WEB_ITEMS: readonly WebItem[] = INTAKE_KINDS;
+/** With strength training (the hello's `health_strength`): its home card too. */
+export const WEB_ITEMS_STRENGTH: readonly WebItem[] = [...INTAKE_KINDS, "strength"];
+/** The items the web draws on a hub with strength training or without it. */
+export const webItems = (strength: boolean): readonly WebItem[] => (strength ? WEB_ITEMS_STRENGTH : WEB_ITEMS);
+const isWebItem = (web: readonly WebItem[]) => (id: string): id is WebItem => (web as readonly string[]).includes(id);
 
 const PATH = "/assistant/health/items?space=health";
 
@@ -57,27 +64,31 @@ export async function writeItems(items: string[], revision: number): Promise<Hea
   }
 }
 
-/** The web items the owner added, in their order (only ones the hub's catalog has). */
-export function shownItems(state: HealthItemsState): IntakeKind[] {
+/** The web items (`web`: the ones this hub lets it draw) the owner added, in their order (only ones the hub's catalog
+ *  has). */
+export function shownItems(state: HealthItemsState, web: readonly WebItem[] = WEB_ITEMS): WebItem[] {
   const known = new Set(state.catalog.map((c) => c.id));
-  return state.items.filter((id): id is IntakeKind => isWebItem(id) && known.has(id));
+  const draws = isWebItem(web);
+  return state.items.filter((id): id is WebItem => draws(id) && known.has(id));
 }
 
 /** The web items the editor offers: the catalog's, in the catalog's order. */
-export function offeredItems(state: HealthItemsState): IntakeKind[] {
-  return state.catalog.map((c) => c.id).filter(isWebItem);
+export function offeredItems(state: HealthItemsState, web: readonly WebItem[] = WEB_ITEMS): WebItem[] {
+  return state.catalog.map((c) => c.id).filter(isWebItem(web));
 }
 
-/** The whole list to save when the web's items become `shown`, in that order. Everything else the list holds (Activity
- *  rings, trends, ids this page does not know) stays where it was: the slots the web's items took are filled with
- *  `shown` in order, a slot left over is dropped, and an item added beyond them goes right after the last of them (first
- *  of all when there were none, as the hub's own defaults put water and protein first). */
-export function mergeItems(stored: string[], shown: readonly string[]): string[] {
+/** The whole list to save when the web's items (`web`) become `shown`, in that order. Everything else the list holds
+ *  (Activity rings, trends, strength training on a hub that does not let the web draw it, ids this page does not know)
+ *  stays where it was: the slots the web's items took are filled with `shown` in order, a slot left over is dropped, and
+ *  an item added beyond them goes right after the last of them (first of all when there were none, as the hub's own
+ *  defaults put water and protein first). */
+export function mergeItems(stored: string[], shown: readonly string[], web: readonly WebItem[] = WEB_ITEMS): string[] {
+  const draws = isWebItem(web);
   const next = [...shown];
   const out: string[] = [];
   let last = -1;
   for (const id of stored) {
-    if (!isWebItem(id)) {
+    if (!draws(id)) {
       out.push(id);
       continue;
     }

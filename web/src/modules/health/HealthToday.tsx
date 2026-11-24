@@ -2,7 +2,8 @@
 // rings with today's amount and goal, and the buttons that log them. A press moves the ring at once and the hub's total
 // settles it (useHealthIntake.ts); a logged one offers Undo, a failed one says why and offers Retry with the same record
 // number, so a retry never logs twice. Shown only when the hub says it has intake; on a hub that keeps what Health tracks
-// (#14716, useHealthItems.ts) only the rings added there, in their order, and nothing when neither is.
+// (#14716, useHealthItems.ts) only the rings added there, in their order, and nothing when none is. Strength training
+// (#14713), when the hub draws it and it is added, is the hub's own card at its place in that order (HealthStrength.tsx).
 import { useState } from "react";
 import { errorText } from "../../lib/api";
 import { currentLanguage, t } from "../../i18n";
@@ -13,16 +14,18 @@ import { navigate } from "../../lib/router";
 import { GaugeFace } from "../../ui/GaugeFace";
 import { inputClass, SectionTitle } from "../../views/assistant/parts";
 import { INTAKE_KINDS, INTAKE_MIN, INTAKE_MAX, newDraft, parseAmount, type IntakeDraft, type IntakeEntry, type IntakeKind } from "./intake";
+import type { WebItem } from "./items";
+import { StrengthHomeCard } from "./HealthStrength";
 import { useHealthIntake, type Ring } from "./useHealthIntake";
 
 const num = (n: number) => new Intl.NumberFormat(currentLanguage(), { maximumFractionDigits: 1 }).format(n);
 const COLOR: Record<IntakeKind, string> = { water: "var(--health-water)", protein: "var(--health-protein)" };
 const unitOf = (kind: IntakeKind) => (kind === "water" ? t("health.today_unit_water") : t("health.today_unit_protein"));
 
-/** Which rings to draw, from the hub's list of what Health tracks: `kinds` null while it is being read (with its read's
+/** What to draw, from the hub's list of what Health tracks: `kinds` null while it is being read (with its read's
  *  failure in `error`). Without it both rings are drawn, as before the list. */
 export interface TodayItems {
-  kinds: readonly IntakeKind[] | null;
+  kinds: readonly WebItem[] | null;
   error: string;
   reload: () => void;
 }
@@ -35,9 +38,6 @@ export function HealthToday({ items }: { items?: TodayItems }) {
   if (!intake.enabled) return null;
   const kinds = items ? items.kinds : INTAKE_KINDS;
   if (kinds?.length === 0) return null;
-  // the list's failure first: without it there is nothing to choose the rings by
-  const error = kinds ? intake.error : items?.error;
-  const retry = kinds ? intake.reload : items!.reload;
 
   const undo = async (e: IntakeEntry) => {
     try {
@@ -76,26 +76,30 @@ export function HealthToday({ items }: { items?: TodayItems }) {
   return (
     <section className="mb-7" data-testid="health-today">
       <SectionTitle>{t("health.today_title")}</SectionTitle>
-      {kinds && intake.rings ? (
-        <div className="grid grid-cols-2 gap-2">
-          {kinds.map((kind) => kind === "water" ? (
-            <RingCard key={kind} kind="water" ring={intake.rings!.water}>
-              <Button tone="primary" onClick={() => void record(newDraft("water"))}>{t("health.today_drank")}</Button>
-              <Button onClick={() => open("water")}>{t("health.today_other")}</Button>
-            </RingCard>
+      {kinds ? (
+        <div className="flex flex-col gap-2">
+          {runsOf(kinds).map((run, i) => run === "strength" ? (
+            <StrengthHomeCard key="strength" />
+          ) : intake.rings ? (
+            <div key={`rings-${i}`} className="grid grid-cols-2 gap-2">
+              {run.map((kind) => kind === "water" ? (
+                <RingCard key={kind} kind="water" ring={intake.rings!.water}>
+                  <Button tone="primary" onClick={() => void record(newDraft("water"))}>{t("health.today_drank")}</Button>
+                  <Button onClick={() => open("water")}>{t("health.today_other")}</Button>
+                </RingCard>
+              ) : (
+                <RingCard key={kind} kind="protein" ring={intake.rings!.protein}>
+                  <Button tone="primary" onClick={() => open("protein")}>{t("health.today_grams")}</Button>
+                </RingCard>
+              ))}
+            </div>
           ) : (
-            <RingCard key={kind} kind="protein" ring={intake.rings!.protein}>
-              <Button tone="primary" onClick={() => open("protein")}>{t("health.today_grams")}</Button>
-            </RingCard>
+            // the rings' read failed or is on its way: said once, where the first of them goes
+            i === firstRings(kinds) && <Status key={`rings-${i}`} error={intake.error ? t("health.today_load_failed", { error: intake.error }) : ""} retry={intake.reload} />
           ))}
         </div>
-      ) : error ? (
-        <div className="flex items-center gap-3 rounded-card bg-surface px-4 py-3 shadow-card">
-          <p className="min-w-0 flex-1 text-meta break-words text-ink-2" role="alert">{kinds ? t("health.today_load_failed", { error }) : t("health.items_load_failed", { error })}</p>
-          <Button icon="retry" onClick={retry}>{t("health.retry")}</Button>
-        </div>
       ) : (
-        <div className="flex justify-center py-8"><Loading /></div>
+        <Status error={items?.error ? t("health.items_load_failed", { error: items.error }) : ""} retry={items!.reload} />
       )}
       <Dialog
         open={ask !== null}
@@ -130,6 +134,30 @@ export function HealthToday({ items }: { items?: TodayItems }) {
         )}
       </Dialog>
     </section>
+  );
+}
+
+/** `kinds` cut where strength training's card goes: the rings on either side of it, in order, each run a grid of its own. */
+function runsOf(kinds: readonly WebItem[]): (IntakeKind[] | "strength")[] {
+  const out: (IntakeKind[] | "strength")[] = [];
+  for (const k of kinds) {
+    if (k === "strength") out.push("strength");
+    else if (Array.isArray(out.at(-1))) (out.at(-1) as IntakeKind[]).push(k);
+    else out.push([k]);
+  }
+  return out;
+}
+const firstRings = (kinds: readonly WebItem[]) => runsOf(kinds).findIndex((r) => r !== "strength");
+
+/** A read that failed, with Retry, or one on its way. */
+function Status({ error, retry }: { error: string; retry: () => void }) {
+  return error ? (
+    <div className="flex items-center gap-3 rounded-card bg-surface px-4 py-3 shadow-card">
+      <p className="min-w-0 flex-1 text-meta break-words text-ink-2" role="alert">{error}</p>
+      <Button icon="retry" onClick={retry}>{t("health.retry")}</Button>
+    </div>
+  ) : (
+    <div className="flex justify-center py-8"><Loading /></div>
   );
 }
 

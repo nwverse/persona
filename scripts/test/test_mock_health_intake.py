@@ -217,7 +217,7 @@ class HealthItemsMockTests(unittest.TestCase):
 
     def test_defaults_follow_the_owner(self):
         got = self.request().result
-        self.assertEqual([c["id"] for c in got["catalog"]], ["water", "protein", "activity", "trends"])
+        self.assertEqual([c["id"] for c in got["catalog"]], ["water", "protein", "strength", "activity", "trends"])
         self.assertEqual((got["items"], got["revision"], got["saved"]), (["water", "protein", "activity", "trends"], 0, False))
         self.request(path="/mock/health-items", query={"mode": ["fresh"]})
         self.assertEqual(self.request().result["items"], ["activity", "trends"])
@@ -254,6 +254,85 @@ class HealthItemsMockTests(unittest.TestCase):
         self.assertEqual(view.result["items"], ["water", "protein", "activity", "trends"])
 
 
+class HealthStrengthMockTests(unittest.TestCase):
+    """Strength training (#14713): the catalog's item and the feature, and its pages as the hub's code drew them."""
+
+    def setUp(self):
+        import health_strength_ui
+        self.ui = health_strength_ui
+        intake.HEALTH_INTAKE_ENABLED = True
+        intake.HEALTH_ITEMS_MODE = "existing"
+        intake.HEALTH_STRENGTH_MODE = "on"
+        intake.health_items_reset()
+        intake.strength_reset()
+        self.addCleanup(intake.health_items_reset)
+        self.addCleanup(intake.strength_reset)
+        self.addCleanup(setattr, intake, "HEALTH_STRENGTH_MODE", "on")
+        self.events = []
+        self.broadcast = patch.object(hub, "broadcast", self.events.append)
+        self.broadcast.start()
+        self.addCleanup(self.broadcast.stop)
+
+    def page(self, state, action="", locale="en"):
+        handler = Handler()
+        body = {"state": json.dumps(state), "context": {"locale": locale, "ui_version": 11}}
+        if action:
+            body["action"] = action
+        self.assertTrue(intake.health_intake_route(handler, "POST", "/api/v1/assistant/health/intake/ui", {"space": ["health"]},
+                                                   json.dumps(body).encode()))
+        return handler
+
+    def items(self, method="GET", body=None):
+        handler = Handler()
+        intake.health_items_route(handler, method, "/api/v1/assistant/health/items", {"space": ["health"]},
+                                  json.dumps(body).encode() if body is not None else b"")
+        return handler
+
+    def test_the_catalog_has_strength_only_on_a_hub_with_it(self):
+        self.assertIn("strength", [c["id"] for c in self.items().result["catalog"]])
+        self.assertEqual(self.items("PUT", {"items": ["strength", "water"], "revision": 0}).status, 200)
+        intake.HEALTH_STRENGTH_MODE = "off"
+        self.assertNotIn("strength", [c["id"] for c in self.items().result["catalog"]])
+        self.assertEqual(self.items("PUT", {"items": ["strength"], "revision": 1}).status, 400)
+        self.assertEqual(self.page({"page": "strength.home"}).status, 400)
+
+    def test_pages_are_the_exported_ones_by_state_and_language(self):
+        exercises, pending, plan = self.ui.ids()
+        home = self.page({"page": "strength.home"})
+        self.assertEqual((home.status, home.result["view"]["title"]), (200, "Strength training"))
+        self.assertEqual(self.page({"page": "strength.home"}, locale="zh-Hans").result["view"]["title"], "力量训练")
+        overview = self.page({"page": "strength.overview"}).result
+        self.assertNotIn('"manage":true', overview["view"]["state"])
+        managed = self.page({"page": "strength.overview"}, "manage").result
+        self.assertIn('"manage":true', managed["view"]["state"])
+        self.assertNotIn("toast", managed)
+        self.assertNotIn('"manage":true', self.page(json.loads(managed["view"]["state"]), "done").result["view"]["state"])
+        for exercise, name in exercises.items():
+            with self.subTest(exercise=name):
+                got = self.page({"page": "strength.exercise", "exercise": exercise}).result
+                self.assertEqual(json.loads(got["view"]["state"])["exercise"], exercise)
+        self.assertEqual(json.loads(self.page({"page": "strength.edit", "draft": plan}).result["view"]["state"])["draft"], plan)
+        edit = self.page({"page": "strength.edit", "draft": pending, "rev": 1})
+        self.assertIn('"control"', json.dumps(edit.result))
+        self.assertTrue(self.page({"page": "strength.edit", "draft": pending}, "save").result["pop"])
+        self.assertTrue(self.page({"page": "strength.edit", "draft": pending}, "cancel").result["pop"])
+        self.assertEqual(self.page({"page": "strength.edit", "draft": pending}, "add").result["toast"], "Sample action: add")
+        self.assertEqual(self.page({"page": "strength.exercise", "exercise": "00000000-0000-4000-8000-000000000000"}).status, 400)
+
+    def test_a_card_saved_makes_its_draft_read_only(self):
+        _, pending, _ = self.ui.ids()
+        key = self.ui.card_key()
+        adjust = [i for i in self.ui.card("en")["view"]["sections"][0]["items"] if (i.get("action") or {}).get("id") == "adjust"]
+        self.assertTrue(adjust[0]["action"]["open"].startswith(intake.STRENGTH_PUBLIC + "/extension/-health-intake/pages?state="))
+        handler = Handler()
+        req = type("Req", (), {"match": {"key": key}, "body": json.dumps({"action": "save", "client_msg_id": "c1"}).encode()})
+        self.assertTrue(intake.strength_card_action(handler, req))
+        self.assertEqual((handler.status, handler.result["action"]["status"]), (200, "sent"))
+        self.assertEqual(self.events, [{"type": "health_strength"}])
+        self.assertNotIn('"control"', json.dumps(self.page({"page": "strength.edit", "draft": pending}).result))
+        self.assertFalse([i for i in self.ui.card("en")["view"]["sections"][0]["items"] if (i.get("action") or {}).get("id") == "adjust"])
+
+
 class HealthIntakeMigrationHTTPTests(unittest.TestCase):
     def test_registered_domain_import_and_reset(self):
         from test_readiness_mock import Hub
@@ -285,6 +364,26 @@ class HealthIntakeMigrationHTTPTests(unittest.TestCase):
         self.assertEqual(h.call("PUT", path, {"items": [], "revision": 0})[0], 409)
         self.assertEqual(h.call("GET", "/mock/reset")[0], 200)
         self.assertEqual(h.call("GET", path)[1]["revision"], 0)
+
+    def test_registered_domain_strength_card(self):
+        from test_readiness_mock import Hub
+        import health_strength_ui
+        h = Hub(MOCK_HEALTH_STRENGTH="card")
+        self.addCleanup(h.stop)
+        features = h.call("GET", "/api/v1/health")[1]["features"]
+        self.assertIn("health_strength", features)
+        self.assertIn("assistant_views", features)
+        code, feed = h.call("GET", "/api/v1/assistant/conversations/%s/feed" % intake.STRENGTH_CHAT)
+        self.assertEqual((code, feed["items"][0]["ref"]), (200, health_strength_ui.card_key()))
+        code, home = h.call("POST", "/api/v1/assistant/health/intake/ui?space=health", {"state": '{"page":"strength.home"}'})
+        self.assertEqual((code, home["view"]["title"]), (200, "Strength training"))
+        actions = "/api/v1/assistant/conversations/%s/views/%s/actions" % (intake.STRENGTH_CHAT, health_strength_ui.card_key())
+        self.assertEqual(h.call("POST", actions, {"action": "save", "expected_version": 1})[0], 200)
+        _, saved = h.call("GET", "/api/v1/assistant/conversations/%s/feed" % intake.STRENGTH_CHAT)
+        self.assertEqual(saved["items"][0]["body"]["view"]["version"], 2)
+        self.assertEqual(h.call("GET", "/mock/reset")[0], 200)
+        _, again = h.call("GET", "/api/v1/assistant/conversations/%s/feed" % intake.STRENGTH_CHAT)
+        self.assertEqual(again["items"][0]["body"]["view"]["version"], 1)
 
     def test_registered_domain_initial_modes(self):
         from test_readiness_mock import Hub
