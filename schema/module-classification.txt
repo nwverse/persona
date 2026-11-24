@@ -150,6 +150,7 @@ go server/internal/imageorient core
 go server/internal/jsonsubset core
 go server/internal/kb core
 go server/internal/kbwire core
+go server/internal/knowledgeuihost core
 go server/internal/larkhost core
 go server/internal/lazyre core
 go server/internal/lcuconfirm core
@@ -262,8 +263,6 @@ go server/internal/protectedapps computer-use
 go server/internal/orcart/... engines-extra
 go server/internal/terncli engines-extra
 go server/internal/rexcli engines-extra
-go server/internal/assistant/kbhistory knowledge-ui
-go server/internal/assistant/kbsent knowledge-ui
 
 # --- Apple ------------------------------------------------------------------------------------------------------
 apple apple/AboutVersionAccessibilityHost core
@@ -273,6 +272,7 @@ apple apple/LiveActivity core
 apple apple/Modules core
 apple apple/Modules/Health health
 apple apple/Modules/ScreenShare screen-share
+apple apple/Modules/Voice voice
 apple apple/PersonaCallIntents voice
 apple apple/PersonaLink screen-share
 apple apple/PersonaNotify core
@@ -307,7 +307,6 @@ apple apple/Persona/Voice voice
 apple apple/Persona/Views/Feishu lark
 apple apple/Persona/Views/Knowledge knowledge-ui
 apple apple/Persona/Views/Mail mail
-apple apple/Persona/Views/Voice voice
 
 apple apple/Packages/BeautifulUI appearance-styles
 apple apple/Packages/PersonaCore core
@@ -377,7 +376,6 @@ web web/src/views/inbox core
 web web/src/views/knowledge knowledge-ui
 web web/src/views/link core
 web web/src/views/machines core
-web web/src/views/messages core
 web web/src/views/palette core
 web web/src/views/session core
 web web/src/views/settings core

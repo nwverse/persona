@@ -219,7 +219,7 @@ Workspace policy: "new" isolates a checkout; {"new":{"branch":"task/my-change"}}
           },
           "tier": {
             "type": "string",
-            "description": "Agent preset from the snapshot's 模型档位 line; choose by purpose; resolved at task start with its profile; explicit launcher/model/effort/speed overrides"
+            "description": "Agent preset from the 模型档位 line, by kind of work (old names work); its candidate is picked at start; explicit launcher/model/effort/speed overrides"
           },
           "speed": {
             "type": "string",

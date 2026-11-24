@@ -919,6 +919,7 @@ export interface Interaction {
   cwd?: string;
   kind: "question" | "plan" | "permission" | "screen" | "elicitation";
   created_at?: string;
+  expires_at?: string;
   tool_name?: string;
   questions?: Question[];
   plan?: string;
@@ -1085,6 +1086,8 @@ export interface AssistantInfo {
   background_supervisor?: string;
   /** Unified experimental To-dos & Tasks Labs toggle (#14538, #14584); off by default and absent from older hubs. */
   todos_v2?: boolean;
+  /** Unified experimental Integrations & Extensions Labs toggle (#14802, #14805); off by default and absent from older hubs. */
+  integrations_v2?: boolean;
   conversations: Session[];
 }
 

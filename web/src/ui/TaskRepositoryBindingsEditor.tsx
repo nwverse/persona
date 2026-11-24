@@ -295,7 +295,7 @@ const isUnsupported = (error: unknown) => error instanceof ApiError && error.sta
 
 /** A to-do's own PR, as the page already parses it (the editor does not read the stage bar, a first-screen chunk). */
 type LegacyPR = { url: string; text: string };
-type TodoRepositoryBindingsProps = { manager: string; owner: string; todoId: string; legacyPRs?: LegacyPR[]; prStatus?: PRFacts; otherPRs?: PRFacts[]; version?: unknown; todosV2?: boolean };
+type TodoRepositoryBindingsProps = { manager: string; owner: string; todoId: string; legacyPRs?: LegacyPR[]; prStatus?: PRFacts; otherPRs?: PRFacts[]; version?: unknown; todosV2?: boolean; onRepositoriesCount?: (count: number) => void };
 
 function hasNewPRLinkTitle(previous: Map<string, PRFacts>, current: Map<string, PRFacts>, saved?: TaskRepositorySet) {
   if (previous === current) return false;
@@ -311,7 +311,7 @@ function hasNewPRLinkTitle(previous: Map<string, PRFacts>, current: Map<string, 
 export function TodoRepositoryBindings(props: TodoRepositoryBindingsProps) {
   return <TodoRepositoryBindingsSession key={`${props.owner}:${props.manager}:${props.todoId}`} {...props} />;
 }
-function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [], prStatus, otherPRs, version, todosV2 }: TodoRepositoryBindingsProps) {
+function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [], prStatus, otherPRs, version, todosV2, onRepositoriesCount }: TodoRepositoryBindingsProps) {
   const prByURL = useMemo(() => {
     const facts = new Map<string, PRFacts>();
     if (prStatus) facts.set(normalizedPR(prStatus.url), prStatus);
@@ -475,6 +475,9 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
     finally { lock.current = false; endBusy(busy); }
   };
   const repositories = saved?.repositories ?? [];
+  useEffect(() => {
+    onRepositoriesCount?.(repositories.length);
+  }, [onRepositoriesCount, repositories.length]);
   const matrix = useMemo(() => (todosV2 === true && repositories.length ? partitionTaskRepositories(repositories) : undefined), [todosV2, repositories]);
   const cleanDraft = cleanRepositoryDraft(draft);
   const duplicateLinks = repositoryDuplicateLink(cleanDraft, identities, saved?.repositories);

@@ -25,7 +25,17 @@ type Host interface {
 	Note(ctx context.Context, to assistantwire.ChannelTarget, replyTo, text string)
 	Reply(ctx context.Context, to assistantwire.ChannelTarget, replyTo, text, key string, full bool) error
 	UpdateCard(ctx context.Context, messageID string, card *botcard.Card) error
-	ThreadPost(todoID string, ev assistantwire.ThreadEvent)
+
+	// What a to-do's topic lines (thread_posts.go) read of the core: the Feishu thread the to-do is bound to (ok
+	// false: none, or one of another channel), the bot's status kept a moment, the topic message to reply under (and
+	// forgetting one that is gone), the to-do's web link, and the clock and timer the lines wait on.
+	ThreadOf(todoID string) (chatID, threadID string, ok bool)
+	StatusKept(ctx context.Context) (assistantwire.FeishuStatus, error)
+	TopicMessage(ctx context.Context, chatID, threadID string) string
+	ForgetTopicMessage(ctx context.Context, chatID, threadID, messageID string)
+	TodoLink(web, todoID string) string
+	PostNow() time.Time
+	PostLater(d time.Duration, f func())
 
 	// What the turn rendering (turn.go, cot.go, cot_worker.go, stream.go) needs of the core.
 	Logf(format string, args ...any)
@@ -149,8 +159,10 @@ func (l *Layer) UpdateCard(ctx context.Context, messageID string, card *botcard.
 	return l.h.UpdateCard(ctx, messageID, card)
 }
 
-// ThreadPost queues a line for a to-do's chat thread.
-func (l *Layer) ThreadPost(todoID string, ev assistantwire.ThreadEvent) { l.h.ThreadPost(todoID, ev) }
+// ThreadPost queues a line for a to-do's chat thread (thread_posts.go): nothing for a to-do bound to none.
+func (l *Layer) ThreadPost(todoID string, ev assistantwire.ThreadEvent) {
+	l.turns.sink().s.threadPost(todoID, threadPostFromPort(ev))
+}
 
 // TurnProgress shows a run's progress: its progress card, and its agent message in a topic.
 func (l *Layer) TurnProgress(ctx context.Context, r *channel.Run, took time.Duration, steps []string, live string) {

@@ -21,7 +21,7 @@ Phase one is done and this document follows the code; how it was split into issu
 
 **Current state**
 
-- The hub has built-in voice extension `personad voice` (`server/internal/modules/voice`), supporting GPT-Live's `live` and `codex` dialects. Clients: iOS and visionOS (`apple/Persona/Voice/`, `apple/Persona/Views/Voice/`; section 6), the web app (6.11) and Android's voice page, which speaks protocol 1 and so always talks to the main chat.
+- The hub has built-in voice extension `personad voice` (`server/internal/modules/voice`), supporting GPT-Live's `live` and `codex` dialects. Clients: iOS and visionOS (the engine in `apple/Persona/Voice/`, the page's voice in the `voice` module `apple/Modules/Voice/`, docs/apple/ios.md "Modules"; section 6), the web app (6.11) and Android's voice page, which speaks protocol 1 and so always talks to the main chat.
 - Since #3502, the extension speaks protocol 2 (`GET /info` returns `protocol: 2`, `features`): `start` with `protocol: 2` and `target` binds to that chat (main chat, another Persona chat, or any Agent),
   with `run` / `link` frames, 409 mapping and `resend`, `状态：` (status), `停止：` (stop), `回答：` (answer), trimmed `resume`, and an interruption gate. Since #3504, questions are supported (`asks`: `ask` frames, voice answers, only category spoken for approvals),
   and since #3505 the upstream pauses (`suspend`: closed while the target works and the call has been quiet for 60 seconds, back when there is something to say or you speak, `link{paused / waking / live}`, 4.9); `features` is `[target, runs, asks, resume, suspend, speak, speech_gate, meeting, hold, dictation]` (`speak` since #5004: `POST /speak` reads a text aloud outside a call, 4.15; `speech_gate` since #5904: what the user-speech gate held back can be sent anyway, and `start` takes `speech_gate`, 4.4; `meeting` since #3862 phase 4: meeting calls, 4.17; `dictation` since #2083: one unbound, text-only dictation session, 4.18). Protocol 1 frames are unchanged.
@@ -229,7 +229,7 @@ the hub forwards App HTTP / WS unchanged through `/api/v1/bus/relay` to the mana
 | --- | --- | --- |
 | `VoiceCalls` / `VoiceConversation` | iOS, new apple/Persona/Voice/ directory | At most one call across the App, carrying surface (`phone` / `carPlay` / `call`, 6.12); frames, captions, runs, mute, pre-`ready` buffering, resume |
 | `VoiceAudio` | Same | Capture (VoiceProcessing echo cancellation), resampling, playback, `clear`, route changes, tones |
-| Call bar, thread tail | iOS, new apple/Persona/Views/Voice/ directory | Replaces ChatView composer; captions are temporary tail rows; cards remain `PendingCards` |
+| Call bar, thread tail | iOS, the `voice` module (apple/Modules/Voice/, #13431) | Replaces ChatView composer; captions are temporary tail rows; cards remain `PendingCards` |
 | Forwarding | hub: `hub/extensions_link.go`; manager: `extmgr/extension_routes.go`, `extensions.go` | Authentication; read-only device 403; identifies caller to extension; registers forwarded WS by principal and closes on revocation |
 | `conversation` + `gate` | `voice/session.go`, `voice/session_app.go`, gate.go (new) | Frames, protocol negotiation; user-speech and interruption gates; `clear` on interruption |
 | `runs` | voice/runs.go (new) | One `channel.Run` per delegation: send, track, read reply, announce |
@@ -1289,7 +1289,7 @@ struct VoiceDeps { var api: () -> APIClient?                 // Refetch each con
 - **Icons**: existing `voiceChannel` entry. Add `voiceMute`, `voiceUnmute`, `voiceEnd`, `voiceCaptions`, `voiceTimbre`; pass `IconVocabularyTests`, avoid #1931 collisions.
 - **Components**:
   - new `DesignSystem/VoiceOrb.swift`: phase/level inputs, static frame with Reduce Motion, button while fast layer speaks;
-  - `VoiceBar`, `VoiceThreadTail`, `VoiceTranscriptSheet` in `Views/Voice/`;
+  - `VoiceBar`, `VoiceThreadTail` in the `voice` module (`apple/Modules/Voice/`), `VoiceTranscriptSheet` in `apple/Persona/Voice/`;
   - colors: `Theme.persona` fast-layer speech, `Theme.danger` end.
 - **Text**: use master localization mechanism at merge (aligned with #2931 iOS trilingual work). Buttons single-line; separate text/accessibility for "Interrupt voice" and "Stop Claude".
 - **Accessibility**: announce only state changes ("Needs a tap", "Paused", "Ended"), not captions, avoiding duplicate speech and VoiceOver leaking into mic. #3508: when the second line's kind becomes one that needs the user, paused, not sent or offline (`VoiceBarLine.Kind.announced`), its words are announced; the end announces "Voice ended".

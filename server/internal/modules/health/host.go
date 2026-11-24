@@ -6,13 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
-	"regexp"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // The core's types the module names, as the seam (internal/healthhost) declares them.
@@ -58,7 +58,7 @@ type Host interface {
 // Service is the module's layer on one manager (internal/healthhost.Layer).
 type Service struct {
 	h Host
-	// intakeMu serializes intake settings, reminder state and local intake mutations.
+	// intakeMu serializes health items, intake settings, reminder state and local intake mutations.
 	intakeMu sync.Mutex
 }
 
@@ -66,7 +66,11 @@ type Service struct {
 func New(h Host) *Service { return &Service{h: h} }
 
 // Routes registers the module's HTTP routes through handle.
-func (s *Service) Routes(handle func(pattern string, fn http.HandlerFunc)) { s.intakeRoutes(handle) }
+func (s *Service) Routes(handle func(pattern string, fn http.HandlerFunc)) {
+	s.intakeRoutes(handle)
+	handle("GET /api/v1/assistant/health/items", s.getHealthItems)
+	handle("PUT /api/v1/assistant/health/items", s.putHealthItems)
+}
 
 // Tool runs the health_intake tool; the core has checked the caller's space.
 func (s *Service) Tool(ctx context.Context, args json.RawMessage) (string, error) {
@@ -91,7 +95,7 @@ func fullRole(r *http.Request) bool {
 }
 
 // intakeUUIDPattern is an entry's id.
-var intakeUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+var intakeUUIDPattern = lazyre.New(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 func randomHex(n int) string {
 	b := make([]byte, n)

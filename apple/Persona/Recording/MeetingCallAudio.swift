@@ -183,7 +183,7 @@ nonisolated final class MeetingTalkTap: @unchecked Sendable {
 /// recorder's player through the same jitter buffer as a phone call's (`VoicePlayout`, reading how much the player has
 /// left off its render position, `VoicePlayerClock`, #13963); stopping it lets go of both and
 /// leaves the recording as it was. A made-up recording (`-showMeetingSample`) has no player: the voice then "plays" for
-/// as long as its PCM lasts, as `VoiceSample.SilentAudio` does, so the call and the echo spans follow it.
+/// as long as its PCM lasts, as `SilentVoiceAudio` does, so the call and the echo spans follow it.
 @MainActor final class MeetingCallAudio: VoiceAudio {
     nonisolated static let log = Logger(subsystem: "persona", category: "meeting-call")
 
@@ -225,7 +225,7 @@ nonisolated final class MeetingTalkTap: @unchecked Sendable {
         playout = VoicePlayout(rate: format.outputRate)
         clock.restart()
         tap.connect(uplink)
-        Self.log.notice("meeting call: the voice plays on the recorder's player (\(PhoneVoiceAudio.describe(AVAudioSession.sharedInstance()), privacy: .public), echo cancellation \(self.cancelsEcho, privacy: .public))")
+        Self.log.notice("meeting call: the voice plays on the recorder's player (\(PhoneVoiceAudio.describe(), privacy: .public), echo cancellation \(self.cancelsEcho, privacy: .public))")
     }
 
     func reconfigure(_ format: VoiceAudioFormat) throws {
@@ -356,7 +356,7 @@ nonisolated final class MeetingTalkTap: @unchecked Sendable {
         let left = max(0, measured ?? 0)
         guard left > 0 || playout.isHolding || (measured == nil && !queued.isEmpty) else { return }
         let amount = measured == nil ? "an unknown amount" : "\(Int((left * 1000).rounded())) ms"
-        let route = PhoneVoiceAudio.describe(AVAudioSession.sharedInstance().currentRoute)
+        let route = PhoneVoiceAudio.describe(AudioSessionBroker.shared.currentRoute)
         Self.log.notice("meeting call: cut off with \(amount, privacy: .public) still in the player\(self.playout.isHolding ? " and more held" : "", privacy: .public) (\(route, privacy: .public), echo cancellation \(self.cancelsEcho, privacy: .public))")
     }
 

@@ -452,6 +452,7 @@ func (s *Service) advanceLogicalConversation(ctx context.Context, st logicalSwit
 		params := map[string]any{"operation_id": logicalNodeOperation(c, op.OperationID), "launcher": p.Launcher, "model": p.Model, "effort": p.Effort, "permission_mode": p.PermissionMode, "is_main": c.SessionID == s.settings(ctx).Main}
 		if method == "assistant.segment.prepare" {
 			row, _ := s.session(ctx, c.MachineID, c.SessionID)
+			params["title"] = row.Title
 			cwd, err := s.prepareSpace(ctx, p.MachineID, row.Space)
 			if err != nil {
 				_ = st.ResolveConversationSwitch(ctx, c.MachineID, c.SessionID, op.OperationID, "rejected", "preparation unavailable")

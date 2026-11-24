@@ -146,6 +146,8 @@ func intakePageResult(t *testing.T, w *httptest.ResponseRecorder) wire.ActionRes
 
 // healthRoutes are the module's routes, each with a request it answers when the module is loaded.
 var healthRouteRequests = []struct{ method, path, body string }{
+	{"GET", "/api/v1/assistant/health/items", ""},
+	{"PUT", "/api/v1/assistant/health/items", `{"items":[],"revision":0}`},
 	{"GET", "/api/v1/assistant/health/intake", ""},
 	{"POST", "/api/v1/assistant/health/intake", `{"id":"` + intakeTestID + `","kind":"water"}`},
 	{"DELETE", "/api/v1/assistant/health/intake/" + intakeTestID, ""},
@@ -158,36 +160,40 @@ var healthRouteRequests = []struct{ method, path, body string }{
 func TestHealthFollowsItsModule(t *testing.T) {
 	for _, off := range []bool{false, true} {
 		t.Run(fmt.Sprintf("off=%v", off), func(t *testing.T) {
-			if !off {
-				needsHealthModule(t)
-			}
+			absent := off || !healthhost.InBuild(moduleswitch.Set{})
 			var modulesOff []string
 			if off {
-				modulesOff = []string{"health"}
+				modulesOff = []string{healthhost.ModuleID}
 			}
 			f, st := newFakeHub(), &intakeTestStore{}
 			s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), ModulesOff: modulesOff}))
-			if s.healthOn() == off {
+			if s.healthOn() == absent {
 				t.Fatalf("Health layer loaded = %v with the module off = %v", s.healthOn(), off)
 			}
 			for _, rq := range healthRouteRequests {
 				w := intakeHTTP(s, rq.method, rq.path, rq.body, "full")
-				if (w.Code == 404 && !strings.Contains(w.Body.String(), "not_found")) != off {
+				if (w.Code == 404 && !strings.Contains(w.Body.String(), "not_found")) != absent {
 					t.Errorf("%s %s = %d %s with the module off = %v", rq.method, rq.path, w.Code, w.Body, off)
 				}
-				if slices.Contains(s.Routes(), rq.method+" "+strings.ReplaceAll(rq.path, intakeTestID, "{id}")) == off {
+				if slices.Contains(s.Routes(), rq.method+" "+strings.ReplaceAll(rq.path, intakeTestID, "{id}")) == absent {
 					t.Errorf("route %s %s listed = %v with the module off = %v", rq.method, rq.path, !off, off)
 				}
 			}
 			listed := slices.ContainsFunc(s.Tools(context.Background()), func(t proto.Tool) bool { return t.Name == healthhost.Tool })
-			if listed == off {
+			if listed == absent {
 				t.Errorf("health_intake listed = %v with the module off = %v", listed, off)
 			}
-			caps := withHealth([]string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityHealthIntake}, s)
-			if slices.Contains(caps, assistantwire.CapabilityHealthIntake) == off {
+			caps := withHealth([]string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityHealthItems}, s)
+			if slices.Contains(caps, assistantwire.CapabilityHealthIntake) == absent {
 				t.Errorf("hello capabilities %v with the module off = %v", caps, off)
 			}
-			if off {
+			if slices.Contains(caps, assistantwire.CapabilityHealthItems) == absent {
+				t.Errorf("health_items capabilities %v with module off = %v", caps, off)
+			}
+			if absent {
+				if got := s.healthClaudeMD(context.Background(), "server"); strings.Contains(got, "`health_intake`") {
+					t.Error("intake instructions remained without the module")
+				}
 				if _, err := s.healthTool(context.Background(), json.RawMessage(`{"action":"list"}`)); err == nil {
 					t.Error("health_intake ran without the module")
 				}
