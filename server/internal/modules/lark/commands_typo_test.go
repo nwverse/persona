@@ -1,4 +1,4 @@
-package assistant
+package lark
 
 import (
 	"context"
@@ -24,7 +24,7 @@ func TestBotCommandTypoIsAsked(t *testing.T) {
 	ctx := context.Background()
 	for _, typo := range []string{"/stpo", "/stp", "/sotp", "/satus", "/nwe", "/hepl", " /stpo", "/taks", "/tsaks"} {
 		notes = nil
-		if h, _ := s.botCommand(ctx, FeishuFeatures{Main: true}, "om", typo, "", ""); !h {
+		if h, _ := s.chat().botCommand(ctx, FeishuFeatures{Main: true}, "om", typo, "", ""); !h {
 			t.Fatalf("%q went on to the conversation", typo)
 		}
 		got := strings.TrimSpace(typo)
@@ -33,30 +33,30 @@ func TestBotCommandTypoIsAsked(t *testing.T) {
 		}
 	}
 	for _, msg := range []string{"/news 今天有什么新闻", "/now 几点了", "/last 三天", "/stpo 这个词什么意思"} {
-		if h, rest := s.botCommand(ctx, FeishuFeatures{Main: true}, "om", msg, "", ""); h || rest != msg {
+		if h, rest := s.chat().botCommand(ctx, FeishuFeatures{Main: true}, "om", msg, "", ""); h || rest != msg {
 			t.Fatalf("%q: handled=%v rest=%q", msg, h, rest)
 		}
 	}
 	for _, own := range []string{"/compact", "/stats", "/model", "/review", "/news", "/now", "/net", "/few", "/man", "/step", "/shop",
 		"/star", "/stat", "/lint", "/todos"} {
-		if h, rest := s.botCommand(ctx, FeishuFeatures{Main: true}, "om", own, "", ""); h || rest != own {
+		if h, rest := s.chat().botCommand(ctx, FeishuFeatures{Main: true}, "om", own, "", ""); h || rest != own {
 			t.Fatalf("%s: handled=%v rest=%q", own, h, rest)
 		}
 	}
 	for in, want := range map[string]string{"//stpo": "/stpo", " //stop": "/stop", "//new 一段话": "/new 一段话", "//tasks": "/tasks", "//taks": "/taks"} {
-		if h, rest := s.botCommand(ctx, FeishuFeatures{Main: true}, "om", in, "", ""); h || rest != want {
+		if h, rest := s.chat().botCommand(ctx, FeishuFeatures{Main: true}, "om", in, "", ""); h || rest != want {
 			t.Fatalf("%q: handled=%v rest=%q", in, h, rest)
 		}
 	}
 	// any other text starting with // goes as written
 	for _, plain := range []string{"// TODO fix this", "//example.com/x", "//lint"} {
-		if h, rest := s.botCommand(ctx, FeishuFeatures{Main: true}, "om", plain, "", ""); h || rest != plain {
+		if h, rest := s.chat().botCommand(ctx, FeishuFeatures{Main: true}, "om", plain, "", ""); h || rest != plain {
 			t.Fatalf("%q: handled=%v rest=%q", plain, h, rest)
 		}
 	}
-	s.rememberBotThread("om_agent", botTarget{Kind: targetAgent, MachineID: "server", SessionID: "a1"}, "Claude")
+	s.layer.RememberThread("om_agent", botTarget{Kind: targetAgent, MachineID: "server", SessionID: "a1"}, "Claude")
 	for _, in := range []string{"/stpo", "//stpo"} {
-		if h, rest := s.botCommand(ctx, FeishuFeatures{Main: true, Agents: true}, "om", in, "om_agent", "om_agent"); h || rest != in {
+		if h, rest := s.chat().botCommand(ctx, FeishuFeatures{Main: true, Agents: true}, "om", in, "om_agent", "om_agent"); h || rest != in {
 			t.Fatalf("%q to an agent: handled=%v rest=%q", in, h, rest)
 		}
 	}

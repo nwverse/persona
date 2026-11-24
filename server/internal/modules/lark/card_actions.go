@@ -1,14 +1,14 @@
-package assistant
+package lark
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -19,7 +19,7 @@ import (
 
 // FeishuAction is feishu.card_action: the owner pressed one of the bot's cards (the hub checked it is the owner);
 // the answer is the toast and the card to show instead. Feishu waits 3 seconds for it.
-func (s *Service) FeishuAction(ctx context.Context, p FeishuAction) (*botcard.CardResponse, error) {
+func (s core) FeishuAction(ctx context.Context, p FeishuAction) (*botcard.CardResponse, error) {
 	var a botcard.CardAction
 	if err := json.Unmarshal(p.Event, &a); err != nil {
 		return nil, badRequest(err)
@@ -34,7 +34,7 @@ func (s *Service) FeishuAction(ctx context.Context, p FeishuAction) (*botcard.Ca
 }
 
 // botCardAction answers a press; action is the owner's action for the card it presses (what answers it).
-func (s *Service) botCardAction(ctx context.Context, a *botcard.CardAction, action string) *botcard.CardResponse {
+func (s core) botCardAction(ctx context.Context, a *botcard.CardAction, action string) *botcard.CardResponse {
 	l := s.botLang(ctx)
 	switch a.Str("a") {
 	case "nop": // a link of a "more" menu was opened: nothing to do
@@ -42,48 +42,11 @@ func (s *Service) botCardAction(ctx context.Context, a *botcard.CardAction, acti
 	case "ix":
 		return s.answerFromCard(ctx, a, action)
 	case "accept":
-		// The hub checked the owner pressed it; marking a task verified approves nothing.
-		var result acceptResult
-		var err error
-		ask, _ := s.askCopy(a.Str("id"))
-		if resp := a.Str("resp"); resp != "" { // "I can't answer this": to its supervisor, nothing taken (decision.go)
-			if s.askCardNow(a.Str("id"), a.Context.MessageID) {
-				result.taken, err = s.ownerCannotAnswer(ctx, a.Str("id"), "", resp)
-			}
-			ask.Response = resp
-		} else if opt := a.Str("opt"); opt != "" { // an option of the decision other than the recommended one
-			if s.askCardNow(a.Str("id"), a.Context.MessageID) {
-				result, err = s.chooseOption(ctx, a.Str("id"), "", opt)
-			}
-			ask.Chosen = opt
-			ask.OptionTaken = result.taken && err == nil // this successful click, not an ambiguous legacy choice
-			if opt == ask.Recommend {
-				ask.Chosen = "" // the recommended one: taken as OK takes it
-			}
-		} else if at := a.Str("asked_at"); at != "" { // a button of a briefing card: it accepts the round it was asked in (briefing.go)
-			result, err = s.acceptTryFromBrief(ctx, a.Str("id"), at)
-		} else {
-			result, err = s.acceptTry(ctx, a.Str("id"), a.Context.MessageID)
-		}
-		if errors.Is(err, errAcceptStore) { // the asks could not be read or saved: not accepted, the button works again
-			return toast("error", i18n.T(l, "http-status.unavailable"))
-		}
-		if note := inDoubtNote(l, err); note != "" { // it may be with the agent already: look before pressing again
-			return toast("error", note)
-		}
-		if err != nil { // another delivery failure: not taken, nothing recorded, the button works again
-			return toast("error", i18n.T(l, "assistant-reports.accept_not_taken", i18n.Args{"error": clip(oneLine(i18n.Localize(err, l)), 120)}))
-		}
-		if result.undelivered != nil {
-			why := clip(oneLine(i18n.Localize(result.undelivered, l)), 120)
-			return toast("success", i18n.T(l, "assistant-reports.accept_decided_not_sent", i18n.Args{"error": why}))
-		}
-		if result.taken {
-			return toast("success", acceptedNote(l, &ask)) // "verified", "got it", or the recommendation taken (conclusion.go)
-		}
-		return toast("info", i18n.T(l, "assistant-feishu_cards.already_handled"))
+		// The hub checked the owner pressed it; marking a task verified approves nothing. The decision is the core's
+		// (its acceptance ledger and decisions), and so is what the toast says.
+		return toast(s.h.AcceptAction(ctx, a))
 	case "later_done": // the Handled button of a question that can wait, on a briefing card (later.go)
-		ok, err := s.laterHandled(ctx, a.Str("id"), time.Now())
+		ok, err := s.h.LaterHandled(ctx, a.Str("id"))
 		if err != nil { // the queue (or a question's to-do) can't be read or written: the question stays, the button works again
 			return toast("error", i18n.T(l, "http-status.unavailable"))
 		}
@@ -98,7 +61,7 @@ func (s *Service) botCardAction(ctx context.Context, a *botcard.CardAction, acti
 		if kind == targetMain {
 			t = botTarget{Kind: targetMain}
 		}
-		if err := botAllowed(l, f, t); err != nil {
+		if err := s.botAllowed(l, f, t); err != nil {
 			return toast("error", err.Error())
 		}
 		s.setBotCurrent(t)
@@ -117,13 +80,15 @@ func (s *Service) botCardAction(ctx context.Context, a *botcard.CardAction, acti
 		var at time.Time
 		if mid != "" {
 			var pressed bool
-			if pressed, at = s.pressOnce(mid, "form", botFormWindow); pressed {
+			if pressed, at = s.pressOnce(mid, "form", s.timing("form_window")); pressed {
 				return toast("info", i18n.T(l, "assistant-feishu_cards.start_form_opening"))
 			}
 		}
 		// Feishu gives the callback 3 s and the post goes over the bus to the feishu app, so the /start form is
 		// posted from a goroutine (as botStartAgent posts its card), quoting the pressed list card.
+		s.t.workers.Add(1) // the layer's background work (Layer.Wait)
 		go func() {
+			defer s.t.workers.Done()
 			cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			if _, err := s.botPost(cctx, mid, s.startAgentCard(cctx, ""), ""); err != nil {
@@ -157,7 +122,9 @@ func (s *Service) botCardAction(ctx context.Context, a *botcard.CardAction, acti
 				return toast("info", i18n.T(l, "assistant-feishu_cards.starting"))
 			}
 		}
+		s.t.workers.Add(1) // the layer's background work (Layer.Wait)
 		go func() {
+			defer s.t.workers.Done()
 			if err := s.botStartAgent(machine, cwd, prompt, mode); err != nil && mid != "" {
 				// Nothing started, so a retry press of the same card must go through. at makes this a compare-and-swap:
 				// a failure arriving after the window only frees the slot if a later press has not re-stamped it.
@@ -165,30 +132,25 @@ func (s *Service) botCardAction(ctx context.Context, a *botcard.CardAction, acti
 			}
 		}()
 		return toast("info", i18n.T(l, "assistant-feishu_cards.starting"))
-	case "nav": // a workbench button (feishu_workbench.go)
-		return s.larkModule().WorkbenchNav(ctx, a)
+	case "nav": // a workbench button (workbench.go)
+		return s.workbenchNav(ctx, a)
 	case "ib": // an Inbox button of the workbench's /inbox card
-		return s.larkModule().WorkbenchInboxAction(ctx, a)
+		return s.workbenchInboxAction(ctx, a)
 	case "stop":
 		// A progress card may outlive its run when its final edit was refused.
 		f, _ := s.feishuFeatures(ctx)
 		t := botTarget{Kind: a.Str("k"), MachineID: a.Str("m"), SessionID: a.Str("s")}
-		out := s.stopProgressCard(ctx, f, t, a.Context.MessageID)
-		return toast(out.kind, out.message)
+		return toast(s.h.StopProgressCard(ctx, f, t, a.Context.MessageID))
 	}
 	return toast("info", i18n.T(l, "assistant-feishu_cards.card_expired"))
 }
 
-func toast(kind, text string) *botcard.CardResponse {
-	return &botcard.CardResponse{Toast: &botcard.Toast{Type: kind, Content: text}}
-}
-
 // cardAnswerWait is how long a press waits for its answer to go through before it says "Processing…": the hub has
-// Feishu's 3 seconds, and the press came over the bus.
-var cardAnswerWait = 1500 * time.Millisecond
+// Feishu's 3 seconds, and the press came over the bus (the timing "card_answer_wait").
+const cardAnswerWait = 1500 * time.Millisecond
 
 // answerFromCard turns a press on an interaction card into the same answer the app would give, and resolves it.
-func (s *Service) answerFromCard(ctx context.Context, a *botcard.CardAction, action string) *botcard.CardResponse {
+func (s core) answerFromCard(ctx context.Context, a *botcard.CardAction, action string) *botcard.CardResponse {
 	l := s.botLang(ctx)
 	id := a.Str("id")
 	var got struct {
@@ -196,18 +158,18 @@ func (s *Service) answerFromCard(ctx context.Context, a *botcard.CardAction, act
 		OK          bool              `json:"ok"`
 		Status      string            `json:"status"`
 	}
-	if err := s.appCall(ctx, AppInteractions, InteractionsGet, map[string]any{"interaction_id": id}, &got); err != nil {
+	if err := s.appCallTo(ctx, assistantwire.AppInteractions, InteractionsGet, map[string]any{"interaction_id": id}, &got); err != nil {
 		return toast("error", clip(oneLine(err.Error()), 80))
 	}
-	if !got.OK && !finalStatus(got.Status) {
+	if !got.OK && !s.h.FinalStatus(got.Status) {
 		// Not up now, but not known to be over either (in the history, not restored yet; or the history could not
 		// say): the card stays as it is.
-		return toast("info", endedText(l, got.Status, "assistant-feishu_cards.already_handled"))
+		return toast("info", s.h.EndedText(l, got.Status, "assistant-feishu_cards.already_handled"))
 	}
 	if !got.OK {
 		// Over for good (answered elsewhere, maybe while the assistant was away): this card is closed as such, its
 		// buttons gone.
-		b := &s.fbot
+		b := s.fbot()
 		b.mu.Lock()
 		s.loadBotLocked(ctx)
 		card, had := b.cards[id]
@@ -217,9 +179,9 @@ func (s *Service) answerFromCard(ctx context.Context, a *botcard.CardAction, act
 		if had {
 			ix = card.Ix
 		}
-		ended := endedText(l, got.Status, "assistant-channels.ended")
-		return &botcard.CardResponse{Toast: &botcard.Toast{Type: "info", Content: endedText(l, got.Status, "assistant-feishu_cards.already_handled")},
-			Card: s.answeredCard(ctx, ix, ended).Raw()}
+		ended := s.h.EndedText(l, got.Status, "assistant-channels.ended")
+		return &botcard.CardResponse{Toast: &botcard.Toast{Type: "info", Content: s.h.EndedText(l, got.Status, "assistant-feishu_cards.already_handled")},
+			Card: s.h.AnsweredCard(ctx, ix, ended).Raw()}
 	}
 	ix := got.Interaction
 	type outcome struct {
@@ -231,7 +193,7 @@ func (s *Service) answerFromCard(ctx context.Context, a *botcard.CardAction, act
 		if !ix.CanClarify || ix.Private {
 			return toast("error", i18n.T(l, "assistant-feishu_cards.unknown_action"))
 		}
-		if err := validateClarifyQuestion(question); err != nil {
+		if err := s.h.ValidateClarifyQuestion(question); err != nil {
 			return toast("warning", err.Error())
 		}
 		// The callback token identifies this form delivery. Replaying it uses the
@@ -250,7 +212,7 @@ func (s *Service) answerFromCard(ctx context.Context, a *botcard.CardAction, act
 		go func() {
 			rctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
-			ok, err := s.clarifyInteraction(rctx, channel.Feishu, id, question, clientMsgID, action, a.Context.ChatID, a.Context.MessageID)
+			ok, err := s.h.ClarifyInteraction(rctx, id, question, clientMsgID, action, a.Context.ChatID, a.Context.MessageID)
 			done <- outcome{ok, err}
 		}()
 		select {
@@ -262,7 +224,7 @@ func (s *Service) answerFromCard(ctx context.Context, a *botcard.CardAction, act
 				return toast("info", i18n.T(l, "assistant-feishu_cards.already_handled"))
 			}
 			return toast("success", i18n.T(l, "assistant-feishu_cards.question_sent_pending"))
-		case <-time.After(cardAnswerWait):
+		case <-time.After(s.timing("card_answer_wait")):
 			msg := a.Context.MessageID
 			go func() {
 				o := <-done
@@ -339,7 +301,7 @@ func (s *Service) answerFromCard(ctx context.Context, a *botcard.CardAction, act
 		return toast("error", i18n.T(l, "assistant-feishu_cards.unknown_action"))
 	}
 	// This card is closed by the answer below, not again when the interaction ends.
-	b := &s.fbot
+	b := s.fbot()
 	b.mu.Lock()
 	card, had := b.cards[id]
 	s.keepBotCardLocked(id, nil)
@@ -350,13 +312,13 @@ func (s *Service) answerFromCard(ctx context.Context, a *botcard.CardAction, act
 		}
 		return false
 	}
-	how := resolutionText(l, ix, r)
+	how := s.h.ResolutionText(l, ix, r)
 	// Screen and Codex cards act on the terminal and can take a few seconds; Feishu waits 3 s for this answer.
 	done := make(chan outcome, 1)
 	go func() {
 		rctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		ok, err := s.resolveInteraction(rctx, channel.Feishu, id, r, action)
+		ok, err := s.h.ResolveInteraction(rctx, id, r, action)
 		done <- outcome{ok, err}
 	}()
 	select {
@@ -368,8 +330,8 @@ func (s *Service) answerFromCard(ctx context.Context, a *botcard.CardAction, act
 		case !o.ok:
 			return toast("info", i18n.T(l, "assistant-feishu_cards.already_handled"))
 		}
-		return &botcard.CardResponse{Toast: &botcard.Toast{Type: "success", Content: how}, Card: s.answeredCard(ctx, ix, how).Raw()}
-	case <-time.After(cardAnswerWait):
+		return &botcard.CardResponse{Toast: &botcard.Toast{Type: "success", Content: how}, Card: s.h.AnsweredCard(ctx, ix, how).Raw()}
+	case <-time.After(s.timing("card_answer_wait")):
 		msg := a.Context.MessageID
 		go func() {
 			o := <-done
@@ -413,14 +375,14 @@ func (s *Service) answerFromCard(ctx context.Context, a *botcard.CardAction, act
 // unless the hub says it is no longer pending: it ended while the answer was out, and its interaction.ended found no
 // card to close, so putting it back would leave a card waiting that nothing answers (#5012). When that cannot be
 // asked either, the card is put back, as before. It reports whether the card waits again.
-func (s *Service) botRestoreCard(ctx context.Context, id string, card botCard) bool {
+func (s core) botRestoreCard(ctx context.Context, id string, card botCard) bool {
 	var got struct {
 		OK bool `json:"ok"`
 	}
-	if err := s.appCall(ctx, AppInteractions, InteractionsGet, map[string]any{"interaction_id": id}, &got); err == nil && !got.OK {
+	if err := s.appCallTo(ctx, assistantwire.AppInteractions, InteractionsGet, map[string]any{"interaction_id": id}, &got); err == nil && !got.OK {
 		return false
 	}
-	b := &s.fbot
+	b := s.fbot()
 	b.mu.Lock()
 	s.keepBotCardLocked(id, &card)
 	b.mu.Unlock()
@@ -431,24 +393,28 @@ func (s *Service) botRestoreCard(ctx context.Context, id string, card botCard) b
 // redelivery, and the hub's ~2 s resend all fall inside it. It is deliberately shorter than botStartAgent's
 // 2-minute timeout: if the first start is still running when the window ends, the owner pressing again is a
 // deliberate manual retry and may start a second agent. The transport retries above arrive at ~2-3 s, while the
-// slot is held for the whole outstanding call, so they can never reach that second start.
-var botStartCardWindow = 60 * time.Second
+// slot is held for the whole outstanding call, so they can never reach that second start (the timing
+// "start_card_window").
+const botStartCardWindow = 60 * time.Second
 
 // botFormWindow is how long a repeat press of the same card's "Start new agent" button is ignored: a double tap and
 // the hub's ~2-3 s resend fall inside it. Much shorter than botStartCardWindow: two agents started from the same form
-// are a duplicate, while asking the form open again a few seconds later is the owner wanting another one.
-var botFormWindow = 10 * time.Second
+// are a duplicate, while asking the form open again a few seconds later is the owner wanting another one (the timing
+// "form_window").
+const botFormWindow = 10 * time.Second
 
 // botPressMost is how long a press is remembered at most: the longest window, after which the sweep drops it so the map
 // cannot grow without bound. A press kind with a longer window than these two must be added here, or its live slots get
 // swept away.
-func botPressMost() time.Duration { return max(botStartCardWindow, botFormWindow) }
+func (s core) botPressMost() time.Duration {
+	return max(s.timing("start_card_window"), s.timing("form_window"))
+}
 
 // pressOnce reports whether message mid's button kind was already pressed within window, and records this press
 // either way. A true answer means the caller must not do the thing again. The returned time is the timestamp this
 // press stored (or the existing one for a duplicate), for releasePress's compare-and-swap.
-func (s *Service) pressOnce(mid, kind string, window time.Duration) (bool, time.Time) {
-	b := &s.fbot
+func (s core) pressOnce(mid, kind string, window time.Duration) (bool, time.Time) {
+	b := s.fbot()
 	now := b.clock()
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -460,7 +426,7 @@ func (s *Service) pressOnce(mid, kind string, window time.Duration) (bool, time.
 		b.pressAt = map[string]time.Time{}
 	}
 	for k, at := range b.pressAt { // forget presses past the longest window so the map cannot grow without bound
-		if now.Sub(at) >= botPressMost() {
+		if now.Sub(at) >= s.botPressMost() {
 			delete(b.pressAt, k)
 		}
 	}
@@ -472,8 +438,8 @@ func (s *Service) pressOnce(mid, kind string, window time.Duration) (bool, time.
 // it instead of being answered with a bare "Starting" / "Opening the start form". It only deletes the slot this press
 // stamped (at): if the window passed and a later manual press re-stamped it while the first one was still hung, that
 // newer slot must survive the first press's late failure.
-func (s *Service) releasePress(mid, kind string, at time.Time) {
-	b := &s.fbot
+func (s core) releasePress(mid, kind string, at time.Time) {
+	b := s.fbot()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	key := mid + kind
@@ -483,46 +449,45 @@ func (s *Service) releasePress(mid, kind string, at time.Time) {
 }
 
 // startCardPressed is pressOnce for the /start card's Start button (botStartCardWindow).
-func (s *Service) startCardPressed(mid string) (bool, time.Time) {
-	return s.pressOnce(mid, "start", botStartCardWindow)
+func (s core) startCardPressed(mid string) (bool, time.Time) {
+	return s.pressOnce(mid, "start", s.timing("start_card_window"))
 }
 
 // forgetStartCard is releasePress for the /start card's Start button.
-func (s *Service) forgetStartCard(mid string, at time.Time) {
+func (s core) forgetStartCard(mid string, at time.Time) {
 	s.releasePress(mid, "start", at)
 }
 
 // botStartAgent starts a coding agent from the /start card and points the chat at it; mode is the form's permission
 // mode (the workbench's field), "" the launcher's own. A non-nil error was already told to the owner as a note; it
 // means no agent was started.
-func (s *Service) botStartAgent(machine, cwd, prompt, mode string) error {
+func (s core) botStartAgent(machine, cwd, prompt, mode string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	l := s.botLang(ctx)
-	d, ok := s.device(ctx, machine)
+	d, ok := s.h.Device(ctx, machine)
 	if !ok {
 		s.botSay(ctx, i18n.T(l, "assistant-feishu_cards.no_such_machine"))
-		return ErrNoDevice
+		return assistantwire.ErrNoDevice
 	}
 	cwd = proto.ExpandHome(cwd, d.Home)
-	params := map[string]any{"cwd": cwd, "prompt": prompt, "tab_name": s.tabName(ctx, prompt)} // agents_start.go
+	params := map[string]any{"cwd": cwd, "prompt": prompt, "tab_name": s.h.TabName(ctx, prompt)} // agents_start.go
 	if slices.Contains(proto.PermissionModes, mode) {
 		params["permission_mode"] = mode
 	}
-	if err := s.applyModel(ctx, "agent.new", params); err != nil {
+	if err := s.h.ApplyModel(ctx, "agent.new", params); err != nil {
 		s.botSay(ctx, i18n.T(l, "assistant-feishu_cards.cannot_start", i18n.Args{"error": err.Error()}))
 		return err
 	}
-	var res struct {
-		Session proto.Session `json:"session"`
-	}
-	if err := s.call(ctx, d.ID, DeviceSessionStart, params, &res); err != nil {
+	var res struct{ Session proto.Session }
+	var err error
+	if res.Session, err = s.h.StartAgent(ctx, d.ID, params); err != nil {
 		s.botSay(ctx, i18n.T(l, "assistant-feishu_cards.cannot_start", i18n.Args{"error": clip(oneLine(err.Error()), 200)}))
 		return err
 	}
 	t := botTarget{Kind: targetAgent, MachineID: d.ID, SessionID: res.Session.SessionID}
-	preferTab := s.useHerdrTabName(ctx)
-	label, secondary := feishuSessionNames(res.Session, preferTab)
+	preferTab := s.h.UseHerdrTabName(ctx)
+	label, secondary := s.h.SessionNamesAs(res.Session, preferTab)
 	if label == "" || label == "." {
 		label = cwd
 	}
@@ -539,7 +504,7 @@ func (s *Service) botStartAgent(machine, cwd, prompt, mode string) error {
 	}
 	s.rememberBotThread(mid, t, label)
 	if prompt != "" && mid != "" {
-		s.startChannelRun(&channel.Run{ID: "fb_" + mid, Channel: channel.Feishu, ReplyTo: mid, MachineID: t.MachineID, SessionID: t.SessionID,
+		s.h.StartChannelRun(&channel.Run{ID: "fb_" + mid, Channel: channel.Feishu, ReplyTo: mid, MachineID: t.MachineID, SessionID: t.SessionID,
 			TargetKind: t.Kind, Label: label, Started: time.Now().UTC()})
 	}
 	return nil

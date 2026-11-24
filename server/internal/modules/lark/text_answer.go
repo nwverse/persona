@@ -1,10 +1,11 @@
-package assistant
+package lark
 
 import (
 	"context"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -21,7 +22,7 @@ import (
 // message to the agent; a card no longer pending is closed, saying whether it was answered elsewhere, expired or was
 // withdrawn, and the words are swallowed rather than let into a conversation. The same goes for an option typed for
 // a card that already ended elsewhere and was closed (b.ended); any other message forgets such cards in its scope.
-func (s *Service) botAnswerQuestion(ctx context.Context, messageID, text, action, root, parent string) bool {
+func (s core) botAnswerQuestion(ctx context.Context, messageID, text, action, root, parent string) bool {
 	text = strings.TrimSpace(text)
 	if action == "" || text == "" {
 		return false
@@ -30,7 +31,7 @@ func (s *Service) botAnswerQuestion(ctx context.Context, messageID, text, action
 	inScope := func(c botCard) bool {
 		return typedAnswerable(c) && (!inTopic || cardInTopic(c, root, parent)) // words in another agent's topic are not stolen for a card elsewhere
 	}
-	b := &s.fbot
+	b := s.fbot()
 	b.mu.Lock()
 	var card botCard
 	for _, c := range b.cards {
@@ -79,7 +80,7 @@ func (s *Service) botAnswerQuestion(ctx context.Context, messageID, text, action
 		OK     bool   `json:"ok"`
 		Status string `json:"status"`
 	}
-	if err := s.appCall(ctx, AppInteractions, InteractionsGet, map[string]any{"interaction_id": ix.ID}, &got); err != nil {
+	if err := s.appCallTo(ctx, assistantwire.AppInteractions, InteractionsGet, map[string]any{"interaction_id": ix.ID}, &got); err != nil {
 		s.logf("bots: typed answer %s: %v", ix.ID, err)
 		return false
 	}
@@ -87,8 +88,8 @@ func (s *Service) botAnswerQuestion(ctx context.Context, messageID, text, action
 		b.mu.Lock()
 		s.keepBotCardLocked(ix.ID, nil)
 		b.mu.Unlock()
-		s.botCardDone(ctx, card.MessageID, ix, endedText(l, got.Status, "assistant-feishu_cards.handled"))
-		s.botNote(ctx, messageID, endedText(l, got.Status, "assistant-channels_plugin.answered_elsewhere"))
+		s.botCardDone(ctx, card.MessageID, ix, s.h.EndedText(l, got.Status, "assistant-feishu_cards.handled"))
+		s.botNote(ctx, messageID, s.h.EndedText(l, got.Status, "assistant-channels_plugin.answered_elsewhere"))
 		return true
 	}
 	r := proto.Resolution{Answers: map[string]string{ix.Questions[0].Question: answer}}
@@ -98,7 +99,7 @@ func (s *Service) botAnswerQuestion(ctx context.Context, messageID, text, action
 	cur, had := b.cards[ix.ID]
 	s.keepBotCardLocked(ix.ID, nil)
 	b.mu.Unlock()
-	switch ok, err := s.resolveInteraction(ctx, channel.Feishu, ix.ID, r, action); {
+	switch ok, err := s.h.ResolveInteraction(ctx, ix.ID, r, action); {
 	case err != nil:
 		s.logf("bots: typed answer %s: %v", ix.ID, err)
 		if had {
@@ -110,7 +111,7 @@ func (s *Service) botAnswerQuestion(ctx context.Context, messageID, text, action
 		s.botCardDone(ctx, card.MessageID, ix, i18n.T(l, "assistant-feishu_cards.handled"))
 		s.botNote(ctx, messageID, i18n.T(l, "assistant-channels_plugin.answered_elsewhere"))
 	default:
-		s.botCardDone(ctx, card.MessageID, ix, resolutionText(l, ix, r))
+		s.botCardDone(ctx, card.MessageID, ix, s.h.ResolutionText(l, ix, r))
 	}
 	return true
 }

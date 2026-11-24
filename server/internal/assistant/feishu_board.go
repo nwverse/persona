@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -43,10 +44,7 @@ const (
 )
 
 // botBoardRef is the board in the chat's state: its message and when it was sent (the edit period counts from then).
-type botBoardRef struct {
-	MessageID string    `json:"message_id"`
-	At        time.Time `json:"at"`
-}
+type botBoardRef = assistantwire.ChatBoardRef
 
 // standingBoard is what keeps the board current: the settle timer, and the lock that lets one send or edit at a time
 // (the /tasks command and the timer). now and after are the clock and the timer; tests replace them.
@@ -86,28 +84,14 @@ func (p *standingBoard) later(d time.Duration, f func()) {
 
 // boardRef is the board the chat has, nil when it has none.
 func (s *Service) boardRef(ctx context.Context) *botBoardRef {
-	b := &s.fbot
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	s.loadBotLocked(ctx)
-	if b.st.Board == nil {
-		return nil
-	}
-	ref := *b.st.Board
-	return &ref
+	var ref *botBoardRef
+	s.larkModule().Book(ctx, func(b assistantwire.ChatBook) { ref = b.Board() })
+	return ref
 }
 
 // setBoardRef remembers the board (nil: forgets it) in the chat's state.
 func (s *Service) setBoardRef(ctx context.Context, ref *botBoardRef) {
-	b := &s.fbot
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	s.loadBotLocked(ctx)
-	if !b.loaded {
-		return
-	}
-	b.st.Board = ref
-	s.saveBotStateLocked()
+	s.larkModule().Book(ctx, func(b assistantwire.ChatBook) { b.SetBoard(ref) })
 }
 
 // boardChanged says something the board shows changed: a card opened or ended, a to-do entered or left "Please
@@ -156,7 +140,7 @@ func (s *Service) boardRefresh() {
 	// The status first: it starts the chat afresh when the bot was paired again, and the board of the old owner goes
 	// with it.
 	// The workbench (feishu_workbench_pin.go) is the board drawn as a home card: either switch keeps it current.
-	f, ready := s.feishuFeatures(ctx)
+	f, ready := s.chat().Features(ctx)
 	on := ready && (f.Board || s.workbenchOn(f, ready))
 	p.mu.Lock()
 	if on {
@@ -245,13 +229,11 @@ func (s *Service) boardKey(ctx context.Context, old *botBoardRef) string {
 	if old != nil {
 		from = old.MessageID + "@" + old.At.UTC().Format(time.RFC3339Nano)
 	} else {
-		b := &s.fbot
-		b.mu.Lock()
-		s.loadBotLocked(ctx)
-		if b.st.Pairing != nil {
-			from = *b.st.Pairing
-		}
-		b.mu.Unlock()
+		s.larkModule().Book(ctx, func(b assistantwire.ChatBook) {
+			if p := b.Pairing(); p != nil {
+				from = *p
+			}
+		})
 	}
 	sum := sha256.Sum256([]byte("board|" + from))
 	return "bd:" + hex.EncodeToString(sum[:])[:32]
@@ -265,7 +247,7 @@ type boardRow struct {
 	summary  string
 	from     string
 	link     string
-	nudged   bool // the bot nudged under its card in the chat (feishu_nudge.go, #6084)
+	nudged   bool // the bot nudged under its card in the chat (the lark module's nudge.go, #6084)
 	// machine and session are the chat a card or a question that can wait came from, empty when it came from none; the
 	// apps open it from the brief item (briefing_feed.go).
 	machine, session string
@@ -286,7 +268,7 @@ func (s *Service) boardRows(ctx context.Context, l i18n.Lang, web string, now ti
 			link = sessionLink(web, ix.MachineID, ix.SessionID, s.sessionAssistantLocal(ix.MachineID, ix.SessionID))
 		}
 		rows = append(rows, boardRow{blocking: true, waited: boardWaited(now, ix.CreatedAt), id: ix.ID,
-			summary: boardSummary(l, ix), from: s.boardFrom(l, ix.MachineID, ix.SessionID, ix.SessionTitle), link: link, nudged: s.cardNudged(ix.ID),
+			summary: boardSummary(l, ix), from: s.boardFrom(l, ix.MachineID, ix.SessionID, ix.SessionTitle), link: link, nudged: s.larkModule().CardNudged(ix.ID),
 			machine: ix.MachineID, session: ix.SessionID})
 	}
 	for _, a := range s.awaitingAcceptance(ctx) {

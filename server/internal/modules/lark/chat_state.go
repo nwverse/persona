@@ -1,14 +1,16 @@
-package assistant
+package lark
 
 import (
 	"context"
 	"errors"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -26,22 +28,14 @@ import (
 const botStateKey = "bots.feishu.state"
 
 // botTarget is where a message goes: the main conversation (whichever it is when the message is sent), another
-// Persona conversation, or a coding agent.
-type botTarget struct {
-	Kind      string `json:"kind"` // main | persona | agent
-	MachineID string `json:"machine_id,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
-	// TodoID is set only on a to-do reminder's cards: a reply still goes to the conversation, with that to-do as data.
-	TodoID string `json:"todo_id,omitempty"`
-}
+// Persona conversation, or a coding agent (assistantwire.ChatTarget, which the core names too).
+type botTarget = assistantwire.ChatTarget
 
 const (
-	targetMain    = "main"
-	targetPersona = "persona"
-	targetAgent   = "agent"
+	targetMain    = assistantwire.ChatMain
+	targetPersona = assistantwire.ChatPersona
+	targetAgent   = assistantwire.ChatAgent
 )
-
-func (t botTarget) agent() bool { return t.Kind == targetAgent }
 
 // botThread is a message the bot posted for a target (an agent picked with /agents): replies to it, and messages in its
 // thread, go to that target.
@@ -65,15 +59,15 @@ type botState struct {
 	// not recorded yet, a state from before). Another one, or none, starts the chat afresh (feishuReconcile).
 	Pairing *string `json:"pairing,omitempty"`
 	// Topics are the latest message the owner said in each topic (chat/thread -> message), what a reply into the thread
-	// goes by (the lark module's thread_posts.go).
+	// goes by (thread_posts.go).
 	Topics map[string]*topicAnchor `json:"topics,omitempty"`
-	// Board is the standing "waiting for you" card: its message and when it was sent (feishu_board.go). Only the bot's
-	// `board` switch uses it.
-	Board *botBoardRef `json:"board,omitempty"`
-	// Companions are the other Lark bots an extension registered for the workbench (feishu_companions.go).
-	Companions []CompanionBot `json:"companions,omitempty"`
+	// Board is the standing "waiting for you" card: its message and when it was sent (the core's feishu_board.go). Only
+	// the bot's `board` switch uses it.
+	Board *assistantwire.ChatBoardRef `json:"board,omitempty"`
+	// Companions are the other Lark bots an extension registered for the workbench (the core's feishu_companions.go).
+	Companions []assistantwire.CompanionBot `json:"companions,omitempty"`
 	// NudgeOffAt is when the nudge sweep first saw nudges off (nudge_after 0), cleared when it sees them on again: the
-	// first sweep with them on lets the cards already due go (feishu_nudge.go). Kept here so a restart while they are
+	// first sweep with them on lets the cards already due go (nudge.go). Kept here so a restart while they are
 	// off does not nudge the backlog.
 	NudgeOffAt time.Time `json:"nudge_off_at,omitzero"`
 }
@@ -89,70 +83,33 @@ const (
 	botCardsDays      = 7
 )
 
-// nudgeProgress is one kind of nudge's durable delivery state. The ordinary
-// nudge keeps its original flat fields for wire compatibility; the deadline
-// nudge has its own record so either one cannot suppress the other.
-type nudgeProgress struct {
-	NudgedAt  time.Time `json:"nudged_at,omitzero"`
-	SkippedAt time.Time `json:"skipped_at,omitzero"`
-	Tries     int       `json:"tries,omitempty"`
-	TriedAt   time.Time `json:"tried_at,omitzero"`
-}
+// nudgeProgress is one kind of nudge's durable delivery state (assistantwire.NudgeProgress).
+type nudgeProgress = assistantwire.NudgeProgress
 
-func (p nudgeProgress) settled() bool { return !p.NudgedAt.IsZero() || !p.SkippedAt.IsZero() }
-
-// botCardRef is a card kept in the chat's state: its message and the interaction it asks.
-type botCardRef struct {
-	MessageID       string    `json:"message_id"`
-	Kind            string    `json:"kind,omitempty"`
-	MachineID       string    `json:"machine_id,omitempty"`
-	SessionID       string    `json:"session_id,omitempty"`
-	Thread          string    `json:"thread,omitempty"`  // the topic it was posted into (botCard.Thread)
-	ChatID          string    `json:"chat_id,omitempty"` // the group chat of that topic (botCard.ChatID); "" in the owner's DM
-	At              time.Time `json:"at"`
-	ExpiresAt       time.Time `json:"expires_at,omitzero"` // the decision deadline when posted; a live prepared card may extend it
-	ApprovalBatchID string    `json:"approval_batch_id,omitempty"`
-	ApprovalItemID  string    `json:"approval_item_id,omitempty"`
-	OwnerProposal   bool      `json:"owner_proposal,omitempty"`
-	Resumable       bool      `json:"resumable,omitempty"`
-	NoExpiry        bool      `json:"no_expiry,omitempty"`
-	// NudgedAt is when the card was nudged under (feishu_nudge.go): once set, never again, also after a restart.
-	NudgedAt time.Time `json:"nudged_at,omitzero"`
-	// SkippedAt is when the nudge for this card was given up (not due any more when nudges came on again, the chat
-	// refused it, too many tries): never nudged, and not shown as nudged. Tries and TriedAt are the sends tried and
-	// when the first went out, for the retry limits.
-	SkippedAt     time.Time     `json:"nudge_skipped_at,omitzero"`
-	Tries         int           `json:"nudge_tries,omitempty"`
-	TriedAt       time.Time     `json:"nudge_tried_at,omitzero"`
-	DeadlineNudge nudgeProgress `json:"deadline_nudge,omitzero"`
-}
+// botCardRef is a card kept in the chat's state: its message and the interaction it asks (assistantwire.ChatCardRef).
+type botCardRef = assistantwire.ChatCardRef
 
 // feishuBook is the chat's state in memory, the cards asking what is asked, and the bot's status a moment.
 type feishuBook struct {
-	mu       sync.Mutex
-	loaded   bool
-	st       botState
-	cards    map[string]botCard      // interaction id -> the card asking it
-	detached map[string]detachedCard // interaction id -> its card closed when its node went away (feishuDetach)
-	// ended: interaction id -> a question card that ended without being answered in this chat (feishuInteractionDone),
-	// kept for endedAskFor so an option typed for it late is not sent on as a new message (botAnswerQuestion).
+	mu     sync.Mutex
+	loaded bool
+	st     botState
+	cards  map[string]botCard // interaction id -> the card asking it
+	// ended: interaction id -> a question card that ended without being answered in this chat (the core's
+	// feishuInteractionDone), kept for endedAskFor so an option typed for it late is not sent on as a new message
+	// (botAnswerQuestion).
 	ended    map[string]endedCard
 	status   *FeishuStatus
 	statusAt time.Time
-	now      func() time.Time     // tests
-	pressAt  map[string]time.Time // recent one-shot card presses (the /start card and the start form), for one press one thing (feishu_card_actions.go)
+	now      func() time.Time     // the chat's clock (Host.ChatNow)
+	pressAt  map[string]time.Time // recent one-shot card presses (the /start card and the start form), for one press one thing (card_actions.go)
 	// line is closed when the last message taken is through (FeishuMessage): the chat's messages are handled one at
 	// a time, in the order they came.
 	line chan struct{}
-	// turnWait is how long a message waits for the one before it (0: feishuTurnWait; tests change it).
-	turnWait time.Duration
 	// recalled are the messages the owner recalled lately (FeishuRecalled): one not in its conversation yet is not sent.
 	recalled map[string]time.Time
 	// hinted are the topics told lately that they are tied to no open to-do (threadHint), by chat and thread.
 	hinted map[string]time.Time
-	// lookupWait is how long the topic of a message just sent waits between two reads of it (0: topicLookupWait;
-	// tests change it).
-	lookupWait time.Duration
 }
 
 // feishuRecalledKeep is how long a recall is remembered: a message waits at most feishuTurnWait for the one before
@@ -161,17 +118,17 @@ const feishuRecalledKeep = 10 * time.Minute
 
 // FeishuRecalled is feishu.recalled: the owner recalled a message in the bot's chat. One not in its conversation yet
 // is not sent; one being answered stops its turn (recallChannelRun).
-func (s *Service) FeishuRecalled(p FeishuRecalled) {
+func (s core) FeishuRecalled(p FeishuRecalled) {
 	if p.MessageID == "" {
 		return
 	}
 	s.noteRecalled(p.MessageID)
-	go s.recallChannelRun(channel.Feishu, p.MessageID, channel.ClientMsgID(channel.Feishu, p.MessageID))
+	go s.h.RecallRun(p.MessageID)
 }
 
 // noteRecalled remembers that the owner recalled message id, for feishuRecalledKeep.
-func (s *Service) noteRecalled(id string) {
-	b := &s.fbot
+func (s core) noteRecalled(id string) {
+	b := s.fbot()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := b.clock()
@@ -187,15 +144,16 @@ func (s *Service) noteRecalled(id string) {
 }
 
 // botRecalled says whether the owner recalled message id.
-func (s *Service) botRecalled(id string) bool {
-	b := &s.fbot
+func (s core) botRecalled(id string) bool {
+	b := s.fbot()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	_, ok := b.recalled[id]
 	return ok
 }
 
-// feishuTurnWait is how long a message waits for the one before it to go into its conversation. Most get there in a
+// feishuTurnWait is how long a message waits for the one before it to go into its conversation (the timing
+// "turn_wait"). Most get there in a
 // second or two; one stuck on a slow download or a new conversation that is slow to start must not hold up the chat
 // for the 3 minutes it may take, so after this the next message goes on without it.
 const feishuTurnWait = 20 * time.Second
@@ -205,7 +163,7 @@ type feishuTurn struct {
 	prev, done chan struct{}
 	wait       time.Duration
 	since      time.Time        // when it came
-	now        func() time.Time // the chat's clock (feishuBook.now)
+	now        func() time.Time // the chat's clock (Host.ChatNow)
 	once       sync.Once
 }
 
@@ -238,22 +196,8 @@ func (t *feishuTurn) pass() {
 	})
 }
 
-type botCard struct {
-	MessageID string
-	Thread    string            // the topic the card was posted into (the run anchor it replies to); "" in the root chat
-	ChatID    string            // the group chat the card is in (a topic's card); "" in the owner's DM
-	Ix        proto.Interaction // what it asks (to close it when it ended unseen)
-	At        time.Time         // when it was posted: the latest waiting card is the one a typed answer answers
-	NudgedAt  time.Time         // when it was nudged under, zero before (feishu_nudge.go)
-	SkippedAt time.Time         // when its nudge was given up (botCardRef.SkippedAt)
-	Tries     int               // nudge sends tried
-	TriedAt   time.Time         // when the first nudge send was tried
-	// DeadlineNudge is independent of the ordinary nudge above, including retries and the one-shot marker.
-	DeadlineNudge nudgeProgress
-}
-
-// nudgeSettled: the card has had its nudge, or the nudge was given up; either way there is no more to do.
-func (c botCard) nudgeSettled() bool { return !c.NudgedAt.IsZero() || !c.SkippedAt.IsZero() }
+// botCard is a card asking an interaction, open in the chat (assistantwire.ChatCard).
+type botCard = assistantwire.ChatCard
 
 func (b *feishuBook) clock() time.Time {
 	if b.now != nil {
@@ -263,16 +207,14 @@ func (b *feishuBook) clock() time.Time {
 }
 
 // loadBotLocked reads the chat's state once; b.mu is held.
-func (s *Service) loadBotLocked(ctx context.Context) {
-	b := &s.fbot
+func (s core) loadBotLocked(ctx context.Context) {
+	b := s.fbot()
 	if b.loaded {
 		return
 	}
-	if st := s.store(); st != nil {
-		if _, err := st.Setting(ctx, botStateKey, &b.st); err != nil {
-			s.logf("bots: load state: %v", err)
-			return // the next look tries again
-		}
+	if _, err := s.h.Setting(ctx, botStateKey, &b.st); err != nil {
+		s.logf("bots: load state: %v", err)
+		return // the next look tries again
 	}
 	b.loaded = true
 	if b.st.Threads == nil {
@@ -298,8 +240,8 @@ func (s *Service) loadBotLocked(ctx context.Context) {
 
 // trimBotCardsLocked keeps the cards' records small: none older than botCardsDays (long over, or Feishu no longer
 // lets them be changed), at most botCardsKeep, the newest; b.mu is held.
-func (s *Service) trimBotCardsLocked() {
-	b := &s.fbot
+func (s core) trimBotCardsLocked() {
+	b := s.fbot()
 	for id, ref := range b.st.Cards {
 		if ref == nil || !(ref.OwnerProposal && ref.NoExpiry) && b.clock().Sub(ref.At) > botCardsDays*24*time.Hour {
 			delete(b.st.Cards, id)
@@ -324,8 +266,8 @@ func (s *Service) trimBotCardsLocked() {
 
 // keepBotCardLocked records (or, card empty, forgets) the card asking interaction id, in memory and in the chat's
 // state; b.mu is held.
-func (s *Service) keepBotCardLocked(id string, card *botCard) {
-	b := &s.fbot
+func (s core) keepBotCardLocked(id string, card *botCard) {
+	b := s.fbot()
 	s.loadBotLocked(context.Background())
 	if card == nil {
 		delete(b.cards, id)
@@ -359,8 +301,8 @@ func (s *Service) keepBotCardLocked(id string, card *botCard) {
 
 // saveBotStateLocked writes the chat's state, once it was read: what is in memory after a failed read would be
 // written over the stored target, threads and pairing.
-func (s *Service) saveBotStateLocked() {
-	b := &s.fbot
+func (s core) saveBotStateLocked() {
+	b := s.fbot()
 	if !b.loaded {
 		return
 	}
@@ -370,13 +312,9 @@ func (s *Service) saveBotStateLocked() {
 	pruneBotThreads(b.st.Threads, b.clock())
 	pruneTopicAnchors(b.st.Topics, b.clock())
 	s.trimBotCardsLocked()
-	st := s.store()
-	if st == nil {
-		return
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := st.PutSetting(ctx, botStateKey, b.st); err != nil {
+	if err := s.h.PutSetting(ctx, botStateKey, b.st); err != nil {
 		s.logf("bots: save state: %v", err)
 	}
 }
@@ -403,12 +341,12 @@ func pruneBotThreads(threads map[string]*botThread, now time.Time) {
 }
 
 // feishuStatus is the bot as the hub has it now (feishu.status): on and paired, its switches.
-func (s *Service) feishuStatus(ctx context.Context) (FeishuStatus, error) {
+func (s core) feishuStatus(ctx context.Context) (FeishuStatus, error) {
 	var st FeishuStatus
-	if err := s.appCall(ctx, AppFeishu, FeishuStatusGet, map[string]any{}, &st); err != nil {
+	if err := s.appCall(ctx, assistantwire.FeishuStatusGet, map[string]any{}, &st); err != nil {
 		return FeishuStatus{}, err
 	}
-	b := &s.fbot
+	b := s.fbot()
 	b.mu.Lock()
 	b.status, b.statusAt = &st, time.Now()
 	b.mu.Unlock()
@@ -419,12 +357,12 @@ func (s *Service) feishuStatus(ctx context.Context) (FeishuStatus, error) {
 // feishuReconcile starts the chat afresh when the bot was paired with someone else, paired again or unpaired since
 // the state was written (the hub's feishu.owner may have come while the assistant was away): back to the main
 // conversation, no threads, no cards, nothing waiting. A state from before pairings were recorded takes the one now.
-func (s *Service) feishuReconcile(st FeishuStatus) {
+func (s core) feishuReconcile(st FeishuStatus) {
 	key := ""
 	if st.Owner != "" {
 		key = st.Owner + "@" + strconv.FormatInt(st.PairedAt.Unix(), 10)
 	}
-	b := &s.fbot
+	b := s.fbot()
 	b.mu.Lock()
 	s.loadBotLocked(context.Background())
 	if !b.loaded || b.st.Pairing != nil && *b.st.Pairing == key {
@@ -441,13 +379,13 @@ func (s *Service) feishuReconcile(st FeishuStatus) {
 	b.mu.Unlock()
 	if fresh {
 		s.logf("bots: the bot's pairing changed: the chat starts afresh")
-		s.forgetChannelTurns(channel.Feishu)
+		s.h.ForgetTurns()
 	}
 }
 
 // feishuStatusKept is feishuStatus kept a moment: for what looks every second (a run's sink, the cards' links).
-func (s *Service) feishuStatusKept(ctx context.Context) (FeishuStatus, error) {
-	b := &s.fbot
+func (s core) feishuStatusKept(ctx context.Context) (FeishuStatus, error) {
+	b := s.fbot()
 	b.mu.Lock()
 	if b.status != nil && time.Since(b.statusAt) < 3*time.Second {
 		st := *b.status
@@ -458,16 +396,16 @@ func (s *Service) feishuStatusKept(ctx context.Context) (FeishuStatus, error) {
 	return s.feishuStatus(ctx)
 }
 
-func (s *Service) feishuForgetStatus() {
-	s.fbot.mu.Lock()
-	s.fbot.status = nil
-	s.fbot.mu.Unlock()
+func (s core) feishuForgetStatus() {
+	s.fbot().mu.Lock()
+	s.fbot().status = nil
+	s.fbot().mu.Unlock()
 }
 
-func (s *Service) feishuFeatures(ctx context.Context) (FeishuFeatures, bool) {
+func (s core) feishuFeatures(ctx context.Context) (FeishuFeatures, bool) {
 	st, err := s.feishuStatus(ctx)
 	ready := err == nil && st.Ready
-	s.workbenchOn(st.Features, ready) // what the posts' workbench button follows (feishu_workbench_pin.go)
+	s.h.WorkbenchOn(st.Features, ready) // what the posts' workbench button follows (the core's feishu_workbench_pin.go)
 	return st.Features, ready
 }
 
@@ -475,8 +413,8 @@ func (s *Service) feishuFeatures(ctx context.Context) (FeishuFeatures, bool) {
 
 // claimBotMessage: the first time this message is taken (Feishu delivers again what it thinks was missed); an error
 // while the chat's state can't be read.
-func (s *Service) claimBotMessage(id string) (bool, error) {
-	b := &s.fbot
+func (s core) claimBotMessage(id string) (bool, error) {
+	b := s.fbot()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	s.loadBotLocked(context.Background())
@@ -493,8 +431,8 @@ func (s *Service) claimBotMessage(id string) (bool, error) {
 
 var errBotUnread = errors.New("the chat's state could not be read")
 
-func (s *Service) setBotCurrent(t botTarget) {
-	b := &s.fbot
+func (s core) setBotCurrent(t botTarget) {
+	b := s.fbot()
 	b.mu.Lock()
 	s.loadBotLocked(context.Background())
 	b.st.Current = t
@@ -504,8 +442,8 @@ func (s *Service) setBotCurrent(t botTarget) {
 
 // botTargetFor is where a message goes: the target of the bot message it replies to (or of its thread), else the
 // chat's current one.
-func (s *Service) botTargetFor(root, parent string) botTarget {
-	b := &s.fbot
+func (s core) botTargetFor(root, parent string) botTarget {
+	b := s.fbot()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	s.loadBotLocked(context.Background())
@@ -518,11 +456,11 @@ func (s *Service) botTargetFor(root, parent string) botTarget {
 }
 
 // rememberBotThread binds a message the bot posted to a target: replying to it talks to that target.
-func (s *Service) rememberBotThread(messageID string, t botTarget, title string) {
+func (s core) rememberBotThread(messageID string, t botTarget, title string) {
 	if messageID == "" || t.Kind == "" {
 		return
 	}
-	b := &s.fbot
+	b := s.fbot()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	s.loadBotLocked(context.Background())
@@ -535,8 +473,8 @@ func (s *Service) rememberBotThread(messageID string, t botTarget, title string)
 
 // feishuReset starts the chat afresh (unpaired from the channels' page): back to the main conversation, no threads,
 // no cards, nothing waiting; the pairing it belongs to is read again.
-func (s *Service) feishuReset() {
-	b := &s.fbot
+func (s core) feishuReset() {
+	b := s.fbot()
 	b.mu.Lock()
 	s.loadBotLocked(context.Background())
 	pairing := b.st.Pairing
@@ -548,15 +486,15 @@ func (s *Service) feishuReset() {
 }
 
 // feishuUnpaired: the owner went: the chat's state and what it waited on go.
-func (s *Service) feishuUnpaired() {
+func (s core) feishuUnpaired() {
 	s.feishuReset()
-	s.forgetChannelTurns(channel.Feishu)
+	s.h.ForgetTurns()
 }
 
 // FeishuOwner is feishu.owner: the bot was paired (it says hello, with what it can do) or unpaired. The pairing now
 // is read from the hub (feishuReconcile starts the chat afresh), the same as on any later look when this event was
 // missed.
-func (s *Service) FeishuOwner(_ context.Context, p FeishuOwner) {
+func (s core) FeishuOwner(_ context.Context, p FeishuOwner) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
@@ -576,8 +514,8 @@ func (s *Service) FeishuOwner(_ context.Context, p FeishuOwner) {
 }
 
 // takeLegacyBotRuns are the runs an older hub kept in the chat's state, taken out of it (once).
-func (s *Service) takeLegacyBotRuns(ctx context.Context) []*channel.Run {
-	b := &s.fbot
+func (s core) takeLegacyBotRuns(ctx context.Context) []*channel.Run {
+	b := s.fbot()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	s.loadBotLocked(ctx)
@@ -644,8 +582,8 @@ func (r *botRun) channelRun() *channel.Run {
 // ---- what the hub shows of the chat ----
 
 // FeishuView is feishu.view: where the chat's messages go now, and the agents bound to its threads.
-func (s *Service) FeishuView(ctx context.Context) FeishuView {
-	b := &s.fbot
+func (s core) FeishuView(ctx context.Context) FeishuView {
+	b := s.fbot()
 	b.mu.Lock()
 	s.loadBotLocked(ctx)
 	cur := b.st.Current
@@ -659,7 +597,7 @@ func (s *Service) FeishuView(ctx context.Context) FeishuView {
 	seen := map[[2]string]int{} // machine and session → where its row is
 	var rows []boundAgent
 	for _, t := range b.st.Threads {
-		if !t.Target.agent() {
+		if !t.Target.Agent() {
 			continue
 		}
 		key := [2]string{t.Target.MachineID, t.Target.SessionID}
@@ -688,65 +626,179 @@ func (s *Service) FeishuView(ctx context.Context) FeishuView {
 		v.Agents = append(v.Agents, r.a)
 	}
 	b.mu.Unlock()
-	v.Target = s.targetLabel(ctx, cur)
+	v.Target = s.h.TargetLabel(ctx, cur)
 	return v
 }
 
-// feishuChannelTarget is the Feishu channel's target as the channels' page shows it.
-func (s *Service) feishuChannelTarget(ctx context.Context) channel.Target {
-	b := &s.fbot
+func (s core) feishuCardsWaiting() int {
+	b := s.fbot()
 	b.mu.Lock()
-	s.loadBotLocked(ctx)
-	cur := b.st.Current
-	b.mu.Unlock()
-	t := channel.Target{Kind: channel.TargetMain}
-	switch cur.Kind {
-	case targetPersona:
-		t = channel.Target{Kind: channel.TargetConversation, MachineID: cur.MachineID, SessionID: cur.SessionID}
-		if cur.SessionID == "" {
-			t = channel.Target{Kind: channel.TargetNew}
-		}
-	case targetAgent:
-		t = channel.Target{Kind: channel.TargetAgent, MachineID: cur.MachineID, SessionID: cur.SessionID}
-	}
-	if t.Kind != channel.TargetMain {
-		t.Title = s.targetLabel(ctx, cur)
-	}
-	return t
+	defer b.mu.Unlock()
+	return len(b.cards)
 }
 
-// updateFeishuChannel maps the channel's settings onto the bot's: its switch and features are the hub's
-// (feishu.configure), where its messages go is the chat's.
-func (s *Service) updateFeishuChannel(ctx context.Context, enabled *bool, target *channel.Target, features map[string]bool) error {
-	if enabled != nil || len(features) > 0 {
-		p := map[string]any{}
-		if enabled != nil {
-			p["enabled"] = *enabled
-		}
-		if len(features) > 0 {
-			p["features"] = features
-		}
-		if err := s.appCall(ctx, AppFeishu, FeishuConfigure, p, nil); err != nil {
-			return err
-		}
-		s.feishuForgetStatus()
+// topicAnchorsKeep and topicAnchorsKeepFor bound the topic messages remembered to reply to.
+const (
+	topicAnchorsKeep    = 200
+	topicAnchorsKeepFor = 30 * 24 * time.Hour
+)
+
+// topicAnchor is a message of the topic the bot can reply into it with: the latest one the owner said there.
+// Feishu replies into a thread by a message in it; the todo only keeps the thread's id.
+type topicAnchor struct {
+	MessageID string    `json:"message_id"`
+	At        time.Time `json:"at"`
+}
+
+// rememberTopicMessage notes message id as the latest of the topic, kept with the chat's state (a restart does not
+// lose where to reply).
+func (s core) rememberTopicMessage(ctx context.Context, chatID, threadID, id string) {
+	if chatID == "" || threadID == "" || id == "" {
+		return
 	}
-	if target != nil {
-		t := botTarget{Kind: targetMain}
-		switch target.Kind {
-		case channel.TargetNew:
-			t = botTarget{Kind: targetPersona}
-		case channel.TargetConversation:
-			t = botTarget{Kind: targetPersona, MachineID: target.MachineID, SessionID: target.SessionID}
+	b := s.fbot()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s.loadBotLocked(ctx)
+	if !b.loaded {
+		return
+	}
+	if b.st.Topics == nil {
+		b.st.Topics = map[string]*topicAnchor{}
+	}
+	b.st.Topics[chatID+"/"+threadID] = &topicAnchor{MessageID: id, At: b.clock()}
+	s.saveBotStateLocked()
+}
+
+// topicMessage is the message to reply to in the topic, "" when none is known.
+func (s core) topicMessage(ctx context.Context, chatID, threadID string) string {
+	b := s.fbot()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s.loadBotLocked(ctx)
+	if a := b.st.Topics[chatID+"/"+threadID]; a != nil {
+		return a.MessageID
+	}
+	return ""
+}
+
+// pruneTopicAnchors drops the anchors older than topicAnchorsKeepFor, then the oldest beyond topicAnchorsKeep.
+func pruneTopicAnchors(m map[string]*topicAnchor, now time.Time) {
+	for k, a := range m {
+		if a == nil || now.Sub(a.At) > topicAnchorsKeepFor {
+			delete(m, k)
 		}
-		s.setBotCurrent(t)
+	}
+	for len(m) > topicAnchorsKeep {
+		oldest := ""
+		for k, a := range m {
+			if oldest == "" || a.At.Before(m[oldest].At) {
+				oldest = k
+			}
+		}
+		delete(m, oldest)
+	}
+}
+
+// forgetTopicMessage drops the anchor of the topic when it is still the one given (a newer message may have come).
+func (s core) forgetTopicMessage(ctx context.Context, chatID, threadID, id string) {
+	b := s.fbot()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s.loadBotLocked(ctx)
+	if a := b.st.Topics[chatID+"/"+threadID]; a != nil && a.MessageID == id {
+		delete(b.st.Topics, chatID+"/"+threadID)
+		s.saveBotStateLocked()
+	}
+}
+
+// chatBook is the chat's records as the core reads and writes them (assistantwire.ChatBook), under b.mu.
+type chatBook struct{ s core }
+
+func (c chatBook) Loaded() bool   { return c.s.fbot().loaded }
+func (c chatBook) Now() time.Time { return c.s.fbot().clock() }
+
+func (c chatBook) Card(id string) (botCard, bool) {
+	card, ok := c.s.fbot().cards[id]
+	return card, ok
+}
+
+func (c chatBook) KeepCard(id string, card *botCard) { c.s.keepBotCardLocked(id, card) }
+
+func (c chatBook) Cards() map[string]botCard { return maps.Clone(c.s.fbot().cards) }
+
+func (c chatBook) CardRef(id string) (botCardRef, bool) {
+	ref := c.s.fbot().st.Cards[id]
+	if ref == nil {
+		return botCardRef{}, false
+	}
+	return *ref, true
+}
+
+func (c chatBook) ProposalFor(parent string) string {
+	id := ""
+	for candidate, ref := range c.s.fbot().st.Cards {
+		if ref == nil || !ref.OwnerProposal || ref.MessageID != parent {
+			continue
+		}
+		if id != "" {
+			return "" // ambiguous persisted mapping: never guess which operation was approved
+		}
+		id = candidate
+	}
+	return id
+}
+
+func (c chatBook) NoteEnded(card botCard) {
+	if typedAnswerable(card) {
+		c.s.fbot().noteEndedLocked(card)
+	}
+}
+
+func (c chatBook) Bound(machine, session string, d time.Duration) bool {
+	b := c.s.fbot()
+	for _, t := range b.st.Threads {
+		if t.Target.MachineID == machine && t.Target.SessionID == session && b.clock().Sub(t.At) < d {
+			return true
+		}
+	}
+	return false
+}
+
+func (c chatBook) Board() *assistantwire.ChatBoardRef {
+	if ref := c.s.fbot().st.Board; ref != nil {
+		cp := *ref
+		return &cp
 	}
 	return nil
 }
 
-func (s *Service) feishuCardsWaiting() int {
-	b := &s.fbot
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return len(b.cards)
+func (c chatBook) SetBoard(ref *assistantwire.ChatBoardRef) {
+	b := c.s.fbot()
+	if !b.loaded {
+		return
+	}
+	b.st.Board = ref
+	c.s.saveBotStateLocked()
+}
+
+func (c chatBook) Pairing() *string {
+	if p := c.s.fbot().st.Pairing; p != nil {
+		cp := *p
+		return &cp
+	}
+	return nil
+}
+
+func (c chatBook) Companions() []assistantwire.CompanionBot {
+	return append([]assistantwire.CompanionBot(nil), c.s.fbot().st.Companions...)
+}
+
+func (c chatBook) SetCompanions(bots []assistantwire.CompanionBot) {
+	b := c.s.fbot()
+	if !b.loaded {
+		return
+	}
+	b.st.Companions = bots
+	c.s.saveBotStateLocked()
 }

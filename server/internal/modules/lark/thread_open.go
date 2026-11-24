@@ -1,4 +1,4 @@
-package assistant
+package lark
 
 import (
 	"context"
@@ -8,8 +8,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
-	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -179,7 +179,7 @@ func genericTopicRequest(text string) bool {
 
 // openTopicIfAsked opens a to-do for the message when it asks for one: it starts a topic that is bound to nothing, or
 // it is "/ai …" in such a topic. It says whether it took the message (everything the owner is to be told is said).
-func (s *Service) openTopicIfAsked(ctx context.Context, ev botcard.MessageEvent, st FeishuStatus, content botcard.Content, topic *feishuTopic) bool {
+func (s core) openTopicIfAsked(ctx context.Context, ev botcard.MessageEvent, st FeishuStatus, content botcard.Content, topic *feishuTopic) bool {
 	rest, asked := aiCommand(openingCommandWords(ev, content))
 	if !asked && !isTopicRoot(ev) {
 		return false
@@ -194,45 +194,23 @@ func (s *Service) openTopicIfAsked(ctx context.Context, ev botcard.MessageEvent,
 
 // openTopicTodo makes the to-do for the topic ev is in, with text (the first words, the command taken off) as its
 // notes, and hands the words to the main conversation (openTodoIn); what keeps it from doing so is said in the topic.
-func (s *Service) openTopicTodo(ctx context.Context, ev botcard.MessageEvent, st FeishuStatus, content botcard.Content, text string, topic *feishuTopic) {
+func (s core) openTopicTodo(ctx context.Context, ev botcard.MessageEvent, st FeishuStatus, content botcard.Content, text string, topic *feishuTopic) {
 	if _, fail := s.openTodoIn(ctx, ev, st, content, text, "", topic, nil); fail != "" {
 		s.botNoteTo(ctx, topic.target(), ev.Message.MessageID, fail)
 	}
 }
 
-// openTarget is who takes a to-do opened from a topic or from elsewhere: the main conversation, which origin is the id
-// of. fail says why not, in the bot's language, "" when it can.
-func (s *Service) openTarget(ctx context.Context, st FeishuStatus) (target botTarget, origin, fail string) {
-	l := s.botLang(ctx)
-	failed := func(err error) string {
-		return i18n.T(l, "assistant-feishu.thread_open_failed", i18n.Args{"error": clip(oneLine(err.Error()), 200)})
-	}
-	target = botTarget{Kind: targetMain}
-	if err := botAllowed(l, st.Features, target); err != nil {
-		return target, "", failed(err)
-	}
-	rt, err := s.resolveBotTarget(ctx, target)
-	if err != nil {
-		return target, "", failed(err)
-	}
-	origin = s.settings(ctx).Main
-	if _, ok := s.session(ctx, rt.machine, origin); origin == "" || rt.isNew || !ok {
-		return target, "", i18n.T(l, "assistant-feishu.thread_open_no_main")
-	}
-	return target, origin, ""
-}
-
 // openTodoIn makes the to-do for the topic, with text (the first words, the command taken off) as its title and notes,
 // and hands the words to the main conversation. Who takes it is worked out before anything is made, and a topic that
-// turns out to be taken (db.ErrThreadTaken) leaves no to-do behind. The first words are not a decision: the to-do is made
+// turns out to be taken (the core's db.ErrThreadTaken) leaves no to-do behind. The first words are not a decision: the to-do is made
 // of them. ev is the message the run answers under in the topic: the owner's own, or the one the bot opened it with
 // (openFromElsewhere). quote, when not empty, is the text of a message the words reply to: it follows them in the notes
 // and in the hand-over, as context. src, when given, is where the request came from, recorded on the to-do. A nil topic
 // is a to-do bound to no topic (a request taken in the owner's private chat, openInOwnerChat): ev is then a message of that
-// chat, and what is said goes there. fail says why no to-do was made, in the bot's language, "" when one was; what goes
-// wrong after the to-do exists is said in the topic (or the private chat).
-func (s *Service) openTodoIn(ctx context.Context, ev botcard.MessageEvent, st FeishuStatus, content botcard.Content, text, quote string,
-	topic *feishuTopic, src *TodoSource) (todo Todo, fail string) {
+// chat, and what is said goes there. todo is the to-do's id; fail says why no to-do was made, in the bot's language, ""
+// when one was; what goes wrong after the to-do exists is said in the topic (or the private chat).
+func (s core) openTodoIn(ctx context.Context, ev botcard.MessageEvent, st FeishuStatus, content botcard.Content, text, quote string,
+	topic *feishuTopic, src *assistantwire.ChatTodoSource) (todo, fail string) {
 	msg := ev.Message
 	l := s.botLang(ctx)
 	to := topic.target()
@@ -249,11 +227,11 @@ func (s *Service) openTodoIn(ctx context.Context, ev botcard.MessageEvent, st Fe
 	if text == "" {
 		// A to-do is named after what was said: a picture, a merged forward, a voice message or the like alone has no
 		// words to name it by.
-		return Todo{}, i18n.T(l, "assistant-feishu.thread_open_needs_text")
+		return "", i18n.T(l, "assistant-feishu.thread_open_needs_text")
 	}
-	target, origin, why := s.openTarget(ctx, st)
+	target, origin, why := s.h.OpenTarget(ctx, st)
 	if why != "" {
-		return Todo{}, why
+		return "", why
 	}
 	// What the owner said, and apart from it what someone else said in the message it replied to: the notes carry both, the
 	// second under a label that says whose it is and with nothing in it that closes a context block.
@@ -268,73 +246,46 @@ func (s *Service) openTodoIn(ctx context.Context, ev botcard.MessageEvent, st Fe
 			titleWords = i18n.T(l, "assistant-tool_titles.todo_create")
 		}
 	}
-	var title string
-	retitle := true
-	if linkLabel {
-		title = cutTitle(oneLine(titleWords), todoTitleMax(string(l)))
-	} else {
-		title, retitle = s.taskTitle(ctx, "", titleWords)
+	title, retitle := s.h.TodoTitle(ctx, titleWords, l, linkLabel)
+	if src != nil && src.Anchor == "" {
+		src.Handoff = msg.MessageID
 	}
-	if title == "" {
-		title = cutRunes(oneLine(titleWords), todoTitleMax(s.hello(ctx).Locale))
-	}
-	todo, err := s.createTodo(ctx, title, clip(words, openNotesMax), origin, "")
+	// The to-do is made, bound to the topic, given its source, supervised by the main conversation and shown in its
+	// feed by the core; anything that fails there takes the to-do back.
+	todo, err := s.h.OpenTodo(ctx, assistantwire.ChatOpenTodo{Title: title, Notes: clip(words, openNotesMax), Origin: origin,
+		Topic: topic != nil, ChatID: topicChat(topic), ThreadID: topicThread(topic), Source: src, Retitle: retitle, Text: text, Where: where})
 	if err != nil {
-		s.logf("bots: %s: open a to-do: %v", where, err)
-		return Todo{}, failed("thread_open_failed", err)
+		return "", failed("thread_open_failed", err)
 	}
-	if topic != nil {
-		var th TodoThread
-		if th, err = cleanThread(TodoThread{Channel: channel.Feishu, ChatID: topic.Chat, ThreadID: topic.Thread, Title: title}); err == nil {
-			_, err = s.bindThread(ctx, todo.ID, th, nil)
-		}
-	}
-	if err == nil && src != nil {
-		if src.Anchor == "" {
-			src.Handoff = msg.MessageID
-		}
-		if err = s.setTodoSource(ctx, todo.ID, *src); err == nil {
-			s.todosChanged(ctx)
-		}
-	}
-	if err != nil {
-		// Taken by another to-do meanwhile (or not a thread that can be bound): the to-do just made goes again.
-		if rerr := s.removeTodo(context.WithoutCancel(ctx), todo.ID); rerr != nil {
-			s.logf("todo %s: take back: %v", todo.ID, rerr)
-		}
-		s.logf("bots: %s: bind: %v", where, err)
-		return Todo{}, failed("thread_open_failed", err)
-	}
-	if retitle {
-		s.nameTodoLater(ctx, todo.ID, title, text)
-	}
-	// The main conversation follows up what it hands out (supervise.go), and its feed shows the task as task_plan's do.
-	if err := s.superviseTodo(ctx, todo.ID, origin, nil, 0); err != nil {
-		if rerr := s.removeTodo(context.WithoutCancel(ctx), todo.ID); rerr != nil {
-			s.logf("todo %s: take back after supervision failure: %v", todo.ID, rerr)
-		}
-		return Todo{}, failed("thread_open_failed", err)
-	}
-	if _, err := s.appendFeed(ctx, origin, feedTask, todo.ID, nil); err != nil {
-		s.logf("task %s: feed: %v", todo.ID, err)
-	}
-	s.logf("bots: %s opened todo %s", where, todo.ID)
+	s.logf("bots: %s opened todo %s", where, todo)
 
 	line := i18n.T(l, "assistant-feishu.thread_open_done", i18n.Args{"title": title})
-	if link := todoLink(strings.TrimRight(st.PublicURL, "/"), todo.ID); isWebLink(link) {
+	if link := s.h.TodoLink(strings.TrimRight(st.PublicURL, "/"), todo); isWebLink(link) {
 		line += "\n" + link
 	}
 	s.botNoteTo(ctx, to, msg.MessageID, line)
 
-	content.Text = prompts.RenderTodoThreadOpen(prompts.TodoThreadOpen{Language: answerLanguage(s.hello(ctx).Locale), Title: contextText(clip(oneLine(title), 80)), TodoID: todo.ID, Text: text, Quote: quote, NoTopic: topic == nil})
+	content.Text = prompts.RenderTodoThreadOpen(prompts.TodoThreadOpen{Language: s.h.AnswerLanguage(s.hello(ctx).Locale), Title: contextText(clip(oneLine(title), 80)), TodoID: todo, Text: text, Quote: quote, NoTopic: topic == nil})
 	if err := s.botSendIn(ctx, &ev, content, target, topic); err != nil {
-		s.logf("bots: %s: todo %s to the main conversation: %v", where, todo.ID, err)
+		s.logf("bots: %s: todo %s to the main conversation: %v", where, todo, err)
 		say("thread_open_not_sent", i18n.Args{"error": clip(oneLine(err.Error()), 200)})
 	}
-	if cur, ok := s.todoNow(todo.ID); ok {
-		todo = cur // with its topic and source
-	}
 	return todo, ""
+}
+
+// topicChat and topicThread are a topic's chat and thread, "" for none.
+func topicChat(t *feishuTopic) string {
+	if t == nil {
+		return ""
+	}
+	return t.Chat
+}
+
+func topicThread(t *feishuTopic) string {
+	if t == nil {
+		return ""
+	}
+	return t.Thread
 }
 
 // isWebLink: link is an http(s) address with a host (what a message can carry as a link; "" is none).
