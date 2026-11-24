@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isValidElement } from "react";
 import { forgetModuleSwitches, setModuleSwitchedOff } from "../../core/module-switch";
-import { connectModuleHub, loadModule, MODULES_FEATURE, registeredModules, registerModule, resetModulesForTest, standaloneAt, standaloneOn, type ModuleDescriptor } from "../../core/module-host";
+import { connectModuleHub, loadModule, MODULES_FEATURE, registerModule, resetModulesForTest, standaloneAt, standaloneOn, type ModuleDescriptor } from "../../core/module-host";
 import { parse } from "../../lib/router";
 import { getState, reset, subscribe } from "../../lib/store";
 import { SCREEN_PAGE } from "../../lib/computer";
