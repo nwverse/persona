@@ -5,8 +5,8 @@
 //
 // Its hub flag is `module.screen-share` (the hub flag rule, core/module-host.ts): off only on a hub that publishes
 // module flags without it, so an older hub keeps it on as before. The machine page's "View screen" button follows it.
-// The page itself draws before any hello, so there only Settings › Labs › Features turns it off; off, /screen/<machine>
-// is an unknown address and its chunk is never requested.
+// The page itself reads the hub's flag from one hello before it loads (src/modules/standalone.ts); off, here or on the
+// hub, /screen/<machine> is an unknown address and its chunk is never requested.
 import { byLanguage, t, type CatalogModule } from "../../i18n";
 import { moduleFeature } from "../../core/module-flags";
 import type { ModuleDescriptor } from "../../core/module-host";

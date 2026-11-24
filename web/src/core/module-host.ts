@@ -5,9 +5,10 @@
 // sidebar entries, its titles), never a module's code.
 //
 // A module is present only while it is enabled: the hub serves it (the hub flag rule below) and this browser has not
-// switched it off (Settings › Labs › Features, core/module-switch.ts). A module that is not enabled
+// switched it off (Settings › General › Optional features, core/module-switch.ts). A module that is not enabled
 // is absent: no sidebar entry, its addresses resolve as unknown ones, and neither its code chunk nor its strings are
 // requested. Its code and its strings load on first use (loadModule), never at start.
+// General owns the permanent browser switches. Labs admits only reversible trials with a stable default and a tracked exit.
 //
 // Field names follow the module contract of #13430 section 4 (`id`, `api`, `needs`, `wants`, `feature`, `shell_places`,
 // `settings`, `chat_card_kinds`, `composer_actions`, `chat_accessories`, `i18n_namespaces`), in this codebase's camelCase:
@@ -257,7 +258,7 @@ export interface ModuleDescriptor {
   needs?: readonly string[];
   /** Declared, not yet served: modules it uses when they are there (#13430 `wants`). */
   wants?: readonly string[];
-  /** Its name and one line on what it does, for the switch in Settings › Labs › Features (shell namespaces). */
+  /** Its name and one line on what it does, for the switch in Settings › General › Optional features (shell namespaces). */
   title: () => string;
   description: () => string;
   routes?: readonly ModuleRoute[];
@@ -267,11 +268,11 @@ export interface ModuleDescriptor {
   navItems?: readonly ModuleNavItem[];
   /** Pages it draws on their own, without the app shell: no sign-in flow, no sidebar (#14404, #13430 `shell_places`),
    *  each the first segment of its addresses (`screen` for `/screen/<machine>`). Before App loads, main.tsx asks
-   *  src/modules/standalone.ts (the modules that have one) and draws `ModuleCode.Standalone`; that is read before any
-   *  hello, so there only this browser's switch can turn the module off. Inside the app, standaloneAt / standaloneOn. The code comes from the module's `standalone.tsx`, which the build
-   *  preloads on these addresses and lets load without waiting for the rest of the catalog (vite.config.ts): that file
-   *  and what it imports statically read only the first screen's core strings, and the module's own. Not a core
-   *  address, nor another module's page. */
+   *  src/modules/standalone.ts (the modules that have one) and draws `ModuleCode.Standalone`; there the hub's flag is
+   *  read from one hello of its own (hubServesHere). Inside the app, standaloneAt / standaloneOn. The code comes from
+   *  the module's `standalone.tsx`, which the build preloads on these addresses and lets load without waiting for the
+   *  rest of the catalog (vite.config.ts): that file and what it imports statically read only the first screen's core
+   *  strings, and the module's own. Not a core address, nor another module's page. */
   standalonePages?: readonly string[];
   /** Knowledge entry kinds whose page it adds parts to (`kb.detail`, #13430 `shell_places`): `ModuleCode.KBDetail`.
    *  One module per kind. */

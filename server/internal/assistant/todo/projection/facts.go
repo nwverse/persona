@@ -81,6 +81,8 @@ type Facts struct {
 	Superseded bool `json:"-"`
 	// Loc is the owner's time zone, for a due day; nil is UTC.
 	Loc *time.Location `json:"-"`
+	// TodosV2 gates experimental New To-dos & Tasks projection rules (#14620); false preserves legacy behavior identically.
+	TodosV2 bool `json:"-"`
 }
 
 // Agent is one of the to-do's runs (an Agent session) as the list links it (agents[]).

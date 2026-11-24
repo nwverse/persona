@@ -277,7 +277,7 @@ Only through the hub tunnel, no new externally exposed port:
 
 ### Page: `/screen/<machine id>` (web, `web/src/modules/screen-share/`)
 
-- **Loading**: on `/screen/…`, the web entry bypasses login and sidebar and dynamically loads only this page: the screen-share module's page of its own (`standalonePages`, `docs/web/web.md` "Modules"). With the module off (Settings › Labs › Features, or a hub that publishes module flags without `module.screen-share`) the machine page has no **View screen** and the address is an unknown one. noVNC ([noVNC](https://github.com/novnc/noVNC) 1.7, MPL-2.0, `@novnc/novnc`) lives in a separate chunk, not the main bundle.
+- **Loading**: on `/screen/…`, the web entry bypasses login and sidebar and dynamically loads only this page: the screen-share module's page of its own (`standalonePages`, `docs/web/web.md` "Modules"). With the module off (Settings › Labs › Features, or a hub that publishes module flags without `module.screen-share`, read from one hello before anything of the page loads) the machine page has no **View screen** and the address is an unknown one. noVNC ([noVNC](https://github.com/novnc/noVNC) 1.7, MPL-2.0, `@novnc/novnc`) lives in a separate chunk, not the main bundle.
 - **Token**:
   - The App opens it with its device token in `#token=…&embed=1`: URL fragments aren't sent to the server; the page removes it from the address bar immediately on load, keeping it only in memory.
     - Includes the machine's display name in `name=` (Mac Studio), used before the hub responds instead of displaying its id.

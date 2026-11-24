@@ -129,6 +129,7 @@ type fakeHub struct {
 	failStart    error
 	refuseUltra  error            // session.start's answer to a start that asks for ultracode (a node refusing it, #3596)
 	refuseGoal   error            // session.start's answer to a start that carries a goal (a node too old for it)
+	refuseHost   map[string]error // session.start's answer to a start naming that host (a node whose Antigravity companion went away)
 	startFailed  string           // the StartError of the sessions session.start answers (the launcher failed in its new tab)
 	worktrees    []map[string]any // worktree.prepare / worktree.create params, {"method": …} added
 	failWorktree error            // worktree.create's answer when set
@@ -698,6 +699,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		}
 		if g, _ := a["goal"].(string); f.refuseGoal != nil && g != "" {
 			return nil, f.refuseGoal
+		}
+		if h, _ := a["host"].(string); f.refuseHost[h] != nil {
+			return nil, f.refuseHost[h]
 		}
 		if f.onStart != nil {
 			f.onStart(f, a) // the node changes state (for example its session list) while handling this start
