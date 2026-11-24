@@ -75,6 +75,10 @@ type PlanTask struct {
 	Speed              string `json:"speed,omitempty"`
 	Tier               string `json:"tier,omitempty"`
 	Permission         string `json:"permission,omitempty"`
+	// Host: where the task's Agent starts, as task_plan named it: agy (the computer's Antigravity companion, which has
+	// no terminal) or one of the computer's engine hosts. "" lets the hub choose: the companion for an agy launcher it
+	// runs, else the computer's default host (start_host.go, #13447).
+	Host string `json:"host,omitempty"`
 	// StartPermission is the effective mode of the last started assignment, not a caller choice. It lets task_spawn
 	// recover that mode when an older node omits the live parent permission.
 	StartPermission string `json:"start_permission,omitempty"`
