@@ -1,4 +1,4 @@
-package persona.core.designsystem
+package persona.module.voice
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -44,16 +44,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcon
-import persona.core.designsystem.icons.PhIcons
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.sin
 
-// ------------------------------------------------------------------ voice conversation (voice chat)
+// The voice page's components (moved out of :core:designsystem, #13431): built only from the design system's tokens
+// and components, and used only by this module.
 
 /** What the orb of a voice conversation shows. */
-enum class VoiceOrbMode { Connecting, Listening, Speaking, Muted, Ended }
+internal enum class VoiceOrbMode { Connecting, Listening, Speaking, Muted, Ended }
 
 private const val SpeakingBeat = 420
 private const val ListeningBreath = 1600
@@ -66,7 +68,7 @@ private const val ListeningBreath = 1600
  * decorative: say the state in text beside it ([VoiceStatus]). Still when motion is reduced.
  */
 @Composable
-fun VoiceOrb(mode: VoiceOrbMode, modifier: Modifier = Modifier, level: () -> Float = { 0f }) {
+internal fun VoiceOrb(mode: VoiceOrbMode, modifier: Modifier = Modifier, level: () -> Float = { 0f }) {
     val moving = !PersonaTheme.reduceMotion
     val live = mode == VoiceOrbMode.Speaking || mode == VoiceOrbMode.Listening
     // Only what moves runs: a still orb (muted, ended, reduced motion) asks for no frames at all.
@@ -156,8 +158,8 @@ private fun BriefOrb(mode: VoiceOrbMode, core: Dp, scale: () -> Float) {
         Box(Modifier.size(core).clip(CircleShape).background(disc), contentAlignment = Alignment.Center) {
             when (mode) {
                 VoiceOrbMode.Connecting -> JSpinner(Modifier.size(core * 0.22f), color = palette.onAction, stroke = 2.5.dp)
-                VoiceOrbMode.Muted -> JIcon(PhIcons.MicrophoneSlash, null, size = core * 0.3f, tint = ink)
-                else -> JIcon(PhIcons.Waveform, null, size = core * 0.34f, tint = ink)
+                VoiceOrbMode.Muted -> JIcon(PersonaIcons.voiceMute, null, size = core * 0.3f, tint = ink)
+                else -> JIcon(PersonaIcons.voiceMessage, null, size = core * 0.34f, tint = ink)
             }
         }
     }
@@ -206,7 +208,7 @@ private fun BoardOrb(mode: VoiceOrbMode, core: Dp, level: () -> Float, turn: () 
 private val MeterProfile = listOf(0.55f, 0.8f, 1f, 0.8f, 0.55f)
 
 /** How a [VoiceControl] stands out: plain, filled with the action colour (on, or the way on), or destructive ("Hang up"). */
-enum class VoiceControlKind { Plain, Filled, Danger }
+internal enum class VoiceControlKind { Plain, Filled, Danger }
 
 /**
  * A round control of the voice page with its label underneath ("Mute", "Interrupt", "Hang up"): a glass circle, a wash disc, or a
@@ -214,7 +216,7 @@ enum class VoiceControlKind { Plain, Filled, Danger }
  * The label is one line; the whole thing is one button for touch and TalkBack.
  */
 @Composable
-fun VoiceControl(
+internal fun VoiceControl(
     icon: PhIcon,
     label: String,
     onClick: () -> Unit,
@@ -264,7 +266,7 @@ fun VoiceControl(
  * on the page's paper in brief, on the board's grey under a rule.
  */
 @Composable
-fun VoiceControlBar(modifier: Modifier = Modifier, content: @Composable RowScope.() -> Unit) {
+internal fun VoiceControlBar(modifier: Modifier = Modifier, content: @Composable RowScope.() -> Unit) {
     val palette = PersonaTheme.palette
     val frame = when (PersonaTheme.style) {
         AppStyle.Glass -> Modifier
@@ -282,7 +284,7 @@ fun VoiceControlBar(modifier: Modifier = Modifier, content: @Composable RowScope
  * on the page. A line still being heard or spoken ([final] false) is faint.
  */
 @Composable
-fun VoiceCaption(text: String, fromUser: Boolean, final: Boolean, modifier: Modifier = Modifier) {
+internal fun VoiceCaption(text: String, fromUser: Boolean, final: Boolean, modifier: Modifier = Modifier) {
     val palette = PersonaTheme.palette
     val ink = palette.ink.copy(alpha = if (final) 1f else 0.55f)
     if (fromUser) {
@@ -299,7 +301,7 @@ fun VoiceCaption(text: String, fromUser: Boolean, final: Boolean, modifier: Modi
 
 /** What the voice conversation is doing ("Listening", "Speaking…"), centred under the orb, and what went wrong under it. */
 @Composable
-fun VoiceStatus(text: String, modifier: Modifier = Modifier, error: String? = null) {
+internal fun VoiceStatus(text: String, modifier: Modifier = Modifier, error: String? = null) {
     val palette = PersonaTheme.palette
     Column(
         modifier.fillMaxWidth().padding(horizontal = 24.dp.dense).semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
