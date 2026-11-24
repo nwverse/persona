@@ -31,6 +31,8 @@ func TestClassifyLauncherError(t *testing.T) {
 		`ERROR codex_models_manager: No Trae auth token available for Trae model fetch`:         errKindAuth,
 		`error: unknown option '--plugin-dir'`:                                                  errKindCLIOutdated,
 		`Claude Code version 2.0.1 is no longer supported, please update`:                       errKindCLIOutdated,
+		`Method not found: session/set_mode`:                                                    errKindCLIOutdated,
+		`This Antigravity CLI (agy) is too old to switch to the "accept-edits" mode: it has no session/set_mode. Please update agy.`:                              errKindCLIOutdated,
 		`Claude Code 还没完成首次引导（hasCompletedOnboarding 未置为 true）：请在这台机器的终端里运行一次 claude`:                                                                             errKindOnboarding,
 		`claude did not become ready within 1m0s of starting: this machine's Claude Code has not completed its first-run setup (hasCompletedOnboarding is unset)`: errKindOnboarding,
 		`zsh: command not found: work`: errKindOther,
@@ -474,6 +476,25 @@ func TestLauncherHealthMovesPlannedTasks(t *testing.T) {
 	if task := p.Tasks[0]; task.Machine != "box" || task.Cwd != "/Users/me/code/app" || !strings.Contains(task.Why, "failed its health check on l4") {
 		t.Fatalf("task: %+v", task)
 	}
+}
+
+// A refusal on the detour happens before bind can fill in the chosen machine.
+func TestAgentStartRecordsRefusedHealthDetour(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	ctx := context.Background()
+	f.checks["server/work"] = proto.LauncherCheck{Error: "unavailable"}
+	s.healthRound(ctx, true)
+	s.devs = &resourceDevs{
+		fleetDevs: newFleetDevs(),
+		machines:  map[string]*proto.Machine{"box": admissionMachine(8)},
+		samples:   map[string]*proto.MetricSample{"box": admissionSample(99, 16<<30, 2<<30, 1)},
+	}
+	_, err := s.runTool(ctx, "server", "conv9", "agent_start", json.RawMessage(`{"machine":"l4","cwd":"/home/me/code/app","prompt":"Check CI"}`))
+	if !isAdmissionDenied(err) || len(f.starts) != 0 {
+		t.Fatalf("expected admission refusal on the detour, got %v, starts %v", err, f.starts)
+	}
+	p := onlyStoredPlacement(t, s.store().(settingsPrefixStore))
+	checkPlacementGolden(t, &p, "v1 enforce l4 -> box (assistant-tasks.admission_load) | l4 launcher_unhealthy no_resources | server launcher_unhealthy no_resources | box assistant-tasks.admission_load health=0")
 }
 
 func TestAgentStartDetourRecomputesLauncherPermission(t *testing.T) {

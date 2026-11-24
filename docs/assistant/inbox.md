@@ -516,6 +516,23 @@ Rules:
 
 Free-text triage rules (`inbox.rules`, a source's `triage_rules`) still exist for what is not a chat or a person ("release notifications are FYI"); policies are for the cases where the user knows exactly who or where.
 
+### Reply policy (opt-in, #11901)
+
+`inbox.reply_policy` in `manager.json` (`docs/operations/config.md`) adds an opt-in, server-side category gate for AI owner reply drafts (`server/internal/assistant/inbox_reply_policy.go`). It serves people who explicitly configure advanced Inbox AI handling; it adds no everyday-facing UI control and is **disabled by default** (`enabled: false`, or omitted/empty), preserving existing queue, suggestion, and confirmation behavior byte-for-byte.
+
+- **Server-side routing**: the classifier (`inbox.triage`, prompts `prompts/inbox/reply_policy.md` and `reply_policy_input.md`) outputs only a category name and short reason. The server maps that category to one of four routes — `owner_draft`, `bot`, `owner_only`, or `no_reply` — ignoring any model-supplied route field. Only `owner_draft` allows creating or confirming an AI owner reply suggestion.
+- **Default category table** (used when `enabled: true` and `categories` is omitted; a non-empty `categories` map replaces it):
+  - `owner_draft`: `routine_reply`.
+  - Four `owner_only` categories: `approval_commitment`, `sensitive_personal`, `external_public`, `escalation_decision`.
+  - Five `bot` categories: `bot_notification`, `system_alert`, `workflow_notice`, `automated_digest`, `bot_command`.
+  - `no_reply`: `no_reply`.
+- **Fail-closed on every uncertainty**: unknown categories, invalid routes in configuration, ambiguous normalized category keys, classification failures or timeouts, missing snapshots, and stale content versions or policy revisions always fail closed and never produce or send an owner draft.
+- **Three independent gates**:
+  1. **Queue gate** (before AI handling in `handPass`, `escalateWithPolicy`, `startInboxAgents`, `retryInboxHandling`, and manual `draftReply`): classifies candidate items and refuses to queue or start AI handling unless the live server route is `owner_draft`; pre-queued items whose policy revision or content changed are released without starting a conversation.
+  2. **Suggestion gate** (when accepting `inbox_suggest` with `kind: "reply"` or legacy `inbox_draft`, including from handed-off conversations): refuses non-`owner_draft` categories, unknown/invalid classifications, failures/timeouts, and mid-call revision/content changes; stamps `{category, route, content_version, policy_revision}` onto the accepted `InboxSuggestion` (persisted, not listed).
+  3. **Send gate** (immediately before the confirmed outward sender call in `confirmSuggestionReplyLocked` and under `once.mu` in `replyInboxDoMode`): verifies the suggestion's policy snapshot matches the live content version, live policy revision, and live `owner_draft` route, then runs a **final-text veto** on the actual text to be sent (original or owner-edited). Any veto returns `409 inbox_reply_policy_blocked` (`delivered: "none"`, `retryable: false`) with **zero sender calls**.
+- **Independent owner confirmation & audit snapshot**: normal `owner_draft` items still require owner confirmation; the persisted `InboxSuggestionAttempt` stores the original `proposal`, actual confirmed `text`, `category`, `route`, `content_version`, and `policy_revision` (kept in storage, omitted from listed copies). Direct manual owner replies via `POST /api/v1/inbox/{id}/reply` remain available for the owner.
+
 ## Folders (2026-11-09, #2463)
 
 Each item can be filed under a **folder path**: a `/`-separated string such as `work/alerts/engine`, every segment a folder level, so the inbox can be browsed as a tree next to the tiers. Tiers say how urgent something is; folders say what it is about.

@@ -296,7 +296,7 @@ A managed Antigravity launcher with a key (`GOOGLE_GEMINI_BASE_URL` / `GEMINI_AP
 
 **Creating one** (`POST /api/v1/launchers`, a full-device token): `{"kind": "launcher", "agent": "agy", "name": "agy-gw", "base_url": "https://<gateway address>", "api_key": "<key>", "model": "<an agy model id the gateway serves>"}`. `model` is required (it is the launcher's default; pick one from `agy models`, such as `gemini-4-neon-high`), `auth` is not used (agy sends the key in `x-goog-api-key` itself), and `name` may be left out. The key is stored sealed and never sent back. A herdr pane start or resume of that launcher types `personad launch agy-gw …`, which fetches the launcher's `GOOGLE_GEMINI_BASE_URL` / `GEMINI_API_KEY` from the node (launch key, as for a managed Claude launcher) and execs `agy --settings '{"modelProvider":"gemini"}' …`; the key is in no typed line, no argument and no resume command. An `--settings` the pane's own arguments carry is kept as it is.
 
-For herdr starts, the Antigravity model picker reads the local launcher's `models` output and uses the standard catalog cache and refresh. Picking an effort passes `--effort` with one of `low`, `medium`, `high`, `xhigh` or `max`. Leaving an override unset uses the launcher's default. pi and Cursor keep their own effort.
+For herdr starts, the Antigravity model picker reads the local launcher's `models` output and uses the standard catalog cache and refresh. Picking an effort passes `--effort` with one of `low`, `medium`, `high`, `xhigh` or `max`. When a model ID already names an effort variant, an explicit effort selects the corresponding catalog variant. Persona reports an unavailable variant before opening the pane. An effort without a model uses the launcher's default model. pi and Cursor keep their own effort.
 
 The first message is never typed into the pane:
 
@@ -812,6 +812,17 @@ are skipped because only Codex knows whether it trusts that project configuratio
 configuration, compact `-c...` / `-p...` options and legacy administrator provider overlays are also skipped.
 Use a Persona-managed or ordinary custom Responses provider on a local CLI when attribution is required. A new Codex session's ID is allocated after startup, so its initial process may omit
 `X-Persona-Session`; a resume with a known ID can include it.
+
+Persona does not add source headers to Antigravity (`agy`) Agent requests. Managed launchers with a Gemini API key
+select `modelProvider: gemini` by default. In agy 1.5.10, both the CLI and ACP ignored `AGY_LLM_GATEWAY_HEADERS`
+when sending generation requests to `GOOGLE_GEMINI_BASE_URL`. To check attribution, inspect a
+`streamGenerateContent` POST in the gateway log. A model catalog GET can carry headers that generation omits.
+
+Antigravity's Enterprise Gateway can send operator-configured headers on generation requests. Its headers apply
+to the whole process. Persona's ACP companion shares one process across ordinary work Agents, so setting a task ID
+there would label other Agents' requests with the same ID. For a terminal Agent, an allowlist check would need
+the effective gateway destination because administrator settings can override the URL independently of the headers.
+See Google's [Enterprise Gateway configuration and precedence](https://docs.cloud.google.com/gemini/enterprise/docs/ai-developer-tools/deploy-enterprise-gateway#settings-precedence).
 
 Direct Messages, Responses and Chat Completions helpers use `background`, including helpers sent through a node.
 Cross-origin redirects strip all source fields, even when the next origin is also allowlisted. A gateway should also

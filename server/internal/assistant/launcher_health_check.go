@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -49,7 +50,12 @@ func (s *Service) healthLaunchers(ctx context.Context, machine string) (names []
 	if err != nil {
 		return nil, nil, err
 	}
-	var runtimes []string
+	names, whileFailing, _ = s.healthLaunchersOf(ctx, list)
+	return names, whileFailing, nil
+}
+
+// healthLaunchersOf is healthLaunchers from the machine's list as read; runtimes are all its runtimes' launchers.
+func (s *Service) healthLaunchersOf(ctx context.Context, list []proto.Launcher) (names []string, whileFailing map[string]bool, runtimes []string) {
 	for _, l := range list {
 		switch {
 		case startableLauncher(l):
@@ -71,7 +77,7 @@ func (s *Service) healthLaunchers(ctx context.Context, machine string) (names []
 			whileFailing[name] = true
 		}
 	}
-	return names, whileFailing, nil
+	return names, whileFailing, runtimes
 }
 
 // runtimeLauncher: l is a runtime's launcher (DSH, Paseo, agy…: its source is the runtime's id), which the node checks
@@ -151,15 +157,28 @@ func (s *Service) healthRound(ctx context.Context, wait bool) {
 // checkMachine checks machine d's launchers that are due (only: one by that name, at once); the records of launchers
 // it no longer has go.
 func (s *Service) checkMachine(ctx context.Context, d Device, cfg healthConfig, cameOnline bool, only string) []LauncherHealth {
-	names, whileFailing, err := s.healthLaunchers(ctx, d.ID)
+	list, err := s.machineLaunchers(ctx, d.ID)
 	if err != nil {
 		s.logf("launcher health: %s: launchers: %v", d.ID, err)
 		return nil
 	}
+	names, whileFailing, runtimes := s.healthLaunchersOf(ctx, list)
+	// "Test again" of one runtime launcher the machine lists (#14534): a person asked for this check, so it runs
+	// whatever the launcher's record says, though rounds check a runtime's launcher only as whileFailing allows.
+	asked := only != "" && slices.Contains(runtimes, only)
+	if asked && !slices.Contains(names, only) {
+		names = append(names, only)
+	}
+	// A record goes with its launcher: one the machine no longer lists, not one this run merely does not check (a
+	// runtime's launcher nobody runs on keeps the record a failed start left, #14534).
+	listed := slices.Clone(names)
+	for _, l := range list {
+		listed = append(listed, l.Name)
+	}
 	b := &s.health
 	b.mu.Lock()
 	for key, r := range b.recs {
-		if r.Machine == d.ID && !slices.Contains(names, r.Launcher) {
+		if r.Machine == d.ID && !slices.Contains(listed, r.Launcher) {
 			delete(b.recs, key)
 			delete(b.recheckAt, key)
 		}
@@ -174,7 +193,7 @@ func (s *Service) checkMachine(ctx context.Context, d Device, cfg healthConfig, 
 			continue
 		}
 		r, ok := s.launcherHealth(ctx, d.ID, name)
-		if whileFailing[name] && !(ok && r.unusable()) {
+		if whileFailing[name] && !(ok && r.unusable()) && !(asked && name == only) {
 			continue // a runtime's launcher that works, or was never seen failing here: nothing to recheck (#10369)
 		}
 		if only == "" {
@@ -224,18 +243,34 @@ func (s *Service) probeLauncherWithRetry(ctx context.Context, machine, launcher 
 func (s *Service) healthyMachine(ctx context.Context, launcher, except string, suitable ...func(Device) bool) (Device, bool) {
 	best, rank := Device{}, 3
 	for _, d := range s.devices(ctx) {
-		if d.ID == except || !d.Reachable {
+		if d.ID == except {
+			continue
+		}
+		p := placementOf(ctx)
+		if p != nil {
+			p.candidate(d.ID)
+		}
+		if !d.Reachable {
+			p.hit(d.ID, "offline", nil)
 			continue
 		}
 		r, ok := s.launcherHealth(ctx, d.ID, launcher)
 		n := 1
 		switch {
 		case ok && r.unusable():
+			p.hit(d.ID, "launcher_unhealthy", i18n.Args{"kind": r.Kind})
 			continue
 		case ok && r.State == healthOK:
 			n = 0
 		}
-		if n >= rank || !s.launcherOn(ctx, d.ID, launcher) {
+		if p != nil {
+			p.candidate(d.ID).HealthRank = &n
+		}
+		if n >= rank {
+			continue
+		}
+		if !s.launcherOn(ctx, d.ID, launcher) {
+			p.hit(d.ID, "launcher_missing", nil)
 			continue
 		}
 		if slices.ContainsFunc(suitable, func(accept func(Device) bool) bool { return !accept(d) }) {
@@ -361,7 +396,11 @@ func (s *Service) healthDetour(ctx context.Context, m Device, launcher string, s
 	if !bad {
 		return m, "", false
 	}
+	placementOf(ctx).hit(m.ID, "launcher_unhealthy", i18n.Args{"launcher": launcher, "kind": r.Kind})
 	alt, moved := s.healthyMachine(ctx, launcher, m.ID, suitable...)
+	if p := placementOf(ctx); p != nil && moved {
+		p.ReasonKey = "healthy_launcher"
+	}
 	// The pool is provider-level: resolve it once from the failed machine. Missing or stale data gives no note, and
 	// a pool with any schedulable account stays quiet too. Read only after the on-the-spot recheck, since a passing
 	// probe returns above without any detour line.
