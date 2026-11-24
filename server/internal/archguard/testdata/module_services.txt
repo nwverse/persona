@@ -22,3 +22,7 @@ health (test) internal/db
 # Meeting recording keeps the recordings' storage in the knowledge base (the kb.Recording model with its Engine and
 # Store), which stays in the core until kb offers a recording port (#13407).
 recording internal/kb
+#
+# The knowledge pages' module imports the connectors' older chat history into the knowledge base and marks a day's
+# lines by the sent ledger: it writes and reads the knowledge base (kb.Engine, kb.Selection), the core's memory (#14407).
+knowledge-ui internal/kb

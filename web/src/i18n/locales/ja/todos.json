@@ -352,12 +352,15 @@
   "reorganize_success_transferred": "{count}件を更新しました（監督権を{transferred}件移譲）",
   "detail_template_work_goal": "作業目標",
   "detail_ownership_region": "作業目標の所属",
+  "detail_status_summary_region": "作業目標の状態サマリー",
   "detail_parent_label": "親タスク：{title}",
-  "detail_schedule_reminder": "期限とリマインダー",
-  "detail_notes_expand": "メモを展開",
-  "detail_notes_collapse": "メモを折りたたむ",
   "detail_subtasks_section": "サブタスク · {done}/{total}",
   "detail_open_active_agent": "稼働中のエージェントを開く",
   "detail_open_pr": "PR を開く",
-  "detail_add_agent": "エージェントを追加"
+  "detail_add_agent": "エージェントを追加",
+  "v2_header_needs_you": "{count}件が対応待ち",
+  "v2_labs_badge": "Labs · v2",
+  "v2_labs_badge_hint": "実験的な ToDo v2 を使用中 — 「設定 › Labs」からいつでも戻せます",
+  "parked_folded_hint": "外部待ち",
+  "slim_repo_count": "{count} リポジトリ"
 }
