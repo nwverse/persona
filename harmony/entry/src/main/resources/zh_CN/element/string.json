@@ -6331,6 +6331,10 @@
     {
       "name": "plan_before_last_message",
       "value": "你最新消息之前的计划"
+    },
+    {
+      "name": "chat_history_failed",
+      "value": "加载失败，点按重试"
     }
   ]
 }

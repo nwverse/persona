@@ -123,6 +123,8 @@ struct MessageSurface {
 
 // Long disclosures participate in the transcript's own virtual list. Only nearby batches acquire ArkUI nodes.
 const workBatchSize: number = 6;
+// A failed history page is read again on the next pull at the top, but not more often than this.
+const historyRetryMs: number = 3000;
 const inlineWorkLimit: number = 18;
 class ConversationLine {
   workBatch?: WorkInspectionStep[];
@@ -216,12 +218,15 @@ export struct Conversation {
   private autoPageCursor: number = -1;
   private revealOlder: boolean = false;
   @Local earlierFailed: boolean = false;
+  private earlierFailedAt: number = 0;
   private userScrolling: boolean = false;
   private followEpoch: number = -1;
   private tailMarker: string = '';
   @Local unseenLatest: boolean = false;
+  // The feed notice and Load more rows are always in the list, empty when unused. A notice or the control coming and
+  // going would otherwise shift every row index, and the list keeps indices, not content (docs/lessons/harmony.md).
   private readingPrefix(): number {
-    return (this.feed.error && this.feed.error !== this.model.error ? 1 : 0) + (this.model.selected.kind === 'conversation' ? 1 : 0) + (this.model.hasMoreMessages || this.feed.nextCursor ? 1 : 0);
+    return (this.model.selected.kind === 'conversation' ? 1 : 0) + 2;
   }
   @Local dismissedNextStep: string = '';
   @Local answeredNextStepId: string = '';
@@ -312,10 +317,12 @@ export struct Conversation {
         const results = await Promise.all([owner.hasMoreMessages ? owner.loadOlder() : Promise.resolve(true),
           cursor ? this.feed.loadMore() : Promise.resolve(true)]);
         if (!valid()) return;
-        this.syncTimeline();
-        boundary = this.lines.findIndex(line => known.has(line.readingId));
+        // A gesture keeps its momentum: the older rows go in when it settles, above the row the reader is on (finishScroll).
+        if (this.userScrolling && !this.revealOlder) this.timelinePending = true;
+        else { this.syncTimeline(); boundary = this.lines.findIndex(line => known.has(line.readingId)); }
         const stalled = owner.oldestTranscriptSeq === before && this.feed.nextCursor === cursor;
         this.earlierFailed = results.some(ok => !ok) || (stalled && boundary === 0 && (owner.hasMoreMessages || !!this.feed.nextCursor));
+        if (this.earlierFailed) this.earlierFailedAt = Date.now();
         if (boundary !== 0 || !this.revealOlder || this.earlierFailed) break;
       } while (owner.hasMoreMessages || this.feed.nextCursor);
       if (!valid()) return;
@@ -340,10 +347,22 @@ export struct Conversation {
     } finally { if (epoch === this.readingEpoch) { this.readingLoading = false; this.revealOlder = false; } }
   }
   private approachHistory(start: number): void {
+    if (start < this.firstVisibleIndex) this.pageHistory(start);
+  }
+  /** At the top, a pull reads the next page even when the list did not move; a failed page is read again. */
+  private pullHistory(offset: number): void {
+    if (offset < 0 && this.firstVisibleIndex < this.readingPrefix()) this.pageHistory(this.firstVisibleIndex);
+  }
+  private reachedEarliest(): void {
+    if (this.userScrolling) this.pageHistory(this.firstVisibleIndex);
+  }
+  /** Read the next older page as the reader nears the top. Each page is read once, unless its read failed. */
+  private pageHistory(start: number): void {
     const cursor = this.model.oldestTranscriptSeq;
+    const retry = this.earlierFailed && Date.now() - this.earlierFailedAt >= historyRetryMs;
     if (this.model.selected.kind !== 'session' || !this.userScrolling || this.atEnd ||
-      this.readingLoading || !this.model.hasMoreMessages || cursor <= 0 || this.autoPageCursor === cursor ||
-      start > this.readingPrefix() + 5 || start >= this.firstVisibleIndex) return;
+      this.readingLoading || !this.model.hasMoreMessages || cursor <= 0 || (this.autoPageCursor === cursor && !retry) ||
+      start > this.readingPrefix() + 5) return;
     this.autoPageCursor = cursor;
     void this.loadEarlier(false);
   }
@@ -864,8 +883,32 @@ export struct Conversation {
     const visible = lines.filter((line: ConversationLine) => (line.message?.id !== this.dismissedNextStep || !!line.message?.nextStep?.selected) && !onlyPlanUpdates(line.message?.work));
     this.markLatest(visible);
     const display = this.virtualWorkLines(this.processLines(visible, plan));
+    const place = this.readingPlace(), placed = place ? this.lines.findIndex(line => line.readingId === place.id) : -1;
     reconcileTimelineRows(this.lines, display, ConversationLine.same);
+    this.keepReadingPlace(place, placed);
+    this.pinLatest();
     this.followReading();
+  }
+  /** The row the reader is on, unless the view follows the latest. Work disclosure keeps its own anchor. */
+  private readingPlace(): ReadingAnchor | undefined {
+    return this.active && !this.atEnd && !this.inspectingWork ? this.visibleReadingAnchor() : undefined;
+  }
+  /** Rows added or removed above the reader leave that row where it was, in the same layout pass. */
+  private keepReadingPlace(place: ReadingAnchor | undefined, before: number): void {
+    if (!place) return;
+    const index = this.lines.findIndex(line => line.readingId === place.id);
+    if (index < 0 || index === before) return;
+    try {
+      this.scroller.scrollToIndex(this.readingPrefix() + index, false, ScrollAlign.START, { extraOffset: LengthMetrics.vp(-place.offset) });
+    } catch (_) { /* A list that is not laid out yet has no place to keep. */ }
+  }
+  /** While the view follows the latest, the next layout starts at the end; the frame callback then settles measured rows. */
+  private pinLatest(): void {
+    if (!this.active || !this.atEnd || this.userScrolling || this.inspectingWork || this.photoOpen || !this.lines.length) return;
+    try { this.scroller.scrollEdge(Edge.Bottom); } catch (_) { /* A list that is not laid out yet starts at its end. */ }
+  }
+  private historyLabel(): string {
+    return !this.model.connected ? 'offline' : this.readingLoading ? 'loading' : this.earlierFailed ? 'chat_history_failed' : 'load_more';
   }
   @Monitor('expanded', 'closedSoloGroups') expandedWorkChanged(): void {
     if (this.mounted) this.syncTimeline();
@@ -1423,22 +1466,24 @@ export struct Conversation {
             !this.lines.length && !this.model.error) ListItem() {
             Text(tr('loading')).fontSize(Tokens.meta).fontColor(Colors.secondary).padding(Tokens.page).id('chat.history.loading')
           }
-          if (this.feed.error && this.feed.error !== this.model.error) ListItem() {
-            Row({ space: Tokens.gap }) { Text(tr(this.feed.error)).fontSize(Tokens.meta).layoutWeight(1); Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry')).bindTips(tr('retry')).onClick(() => this.feed.refresh()) }.padding(Tokens.inset)
+          ListItem() {
+            if (this.feed.error && this.feed.error !== this.model.error) Row({ space: Tokens.gap }) { Text(tr(this.feed.error)).fontSize(Tokens.meta).layoutWeight(1); Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry')).bindTips(tr('retry')).onClick(() => this.feed.refresh()) }.padding(Tokens.inset)
           }
           if (this.model.selected.kind === 'conversation') ListItem() {
             AssistantCards({ model: this.model, feed: this.feed, active: this.active && this.model.connected, onOpenResource: (row: ResourceRow) => this.onOpenResource(row), dockOnly: true, onOpenCard: (itemId: string, kind: string) => this.onOpenCard(itemId, kind), onOpenSession: (row: ResourceRow) => this.onOpenResource(row),
               onOpenTodo: (row: ResourceRow) => this.onOpenResource(row), onOpenInbox: (row: ResourceRow) => this.onOpenResource(row), onLink: (address: string) => this.onLink(address) })
           }
-          if (this.model.hasMoreMessages || this.feed.nextCursor) ListItem() {
-            Row() {
+          ListItem() {
+            if (this.model.hasMoreMessages || this.feed.nextCursor) Row() {
               Button({ type:ButtonType.Normal, buttonStyle:ButtonStyleMode.TEXTUAL }) {
                 Row({space:4}) {
-                  SymbolGlyph(Symbols.up).fontSize(12).fontColor([Colors.activity])
-                  Text(tr(!this.model.connected ? 'offline' : this.readingLoading ? 'loading' : this.earlierFailed ? 'retry' : 'load_more')).fontSize(Tokens.toolLabel).fontColor(Colors.activity)
+                  if (this.readingLoading && this.model.connected) LoadingProgress().width(Tokens.symbol).height(Tokens.symbol).color(Colors.activity)
+                  else SymbolGlyph(this.earlierFailed ? IconActions.symbol('retry') : Symbols.up).fontSize(12).fontColor([Colors.activity])
+                  Text(tr(this.historyLabel())).fontSize(Tokens.toolLabel).fontColor(Colors.activity)
+                    .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                 }
               }.width('100%').height(44).padding({left:8,right:8}).backgroundColor(Color.Transparent).enabled(this.model.connected)
-                .accessibilityText(tr(!this.model.connected ? 'offline' : this.readingLoading ? 'loading' : this.earlierFailed ? 'retry' : 'load_more')).onClick(() => this.loadEarlier()).id('chat.history.more')
+                .accessibilityText(tr(this.historyLabel())).onClick(() => this.loadEarlier()).id('chat.history.more')
             }.width('100%').justifyContent(FlexAlign.Center)
           }
           Repeat(this.lines).each((entry: RepeatItem<ConversationLine>) => {
@@ -1469,7 +1514,8 @@ export struct Conversation {
         }.cachedCount(2).width('100%').height('100%').id('chat.transcript')
           .bindSheet(this.questions.shown, this.questionContent(), { title: { title: tr('interaction_question_reopen') }, height: SheetSize.LARGE, keyboardAvoidMode: SheetKeyboardAvoidMode.RESIZE_ONLY, showClose: true, onWillAppear: () => this.presentedQuestion = this.questions.beginPresentation(), onAppear: () => { this.questionLayoutReady = true; this.measureQuestion(); }, onWillDismiss: (action: DismissSheetAction) => this.questions.dismiss(this.presentedQuestion, () => action.dismiss()), onDisappear: () => { this.questionLayoutReady = false; this.questions.endPresentation(this.presentedQuestion); this.presentedQuestion = undefined; } })
           .maintainVisibleContentPosition(!this.atEnd || this.photoOpen)
-          .onWillScroll((offset: number, _state: ScrollState, source: ScrollSource) => this.userScroll(offset, source))
+          .onWillScroll((offset: number, _state: ScrollState, source: ScrollSource) => { this.userScroll(offset, source); this.pullHistory(offset); })
+          .onReachStart(() => this.reachedEarliest())
           .onScrollIndex((start: number, end: number) => {
             this.trackHistoryRendering(end);
             this.approachHistory(start);

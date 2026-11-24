@@ -70,8 +70,8 @@ function manualFixture(){
  const calls=[];Object.assign(v.scroller,{getItemRect:()=>({y:48,height:120}),scrollToIndex:(...args)=>calls.push(args)});
  return {...f,calls,bump:()=>generation++};
 }
-test('tapping older history reveals a newly inserted entry when the loading control disappears',async()=>{
- const {v,calls,flush}=manualFixture();await v.loadEarlier();assert.deepEqual(calls,[]);await flush();assert.deepEqual(calls,[[0,false,1,{extraOffset:-0}]]);assert.equal(v.readingLoading,false);
+test('tapping older history reveals a newly inserted entry below the leading rows, which stay when history ends',async()=>{
+ const {v,calls,flush}=manualFixture();await v.loadEarlier();assert.deepEqual(calls,[]);await flush();assert.deepEqual(calls,[[2,false,1,{extraOffset:-0}]]);assert.equal(v.readingLoading,false);
 });
 test('jumping back during a page load cancels its pending scroll and follows subsequent layout changes', async () => {
  const {v, calls, flush, scrolls} = manualFixture();
@@ -204,7 +204,7 @@ test('scrolling through earlier turns coalesces incoming display updates and the
 
 test('prefetched rows keep the old anchor while a manual tap reads through hidden pages to an earlier question',async()=>{
   const passive=manualFixture();await passive.v.loadEarlier(false);await passive.flush();
-  assert.deepEqual(passive.calls,[[1,false,1,{extraOffset:-48}]]);
+  assert.deepEqual(passive.calls,[[3,false,1,{extraOffset:-48}]]);
   const {v,calls,flush}=manualFixture();let pages=0;
   v.model.oldestTranscriptSeq=100;
   v.model.loadOlder=async()=>{
@@ -213,9 +213,73 @@ test('prefetched rows keep the old anchor while a manual tap reads through hidde
     return true;
   };
   await v.loadEarlier();await flush();
-  assert.equal(pages,3);assert.deepEqual(calls, [[1,false,1,{extraOffset:-0}]]);
+  assert.equal(pages,3);assert.deepEqual(calls, [[2,false,1,{extraOffset:-0}]]);
 });
 test('unchanged cursor stops the pager and leaves a retryable status',async()=>{
   const {v,flush}=manualFixture();let calls=0;v.model.loadOlder=async()=>{calls++;return true;};
   await v.loadEarlier();await flush();assert.equal(calls,1);assert.equal(v.earlierFailed,true);
+});
+
+test('the leading rows keep their count when a notice or Load more comes and goes',()=>{
+ const {v}=fixture();
+ for(const [more,error,cursor] of [[false,'',''],[true,'failed','next'],[true,'','']]){
+  v.model.hasMoreMessages=more;v.feed.error=error;v.feed.nextCursor=cursor;assert.equal(v.readingPrefix(),2);
+ }
+ v.model.selected={kind:'conversation'};assert.equal(v.readingPrefix(),3);
+ const rows=sourceTextBetween('          ListItem() {\n            if (this.feed.error', ".id('chat.history.more')");
+ assert.match(rows,/ListItem\(\) \{\n            if \(this.model.hasMoreMessages \|\| this.feed.nextCursor\) Row/);
+});
+
+test('rows added above keep the reader on the same row, and the latest is pinned in the same pass',()=>{
+ const Place=new Function('Edge','ScrollAlign','LengthMetrics','return '+stripTypeScriptTypes('class Place {'+
+   ['readingPrefix','visibleReadingAnchor','readingPlace','keepReadingPlace','pinLatest'].map(method).join('\n')+'}'))({Bottom:1},{START:1},{vp:n=>n});
+ const v=new Place(),scrolls=[];
+ Object.assign(v,{active:true,atEnd:false,inspectingWork:false,userScrolling:false,photoOpen:false,firstVisibleIndex:3,
+   model:{selected:{kind:'session'}},lines:[{readingId:'a'},{readingId:'b'}],
+   scroller:{getItemRect:()=>({y:-40,height:300}),scrollToIndex:(...args)=>scrolls.push(args),scrollEdge:edge=>scrolls.push(['edge',edge])}});
+ const place=v.readingPlace();assert.deepEqual(place,{id:'b',offset:-40});
+ v.lines.unshift({readingId:'older1'},{readingId:'older2'});
+ v.keepReadingPlace(place,1);assert.deepEqual(scrolls,[[5,false,1,{extraOffset:40}]]);
+ v.keepReadingPlace(place,3);assert.equal(scrolls.length,1,'a row that did not move is left alone');
+ v.inspectingWork=true;assert.equal(v.readingPlace(),undefined,'work disclosure keeps its own anchor');v.inspectingWork=false;
+ v.pinLatest();assert.equal(scrolls.length,1,'a reader away from the end is not moved');
+ v.atEnd=true;assert.equal(v.readingPlace(),undefined);v.pinLatest();assert.deepEqual(scrolls.at(-1),['edge',1]);
+ v.userScrolling=true;v.pinLatest();assert.equal(scrolls.length,2,'a gesture is never taken over');
+});
+
+test('a page read during a gesture lands when it settles instead of moving the rows under the finger',async()=>{
+ const {v,flush,calls}=manualFixture();let synced=0;v.syncTimeline=()=>{synced++;};v.userScrolling=true;
+ await v.loadEarlier(false);await flush();
+ assert.equal(synced,0);assert.equal(v.timelinePending,true);assert.equal(v.earlierFailed,false);assert.deepEqual(calls,[]);
+ const tapped=manualFixture();let shown=0;tapped.v.syncTimeline=()=>{shown++;};tapped.v.userScrolling=true;
+ await tapped.v.loadEarlier();assert.equal(shown,1,'a tap on Load more shows the page at once');
+});
+
+test('the next page is read once near the top, again after a failed read, and on a pull at the very top',()=>{
+ const Pager=new Function('historyRetryMs','return '+stripTypeScriptTypes('class Pager {'+
+   ['readingPrefix','approachHistory','pullHistory','reachedEarliest','pageHistory'].map(method).join('\n')+'}'))(3000);
+ const v=new Pager(),reads=[];
+ Object.assign(v,{model:{selected:{kind:'session'},oldestTranscriptSeq:90,hasMoreMessages:true},feed:{},userScrolling:true,atEnd:false,
+   readingLoading:false,autoPageCursor:-1,earlierFailed:false,earlierFailedAt:0,firstVisibleIndex:6,loadEarlier:manual=>reads.push(manual)});
+ v.approachHistory(9);assert.deepEqual(reads,[],'moving toward the latest');
+ v.approachHistory(5);assert.deepEqual(reads,[false]);
+ v.firstVisibleIndex=5;v.approachHistory(4);assert.equal(reads.length,1,'one read per page');
+ v.earlierFailed=true;v.earlierFailedAt=Date.now();v.firstVisibleIndex=1;v.pullHistory(-12);assert.equal(reads.length,1,'not straight after a failure');
+ v.earlierFailedAt=Date.now()-3000;v.pullHistory(12);assert.equal(reads.length,1,'only a pull toward earlier rows');
+ v.pullHistory(-12);assert.equal(reads.length,2,'a pull at the top reads the failed page again');
+ v.earlierFailed=false;v.model.oldestTranscriptSeq=60;v.reachedEarliest();assert.equal(reads.length,3,'reaching the top reads the next page');
+ v.userScrolling=false;v.model.oldestTranscriptSeq=30;v.reachedEarliest();assert.equal(reads.length,3,'the first layout at the top is not a pull');
+});
+
+test('an earlier page that cannot be read stays on the Load more row unless pairing or permission is lost',async()=>{
+ const text=readFileSync(new URL('../entry/src/main/ets/models/ClientModel.ets',import.meta.url),'utf8');
+ const start=text.indexOf('  async loadOlder(): Promise<boolean> {');assert.notEqual(start,-1);
+ let depth=0,end=text.indexOf('{',start);for(;end<text.length;end++){if(text[end]==='{')depth++;else if(text[end]==='}'&&--depth===0)break;}
+ class HttpFailure extends Error{constructor(status){super('failed');this.status=status;}}
+ const Model=new Function('HttpFailure','return '+stripTypeScriptTypes('class Model {'+text.slice(start,end+1)+'}'))(HttpFailure);
+ for(const [error,reported] of [[new Error('transport_failed_1007900028'),0],[new HttpFailure(504),0],[new HttpFailure(403),1],[new HttpFailure(401),1]]){
+  const model=new Model(),notices=[];Object.assign(model,{transcript:{older:async()=>{throw error;}},failure:e=>notices.push(e)});
+  assert.equal(await model.loadOlder(),false);assert.equal(notices.length,reported);
+ }
+ const label=method('historyLabel');assert.match(label,/'chat_history_failed'/);
 });

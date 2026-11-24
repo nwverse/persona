@@ -6331,6 +6331,10 @@
     {
       "name": "plan_before_last_message",
       "value": "Plan from before your last message"
+    },
+    {
+      "name": "chat_history_failed",
+      "value": "Couldn't load. Tap to retry"
     }
   ]
 }

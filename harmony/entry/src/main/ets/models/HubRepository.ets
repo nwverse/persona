@@ -31,7 +31,9 @@ export class HubRepository {
   async call(path: string, method: string = 'GET', body: Record<string, Object> = {}, op: string = '', admit?: () => boolean, completedAsAck: boolean = false,
     acknowledged?: (result: Record<string, Object>) => boolean): Promise<Record<string, Object>> {
     const catalogRead = method === 'GET' && /^\/api\/v1\/machines\/[^/]+\/launchers\/[^/]+\/models(?:\?|$)/.test(path);
-    const timeout = catalogRead ? 75000 : method === 'POST' && (path === '/api/v1/sessions' || path.endsWith('/takeover')) ? 110000 : undefined;
+    // An earlier transcript page can make the Hub read a long file from the computer; it is prefetched, so waiting is unseen.
+    const historyRead = method === 'GET' && /^\/api\/v1\/sessions\/[^?]+\/items\?(?:[^#]*&)?before_seq=/.test(path);
+    const timeout = catalogRead ? 75000 : historyRead ? 30000 : method === 'POST' && (path === '/api/v1/sessions' || path.endsWith('/takeover')) ? 110000 : undefined;
     if (method === 'GET' || !this.mutations) {
       if (admit && !admit()) throw new HttpFailure(0, 'request_updated', false);
       const result = Wire.parse(await this.transport.request(path, method, method === 'GET' ? '' : JSON.stringify(body), op, timeout));
