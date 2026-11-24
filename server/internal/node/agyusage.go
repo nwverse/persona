@@ -116,6 +116,9 @@ func (u *agyTranscriptUsage) observeCheckpoint() {
 func (u *agyTranscriptUsage) observePlanner(step agyStep) (proto.TokenUsage, bool) {
 	model := step.normalizedModel()
 	if model != "" {
+		if u.model != "" && !strings.EqualFold(u.model, model) {
+			u.contextWindow = 0
+		}
 		u.model = model
 	}
 	usage, ctxTokens, win, ok := step.tokenUsage()
@@ -291,7 +294,7 @@ func agyModelCandidates(models ...string) []string {
 // agyContextWindow resolves the context window for an Antigravity session without fabricating numbers for unknown
 // models: a transcript-recorded window comes first, then a managed launcher's MaxContext / Models catalog (matching
 // both exact and effort-stripped IDs), then discovered agyModelList window metadata, then built-in known model rules
-// (Claude models and explicit [1m] suffixes), else 0.
+// for the model that answered, else 0.
 func agyContextWindow(l *proto.ManagedLauncher, model string, recorded, used int, catalogLookup func(string) int, fallbackModels ...string) int {
 	if recorded > 0 {
 		return recorded
@@ -303,16 +306,7 @@ func agyContextWindow(l *proto.ManagedLauncher, model string, recorded, used int
 	allModels = append(allModels, fallbackModels...)
 	candidates := agyModelCandidates(allModels...)
 	if l != nil {
-		var w int
-		if len(candidates) > 0 {
-			w = launcherContextWindow(*l, candidates[0], candidates[1:]...)
-		} else if l.MaxContext > 0 {
-			w = l.MaxContext
-		}
-		if w > 0 {
-			if l.MaxContext <= 0 && w == claudeWindow && (used > claudeWindow || strings.Contains(strings.ToLower(strings.TrimSpace(model)), oneMillionSuffix)) {
-				return claudeWindow1M
-			}
+		if w := launcherContextWindow(*l, used, candidates...); w > 0 {
 			return w
 		}
 	}
