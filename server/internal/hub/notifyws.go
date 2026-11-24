@@ -126,7 +126,7 @@ func (h *Hub) notifyReply(owner, machineID, machine, sessionID, title, text stri
 func (h *Hub) notifyReplyKeyed(owner, machineID, machine, sessionID, title, text, key string) {
 	build := func(l i18n.Lang) map[string]any { return donePayloadIn(l, machineID, machine, sessionID, title, text) }
 	wants := pushWants{Kind: "input"}
-	policy := pushPolicy{level: assistantwire.LevelP0, relatedKey: replyKey(sessionID, text, key), title: title, body: text}
+	policy := pushPolicy{kind: assistantwire.NotifyReply, level: assistantwire.LevelP0, relatedKey: replyKey(sessionID, text, key), title: title, body: text}
 	if _, _, heldReason := h.push.sendFromPolicy(owner, policy, build, "", wants.fn(), wants.quiet(), nil, nil); heldReason == "" {
 		h.notifyWSFrom(owner, "reply", build, wants.fn(), wants.quiet())
 	}
@@ -178,7 +178,7 @@ func (h *Hub) notifyDecideKeyed(owner, machineID, machine, sessionID, title, tex
 	sent := func(d Device) { h.push.ownerCardPushedTo(card, d.DeviceID) }
 	wants := pushWants{Kind: "input"}
 	sum := sha256.Sum256([]byte("todo_decide\x00" + todo.ID))
-	policy := pushPolicy{level: assistantwire.LevelP0, relatedKey: key, title: title, body: text}
+	policy := pushPolicy{kind: assistantwire.NotifyDecide, level: assistantwire.LevelP0, relatedKey: key, title: title, body: text}
 	if _, _, heldReason := h.push.sendFromPolicy(owner, policy, build, "td_"+hex.EncodeToString(sum[:12]), wants.fn(), wants.quiet(), nil, sent); heldReason == "" {
 		h.notifyWSFrom(owner, "assistant", build, wants.fn(), wants.quiet())
 	}
@@ -221,7 +221,7 @@ func (h *Hub) notifyInteractionHinted(owner string, ix proto.Interaction, machin
 	if ix.Kind == proto.IxElicitation {
 		// Only what can show an MCP form or link: the phones that registered for one (#2433; a tap opens the card,
 		// the push has no buttons) and the connections that declared it.
-		policy := pushPolicy{level: level, relatedKey: key, title: summary, depth: depth, track: track}
+		policy := pushPolicy{kind: assistantwire.NotifyInput, level: level, relatedKey: key, title: summary, depth: depth, track: track}
 		if heldReason := h.push.sendCard(owner, policy, build, ix.ID, wants.fn(), wants.quiet(), takesElicitation); heldReason == "" {
 			h.notifyWSFrom(owner, "interaction", build, wants.fn(), wants.quiet(), "elicitation")
 		}
@@ -230,7 +230,7 @@ func (h *Hub) notifyInteractionHinted(owner string, ix proto.Interaction, machin
 		// desktops is there too (desktops.go); which cards those are is owner's to say. The desktop app's online check
 		// follows in sendCard and notifyWSFrom.
 		fn := alertWanted(wants.fn(), linkCovered && h.linkDesktopOnline(owner))
-		policy := pushPolicy{level: level, relatedKey: key, title: summary, depth: depth, track: track}
+		policy := pushPolicy{kind: assistantwire.NotifyInput, level: level, relatedKey: key, title: summary, depth: depth, track: track}
 		if heldReason := h.push.sendCard(owner, policy, build, ix.ID, fn, wants.quiet(), nil); heldReason == "" {
 			h.notifyWSFrom(owner, "interaction", build, fn, wants.quiet())
 		}

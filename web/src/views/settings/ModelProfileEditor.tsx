@@ -7,7 +7,7 @@ import { launcherBindingState, useCanonicalLauncherBinding } from "../../lib/lau
 import { takesEffort } from "../../lib/launcher-models";
 import { MANAGER_HEADER } from "../../lib/manager-choice";
 import { providerAgent, type ModelBinding, type ModelProvider, type ModelPurpose } from "../../lib/model-config";
-import { chooseProvider, effortOffered, modelConfiguration, permissionModesForLauncher, permissionModesForProvider } from "../../lib/model-config-execution";
+import { chooseProvider, effortOffered, modelConfiguration, permissionModesForLauncher, permissionModesForProvider, supportsField } from "../../lib/model-config-execution";
 import {
   draftToProfileInput,
   isProfileDraftDirty,
@@ -82,24 +82,32 @@ export function ModelProfileEditor({
   manager,
   profile,
   revision,
+  syncKey = 0,
   purposes: propPurposes,
   providers: propProviders,
   busy,
+  saving,
+  capturing,
   error,
   conflict,
   onSave,
+  onCapture,
   onReload,
   onCancel,
 }: {
   manager: string;
   profile: ModelProfile;
   revision: number;
+  syncKey?: number;
   purposes?: ModelPurpose[];
   providers?: ModelProvider[];
   busy: boolean;
+  saving?: boolean;
+  capturing?: boolean;
   error: string;
   conflict: boolean;
   onSave: (input: ModelProfileSaveInput) => Promise<void>;
+  onCapture?: () => Promise<void>;
   onReload: () => Promise<void>;
   onCancel: () => void;
 }) {
@@ -145,11 +153,11 @@ export function ModelProfileEditor({
   }, [manager]);
 
   const catalogIds = useMemo(() => purposes.map((p) => p.id), [purposes]);
-  const initialDraft = useMemo(() => profileToDraft(profile, catalogIds), [profile, revision]);
+  const loadedKey = `${profile.id}:${revision}:${syncKey}`;
+  const initialDraft = useMemo(() => profileToDraft(profile, catalogIds), [profile, loadedKey]);
   const [draft, setDraft] = useState<ProfileDraft>(() => initialDraft);
 
-  // Reset the draft only when opening a different profile or after an explicit reload bumps revision.
-  const loadedKey = `${profile.id}:${revision}`;
+  // Reset the draft only when opening a different profile or after an explicit reload/capture bumps revision/syncKey.
   const prevKey = useRef(loadedKey);
   useEffect(() => {
     if (prevKey.current !== loadedKey) {
@@ -286,16 +294,35 @@ export function ModelProfileEditor({
   };
 
   const chatEffortKnown = providers.some((p) => p.chat_effort === true);
+  const launcherPurposes = purposes.filter((p) => p.kind === "launcher" && Array.isArray(p.fields));
+  // Hide permission_mode on empty tiers when the hub's launcher purposes omit permission_mode (cross-version hubs).
+  const hubSupportsPermissionMode = launcherPurposes.length === 0 || launcherPurposes.some((p) => supportsField(p, "permission_mode"));
   const purposeIds = Object.keys(draft.purposes);
   const launcherNames = Object.keys(draft.launchers).sort((a, b) => a.localeCompare(b));
 
   return (
     <div data-testid="model-profile-editor" className="flex flex-col gap-5">
-      <p className="rounded-control bg-inset px-3 py-2 text-label leading-relaxed text-ink-2">
-        {profile.active
-          ? t("settings-modelprofiles.save_note_active")
-          : t("settings-modelprofiles.save_note_inactive")}
-      </p>
+      <div className="flex flex-col gap-2 rounded-control bg-inset px-3 py-2.5 text-label leading-relaxed text-ink-2">
+        <p>
+          {profile.active
+            ? t("settings-modelprofiles.save_note_active")
+            : t("settings-modelprofiles.save_note_inactive")}
+        </p>
+        {onCapture && (
+          <div>
+            <Button
+              tone="secondary"
+              size="sm"
+              testId="profile-editor-capture-button"
+              busy={capturing}
+              disabled={busy}
+              onClick={() => void onCapture()}
+            >
+              {t("settings-modelprofiles.capture_from_current")}
+            </Button>
+          </div>
+        )}
+      </div>
 
       {/* Profile identity */}
       <div className="flex flex-col gap-3">
@@ -445,6 +472,7 @@ export function ModelProfileEditor({
                 launcherProviders={launcherProviders}
                 providerNames={providerNames}
                 manager={manager}
+                hubSupportsPermissionMode={hubSupportsPermissionMode}
                 busy={busy}
                 onChange={(patch) => updateTier(tier.key, patch)}
                 onRemove={() => removeTier(tier.key)}
@@ -454,38 +482,41 @@ export function ModelProfileEditor({
         )}
       </section>
 
-      {/* Inline validation problems */}
-      {problems.length > 0 && (
-        <ul role="alert" data-testid="profile-editor-problems" className="flex flex-col gap-1 rounded-control bg-field px-3 py-2 text-label text-red">
-          {problems.map((msg, i) => (
-            <li key={i}>{msg}</li>
-          ))}
-        </ul>
-      )}
-
-      {/* Server/action error and 409 reload */}
-      {error && <p role="alert" className="text-label text-red">{error}</p>}
-      {conflict && (
-        <div>
-          <Button tone="secondary" disabled={busy} onClick={() => void onReload()}>
-            {t("settings-modelprofiles.reload_discard")}
+      {/* Sticky save bar: keeps Save and any validation/save/409 errors adjacent and always visible on long forms. */}
+      <div
+        data-testid="profile-editor-save-bar"
+        className="sticky bottom-0 z-10 -mx-4 -mb-4 flex flex-col gap-2 border-t border-line bg-inset px-4 py-2.5 max-sm:pb-[calc(10px+env(safe-area-inset-bottom))]"
+      >
+        {problems.length > 0 && (
+          <ul role="alert" data-testid="profile-editor-problems" className="flex max-h-24 flex-col gap-1 overflow-y-auto rounded-control bg-field px-3 py-2 text-label text-red">
+            {problems.map((msg, i) => (
+              <li key={i}>{msg}</li>
+            ))}
+          </ul>
+        )}
+        {error && (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p role="alert" data-testid="profile-save-error" className="min-w-0 flex-1 text-label text-red">{error}</p>
+            {conflict && (
+              <Button tone="secondary" size="sm" disabled={busy} onClick={() => void onReload()}>
+                {t("settings-modelprofiles.reload_discard")}
+              </Button>
+            )}
+          </div>
+        )}
+        <div className="flex items-center justify-end gap-2">
+          <Button tone="quiet" disabled={busy} onClick={onCancel}>
+            {t("common.cancel")}
+          </Button>
+          <Button
+            tone="primary"
+            busy={saving ?? busy}
+            disabled={!canSave || (!dirty && !conflict)}
+            onClick={handleSave}
+          >
+            {t("settings-modelprofiles.save")}
           </Button>
         </div>
-      )}
-
-      {/* Footer actions inside editor */}
-      <div className="flex items-center justify-end gap-2 border-t border-line pt-3">
-        <Button tone="quiet" disabled={busy} onClick={onCancel}>
-          {t("common.cancel")}
-        </Button>
-        <Button
-          tone="primary"
-          busy={busy}
-          disabled={!canSave || (!dirty && !conflict)}
-          onClick={handleSave}
-        >
-          {t("settings-modelprofiles.save")}
-        </Button>
       </div>
     </div>
   );
@@ -884,6 +915,7 @@ function TierEditorCard({
   launcherProviders,
   providerNames,
   manager,
+  hubSupportsPermissionMode,
   busy,
   onChange,
   onRemove,
@@ -893,6 +925,7 @@ function TierEditorCard({
   launcherProviders: ModelProvider[];
   providerNames: Named[];
   manager: string;
+  hubSupportsPermissionMode: boolean;
   busy: boolean;
   onChange: (patch: Partial<TierDraftEntry>) => void;
   onRemove: () => void;
@@ -1024,7 +1057,7 @@ function TierEditorCard({
         </label>
       </div>
 
-      {permissionModes.length > 0 && (
+      {permissionModes.length > 0 && (hubSupportsPermissionMode || !!tier.permission_mode) && (
         <label className="block">
           <span className="mb-1 block text-label font-medium text-ink-2">
             {t("settings-modelconfiguration.permission_mode")}

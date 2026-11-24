@@ -694,6 +694,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	asked := ""
 	if agent == "claude" {
+		if _, err := n.resolveClaudeModelArg(ctx, launcher, execution.Model); err != nil {
+			return "", err
+		}
 		asked = n.startProfile(executionOption(options).ConfigDir, guestKind, resume)
 		execution.ConfigDir, err = n.assistantProfileSelection(ctx, id, launcher, asked, resume)
 		if err != nil {

@@ -94,9 +94,11 @@ type channelsBook struct {
 	// generation changes on unbind so an in-flight message or question cannot restore the old binding's state.
 	generation map[string]uint64
 	// list is the hub's list of the channels, kept a moment (the runs look at it every second).
-	list   []channel.View
-	listAt time.Time
-	now    func() time.Time // tests
+	list         []channel.View
+	listAt       time.Time
+	overrides    map[string]*channel.TargetOverride
+	hasOverrides bool
+	now          func() time.Time // tests
 }
 
 func (c *channelsBook) clock() time.Time {

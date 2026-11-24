@@ -344,6 +344,15 @@ func (s *Service) allOwnSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.inboxSignalsOn(ctx)), nil },
 			set: s.setInboxSignals},
+		{Setting: Setting{Key: "assistant.auto_supervision_messages", Title: "Automatic supervision messages", Actions: getSet,
+			About: "on (the default): the assistant sends its follow-up messages about supervised tasks on its own (they wake the main " +
+				"conversation, a leader or the background supervisor, and each costs a model turn). off: it sends none, queues none and " +
+				"schedules none, and what was waiting is withdrawn once. Not affected: the task ledger and states, the user's own " +
+				"questions and task_review, approval and permission cards, and the safety checks. Turning it back on takes only what " +
+				"happens afterwards. Applies at once",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.autoSupervisionOn(ctx)), nil },
+			set: s.setAutoSupervisionMessages},
 		{Setting: Setting{Key: "inbox.todo_forward.enabled", Title: "Auto-forward PR/Issue Inbox events to the bound to-do's Agent", Actions: getSet,
 			About: "off (the default): Inbox ingestion performs zero automatic forwards to task Agents. on: incoming Inbox items " +
 				"with an exact canonical GitHub PR or Issue URL bound to an open to-do's pr_url or todo_repositories are " +
@@ -661,7 +670,7 @@ var settingTitles = map[string]string{modulesKey: "title_modules", standingAutho
 	"assistant.start_requested_tasks":     "title_start_requested_tasks", "assistant.launcher": "title_launcher", "assistant.limit_fallbacks": "title_limit_fallbacks",
 	"assistant.recording_days": "title_recording_days", "assistant.delivery_gate": "title_delivery_gate", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders", "assistant.briefing_waits": "title_briefing_waits", "assistant.background_supervisor_keeps_context": "title_background_supervisor_keeps_context", "assistant.chat_reply_relay": "title_chat_reply_relay",
-	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.task_lessons": "title_task_lessons", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "inbox.todo_forward.enabled": "title_inbox_todo_forward", "assistant.pr_events_route_to_agent": "title_pr_events_route_to_agent", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", "model_profiles.tiers": "title_model_tiers",
+	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.task_lessons": "title_task_lessons", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "assistant.auto_supervision_messages": "title_auto_supervision_messages", "inbox.todo_forward.enabled": "title_inbox_todo_forward", "assistant.pr_events_route_to_agent": "title_pr_events_route_to_agent", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", "model_profiles.tiers": "title_model_tiers",
 	"assistant.load_all_tools":                "title_load_all_tools",
 	"assistant.meeting_transcription_default": "title_meeting_transcription_default",
 	"assistant.meeting_attendance_default":    "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days",
@@ -1168,6 +1177,13 @@ func (s *Service) setInboxSignals(ctx context.Context, v json.RawMessage) (*ownC
 		return i18n.T(l, "assistant-settings_tool.change_inbox_signals", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.InboxSignals },
 		"assistant.inbox_signals is %v from the next new Inbox message on (signals already waiting go out only while it is on).")
+}
+
+func (s *Service) setAutoSupervisionMessages(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.autoSupervisionOn, "assistant.auto_supervision_messages is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_auto_supervision_messages", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.AutoSupervisionMessages },
+		"assistant.auto_supervision_messages is %v now (settingsChanged applies the switch at once; turning it off withdraws what waited, turning it on replays nothing).")
 }
 
 func (s *Service) setInboxTodoForward(ctx context.Context, v json.RawMessage) (*ownChange, error) {

@@ -108,6 +108,12 @@ import { findSelectedBlocker, matchesSharedBlocker, parseSharedBlockers } from "
 import { SharedBlockersStrip } from "../components/SharedBlockersStrip";
 import { reorganizeDirectionOptions, reorganizeTodos, type TodoReorganizeRequest } from "../lib/todo-reorganize";
 import { BatchReorganizeBar } from "../components/BatchReorganizeBar";
+import {
+  classifyTodoDetailTemplate,
+  resolveWorkGoalActions,
+  shouldCollapseLongNotes,
+  shouldCollapsePersonalFields,
+} from "../lib/todo-detail-template";
 import { useRestoredTodos } from "../lib/todo-restore";
 import { stepsWords } from "../lib/todo-steps";
 import { useOwnerNeeds, useTodoLookup, useTodoMinute } from "../lib/todo-owner-needs";
@@ -520,6 +526,7 @@ export function TodosView({
   // "By request": the requests graph takes the page's width, and the detail opens beside it only once a piece is picked
   const requestMode = grouping === "request";
   const leaderTitles = useStore((s) => s.assistant?.conversations);
+  const cachedDirectionNames = useCachedDirectionNames();
   const reorganizeDirections = useMemo(
     () => (todosV2 ? reorganizeDirectionOptions(directionTree, leaderTitles, assistant?.leaders) : []),
     [todosV2, directionTree, leaderTitles, assistant?.leaders],
@@ -1306,6 +1313,16 @@ export function TodosView({
               onOpenTodo={openFromList}
               onDeleteClick={() => askDelete(activeTodo.id)}
               todosV2={todosV2}
+              parentTodo={todosV2 && activeTodo.part_of ? todos.find((td) => td.id === activeTodo.part_of) : undefined}
+              childTodos={todosV2 ? todos.filter((td) => td.part_of === activeTodo.id) : undefined}
+              directionName={
+                todosV2 && activeTodo.direction_id
+                  ? reorganizeDirections.find((d) => d.id === activeTodo.direction_id)?.label ||
+                    cachedDirectionNames.get(activeTodo.direction_id) ||
+                    leaderTitles?.find((c) => c.session_id === activeTodo.direction_id)?.title ||
+                    activeTodo.direction_id
+                  : undefined
+              }
             />
           ) : (
             <div className="flex flex-1 items-center justify-center text-[13px] text-ink-3">
@@ -2865,6 +2882,9 @@ function TodoDetail({
   onOpenTodo,
   onDeleteClick,
   todosV2,
+  parentTodo,
+  childTodos = [],
+  directionName,
 }: {
   todo: Todo;
   owner: string;
@@ -2883,6 +2903,9 @@ function TodoDetail({
   onOpenTodo: (id: string) => void;
   onDeleteClick: () => void;
   todosV2?: boolean;
+  parentTodo?: Todo;
+  childTodos?: readonly Todo[];
+  directionName?: string;
 }) {
   const title = useTodoField({
     remote: todo.title, owner, allowEmpty: false,
@@ -2897,6 +2920,21 @@ function TodoDetail({
   const menu = useMenu();
   const allSessions = useAgentSessions();
   const spacesSupported = useStore((s) => s.spacesSupported);
+  const [repositoryCount, setRepositoryCount] = useState(0);
+  const [personalFieldsOpen, setPersonalFieldsOpen] = useState(false);
+  const [notesExpanded, setNotesExpanded] = useState(false);
+
+  const template = useMemo(
+    () => (todosV2 === true ? classifyTodoDetailTemplate(todo, childTodos.length, { repositoryCount }) : undefined),
+    [todosV2, todo, childTodos.length, repositoryCount],
+  );
+  const isWorkGoalV2 = todosV2 === true && template === "work_goal";
+  const collapsePersonalFields = isWorkGoalV2 && shouldCollapsePersonalFields(todo);
+  const collapseLongNotes = isWorkGoalV2 && shouldCollapseLongNotes(todo);
+  const workGoalActions = useMemo(
+    () => (isWorkGoalV2 ? resolveWorkGoalActions(todo, lookup) : undefined),
+    [isWorkGoalV2, todo, lookup],
+  );
 
   const hasLiveAgent = (mid: string, spaceName: string) => {
     return allSessions.some(
@@ -2981,6 +3019,52 @@ function TodoDetail({
   return (
     // a page's reading width (DESIGN_SYSTEM 2.5 "Widths", as the inbox's detail): a wide window centers it (audit item 75)
     <div className="mx-auto flex min-h-full w-full max-w-[760px] flex-col p-6 sm:p-8" data-testid="todo-detail">
+      {/* Work-goal Ownership Strip under todos_v2 (#14777) */}
+      {isWorkGoalV2 && (
+        <div
+          data-testid="todo-detail-ownership"
+          aria-label={t("todos.detail_ownership_region")}
+          className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-control bg-inset px-3 py-1.5 text-xs text-ink-2 shadow-hairline"
+        >
+          <span
+            data-testid="todo-detail-template-badge"
+            className="inline-flex shrink-0 items-center gap-1 font-semibold text-accent-ink"
+          >
+            <Icon name="target" size={12} stroke={2} />
+            <span>{t("todos.detail_template_work_goal")}</span>
+          </span>
+          {todo.direction_id && (
+            <>
+              <span className="text-ink-3" aria-hidden>·</span>
+              <span data-testid="todo-detail-direction" className="inline-flex min-w-0 items-center gap-1 text-ink-2">
+                <Icon name="folder" size={12} stroke={2} className="shrink-0 text-ink-3" />
+                <span className="truncate">{directionName || todo.direction_id}</span>
+              </span>
+            </>
+          )}
+          {todo.part_of && (
+            <>
+              <span className="text-ink-3" aria-hidden>·</span>
+              {parentTodo ? (
+                <button
+                  type="button"
+                  data-testid="todo-detail-parent-link"
+                  onClick={() => onOpenTodo(parentTodo.id)}
+                  className="touch-hit inline-flex min-w-0 items-center gap-1 font-medium text-accent-ink hover:underline focus-visible:outline-2 focus-visible:outline-accent"
+                >
+                  <span className="truncate">{t("todos.detail_parent_label", { title: parentTodo.title })}</span>
+                  <Icon name="chevronRight" size={11} stroke={2.2} className="shrink-0" />
+                </button>
+              ) : (
+                <span data-testid="todo-detail-parent-link" className="truncate text-ink-3">
+                  {t("todos.detail_parent_label", { title: todo.part_of })}
+                </span>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
       {/* Title Row with ⋯ menu */}
       <div className="flex items-center justify-between gap-3">
         <input
@@ -3076,7 +3160,29 @@ function TodoDetail({
       <HeldForBriefing todo={todo} />
 
       {/* Due date, reminder, priority (#1683) */}
-      <TodoPlanEditor todo={todo} todosV2={todosV2} />
+      {collapsePersonalFields ? (
+        <div className="mt-4" data-testid="todo-detail-personal-fields">
+          <button
+            type="button"
+            data-testid="todo-detail-personal-fields-toggle"
+            aria-expanded={personalFieldsOpen}
+            onClick={() => setPersonalFieldsOpen((v) => !v)}
+            className="touch-hit inline-flex items-center gap-1.5 rounded-control px-2 py-1 text-meta font-medium text-ink-3 transition-colors hover:bg-hover hover:text-ink-2 focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            <Icon
+              name="chevron"
+              size={11}
+              stroke={2.4}
+              className={cx("shrink-0 transition-transform duration-150", personalFieldsOpen ? "" : "-rotate-90")}
+            />
+            <Icon name="calendar" size={13} stroke={2} className="shrink-0" />
+            <span>{t("todos.detail_schedule_reminder")}</span>
+          </button>
+          {personalFieldsOpen && <TodoPlanEditor todo={todo} todosV2={todosV2} />}
+        </div>
+      ) : (
+        <TodoPlanEditor todo={todo} todosV2={todosV2} />
+      )}
       {/* The brief its work is held to (#3822): who asked and in what words above the criteria; the scope changes
           and who worked on it under them. */}
       {todo.brief && (
@@ -3099,24 +3205,116 @@ function TodoDetail({
       {todo.origin && <TaskCompletionCheck todo={todo} />}
 
       {/* Notes / Description */}
-      <div className="mt-4">
-        <div className="relative rounded-control bg-inset p-3.5 shadow-hairline">
-          <textarea
-            rows={3}
-            value={notes.value}
-            aria-busy={notes.saving}
-            onChange={(e) => notes.edit(e.target.value)}
-            onBlur={notes.save}
-            placeholder={t("todos.notes_placeholder")}
-            className="w-full resize-none bg-transparent text-[13.5px] leading-[1.65] text-ink outline-none placeholder:text-ink-3"
-          />
+      {collapseLongNotes ? (
+        <div className="mt-4" data-testid="todo-detail-notes-collapsible">
+          {notesExpanded ? (
+            <div className="relative rounded-control bg-inset p-3.5 shadow-hairline">
+              <div className="mb-2 flex justify-end">
+                <button
+                  type="button"
+                  data-testid="todo-detail-notes-toggle"
+                  aria-expanded={true}
+                  onClick={() => setNotesExpanded(false)}
+                  className="touch-hit inline-flex items-center gap-1 text-xs font-medium text-ink-3 hover:text-ink-2 focus-visible:outline-2 focus-visible:outline-accent"
+                >
+                  <Icon name="chevron" size={10} stroke={2.4} />
+                  <span>{t("todos.detail_notes_collapse")}</span>
+                </button>
+              </div>
+              <textarea
+                rows={3}
+                value={notes.value}
+                aria-busy={notes.saving}
+                onChange={(e) => notes.edit(e.target.value)}
+                onBlur={notes.save}
+                placeholder={t("todos.notes_placeholder")}
+                className="w-full resize-none bg-transparent text-sm leading-[1.65] text-ink outline-none placeholder:text-ink-3"
+              />
+            </div>
+          ) : (
+            <div className="rounded-control bg-inset p-3.5 shadow-hairline" data-testid="todo-detail-notes-collapsed">
+              <p className="line-clamp-2 text-meta leading-[1.55] text-ink-2 select-text">{notes.value}</p>
+              <button
+                type="button"
+                data-testid="todo-detail-notes-toggle"
+                aria-expanded={false}
+                onClick={() => setNotesExpanded(true)}
+                className="touch-hit mt-2 inline-flex items-center gap-1 text-xs font-medium text-accent-ink hover:underline focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                <Icon name="chevron" size={10} stroke={2.4} className="-rotate-90" />
+                <span>{t("todos.detail_notes_expand")}</span>
+              </button>
+            </div>
+          )}
         </div>
-      </div>
+      ) : (
+        <div className="mt-4">
+          <div className="relative rounded-control bg-inset p-3.5 shadow-hairline">
+            <textarea
+              rows={3}
+              value={notes.value}
+              aria-busy={notes.saving}
+              onChange={(e) => notes.edit(e.target.value)}
+              onBlur={notes.save}
+              placeholder={t("todos.notes_placeholder")}
+              className="w-full resize-none bg-transparent text-[13.5px] leading-[1.65] text-ink outline-none placeholder:text-ink-3"
+            />
+          </div>
+        </div>
+      )}
 
       <TodoImages todo={todo} owner={owner} />
 
       <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id}
-        prStatus={todo.pr_status} otherPRs={todo.other_prs} legacyPRs={legacyPR ? [legacyPR] : []} version={todo.updated_at} todosV2={todosV2} />
+        prStatus={todo.pr_status} otherPRs={todo.other_prs} legacyPRs={legacyPR ? [legacyPR] : []} version={todo.updated_at} todosV2={todosV2}
+        onRepositoriesCount={todosV2 === true ? setRepositoryCount : undefined} />
+      {isWorkGoalV2 && childTodos.length > 0 && (
+        <section className="mt-6" data-testid="todo-detail-subtasks">
+          <div className="mb-2 text-submeta font-medium tracking-[0.04em] text-ink-3">
+            {t("todos.detail_subtasks_section", {
+              done: childTodos.filter((c) => Boolean(c.done_at)).length,
+              total: childTodos.length,
+            })}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {childTodos.map((child) => {
+              const childDone = Boolean(child.done_at);
+              const childStatus = todoStatus(child, lookup);
+              const childShown = shownStatus(child, childStatus);
+              const childDot =
+                childShown === "needs_you" || childShown === "interrupted"
+                  ? "needs_you"
+                  : childShown === "unread"
+                    ? "unread"
+                    : childShown === "working" || childShown === "waiting"
+                      ? "working"
+                      : "offline";
+              return (
+                <button
+                  key={child.id}
+                  type="button"
+                  data-testid="todo-detail-subtask-item"
+                  data-subtask-id={child.id}
+                  onClick={() => onOpenTodo(child.id)}
+                  className="flex items-center gap-2.5 rounded-control border border-line bg-canvas px-3 py-2 text-left transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent"
+                >
+                  {childDone ? (
+                    <span className="flex size-3.5 shrink-0 items-center justify-center rounded-full bg-accent text-white">
+                      <Icon name="check" size={9} stroke={2.6} />
+                    </span>
+                  ) : (
+                    <StatusMark state={childDot} size="sm" />
+                  )}
+                  <span className={cx("min-w-0 flex-1 truncate text-meta", childDone ? "text-ink-3 line-through" : "font-medium text-ink")}>
+                    {child.title}
+                  </span>
+                  <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
       <PageBoundary page="workspace-naming">
         <Suspense fallback={<Loading />}>
           <WorkspaceNaming manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id} />
@@ -3352,10 +3550,59 @@ function TodoDetail({
             {t("todos.retry")}
           </Button>
         )}
-        {open && (
-          <Button tone={canRetry ? "secondary" : "accent"} icon="hand" onClick={onOpenHandover} className="h-8.5 px-3.5 text-[13px] whitespace-nowrap">
-            {t("todos.hand_over")}
-          </Button>
+        {isWorkGoalV2 && open && workGoalActions?.primaryAction === "open_agent" && workGoalActions.activeAgent ? (
+          <>
+            <Button
+              tone={instead || canRetry ? "secondary" : "accent"}
+              icon="terminal"
+              testId="todo-open-active-agent"
+              onClick={() => openFromPage({ name: "session", mid: workGoalActions.activeAgent!.machineId, sid: workGoalActions.activeAgent!.sessionId })}
+              className="h-8.5 px-3.5 text-meta whitespace-nowrap"
+            >
+              {t("todos.detail_open_active_agent")}
+            </Button>
+            {workGoalActions.prUrl && (
+              <a
+                href={workGoalActions.prUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid="todo-open-pr"
+                className="inline-flex h-8.5 items-center gap-1.5 rounded-control border border-line bg-surface px-3.5 text-meta font-medium whitespace-nowrap text-ink transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                <Icon name="external" size={13} stroke={2} />
+                <span>{t("todos.detail_open_pr")}</span>
+              </a>
+            )}
+            <Button
+              tone="secondary"
+              icon="plus"
+              testId="todo-add-agent"
+              onClick={onOpenHandover}
+              className="h-8.5 px-3.5 text-meta whitespace-nowrap"
+            >
+              {t("todos.detail_add_agent")}
+            </Button>
+          </>
+        ) : (
+          <>
+            {open && (
+              <Button tone={canRetry ? "secondary" : "accent"} icon="hand" onClick={onOpenHandover} className="h-8.5 px-3.5 text-[13px] whitespace-nowrap">
+                {t("todos.hand_over")}
+              </Button>
+            )}
+            {isWorkGoalV2 && workGoalActions?.prUrl && (
+              <a
+                href={workGoalActions.prUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid="todo-open-pr"
+                className="inline-flex h-8.5 items-center gap-1.5 rounded-control border border-line bg-surface px-3.5 text-meta font-medium whitespace-nowrap text-ink transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                <Icon name="external" size={13} stroke={2} />
+                <span>{t("todos.detail_open_pr")}</span>
+              </a>
+            )}
+          </>
         )}
         <Button tone="secondary" icon="check" onClick={() => onToggleDone(open)} className="h-8.5 px-3 text-[13px] whitespace-nowrap">
           {open ? t("todos.complete") : t("todos.reopen")}

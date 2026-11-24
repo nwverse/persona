@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"os"
@@ -226,5 +227,134 @@ func TestCodexEffortFallbackWaitsForTaskCard(t *testing.T) {
 	}
 	if s := decodeSessions(t, []any{result["session"]})[0]; s.CodexRoute != codexRouteTerminal || !slices.Equal(ran, []string{"codex", "--profile", "custom", "-c", "model_reasoning_effort=high"}) {
 		t.Fatalf("fallback %s %v", s.CodexRoute, ran)
+	}
+}
+
+func TestCodexWebStartEffortOnSharedDaemon(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix control socket fixture")
+	}
+	for _, tc := range []struct {
+		name, effort string
+		expectShared bool
+	}{
+		{name: "explicit effort reaches first turn and retains live controls", effort: "high", expectShared: true},
+		{name: "unset effort keeps existing launch settings", effort: "", expectShared: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, f, _, _ := codexStartHerdr(t, 0)
+			home, err := os.MkdirTemp("/tmp", "cxs-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.RemoveAll(home) })
+			n.home = home
+			cwd := mkdir(t, filepath.Join(home, "proj"))
+			t.Setenv("HOME", home)
+			t.Setenv("ZDOTDIR", home)
+			codexOnPath(t, home)
+			n.codices = newCodexRegistry()
+			n.configureCodex(proto.CodexConfig{})
+			writeFile(t, filepath.Join(n.codexHome(), "config.toml"), "model_reasoning_effort = \"low\"\n")
+			dir := filepath.Join(n.codexHome(), "app-server-control")
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			socket := filepath.Join(dir, "app-server-control.sock")
+			listener, err := net.Listen("unix", socket)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(socket, 0600); err != nil {
+				t.Fatal(err)
+			}
+			rf := &remoteFixture{home: n.codexHome()}
+			rf.response = func(method string, p map[string]any) (any, bool) {
+				if method == "turn/start" {
+					rf.mu.Lock()
+					effort := rf.threadEffort
+					rf.mu.Unlock()
+					if effort != tc.effort {
+						t.Errorf("first turn used %q, want %q", effort, tc.effort)
+					}
+				}
+				if method != "thread/start" {
+					return nil, false
+				}
+				rf.mu.Lock()
+				rf.threads = []string{remoteRaw}
+				rf.threadEffort = "low"
+				rf.mu.Unlock()
+				return map[string]any{"thread": map[string]any{"id": remoteRaw}, "reasoningEffort": "low", "model": "example"}, true
+			}
+			server := &http.Server{Handler: http.HandlerFunc(rf.serve)}
+			go server.Serve(listener)
+			t.Cleanup(func() { server.Close() })
+			endpoint := "unix://" + filepath.Join(canonicalCodexHome(n.codexHome(), n.home), "app-server-control", "app-server-control.sock")
+			connectFixtureEndpoint(t, n, n.codexHome(), "local", endpoint)
+			withCodexLaunchers(t, map[string][]string{"codex": {"codex"}})
+			if tc.expectShared {
+				f.after(func(c herdrCall) {
+					if c.Method == "pane.send_input" && strings.Contains(str(c.Params["text"]), "codex-start") {
+						f.setScreen("w1:p2", cxReady)
+					}
+				})
+				f.reply("session.snapshot", snapshot(nil, nil, []any{agentOf("codex", remoteRaw, proto.StatusDone, "w1:p2", "w1:t2", "w1", cwd, "")}, nil))
+			} else {
+				f.after(func(c herdrCall) {
+					if c.Method != "pane.send_input" || !strings.Contains(str(c.Params["text"]), "codex-start") {
+						return
+					}
+					day := time.Now()
+					rdir := filepath.Join(n.codexHome(), "sessions", day.Format("2006"), day.Format("01"), day.Format("02"))
+					if err := os.MkdirAll(rdir, 0o700); err != nil {
+						return
+					}
+					now := time.Now().UTC().Format(time.RFC3339Nano)
+					resolved, _ := filepath.EvalSymlinks(cwd)
+					meta, _ := json.Marshal(map[string]any{"timestamp": now, "type": "session_meta", "payload": map[string]any{"id": startThread, "cwd": resolved, "cli_version": startRolloutVersion}})
+					user, _ := json.Marshal(map[string]any{"timestamp": now, "type": "event_msg", "payload": map[string]any{"type": "item_completed",
+						"item": map[string]any{"type": "UserMessage", "id": "u1", "content": []any{map[string]any{"type": "text", "text": "web first turn"}}}}})
+					_ = os.WriteFile(filepath.Join(rdir, "rollout-2026-11-02T10-00-00-"+startThread+".jsonl"), []byte(string(meta)+"\n"+string(user)+"\n"), 0o600)
+				})
+			}
+			// Web New Agent sends agent_type="codex" with no codex_effort_fallback.
+			params := map[string]any{"cwd": cwd, "launcher": "codex", "agent_type": "codex", "prompt": "web first turn"}
+			if tc.effort != "" {
+				params["effort"] = tc.effort
+			}
+			result, err := request(t, n, "session.start", params)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := decodeSessions(t, []any{result["session"]})[0]
+			if !tc.expectShared {
+				if rf.count("thread/start") != 0 || rf.count("thread/settings/update") != 0 {
+					t.Fatalf("unset effort unexpectedly prepared app-server thread: starts=%d updates=%d", rf.count("thread/start"), rf.count("thread/settings/update"))
+				}
+				if !slices.Equal(ran, []string{"codex"}) {
+					t.Fatalf("unset effort changed launch argv: got %q, want [codex]", ran)
+				}
+				return
+			}
+			if s.SessionID != remoteRaw || s.CodexRoute != codexRouteAppServer || s.Effort != "high" || !slices.Contains(s.Efforts, "high") || s.Capabilities == nil || s.Capabilities.Model == nil || !*s.Capabilities.Model {
+				t.Fatalf("returned session missing shared route or live controls: %+v", s)
+			}
+			if !slices.Equal(ran, []string{"codex", "--remote", endpoint, "resume", remoteRaw}) {
+				t.Fatalf("pane ran %q", ran)
+			}
+			turns := rf.sent("turn/start")
+			if len(turns) != 1 || turns[0]["threadId"] != remoteRaw || turns[0]["input"].([]any)[0].(map[string]any)["text"] != "web first turn" {
+				t.Fatalf("first turn %v", turns)
+			}
+			// Live controls remain active after launch.
+			if _, err := request(t, n, "session.modes", map[string]any{"session_id": remoteRaw, "effort": "low"}); err != nil {
+				t.Fatalf("post-launch live effort update failed: %v", err)
+			}
+			updates := rf.sent("thread/settings/update")
+			if len(updates) != 2 || updates[1]["effort"] != "low" {
+				t.Fatalf("live updates %v", updates)
+			}
+		})
 	}
 }
