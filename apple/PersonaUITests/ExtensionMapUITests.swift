@@ -91,7 +91,7 @@ final class ExtensionMapUITests: XCTestCase {
         fastRoute.tap()
 
         // Pan away from the leading edge, then reset back to fitted bounds.
-        let panStart = map.coordinate(withNormalizedOffset: CGVector(dx: 0.72, dy: 0.35))
+        let panStart = map.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.38))
         let panEnd = map.coordinate(withNormalizedOffset: CGVector(dx: 0.30, dy: 0.65))
         panStart.press(forDuration: 0.05, thenDragTo: panEnd)
         waitEnabled(reset, enabled: true)
@@ -184,6 +184,13 @@ final class ExtensionMapUITests: XCTestCase {
 
         let preview = card.buttons["extension-map-preview"]
         XCTAssertTrue(preview.waitForExistence(timeout: 10), app.debugDescription)
+        let sidebarBtn = app.buttons["assistant-sidebar-button"]
+        let minVisibleY = sidebarBtn.exists ? sidebarBtn.frame.maxY + 12 : app.windows.firstMatch.frame.height * 0.2
+        for _ in 0..<6 where !preview.isHittable || preview.frame.minY < minVisibleY {
+            app.swipeDown(velocity: .slow)
+        }
+        XCTAssertTrue(preview.isHittable && preview.frame.minY >= minVisibleY,
+                      "expected preview below top header (\(minVisibleY)), frame=\(preview.frame)\n\(app.debugDescription)")
         shot(app, "chat-inline")
 
         preview.tap()

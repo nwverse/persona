@@ -815,30 +815,32 @@ private struct ExtensionMapInteractiveViewport: View {
                 fittedRegion = context.region
             }
         }
-        .overlay(alignment: .bottomTrailing) {
-            HStack(spacing: Theme.Space.flush) {
-                Button(action: onReset) {
-                    ViewerIcon(symbol: Theme.Icon.resetDefaults, enabled: adjustedCamera)
-                }
-                .buttonStyle(.plain)
-                .disabled(!adjustedCamera)
-                .accessibilityLabel(String(localized: "Reset View"))
-                .accessibilityShowsLargeContentViewer { Text(String(localized: "Reset View")) }
-                .accessibilityIdentifier("extension-map-reset")
-
-                if showsFullScreen {
-                    Button(action: onFullScreen) {
-                        ViewerIcon(symbol: Theme.Icon.enlarge, enabled: true)
+        .overlay(alignment: .topTrailing) {
+            if showsFullScreen || adjustedCamera {
+                HStack(spacing: Theme.Space.flush) {
+                    Button(action: onReset) {
+                        ViewerIcon(symbol: Theme.Icon.resetDefaults, enabled: adjustedCamera)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(String(localized: "Full Screen"))
-                    .accessibilityShowsLargeContentViewer { Text(String(localized: "Full Screen")) }
-                    .accessibilityIdentifier("extension-map-full-screen")
+                    .disabled(!adjustedCamera)
+                    .accessibilityLabel(String(localized: "Reset View"))
+                    .accessibilityShowsLargeContentViewer { Text(String(localized: "Reset View")) }
+                    .accessibilityIdentifier("extension-map-reset")
+
+                    if showsFullScreen {
+                        Button(action: onFullScreen) {
+                            ViewerIcon(symbol: Theme.Icon.enlarge, enabled: true)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(String(localized: "Full Screen"))
+                        .accessibilityShowsLargeContentViewer { Text(String(localized: "Full Screen")) }
+                        .accessibilityIdentifier("extension-map-full-screen")
+                    }
                 }
+                .padding(Theme.Space.xs)
+                .chromeSurface(in: Capsule())
+                .padding(Theme.Space.page)
             }
-            .padding(Theme.Space.xs)
-            .chromeSurface(in: Capsule())
-            .padding(Theme.Space.page)
         }
         .accessibilityElement(children: .contain)
     }
