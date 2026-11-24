@@ -2964,6 +2964,7 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 
 **Rules**
 
+- [ ] Web sidebar page arrangement: Settings remains the fixed recovery entry; when More is explicitly hidden, its pages keep their arrangement and stay in quick search, but their badges are not promoted into the shell (principles 2, 3 and 7; `docs/web/web.md` "The sidebar's pages", #13798).
 - [ ] Only tokens and design-system components: no literal sizes, colors, fonts, SF Symbol names, `glassEffect` or lookalike components. The token ratchets did not go up (sections 1.2, 1.3).
 - [ ] Existing styles and theme colors look pixel-identical, except for a change that brings a screen in line with this document (section 1.2).
 - [ ] Hit areas at least 44 x 44 pt (Android 48 dp); every control has a spoken label; gesture-only actions also have a visible control or an accessibility action (section 6.3).
