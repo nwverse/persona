@@ -6,5 +6,5 @@
   "features_activation": "すぐに反映され、このブラウザのすべてのタブに適用されます。",
   "features_rollback": "オンに戻してください。何も削除されていないので、すべて元のままです。",
   "module_voice": "音声チャット",
-  "module_voice_hint": "チャットの入力欄から Persona やエージェントと音声で話します。ライブ字幕付き。入力と送信はそのままです。"
+  "module_voice_hint": "入力欄から Persona やエージェントと音声で会話。ライブ字幕付き。"
 }

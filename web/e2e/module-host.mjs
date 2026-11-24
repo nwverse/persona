@@ -107,7 +107,10 @@ try {
         const navigation = page.getByRole("navigation", { name: settings.categories });
         const jump = async (query, label, anchor) => {
           await search.fill(query);
-          await navigation.getByRole("button", { name: `${nav.tab_general} › ${label}`, exact: true }).click();
+          await navigation.getByRole("button")
+            .filter({ has: page.getByText(nav.tab_general, { exact: true }) })
+            .filter({ has: page.getByText(label, { exact: true }) })
+            .click();
           await page.getByRole("region", { name: nav.tab_general }).waitFor();
           await page.waitForFunction((anchor) => {
             const target = document.querySelector(`[data-settings-group="${anchor}"], [data-settings-row="${anchor}"]`);

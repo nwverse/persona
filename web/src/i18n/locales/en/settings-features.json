@@ -6,5 +6,5 @@
   "features_activation": "Right away, in every tab of this browser.",
   "features_rollback": "Turn it back on. Nothing was deleted, so everything is where you left it.",
   "module_voice": "Voice chat",
-  "module_voice_hint": "Talk to Persona or an Agent by voice from a chat's composer, with live captions. Typing and sending stay as they are."
+  "module_voice_hint": "Start a voice chat with Persona or an Agent from the composer, with live captions."
 }
