@@ -129,6 +129,8 @@ const render = async ({
   sharedBlockers = [],
   todosV2,
   assistantManager,
+  leaders,
+  conversations = [],
   grouping = "status",
   selectedId,
 }: {
@@ -136,6 +138,8 @@ const render = async ({
   sharedBlockers?: unknown[];
   todosV2?: boolean;
   assistantManager?: string;
+  leaders?: string[];
+  conversations?: unknown[];
   grouping?: "status" | "folder";
   selectedId?: string;
 } = {}) => {
@@ -149,12 +153,13 @@ const render = async ({
     answered: {},
     features: ["todo_view"],
     assistant:
-      todosV2 === undefined && assistantManager === undefined
+      todosV2 === undefined && assistantManager === undefined && leaders === undefined && conversations.length === 0
         ? { machine_id: "m1", main: "main", conversations: [] }
         : {
             machine_id: "m1",
             main: "main",
-            conversations: [],
+            conversations,
+            ...(leaders !== undefined ? { leaders } : {}),
             ...(assistantManager !== undefined ? { manager: assistantManager } : {}),
             ...(todosV2 !== undefined ? { todos_v2: todosV2 } : {}),
           },
@@ -575,5 +580,167 @@ describe("TodosView shared external blockers strip under todos_v2 (#14728)", () 
     await flush();
     expect(stripEl()).toBeNull();
     expect(visibleTodoIds()).toEqual(["task_supervised", "task_agent", "personal_plain", "personal_proj", "task_done"]);
+  });
+});
+
+describe("TodosView batch reorganize mode under todos_v2 (#14758)", () => {
+  const toggleBtn = () => host.querySelector<HTMLButtonElement>("[data-testid=todos-reorganize-toggle]");
+  const barEl = () => host.querySelector<HTMLElement>("[data-testid=batch-reorganize-bar]");
+  const checkboxes = () => [...host.querySelectorAll<HTMLInputElement>("[data-testid=todo-reorganize-checkbox]")];
+  const checkboxFor = (id: string) =>
+    host.querySelector<HTMLInputElement>(`[data-testid=todo-reorganize-checkbox][data-todo-id="${id}"]`);
+
+  it("renders no batch reorganize controls when todos_v2 is false or omitted by an older Hub", async () => {
+    await render({ todosV2: undefined, selectedId: "personal_plain" });
+    expect(toggleBtn()).toBeNull();
+    expect(barEl()).toBeNull();
+    expect(checkboxes()).toHaveLength(0);
+    const legacyHeader = host.querySelector("header")?.innerHTML;
+    const legacyList = host.querySelector("[data-testid=todos-list-column]")?.innerHTML;
+
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render({ todosV2: false, selectedId: "personal_plain" });
+    expect(toggleBtn()).toBeNull();
+    expect(barEl()).toBeNull();
+    expect(checkboxes()).toHaveLength(0);
+    expect(host.querySelector("header")?.innerHTML).toBe(legacyHeader);
+    expect(host.querySelector("[data-testid=todos-list-column]")?.innerHTML).toBe(legacyList);
+  });
+
+  it("supports multi-select across states without opening detail, excludes cycle parent targets, and submits exact payload", async () => {
+    const hierarchyTodos: Todo[] = [
+      ...sampleTodos,
+      {
+        id: "child_of_plain",
+        title: "Grind beans",
+        part_of: "personal_plain",
+        created_at: iso(3 * HOUR),
+        updated_at: iso(2 * HOUR),
+        view: view("todo", "rest", "todo", 2),
+      },
+    ];
+    api.mockImplementation(async (path: string) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/reorganize") return { updated: [hierarchyTodos[0], hierarchyTodos[2]] };
+      if (path === "/todos") return { todos: hierarchyTodos };
+      return {};
+    });
+
+    await render({
+      todos: hierarchyTodos,
+      todosV2: true,
+      selectedId: "task_supervised",
+      leaders: ["dir-platform"],
+      conversations: [{ machine_id: "m1", session_id: "dir-platform", title: "Platform Direction" }],
+    });
+
+    expect(toggleBtn()?.getAttribute("aria-pressed")).toBe("false");
+    expect(barEl()).toBeNull();
+
+    // Enter organize mode
+    await act(async () => toggleBtn()!.click());
+    await flush();
+    expect(toggleBtn()?.getAttribute("aria-pressed")).toBe("true");
+    expect(barEl()).toBeTruthy();
+
+    // Select a personal to-do and a working agent task; detail selection stays on task_supervised
+    await act(async () => checkboxFor("personal_plain")!.click());
+    await act(async () => checkboxFor("task_agent")!.click());
+    await flush();
+    expect(host.querySelector('[data-todo="task_supervised"]')?.getAttribute("aria-current")).toBe("true");
+    expect(host.querySelector("[data-testid=reorganize-selected-count]")?.textContent).toBe(
+      t("todos.reorganize_selected_count", { count: 2 }),
+    );
+
+    // Parent dropdown excludes selected items AND their descendants (child_of_plain) to prevent cycles
+    const parentSelect = host.querySelector<HTMLSelectElement>("[data-testid=reorganize-part-of]")!;
+    const parentValues = [...parentSelect.options].map((o) => o.value);
+    expect(parentValues).not.toContain("personal_plain");
+    expect(parentValues).not.toContain("task_agent");
+    expect(parentValues).not.toContain("child_of_plain");
+    expect(parentValues).toContain("personal_proj");
+
+    // transfer_supervision is disabled and unchecked by default until an active direction is chosen
+    const transferBox = host.querySelector<HTMLInputElement>("[data-testid=reorganize-transfer-supervision]")!;
+    expect(transferBox.checked).toBe(false);
+    expect(transferBox.disabled).toBe(true);
+
+    // Choose target parent and active direction
+    await act(async () => {
+      parentSelect.value = "personal_proj";
+      parentSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const dirSelect = host.querySelector<HTMLSelectElement>("[data-testid=reorganize-direction]")!;
+    await act(async () => {
+      dirSelect.value = "dir-platform";
+      dirSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+    expect(transferBox.disabled).toBe(false);
+    expect(transferBox.checked).toBe(false);
+
+    // Submit without checking transfer_supervision -> defaults to false
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=reorganize-apply]")!.click());
+    await flush();
+
+    expect(api).toHaveBeenCalledWith(
+      "/todos/reorganize",
+      expect.objectContaining({
+        method: "POST",
+        json: {
+          ids: ["personal_plain", "task_agent"],
+          part_of: "personal_proj",
+          direction_id: "dir-platform",
+          include_children: false,
+          transfer_supervision: false,
+        },
+      }),
+    );
+    // Refreshes list, clears selection, and shows feedback
+    expect(api).toHaveBeenCalledWith("/todos", expect.anything());
+    expect(host.querySelector("[data-testid=reorganize-selected-count]")?.textContent).toBe(
+      t("todos.reorganize_selected_count", { count: 0 }),
+    );
+    expect(host.querySelector("[data-testid=reorganize-feedback]")?.textContent).toBe(
+      t("todos.reorganize_success", { count: 2 }),
+    );
+  });
+
+  it("shows inline error without losing selection on API failure, and resets immediately when todos_v2 turns off", async () => {
+    api.mockImplementation(async (path: string) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/reorganize") throw new Error("read-only role cannot modify todos");
+      return {};
+    });
+
+    await render({ todosV2: true });
+    await act(async () => toggleBtn()!.click());
+    await flush();
+
+    await act(async () => checkboxFor("personal_plain")!.click());
+    await flush();
+
+    const parentSelect = host.querySelector<HTMLSelectElement>("[data-testid=reorganize-part-of]")!;
+    await act(async () => {
+      parentSelect.value = "__clear__";
+      parentSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=reorganize-apply]")!.click());
+    await flush();
+
+    expect(host.querySelector("[data-testid=reorganize-error]")?.textContent).toContain("read-only role cannot modify todos");
+    // Selection preserved on error
+    expect(checkboxFor("personal_plain")?.checked).toBe(true);
+    expect(host.querySelector("[data-testid=reorganize-selected-count]")?.textContent).toBe(
+      t("todos.reorganize_selected_count", { count: 1 }),
+    );
+
+    // Turning todos_v2 off exits organize mode and removes all controls immediately
+    await act(async () => patchAssistant({ todos_v2: false }));
+    await flush();
+    expect(toggleBtn()).toBeNull();
+    expect(barEl()).toBeNull();
+    expect(checkboxes()).toHaveLength(0);
   });
 });
