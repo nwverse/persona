@@ -21,9 +21,10 @@ import (
 // top-level oldText/newText (#14092, 11 B) and paseo's WebSocket RSV-bit and Close-payload checks (#14095, 98 B).
 // OpenCode live ACP tool-call normalization (#14130) adds 383 B on main (254,092 B).
 // The dedicated-Assistant environment handoff (#14068) adds 114 B (254,206 B).
+// Claude Code plugin 0.3.0 permission / question / plan approval bridging (#14214) adds 6,363 B (260,569 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 254_206
+	const budget = 260_569
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

@@ -600,6 +600,14 @@ Ordinary `go test` and CI do not include `//go:build herdrlive`, so a node helpe
 
 - With `http_proxy` (or `HTTPS_PROXY`, `ALL_PROXY`) set in the shell, about 30 suites under `scripts/mock/` run by hand failed with socket timeouts: their `urlopen` calls to the mock on `127.0.0.1` went to the proxy. CI never sees it, since `scripts/ci/python-tests.py` starts every suite with the environment `server_test_env.clean_environment` cleans. By hand, unset the proxy variables or go through `python3 scripts/ci/python-tests.py`; a new suite opens loopback URLs with `build_opener(ProxyHandler({}))` (as `scripts/mock/test_todo_view_mock.py` does) and needs neither.
 
+## A test's premise must hold before the event it races with (2026-11-23, #14007)
+
+- `TestSayWaitsForTheUserToStop` (voice) ended the bound turn before the call began and then started talking. The hub
+link's first event can read that finished turn before the call has heard the first frame of the user's voice, and the
+answer is then rightly said at once: nobody was talking yet. It failed about one run in 25 on two loaded cores, and on
+the gate. Make the premise true first and wait on something observable (here: the service got the user's audio, which
+the call weighs before it sends it on), then trigger what it races with. A longer sleep only makes the race rarer.
+
 ## A moved file or block needs a test that fails when the old copy comes back (2026-11-20, #11476, #11543)
 
 When a file is split or a block moves to another file, branches written before the move still edit the old copy. Their
@@ -1281,7 +1289,7 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 - A result from a loaded machine can reverse once it is quiet: at a load of ~400, asking for VNC updates early looked
   239 ms faster for typing (3 of 6 pairs); at 25–80 it was slower in all 5 pairs (median +81 ms). Decide on runs made at
   a low load, interleaved (ABBA), and say the load next to the numbers.
-- Driving the real desktop (`server/cmd/vncbench run`): other lanes' windows and dialogs open on top of yours at any
+- Driving the real desktop (`server/internal/modules/screen-share/vncbench run`): other lanes' windows and dialogs open on top of yours at any
   time. Send a click, a wheel notch or a drag only where your own page is seen on the screen (vncbench's target
   checker), type only while your page says it has the keyboard, and bring your browser forward with `open -a`, never
   by clicking. A window's rounded corner clips a marker drawn in it: keep markers inset.

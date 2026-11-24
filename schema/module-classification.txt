@@ -148,6 +148,7 @@ go server/internal/imageorient core
 go server/internal/jsonsubset core
 go server/internal/kb core
 go server/internal/kbwire core
+go server/internal/larkhost core
 go server/internal/lazyre core
 go server/internal/lcuconfirm core
 go server/internal/link core
@@ -174,6 +175,7 @@ go server/internal/node/clipshare core
 go server/internal/node/imessageport core
 go server/internal/node/machdiag core
 go server/internal/node/nodekit core
+go server/internal/node/screenport core
 go server/internal/node/transcripttail core
 go server/internal/nodeclient core
 go server/internal/nodecmd core
@@ -248,15 +250,13 @@ go server/plugins core
 # Module code still in core paths.
 go server/internal/transcribelive voice
 go server/internal/lark lark
-go server/internal/screen screen-share
-go server/internal/screenlink screen-share
+go server/internal/screen core
 go server/internal/iphone phone-extra
 go server/internal/iphonectl phone-extra
 go server/internal/node/iphone phone-extra
 go server/internal/protectedapps computer-use
 go server/internal/orcart/... engines-extra
 go server/internal/terncli engines-extra
-go server/cmd/vncbench screen-share
 go server/internal/rexcli engines-extra
 go server/internal/assistant/kbhistory knowledge-ui
 go server/internal/assistant/kbsent knowledge-ui
@@ -267,6 +267,7 @@ apple apple/AboutVersionAccessibilityUITests core
 apple apple/IslandPeer core
 apple apple/LiveActivity core
 apple apple/Modules core
+apple apple/Modules/Health health
 apple apple/Modules/ScreenShare screen-share
 apple apple/PersonaCallIntents voice
 apple apple/PersonaLink screen-share
@@ -300,7 +301,6 @@ apple apple/Persona/Resources core
 apple apple/Persona/Views core
 apple apple/Persona/Voice voice
 apple apple/Persona/Views/Feishu lark
-apple apple/Persona/Views/Health health
 apple apple/Persona/Views/Knowledge knowledge-ui
 apple apple/Persona/Views/Mail mail
 apple apple/Persona/Views/Voice voice

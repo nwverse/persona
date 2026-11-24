@@ -60,6 +60,7 @@ func reportServiceWith(t *testing.T, feats FeishuFeatures, stores ...Store) (*Se
 // A task's turn that ends with a merged PR is one card in the chat: the task, its stage, what was said, links to the
 // task's page, the PR and the agent; never a bare id. The todo carries the stage and the PR for the apps.
 func TestTaskDoneIsReportedInFeishu(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, posts := reportService(t, true, repositorystore.New(todoTestDB(t)))
 	todo := startedTask(t, s, f)
 	artifactNodeProof(f, "https://github.com/o/r/pull/901", "contributor", "contributor",
@@ -86,6 +87,7 @@ func TestTaskDoneIsReportedInFeishu(t *testing.T) {
 // A chart in the Agent's answer (persona-card, #3140) is drawn on the report card as its numbers, never cut down to
 // the title alone: the owner reads this card in Lark (#4093).
 func TestTaskReportDrawsAChartAsNumbers(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, posts := reportService(t, true)
 	startedTask(t, s, f)
 	agentTurn(s, f, proto.StatusWorking, "", 0)
@@ -107,6 +109,7 @@ func TestTaskReportDrawsAChartAsNumbers(t *testing.T) {
 // Changes within the delay are one card, the decision on top with its own answerable card; with reports off nothing
 // is posted.
 func TestTaskReportsMergeAndPutDecisionsFirst(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, posts := reportService(t, true)
 	todo := startedTask(t, s, f)
 	agentTurn(s, f, proto.StatusBlocked, "", 1)
@@ -256,6 +259,7 @@ func reportsState(s *Service) (n int, timer bool) {
 // A transport failure keeps the whole batch (its terminal reports with it), schedules a retry; the second attempt
 // posts the card and only then the needs decision card; success clears pending and the timer.
 func TestTaskReportRetriesAfterTransportFailure(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, _ := reportService(t, true)
 	s.reports.mu.Lock()
 	s.reports.retry = testReportDelay
@@ -330,6 +334,7 @@ func TestTaskReportDroppedWhenBotNotReady(t *testing.T) {
 
 // After reportMaxRetries retries the batch is given up: the queue does not pin a dead transport forever.
 func TestTaskReportGivesUpAfterMaxRetries(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, _ := reportService(t, true)
 	s.reports.mu.Lock()
 	s.reports.retry = testReportDelay
@@ -354,6 +359,7 @@ func TestTaskReportGivesUpAfterMaxRetries(t *testing.T) {
 // A newer change of the same todo arriving while a failed batch waits for retry replaces the failed item; the retry
 // sends the newer state.
 func TestTaskReportRetryKeepsNewerChange(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, _ := reportService(t, true)
 	s.reports.mu.Lock()
 	s.reports.retry = time.Second
@@ -385,6 +391,7 @@ func TestTaskReportRetryKeepsNewerChange(t *testing.T) {
 // the superseded item is never posted, the retry carries the newer state. The first post is gated open only after the
 // newer change landed.
 func TestTaskReportMergesChangeArrivedDuringPost(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, _ := reportService(t, true)
 	s.reports.mu.Lock()
 	s.reports.delay = time.Second // the newer change's normal-delay timer must not fire while the post is gated

@@ -458,6 +458,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		n.notifyHookEvent(ctx, req, in, stopSig)
 		return nil, nil
 	}
+	if validID(in.SessionID) {
+		n.ccPlugins.notePersonaHook(in.SessionID, req.AgentPID)
+	}
 	// An Orca pane is bound only on a machine that enables Orca: elsewhere nothing could drive it, and the hook
 	// reported no pane for it before Orca was a host (a herdr machine behaves as it did).
 	if paneKindOK(n, req.Pane) {

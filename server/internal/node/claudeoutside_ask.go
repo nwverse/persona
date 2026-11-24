@@ -175,11 +175,11 @@ func readPendingOutsideAskFile(f *transcript.File) (*proto.Item, error) {
 
 // outsideAskCard is the card of the question claude c waits on, ok false when its current turn's latest call is not an
 // AskUserQuestion still open (a permission prompt, a plan, a dialog of its own), when an active AskUserQuestion hook
-// already covers the same tool call, or when the call cannot be one card.
+// or plugin permission request already covers the same tool call, or when the call cannot be one card.
 func (n *Node) outsideAskCard(c claudeProc) (proto.Interaction, bool) {
 	id := c.SessionID
 	call := n.pendingOutsideAsk(c)
-	if call == nil || n.activeAsks.coversAsk(id, call.ToolUseID) {
+	if call == nil || n.activeAsks.coversAsk(id, call.ToolUseID) || n.ccPlugins.coversAsk(id, call.ToolUseID) {
 		return proto.Interaction{}, false
 	}
 	var ix proto.Interaction

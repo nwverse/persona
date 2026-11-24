@@ -11,6 +11,7 @@ public struct ModuleRegistrar<Host: ModuleHost> {
     var composerActions: [ComposerAction<Host>] = []
     var views: [(Host.Place, ModuleView<Host>)] = []
     var settingsEntries: [ModuleSettingsEntry<Host>] = []
+    var shellPages: [ModuleShellPage<Host>] = []
     var capabilities: [ObjectIdentifier: Any] = [:]
     var problems: [String] = []
 
@@ -63,6 +64,12 @@ public struct ModuleRegistrar<Host: ModuleHost> {
         settingsEntries.append(ModuleSettingsEntry(id: id, module: module.id, info: info, row: row) { AnyView(page()) })
     }
 
+    /// Adds a page to the host's shell (`ModuleSlot.shellPlaces`), which the host routes to by `id`.
+    public mutating func shellPage<Page: View>(id: String, @ViewBuilder _ page: @escaping @MainActor (Host.ShellContext) -> Page) {
+        guard allows(.shellPlaces) else { return }
+        shellPages.append(ModuleShellPage(id: id, module: module.id) { AnyView(page($0)) })
+    }
+
     /// Provides an interface the core declares and asks for (`ModuleSlot.capabilities`): the core does without it when
     /// no active module provides one. One provider per interface.
     public mutating func provide<Capability>(_ type: Capability.Type, _ value: Capability) {
@@ -92,6 +99,8 @@ public struct ModuleRegistry<Host: ModuleHost> {
     public let problems: [String]
     /// Every settings entry of the active modules, in list order, then registration order.
     public let settingsEntries: [ModuleSettingsEntry<Host>]
+    /// Every shell page of the active modules, in list order.
+    public let shellPages: [ModuleShellPage<Host>]
     private let launchHooks: [(ModuleID, () -> Void)]
     private let urlHandlers: [(URL) -> Bool]
     private let placeViews: [Host.Place: [ModuleView<Host>]]
@@ -117,6 +126,8 @@ public struct ModuleRegistry<Host: ModuleHost> {
         var placeViews: [Host.Place: [ModuleView<Host>]] = [:]
         var settings: [ModuleSettingsEntry<Host>] = []
         var settingIDs = Set<String>()
+        var shellPages: [ModuleShellPage<Host>] = []
+        var shellIDs = Set<String>()
         var capabilities: [ObjectIdentifier: Any] = [:]
         var seen = Set<ModuleID>()
         var actionIDs = Set<String>()
@@ -153,6 +164,11 @@ public struct ModuleRegistry<Host: ModuleHost> {
             hooks += registrar.launchHooks.map { (descriptor.id, $0) }
             handlers += registrar.urlHandlers
             for (place, view) in registrar.views { placeViews[place, default: []].append(view) }
+            for page in registrar.shellPages {
+                if shellIDs.insert(page.id).inserted { shellPages.append(page) } else {
+                    problems.append("\(descriptor.id): shell page \(page.id) is already taken")
+                }
+            }
             for entry in registrar.settingsEntries {
                 if settingIDs.insert(entry.id).inserted { settings.append(entry) } else {
                     problems.append("\(descriptor.id): settings entry \(entry.id) is already taken")
@@ -174,6 +190,7 @@ public struct ModuleRegistry<Host: ModuleHost> {
         self.urlHandlers = handlers
         self.placeViews = placeViews
         self.settingsEntries = settings
+        self.shellPages = shellPages
         self.capabilities = capabilities
         self.modules = modules
         self.isEnabled = isEnabled
@@ -208,6 +225,9 @@ public struct ModuleRegistry<Host: ModuleHost> {
 
     /// The active modules' views at a place, in list order: a dictionary read.
     public func views(at place: Host.Place) -> [ModuleView<Host>] { placeViews[place] ?? [] }
+
+    /// The shell page with this id, nil when no active module provides it.
+    public func shellPage(id: String) -> ModuleShellPage<Host>? { shellPages.first { $0.id == id } }
 
     /// The settings entry with this id, nil when no active module offers it.
     public func settingsEntry(id: String) -> ModuleSettingsEntry<Host>? { settingsEntries.first { $0.id == id } }

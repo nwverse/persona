@@ -140,9 +140,11 @@ func restartedOn(t *testing.T, st Store) (*Service, *fakeHub) {
 	t.Helper()
 	s, f := newTaskServiceOn(t, st)
 	shortSupervise(t, s)
+	f.mu.Lock()
 	f.hello.Assistant.MachineID = "server"
-	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	f.known["conv1"] = true
+	f.mu.Unlock()
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
 	return s, f
 }

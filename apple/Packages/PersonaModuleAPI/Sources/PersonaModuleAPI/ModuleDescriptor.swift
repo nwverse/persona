@@ -34,7 +34,8 @@ public enum ModuleSlot: String, CaseIterable, Sendable {
     /// it opens and the attachment that sheet hands back (#13400 `composer_source`). Served.
     case composerActions = "composer_actions"
 
-    /// Pages in the shell: sidebar / drawer rows and their routes (`ShellPage`, `ShellRoute`). Declared, not served.
+    /// Pages in the shell: a page the core routes to by id and lists a row for only while a module provides it
+    /// (`ModuleRegistrar.shellPage`). Served.
     case shellPlaces = "shell_places"
     /// Entries in Settings (#13400 `settings_section`, #13395's settings registry), each with its page. Served.
     case settings = "settings"
@@ -67,8 +68,8 @@ public enum ModuleSlot: String, CaseIterable, Sendable {
     /// True when the core reads this slot today.
     public var isServed: Bool {
         switch self {
-        case .launchHooks, .deepLinks, .composerActions, .settings, .chatCardKinds, .chatAccessories, .toolbarItems,
-             .capabilities: true
+        case .launchHooks, .deepLinks, .composerActions, .shellPlaces, .settings, .chatCardKinds, .chatAccessories,
+             .toolbarItems, .capabilities: true
         default: false
         }
     }
