@@ -103,6 +103,7 @@ func (s *Service) allOwnSettings() []ownSetting {
 			Value: `"bot" or "user"; only supported identity-aware transports use this setting`},
 			get: s.outboundIdentity, set: s.setOutboundIdentity},
 		s.hiddenDirSetting(),
+		s.blockedHerdrSessionsSetting(),
 		{Setting: Setting{Key: modulesKey, Title: "Built-in modules", Actions: getSet,
 			About: "built-in feature modules switched off; a change applies when the manager next starts, not to the running process",
 			Value: `{"disabled": ["<module id>", …]}; null or an empty list restores every compiled-in module`},
