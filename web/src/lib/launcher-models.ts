@@ -100,7 +100,7 @@ export interface UnavailableLauncher {
   agent?: string;
   /** A direct API's protocol (responses, chat…). */
   api?: string;
-  /** not_main_chat, api_protocol, launcher_out_of_scope, launcher_own_service */
+  /** not_main_chat, api_protocol, launcher_out_of_scope, launcher_own_service, launcher_unhealthy */
   code?: string;
   reason: string;
 }

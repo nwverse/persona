@@ -503,22 +503,29 @@ func (s *Service) machineLauncherRoutes() {
 		}
 		// A launcher whose latest check failed is left out of the pickers and of the presets that name it; the launcher
 		// the configuration runs with no pick stays, with its record, so the form can still say why this start may fail.
+		// New Agent lists the ones left out as unavailable, with why (#14535).
 		def := s.pickerDefault(ctx, r, all)
 		keep, _ := def["provider"].(string)
-		shown := s.withHealth(ctx, mid, list, keep)
+		shown, left := s.withHealth(ctx, mid, list, keep)
 		// A Persona-managed provider shows its display name over its ID (launcher_auto_name), and a runtime's provider the
 		// name the runtime gives it (Paseo's label, the node's display_name, #8261); tiers and default still name the
 		// ID, which clients look up here.
 		stored := s.storedLaunchers(ctx)
-		for i, l := range shown {
+		shownName := func(l ConfiguredLauncher) string {
 			if proto.IsExternalLauncher(l.Name) && l.External != nil {
-				shown[i].DisplayName = l.External.Name
-				continue
+				return l.External.Name
 			}
 			j := slices.IndexFunc(stored, func(m storedLauncher) bool { return m.Name == l.Name })
 			if j >= 0 && proto.CanonicalLauncherSource(l.Source) == "persona" {
-				shown[i].DisplayName = stored[j].DisplayName
+				return stored[j].DisplayName
 			}
+			return l.DisplayName
+		}
+		for i, l := range shown {
+			shown[i].DisplayName = shownName(l.ConfiguredLauncher)
+		}
+		for i, l := range left {
+			left[i].DisplayName = shownName(l.ConfiguredLauncher)
 		}
 		out := map[string]any{"launchers": shown, "default": def}
 		if unavailable != nil {
@@ -532,8 +539,12 @@ func (s *Service) machineLauncherRoutes() {
 			if p, tiers := s.pickerTiers(ctx, mid, usable); len(tiers) > 0 {
 				out["tiers"], out["tiers_profile"] = tiers, map[string]string{"id": p.ID, "name": p.Name}
 			}
-			// and the providers left out here for their own-service rule, with why (#8109), as the main chat's has them
-			if skipped := s.ownServiceSkipped(ctx, mid, list, s.requestLang(r)); len(skipped) > 0 {
+			// the launchers whose latest check failed here (#14535), and the providers left out here for their
+			// own-service rule (#8109), as the main chat's has them: listed off, with why
+			lang := s.requestLang(r)
+			skipped := unhealthyUnavailable(lang, firstNonEmpty(d.Name, mid), left)
+			skipped = append(skipped, s.ownServiceSkipped(ctx, mid, list, lang)...)
+			if len(skipped) > 0 {
 				out["unavailable"] = skipped
 			}
 		}
