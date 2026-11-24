@@ -384,9 +384,9 @@ func conversationSwitchBusyError(err error) bool {
 	return errors.As(err, &re) && re.Code == assistantwire.CodeConversationBusy
 }
 
-func (s *Service) runConversationSwitchItem(ctx context.Context, st logicalSwitchStore, restore, firstTurn bool, item *conversationSwitchItem) bool {
+func (s *Service) runConversationSwitchItem(ctx context.Context, st logicalSwitchStore, state *conversationSwitchState, batch *conversationSwitchBatch, item *conversationSwitchItem) bool {
 	if item.Outcome == conversationSwitchSwitching {
-		changed, err := s.reconcileConversationSwitchItem(ctx, st, firstTurn, item)
+		changed, err := s.reconcileConversationSwitchItem(ctx, st, batch.FirstTurn, item)
 		if err != nil {
 			s.logf("conversations_switch %s: reconcile: %v", item.OperationID, err)
 			return false
@@ -409,13 +409,18 @@ func (s *Service) runConversationSwitchItem(ctx context.Context, st logicalSwitc
 	}
 	if op != nil {
 		item.Outcome = conversationSwitchSwitching
-		_, reconcileErr := s.reconcileConversationSwitchItem(ctx, st, firstTurn, item)
+		_, reconcileErr := s.reconcileConversationSwitchItem(ctx, st, batch.FirstTurn, item)
 		if reconcileErr != nil {
 			s.logf("conversations_switch %s: replay reconcile: %v", item.OperationID, reconcileErr)
 		}
 		return true
 	}
-	automaticRestore := restore && firstTurn
+	// Reconcile an operation already begun even if the reset passed before its batch was saved.
+	if fb := batch.Fallback; fb != nil && !time.Now().Before(fb.ResetsAt) {
+		item.Outcome, item.Reason = conversationSwitchRefused, "the usage limit reset before the switch could start"
+		return true
+	}
+	automaticRestore := batch.RestoreOf != "" && batch.FirstTurn
 	row, known := s.session(ctx, item.Machine, item.ConversationID)
 	if !known || !row.Assistant || row.PaneID != "" || row.IsDeleted() {
 		// Disconnected nodes can lose their cached row before their next snapshot. An explicit deletion is final.
@@ -435,12 +440,12 @@ func (s *Service) runConversationSwitchItem(ctx context.Context, st logicalSwitc
 		epoch = c.Epoch
 	}
 	current := conversationExecutionNow(item.Machine, row, c)
-	if epoch != item.ExpectedEpoch || !sameConversationExecution(current, item.Before) {
+	if epoch != item.ExpectedEpoch || !sameConversationExecution(current, item.Before) || (automaticRestore && !limitFallbackOwnsEpoch(state, batch.RestoreOf, epoch)) {
 		item.Outcome, item.Reason = conversationSwitchRefused, "the conversation changed independently; its newer settings were left untouched"
 		return true
 	}
 	permission := item.Target.PermissionMode
-	if restore && permission == "" {
+	if batch.RestoreOf != "" && permission == "" {
 		permission = "default"
 	}
 	_, err = s.beginLogicalSwitch(ctx, item.Machine, item.ConversationID, logicalSwitchRequest{
@@ -481,7 +486,7 @@ func (s *Service) runConversationSwitchesLocked(ctx context.Context, state *conv
 	for bi := range state.Batches {
 		batch := &state.Batches[bi]
 		for ii := range batch.Items {
-			if s.runConversationSwitchItem(ctx, st, batch.RestoreOf != "", batch.FirstTurn, &batch.Items[ii]) {
+			if s.runConversationSwitchItem(ctx, st, state, batch, &batch.Items[ii]) {
 				changed = true
 			}
 		}
