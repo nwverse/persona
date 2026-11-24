@@ -1,6 +1,11 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { initI18n } from "../i18n";
-import type { ModelProfile } from "./model-profiles";
+import {
+  captureProfileInput,
+  parseProfileChange,
+  profileApplyDrift,
+  type ModelProfile,
+} from "./model-profiles";
 import {
   draftToProfileInput,
   isProfileDraftDirty,
@@ -74,20 +79,25 @@ describe("model-profile-editor", () => {
     draft.tiers.push({
       key: "bad-1",
       name: "Invalid Name",
-      launcher: "",
-      model: "bad model id!",
-      effort: "extreme",
-      permission_mode: "bogusMode",
-      speed: "warp",
       description: "line1\nline2",
+      candidates: [
+        {
+          key: "bad-1-c0",
+          launcher: "",
+          model: "bad model id!",
+          effort: "extreme",
+          permission_mode: "bogusMode",
+          speed: "warp",
+        },
+      ],
     });
     const problems = profileDraftProblems(draft, { gw: "launcher", api_only: "api" });
     expect(problems.length).toBeGreaterThanOrEqual(7);
     expect(problems.some((p) => p.includes("Profile name"))).toBe(true);
     expect(problems.some((p) => p.includes("api_only"))).toBe(true);
     expect(problems.some((p) => p.includes("Invalid Name"))).toBe(true);
-    expect(problems.some((p) => p.includes("bad model id!"))).toBe(true);
-    expect(problems.some((p) => p.includes("permission_mode"))).toBe(true);
+    expect(problems.some((p) => p.includes("bad model id!") && p.includes("#1"))).toBe(true);
+    expect(problems.some((p) => p.includes("permission_mode") && p.includes("#1"))).toBe(true);
   });
 
   it("detects duplicate tier names and preserves untouched legacy tier model IDs", () => {
@@ -107,13 +117,189 @@ describe("model-profile-editor", () => {
     draft.tiers.push({
       key: "dup",
       name: "old",
-      launcher: "claude",
-      model: "valid-model",
-      effort: "",
-      permission_mode: "",
-      speed: "",
       description: "",
+      candidates: [
+        {
+          key: "dup-c0",
+          launcher: "claude",
+          model: "valid-model",
+          effort: "",
+          permission_mode: "",
+          speed: "",
+        },
+      ],
     });
     expect(profileDraftProblems(draft).some((p) => p.includes("Duplicate"))).toBe(true);
+  });
+
+  it("round-trips multi-candidate tiers with aliases and keeps single-candidate tiers flat", () => {
+    const multi: ModelProfile = {
+      id: "routing",
+      name: "Routing",
+      tiers: {
+        dev: {
+          launcher: "example-a",
+          model: "model-a",
+          effort: "medium",
+          description: "Development work",
+          aliases: ["standard"],
+          candidates: [
+            { launcher: "example-a", model: "model-a", effort: "medium" },
+            { launcher: "example-b", model: "model-b", effort: "high", speed: "fast" },
+          ],
+        },
+      },
+      changes: [],
+    };
+    const draft = profileToDraft(multi);
+    expect(draft.tiers[0].aliases).toEqual(["standard"]);
+    expect(draft.tiers[0].candidates).toHaveLength(2);
+    expect(profileDraftProblems(draft)).toEqual([]);
+
+    // Reorder candidates: second becomes primary flat fields.
+    const [first, second] = draft.tiers[0].candidates;
+    draft.tiers[0].candidates = [second, first];
+    const reordered = draftToProfileInput(draft, 4);
+    expect(reordered.tiers?.dev).toEqual({
+      launcher: "example-b",
+      model: "model-b",
+      effort: "high",
+      speed: "fast",
+      description: "Development work",
+      aliases: ["standard"],
+      candidates: [
+        { launcher: "example-b", model: "model-b", effort: "high", speed: "fast" },
+        { launcher: "example-a", model: "model-a", effort: "medium" },
+      ],
+    });
+
+    // Removing down to one candidate omits `candidates` (legacy flat shape).
+    draft.tiers[0].candidates = [first];
+    const single = draftToProfileInput(draft, 4);
+    expect(single.tiers?.dev).toEqual({
+      launcher: "example-a",
+      model: "model-a",
+      effort: "medium",
+      description: "Development work",
+      aliases: ["standard"],
+    });
+    expect(single.tiers?.dev?.candidates).toBeUndefined();
+  });
+
+  it("validates candidate count limits and includes 1-based candidate indices in errors", () => {
+    const draft = profileToDraft(baseProfile);
+    draft.tiers[0].candidates.push({
+      key: "bad-c2",
+      launcher: "",
+      model: "not valid!",
+      effort: "bogus",
+      permission_mode: "",
+      speed: "ludicrous",
+    });
+    const problems = profileDraftProblems(draft);
+    expect(problems.some((p) => p.includes("#2") && p.includes("launcher"))).toBe(true);
+    expect(problems.some((p) => p.includes("#2") && p.includes("not valid!"))).toBe(true);
+    expect(problems.some((p) => p.includes("#2") && p.includes("bogus"))).toBe(true);
+    expect(problems.some((p) => p.includes("#2") && p.includes("ludicrous"))).toBe(true);
+
+    // More than 6 candidates is rejected.
+    while (draft.tiers[0].candidates.length <= 6) {
+      draft.tiers[0].candidates.push({
+        key: `extra-${draft.tiers[0].candidates.length}`,
+        launcher: "example-a",
+        model: "",
+        effort: "",
+        permission_mode: "",
+        speed: "",
+      });
+    }
+    expect(profileDraftProblems(draft).some((p) => p.includes("at most 6"))).toBe(true);
+  });
+
+  it("omits empty optional fields and default standard speed for cross-version hub compatibility", () => {
+    const profile: ModelProfile = {
+      id: "compat",
+      name: "Compat",
+      purposes: {
+        assistant: { provider: "launcher.claude", model: "sonnet-4" },
+      },
+      tiers: {
+        standard: { launcher: "claude", model: "sonnet-4", speed: "standard" },
+        quick: { launcher: "claude", speed: "fast", permission_mode: "plan" },
+      },
+      changes: [],
+    };
+    const draft = profileToDraft(profile);
+    const input = draftToProfileInput(draft, 4);
+    expect(input.purposes?.assistant).toEqual({ provider: "launcher.claude", model: "sonnet-4" });
+    expect("permission_mode" in (input.purposes?.assistant ?? {})).toBe(false);
+    expect(input.tiers?.standard).toEqual({ launcher: "claude", model: "sonnet-4" });
+    expect("speed" in (input.tiers?.standard ?? {})).toBe(false);
+    expect("permission_mode" in (input.tiers?.standard ?? {})).toBe(false);
+    expect(input.tiers?.quick).toEqual({ launcher: "claude", speed: "fast", permission_mode: "plan" });
+    expect("capture" in input).toBe(false);
+  });
+
+  it("builds minimal capture: true payloads preserving name and description without tiers", () => {
+    expect(captureProfileInput({ name: "Performance", description: "Fast models" }, 7)).toEqual({
+      revision: 7,
+      name: "Performance",
+      description: "Fast models",
+      capture: true,
+    });
+    const noDesc = captureProfileInput({ name: "Economy", description: "" }, 2);
+    expect(noDesc).toEqual({ revision: 2, name: "Economy", capture: true });
+    expect("description" in noDesc).toBe(false);
+    expect("tiers" in noDesc).toBe(false);
+    expect("purposes" in noDesc).toBe(false);
+    expect("launchers" in noDesc).toBe(false);
+  });
+
+  it("parses dotted category IDs and dotted launcher field changes unambiguously", () => {
+    expect(parseProfileChange("assistant")).toEqual({ kind: "purpose", id: "assistant" });
+    expect(parseProfileChange("agent.new")).toEqual({ kind: "purpose", id: "agent.new" });
+    expect(parseProfileChange("inbox.triage")).toEqual({ kind: "purpose", id: "inbox.triage" });
+    expect(parseProfileChange("agent.delegate")).toEqual({ kind: "purpose", id: "agent.delegate" });
+    expect(parseProfileChange("gw.small_model")).toEqual({ kind: "launcher", launcher: "gw", field: "small_model" });
+    expect(parseProfileChange("relay.example.com.effort")).toEqual({ kind: "launcher", launcher: "relay.example.com", field: "effort" });
+    expect(parseProfileChange("custom.unknown_field")).toEqual({ kind: "other", raw: "custom.unknown_field" });
+  });
+
+  it("computes apply drift and active-profile capture availability accurately", () => {
+    expect(profileApplyDrift({ id: "economy", changes: [] }, { id: "performance", changes: [] })).toEqual({
+      targetChanges: [],
+      activeDrift: [],
+      hasDrift: false,
+      hasActiveDrift: false,
+      canCaptureActiveFirst: true,
+    });
+    expect(profileApplyDrift({ id: "economy", changes: ["assistant"] }, { id: "performance", changes: ["kb"] })).toEqual({
+      targetChanges: ["assistant"],
+      activeDrift: ["kb"],
+      hasDrift: true,
+      hasActiveDrift: true,
+      canCaptureActiveFirst: true,
+    });
+    expect(profileApplyDrift({ id: "economy", changes: [] }, { id: "performance", changes: ["translate"] })).toEqual({
+      targetChanges: [],
+      activeDrift: ["translate"],
+      hasDrift: true,
+      hasActiveDrift: true,
+      canCaptureActiveFirst: true,
+    });
+    expect(profileApplyDrift({ id: "performance", changes: ["assistant"] }, { id: "performance", changes: ["assistant"] })).toEqual({
+      targetChanges: ["assistant"],
+      activeDrift: [],
+      hasDrift: true,
+      hasActiveDrift: false,
+      canCaptureActiveFirst: false,
+    });
+    expect(profileApplyDrift({ id: "economy", changes: ["assistant"] }, undefined)).toEqual({
+      targetChanges: ["assistant"],
+      activeDrift: [],
+      hasDrift: true,
+      hasActiveDrift: false,
+      canCaptureActiveFirst: false,
+    });
   });
 });

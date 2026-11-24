@@ -50,8 +50,8 @@ CHECKS = {
     "sdk-ts": "bun test in sdk/ts (a SKIP line when bun is absent)",
     "deno-adapter": "go test ./internal/extension/denohost/...: the trusted Deno adapter bundles sdk/ts/src, and "
                     "TestTrustedAdapterMatchesOfficialSDK fails while the committed one is stale (#4221; needs bun)",
-    "go-package": "go test ./<top>/<name>/... in server/ for server/internal/<name>, server/cmd/<name> or "
-                  "server/plugins/<name>, the path's package group",
+    "go-package": "go test ./<top>/<name>/... in server/ for server/internal/<name>, server/cmd/<name>, "
+                  "server/plugins/<name> or server/scripts/<name>, the path's package group",
     "server-build": "go build ./... in server/: a server change no package group covers",
     "go-guards": "the server's repo-wide guard and contract tests (GO_GUARD_PKGS, GO_GUARD_TEST_PKGS, GO_GUARD_TESTS "
                  "in check-fast.sh): they read other packages' source, go list output, the migrations or sdk/go "
@@ -76,10 +76,9 @@ CHECKS = {
 
 def _vet_group(parts):
     """The server package group go vet checks a path's change in for Windows: <top>/<name> for a path under
-    server/internal/<name>, server/cmd/<name> or server/plugins/<name> (go-package's groups), and . (the whole module)
-    for any other server path, such as go.mod or a file directly in server/plugins/, and for sdk/go, which the server
-    module imports."""
-    if len(parts) > 3 and parts[0] == "server" and parts[1] in ("internal", "cmd", "plugins"):
+    server/{internal,cmd,plugins,scripts}/<name> (go-package's groups), and . (the whole module) for other server paths,
+    such as go.mod or a file directly in server/plugins/, and for sdk/go, which the server module imports."""
+    if len(parts) > 3 and parts[0] == "server" and parts[1] in ("internal", "cmd", "plugins", "scripts"):
         return parts[1] + "/" + parts[2]
     return "."
 
@@ -111,7 +110,7 @@ TABLE = (
         (("spec/fixtures/*",), ()),
         # test_gen_tokens.py and test_gen_icon_meanings.py, in the suites below.
         (("spec/tokens/*", "spec/icons/*"), ()),
-        (("server/internal/*/*", "server/cmd/*/*", "server/plugins/*/*"), ("go-package",)),
+        (("server/internal/*/*", "server/cmd/*/*", "server/plugins/*/*", "server/scripts/*/*"), ("go-package",)),
         # A file directly in server/plugins/ is the plugins package, which the repo-wide guards run.
         (("server/plugins/*",), ()),
         (("server/*",), ("server-build",)),
@@ -218,8 +217,8 @@ TABLE = (
     # they and the prompt-language ratchet import (#12785); test_changed_ratchets.py imports them, and the ratchets'
     # own suites load ratchet_base.py through them (test_prompt_language_ratchet.py copies both). test_ci.py and test_check_fast_inputs.py run server.sh and check-fast.sh with go_trimpath.sh, which composes
     # their GOFLAGS; test_check_fast_inputs.py runs check-fast.sh with heavy_slot.py too, and test_android_sh.py runs
-    # android.sh with it (#11250). check-fast.sh's tests are three files (#11017): its own name picks
-    # test_check_fast.py, and the other two, which import its fixtures, come along. They copy check_fast_compare.py,
+    # android.sh with it (#11250). check-fast.sh's tests are six files (#11017, #14321): its own name picks
+    # test_check_fast.py, and the other five, which import its fixtures, come along. They copy check_fast_compare.py,
     # which names a failure's rerun and compares it with the merge base (#12733), into their temp repositories too,
     # and go_test_partitioned.py with the go_partitions.py it imports, which every Go group runs through (#12765).
     (
@@ -239,11 +238,15 @@ TABLE = (
         (("scripts/ci/web_module_boundary_ratchet.py",), ("scripts/ci/test_web_module_boundary_ratchet.py",)),
         (("scripts/test/go_trimpath.sh",), ("scripts/ci/test_ci.py", "scripts/test/test_check_fast_inputs.py")),
         (("scripts/heavy_slot.py",), ("scripts/test/test_check_fast_inputs.py", "scripts/test/test_android_sh.py")),
-        (("scripts/check-fast.sh", "scripts/test/check-fast.sh", "scripts/test/test_check_fast.py"),
-         ("scripts/test/test_check_fast_guards.py", "scripts/test/test_check_fast_inputs.py")),
+        (("scripts/check-fast.sh", "scripts/test/check-fast.sh", "scripts/test/test_check_fast.py",
+          "scripts/ci/affected_drift.py"),
+         ("scripts/test/test_check_fast_guards.py", "scripts/test/test_check_fast_inputs.py",
+          "scripts/test/test_check_fast_base.py", "scripts/test/test_check_fast_reports.py",
+          "scripts/test/test_check_fast_callers.py")),
         (("scripts/ci/check_fast_compare.py", "scripts/test/go_test_partitioned.py", "scripts/test/go_partitions.py"),
          ("scripts/test/test_check_fast.py", "scripts/test/test_check_fast_guards.py",
-          "scripts/test/test_check_fast_inputs.py")),
+          "scripts/test/test_check_fast_inputs.py", "scripts/test/test_check_fast_base.py",
+          "scripts/test/test_check_fast_reports.py", "scripts/test/test_check_fast_callers.py")),
     ),
     # test_heavy_slot.py reads CI's lanes, the operations scripts (the watchers among them), their example configs and
     # services, and both watcher skills: one that names a script taking a slot must set PERSONA_HEAVY_SLOTS=0
@@ -258,14 +261,16 @@ TABLE = (
     ),
     # The selections of what a change affects (#11026): CI's lanes (paths.py, tested in test_ci.py and, for the web
     # plan and the lanes a plan names, test_check_fast_inputs.py), check-fast (check-fast.sh and this table, which
-    # check-fast's three test files run) and the watcher's lanes; test_affected_drift.py compares them.
+    # check-fast's six test files run) and the watcher's lanes; test_affected_drift.py compares them.
     (
         (("scripts/ci/paths.py",), ("scripts/ci/test_ci.py", "scripts/test/test_check_fast_inputs.py",
                                     "scripts/ci/test_affected_drift.py")),
-        (("scripts/test/check-fast.sh",), ("scripts/ci/test_affected_drift.py",)),
+        (("scripts/test/check-fast.sh", "scripts/ci/affected_drift.py"), ("scripts/ci/test_affected_drift.py",)),
         (("scripts/ci/check_fast_map.py",),
          ("scripts/test/test_check_fast.py", "scripts/test/test_check_fast_guards.py",
-          "scripts/test/test_check_fast_inputs.py", "scripts/ci/test_affected_drift.py")),
+          "scripts/test/test_check_fast_inputs.py", "scripts/test/test_check_fast_base.py",
+          "scripts/test/test_check_fast_reports.py", "scripts/test/test_check_fast_callers.py",
+          "scripts/ci/test_affected_drift.py")),
         (("scripts/operations/pr_watch_verify.py",),
          ("scripts/operations/test_pr_watch.py", "scripts/ci/test_affected_drift.py")),
         (("scripts/operations/pr_watch_*.py",), ("scripts/operations/test_pr_watch.py",)),

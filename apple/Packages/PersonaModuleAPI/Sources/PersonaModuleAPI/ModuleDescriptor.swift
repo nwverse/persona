@@ -34,7 +34,8 @@ public enum ModuleSlot: String, CaseIterable, Sendable {
     /// it opens and the attachment that sheet hands back (#13400 `composer_source`). Served.
     case composerActions = "composer_actions"
 
-    /// Pages in the shell: sidebar / drawer rows and their routes (`ShellPage`, `ShellRoute`). Declared, not served.
+    /// Pages in the shell: a page the core routes to by id and lists a row for only while a module provides it
+    /// (`ModuleRegistrar.shellPage`). Served.
     case shellPlaces = "shell_places"
     /// Entries in Settings (#13400 `settings_section`, #13395's settings registry), each with its page. Served.
     case settings = "settings"
@@ -60,15 +61,15 @@ public enum ModuleSlot: String, CaseIterable, Sendable {
     /// Interfaces the core declares and asks for, which a module implements (`ModuleRegistrar.provide`): the core does
     /// without one when no active module provides it. A client-side slot, as `launch_hooks`. Served.
     case capabilities = "capabilities"
-    /// Leases on the shared audio session through the core's `AudioSessionBroker` (#13432's remaining work). Declared,
-    /// not served.
+    /// Leases on the shared audio session through the core's `AudioSessionBroker` (`ModuleRegistrar.audioLease`,
+    /// #13849). Served.
     case audioLeases = "audio_leases"
 
     /// True when the core reads this slot today.
     public var isServed: Bool {
         switch self {
-        case .launchHooks, .deepLinks, .composerActions, .settings, .chatCardKinds, .chatAccessories, .toolbarItems,
-             .capabilities: true
+        case .launchHooks, .deepLinks, .composerActions, .shellPlaces, .settings, .chatCardKinds, .chatAccessories,
+             .toolbarItems, .capabilities, .audioLeases: true
         default: false
         }
     }

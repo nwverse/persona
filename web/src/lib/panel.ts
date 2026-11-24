@@ -83,6 +83,11 @@ export type Panel =
    *  and workflow runs. `run`: a workflow run's task_id; `task`: a background command's id; `from`: Session overview when
    *  that view opened the detail. */
   | { kind: "background"; mid: string; sid: string; run?: string; task?: string; from?: "overview" }
+  /** A subagent's full conversation opened from Session overview, an expanded TaskCard, or a deep link (#14323):
+   *  renders embedded ChatView in the right panel (full-screen overlay on narrow viewports) while keeping the parent chat
+   *  in place. `mid`/`sid` name the subagent (including `<parent>@<agent>` or cross-machine child); `parentMid`/`parentSid`
+   *  name the parent session; `call` is the parent transcript's launching call ID when known. */
+  | { kind: "subagent"; mid: string; sid: string; parentMid?: string; parentSid?: string; call?: string; from?: "overview" | "card" | "link" }
   /** The session's dev server in a headless browser on its computer (docs/web/preview.md); `port` / `path`: the one to
    *  show (a localhost link of a reply), else the one shown last or the first running one. */
   | { kind: "preview"; mid: string; sid: string; cwd: string; port?: number; path?: string };
@@ -144,6 +149,7 @@ function panelTargetKey(p: Panel): string {
     case "team":
     case "sides":
     case "background":
+    case "subagent":
       return `${p.kind}:${p.mid}/${p.sid}`;
     case "file":
       return `file:${p.mid}:${p.path}`;
@@ -168,7 +174,7 @@ export function openPanel(p: Panel | null, options?: OpenPanelOptions) {
   // what had the focus when the panel opened (its header button): closing gives the focus back to it (#5155). Called
   // from the click, before the panel renders, so it is never something inside the panel; a panel replacing another keeps
   // the first one's, except an overview detail, which returns to the overview row that opened it.
-  if (p && (!current || (p.kind === "background" && p.from === "overview")))
+  if (p && (!current || ((p.kind === "background" || p.kind === "subagent") && p.from === "overview")))
     opener = typeof document === "undefined" ? null : document.activeElement;
   if (!p) {
     history = [];

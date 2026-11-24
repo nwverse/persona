@@ -28,7 +28,12 @@ final class AppModel {
     /// What a Settings disconnect is signing this device out of (HubSignOut.swift); nil when none runs.
     var hubSignOut: HubSignOutScope?
     /// One per group, in the registry's order; the demo's alone in Demo Mode.
-    private(set) var links: [HubLink] = []
+    private(set) var links: [HubLink] = [] {
+        didSet { syncHerdrTabNameGroups() }
+    }
+    /// Hub groups whose `use_herdr_tab_name` setting is enabled (#13899). Only mutates when the set changes,
+    /// so ordinary session pushes and heartbeats never redraw views that read it.
+    private(set) var herdrTabNameGroups: Set<String> = []
     /// The group hub-level pages show (`selectHub`); the first group when it is not one of them.
     var hubGroup: String
     /// The hub-level group's hub (what Persona, Inbox and the hub's settings talk to); nil when not paired.
@@ -155,6 +160,14 @@ final class AppModel {
         for s in sampleSides where index[s.key] == nil { index[s.key] = s }
         #endif
         for s in indexedSides where index[s.key] == nil { index[s.key] = s }
+        // Folded & cross-machine child rows stay out of `allSessions` (never leaking into the Agents list), while
+        // joining `sessionIndex` so opening a subagent detail page or answering its card resolves its live metadata.
+        // Preserve full detail fields if `sessionIndex` already held a `summary=0` row for an open child session.
+        for rows in childIndex.heldNow.values {
+            for s in rows where index[s.key] == nil {
+                index[s.key] = s.preservingDetails(from: sessionIndex[s.key])
+            }
+        }
         sessionIndex = index
         for (key, cell) in sideCells {
             let now = SideSessions(fold, parent: key)
@@ -996,7 +1009,26 @@ final class AppModel {
     func makeLink(_ group: String, _ config: ServerConfig) -> HubLink {
         let pins = PinsStore(deps: .init(api: { [weak self] in self?.api(group) }, report: { [weak self] in self?.show($0) },
                                          suffix: group))
-        let link = HubLink(group: group, config: config, pins: pins)
+        let folder = stateFolder
+        let cacheKey = AgentsDisplayStore.cacheName(group)
+        let agentsDisplay: AgentsDisplayStore
+        if config.isDemo {
+            agentsDisplay = AgentsDisplayStore(deps: .init(api: { nil }))
+        } else {
+            agentsDisplay = AgentsDisplayStore(deps: .init(
+                api: { [weak self] in self?.api(group) },
+                loadCache: { StateCache.load(cacheKey, as: AgentsDisplayStore.Cached.self, in: folder) },
+                saveCache: { value in
+                    if let value {
+                        StateCache.save(cacheKey, value, in: folder)
+                    } else {
+                        StateCache.remove(cacheKey, in: folder)
+                    }
+                }
+            ))
+        }
+        agentsDisplay.onChange = { [weak self] in self?.syncHerdrTabNameGroups() }
+        let link = HubLink(group: group, config: config, pins: pins, agentsDisplay: agentsDisplay)
         link.live.onEvent = { [weak self] ev in self?.handle(ev.stamped(group), group: group) }
         link.live.prepareEvent = { Self.prepare($0) }
         link.live.onConnected = { [weak self] in self?.didConnect(group) }
@@ -1253,6 +1285,7 @@ final class AppModel {
         for group in Set(links.map(\.group)).union([hubGroup]) {
             InboxHandOffMemory.forget(group: group)
             ForwardMemory.forget(group: group) // and where forwards went (#3807)
+            AgentsDisplayStore.forget(group: group, in: stateFolder)
         }
         LarkDrafts.shared.forget()
         pairingEngineMachine = nil
@@ -1763,10 +1796,23 @@ final class AppModel {
         do {
             let st = try await api.setAssistant(mainBackgroundFolded: on)
             guard showsPage(of: api) else { return }
-            assistantConfig = st
+            assistantConfig?.mainBackgroundFolded = st.mainBackgroundFolded
         } catch {
             if showsPage(of: api) { assistantConfig?.mainBackgroundFolded = was }
             show(error)
+        }
+    }
+
+    /// Change only the main conversation's relay policy. Apply it to the transcript after this hub confirms the write.
+    func setRoutineRelayReplies(_ on: Bool) async {
+        guard let api, let current = assistantConfig?.foldRoutineRelayReplies, current != on else { return }
+        do {
+            let state = try await api.setAssistant(APIClient.AssistantConfigBody(foldRoutineRelayReplies: on))
+            guard showsPage(of: api) else { return }
+            assistantConfig?.foldRoutineRelayReplies = state.foldRoutineRelayReplies
+            if state.foldRoutineRelayReplies != on { show(URLError(.badServerResponse)) }
+        } catch {
+            if showsPage(of: api) { show(error) }
         }
     }
 
@@ -1859,18 +1905,22 @@ final class AppModel {
     /// A child whose parent row is already in hand opens that parent, with the child's card revealed. Anything else
     /// opens immediately. A child whose row is not loaded yet is looked up in the background (`refreshSessionDetail`),
     /// and moves to the parent only when that parent row exists.
-    func open(_ key: SessionKey, latestAnswer: Bool = false, reveal: String? = nil) {
+    func open(_ key: SessionKey, latestAnswer: Bool = false, reveal: String? = nil, revealKey: SessionKey? = nil) {
         provisionalChat = nil
         // A side session lives in its parent's chat (#7944): its parent opens with the side shown over it, not with a
         // child's card revealed (`openChat` turns it into the parent and `sideLanding`).
-        if reveal == nil, !openingExactStar(key), sideFold.home[key] == nil, let home = localChildHome(key), home.key != key {
+        if reveal == nil, revealKey == nil, !openingExactStar(key), sideFold.home[key] == nil,
+           let home = localChildHome(key), home.key != key {
             moveDraft(from: key, to: home.key)
-            open(home.key, latestAnswer: latestAnswer, reveal: home.childID)
+            open(home.key, latestAnswer: latestAnswer, reveal: home.childID, revealKey: home.childKey)
             return
         }
         // A prior missing answer must not flash on a reopen before the lookup returns (#8748).
         clearMissingSessionDetail(key)
-        if let reveal {
+        if let revealKey {
+            revealToken += 1
+            revealChild = ChildReveal(key: revealKey, token: revealToken)
+        } else if let reveal {
             revealToken += 1
             revealChild = ChildReveal(sessionID: reveal, token: revealToken)
         } else {
@@ -1906,11 +1956,11 @@ final class AppModel {
         }
         provisionalChat = nil
         var target = key
-        if sideFold.home[key] == nil, let home = localChildHome(key), home.key != key, let child = home.childID {
+        if sideFold.home[key] == nil, let home = localChildHome(key), home.key != key, let childKey = home.childKey {
             moveDraft(from: key, to: home.key)
             target = home.key
             revealToken += 1
-            revealChild = ChildReveal(sessionID: child, token: revealToken)
+            revealChild = ChildReveal(key: childKey, token: revealToken)
         } else {
             revealChild = nil
         }
@@ -1922,10 +1972,12 @@ final class AppModel {
     func interactions(for key: SessionKey) -> [Interaction] {
         pendingInteractions.filter { ix in
             if ix.sessionKey == key { return true }
-            // A folded child's card is shown on the parent, and only when that parent row is in hand. A row of a side
-            // session's chat (`folded_side`, #7944) is shown in that side's chat too.
-            guard ix.machineID == key.machineID, ix.group == key.group,
-                  ix.requestHome == key.sessionID || ix.foldedSide == key.sessionID else { return false }
+            // A folded child's card is shown on the parent (same-machine or cross-machine via `folded_under_machine_id`),
+            // and only when that parent row is in hand. A row of a side session's chat (`folded_side`, #7944) is shown
+            // in that side's chat too.
+            let matchesParent = ix.requestHomeKey == key
+            let matchesSide = ix.group == key.group && ix.machineID == key.machineID && ix.foldedSide == key.sessionID
+            guard matchesParent || matchesSide else { return false }
             return session(key) != nil
         }
     }
@@ -1957,11 +2009,51 @@ final class AppModel {
         if cell.rows != rows { cell.rows = rows }
     }
 
-    /// The child index read `parent`'s children: its child cards, and when the read holds side sessions the lists, which
-    /// fold them behind its Side Sessions chip (#7944).
+    /// Asks the already-open parent chat to expand the card for `childKey` without switching tabs or resetting `openChat`.
+    func requestRevealChild(_ childKey: SessionKey) {
+        revealToken += 1
+        revealChild = ChildReveal(key: childKey, token: revealToken)
+    }
+
+    /// The child index read `parent`'s children: its child cards, per-child metadata cells (for full subagent detail
+    /// without adding children to `allSessions`), and when the read holds side sessions the lists, which fold them
+    /// behind its Side Sessions chip (#7944). Summary child rows preserve detail-only fields already fetched for an
+    /// open child session (`preservingDetails`).
     private func childRowsRead(_ parent: SessionKey) {
+        let rows = childIndex.knownNow(parent)
+        for child in rows {
+            let merged: Session
+            if let existing = sessionIndex[child.key] {
+                if (existing.rev ?? -1) > (child.rev ?? -1) {
+                    merged = (existing.listWaiting != nil && child.listWaiting == nil)
+                        ? existing.preservingDetails(from: child)
+                        : existing
+                } else {
+                    merged = child.preservingDetails(from: existing)
+                }
+            } else {
+                merged = child
+            }
+            sessionIndex[child.key] = merged
+            if let cell = sessionCells[child.key], !Session.sameForItsPage(cell.value, merged) {
+                cell.value = merged
+            }
+            if let cell = sessionLineCells[child.key], !Session.sameApartFromTicks(cell.value, merged) {
+                cell.value = merged
+            }
+        }
         refreshChildFold(parent)
-        if sideFoldGroups.contains(parent.group), childIndex.knownNow(parent).contains(where: SideFold.isSideRow) { sessionsChanged() }
+        if sideFoldGroups.contains(parent.group), rows.contains(where: SideFold.isSideRow) { sessionsChanged() }
+    }
+
+    /// Reads all folded / cross-machine / archived-parent children of `parent` for Session Overview, serialized through
+    /// the per-parent `childHints` gate so concurrent reads never race or roll back `childIndex`'s checkpoint.
+    func refreshOverviewChildren(_ parent: SessionKey) async {
+        guard !Task.isCancelled,
+              features(parent.group).contains(ChildSessions.feature),
+              let api = api(parent.group),
+              socket(parent.group)?.state == .connected else { return }
+        await runChildRefresh(parent, api: api, hint: nil, force: true)
     }
 
     private func refreshChildFolds() {
@@ -2039,6 +2131,14 @@ final class AppModel {
     /// does not name the chat leaves that row as it was (#9479).
     @ObservationIgnored private var detailAt: [SessionKey: String] = [:]
     @ObservationIgnored private var childHints: [SessionKey: FetchHint] = [:]
+    /// Parents with a forced Overview child refresh queued behind an in-flight `childHints` read.
+    @ObservationIgnored private var childForceQueued: Set<SessionKey> = []
+    /// Active model-owned per-parent child refresh runner tasks (never cancelled by a sheet `.task` closing).
+    @ObservationIgnored private(set) var childRefreshTasks: [SessionKey: Task<Void, Never>] = [:]
+    /// Latest `APIClient` supplied for each active per-parent child refresh loop.
+    @ObservationIgnored private var childRefreshAPIs: [SessionKey: APIClient] = [:]
+    /// Per-caller cancellable waiters for the active per-parent `childHints` refresh loop, keyed by waiter token.
+    @ObservationIgnored private var childRefreshWaiters: [SessionKey: [UUID: CheckedContinuation<Void, Never>]] = [:]
     /// Folded children of open chats, kept out of the root list window.
     let childIndex = ChildSessionIndex()
     /// One parent's folded children, observed on their own. A push about any other agent does not redraw the chat.
@@ -2116,7 +2216,7 @@ final class AppModel {
                     }
                     if openChat == key {
                         moveDraft(from: key, to: parent.key)
-                        open(parent.key, reveal: full.sessionID)
+                        open(parent.key, reveal: full.sessionID, revealKey: full.key)
                     }
                     return
                 }
@@ -2183,28 +2283,103 @@ final class AppModel {
               socket(key.group)?.state == .connected,
               ChildSessions.needsRead(parent: session(key), known: everyFoldedChild(key)) else { return }
         if let hint, childIndex.checkpoint(key) == hint { return }
-        var next = hint
-        while true {
-            var gate = childHints[key] ?? FetchHint()
-            guard gate.start(next) else {
-                childHints[key] = gate
-                return
-            }
+        await runChildRefresh(key, api: api, hint: hint, force: false)
+    }
+
+    /// Single per-parent serialized child-page runner shared by `refreshOpenChildren` and `refreshOverviewChildren`:
+    /// runs in a model-owned `Task` (`childRefreshTasks[key]`) so cancelling a caller (such as closing
+    /// `SessionOverviewSheet`) detaches only that caller's waiter and never cancels an in-flight or
+    /// `sessions_list`-queued refresh.
+    func runChildRefresh(_ key: SessionKey, api: APIClient, hint: String?, force: Bool) async {
+        childRefreshAPIs[key] = api
+        var gate = childHints[key] ?? FetchHint()
+        guard gate.start(hint) else {
             childHints[key] = gate
+            if force {
+                childForceQueued.insert(key)
+                await waitForChildRefresh(key)
+            }
+            return
+        }
+        childHints[key] = gate
+        childRefreshTasks[key] = Task { [weak self] in
+            await self?.drainChildRefresh(key, initialAPI: api)
+        }
+        await waitForChildRefresh(key)
+    }
+
+    private func drainChildRefresh(_ key: SessionKey, initialAPI: APIClient) async {
+        while true {
+            let api = childRefreshAPIs[key] ?? initialAPI
             await childIndex.refresh(parent: key, api: api)
             childRowsRead(key)
-            gate = childHints[key] ?? FetchHint()
-            switch gate.finish() {
+            var gate = childHints[key] ?? FetchHint()
+            let pending = gate.finish()
+            let forced = childForceQueued.remove(key) != nil
+            switch pending {
             case .none:
                 childHints[key] = gate
+                finishChildRefresh(for: key)
                 return
             case .hint(let queued):
+                let shouldContinue: Bool
+                if forced {
+                    shouldContinue = true
+                } else if !ChildSessions.needsRead(parent: session(key), known: everyFoldedChild(key)) {
+                    shouldContinue = false
+                } else if let queued, childIndex.checkpoint(key) == queued {
+                    shouldContinue = false
+                } else {
+                    shouldContinue = true
+                }
+                guard shouldContinue else {
+                    childHints[key] = gate
+                    finishChildRefresh(for: key)
+                    return
+                }
+                _ = gate.start(queued)
                 childHints[key] = gate
-                next = queued
-                guard ChildSessions.needsRead(parent: session(key), known: everyFoldedChild(key)) else { return }
-                if let queued, childIndex.checkpoint(key) == queued { return }
             }
         }
+    }
+
+    private func finishChildRefresh(for key: SessionKey) {
+        childRefreshTasks[key] = nil
+        childRefreshAPIs[key] = nil
+        resumeChildRefreshWaiters(for: key)
+    }
+
+    private func waitForChildRefresh(_ key: SessionKey) async {
+        let waiterID = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled || childRefreshTasks[key] == nil {
+                    continuation.resume()
+                    return
+                }
+                childRefreshWaiters[key, default: [:]][waiterID] = continuation
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancelChildRefreshWaiter(waiterID, for: key)
+            }
+        }
+    }
+
+    private func cancelChildRefreshWaiter(_ waiterID: UUID, for key: SessionKey) {
+        guard var waiters = childRefreshWaiters[key],
+              let continuation = waiters.removeValue(forKey: waiterID) else { return }
+        if waiters.isEmpty {
+            childRefreshWaiters[key] = nil
+        } else {
+            childRefreshWaiters[key] = waiters
+        }
+        continuation.resume()
+    }
+
+    private func resumeChildRefreshWaiters(for key: SessionKey) {
+        guard let waiters = childRefreshWaiters.removeValue(forKey: key) else { return }
+        for continuation in waiters.values { continuation.resume() }
     }
 
     /// `row` where the list has its session (any other copy of it dropped), or at the end when it has none: an unchanged
@@ -2926,7 +3101,7 @@ final class AppModel {
         }
         guard let shown = openChat, let home = localChildHome(shown), home.key != shown else { return }
         moveDraft(from: shown, to: home.key)
-        open(home.key, reveal: home.childID)
+        open(home.key, reveal: home.childID, revealKey: home.childKey)
     }
 
     /// Conversations the assistant settings were read again for (`readSettingsForNewTaskConversations`): once each.
@@ -3031,6 +3206,7 @@ final class AppModel {
         case .hello(let hello):
             let previousSurfaceCapabilities = extensionSurfaceCapabilities
             link(group)?.received(hello)
+            if let link = link(group), !link.isDemo { Task { await link.agentsDisplay.refresh() } }
             // The hub may turn modules off, or on again (#13849, docs/apple/ios.md "Modules"); kept per hub.
             ModuleState.shared.heard(Set(hello.features), from: group, isHub: isHub)
             #if os(iOS)
@@ -3230,7 +3406,13 @@ final class AppModel {
             #endif
             _ = (id, state)
         case .sendReceipt(let receipt):
-            sendReceipts.received(receipt)
+            if let state = sendReceipts.received(receipt),
+               receipt.key.kind == .message,
+               case .session(let machineID, let sessionID) = receipt.target,
+               let id = UUID(uuidString: receipt.key.id) {
+                existingChat(SessionKey(group: receipt.key.group, machineID: machineID, sessionID: sessionID))?
+                    .receiveSendReceipt(id, state: state)
+            }
         case .items(let key, let items, let backlog, let hasMore, let span, let moreAfter):
             if backlog { connection.caughtUp(Self.catchUpPart(key)) }
             let store = chat(key)
@@ -4724,6 +4906,7 @@ final class AppModel {
             StateCache.remove(Self.snapshotName(g), in: stateFolder)
             ChatCache.removeGroup(g, in: stateFolder)
             PinsStore.forget(suffix: g)
+            AgentsDisplayStore.forget(group: g, in: stateFolder)
             assistantPicks[g] = nil
             managerRosters[g] = nil
             rostersKept.remove(g)
@@ -5024,6 +5207,33 @@ final class AppModel {
         }
     }
 
+    /// Recomputes `herdrTabNameGroups` from all links' acknowledged `use_herdr_tab_name` values.
+    func syncHerdrTabNameGroups() {
+        let next = Set(links.lazy.filter { !$0.isDemo && $0.agentsDisplay.useHerdrTabName == true }.map(\.group))
+        if next != herdrTabNameGroups {
+            herdrTabNameGroups = next
+        }
+    }
+
+    /// Whether `group`'s hub has "Use the herdr tab name as the session name" turned on (#13899).
+    func prefersHerdrTabName(for group: String) -> Bool {
+        herdrTabNameGroups.contains(group)
+    }
+
+    /// Whether `session` should promote its herdr tab name to its main title (#13899).
+    func prefersHerdrTabName(for session: Session) -> Bool {
+        !session.assistant && herdrTabNameGroups.contains(session.group)
+    }
+
+    /// Refreshes per-hub Agents display settings (`GET /api/v1/agents/display-settings`) across all paired hubs.
+    func loadAgentsDisplay() async {
+        await withTaskGroup(of: Void.self) { tasks in
+            for link in links where !link.isDemo {
+                tasks.addTask { await link.agentsDisplay.refresh() }
+            }
+        }
+    }
+
     func isMuted(_ g: SpaceGroup) -> Bool { pinsStore(g.group)?.isMuted(space: Self.pinKey(space: g)) == true }
     /// Muted: the agent itself, or its space unless the agent was turned back on there (same rule as the hub).
     func isMuted(_ k: SessionKey) -> Bool {
@@ -5134,6 +5344,7 @@ final class AppModel {
     func refresh() async {
         guard let api else { return }
         Task { await loadPins() }
+        Task { await loadAgentsDisplay() }
         // The assistant's settings too, once read: one changed on another device (Show Scheduled Task Chats, #8324)
         // shows here when the user comes back.
         if assistantConfig != nil { Task { await refreshAssistant() } }
@@ -5331,9 +5542,9 @@ extension AppModel {
 /// (#5258)"). A sender expects its `client_msg_id` or op id before it sends and keeps the cell it is given, and forgets
 /// it once the HTTP answer comes, not when it stops waiting for one: the hub's final state still says how the send
 /// ended. A receipt the socket trusted (`LiveConnection.receiptTrust`) moves that cell alone, so other sends' receipts,
-/// every session's included, draw nothing. The cell keeps the final state after the table lets the id go. Nothing
-/// draws them yet: the to-do composer will (#10465), and the chats still show Processing after the HTTP answer
-/// (`ChatSendFeedback`).
+/// every session's included, draw nothing. The cell keeps the final state after the table lets the id go. Chats move
+/// `ChatSendFeedback` to Processing on trusted `message_send_state` receipts (#12773), keeping the HTTP answer as the
+/// fallback; the to-do composer will read `todo_send_state` cells (#10465).
 final class SendReceiptStore {
     private var table = SendReceipts()
     private var cells: [SendReceipt.Key: SendReceiptCell] = [:]
@@ -5344,6 +5555,7 @@ final class SendReceiptStore {
     /// Before sending under `key` to `target`: the cell its receipts land in. The key names the hub group the send
     /// goes to (`HubLink.group`), as its receipts are stamped with their socket's. Expecting a key again starts it over
     /// with a new cell; when the table is full, the oldest send's cell stops moving.
+    @discardableResult
     func expect(_ key: SendReceipt.Key, target: SendReceipt.Target) -> SendReceiptCell {
         let cell = SendReceiptCell()
         if let gone = table.expect(key, target: target) { cells[gone] = nil }
@@ -5351,10 +5563,12 @@ final class SendReceiptStore {
         return cell
     }
 
-    func received(_ receipt: SendReceipt) {
-        guard let state = table.apply(receipt), let cell = cells[receipt.key] else { return }
+    @discardableResult
+    func received(_ receipt: SendReceipt) -> SendReceipt.State? {
+        guard let state = table.apply(receipt), let cell = cells[receipt.key] else { return nil }
         cell.state = state
         if state.isFinal { cells[receipt.key] = nil }
+        return state
     }
 
     /// The sender has its answer: later receipts for `key` are ignored.
@@ -5394,10 +5608,29 @@ nonisolated struct WorkflowCallKey: Hashable, Sendable {
 }
 
 /// A link to a folded child, once per open. `token` changes when the same child is opened again, so the card opens
-/// again; an ordinary open has none.
+/// again; an ordinary open has none. Carries the full `SessionKey` when known so cross-machine children sharing a
+/// `sessionID` never collide.
 struct ChildReveal: Equatable {
+    var key: SessionKey?
     var sessionID: String
     var token: Int
+
+    init(key: SessionKey, token: Int) {
+        self.key = key
+        self.sessionID = key.sessionID
+        self.token = token
+    }
+
+    init(sessionID: String, token: Int) {
+        self.key = nil
+        self.sessionID = sessionID
+        self.token = token
+    }
+
+    func matches(_ candidate: SessionKey) -> Bool {
+        if let key { return key == candidate }
+        return candidate.sessionID == sessionID
+    }
 }
 
 /// Questions and approvals waiting, as the tab bar counts them: the Persona tab's (its conversations') and the Agents

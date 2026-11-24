@@ -150,6 +150,10 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 		if seen[id] || listed[id] {
 			continue // a pane lists it (and a cli claude's environment is not read for nothing)
 		}
+		if sess := n.claudeProcHerdrSession(c); n.herdrSessionBlocked(sess) && !n.isAssistantSession(id) && !n.keptSessions()[id] {
+			n.noteHerdrSessionID(id, sess)
+			continue
+		}
 		source := n.outsideSource(c)
 		if source == "" {
 			continue
@@ -193,6 +197,10 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 		if s.Capabilities != nil && c.Status == "busy" && n.ccPlugins.interruptCapable(id, c.pid) {
 			s.Capabilities.Interrupt = true
 		}
+		pluginPerms := n.ccPluginPermissionsCapable(id, c.pid)
+		if s.Capabilities != nil && pluginPerms {
+			s.Capabilities.Approve = true
+		}
 		// A claude in a tmux pane says where it runs ("tmux":"orc:@11.%11") and no hooks of Persona's run there: the
 		// pane's screen is what its approval shows on, so it gets that screen and the keys into it (#2562).
 		if pane := outsidePane(c); pane != "" {
@@ -222,16 +230,20 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 				s.AttentionReason = n.dialogOn(id, pane)
 			}
 		}
-		hasActiveHook := n.activeAsks.active(id)
+		hasActiveCard := n.activeAsks.active(id) || n.ccPlugins.hasActivePermission(id)
 		hasPublishedAsk := s.Capabilities != nil && s.Capabilities.Send && s.PaneID == "" && n.cx.hasOutsideAsk(id)
-		if hasActiveHook || hasPublishedAsk {
+		if hasActiveCard || hasPublishedAsk {
 			if s.Capabilities == nil {
 				s.Capabilities = &proto.SessionCapabilities{Read: true}
 			}
 			s.Capabilities.Approve = true
 		}
-		if status == proto.StatusBlocked && s.AttentionReason == "" && !hasActiveHook {
-			s.AttentionReason = proto.AttentionClaudeComputer // no dialog read from a pane (yet)
+		if status == proto.StatusBlocked && s.AttentionReason == "" && !hasActiveCard {
+			if source == proto.SourceClaudeDesktop && pluginPerms {
+				s.AttentionReason = proto.AttentionClaudeDesktopComputer
+			} else {
+				s.AttentionReason = proto.AttentionClaudeComputer // no dialog read from a pane (yet)
+			}
 			if s.Capabilities != nil && s.Capabilities.Send && s.PaneID == "" && (hasPublishedAsk || n.askingOutside(c)) {
 				s.AttentionReason = proto.AttentionClaudeAnswer // a message answers it (sendOutside)
 				// Its question is a card the apps answer (claudeoutside_ask.go): the answer goes as that message.

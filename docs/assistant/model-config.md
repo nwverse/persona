@@ -171,7 +171,8 @@ only the prompt and the answer travel.
   day, purpose, route, provider and model (calls, failures, the four token sums); a write drops the days older than 60.
   `GET /api/v1/model-config` gives each listed purpose its last 7 UTC days as `usage` (its own calls and those of the
   unlisted uses under it: Information processing's titles, translation and the rest), and the web's Settings › Models
-  shows "Last 7 days: N calls · M tokens" under a purpose with calls (#10498). Its tokens are input + output + cache
+  shows "Last 7 days: N calls · M tokens" under a purpose with calls (#10498), then "· K failed" in red when any of
+  them failed, so a purpose whose every call fails does not read as merely busy. Its tokens are input + output + cache
   writes; cache reads are left out of that number, since they cost a fraction and would swamp it, and the line's
   tooltip lists all four. The Apple and Android apps do not show it yet.
 - **How it runs and isolation guarantees**: the node runs the launcher in a fresh `persona-check-*` temporary directory
@@ -214,6 +215,13 @@ only the prompt and the answer travel.
 
 ## Editing and inheritance
 
+The web model, profile and scheduled task editors group launcher models when at least two catalog IDs share a base
+and end in their advertised default effort. The model picker shows the base name, searches the concrete IDs, and
+accepts custom IDs. The effort selector shows the levels the catalog and save path support. Choosing a group starts
+at Medium when available, or the first listed level, and keeps an explicit effort choice the group supports.
+The saved model ID carries the level. A supported legacy effort takes precedence over the suffix and is cleared on
+save once the catalog identifies the group. An effort override on a followed variant pins the matching concrete ID.
+
 Each category shows both “In Effect” and “Model Settings”:
 
 - Empty provider: inherit; empty specific model: use that source's default model.
@@ -240,7 +248,7 @@ For `set`, `value` is exactly one provider ID string from `purpose.provider_ids`
 
 ## Lark /agent override (#5921)
 
-`lark.agent` is an editable launcher purpose with `parent: "agent.new"` and `category_id: "agent.new"`, not a sixth default category. It supports the same provider (including launcher providers), model, and effort fields as Agents. Nonempty fields override the Agents binding; choosing a different provider drops the inherited model and effort before applying this purpose's selections. With an empty binding, the next new `/agent` conversation inherits Agents, including subsequent changes to Agents. Saving does not change existing conversations or permissions.
+`lark.agent` is an editable launcher purpose with `parent: "agent.new"` and `category_id: "agent.new"`, not a sixth default category. It supports the same provider (including launcher providers), model, and effort fields as Agents. Nonempty fields override the Agents binding; choosing a different provider drops the inherited model and effort before applying this purpose's selections. With an empty binding, every `/agent` conversation inherits Agents, including subsequent changes to Agents. The current binding applies to new conversations and to an existing topic conversation on its next input; it does not interrupt a running turn or change its permission mode. A different execution engine uses the durable logical-switch flow: the original input is queued behind the switch and carries its context handoff, rather than silently running on the old model. An explicit launcher or model on one message still takes precedence (#14750).
 
 GET `/api/v1/model-config/purposes/lark.agent` returns this purpose's own revision, override, effective binding, and writable fields. PUT and the compatibility PATCH endpoint share sparse updates and optimistic locking. To restore following Agents, send the current revision and explicit `null` for `provider`, `model`, and `effort`; omitting fields leaves them unchanged. Stale revisions return 409 without overwriting a draft.
 
