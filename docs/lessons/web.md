@@ -8,7 +8,9 @@ which Git keys by the main checkout. When a tree was removed after its work merg
 none of its Agents, and the repository showed as a second section with its name. Treat such a folder as naming its
 repository, and resolve it against what Git placed on the same computer: another tree of that folder, else the one
 section of that name. When either is ambiguous, keep it apart. A fixture where every session carries `repo_root` never
-reaches this fallback, so test sessions with a removed tree's bare `cwd`.
+reaches this fallback, so test sessions with a removed tree's bare `cwd`. Check the folder is at the computer's home: a
+cwd in a folder of a repository's own tree (`/code/app/.worktrees/feature/src`) has the same shape, and joining by the
+tree's name moved its Agent into an unrelated repository's section.
 
 ## A folded launcher must retain its identity (#10249)
 

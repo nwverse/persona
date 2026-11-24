@@ -5,9 +5,11 @@ import { byWorkspacePin, workspaceKey, workspacePinTime, workspaceTarget, type H
 import { sessionHost } from "./agent-groups";
 import { directoryKey } from "./workspace-directory";
 
-/** Where a session's cwd sits: the repository it belongs to and the working tree inside it. `apart`: the tree is in a
- *  folder of trees kept apart from its repository (`~/.herdr/worktrees/<repository>/<tree>`), and `repo` is that folder,
- *  which names the repository without being its checkout (joinApart). */
+/** Where a session's cwd sits: the repository it belongs to and the working tree inside it. `apart`: the cwd has the
+ *  shape of a tree in a folder of trees kept apart from its repository (`~/.herdr/worktrees/<repository>/<tree>`), and
+ *  `repo` is that folder, which names the repository without being its checkout. Only such a folder at the computer's
+ *  home is one (joinApart): a repository can keep its own trees in a `.worktrees` folder, and a cwd in a folder of one
+ *  of those has the same shape. */
 export type Repo = { repo: string; name: string; worktree: string; main: boolean; apart?: boolean };
 
 export type RepoWorktree = {
@@ -46,7 +48,8 @@ export type RepoTree = {
   worktrees: RepoWorktree[];
   /** Newest host pin among this repository's visible workspaces. */
   latestPinTime?: number;
-  /** Keyed by a folder of trees kept apart from the repository (`Repo.apart`), not by the repository itself. */
+  /** Keyed by a folder of trees kept apart from the repository at the computer's home (`Repo.apart`, joinApart), not by
+   *  the repository itself. */
   apart?: boolean;
 };
 
@@ -63,6 +66,9 @@ export interface RepoMachine {
 // The layouts a working tree commonly lives in (herdr, Claude Code, a home-level collection): the parts before the
 // last one name the repository, everything from there on is the tree.
 const WORKTREE_SEGMENTS = [["/.worktrees/"], ["/.claude/worktrees/"], ["/.herdr/worktrees/"]];
+// The ones that keep every repository's trees in a folder of its own at the home level (`~/.worktrees/<repository>/<tree>`,
+// herdr's `~/.herdr/worktrees/<repository>/<tree>`). Claude Code keeps a repository's trees inside it.
+const APART_SEGMENTS = ["/.worktrees/", "/.herdr/worktrees/"];
 
 const trimmed = (value?: string) => {
   const path = pathSlashes(value ?? "");
@@ -100,7 +106,7 @@ export function repoOf(cwd: string, repoRoot?: string): Repo {
     const repo = path.slice(0, at);
     // ~/.worktrees/<repo>/<tree>: the marker sits at the home level, so the repository is the first part after it and
     // the tree is what follows.
-    if (rest.length >= 2) return { repo: `${repo}${marker}${rest[0]}`, name: rest[0]!, worktree: path, main: false, apart: true };
+    if (rest.length >= 2) return { repo: `${repo}${marker}${rest[0]}`, name: rest[0]!, worktree: path, main: false, ...(APART_SEGMENTS.includes(marker) && { apart: true }) };
     return { repo, name: baseName(repo), worktree: path, main: false };
   }
   return { repo: path, name: baseName(path), worktree: path, main: true };
@@ -591,9 +597,16 @@ function catalogRepos(sessions: Session[], machineId: string, options: RepoCatal
  * names its repository only by that folder, which is never the checkout, so its rows formed a second section with the
  * repository's name (#13453). They join the repository Git placed another tree of that folder in, else the one other
  * section of that name on the computer; when Git placed that folder's trees in two repositories, or two sections share
- * the name, they keep their own section rather than guess.
+ * the name, they keep their own section rather than guess. Only a folder of trees at the computer's home keeps them
+ * apart: in a repository's own tree a folder such as `/code/app/.worktrees/feature/src` has the same shape, but
+ * `feature` is that tree, not a repository to join. Without the home, nothing joins.
  */
-function joinApart(repos: RepoTree[], sessions: readonly Session[]): RepoTree[] {
+function joinApart(repos: RepoTree[], sessions: readonly Session[], home?: string): RepoTree[] {
+  const folders = home ? APART_SEGMENTS.map((marker) => catalogPath(`${home}${marker}`)) : [];
+  for (const r of repos) {
+    const path = catalogPath(r.repo);
+    if (r.apart && !folders.includes(path.slice(0, path.lastIndexOf("/")))) delete r.apart;
+  }
   if (!repos.some((r) => r.apart)) return repos;
   const taught = new Map<string, string | null>();
   for (const s of sessions) {
@@ -644,7 +657,7 @@ export function buildRepoMachineTree(all: Session[], machines: Machine[], option
     const navigation = m.online && options?.navigationSessions?.some((s) => !s.assistant && s.machine_id === m.id);
     if ((!sessions || sessions.length === 0) && !workspaces && !navigation) continue;
     const known = [...(sessions ?? []), ...(options?.navigationSessions ?? []).filter((s) => s.machine_id === m.id)];
-    const repos = joinApart(options ? catalogRepos(sessions ?? [], m.id, options) : buildRepos(sessions!, m.id), known);
+    const repos = joinApart(options ? catalogRepos(sessions ?? [], m.id, options) : buildRepos(sessions!, m.id), known, m.home);
     if (!repos.length) continue;
     out.push({
       key: `repo-machine:${m.id}`,

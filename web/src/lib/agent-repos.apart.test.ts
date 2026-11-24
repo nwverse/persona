@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildRepoMachineTree, repoOf, type RepoCatalogOptions, type RepoMachine } from "./agent-repos";
+import { buildRepoMachineTree, repoOf, type RepoCatalogOptions, type RepoMachine, type RepoTree } from "./agent-repos";
 import type { HostWorkspace } from "./workspace-catalog";
 import type { Machine, Session } from "./types";
 
 // A folder of trees kept apart from its repository (herdr's ~/.herdr/worktrees/<repository>/<tree>) names that
 // repository only by its name. A tree there that Git no longer places must not make a second section with that name.
-const machines: Machine[] = [{ id: "machine-a", name: "Computer A", online: true }, { id: "machine-b", name: "Computer B", online: true }];
+const machines: Machine[] = [{ id: "machine-a", name: "Computer A", online: true, home: "/home/me" }, { id: "machine-b", name: "Computer B", online: true, home: "/home/me" }];
 const trees = "/home/me/.herdr/worktrees/app";
 const session = (id: string, cwd: string, patch: Partial<Session> = {}): Session => ({
   session_id: id, machine_id: "machine-a", title: id, cwd, state: "idle", status: "idle", updated_at: "2026-11-22T10:00:00Z", ...patch,
@@ -26,6 +26,8 @@ describe("a folder of trees kept apart from its repository", () => {
     // A tree kept inside its repository names the checkout itself.
     expect(repoOf("/code/app/.worktrees/fix-login").apart).toBeUndefined();
     expect(repoOf("/code/app/.claude/worktrees/fix-login").apart).toBeUndefined();
+    // Claude Code keeps a repository's trees inside it, so a folder in one of them is never a tree kept apart.
+    expect(repoOf("/code/app/.claude/worktrees/feature/src").apart).toBeUndefined();
     expect(repoOf("/code/app").apart).toBeUndefined();
   });
 
@@ -86,6 +88,30 @@ describe("a folder of trees kept apart from its repository", () => {
       { machine: "machine-a", name: "app", count: 1, rows: ["fix"] },
       { machine: "machine-b", name: "notes", count: 1, rows: ["main"] },
     ]);
+  });
+
+  it("never takes a folder in a repository's own tree for a tree of another repository", () => {
+    // Without Git metadata, `/code/app/.worktrees/feature/src` has the shape of `~/.worktrees/<repository>/<tree>`, but it
+    // is not at the computer's home: it is a folder in the tree `feature` of `/code/app`, and `/code/feature` is unrelated.
+    const feature = placed("feature", "/code/feature", "/code/feature", "/code/feature");
+    for (const cwd of ["/code/app/.worktrees/feature/src", "/code/app/.claude/worktrees/feature/src", "/home/me/.claude/worktrees/feature/src"]) {
+      for (const tree of [
+        buildRepoMachineTree([feature, session("nested", cwd)], machines),
+        buildRepoMachineTree([feature, session("nested", cwd)], machines, options([herdr("w-feature", "/code/feature")])),
+      ]) {
+        const repos = tree[0]!.repos;
+        const ids = (r?: RepoTree) => r?.worktrees.flatMap((w) => w.sessions.map((s) => s.session_id));
+        expect(ids(repos.find((r) => r.repo === "/code/feature"))).toEqual(["feature"]);
+        expect(ids(repos.find((r) => r.repo !== "/code/feature"))).toEqual(["nested"]);
+        expect(repos.map((r) => r.count)).toEqual([1, 1]);
+        expect(repos.some((r) => r.apart)).toBe(false);
+      }
+    }
+  });
+
+  it("keeps its own section on a computer whose home is not known", () => {
+    const tree = buildRepoMachineTree([placed("main", "/code/app", "/code/app", "/code/app"), session("old", `${trees}/fix`)], [{ id: "machine-a", name: "Computer A", online: true }]);
+    expect(sections(tree).map((s) => s.count)).toEqual([1, 1]);
   });
 
   it("never joins a repository on another computer", () => {
