@@ -45,9 +45,13 @@ module alarms
 module briefing
 
 # Module roots: each directory below them is the module of that name.
+go server/internal/assistant/todo/conflict core
+go server/internal/assistant/todo/mergetrain core
+go server/internal/assistant/todo/stagegate core
 go server/internal/modules/*/... *
 go server/internal/modules/all core
 go server/internal/modules/all/node core
+web web/src/components core
 web web/src/modules/* *
 gradle :module:* *
 
