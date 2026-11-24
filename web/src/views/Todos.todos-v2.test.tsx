@@ -126,12 +126,14 @@ afterEach(async () => {
 
 const render = async ({
   todos = sampleTodos,
+  sharedBlockers = [],
   todosV2,
   assistantManager,
   grouping = "status",
   selectedId,
 }: {
   todos?: Todo[];
+  sharedBlockers?: unknown[];
   todosV2?: boolean;
   assistantManager?: string;
   grouping?: "status" | "folder";
@@ -140,6 +142,7 @@ const render = async ({
   localStorage.setItem("persona.todos.grouping", grouping);
   seed({
     todos,
+    sharedBlockers,
     todosLoaded: true,
     sessions: {},
     interactions: [],
@@ -465,5 +468,112 @@ describe("TodosView goal folding and blocker surfacing under todos_v2 (#14661)",
     await flush();
     expect(host.querySelector("[data-repo-matrix]")).toBeNull();
     expect(host.querySelector("[data-repo-role-badge]")).toBeNull();
+  });
+});
+
+describe("TodosView shared external blockers strip under todos_v2 (#14728)", () => {
+  const sampleBlockers = [
+    {
+      key: "pull_request:https://github.com/example/core/pull/42",
+      kind: "pull_request",
+      label: "example/core#42",
+      url: "https://github.com/example/core/pull/42",
+      todo_ids: ["task_agent", "task_supervised"],
+      count: 2,
+    },
+    {
+      key: "target:staging deploy",
+      kind: "external_target",
+      label: "staging deploy",
+      todo_ids: ["personal_proj", "task_agent"],
+      count: 2,
+    },
+  ];
+
+  const stripEl = () => host.querySelector<HTMLElement>("[data-testid=todos-shared-blockers]");
+  const chips = () => [...host.querySelectorAll<HTMLButtonElement>("[data-testid=shared-blocker-chip]")];
+
+  it("renders no shared blockers DOM when todos_v2 is false or omitted, even if shared_blockers exists", async () => {
+    await render({ todosV2: undefined, sharedBlockers: sampleBlockers });
+    expect(stripEl()).toBeNull();
+    const legacyHtml = host.querySelector("[data-testid=todos-list-column]")?.innerHTML;
+
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render({ todosV2: false, sharedBlockers: sampleBlockers });
+    expect(stripEl()).toBeNull();
+    expect(host.querySelector("[data-testid=todos-list-column]")?.innerHTML).toBe(legacyHtml);
+  });
+
+  it("renders nothing under todos_v2=true when shared_blockers is empty or absent", async () => {
+    await render({ todosV2: true, sharedBlockers: [] });
+    expect(stripEl()).toBeNull();
+  });
+
+  it("renders blocker labels, counts, and safe external links, and filters tasks on click with toggle and clear", async () => {
+    await render({ todosV2: true, sharedBlockers: sampleBlockers });
+    expect(stripEl()).toBeTruthy();
+
+    const list = chips();
+    expect(list).toHaveLength(2);
+    expect(list[0].textContent).toContain("example/core#42");
+    expect(list[0].textContent).toContain(t("todos.shared_blockers_count", { count: 2 }));
+    expect(list[0].getAttribute("aria-pressed")).toBe("false");
+
+    // External link renders only for valid http(s) URL, never nested inside the filter button
+    const links = [...host.querySelectorAll<HTMLAnchorElement>("[data-testid=shared-blocker-link]")];
+    expect(links).toHaveLength(1);
+    expect(links[0].getAttribute("href")).toBe("https://github.com/example/core/pull/42");
+    expect(links[0].getAttribute("target")).toBe("_blank");
+    expect(links[0].getAttribute("rel")).toBe("noopener noreferrer");
+    expect(links[0].closest("button")).toBeNull();
+    expect(host.querySelector("[data-testid=shared-blockers-clear]")).toBeNull();
+
+    // Click first blocker -> filters list to its todo_ids
+    await act(async () => list[0].click());
+    await flush();
+    expect(list[0].getAttribute("aria-pressed")).toBe("true");
+    expect(visibleTodoIds()).toEqual(["task_supervised", "task_agent"]);
+    expect(host.querySelector("[data-testid=shared-blockers-clear]")).toBeTruthy();
+
+    // Click same blocker again -> toggles off and restores all rows
+    await act(async () => list[0].click());
+    await flush();
+    expect(list[0].getAttribute("aria-pressed")).toBe("false");
+    expect(visibleTodoIds()).toEqual(["task_supervised", "task_agent", "personal_plain", "personal_proj", "task_done"]);
+
+    // Click second blocker, then click Clear filter button -> restores all rows
+    await act(async () => chips()[1].click());
+    await flush();
+    expect(visibleTodoIds()).toEqual(["task_agent", "personal_proj"]);
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=shared-blockers-clear]")!.click());
+    await flush();
+    expect(visibleTodoIds()).toEqual(["task_supervised", "task_agent", "personal_plain", "personal_proj", "task_done"]);
+  });
+
+  it("auto-clears selection when the selected blocker disappears after refresh, and reverts when todos_v2 is switched off", async () => {
+    await render({ todosV2: true, sharedBlockers: sampleBlockers });
+    await act(async () => chips()[0].click());
+    await flush();
+    expect(visibleTodoIds()).toEqual(["task_supervised", "task_agent"]);
+
+    // Refresh drops the selected blocker -> automatically exits filter instead of deadlocking empty
+    await act(async () => {
+      seed({ sharedBlockers: [sampleBlockers[1]] });
+      root.render(<TodosView />);
+    });
+    await flush();
+    expect(visibleTodoIds()).toEqual(["task_supervised", "task_agent", "personal_plain", "personal_proj", "task_done"]);
+    expect(host.querySelector("[data-testid=shared-blockers-clear]")).toBeNull();
+
+    // Re-select remaining blocker, then turn todos_v2 off -> immediate rollback
+    await act(async () => chips()[0].click());
+    await flush();
+    expect(visibleTodoIds()).toEqual(["task_agent", "personal_proj"]);
+
+    await act(async () => patchAssistant({ todos_v2: false }));
+    await flush();
+    expect(stripEl()).toBeNull();
+    expect(visibleTodoIds()).toEqual(["task_supervised", "task_agent", "personal_plain", "personal_proj", "task_done"]);
   });
 });
