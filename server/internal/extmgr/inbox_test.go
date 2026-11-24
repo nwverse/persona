@@ -492,9 +492,8 @@ func TestInboxSourcesAnswerTheManager(t *testing.T) {
 	h.cfg.Inbox.Rules = "  示例规则  "
 	h.cfg.Inbox.Agent = InboxAgentConfig{Enabled: true, Concurrency: 2}
 	h.cfg.Inbox.ReplyPolicy = InboxReplyPolicyConfig{
-		Enabled:    true,
-		Revision:   "rp-1",
-		Categories: map[string]string{"routine_reply": assistantwire.ReplyRouteOwnerDraft},
+		Enabled: true, Revision: "rpc-v1", Sources: []string{"lark", "mail"}, RequireIndependentReview: true,
+		Categories: map[string]string{"ordinary_coordination": "owner_draft", "approval_permission": "owner_only", "unknown": "owner_only"},
 	}
 	h.cfg.Lark.Account = 3
 	app := func(app, method string, params any) (json.RawMessage, error) {
@@ -561,9 +560,14 @@ func TestInboxSourcesAnswerTheManager(t *testing.T) {
 	var cfg assistantwire.InboxConfig
 	out, err = inbox(assistantwire.InboxConfigMethod, map[string]any{})
 	if err != nil || json.Unmarshal(out, &cfg) != nil || cfg.Rules != "示例规则" || !cfg.Agent.Enabled || cfg.Agent.Concurrency != 2 || cfg.LarkAccount != 3 ||
-		!cfg.ReplyPolicy.Enabled || cfg.ReplyPolicy.Revision != "rp-1" || cfg.ReplyPolicy.Categories["routine_reply"] != assistantwire.ReplyRouteOwnerDraft ||
 		!slices.Contains(cfg.Extensions, "examplechat") {
 		t.Fatalf("the settings: %s %v", out, err)
+	}
+	policy := cfg.ReplyPolicy
+	if !policy.Enabled || policy.Revision != "rpc-v1" || !slices.Equal(policy.Sources, []string{"lark", "mail"}) ||
+		!policy.RequireIndependentReview || policy.Categories["ordinary_coordination"] != "owner_draft" ||
+		policy.Categories["approval_permission"] != "owner_only" || policy.Categories["unknown"] != "owner_only" {
+		t.Fatalf("reply policy did not survive the real inbox.config RPC: %s", out)
 	}
 	// A mail's text for translation keeps the HTML's paragraphs and links.
 	if out, err := inbox(assistantwire.InboxMailBody, assistantwire.InboxMailRef{AccountID: "acc1", UID: 9, Mailbox: "INBOX", Readable: true}); err != nil ||

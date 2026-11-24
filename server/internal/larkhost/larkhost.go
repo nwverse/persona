@@ -104,6 +104,7 @@ type Workbench interface {
 	WorkbenchCommand(ctx context.Context, f assistantwire.FeishuFeatures, cmd string) bool
 	WorkbenchNav(ctx context.Context, a *botcard.CardAction) *botcard.CardResponse
 	WorkbenchInboxAction(ctx context.Context, a *botcard.CardAction) *botcard.CardResponse
+	WorkbenchDraftCard(ctx context.Context, it assistantwire.WorkbenchItem, text string, err error, list string) *botcard.Card
 	HomeCard(ctx context.Context, f assistantwire.FeishuFeatures) (card *botcard.Card, fallback, said string)
 }
 
@@ -241,10 +242,10 @@ type Host interface {
 	// InboxDone files an item (dismissed: muted along with it); InboxMute mutes what is tagged tag = value in source.
 	InboxDone(ctx context.Context, id string, dismissed bool) error
 	InboxMute(ctx context.Context, source, tag, value, name string) error
-	DraftReply(ctx context.Context, id, instruction string) (string, error)
-	// ReplyInbox sends text as the owner's reply to item id, once per clientID; filed: the item was filed meanwhile
-	// and nothing was sent.
-	ReplyInbox(ctx context.Context, id, text, clientID string) (filed bool, err error)
+	DraftReply(ctx context.Context, id, instruction string, expectedVersion int, strictVersion bool) (item assistantwire.WorkbenchItem, text string, err error)
+	// ReplyInbox sends text as the owner's reply to item id, once per clientID and exact rendered suggestion version;
+	// filed: the item was filed meanwhile and nothing was sent.
+	ReplyInbox(ctx context.Context, id, text, clientID string, expectedVersion int) (filed bool, err error)
 
 	// The chat's state (chat_state.go): the settings row it is kept in, the chat's clock, and what the core does when
 	// the chat starts afresh (it forgets the bot's runs) or the owner recalls a message (its run stops). WorkbenchOn
@@ -431,6 +432,9 @@ func (None) WorkbenchCommand(context.Context, assistantwire.FeishuFeatures, stri
 }
 func (None) WorkbenchNav(context.Context, *botcard.CardAction) *botcard.CardResponse { return nil }
 func (None) WorkbenchInboxAction(context.Context, *botcard.CardAction) *botcard.CardResponse {
+	return nil
+}
+func (None) WorkbenchDraftCard(context.Context, assistantwire.WorkbenchItem, string, error, string) *botcard.Card {
 	return nil
 }
 func (None) HomeCard(context.Context, assistantwire.FeishuFeatures) (*botcard.Card, string, string) {

@@ -324,6 +324,9 @@ func workbenchItemOf(it InboxItem) assistantwire.WorkbenchItem {
 	w := assistantwire.WorkbenchItem{ID: it.ID, Source: it.Source, AccountName: it.AccountName, Title: it.Title,
 		Sender: it.Sender, Preview: it.Preview, Summary: it.Summary, Recap: it.Recap, Tier: it.Tier, Urgent: it.Urgent,
 		UpdatedAt: it.UpdatedAt, Done: it.DoneAt != nil, Mail: it.Mail != nil, Lark: it.Lark != nil, Connector: it.Connector != nil}
+	if g := currentSuggestion(&it); g != nil && g.Kind == SuggestReply {
+		w.ReplyVersion = g.Version
+	}
 	if c := it.Connector; c != nil {
 		w.ConnectorLabel, w.ConnectorCanReply, w.ConnectorReplyTo = c.Label, c.CanReply, c.ReplyTo
 	}
@@ -402,12 +405,31 @@ func (h larkHost) InboxMute(ctx context.Context, source, tag, value, name string
 	return err
 }
 
-func (h larkHost) DraftReply(ctx context.Context, id, instruction string) (string, error) {
-	return h.s.draftReply(ctx, id, instruction)
+func (h larkHost) DraftReply(ctx context.Context, id, instruction string, expectedVersion int, strictVersion bool) (assistantwire.WorkbenchItem, string, error) {
+	publishedVersion := 0
+	text, err := h.s.draftReplyVersionMode(ctx, id, instruction, expectedVersion, strictVersion, &publishedVersion)
+	if hook := h.s.inbox.workbenchDraftHook; hook != nil {
+		hook()
+	}
+	live, liveOK := h.s.workbenchItem(id)
+	if publishedVersion > 0 && err == nil {
+		// Render only the exact text/version pair created by this generation. A replacement installed before this
+		// reload must never lend its newer version to the older generated text.
+		g := currentSuggestion(&live)
+		if !liveOK || g == nil || g.Kind != SuggestReply || g.Version != publishedVersion || g.Text != text {
+			err = errSuggestionStale
+		}
+	}
+	cardItem := workbenchItemOf(live)
+	if liveOK && publishedVersion == 0 && err == nil {
+		// A transient result has no publication version and must not borrow a mirror installed while it generated.
+		cardItem.ReplyVersion = 0
+	}
+	return cardItem, text, err
 }
 
-func (h larkHost) ReplyInbox(ctx context.Context, id, text, clientID string) (bool, error) {
-	_, err := h.s.replyInboxFrom(ctx, id, text, clientID, true)
+func (h larkHost) ReplyInbox(ctx context.Context, id, text, clientID string, expectedVersion int) (bool, error) {
+	_, err := h.s.replyInboxFromVersion(ctx, id, text, clientID, true, expectedVersion)
 	if errors.Is(err, errInboxItemDone) {
 		return true, nil
 	}

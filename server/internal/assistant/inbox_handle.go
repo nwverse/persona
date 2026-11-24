@@ -400,8 +400,14 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 	mu := v.(*sync.Mutex)
 	mu.Lock()
 	defer mu.Unlock()
-	enabled := s.inboxConfig(ctx).Agent.Enabled
 	hello := s.hello(ctx)
+	// Hello is a blocking hub RPC. Read authorization only after it returns, before changing the processing turn.
+	fullCfg, configErr := s.inboxConfigFresh(ctx)
+	if configErr != nil {
+		return
+	}
+	enabled := fullCfg.Agent.Enabled
+	policy := compileReplyPolicy(fullCfg.ReplyPolicy)
 	owner, language := inboxPromptOwner(hello), answerLanguage(hello.Locale)
 	b.mu.Lock()
 	if cur := b.items[it.ID]; cur != it {
@@ -441,6 +447,18 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 	if len(notes) == 0 {
 		b.mu.Unlock()
 		return
+	}
+	if !replyPolicyAllowsQueueLocked(it, policy) {
+		// Work-bearing turns need the same current owner-draft authorization as a new queue start. A terminal closed
+		// notice performs no work and must still let the existing processing session shut down cleanly.
+		terminalOnly := !it.open()
+		for _, note := range notes {
+			terminalOnly = terminalOnly && note.Name == prompts.NoteClosed
+		}
+		if !terminalOnly {
+			b.mu.Unlock()
+			return
+		}
 	}
 	turn := ""
 	if it.open() {

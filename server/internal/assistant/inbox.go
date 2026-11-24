@@ -172,6 +172,17 @@ type InboxItem struct {
 	// ReplyPolicy is the latest server-side reply-policy classification for this item (inbox_reply_policy.go).
 	// Persisted, never listed.
 	ReplyPolicy *InboxReplyPolicySnapshot `json:"reply_policy,omitempty"`
+	// ReplyContentSources follows retained member text through merge and Undo. ReplyContextTruncated records
+	// incomplete classifier input; MailBodyTruncated distinguishes a clipped body from formatted headers.
+	ReplyContentSources   []string `json:"reply_content_sources,omitempty"`
+	ReplyContextTruncated bool     `json:"reply_context_truncated,omitempty"`
+	MailBodyTruncated     *bool    `json:"mail_body_truncated,omitempty"`
+	// ReplyInstruction and rejected draft text retain exact authorization provenance across replacements.
+	ReplyInstruction     *InboxChainEntry `json:"reply_instruction,omitempty"`
+	RejectedReplyDraft   string           `json:"rejected_reply_draft,omitempty"`
+	RejectedReplyDrafts  []string         `json:"rejected_reply_drafts,omitempty"`
+	replyClassifySerial  uint64
+	receivedInCollection bool
 }
 
 type InboxLark struct {
@@ -246,6 +257,8 @@ func (it *InboxItem) listed() InboxItem {
 	c.Meta, c.Group = nil, nil
 	c.ChainSeq, c.SuggestSeq = 0, 0
 	c.ReplyPolicy = nil
+	c.ReplyContentSources, c.ReplyContextTruncated, c.MailBodyTruncated = nil, false, nil
+	c.ReplyInstruction, c.RejectedReplyDraft, c.RejectedReplyDrafts = nil, "", nil
 	c.Status = it.status()
 	c.Now, c.TitleBy = it.nowKey(), ""
 	c.PreMergeTitle, c.PreMergeTitleBy, c.MergeTitle = "", "", ""
@@ -266,6 +279,8 @@ func (it *InboxItem) listed() InboxItem {
 		g.MailTarget = nil // the reply's internal conflict check, not a client's target to choose
 		g.Owner, g.SourceOf = nil, ""
 		g.ReplyPolicy = nil
+		g.OnDemand, g.ReplyPublicationPending, g.ReplyPublicationFailed = false, false, false
+		g.ReplyInstruction = ""
 		c.Suggestion = &g
 		if c.Handling == nil && g.Conversation == nil && it.Agent != nil { // an old draft: its conversation is done with this round
 			c.Handling = &InboxHandling{Owner: HandlingOwner, State: HandlingDone, MachineID: it.Agent.MachineID, SessionID: it.Agent.SessionID}
