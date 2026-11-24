@@ -205,6 +205,7 @@ func TestInboxAndThreadAndPrereqSignalsWakeDuringNeedsUser(t *testing.T) {
 	})
 
 	t.Run("bound feishu thread reply wakes supervisor without mutating card", func(t *testing.T) {
+		needsLarkLayer(t) // the topic's message is the lark module's
 		ctx := context.Background()
 		s, f, todo, _, _ := setupNeedsUserTaskWithLark(t, nil)
 		th := TodoThread{Channel: channel.Feishu, ChatID: "oc_group1", ThreadID: "omt_thread1", Title: "Rollout topic"}

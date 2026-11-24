@@ -80,6 +80,7 @@ func TestBriefCutsTheQueueAtTenRows(t *testing.T) {
 
 // The briefing card has a "Can wait" section after "To verify", each question with its own Handled button.
 func TestBriefCardHasACanWaitSection(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefRunEnvWith(t, true, func(e *briefRunEnv) {
 		e.later("1", "todo_a", "新接口用 snake_case 还是 camelCase？", 30*time.Hour)
 		e.later("2", "todo_b", "图标要不要换？", time.Hour)

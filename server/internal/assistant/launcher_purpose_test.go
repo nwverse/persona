@@ -117,6 +117,7 @@ func TestAssistantFollowupKeepsModelFromAssistantCatalog(t *testing.T) {
 }
 
 func TestAssistantBotModelMenuUsesAssistantCatalog(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	s, f := pickFixture(t)
 	f.answerNode(assistantwire.DeviceLaunchersModels, func(_ string, raw json.RawMessage) (any, error) {
 		var p struct{ Purpose string }
