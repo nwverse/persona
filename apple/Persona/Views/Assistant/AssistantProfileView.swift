@@ -458,15 +458,9 @@ struct AssistantProfileView: View {
     private static let nextSuggestionsTitle = String(localized: "Suggest the Next Message")
     private static let nextSuggestionsFooter = String(localized: "After a reply in a chat you have open, a small model suggests what you might send next, above the empty message box. Claude Code in a terminal keeps its own suggestions. Uses one extra model call per reply; the model is set under Model configuration › Next-message suggestions.")
 
-    // Where Persona asks before acting on your behalf: the Mac app asks in the app, iOS asks on the phone (#4068).
-    // The push itself still goes to the iPhone, so "notify you" stays in both.
-    #if os(macOS)
-    private static let reachApprovalLine = String(localized: "Ask you and notify you in the app")
-    private static let reachApprovalFooter = String(localized: "Anything that acts on your behalf, like sending Lark messages, sending email, or creating events, asks you in the app first.")
-    #else
+    // Where Persona asks before acting on your behalf: on the phone, where its push goes too (#4068).
     private static let reachApprovalLine = String(localized: "Ask you and notify you on your phone")
     private static let reachApprovalFooter = String(localized: "Anything that acts on your behalf, like sending Lark messages, sending email, or creating events, asks you on your phone first.")
-    #endif
 
     private var upcoming: [AssistantUpcoming] {
         AssistantUpcoming.merge(tasks ?? []).prefix(3).map { $0 }

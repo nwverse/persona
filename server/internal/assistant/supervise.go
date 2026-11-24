@@ -71,11 +71,12 @@ func isStalledReworkKind(kind string) bool {
 
 // Supervision is a supervised task's ledger, as the apps get it on the todo (supervision).
 type Supervision struct {
-	Supervisor    string             `json:"supervisor"` // the conversation that handed it out
-	DoneWhen      []string           `json:"done_when"`
-	Criteria      []db.TodoCriterion `json:"criteria"`
-	ExpectMinutes int                `json:"expect_minutes,omitempty"`
-	State         string             `json:"state"` // "" going on, or one of review*
+	Supervisor       string             `json:"supervisor"`                  // the conversation currently supervising it
+	SupervisorSource string             `json:"supervisor_source,omitempty"` // "plan" for a planned leader assignment; "explicit" after a move
+	DoneWhen         []string           `json:"done_when"`
+	Criteria         []db.TodoCriterion `json:"criteria"`
+	ExpectMinutes    int                `json:"expect_minutes,omitempty"`
+	State            string             `json:"state"` // "" going on, or one of review*
 	// Parked: what a parked task waits for (parked.go); nil unless State is parked. Read off its latest review each time
 	// the ledger is copied, not kept on its own.
 	Parked              *Parked      `json:"parked,omitempty"`
@@ -102,6 +103,11 @@ type Supervision struct {
 	// reading kept in memory only (the next report brings it back after a restart), and apart from UpdatedAt, which
 	// names the review a task waits for.
 	Progress *TaskProgress `json:"progress,omitempty"`
+}
+
+// assigned records a current ownership decision, rather than a pre-policy legacy ledger.
+func (v *Supervision) assigned() bool {
+	return v != nil && v.Supervisor != "" && v.SupervisorSource != ""
 }
 
 // TaskProgress is a supervised task's agent's latest report: its kind, the step it is on of how many (0: not said),
@@ -183,11 +189,15 @@ type TaskReview struct {
 	// SupersededReason records the supervisor's natural-language reason when this task_review superseded an earlier
 	// pending needs_user decision without fabricating an owner selection (#13112).
 	SupersededReason string `json:"superseded_reason,omitempty"`
+	// WithdrewNeedsUser: this accepted review is the supervisor taking back the needs_user it had raised
+	// (task_review withdraw_needs_user): no owner answered it, and nothing was pushed or carded for it.
+	WithdrewNeedsUser bool `json:"withdrew_needs_user,omitempty"`
 }
 
-// OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on the owner's decision:
-// when it was judged and the judge's reason. PushPending marks a new, still-undelivered push; NotifiedAt records its
-// success. Legacy waits have neither and are not replayed on upgrade.
+// OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on a decision its agent
+// says is the owner's: when it was judged and the judge's reason. It goes to the supervisor, never straight to the
+// owner (noteOwnerWait). PushPending and NotifiedAt are what earlier versions recorded of their own push to the owner;
+// they are read and kept, never set.
 type OwnerWait struct {
 	Work        time.Time  `json:"work"`
 	At          time.Time  `json:"at"`
@@ -312,7 +322,7 @@ func (s *Service) supervisionDB() supervisionStore {
 }
 
 func supervisionFromRow(r db.TodoSupervisionRow) *Supervision {
-	v := &Supervision{Supervisor: r.Supervisor, DoneWhen: r.DoneWhen, Criteria: r.Criteria, ExpectMinutes: r.ExpectMinutes, State: r.State, Round: r.Round,
+	v := &Supervision{Supervisor: r.Supervisor, SupervisorSource: r.SupervisorSource, DoneWhen: r.DoneWhen, Criteria: r.Criteria, ExpectMinutes: r.ExpectMinutes, State: r.State, Round: r.Round,
 		PendingSince: r.PendingSince, CardlessToldAt: r.CardlessToldAt, UpdatedAt: r.UpdatedAt}
 	_ = json.Unmarshal(r.Reviews, &v.Reviews)
 	v.StalledReworkRounds = v.stalledReworkRounds()
@@ -403,7 +413,7 @@ func (v *Supervision) row(todoID string) db.TodoSupervisionRow {
 	if v.Waits != nil {
 		waits, _ = json.Marshal(v.Waits)
 	}
-	return db.TodoSupervisionRow{TodoID: todoID, Supervisor: v.Supervisor, DoneWhen: v.DoneWhen, Criteria: v.Criteria, ExpectMinutes: v.ExpectMinutes,
+	return db.TodoSupervisionRow{TodoID: todoID, Supervisor: v.Supervisor, SupervisorSource: v.SupervisorSource, DoneWhen: v.DoneWhen, Criteria: v.Criteria, ExpectMinutes: v.ExpectMinutes,
 		State: v.State, Round: v.Round, Reviews: raw, AutoReview: auto, Waits: waits, PendingSince: v.PendingSince, CardlessToldAt: v.CardlessToldAt, UpdatedAt: v.UpdatedAt}
 }
 
@@ -421,8 +431,11 @@ func cleanDoneWhen(list []string) []string {
 
 // superviseTodo makes todo id a supervised task of conversation supervisor. A persistence failure leaves its in-memory
 // ledger untouched; callers that must not start untracked work check the returned error.
-func (s *Service) superviseTodo(ctx context.Context, id, supervisor string, doneWhen []string, expect int) error {
+func (s *Service) superviseTodo(ctx context.Context, id, supervisor string, doneWhen []string, expect int, source ...string) error {
 	_, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+		if len(source) > 0 && !v.assigned() {
+			v.SupervisorSource = source[0]
+		}
 		v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, cleanDoneWhen(doneWhen), max(0, min(expect, 24*60))
 		return true
 	})
@@ -633,8 +646,8 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 	if t.DoneAt != nil {
 		return "", 8
 	}
-	if v.Waits != nil { // the judge found it stopped on the owner's decision (#1277): not to be accepted as done
-		return "停下等用户拍板，别直接验收", 0 // i18n-ignore: the snapshot is the assistant's prompt
+	if v.Waits != nil { // the judge found it stopped on what its agent says is the owner's decision (#1277)
+		return "Agent 停下说要用户拍板：先判断是不是用户的事，别直接验收", 0 // i18n-ignore: the snapshot is the assistant's prompt
 	}
 	if snapshotDoneRule(t, agents, nil, nil, now, now.Location()) == ruleAccepted {
 		// v.state masks an accepted review after reopening; acceptanceStands inside the shared triage rule still holds

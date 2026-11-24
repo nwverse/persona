@@ -463,7 +463,7 @@ func RenderSnapshotWorkflow(w SnapshotWorkflow) string {
 type AssistantContext struct {
 	ScheduledWorkPlan bool // Inline instructions for a granted scheduled round when the manager uses persona-work.
 	Main              bool
-	Leader            bool // a leader conversation: explicit manual-Agent tasks only; new task_plan work is main-supervised
+	Leader            bool // a direction lead supervises its planned tasks and explicitly assigned Agents
 	Owner             string
 	Snapshot          string
 	// Directions: for the main conversation, the current leaders used as direction labels;
@@ -550,6 +550,9 @@ type BriefFacts struct {
 	Day *BriefDay
 	// Setup: the lines of the weekly recommended-setup block (#5085), ready to read; none leaves the section out.
 	Setup []string
+	// Captures: the quick-capture lines (#13502), ready to read; a sensitive capture is only counted. None leaves the
+	// section out.
+	Captures []string
 }
 
 // BriefDay is today's all-day recording in the evening routine's facts (#4741), the day's parts merged by time; the
@@ -832,6 +835,15 @@ type ChatReply struct {
 
 func RenderChatReply(d ChatReply) string { return render("assistant/chat_reply", d) }
 
+// ChatReplyHint is the one-time note to a conversation that wrote into a chat as the user while assistant.chat_reply_relay
+// is off (the default): others replied there, Persona does not pass it on, and the owner can turn that on.
+type ChatReplyHint struct {
+	Language, Title string
+	Group           bool
+}
+
+func RenderChatReplyHint(d ChatReplyHint) string { return render("assistant/chat_reply_hint", d) }
+
 // AskTodoAnswer is the message to the conversation whose ask_user question became a to-do (#1617): the user's call on it
 // (Thread: said in the to-do's Lark topic), or that the to-do was closed without one (Dropped). The questions and choices
 // are escaped by the caller.
@@ -902,8 +914,8 @@ type Supervise struct {
 	// they wait here before going up a rung.
 	Asked      bool
 	AskMinutes int
-	// PushGrading: the owner's push grading switch is on: a card is never handed to the user on a timeout, and ask_escalate
-	// pushes only what is the owner's alone (why_owner).
+	// PushGrading: the owner's push grading switch is on: ask_escalate pushes only what is the owner's alone (why_owner).
+	// No card is handed to the user on a timeout either way.
 	PushGrading bool
 	// Decisions: an entry is about a decision the owner cannot answer as it is (recheck, undecidable,
 	// owner_cannot_answer; #3804).
@@ -941,6 +953,9 @@ type SuperviseEntry struct {
 	Orphan          string              // orphaned: why nobody works on it (error, closed, offline)
 	Review          *SuperviseReviewed  // review: what the independent reviewer found (#2173), nil when none ran
 	// report: what its agent reported (progress, question, blocked, done), its words, evidence and step.
+	// Reported: on the entry of a turn's end (review, idle, unjudged, interrupted), the kind of the report its agent
+	// made before it stopped, told in that one entry (assistant.joinTurnReports); Said, Evidence and Step are the report's.
+	Reported    string
 	Report      string
 	Said        string
 	Evidence    []string
@@ -949,7 +964,8 @@ type SuperviseEntry struct {
 	// #10511). The manager copied them here when the agent's turn ended; they are kept out of Last's clip.
 	Files []TaskFile
 	// failed with its tab kept (#2570): until when (local "15:04"), the question its shell waits on, the tab's last
-	// lines, and how many retries are left; KeptUntil "" when the start failed for good.
+	// lines, and how many retries are left; KeptUntil "" when the start failed for good. Screen is also set for an
+	// agent_start_stalled start that failed for good (its screen when it stopped, start_remedy.go remedyEntry).
 	KeptUntil, Question, Screen string
 	RetriesLeft                 int
 	// RetryWith: failed because of its launcher on that computer, the other launchers there task_retry may start it
@@ -972,6 +988,8 @@ type SuperviseEntry struct {
 	// (assistant, leader, routine, hub) and StartedWhy the reason given.
 	Asked, AskedAt, Started, StartedWhy string
 	Dropped                             []string
+	// AskedCut: Asked is only the start of the owner's message; the rest is on the task (todo_get, its Link).
+	AskedCut bool
 	// inbox: the Inbox item the new messages came in, the newest when several did.
 	Inbox *SuperviseInbox
 	// LastReview: the task's last review, shown only in a Fresh message (#7315): a round that does not see the earlier
