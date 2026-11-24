@@ -324,3 +324,324 @@ func TestTaskStartRecordsTheDispatch(t *testing.T) {
 		}
 	}
 }
+
+// The templates and a capture into a new profile make core and dev answering to their older names, as a migrated
+// profile does, so a stored plan task or an older client naming strong or standard resolves on them too (#15010).
+func TestCapturedTiersAnswerToOldNames(t *testing.T) {
+	s, _, st := modelService(t)
+	ctx := context.Background()
+	sealed, err := s.sealKey("test-secret-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "current", Model: "test-current",
+		BaseURL: "https://example.invalid"}, KeySealed: sealed})
+	for id, binding := range map[string]ModelBinding{
+		"assistant": {Provider: "launcher.current", Model: "test-chat"},
+		"agent.new": {Provider: "launcher.current", Model: "test-agents"},
+	} {
+		if err := st.PutSetting(ctx, modelRecordKey(id), modelRecord{Revision: 3, Binding: binding}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldNames := func(where string, tiers map[string]ModelTier) {
+		t.Helper()
+		if !slices.Equal(tiers["core"].Aliases, []string{"strong"}) || !slices.Equal(tiers["dev"].Aliases, []string{"standard"}) {
+			t.Fatalf("%s: tiers do not answer to their older names: %+v", where, tiers)
+		}
+	}
+	resolves := func(where string) {
+		t.Helper()
+		for name, want := range map[string][2]string{"strong": {"core", "test-chat"}, "standard": {"dev", "test-agents"}} {
+			pick, err := s.pickTierCandidate(ctx, name, tierFacts{})
+			if err != nil {
+				t.Fatalf("%s: %s: %v", where, name, err)
+			}
+			if pick.Name != want[0] || pick.Tier.Launcher != "current" || pick.Tier.Model != want[1] || pick.Reason != tierReasonOnly {
+				t.Fatalf("%s: %s picked %+v", where, name, pick)
+			}
+		}
+	}
+	// (a) The seeded templates.
+	v := profilesOf(t, s)
+	for _, p := range v.Profiles {
+		oldNames("template "+p.ID, p.Tiers)
+	}
+	resolves("seeded")
+	raw := func() modelProfiles {
+		t.Helper()
+		var ps modelProfiles
+		if _, err := st.Setting(ctx, modelProfilesKey, &ps); err != nil {
+			t.Fatal(err)
+		}
+		return ps
+	}
+	capturedTiers := func() map[string]ModelTier {
+		t.Helper()
+		for _, p := range raw().Profiles {
+			if p.ID == "captured" {
+				return p.Tiers
+			}
+		}
+		t.Fatal("no profile captured stored")
+		return nil
+	}
+	capture := func() {
+		t.Helper()
+		body := `{"revision":` + jsonInt(raw().Revision) + `,"name":"Captured","capture":true}`
+		if r := request(s, http.MethodPut, "/api/v1/model-profiles/captured", body); r.Code != http.StatusOK {
+			t.Fatalf("capture: %d %s", r.Code, r.Body.String())
+		}
+	}
+	// (b) A capture into a new profile stores the aliases themselves, not only a migrated read of them.
+	capture()
+	tiers := capturedTiers()
+	oldNames("captured, as stored", tiers)
+	// (d) A later save of the captured tiers is not refused.
+	if err := checkModelTiers(maps.Clone(tiers)); err != nil {
+		t.Fatalf("captured tiers fail the save check: %v", err)
+	}
+	// (c) In use, the older names resolve to its tiers.
+	if _, err := s.applyModelProfile(ctx, "captured", ProfileActor{Kind: "hub"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, state := storedTiers(t, s); state.Active != "captured" {
+		t.Fatalf("captured is not in use: %+v", state)
+	}
+	resolves("captured in use")
+	// (e) Capturing it again keeps the aliases as they are, not doubled.
+	capture()
+	oldNames("recaptured", capturedTiers())
+}
+
+// renamedTiers pairs a tier an older client renamed with the stored one it replaces: an unchanged first candidate and
+// description, or one tier gone and one added with the same non-empty description. Nothing else pairs.
+func TestRenamedTiersPairs(t *testing.T) {
+	core := ModelTier{Launcher: "first", Model: "m-first", Description: "Core",
+		Candidates: []TierCandidate{{Launcher: "first", Model: "m-first"}, {Launcher: "second"}}, Aliases: []string{"strong"}}
+	dev := ModelTier{Launcher: "codex", Description: "Dev", Aliases: []string{"standard"}}
+	flat := func(t ModelTier) ModelTier {
+		return ModelTier{Launcher: t.Launcher, Model: t.Model, Description: t.Description}
+	}
+	for _, tc := range []struct {
+		name    string
+		was, in map[string]ModelTier
+		want    map[string]string
+	}{
+		{"exact rename", map[string]ModelTier{"core": core}, map[string]ModelTier{"lead": flat(core)}, map[string]string{"lead": "core"}},
+		{"rename and edit, same description", map[string]ModelTier{"core": core},
+			map[string]ModelTier{"lead": {Launcher: "other", Description: "Core"}}, map[string]string{"lead": "core"}},
+		{"same first candidate, other description", map[string]ModelTier{"core": core},
+			map[string]ModelTier{"review": {Launcher: "first", Model: "m-first", Description: "Review"}}, map[string]string{}},
+		{"same first candidate, no description", map[string]ModelTier{"core": {Launcher: "first", Aliases: []string{"strong"}}},
+			map[string]ModelTier{"review": {Launcher: "first"}}, map[string]string{"review": "core"}},
+		{"changed, no description", map[string]ModelTier{"core": {Launcher: "first", Aliases: []string{"strong"}}},
+			map[string]ModelTier{"review": {Launcher: "other"}}, map[string]string{}},
+		{"nothing shared", map[string]ModelTier{"core": core}, map[string]ModelTier{"fresh": {Launcher: "x", Description: "Other"}}, map[string]string{}},
+		{"new shape is never paired", map[string]ModelTier{"core": core},
+			map[string]ModelTier{"lead": {Launcher: "first", Model: "m-first", Description: "Core", Aliases: []string{}}}, map[string]string{}},
+		{"kept name is not a rename", map[string]ModelTier{"core": core, "dev": dev},
+			map[string]ModelTier{"core": flat(core), "lead": flat(dev)}, map[string]string{"lead": "dev"}},
+		{"two renames, each by its own fields", map[string]ModelTier{"core": core, "dev": dev},
+			map[string]ModelTier{"x": flat(core), "y": flat(dev)}, map[string]string{"x": "core", "y": "dev"}},
+		{"two added, two gone, nothing equal", map[string]ModelTier{"core": core, "dev": dev},
+			map[string]ModelTier{"x": {Launcher: "c", Description: "Core"}, "y": {Launcher: "d", Description: "Dev"}}, map[string]string{}},
+		{"two added equal to one gone: the first takes it", map[string]ModelTier{"core": core},
+			map[string]ModelTier{"a": flat(core), "b": flat(core)}, map[string]string{"a": "core"}},
+	} {
+		if got := renamedTiers(tc.was, tc.in); !maps.Equal(got, tc.want) {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// An older client renames a tier by sending it in the flat shape under its new name: it keeps its candidates and
+// aliases. Deleting a tier and adding an unrelated one in the same save hands nothing over (#15010).
+func TestModelProfilePutRenameKeepsCandidatesAndAliases(t *testing.T) {
+	s, _, _ := modelService(t)
+	ctx := context.Background()
+	seed := func(tiers map[string]ModelTier) {
+		t.Helper()
+		if _, err := s.saveModelProfile(ctx, nil, "custom", ProfileActor{Kind: "hub"}, func(p *ModelProfile, _ bool) error {
+			p.Name, p.Tiers = "Custom", tiers
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	core := ModelTier{Launcher: "first", Model: "m-first", Description: "Core",
+		Candidates: []TierCandidate{{Launcher: "first", Model: "m-first"}, {Launcher: "second", Model: "m-second"}}, Aliases: []string{"strong"}}
+	dev := ModelTier{Launcher: "codex", Description: "Dev", Aliases: []string{"standard"}}
+	profile := func() *ModelProfile {
+		t.Helper()
+		ps, _ := storedTiers(t, s)
+		for i := range ps.Profiles {
+			if ps.Profiles[i].ID == "custom" {
+				return &ps.Profiles[i]
+			}
+		}
+		t.Fatal("no profile custom")
+		return nil
+	}
+	put := func(tiers string) int {
+		t.Helper()
+		ps, _ := storedTiers(t, s)
+		body := `{"revision":` + jsonInt(ps.Revision) + `,"name":"Custom","tiers":` + tiers + `}`
+		return request(s, http.MethodPut, "/api/v1/model-profiles/custom", body).Code
+	}
+
+	// A pure rename.
+	seed(map[string]ModelTier{"core": core})
+	if code := put(`{"lead":{"launcher":"first","model":"m-first","description":"Core"}}`); code != http.StatusOK {
+		t.Fatalf("rename: %d", code)
+	}
+	p := profile()
+	if _, ok := p.Tiers["core"]; ok {
+		t.Fatalf("the old name stayed: %+v", p.Tiers)
+	}
+	if lead := p.Tiers["lead"]; !slices.Equal(lead.Aliases, []string{"strong"}) || !slices.Equal(lead.Candidates, core.Candidates) {
+		t.Fatalf("rename lost candidates or aliases: %+v", lead)
+	}
+	if own, ok := p.lookupTier("strong"); !ok || own != "lead" {
+		t.Fatalf("strong resolves to %q %v", own, ok)
+	}
+
+	// A rename that also changes the launcher, the description unchanged: candidate 0 is the new one, the rest stay.
+	seed(map[string]ModelTier{"core": core})
+	if code := put(`{"lead":{"launcher":"other","description":"Core"}}`); code != http.StatusOK {
+		t.Fatalf("rename and edit: %d", code)
+	}
+	lead := profile().Tiers["lead"]
+	if want := []TierCandidate{{Launcher: "other"}, {Launcher: "second", Model: "m-second"}}; !slices.Equal(lead.Candidates, want) ||
+		!slices.Equal(lead.Aliases, []string{"strong"}) {
+		t.Fatalf("rename and edit: %+v", lead)
+	}
+
+	// Deleting core and adding an unrelated tier on the same launcher and model hands it nothing.
+	seed(map[string]ModelTier{"core": core})
+	if code := put(`{"review":{"launcher":"first","model":"m-first","description":"Review"}}`); code != http.StatusOK {
+		t.Fatalf("delete and add: %d", code)
+	}
+	p = profile()
+	if review := p.Tiers["review"]; review.Aliases != nil || review.Candidates != nil {
+		t.Fatalf("an unrelated new tier inherited: %+v", review)
+	}
+	if _, ok := p.lookupTier("strong"); ok {
+		t.Fatal("strong still resolves after its tier was deleted")
+	}
+
+	// Two tiers renamed at once each keep their own aliases; two unrelated new ones get none.
+	seed(map[string]ModelTier{"core": core, "dev": dev})
+	if code := put(`{"x":{"launcher":"c","description":"E"},"y":{"launcher":"d","description":"F"}}`); code != http.StatusOK {
+		t.Fatalf("two new: %d", code)
+	}
+	if p = profile(); p.Tiers["x"].Aliases != nil || p.Tiers["y"].Aliases != nil {
+		t.Fatalf("unrelated new tiers inherited: %+v", p.Tiers)
+	}
+	seed(map[string]ModelTier{"core": core, "dev": dev})
+	if code := put(`{"x":{"launcher":"first","model":"m-first","description":"Core"},"y":{"launcher":"codex","description":"Dev"}}`); code != http.StatusOK {
+		t.Fatalf("two renames: %d", code)
+	}
+	if p = profile(); !slices.Equal(p.Tiers["x"].Aliases, []string{"strong"}) || !slices.Equal(p.Tiers["y"].Aliases, []string{"standard"}) {
+		t.Fatalf("two renames: %+v", p.Tiers)
+	}
+}
+
+// An alias the older client cannot see gives way to a tier name it sends: adding a tier named strong while core
+// answers to strong saves, and strong then names the new tier. An alias a client sends itself that is another tier's
+// name is still refused, from a PUT and from the assistant's tier edit (#15010).
+func TestModelProfilePutHiddenAliasGivesWay(t *testing.T) {
+	s, _, _ := modelService(t)
+	ctx := context.Background()
+	seed := func(tiers map[string]ModelTier) {
+		t.Helper()
+		if _, err := s.saveModelProfile(ctx, nil, "custom", ProfileActor{Kind: "hub"}, func(p *ModelProfile, _ bool) error {
+			p.Name, p.Tiers = "Custom", tiers
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	core := ModelTier{Launcher: "first", Description: "Core", Aliases: []string{"strong", "lead"}}
+	dev := ModelTier{Launcher: "codex", Description: "Dev", Aliases: []string{"standard"}}
+	tiers := func() map[string]ModelTier {
+		t.Helper()
+		ps, _ := storedTiers(t, s)
+		for _, p := range ps.Profiles {
+			if p.ID == "custom" {
+				return p.Tiers
+			}
+		}
+		t.Fatal("no profile custom")
+		return nil
+	}
+	put := func(body string) int {
+		t.Helper()
+		ps, _ := storedTiers(t, s)
+		return request(s, http.MethodPut, "/api/v1/model-profiles/custom",
+			`{"revision":`+jsonInt(ps.Revision)+`,"name":"Custom","tiers":`+body+`}`).Code
+	}
+
+	// An older client adds a tier named strong: core keeps its other alias and strong is the new tier, also on the
+	// next read (the seeded-name migration leaves it, since core exists).
+	seed(map[string]ModelTier{"core": core, "dev": dev})
+	if code := put(`{"core":{"launcher":"first","description":"Core"},"dev":{"launcher":"codex","description":"Dev"},` +
+		`"strong":{"launcher":"x","model":"m2"}}`); code != http.StatusOK {
+		t.Fatalf("adding strong: %d", code)
+	}
+	got := tiers()
+	if !slices.Equal(got["core"].Aliases, []string{"lead"}) || got["strong"].Model != "m2" || !slices.Equal(got["dev"].Aliases, []string{"standard"}) {
+		t.Fatalf("adding strong: %+v", got)
+	}
+	p := &ModelProfile{Tiers: got}
+	if own, _ := p.lookupTier("strong"); own != "strong" {
+		t.Fatalf("strong resolves to %q", own)
+	}
+	if own, _ := p.lookupTier("lead"); own != "core" {
+		t.Fatalf("lead resolves to %q", own)
+	}
+
+	// The same for standard against dev: dev keeps no aliases at all.
+	seed(map[string]ModelTier{"core": core, "dev": dev})
+	if code := put(`{"core":{"launcher":"first","description":"Core"},"dev":{"launcher":"codex","description":"Dev"},` +
+		`"standard":{"launcher":"y"}}`); code != http.StatusOK {
+		t.Fatalf("adding standard: %d", code)
+	}
+	if got = tiers(); got["dev"].Aliases != nil || got["standard"].Launcher != "y" {
+		t.Fatalf("adding standard: %+v", got)
+	}
+
+	// A hidden alias also gives way to an alias another tier sends itself.
+	seed(map[string]ModelTier{"core": core, "dev": dev})
+	if code := put(`{"core":{"launcher":"first","description":"Core"},"dev":{"launcher":"codex","aliases":["standard","lead"]}}`); code != http.StatusOK {
+		t.Fatalf("sent alias over a hidden one: %d", code)
+	}
+	if got = tiers(); !slices.Equal(got["core"].Aliases, []string{"strong"}) || !slices.Equal(got["dev"].Aliases, []string{"standard", "lead"}) {
+		t.Fatalf("sent alias over a hidden one: %+v", got)
+	}
+
+	// Renaming core to strong from an older client is accepted, and the seeded-name migration reads it back as core
+	// answering to strong (a known quirk of the read-time migration, as before this change).
+	seed(map[string]ModelTier{"core": core})
+	if code := put(`{"strong":{"launcher":"first","description":"Core"}}`); code != http.StatusOK {
+		t.Fatalf("rename core to strong: %d", code)
+	}
+	if got = tiers(); len(got) != 1 || !slices.Contains(got["core"].Aliases, "strong") {
+		t.Fatalf("rename core to strong read back as %+v", got)
+	}
+
+	// Sent explicitly, an alias that is another tier's name is still refused.
+	seed(map[string]ModelTier{"core": core, "dev": dev})
+	if code := put(`{"core":{"launcher":"first","aliases":["dev"]},"dev":{"launcher":"codex"}}`); code != http.StatusBadRequest {
+		t.Fatalf("explicit alias dev on core: %d", code)
+	}
+	if got = tiers(); !slices.Equal(got["core"].Aliases, core.Aliases) {
+		t.Fatalf("a refused PUT changed the tiers: %+v", got)
+	}
+	// And from the assistant's tier edit.
+	r := s.Tool(ctx, ToolCall{Name: "persona_settings", MachineID: "server", SessionID: "c1",
+		Arguments: json.RawMessage(`{"action":"set","key":"model_profiles.tiers","value":{"tier":"core","aliases":["dev"],"profiles":["custom"]}}`)})
+	if !r.IsError || len(s.pendingQuestions()) != 0 {
+		t.Fatalf("tier edit setting alias dev on core: %+v", r)
+	}
+}
