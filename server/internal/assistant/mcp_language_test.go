@@ -14,6 +14,7 @@ import (
 // Capture the JSON returned to the node, including deferred-loading metadata.
 func TestGoldenMCPDiscoveryLanguages(t *testing.T) {
 	needsLarkLayer(t)
+	needsHealthModule(t) // the goldens list health_intake, the Health module's tool
 	ft := newFleetTest(t)
 	ft.f.hello.Assistant.MachineID = "mac"
 	ctx := i18n.With(context.Background(), i18n.En) // request locale must not replace the owner's

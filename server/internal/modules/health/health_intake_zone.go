@@ -1,4 +1,4 @@
-package assistant
+package health
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 // Intake returns a portable zone identifier, never Go's process-local "Local" name.
 // Resolve the same zone for both calendar boundaries and the API/page's displayed zone.
 func (s *Service) healthIntakeLocation(ctx context.Context) *time.Location {
-	name := s.settings(ctx).Timezone
+	name := s.h.Timezone(ctx)
 	if name != "" && name != "Local" {
 		if loc, err := time.LoadLocation(name); err == nil {
 			return loc

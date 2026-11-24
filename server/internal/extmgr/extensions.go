@@ -565,6 +565,9 @@ func (ps *extensions) changed(c extension.Change) {
 	if ps.h != nil && ps.h.opts.TranscriptionChanged != nil {
 		defer ps.h.opts.TranscriptionChanged()
 	}
+	if ps.h != nil && ps.h.opts.TracksChanged != nil {
+		defer ps.h.opts.TracksChanged()
+	}
 	ctx := ps.ctx
 	if ctx == nil {
 		ctx = context.Background()

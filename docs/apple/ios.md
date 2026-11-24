@@ -2459,6 +2459,10 @@ Who it serves: everyday people who keep one part of their life (family, money, a
 health space does. The iOS / iPadOS app follows the web (`docs/web/web.md`, "Domain spaces"); the server side is in
 `docs/assistant/health.md` ("Tracks and kinds").
 
+- **Optional extension (#14574)**: the domain-space product surface belongs to `space-conversations`, not the schema-driven `spaces` extension. Core has no default Spaces entry. `ExtensionSlots.spaceConversationsEnabled` is true only while that extension's `home` navigation contribution is enabled; the sidebar shows its Spaces section only then. A hub with no spaces or no extension installs nothing automatically. Existing tracks and conversations are retained when the extension is off.
+- **Upgrade**: an installation with existing non-health tracks gets the extension once from the signed official marketplace and starts it. An installed or disabled extension is never replaced by migration. The health space's own entry and pages are unchanged.
+- **Extension handoff** (`ExtensionConversationLink`): the extension page can open only a bounded `persona://tracks/<machine>/<space>/<session>` link. It resolves to the existing `openAssistantConversation` host, with no WebView or general internal-link grant; Health and arbitrary app links are refused.
+
 - **Model**: `apple/Shared/Tracks.swift` decodes tracks, kinds, `SPACE.md`, a conversation's categories and the extension
   grants; every field is optional and unknown ones are ignored. Every call goes to the default manager (no
   `X-Persona-Manager`), as spaces are the default manager's. A hub without `GET /api/v1/assistant/tracks` (404 / 405, or an
@@ -2537,7 +2541,7 @@ visible one; its block shows only the one-line `injected.line` (`ChatLine.hidesP
 the supervision rule (`Supervision.visible`): a successful `ask_user` / `notify_user`, a pending live `ask_user`, an
 accepted / needs-user `task_review`, a `supervision_finish` receipt with user visibility, or `fold.supervision_user`.
 A completed round with a nonblank final reply also stays visible unless it successfully finished silent, except for a
-routine cross-conversation report to the main conversation: that reply stays inside the expandable background record,
+routine cross-conversation report when the main conversation has opted into folding these replies. It then stays inside the expandable background record,
 just as on the web. Explicit owner-visibility actions above still open and notify. The reply uses the usual bubble and
 the work stays collapsed. See `docs/assistant/assistant.md` "Background rounds".
 
@@ -2559,7 +2563,14 @@ and the count are unchanged (`ActionTrayContent.grouped`); with one group the tr
 
 The hub's `main_background_folded` (`GET` / `PUT /api/v1/assistant`, on unless changed; an older hub that omits it
 counts as on and hides the switch) is Settings › Assistant › **Fold background rounds**. Off, the main conversation
-and Needs You look exactly as before. Tests: `ChatBackgroundRoundsTests`.
+and leader conversations show their background rounds, and Needs You uses its usual grouping.
+
+The separate **Fold routine replies from other chats** preference (`fold_routine_relay_replies`, #11899) starts off.
+Ordinary completed replies from another conversation appear in the main chat and receive their finished notification.
+When both switches are on, the main chat keeps these replies in the expandable source record and the Hub quiets that
+notification. Explicit requests for the user’s attention and completed replies in leader conversations still appear.
+An older Hub that omits the opt-in keeps the default and hides the new switch. Each change writes only its own field.
+`ChatBackgroundRoundsTests` covers the wire values and transcript projection.
 
 ## Agent follow-up settings (#7005)
 

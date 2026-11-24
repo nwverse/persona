@@ -1450,6 +1450,7 @@ func newServiceOn(t testing.TB, f *fakeHub, st Store) *Service {
 // withSettings saves f.settings as s's own (none: s keeps what it has), and gives the hub's hello the fake model.
 func withSettings(t testing.TB, f *fakeHub, s *Service) *Service {
 	t.Helper()
+	installTestTrackKinds(s)
 	f.fakeModel(t)
 	// These tests are about what a plan does once it exists; what task_plan requires of a brief is task_brief_test.go's,
 	// which turns this off.

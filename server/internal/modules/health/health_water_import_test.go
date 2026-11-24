@@ -1,4 +1,4 @@
-package assistant
+package health
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 )
@@ -45,7 +46,7 @@ func (h *importWaterHub) DisableWaterExtension(w http.ResponseWriter, _ *http.Re
 
 type importMemoryStore struct{ intakeTestStore }
 
-func (m *importMemoryStore) HealthIntakeImport(ctx context.Context, rows []db.HealthIntakeRow) (int, error) {
+func (m *importMemoryStore) HealthIntakeImport(ctx context.Context, rows []assistantwire.HealthIntakeRow) (int, error) {
 	n := 0
 	for _, r := range rows {
 		_, added, err := m.HealthIntakeAdd(ctx, r)
@@ -91,12 +92,36 @@ func importHarness(t *testing.T, realDB bool) (*Service, *importWaterHub, health
 		store = d
 	}
 	f := newFakeHub()
-	s := newServiceOn(t, f, store)
 	h := &importWaterHub{fakeHub: f, water: &assistantwire.WaterExtension{StorageKey: "water", Version: "0.4.0", Enabled: true,
 		Config: json.RawMessage(`{"goal_ml":2400,"interval_minutes":90}`), State: importFixture(t, "water-import.json")}}
-	s.hub = h
-	return s, h, s.store().(healthIntakeStore)
+	s := newService(Options{Hub: h, Store: func() Store { return store }, Logf: testLogf(t)})
+	return s, h, s.h.IntakeStore()
 }
+
+// newDatabase is a fresh database on PERSONA_TEST_DATABASE_URL's server, dropped when t ends; t skips without one.
+func newDatabase(t *testing.T) string {
+	t.Helper()
+	base := os.Getenv("PERSONA_TEST_DATABASE_URL") // dbtest.Env, the core's test database (scripts/test/test-server.sh)
+	if base == "" {
+		t.Skip("PERSONA_TEST_DATABASE_URL not set")
+	}
+	name := "persona_health_t_" + randomHex(4)
+	url, err := db.WithDatabase(base, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.EnsureDatabase(context.Background(), url); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if admin, err := pgx.Connect(context.Background(), base); err == nil {
+			_, _ = admin.Exec(context.Background(), `DROP DATABASE IF EXISTS "`+name+`" WITH (FORCE)`)
+			_ = admin.Close(context.Background())
+		}
+	})
+	return url
+}
+
 func doWaterImport(t *testing.T, s *Service, status int) waterImportResult {
 	t.Helper()
 	w := intakeHTTP(s, "POST", "/api/v1/assistant/health/intake/import", "", "full")

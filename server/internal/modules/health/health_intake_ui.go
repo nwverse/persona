@@ -1,4 +1,4 @@
-package assistant
+package health
 
 import (
 	"encoding/json"
@@ -10,7 +10,6 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/apierr"
-	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -65,11 +64,11 @@ func (s *Service) healthIntakeUI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	l := i18n.FromRequest(r).Or(s.lang(r.Context()))
-	version := extension.UIVersion
+	version := s.h.UIVersion()
 	if req.Context != nil {
 		l = i18n.Lang(req.Context.Locale).Or(l)
 		if req.Context.UIVersion > 0 {
-			version = min(req.Context.UIVersion, extension.UIVersion)
+			version = min(req.Context.UIVersion, s.h.UIVersion())
 		}
 	}
 	now, toast := time.Now(), ""
@@ -140,7 +139,7 @@ func (s *Service) healthIntakeUI(w http.ResponseWriter, r *http.Request) {
 		recordedAmount = amount
 	case "undo":
 		id := req.Values["id"]
-		if !workoutUUID.MatchString(id) {
+		if !intakeUUIDPattern.MatchString(id) {
 			bad("invalid_entry")
 			return
 		}
@@ -188,9 +187,8 @@ func (s *Service) healthIntakeUI(w http.ResponseWriter, r *http.Request) {
 		intakeUnavailable(w)
 		return
 	}
-	view := drawIntakePage(p, c, v, reminder, now, s.healthIntakeLocation(r.Context()), l, version, s.hello(r.Context()).QuietPush)
-	slot, _ := extension.Slot("extension_page")
-	if _, err := extension.Fit(&view, slot, version, l); err != nil {
+	view := drawIntakePage(p, c, v, reminder, now, s.healthIntakeLocation(r.Context()), l, version, s.h.QuietPush(r.Context()))
+	if err := s.h.FitPage(&view, version, l); err != nil {
 		s.logf("health intake page: %v", err)
 		intakeUnavailable(w)
 		return

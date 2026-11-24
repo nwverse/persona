@@ -1,4 +1,4 @@
-package assistant
+package health
 
 import (
 	"context"
@@ -90,7 +90,7 @@ func TestHealthWaterReminderDedupSurvivesRestartAndUndo(t *testing.T) {
 	if w := waterActionHTTP(s, "synthetic-second", "log", "400", "full"); w.Code != 200 || len(st.rows) != 3 {
 		t.Fatalf("valid retry: %d %s", w.Code, w.Body)
 	}
-	if !workoutUUID.MatchString(id) || id[14] != '5' || id == reminderEntryID("synthetic-reminder", "log") {
+	if !intakeUUIDPattern.MatchString(id) || id[14] != '5' || id == reminderEntryID("synthetic-reminder", "log") {
 		t.Fatalf("unstable UUIDv5: %s", id)
 	}
 }
@@ -280,28 +280,6 @@ func TestHealthWaterLoopStopsAndCopyIsLocalized(t *testing.T) {
 			}
 		}
 	}
-}
-
-func TestHealthWaterOutboxPreservesReminderContext(t *testing.T) {
-	h := newOutboxHub(t)
-	out := &memOutbox{}
-	b := startOutboxManager(t, h, out)
-	n := Notification{ID: "synthetic-reminder", Kind: assistantwire.NotifyHealthWater, Level: assistantwire.LevelP1,
-		Title: "Time for some water", Health: &assistantwire.NotifyHealth{Reminder: "synthetic-reminder"}}
-	res, err := b.NotifyRequest(context.Background(), NotifyRequest{Notification: n})
-	if err != nil || !res.Queued || res.Devices != nil {
-		t.Fatalf("offline: %+v %v", res, err)
-	}
-	items, err := out.OutboxItems(context.Background(), 10)
-	if err != nil || len(items) != 1 {
-		t.Fatalf("outbox: %v %v", items, err)
-	}
-	var saved Notification
-	if err := json.Unmarshal(items[0].Body, &saved); err != nil || saved.Health == nil || saved.Health.Reminder != n.Health.Reminder || saved.Level != assistantwire.LevelP1 || saved.RelatedKey != "" {
-		t.Fatalf("queued context lost: %+v %v", saved, err)
-	}
-	h.up.Store(true)
-	h.waitFor(t, []string{"push synthetic-reminder"})
 }
 
 func TestHealthWaterGoalToastAndSnoozeWindow(t *testing.T) {

@@ -891,6 +891,7 @@ struct ChatView: View {
                                        quietAgents: quietSubagents, workflowCalls: workflowCalls,
                                        day: style == .assistant ? Calendar.current.startOfDay(for: .now) : nil,
                                        supervision: openSupervision, active: shownRoundActive, background: foldsBackground,
+                                       foldRoutineRelayReplies: foldRoutineRelayReplies, latestReplyNeedsAttention: latestReplyNeedsAttention,
                                        closeout: shownCloseout != nil, children: childStamp, modes: modes.map { "\($0.kind)@\($0.at.timeIntervalSince1970)" })
         if scratch.linesKey == key { return scratch.lines }
         var blocks = store.blocks
@@ -956,6 +957,14 @@ struct ChatView: View {
                                   leaders: Set(model.assistantLeaders))
     }
 
+    private var latestReplyNeedsAttention: Bool {
+        ChatLines.needsReplyAttention(session)
+    }
+
+    private var foldRoutineRelayReplies: Bool {
+        style == .assistant && shownKey == model.assistantMain && model.assistantConfig?.foldRoutineRelayReplies == true
+    }
+
     /// A later turn must not make a frozen historical question look like a live one.
     private var shownRoundActive: Bool { frozen.map { $0.live != nil } ?? status.isActive }
 
@@ -965,6 +974,7 @@ struct ChatView: View {
                   openAllRuns: Self.debugOpenRuns, chipRuns: AppStyle.current.usesBeautifulUI,
                   foldsIntoRun: foldsIntoRun, foldSupervision: style == .assistant, foldBackground: foldsBackground,
                   main: shownKey.sessionID == model.assistantMain?.sessionID,
+                  foldRoutineRelayReplies: foldRoutineRelayReplies, latestReplyNeedsAttention: latestReplyNeedsAttention,
                   openSupervision: openSupervision, openAllSupervision: Self.debugOpenSupervision, active: shownRoundActive)
     }
     private func unfoldWork(_ lines: [ChatLine]) -> [ChatLine] { lineBuilder.unfold(lines) }
@@ -8373,6 +8383,8 @@ final class ChatScratch {
         var active = false
         /// Background rounds fold (`ChatLines.foldBackground`): the main conversation with the hub's switch on.
         var background = false
+        var foldRoutineRelayReplies = false
+        var latestReplyNeedsAttention = false
         /// The header shows the session's closeout card: its raw block is left out of the last reply.
         var closeout = false
         /// Folded children placed in this chat. A change of row rebuilds the lines.

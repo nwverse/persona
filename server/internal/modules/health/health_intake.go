@@ -1,4 +1,4 @@
-package assistant
+package health
 
 import (
 	"context"
@@ -11,17 +11,9 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
-	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
-
-// The manager owns intake; the hub only authenticates and forwards these routes.
-type healthIntakeStore interface {
-	HealthIntakeAdd(context.Context, db.HealthIntakeRow) (db.HealthIntakeRow, bool, error)
-	HealthIntakeUndo(context.Context, string) (*db.HealthIntakeRow, bool, error)
-	HealthIntakeRange(context.Context, time.Time, time.Time) ([]db.HealthIntakeRow, error)
-	HealthIntakeChanges(context.Context, int64, int) ([]db.HealthIntakeRow, error)
-}
 
 type healthIntakeRequest struct {
 	ID     string     `json:"id"`
@@ -31,8 +23,8 @@ type healthIntakeRequest struct {
 	Note   string     `json:"note"`
 }
 
-func (v healthIntakeRequest) entry(settings healthIntakeSettings, now time.Time) (db.HealthIntakeRow, error) {
-	r := db.HealthIntakeRow{ID: strings.ToLower(v.ID), Kind: v.Kind, At: now.UTC(), Note: v.Note}
+func (v healthIntakeRequest) entry(settings healthIntakeSettings, now time.Time) (assistantwire.HealthIntakeRow, error) {
+	r := assistantwire.HealthIntakeRow{ID: strings.ToLower(v.ID), Kind: v.Kind, At: now.UTC(), Note: v.Note}
 	if v.At != nil {
 		r.At = v.At.UTC()
 	}
@@ -42,7 +34,7 @@ func (v healthIntakeRequest) entry(settings healthIntakeSettings, now time.Time)
 		r.Amount = float64(settings.Water.Cup)
 	}
 	rounded := math.Round(r.Amount*10) / 10
-	if !workoutUUID.MatchString(r.ID) ||
+	if !intakeUUIDPattern.MatchString(r.ID) ||
 		len(r.Note) > 4096 || strings.ContainsRune(r.Note, '\x00') ||
 		math.IsNaN(r.Amount) || math.IsInf(r.Amount, 0) || rounded <= 0 ||
 		math.Abs(r.Amount*10-math.Round(r.Amount*10)) > 1e-7 ||
@@ -55,9 +47,9 @@ func (v healthIntakeRequest) entry(settings healthIntakeSettings, now time.Time)
 }
 
 type healthIntakeKind struct {
-	Today   float64              `json:"today"`
-	Goal    int                  `json:"goal"`
-	Entries []db.HealthIntakeRow `json:"entries"`
+	Today   float64                         `json:"today"`
+	Goal    int                             `json:"goal"`
+	Entries []assistantwire.HealthIntakeRow `json:"entries"`
 }
 
 type healthIntakeDay struct {
@@ -80,20 +72,20 @@ type healthIntakeTotals struct {
 }
 
 type healthIntakeMutation struct {
-	Entry *db.HealthIntakeRow `json:"entry,omitempty"`
-	Today healthIntakeTotals  `json:"today"`
-	Zone  string              `json:"zone"`
+	Entry *assistantwire.HealthIntakeRow `json:"entry,omitempty"`
+	Today healthIntakeTotals             `json:"today"`
+	Zone  string                         `json:"zone"`
 }
 
 // sumHealthIntake includes empty dates and today's entries. Tenths avoid accumulating floating
 // point error from the database's numeric(7,1) measurements. AddDate keeps DST days intact.
-func sumHealthIntake(rows []db.HealthIntakeRow, settings healthIntakeSettings, now time.Time, loc *time.Location, days int) healthIntakeView {
+func sumHealthIntake(rows []assistantwire.HealthIntakeRow, settings healthIntakeSettings, now time.Time, loc *time.Location, days int) healthIntakeView {
 	now = now.In(loc)
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 	first := today.AddDate(0, 0, 1-days)
 	v := healthIntakeView{
-		Water:   healthIntakeKind{Goal: settings.Water.Goal, Entries: []db.HealthIntakeRow{}},
-		Protein: healthIntakeKind{Goal: settings.Protein.Goal, Entries: []db.HealthIntakeRow{}},
+		Water:   healthIntakeKind{Goal: settings.Water.Goal, Entries: []assistantwire.HealthIntakeRow{}},
+		Protein: healthIntakeKind{Goal: settings.Protein.Goal, Entries: []assistantwire.HealthIntakeRow{}},
 		Days:    make([]healthIntakeDay, days), Zone: loc.String(),
 	}
 	byDate := map[string]int{}
@@ -141,7 +133,7 @@ func (s *Service) healthIntakeView(ctx context.Context, st healthIntakeStore, se
 // intakeAccess keeps the watch's exception narrow even when called directly on the manager.
 // Extension, read-only and scoped credentials never read or write Health intake.
 func intakeAccess(w http.ResponseWriter, r *http.Request, watch bool) bool {
-	if fullRole(r) || watch && r.Header.Get(RoleHeader) == "answer" {
+	if fullRole(r) || watch && r.Header.Get(assistantwire.RoleHeader) == "answer" {
 		return true
 	}
 	apierr.Write(w, http.StatusForbidden, i18n.Err("assistant-health_intake.forbidden"))
@@ -149,7 +141,7 @@ func intakeAccess(w http.ResponseWriter, r *http.Request, watch bool) bool {
 }
 
 func (s *Service) intakeStore(w http.ResponseWriter) healthIntakeStore {
-	st, _ := s.store().(healthIntakeStore)
+	st := s.h.IntakeStore()
 	if st == nil {
 		intakeUnavailable(w)
 	}
@@ -174,14 +166,15 @@ func intakeQueryInt(r *http.Request, name string, fallback, minimum, maximum int
 	return n, err == nil && n >= minimum && n <= maximum
 }
 
-func (s *Service) intakeRoutes() {
-	s.handle("GET /api/v1/assistant/health/intake", s.getHealthIntake)
-	s.handle("POST /api/v1/assistant/health/intake", s.postHealthIntake)
-	s.handle("DELETE /api/v1/assistant/health/intake/{id}", s.undoHealthIntake)
-	s.handle("GET /api/v1/assistant/health/intake/changes", s.healthIntakeChanges)
-	s.handle("POST /api/v1/assistant/health/intake/ui", s.healthIntakeUI)
-	s.handle("POST /api/v1/assistant/health/intake/import", s.importHealthWater)
-	s.handle("POST /api/v1/assistant/health/water/reminder", s.waterReminderAction)
+// The manager owns intake; the hub only authenticates and forwards these routes.
+func (s *Service) intakeRoutes(handle func(string, http.HandlerFunc)) {
+	handle("GET /api/v1/assistant/health/intake", s.getHealthIntake)
+	handle("POST /api/v1/assistant/health/intake", s.postHealthIntake)
+	handle("DELETE /api/v1/assistant/health/intake/{id}", s.undoHealthIntake)
+	handle("GET /api/v1/assistant/health/intake/changes", s.healthIntakeChanges)
+	handle("POST /api/v1/assistant/health/intake/ui", s.healthIntakeUI)
+	handle("POST /api/v1/assistant/health/intake/import", s.importHealthWater)
+	handle("POST /api/v1/assistant/health/water/reminder", s.waterReminderAction)
 }
 
 func (s *Service) getHealthIntake(w http.ResponseWriter, r *http.Request) {
@@ -256,7 +249,7 @@ func (s *Service) undoHealthIntake(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if !workoutUUID.MatchString(id) {
+	if !intakeUUIDPattern.MatchString(id) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-health_intake.invalid_entry"))
 		return
 	}
@@ -284,7 +277,7 @@ func (s *Service) undoHealthIntake(w http.ResponseWriter, r *http.Request) {
 	s.intakeMutationReply(w, r, st, settings, nil)
 }
 
-func (s *Service) intakeMutationReply(w http.ResponseWriter, r *http.Request, st healthIntakeStore, settings healthIntakeSettings, entry *db.HealthIntakeRow) {
+func (s *Service) intakeMutationReply(w http.ResponseWriter, r *http.Request, st healthIntakeStore, settings healthIntakeSettings, entry *assistantwire.HealthIntakeRow) {
 	v, err := s.healthIntakeView(r.Context(), st, settings, 1)
 	if err != nil {
 		intakeUnavailable(w)
@@ -317,15 +310,15 @@ func (s *Service) healthIntakeChanges(w http.ResponseWriter, r *http.Request) {
 		rows = rows[:limit]
 	}
 	if rows == nil {
-		rows = []db.HealthIntakeRow{}
+		rows = []assistantwire.HealthIntakeRow{}
 	}
 	next := after
 	if len(rows) > 0 {
 		next = rows[len(rows)-1].Seq
 	}
 	intakeJSON(w, struct {
-		Changes []db.HealthIntakeRow `json:"changes"`
-		Next    int64                `json:"next"`
-		HasMore bool                 `json:"has_more"`
+		Changes []assistantwire.HealthIntakeRow `json:"changes"`
+		Next    int64                           `json:"next"`
+		HasMore bool                            `json:"has_more"`
 	}{rows, next, more})
 }

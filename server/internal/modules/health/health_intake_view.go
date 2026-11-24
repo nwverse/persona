@@ -1,4 +1,4 @@
-package assistant
+package health
 
 import (
 	"encoding/json"
@@ -7,6 +7,7 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 func drawIntakePage(p intakePageState, c healthIntakeSettings, v healthIntakeView, reminder waterReminderState, now time.Time, loc *time.Location, l i18n.Lang, version int, quiet bool) wire.View {
@@ -85,7 +86,7 @@ func drawIntakePage(p intakePageState, c healthIntakeSettings, v healthIntakeVie
 				action.ID, action.Values = "undo:"+e.ID, nil
 			}
 			rows = append(rows, wire.Component{Type: "row", Title: e.At.In(loc).Format("15:04") + " · " + intakeNumber(e.Amount) + " " + unit,
-				Subtitle: clip(e.Note, 200), Value: t("undo"), Action: action})
+				Subtitle: textfmt.Clip(e.Note, 200), Value: t("undo"), Action: action})
 		}
 		if len(rows) == 0 {
 			rows = append(rows, text(t("empty."+p.Kind)))

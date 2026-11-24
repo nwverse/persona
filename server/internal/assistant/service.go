@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistant/saved"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/healthhost"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/modapi"
@@ -135,6 +136,8 @@ type Service struct {
 	mcpChanges mcpToolChanges
 	// ext is the extensions' tools in this process (extensions.go SetExtensions); nil: none (tests).
 	ext ExtensionTools
+	// trackKindsExt supplies declarative domain-space kinds from enabled extensions.
+	trackKindsExt domainTrackKinds
 	// extOwners keeps the extensions the user marked as their own for the profile (extension_trust.go).
 	extOwners extensionOwnerCache
 	// startDefaultsFor answers a task start's defaults from the extension layer (start_defaults.go); nil: no defaults.
@@ -204,8 +207,6 @@ type Service struct {
 	rules ruleSuggestState
 	// setupMu serializes the reads and the one write of the weekly setup block's book (setup_suggest.go).
 	setupMu sync.Mutex
-	// intakeMu serializes intake settings, reminder state and local intake mutations.
-	intakeMu sync.Mutex
 
 	// prepared is what this hub last gave a machine's node for a directory (key: machine id NUL directory), the
 	// CLAUDE.md and the plugin skills, by prepareSpaceIf; refreshInstructions gives again what differs.
@@ -391,6 +392,7 @@ type Service struct {
 	// rec is the recording module (recording.go, internal/recordinghost); nil without it. meetingModel stands in for
 	// the meeting.answer model in tests (nil: the configured one).
 	rec          recordingLayer
+	healthMod    healthhost.Layer // the Health module, nil without it (health_layer.go)
 	recOpts      recordingOptions // Options' recording knobs, for the module's Host
 	meetingModel kb.Model
 	// sockets makes socketMux, ServeSocket's (sockets.go).
@@ -461,7 +463,7 @@ func New(o Options) *Service {
 	s.startRoutes()
 	s.skillRoutes()
 	s.workoutRoutes()
-	s.intakeRoutes()
+	s.healthRoutes() // the Health module (health_layer.go)
 	s.scheduleRoutes()
 	s.scheduleGrantRoutes()
 	s.placeRoutes()

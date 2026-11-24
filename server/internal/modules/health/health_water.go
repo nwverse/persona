@@ -1,4 +1,4 @@
-package assistant
+package health
 
 import (
 	"context"
@@ -14,7 +14,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
@@ -53,7 +52,7 @@ func (s *Service) putIntakeSetting(ctx context.Context, key string, value any) e
 	return st.PutSetting(ctx, key, value)
 }
 
-func (s *Service) addHealthIntake(ctx context.Context, st healthIntakeStore, v db.HealthIntakeRow) (db.HealthIntakeRow, bool, error) {
+func (s *Service) addHealthIntake(ctx context.Context, st healthIntakeStore, v assistantwire.HealthIntakeRow) (assistantwire.HealthIntakeRow, bool, error) {
 	s.intakeMu.Lock()
 	defer s.intakeMu.Unlock()
 	return s.addHealthIntakeLocked(ctx, st, v)
@@ -62,7 +61,7 @@ func (s *Service) addHealthIntake(ctx context.Context, st healthIntakeStore, v d
 // All sources use this write path. A retry after the entry committed but saving the reminder
 // state failed repairs the state from created_at without changing the record or reviving an undo.
 // The caller holds intakeMu, also held by the scheduler and page setting actions.
-func (s *Service) addHealthIntakeLocked(ctx context.Context, st healthIntakeStore, v db.HealthIntakeRow) (db.HealthIntakeRow, bool, error) {
+func (s *Service) addHealthIntakeLocked(ctx context.Context, st healthIntakeStore, v assistantwire.HealthIntakeRow) (assistantwire.HealthIntakeRow, bool, error) {
 	saved, changed, err := st.HealthIntakeAdd(ctx, v)
 	if err == nil && changed {
 		s.event(ctx, map[string]any{"type": "health_intake"})
@@ -101,7 +100,7 @@ func (s *Service) waterReminderLoop(ctx context.Context) {
 }
 
 type waterReminderAttempt struct {
-	Notification Notification
+	Notification assistantwire.Notification
 	State        waterReminderState
 }
 
@@ -111,8 +110,8 @@ func (s *Service) prepareWaterReminderLocked(ctx context.Context, now time.Time)
 	if err != nil || !c.Water.Remind {
 		return nil, err
 	}
-	st, ok := s.store().(healthIntakeStore)
-	if !ok {
+	st := s.h.IntakeStore()
+	if st == nil {
 		return nil, i18n.Err("assistant-health_intake.unavailable")
 	}
 	r, err := s.waterReminderState(ctx)
@@ -144,14 +143,14 @@ func (s *Service) prepareWaterReminderLocked(ctx context.Context, now time.Time)
 			"cups": int(math.Ceil(max(0, float64(c.Water.Goal)-v.Water.Today) / float64(c.Water.Cup)))})
 	}
 	id := "water-" + strconv.FormatInt(now.UnixMilli(), 10) + "-" + randomHex(8)
-	return &waterReminderAttempt{State: r, Notification: Notification{
+	return &waterReminderAttempt{State: r, Notification: assistantwire.Notification{
 		ID: id, Kind: assistantwire.NotifyHealthWater, Title: intakeText(l, "reminder.title"), Body: body,
 		Level: assistantwire.LevelP1, Health: &assistantwire.NotifyHealth{Reminder: id},
 	}}, nil
 }
 
 func (s *Service) waterReminderTick(ctx context.Context, now time.Time) error {
-	if s.store() == nil || s.hello(ctx).Assistant.Standby {
+	if s.store() == nil || s.h.Standby(ctx) {
 		return nil
 	}
 	s.intakeMu.Lock()
@@ -160,8 +159,7 @@ func (s *Service) waterReminderTick(ctx context.Context, now time.Time) error {
 	if err != nil || attempt == nil {
 		return err
 	}
-	s.noteCard(ctx, cardHealthWater, attempt.Notification)
-	res, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: attempt.Notification})
+	res, err := s.h.Notify(ctx, attempt.Notification)
 	reason := ""
 	switch {
 	case err != nil:
@@ -297,7 +295,7 @@ func (s *Service) waterReminderAction(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		saved, _, err := s.addHealthIntakeLocked(r.Context(), st, db.HealthIntakeRow{
+		saved, _, err := s.addHealthIntakeLocked(r.Context(), st, assistantwire.HealthIntakeRow{
 			ID: reminderEntryID(req.Reminder, req.Action), Kind: "water", Amount: float64(ml), At: now.UTC(),
 		})
 		if err != nil {
@@ -327,7 +325,7 @@ func intakeWaterToast(l i18n.Lang, c healthWaterSettings, amount, today float64)
 	return intakeText(l, "toast.logged", i18n.Args{"amount": intakeNumber(amount), "today": intakeNumber(today), "goal": c.Goal})
 }
 
-func intakeReminderStatus(l i18n.Lang, c healthWaterSettings, r waterReminderState, rows []db.HealthIntakeRow, now time.Time, loc *time.Location) string {
+func intakeReminderStatus(l i18n.Lang, c healthWaterSettings, r waterReminderState, rows []assistantwire.HealthIntakeRow, now time.Time, loc *time.Location) string {
 	p := scheduleWater(c, r, rows, now, loc)
 	switch p.Reason {
 	case "off", "invalid", "done":

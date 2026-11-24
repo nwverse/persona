@@ -1,4 +1,4 @@
-package assistant
+package health
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
-	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -39,7 +39,7 @@ func intakePageResult(t *testing.T, w *httptest.ResponseRecorder) wire.ActionRes
 
 func TestHealthIntakePageTotalsPaginationAndVersions(t *testing.T) {
 	now, c := waterTestTime("2026-11-16T10:00:00Z"), defaultHealthIntakeSettings()
-	rows := []db.HealthIntakeRow{
+	rows := []assistantwire.HealthIntakeRow{
 		{ID: intakeTestID, Kind: "water", Amount: 750, At: now},
 		{Kind: "water", Amount: 2000, At: now.AddDate(0, 0, -1)},
 		{Kind: "water", Amount: 2100, At: now.AddDate(0, 0, -10)},
@@ -89,7 +89,7 @@ func TestHealthIntakePageTotalsPaginationAndVersions(t *testing.T) {
 	st := &intakeTestStore{}
 	s := newServiceOn(t, newFakeHub(), st)
 	for i := range 100 {
-		st.HealthIntakeAdd(context.Background(), db.HealthIntakeRow{ID: fmt.Sprintf("00000000-0000-4000-8000-%012d", i+1), Kind: "water", Amount: 1, At: time.Now()})
+		st.HealthIntakeAdd(context.Background(), assistantwire.HealthIntakeRow{ID: fmt.Sprintf("00000000-0000-4000-8000-%012d", i+1), Kind: "water", Amount: 1, At: time.Now()})
 	}
 	for _, version := range []int{1, 2, 4, 11} {
 		res := intakePageResult(t, intakePageHTTP(s, "water", "", nil, "", version, "full"))
@@ -156,7 +156,7 @@ func TestHealthIntakePageActionsAndSettings(t *testing.T) {
 		t.Fatalf("settings: %+v", settings)
 	}
 	// A page action cannot remove yesterday's entry or an entry of another kind.
-	for i, row := range []db.HealthIntakeRow{{Kind: "water", At: time.Now().AddDate(0, 0, -1)}, {Kind: "protein", At: time.Now()}} {
+	for i, row := range []assistantwire.HealthIntakeRow{{Kind: "water", At: time.Now().AddDate(0, 0, -1)}, {Kind: "protein", At: time.Now()}} {
 		row.ID, row.Amount = fmt.Sprintf("10000000-0000-4000-8000-%012d", i+1), 10
 		st.HealthIntakeAdd(context.Background(), row)
 		intakePageResult(t, intakePageHTTP(s, "water", "undo", map[string]string{"id": row.ID}, "", 4, "full"))
@@ -219,7 +219,7 @@ func TestHealthIntakePageStatusAndLocalization(t *testing.T) {
 		{"weekend", "2026-11-14T10:00:00Z", "No weekend reminders", func(c *healthWaterSettings, s *waterPlanFixture) { c.Weekends = false }},
 		{"off", "2026-11-16T10:00:00Z", "Reminders are off", func(c *healthWaterSettings, s *waterPlanFixture) { c.Remind = false }},
 		{"done", "2026-11-16T10:00:00Z", "Goal met", func(c *healthWaterSettings, s *waterPlanFixture) {
-			s.Records = []db.HealthIntakeRow{{Kind: "water", Amount: 2000, At: waterTestTime("2026-11-16T10:00:00Z")}}
+			s.Records = []assistantwire.HealthIntakeRow{{Kind: "water", Amount: 2000, At: waterTestTime("2026-11-16T10:00:00Z")}}
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

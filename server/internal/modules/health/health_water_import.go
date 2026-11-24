@@ -1,4 +1,4 @@
-package assistant
+package health
 
 import (
 	"bytes"
@@ -12,15 +12,9 @@ import (
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/db"
 )
 
 const waterImportKey = "health.intake.water_import"
-
-type healthWaterImportStore interface {
-	HealthIntakeImport(context.Context, []db.HealthIntakeRow) (int, error)
-	HealthIntakeFinishWaterImport(ctx context.Context, settings, reminder, receipt any) error
-}
 
 type waterImportReceipt struct {
 	At      time.Time `json:"at"`
@@ -64,7 +58,7 @@ type legacyWaterState struct {
 	} `json:"pending"`
 }
 
-func readLegacyWater(v *assistantwire.WaterExtension) ([]db.HealthIntakeRow, waterReminderState, error) {
+func readLegacyWater(v *assistantwire.WaterExtension) ([]assistantwire.HealthIntakeRow, waterReminderState, error) {
 	var state legacyWaterState
 	if raw := bytes.TrimSpace(v.State); len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &state) != nil {
 		return nil, waterReminderState{}, errors.New("water.json must be a valid water state object, with valid field types and timestamps")
@@ -73,7 +67,7 @@ func readLegacyWater(v *assistantwire.WaterExtension) ([]db.HealthIntakeRow, wat
 		return nil, waterReminderState{}, errors.New("water.json contains an invalid pending reminder")
 	}
 	reminder := waterReminderState{Last: state.LastReminder, Snooze: state.Snooze}
-	rows := make([]db.HealthIntakeRow, 0, len(state.Records))
+	rows := make([]assistantwire.HealthIntakeRow, 0, len(state.Records))
 	amounts := map[string]int{}
 	for i, r := range state.Records {
 		if r.ID == "" || r.At.IsZero() || r.ML < 1 || r.ML > 3000 {
@@ -84,7 +78,7 @@ func readLegacyWater(v *assistantwire.WaterExtension) ([]db.HealthIntakeRow, wat
 			return nil, waterReminderState{}, fmt.Errorf("water.json record %d conflicts with another record at the same time", i+1)
 		}
 		amounts[id] = r.ML
-		rows = append(rows, db.HealthIntakeRow{ID: id, Kind: "water", Amount: float64(r.ML), At: r.At.UTC()})
+		rows = append(rows, assistantwire.HealthIntakeRow{ID: id, Kind: "water", Amount: float64(r.ML), At: r.At.UTC()})
 		if r.At.After(reminder.Last) {
 			reminder.Last = r.At
 		}
@@ -109,8 +103,8 @@ func legacyWaterSettings(v *assistantwire.WaterExtension) (healthIntakeSettings,
 }
 
 func (s *Service) pendingWaterExtension(ctx context.Context) (string, error) {
-	e, ok := s.hub.(waterExtensions)
-	if !ok {
+	e := s.h.WaterExtensions()
+	if e == nil {
 		return "", nil
 	}
 	v, err := e.WaterExtension(ctx, false)
@@ -135,9 +129,8 @@ func (s *Service) importHealthWater(w http.ResponseWriter, r *http.Request) {
 	if !intakeAccess(w, r, false) {
 		return
 	}
-	e, ok := s.hub.(waterExtensions)
-	st, hasStore := s.store().(healthWaterImportStore)
-	if !ok || !hasStore {
+	e, st := s.h.WaterExtensions(), s.h.ImportStore()
+	if e == nil || st == nil || s.store() == nil {
 		intakeUnavailable(w)
 		return
 	}

@@ -1,4 +1,4 @@
-package assistant
+package health
 
 import (
 	"context"
@@ -38,7 +38,7 @@ func TestHealthWaterBlockedDeliveryDoesNotBlockIntake(t *testing.T) {
 			var release sync.Once
 			unblock := func() { release.Do(func() { close(bus.release) }) }
 			defer unblock()
-			s := withSettings(t, f, New(Options{Hub: bus, Store: func() Store { return st }, Logf: testLogf(t)}))
+			s := withSettings(t, f, newService(Options{Hub: bus, Store: func() Store { return st }, Logf: testLogf(t)}))
 			setSettings(t, s, func(v *Settings) { v.Timezone = "UTC" })
 			c := defaultHealthIntakeSettings()
 			c.Water.Remind = true
@@ -103,7 +103,7 @@ func TestHealthIntakeInvalidStoredSettingsRemainRepairable(t *testing.T) {
 				defer logMu.Unlock()
 				logs = append(logs, fmt.Sprintf(format, args...))
 			}
-			s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: logf}))
+			s := withSettings(t, f, newService(Options{Hub: f, Store: func() Store { return st }, Logf: logf}))
 			st.mu.Lock()
 			if st.vals == nil {
 				st.vals = map[string][]byte{}
@@ -160,7 +160,7 @@ func TestHealthIntakeCommittedWaterSurvivesReminderStateFailure(t *testing.T) {
 			st, f := &intakeTestStore{}, newFakeHub()
 			var logMu sync.Mutex
 			var logs []string
-			s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: func(format string, args ...any) {
+			s := withSettings(t, f, newService(Options{Hub: f, Store: func() Store { return st }, Logf: func(format string, args ...any) {
 				logMu.Lock()
 				defer logMu.Unlock()
 				logs = append(logs, fmt.Sprintf(format, args...))

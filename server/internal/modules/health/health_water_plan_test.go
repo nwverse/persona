@@ -1,10 +1,10 @@
-package assistant
+package health
 
 import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
 func waterTestTime(s string) time.Time {
@@ -33,15 +33,15 @@ func TestHealthWaterScheduleRules(t *testing.T) {
 		{"R2 inclusive end", "2026-11-16T21:00:00Z", "2026-11-16T21:00:00Z", "", nil},
 		{"R3 first at start", "2026-11-16T07:00:00Z", "2026-11-16T09:00:00Z", "", nil},
 		{"R3 drink restarts interval", base, "2026-11-16T10:30:00Z", "", func(c *healthWaterSettings, s *waterPlanFixture) {
-			s.Records = []db.HealthIntakeRow{{At: waterTestTime("2026-11-16T09:30:00Z"), Kind: "water", Amount: 250}}
+			s.Records = []assistantwire.HealthIntakeRow{{At: waterTestTime("2026-11-16T09:30:00Z"), Kind: "water", Amount: 250}}
 		}},
 		{"R3 reminder is later", base, "2026-11-16T10:45:00Z", "", func(c *healthWaterSettings, s *waterPlanFixture) {
 			s.LastReminder = waterTestTime("2026-11-16T09:45:00Z")
-			s.Records = []db.HealthIntakeRow{{At: waterTestTime("2026-11-16T09:30:00Z"), Kind: "water", Amount: 250}}
+			s.Records = []assistantwire.HealthIntakeRow{{At: waterTestTime("2026-11-16T09:30:00Z"), Kind: "water", Amount: 250}}
 		}},
 		{"R3 drink is later", base, "2026-11-16T10:50:00Z", "", func(c *healthWaterSettings, s *waterPlanFixture) {
 			s.LastReminder = waterTestTime("2026-11-16T09:45:00Z")
-			s.Records = []db.HealthIntakeRow{{At: waterTestTime("2026-11-16T09:50:00Z"), Kind: "water", Amount: 250}}
+			s.Records = []assistantwire.HealthIntakeRow{{At: waterTestTime("2026-11-16T09:50:00Z"), Kind: "water", Amount: 250}}
 		}},
 		{"R3 old events do not delay morning", "2026-11-16T08:00:00Z", "2026-11-16T09:00:00Z", "", func(c *healthWaterSettings, s *waterPlanFixture) {
 			s.LastReminder = waterTestTime("2026-11-15T21:00:00Z")
@@ -58,15 +58,15 @@ func TestHealthWaterScheduleRules(t *testing.T) {
 		{"R6 Sunday", "2026-11-15T12:00:00Z", "2026-11-16T09:00:00Z", "weekend", func(c *healthWaterSettings, s *waterPlanFixture) { c.Weekends = false }},
 		{"R6 Friday overflow", "2026-11-13T21:30:00Z", "2026-11-16T09:00:00Z", "closed", func(c *healthWaterSettings, s *waterPlanFixture) { c.Weekends = false }},
 		{"R7 goal reached", base, "2026-11-17T09:00:00Z", "done", func(c *healthWaterSettings, s *waterPlanFixture) {
-			s.Records = []db.HealthIntakeRow{{At: waterTestTime(base), Kind: "water", Amount: 2000}}
+			s.Records = []assistantwire.HealthIntakeRow{{At: waterTestTime(base), Kind: "water", Amount: 2000}}
 		}},
 		{"R7 goal ignored when disabled", base, "2026-11-16T11:00:00Z", "", func(c *healthWaterSettings, s *waterPlanFixture) {
 			c.Stop = false
-			s.Records = []db.HealthIntakeRow{{At: waterTestTime(base), Kind: "water", Amount: 2000}}
+			s.Records = []assistantwire.HealthIntakeRow{{At: waterTestTime(base), Kind: "water", Amount: 2000}}
 		}},
 		{"R7 Friday goal skips weekend", "2026-11-13T10:00:00Z", "2026-11-16T09:00:00Z", "done", func(c *healthWaterSettings, s *waterPlanFixture) {
 			c.Weekends = false
-			s.Records = []db.HealthIntakeRow{{At: waterTestTime("2026-11-13T09:30:00Z"), Kind: "water", Amount: 2100}}
+			s.Records = []assistantwire.HealthIntakeRow{{At: waterTestTime("2026-11-13T09:30:00Z"), Kind: "water", Amount: 2100}}
 		}},
 		{"R8 disabled", base, "", "off", func(c *healthWaterSettings, s *waterPlanFixture) { c.Remind = false }},
 		{"R9 one catchup", base, base, "", func(c *healthWaterSettings, s *waterPlanFixture) {
@@ -77,7 +77,7 @@ func TestHealthWaterScheduleRules(t *testing.T) {
 		{"R10 fall DST window", "2026-11-01T05:30:00Z", "2026-11-01T14:00:00Z", "", func(c *healthWaterSettings, s *waterPlanFixture) { s.Zone = "America/New_York" }},
 		{"R10 local midnight excludes yesterday", "2026-03-09T04:00:00Z", "2026-03-09T13:00:00Z", "", func(c *healthWaterSettings, s *waterPlanFixture) {
 			s.Zone = "America/New_York"
-			s.Records = []db.HealthIntakeRow{{At: waterTestTime("2026-03-09T03:59:59Z"), Kind: "water", Amount: 2000}}
+			s.Records = []assistantwire.HealthIntakeRow{{At: waterTestTime("2026-03-09T03:59:59Z"), Kind: "water", Amount: 2000}}
 		}},
 	}
 	for _, tt := range tests {
@@ -126,7 +126,7 @@ func TestHealthWaterCalendarTotalsDST(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			start, end := waterTestTime(tc.start), waterTestTime(tc.end)
 			l := zoneOf("America/New_York")
-			s := waterPlanFixture{Records: []db.HealthIntakeRow{{At: start.Add(-time.Second), Kind: "water", Amount: 100}, {At: start, Kind: "water", Amount: 200}, {At: end.Add(-time.Second), Kind: "water", Amount: 300}, {At: end, Kind: "water", Amount: 400}}}
+			s := waterPlanFixture{Records: []assistantwire.HealthIntakeRow{{At: start.Add(-time.Second), Kind: "water", Amount: 100}, {At: start, Kind: "water", Amount: 200}, {At: end.Add(-time.Second), Kind: "water", Amount: 300}, {At: end, Kind: "water", Amount: 400}}}
 			if got := waterFixtureTotal(s, start, l); got != 500 {
 				t.Fatalf("total %g", got)
 			}
@@ -140,7 +140,7 @@ func TestHealthWaterCalendarTotalsDST(t *testing.T) {
 // Fixtures preserve the extension schedule's table while using manager-owned rows and zoneOf.
 type waterPlanFixture struct {
 	Zone         string
-	Records      []db.HealthIntakeRow
+	Records      []assistantwire.HealthIntakeRow
 	LastReminder time.Time
 	Snooze       time.Time
 }

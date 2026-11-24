@@ -1,4 +1,4 @@
-package assistant
+package health
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
 const intakeTestID = "00000000-0000-4000-8000-000000000001"
@@ -25,12 +25,12 @@ const intakeTestID = "00000000-0000-4000-8000-000000000001"
 type intakeTestStore struct {
 	memStore
 	intakeMu sync.Mutex
-	rows     map[string]db.HealthIntakeRow
+	rows     map[string]assistantwire.HealthIntakeRow
 	seq      int64
 	fail     bool
 }
 
-func (m *intakeTestStore) HealthIntakeAdd(_ context.Context, v db.HealthIntakeRow) (db.HealthIntakeRow, bool, error) {
+func (m *intakeTestStore) HealthIntakeAdd(_ context.Context, v assistantwire.HealthIntakeRow) (assistantwire.HealthIntakeRow, bool, error) {
 	m.intakeMu.Lock()
 	defer m.intakeMu.Unlock()
 	if m.fail {
@@ -40,7 +40,7 @@ func (m *intakeTestStore) HealthIntakeAdd(_ context.Context, v db.HealthIntakeRo
 		return old, false, nil
 	}
 	if m.rows == nil {
-		m.rows = map[string]db.HealthIntakeRow{}
+		m.rows = map[string]assistantwire.HealthIntakeRow{}
 	}
 	m.seq++
 	v.Seq, v.CreatedAt = m.seq, time.Now().UTC()
@@ -48,7 +48,7 @@ func (m *intakeTestStore) HealthIntakeAdd(_ context.Context, v db.HealthIntakeRo
 	return v, true, nil
 }
 
-func (m *intakeTestStore) HealthIntakeUndo(_ context.Context, id string) (*db.HealthIntakeRow, bool, error) {
+func (m *intakeTestStore) HealthIntakeUndo(_ context.Context, id string) (*assistantwire.HealthIntakeRow, bool, error) {
 	m.intakeMu.Lock()
 	defer m.intakeMu.Unlock()
 	if m.fail {
@@ -68,35 +68,35 @@ func (m *intakeTestStore) HealthIntakeUndo(_ context.Context, id string) (*db.He
 	return &v, changed, nil
 }
 
-func (m *intakeTestStore) HealthIntakeRange(_ context.Context, from, until time.Time) ([]db.HealthIntakeRow, error) {
+func (m *intakeTestStore) HealthIntakeRange(_ context.Context, from, until time.Time) ([]assistantwire.HealthIntakeRow, error) {
 	m.intakeMu.Lock()
 	defer m.intakeMu.Unlock()
 	if m.fail {
 		return nil, errors.New("synthetic storage failure")
 	}
-	out := []db.HealthIntakeRow{}
+	out := []assistantwire.HealthIntakeRow{}
 	for _, v := range m.rows {
 		if v.DeletedAt == nil && !v.At.Before(from) && v.At.Before(until) {
 			out = append(out, v)
 		}
 	}
-	slices.SortFunc(out, func(a, b db.HealthIntakeRow) int { return b.At.Compare(a.At) })
+	slices.SortFunc(out, func(a, b assistantwire.HealthIntakeRow) int { return b.At.Compare(a.At) })
 	return out, nil
 }
 
-func (m *intakeTestStore) HealthIntakeChanges(_ context.Context, after int64, limit int) ([]db.HealthIntakeRow, error) {
+func (m *intakeTestStore) HealthIntakeChanges(_ context.Context, after int64, limit int) ([]assistantwire.HealthIntakeRow, error) {
 	m.intakeMu.Lock()
 	defer m.intakeMu.Unlock()
 	if m.fail {
 		return nil, errors.New("synthetic storage failure")
 	}
-	out := []db.HealthIntakeRow{}
+	out := []assistantwire.HealthIntakeRow{}
 	for _, v := range m.rows {
 		if v.Seq > after {
 			out = append(out, v)
 		}
 	}
-	slices.SortFunc(out, func(a, b db.HealthIntakeRow) int { return int(a.Seq - b.Seq) })
+	slices.SortFunc(out, func(a, b assistantwire.HealthIntakeRow) int { return int(a.Seq - b.Seq) })
 	return out[:min(limit, len(out))], nil
 }
 
@@ -214,7 +214,7 @@ func TestHealthIntakeCalendarDays(t *testing.T) {
 	} {
 		midnight := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, loc)
 		deleted := today
-		rows := []db.HealthIntakeRow{
+		rows := []assistantwire.HealthIntakeRow{
 			{ID: "last", Kind: "water", Amount: 100, At: midnight.Add(-time.Nanosecond)},
 			{ID: "start", Kind: "water", Amount: 200, At: midnight},
 			{ID: "end", Kind: "protein", Amount: 30.1, At: midnight.AddDate(0, 0, 1).Add(-time.Nanosecond)},
@@ -222,7 +222,7 @@ func TestHealthIntakeCalendarDays(t *testing.T) {
 			{ID: "undo", Kind: "water", Amount: 900, At: today, DeletedAt: &deleted},
 		}
 		for range 10 {
-			rows = append(rows, db.HealthIntakeRow{Kind: "protein", Amount: 0.1, At: today})
+			rows = append(rows, assistantwire.HealthIntakeRow{Kind: "protein", Amount: 0.1, At: today})
 		}
 		v := sumHealthIntake(rows, defaultHealthIntakeSettings(), today, loc, 7)
 		if v.Zone != loc.String() || len(v.Days) != 7 || v.Days[5].Water != 100 || v.Days[6].Water != 200 || v.Protein.Today != 31.1 || v.Water.Today != 200 || len(v.Water.Entries) != 1 || len(v.Protein.Entries) != 11 || v.Days[0].Water != 0 {
@@ -336,17 +336,17 @@ func TestHealthIntakeChangesHTTPPaging(t *testing.T) {
 	ctx, st := context.Background(), &intakeTestStore{}
 	s := newServiceOn(t, newFakeHub(), st)
 	for i := 1; i <= 3; i++ {
-		if _, _, err := st.HealthIntakeAdd(ctx, db.HealthIntakeRow{ID: fmt.Sprintf("00000000-0000-4000-8000-%012d", i), Kind: "water", Amount: 100, At: time.Now().UTC()}); err != nil {
+		if _, _, err := st.HealthIntakeAdd(ctx, assistantwire.HealthIntakeRow{ID: fmt.Sprintf("00000000-0000-4000-8000-%012d", i), Kind: "water", Amount: 100, At: time.Now().UTC()}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	read := func(after int64) (next int64, more bool, rows []db.HealthIntakeRow) {
+	read := func(after int64) (next int64, more bool, rows []assistantwire.HealthIntakeRow) {
 		t.Helper()
 		w := intakeHTTP(s, "GET", fmt.Sprintf("/api/v1/assistant/health/intake/changes?after=%d&limit=2", after), "", "full")
 		var page struct {
-			Changes []db.HealthIntakeRow `json:"changes"`
-			Next    int64                `json:"next"`
-			More    bool                 `json:"has_more"`
+			Changes []assistantwire.HealthIntakeRow `json:"changes"`
+			Next    int64                           `json:"next"`
+			More    bool                            `json:"has_more"`
 		}
 		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil {
 			t.Fatalf("page: %d %s", w.Code, w.Body)
@@ -381,7 +381,7 @@ func TestHealthIntakeReadUsesReportedZone(t *testing.T) {
 	now := time.Now().In(loc)
 	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 	for i, at := range []time.Time{start.Add(-time.Nanosecond), start, start.AddDate(0, 0, 1)} {
-		if _, _, err := st.HealthIntakeAdd(context.Background(), db.HealthIntakeRow{ID: fmt.Sprintf("00000000-0000-4000-8000-%012d", i+1), Kind: "water", Amount: 100, At: at}); err != nil {
+		if _, _, err := st.HealthIntakeAdd(context.Background(), assistantwire.HealthIntakeRow{ID: fmt.Sprintf("00000000-0000-4000-8000-%012d", i+1), Kind: "water", Amount: 100, At: at}); err != nil {
 			t.Fatal(err)
 		}
 	}

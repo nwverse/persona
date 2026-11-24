@@ -1,9 +1,9 @@
-package assistant
+package health
 
 import (
 	"time"
 
-	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
 const waterReminderKey = "health.intake.water_reminder"
@@ -30,7 +30,7 @@ func waterAt(t time.Time, minutes int) time.Time {
 
 // scheduleWater ports the water extension's calendar rules. Overdue occurrences collapse to
 // one send at now; dates and window boundaries follow the phone's last reported time zone.
-func scheduleWater(c healthWaterSettings, s waterReminderState, rows []db.HealthIntakeRow, now time.Time, loc *time.Location) waterPlan {
+func scheduleWater(c healthWaterSettings, s waterReminderState, rows []assistantwire.HealthIntakeRow, now time.Time, loc *time.Location) waterPlan {
 	now = now.In(loc)
 	start, ok := waterClock(c.Start)
 	end, okEnd := waterClock(c.End)

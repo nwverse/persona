@@ -1,4 +1,4 @@
-package assistant
+package health
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -47,13 +47,13 @@ func (s *Service) toolHealthIntake(ctx context.Context, args json.RawMessage) (s
 			return "", i18n.Err("assistant-health_intake.invalid_query")
 		}
 	case "delete":
-		if logFields || a.Days != nil || !workoutUUID.MatchString(a.ID) {
+		if logFields || a.Days != nil || !intakeUUIDPattern.MatchString(a.ID) {
 			return "", i18n.Err("assistant-health_intake.invalid_entry")
 		}
 	default:
 		return "", errors.New("action must be log, list or delete")
 	}
-	st, _ := s.store().(healthIntakeStore)
+	st := s.h.IntakeStore()
 	if st == nil {
 		return "", i18n.Err("assistant-health_intake.unavailable")
 	}
@@ -116,7 +116,7 @@ func (s *Service) toolHealthIntake(ctx context.Context, args json.RawMessage) (s
 }
 
 func (s *Service) listHealthIntakeTool(ctx context.Context, st healthIntakeStore, settings healthIntakeSettings, days int) (string, error) {
-	loc, now := s.location(ctx), time.Now()
+	loc, now := s.h.Location(ctx), time.Now()
 	local := now.In(loc)
 	today := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
 	rows, err := st.HealthIntakeRange(ctx, today.AddDate(0, 0, 1-days), today.AddDate(0, 0, 1))
@@ -124,15 +124,15 @@ func (s *Service) listHealthIntakeTool(ctx context.Context, st healthIntakeStore
 		return "", err
 	}
 	if rows == nil {
-		rows = []db.HealthIntakeRow{}
+		rows = []assistantwire.HealthIntakeRow{}
 	}
 	v := sumHealthIntake(rows, settings, now, loc, days)
 	b, err := json.Marshal(struct {
-		Entries []db.HealthIntakeRow `json:"entries"`
-		Days    []healthIntakeDay    `json:"days"`
-		Today   healthIntakeTotals   `json:"today"`
-		Goals   healthIntakeTotals   `json:"goals"`
-		Zone    string               `json:"zone"`
+		Entries []assistantwire.HealthIntakeRow `json:"entries"`
+		Days    []healthIntakeDay               `json:"days"`
+		Today   healthIntakeTotals              `json:"today"`
+		Goals   healthIntakeTotals              `json:"goals"`
+		Zone    string                          `json:"zone"`
 	}{rows, v.Days, healthIntakeTotals{v.Water.Today, v.Protein.Today},
 		healthIntakeTotals{float64(v.Water.Goal), float64(v.Protein.Goal)}, v.Zone})
 	return string(b), err
