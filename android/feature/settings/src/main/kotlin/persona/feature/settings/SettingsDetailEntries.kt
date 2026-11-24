@@ -23,7 +23,7 @@ import persona.core.navigation.ExtensionUiRoute
 
 /**
  * Settings pages opened by key rather than from the settings list: a machine's engine (from its page in Agents) and
- * one AI use of "Model configuration" (from that list, or from the voice page for its extension's model), one extension of "Extensions" and the
+ * one AI use of "Model configuration" (from that list, or from a module's page for its extension's model), one extension of "Extensions" and the
  * pages it draws, "Extension market" with its extensions and markets, a launcher of a machine (from the machine's page), and one channel
  * of "Channels".
  */

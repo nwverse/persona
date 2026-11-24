@@ -161,7 +161,7 @@ func TestDetectCrossRepoIsolationAndEmptyRepoKey(t *testing.T) {
 		},
 		{
 			TodoID:        "todo_2",
-			RepoKey:       "github.com/nwverse/other-repo",
+			RepoKey:       "example.test/other/repo",
 			WritePrefixes: []string{"."},
 			ChangedFiles:  []string{"server/main.go"},
 		},
