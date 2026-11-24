@@ -765,9 +765,6 @@ func (s *Service) updatePlanTask(ctx context.Context, planID string, i int, t Pl
 		pt.Machine, pt.Cwd, pt.Why = t.Machine, t.Cwd, t.Why
 		if t.Placement != nil {
 			pt.Placement = t.Placement
-			if t.Placement.Choice != "" {
-				pt.Why = t.Placement.Reason
-			}
 		}
 		pt.Reroute, pt.Ultracode = t.Reroute, launch.ultracode
 		pt.Workspace, pt.WorkspaceResolved, pt.MachinePolicy = t.Workspace, t.WorkspaceResolved, t.MachinePolicy
