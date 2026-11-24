@@ -1302,8 +1302,6 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		running, known := n.herdrRunning(ctx)
 		installing, installErr := n.herdrInstalling() // herdrinstall.go
 		return map[string]any{"running": running, "known": known, "installing": installing, "install_error": installErr}, nil
-	case "herdr.sessions.list": // configurable named herdr sessions on this computer (#14898, herdrsessions.go)
-		return n.listHerdrSessions(ctx)
 	case "connector.list", "connector.chats", "connector.older", "connector.changes", "connector.search": // this Mac's own data (connectors.go)
 		return localConnector(ctx, method, params)
 	case "credential.gh_token": // the GitHub connector's token from this machine's gh login (credential.go)
@@ -1358,7 +1356,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			// leaves them as they are.
 			HerdrSessionsBlocked *[]string          `json:"herdr_sessions_blocked"`
 			Codex                *proto.CodexConfig `json:"codex"`
-			MachineID        string             `json:"machine_id"`
+			MachineID            string             `json:"machine_id"`
 			// Keep: sessions always listed, however old or crowded out (the assistant's main conversation).
 			Keep *[]string `json:"keep_sessions"`
 			// Botmux: list botmux's sessions (hub.json machines[].botmux); nil (a call that says nothing of it, an
