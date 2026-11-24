@@ -21,6 +21,15 @@ for the owner's native language name (`English`, `日本語`, empty for zh-Hans)
 pattern where the caller already uses it. Instruction-only language hints and fully translated templates are both
 supported; a hint alone is not evidence that user-visible injected instructions have been translated.
 
+### Strength workout reports
+
+Strength workout reports (#14713) carry `WorkoutReport.Language` from the owner at execution time and an optional
+`Strength` input assembled by the Health module. Sets, comparisons and plans are explicitly untrusted data. The three
+scenarios (sets, plan without sets, neither) have en / zh-Hans / ja caller-level goldens in the module's `testdata`.
+The nil-Strength report keeps the original bytes, including the existing `workout_report.golden`; the language hint
+is inside the strength-only branch. Health tool discovery stays unchanged here pending #14855; no legacy MCP bytes
+or prompt-size baselines are raised for this work.
+
 ### Compatibility and wake messages
 
 `agents/wake.md` is fully rendered in English and Japanese. `agents_work_tick.go` reads the owner's language at

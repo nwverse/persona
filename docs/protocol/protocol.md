@@ -309,6 +309,7 @@ The authenticated WS `hello.features` always lists server capabilities; trusted 
   - `assistant_search` only while the default manager names it in its `manager.hello` capabilities, the same way (an extension's report cannot add it): `GET /api/v1/assistant/search`, the assistant's chats found by what was said in them (see "Assistant chat search (#6282)"). Without it the apps filter titles and last messages as before; a non-default manager from before it answers the route 404, which the apps take the same way.
   - `health_items` only while the default manager names it in its hello: ordered health items and revisions (see "Health items"). Extension reports cannot enable it.
   - `health_intake` only while the default manager is connected and names it in its `manager.hello` capabilities (an extension's report cannot add it): built-in water and protein records, daily totals, undo markers and the changes feed (see "Health intake"). Clients check this feature before offering intake controls; an older hub may refuse a watch request with 403 rather than 404.
+  - `health_strength` only while the default manager names it in its `manager.hello`: strength exercises, sets, drafts, managed cards and pages under the reserved `-health-intake` id (see "Strength training"). Extension reports cannot enable it. It follows the Health module, independently of whether the owner added strength training.
   - `starred_messages` means the hub relays the starred-message routes. Clients load the index only after seeing the feature. A selected assistant from before those routes answers 404.
   - `direction_sessions` only while the default manager is connected and names it in its `manager.hello` capabilities, the same way (an extension's report cannot add it): the owner can file a session under a direction with `PUT /api/v1/assistant/sessions/{mid}/{sid}/direction`, read one current or ended direction with `GET /api/v1/assistant/directions/{id}`, and see the additive active `sessions` on the direction tree (#11391). Without it clients show no filing or single-direction entry and keep the old task-only tree; an older manager answers the new routes 404.
   - `remote_images` only while the default manager names it in its `manager.hello` capabilities, the same way (an extension's report cannot add it): `GET /api/v1/remote-image`, the pictures a reply names by address fetched, checked and scaled by the manager for the apps (see "Remote images (#9473)"). Without it iOS loads such pictures from their host as before and the web keeps its tap-to-load placeholder (#8162).
@@ -2602,6 +2603,42 @@ in Health. Intake HTTP writes/imports and the Apple Health changes feed ignore t
 older-client compatibility. The default manager's item event wakes widgets like intake events.
 Without the Health module the routes are absent and hello omits `health_items`.
 
+## Strength training
+
+The Health module owns `health_strength` (#14713). The tool matches and manages exercises, logs or undoes confirmed
+sets, reads history, creates drafts and shows an existing draft in the caller's Health conversation. Execution requires
+a known Health caller; discovery still includes the tools in the common list until the first-session discovery work
+in #14855 lands. Creating, updating or logging requires the added `strength` item; existing pages and stored data remain
+available after the item is removed. See docs/assistant/health.md "Strength training" for storage and workout linking.
+
+`-health-intake` is the Health module's reserved page id for water, protein **and strength training**. All use
+`POST /api/v1/assistant/health/intake/ui`, a full-device route, with the existing `UIRequest` / `ActionResult` contract.
+The extension-style entry is `/extension/-health-intake/pages?state=<JSON>`. Strength state selects:
+
+| `page` | Additional state | Result |
+| --- | --- | --- |
+| `strength.overview` | `manage`, `exercises_offset`, `drafts_offset`, `muscles_offset`, optional `exercise` and `field` (`rename`, `setting`, `rule`) | Pending drafts, exercises with last/best, weekly primary-muscle working sets, latest session, next open plan and exercise management |
+| `strength.exercise` | `exercise` UUID, `metric` (`weight` or `e1rm`), `days` (30/90/365), `offset` | Daily best chart, individual sets and Undo; only currently listed sets may be undone |
+| `strength.edit` | `draft` UUID, `rev`, optional `work` (at most 40 sets) | Working copy; Save updates the draft and card in one transaction, Cancel writes nothing, stale revisions reload |
+| `strength.home` | None | Latest session, seven days of training and up to three recent personal records; opens the overview |
+
+Omitted `days` / `metric` default to 30 / `weight`. The client returns state opaquely. Page rendering negotiates
+`min(context.ui_version, hub UI version)` and uses the normal page fitting; clients below UI version 6 get a read-only
+draft with an update hint. Locale comes from page context before the request and owner defaults. Invalid strength state
+returns 400. A missing Health module leaves the shared page route at 404 and announces no `health_strength` capability.
+`health_strength` events have no measurements or identifiers: open strength pages and home cards reload themselves.
+
+Managed cards keep the existing assistant-view schema. Keys beginning `health-strength-` belong to the module, with a
+draft UUID and an optional move revision suffix. `POST /api/v1/assistant/conversations/{id}/views/{key}/actions` dispatches
+those keys to the module before the generic action outbox. It checks conversation, Health space, declared action,
+card version and durable draft revision. Save confirms all sets once; Don't save writes no sets. The draft and card
+commit together, followed by `assistant_view` and `health_strength`; no model turn or push is required. The response
+contains the existing synthetic action receipt with `status: sent`. Retrying the same click with its original version
+returns the receipt; another click returns `already_answered`, and an open stale card returns `view_changed`.
+Adjust opens `strength.edit`; without a public URL the card points the owner to the Health overview. Moving a draft
+with `show` makes the old card read-only. `view_update` and HTML actions cannot rewrite these keys. With Health absent,
+the card remains stored but its actions return 404.
+
 ## Health intake
 
 Built-in water and protein intake belongs to the assistant manager's Health space (#13175).
@@ -2903,6 +2940,7 @@ Server → client:
 | `assistant_starred` | No snapshot payload. After a star is added or removed, the selected assistant’s clients re-read `GET /api/v1/assistant/starred`. The hub stamps `manager` on another manager’s update. |
 | `health_items` | `{revision:integer}`: the ordered health items changed. Reload GET health items and intake; the default manager also advances the widget revision. See "Health items" |
 | `health_intake` | No payload: a water or protein record was added or undone. Reload `GET /api/v1/assistant/health/intake`; the default manager's update also advances the hub's widget revision, throttled to 15 minutes without changing the fleet. See "Health intake" |
+| `health_strength` | No payload: a strength exercise, set or draft changed, or sets joined a workout. Reload open strength pages and home cards under `-health-intake`. This event does not advance the water/protein widget revision. See "Strength training" |
 | `agents.triage` | `triage` (the switches as `GET /api/v1/agents/triage` returns them: `enabled`, `auto_continue`, `wake`, `decide`, `tool_loop`, `closeout`, `closeout_ask`, `reply_reminder?`, `reply_reminder_minutes?`, `transient_retry?`): the session triage switches were saved, and what they turned off has stopped ([agent-work.md](../assistant/agent-work.md) "Switches") |
 | `launcher_health` | `record` (one record as `GET /api/v1/launchers/health` lists it: `machine`, `launcher`, `state`, `kind`, `error`, `checked_at`, `source`, `fails`, `repair?`, `blocked_reason?`, `resets_at?`, `limit_models?`, `limit_resets?`): a launcher's health state changed; only to connected clients, not a push ([launcher-health.md](../server/launcher-health.md) "API for the board") |
 | `meeting_live` | `recording_id`, `changed` (an open set: `room`, `asks`, `private`, `followup`, from phase 2 `lines` and `topics`, from phase 2b `highlights`, from phase 3 `photos`; later phases add more) and `revs` (each changed part's revision, numbers only; for `lines` the live log's length): a meeting's parts changed, at most one a second per recording, content-free; clients read only the newer parts with `GET /api/v1/recordings/{id}/live?parts=…` ([meeting-minutes.md](../assistant/meeting-minutes.md) "The `meeting_live` event", #3862) |

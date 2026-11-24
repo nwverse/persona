@@ -247,6 +247,61 @@ The original rule from #4329 (implemented in #4385) resumed the latest health ch
 | iOS (iPhone and iPad) | the sidebar's **Health** opens the home, with all open health conversations listed newest first. `AssistantView.enterHealth()` synchronously returns to the root and presents the home; the embedded Sidebar layout selects Health as its page root. Entry does not wait for the conversation list. **New Chat** in a health conversation still returns to the home (`HealthModel.newOpensHealth`); the first message in its composer starts a new health conversation. `-openAssistantPage health` / `-openShellPage health` still open the home. Tests: `HealthModelTests`, `HealthEntryUITests`, the Health upload case in `TreeSwapFoldTests` |
 | Android | the assistant sidebar's **Health** opens the home immediately (`AssistantScreen.openHealth`); `HealthEntry.history` keeps its chat list ordered. See "Android entry point" below |
 
+## Strength training
+
+Who this serves: people keeping gym sets, including people who recognize a machine without knowing its name.
+Adding **Strength training** enables writing through `health_strength`; it adds no setup to other Health items.
+The model matches exercise names and aliases before creating an exercise, asks once how a new machine's weight is
+counted, and never invents weights or reps. A machine photo is conversation input, not an exercise photo archive.
+The tool requires a known Health caller. Its common discovery listing is retained pending #14855; execution is
+already isolated to Health.
+
+The manager stores four tables in Postgres:
+
+| Table | Meaning |
+| --- | --- |
+| `health_strength_exercises` | Name, aliases, primary/secondary muscles, equipment, weight rule and seat/settings note. Another machine is another exercise. Deleted exercises retain a tombstone. |
+| `health_strength_sets` | Confirmed exercise, kg, reps, warm-up flag, time and optional workout/draft. Idempotent IDs, undo tombstones and commit-ordered sequence numbers follow intake's rules. |
+| `health_strength_drafts` | Unconfirmed sets or a day's plan, revision, status and the current conversation/card/version. Drafts never count as sets. |
+| `health_strength_workouts` | Uploaded strength workout UUID, start/end and aggregate measurements. Other activities never enter this table. |
+
+When a strength workout arrives, unassigned sets from 30 minutes before its start to three hours after its end join
+it; existing assignments remain. Sets logged later use the latest matching strength window, so locker-room logging
+can still count. Upload and logging both use the same inclusive boundaries and serialized transaction. Duplicate
+uploads use the persisted window. Undo advances the set's sequence; a repeated undo does not.
+
+A multi-set interpretation or plan creates a managed conversation card: **Save**, **Don't save**, **Adjust**, or
+**Done as planned** for a plan. Only Save confirms the sets, in one transaction with the card. A repeated click adds
+nothing twice. These buttons are handled by Health without a model round or notification. Models cannot rewrite
+the reserved `health-strength-` cards. Adjust opens the working copy; saving that page updates the draft and card,
+not the set table. A stale edit reloads the newer draft; Cancel keeps the stored draft. A settled draft is read-only.
+Deleting an exercise confirms its name and active set count, then tombstones it and undoes all its sets atomically.
+
+The server draws the following pages with existing declarative components, under Health's shared reserved
+`-health-intake` page id (`docs/protocol/protocol.md`, "Strength training"):
+
+- Overview puts pending drafts first, followed by exercises with last/best, this week's sets per primary muscle
+  (excluding warm-ups), the latest session and the latest open plan. Management exposes name, settings and weight rule.
+- An exercise shows its seat note, weight rule, daily best weight or estimated one-rep max, and each set with its own
+  weight and reps, including warm-up and drop sets. History ranges are 30/90/365 days; Undo only accepts a listed set.
+- Adjust has kg steppers (2.5 per tap), reps steppers, an exercise choice, warm-up switch and add/remove controls for
+  up to 40 sets. Below UI version 6 it displays a read-only list and an update hint.
+- Home shows today's or the latest session, seven days of training, and up to three records in the last 30 days.
+  A record exceeds the earlier non-warm-up best weight or estimated one-rep max (`weight × (1 + reps / 30)`).
+
+`health_strength` broadcasts contain no health data and make open pages refresh. Removing the item retains its data
+and pages and permits existing cards to settle; new tool writes ask to add the item again. Workout reports fall back
+to their existing behavior when strength is not added. Building or switching out Health removes the capability,
+pages and tool handler, disables card buttons, and leaves stored data intact.
+
+Strength reports assemble **when the task runs**, including sets logged after upload: this workout's sets grouped by
+exercise, the previous day's sets before the workout, previous non-warm-up best weight/estimated max, explicit record
+flags, the latest open plan for the workout's local day, measurements and the owner's language. They do not request
+other Health data. With sets, the report lists and compares them; with a plan but no sets it asks `health_strength show`
+to place the Done as planned card in the report's actual conversation. With neither it gives one line about logging
+with a sentence or a machine photo. A failed assembly uses the stored prompt. Other activities retain the exact
+existing report prompt. Three scenarios in English, Simplified Chinese and Japanese have caller-level goldens.
+
 ## Water and protein
 
 Persona keeps water and protein entries in the default assistant manager's database (#13175).
@@ -640,6 +695,9 @@ Since #2526's second step, a report also carries:
 - the elevation gain;
 - the heart rate's average and maximum;
 - per-kilometre splits for runs, walks, hikes and rides, with pauses left out.
+
+Strength training instead uses the execution-time assembly described in "Strength training" above, when that item
+is added and its uploaded window is stored. Other activities retain the following comparison behavior.
 
 The report then draws a pace chart from the splits, and compares the workout with the
 user's recent ones of the same activity through `phone_workouts_recent`. When the tool
