@@ -1,6 +1,6 @@
 import XCTest
 
-/// The Agents list with a lot of agents (scripts/mock/mock_hub.py with MOCK_AGENTS=1: ~120 agents, a space with 3 needing
+/// The Agents list with a lot of agents (scripts/mock/mock_hub.py with MOCK_AGENTS=1 MOCK_MANAGERS=1: ~120 agents, a space with 3 needing
 /// you, 35 finished-unread and 12 working): the quick filters, the compact rows, folding spaces, marking read.
 ///   TEST_RUNNER_PERSONA_AGENTS_HUB=http://127.0.0.1:<port>
 /// TEST_RUNNER_PERSONA_SHOTS=<dir> also saves a screenshot of each step there (docs/operations/testing.md「Agents list」);
@@ -12,7 +12,7 @@ final class AgentsListTests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
         guard let h = ProcessInfo.processInfo.environment["PERSONA_AGENTS_HUB"] else {
-            throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_AGENTS=1 (PERSONA_AGENTS_HUB)")
+            throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_AGENTS=1 MOCK_MANAGERS=1 (PERSONA_AGENTS_HUB)")
         }
         hub = h
         _ = mock("reset") // every agent back to its state, nothing marked seen
@@ -113,6 +113,15 @@ final class AgentsListTests: XCTestCase {
         see(app.buttons["shell-agents"].firstMatch, "the list menu")
     }
 
+    /// An item of the open list menu. The menu is longer than its window (grouping, sort, display, folding, hidden
+    /// sessions, then the machines) and draws only the rows it shows, so the machines come into reach as it scrolls.
+    private func menuItem(_ label: String) -> XCUIElement {
+        let item = app.buttons[label].firstMatch
+        let menu = app.collectionViews.allElementsBoundByIndex.first { $0.frame.width < app.frame.width && !$0.buttons["agents.filter.all"].exists }
+        for _ in 0..<6 where !(item.exists && item.isHittable) { menu?.swipeUp(velocity: .slow) }
+        return item
+    }
+
     /// Back to the top of the list, where the quick filters are (a list scrolled to a row below the cards).
     private func toTop() {
         for _ in 0..<6 where !(filter("all").exists && filter("all").isHittable) {
@@ -197,7 +206,7 @@ final class AgentsListTests: XCTestCase {
 
         // One machine: the counts are that machine's.
         listMenu().tap()
-        see(app.buttons["MacBook"], "MacBook in the menu").tap()
+        see(menuItem("MacBook"), "MacBook in the menu").tap()
         let unread = filter("unread")
         wait("完成未看 counts MacBook's only (\(unread.label))") { unread.label == "完成未看 6" }
         XCTAssertEqual(filter("needsYou").label, "需要你 1")
@@ -206,7 +215,7 @@ final class AgentsListTests: XCTestCase {
         gone(text("platform 任务 4"), "Mac Studio's agents leave")
         shot("example-machine")
         listMenu().tap()
-        see(app.buttons["全部机器"], "全部机器").tap()
+        see(menuItem("全部机器"), "全部机器").tap()
         wait("完成未看 counts every machine again") { filter("unread").label == "完成未看 48" }
         filter("all").tap()
         reach(text("给天气 App 加主屏幕小组件"), "everything again under 全部")
@@ -225,7 +234,7 @@ final class AgentsListTests: XCTestCase {
         let all = filter("unread").label
 
         see(app.buttons["shell-agents"], "the selected Agents switch").tap()
-        see(app.buttons["MacBook"], "MacBook in the menu").tap()
+        see(menuItem("MacBook"), "MacBook in the menu").tap()
         see(chip, "the chosen machine on the page")
         XCTAssertEqual(chip.label, "只看 MacBook")
         wait("完成未看 counts MacBook's only (\(filter("unread").label))") { filter("unread").label == "完成未看 6" }
