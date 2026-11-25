@@ -55,6 +55,21 @@
         "orientation": "auto_rotation_unspecified"
       }
     ],
+    "extensionAbilities": [
+      {
+        "name": "PersonaAgentExtensionAbility",
+        "srcEntry": "./ets/xiaoyi/agent/PersonaAgentExtensionAbility.ets",
+        "type": "agent",
+        "description": "$string:EntryAbility_desc",
+        "exported": true,
+        "metadata": [
+          {
+            "name": "ohos.extension.agent",
+            "resource": "$profile:agent_config"
+          }
+        ]
+      }
+    ],
     "requestPermissions": [
       {
         "name": "ohos.permission.INTERNET"
