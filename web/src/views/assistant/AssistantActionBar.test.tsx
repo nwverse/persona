@@ -9,6 +9,7 @@ import { setAgentOpenMode } from "../../lib/agent-open";
 import { closePanel, getPanel } from "../../lib/panel";
 import { loadPages } from "../../lib/lazy-page";
 import { getState, putTodo, refresh, refreshTodos, reset, upsertSession } from "../../lib/store";
+import { interactionID } from "../../lib/ids-wire";
 import type { Todo } from "../../lib/todos";
 import { stateName } from "../../lib/state-labels";
 import { usageLimitLabel } from "../../lib/usage-limit";
@@ -1268,7 +1269,7 @@ describe("Assistant Needs you / In progress trays", () => {
 
     // Plain unescalated screen card on a quiet task (even with view needs_you / agent_asks): stays out of main chat
     // Needs you per D19 until explicitly escalated via ask_escalate.
-    todo = { ...todo, quiet: true, view: { phase: "needs_you", section: "needs_you", reason: "agent_asks", rank: 0, asks: [{ id: "run:demo/worker", kind: "question", home: "run", interaction: screenID }] } };
+    todo = { ...todo, quiet: true, view: { phase: "needs_you", section: "needs_you", reason: "agent_asks", rank: 0, asks: [{ id: "run:demo/worker", kind: "question", home: "run", interaction: interactionID(screenID) }] } };
     moreInteractions = [{ ...baseScreen, delegating: false }];
     await act(async () => {
       await refresh();

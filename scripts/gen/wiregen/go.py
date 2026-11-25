@@ -34,10 +34,14 @@ def go_calls(calls: list[Call]) -> list[str]:
 
 def gen_go(defs: dict[str, Def], calls: list[Call] | None = None, *, header: list[str] | None = None,
            package: str = "wire", package_doc: str = GO_PACKAGE_DOC, registry: str = "newDef",
-           defects: str = "ExtensionWire") -> str:
+           defects: str = "ExtensionWire", packages: dict[str, tuple[str, str]] | None = None) -> str:
     """Go for one package. A schema/wire file shares its package with hand-written code, so it gets no package doc
     (package_doc "") and its own registry name; it imports encoding/json only when its types use it. defects names the
-    hook closed enums with x-unknown "count" call (<defects>UnknownEnum), one per file."""
+    hook closed enums with x-unknown "count" call (<defects>UnknownEnum), one per file. packages: the import path and
+    package name each shared file's IDs (Def.external) come from."""
+    for d in defs.values():
+        if d.external and d.external not in (packages or {}):
+            raise SchemaError(f"{d.name} of {d.external}: no Go package to import it from")
     uses_time = any(f.type.kind == "time" for d in defs.values() for f in d.fields)
     out: list[str] = []
 
@@ -67,7 +71,8 @@ def gen_go(defs: dict[str, Def], calls: list[Call] | None = None, *, header: lis
         if d.kind == "enum" and not d.closed:
             return "string"
         if d.kind in ("enum", "id", "text"):
-            return ("*" if pointer else "") + t.ref
+            qualified = f"{packages[d.external][1]}.{t.ref}" if d.external else t.ref
+            return ("*" if pointer else "") + qualified
         if d.kind == "opaque":
             return t.ref
         return ("*" if optional else "") + t.ref
@@ -176,7 +181,7 @@ def gen_go(defs: dict[str, Def], calls: list[Call] | None = None, *, header: lis
                 f"var {hook} func(enum, raw string)", ""]
 
     for d in defs.values():
-        if d.union:
+        if d.union or d.external:
             continue
         if d.kind == "enum" and d.closed:
             out += closed_enum(d, hook)
@@ -291,6 +296,9 @@ def gen_go(defs: dict[str, Def], calls: list[Call] | None = None, *, header: lis
     uses_errors = any(re.search(r"\berrors\.", line) for line in out if not line.lstrip().startswith("//"))
     imports = [f'\t"{p}"' for p, used in (("encoding/json", uses_json), ("errors", uses_errors), ("time", uses_time))
                if used]
+    shared = sorted({packages[d.external][0] for d in defs.values() if d.external})
+    if shared:
+        imports += [""] * bool(imports) + [f'\t"{p}"' for p in shared]
     head = [*(header or GO_HEADER), ""] + ([package_doc] if package_doc else []) + [f"package {package}", ""]
     if imports:
         head += ["import (", *imports, ")", ""]

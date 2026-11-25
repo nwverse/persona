@@ -2603,7 +2603,8 @@ Layer / preview and push-layer integration are follow-up work, not part of this 
 Owners can opt into connecting external updates to directions and to-dos. These routes use full credentials and the
 selected assistant manager, via `X-Persona-Manager` or `manager`, with the usual default manager fallback.
 Unconfigured sources have forwarding off and ask the owner about new work. The API is available independently of
-Labs. Inbox routing uses these bindings and policies. The editor is tracked in #15518.
+Labs. Inbox routing uses these bindings and policies. The web editor uses the same routes from Inbox, work details
+and Settings. See [External sources in the web app](../web/web.md#external-sources-15518).
 
 ### Reference paths
 

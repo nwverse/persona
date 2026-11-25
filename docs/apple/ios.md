@@ -2247,7 +2247,8 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   changes, `TodosV1` tells the store (`v1Changed`), which counts, writes the cache, arms the timer and reads the places
   from what the last read had, or lets the numbers go. `TodosAPI.swift` has the item, places, Someday, restore and
   origin-route calls (the last with its op id and a timeout above the hub's five-minute relay).
-- **Filing and counts.** `TodoFiling` files a row by its `view` when its section is one this build knows, else by the
+- **Filing and counts.** `TodoFiling` files a row by its `view` when its section is one this build knows (the generated
+  `TodoListSection` is closed: a newer hub's section decodes as `.unknown`, never as one of ours), else by the
   app's own rules (`TodoTriageLogic`, frozen) mapped onto the V1 sections (Needs you → Needs you, Working → Working,
   PR to merge → Waiting, Other open → To do, Just finished → Just finished, Shelved → To do with the Inactive mark,
   Done → Done); a section's rows go by `rank`, then `manager`, then `id`. Every To-dos number comes from
