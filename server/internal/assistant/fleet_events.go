@@ -306,7 +306,7 @@ func (s *Service) FleetEvent(ctx context.Context, name string, params json.RawMe
 			s.fleet.clients = c
 			s.fleet.mu.Unlock()
 			if c.AppOnline && !wasOnline {
-				go s.ownerAppeared(context.WithoutCancel(ctx), "app_online")
+				go s.ownerAppeared(context.WithoutCancel(ctx), "app_online", "")
 			}
 		}
 	case assistantwire.EventMutes:

@@ -29,7 +29,7 @@ var mainOnlySignals = []string{sigFailed, sigStarted, sigEscalated, sigLeaderStu
 // notices. Without that explicit legacy target, all of them stay with main for new assistant-dispatched work (#5732).
 var backgroundSignals = []string{sigReview, sigReviewNudge, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigAllStopped, sigInterrupted,
 	sigPRConflict, sigDraftPR, sigPRMerged, sigReport, sigOrphaned, sigRecovered, sigAsk, sigDecide, sigDecisionReply, sigRecheck, sigUndecidable, sigDeliveryHold, sigCardlessWait,
-	sigOwnerCannot, sigParkedDue, sigParkedSummary, sigParkDecided, sigInbox, sigNeedsUserExternalInfo, sigOverdue, sigCheck}
+	sigOwnerCannot, sigParkedDue, sigParkedSummary, sigParkDecided, sigInbox, sigNeedsUserExternalInfo, sigOwnerPresent, sigOverdue, sigCheck}
 
 // roundConnectorTools are the round's tools that come with the Lark extension (lark_search) or the lark-cli connector
 // (larkcli_search) rather than the assistant's own list.

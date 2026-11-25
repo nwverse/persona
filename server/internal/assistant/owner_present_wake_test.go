@@ -33,17 +33,21 @@ func TestOwnerPresentWakesSupervisorOnAppOnlineAndDedupes(t *testing.T) {
 	ownerCardMaxWait = 80 * time.Millisecond
 	t.Cleanup(func() { ownerCardMaxWait = oldMax })
 
-	ft := newFleetTestNoStore(t)
-	s := ft.s
-	shortSupervise(t, s)
+	s, f := newQuietServiceOn(t, nil)
 	presenceTimes(t, 0, 0)
 	ownerTurnTimes(t, 0, 0)
-	ft.f.setSessions("mac", proto.Session{MachineID: "mac", SessionID: "sup1", Assistant: true, Status: proto.StatusIdle})
+	f.mu.Lock()
+	f.known["sup1"] = true
+	f.mu.Unlock()
+	f.setSessions("server",
+		proto.Session{MachineID: "server", SessionID: "conv1", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{MachineID: "server", SessionID: "sup1", Assistant: true, Status: proto.StatusIdle},
+	)
 
 	// Simulate two expired secret_run cards in the same supervisor conversation (same matter).
 	for _, id := range []string{"ix_exp_1", "ix_exp_2"} {
 		ix := proto.Interaction{
-			ID: id, MachineID: "mac", SessionID: "sup1",
+			ID: id, MachineID: "server", SessionID: "sup1",
 			Kind: proto.IxPermission, ToolName: proto.SecretRunTool,
 			Summary: "Run sudo backup on Mac mini",
 			Fields:  []proto.Field{{Key: "password", Label: "Password", Secret: true}},
@@ -61,9 +65,9 @@ func TestOwnerPresentWakesSupervisorOnAppOnlineAndDedupes(t *testing.T) {
 	}
 
 	waitFor(t, "supervisor woken on app online", func() bool {
-		return len(sentTextsTo(ft.f, "sup1")) == 1
+		return len(sentTextsTo(f, "sup1")) == 1
 	})
-	first := sentTextsTo(ft.f, "sup1")[0]
+	first := sentTextsTo(f, "sup1")[0]
 	if !strings.Contains(first, "<persona-supervision") || !strings.Contains(first, "重新发卡") {
 		t.Fatalf("unexpected wake message: %q", first)
 	}
@@ -72,10 +76,10 @@ func TestOwnerPresentWakesSupervisorOnAppOnlineAndDedupes(t *testing.T) {
 	offlineRaw, _ := json.Marshal(assistantwire.Clients{AppOnline: false})
 	s.FleetEvent(context.Background(), assistantwire.EventClients, offlineRaw)
 	s.FleetEvent(context.Background(), assistantwire.EventClients, onlineRaw)
-	s.ownerAppeared(context.Background(), "user_spoke")
+	s.ownerAppeared(context.Background(), "user_spoke", "other_chat")
 	time.Sleep(100 * time.Millisecond)
 
-	if got := len(sentTextsTo(ft.f, "sup1")); got != 1 {
+	if got := len(sentTextsTo(f, "sup1")); got != 1 {
 		t.Fatalf("supervisor nudged %d times for the same matter, want 1", got)
 	}
 }
@@ -119,7 +123,7 @@ func TestOwnerPresentWakesSupervisedTaskOnUserSpokeAndDedupes(t *testing.T) {
 
 	// Speaking again or app coming online must not repeat the nudge for the same waiting round.
 	s.UserSpoke(ctx, SessionRef{MachineID: "server", SessionID: "other_chat"})
-	s.ownerAppeared(ctx, "app_online")
+	s.ownerAppeared(ctx, "app_online", "")
 	time.Sleep(150 * time.Millisecond)
 
 	if got := len(sentTextsTo(f, "conv1")); got != before+1 {
@@ -159,7 +163,7 @@ func TestOwnerPresentSkipsWhenLiveOwnerCardAlreadyPending(t *testing.T) {
 		return ok
 	})
 
-	s.ownerAppeared(ctx, "app_online")
+	s.ownerAppeared(ctx, "app_online", "")
 	time.Sleep(150 * time.Millisecond)
 	if got := len(sentTextsTo(f, "conv1")); got != before {
 		t.Fatalf("expected no extra nudges while live owner card is pending, got %d (before=%d)", got, before)

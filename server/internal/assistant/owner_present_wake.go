@@ -153,9 +153,11 @@ func (s *Service) hasPendingOwnerOnlyCard(todo *Todo, sessionID string) bool {
 }
 
 // ownerAppeared is called when the hub observes that the user is present (an app came online or
-// the user spoke in any conversation). It wakes supervisors waiting on an owner-only action once
-// per waiting matter so they can issue a card on the spot.
-func (s *Service) ownerAppeared(ctx context.Context, source string) {
+// the user spoke in any conversation). excludeConv is the conversation the user just spoke in (empty
+// for app_online): we do not inject a redundant supervision nudge into the very conversation the
+// user is actively talking to. It wakes waiting supervisors once per waiting matter so they can
+// issue a card on the spot.
+func (s *Service) ownerAppeared(ctx context.Context, source, excludeConv string) {
 	if ctx.Err() != nil {
 		return
 	}
@@ -172,6 +174,9 @@ func (s *Service) ownerAppeared(ctx context.Context, source string) {
 	s.ownerWaits.mu.Unlock()
 
 	for _, w := range cardWaits {
+		if excludeConv != "" && w.Supervisor == excludeConv {
+			continue
+		}
 		var todoPtr *Todo
 		if w.TodoID != "" {
 			t, ok := s.todoNow(w.TodoID)
@@ -211,6 +216,10 @@ func (s *Service) ownerAppeared(ctx context.Context, source string) {
 	})
 
 	for _, t := range todos {
+		sup := cmp.Or(t.Supervision.Supervisor, t.Origin)
+		if excludeConv != "" && sup == excludeConv {
+			continue
+		}
 		key, detail, ok := ownerPresentTodoWait(t)
 		if !ok {
 			continue
@@ -305,13 +314,13 @@ func (s *Service) nudgeSupervisorOwnerPresent(ctx context.Context, w ownerAction
 		At:        now.UTC(),
 	}
 	c, ok := s.session(ctx, machine, to)
-	if !ok || c.Starting || c.Status == proto.StatusWorking || s.relayWaits(to, msg) {
+	if ok && (c.Starting || c.Status == proto.StatusWorking || s.relayWaits(to, msg)) {
 		n, err := s.queueRelayDurable(to, msg)
 		if err != nil || n == 0 {
 			return false
 		}
 		s.publish(ctx)
-		if ok && c.Status != proto.StatusWorking && !c.Starting {
+		if c.Status != proto.StatusWorking && !c.Starting {
 			s.drainRelays(machine, []proto.Session{c})
 		}
 		return true
