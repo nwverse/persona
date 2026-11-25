@@ -11,6 +11,43 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 )
 
+func TestExternalInboxLegacyClaimsAreAtomicAndKeepTheirOriginalRecipient(t *testing.T) {
+	d, next := open(t), open(t)
+	ctx, now := t.Context(), time.Now()
+	event := func(id string) w.ExternalInboxEvent {
+		return w.ExternalInboxEvent{Key: id, Ref: ref{Provider: "github"}, EventID: w.ExternalEventID(id)}
+	}
+	scoped, unclaimed, legacy := event("scoped"), event("unclaimed"), event("legacy")
+	if err := d.SaveExternalInboxItems(ctx, nil, []w.ExternalInboxEvent{scoped}, now); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := d.SaveExternalInboxProgress(context.Background(), scoped.Key, now, nil, true); err != nil {
+			t.Error(err)
+		}
+	})
+	claim := func(events []w.ExternalInboxEvent, owner string, want bool) {
+		t.Helper()
+		if ok, err := next.ClaimLegacyExternalInbox(ctx, events, owner, now); err != nil || ok != want {
+			t.Fatalf("claim for %s: %t, %v, want %t", owner, ok, err, want)
+		}
+	}
+	// A collision on one event must give every other event in the same legacy send back.
+	unclaimed.Key = "first"
+	claim([]w.ExternalInboxEvent{unclaimed, scoped}, "version_a", false)
+	claim([]w.ExternalInboxEvent{unclaimed}, "version_b", true)
+	claim([]w.ExternalInboxEvent{legacy}, "version_c", true)
+	claim([]w.ExternalInboxEvent{legacy}, "version_c", true)
+	claim([]w.ExternalInboxEvent{legacy}, "version_d", false)
+	if err := d.SaveExternalInboxItems(ctx, nil, []w.ExternalInboxEvent{legacy}, now); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := d.ReadyExternalInboxEvents(ctx, now, 10)
+	if err != nil || len(ready) != 1 || ready[0].Key != scoped.Key {
+		t.Fatalf("scoped queue: %+v, %v", ready, err)
+	}
+}
+
 func TestExternalInboxReceiptsCommitAndDeduplicateAcrossWriters(t *testing.T) {
 	d := open(t)
 	ctx := t.Context()
