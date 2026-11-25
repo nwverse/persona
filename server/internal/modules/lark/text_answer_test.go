@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -18,9 +17,9 @@ func TestEndedCardIsReadOnce(t *testing.T) {
 	free := proto.Interaction{ID: "ix_free", MachineID: "server", SessionID: "m1", Kind: proto.IxQuestion,
 		Questions: []proto.Question{{Question: "为什么？"}}}
 	card := botCard{MessageID: "om_ix_free", Thread: "om_topic", Ix: free, At: time.Unix(1000, 0)}
-	s.layer.Book(ctx, func(b assistantwire.ChatBook) {
+	s.chat().book(ctx, func(b chatBook) {
 		b.KeepCard(free.ID, &card)
-		b.KeepCard(free.ID, nil) // it ended elsewhere: its card is closed (the core's feishuInteractionEnded)
+		b.KeepCard(free.ID, nil) // it ended elsewhere: its card is closed (feishuInteractionEnded)
 		b.NoteEnded(card)
 	})
 	c := s.chat()

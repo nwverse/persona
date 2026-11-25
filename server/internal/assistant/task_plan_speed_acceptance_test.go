@@ -65,8 +65,9 @@ func TestTaskPlanSpeedAtPlanAndStart11141(t *testing.T) {
 					t.Fatalf("start: %d %s", w.Code, w.Body)
 				}
 				waitFor(t, "the task dispatch", func() bool {
-					todo := onlyTodo(s)
-					return len(todo.Agents) != 0 || todo.StartError != ""
+					// The node start is recorded before the manager links its Agent. Do not mistake that
+					// intermediate state for a speed-selection failure.
+					return len(onlyTodo(s).Agents) == 1 || onlyTodo(s).StartError != ""
 				})
 				if todo := onlyTodo(s); todo.StartError != "" || len(todo.Agents) != 1 {
 					t.Fatalf("task failed: %+v", todo)

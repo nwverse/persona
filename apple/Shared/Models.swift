@@ -807,16 +807,19 @@ nonisolated struct LauncherHealth: Codable, Hashable, Sendable {
 
 extension Launcher {
     /// Runs Claude Code or Codex, or is an agent runtime's launcher that says it can: what the Persona assistant can
-    /// use (headless `claude -p`, `codex app-server`, the runtime). Other agents (TRAE CLI…) are left out; the node
-    /// refuses them with a reason too.
+    /// use (headless `claude -p`, `codex app-server`, the runtime). Mirrors the hub's assistant catalog and the web's
+    /// `runsAssistant` (#12569): native Claude Code/Codex launchers, Persona-managed providers of those engines,
+    /// managed Codex included, and runtimes that advertise the assistant. Other agents (TRAE CLI…) are left out; the
+    /// node refuses them with a reason too.
     var runsAssistant: Bool {
         if let assistant { return assistant }
         guard baseURL != "(traex)" else { return false }
-        // Older hubs can ignore purpose=assistant. A runtime's provider is not a shell command, and managed Codex
-        // launchers cannot start the assistant's app-server. Keep the shell fallback for hubs without capabilities.
+        // Older hubs can ignore purpose=assistant. A runtime's provider is not a shell command; keep the shell fallback
+        // for hubs without capabilities. The hub's configured kind wins over the node's agent (`runtimeAgent`).
         let managed = source == "persona" || source == LegacyNames.product
-        guard isMachineLauncher || managed, !(managed && agent == "codex") else { return false }
-        return agent == nil || agent == "" || agent == "claude" || agent == "codex"
+        guard isMachineLauncher || managed else { return false }
+        let kind = runtimeAgent
+        return kind == nil || kind == "" || kind == "claude" || kind == "codex"
     }
 }
 

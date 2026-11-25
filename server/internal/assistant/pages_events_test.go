@@ -157,6 +157,9 @@ func TestReservedPagePlaces(t *testing.T) {
 	for title, refused := range map[string][2]bool{
 		"Settings": {true, true}, "ｓｅｔｔｉｎｇｓ": {true, true}, "Inbox (2)": {true, false}, "收件箱 ·": {true, false},
 		"Morning run": {false, false}, "晨跑打卡": {false, false},
+		// a name in Latin letters as a whole word only (Persona, ToDo), a Chinese or Japanese one anywhere
+		"Inbox · work": {true, false}, "My Persona notes": {true, false}, "Personal budget": {false, false}, "Todoist export": {false, false},
+		"看收件箱": {true, false}, "週のToDo": {true, false},
 	} {
 		_, a := agent.Check(title)
 		_, o := owner.Check(title)

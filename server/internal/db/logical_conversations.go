@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -27,6 +28,7 @@ type ConversationSwitch struct {
 	Request       json.RawMessage `json:"request"`
 	Phase         string          `json:"phase"`
 	Error         string          `json:"error,omitempty"`
+	UpdatedAt     time.Time       `json:"-"`
 }
 
 type LogicalConversation struct {
@@ -512,8 +514,8 @@ func resolveConversationSwitch(ctx context.Context, tx pgx.Tx, machine, session,
 func (d *DB) ConversationSwitch(ctx context.Context, machine, session, operation string) (*ConversationSwitch, error) {
 	var op ConversationSwitch
 	var raw []byte
-	err := d.pool.QueryRow(ctx, `SELECT operation_id,expected_epoch,source_segment,coalesce(target_segment,''),request,phase,error FROM conversation_switches WHERE logical_machine=$1 AND logical_session=$2 AND operation_id=$3`, machine, session, operation).
-		Scan(&op.OperationID, &op.ExpectedEpoch, &op.SourceSegment, &op.TargetSegment, &raw, &op.Phase, &op.Error)
+	err := d.pool.QueryRow(ctx, `SELECT operation_id,expected_epoch,source_segment,coalesce(target_segment,''),request,phase,error,updated_at FROM conversation_switches WHERE logical_machine=$1 AND logical_session=$2 AND operation_id=$3`, machine, session, operation).
+		Scan(&op.OperationID, &op.ExpectedEpoch, &op.SourceSegment, &op.TargetSegment, &raw, &op.Phase, &op.Error, &op.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

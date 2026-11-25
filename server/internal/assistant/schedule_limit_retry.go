@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -96,6 +97,10 @@ func (s *Service) scheduledLimitRetryDue(ctx context.Context, w delayedWait) (Ta
 	if res.OK && (res.Session.Status == proto.StatusWorking || !sameTurn(res.Session, retry.LimitTurn)) {
 		s.logf("task %s run %s: its conversation went on before retry: not retried", failed.RefID, failed.ID)
 		return Task{}, false, nil
+	}
+	// An overdue wait can be restored before the first work tick has loaded the conversation's pending wake.
+	if !s.loadWork(rctx) {
+		return Task{}, false, errors.New("session work unavailable")
 	}
 	if s.hasPendingTransientWake(failed.MachineID, failed.SessionID) {
 		s.logf("task %s run %s: transient recovery is pending on its conversation: not retried", failed.RefID, failed.ID)

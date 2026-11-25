@@ -648,13 +648,17 @@ func (s *Service) startConversation(ctx context.Context, p startParams) (proto.S
 // Start is assistant.start: a conversation one of the hub's features starts (the inbox's AI twin), or the channels'
 // (the lark module's message.go, channels_plugin.go). It is named after its first turn like the app's, unless it is untitled.
 func (s *Service) Start(ctx context.Context, p StartParams) (proto.Session, error) {
+	return s.startUserWith(ctx, p, s.start)
+}
+
+func (s *Service) startUserWith(ctx context.Context, p StartParams, start func(context.Context, StartParams) (proto.Session, error)) (proto.Session, error) {
 	if p.Origin == "" || p.Origin == OriginUser {
 		p.Text = prompts.ProtectUserMessage(p.Text)
 	}
 	// The first message gets no client_msg_id of the manager's own (#5200): the node would tag its line with it, and the
 	// iPhone app, which matches its pending bubble by the id a line carries, would show the message twice. An Always
 	// rule still needs a vouched client_msg_id. Missing-reply recovery can also use the vouched start in startOn.
-	sess, err := s.start(ctx, p)
+	sess, err := start(ctx, p)
 	if err != nil {
 		return proto.Session{}, err
 	}
@@ -679,10 +683,12 @@ type mainHandoff struct {
 	Until     time.Time `json:"until"`
 	// For: the new main conversation it waits in, started without a message (Android starts it empty, then sends).
 	// A cleared external choice reserves this ID before its start, so retries cannot create another conversation.
-	For     string `json:"for,omitempty"`
-	Summary string `json:"summary,omitempty"`
-	Partial bool   `json:"partial,omitempty"`
-	Recent  []struct {
+	For          string `json:"for,omitempty"`
+	FromLauncher string `json:"from_launcher,omitempty"`
+	FromModel    string `json:"from_model,omitempty"`
+	Summary      string `json:"summary,omitempty"`
+	Partial      bool   `json:"partial,omitempty"`
+	Recent       []struct {
 		Role string `json:"role"`
 		Text string `json:"text"`
 	} `json:"recent,omitempty"`

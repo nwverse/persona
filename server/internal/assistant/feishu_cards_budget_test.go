@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -230,13 +231,12 @@ func TestFeishuBotCardDoneFallback(t *testing.T) {
 	needsLarkLayer(t) // the chat is the lark module's
 	f := newFakeHub()
 	s := newTestService(t, f)
-	ctx := context.Background()
 
 	// UpdateCard fails, verify fallback botNote is triggered.
 	f.answerApp(AppFeishu, FeishuUpdateCard, func(raw json.RawMessage) (any, error) {
 		return nil, errors.New("update card failed: size exceeded")
 	})
-	var textCalled bool
+	var textCalled atomic.Bool
 	f.answerApp(AppFeishu, FeishuText, func(raw json.RawMessage) (any, error) {
 		var m map[string]any
 		if err := json.Unmarshal(raw, &m); err != nil {
@@ -244,7 +244,7 @@ func TestFeishuBotCardDoneFallback(t *testing.T) {
 		}
 		if replyTo, _ := m["reply_to"].(string); replyTo == "msg-123" {
 			if text, _ := m["text"].(string); strings.Contains(text, "✓ 已处理") {
-				textCalled = true
+				textCalled.Store(true)
 			}
 		}
 		return map[string]any{"message_id": "note-1"}, nil
@@ -257,11 +257,10 @@ func TestFeishuBotCardDoneFallback(t *testing.T) {
 			{Question: "测试问题"},
 		},
 	}
-	s.botCardDone(ctx, "msg-123", ix, "已处理")
+	keepChatCard(s, ix.ID, &botCard{MessageID: "msg-123", Ix: ix})
+	s.feishuInteractionDone(ix, "已处理") // the card is closed in the background
 
-	if !textCalled {
-		t.Fatalf("botCardDone did not trigger fallback botNote on update failure")
-	}
+	waitUntil(t, textCalled.Load)
 }
 
 // A form must carry every question: the submit handler asks for an answer to each, so a clipped form could never be sent.

@@ -1046,6 +1046,10 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 		if !s.needsUserExternalInfoStillHolds(t, g) {
 			return prompts.SuperviseEntry{}, false // answered, superseded, or closed meanwhile
 		}
+	case sigOwnerPresent:
+		if !s.ownerPresentStillHolds(t, g) {
+			return prompts.SuperviseEntry{}, false // closed, card already active, or no longer waiting on owner
+		}
 	case sigInbox:
 		if g.Inbox == nil || !s.inboxSignalsOn(ctx) {
 			return prompts.SuperviseEntry{}, false // switch went off meanwhile

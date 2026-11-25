@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -495,11 +496,19 @@ func (s core) workbenchInboxAction(ctx context.Context, a *botcard.CardAction) *
 		if op == "draft" {
 			list = mid // pressed on the Inbox card: it is redrawn once the reply goes out
 		}
+		expectedVersion, _ := strconv.Atoi(a.Str("version"))
 		go func() {
 			cctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
-			text, err := s.h.DraftReply(cctx, id, instruction)
-			card := s.draftCard(cctx, it, text, err, list)
+			cardItem, text, err := s.h.DraftReply(cctx, id, instruction, expectedVersion, op == "redraft")
+			if cardItem.ID == "" {
+				cardItem = it
+				if err == nil {
+					// A transient result cannot borrow a version from the item captured before generation.
+					cardItem.ReplyVersion = 0
+				}
+			}
+			card := s.draftCard(cctx, cardItem, text, err, list)
 			if op == "redraft" {
 				if err := s.botUpdateCard(cctx, mid, card); err == nil {
 					return
@@ -518,13 +527,16 @@ func (s core) workbenchInboxAction(ctx context.Context, a *botcard.CardAction) *
 		if it.Done {
 			return toast("info", wbT(l, "inbox_gone"))
 		}
+		// Missing, malformed and explicit zero all denote an old unversioned card. The reply-policy route decides
+		// whether that legacy card is still allowed; inside policy scope it fails closed.
+		expectedVersion, _ := strconv.Atoi(a.Str("version"))
 		list := a.Str("list")
 		go func() {
 			cctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 			// One reply per draft card however many presses: the card's message is the send's id, and a press that
 			// comes after the reply filed the item changes nothing (the first one drew the card).
-			filed, err := s.h.ReplyInbox(cctx, id, text, "feishu-workbench-"+mid)
+			filed, err := s.h.ReplyInbox(cctx, id, text, "feishu-workbench-"+mid, expectedVersion)
 			if filed {
 				return
 			}
@@ -566,11 +578,13 @@ func (s core) draftCard(ctx context.Context, it assistantwire.WorkbenchItem, tex
 	box := botcard.Input("text", wbT(l, "draft_text"), "", true)
 	box["default_value"] = text
 	instr := botcard.Input("instruction", wbT(l, "draft_instruction"), wbT(l, "draft_instruction_placeholder"), false)
-	// Sending goes out under the owner's name: Feishu's dialog asks first.
+	version := it.ReplyVersion
+	// Sending goes out under the owner's name: Feishu's dialog asks first. Both actions bind the exact AI card they
+	// rendered; an action from a replaced suggestion must never confirm its old text against the new source position.
 	card.Form("draft", []any{box, instr},
-		botcard.Confirm(botcard.Submit(wbT(l, "btn_send"), wbFilled, "send_submit", map[string]any{"a": "ib", "op": "send", "id": it.ID, "list": list}),
+		botcard.Confirm(botcard.Submit(wbT(l, "btn_send"), wbFilled, "send_submit", map[string]any{"a": "ib", "op": "send", "id": it.ID, "list": list, "version": version}),
 			wbT(l, "send_confirm_title"), wbT(l, "send_confirm_text", i18n.Args{"who": clip(wbWho(it), 20)})),
-		botcard.Submit(wbT(l, "btn_redraft"), botcard.Default, "redraft_submit", map[string]any{"a": "ib", "op": "redraft", "id": it.ID, "list": list}))
+		botcard.Submit(wbT(l, "btn_redraft"), botcard.Default, "redraft_submit", map[string]any{"a": "ib", "op": "redraft", "id": it.ID, "list": list, "version": version}))
 	reply := wbT(l, "draft_as_you")
 	if it.Connector && it.ConnectorReplyTo != "" {
 		reply = it.ConnectorReplyTo

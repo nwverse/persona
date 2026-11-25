@@ -1507,6 +1507,11 @@ data class ExtensionInitializeParams(
      * The configuration with the schema's defaults filled in.
      */
     val config: JsonElement? = null,
+    /**
+     * The manager's source-privacy boundary, sent only to an extension contributing a selected connector. Runtime
+     * authorization input, not extension settings persisted in the extension registry.
+     */
+    @SerialName("inbox_visibility") val inboxVisibility: JsonElement? = null,
     val secrets: Map<String, String>? = null,
     val granted: ExtensionPermissions = ExtensionPermissions(),
     /**

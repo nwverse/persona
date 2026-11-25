@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
@@ -157,6 +158,11 @@ var healthRouteRequests = []struct{ method, path, body string }{
 	{"POST", "/api/v1/assistant/health/water/reminder", `{"reminder":"r","action":"snooze"}`},
 }
 
+type healthTellModuleTestStore struct {
+	*intakeTestStore
+	healthTellStore
+}
+
 func TestHealthFollowsItsModule(t *testing.T) {
 	for _, off := range []bool{false, true} {
 		t.Run(fmt.Sprintf("off=%v", off), func(t *testing.T) {
@@ -165,8 +171,14 @@ func TestHealthFollowsItsModule(t *testing.T) {
 			if off {
 				modulesOff = []string{healthhost.ModuleID}
 			}
-			f, st := newFakeHub(), &intakeTestStore{}
+			f, st := healthHub(), &healthTellModuleTestStore{intakeTestStore: &intakeTestStore{}, healthTellStore: &healthTellMemStore{}}
 			s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), ModulesOff: modulesOff}))
+			if !slices.Contains(s.Routes(), "POST /api/v1/assistant/health/tell") {
+				t.Fatal("core Tell Health route absent")
+			}
+			if w := intakeHTTP(s, "POST", "/api/v1/assistant/health/tell", `{"client_id":"module-tell-client","text":"note"}`, "answer"); w.Code != http.StatusAccepted {
+				t.Fatalf("Tell Health with module off=%v: %d %s", off, w.Code, w.Body)
+			}
 			if s.healthOn() == absent {
 				t.Fatalf("Health layer loaded = %v with the module off = %v", s.healthOn(), off)
 			}
@@ -179,11 +191,16 @@ func TestHealthFollowsItsModule(t *testing.T) {
 					t.Errorf("route %s %s listed = %v with the module off = %v", rq.method, rq.path, !off, off)
 				}
 			}
-			listed := slices.ContainsFunc(s.Tools(context.Background()), func(t proto.Tool) bool { return t.Name == healthhost.Tool })
-			if listed == absent {
-				t.Errorf("health_intake listed = %v with the module off = %v", listed, off)
+			for _, name := range healthToolNames {
+				listed := slices.ContainsFunc(s.ToolsFor(context.Background(), "server", "sleep-000-0000"), func(t proto.Tool) bool { return t.Name == name })
+				if listed == absent {
+					t.Errorf("%s listed = %v with the module off = %v", name, listed, off)
+				}
 			}
-			caps := withHealth([]string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityHealthItems}, s)
+			caps := withHealth([]string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityHealthTell, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityHealthItems}, s)
+			if !slices.Contains(caps, assistantwire.CapabilityHealthTell) {
+				t.Fatal("core Tell Health capability absent")
+			}
 			if slices.Contains(caps, assistantwire.CapabilityHealthIntake) == absent {
 				t.Errorf("hello capabilities %v with the module off = %v", caps, off)
 			}
@@ -194,7 +211,7 @@ func TestHealthFollowsItsModule(t *testing.T) {
 				if got := s.healthClaudeMD(context.Background(), "server"); strings.Contains(got, "`health_intake`") {
 					t.Error("intake instructions remained without the module")
 				}
-				if _, err := s.healthTool(context.Background(), json.RawMessage(`{"action":"list"}`)); err == nil {
+				if _, err := s.healthTool(context.Background(), healthhost.ToolCall{Name: healthhost.Tool, Args: json.RawMessage(`{"action":"list"}`)}); err == nil {
 					t.Error("health_intake ran without the module")
 				}
 				ctx, cancel := context.WithCancel(context.Background())
