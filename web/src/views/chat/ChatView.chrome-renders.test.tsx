@@ -122,6 +122,8 @@ async function open(view: React.ReactElement<{ assistant?: boolean }>, session =
   for (let i = 0; i < 6; i++) await settle();
   const title = view.props.assistant && getState().assistant?.main === session.session_id ? "Persona" : "Checks";
   await vi.waitFor(() => expect(host.querySelector("h1")?.textContent).toBe(title)); // session-derived props are stable
+  // Flush the header's lazy menu state before counting renders caused by the transcript.
+  await act(async () => { await vi.dynamicImportSettled(); });
   expect(live.listeners.size).toBeGreaterThan(0);
   expect(renders.info).toBeGreaterThan(0);
   expect(renders.chips).toBeGreaterThan(0);
