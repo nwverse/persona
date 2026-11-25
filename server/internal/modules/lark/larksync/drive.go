@@ -254,6 +254,9 @@ func (r *run) walkNodes(ctx context.Context, w *wikiWalk, resource, parent strin
 			w.nodes++
 			edited := parseUnix(n.ObjEditTime)
 			w.newest = max(w.newest, edited)
+			if n.NodeToken != "" && n.ObjToken != "" {
+				r.wikiNodes[n.NodeToken] = wikiNodeInfo{objToken: n.ObjToken, objType: strings.ToLower(n.ObjType), title: n.Title, edited: edited}
+			}
 			if edited >= w.floor && n.ObjToken != "" {
 				var err error
 				if n.ObjType == "minutes" {

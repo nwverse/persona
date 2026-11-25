@@ -1648,7 +1648,7 @@ func (s *Service) findAgent(ctx context.Context, machine, id string) (Device, pr
 	return s.findAgentInSpace(ctx, machine, id, nil)
 }
 
-// findAgentInSpace resolves a full id or prefix among eligible sessions. An empty
+// findAgentInSpace resolves a full id, prefix, or exact session alias among eligible sessions. An empty
 // machine searches all of them. A nil space preserves the lookup for other callers.
 func (s *Service) findAgentInSpace(ctx context.Context, machine, id string, space *string) (Device, proto.Session, error) {
 	id = strings.TrimSpace(id)
@@ -1657,6 +1657,9 @@ func (s *Service) findAgentInSpace(ctx context.Context, machine, id string, spac
 	}
 	var found *Device
 	var session proto.Session
+	var aliasDev *Device
+	var aliasSess proto.Session
+	aliasMatches := 0
 	for _, m := range s.devices(ctx) {
 		if machine != "" {
 			if want, ok := s.machineByName(ctx, machine); !ok || want.ID != m.ID {
@@ -1673,11 +1676,20 @@ func (s *Service) findAgentInSpace(ctx context.Context, machine, id string, spac
 					return Device{}, proto.Session{}, fmt.Errorf("session_id %s is ambiguous; use the full id and machine", id)
 				}
 				found, session = &m, c
+			} else if slices.Contains(c.Aliases(), id) {
+				aliasMatches++
+				aliasDev, aliasSess = &m, c
 			}
 		}
 	}
 	if found != nil {
 		return *found, session, nil
+	}
+	if aliasMatches == 1 {
+		return *aliasDev, aliasSess, nil
+	}
+	if aliasMatches > 1 {
+		return Device{}, proto.Session{}, fmt.Errorf("session_id %s is ambiguous; use the full id and machine", id)
 	}
 	return Device{}, proto.Session{}, fmt.Errorf("no agent %s (use agents_list)", id)
 }
