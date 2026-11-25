@@ -52,7 +52,7 @@ internal class FakeLarkSync(var view: LarkSyncView?) : LarkSyncSettings {
         return view
     }
     override suspend fun removeBinding(key: String): LarkSyncView? { calls += "remove $key"; return view }
-    override suspend fun runBinding(key: String): LarkSyncView? { calls += "run $key"; return view }
+    override suspend fun runBinding(key: String): LarkSyncView? { calls += "run $key"; refused(); return view }
     override suspend fun oauthRedirectUri(): String? = redirect
 }
 
