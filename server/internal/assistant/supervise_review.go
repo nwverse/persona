@@ -18,6 +18,51 @@ import (
 
 // ---- the assistant's task_review tool ----
 
+func isFormerMain(cfg Settings, id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, f := range cfg.Former {
+		if f.SessionID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// canReviewLedger reports whether conversation self is the single conversation currently allowed to review task t
+// under ledger v. Only the task's current supervisor (or a task leader's parent / legacy background) may review it;
+// main chat cannot review a task another conversation supervises.
+func (s *Service) canReviewLedger(ctx context.Context, self string, t Todo, v *Supervision) bool {
+	if self == "" || t.Origin == "" {
+		return false
+	}
+	cfg := s.settings(ctx)
+	isMain := s.isMain(ctx, self)
+	if s.backgroundSupervises(ctx, self, t) {
+		return true
+	}
+	if s.mayReviewForLeader(ctx, self, t) {
+		return true
+	}
+	if v == nil || v.Supervisor == "" {
+		if t.Origin != cfg.Main && s.liveSideSupervisor(ctx, t.Origin) {
+			return self == t.Origin
+		}
+		return isMain
+	}
+	sup := v.Supervisor
+	// An unassigned non-leader task (such as a main-chat task after main changed) belongs to the current main
+	// conversation alone.
+	if !v.assigned() && !s.isLeader(ctx, sup) && !s.isLeaderRef(sup) {
+		return isMain
+	}
+	if sup == self {
+		return !isFormerMain(cfg, self)
+	}
+	return isMain && isFormerMain(cfg, sup)
+}
+
 func (s *Service) toolTaskReview(ctx context.Context, self string, args json.RawMessage) (string, error) {
 	var a struct {
 		TodoID     string        `json:"todo_id"`
@@ -138,15 +183,11 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	s.reviewDismissals.actions.acquire(t.ID)
 	defer s.reviewDismissals.actions.release(t.ID)
 	t, _ = s.todoNow(t.ID)
-	// A planning lead owns its assigned task. Origin alone never lets an ordinary side conversation accept one.
-	// Other authorized reviewers are main, a task leader for its worker, the legacy
-	// background with durable evidence, or the explicit capable-runtime side topology introduced with policy support.
+	// Exactly one conversation can review a task at a time: the task's current supervisor (main, direction lead, or
+	// side conversation), a task leader's parent conversation, or the legacy background with durable evidence.
 	isMain := s.isMain(ctx, self)
 	background := s.backgroundSupervises(ctx, self, t)
-	manualLeader := t.Supervision != nil && t.Supervision.Supervisor == self && s.isLeader(ctx, self)
-	capableRuntime := t.Supervision != nil && t.Supervision.Supervisor == self && t.Origin == self && s.runtimeWithSupervisionPolicy(ctx, s.settings(ctx).MachineID, self)
-	allowed := isMain || background || manualLeader || capableRuntime || s.mayReviewForLeader(ctx, self, t)
-	if t.Origin == "" || !allowed {
+	if !s.canReviewLedger(ctx, self, t, t.Supervision) {
 		return "", fmt.Errorf("task %s was not handed out from this conversation", t.ID)
 	}
 	if withdraw {
@@ -263,11 +304,16 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	wasNeedsUser := false  // transitioning out of (or updating) a pending needs_user decision (#13112)
 	var supersededReason string
 	var criteriaErr error
+	unauthorized := false
 	var v Supervision
 	var reviewedAt time.Time
 	withdrawGone := false // withdraw_needs_user, but the task stopped waiting for the user meanwhile: nothing is written
 	if ledger {
 		v, _, err = s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+			if !s.canReviewLedger(ctx, self, t, v) {
+				unauthorized = true
+				return false
+			}
 			if withdraw && v.State != reviewNeedsUser && v.Waits == nil {
 				withdrawGone = true
 				return false
@@ -284,8 +330,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			}
 			judgedDone = v.State == reviewPending
 			wasNeedsUser = v.state(t) == reviewNeedsUser
-			if isMain && !s.isLeader(ctx, v.Supervisor) && !s.isLeaderRef(v.Supervisor) {
-				v.Supervisor = self // the main conversation takes over an old main conversation's task, not a leader's
+			if isMain && (v.Supervisor == "" || isFormerMain(s.settings(ctx), v.Supervisor) ||
+				!v.assigned() && !s.isLeader(ctx, v.Supervisor) && !s.isLeaderRef(v.Supervisor)) {
+				v.Supervisor = self // the main conversation takes over an old main conversation's task, not another conversation's
 			} else if v.Supervisor == "" {
 				v.Supervisor = t.Origin
 			}
@@ -353,6 +400,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	}
 	if err != nil {
 		return "", err
+	}
+	if unauthorized {
+		return "", fmt.Errorf("task %s was not handed out from this conversation", t.ID)
 	}
 	if criteriaErr != nil {
 		return "", criteriaErr
@@ -552,7 +602,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		}
 		// One that can wait is held for the next briefing: no card and no push now (#4930, decision_wait.go).
 		held, notHeld := false, ""
-		escalates := !isMain && (background || s.isLeader(ctx, v.Supervisor)) // the main conversation hears of it too
+		escalates := !isMain && (background || s.isLeader(ctx, v.Supervisor) || s.sideSupervisor(ctx, s.settings(ctx), v.Supervisor)) // the main conversation hears of it too
 		if a.CanWait {
 			held, notHeld = s.decisionWaits(ctx, decision.WhyOwner, deadline, reversible, time.Now())
 			conclusion.ForBriefing = held

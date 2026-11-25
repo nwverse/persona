@@ -1551,8 +1551,9 @@ nonisolated enum ChatCache {
     /// v22: replies retain the model that wrote each assistant item; older copies could not mark model changes.
     /// v23: Codex image generation completions are Read items; older copies keep their notices without the image strip.
     /// v24: tool_result and fold items carry out-of-band tool_views (interactive maps, etc.); older copies omit them.
+    /// v25: folds retain `changes` for completed Agent turn Changed Files cards (#12016); older copies lacked `changes`.
     /// Bump it whenever the item structure or the text the hub gives an item changes.
-    static let folder = "chats-v24"
+    static let folder = "chats-v25"
 
     /// Once per launch, before the first copy is read or written (a static let runs once, on whichever thread asks first).
     private static let dropOlder: Void = {

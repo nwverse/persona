@@ -361,7 +361,7 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 			if h, _, _ := n.runtimes.belongs(id); h != nil {
 				st, _ := n.state.get(id)
 				params := map[string]any{"session_id": id, "permission_mode": mode, "effort": effort, "assistant": true}
-				if env := n.assistantEnvForRuntime(h, n.runtimeAssistantCwd(id, "", st)); env != nil {
+				if env := n.assistantEnvForRuntime(h, n.runtimeAssistantCwd(id, "", st), id); env != nil {
 					params["env"] = env
 				}
 				cctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
