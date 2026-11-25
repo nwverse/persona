@@ -1069,7 +1069,9 @@ the named person's parking receipt. The Agent's subsequent turn follows the exis
   or fixed-latency guarantee. Source I/O never runs on task-list or snapshot requests.
 - `todos.thread.followups` is internal JSON, not part of the public `TodoThread` response or accepted binding input.
   New bindings start at the recorded bind time. A legacy binding without a trustworthy cutoff establishes one on
-  its first successful observation without replaying earlier messages. The checked app/account identity is retained
+  its first successful observation without replaying earlier messages. If a checkpoint has a timestamp but no
+  recorded IDs, its first successful read records the IDs already visible at that timestamp. Subsequent reads can
+  deliver newly visible IDs at the same timestamp. The checked app/account identity is retained
   across restarts; changing the configured identity does not silently retarget an existing watch. Unbind/rebind
   explicitly starts a new observation. Incomplete or coarse ordering that cannot prove activity after binding is ignored.
 - A bounded timestamp/ID checkpoint and one pending source receipt coalesce activity into the newest topic context.

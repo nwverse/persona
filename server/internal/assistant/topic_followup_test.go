@@ -432,6 +432,42 @@ func TestLinkedTopicFollowupLegacyBindingStartsWithoutHistoryReplay(t *testing.T
 	}
 }
 
+func TestLinkedTopicFollowupTimestampOnlyCheckpoint(t *testing.T) {
+	for _, initial := range []string{"om_history", ""} {
+		t.Run("initial="+initial, func(t *testing.T) {
+			database := taskRecoveryDatabase(t)
+			s, f, task, now := linkedFollowupTask(t, database, database)
+			before := len(sentToAgent(f))
+			for i, id := range []string{initial, "om_new", "om_new", "om_older"} {
+				f.answerApp(AppConnectors, "connectors.lark_topic", func(raw json.RawMessage) (any, error) {
+					at := now.Add(-8 * time.Minute)
+					if id == "om_older" {
+						at = at.Add(-time.Second)
+					}
+					o := linkedFollowupObservation(raw, at, id, "ou_requester")
+					if id == "" {
+						o["messages"] = []any{}
+					}
+					return o, nil
+				})
+				s.sweepDeploys(now.Add(time.Duration(i) * time.Minute))
+				flushLinkedFollowup(s)
+				holdDigest(s)
+				want := min(i, 1)
+				if got := len(sentToAgent(f)) - before; got != want {
+					t.Fatalf("poll %d (%q): got %d Agent deliveries, want %d", i, id, got, want)
+				}
+				if got := len(f.notices()); got != want {
+					t.Fatalf("poll %d (%q): got %d supervisor deliveries, want %d", i, id, got, want)
+				}
+			}
+			if pending := linkedFollowupStoredPending(t, database, task.ID); pending != nil {
+				t.Fatalf("the acknowledged boundary message remained pending: %v", pending)
+			}
+		})
+	}
+}
+
 func TestLinkedTopicFollowupSameTimeIDsAndOlderMessages(t *testing.T) {
 	database := taskRecoveryDatabase(t)
 	s, f, _, now := linkedFollowupTask(t, database, database)

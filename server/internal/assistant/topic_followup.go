@@ -37,8 +37,9 @@ type topicFollowupPending struct {
 type topicFollowupState struct {
 	Since    time.Time                       `json:"since"`
 	Identity connectorwire.LarkTopicIdentity `json:"identity"`
-	Seen     []string                        `json:"seen,omitempty"`
-	Pending  *topicFollowupPending           `json:"pending,omitempty"`
+	// A nil Seen means no successful read has established the IDs at Since.
+	Seen    []string              `json:"seen"`
+	Pending *topicFollowupPending `json:"pending,omitempty"`
 }
 
 type topicFollowupRecord struct {
@@ -137,11 +138,20 @@ func (s *Service) observeTopicFollowup(ctx context.Context, st topicFollowupStor
 		if state.Since.IsZero() {
 			// Legacy bindings have no trustworthy bind time: establish a baseline without replaying their history.
 			state.Since = observation.CheckedAt
+			state.Seen = []string{}
 		} else {
+			if state.Seen == nil {
+				// Seed the timestamp-only checkpoint with the IDs already visible at its boundary.
+				state.Seen = []string{}
+				for _, msg := range observation.Messages {
+					if msg.At.Equal(state.Since) && !slices.Contains(state.Seen, msg.ID) {
+						state.Seen = append(state.Seen, msg.ID)
+					}
+				}
+			}
 			var latest connectorwire.LarkReplyMessage
 			for _, msg := range observation.Messages {
-				if msg.At.Before(state.Since) || msg.At.Equal(state.Since) &&
-					(len(state.Seen) == 0 || slices.Contains(state.Seen, msg.ID)) {
+				if msg.At.Before(state.Since) || msg.At.Equal(state.Since) && slices.Contains(state.Seen, msg.ID) {
 					continue
 				}
 				if latest.ID == "" || msg.At.After(latest.At) || msg.At.Equal(latest.At) && msg.ID > latest.ID {
