@@ -393,6 +393,13 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if wait > 0 && len(a.Tasks) == 1 && scope == nil {
 		a.Tasks[0].WaitInputID = "wait_" + randomHex(16)
 	}
+	if s.settings(ctx).todosV2On() {
+		for i := range a.Tasks {
+			if a.Tasks[i].ReuseTodo == "" {
+				s.applyTodosV2DispatchDefaults(ctx, sessionID, cmp.Or(a.Tasks[i].Supervisor, sessionID), &a.Tasks[i], nil)
+			}
+		}
+	}
 	dups := s.planDuplicates(ctx, a.Tasks) // before the plan's own todos exist
 	now := time.Now().UTC()
 	p := &TaskPlan{ID: "plan_" + randomHex(6), Conversation: sessionID, Tasks: a.Tasks, State: planOpen,

@@ -14,8 +14,11 @@ import (
 // IM reading bounds.
 const (
 	chatsPagesMost     = 20              // 2000 chats
-	chatPagesMost      = 40              // 2000 messages of one chat per run; the rest next run (ascending order)
-	threadPagesMost    = 10              // 500 replies of one thread per run
+	chatPagesMost      = 40              // 2000 messages of one chat per full run; the rest next run (ascending order)
+	imChatPagesMost    = 5               // 250 messages of one chat per ModeIM run so one busy chat never starves others
+	threadPagesMost    = 10              // 500 replies of one thread per full run
+	imThreadPagesMost  = 3               // 150 replies of one thread per ModeIM run
+	imChatThreadsMost  = 20              // threads read per chat per ModeIM run
 	searchPagesMost    = 10              // 500 general search hits per run
 	p2pSearchPagesMost = 40              // 2000 p2p search hits per run for single-chat discovery
 	p2pChatsMost       = 2000            // remembered single chats per binding
@@ -23,7 +26,9 @@ const (
 	searchResource     = larksyncwire.ResSearch
 	p2pSearchResource  = larksyncwire.ResSearch + ":p2p"
 	chatResourceStem   = larksyncwire.ResIM + ":"
+	threadCursorStem   = "im_thread:"
 	p2pChatsResource   = chatResourceStem + "p2p_chats"
+	imRoundRobinCursor = chatResourceStem + "rr"
 	// searchChatTypeP2P is the chat_type filter for POST /open-apis/search/v2/message to match single (p2p) chats only.
 	// Feishu Open Platform docs: https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/search-v2/message/create
 	// (oapi-sdk-go/v3/service/search/v2 CreateMessageReqBody.ChatType: "group_chat" | "p2p_chat").
@@ -67,22 +72,22 @@ type page struct {
 // readIM reads every chat the owner is in, one resource per chat ("im:<chat_id>"), plus every previously discovered
 // single (p2p) chat remembered in p2pChatsResource: GET /open-apis/im/v1/chats lists only group chats for a user, so
 // single chats are discovered separately through p2p message search and then read incrementally by chat_id just like
-// group chats. The documents tier does not read chats at all.
+// group chats. Chats are ordered oldest-cursor-first, and in ModeIM rotated past the last chat that stopped on budget
+// (im:rr) so no chat is starved behind a busy backlog. The documents tier does not read chats at all.
 func (r *run) readIM(ctx context.Context) error {
 	if r.b.Tier != larksyncwire.TierFull {
 		return nil
 	}
 	r.loadP2PChats()
 	defer r.saveP2PChats()
-	chats, err := r.listChats(ctx)
+	listed, err := r.listChats(ctx)
 	if err != nil {
 		return r.settle(ctx, larksyncwire.ResIM, err)
 	}
-	for _, c := range chats {
-		if r.overBudget() {
-			r.partial = true
-			return nil
-		}
+	seenListed := map[string]bool{}
+	all := make([]chatInfo, 0, len(listed)+len(r.p2pChats))
+	for _, c := range listed {
+		seenListed[c.id] = true
 		if c.kind == "p2p" {
 			if c.name == "" && r.p2pChats[c.id] != "" {
 				c.name = r.p2pChats[c.id]
@@ -90,25 +95,65 @@ func (r *run) readIM(ctx context.Context) error {
 			}
 			r.recordP2PChat(c.id, c.name)
 		}
+		all = append(all, c)
+	}
+	for _, id := range sortedKeys(r.p2pChats) {
+		if seenListed[id] {
+			continue
+		}
+		ci := chatInfo{id: id, name: r.p2pChats[id], kind: "p2p"}
+		r.chats[id] = ci
+		all = append(all, ci)
+	}
+	all = r.orderChats(all)
+	lastChat := ""
+	stoppedOnBudget := false
+	for _, c := range all {
+		if r.overBudget() {
+			r.partial = true
+			stoppedOnBudget = true
+			break
+		}
+		lastChat = c.id
 		if err := r.readChat(ctx, c); err != nil {
 			return err
 		}
 	}
-	for _, id := range sortedKeys(r.p2pChats) {
-		if r.readChats[id] {
-			continue
-		}
-		if r.overBudget() {
-			r.partial = true
-			return nil
-		}
-		ci := chatInfo{id: id, name: r.p2pChats[id], kind: "p2p"}
-		r.chats[id] = ci
-		if err := r.readChat(ctx, ci); err != nil {
-			return err
+	if r.b.Mode == larksyncwire.ModeIM {
+		if stoppedOnBudget && lastChat != "" {
+			r.moveCursor(imRoundRobinCursor, lastChat)
+		} else if !stoppedOnBudget && r.cursors[imRoundRobinCursor] != "" && r.cursors[imRoundRobinCursor] != "-" {
+			r.moveCursor(imRoundRobinCursor, "-")
 		}
 	}
 	return nil
+}
+
+// orderChats orders chats oldest-cursor-first (never-synced chats first, ties preserving original order), and in
+// ModeIM rotates past im:rr so a run that hit budget on one busy chat resumes at the next chat on the following round.
+func (r *run) orderChats(chats []chatInfo) []chatInfo {
+	if len(chats) <= 1 {
+		return chats
+	}
+	out := append([]chatInfo(nil), chats...)
+	sort.SliceStable(out, func(i, j int) bool {
+		ci := parseUnix(r.cursors[chatResourceStem+out[i].id])
+		cj := parseUnix(r.cursors[chatResourceStem+out[j].id])
+		return ci < cj
+	})
+	if r.b.Mode == larksyncwire.ModeIM {
+		if rr := r.cursors[imRoundRobinCursor]; rr != "" && rr != "-" {
+			for i, c := range out {
+				if c.id == rr {
+					rotated := make([]chatInfo, 0, len(out))
+					rotated = append(rotated, out[i+1:]...)
+					rotated = append(rotated, out[:i+1]...)
+					return rotated
+				}
+			}
+		}
+	}
+	return out
 }
 
 func (r *run) listChats(ctx context.Context) ([]chatInfo, error) {
@@ -146,7 +191,9 @@ func (r *run) listChats(ctx context.Context) ([]chatInfo, error) {
 }
 
 // readChat reads one chat's messages since its cursor (less the overlap) and the replies of the threads they belong
-// to, in the same window. Nothing of the chat counts unless all of it was read.
+// to, in ascending create_time order. Completed pages and completed threads are kept and advance the cursor even when
+// a per-run page/thread cap or the budget stops the chat early (preventing livelock on high-volume topic backlogs),
+// whereas an API error fails the resource via settle and drops its uncommitted sightings without moving the cursor.
 func (r *run) readChat(ctx context.Context, c chatInfo) error {
 	r.readChats[c.id] = true
 	resource := chatResourceStem + c.id
@@ -156,90 +203,164 @@ func (r *run) readChat(ctx context.Context, c chatInfo) error {
 		from = old/1000 - int64(messageOverlap/time.Second)
 	}
 	end := r.start.Unix()
-	seen := map[string]bool{}
-	var msgs []larksyncwire.Message
-	extraURLs := map[string][]string{}
-	var threads []string
-	var last int64 // the newest create_time read from the chat itself, in ms
-	capped := false
-	add := func(items []apiMessage) {
-		for _, am := range items {
-			if am.MessageID == "" || seen[am.MessageID] || am.Deleted {
-				continue
-			}
-			seen[am.MessageID] = true
-			m := r.message(am, c)
-			msgs = append(msgs, m)
-			if urls := extraMessageURLs(am); len(urls) > 0 {
-				extraURLs[am.MessageID] = urls
-			}
-			if am.ThreadID != "" && !containsString(threads, am.ThreadID) {
-				threads = append(threads, am.ThreadID)
-			}
-		}
+
+	maxPages := chatPagesMost
+	maxThreads := 0
+	maxThreadPages := threadPagesMost
+	if r.b.Mode == larksyncwire.ModeIM {
+		maxPages = imChatPagesMost
+		maxThreads = imChatThreadsMost
+		maxThreadPages = imThreadPagesMost
 	}
+
+	seen := map[string]bool{}
+	seenThreads := map[string]bool{}
+	var committedMsgs []larksyncwire.Message
+	extraURLs := map[string][]string{}
+	var committedLast int64 // newest create_time (ms) of fully committed chat items
+	pagesDone := 0
+	threadsRead := 0
+	capped := false
+	budgetStopped := false
+
 	tok := ""
 	for n := 0; ; n++ {
-		if n == chatPagesMost {
+		if n == maxPages {
 			capped = true
 			break
 		}
 		if r.overBudget() {
-			r.abandon(resource)
-			return nil
+			budgetStopped = true
+			break
 		}
 		items, more, next, err := r.listMessages(ctx, "chat", c.id, from, end, tok)
 		if err != nil {
 			return r.settle(ctx, resource, err)
 		}
+
+		// When a page contains threaded messages, check which roots are already in the dedup index so already-synced
+		// overlap roots do not consume the thread quota ahead of unseen threads on the same page.
+		var threadRootKeys []string
 		for _, am := range items {
-			last = max(last, parseUnix(am.CreateTime))
+			if am.MessageID != "" && !am.Deleted && am.ThreadID != "" {
+				threadRootKeys = append(threadRootKeys, larksyncwire.KeyMessage+am.MessageID)
+			}
 		}
-		add(items)
+		hasUnseenThreads := false
+		if len(threadRootKeys) > 0 && r.idx != nil {
+			if err := r.lookup(ctx, threadRootKeys...); err != nil {
+				return r.settle(ctx, resource, err)
+			}
+			for _, k := range threadRootKeys {
+				if !r.known[k].ok {
+					hasUnseenThreads = true
+					break
+				}
+			}
+		}
+
+		var pageMsgs []larksyncwire.Message
+		var pageLast int64
+		stoppedMidPage := false
+		for _, am := range items {
+			itemTime := parseUnix(am.CreateTime)
+			if am.MessageID == "" || am.Deleted {
+				pageLast = max(pageLast, itemTime)
+				continue
+			}
+			if am.ThreadID != "" && !seenThreads[am.ThreadID] {
+				thCur := r.cursors[threadCursorStem+am.ThreadID]
+				resumingThread := thCur != "" && thCur != "done"
+				knownOverlap := !resumingThread && old > 0 && itemTime <= old && r.known[larksyncwire.KeyMessage+am.MessageID].ok
+				if knownOverlap && hasUnseenThreads {
+					seenThreads[am.ThreadID] = true
+				} else {
+					if maxThreads > 0 && threadsRead >= maxThreads {
+						capped = true
+						stoppedMidPage = true
+						break
+					}
+					if r.overBudget() {
+						budgetStopped = true
+						stoppedMidPage = true
+						break
+					}
+					if !seen[am.MessageID] {
+						seen[am.MessageID] = true
+						pageMsgs = append(pageMsgs, r.message(am, c))
+						if urls := extraMessageURLs(am); len(urls) > 0 {
+							extraURLs[am.MessageID] = urls
+						}
+					}
+					thMsgs, thExtra, thIncomplete, err := r.readThread(ctx, c, am.ThreadID, from, end, maxThreadPages, seen)
+					if err != nil {
+						return r.settle(ctx, resource, err)
+					}
+					seenThreads[am.ThreadID] = true
+					threadsRead++
+					pageMsgs = append(pageMsgs, thMsgs...)
+					for id, urls := range thExtra {
+						extraURLs[id] = urls
+					}
+					if thIncomplete {
+						if r.overBudget() {
+							budgetStopped = true
+						} else {
+							capped = true
+						}
+						stoppedMidPage = true
+						break
+					}
+				}
+			}
+			if !seen[am.MessageID] {
+				seen[am.MessageID] = true
+				m := r.message(am, c)
+				pageMsgs = append(pageMsgs, m)
+				if urls := extraMessageURLs(am); len(urls) > 0 {
+					extraURLs[am.MessageID] = urls
+				}
+			}
+			pageLast = max(pageLast, itemTime)
+		}
+
+		if len(pageMsgs) > 0 {
+			r.nameSenders(ctx, pageMsgs)
+			committedMsgs = append(committedMsgs, pageMsgs...)
+		}
+		committedLast = max(committedLast, pageLast)
+		if stoppedMidPage {
+			break
+		}
+		pagesDone++
 		if !more || next == "" {
 			break
 		}
 		tok = next
 	}
-	for _, th := range threads {
-		tok := ""
-		for range threadPagesMost {
-			if r.overBudget() {
-				r.abandon(resource)
-				return nil
-			}
-			items, more, next, err := r.listMessages(ctx, "thread", th, from, end, tok)
-			if err != nil {
-				return r.settle(ctx, resource, err)
-			}
-			for _, am := range items {
-				if am.ChatID == "" {
-					am.ChatID = c.id
-				}
-			}
-			add(items)
-			if !more || next == "" {
-				break
-			}
-			tok = next
-		}
+
+	if budgetStopped {
+		r.partial = true
 	}
-	r.nameSenders(ctx, msgs)
+	if pagesDone == 0 && len(committedMsgs) == 0 && budgetStopped {
+		return nil
+	}
+
 	if c.kind == "p2p" {
 		peer := c.name
 		if peer == "" {
-			for _, m := range msgs {
+			for _, m := range committedMsgs {
 				if m.ChatName != "" {
 					peer = m.ChatName
 					break
 				}
 			}
 		}
-		if peer == "" && len(msgs) > 0 {
+		if peer == "" && len(committedMsgs) > 0 && !r.overBudget() {
 			if peer = r.fetchP2PChatName(ctx, c.id); peer != "" {
-				for i := range msgs {
-					if msgs[i].ChatName == "" {
-						msgs[i].ChatName = peer
+				for i := range committedMsgs {
+					if committedMsgs[i].ChatName == "" {
+						committedMsgs[i].ChatName = peer
 					}
 				}
 			}
@@ -250,19 +371,87 @@ func (r *run) readChat(ctx context.Context, c chatInfo) error {
 		}
 		r.recordP2PChat(c.id, c.name)
 	}
-	for _, m := range msgs {
+	for _, m := range committedMsgs {
 		r.addMessage(resource, m, larksyncwire.EntryChat)
 		r.findMessageLeads(resource, larksyncwire.EntryMessage, m.Text)
 		for _, u := range extraURLs[m.ID] {
 			r.findMessageLeads(resource, larksyncwire.EntryMessage, u)
 		}
 	}
-	cursor := max(last, old)
-	if !capped && cursor == 0 {
+	cursor := max(committedLast, old)
+	if !capped && !budgetStopped && cursor == 0 {
 		cursor = end * 1000 // a quiet chat: the next run need not look back the whole backfill again
 	}
-	r.moveCursor(resource, unixCursor(cursor))
+	if cursor > 0 {
+		r.moveCursor(resource, unixCursor(cursor))
+	}
 	return nil
+}
+
+// readThread reads up to maxPages pages of thread th in ascending create_time order, resuming from im_thread:<th>
+// when a previous run stopped partway through the thread. Completed pages are kept and advance im_thread:<th> when
+// incomplete (budget or page cap), so a large thread also makes forward progress across runs.
+func (r *run) readThread(ctx context.Context, c chatInfo, th string, chatFrom, end int64, maxPages int, seen map[string]bool) ([]larksyncwire.Message, map[string][]string, bool, error) {
+	thRes := threadCursorStem + th
+	thCur := r.cursors[thRes]
+	thOld := int64(0)
+	if thCur != "" && thCur != "done" {
+		thOld = parseUnix(thCur)
+	}
+	thFrom := chatFrom
+	if thOld > 0 {
+		if resumed := thOld/1000 - int64(messageOverlap/time.Second); resumed > thFrom {
+			thFrom = resumed
+		}
+	}
+	var msgs []larksyncwire.Message
+	var extra map[string][]string
+	var thLast int64
+	incomplete := false
+	tok := ""
+	for p := 0; ; p++ {
+		if p == maxPages {
+			incomplete = true
+			break
+		}
+		if r.overBudget() {
+			incomplete = true
+			break
+		}
+		items, more, next, err := r.listMessages(ctx, "thread", th, thFrom, end, tok)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		for _, am := range items {
+			thLast = max(thLast, parseUnix(am.CreateTime))
+			if am.MessageID == "" || seen[am.MessageID] || am.Deleted {
+				continue
+			}
+			if am.ChatID == "" {
+				am.ChatID = c.id
+			}
+			seen[am.MessageID] = true
+			msgs = append(msgs, r.message(am, c))
+			if urls := extraMessageURLs(am); len(urls) > 0 {
+				if extra == nil {
+					extra = map[string][]string{}
+				}
+				extra[am.MessageID] = urls
+			}
+		}
+		if !more || next == "" {
+			break
+		}
+		tok = next
+	}
+	if incomplete {
+		if thLast > thOld {
+			r.moveCursor(thRes, unixCursor(thLast))
+		}
+	} else if thOld > 0 {
+		r.moveCursor(thRes, "done")
+	}
+	return msgs, extra, incomplete, nil
 }
 
 // listMessages is one page of a chat's or a thread's messages in [from, end] (seconds), oldest first.
@@ -417,6 +606,7 @@ func (r *run) discoverP2PChats(ctx context.Context) (bool, error) {
 	if r.b.Tier != larksyncwire.TierFull || r.overBudget() {
 		return false, nil
 	}
+	r.loadP2PChats()
 	defer r.saveP2PChats()
 	from := r.backfillFrom().Unix()
 	if old := parseUnix(r.cursors[p2pSearchResource]); old > 0 {
@@ -565,6 +755,10 @@ func extraMessageURLs(am apiMessage) []string {
 // loadP2PChats loads the remembered single chats (chat_id -> peer name) from cursors. Invalid or empty cursor data is
 // ignored so a run never fails on metadata.
 func (r *run) loadP2PChats() {
+	if r.p2pLoaded {
+		return
+	}
+	r.p2pLoaded = true
 	raw := strings.TrimSpace(r.cursors[p2pChatsResource])
 	if raw == "" {
 		return
