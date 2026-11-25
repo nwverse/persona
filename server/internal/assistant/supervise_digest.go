@@ -1362,7 +1362,10 @@ func (s *Service) shouldHoldSupervisionPushes(ctx context.Context, to string, ms
 
 // noteSideSupervisionPush records the task and conversation links to attach when a side conversation's user-level
 // supervision round finishes and pushes the owner.
-func (s *Service) noteSideSupervisionPush(ctx context.Context, to string, msg relayMsg) {
+func (s *Service) noteSideSupervisionPush(ctx context.Context, to string, msg relayMsg) error {
+	if err := s.releasePushes(ctx, to); err != nil {
+		return err
+	}
 	cfg := s.settings(ctx)
 	web := s.webBase(ctx)
 	var links []string
@@ -1384,14 +1387,9 @@ func (s *Service) noteSideSupervisionPush(ctx context.Context, to string, msg re
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()
-	_, held := b.hold[to]
-	delete(b.hold, to)
-	delete(b.visible, to)
 	b.sideLinks[to] = links
 	b.mu.Unlock()
-	if held {
-		s.publish(ctx)
-	}
+	return nil
 }
 
 // consumeSideSupervisionLinks returns and clears any pending task/conversation links recorded for conversation id's
@@ -1405,53 +1403,6 @@ func (s *Service) consumeSideSupervisionLinks(id string) []string {
 	return links
 }
 
-// holdPushes: a supervision message went into conversation id: its turn's normal finish is not pushed (the hub and the
-// channels read it off the snapshot, SessionView.Supervising) until the user or anything else speaks there.
-func (s *Service) holdPushes(ctx context.Context, id string) {
-	b := &s.supervise
-	b.mu.Lock()
-	b.init()
-	b.hold[id] = time.Now()
-	delete(b.visible, id)
-	delete(b.sideLinks, id)
-	b.mu.Unlock()
-	s.publish(ctx)
-}
-
 // holdPushesParam marks an assistant.send whose supervision turn holds the conversation's pushes (holdPushes).
 // Any other send releases them (call); scheduled inputs carry their own persisted push mode.
 const holdPushesParam = "hold_pushes"
-
-// releasePushes: someone else speaks in conversation id: its turns are pushed as ever.
-func (s *Service) releasePushes(ctx context.Context, id string) {
-	b := &s.supervise
-	b.mu.Lock()
-	_, held := b.hold[id]
-	delete(b.hold, id)
-	delete(b.visible, id)
-	delete(b.sideLinks, id)
-	b.mu.Unlock()
-	if held {
-		s.publish(ctx)
-	}
-}
-
-// supervising: conversation id's current turn was started by a supervision message.
-func (s *Service) supervising(id string) bool {
-	b := &s.supervise
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	_, ok := b.hold[id]
-	return ok
-}
-
-func (s *Service) heldConversations() []string {
-	b := &s.supervise
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	out := make([]string, 0, len(b.hold))
-	for id := range b.hold {
-		out = append(out, id)
-	}
-	return out
-}

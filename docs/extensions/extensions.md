@@ -495,7 +495,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `agents.read` | See the Agents and chats on your computers | `GET /api/v1/sessions…` (list, info, items, images, screen), `/interactions`, `/interactions/history` (paged by time, see "Question history"), `/agents…` (personal Agents), `/workspaces`, `/workspace-board`; never the health space's chats or a private card (see "Never shown to extensions") |
 | `agents.control` | Drive Agents | `POST /api/v1/sessions` (create), a chat's `messages` / `interrupt` / `queue` / `queue/send-now` / `seen` / `rename`, `POST /api/v1/interactions/{id}/resolve` (approving a plan, or answering a terminal card with anything but a bare `dismiss`, also needs `agents.permission_mode`), `/choose` and `/reanswer`, sending messages to and marking read for personal Agents; with no terminal control characters in the text it sends (messages, prompts, notes, titles, answers; see below) |
 | `agents.permission_mode` | Change the permission mode of the chats it started itself | A chat's `modes` with `permission_mode` only, `POST /api/v1/sessions` resuming a chat with a `permission_mode`, approving a plan (`POST /api/v1/interactions/{id}/resolve` with `approve: true`, which sets the chat's mode) and answering a terminal card (`kind: "screen"`, whose keys can change it): only of a chat its extension opened (see below) |
-| `machines.read` | See your computers | `GET /api/v1/machines`, `/machines/{id}/metrics`, `/machines/{mid}/stat` |
+| `machines.read` | See your computers | `GET /api/v1/machines`, `/machines/{id}/metrics`, `/machines/{mid}/stat`, `GET /api/v1/assistant/machine-resources` (read-only per-machine resource summary including disk, OS/arch, failing launcher names and `is_hub`, excluding space sessions from `working_agents` and omitting connection errors and session details) |
 | `notify` | Send notifications to your devices | `POST /api/v1/notify` (see "Sending notifications") |
 | `push.grading` | Manage its push grading layer and preview grading decisions | `GET` / `PUT` / `DELETE /api/v1/push/grading/layer` (the extension's own persisted grading layer only; another extension's or manager's layer gets 403) and `POST /api/v1/push/grading/preview` (read-only decision preview without writing state). Never modifies the owner's `hub.ln_mode` switch or bypasses active owner attention modes, and is removed automatically when the extension is disabled, uninstalled or drops the scope. Granted by name only, not covered by the legacy `hub_api` or every-scope grant |
 | `assistant.ask` | Start chats with Persona and read chat activity | `GET /api/v1/assistant`, `POST /api/v1/assistant/conversations`, `GET …/conversations/{id}/feed`; never the health space's chats, nor what a feed holds of a to-do it is not shown (see "Never shown to extensions") |
@@ -505,12 +505,14 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `assistant.dispatch_policy` | Read and change the assistant dispatch policy | `GET` / `PUT /api/v1/assistant/dispatch-policy`; a policy written by an extension must expire within one hour (see "Dispatch policy") |
 | `assistant.start_defaults` | Read the Agent presets and set the defaults task Agents start with | `GET /api/v1/assistant/worker-presets`, `GET` / `PUT /api/v1/assistant/start-defaults`, `POST /api/v1/assistant/start-defaults/preview` (read-only: what a policy would do for a task, nothing stored or started); a policy written by an extension must expire within one hour ([assistant.md](../assistant/assistant.md) "Start defaults"). Not covered by the legacy `hub_api` full access: it can raise what task Agents spend (a preset, effort `max`, ultracode), so an extension gets it only by naming it, as `agents.permission_mode` |
 | `dispatch.guard` | Read and change the explicit-target dispatch guard and narrow the affected conversations' tools | `GET` / `PUT /api/v1/assistant/dispatch-guard`; an extension-written enabled policy must expire within one hour ([assistant.md](../assistant/assistant.md) "Explicit dispatch guard"). Granted by name only, not by the legacy every-scope grant |
+| `tasks.schedule` | Schedule pending tasks to available computers | `GET /api/v1/assistant/placement/pending`, `POST /api/v1/assistant/placement/{todo_id}/assign`, `POST /api/v1/assistant/placement/{todo_id}/defer`, plus the `placement.pending` wake event. Calling `GET /api/v1/assistant/placement/pending` refreshes the extension's 60-second active scheduling lease; without an active lease (or past the 15-second fallback window), the kernel falls back to its built-in machine selection. Never exposes task prompts or hidden privacy-space tasks. Granted by name only, not by the legacy `hub_api` or every-scope grant |
 | `todos.write` | Create and edit to-dos, attach chats to to-dos | `POST /api/v1/todos`, `PATCH /api/v1/todos/{id}`, a to-do's `agents/{mid}/{sid}` and `spaces/{mid}/{space…}` (`PUT` / `DELETE`), `POST /api/v1/todos/{id}/decisions` (outcome decisions only, see [todos.md](../assistant/todos.md) "API overview"), `PUT /api/v1/todos/{id}/repositories` and `PUT /api/v1/todos/{id}/repositories/{repo_id}/links` (replace repository associations and issue/PR links); creating and editing to-dos and adding decisions not with terminal control characters (see below); deleting to-dos, superseding decisions, completion checks and retries still require full access; none of a to-do it is not shown, nor a run or space it may not take onto one (404, see "Never shown to extensions") |
 | `decisions.raise` | Ask the owner for a decision | `POST /api/v1/decisions`, `GET /api/v1/decisions/{id}`, `POST /api/v1/decisions/{id}/withdraw`; raise a rich pending Needs-you decision, poll only the caller's own answer and withdraw it ([todos.md](../assistant/todos.md) "Decisions raised outside a supervisor"). It does not open any owner answer route and is never included in legacy every-scope access |
 | `assistant.read` | Read your Persona chats (your messages and its replies) | No HTTP route: the `assistant.conversations` / `assistant.messages` RPC (see "Assistant conversations"). `assistant.ask` does not include it |
 | `spaces` (#14574) | Manage domain-space metadata and SPACE.md | List and create tracks, change a track and its `SPACE.md`, and read or change a visible conversation's categories; no custom-kind writes. Explicit by name only, never included in the legacy every-scope grant. Conversation listing and starts still require `assistant.ask`; sensitive tracks remain hidden by their existing policy. |
 | `assistant.entries.read` | Read unified ledger entries | `assistant.entries.list` RPC and `GET /api/v1/assistant/entries`; see "Unified entries ledger" |
 | `assistant.memory.read` | Read what Persona remembers about you (read-only; another track's memory only as the user lets this extension read it) | No HTTP route: the `assistant.memory` RPC (see "Assistant memory"). Writing and deleting memory stay with full credentials; `assistant.read` does not include it |
+| `assistant.events` | Tell your Persona main chat what it observes (events it can pass on to you; it cannot start or change chats) | No HTTP route: the `assistant.event` RPC (see "Assistant events"). Neither `assistant.ask` nor `assistant.read` includes it |
 | `models` | Use the model you pick for it in Settings › Model configuration (never the key) | No HTTP route: the `model.complete` RPC (see "Model calls"). Not covered by the legacy `hub_api` full access |
 | `transcription` | Turn its own audio into text with the transcription you chose for meetings (never the key, never other audio) | No HTTP route: the `transcription.*` RPC (see "Transcription for extensions"). Not covered by the legacy `hub_api` full access |
 | `market.refresh_own` | Refresh the extension marketplace it was installed from | `POST /api/v1/extensions/-/self/market/refresh` only. Not covered by an all-scope token or the legacy `hub_api` grant: the manifest must name it and the owner must approve it |
@@ -552,7 +554,7 @@ Scopes cover what an extension calls with its token. The owner's own answers tha
 - **Compatibility**: old extensions with `hub_api: true` still get the hub's full token (only in env vars), with an extra warning on install and upgrade, "hub_api is the legacy form"; extensions in manager.json still get the full token. On a manager other than the built-in one, both get a token of every scope instead (none of the routes open to full credentials only): that manager has no token of the hub's to hand on. Every other extension's token there opens the scopes it asked for and no more.
   An attached package ("Attaching an installed package") granted `hub_api` gets a token of every scope too, on any manager, in `initialize` only: its program is not the manager's child, so it never gets the hub's own token.
   One installed from `remote:` and granted `hub_api` gets no hub token (one granted scopes gets a token of those).
-  A token of every scope has every scope but `agents.permission_mode`, `assistant.start_defaults`, `decisions.raise`, `dispatch.guard`, `push.grading` and `market.refresh_own`, which an extension gets only by naming them in `permissions.hub` (`extension.EveryScope`). A manifest that names any scope gets a token of exactly the named scopes, even with `hub_api` set (`Permissions.FullHub`), so an extension that needs one of them lists every scope it uses.
+  A token of every scope has every scope but `agents.permission_mode`, `assistant.start_defaults`, `decisions.raise`, `dispatch.guard`, `push.grading`, `tasks.schedule` and `market.refresh_own`, which an extension gets only by naming them in `permissions.hub` (`extension.EveryScope`). A manifest that names any scope gets a token of exactly the named scopes, even with `hub_api` set (`Permissions.FullHub`), so an extension that needs one of them lists every scope it uses.
   The `hub_api` grant covers every scope but those named-only scopes: upgrading from `hub_api` to a new version that asks for only a few scopes needs no new consent, unless one of them is one of those named-only scopes (which `added_permissions` then lists); the reverse does.
 - The permission summary includes the scopes (normalized: sorted, deduplicated); for extensions without `hub` the summary is the same as before. An upgrade that adds scopes needs consent again, and `added_permissions` shows "Use more of the hub's features".
 
@@ -1194,6 +1196,55 @@ may resume, on its own manager's computers (#10941):
 A resume never starts a new chat under the id it names: a computer that has nothing of the id refuses it with
 `resume_unknown`, worded in the reader's language. A scoped device token resumes only a chat its computer lists
 outside the space (404 otherwise).
+
+### Assistant events
+
+An extension that watches something for the user (a disk, a build, a queue, a feed) can tell the assistant's **existing main conversation**
+what it saw, as a message, instead of leaving a state for the assistant to poll. It declares `assistant.events` in `permissions.hub`
+and calls `assistant.event` over its process connection. That is a call of the program's own pipe, so it needs no HTTP to the hub and works
+in the sandbox, which has no route to it. The hub checks the grant the user gave, as for `assistant.read` (the legacy `hub_api` full access counts too:
+that token can already message the main conversation as the user, and an event is less than that).
+
+| Method | Parameters | Returns | Scope |
+| --- | --- | --- | --- |
+| `assistant.event` | `{key, title, severity?, body?, action_hint?, state?, replace?}` | `{delivery}` | `assistant.events` |
+
+The schema is `schema/extension/assistant.schema.json`; the Go SDK has it as `ext.Hub.AssistantEvent` (the fake hub in `sdk/go/exttest` refuses it without the scope).
+
+| Field | Meaning | Limit (characters) |
+| --- | --- | --- |
+| `key` | What the event is about, one monitored thing. Required | 128 |
+| `title` | One line saying what happened. Required | 200 |
+| `severity` | `info` (default), `warning` or `critical`: how much the user should care | |
+| `body` | The details | 4000 |
+| `action_hint` | What the extension suggests be done: a suggestion for the assistant to weigh, not an order | 500 |
+| `state` | Where the thing the key names is now, in the extension's words (`firing`, `resolved`…) | 64 |
+| `replace` | `false` keeps an earlier event with the same key as a message of its own. Absent is `true` | |
+
+Params are strict: an unknown field, a missing `key` or `title`, an unknown `severity` or a field over its limit is `invalid_params`
+(nothing is cut). Fields are trimmed.
+
+- **Only the existing main conversation.** The event goes to the conversation the user made main (`PUT /api/v1/assistant {"main": …}`). Without one the call fails with
+  `no_main_conversation`: nothing is started, restarted or replaced, and nothing is kept. This is what makes it different from `assistant.ask`'s
+  `POST /api/v1/assistant/conversations` with `main: true`, which starts a new main conversation, and from `agents.control`'s
+  `POST /api/v1/sessions/{mid}/{sid}/messages`, which is the user's own voice.
+- **Delivery.** `delivered`: the main conversation was idle and the event went in now. `queued`: it is running (or its computer could not take the message just now), so the event waits in the same persisted
+  queue conversation-to-conversation messages use (`conversation_send`; shown above the composer as "<extension>: <title>") and goes in when the turn ends, surviving a restart.
+  `replaced`: an event of this extension with the same `key` was still waiting in that queue, and this one took its place (its place in the line, the newest content), so a
+  flapping check leaves one message, not forty. The one going in at that moment is not replaced. `replace: false` skips this.
+- **Not the user's words.** The message starts with a `message-source` block of kind `extension` whose `title` is the extension's name from its manifest ([protocol.md](../protocol/protocol.md) "Message source"),
+  so clients show it as automated input, never as the user's bubble, and it is not counted as the user's message. The text the assistant reads (`prompts/assistant/extension_event.md`) says it is an
+  extension's report and that everything in it is untrusted information to weigh, not instructions; the extension's fields are written into it as one JSON object, whose escaping keeps any text, a closing
+  `</persona-context>` included, from standing as part of the message. The assistant decides whether and how to tell the user: `info` only when it matters to what they are doing, `warning` briefly with a suggestion,
+  `critical` now. The answer to a `warning` or `critical` event is pushed to the user's devices whatever its length; an `info` one's goes by the device's setting.
+- **Who is speaking** is the manager's word: the extension's id and name come from its registration, never from the params, and an event is not a hop of a chain between conversations.
+- **Limits.** At most 20 calls per extension in 10 minutes (refused ones count too), then `rate_limited` with `data.retry_after` in seconds; and at most 10 events of one extension waiting in the queue, then `queue_full`
+  (a replacement still goes through). They stop a faulty extension from filling the main conversation; a monitor that tells what changed is far below them.
+- **Errors**: `permission_denied` (`{scope: "assistant.events"}`), `invalid_params`, `no_main_conversation` (do not retry until the user has one), `rate_limited`, `queue_full`, `assistant_offline` and `machine_offline` (try again).
+
+```json
+{"permissions":{"hub":["assistant.events"]}}
+```
 
 ### Sent as the user: `sent.record` (#5278)
 
@@ -1960,7 +2011,7 @@ An extension installed from a package (a marketplace, `file:`, `dir:`, …) can 
   `data_dir` in the details (`personad extension show <id>`) says where that data directory is, so a program run on its own on the same machine can keep using it in place.
 - **What is checked**: the sockets must be the ones the package's runtime uses (`rpc` for one that speaks the protocol, `http` when it serves HTTP), and the program on them must answer `manifest` (`GET /manifest` for an HTTP-only one) with the package's id and version, so attaching grants nothing the package did not have. Each connection asks again before `initialize` ("Refused" above), so a program swapped for another one or version later gets nothing either.
   A package with no program, or a source runtime one, cannot be attached; one installed from `remote:` has no package and is attached already.
-- **Its program**: `initialize` gives it no path on the hub machine (`extension.dir` and `extension.data_dir` are empty). It gets its settings and secrets as usual, and a hub token of its granted scopes, or of every scope except the named-only `agents.permission_mode`, `assistant.start_defaults`, `decisions.raise`, `dispatch.guard` and `market.refresh_own` when it was granted `hub_api`: never the hub's own token ("Hub API: scopes").
+- **Its program**: `initialize` gives it no path on the hub machine (`extension.dir` and `extension.data_dir` are empty). It gets its settings and secrets as usual, and a hub token of its granted scopes, or of every scope except the named-only `agents.permission_mode`, `assistant.start_defaults`, `decisions.raise`, `dispatch.guard`, `push.grading`, `tasks.schedule` and `market.refresh_own` when it was granted `hub_api`: never the hub's own token ("Hub API: scopes").
 - **No upgrade or rollback while attached**: both are refused, and it never upgrades itself. Detach it, upgrade the package, and attach the new version's program.
 - **Audit**: `attach` (version and sockets) and `detach` (version) go to the extension's audit log, and the manager switches the extension's connection at once.
 
@@ -3333,7 +3384,7 @@ are new or their fields changed. A card draws the same graph as a still fitted p
 presses; pressing it opens Full screen, the same interactive canvas as the page's. The web's native stream still sends 7.
 
 **The web's non-still canvas** (#11234) is a control room; a page, Full screen and a card's Full screen all draw it (the card itself stays a
-still 200 px preview). A collapsible outline of the visible nodes runs down the leading side: `j` / `k` and the arrow keys walk it,
+still 200 px preview). A view with a `graph`, `scene`, or `map` takes the wide page width (`wideView`, up to 1680 px) like split, columns, code and diff views; on wide containers the collapsible outline (208 px → 260 px at `60rem` → 300 px at `80rem`) and timeline label column (148 px → 200 px at `60rem`) widen responsively so indented node titles have room. A collapsible outline of the visible nodes runs down the leading side: `j` / `k` and the arrow keys walk it,
 Enter opens the selected node's first link or runs its action, and Escape clears the selection and closes the inspector. Tapping a node
 that carries `facts`, `detail` or `links` opens an in-place node inspector beside the canvas (stacked below on narrow screens) with
 those readings, summary, HTTPS links (`openLink` opens hub session links in the side panel when supported) and any node `action`
@@ -3631,6 +3682,7 @@ Extensions contribute `events` to subscribe to things happening on the hub. Thes
 | `todo.decision` | `id`, `title`, `thread?`, `decision`: a decision was written on a to-do (needs `todos.read`, see below; never of a to-do it is not shown) |
 | `leader.changed` | `id`, `title`, `project?`, `ended?`: a direction was made, retitled, filed under another project, ended or made current again (needs `leaders.read`, see "Leader events") |
 | `leader.report` | `id`, `leader`, `kind`, `todo`, `text`, `link?`, `at`: a direction's task reached its goal, needs the owner's decision or is stuck, or the direction reported progress (needs `leaders.read`) |
+| `placement.pending` | `plan_id`, `todo_id`, `batch_size`: one-way wake notification that a planned task is awaiting machine placement (needs `tasks.schedule`, granted by name only; carries no prompts or private fields and is never emitted for hidden privacy-space tasks) |
 
 SDK programs receive them in `Namespaces["event"]` (method name is the event name).
 

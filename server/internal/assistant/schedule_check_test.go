@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -409,4 +410,214 @@ func TestRoutineCheckCompletedApprovalIsNotReused(t *testing.T) {
 	if result := receiveRoutineApproval(t, results); result.err != nil || result.allowed {
 		t.Fatalf("second decision = %+v, want a new denial", result)
 	}
+}
+
+func TestRoutineCheckApprovalBookRetryWhileCancelledCallUnwinds(t *testing.T) {
+	var book routineCheckApprovalBook
+	key := routineCheckApprovalKey{machine: "server", session: "conv1", check: `{"command":"check"}`}
+
+	firstStarted := make(chan struct{})
+	firstSawCancel := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var releaseFirstOnce sync.Once
+	unlockFirst := func() { releaseFirstOnce.Do(func() { close(releaseFirst) }) }
+	t.Cleanup(unlockFirst)
+	firstCtx, cancelFirst := context.WithCancel(t.Context())
+	defer cancelFirst()
+
+	firstResults := make(chan routineApprovalResult, 1)
+	go func() {
+		allowed, err := book.wait(firstCtx, key, func(ctx context.Context) (bool, error) {
+			close(firstStarted)
+			<-ctx.Done()
+			close(firstSawCancel)
+			<-releaseFirst
+			return false, ctx.Err()
+		})
+		firstResults <- routineApprovalResult{allowed: allowed, err: err}
+	}()
+	<-firstStarted
+
+	book.mu.Lock()
+	firstCall := book.calls[key]
+	book.mu.Unlock()
+	if firstCall == nil {
+		t.Fatal("first call not registered")
+	}
+
+	cancelFirst()
+	if res := receiveRoutineApproval(t, firstResults); !errors.Is(res.err, context.Canceled) || res.allowed {
+		t.Fatalf("first cancelled caller = %+v, want context.Canceled", res)
+	}
+	<-firstSawCancel
+
+	// Retry while the cancelled call's ask goroutine is still unwinding.
+	secondStarted := make(chan struct{})
+	secondResults := make(chan routineApprovalResult, 1)
+	go func() {
+		allowed, err := book.wait(t.Context(), key, func(ctx context.Context) (bool, error) {
+			close(secondStarted)
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			return true, nil
+		})
+		secondResults <- routineApprovalResult{allowed: allowed, err: err}
+	}()
+
+	// Wait until the retry either started a fresh ask (fixed) or joined the cancelled call (buggy).
+	waitFor(t, "retry to start or join an approval call", func() bool {
+		select {
+		case <-secondStarted:
+			return true
+		default:
+		}
+		book.mu.Lock()
+		defer book.mu.Unlock()
+		return firstCall.waiters > 0
+	})
+	unlockFirst()
+	<-firstCall.done
+
+	if res := receiveRoutineApproval(t, secondResults); res.err != nil || !res.allowed {
+		t.Fatalf("retry while cancelled call unwinds = (allowed=%v, err=%v), want allowed without error", res.allowed, res.err)
+	}
+	select {
+	case <-secondStarted:
+	default:
+		t.Fatal("retry joined the cancelled call instead of starting a fresh approval")
+	}
+}
+
+func TestRoutineCheckApprovalBookStaleRunDoesNotEvictReplacement(t *testing.T) {
+	var book routineCheckApprovalBook
+	key := routineCheckApprovalKey{machine: "server", session: "conv1", check: `{"command":"check"}`}
+
+	firstStarted := make(chan struct{})
+	firstSawCancel := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var releaseFirstOnce sync.Once
+	unlockFirst := func() { releaseFirstOnce.Do(func() { close(releaseFirst) }) }
+	t.Cleanup(unlockFirst)
+	firstCtx, cancelFirst := context.WithCancel(t.Context())
+	defer cancelFirst()
+
+	firstResults := make(chan routineApprovalResult, 1)
+	go func() {
+		allowed, err := book.wait(firstCtx, key, func(ctx context.Context) (bool, error) {
+			close(firstStarted)
+			<-ctx.Done()
+			close(firstSawCancel)
+			<-releaseFirst
+			return false, ctx.Err()
+		})
+		firstResults <- routineApprovalResult{allowed: allowed, err: err}
+	}()
+	<-firstStarted
+
+	book.mu.Lock()
+	firstCall := book.calls[key]
+	book.mu.Unlock()
+	if firstCall == nil {
+		t.Fatal("first call not registered")
+	}
+
+	cancelFirst()
+	if res := receiveRoutineApproval(t, firstResults); !errors.Is(res.err, context.Canceled) || res.allowed {
+		t.Fatalf("first cancelled caller = %+v, want context.Canceled", res)
+	}
+	<-firstSawCancel
+
+	// Start a replacement call while the cancelled first call has not finished unwinding.
+	secondStarted := make(chan struct{})
+	secondSawCancel := make(chan struct{})
+	secondCtx, cancelSecond := context.WithCancel(t.Context())
+	defer cancelSecond()
+
+	secondResults := make(chan routineApprovalResult, 1)
+	go func() {
+		allowed, err := book.wait(secondCtx, key, func(ctx context.Context) (bool, error) {
+			close(secondStarted)
+			<-ctx.Done()
+			close(secondSawCancel)
+			return false, ctx.Err()
+		})
+		secondResults <- routineApprovalResult{allowed: allowed, err: err}
+	}()
+
+	// Wait until the replacement call is registered (or fail fast if the cancelled call was not evicted).
+	select {
+	case <-secondStarted:
+	case <-time.After(2 * time.Second):
+		unlockFirst()
+		<-firstCall.done
+		t.Fatal("replacement call did not start while cancelled call was still unwinding")
+	}
+
+	book.mu.Lock()
+	secondCall := book.calls[key]
+	book.mu.Unlock()
+	if secondCall == nil || secondCall == firstCall {
+		unlockFirst()
+		cancelSecond()
+		t.Fatalf("replacement call = %p, want distinct from first call %p", secondCall, firstCall)
+	}
+	t.Cleanup(func() {
+		secondCall.cancel()
+		<-secondCall.done
+	})
+
+	// Let the stale first call finish run(); it must not delete secondCall from book.calls.
+	unlockFirst()
+	<-firstCall.done
+
+	// A third concurrent caller must share secondCall rather than launching a duplicate ask.
+	thirdCtx, cancelThird := context.WithCancel(t.Context())
+	defer cancelThird()
+	thirdResults := make(chan routineApprovalResult, 1)
+	duplicateAsk := make(chan struct{})
+	var duplicateAskOnce sync.Once
+	go func() {
+		allowed, err := book.wait(thirdCtx, key, func(ctx context.Context) (bool, error) {
+			duplicateAskOnce.Do(func() { close(duplicateAsk) })
+			<-ctx.Done()
+			return false, ctx.Err()
+		})
+		thirdResults <- routineApprovalResult{allowed: allowed, err: err}
+	}()
+
+	waitFor(t, "third caller to join second call or trigger duplicate ask", func() bool {
+		select {
+		case <-duplicateAsk:
+			return true
+		default:
+		}
+		book.mu.Lock()
+		defer book.mu.Unlock()
+		return secondCall.waiters == 2
+	})
+
+	select {
+	case <-duplicateAsk:
+		cancelSecond()
+		cancelThird()
+		t.Fatal("stale run evicted replacement call, causing a duplicate approval ask")
+	default:
+	}
+
+	// Cancelling both waiters on secondCall must cancel secondCall's shared context.
+	cancelSecond()
+	cancelThird()
+	if res := receiveRoutineApproval(t, secondResults); !errors.Is(res.err, context.Canceled) {
+		t.Fatalf("second caller = %+v, want context.Canceled", res)
+	}
+	if res := receiveRoutineApproval(t, thirdResults); !errors.Is(res.err, context.Canceled) {
+		t.Fatalf("third caller = %+v, want context.Canceled", res)
+	}
+	select {
+	case <-secondSawCancel:
+	case <-time.After(2 * time.Second):
+		t.Fatal("replacement approval context was not cancelled after all waiters left")
+	}
+	<-secondCall.done
 }

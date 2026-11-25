@@ -111,8 +111,8 @@ func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, ow
 		return agent, err
 	}
 	if t.Readonly {
-		// The Antigravity companion holds a plan start read-only (caps.readonly): a read-only agy task whose launcher it
-		// runs starts there and never in a pane (start_host.go, #13464).
+		// The Antigravity companion runs read-only agy tasks with bypassPermissions and the first-message
+		// constraint, matching Claude Code; terminal agy without the companion stays refused (start_host.go, #13464).
 		s.companionStartHost(ctx, m, agent, params)
 		if err := s.readonlyLauncherRefusal(ctx, m, params, agent); err != nil {
 			return startAgent{}, err
@@ -139,8 +139,9 @@ func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, ow
 // the node refuses their plan-mode start too (node/control.go). No other launcher is put in its place: the plan named
 // that agent. Anything else goes on as before: a launcher whose agent the computer's list does not say goes to the node
 // with plan, which refuses what it cannot hold read-only (nothing is refused here on a guess), and a start an engine
-// runtime runs is the runtime's to refuse (Paseo holds only its Claude Code providers read-only, caps.readonly). So is
-// an agy start on the Antigravity companion (host agy, fitTaskLauncher), which runs plan in agy's own plan mode (#13464).
+// runtime runs is the runtime's to refuse (Paseo holds only its Claude Code providers read-only, caps.readonly). An
+// agy start on the Antigravity companion (host agy, fitTaskLauncher) is allowed and runs with bypassPermissions and the
+// first-message read-only constraint like Claude Code (#13464).
 func (s *Service) readonlyLauncherRefusal(ctx context.Context, m Device, params map[string]any, agent startAgent) error {
 	if !proto.IsWorkAgentType(agent.agent) {
 		return nil
@@ -210,9 +211,15 @@ type deferredTaskStart struct {
 // up again after the start could find another, or none). A failed start counts against the launcher there.
 func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (mid, sid string, err error) {
 	p := newPlacement(t.Machine, "enforce")
-	if prev := t.Placement; prev != nil && prev.TaskID == "" && t.Reroute != nil {
-		// Start on the landing shown on the plan card and retain the preview's candidate evidence.
-		p.Requested, p.ReasonKey = prev.Requested, prev.ReasonKey
+	if prev := t.Placement; prev != nil && (prev.TaskID == "" && t.Reroute != nil || prev.ReasonKey == placementReasonExtension || prev.ReasonKey == placementReasonFallback) {
+		// Start on the landing shown on the plan card or chosen by automatic placement, retaining its audit evidence.
+		if prev.ID != "" && (prev.ReasonKey == placementReasonExtension || prev.ReasonKey == placementReasonFallback) {
+			p.ID = prev.ID
+			if !prev.At.IsZero() {
+				p.At = prev.At
+			}
+		}
+		p.Requested, p.ReasonKey, p.Reason = prev.Requested, prev.ReasonKey, prev.Reason
 		p.Candidates = prev.cloneCandidates()
 	}
 	p.TaskID = t.TodoID
@@ -225,6 +232,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	if err := s.checkRequestStart(ctx, *t); err != nil {
 		return "", "", err
+	}
+	if (t.HandoffID != "" || t.HandoffOperationID != "") && (t.Permission != "" || t.Readonly) {
+		t.preservePermission = true
 	}
 	t.normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
 	settledPermission := t.Permission
@@ -332,6 +342,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		if err != nil && t.admissionRelease != nil {
 			t.admissionRelease()
 			t.admissionRelease = nil
+			t.admissionClaimMachine = ""
 		}
 	}()
 	if err != nil {
@@ -372,9 +383,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if !t.preservePermission {
 		switch {
 		case t.Readonly:
-			// Allow all and the first message's constraint, as for Claude Code; the companion keeps plan, which it runs
-			// read-only (#13464), unless assistant.readonly_mode is prompt.
-			if fit.allowAll() && !(t.Permission == "plan" && params["host"] == proto.HostAgy) {
+			// Allow all and the first message's constraint, as for Claude Code: agy's ACP plan mode prompts on every
+			// Bash call (including read-only inspection commands), stalling autonomous tasks. Codex keeps plan.
+			if fit.allowAll() {
 				t.Permission = "bypassPermissions"
 			}
 		case configuredMode != "" && fit.supportsPermissionMode(configuredMode):
@@ -434,6 +445,11 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		s.grantScheduleKind(ctx, id, *t)
 	}
 	prompt := t.Prompt
+	if t.HandoffID != "" {
+		if handoffSummary := strings.TrimSpace(s.todoHandoffSummary(ctx, t.HandoffID)); handoffSummary != "" {
+			prompt = handoffSummary + "\n\n" + prompt
+		}
+	}
 	if t.backendWorkspace() {
 		rows, err := json.Marshal(t.WorkspaceResolved.Repositories)
 		if err != nil {
@@ -555,7 +571,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			params["images"] = todoProtoImages(rows)
 		}
 	}
-	params["cwd"], params["prompt"], params["tab_name"] = t.Cwd, prompt, s.tabName(ctx, t.Title)
+	params["cwd"], params["prompt"], params["tab_name"] = t.Cwd, prompt, localTabName(t.Title)
 	if t.WaitInputID != "" {
 		params["client_msg_id"] = t.WaitInputID
 	}
@@ -672,7 +688,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			continue
 		}
 		// The companion the hub picked went away before the start reached it: nothing ran, and the start goes to the
-		// computer's default host instead (a pane), never for a read-only task, which only the companion holds read-only.
+		// computer's default host instead (a pane), never for a read-only task, which does not fall back to a pane.
 		if companionAway(err, companion) && !t.Readonly {
 			companion = false
 			delete(params, "host")
@@ -704,6 +720,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 					if found {
 						t.startedAgent = cmp.Or(session.Agent, fit.snapshot)
 						noteDeferredStart(session)
+						s.nameAgentTabLater(agentTabNameStart(m.ID, session, params["tab_name"].(string), t.Title))
 						return m.ID, session.SessionID, nil
 					}
 				}
@@ -716,6 +733,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 				s.logf("task %s: start answered late on %s; adopted session %s from the machine's own list", t.TodoID, m.ID, sess.SessionID)
 				t.startedAgent = cmp.Or(sess.Agent, fit.snapshot)
 				noteDeferredStart(sess)
+				s.nameAgentTabLater(agentTabNameStart(m.ID, sess, params["tab_name"].(string), t.Title))
 				return m.ID, sess.SessionID, nil
 			}
 			// Nothing found, and the link took the answer (it closed, or the machine is not reachable now): the
@@ -730,6 +748,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 						s.logf("task %s: start's link dropped; adopted session %s on %s after it reconnected", t.TodoID, sess.SessionID, m.ID)
 						t.startedAgent = cmp.Or(sess.Agent, fit.snapshot)
 						noteDeferredStart(sess)
+						s.nameAgentTabLater(agentTabNameStart(m.ID, sess, params["tab_name"].(string), t.Title))
 						return m.ID, sess.SessionID, nil
 					}
 				}
@@ -787,6 +806,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	t.startedAgent = cmp.Or(res.Session.Agent, fit.snapshot)
 	noteDeferredStart(res.Session)
+	s.nameAgentTabLater(agentTabNameStart(m.ID, res.Session, params["tab_name"].(string), t.Title))
 	return m.ID, res.Session.SessionID, nil
 }
 

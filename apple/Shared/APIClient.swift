@@ -2414,9 +2414,10 @@ nonisolated struct APIClient: Sendable {
     }
     @discardableResult
     /// opID: one per answer (the same on every retry of it), so a retry through a hub restart presses nothing twice.
-    /// `handoffCard`: a hand-off card's own approval, which says so (`SecretHandoff.feature`) on this request alone.
-    func resolve(_ id: String, _ r: Resolution, opID: UUID = UUID(), handoffCard: Bool = false) async throws -> ResolveResult {
-        let headers = handoffCard ? ["X-Persona-Features": SecretHandoff.feature] : [:]
+    /// `handoffCard`: a hand-off or explicit env card's own approval, which says so on this request alone.
+    /// `secretRunEnv` selects the env feature; otherwise the hand-off feature is used.
+    func resolve(_ id: String, _ r: Resolution, opID: UUID = UUID(), handoffCard: Bool = false, secretRunEnv: Bool = false) async throws -> ResolveResult {
+        let headers = handoffCard ? ["X-Persona-Features": secretRunEnv ? "secret_run_env" : SecretHandoff.feature] : [:]
         return try JSON.decoder.decode(ResolveResult.self, from: try await post("/api/v1/interactions/\(id)/resolve", body: r, opID: opID,
                                                                                  extraHeaders: headers))
     }

@@ -39,6 +39,7 @@ GET /api/v1/devices/{id}/sessions
 GET /api/v1/endpoints
 GET /api/v1/fleet
 GET /api/v1/health
+GET /api/v1/hub/recovery # hub installation administration: read-only whole-install inventory
 GET /api/v1/hub/update
 GET /api/v1/hub/update/backups # hub installation administration: owned local recovery snapshots
 GET /api/v1/hub/update/history
@@ -111,6 +112,7 @@ GET {link.StreamPath}
 GET {peerPath}
 GET /i/{code}
 GET /i/{code}/docker
+PATCH /api/v1/looks/uploads/{id} # the hub keeps the looks: personas/ is its own directory (look_uploads.go)
 PATCH /api/v1/machines/{mid}/files/entry
 PATCH /api/v1/managers/{id}
 POST /api/v1/admin/devices/pair
@@ -138,6 +140,8 @@ POST /api/v1/devices
 POST /api/v1/devices/{id}/live-activity
 POST /api/v1/devices/{id}/lock-tests
 POST /api/v1/devices/{id}/lock-tests/{test_id}/receipt
+POST /api/v1/hub/recovery/bundles/{id}/inspect # hub installation administration: audited offline integrity check
+POST /api/v1/hub/recovery/bundles/{id}/verify # hub installation administration: audited temporary-database verification
 POST /api/v1/hub/update
 POST /api/v1/hub/update/backups/{id}/apply # hub installation administration: shared self-update transaction
 POST /api/v1/hub/update/check

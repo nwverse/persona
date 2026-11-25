@@ -26,30 +26,39 @@ const lookupBatch = 100
 // end (finish), from the resources that did not fail: a resource that fails part way contributes nothing, neither
 // content nor index records nor its cursor.
 type run struct {
-	s        *Syncer
-	b        larksyncwire.Binding
-	sess     *session
-	cursors  map[string]string
-	idx      larksyncwire.Index
-	start    time.Time // the run's "now": windows' ends and SeenAt
-	deadline time.Time
-	owner    string // the owner's open id (Message.Mine)
-	webHost  string // the tenant's document site, learned from the first document URL read
-	partial  bool
+	s            *Syncer
+	b            larksyncwire.Binding
+	sess         *session
+	cursors      map[string]string
+	idx          larksyncwire.Index
+	start        time.Time // the run's "now": windows' ends and SeenAt
+	deadline     time.Time
+	stepDeadline time.Time // optional per-step deadline in ModeIM (zero: use deadline)
+	owner        string    // the owner's open id (Message.Mine)
+	webHost      string    // the tenant's document site, learned from the first document URL read
+	partial      bool
+	p2pLoaded    bool
 
-	res      map[string]*resourceState
-	errs     []larksyncwire.ResourceError
-	known    map[string]knownRecord
-	msgs     map[string]*msgState
-	msgOrder []string
-	docs     map[string]*docState
-	docOrder []string
-	chats    map[string]chatInfo
-	leads    []minuteLead
-	// names are the senders' display names read this run (open id -> name); namesOff stops asking after the first
-	// refusal (no contact scope): names are a help for matching the gateway's copy, never a reason to fail.
-	names    map[string]string
-	namesOff bool
+	res           map[string]*resourceState
+	errs          []larksyncwire.ResourceError
+	known         map[string]knownRecord
+	msgs          map[string]*msgState
+	msgOrder      []string
+	docs          map[string]*docState
+	docOrder      []string
+	chats         map[string]chatInfo
+	readChats     map[string]bool         // chat ids whose history readChat already attempted this run
+	p2pChats      map[string]string       // known p2p chat_id -> peer display name (persisted in im:p2p_chats)
+	chatMetaTried map[string]bool         // p2p chat ids already queried via GET /open-apis/im/v1/chats/:chat_id this run
+	wikiNodes     map[string]wikiNodeInfo // wiki node_token -> resolved object info learned during this run
+	docLeads      []docLead
+	leads         []minuteLead
+	// names are the senders' display names read this run (open id -> name); namesOff stops asking after a missing
+	// contact scope: names are a help for matching the gateway's copy, never a reason to fail.
+	// senderTypes records each sender id's sender_type ("user", "app", …) seen in messages this run.
+	names       map[string]string
+	senderTypes map[string]string
+	namesOff    bool
 }
 
 // resourceState is how one resource (a cursor key) ended: failed (its content is dropped), abandoned (the budget ran
@@ -93,6 +102,17 @@ type chatInfo struct {
 	id, name, kind string
 }
 
+// docLead is a cloud document or wiki link found in a synced message.
+type docLead struct {
+	token, objType, url, resource, entry string
+}
+
+// wikiNodeInfo caches a resolved wiki node (node_token -> underlying cloud object).
+type wikiNodeInfo struct {
+	objToken, objType, title string
+	edited                   int64
+}
+
 // minuteLead is a minutes token found in this run, in a resource's content.
 type minuteLead struct {
 	token, url, resource, entry string
@@ -101,24 +121,35 @@ type minuteLead struct {
 func newRun(s *Syncer, b larksyncwire.Binding, token func(context.Context) (string, error), cursors map[string]string, idx larksyncwire.Index, deadline time.Time) *run {
 	start := s.now()
 	return &run{
-		s:        s,
-		b:        b,
-		sess:     &session{s: s, base: botcard.ResolveDomain(b.App.Domain), token: token, deadline: deadline},
-		cursors:  cursors,
-		idx:      idx,
-		start:    start,
-		deadline: deadline,
-		owner:    openIDOf(b.AccountID),
-		res:      map[string]*resourceState{},
-		known:    map[string]knownRecord{},
-		msgs:     map[string]*msgState{},
-		docs:     map[string]*docState{},
-		names:    map[string]string{},
-		chats:    map[string]chatInfo{},
+		s:             s,
+		b:             b,
+		sess:          &session{s: s, base: botcard.ResolveDomain(b.App.Domain), token: token, deadline: deadline},
+		cursors:       cursors,
+		idx:           idx,
+		start:         start,
+		deadline:      deadline,
+		owner:         openIDOf(b.AccountID),
+		res:           map[string]*resourceState{},
+		known:         map[string]knownRecord{},
+		msgs:          map[string]*msgState{},
+		docs:          map[string]*docState{},
+		names:         map[string]string{},
+		senderTypes:   map[string]string{},
+		chats:         map[string]chatInfo{},
+		readChats:     map[string]bool{},
+		p2pChats:      map[string]string{},
+		chatMetaTried: map[string]bool{},
+		wikiNodes:     map[string]wikiNodeInfo{},
 	}
 }
 
-func (r *run) overBudget() bool { return !r.s.now().Before(r.deadline) }
+func (r *run) overBudget() bool {
+	now := r.s.now()
+	if !r.stepDeadline.IsZero() && !now.Before(r.stepDeadline) {
+		return true
+	}
+	return !now.Before(r.deadline)
+}
 
 // backfillFrom is where a resource without a cursor starts reading.
 func (r *run) backfillFrom() time.Time {

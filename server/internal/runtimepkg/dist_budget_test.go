@@ -31,8 +31,7 @@ import (
 // Untitled Antigravity conversations take a short title from their first prompt line (#14629), 218 B (264,212 B).
 // An API error agy streams as message text becomes the turn's error, kept in history and settled idle (#14628), 231 B (264,443 B).
 // Antigravity GENERIC timestamp header stripping (#13662) adds 176 B (264,619 B).
-// Recovering settled Antigravity sessions after a restart (#12952) adds 631 B (265,242 B).
-// Deferring an Antigravity task session's MCP start until its roles are linked (#15475) adds 120 B (265,362 B).
+// Subsequent runtime fixes on main (#15269, #15275, #13312, #12952, #15475) bring the total to 265,362 B.
 // Following an Antigravity conversation past a rewind's abandoned export tail and rewinding a cut that hides ranges at
 // its matching visible step (#14297) add 332 B (265,694 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
