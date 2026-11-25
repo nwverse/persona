@@ -46,7 +46,20 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		if i < len(edits) {
 			applyPlanEdit(&p.Tasks[i], edits[i])
 		}
+	}
+	// A waiting card can gain a matching task or repository link after planning.
+	if err := s.checkPlanRepositoryDuplicates(ctx, p.Tasks); err != nil {
+		return nil, planInvalid{err}
+	}
+	for i := range p.Tasks {
 		task := &p.Tasks[i]
+		var request *BriefRequest
+		if task.Brief != nil {
+			request = task.Brief.Request
+		}
+		if err := s.checkDispatchReuse(ctx, p.Conversation, *task, request); err != nil {
+			return nil, planInvalid{err}
+		}
 		task.CloseTabOnAccept = ownerStarts(ctx) && i < len(edits) && edits[i].CloseTabOnAccept
 		task.TerminalTarget, task.TerminalCleanup = taskTerminalTarget{}, ""
 		task.TerminalAuthorized = false
@@ -122,10 +135,6 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		if supervisors[i], err = s.planTaskSupervisor(ctx, p.Conversation, *task); err != nil {
 			return nil, err
 		}
-	}
-	// Waiting cards may have changed, or gained a conflicting association, since planning.
-	if err := s.checkPlanRepositoryDuplicates(ctx, p.Tasks); err != nil {
-		return nil, planInvalid{err}
 	}
 	p.State = planStarted
 	for i := range p.Tasks {

@@ -100,7 +100,10 @@ func (s *Service) takeOver(ctx context.Context, conversation string, t *PlanTask
 // show before "Start": who asked is read off the conversation once (briefOrigin); a task that continues another takes
 // that task's brief, with its criteria and expected time as they stand.
 func (s *Service) planBriefs(ctx context.Context, machine, conversation string, tasks []PlanTask) error {
-	var origin *briefRecord
+	return s.planBriefsFromOrigin(ctx, machine, conversation, tasks, nil)
+}
+
+func (s *Service) planBriefsFromOrigin(ctx context.Context, machine, conversation string, tasks []PlanTask, origin *briefRecord) error {
 	for i := range tasks {
 		t := &tasks[i]
 		if t.Continues != "" {
