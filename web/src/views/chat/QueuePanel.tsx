@@ -15,9 +15,9 @@ import { COMPOSER_INPUT } from "../../lib/dock-focus";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { api, errorText, fileDownloadURL, fileThumbURL, sessionPath } from "../../lib/api";
 import { agentLabel } from "../../lib/mentions";
-import { useMessageFeedback } from "../../lib/message-send";
+import { useMessageFeedback, type SendFeedback } from "../../lib/message-send";
 import { inSendOrder, outboxKey } from "../../lib/outbox";
-import { keepAllBut, moved, movedTo, parseQueued, queuedMarks } from "../../lib/queue";
+import { keepAllBut, moved, movedTo, parseQueued, queuedMarks, type QueuedParts } from "../../lib/queue";
 import { relayedFrom } from "../../lib/queue-relayed";
 import { useStore } from "../../lib/store";
 import type { Session } from "../../lib/types";
@@ -27,6 +27,11 @@ import { Icon, type IconName } from "../../ui/icons";
 import { t } from "../../i18n";
 import { useQueueEntries, type QueueCandidate, type QueueEntry, type QueueSnapshot } from "./queue-entries";
 import { restoreQueued, type QueuedImage } from "./queue-restore";
+
+export interface QueueEditResult {
+  queue?: string[];
+  images?: QueuedImage[][];
+}
 
 export interface QueuePanelProps {
   session: Session;
@@ -42,6 +47,22 @@ export interface QueuePanelProps {
   /** A phone on its side: one line, "N queued", in the line of the run's status (outside the composer), that opens the
    *  same rows under it. */
   compact?: boolean;
+  /** Controlled queue update handler (`keep` indexes into the own queue), replacing default `inSendOrder` + `api(".../queue")`. */
+  onEditQueue?: (keep: number[]) => Promise<QueueEditResult | void> | QueueEditResult | void;
+  /** Controlled Send now handler, replacing default `api(".../queue/send-now")`. */
+  onSendNow?: () => Promise<void> | void;
+  /** Controlled draft restoration handler when Edit pulls a message back, replacing default `restoreQueued`. */
+  onRestoreQueued?: (draftKey: string, session: Session, parts: QueuedParts, images: QueuedImage[]) => Promise<void> | void;
+  /** Controlled notification handler replacing default `toast`. */
+  onNotify?: (message: string, tone?: "ok" | "error") => void;
+  /** Controlled photo thumbnail URL resolver replacing default `fileThumbURL`. */
+  resolveThumbURL?: (path: string, size: number) => string;
+  /** Controlled inline photo download URL resolver replacing default `fileDownloadURL`. */
+  resolveDownloadURL?: (path: string, options: { inline?: boolean }) => string;
+  /** Controlled per-message transport feedback resolver replacing default `useMessageFeedback`. */
+  getSendFeedback?: (id: string) => SendFeedback | undefined;
+  /** Explicit offline connection state replacing default `useStore((s) => s.conn === "offline")`. */
+  offline?: boolean;
 }
 
 /** cindy's: four rows or fewer show in full; past that the first three and "N more". */
@@ -73,7 +94,31 @@ function relayNote(noWake: boolean) {
   return t(noWake ? "chat-queuepanel.relayed_note_no_wake" : "chat-queuepanel.relayed_note");
 }
 
-export function QueuePanel({ session, draftKey, canEdit, persona, pending = [], optimistic: local = [], memory, onAccepted, cancelQueued, compact }: QueuePanelProps) {
+export function QueuePanel(props: QueuePanelProps) {
+  const sessionKey = JSON.stringify([props.session.machine_id, props.session.session_id, props.draftKey]);
+  return <QueuePanelBody key={sessionKey} {...props} />;
+}
+
+function QueuePanelBody({
+  session,
+  draftKey,
+  canEdit,
+  persona,
+  pending = [],
+  optimistic: local = [],
+  memory,
+  onAccepted,
+  cancelQueued,
+  compact,
+  onEditQueue,
+  onSendNow,
+  onRestoreQueued,
+  onNotify,
+  resolveThumbURL,
+  resolveDownloadURL,
+  getSendFeedback,
+  offline,
+}: QueuePanelProps) {
   const queued = useMemo(() => session.queued ?? [], [session.queued]);
   const { rows: confirmed, accepted, planEdit } = useQueueEntries(session, pending, memory, onAccepted);
   const optimistic = local.filter((p) => !accepted.includes(p.id));
@@ -85,7 +130,6 @@ export function QueuePanel({ session, draftKey, canEdit, persona, pending = [], 
   const editable = canEdit && (session.capabilities?.queue_edit ?? (!runtime && session.agent !== "agy"));
   // a Claude or agy takes queued messages at its next step, and can be given them now (#6088, #14871); so does a Persona chat's (#4342)
   const takesNow = canEdit && (session.capabilities?.queue_send_now ?? (!runtime && (session.agent === "claude" || session.agent === "agy" || (persona !== undefined && own > 0))));
-  const path = sessionPath(session.machine_id, session.session_id);
   const listId = useId();
   const explainId = useId();
   const region = useRef<HTMLDivElement>(null);
@@ -95,7 +139,12 @@ export function QueuePanel({ session, draftKey, canEdit, persona, pending = [], 
 
   const [busy, setBusy] = useState<string | null>(null);
   const [withdraw, setWithdraw] = useState<{ id: string; del: boolean } | null>(null);
-  const inFlight = useRef(false);
+  const mounted = useRef(true);
+  const nextToken = useRef(0);
+  const inFlight = useRef<number | null>(null);
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionRef = useRef({ mid: session.machine_id, sid: session.session_id, draftKey });
+  sessionRef.current = { mid: session.machine_id, sid: session.session_id, draftKey };
   const [expanded, setExpanded] = useState(false);
   // relayed messages from other conversations are one collapsed line until the owner asks to inspect them (#6394)
   const [relayedOpen, setRelayedOpen] = useState(false);
@@ -155,31 +204,61 @@ export function QueuePanel({ session, draftKey, canEdit, persona, pending = [], 
   useEffect(() => {
     dragging.current?.stop();
   }, [queueKey]);
-  useEffect(() => () => dragging.current?.stop(), []);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      inFlight.current = null;
+      if (holdTimer.current !== null) {
+        clearTimeout(holdTimer.current);
+        holdTimer.current = null;
+      }
+      dragging.current?.stop();
+    };
+  }, []);
 
-  const run = async (id: string, work: () => Promise<void>): Promise<boolean> => {
-    if (inFlight.current) return false;
-    inFlight.current = true;
+  const notify = (message: string, tone?: "ok" | "error") => {
+    if (onNotify) onNotify(message, tone);
+    else toast(message, tone);
+  };
+  const isCurrentSession = (mid: string, sid: string, key: string) =>
+    mounted.current && sessionRef.current.mid === mid && sessionRef.current.sid === sid && sessionRef.current.draftKey === key;
+
+  const run = async (id: string, work: (isCurrent: () => boolean) => Promise<boolean | void>): Promise<boolean> => {
+    if (inFlight.current !== null) return false;
+    const token = ++nextToken.current;
+    const targetMid = session.machine_id;
+    const targetSid = session.session_id;
+    const targetDraftKey = draftKey;
+    const isCurrent = () => isCurrentSession(targetMid, targetSid, targetDraftKey) && inFlight.current === token;
+    inFlight.current = token;
     setBusy(id);
     try {
-      await work();
-      return true;
+      const outcome = await work(isCurrent);
+      if (!isCurrent()) return false;
+      return outcome !== false;
     } catch (e) {
-      toast(t("chat-queuepanel.failed", { error: errorText(e) }), "error");
+      if (isCurrent()) notify(t("chat-queuepanel.failed", { error: errorText(e) }), "error");
       return false;
     } finally {
-      inFlight.current = false;
-      setBusy(null);
+      if (inFlight.current === token) {
+        inFlight.current = null;
+        if (mounted.current) setBusy(null);
+      }
     }
   };
   // back to the box below once the row is gone (a precise pointer only: a touch screen would raise its keyboard)
   const toBox = (always: boolean) => {
+    if (!mounted.current) return;
     const at = document.activeElement;
     if (!hasFinePointer() || !(always || !at || at === document.body || region.current?.contains(at))) return;
     region.current?.closest("[data-composer-top]")?.parentElement?.querySelector<HTMLElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
   };
-  const editQueue = (keep: number[]) =>
-    inSendOrder(outboxKey(session.machine_id, session.session_id), async () => {
+  const editQueue = (keep: number[], isCurrent: () => boolean): Promise<QueueEditResult | undefined> => {
+    const targetMid = session.machine_id;
+    const targetSid = session.session_id;
+    const execute = async (): Promise<QueueEditResult | undefined> => {
+      if (!isCurrent()) return undefined;
       // A send whose queue row arrived before its HTTP reply can still hold the turn. Recheck indexes when the
       // edit starts, and keep later sends behind it so the keep list cannot drop one of them.
       if (current.current.length !== own || ownRows.some((r, i) => r.id !== current.current[i].id)) {
@@ -188,13 +267,21 @@ export function QueuePanel({ session, draftKey, canEdit, persona, pending = [], 
       const finish = planEdit(keep);
       let matched = false;
       try {
-        const r = await api<{ queue?: string[]; images?: QueuedImage[][] }>(`${path}/queue`, { method: "POST", json: { keep } });
-        matched = r.queue?.length === own && r.queue.every((raw, i) => raw === ownRows[i].raw);
+        const r = onEditQueue
+          ? ((await onEditQueue(keep)) ?? undefined)
+          : await api<QueueEditResult>(`${sessionPath(targetMid, targetSid)}/queue`, { method: "POST", json: { keep } });
+        if (!isCurrent()) return undefined;
+        matched = r?.queue !== undefined
+          ? r.queue.length === own && r.queue.every((raw, i) => raw === ownRows[i].raw)
+          : Boolean(onEditQueue);
         return r;
       } finally {
-        finish(matched);
+        if (mounted.current) finish(matched);
       }
-    });
+    };
+    if (onEditQueue) return execute();
+    return inSendOrder(outboxKey(targetMid, targetSid), execute);
+  };
   const act = (row: Row, del: boolean) => {
     const local = row.i < 0;
     if (local && !cancelQueued?.(row.id)) {
@@ -202,12 +289,19 @@ export function QueuePanel({ session, draftKey, canEdit, persona, pending = [], 
       setWithdraw({ id: row.id, del });
       return;
     }
-    void run(row.id, async () => {
-      const r = local ? undefined : await editQueue(keepAllBut(own, row.i));
-      const raw = local ? row.raw : r?.queue?.[row.i];
-      const images = (local ? row.images : r?.images?.[row.i]) ?? [];
-      toast(del ? t("chat-queuepanel.deleted") : t("chat-queuepanel.pulled_back"), "ok");
-      if (!del && raw !== undefined) await restoreQueued(draftKey, session, parseQueued(raw, images.length), images);
+    const targetSession = session;
+    const targetDraftKey = draftKey;
+    void run(row.id, async (isCurrent) => {
+      const r = local ? undefined : await editQueue(keepAllBut(own, row.i), isCurrent);
+      if (!isCurrent()) return false;
+      const raw = local ? row.raw : r?.queue !== undefined ? r.queue[row.i] : (onEditQueue ? row.raw : undefined);
+      const images = (local ? row.images : r?.images?.[row.i] ?? (onEditQueue && r?.queue === undefined ? row.images : undefined)) ?? [];
+      notify(del ? t("chat-queuepanel.deleted") : t("chat-queuepanel.pulled_back"), "ok");
+      if (!del && raw !== undefined) {
+        const parsed = parseQueued(raw, images.length);
+        if (onRestoreQueued) await onRestoreQueued(targetDraftKey, targetSession, parsed, images);
+        else await restoreQueued(targetDraftKey, targetSession, parsed, images);
+      }
     }).then((ok) => ok && toBox(!del));
   };
   useEffect(() => {
@@ -220,17 +314,29 @@ export function QueuePanel({ session, draftKey, canEdit, persona, pending = [], 
     if (!keep) return;
     const mine = { order: keep, queue: queueKey };
     setHeld(mine);
-    void run(id, async () => { await editQueue(keep); }).then((ok) => {
-      if (!ok || keep.every((i, at) => ownRows[i].raw === ownRows[at].raw)) setHeld(null);
-      else setTimeout(() => setHeld((h) => (h === mine ? null : h)), HOLD_MS);
+    void run(id, async (isCurrent) => {
+      await editQueue(keep, isCurrent);
+    }).then((ok) => {
+      if (!mounted.current) return;
+      if (!ok || keep.every((i, at) => ownRows[i].raw === ownRows[at].raw)) {
+        setHeld((h) => (h === mine ? null : h));
+      } else {
+        if (holdTimer.current !== null) clearTimeout(holdTimer.current);
+        holdTimer.current = setTimeout(() => {
+          holdTimer.current = null;
+          if (mounted.current) setHeld((h) => (h === mine ? null : h));
+        }, HOLD_MS);
+      }
     });
   };
   // at one press, with no dialog: it loses nothing (the messages go now rather than at the next step), and Stop, which
   // cuts the whole turn, and Delete beside it act at one press too (DESIGN_SYSTEM.md 4.4)
   const sendNow = (row: Row) =>
-    void run(row.id, async () => {
-      await api(`${path}/queue/send-now`, { method: "POST", json: {} });
-      toast(t("chat-queuepanel.sent_now", { agent }), "ok");
+    void run(row.id, async (isCurrent) => {
+      if (onSendNow) await onSendNow();
+      else await api(`${sessionPath(session.machine_id, session.session_id)}/queue/send-now`, { method: "POST", json: {} });
+      if (!isCurrent()) return false;
+      notify(t("chat-queuepanel.sent_now", { agent }), "ok");
     }).then((ok) => ok && toBox(false));
   // what the dialog used to say, now the button's tooltip and description
   const sendNowTip = t(runtimeSource ? "chat-queuepanel.send_now_tip_runtime" : "chat-queuepanel.send_now_tip", { agent });
@@ -306,6 +412,10 @@ export function QueuePanel({ session, draftKey, canEdit, persona, pending = [], 
       busy={busy === row.id || withdraw?.id === row.id}
       locked={locked || (row.i >= 0 && optimistic.length > 0)}
       dragging={drag?.id === row.id}
+      resolveThumbURL={resolveThumbURL}
+      resolveDownloadURL={resolveDownloadURL}
+      getSendFeedback={getSendFeedback}
+      offline={offline}
       rowRef={(el) => {
         if (el) rowEls.current.set(row.id, el);
         else rowEls.current.delete(row.id);
@@ -346,9 +456,18 @@ export function QueuePanel({ session, draftKey, canEdit, persona, pending = [], 
       {relayedOpen && (
         <div role="list" data-queue-relayed-list className="flex max-h-[196px] flex-col overflow-y-auto overscroll-contain px-1 pb-1">
           {relayedRows.map(({ row, source }, pos) => (
-            <RelayedRow key={row.id} raw={source?.text ?? row.raw} from={source?.from}
-              note={relayNote(source?.noWake ?? false)} showNote={mixedRelays}
-              n={own + pos + 1} mid={session.machine_id} cwd={session.cwd} />
+            <RelayedRow
+              key={row.id}
+              raw={source?.text ?? row.raw}
+              from={source?.from}
+              note={relayNote(source?.noWake ?? false)}
+              showNote={mixedRelays}
+              n={own + pos + 1}
+              mid={session.machine_id}
+              cwd={session.cwd}
+              resolveThumbURL={resolveThumbURL}
+              resolveDownloadURL={resolveDownloadURL}
+            />
           ))}
         </div>
       )}
@@ -406,7 +525,15 @@ export function QueuePanel({ session, draftKey, canEdit, persona, pending = [], 
           >
             <Icon name="inbox" size={13} />
             <span className="min-w-0 flex-1 truncate">{t("chat-queuepanel.summary", { count: total })}</span>
-            {optimistic.length > 0 ? <QueueSendStatus mid={session.machine_id} sid={session.session_id} id={optimistic[0].id} /> : busy !== null && <Spinner />}
+            {optimistic.length > 0 ? (
+              <QueueSendStatus
+                mid={session.machine_id}
+                sid={session.session_id}
+                id={optimistic[0].id}
+                getSendFeedback={getSendFeedback}
+                offline={offline}
+              />
+            ) : busy !== null && <Spinner />}
             <Icon name="chevron" size={12} stroke={2.2} className={cx("shrink-0 transition-transform duration-200", open && "rotate-180")} />
           </button>
           <Collapse open={open}>{rowsAndFold}</Collapse>
@@ -443,12 +570,14 @@ const ON_ACTIVE = "opacity-0 transition-opacity group-hover:opacity-100 group-fo
 
 /** Small 28 px thumbnails for photos attached to a queued message (#10871). Uses local preview data URLs when freshly
  *  queued from this page, otherwise loads from the session's machine (file/thumb -> inline file/download -> icon fallback). */
-function QueuedPhotoThumbs({ paths, previews, count, mid, cwd }: {
+function QueuedPhotoThumbs({ paths, previews, count, mid, cwd, resolveThumbURL, resolveDownloadURL }: {
   paths: string[];
   previews?: string[];
   count: number;
   mid: string;
   cwd?: string;
+  resolveThumbURL?: (path: string, size: number) => string;
+  resolveDownloadURL?: (path: string, options: { inline?: boolean }) => string;
 }) {
   const [stage, setStage] = useState<Record<string, number>>({});
   if (count <= 0) return null;
@@ -462,12 +591,26 @@ function QueuedPhotoThumbs({ paths, previews, count, mid, cwd }: {
         const key = local ? `preview-${i}` : path || `preview-${i}`;
         const candidates: string[] = [];
         if (local) candidates.push(local);
-        if (path && mid) {
-          try {
-            candidates.push(fileThumbURL(mid, path, cwd, PHOTO_THUMB_SIZE));
-            candidates.push(fileDownloadURL(mid, path, cwd, { inline: true }));
-          } catch {
-            // environments without storage (e.g. Node static markup) fall back to the icon tile
+        if (path) {
+          if (resolveThumbURL) {
+            const thumb = resolveThumbURL(path, PHOTO_THUMB_SIZE);
+            if (thumb) candidates.push(thumb);
+          } else if (mid && !resolveDownloadURL) {
+            try {
+              candidates.push(fileThumbURL(mid, path, cwd, PHOTO_THUMB_SIZE));
+            } catch {
+              // environments without storage (e.g. Node static markup) fall back to the icon tile
+            }
+          }
+          if (resolveDownloadURL) {
+            const download = resolveDownloadURL(path, { inline: true });
+            if (download) candidates.push(download);
+          } else if (mid && !resolveThumbURL) {
+            try {
+              candidates.push(fileDownloadURL(mid, path, cwd, { inline: true }));
+            } catch {
+              // environments without storage (e.g. Node static markup) fall back to the icon tile
+            }
           }
         }
         const cur = stage[key] ?? 0;
@@ -507,9 +650,37 @@ function QueuedPhotoThumbs({ paths, previews, count, mid, cwd }: {
   );
 }
 
-function QueueSendStatus({ mid, sid, id }: { mid: string; sid: string; id: string }) {
+function QueueSendStatus(props: {
+  mid: string;
+  sid: string;
+  id: string;
+  getSendFeedback?: (id: string) => SendFeedback | undefined;
+  offline?: boolean;
+}) {
+  if (props.getSendFeedback) {
+    return <QueueSendStatusOffline feedback={props.getSendFeedback(props.id)} offline={props.offline} />;
+  }
+  return <DefaultQueueSendFeedback mid={props.mid} sid={props.sid} id={props.id} offline={props.offline} />;
+}
+
+function DefaultQueueSendFeedback({ mid, sid, id, offline }: { mid: string; sid: string; id: string; offline?: boolean }) {
   const feedback = useMessageFeedback(mid, sid, id);
+  return <QueueSendStatusOffline feedback={feedback} offline={offline} />;
+}
+
+function QueueSendStatusOffline({ feedback, offline }: { feedback: SendFeedback | undefined; offline?: boolean }) {
+  if (offline !== undefined) {
+    return <QueueSendStatusView feedback={feedback} offline={offline} />;
+  }
+  return <DefaultQueueOfflineStatus feedback={feedback} />;
+}
+
+function DefaultQueueOfflineStatus({ feedback }: { feedback: SendFeedback | undefined }) {
   const offline = useStore((s) => s.conn === "offline");
+  return <QueueSendStatusView feedback={feedback} offline={offline} />;
+}
+
+function QueueSendStatusView({ feedback, offline }: { feedback: SendFeedback | undefined; offline: boolean }) {
   const label = feedback === "unknown" ? t("lib-outbox.delivery_unknown") :
     feedback === "processing" ? t("chat-segmentview.processing") :
     offline ? t("chat-chatview.waiting_for_hub") : t("chat-segmentview.sending");
@@ -522,7 +693,33 @@ function QueueSendStatus({ mid, sid, id }: { mid: string; sid: string; id: strin
 }
 
 /** One of the owner's queued messages, including a send that is still on its way. */
-function QueueRow({ row, n, mid, sid, cwd, editable, movable, takesNow, sendNowTip, explain, explainId, busy, locked, dragging, rowRef, handleRef, onKey, onPointerDown, onSendNow, onEdit, onDelete }: {
+function QueueRow({
+  row,
+  n,
+  mid,
+  sid,
+  cwd,
+  editable,
+  movable,
+  takesNow,
+  sendNowTip,
+  explain,
+  explainId,
+  busy,
+  locked,
+  dragging,
+  resolveThumbURL,
+  resolveDownloadURL,
+  getSendFeedback,
+  offline,
+  rowRef,
+  handleRef,
+  onKey,
+  onPointerDown,
+  onSendNow,
+  onEdit,
+  onDelete,
+}: {
   row: Row;
   n: number;
   mid: string;
@@ -538,6 +735,10 @@ function QueueRow({ row, n, mid, sid, cwd, editable, movable, takesNow, sendNowT
   busy: boolean;
   locked: boolean;
   dragging: boolean;
+  resolveThumbURL?: (path: string, size: number) => string;
+  resolveDownloadURL?: (path: string, options: { inline?: boolean }) => string;
+  getSendFeedback?: (id: string) => SendFeedback | undefined;
+  offline?: boolean;
   rowRef: (el: HTMLDivElement | null) => void;
   handleRef: (el: HTMLButtonElement | null) => void;
   onKey: (e: React.KeyboardEvent) => void;
@@ -587,7 +788,9 @@ function QueueRow({ row, n, mid, sid, cwd, editable, movable, takesNow, sendNowT
         dragging && "relative z-10 bg-hover",
       )}
     >
-      {row.i < 0 ? <QueueSendStatus mid={mid} sid={sid} id={row.id} /> : movable ? (
+      {row.i < 0 ? (
+        <QueueSendStatus mid={mid} sid={sid} id={row.id} getSendFeedback={getSendFeedback} offline={offline} />
+      ) : movable ? (
         <button
           ref={handleRef}
           type="button"
@@ -608,7 +811,15 @@ function QueueRow({ row, n, mid, sid, cwd, editable, movable, takesNow, sendNowT
         <span aria-hidden className="size-5 shrink-0" />
       )}
       {photoCount > 0 && (
-        <QueuedPhotoThumbs paths={parts.photos} previews={photoPreviews} count={photoCount} mid={mid} cwd={cwd} />
+        <QueuedPhotoThumbs
+          paths={parts.photos}
+          previews={photoPreviews}
+          count={photoCount}
+          mid={mid}
+          cwd={cwd}
+          resolveThumbURL={resolveThumbURL}
+          resolveDownloadURL={resolveDownloadURL}
+        />
       )}
       <p
         data-queue-row-body
@@ -672,8 +883,16 @@ function QueueRow({ row, n, mid, sid, cwd, editable, movable, takesNow, sendNowT
 /** One message another conversation (or the system) sent in: only shown. It names the chat it came from once, then its
  *  words on one line; a line cut short opens in place to its whole text (the chevron, or a click on the row that selects
  *  nothing), so nothing it says is left to a hover tooltip, and the opened text can be selected and copied. */
-function RelayedRow({ raw, from, note, showNote, n, mid, cwd }: {
-  raw: string; from?: string; note: string; showNote: boolean; n: number; mid: string; cwd?: string;
+function RelayedRow({ raw, from, note, showNote, n, mid, cwd, resolveThumbURL, resolveDownloadURL }: {
+  raw: string;
+  from?: string;
+  note: string;
+  showNote: boolean;
+  n: number;
+  mid: string;
+  cwd?: string;
+  resolveThumbURL?: (path: string, size: number) => string;
+  resolveDownloadURL?: (path: string, options: { inline?: boolean }) => string;
 }) {
   const parts = useMemo(() => parseQueued(raw), [raw]);
   const marks = queuedMarks(parts);
@@ -722,7 +941,14 @@ function RelayedRow({ raw, from, note, showNote, n, mid, cwd }: {
             </span>
           )}
           {parts.photos.length > 0 && (
-            <QueuedPhotoThumbs paths={parts.photos} count={parts.photos.length} mid={mid} cwd={cwd} />
+            <QueuedPhotoThumbs
+              paths={parts.photos}
+              count={parts.photos.length}
+              mid={mid}
+              cwd={cwd}
+              resolveThumbURL={resolveThumbURL}
+              resolveDownloadURL={resolveDownloadURL}
+            />
           )}
           <span
             ref={body}
