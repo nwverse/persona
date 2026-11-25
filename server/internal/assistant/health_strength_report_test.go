@@ -122,7 +122,7 @@ func TestStrengthWorkoutTaskAssemblesAtExecutionAndFallsBack(t *testing.T) {
 	needsHealthModule(t)
 	d := strengthReportTestDB(t)
 	s, f, _ := healthExecutionService(t)
-	s.store = func() Store { return d }
+	s.setStore(func() Store { return d })
 	ctx := context.Background()
 	if err := d.PutSetting(ctx, "health.items", map[string]any{"items": []string{"strength"}, "revision": 1}); err != nil {
 		t.Fatal(err)

@@ -16,6 +16,9 @@ import (
 // compliant twin per rule. The domain kit is read from the server itself.
 const plantedDir = "testdata/domainrules/planted"
 
+// plantedBareIDs is the wire-types baseline's bare-id names for the planted tree: none, so every bare ID field fails.
+var plantedBareIDs = map[string]bool{}
+
 // plantedContracts is contracts.txt for the planted tree.
 var plantedContracts = []string{"internal/assistantwire", "internal/badwire", "internal/listedlib"}
 
@@ -65,7 +68,7 @@ func domainCase(t *testing.T, files map[string]string, contracts []string) ([]st
 	if err != nil {
 		t.Fatal(err)
 	}
-	idx := domainrules.NewIndex(serverModule, pkgs, contracts)
+	idx := domainrules.NewIndex(serverModule, pkgs, contracts).WithBareIDs(plantedBareIDs)
 	findings, _, err := domainrules.Run(pkgs, idx, "")
 	if err != nil {
 		t.Fatal(err)
@@ -187,6 +190,7 @@ var plantedWant = []string{
 	"app-named-primitive internal/assistant/badapp 1",
 	"app-named-primitive internal/assistant/notadapt 2",
 	"app-named-primitive internal/badlib 1",
+	"contract-bare-id internal/badwire/badwire.go:12",
 	"core-accessor internal/assistant/badcore/accessor.go:10",
 	"core-accessor internal/assistant/badcore/accessor.go:13",
 	"core-accessor internal/assistant/badcore/accessor.go:16",
@@ -285,6 +289,12 @@ var plantedWant = []string{
 	"path-no-core internal/db/usage.go:3",
 	"path-no-core internal/hub/core.go:3",
 	"seam-any internal/assistant/badseam/badseam.go:15",
+	"seam-any internal/assistant/badseam/badseam.go:18",
+	"seam-any internal/assistant/badseam/badseam.go:19",
+	"seam-any internal/assistant/badseam/badseam.go:22",
+	"seam-any internal/assistant/badseam/badseam.go:23",
+	"seam-any internal/assistant/badseam/badseam.go:24",
+	"seam-any internal/assistant/badseam/badseam.go:28",
 	"seam-exported-field internal/assistant/badseam/badseam.go:11",
 }
 

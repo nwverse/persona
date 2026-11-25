@@ -32,7 +32,7 @@ import { mentionAt, replaceToken, sessionQuote, workspaceContext, type MentionTo
 import { machineWithHub } from "../../lib/mesh";
 import { skillContext, skillDraft, splitSkillDraft } from "../../lib/skill-mentions";
 import { getState } from "../../lib/store";
-import { AttachmentTray } from "../../ui/AttachmentTray";
+import { AttachmentTiles } from "../../ui/AttachmentTray";
 import { FileTiles } from "./FileTiles";
 import { Button, cx, Dialog, EASE, Spinner, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -1088,53 +1088,54 @@ export const Composer = memo(function Composer({
             }}
           />
         )}
-        {(atts.length > 0 || pastedBlocks.length > 0) && (
+        {(atts.length > 0 || files.length > 0) && (
+          <div data-composer-attachments className="flex flex-wrap items-center gap-2 px-0.5 pt-0.5 empty:hidden">
+            <AttachmentTiles attachments={atts} onOpen={(id) => setEditing(atts.find((a) => a.id === id) ?? null)} onRemove={(id) => {
+              const att = atts.find((a) => a.id === id);
+              // an edited picture's source and edits go with it
+              if (att) releaseAttachments([att]);
+              setAtts((cur) => cur.filter((a) => a.id !== id));
+            }} />
+            <FileTiles draftKey={draftKey} files={files} />
+          </div>
+        )}
+        {pastedBlocks.length > 0 && (
           <div className="flex flex-col gap-1.5 px-0.5 pt-0.5">
-            {atts.length > 0 && (
-              <AttachmentTray attachments={atts} onOpen={(id) => setEditing(atts.find((a) => a.id === id) ?? null)} onRemove={(id) => {
-                const att = atts.find((a) => a.id === id);
-                // an edited picture's source and edits go with it
-                if (att) releaseAttachments([att]);
-                setAtts((cur) => cur.filter((a) => a.id !== id));
-              }} />
-            )}
-            {pastedBlocks.length > 0 && (
-              <div className="flex flex-wrap items-center gap-1.5">
-                {pastedBlocks.map((b) => {
-                  const open = previewPasteId === b.id;
-                  return (
-                    <span
-                      key={b.id}
-                      className={cx(
-                        "inline-flex h-6.5 max-w-full items-center gap-1 rounded-[8px] border px-2 text-label transition-colors",
-                        open ? "border-accent/40 bg-accent-tint text-accent-ink" : "border-line bg-inset text-ink-2 hover:bg-hover",
-                      )}
+            <div className="flex flex-wrap items-center gap-1.5">
+              {pastedBlocks.map((b) => {
+                const open = previewPasteId === b.id;
+                return (
+                  <span
+                    key={b.id}
+                    className={cx(
+                      "inline-flex h-6.5 max-w-full items-center gap-1 rounded-[8px] border px-2 text-label transition-colors",
+                      open ? "border-accent/40 bg-accent-tint text-accent-ink" : "border-line bg-inset text-ink-2 hover:bg-hover",
+                    )}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setPreviewPasteId((cur) => (cur === b.id ? null : b.id))}
+                      className="inline-flex min-w-0 items-center gap-1.5 truncate"
+                      title={t("chat-composer.pasted_preview_hint")}
                     >
-                      <button
-                        type="button"
-                        onClick={() => setPreviewPasteId((cur) => (cur === b.id ? null : b.id))}
-                        className="inline-flex min-w-0 items-center gap-1.5 truncate"
-                        title={t("chat-composer.pasted_preview_hint")}
-                      >
-                        <Icon name="paste" size={12} className="shrink-0 opacity-75" />
-                        <span className="truncate">{t("chat-composer.pasted_chip", { count: b.text.length })}</span>
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={t("chat-composer.pasted_remove")}
-                        onClick={() => {
-                          setPastedBlocks((cur) => cur.filter((x) => x.id !== b.id));
-                          if (previewPasteId === b.id) setPreviewPasteId(null);
-                        }}
-                        className="ml-0.5 flex size-4 shrink-0 items-center justify-center rounded-[4px] text-ink-3 transition-colors hover:bg-hover hover:text-ink"
-                      >
-                        <Icon name="x" size={10} stroke={2.4} />
-                      </button>
-                    </span>
-                  );
-                })}
-              </div>
-            )}
+                      <Icon name="paste" size={12} className="shrink-0 opacity-75" />
+                      <span className="truncate">{t("chat-composer.pasted_chip", { count: b.text.length })}</span>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={t("chat-composer.pasted_remove")}
+                      onClick={() => {
+                        setPastedBlocks((cur) => cur.filter((x) => x.id !== b.id));
+                        if (previewPasteId === b.id) setPreviewPasteId(null);
+                      }}
+                      className="ml-0.5 flex size-4 shrink-0 items-center justify-center rounded-[4px] text-ink-3 transition-colors hover:bg-hover hover:text-ink"
+                    >
+                      <Icon name="x" size={10} stroke={2.4} />
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
             {previewPaste && (() => {
               const allLines = previewPaste.text.split(/\r?\n/);
               const snippet = allLines.slice(0, 6).join("\n") + (allLines.length > 6 ? "\n…" : "");
@@ -1159,11 +1160,6 @@ export const Composer = memo(function Composer({
                 </div>
               );
             })()}
-          </div>
-        )}
-        {files.length > 0 && (
-          <div className="px-0.5 pt-0.5">
-            <FileTiles draftKey={draftKey} files={files} />
           </div>
         )}
         {/* a field that turns disabled loses focus with no blur event: the keyboard is down, say so */}

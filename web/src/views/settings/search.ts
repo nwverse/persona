@@ -1,6 +1,7 @@
 import { t } from "../../i18n";
 import { LOCAL_SHORTCUTS, SHORTCUTS } from "../../lib/shortcuts";
-import { enabledSettingsTabs, registeredModules } from "../../core/module-host";
+import { registeredModules } from "../../core/module-host";
+import { enabledSettingsTabs } from "../../core/module-settings";
 import { MODULE_FEATURES_ID } from "../../core/module-features";
 import { isLegacyIntegrationTab } from "./integrations-route";
 import { tabInfo, TABS, type Tab } from "./nav";
