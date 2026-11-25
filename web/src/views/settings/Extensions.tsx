@@ -30,6 +30,7 @@ import { ExtensionLogo } from "../../ui/ExtensionLogo";
 import { ExtensionDownloads, packageDownloads } from "../../ui/ExtensionDownloads";
 import { Icon } from "../../ui/icons";
 import { ChannelLink } from "./Channels";
+import { ConnectorExternalSourceSettings } from "../../features/external-sources/ExternalSourceSettingsEntry";
 import { MarketCatalog, MarketItem, Markets, PackMemberRow, UninstallDialog, useInstalledNames } from "./ExtensionMarket";
 import { ExtensionSettingsPage } from "./ExtensionSettingsPage";
 import { ExtensionInfoAccess } from "./ExtensionInfoAccess";
@@ -50,7 +51,7 @@ import { isOpenBeside } from "./open-beside";
  * The tab's pages, by its `extension` parameter (lib/extension-market.ts extensionsRoute): the list, an extension, a page an extension
  * draws, and the market (its catalog, one extension of it, the markets).
  */
-export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, openBeside }: {
+export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, openBeside, onPageWide }: {
   open: string | null;
   onOpen: (id: string | null) => void;
   /** The page's top bar has the way back (a phone, Settings.tsx itemParent): an extension's page, a page it draws, the
@@ -61,6 +62,7 @@ export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, o
   /** `manager`: another manager's channel / connector (its extension's page links to its own); none: the default's. */
   onChannel?: (id: string, manager?: string) => void;
   onConnector?: (id: string, manager?: string) => void;
+  onPageWide?: (wide: boolean) => void;
 }) {
   const r = extensionsRoute(open);
   const go = (to: Parameters<typeof routeSub>[0]) => onOpen(routeSub(to));
@@ -89,7 +91,7 @@ export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, o
     case "page":
       return (
         <OwnedExtension id={r.id} manager={r.manager}>
-          {(manager) => <ExtensionPage key={`${open}@${manager ?? ""}`} id={r.id} ui={r.ui} manager={manager} onBack={headerBack ? undefined : () => go({ kind: "extension", id: r.id, manager })} />}
+          {(manager) => <ExtensionPage key={`${open}@${manager ?? ""}`} id={r.id} ui={r.ui} manager={manager} onBack={headerBack ? undefined : () => go({ kind: "extension", id: r.id, manager })} onWide={onPageWide} />}
         </OwnedExtension>
       );
     case "catalog":
@@ -125,13 +127,14 @@ function OwnedExtension({ id: _id, manager, children }: { id: string; manager?: 
 
 /** A page an extension draws (placement plugin_page), under the extension's name. `onBack`: none where the page's top
  *  bar has the way back (a phone). */
-function ExtensionPage({ id, ui, manager, onBack }: { id: string; ui: string; manager?: string; onBack?: () => void }) {
+function ExtensionPage({ id, ui, manager, onBack, onWide }: { id: string; ui: string; manager?: string; onBack?: () => void; onWide?: (wide: boolean) => void }) {
   usePinnedExtension(id, manager);
   const [d, setD] = useState<HubExtensionDetail | null>(null);
   const [n, setN] = useState(0);
   useEffect(() => {
     extensionDetail(id).then(setD, () => {});
   }, [id]);
+  useEffect(() => () => onWide?.(false), [onWide]);
   const title = d?.ui?.find((u) => u.id === ui)?.title;
   return (
     <>
@@ -146,7 +149,7 @@ function ExtensionPage({ id, ui, manager, onBack }: { id: string; ui: string; ma
       </div>
       {/* its extension id scopes what a graph's `key` keeps (lib/extension-owner.tsx) */}
       <ExtensionOwnerScope owner={id}>
-        <ExtensionUI key={n} extension={id} ui={ui} title={title} manager={manager} />
+        <ExtensionUI key={n} extension={id} ui={ui} title={title} manager={manager} onWide={onWide} />
       </ExtensionOwnerScope>
     </>
   );
@@ -797,6 +800,7 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
           )}
 
           {(p.enabled ?? true) && !!p.contributes?.connectors?.length && <ExtensionConnectorInbox ids={p.contributes.connectors} manager={manager} onOpen={onConnector} />}
+          <ConnectorExternalSourceSettings ids={[...(p.contributes?.connectors ?? []), ...(p.contributes?.channel ?? [])]} manager={manager} />
           {/* source subscriptions (#2041) of its connectors, the default manager's */}
           {(p.enabled ?? true) && !manager && !!p.contributes?.connectors?.length && <SubscriptionsEntry pick={(l) => l.extension === p.id} scope={{ ext: p.id }} />}
 

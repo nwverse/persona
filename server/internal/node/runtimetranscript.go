@@ -108,7 +108,8 @@ func (n *Node) runtimeTranscript(id string) string {
 }
 
 // transcriptCalls are the calls about a session that its transcript answers when the runtime names one.
-var transcriptCalls = map[string]bool{"session.items": true, "session.item": true, "session.image": true, "session.visualization": true}
+var transcriptCalls = map[string]bool{"session.items": true, "session.item": true, "session.image": true, "session.visualization": true,
+	proto.MethodSessionInputPreviews: true, proto.MethodSessionItemsWindow: true}
 
 // runtimeTranscriptCall serves the watch and the session info of a session of h whose conversation is a transcript
 // here (runtimeTranscript); handled is false for the calls the runtime answers as for any of its sessions.

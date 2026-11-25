@@ -2,10 +2,10 @@
 // enabled for Assistant chats with lazy Session Insights popover in #12541): shows context window share when known
 // (or the latest context size, then cumulative tokens from loaded items), and opens the lazy Session Insights popover
 // on click. "Show details in Agent rows" does not gate it. Nothing renders while both window and token usage are unknown.
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { t } from "../../i18n";
 import { contextHint } from "../../lib/context-notes";
-import { contextLabel, contextTier, contextTooltip, contextUsage, currentContextTokens, type ContextTier } from "../../lib/context-usage";
+import { contextLabel, contextTier, contextTooltip, contextUsage, currentContextTokens, type ContextTier, type ContextUsage } from "../../lib/context-usage";
 import { bareModel } from "../../lib/model-change";
 import { compactTokens } from "../../lib/tokens";
 import { cx } from "../../ui/atoms";
@@ -69,6 +69,16 @@ export function hasSessionTokenUsage(items?: readonly Item[]): boolean {
   return false;
 }
 
+export interface ContextMeterPopoverProps {
+  anchor: RefObject<HTMLElement | null>;
+  session: Session;
+  items?: readonly Item[];
+  assistant?: boolean;
+  onCompact?: () => boolean | void | Promise<boolean | void | unknown>;
+  compactBlocked?: boolean;
+  onClose: () => void;
+}
+
 export interface ContextMeterProps {
   session: Session;
   compact?: boolean;
@@ -76,24 +86,58 @@ export interface ContextMeterProps {
   assistant?: boolean;
   onCompact?: () => boolean | void | Promise<boolean | void | unknown>;
   compactBlocked?: boolean;
+  /** Controlled popover open state; omitted uses internal toggle state. */
+  open?: boolean;
+  /** Called when the trigger toggles, the popover closes, or usage becomes unknown while open. */
+  onOpenChange?: (open: boolean) => void;
+  /** Custom popover renderer bypassing the default lazy `SessionInsightsPopover`. */
+  renderPopover?: (props: ContextMeterPopoverProps) => ReactNode;
+  /** Controlled context-window usage (`null` forces the token-only fallback). */
+  usage?: ContextUsage | null;
+  /** Controlled token total used when window usage is absent; skips scanning `items`. */
+  tokens?: number;
 }
 
-export function ContextMeter({ session, compact = false, items, assistant, onCompact, compactBlocked }: ContextMeterProps) {
+export function ContextMeter({
+  session,
+  compact = false,
+  items,
+  assistant,
+  onCompact,
+  compactBlocked,
+  open: controlledOpen,
+  onOpenChange,
+  renderPopover,
+  usage: controlledUsage,
+  tokens: controlledTokens,
+}: ContextMeterProps) {
   const buttonRef = useRef<HTMLButtonElement>(null);
-  const [open, setOpen] = useState(false);
-  const close = useCallback(() => setOpen(false), []);
-  const usage = contextUsage(session);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isOpen = controlledOpen ?? internalOpen;
+  const openRef = useRef(isOpen);
+  openRef.current = isOpen;
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+  const setOpenState = useCallback((next: boolean) => {
+    if (controlledOpen === undefined) setInternalOpen(next);
+    if (next !== openRef.current) onOpenChangeRef.current?.(next);
+  }, [controlledOpen]);
+  const close = useCallback(() => setOpenState(false), [setOpenState]);
+  const usage = controlledUsage !== undefined ? controlledUsage : contextUsage(session);
   const current = currentContextTokens(session);
-  const tokens = useMemo(() => current || sessionTokenTotal(items), [current, items]);
-  const known = tokens > 0;
+  const tokens = useMemo(
+    () => (controlledTokens !== undefined ? positive(controlledTokens) : current || sessionTokenTotal(items)),
+    [controlledTokens, current, items],
+  );
+  const known = usage !== null || tokens > 0;
   // close if the window and usage go unknown (e.g. a /clear) while open
   useEffect(() => {
-    if (!known) setOpen(false);
-  }, [known]);
+    if (!known && isOpen) setOpenState(false);
+  }, [known, isOpen, setOpenState]);
   if (!known) return null;
 
   const tier = usage ? contextTier(usage) : "ok";
-  const tip = usage ? contextTooltip(usage) : t(current ? "context.current_tokens" : "chat-runningstatusbar.token_count", { tokens: compactTokens(tokens) });
+  const tip = usage ? contextTooltip(usage) : t(controlledTokens === undefined && current ? "context.current_tokens" : "chat-runningstatusbar.token_count", { tokens: compactTokens(tokens) });
   const description = usage ? contextHint(usage) : undefined;
   const title = description ? [tip, description].join("\n") : tip;
 
@@ -102,13 +146,13 @@ export function ContextMeter({ session, compact = false, items, assistant, onCom
       <button
         ref={buttonRef}
         type="button"
-        onClick={() => setOpen((was) => !was)}
+        onClick={() => setOpenState(!isOpen)}
         aria-haspopup="dialog"
-        aria-expanded={open}
+        aria-expanded={isOpen}
         aria-label={tip}
         aria-description={description}
-        title={open ? undefined : title}
-        className={cx("touch-hit -mx-1.5 flex shrink-0 items-center gap-1.5 rounded-chip px-1.5 text-submeta whitespace-nowrap text-ink-3 transition-colors", open && "bg-hover")}
+        title={isOpen ? undefined : title}
+        className={cx("touch-hit -mx-1.5 flex shrink-0 items-center gap-1.5 rounded-chip px-1.5 text-submeta whitespace-nowrap text-ink-3 transition-colors", isOpen && "bg-hover")}
       >
         {usage ? (
           <>
@@ -119,7 +163,17 @@ export function ContextMeter({ session, compact = false, items, assistant, onCom
           <span className="tabular-nums" data-context-tokens>{tip}</span>
         )}
       </button>
-      {open && (
+      {isOpen && (renderPopover ? (
+        renderPopover({
+          anchor: buttonRef,
+          session,
+          items,
+          assistant,
+          onCompact,
+          compactBlocked,
+          onClose: close,
+        })
+      ) : (
         <Suspense fallback={null}>
           <SessionInsightsPopover
             anchor={buttonRef}
@@ -131,7 +185,7 @@ export function ContextMeter({ session, compact = false, items, assistant, onCom
             onClose={close}
           />
         </Suspense>
-      )}
+      ))}
     </>
   );
 }

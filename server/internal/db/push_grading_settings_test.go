@@ -337,3 +337,149 @@ func TestPushGradingLayerWritesPreserveLegacySwitch(t *testing.T) {
 		})
 	}
 }
+
+func TestPushGradingLayerClearAndPrune(t *testing.T) {
+	t.Run("clear filters by optional manager and source without touching mirror", func(t *testing.T) {
+		d, ctx := openPushGradingHubStore(t)
+		if err := d.PutSetting(ctx, gradingTestMirrorKey, true); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := d.PutPushGradingLayer(ctx, gradingTestBaseKey, gradingTestLayerKey, gradingTestMirrorKey, "manager-a", "extension:one", gradingLayerTestValue("extension:one", "manager-a"), nil); err != nil || !ok {
+			t.Fatalf("claim: ok=%v err=%v", ok, err)
+		}
+		// Mismatched manager or source leaves the layer intact.
+		for _, tc := range []struct {
+			name, mgr, src string
+		}{
+			{"wrong manager", "manager-b", ""},
+			{"wrong source", "", "extension:two"},
+			{"wrong manager with right source", "manager-b", "extension:one"},
+			{"right manager with wrong source", "manager-a", "extension:two"},
+		} {
+			if deleted, err := d.ClearPushGradingLayer(ctx, gradingTestLayerKey, tc.mgr, tc.src); err != nil || deleted {
+				t.Fatalf("%s: deleted=%v err=%v, want false nil", tc.name, deleted, err)
+			}
+		}
+		// Exact manager+source clears it.
+		if deleted, err := d.ClearPushGradingLayer(ctx, gradingTestLayerKey, "manager-a", "extension:one"); err != nil || !deleted {
+			t.Fatalf("exact clear: deleted=%v err=%v", deleted, err)
+		}
+		assertGradingTestMirror(t, d, true)
+
+		// Unfiltered clear deletes any owner and is idempotent on empty.
+		if ok, err := d.PutPushGradingLayer(ctx, gradingTestBaseKey, gradingTestLayerKey, gradingTestMirrorKey, "manager-b", "extension:two", gradingLayerTestValue("extension:two", "manager-b"), nil); err != nil || !ok {
+			t.Fatalf("re-claim: ok=%v err=%v", ok, err)
+		}
+		if deleted, err := d.ClearPushGradingLayer(ctx, gradingTestLayerKey, "", ""); err != nil || !deleted {
+			t.Fatalf("unfiltered clear: deleted=%v err=%v", deleted, err)
+		}
+		if deleted, err := d.ClearPushGradingLayer(ctx, gradingTestLayerKey, "", ""); err != nil || deleted {
+			t.Fatalf("repeat clear: deleted=%v err=%v", deleted, err)
+		}
+		assertGradingTestMirror(t, d, true)
+	})
+
+	t.Run("prune reconciles manager ownership and handles empty or nil keep list", func(t *testing.T) {
+		for _, initial := range []bool{false, true} {
+			d, ctx := openPushGradingHubStore(t)
+			if err := d.PutSetting(ctx, gradingTestMirrorKey, initial); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := d.pool.Exec(ctx, `CREATE FUNCTION fail_push_grading_prune_mirror() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'blocked test mirror'; END; $$;
+				CREATE TRIGGER fail_push_grading_prune_mirror BEFORE INSERT OR UPDATE ON hub_settings FOR EACH ROW
+				WHEN (NEW.key = 'hub.push_grading_mirror_test') EXECUTE FUNCTION fail_push_grading_prune_mirror()`); err != nil {
+				t.Fatal(err)
+			}
+			cleanupTrigger := func() {
+				_, _ = d.pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS fail_push_grading_prune_mirror ON hub_settings; DROP FUNCTION IF EXISTS fail_push_grading_prune_mirror()`)
+			}
+
+			if ok, err := d.PutPushGradingLayer(ctx, gradingTestBaseKey, gradingTestLayerKey, gradingTestMirrorKey, "manager-a", "extension:one", gradingLayerTestValue("extension:one", "manager-a"), nil); err != nil || !ok {
+				cleanupTrigger()
+				t.Fatalf("claim: ok=%v err=%v", ok, err)
+			}
+			// Empty manager is rejected.
+			if deleted, err := d.PrunePushGradingLayer(ctx, gradingTestLayerKey, " ", nil); err == nil || deleted {
+				cleanupTrigger()
+				t.Fatalf("empty manager prune: deleted=%v err=%v, want error", deleted, err)
+			}
+			// Different manager's report never prunes manager-a's layer.
+			if deleted, err := d.PrunePushGradingLayer(ctx, gradingTestLayerKey, "manager-b", nil); err != nil || deleted {
+				cleanupTrigger()
+				t.Fatalf("other manager prune: deleted=%v err=%v", deleted, err)
+			}
+			// Owning manager keeping extension:one preserves the layer.
+			if deleted, err := d.PrunePushGradingLayer(ctx, gradingTestLayerKey, "manager-a", []string{"extension:one", "extension:two"}); err != nil || deleted {
+				cleanupTrigger()
+				t.Fatalf("active owner prune: deleted=%v err=%v", deleted, err)
+			}
+			// Dropping extension:one while keeping another extension prunes the layer.
+			if deleted, err := d.PrunePushGradingLayer(ctx, gradingTestLayerKey, "manager-a", []string{"extension:two"}); err != nil || !deleted {
+				cleanupTrigger()
+				t.Fatalf("dropped owner prune: deleted=%v err=%v", deleted, err)
+			}
+			// After prune, another owner can claim revision 1 cleanly.
+			var claimed map[string]any
+			if ok, err := d.PutPushGradingLayer(ctx, gradingTestBaseKey, gradingTestLayerKey, gradingTestMirrorKey, "manager-a", "extension:two", gradingLayerTestValue("extension:two", "manager-a"), &claimed); err != nil || !ok || claimed["revision"] != float64(1) {
+				cleanupTrigger()
+				t.Fatalf("post-prune claim: ok=%v claimed=%v err=%v", ok, claimed, err)
+			}
+			// Nil keepSources (all extensions disabled/uninstalled/revoked) prunes the layer too.
+			if deleted, err := d.PrunePushGradingLayer(ctx, gradingTestLayerKey, "manager-a", nil); err != nil || !deleted {
+				cleanupTrigger()
+				t.Fatalf("nil keepSources prune: deleted=%v err=%v", deleted, err)
+			}
+			var raw map[string]any
+			if found, err := d.Setting(ctx, gradingTestLayerKey, &raw); err != nil || found {
+				cleanupTrigger()
+				t.Fatalf("pruned row still exists: found=%v raw=%v err=%v", found, raw, err)
+			}
+			assertGradingTestMirror(t, d, initial)
+			cleanupTrigger()
+		}
+	})
+
+	t.Run("concurrent prune and owner claim serialize cleanly", func(t *testing.T) {
+		d, ctx := openPushGradingHubStore(t)
+		if ok, err := d.PutPushGradingLayer(ctx, gradingTestBaseKey, gradingTestLayerKey, gradingTestMirrorKey, "manager-a", "extension:one", gradingLayerTestValue("extension:one", "manager-a"), nil); err != nil || !ok {
+			t.Fatalf("initial claim: ok=%v err=%v", ok, err)
+		}
+		start := make(chan struct{})
+		errs := make(chan error, 2)
+		var pruned bool
+		var claimed bool
+		go func() {
+			<-start
+			ok, err := d.PrunePushGradingLayer(ctx, gradingTestLayerKey, "manager-a", nil)
+			pruned = ok
+			errs <- err
+		}()
+		go func() {
+			<-start
+			ok, err := d.PutPushGradingLayer(ctx, gradingTestBaseKey, gradingTestLayerKey, gradingTestMirrorKey, "manager-b", "extension:two", gradingLayerTestValue("extension:two", "manager-b"), nil)
+			claimed = ok
+			errs <- err
+		}()
+		close(start)
+		for range 2 {
+			if err := <-errs; err != nil {
+				t.Fatal(err)
+			}
+		}
+		if !pruned {
+			t.Fatal("expected prune of manager-a layer to succeed")
+		}
+		var raw map[string]any
+		found, err := d.Setting(ctx, gradingTestLayerKey, &raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if claimed {
+			if !found || raw["manager"] != "manager-b" || raw["source"] != "extension:two" || raw["revision"] != float64(1) {
+				t.Fatalf("after claim-second: found=%v raw=%v", found, raw)
+			}
+		} else if found {
+			t.Fatalf("after claim-first conflict + prune: row should be absent, got %v", raw)
+		}
+	})
+}

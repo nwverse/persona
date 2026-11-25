@@ -284,3 +284,155 @@ func TestAlignDaysNearMidnight(t *testing.T) {
 		t.Errorf("before midnight: %v", got)
 	}
 }
+
+// Pre-#15486 overlapping larksync chats (written without alignment and with empty sender names "?") are deduplicated
+// once by DedupeLarkSyncChats: overlapping lines are removed from the larksync copy, .crosswalk.json is recorded,
+// non-overlapping lines and all receipt IDs are preserved, and reruns (with or without the version marker) are no-ops.
+func TestDedupeLarkSyncChatsBackfillIsIdempotentAndPreservesNonOverlap(t *testing.T) {
+	e := testEngine(t, nil)
+	ctx := context.Background()
+	at := alignAt()
+
+	// Seed Lark gateway chat.
+	gw := SourceChat{ID: "f_overlap", Name: "Example Overlap Group", Kind: "group"}
+	if n, err := e.Ingest(ctx, named("lark"), gw, []SourceMessage{
+		{ID: "g1", SenderID: "u1", SenderName: "Example Alice", Text: "Shared announcement", At: at},
+		{ID: "g2", SenderID: "u_me", SenderName: "Owner", Mine: true, Text: "Owner reply", At: at.Add(20 * time.Second)},
+	}); err != nil || n != 2 {
+		t.Fatalf("gateway ingest: %d, %v", n, err)
+	}
+
+	// Simulate pre-#15486 larksync ingestion (e.Align nil, SenderName empty -> written as "?"), with 2 overlapping
+	// messages + 1 unique message that the gateway does not have.
+	sync := SourceChat{ID: "oc_overlap", Name: "Example Overlap Group", Kind: "group"}
+	if n, err := e.Ingest(ctx, named("larksync"), sync, []SourceMessage{
+		{ID: "om_dup1", SenderID: "ou_a", SenderName: "", Text: "Shared announcement", At: at.Add(time.Second)},
+		{ID: "om_dup2", SenderID: "ou_me", SenderName: "", Mine: true, Text: "Owner reply", At: at.Add(21 * time.Second)},
+		{ID: "om_unique", SenderID: "ou_b", SenderName: "", Text: "Only in larksync", At: at.Add(40 * time.Second)},
+	}); err != nil || n != 3 {
+		t.Fatalf("pre-#15486 sync ingest: %d, %v", n, err)
+	}
+
+	// First pass removes the 2 duplicates, writes .crosswalk.json, preserves om_unique and all 3 receipt IDs.
+	dropped := e.DedupeLarkSyncChats()
+	if dropped != 2 {
+		t.Fatalf("DedupeLarkSyncChats dropped %d, want 2", dropped)
+	}
+	text := e.Store.Since("larksync-oc_overlap", time.Time{}, 1<<20)
+	if strings.Contains(text, "Shared announcement") || strings.Contains(text, "Owner reply") {
+		t.Fatalf("duplicates still in larksync archive:\n%s", text)
+	}
+	if !strings.Contains(text, "Only in larksync") {
+		t.Fatalf("non-overlapping message lost:\n%s", text)
+	}
+	if w := readCrosswalk(t, e.Store); w["larksync-oc_overlap"] != "lark-f_overlap" {
+		t.Fatalf("crosswalk = %v, want larksync-oc_overlap -> lark-f_overlap", w)
+	}
+	if c, ok := e.Store.Chat("larksync-oc_overlap"); !ok || c.Messages != 1 {
+		t.Fatalf("chat count = %+v, want Messages=1", c)
+	}
+	rIDs := receiptIDs(t, e.Store, "larksync-oc_overlap")
+	for _, id := range []string{"om_dup1", "om_dup2", "om_unique"} {
+		if _, ok := rIDs[id]; !ok {
+			t.Errorf("receipt %s lost after dedupe", id)
+		}
+	}
+
+	// Second pass is skipped via version marker (0 dropped).
+	if again := e.DedupeLarkSyncChats(); again != 0 {
+		t.Fatalf("second pass with marker dropped %d, want 0", again)
+	}
+
+	// Even if the version marker is removed, rerunning is inherently idempotent (0 dropped, unique line stays).
+	if err := os.Remove(filepath.Join(e.Store.Dir, KindChat, larkSyncRepairFile)); err != nil {
+		t.Fatal(err)
+	}
+	if again := e.DedupeLarkSyncChats(); again != 0 {
+		t.Fatalf("rerun without marker dropped %d, want 0", again)
+	}
+	if !strings.Contains(e.Store.Since("larksync-oc_overlap", time.Time{}, 1<<20), "Only in larksync") {
+		t.Fatal("unique line disappeared on rerun")
+	}
+}
+
+// Re-ingesting a repair batch with resolved SenderNames rewrites pre-#15486 "?:" lines in place, updates Person.Name
+// and unnamed DM Chat.Name, removes any line that now aligns with a gateway chat, and is idempotent on replay.
+func TestIngestRepairsPre15486SenderNamesAndIsIdempotent(t *testing.T) {
+	e := testEngine(t, nil)
+	ctx := context.Background()
+	at := alignAt()
+
+	// Seed a gateway chat with a minute-only attachment line that could not align without a sender name.
+	gw := SourceChat{ID: "f_dm", Name: "Example Group", Kind: "group"}
+	if _, err := e.Ingest(ctx, named("lark"), gw, []SourceMessage{
+		{ID: "g_named", SenderID: "u1", SenderName: "Example Alice", Text: "Gateway copy", At: at},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-#15486 ingestion (no Align, empty SenderName) into a group chat and an unnamed DM chat.
+	grp := SourceChat{ID: "oc_grp", Name: "Example Group", Kind: "group"}
+	if n, err := e.Ingest(ctx, named("larksync"), grp, []SourceMessage{
+		{ID: "om_overlap", SenderID: "ou_alice", SenderName: "", Text: "Gateway copy", At: at.Add(time.Second)},
+		{ID: "om_keep", SenderID: "ou_bob", SenderName: "", Text: "Sync only line", At: at.Add(30 * time.Second)},
+	}); err != nil || n != 2 {
+		t.Fatalf("seed grp: %d, %v", n, err)
+	}
+	dm := SourceChat{ID: "oc_dm", Name: "", Kind: "dm"}
+	if n, err := e.Ingest(ctx, named("larksync"), dm, []SourceMessage{
+		{ID: "om_dm", SenderID: "ou_carol", SenderName: "", Text: "Direct hello", At: at.Add(40 * time.Second)},
+	}); err != nil || n != 1 {
+		t.Fatalf("seed dm: %d, %v", n, err)
+	}
+
+	// Now enable the gateway aligner and replay repair batches with resolved SenderNames.
+	e.Align = NewGatewayAligner(e.Store)
+	if n, err := e.Ingest(ctx, named("larksync"), grp, []SourceMessage{
+		{ID: "om_overlap", SenderID: "ou_alice", SenderName: "Example Alice", Text: "Gateway copy", At: at.Add(time.Second)},
+		{ID: "om_keep", SenderID: "ou_bob", SenderName: "Example Bob", Text: "Sync only line", At: at.Add(30 * time.Second)},
+	}); err != nil || n != 0 {
+		t.Fatalf("repair grp: %d, %v", n, err)
+	}
+	if n, err := e.Ingest(ctx, named("larksync"), SourceChat{ID: "oc_dm", Name: "Example Carol", Kind: "dm"}, []SourceMessage{
+		{ID: "om_dm", SenderID: "ou_carol", SenderName: "Example Carol", Text: "Direct hello", At: at.Add(40 * time.Second)},
+	}); err != nil || n != 0 {
+		t.Fatalf("repair dm: %d, %v", n, err)
+	}
+
+	grpText := e.Store.Since("larksync-oc_grp", time.Time{}, 1<<20)
+	if strings.Contains(grpText, "Gateway copy") {
+		t.Fatalf("aligned duplicate not removed during repair:\n%s", grpText)
+	}
+	if !strings.Contains(grpText, "Example Bob: Sync only line") || strings.Contains(grpText, "?: Sync only line") {
+		t.Fatalf("sender name not repaired in grp:\n%s", grpText)
+	}
+	if c, _ := e.Store.Chat("larksync-oc_grp"); c.Messages != 1 {
+		t.Fatalf("grp Messages = %d, want 1", c.Messages)
+	}
+	if p, ok := e.Store.Person(PersonID("larksync", "ou_bob")); !ok || p.Name != "Example Bob" {
+		t.Fatalf("person ou_bob = %+v, want Example Bob", p)
+	}
+	if w := readCrosswalk(t, e.Store); w["larksync-oc_grp"] != "lark-f_dm" {
+		t.Fatalf("crosswalk = %v", w)
+	}
+
+	dmText := e.Store.Since("larksync-oc_dm", time.Time{}, 1<<20)
+	if !strings.Contains(dmText, "Example Carol: Direct hello") {
+		t.Fatalf("dm sender not repaired:\n%s", dmText)
+	}
+	if c, _ := e.Store.Chat("larksync-oc_dm"); c.Name != "Example Carol" {
+		t.Fatalf("dm chat name = %q, want Example Carol", c.Name)
+	}
+
+	// Idempotent replay: running the exact same repair batch again leaves text and counts unchanged.
+	beforeText := e.Store.Since("larksync-oc_grp", time.Time{}, 1<<20)
+	if n, err := e.Ingest(ctx, named("larksync"), grp, []SourceMessage{
+		{ID: "om_overlap", SenderID: "ou_alice", SenderName: "Example Alice", Text: "Gateway copy", At: at.Add(time.Second)},
+		{ID: "om_keep", SenderID: "ou_bob", SenderName: "Example Bob", Text: "Sync only line", At: at.Add(30 * time.Second)},
+	}); err != nil || n != 0 {
+		t.Fatalf("replay repair grp: %d, %v", n, err)
+	}
+	if afterText := e.Store.Since("larksync-oc_grp", time.Time{}, 1<<20); afterText != beforeText {
+		t.Fatalf("replay modified archive:\nbefore:\n%s\nafter:\n%s", beforeText, afterText)
+	}
+}

@@ -45,7 +45,7 @@ import { t as tr } from "../../i18n";
 import { lastEditablePrompt, promptsOf, rewindBlock, rewindDone, rewindSession, rewindTarget, type RewindRestore } from "../../lib/rewind";
 import { EDIT_SEND_SETTLE_MS } from "../../lib/edit-last-key";
 import { sendDraft } from "../../lib/drafts";
-import { chatLines, freshWords, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
+import { chatLines, freshWords, isUserInput, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
 import { foldsBackgroundRounds, relayNeedsAttention } from "../../lib/background-fold";
 import type { Interaction, Item, Session, Subagent } from "../../lib/types";
 import { REVIEW_FEATURE } from "../../lib/types";
@@ -73,7 +73,7 @@ import { COMPOSER_INPUT, lostWith } from "../../lib/dock-focus";
 import { FailureNote, showsFailureNote } from "./FailureNote";
 import { LazyCloseoutCard } from "./closeout-chunks";
 import { shownCloseout } from "../../lib/closeout";
-import { AWAIT_MS, awaitingTurn, COMMAND_DOCK_MAX, DOCK_MAX, turnStart } from "./dock";
+import { AWAIT_MS, awaitingTurn, COMMAND_DOCK_MAX, DOCK_MAX, pickupStateForWait, RETRY_IDLE_GRACE_MS, turnStart } from "./dock";
 const ChatEmptyState = lazyPage(() => import("./ChatEmptyState").then((m) => m.ChatEmptyState));
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
 import { AgentModelPill, AssistantModelPill, useAssistantTurnFix } from "./ModelPill";
@@ -152,6 +152,7 @@ import { sessionAgentName } from "../../lib/agent-kind";
 import { AssistantActionBar, DayLine, FeedLineView, QuickResultCard, RouteChip, TaskQuestions } from "../assistant/Tasks";
 import { t } from "../../i18n";
 import { lazyDialog, lazyOverlay } from "../LazyOverlay";
+import { AssistantUpdateSlot } from "./AssistantUpdateSlot";
 
 // The terminal view (TerminalPanel and its stream / cell parsing) loads on demand: most visits only read the chat, so it
 // stays out of the main chunk. A page that can switch to it fetches it in the background (loadTerminal below), so the
@@ -318,10 +319,12 @@ export function ChatView(props: Parameters<typeof ActiveChatView>[0]) {
   return <ActiveChatView {...props} />;
 }
 
-function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSidebar, topCenter, inPage, embedded, panel: chrome, terminalAvailable, banner, offline, mainCache, refreshError, onRefresh, headerActions, landAt, placeholder: askPlaceholder }: {
+function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launching, onToggleSidebar, topCenter, inPage, embedded, panel: chrome, terminalAvailable, banner, offline, mainCache, refreshError, onRefresh, headerActions, landAt, placeholder: askPlaceholder }: {
   mid: string;
   sid: string;
   assistant?: boolean;
+  /** The assistant page's routing owner while this conversation's session row is still loading. */
+  assistantManager?: string;
   starting?: boolean;
   onToggleSidebar?: () => void;
   /** On a narrow screen, in the header's middle in place of the title (the shell's "Assistant" | "Agents" switch). */
@@ -543,30 +546,57 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // the message is in, the hub has not said working yet (#3654): the live row covers that wait too
   const segs = useMemo(() => segments(tr.items), [tr.items]);
   const lastSeg = segs[segs.length - 1];
+  const endedThrough = tr.streamEndedThrough;
+  const inputAfterPreview = endedThrough !== undefined && endedThrough > 0 &&
+    tr.items.some((item) => item.seq > endedThrough && !item.queued && isUserInput(item));
+  const streamEnded = tr.streamEnded && !inputAfterPreview;
+  const replyPreview = inputAfterPreview ? "" : tr.streaming;
   const [awaitNow, setAwaitNow] = useState(() => Date.now());
   const turnFailure = session?.failure_reason || session?.turn_error || lastSeg?.cut ? { since: session?.state_since } : undefined;
   // a message whose wait the hub took a stop for (#2450): it is no longer worked on, so Working… and Interrupt go at
   // once instead of after AWAIT_MS; a turn the hub reports later still shows through `state`
-  const [stoppedTurn, setStoppedTurn] = useState<string>();
-  const awaitedTurn = awaitingTurn(lastSeg, state, awaitNow, turnFailure, session?.state_since) ? lastSeg?.user?.id : undefined;
-  const awaiting = awaitedTurn !== undefined && awaitedTurn !== stoppedTurn && !tr.streamEnded;
+  const [stoppedInput, setStoppedInput] = useState<{ chat: string; id: string }>();
+  const stoppedTurn = stoppedInput?.chat === chatNow.current ? stoppedInput.id : undefined;
+  // An existing background command can keep the row working before the next foreground turn picks up the echo.
+  // background_working alone is not proof the foreground is idle; pickupStateForWait only demotes it while this turn
+  // has no foreground activity yet, so a live turn keeps the real working state (review P1).
+  const foregroundActive = Boolean(tr.streaming || lastSeg?.answer ||
+    lastSeg?.steps.some((step) => step.kind === "thinking" || (step.kind === "tool" && !step.result)));
+  const pickupState = pickupStateForWait(state, session?.background_working, foregroundActive);
+  const inputKey = lastSeg?.user ? `${mid}/${sid}/${lastSeg.user.id}` : undefined;
+  const hubStateAt = Date.parse(session?.state_since ?? "");
+  const [observedInput, setObservedInput] = useState<{ key: string; hubStateAt: number; seenAt: number }>();
+  const observedKey = observedInput?.key;
+  useLayoutEffect(() => {
+    if (inputKey !== observedKey) {
+      setObservedInput(inputKey ? { key: inputKey, hubStateAt, seenAt: Date.now() } : undefined);
+    }
+  }, [inputKey, hubStateAt, observedKey]);
+  // The hub can deliver its idle update with the echo or just after it. Wait for it to stay idle
+  // through the handoff before offering a retry, since the input and status come from separate streams.
+  const idleAt = observedInput && observedKey === inputKey && !tr.streaming && (state === "idle" || state === "unread") &&
+    (hubStateAt > observedInput.hubStateAt || hubStateAt > Date.parse(lastSeg?.user?.ts ?? ""))
+    ? observedInput.seenAt + RETRY_IDLE_GRACE_MS : undefined;
+  const settled = idleAt !== undefined && awaitNow >= idleAt;
+  const awaitedTurn = awaitingTurn(lastSeg, pickupState, awaitNow, turnFailure, settled) ? lastSeg?.user?.id : undefined;
+  const awaiting = awaitedTurn !== undefined && awaitedTurn !== stoppedTurn && !streamEnded;
   const awaitingNow = useRef<string | undefined>(undefined);
   awaitingNow.current = awaiting ? awaitedTurn : undefined;
   const waitStart = awaitedTurn ? lastSeg?.user?.ts : undefined;
+  const waitUntil = Math.min(Date.parse(waitStart ?? "") + AWAIT_MS, idleAt ?? Infinity);
   useEffect(() => {
     // draw again when the wait runs out, so a message nobody picks up stops looking worked on; once something answers
     // it there is nothing to wait for (and no clock to reset on every streamed item)
-    const at = waitStart ? Date.parse(waitStart) : NaN;
-    if (Number.isNaN(at)) return;
+    if (Number.isNaN(waitUntil)) return;
     setAwaitNow(Date.now());
-    const left = at + AWAIT_MS - Date.now();
+    const left = waitUntil - Date.now();
     if (left <= 0) return;
     const timer = window.setTimeout(() => setAwaitNow(Date.now()), left + 10);
     return () => clearTimeout(timer);
-  }, [waitStart]);
+  }, [waitUntil]);
   const stopped = Boolean(stoppedTurn && stoppedTurn === lastSeg?.user?.id);
   const canShowPreview = state !== "offline" && state !== "needs_you" && !stopped && !turnFailure;
-  const streaming = Boolean(tr.streaming) && !tr.streamEnded && (state === "working" || canShowPreview);
+  const streaming = Boolean(replyPreview) && !streamEnded && (state === "working" || canShowPreview);
   const working = state === "working" || streaming || outgoing > 0 || awaiting;
   // The user's time stays in its row until the finished reply can show its own. An item that lands
   // while the turn is still running otherwise removes a line above the live work and moves it up.
@@ -1587,7 +1617,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       if (r.state === "unknown") throw new Error(t("lib-new-agent.outcome_unknown"));
       toast(t("chat-chatview.interrupted"));
       stopMessageFeedback(mid, sid);
-      if (waited) setStoppedTurn(waited);
+      if (waited) setStoppedInput({ chat: `${mid}/${sid}`, id: waited });
       stopTimer.current = window.setTimeout(stopDone, STOP_SETTLE_MS);
     } catch (e) {
       toast(t("chat-chatview.interrupt_failed", { error: errorText(e) }), "error");
@@ -2122,7 +2152,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // After the end marker the last reply can still be waiting for its item. Its text stays visible
   // without keeping the exchange working, even if the host already reported completion.
   const wordsFor = (line: ChatLine) => (line.kind === "segment" || line.kind === "supervision") &&
-    ((line.live && streaming) || (line === lastLine && tr.streamEnded && canShowPreview)) ? tr.streaming || undefined : undefined;
+    ((line.live && streaming) || (line === lastLine && streamEnded && canShowPreview)) ? replyPreview || undefined : undefined;
   // "Retry" on the error banner and the failure note: sends "continue" alone, not what is in the box. Whether it went:
   // deliver can refuse without leaving a bubble (the setup gate, a row that cannot send, a refused launcher switch)
   const retry = useCallback(() => deliver({ text: t("chat-chatview.continue_text"), images: [] }, uuid()), [deliver]);
@@ -2267,7 +2297,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     const live = lines.flatMap((l) => l.kind === "supervision" ? l.lines : [l]).findLast((l) => l.kind === "segment" && l.live);
     return live?.kind === "segment" ? live.seg : undefined;
   }, [lines]);
-  const processing = !sendFeedback && Boolean(assistant || session?.assistant) && state === "working" && !backgroundOnly &&
+  const hasFeedback = Boolean(
+    shownPending.some((p) => p.waits) ||
+    (sendFeedback !== undefined ? Boolean(sendFeedback) : shownPending.length > 0 || outbox.some((e) => e.state === "sending") || (starting && outgoing > 0)),
+  );
+  // Keep empty-transcript "Loading chat" and inline "Processing…" mutually exclusive so at most one loader shows.
+  const loadingChat = tr.loading && !tr.items.length && !opening && !hasFeedback;
+  const processing = !hasFeedback && !loadingChat && Boolean(assistant || session?.assistant) && state === "working" && !backgroundOnly &&
     !liveSeg && (tr.loading || (opening && !tr.streaming));
   const runStart = (liveSeg ? turnStart(liveSeg) : undefined) ?? stateSince;
   // what the turn is doing, for the bar's words (cindy's status): kept as it was while it says the same
@@ -2561,6 +2597,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         takeoverBusy={takeoverPending}
       />}
       {isMain && !embedded && <MainRuntimeSlot sid={sid} />}
+      {isAssistant && !embedded && <AssistantUpdateSlot mid={mid} manager={session?.manager ?? assistantManager} />}
       {!embedded && banner}
       {backPage && (cameFrom ? <Suspense fallback={null}><HandoffBack onDismiss={() => setCameFrom(null)} /></Suspense> : cameFrom === undefined ? <Suspense fallback={null}><InboxBack key={`${mid}/${sid}`} mid={mid} sid={sid} session={session} /></Suspense> : null)}
       {/* a known session keeps its chat: a failed background read is retried quietly (runtime-session.ts) */}
@@ -2606,7 +2643,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                 {t("chat-chatview.codex_waiting", { computer: machineName })}
               </p>
             )}
-            {tr.loading && !tr.items.length && !opening && (
+            {loadingChat && (
               <div className="flex justify-center py-16">
                 <Loading label={starting ? t("chat-chatview.preparing") : t("chat-chatview.loading_chat")} />
               </div>
@@ -2709,7 +2746,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
               ) }))]
               .sort((a, b) => a.at - b.at)
               .map((x) => x.el)}
-            {(shownPending.some((p) => p.waits) || processing || (sendFeedback !== undefined ? Boolean(sendFeedback) : shownPending.length > 0 || outbox.some((e) => e.state === "sending") || (starting && outgoing > 0))) && (
+            {!loadingChat && (hasFeedback || processing) && (
               <div className="flex items-center gap-2.5" data-message-feedback={sendFeedback || (processing ? "processing" : "sending")}>
                 {sendFeedback === "unknown" ? <span role="status" className="text-ink-3">{t("lib-outbox.delivery_unknown")}</span> : <Loading label={shownPending.some((p) => p.waits) ? t("ultracode.send_waits") : sendFeedback === "processing" || processing ? t("chat-segmentview.processing") : starting ? t("chat-chatview.preparing") : online ? t("chat-segmentview.sending") : t("chat-chatview.waiting_for_hub")} />}
               </div>
@@ -3230,8 +3267,7 @@ export const Header = memo(function Header({
   const attach = () => session && import("../../lib/attach-live").then((m) => m.attachLive(session));
   // Resume in terminal (#5521): a stopped Agent comes back in a terminal on its computer. The same action as its stopped
   // line's Resume: the terminal shown as that line's Terminal shows it, then the Resume both share.
-  const machine = useStore((s) => s.machines.find((m) => m.id === session?.machine_id));
-  const resumeOffer = onTerminal ? terminalResume(session, machine) : "hidden";
+  const resumeOffer = useStore((s) => onTerminal ? terminalResume(session, s.machines.find((m) => m.id === session?.machine_id)) : "hidden");
   const resumeHere = () => {
     if (session && onTerminal) void resumeInTerminal(session.machine_id, session.session_id, onTerminal);
   };
