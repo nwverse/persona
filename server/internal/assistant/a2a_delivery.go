@@ -581,7 +581,7 @@ func (s *Service) a2aLaunch(ctx context.Context, st a2aStore, t *a2aTask) error 
 	from := t.source()
 	lang := string(s.lang(ctx))
 	request := map[string]any{"cwd": t.Launch.CWD, "launcher": t.Launch.Launcher, "session_id": sid,
-		"client_msg_id": a2aDeliveryID(taskID, 1),
+		"client_msg_id":  a2aDeliveryID(taskID, 1),
 		"message_source": a2aMessageSource(from), "permission_mode": permMode}
 	go func() {
 		ctx, cancel := context.WithTimeout(s.runCtx(), agentStartTimeout)

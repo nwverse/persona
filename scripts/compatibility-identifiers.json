@@ -1387,6 +1387,14 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "web/e2e/composer-inline-references.mjs": {
+      "reason": "Browser assertions for the exact legacy context/file markers accepted by the registered compatibility adapter.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "web/src/lib/assistant-chat.test.ts": {
       "reason": "Baseline regression fixture or exact compatibility assertion for a persisted contract.",
       "tokens": [

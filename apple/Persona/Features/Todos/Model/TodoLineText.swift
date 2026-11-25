@@ -56,6 +56,20 @@ nonisolated enum TodoLineText {
     /// Every key this build says: the README's table (`TodoLineTextTests` keeps the two the same).
     static let keys = Set(TodoLineKey.all)
 
+    /// "Persona picks Ryokan Hanami on Fri unless you answer": what happens when nobody answers a decision, `when` its
+    /// default's day or time of day in words (`today`: the time). The line and an ask's card (`AskCardModel.about`) say
+    /// it in the same words. nil with neither a pick nor a time.
+    static func decisionDefault(pick: String?, when: String?, today: Bool, words: TodoWords) -> String? {
+        switch (pick, when) {
+        case let (pick?, when?) where today: words("Persona picks \(pick) at \(when) unless you answer [To-dos Line]")
+        case let (pick?, when?): words("Persona picks \(pick) on \(when) unless you answer [To-dos Line]")
+        case let (nil, when?) where today: words("Persona decides at \(when) unless you answer [To-dos Line]")
+        case let (nil, when?): words("Persona decides on \(when) unless you answer [To-dos Line]")
+        case let (pick?, nil): words("Persona picks \(pick) unless you answer [To-dos Line]")
+        case (nil, nil): nil
+        }
+    }
+
     /// The line in words; nil for no line, or a key this build does not know. `since`: when the row came to where it is
     /// (the view's `since`), said on the lines of rows that wait. `closedReason`: the to-do's own words on how it ended.
     static func said(_ line: TodoLine?, since: Date? = nil, closedReason: String? = nil, now: Date, words: TodoWords = TodoWords(),
@@ -93,15 +107,7 @@ nonisolated enum TodoLineText {
             let at = time(TodoLineArg.defaultAt)
             let today = at.map { calendar.isDate($0, inSameDayAs: now) } ?? false
             let when = at.map(day)
-            let rest: String? = switch (arg("recommend"), when) {
-            case let (pick?, when?) where today: words("Persona picks \(pick) at \(when) unless you answer [To-dos Line]")
-            case let (pick?, when?): words("Persona picks \(pick) on \(when) unless you answer [To-dos Line]")
-            case let (nil, when?) where today: words("Persona decides at \(when) unless you answer [To-dos Line]")
-            case let (nil, when?): words("Persona decides on \(when) unless you answer [To-dos Line]")
-            case let (pick?, nil): words("Persona picks \(pick) unless you answer [To-dos Line]")
-            case (nil, nil): nil
-            }
-            said = Said(lead: arg("text"), rest: rest)
+            said = Said(lead: arg("text"), rest: decisionDefault(pick: arg("recommend"), when: when, today: today, words: words))
         case TodoLineKey.cannot:
             said = Said(lead: words("Persona says it can't be done as asked [To-dos Line]"), tone: .needs)
         case TodoLineKey.awaitsReply:

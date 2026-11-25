@@ -7,46 +7,46 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* The Web shell columns share this gutter with the width budget in lib/layout.ts. */
+/* Desktop shell: flush sidebar on the shell canvas, inset framed cards for main and side panel (#14696). */
 @media (width >= 64rem) {
   [data-app-shell] {
     --panel-gap: 6px;
-    background: var(--inset);
+    background: var(--canvas);
+    padding-right: var(--panel-gap);
+  }
+
+  [data-app-shell][data-sidebar-hidden] {
+    padding-left: var(--panel-gap);
   }
 
   [data-sidebar-column] {
     flex-shrink: 0;
-    margin-right: var(--panel-gap);
     border-right: 0;
   }
 
+  [data-app-shell] > main,
   [data-app-shell] > aside {
-    margin-left: var(--panel-gap);
-    border-left: 0;
+    margin-block: var(--panel-gap);
+    border: 1px solid var(--line);
     border-radius: var(--radius-card);
   }
 
   [data-app-shell] > main {
     background: var(--page);
-  }
-
-  /* The sidebar's usage dialog may extend beyond the rounded background. */
-  [data-sidebar-column] > aside {
-    border-radius: var(--radius-card);
-  }
-
-  [data-app-shell] > main,
-  [data-app-shell] > aside > div:not([role="separator"]) {
-    border-radius: var(--radius-card);
     overflow: clip;
   }
 
-  [data-sidebar-column] > [role="separator"] {
-    right: calc(-0.25rem - var(--panel-gap) / 2);
+  [data-app-shell] > aside {
+    margin-left: var(--panel-gap);
+  }
+
+  [data-app-shell] > aside > div:not([role="separator"]) {
+    border-radius: calc(var(--radius-card) - 1px);
+    overflow: clip;
   }
 
   [data-app-shell] > aside > [role="separator"] {
-    left: calc(-0.25rem - var(--panel-gap) / 2);
+    left: calc(-0.25rem - var(--panel-gap) / 2 - 1px);
   }
 }
 
@@ -172,7 +172,7 @@
 
 [data-terminal-scheme="dark"], .dark {
   --page: #17181a;
-  --canvas: #1c1d1f;
+  --canvas: #101113;
   --surface: #232427;
   --inset: #1f2022;
   --hover: #2a2b2e;
