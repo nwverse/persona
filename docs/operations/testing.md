@@ -742,7 +742,7 @@ DOCKER=<docker client> python3 scripts/ci/module-e2e.py --modules voice,health,r
   asserts the same rule in the browser (the `off` block of the `recording` entry in `WEB`, #15530): while the module
   is off the recording uploaded during the `on` phase and the seeded meeting with minutes are still listed under
   Knowledge › Meetings, each opens in the default panel's read-only detail and shows its transcript (the seeded one
-  its minutes too), none of the module's controls is on that page (rename, regenerate, hand to an Agent, the private
+  its minutes too), none of the module's controls is on that page (rename, make or regenerate minutes, hand to an Agent, the private
   mark, the questions asked in the meeting), and none of the module's chunks is requested, the detail opened inside
   the app included. `on` and `back-on` are as for every entry: present, opens, its chunk loads.
 - **Output**: a `PASS` / `WARN` / `FAIL` line per phase, module and check, the evidence JSON (`--evidence`, default

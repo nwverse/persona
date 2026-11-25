@@ -26,7 +26,7 @@ is read or touched. Then, for every module id in --modules:
   off phase began. In the web app (the `off` block of the recording row in WEB, #15530), off: the recording uploaded
   while on and a stored meeting with minutes are still listed under Knowledge › Meetings, each opens in the default
   panel's read-only detail (the transcript, and the minutes of the one that has them), none of the module's controls
-  is there (rename, regenerate, hand to an Agent, the private mark, the questions asked in the meeting), and none of
+  is there (rename, make or regenerate minutes, hand to an Agent, the private mark, the questions asked in the meeting), and none of
   the module's chunks is requested, the detail opened inside the app included;
 - older hub: against the mock hub (scripts/mock/mock_hub.py) without the `modules` marker every module is on, the
   composer's voice button included; with the marker and without the module's flags they are off.
@@ -200,8 +200,8 @@ WEB = {
              # Off, both stay (#13430, #15530): the default panel's read-only detail (RecordingReadOnlyDetail.tsx) shows
              # what is stored and no control of the module's. The second is core-only-smoke's seeded meeting
              # (KEPT_RECORDING: "Kept recording", with minutes). The controls are the module's English labels
-             # (web/src/i18n/locales/en: recording.rename, recording.minutes_regenerate, recording-handoff.title,
-             # recording.private_label, recording.asks_title).
+             # (web/src/i18n/locales/en: recording.rename, recording.minutes_make, recording.minutes_regenerate,
+             # recording-handoff.title, recording.private_label, recording.asks_title).
              "off": {
                  "kept": [
                      {"name": "the recording uploaded while on", "text": r"Module gate sample recording",
@@ -211,6 +211,7 @@ WEB = {
                                 {"name": "its transcript", "selector": "main :text('quokka transcript')"}]},
                  ],
                  "hides": [{"name": "rename", "selector": "main button:has-text('Rename')"},
+                           {"name": "make minutes", "selector": "main button:has-text('Make minutes')"},
                            {"name": "regenerate", "selector": "main button:has-text('Regenerate')"},
                            {"name": "hand to an Agent", "selector": "main button:has-text('Hand to Agent')"},
                            {"name": "private mark", "selector": "main :text('Private meeting')"},
