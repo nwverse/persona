@@ -28,7 +28,6 @@ import { HubList } from "./Hubs";
 import { useDisconnect } from "./DisconnectBrowser";
 import { KnowledgeSelection } from "./settings/KnowledgeSelection";
 import { SavedPrompts } from "./settings/SavedPrompts";
-import { SourcesUI } from "./subscriptions/SourcesUI";
 import { useInboxSourcesShown } from "../lib/subscriptions";
 import { ModelConfiguration } from "./settings/ModelConfiguration";
 import { HiddenAgentDirs } from "./settings/HiddenAgentDirs";
@@ -157,10 +156,11 @@ export function tokens(n: number): string {
 const Extensions = lazyPage(() => import("./settings/Extensions").then((m) => m.Extensions));
 const Connectors = lazyPage(() => import("./settings/Connectors").then((m) => m.Connectors));
 const Integrations = lazyPage(() => import("./settings/Integrations").then((m) => m.Integrations));
+const SourcesUI = lazyPage(() => import("./subscriptions/SourcesUI").then((m) => m.SourcesUI));
 // Labs and the shared configuration form load on first use.
 const LabsSettings = lazyPage(() => import("./settings/Labs").then((m) => m.LabsSettings));
 const ModuleFeaturesForm = lazyPage(() => import("./settings/configuration/ConfigurationForm").then((m) => m.ConfigurationForm));
-const TAB_PAGES: Partial<Record<Tab, { preload: () => Promise<unknown> }>> = { extensions: Extensions, connectors: Connectors, integrations: Integrations };
+const TAB_PAGES: Partial<Record<Tab, { preload: () => Promise<unknown> }>> = { extensions: Extensions, connectors: Connectors, integrations: Integrations, sources: SourcesUI };
 // a failed load is not kept (lazyPage): opening the page asks again, and PageBoundary shows the failure then
 const preloadTab = (k: Tab) => void TAB_PAGES[k]?.preload().catch(() => {});
 
@@ -245,10 +245,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // Inbox Sources (#5278) only with a manager that draws them; a link to it still opens it
   const hasSources = useInboxSourcesShown();
   const shown = (k: Tab) => {
-    if (integrationsV2) {
-      if (isLegacyIntegrationTab(k)) return false;
-      return k !== "sources" || hasSources || tab === "sources";
-    }
+    if (integrationsV2) return !isLegacyIntegrationTab(k);
     if (k === "integrations") return false;
     return (k !== "extensions" || hasExtensions || tab === "extensions") && (k !== "channels" || hasChannels || tab === "channels") &&
       (k !== "sources" || hasSources || tab === "sources");
@@ -272,7 +269,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     }
     setAt({ tab: k, sub: id, section: section ?? null });
     // the hub's page keeps its own choice of manager (the download mirrors); the current assistant's pages follow the pick
-    let to = settingsHref(k, id, phone, k === "hub" ? configurationOwner.current : null, section);
+    let to = settingsHref(k, id, phone, k === "hub" ? configurationOwner.current : (resolved.manager ?? null), section);
     if (k === "integrations" && !id && resolved.filter && resolved.filter !== "all") {
       to += `${to.includes("?") ? "&" : "?"}filter=${encodeURIComponent(resolved.filter)}`;
     }
@@ -417,7 +414,11 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               {tab === "notifications" && <NotificationSettings />}
               {tab === "knowledge" && <KnowledgeSelection />}
               {tab === "prompts" && <SavedPrompts />}
-              {tab === "sources" && <SourcesUI title={TAB_INFO.sources.label} onGraph={setSourcesGraph} />}
+              {tab === "sources" && (
+                <Suspense fallback={<Loading />}>
+                  <SourcesUI title={TAB_INFO.sources.label} state={sub ?? undefined} onGraph={setSourcesGraph} />
+                </Suspense>
+              )}
               {tab === "models" && <>
                 <section id="settings-providers" className="scroll-mt-4">
                   <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">{TAB_INFO.models.label}</h2>

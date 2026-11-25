@@ -651,6 +651,9 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			if _, trusted := p["model_source"].(modelhttp.Source); !trusted {
 				p["model_source"] = s.conversationModelSource(ctx, device, id)
 			}
+			if method == DeviceAssistantSend || method == assistantwire.DeviceAssistantAnswerAgain {
+				s.putConversationCategories(ctx, id, p)
+			}
 		} else if method == DeviceAssistantWarm {
 			p["model_source"] = modelhttp.Source{Role: "main"}
 		}

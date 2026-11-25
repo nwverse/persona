@@ -450,7 +450,7 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	if toolSearch.env != "" {
 		startEnv = append(startEnv, toolSearchEnv+"="+toolSearch.env)
 	}
-	env := identity.Environment(withoutEnv(os.Environ(), []string{toolSearchEnv}), append(startEnv, compaction.env()...)...)
+	env := identity.Environment(withoutEnv(os.Environ(), []string{toolSearchEnv, categoriesEnv}), append(startEnv, compaction.env()...)...)
 	env = n.claudeProcessEnv(env, configDir)
 	if cacheProxy != nil {
 		env = identity.Environment(env, "ANTHROPIC_BASE_URL="+cacheProxy.BaseURL())
@@ -460,6 +460,7 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		releaseGates()
 		gateEnv, releaseGates = nil, func() {} // no commands to gate: it has no Bash
 	}
+	categories := categoriesFromEnv(gateEnv)
 	cleanupMCP := func() {}
 	cleanupAdapter := func() {}
 	started := false
@@ -548,7 +549,7 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	// receive its ACK before the user's first input, just as for live changes.
 	p := &assistantProc{cacheProxy: cacheProxy, id: id, agent: "claude", launcher: launcher, cwd: cwd, cmd: cmd, stdin: stdin, exited: make(chan struct{}), ready: make(chan struct{}),
 		stderrDone: make(chan struct{}), born: time.Now(), lastActive: time.Now(), mode: startMode, canBypass: startMode == proto.ModeBypass, model: processExecution, fingerprint: n.executionFingerprint(launcher, processExecution),
-		instructions: instructions, personaMCPOnly: !legacyMCP, origin: execution.Origin, compactIdleAt: compaction.idle(), declaredWindow: compaction.declared(),
+		instructions: instructions, personaMCPOnly: !legacyMCP, categories: categories, guest: guest, origin: execution.Origin, compactIdleAt: compaction.idle(), declaredWindow: compaction.declared(),
 		round: round.anchor != "", toolSet: round.toolSet, toolSearch: toolSearch, endpoint: compaction.endpoint, tui: tui, tuiNote: tuiNote}
 	startedCacheProxy = true
 	if cacheProxy != nil {
