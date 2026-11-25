@@ -592,6 +592,42 @@ python3 scripts/test/backup_restore_drill.py --execute --binary /tmp/personad-dr
   restored services and their first start's recovery are outside it. A later Settings page belongs under Settings →
   Hub (Backup & Recovery), apart from the program backups of hub updates, not under Machines.
 
+### Settings → Hub → Recovery (#12553)
+
+The Web Recovery page is a read-only overview for ordinary users. It explains the bundle's scope (the hub and built-in
+manager databases, knowledge base, runtime files and configuration, encryption keys, and TLS identity), and keeps
+independently hosted managers and update program backups outside that scope. Its three full-credential routes are
+`GET /api/v1/hub/recovery`, `POST /api/v1/hub/recovery/bundles/{id}/inspect`, and
+`POST /api/v1/hub/recovery/bundles/{id}/verify`; answer-only, scoped, and extension credentials are refused. Every
+request writes an audit log line with the action, credential ID, and result, never a path, bundle name, archive content,
+database URL, key, fingerprint, or raw operational error.
+
+- **Inventory is deliberately narrow.** Only direct, non-hidden regular files in the owner-only `~/.persona/backups/`
+  directory are listed, newest first, at most 50. A missing directory is an empty inventory. A symbolic-link,
+  non-private, or unreadable directory is unsupported rather than an empty or healthy one; nested directories and
+  symbolic-link files are skipped. Bundle IDs are SHA-256 digests of file names, not paths, and a separate revision
+  binds a displayed result to the listed name, size, modification time, and mode. A changed revision discards the
+  result. The API accepts no file name, arbitrary path, or alternate directory.
+- **Inspection is explicit and offline.** Opening or refreshing the page does not read archive contents. **Check
+  integrity** uses the same `backup inspect` implementation and returns its aggregate redacted report: no member paths,
+  configuration, database names, keys, hashes, or fingerprints. A malformed or replaced bundle fails closed. The result
+  belongs only to the current page and revision; it is not presented as durable verification history.
+- **Verification is explicit and not a restore drill.** **Verify databases** preflights configuration and the required
+  PostgreSQL clients without opening a database, then runs the existing `backup verify`: both dumps restore into
+  temporary databases, schema and key identity are checked, and the temporary databases are removed. It does not
+  quiesce writes, restore runtime files, replace a live database, or start services. Missing tools and the shipped
+  Docker Compose deployment are unsupported states. Raw errors stay out of the API; the terminal command supplies the
+  redacted diagnostic. There is no authoritative per-install restore/drill history source, so the page says that
+  history is unavailable instead of inventing success from an inspection.
+- **One check at a time.** A verification extracts the whole bundle into temporary space and restores two temporary
+  databases on the live PostgreSQL server, so the hub runs one inspection or verification at a time across all requests
+  and credentials. Another one is refused with `409` until the running check finishes; nothing is queued.
+- **No unsafe create, restore, or export.** There is no server-managed full-install quiescence that can stop both the
+  hub and built-in manager while their Web request is running. Creation therefore remains the guided terminal workflow
+  above with both writers stopped and `--writes-quiesced`; no create endpoint exists. Restore and service-starting
+  drills remain terminal operations too. No bundle download or private-key export route exists: the current Web
+  boundary has no separate reauthentication ceremony appropriate for releasing a bundle full of private keys.
+
 ### Logs
 
 ```sh
