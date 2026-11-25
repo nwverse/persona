@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/agentref"
+	"github.com/nwverse/persona/server/internal/domainkit/defect"
 	"github.com/nwverse/persona/server/internal/domainkit/domaintest"
 )
 
@@ -19,14 +20,36 @@ func someMachineID(t *testing.T) agentref.MachineID {
 	return domaintest.Ok(t, agentref.ParseMachineID("machine 1"))
 }
 
-func TestTheZeroRefIsNoSessionParseRefMakes(t *testing.T) {
+// raises fails the test unless do raises the defect want ("<op>: <cause>").
+func raises(t *testing.T, want string, do func()) {
+	t.Helper()
+	defer func() {
+		t.Helper()
+		r := recover()
+		if d, ok := r.(defect.Defect); !ok || d.Error() != want {
+			t.Errorf("raised %v, want the defect %q", r, want)
+		}
+	}()
+	do()
+}
+
+func TestParseRefNeverMakesTheZeroRef(t *testing.T) {
 	var zero agentref.Ref
-	if someRef(t) == zero || someRef(t).IsSame(zero) {
+	if someRef(t) == zero {
 		t.Error("ParseRef made the zero Ref")
 	}
-	if zero.OnMachine(someMachineID(t)) {
-		t.Error("the zero Ref is on a machine")
-	}
+}
+
+// The zero Ref is no session and the zero MachineID no machine: every method handed one raises a defect, so neither
+// stands for "none" (that is opt.Option[Ref]) and neither leaves for the wire as empty text.
+func TestTheZeroRefIsADefect(t *testing.T) {
+	var zero agentref.Ref
+	var noMachine agentref.MachineID
+	raises(t, "agentref.Ref.OnMachine: the zero Ref", func() { zero.OnMachine(someMachineID(t)) })
+	raises(t, "agentref.Ref.OnMachine: the zero MachineID", func() { someRef(t).OnMachine(noMachine) })
+	raises(t, "agentref.Ref.IsSame: the zero Ref", func() { zero.IsSame(someRef(t)) })
+	raises(t, "agentref.Ref.IsSame: the zero Ref", func() { someRef(t).IsSame(zero) })
+	raises(t, "agentref.Ref.Accept: the zero Ref", func() { zero.Accept(nil) })
 }
 
 func TestParseRefNamesEachEmptyPart(t *testing.T) {

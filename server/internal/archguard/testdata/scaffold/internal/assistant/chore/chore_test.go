@@ -7,6 +7,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistant/chore"
 	"github.com/nwverse/persona/server/internal/domainkit/clock/clocktest"
+	"github.com/nwverse/persona/server/internal/domainkit/defect"
 	"github.com/nwverse/persona/server/internal/domainkit/domaintest"
 	"github.com/nwverse/persona/server/internal/domainkit/instant"
 	"github.com/nwverse/persona/server/internal/domainkit/opt"
@@ -32,6 +33,19 @@ func someWindow(t *testing.T) chore.Window {
 
 // at is the moment the tests' instants and clock read.
 var at = instant.At(time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC))
+
+// raises fails the test unless do raises the defect want ("<op>: <cause>").
+func raises(t *testing.T, want string, do func()) {
+	t.Helper()
+	defer func() {
+		t.Helper()
+		r := recover()
+		if d, ok := r.(defect.Defect); !ok || d.Error() != want {
+			t.Errorf("raised %v, want the defect %q", r, want)
+		}
+	}()
+	do()
+}
 
 // someHouseID is a valid house id.
 func someHouseID(t *testing.T) chore.HouseID {
@@ -112,6 +126,11 @@ func TestNewWindowNeverMakesTheZeroWindow(t *testing.T) {
 	}
 }
 
+func TestTheZeroWindowIsADefect(t *testing.T) {
+	var zero chore.Window
+	raises(t, "chore.Window.Accept: the zero Window", func() { zero.Accept(nil) })
+}
+
 func TestNewWindowRefusesPartsThatAreNoValue(t *testing.T) {
 	var noInstant instant.Instant
 	got := domaintest.Fails(t, chore.NewWindow(noInstant, noInstant))
@@ -170,6 +189,11 @@ func TestParseSpotNeverMakesTheZeroSpot(t *testing.T) {
 	}
 }
 
+func TestTheZeroSpotIsADefect(t *testing.T) {
+	var zero chore.Spot
+	raises(t, "chore.Spot.Accept: the zero Spot", func() { zero.Accept(nil) })
+}
+
 func TestParseSpotReportsEveryInvalidPart(t *testing.T) {
 	got := domaintest.Fails(t, chore.ParseSpot(" ", " "))
 	if want := "invalid chore.house.empty house; " +
@@ -204,6 +228,11 @@ func TestSpotAcceptTellsItsParts(t *testing.T) {
 	}
 }
 
+func TestTheZeroPriorityIsADefect(t *testing.T) {
+	var zero chore.Priority
+	raises(t, "chore.Priority.Accept: the zero Priority", func() { zero.Accept(nil) })
+}
+
 // priorityNames is the test's own visitor: it keeps the name of each priority it is told.
 type priorityNames struct{ names []string }
 
@@ -219,6 +248,11 @@ func TestPriorityAcceptTellsEachPriority(t *testing.T) {
 	if want := []string{"low", "normal", "urgent"}; !slices.Equal(got.names, want) {
 		t.Errorf("Accept told %q, want %q", got.names, want)
 	}
+}
+
+func TestReminderRefusesPayloadsThatAreNoValue(t *testing.T) {
+	var noInstant instant.Instant
+	raises(t, "chore.ReminderRing: the zero Instant", func() { chore.ReminderRing(noInstant) })
 }
 
 // reminderNames is the test's own visitor: it keeps the name of each reminder it is told.
@@ -299,6 +333,24 @@ func TestBuildListsEveryPartASkippedStageLeftOut(t *testing.T) {
 	}
 }
 
+func TestTheZeroChoreIsADefect(t *testing.T) {
+	var zero chore.Chore
+	some := domaintest.Ok(t, chore.NewChoreBuilder(someChoreID(t)).
+		Title(someTitle(t)).
+		Effort(someEffort(t)).
+		Snooze(someSnooze(t)).
+		Priority(chore.PriorityLow()).
+		Build())
+	raises(t, "chore.Chore.ID: the zero Chore", func() { zero.ID() })
+	raises(t, "chore.Chore.IsSame: the zero Chore", func() { zero.IsSame(some) })
+	raises(t, "chore.Chore.IsSame: the zero Chore", func() { some.IsSame(zero) })
+	raises(t, "chore.Chore.Accept: the zero Chore", func() { zero.Accept(nil) })
+	raises(t, "chore.Chore.CanClose: the zero Chore", func() { zero.CanClose() })
+	raises(t, "chore.Chore.CanReopen: the zero Chore", func() { zero.CanReopen() })
+	now := clocktest.Fixed(time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)).Now()
+	raises(t, "chore.Decide: the zero Chore", func() { chore.Decide(zero, chore.CommandClose(), now) })
+}
+
 // choreParts is the test's own visitor: it keeps the identity it is told and whether the chore is closed.
 type choreParts struct {
 	id     chore.ChoreID
@@ -358,6 +410,13 @@ func (r *events) VisitChore(x chore.Chore)    { r.decided = x }
 func (r *events) VisitEvent(e chore.Event)    { e.Accept(r) }
 func (r *events) VisitClosed(instant.Instant) { r.names = append(r.names, "closed") }
 func (r *events) VisitReopened()              { r.names = append(r.names, "reopened") }
+
+func TestTheZeroDecidedIsADefect(t *testing.T) {
+	var zero chore.Decided
+	now := clocktest.Fixed(time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)).Now()
+	raises(t, "chore.Decided.Accept: the zero Decided", func() { zero.Accept(nil) })
+	raises(t, "chore.Decided.Then: the zero Decided", func() { zero.Then(chore.CommandClose(), now) })
+}
 
 func TestCloseThenReopen(t *testing.T) {
 	now := clocktest.Fixed(time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)).Now()

@@ -3,6 +3,7 @@ package agentref
 import (
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/domainkit/defect"
 	"github.com/nwverse/persona/server/internal/domainkit/fail"
 	"github.com/nwverse/persona/server/internal/domainkit/outcome"
 )
@@ -19,7 +20,7 @@ type invalid struct{ fail.Invalids }
 func (invalid) agentrefFail() {}
 
 // MachineID is one of the owner's computers. The zero MachineID is no machine; ParseMachineID and ParseRef never make
-// one.
+// one, and OnMachine raises a defect on it.
 type MachineID struct{ machine string }
 
 // SessionID is one session on a machine. The zero SessionID is no session; ParseRef never makes one, and only a Ref
@@ -30,7 +31,7 @@ type SessionID struct{ session string }
 type InteractionID struct{ interaction string }
 
 // Ref is one session on one machine. It is comparable, so it keys maps. The zero Ref is no session; ParseRef never
-// makes one, and where a session may be absent the type is opt.Option[Ref].
+// makes one, every method raises a defect on it, and where a session may be absent the type is opt.Option[Ref].
 type Ref struct {
 	machine MachineID
 	session SessionID
@@ -69,13 +70,33 @@ func ParseInteractionID(raw string) (out outcome.Of[InteractionID, Fail]) {
 }
 
 // OnMachine says whether r is a session on m.
-func (r Ref) OnMachine(m MachineID) bool { return r.machine == m }
+func (r Ref) OnMachine(m MachineID) bool {
+	r.known("agentref.Ref.OnMachine")
+	if m == (MachineID{}) {
+		defect.Raise("agentref.Ref.OnMachine", "the zero MachineID")
+	}
+	return r.machine == m
+}
 
 // IsSame says whether r and other name the same session.
-func (r Ref) IsSame(other Ref) bool { return r == other }
+func (r Ref) IsSame(other Ref) bool {
+	r.known("agentref.Ref.IsSame")
+	other.known("agentref.Ref.IsSame")
+	return r == other
+}
 
 // Accept tells v the machine and the session.
-func (r Ref) Accept(v RefVisitor) { v.VisitRef(r.machine, r.session) }
+func (r Ref) Accept(v RefVisitor) {
+	r.known("agentref.Ref.Accept")
+	v.VisitRef(r.machine, r.session)
+}
+
+// known raises a defect when r is the zero Ref, which no function takes; op names the function it was handed to.
+func (r Ref) known(op string) {
+	if r == (Ref{}) {
+		defect.Raise(op, "the zero Ref")
+	}
+}
 
 // Wire is the machine's id as the wire carries it. Adapters only.
 func (m MachineID) Wire() string { return m.machine }

@@ -1,6 +1,7 @@
 package chore
 
 import (
+	"github.com/nwverse/persona/server/internal/domainkit/defect"
 	"github.com/nwverse/persona/server/internal/domainkit/fail"
 	"github.com/nwverse/persona/server/internal/domainkit/instant"
 	"github.com/nwverse/persona/server/internal/domainkit/opt"
@@ -8,7 +9,7 @@ import (
 )
 
 // Chore is one chore as chore knows it, open or closed: it holds when it closed only while it is closed.
-// The zero Chore is no chore; only Build makes one.
+// The zero Chore is no chore; only Build makes one, and every method raises a defect on it.
 type Chore struct {
 	id       ChoreID
 	title    Title
@@ -108,17 +109,38 @@ func (c Chore) wrongParts() []fail.Invalid {
 	return parts
 }
 
+// known raises a defect when c is the zero Chore, which no function takes; op names the function it was handed to.
+// Every constructor refuses a zero identity, so the identity tells.
+func (c Chore) known(op string) {
+	if c.id == (ChoreID{}) {
+		defect.Raise(op, "the zero Chore")
+	}
+}
+
 // ID is the chore's identity, which stores and other chores refer to it by.
-func (c Chore) ID() ChoreID { return c.id }
+func (c Chore) ID() ChoreID {
+	c.known("chore.Chore.ID")
+	return c.id
+}
 
 // IsSame says whether c and other are the same chore, whatever their parts.
-func (c Chore) IsSame(other Chore) bool { return c.id == other.id }
+func (c Chore) IsSame(other Chore) bool {
+	c.known("chore.Chore.IsSame")
+	other.known("chore.Chore.IsSame")
+	return c.id == other.id
+}
 
 // CanClose says whether CommandClose applies: the chore is open.
-func (c Chore) CanClose() bool { return c.closed.IsNone() }
+func (c Chore) CanClose() bool {
+	c.known("chore.Chore.CanClose")
+	return c.closed.IsNone()
+}
 
 // CanReopen says whether CommandReopen applies: the chore is closed.
-func (c Chore) CanReopen() bool { return !c.closed.IsNone() }
+func (c Chore) CanReopen() bool {
+	c.known("chore.Chore.CanReopen")
+	return !c.closed.IsNone()
+}
 
 // ChoreVisitor is told the chore's identity and parts, then whether it is open or when it closed.
 type ChoreVisitor interface {
@@ -133,6 +155,7 @@ type ChoreVisitor interface {
 
 // Accept tells v the chore's identity and parts, then whether it is open or when it closed.
 func (c Chore) Accept(v ChoreVisitor) {
+	c.known("chore.Chore.Accept")
 	v.VisitChoreID(c.id)
 	v.VisitTitle(c.title)
 	v.VisitEffort(c.effort)

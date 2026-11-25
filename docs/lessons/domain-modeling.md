@@ -17,8 +17,10 @@ traps the compiler does not stop, each with what to write instead.
 - **The zero value exists anyway.** Go cannot stop `var r agentref.Ref` outside the package, so the rules allow it (it
   names the documented zero) and refuse only the literal `agentref.Ref{}` outside the core (`out-literal`). Every exported
   type says what its zero is ("The zero Ref is no session"); constructors refuse a zero part (`Build` lists each one),
-  and a function handed a zero that is no value raises a defect. Absence is `opt.Option[Ref]`, never the zero standing
-  for "none".
+  and a function handed a zero that is no value raises a defect: `agentref.Ref`'s `Accept`, `IsSame` and `OnMachine`
+  do, and so does every method the scaffold writes, through an unexported `known` check. `Wire` stays the bare field
+  (`core-wire-method`), so the check sits where the value is read, and `agentrefadapt.Wire` of a zero `Ref` raises
+  rather than send empty ids. Absence is `opt.Option[Ref]`, never the zero standing for "none".
 - **Comparing two failures with `==` panics.** A failure cannot be compared (`fail.Code` holds a `[0]func()`, and
   `fail.Invalids` a slice), so `==` on two `fail.Fail` values compiles, being an interface comparison, and panics at run
   time with "comparing uncomparable type agentref.invalid". Read a failure by visiting it (`fail.FailVisitor`); a test compares

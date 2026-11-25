@@ -140,7 +140,9 @@ twins, never the packages those lists hold. A new domain package starts from the
 `python3 scripts/new_domain_slice.py go <dir> --doc "<one sentence>" [flags]`, which writes the compliant shape with
 its black-box tests and its hook; its output with every flag but `--shared` is the golden
 `server/internal/archguard/testdata/scaffold`, which archguard's `TestScaffoldGoldenPasses` holds to the rules and
-`scripts/test/test_new_domain_slice.py` writes again, compiles and tests with each flag combination.
+`scripts/test/test_new_domain_slice.py` writes again and compares byte for byte, then compiles, vets and tests in a
+temporary module together with the flag combinations its `COMBINATIONS` table lists (the package's own types and the
+shared kernel's as parts and payloads among them), each through its own rules hook.
 
 Each sentence below states a rule, and the rule holds whether or not a check sees a breach. The checks read syntax
 only (`go/ast`, no type information) and enforce each rule where the source shows it: in names, declarations,

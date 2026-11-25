@@ -70,6 +70,7 @@ const fleetImport = "\t\"github.com/nwverse/persona/server/internal/assistant/fl
 // The in-memory cases: what each one adds to a tree of compliant packages fails (or passes) exactly as written.
 func TestDomainRuleCases(t *testing.T) {
 	fleet := plantedDirs(t, "internal/agentref", "internal/assistant/fleetcount")
+	quiet := plantedDirs(t, "internal/assistant/quiethours")
 	// The adapter reads the declarations of the contract types it names, so the contract comes with it.
 	refAdapt := plantedDirs(t, "internal/agentref/agentrefadapt", "internal/assistantwire")
 	// contract is the contract assistantwire with body as its one file; adapt is an adapter of fleetcount's beside it.
@@ -141,14 +142,30 @@ func TestDomainRuleCases(t *testing.T) {
 				"\t\"github.com/nwverse/persona/server/internal/domainkit/slot\"\n",
 			"type view struct{ rows int }\n\nfunc (x *view) VisitAgent(a slot.Slot, w fleetcount.Why, s instant.Instant) {}\n")),
 			[]string{"out-visitor-impl"}},
-		// A core's own black-box tests visit it, with its own types and the kit's (quiethours' VisitHoldUntil takes only
-		// an instant.Instant); another core's types in such a test are still a finding against that core.
-		{"a core's own test visiting it with the kit's types passes", merged(fleet, map[string]string{
-			"internal/assistant/fleetcount/kit_visit_test.go": "package fleetcount_test\n\nimport (\n" +
-				"\t\"github.com/nwverse/persona/server/internal/domainkit/instant\"\n" +
-				"\t\"github.com/nwverse/persona/server/internal/domainkit/slot\"\n)\n\n" +
-				"type held struct{ at instant.Instant }\n\nfunc (h *held) VisitHoldUntil(at instant.Instant) { h.at = at }\n\n" +
-				"type place struct{ at slot.Slot }\n\nfunc (p *place) VisitPlace(at slot.Slot) { p.at = at }\n"}), []string{}},
+		// A core's own black-box tests implement its visitors, whatever the kit's or a shared kernel's types they take
+		// (quiethours' VisitHoldUntil takes only an instant.Instant); another domain package's visitor in such a test is
+		// a finding against that package, one that takes only the kit's types included.
+		{"a core's own test visiting it with the kit's types passes", merged(fleet, quiet, map[string]string{
+			"internal/assistant/quiethours/visit_test.go": "package quiethours_test\n\n" +
+				"import \"github.com/nwverse/persona/server/internal/domainkit/instant\"\n\n" +
+				"type held struct{ at instant.Instant }\n\nfunc (h *held) VisitDeliver() {}\n\n" +
+				"func (h *held) VisitHoldUntil(until instant.Instant) { h.at = until }\n"}), []string{}},
+		{"a core's own test visiting it with a shared kernel's type passes", merged(fleet, map[string]string{
+			"internal/assistant/fleetcount/asker.go": "package fleetcount\n\n" +
+				"import \"github.com/nwverse/persona/server/internal/agentref\"\n\n" +
+				"// AskerVisitor is told which session asked.\ntype AskerVisitor interface {\n\tVisitAsker(asker agentref.Ref)\n}\n",
+			"internal/assistant/fleetcount/asker_test.go": "package fleetcount_test\n\n" +
+				"import \"github.com/nwverse/persona/server/internal/agentref\"\n\n" +
+				"type asked struct{ by agentref.Ref }\n\nfunc (a *asked) VisitAsker(asker agentref.Ref) { a.by = asker }\n"}),
+			[]string{}},
+		{"a core's own test visiting another core with the kit's types is a finding", merged(fleet, quiet, map[string]string{
+			"internal/assistant/fleetcount/hold_visit_test.go": "package fleetcount_test\n\nimport (\n" +
+				"\t\"github.com/nwverse/persona/server/internal/assistant/quiethours\"\n" +
+				"\t\"github.com/nwverse/persona/server/internal/domainkit/instant\"\n)\n\n" +
+				"type held struct{ at instant.Instant }\n\nfunc (h *held) VisitDeliver() {}\n\n" +
+				"func (h *held) VisitHoldUntil(until instant.Instant) { h.at = until }\n\n" +
+				"var _ quiethours.DecisionVisitor = (*held)(nil)\n"}),
+			[]string{"out-visitor-impl", "out-visitor-impl"}},
 		{"a core's own test visiting another core is a finding", merged(fleet, map[string]string{
 			"internal/assistant/fleetcount/ref_visit_test.go": "package fleetcount_test\n\n" +
 				"import \"github.com/nwverse/persona/server/internal/agentref\"\n\ntype seen struct{ m agentref.MachineID }\n\n" +

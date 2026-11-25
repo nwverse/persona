@@ -6,6 +6,7 @@ import (
 	"github.com/nwverse/persona/server/internal/agentref"
 	"github.com/nwverse/persona/server/internal/agentref/agentrefadapt"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/domainkit/defect"
 	"github.com/nwverse/persona/server/internal/domainkit/domaintest"
 	"github.com/nwverse/persona/server/internal/domainkit/opt"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -53,5 +54,27 @@ func TestLog(t *testing.T) {
 	ref := domaintest.Ok(t, agentref.ParseRef("mac", "s1"))
 	if got := agentrefadapt.Log(ref); got != "mac/s1" {
 		t.Errorf("Log = %q, want %q", got, "mac/s1")
+	}
+}
+
+// A zero Ref never reaches the wire or a log line as empty text: the session is absent (opt.Option) or it is a defect.
+func TestWireAndLogRaiseOnTheZeroRef(t *testing.T) {
+	var zero agentref.Ref
+	for _, c := range []struct {
+		name string
+		use  func()
+	}{
+		{"Wire", func() { agentrefadapt.Wire(zero) }},
+		{"Log", func() { agentrefadapt.Log(zero) }},
+	} {
+		func() {
+			defer func() {
+				r := recover()
+				if d, ok := r.(defect.Defect); !ok || d.Error() != "agentref.Ref.Accept: the zero Ref" {
+					t.Errorf("%s of the zero Ref raised %v, want the zero Ref's defect", c.name, r)
+				}
+			}()
+			c.use()
+		}()
 	}
 }

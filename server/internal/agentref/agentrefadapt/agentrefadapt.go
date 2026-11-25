@@ -28,14 +28,15 @@ func FromWire(r assistantwire.SessionRef) outcome.Of[agentref.Ref, agentref.Fail
 	return agentref.ParseRef(r.MachineID, r.SessionID)
 }
 
-// Wire is r as the wire carries it, for the callers that still take the contract.
+// Wire is r as the wire carries it, for the callers that still take the contract. The zero Ref is a defect: a session
+// that may be absent is an opt.Option[agentref.Ref], and its absence is the caller's to spell on the wire.
 func Wire(r agentref.Ref) assistantwire.SessionRef {
 	var w refWire
 	r.Accept(&w)
 	return assistantwire.SessionRef{MachineID: w.machine, SessionID: w.session}
 }
 
-// Log is r for a log line, and only for one: "<machine>/<session>".
+// Log is r for a log line, and only for one: "<machine>/<session>". The zero Ref is a defect.
 func Log(r agentref.Ref) string {
 	var w refWire
 	r.Accept(&w)

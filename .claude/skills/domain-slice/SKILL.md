@@ -37,8 +37,12 @@ nearby: packages with lines in `server/internal/archguard/testdata/domain_layers
 5. **Edit it into the domain's words**: rename the scaffold's open / closed lifecycle, its sample docs and its codes;
    add behaviour as predicates (`CanX` beside `X`) and transitions, never getters; keep the adapter's `Record` the only
    exported struct with fields. A caller that wants data gets a predicate, a decision through `Act`, or a contract the
-   adapter fills.
-6. **Before the PR**, run archguard too (check-fast does for any server change), and fill the "Domain model" line under
+   adapter fills. A method you add to a value whose zero is no value starts with its `known` check, as the scaffold's
+   do, so the zero is a defect wherever it is handed in; absence is `opt.Option`.
+6. **Classify the package and its adapter** in `schema/module-classification.txt` (`go server/internal/<context>/<name>
+   <core|module id>`, sorted with its neighbours); `python3 scripts/test/test_module_classification.py` fails on a
+   package nobody classified.
+7. **Before the PR**, run archguard too (check-fast does for any server change), and fill the "Domain model" line under
    Verification in the PR template:
 
    ```sh

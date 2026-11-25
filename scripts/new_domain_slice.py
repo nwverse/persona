@@ -6,8 +6,9 @@
 The rules are docs/server/architecture.md "Domain model"; the package this writes passes them (its rules_test.go hook
 runs them in its own go test), so the compliant shape is the cheapest one to start from: value objects, closed sets
 with visitors, the package's failure family, an entity with a staged builder, a decider and an adapter come written,
-with black-box tests. Edit what it writes into the domain's own words; `go test ./<dir>/...` names each rule a change
-breaks and its fix. It refuses a directory that exists.
+with black-box tests. Where a type's zero is no value, its constructors refuse it and every function handed it raises
+a defect, and the tests pin both. Edit what it writes into the domain's own words; `go test ./<dir>/...` names each
+rule a change breaks and its fix. It refuses a directory that exists.
 
 What each flag writes (Go):
 
@@ -120,6 +121,11 @@ def spoken(name):
     return " ".join(words(name))
 
 
+def plural(word):
+    """word for more than one: chore -> chores, search -> searches."""
+    return word + ("es" if re.search(r"(s|x|z|ch|sh)$", word) else "s")
+
+
 def article(phrase):
     return ("an " if phrase[:1] in "aeiou" else "a ") + phrase
 
@@ -200,8 +206,11 @@ class Slice:
             if self.id not in self.names:
                 self.values.append(Value(self.id, "string"))
                 self.declare(self.id, "--id")
-            elif not isinstance(self.names[self.id], Value) or self.names[self.id].kind != "string":
+            elif not isinstance(self.local(self.id), Value) or self.local(self.id).kind != "string":
                 raise Refused(f"--id {self.id} names a --value of string, or one --entity adds")
+            elif self.local(self.id).zero_is is not None:
+                raise Refused(f"--id {self.id}: the zero of an identity is no {spoken(self.entity)}, so it takes no "
+                              "--zero-is")
         elif self.id:
             raise Refused("--id goes with --entity")
         for spec in args.parse or []:
@@ -211,6 +220,7 @@ class Slice:
         for v in self.values:
             for _, t in v.parts:
                 self.check_type(t, f"--value {v.name}")
+        self.acyclic()
         for c in self.closed:
             for _, _, t in c.cases:
                 if t:
@@ -342,11 +352,31 @@ class Slice:
         return None
 
     def zero_invalid(self, t):
-        """Whether a type's zero value is no value, which constructors refuse."""
+        """Whether a type's zero value is no value, which constructors refuse and functions raise a defect on: a
+        simple value's unless --zero-is says what it is, a value of parts or parsed parts when one part's is, and
+        every closed set's (no constructor makes a plain set's zero, and a payload set's is nil)."""
         if t in FOREIGN:
             return FOREIGN[t][1]
         x = self.local(t)
-        return not (isinstance(x, Value) and x.zero_is is not None)
+        if isinstance(x, Value):
+            return x.zero_is is None if x.simple else any(self.zero_invalid(pt) for _, pt in x.parts)
+        if isinstance(x, Parsed):
+            return any(v.zero_is is None for _, _, v in x.raws)
+        return True
+
+    def acyclic(self):
+        """Refuses a value that holds itself through its parts: Go has no struct that contains itself."""
+        def visit(v, path):
+            for _, t in v.parts:
+                x = self.local(t)
+                if x is v or x in path:
+                    raise Refused(f"--value {path[0].name}: its parts hold {v.name} again "
+                                  f"({' -> '.join(y.name for y in path + [x])}); a value holds other values")
+                if isinstance(x, Value) and not x.simple:
+                    visit(x, path + [x])
+        for v in self.values:
+            if not v.simple:
+                visit(v, [v])
 
     def imports_for(self, t):
         return {self.module + "/" + FOREIGN[t][0]} if t in FOREIGN else set()
@@ -453,6 +483,7 @@ class Writer:
     def values_go(self):
         s = self.s
         src = Source(s.name)
+        src.need(self.kit("defect"))
         for v in s.values:
             if v.simple:
                 self.simple_value(src, v)
@@ -512,8 +543,12 @@ class Writer:
         fields = "".join(f"\t{p.ljust(width)} {t}\n" for p, t in v.parts)
         for _, t in v.parts:
             src.need(*s.imports_for(t))
-        src.add(comment(f"{n} is {article(thing)} as {s.name} knows it: {names}. The zero {n} is no {thing}; New{n} "
-                        "never makes one.") + f"type {n} struct {{\n{fields}}}\n")
+        if s.zero_invalid(n):
+            zero = f"The zero {n} is no {thing}; New{n} never makes one, and Accept raises a defect on it."
+        else:
+            zero = f"The zero {n} is the {thing} of zero parts: New{n} returns it for them."
+        src.add(comment(f"{n} is {article(thing)} as {s.name} knows it: {names}. {zero}") +
+                f"type {n} struct {{\n{fields}}}\n")
         params = ", ".join(f"{p} {t}" for p, t in v.parts)
         src.add(comment(f"{n}Visitor is told the parts of {article(thing)}.") +
                 f"type {n}Visitor interface {{\n\tVisit{n}({params})\n}}\n")
@@ -533,8 +568,17 @@ class Writer:
             src.add(comment(f"New{n} is the {thing} of its parts.") +
                     f"func New{n}({params}) {n} {{ return {build} }}\n")
         args = ", ".join(f"{r}.{p}" for p, _ in v.parts)
-        src.add(comment(f"Accept tells v the parts of the {thing}.") +
-                f"func ({r} {n}) Accept(v {n}Visitor) {{ v.Visit{n}({args}) }}\n")
+        src.add(self.accept(n, r, f"v.Visit{n}({args})", s.zero_invalid(n)))
+
+    def accept(self, n, r, visit, raises):
+        """Accept on a value that tells its parts: visit is the call, raises whether the zero n is a defect."""
+        thing = spoken(n)
+        if not raises:
+            return (comment(f"Accept tells v the parts of the {thing}.") +
+                    f"func ({r} {n}) Accept(v {n}Visitor) {{ {visit} }}\n")
+        return (comment(f"Accept tells v the parts of the {thing}; the zero {n} is a defect.") +
+                f"func ({r} {n}) Accept(v {n}Visitor) {{\n\tif {r} == ({n}{{}}) {{\n"
+                f'\t\tdefect.Raise("{self.s.name}.{n}.Accept", "the zero {n}")\n\t}}\n\t{visit}\n}}\n')
 
     def parsed_value(self, src, p):
         s, n, r = self.s, p.name, receiver(p.name)
@@ -544,8 +588,12 @@ class Writer:
         fields = "".join(f"\t{raw.ljust(width)} {v.name}\n" for raw, _, v in p.raws)
         src.need(self.kit("outcome"), self.kit("fail"))
         self.used_wrong = True
+        if s.zero_invalid(n):
+            zero = f"The zero {n} is no {thing}; Parse{n} never makes one, and Accept raises a defect on it."
+        else:
+            zero = f"The zero {n} is the {thing} of empty parts: Parse{n} returns it for them."
         src.add(comment(f"{n} is {article(thing)} as {s.name} knows it: {names}. It is comparable, so it keys maps. "
-                        f"The zero {n} is no {thing}; Parse{n} never makes one.") + f"type {n} struct {{\n{fields}}}\n")
+                        f"{zero}") + f"type {n} struct {{\n{fields}}}\n")
         visit = ", ".join(f"{raw} {v.name}" for raw, _, v in p.raws)
         src.add(comment(f"{n}Visitor is told the parts of {article(thing)}.") +
                 f"type {n}Visitor interface {{\n\tVisit{n}({visit})\n}}\n")
@@ -560,8 +608,7 @@ class Writer:
         src.add(comment(f"Parse{n} is the {thing} its raw parts name; it reports every invalid part, in order.") +
                 f"func Parse{n}({params}) (out outcome.Of[{n}, Fail]) {{\n{body}}}\n")
         args = ", ".join(f"{r}.{raw}" for raw, _, _ in p.raws)
-        src.add(comment(f"Accept tells v the parts of the {thing}.") +
-                f"func ({r} {n}) Accept(v {n}Visitor) {{ v.Visit{n}({args}) }}\n")
+        src.add(self.accept(n, r, f"v.Visit{n}({args})", s.zero_invalid(n)))
 
     # closed.go
 
@@ -648,7 +695,7 @@ class Writer:
         e, idt = s.entity, s.id
         r = receiver(e)
         src = Source(s.name)
-        src.need(self.kit("outcome"), self.kit("fail"))
+        src.need(self.kit("outcome"), self.kit("fail"), self.kit("defect"))
         self.used_wrong = True
         thing = spoken(e)
         fields = [("id", idt)] + [(p.field, p.name) for p in s.parts]
@@ -660,7 +707,8 @@ class Writer:
         made = "only Build makes one" if s.builder else f"only New{e} and Restore{e} make one"
         src.add(comment(f"{e} is one {thing} as {s.name} knows it" +
                         (", open or closed: it holds when it closed only while it is closed" if s.decider else "") +
-                        f". The zero {e} is no {thing}; {made}.") + f"type {e} struct {{\n{body}}}\n")
+                        f". The zero {e} is no {thing}; {made}, and every method raises a defect on it.") +
+                f"type {e} struct {{\n{body}}}\n")
         # The rules every part of an entity meets, wherever it is made.
         checks = [(f, t) for f, t in fields[:len(s.parts) + 1] if s.zero_invalid(t)]
         rules = zero_vars([t for _, t in checks], "\t") + "\tvar parts []fail.Invalid\n"
@@ -677,15 +725,22 @@ class Writer:
             self.new_and_restore(src, e, idt, r)
         src.add(comment(f"wrongParts is every part of {r} a rule refuses, in order.") +
                 f"func ({r} {e}) wrongParts() []fail.Invalid {{\n{rules}}}\n")
-        src.add(comment(f"ID is the {thing}'s identity, which stores and other {thing}s refer to it by.") +
-                f"func ({r} {e}) ID() {idt} {{ return {r}.id }}\n")
+        src.add(comment(f"known raises a defect when {r} is the zero {e}, which no function takes; op names the function "
+                        "it was handed to. Every constructor refuses a zero identity, so the identity tells.") +
+                f"func ({r} {e}) known(op string) {{\n\tif {r}.id == ({idt}{{}}) {{\n"
+                f'\t\tdefect.Raise(op, "the zero {e}")\n\t}}\n}}\n')
+        op = f"{s.name}.{e}."
+        src.add(comment(f"ID is the {thing}'s identity, which stores and other {plural(thing)} refer to it by.") +
+                f'func ({r} {e}) ID() {idt} {{\n\t{r}.known("{op}ID")\n\treturn {r}.id\n}}\n')
         src.add(comment(f"IsSame says whether {r} and other are the same {thing}, whatever their parts.") +
-                f"func ({r} {e}) IsSame(other {e}) bool {{ return {r}.id == other.id }}\n")
+                f'func ({r} {e}) IsSame(other {e}) bool {{\n\t{r}.known("{op}IsSame")\n\tother.known("{op}IsSame")\n'
+                f"\treturn {r}.id == other.id\n}}\n")
         if s.decider:
             src.add(comment(f"CanClose says whether CommandClose applies: the {thing} is open.") +
-                    f"func ({r} {e}) CanClose() bool {{ return {r}.closed.IsNone() }}\n")
+                    f'func ({r} {e}) CanClose() bool {{\n\t{r}.known("{op}CanClose")\n\treturn {r}.closed.IsNone()\n}}\n')
             src.add(comment(f"CanReopen says whether CommandReopen applies: the {thing} is closed.") +
-                    f"func ({r} {e}) CanReopen() bool {{ return !{r}.closed.IsNone() }}\n")
+                    f'func ({r} {e}) CanReopen() bool {{\n\t{r}.known("{op}CanReopen")\n'
+                    f"\treturn !{r}.closed.IsNone()\n}}\n")
         visits = f"\tVisit{idt}(id {idt})\n" + "".join(f"\tVisit{p.name}({p.field} {p.name})\n" for p in s.parts)
         tail = ""
         if s.decider:
@@ -693,7 +748,8 @@ class Writer:
             tail = f"\t{r}.closed.Match(v.VisitClosedAt, v.VisitOpen)\n"
         told = f"the {thing}'s identity and parts" + (", then whether it is open or when it closed" if s.decider else "")
         src.add(comment(f"{e}Visitor is told {told}.") + f"type {e}Visitor interface {{\n{visits}}}\n")
-        calls = f"\tv.Visit{idt}({r}.id)\n" + "".join(f"\tv.Visit{p.name}({r}.{p.field})\n" for p in s.parts)
+        calls = (f'\t{r}.known("{op}Accept")\n\tv.Visit{idt}({r}.id)\n' +
+                 "".join(f"\tv.Visit{p.name}({r}.{p.field})\n" for p in s.parts))
         src.add(comment(f"Accept tells v {told}.") + f"func ({r} {e}) Accept(v {e}Visitor) {{\n{calls}{tail}}}\n")
         return src.text()
 
@@ -783,7 +839,8 @@ class Writer:
                 f"func ({v}Closed) event()                  {{}}\n"
                 f"func ({v}Reopened) event()                {{}}\n")
         src.add(comment(f"Decided is {article(thing)} after a command, with the events that took it there. The zero "
-                        "Decided is no decision; only Decide makes one.") +
+                        "Decided is no decision; only Decide makes one, always with an event, and Then and Accept raise "
+                        "a defect on it.") +
                 f"type Decided struct {{\n\t{v} {e}\n\tevents []Event\n}}\n")
         src.add(comment(f"DecidedVisitor is told the {thing} as decided, then each event in order.") +
                 f"type DecidedVisitor interface {{\n\tVisit{e}({v} {e})\n\tVisitEvent(event Event)\n}}\n")
@@ -791,17 +848,23 @@ class Writer:
         src.add(comment(f"Decide is what a command does to {article(thing)} at now: the next {thing} with its events, "
                         f"or why the {thing} refuses it.") +
                 f"func Decide({r} {e}, cmd Command, now instant.Now) outcome.Of[Decided, Fail] {{\n"
+                f'\t{r}.known("{s.name}.Decide")\n'
                 f'\tif cmd == nil {{\n\t\tdefect.Raise("{s.name}.Decide", "the zero Command")\n\t}}\n'
                 f"\treturn cmd.decide({r}, now)\n}}\n")
         src.add(comment(f"Then decides a further command on the {thing} as decided: both decisions' events in order, or "
                         f"why the {thing} refuses the second.") +
                 "func (d Decided) Then(cmd Command, now instant.Now) (out outcome.Of[Decided, Fail]) {\n"
+                f'\td.known("{s.name}.Decided.Then")\n'
                 f"\tnext, f := outcome.Unpack(Decide(d.{v}, cmd, now))\n"
                 "\tif f != nil {\n\t\treturn out.Err(f)\n\t}\n"
                 f"\treturn out.Ok(Decided{{{v}: next.{v}, events: slices.Concat(d.events, next.events)}})\n}}\n")
         src.add(comment(f"Accept tells v the {thing} as decided, then each event in order.") +
-                f"func (d Decided) Accept(v DecidedVisitor) {{\n\tv.Visit{e}(d.{v})\n"
+                f'func (d Decided) Accept(v DecidedVisitor) {{\n\td.known("{s.name}.Decided.Accept")\n\tv.Visit{e}(d.{v})\n'
                 "\tfor _, e := range d.events {\n\t\tv.VisitEvent(e)\n\t}\n}\n")
+        src.add(comment("known raises a defect when d is the zero Decided, which holds no event; op names the function "
+                        "it was handed to.") +
+                'func (d Decided) known(op string) {\n\tif len(d.events) == 0 {\n'
+                '\t\tdefect.Raise(op, "the zero Decided")\n\t}\n}\n')
         src.add(f"func (closeCommand) decide({r} {e}, now instant.Now) (out outcome.Of[Decided, Fail]) {{\n"
                 f"\tif !{r}.CanClose() {{\n"
                 f'\t\treturn out.Err(refused{{fail.NewRefusal(fail.NewCode("{s.name}.{snake(e)}.already_closed"))}})\n'
@@ -830,13 +893,14 @@ def zero_name(t):
     return "no" + t.rsplit(".", 1)[-1]
 
 
-def zero_vars(types, indent):
-    """One var per distinct type holding its zero value: a literal of another package's type is refused outside it."""
+def zero_vars(types, indent, p=None):
+    """One var per distinct type holding its zero value: a literal of another package's type is refused outside it.
+    In the package's black-box tests (p, its name) the package's own types are p.T."""
     seen, out = set(), ""
     for t in types:
         if t not in seen:
             seen.add(t)
-            out += f"{indent}var {zero_name(t)} {t}\n"
+            out += f"{indent}var {zero_name(t)} {qualified(p, t) if p else t}\n"
     return out
 
 
@@ -909,6 +973,16 @@ class Tests:
     def plain_parse(self, v):
         return v.kind == "string" and v.zero_is is not None
 
+    def raises(self, op, what, call):
+        """A line that fails the test unless call raises the defect op names for the zero what."""
+        self.src.need(self.s.module + "/" + KIT + "defect")
+        self.helpers["raises"] = (
+            comment('raises fails the test unless do raises the defect want ("<op>: <cause>").') +
+            "func raises(t *testing.T, want string, do func()) {\n\tt.Helper()\n\tdefer func() {\n\t\tt.Helper()\n"
+            "\t\tr := recover()\n\t\tif d, ok := r.(defect.Defect); !ok || d.Error() != want {\n"
+            '\t\t\tt.Errorf("raised %v, want the defect %q", r, want)\n\t\t}\n\t}()\n\tdo()\n}\n')
+        return f'\traises(t, "{op}: the zero {what}", func() {{ {call} }})\n'
+
     def at(self):
         self.src.need("time", self.s.module + "/" + KIT + "instant")
         self.helpers["at"] = ("// at is the moment the tests' instants and clock read.\n"
@@ -961,22 +1035,39 @@ class Tests:
                     f"func TestParse{n}RefusesInvalidInput(t *testing.T) {{\n" +
                     self.check(f"{p}.Parse{n}({bad})", f'"invalid {s.name}.{snake(v.field)}.{word} {v.field}"') + "}\n"]
         checked = [(part, t) for part, t in v.parts if s.zero_invalid(t)]
+        if not checked:
+            for _, t in v.parts:
+                self.src.need(*s.imports_for(t))
+            zeros = zero_vars([t for _, t in v.parts], "\t", p)
+            args = ", ".join(zero_name(t) for _, t in v.parts)
+            return [f"func TestNew{n}OfZeroPartsIsTheZero{n}(t *testing.T) {{\n\tvar zero {p}.{n}\n{zeros}"
+                    f"\tif {p}.New{n}({args}) != zero {{\n\t\tt.Error(\"New{n} of zero parts is not the zero {n}\")\n"
+                    "\t}\n}\n"]
         self.helper(v)
         out = [f"func TestNew{n}NeverMakesTheZero{n}(t *testing.T) {{\n\tvar zero {p}.{n}\n"
-               f"\tif some{n}(t) == zero {{\n\t\tt.Error(\"New{n} made the zero {n}\")\n\t}}\n}}\n"]
-        if checked:
-            zeros = zero_vars([t for _, t in checked], "\t")
-            args = ", ".join(zero_name(t) if (part, t) in checked else self.sample(t) for part, t in v.parts)
-            want = "; ".join(f"invalid {s.name}.{snake(n)}.no_{snake(part)} {part}" for part, _ in checked)
-            out.append(f"func TestNew{n}RefusesPartsThatAreNoValue(t *testing.T) {{\n{zeros}" +
-                       self.check(f"{p}.New{n}({args})", f'"{want}"') + "}\n")
+               f"\tif some{n}(t) == zero {{\n\t\tt.Error(\"New{n} made the zero {n}\")\n\t}}\n}}\n",
+               f"func TestTheZero{n}IsADefect(t *testing.T) {{\n\tvar zero {p}.{n}\n" +
+               self.raises(f"{s.name}.{n}.Accept", n, "zero.Accept(nil)") + "}\n"]
+        zeros = zero_vars([t for _, t in checked], "\t", p)
+        args = ", ".join(zero_name(t) if (part, t) in checked else self.sample(t) for part, t in v.parts)
+        want = "; ".join(f"invalid {s.name}.{snake(n)}.no_{snake(part)} {part}" for part, _ in checked)
+        out.append(f"func TestNew{n}RefusesPartsThatAreNoValue(t *testing.T) {{\n{zeros}" +
+                   self.check(f"{p}.New{n}({args})", f'"{want}"') + "}\n")
         return out
 
     def parsed_tests(self, x):
         s, n, p = self.s, x.name, self.p
         self.helper(x)
-        out = [f"func TestParse{n}NeverMakesTheZero{n}(t *testing.T) {{\n\tvar zero {p}.{n}\n"
-               f"\tif some{n}(t) == zero {{\n\t\tt.Error(\"Parse{n} made the zero {n}\")\n\t}}\n}}\n"]
+        if s.zero_invalid(n):
+            out = [f"func TestParse{n}NeverMakesTheZero{n}(t *testing.T) {{\n\tvar zero {p}.{n}\n"
+                   f"\tif some{n}(t) == zero {{\n\t\tt.Error(\"Parse{n} made the zero {n}\")\n\t}}\n}}\n",
+                   f"func TestTheZero{n}IsADefect(t *testing.T) {{\n\tvar zero {p}.{n}\n" +
+                   self.raises(f"{s.name}.{n}.Accept", n, "zero.Accept(nil)") + "}\n"]
+        else:
+            empty = ", ".join('""' if kind == "string" else "0" for _, kind, _ in x.raws)
+            out = [f"func TestParse{n}OfEmptyPartsIsTheZero{n}(t *testing.T) {{\n\tvar zero {p}.{n}\n"
+                   f"\tif domaintest.Ok(t, {p}.Parse{n}({empty})) != zero {{\n"
+                   f'\t\tt.Error("Parse{n} of empty parts is not the zero {n}")\n\t}}\n}}\n']
         ruled = [v for _, _, v in x.raws if bad_input(v)]
         if ruled:
             args = ", ".join(bad_input(v)[0] if bad_input(v) else sample_raw(raw, kind) for raw, kind, v in x.raws)
@@ -984,9 +1075,9 @@ class Tests:
             out.append(f"func TestParse{n}ReportsEveryInvalidPart(t *testing.T) {{\n" +
                        self.check(f"{p}.Parse{n}({args})", f'"{want}"') + "}\n")
         # One behaviour: equal parts make equal values, which key maps.
-        out.append(f"func TestEqualPartsMakeEqual{n}s(t *testing.T) {{\n"
+        out.append(f"func TestEqualPartsMakeEqual{plural(n)}(t *testing.T) {{\n"
                    f"\tseen := map[{p}.{n}]bool{{some{n}(t): true}}\n"
-                   f"\tif !seen[some{n}(t)] {{\n\t\tt.Error(\"two {spoken(n)}s of the same parts are not the same "
+                   f"\tif !seen[some{n}(t)] {{\n\t\tt.Error(\"two {plural(spoken(n))} of the same parts are not the same "
                    "key\")\n\t}\n}\n")
         # One test visitor: Accept tells the parts as Parse took them.
         fields = "".join(f"\t{raw} {p}.{v.name}\n" for raw, _, v in x.raws)
@@ -1012,13 +1103,28 @@ class Tests:
         for w, pname, ptype in c.cases:
             if ptype:
                 self.src.need(*self.s.imports_for(ptype))
-                methods += f'func (r *{name}) Visit{camel(w)}({ptype}) {{ r.names = append(r.names, "{w}") }}\n'
+                methods += (f'func (r *{name}) Visit{camel(w)}({qualified(p, ptype)}) '
+                            f'{{ r.names = append(r.names, "{w}") }}\n')
             else:
                 methods += f'func (r *{name}) Visit{camel(w)}() {{ r.names = append(r.names, "{w}") }}\n'
         values = ", ".join(f"{p}.{n}{camel(w)}({self.sample(pt) if pt else ''})" for w, _, pt in c.cases)
         want = ", ".join(f'"{w}"' for w, _, _ in c.cases)
         self.src.need("slices")
-        return [comment(f"{name} is the test's own visitor: it keeps the name of each {spoken(n)} it is told.") +
+        if c.plain:
+            zero = (f"func TestTheZero{n}IsADefect(t *testing.T) {{\n\tvar zero {p}.{n}\n" +
+                    self.raises(f"{self.s.name}.{n}.Accept", n, "zero.Accept(nil)") + "}\n")
+        else:
+            checked = [(w, pt) for w, _, pt in c.cases if pt and self.s.zero_invalid(pt)]
+            zero = ""
+            if checked:
+                for _, pt in checked:
+                    self.src.need(*self.s.imports_for(pt))
+                zero = (f"func Test{n}RefusesPayloadsThatAreNoValue(t *testing.T) {{\n" +
+                        zero_vars([pt for _, pt in checked], "\t", p) +
+                        "".join(self.raises(f"{self.s.name}.{n}{camel(w)}", pt.rsplit(".", 1)[-1],
+                                            f"{p}.{n}{camel(w)}({zero_name(pt)})") for w, pt in checked) + "}\n")
+        tests = [zero] if zero else []
+        return tests + [comment(f"{name} is the test's own visitor: it keeps the name of each {spoken(n)} it is told.") +
                 f"type {name} struct{{ names []string }}\n\n{methods}\n"
                 f"func Test{n}AcceptTellsEach{n}(t *testing.T) {{\n\tvar got {name}\n"
                 f"\tfor _, x := range []{p}.{n}{{{values}}} {{\n\t\tx.Accept(&got)\n\t}}\n"
@@ -1062,12 +1168,27 @@ class Tests:
                            f"\tvar skipped {p}.{last} // a skipped stage still compiles; Build refuses it\n" +
                            self.check(f"skipped.{s.parts[-1].name}({self.sample(s.parts[-1].name)}).Build()",
                                       f'"{want}"') + "}\n")
+        # Every method raises a defect on the zero entity, which no constructor makes.
+        op = f"{s.name}.{e}."
+        zero = (f"func TestTheZero{e}IsADefect(t *testing.T) {{\n\tvar zero {p}.{e}\n"
+                f"\tsome := domaintest.Ok(t, {self.built()})\n" +
+                self.raises(op + "ID", e, "zero.ID()") +
+                self.raises(op + "IsSame", e, "zero.IsSame(some)") +
+                self.raises(op + "IsSame", e, "some.IsSame(zero)") +
+                self.raises(op + "Accept", e, "zero.Accept(nil)"))
+        if s.decider:
+            self.src.need(s.module + "/" + KIT + "clock/clocktest", "time")
+            zero += (self.raises(op + "CanClose", e, "zero.CanClose()") +
+                     self.raises(op + "CanReopen", e, "zero.CanReopen()") +
+                     "\tnow := clocktest.Fixed(time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)).Now()\n" +
+                     self.raises(f"{s.name}.Decide", e, f"{p}.Decide(zero, {p}.CommandClose(), now)"))
+        out.append(zero + "}\n")
         if not s.decider:
             # One behaviour: the same identity is the same entity, whatever its parts.
-            out.append(f"func TestTwo{e}sOfOneIdentityAreTheSame(t *testing.T) {{\n"
+            out.append(f"func TestTwo{plural(e)}OfOneIdentityAreTheSame(t *testing.T) {{\n"
                        f"\ta := domaintest.Ok(t, {self.built()})\n"
                        f"\tif !a.IsSame(domaintest.Ok(t, {self.built()})) {{\n"
-                       f'\t\tt.Error("two {spoken(e)}s of one identity are not the same")\n\t}}\n}}\n')
+                       f'\t\tt.Error("two {plural(spoken(e))} of one identity are not the same")\n\t}}\n}}\n')
         # A test visitor over the entity.
         name = lower_camel(e) + "Parts"
         methods = f"func (r *{name}) Visit{idt}(id {p}.{idt}) {{ r.id = id }}\n"
@@ -1115,6 +1236,10 @@ class Tests:
                    f"func (r *{name}) VisitEvent(e {p}.Event)        {{ e.Accept(r) }}\n"
                    f'func (r *{name}) VisitClosed(instant.Instant) {{ r.names = append(r.names, "closed") }}\n'
                    f'func (r *{name}) VisitReopened()              {{ r.names = append(r.names, "reopened") }}\n')
+        out.append(f"func TestTheZeroDecidedIsADefect(t *testing.T) {{\n\tvar zero {p}.Decided\n"
+                   "\tnow := clocktest.Fixed(time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)).Now()\n" +
+                   self.raises(f"{s.name}.Decided.Accept", "Decided", "zero.Accept(nil)") +
+                   self.raises(f"{s.name}.Decided.Then", "Decided", f"zero.Then({p}.CommandClose(), now)") + "}\n")
         out.append(f"func TestCloseThenReopen(t *testing.T) {{\n"
                    "\tnow := clocktest.Fixed(time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)).Now()\n"
                    f"\topen := domaintest.Ok(t, {self.built()})\n"
@@ -1558,7 +1683,8 @@ def main(argv=None):
         path.write_text(text, encoding="utf-8")
     shown = os.path.relpath(target, Path.cwd())
     print(f"new_domain_slice.py: wrote {len(files)} files under {shown}; run its rules and tests with "
-          f"(cd server && go test ./{s.dir}/...)")
+          f"(cd server && go test ./{s.dir}/...), and classify the package"
+          f"{' and its adapter' if s.adapter else ''} in schema/module-classification.txt")
     return 0
 
 

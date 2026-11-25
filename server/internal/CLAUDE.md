@@ -18,21 +18,22 @@ A new package declares one; the packages in `server/internal/archguard/testdata/
 - Counts that only fall, in code that predates the rules: `app-exported-record`, `app-named-primitive`, `app-lifecycle-write`, `app-bridge-call`.
 
 **What compliant code looks like** (`server/internal/agentref/ref.go`): unexported fields named for their types, the zero
-value documented, a predicate where a caller would want a getter, and a visitor as the only way out:
+value documented and raised as a defect wherever it is handed in, a predicate (`OnMachine`, `IsSame`) where a caller
+would want a getter, and a visitor as the only way out:
 
 ```go
 // Ref is one session on one machine. It is comparable, so it keys maps. The zero Ref is no session; ParseRef never
-// makes one, and where a session may be absent the type is opt.Option[Ref].
+// makes one, every method raises a defect on it, and where a session may be absent the type is opt.Option[Ref].
 type Ref struct {
 	machine MachineID
 	session SessionID
 }
 
-// OnMachine says whether r is a session on m.
-func (r Ref) OnMachine(m MachineID) bool { return r.machine == m }
-
 // Accept tells v the machine and the session.
-func (r Ref) Accept(v RefVisitor) { v.VisitRef(r.machine, r.session) }
+func (r Ref) Accept(v RefVisitor) {
+	r.known("agentref.Ref.Accept")
+	v.VisitRef(r.machine, r.session)
+}
 ```
 
 **Start a package with the scaffold**, then edit it into the domain's own words:

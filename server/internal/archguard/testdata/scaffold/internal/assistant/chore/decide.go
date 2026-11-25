@@ -51,7 +51,7 @@ func (choreClosed) event()                  {}
 func (choreReopened) event()                {}
 
 // Decided is a chore after a command, with the events that took it there. The zero Decided is no decision; only Decide
-// makes one.
+// makes one, always with an event, and Then and Accept raise a defect on it.
 type Decided struct {
 	chore  Chore
 	events []Event
@@ -65,6 +65,7 @@ type DecidedVisitor interface {
 
 // Decide is what a command does to a chore at now: the next chore with its events, or why the chore refuses it.
 func Decide(c Chore, cmd Command, now instant.Now) outcome.Of[Decided, Fail] {
+	c.known("chore.Decide")
 	if cmd == nil {
 		defect.Raise("chore.Decide", "the zero Command")
 	}
@@ -74,6 +75,7 @@ func Decide(c Chore, cmd Command, now instant.Now) outcome.Of[Decided, Fail] {
 // Then decides a further command on the chore as decided: both decisions' events in order, or why the chore refuses the
 // second.
 func (d Decided) Then(cmd Command, now instant.Now) (out outcome.Of[Decided, Fail]) {
+	d.known("chore.Decided.Then")
 	next, f := outcome.Unpack(Decide(d.chore, cmd, now))
 	if f != nil {
 		return out.Err(f)
@@ -83,9 +85,17 @@ func (d Decided) Then(cmd Command, now instant.Now) (out outcome.Of[Decided, Fai
 
 // Accept tells v the chore as decided, then each event in order.
 func (d Decided) Accept(v DecidedVisitor) {
+	d.known("chore.Decided.Accept")
 	v.VisitChore(d.chore)
 	for _, e := range d.events {
 		v.VisitEvent(e)
+	}
+}
+
+// known raises a defect when d is the zero Decided, which holds no event; op names the function it was handed to.
+func (d Decided) known(op string) {
+	if len(d.events) == 0 {
+		defect.Raise(op, "the zero Decided")
 	}
 }
 

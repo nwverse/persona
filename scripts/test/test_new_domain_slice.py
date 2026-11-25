@@ -49,8 +49,8 @@ COMBINATIONS = {
         "--value", "Query=string", "--zero-is", "no text", "--value", "Limit=int", "--zero-is", "no limit",
         "--value", "Span=length:instant.Span,start:instant.Instant,place:slot.Slot",
         "--closed", "Mode=quick,deep", "--closed", "Pause=none,until(until:instant.Instant),for(instant.Span)"],
-    "entity without a builder": [
-        "go", "internal/assistant/plainentity", "--doc", "keeps one label",
+    "entity without a builder, its id a --value": [
+        "go", "internal/assistant/plainentity", "--doc", "keeps one label", "--value", "LabelID=string",
         "--value", "Text=string", "--value", "Note=string", "--zero-is", "no note", "--closed", "Tone=calm,loud",
         "--entity", "Label", "--id", "LabelID", "--adapter"],
     "decider without a builder": [
@@ -58,6 +58,23 @@ COMBINATIONS = {
         "--value", "Title=string", "--entity", "Errand", "--id", "ErrandID", "--decider", "--adapter", "--act"],
     "a value as the adapter's record": [
         "go", "internal/assistant/plaincount", "--doc", "counts one thing", "--value", "Count=int", "--adapter"],
+    # The package's own values, parsed values, closed sets and id as parts and payloads, which its black-box tests
+    # name qualified; and values whose zero is a real one, made of parts whose zero is.
+    "the package's own types as parts and payloads": [
+        "go", "internal/assistant/owntypes", "--doc", "keeps one note: what it says, where it is pinned and why it waits",
+        "--value", "Title=string", "--value", "Snooze=int", "--zero-is", "no snooze",
+        "--value", "HouseID=string", "--value", "RoomID=string", "--parse", "Spot=house:string,room:string",
+        "--value", "Pair=at:Spot,title:Title", "--value", "Pin=note:NoteID,at:instant.Instant",
+        "--value", "Gap=snooze:Snooze,place:slot.Slot",
+        "--value", "Query=string", "--zero-is", "no text", "--value", "Count=int", "--zero-is", "none",
+        "--parse", "Search=query:string,count:int",
+        "--closed", "Reason=none,snoozed(Snooze),titled(Title),pinned(Pin)", "--closed", "Wait=plain,nested(Reason)",
+        "--entity", "Note", "--id", "NoteID", "--adapter"],
+    # The shared kernel's types as parts and payloads, as a context's asker or card is.
+    "the shared kernel's types as parts and payloads": [
+        "go", "internal/assistant/askers", "--doc", "says who asked for one card",
+        "--value", "Card=machine:agentref.MachineID,card:agentref.InteractionID",
+        "--closed", "Asker=nobody,agent(agentref.Ref)", "--value", "Topic=string", "--adapter"],
 }
 
 # The slice a getter is planted in: closed sets, a builder, a decider and an adapter, as a new context starts.
@@ -121,6 +138,9 @@ class GenerateTests(unittest.TestCase):
             ("--value", "A=string", "--value", "B=string", "--value", "C=string", "--value", "D=string",
              "--entity", "Box", "--id", "BoxID"): "takes four at most: add --builder",
             ("--closed", "Fail=a,b"): "the scaffold declares that name itself",
+            ("--value", "NoteID=string", "--zero-is", "x", "--entity", "Note", "--id", "NoteID"): "takes no --zero-is",
+            ("--value", "Pair=left:Pair"): "its parts hold Pair again",
+            ("--value", "A=left:B", "--value", "B=right:A"): "its parts hold",
         }
         with tempfile.TemporaryDirectory() as work:
             for flags, says in cases.items():

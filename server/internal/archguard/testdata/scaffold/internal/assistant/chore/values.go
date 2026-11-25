@@ -3,6 +3,7 @@ package chore
 import (
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/domainkit/defect"
 	"github.com/nwverse/persona/server/internal/domainkit/fail"
 	"github.com/nwverse/persona/server/internal/domainkit/instant"
 	"github.com/nwverse/persona/server/internal/domainkit/outcome"
@@ -66,7 +67,7 @@ func snoozeRule(parts []fail.Invalid, raw int) []fail.Invalid {
 func (x Snooze) Wire() int { return x.snooze }
 
 // Window is a window as chore knows it: its opens and its closes. The zero Window is no window; NewWindow never makes
-// one.
+// one, and Accept raises a defect on it.
 type Window struct {
 	opens  instant.Instant
 	closes instant.Instant
@@ -89,8 +90,13 @@ func NewWindow(opens instant.Instant, closes instant.Instant) (out outcome.Of[Wi
 	return out.Ok(Window{opens: opens, closes: closes})
 }
 
-// Accept tells v the parts of the window.
-func (w Window) Accept(v WindowVisitor) { v.VisitWindow(w.opens, w.closes) }
+// Accept tells v the parts of the window; the zero Window is a defect.
+func (w Window) Accept(v WindowVisitor) {
+	if w == (Window{}) {
+		defect.Raise("chore.Window.Accept", "the zero Window")
+	}
+	v.VisitWindow(w.opens, w.closes)
+}
 
 // HouseID is a house id as chore knows it. The zero HouseID is no house id; ParseHouseID never makes one.
 type HouseID struct{ house string }
@@ -150,7 +156,7 @@ func choreIDRule(parts []fail.Invalid, raw string) []fail.Invalid {
 func (c ChoreID) Wire() string { return c.chore }
 
 // Spot is a spot as chore knows it: its house and its room. It is comparable, so it keys maps. The zero Spot is no
-// spot; ParseSpot never makes one.
+// spot; ParseSpot never makes one, and Accept raises a defect on it.
 type Spot struct {
 	house HouseID
 	room  RoomID
@@ -172,5 +178,10 @@ func ParseSpot(house string, room string) (out outcome.Of[Spot, Fail]) {
 	return out.Ok(Spot{house: HouseID{house: house}, room: RoomID{room: room}})
 }
 
-// Accept tells v the parts of the spot.
-func (x Spot) Accept(v SpotVisitor) { v.VisitSpot(x.house, x.room) }
+// Accept tells v the parts of the spot; the zero Spot is a defect.
+func (x Spot) Accept(v SpotVisitor) {
+	if x == (Spot{}) {
+		defect.Raise("chore.Spot.Accept", "the zero Spot")
+	}
+	v.VisitSpot(x.house, x.room)
+}
