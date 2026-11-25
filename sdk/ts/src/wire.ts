@@ -7347,8 +7347,8 @@ export interface MemoryEntry {
   /** What the entry says, as the program would render it, on one or a few lines. */
   text: string;
   /**
-   * The program's own grouping (preferences, workflow, people…). Informational: the hub neither filters nor orders by
-   * it.
+   * The program's own grouping (preferences, workflow, people…). Used for explicit recall tag matching; it does not
+   * change priority or visibility.
    */
   facet?: string;
   /**

@@ -354,10 +354,11 @@ type Node struct {
 	expectedTokens   map[string]map[string]string
 	expectedSynced   bool
 
-	// ctxSent: assistant conversation → the snapshot sections it has seen; ctxTools: the tools its process last
-	// started with (assistant_context.go).
-	ctxSent  map[string]map[string]string
-	ctxTools map[string][]string
+	// ctxSent: assistant conversation → the snapshot sections it has seen; ctxOpenTodoIndex keeps the last raw index
+	// across compaction as a comparison baseline only. ctxTools: the tools its process last started with.
+	ctxSent          map[string]map[string]string
+	ctxOpenTodoIndex map[string]string
+	ctxTools         map[string][]string
 
 	// ports: the agents' listening ports (ports.go); streams: the forwarded connections to them (streams.Mux).
 	ports   portState
