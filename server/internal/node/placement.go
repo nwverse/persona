@@ -507,7 +507,7 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 	if n.codices != nil {
 		n.codices.paneReads.retain(codex)
 	}
-	paneDeadline := time.Now().Add(codexHomeListWait)
+	paneDeadline := time.Now().Add(n.codexHomeListBudget())
 	for _, a := range codex {
 		w := n.codexWaitOf(a.PaneID)
 		n.mu.Lock()

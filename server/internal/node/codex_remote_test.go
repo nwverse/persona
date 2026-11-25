@@ -239,11 +239,26 @@ func remoteTestNode(t *testing.T) *Node {
 	n, home := testNode(t)
 	n.codices = newCodexRegistry()
 	n.codices.scan = func() []codexProcess { return nil }
+	// Healthy test homes can invoke multiple sqlite3 subprocesses on a cold scan (desktop projects and sidebar threads).
+	// Give ordinary fixture nodes room under multi-shard CPU contention; stall-isolation tests use boundedTestNode to
+	// keep the production 100ms/300ms wait budgets.
+	n.codices.index.scanWait = 5 * time.Second
+	n.codices.index.listWait = 5 * time.Second
 	n.logger = log.New(io.Discard, "", 0)
 	n.metas = map[string]quickMeta{}
 	n.bgScans = map[string]*bgScan{}
 	n.dir = filepath.Join(home, ".persona")
 	n.configureCodex(proto.CodexConfig{})
+	return n
+}
+
+// boundedTestNode returns a remoteTestNode with the production Codex home index wait budgets
+// (codexHomeScanWait and codexHomeListWait), for tests that deliberately block a home's scan.
+func boundedTestNode(t *testing.T) *Node {
+	t.Helper()
+	n := remoteTestNode(t)
+	n.codices.index.scanWait = 0
+	n.codices.index.listWait = 0
 	return n
 }
 
