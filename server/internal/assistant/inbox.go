@@ -82,6 +82,11 @@ type InboxItem struct {
 	Connector *InboxConnector `json:"connector,omitempty"`
 	// ExternalPath names the source object and its parents in lookup order.
 	ExternalPath []assistantwire.ExternalRef `json:"external_path,omitempty"`
+	// ExternalRouteOf is the Inbox version which belongs to scoped routing.
+	ExternalAsked    string `json:"external_asked,omitempty"`
+	ExternalRouteOf  string `json:"external_route_of,omitempty"`
+	externalMoves    []assistantwire.ExternalInboxEvent
+	externalChecking bool
 	// Agent is the AI twin's work on the item: judged by model 2, handled and drafted by the agent (inbox_agent.go).
 	Agent *InboxAgent `json:"agent,omitempty"`
 	// TodoForward records deterministic PR/Issue auto-forwarding of this item to a bound open to-do (#12492, inbox_forward.go).
@@ -277,6 +282,7 @@ func (it *InboxItem) listed() InboxItem {
 	c.ArrivedAt = time.Time{}
 	c.Meta, c.Group = nil, nil
 	c.ExternalPath = slices.Clone(it.ExternalPath)
+	c.ExternalAsked, c.ExternalRouteOf, c.externalMoves, c.externalChecking = "", "", nil, false
 	c.ChainSeq, c.SuggestSeq = 0, 0
 	c.ReplyPolicy = nil
 	c.ReplyContentSources, c.ReplyContextTruncated, c.MailBodyTruncated = nil, false, nil

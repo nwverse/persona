@@ -62,6 +62,16 @@ or the manager restarts and retries). A previous interrupted send (hub stopped o
 - Immediately after restart, before a round lists sources, the manager still knows plugin-provided connectors (`extensions` in `inbox.config`). Their items still have no fallback and must wait for the model;
   unknown sources behave likewise, never defaulting to unimportant.
 
+### Route external updates to work
+
+Inbox source routing is for people who want specific chats, repositories, mail or subscriptions to update their work.
+Forwarding starts after the owner configures a source mode. Persona uses the closest applicable binding and sends
+actionable updates to one owner. FYI updates are kept in the target's activity. When a source serves several topics,
+Persona can sort short summaries against the bound work. New work appears as a to-do confirmation unless the owner
+has enabled automatic to-do creation for its owning direction. An update to work already in progress goes to the
+existing owner. The Inbox can receive the update before it is routed. Digest sources wait for their configured window.
+See [External source bindings](../protocol/protocol.md#external-source-bindings) for configuration and source identities.
+
 ### Send failures (2026-11-16, #9125)
 
 A reply that did not go out says why, on `POST /api/v1/inbox/{id}/reply` and on a confirmed reply suggestion (`…/suggestion`), instead of a bare 502.

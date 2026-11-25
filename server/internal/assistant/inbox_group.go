@@ -169,10 +169,22 @@ func (s *Service) relateBatch(ctx context.Context, c assistantwire.InboxSource, 
 		return
 	}
 	events := s.groupEventsWithVisibility(c.ID, t.Thread, "", fullCfg.Visibility)
-	plan, why := s.askGroup(ctx, c, t, events)
+	var plan *groupPlan
+	var why string
+	scoped := s.externalGroupingConfigured(ctx, c, t)
+	if scoped {
+		why = "scoped external routing uses structural grouping"
+	} else {
+		plan, why = s.askGroup(ctx, c, t, events)
+	}
 	if plan == nil {
 		var err error
-		if plan, err = s.fallbackGroup(ctx, c, t, events); err != nil {
+		plan, err = s.fallbackGroup(ctx, c, t, events)
+		if scoped && errors.Is(err, errNoFallback) {
+			plan = &groupPlan{events: []plannedEvent{{messages: t.Group.New, title: t.Title}}}
+			err = nil
+		}
+		if err != nil {
 			if errors.Is(err, errNoFallback) { // the batch waits for the model, as an inbox item without a fallback does
 				s.noteGroupWhy(c.ID, why+"; no fallback: waiting for the model")
 				return
@@ -645,6 +657,7 @@ func (s *Service) writeGroup(ctx context.Context, c assistantwire.InboxSource, t
 	b.mu.Lock()
 	saved = b.followMerged(saved, time.Now())
 	b.mu.Unlock()
+	s.prepareExternalInbox(ctx, saved)
 	for id := range s.saveInbox(ctx, saved) {
 		s.logf("inbox: %s: event %s could not be saved; it stays in memory until its next save", c.ID, id)
 	}

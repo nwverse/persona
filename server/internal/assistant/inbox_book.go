@@ -102,6 +102,9 @@ type inboxBook struct {
 	listMemo inboxListMemo // each listed item's JSON for GET /api/v1/inbox, under mu (inbox_list_memo.go)
 
 	// Deterministic PR/Issue to-do auto-forwarding state (inbox_forward.go).
+	externalCapture bool // the manager has the external routing store, under mu
+	externalTriage  externalInboxTriager
+	externalWake    chan struct{}
 	forwarding      sync.Mutex
 	forwardAgain    atomic.Bool
 	forwardStoreMu  sync.Mutex // serializes ledger DB load and save (lock order: forwardStoreMu -> forwardMu)
@@ -124,6 +127,7 @@ type inboxVia struct {
 func (b *inboxBook) init() {
 	b.once.Do(func() {
 		b.items = map[string]*InboxItem{}
+		b.externalWake = make(chan struct{}, 1)
 		b.extensions, b.builtin, b.kinds, b.names = map[string]bool{}, map[string]bool{}, map[string]string{}, map[string]string{}
 		b.vias = map[string]inboxVia{}
 		b.retriaged, b.settleAsked, b.settleSeen = map[string]bool{}, map[string]time.Time{}, map[string]string{}

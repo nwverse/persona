@@ -73,8 +73,18 @@ func larkExternalRef(lark *InboxLark, thing connector.InboxThing) assistantwire.
 			chat, topic = linkedChat, q.Get("open_thread_id")
 		}
 	}
+	if tagged := inboxExternalTag(thing.Tags, connector.TagChat); tagged != "" && (chat == "" || !strings.HasPrefix(chat, "oc_")) {
+		chat = tagged
+	}
 	if chat == "" {
-		chat = inboxExternalTag(thing.Tags, connector.TagChat)
+		if raw, ok := strings.CutPrefix(thing.Thread, "chat:"); ok {
+			if account, feed, found := strings.Cut(raw, ":"); found {
+				if n, err := strconv.Atoi(account); err == nil && n > 1 {
+					ref.Channel, raw = assistantwire.ExternalChannelID(account), feed
+				}
+			}
+			chat = raw
+		}
 	}
 	ref.Container, ref.Item = externalNode("chat", chat), externalNode("thread", topic)
 	return ref
@@ -166,9 +176,29 @@ func inboxExternalEventIDs(it *InboxItem) []string {
 				return slices.Compact(head.IDs)
 			}
 		}
+		if it.Connector != nil {
+			if u, err := url.Parse(it.Connector.URL); err == nil {
+				if id := githubExternalCommentID(u.Fragment); id != "" {
+					return []string{id}
+				}
+			}
+		}
 	}
 	if last == "" {
 		return nil
 	}
 	return []string{last}
+}
+
+func githubExternalCommentID(fragment string) string {
+	for _, part := range []struct{ prefix, kind string }{
+		{"issuecomment-", "comment:"}, {"pullrequestreview-", "review:"}, {"discussion_r", "review-comment:"},
+	} {
+		if raw, ok := strings.CutPrefix(fragment, part.prefix); ok {
+			if id, err := strconv.ParseUint(raw, 10, 64); err == nil && id > 0 {
+				return part.kind + strconv.FormatUint(id, 10)
+			}
+		}
+	}
+	return ""
 }

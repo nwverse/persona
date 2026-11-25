@@ -1017,3 +1017,10 @@ it the CLI declares only five-minute markers on an API key or a gateway, whateve
 
 Adding an always-loaded tool to the top-level list can invalidate a warm Claude conversation prefix. Test
 the full ordered list before and after discovery and reconnection, including a different upstream order.
+
+## An inbox row can carry more than one provider event (#15517)
+
+Keep the deduplication key independent of the Inbox row and the binding that matched. Two readers can report
+the same comment, and the row can collect a later comment while the first is waiting for its digest. Commit the
+source receipt with the Inbox write. Reserve only one action owner and pin the delivery before contacting the
+Agent. Record uncertain delivery against that recipient so a restarted worker does not try another one.

@@ -296,6 +296,7 @@ func (b *inboxBook) noteReceived(it *InboxItem, prev inboxSeen, messages []Inbox
 	// followMerged consumes this per-round fact before the next collection. Unlike a timestamp comparison with the
 	// survivor, it proves that this member itself advanced even when its source event is older than the survivor's.
 	it.receivedInCollection = true
+	b.captureExternalInbox(it)
 	fresh := prev.last == "" && len(it.Chain) == 0
 	n := it.Count - prev.count
 	if fresh {
