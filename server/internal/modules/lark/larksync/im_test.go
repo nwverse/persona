@@ -574,3 +574,149 @@ func TestIMNamesSendersAndSingleChats(t *testing.T) {
 		t.Errorf("refused lookups = %d, want 1", n)
 	}
 }
+
+// Bot/app senders (sender_type="app" or cli_* ids) and other non-user senders skip contact lookups completely, and a
+// single user lookup failure (non-scope error or transient error) leaves only that sender unnamed without disabling
+// name resolution for everyone else in the run.
+func TestIMNameSendersSkipsBotsAndIsolatesPerSenderFailures(t *testing.T) {
+	clk := &fakeClock{t: testNow}
+	f := newFakeOpen(t, clk)
+	s := newTestSyncer(t, clk)
+	emptyDocs(f)
+	emptySearch(f)
+
+	msgWithType := func(id, chat, sender, senderType, text string, at time.Time) map[string]any {
+		m := textMsg(id, chat, sender, text, at)
+		senderMap := map[string]string{"id": sender}
+		if senderType != "" {
+			senderMap["sender_type"] = senderType
+		}
+		m["sender"] = senderMap
+		return m
+	}
+
+	f.data("/open-apis/im/v1/chats", map[string]any{"items": []any{
+		map[string]any{"chat_id": "oc_mix", "name": "Example Group", "chat_mode": "group"},
+		map[string]any{"chat_id": "oc_dm", "chat_mode": "p2p"},
+	}})
+	f.handle("/open-apis/im/v1/messages", func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("container_id") {
+		case "oc_mix":
+			writeData(w, map[string]any{"items": []any{
+				// Bot/app senders first (previously poisoned r.namesOff for the entire run).
+				msgWithType("om_bot_app", "oc_mix", "cli_example_bot", "app", "deploy started", testNow.Add(-6*time.Minute)),
+				msgWithType("om_bot_prefix", "oc_mix", "cli_example_legacy", "", "legacy alert", testNow.Add(-5*time.Minute)),
+				msgWithType("om_anon", "oc_mix", "ou_anon", "anonymous", "anon note", testNow.Add(-4*time.Minute)),
+				// Per-sender non-scope failures: must not disable lookups for later users.
+				msgWithType("om_missing_1", "oc_mix", "ou_missing", "user", "first from missing", testNow.Add(-3*time.Minute)),
+				msgWithType("om_missing_2", "oc_mix", "ou_missing", "user", "second from missing", testNow.Add(-2*time.Minute)),
+				msgWithType("om_flaky", "oc_mix", "ou_flaky", "user", "transient fail", testNow.Add(-90*time.Second)),
+				// Ordinary human user after all the above.
+				msgWithType("om_alice", "oc_mix", "ou_alice", "user", "hello from alice", testNow.Add(-time.Minute)),
+			}})
+		case "oc_dm":
+			writeData(w, map[string]any{"items": []any{
+				msgWithType("om_bob", "oc_dm", "ou_bob", "user", "hello in dm", testNow.Add(-30*time.Second)),
+			}})
+		default:
+			t.Errorf("unexpected container %q", r.URL.Query().Get("container_id"))
+		}
+	})
+	f.handle("/open-apis/contact/v3/users/ou_missing", func(w http.ResponseWriter, _ *http.Request) {
+		writeCode(w, http.StatusBadRequest, 41001, "user not found")
+	})
+	f.handle("/open-apis/contact/v3/users/ou_flaky", func(w http.ResponseWriter, _ *http.Request) {
+		writeCode(w, http.StatusInternalServerError, 0, "temporary error")
+	})
+	// Bot/non-user contact paths must never be called at all.
+	for _, skip := range []string{"cli_example_bot", "cli_example_legacy", "ou_anon"} {
+		id := skip
+		f.handle("/open-apis/contact/v3/users/"+id, func(w http.ResponseWriter, _ *http.Request) {
+			t.Errorf("contact lookup called for non-user sender %s", id)
+			writeCode(w, http.StatusBadRequest, 99992402, "field validation failed")
+		})
+	}
+
+	res, err := s.Run(t.Context(), binding(f, "primary~a1", larksyncwire.TierFull), staticToken("tok"), nil, newMemIndex())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Errors) != 0 {
+		t.Fatalf("unexpected errors: %+v", res.Errors)
+	}
+	byID := map[string]larksyncwire.Message{}
+	for _, m := range res.Messages {
+		byID[m.ID] = m
+	}
+	wantNames := map[string]string{
+		"om_bot_app":    "",
+		"om_bot_prefix": "",
+		"om_anon":       "",
+		"om_missing_1":  "",
+		"om_missing_2":  "",
+		"om_flaky":      "",
+		"om_alice":      "Name ou_alice",
+		"om_bob":        "Name ou_bob",
+	}
+	if len(byID) != len(wantNames) {
+		t.Fatalf("got %d messages, want %d", len(byID), len(wantNames))
+	}
+	for id, want := range wantNames {
+		if got := byID[id].SenderName; got != want {
+			t.Errorf("%s: SenderName = %q, want %q", id, got, want)
+		}
+	}
+	if got := byID["om_bob"].ChatName; got != "Name ou_bob" {
+		t.Errorf("dm ChatName = %q, want %q", got, "Name ou_bob")
+	}
+	if n := f.count("/open-apis/contact/v3/users/ou_missing"); n != 1 {
+		t.Errorf("ou_missing looked up %d times, want 1 (cached miss)", n)
+	}
+	if n := f.count("/open-apis/contact/v3/users/ou_alice"); n != 1 {
+		t.Errorf("ou_alice looked up %d times, want 1", n)
+	}
+	if n := f.count("/open-apis/contact/v3/users/ou_bob"); n != 1 {
+		t.Errorf("ou_bob looked up %d times, want 1", n)
+	}
+}
+
+// A missing contact scope disables further uncached lookups for the rest of the run while still serving names that
+// were already cached earlier in the same run.
+func TestIMNameSendersScopeErrorStopsRemainingLookupsButKeepsCache(t *testing.T) {
+	clk := &fakeClock{t: testNow}
+	f := newFakeOpen(t, clk)
+	s := newTestSyncer(t, clk)
+	emptyDocs(f)
+	emptySearch(f)
+
+	f.data("/open-apis/im/v1/chats", map[string]any{"items": []any{
+		map[string]any{"chat_id": "oc_g", "name": "Example Group", "chat_mode": "group"},
+	}})
+	f.data("/open-apis/im/v1/messages", map[string]any{"items": []any{
+		textMsg("om_1", "oc_g", "ou_ok", "first", testNow.Add(-4*time.Minute)),
+		textMsg("om_2", "oc_g", "ou_denied", "second", testNow.Add(-3*time.Minute)),
+		textMsg("om_3", "oc_g", "ou_never", "third", testNow.Add(-2*time.Minute)),
+		textMsg("om_4", "oc_g", "ou_ok", "fourth", testNow.Add(-time.Minute)),
+	}})
+	f.handle("/open-apis/contact/v3/users/ou_denied", func(w http.ResponseWriter, _ *http.Request) {
+		writeCode(w, http.StatusBadRequest, 99991679, "missing contact scope")
+	})
+
+	res, err := s.Run(t.Context(), binding(f, "primary~a1", larksyncwire.TierFull), staticToken("tok"), nil, newMemIndex())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]larksyncwire.Message{}
+	for _, m := range res.Messages {
+		byID[m.ID] = m
+	}
+	if byID["om_1"].SenderName != "Name ou_ok" || byID["om_4"].SenderName != "Name ou_ok" {
+		t.Errorf("cached user names: om_1=%q om_4=%q", byID["om_1"].SenderName, byID["om_4"].SenderName)
+	}
+	if byID["om_2"].SenderName != "" || byID["om_3"].SenderName != "" {
+		t.Errorf("post-scope names: om_2=%q om_3=%q", byID["om_2"].SenderName, byID["om_3"].SenderName)
+	}
+	if n := f.count("/open-apis/contact/v3/users/ou_never"); n != 0 {
+		t.Errorf("ou_never looked up %d times after scope refusal, want 0", n)
+	}
+}
