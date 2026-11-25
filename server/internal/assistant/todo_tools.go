@@ -471,7 +471,7 @@ func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args
 	}
 	out, err := s.editTodo(ctx, t.ID, e)
 	if err != nil {
-		return "", fmt.Errorf("the change could not be saved, nothing changed: %w", s.taskCloseToolError(ctx, err))
+		return "", fmt.Errorf("the change could not be saved, nothing changed: %w", err)
 	}
 	return "Updated: " + todoLine(out, now, loc), nil
 }
@@ -511,7 +511,7 @@ func (s *Service) toolTodoDone(ctx context.Context, machine, self, name string, 
 	}
 	out, err := s.editTodoWithCloseActivity(ctx, t.ID, db.TodoEdit{Done: &complete}, complete)
 	if err != nil {
-		return "", fmt.Errorf("the change could not be saved, nothing changed: %w", err)
+		return "", fmt.Errorf("the change could not be saved, nothing changed: %w", s.taskCloseToolError(ctx, err))
 	}
 	if complete {
 		return "Completed: " + todoLine(out, now, loc), nil
