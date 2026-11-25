@@ -268,6 +268,16 @@ The web catalog includes the separate row and a reset-to-follow action. Android 
 
 Clients find these rows by data, not by ID: a purpose with `parent: "agent.new"` and writable `fields` is an Agents override (web `agentsOverride`, Android `agentsOverride`, Apple `ModelConfigurationModel.followsAgents`), shown with "Separately configured" / "Follow Agents". An older hub that still sends `inbox.agent` with `fields: []` keeps it a read-only use of Agents.
 
+## Claude's desktop app as Agents' launcher (#13117)
+
+Agents (`agent.new`) can run on **Claude's desktop app** (`launcher.claude-desktop`, `models_desktop.go`): a person's New Agent then opens its session in the app by default (`docs/integrations/claude-integration.md`, "New sessions in the desktop app"). Settings › Model providers does not list it, as it has no command, gateway or test of its own; Model configuration adds it as a provider named "Claude desktop app" with the computers whose launcher list offers it.
+
+- **Agents only:** `provider_ids` holds it for `agent.new` alone. The main chat, scheduled tasks, the background supervisor, the in-meeting conversation and API uses run headless or through `model.run`, which an app cannot; the Inbox AI twin's and Lark /agent's own choices don't offer it either. The Codex App's `codex-app` is not offered anywhere (`docs/integrations/launchers.md`).
+- **The AI twin and Lark /agent:** they run headless, so while they follow Agents and Agents runs on the app, they run on Claude Code's default launcher; "Inherited from" says why. Set apart, they keep their own choice.
+- **Saving:** a model is saved without a node check (the app has no command to probe; its node checks the ID at the start). The permission mode Plan is refused: the app runs no read-only plan start.
+- **Computers without the app:** `GET /api/v1/machines/{mid}/launchers` answers `default` with the launcher a start there gives way to (`launcherInstead`, "Launcher-picker defaults"), with its own model and effort, so New Agent shows what will run; the start itself falls back the same way, with no error (#2640).
+- **Starts Persona makes itself:** a task, `agent_start` and a message resuming an Agent started outside Persona do not open the app from the default. A start in the app brings the app to the front and runs on the app's own settings, which an unattended start should not do. They run on that same fallback launcher, with a model the caller named kept, and the task's why or the tool's answer says so (`assistant-tasks.launcher_desktop_default`, `launcher_desktop_default_model`). Naming `claude-desktop` explicitly still opens the app.
+
 ## Meeting minutes and the in-meeting conversation (#7980)
 
 A recorded meeting uses two models: one writes its minutes afterwards, the other is Persona in the meeting, the room
@@ -527,7 +537,7 @@ The text is never logged. At most 256 KiB is read, and the answer stays small: a
 
 ## Launcher-picker defaults
 
-`GET /api/v1/machines/{mid}/launchers` includes `default: {provider, model, effort}`, the effective value for the corresponding purpose in “Model Settings” (`?purpose=`, default `agent.new`; the main-chat picker sends `assistant`). An older hub adds `runtime` for `assistant`, which current clients do not need. Clients use it to show “Default: …” without separately querying model configuration.
+`GET /api/v1/machines/{mid}/launchers` includes `default: {provider, model, effort}`, the effective value for the corresponding purpose in “Model Settings” (`?purpose=`, default `agent.new`; the main-chat picker sends `assistant`). For `agent.new` on a computer without Claude's desktop app while Agents runs on it, `default` is the launcher the start runs there instead ("Claude's desktop app as Agents' launcher (#13117)"). An older hub adds `runtime` for `assistant`, which current clients do not need. Clients use it to show “Default: …” without separately querying model configuration.
 
 ## Choosing a model for a new Agent (#794)
 

@@ -21122,6 +21122,7 @@ _SEARCH_DROP = [re.compile(r"(?s)<persona-view-errors\b[^>]*>.*?</persona-view-e
                 re.compile(r"<" + FILE_TAG_PATTERN + r"\b[^>]*?/?>(?:\s*</" + FILE_TAG_PATTERN + r">)?")]
 _SEARCH_PASTED = re.compile(r"(?s)<pasted_content\b[^>]*>(.*?)</pasted_content>")
 _SEARCH_IMAGES = [re.compile(r"(?s)<attached_images>.*?</attached_images>"), re.compile(r"\[Image #\d+\]\s?")]
+_SEARCH_INLINE_REFERENCE = re.compile(r"(?:^|\r?\n\r?\n)<!-- persona-inline-v1 \[[^\r\n]*", re.M)
 _SEARCH_ACTION = re.compile(r'\n<persona-action view="[^"<>]*" action="[^"<>]*">\{[^<>]*\}</persona-action>$')
 _SEARCH_CARD = re.compile(r"```(persona-view|persona-card)[^\n]*\n(.*?)\n```[^\n]*(?:\n|$)", re.S)
 
@@ -21154,7 +21155,7 @@ def search_index_text(item):
         text = _SEARCH_PASTED.sub(r"\1", text)
         for r in _SEARCH_IMAGES:
             text = r.sub("", text)
-        text = _SEARCH_ACTION.sub("", text.strip()).strip()
+        text = _SEARCH_ACTION.sub("", _SEARCH_INLINE_REFERENCE.sub("", text).strip()).strip()
     else:
         return None
     return text if text.strip() else None
