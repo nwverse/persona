@@ -217,17 +217,17 @@ import UIKit
         hub.on("GET", Self.path, json: Self.view)
         hub.on("POST", "\(Self.path)/bots/primary/authorize",
                json: #"{"mode":"device","prompt":{"step":"device","kind":"device_code","url":"https://open.example.com/device","user_code":"ABCD-EFGH","interval":5}}"#)
-        var answer = #"{"step":"device"}"#
-        hub.on("POST", "\(Self.path)/bots/primary/authorize/poll") { _ in Data(answer.utf8) }
+        let answer = BotRecorder(#"{"step":"device"}"#)
+        hub.on("POST", "\(Self.path)/bots/primary/authorize/poll") { _ in Data(answer.value.utf8) }
         let m = model(hub)
         await m.load()
         await m.startAuthorize(bot: "primary", tier: LarkSyncView.tierDocs)
         #expect(await m.pollDevice() == false)
-        answer = #"{"error":"expired"}"#
+        answer.value = #"{"error":"expired"}"#
         #expect(await m.pollDevice() == true)
         guard case let .authorize(_, _, _, _, prompt, _) = m.flow else { Issue.record("left step 2"); return }
         #expect(prompt?.error == "expired" && prompt?.userCode == "ABCD-EFGH")
-        answer = #"{"done":true}"#
+        answer.value = #"{"done":true}"#
         #expect(await m.pollDevice() == true)
         #expect(m.flow == nil)
     }
