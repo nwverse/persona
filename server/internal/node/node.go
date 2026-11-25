@@ -1054,7 +1054,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	if method == "session.a2a.send" {
 		// This path is called by the manager's delivery queue. The separate
 		// method prevents older nodes from ignoring the idle-only guard.
-		id := n.resolveAlias(p.SessionID)
+		id := n.resolveSessionAlias("session.send", p.SessionID)
 		if !n.a2aIdleSession(ctx, id, p.A2AWakeOnSend, true) {
 			return nil, a2aBusy()
 		}
@@ -1137,7 +1137,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	}
 	if strings.HasPrefix(method, "session.") {
 		rewrite := map[string]string{}
-		if id := n.resolveAlias(p.SessionID); p.SessionID != "" && id != p.SessionID { // a fallback row the pane named (pifamily.go)
+		if id := n.resolveSessionAlias(method, p.SessionID); p.SessionID != "" && id != p.SessionID { // a fallback row the pane named (pifamily.go, agyaliases.go)
 			p.SessionID = id
 			rewrite["session_id"] = id
 		}

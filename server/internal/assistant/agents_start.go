@@ -65,9 +65,10 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 			return nil, badRequest(fmt.Errorf("purpose %q requires engine launch for session.start", "agent.new"), s.appLang(ctx, p.Lang))
 		}
 		// Held to what the computer has (#2640): a launcher picked that it lacks is refused, a default it lacks gives
-		// way to one it has.
+		// way to one it has. A person's New Agent start: a default of Claude's desktop app opens in the app where the
+		// computer has it (models_desktop.go).
 		if m, ok := s.device(ctx, p.MachineID); ok {
-			note, agent, err := s.fitNewLauncher(ctx, m, own, params)
+			note, agent, err := s.fitNewLauncher(withPersonStart(ctx), m, own, params)
 			if err != nil {
 				return nil, badRequest(err, s.appLang(ctx, p.Lang))
 			}

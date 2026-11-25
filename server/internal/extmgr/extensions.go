@@ -240,6 +240,8 @@ type extensions struct {
 	sandboxes extensionSandboxes
 	// sentLimit is the rate limit of the extensions' sent.record calls (sent_ledger.go).
 	sentLimit sentLimiter
+	// eventLimit is the rate limit of the extensions' assistant.event calls (extension_assistant_event.go).
+	eventLimit eventLimiter
 	// voice is the hub.json entry the built-in voice extension took over (nil without one); voiceID the built-in's id
 	// once registered, "" when there is none (voice_extension.go).
 	voice            *ExtensionConfig
@@ -1224,6 +1226,8 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			return ps.extensionMachinesCall(ctx, id, method, params)
 		case "browser.machines", "browser.run": // browser.run (extension_browser.go)
 			return ps.extensionBrowserCall(ctx, id, method, params)
+		case assistantwire.MethodAssistantEvent: // assistant.events (extension_assistant_event.go)
+			return ps.extensionAssistantEvent(ctx, id, params)
 		case "model.complete": // assistantwire.MethodModelComplete (extension_model_calls.go)
 			return ps.extensionModelCall(ctx, id, params)
 		case assistantwire.MethodTranscriptionStart, assistantwire.MethodTranscriptionAudio, assistantwire.MethodTranscriptionFinish,

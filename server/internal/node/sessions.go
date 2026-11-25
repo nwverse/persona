@@ -135,6 +135,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			WorkspaceID: a.WorkspaceID, AgentName: a.Name, Title: a.Title, Agent: a.Agent,
 			ExternalURL: a.ExternalURL, Chat: a.Chat, Topic: a.Topic, Dispatched: a.Dispatched,
 		}
+		if isStartScriptTitle(s.Title) {
+			s.Title = ""
+		}
 		if a.Agent == "codex" && isCodexWaitID(id) { // opened with no first message: no thread, no transcript yet (codex_waiting.go)
 			n.placeIn(&s, a)
 			codexWaitRow(&s, a)

@@ -227,7 +227,7 @@ func (n *Node) startWorkAgent(ctx context.Context, launch host.Launcher, cwd, la
 			return nil, n.abandonStart(ctx, created, kind, err)
 		}
 	}
-	n.noteWorkAgent(ctx, launch, pane, id, cwd, launcher, kind, model, effort, mode)
+	n.noteWorkAgent(ctx, launch, pane, id, cwd, launcher, kind, model, effort, mode, promptTitle(prompt))
 	if prompt != "" {
 		// Typed once, then checked in the background until the agent is seen taking it (workagent_first.go, #11345).
 		if err := n.workAgentFirst(ctx, pane, id, herdrName, prompt); err != nil {
@@ -279,8 +279,12 @@ func (n *Node) finishPiStart(ctx context.Context, launch host.Launcher, created 
 
 // noteWorkAgent records the session as Persona's, bound to its pane, so herdr resumes it the way it was started. An agy's
 // mode is its row's permission_mode (AppMode, modes.go currentModes): the mode its flags started it in.
-func (n *Node) noteWorkAgent(ctx context.Context, launch host.Launcher, pane, id, cwd, launcher, kind, model, effort, mode string) {
-	n.putAgentState(ctx, launch, id, sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, Model: model, ModelEffort: effort, AppMode: mode, StartedAt: time.Now().UTC()})
+func (n *Node) noteWorkAgent(ctx context.Context, launch host.Launcher, pane, id, cwd, launcher, kind, model, effort, mode string, startTitle ...string) {
+	title := ""
+	if len(startTitle) > 0 {
+		title = startTitle[0]
+	}
+	n.putAgentState(ctx, launch, id, sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, Model: model, ModelEffort: effort, AppMode: mode, StartTitle: title, StartedAt: time.Now().UTC()})
 	n.bindPane(pane, id)
 	n.holdResume(ctx, launch, pane, id, agentLaunch{Agent: kind, Launcher: launcher, Model: model, Effort: effort, Mode: mode, ID: id})
 }

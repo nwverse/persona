@@ -272,8 +272,14 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 	case "inbox_move":
 		return s.toolInboxMove(ctx, args)
 	case "inbox_post":
+		if s.isPageRoutineConversation(ctx, machine, self) {
+			return "", errors.New("inbox_post is not available to a dashboard routine; update the dashboard with page patch instead")
+		}
 		return s.toolInboxPost(ctx, machine, self, args) // inbox_post.go
 	case "notify_user":
+		if s.isPageRoutineConversation(ctx, machine, self) {
+			return "", errors.New("notify_user is not available to a dashboard routine; update the dashboard with page patch and Persona handles alerts")
+		}
 		var a struct {
 			Title      string `json:"title"`
 			Body       string `json:"body"`
@@ -365,6 +371,15 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		space, _ := s.knownSpace(ctx, self)
 		if !s.taskInSpace(ctx, a.ID, space) { // another space's task is as good as none (health.go)
 			return "", fmt.Errorf("no task %q", a.ID)
+		}
+		if task, ok := s.pageRoutineTask(ctx, a.ID); ok && task.PageID != "" {
+			if st, hasStore := s.pageStore(); hasStore {
+				if caller, err := s.pageCallerOf(ctx, machine, self, false); err != nil {
+					return "", err
+				} else if _, err := s.writablePage(ctx, st, caller, task.PageID); err != nil {
+					return "", err
+				}
+			}
 		}
 		ok, err := s.deleteTaskFrom(ctx, a.ID, self) // this conversation may ask for it again (scheduleOwn)
 		if err != nil {
@@ -1633,7 +1648,7 @@ func (s *Service) findAgent(ctx context.Context, machine, id string) (Device, pr
 	return s.findAgentInSpace(ctx, machine, id, nil)
 }
 
-// findAgentInSpace resolves a full id or prefix among eligible sessions. An empty
+// findAgentInSpace resolves a full id, prefix, or exact session alias among eligible sessions. An empty
 // machine searches all of them. A nil space preserves the lookup for other callers.
 func (s *Service) findAgentInSpace(ctx context.Context, machine, id string, space *string) (Device, proto.Session, error) {
 	id = strings.TrimSpace(id)
@@ -1642,6 +1657,9 @@ func (s *Service) findAgentInSpace(ctx context.Context, machine, id string, spac
 	}
 	var found *Device
 	var session proto.Session
+	var aliasDev *Device
+	var aliasSess proto.Session
+	aliasMatches := 0
 	for _, m := range s.devices(ctx) {
 		if machine != "" {
 			if want, ok := s.machineByName(ctx, machine); !ok || want.ID != m.ID {
@@ -1658,11 +1676,20 @@ func (s *Service) findAgentInSpace(ctx context.Context, machine, id string, spac
 					return Device{}, proto.Session{}, fmt.Errorf("session_id %s is ambiguous; use the full id and machine", id)
 				}
 				found, session = &m, c
+			} else if slices.Contains(c.Aliases(), id) {
+				aliasMatches++
+				aliasDev, aliasSess = &m, c
 			}
 		}
 	}
 	if found != nil {
 		return *found, session, nil
+	}
+	if aliasMatches == 1 {
+		return *aliasDev, aliasSess, nil
+	}
+	if aliasMatches > 1 {
+		return Device{}, proto.Session{}, fmt.Errorf("session_id %s is ambiguous; use the full id and machine", id)
 	}
 	return Device{}, proto.Session{}, fmt.Errorf("no agent %s (use agents_list)", id)
 }

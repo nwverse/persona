@@ -77,9 +77,9 @@ var (
 	// Inline numbered sequences: "1. foo; 2. bar" / "1) foo; 2) bar" / "(1) foo (2) bar" / "1、foo；2、bar" / "① foo ② bar".
 	inlineNumDotRe     = lazyre.New(`(?:^|[\s:：;；,，])(\d{1,2})\.\s+`) // i18n-ignore: parses inline numbered lists
 	inlineNumParenRe   = lazyre.New(`(?:^|[\s:：;；,，])(\d{1,2})\)\s*`) // i18n-ignore: parses inline numbered lists
-	inlineWrapParenRe  = lazyre.New(`[（(](\d{1,2})[)）]\s*`)            // i18n-ignore: parses inline numbered lists
-	inlineZhDunhaoRe   = lazyre.New(`(?:^|[\s:：;；,，])(\d{1,2})、\s*`)   // i18n-ignore: parses inline numbered lists
-	inlineCircledNumRe = lazyre.New(`([①②③④⑤⑥⑦⑧⑨⑩])\s*`)                // i18n-ignore: parses inline numbered lists
+	inlineWrapParenRe  = lazyre.New(`[（(](\d{1,2})[)）]\s*`)           // i18n-ignore: parses inline numbered lists
+	inlineZhDunhaoRe   = lazyre.New(`(?:^|[\s:：;；,，])(\d{1,2})、\s*`)  // i18n-ignore: parses inline numbered lists
+	inlineCircledNumRe = lazyre.New(`([①②③④⑤⑥⑦⑧⑨⑩])\s*`)              // i18n-ignore: parses inline numbered lists
 )
 
 type scopeHeadingKind int

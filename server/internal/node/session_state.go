@@ -138,6 +138,9 @@ type sessionState struct {
 	// StartOpID is the X-Persona-Op-Id that started this session, kept so reconnect reconciliation after a mid-flight
 	// disconnect or node restart can prove the start already ran (#10674).
 	StartOpID string `json:"start_op_id,omitempty"`
+	// StartTitle is the clipped first prompt of a Persona-started work agent pane (agytitle.go), shown before the
+	// agent reports its conversation or generates its own title instead of the shell's agent-start-*.sh command.
+	StartTitle string `json:"start_title,omitempty"`
 }
 
 func newState() *stateFile { return &stateFile{Sessions: map[string]sessionState{}} }
