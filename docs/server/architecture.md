@@ -151,8 +151,9 @@ only (`go/ast`, no type information) and enforce each rule where the source show
 signatures, literals, imports and the calls they can resolve; archguard's `TestDomainTyped`
 (`server/internal/archguard/domain_typed_test.go`) adds the rules that take a value's type to see, with `go/types` over
 the gc export data of what the packages import (`go list -export -deps`), for the cores the baseline does not hold and
-the packages that import them (the `typed-*` rows below). The routes neither sees yet are listed in #15088. A route
-found later is a bug in the check, never permission to take it.
+every package whose production imports reach one, directly or through another package such as the core's adapter
+(the `typed-*` rows below). The routes neither sees yet are listed in #15088. A route found later is a bug in the
+check, never permission to take it.
 
 Why the rules exist, in this repository's own code:
 
@@ -751,7 +752,7 @@ stated above; #15088 lists the ones known.
 | `app-named-primitive` | named basic types, in undeclared, application and library packages and adapters | the package |
 | `app-lifecycle-write` | assignments to a `DoneAt` or `DoneBy` field, in undeclared, application and library packages | the package |
 | `app-bridge-call` | uses of an adapter's `Wire` function, called or passed on, in undeclared, application and library packages' production code | the package |
-| `typed-visitor-impl` | a type that implements a core's `*Visitor` interface, whatever its methods' parameters are spelled, only in adapters, testkit and cores | fails at once |
+| `typed-visitor-impl` | a type that implements a core's `*Visitor` interface, whatever its methods' parameters are spelled, only in adapters, testkit and cores: read where it is declared in a package that reaches the core (imported, or through an adapter that hands out the core's values), and where such a package uses a type declared elsewhere, a generic one instantiated included | fails at once |
 | `typed-discard` | no `outcome.Of` or failure dropped, by a call written as a statement or an assignment to `_`, outside cores | fails at once |
 | `typed-codec` | no core value, nor a value that holds one, passed to `fmt`, `log`, `slog`, `json.Marshal`, `MarshalIndent` or `Encode`, or a template's `Execute` | fails at once |
 | `typed-map-range` | no range over a value whose type is a map in a core, a field or a named map type included | fails at once |

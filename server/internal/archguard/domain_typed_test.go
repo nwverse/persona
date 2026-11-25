@@ -10,6 +10,7 @@ import (
 	"go/token"
 	"go/types"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,9 +24,10 @@ import (
 
 // The type-aware domain rules (docs/server/architecture.md "Domain model", "The rules and their checks"): what the
 // syntax-only rules of domainrules cannot see, because it takes a value's type to see it. TestDomainTyped runs them
-// over the cores that predate no rule (every core but the legacy ones the baseline holds) and the packages that import
-// one, type-checked from source against the gc export data of what they import (go list -export -deps; go/types and
-// go/importer, the standard library only).
+// over the cores that predate no rule (every core but the legacy ones the baseline holds) and every package that
+// reaches one through its production imports, directly or through others (an adapter hands a core's value to code
+// that never imports the core), type-checked from source against the gc export data of what they import
+// (go list -export -deps; go/types and go/importer, the standard library only).
 
 // typedRule is what a typed finding says besides what was found, as domainrules' rules do.
 type typedRule struct{ why, fix, good string }
@@ -92,16 +94,15 @@ func TestDomainTyped(t *testing.T) {
 		}
 	}
 	layers := map[string]string{}
-	var targets []string
+	byPath := map[string]*domainrules.Pkg{}
 	for _, p := range pkgs {
 		layers[p.Path] = p.Layer
-		imports := strict[p.Path]
-		for _, f := range p.Files {
-			for _, imp := range f.Imports {
-				imports = imports || !f.Test && strict[imp.Path]
-			}
-		}
-		if imports && p.Name != "" {
+		byPath[p.Path] = p
+	}
+	reach := reachesStrict(byPath, strict)
+	var targets []string
+	for _, p := range pkgs {
+		if (strict[p.Path] || reach(p.Path)) && p.Name != "" {
 			targets = append(targets, p.Path)
 		}
 	}
@@ -118,7 +119,7 @@ func TestDomainTyped(t *testing.T) {
 		}
 		units = append(units, typedUnit{path: path, layer: layers[path], files: files})
 	}
-	findings, checked, err := typedCheck(units, strict, listed)
+	findings, checked, err := typedCheck(units, strict, layers, listed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,13 +133,16 @@ func TestDomainTyped(t *testing.T) {
 	}
 }
 
-// Every typed rule fails on its planted case and passes its compliant twin (testdata/domaintyped, one package per
-// layer, each case marked with a "planted: <rule>" comment on its line; a twin names none).
+// Every typed rule fails on its planted case and passes its compliant twin (testdata/domaintyped: an application
+// package and a core, one that reaches a core only through its adapter and a helper that reaches none; each case is
+// marked with a "planted: <rule>" comment on its line, and a twin names none).
 func TestDomainTypedPlanted(t *testing.T) {
 	planted := filepath.Join("testdata", "domaintyped")
-	units := []typedUnit{
+	units := []typedUnit{ // the ones another imports first
+		{path: "planted/helper", layer: "library"},
 		{path: "planted/app", layer: "application"},
 		{path: "planted/core", layer: "core"},
+		{path: "planted/viaadapt", layer: "application"},
 	}
 	want := map[string]bool{}
 	for i := range units {
@@ -162,12 +166,17 @@ func TestDomainTypedPlanted(t *testing.T) {
 	}
 	strict := map[string]bool{serverModule + "/internal/assistant/fleetcount": true, serverModule + "/internal/agentref": true,
 		"planted/core": true}
+	layers := map[string]string{serverModule + "/internal/assistant/fleetcount/fleetcountadapt": "adapter",
+		serverModule + "/internal/agentref/agentrefadapt": "adapter"}
+	for _, u := range units {
+		layers[u.path] = u.layer
+	}
 	listed, err := goListExport(serverDir, []string{serverModule + "/internal/assistant/fleetcount/fleetcountadapt",
 		serverModule + "/internal/agentref/agentrefadapt", "fmt", "maps", "slices", "encoding/json", "log/slog"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	findings, _, err := typedCheck(units, strict, listed)
+	findings, _, err := typedCheck(units, strict, layers, listed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,15 +211,69 @@ func TestDomainTypedPlanted(t *testing.T) {
 	}
 }
 
+// reachesStrict says of a package of the tree whether its production imports reach a strict core, directly or through
+// other packages of the tree.
+func reachesStrict(byPath map[string]*domainrules.Pkg, strict map[string]bool) func(path string) bool {
+	memo := map[string]bool{}
+	var reach func(path string) bool
+	reach = func(path string) bool {
+		if r, ok := memo[path]; ok {
+			return r
+		}
+		memo[path] = false // production imports cannot cycle; this only ends the walk if they did
+		r := false
+		if p := byPath[path]; p != nil {
+			for _, f := range p.Files {
+				for _, imp := range f.Imports {
+					r = r || !f.Test && (strict[imp.Path] || reach(imp.Path))
+				}
+			}
+		}
+		memo[path] = r
+		return r
+	}
+	return reach
+}
+
+// The typed rules check a package that reaches a strict core only through another package's production code, and
+// leave out one that reaches it only from its tests.
+func TestDomainTypedReach(t *testing.T) {
+	const module = "planted"
+	pkgs, err := domainrules.LoadFiles(module, map[string]string{
+		"core/core.go":          "// Package core.\n//\n//persona:layer core\npackage core\n",
+		"coreadapt/adapt.go":    "// Package coreadapt.\n//\n//persona:layer adapter\npackage coreadapt\n\nimport _ \"planted/core\"\n",
+		"app/app.go":            "// Package app.\npackage app\n\nimport _ \"planted/coreadapt\"\n",
+		"tested/tested.go":      "// Package tested.\npackage tested\n",
+		"tested/tested_test.go": "package tested\n\nimport _ \"planted/core\"\n",
+		"alone/alone.go":        "// Package alone.\npackage alone\n\nimport _ \"strings\"\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := map[string]*domainrules.Pkg{}
+	for _, p := range pkgs {
+		byPath[p.Path] = p
+	}
+	reach := reachesStrict(byPath, map[string]bool{module + "/core": true})
+	for path, want := range map[string]bool{"coreadapt": true, "app": true, "tested": false, "alone": false} {
+		if byPath[module+"/"+path] == nil {
+			t.Fatalf("%s was not loaded", path)
+		}
+		if got := reach(module + "/" + path); got != want {
+			t.Errorf("%s reaches the core: %v, want %v", path, got, want)
+		}
+	}
+}
+
 // listedPkg is what go list says of a package.
 type listedPkg struct {
 	ImportPath, Dir, Export string
-	GoFiles                 []string
+	GoFiles, Deps           []string
 }
 
 // goListExport is go list -export -deps over pkgs, from dir: every package they reach, with its export data file.
 func goListExport(dir string, pkgs []string) (map[string]listedPkg, error) {
-	cmd := exec.Command("go", append([]string{"list", "-export", "-deps", "-json=ImportPath,Dir,Export,GoFiles"}, pkgs...)...)
+	cmd := exec.Command("go", append([]string{"list", "-export", "-deps", "-json=ImportPath,Dir,Export,GoFiles,Deps"}, pkgs...)...)
 	cmd.Dir = dir
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -233,16 +296,19 @@ func goListExport(dir string, pkgs []string) (map[string]listedPkg, error) {
 }
 
 // typedCheck type-checks each unit from source, against the export data listed of what it imports, and runs the
-// rules over it; it returns the findings and the number of files checked.
-func typedCheck(units []typedUnit, strict map[string]bool, listed map[string]listedPkg) ([]typedFinding, int, error) {
+// rules over it; layers is the layer each package of the tree declares. It returns the findings and the number of
+// files checked.
+func typedCheck(units []typedUnit, strict map[string]bool, layers map[string]string,
+	listed map[string]listedPkg) ([]typedFinding, int, error) {
 	fset := token.NewFileSet()
-	imp := importer.ForCompiler(fset, "gc", func(path string) (io.ReadCloser, error) {
-		p, ok := listed[path]
-		if !ok || p.Export == "" {
-			return nil, fmt.Errorf("no export data for %s", path)
-		}
-		return os.Open(p.Export)
-	})
+	imp := unitImporter{listed: listed, checked: map[string]*types.Package{},
+		gc: importer.ForCompiler(fset, "gc", func(path string) (io.ReadCloser, error) {
+			p, ok := listed[path]
+			if !ok || p.Export == "" {
+				return nil, fmt.Errorf("no export data for %s", path)
+			}
+			return os.Open(p.Export)
+		})}
 	var findings []typedFinding
 	files := 0
 	for _, u := range units {
@@ -266,18 +332,37 @@ func typedCheck(units []typedUnit, strict map[string]bool, listed map[string]lis
 			return nil, 0, fmt.Errorf("type-checking %s: %v", u.path, err)
 		}
 		files += len(parsed)
-		c := typedChecks{fset: fset, unit: u, pkg: pkg, info: info, strict: strict}
+		imp.checked[u.path] = pkg
+		c := typedChecks{fset: fset, unit: u, pkg: pkg, info: info, strict: strict, layers: layers}
 		c.fail = c.failInterface()
+		if c.cores, err = reachedCores(pkg, strict, listed, imp); err != nil {
+			return nil, 0, fmt.Errorf("type-checking %s: %v", u.path, err)
+		}
 		for _, f := range parsed {
 			c.file(f)
 		}
-		c.visitors()
+		c.visitors(parsed)
 		findings = append(findings, c.findings...)
 	}
 	slices.SortFunc(findings, func(a, b typedFinding) int {
 		return strings.Compare(a.pos.String()+a.rule, b.pos.String()+b.rule)
 	})
 	return findings, files, nil
+}
+
+// unitImporter imports a package from its gc export data, or, when go list knows no such package (a planted one), as
+// typedCheck type-checked it from source before: the planted units import one another that way.
+type unitImporter struct {
+	gc      types.Importer
+	listed  map[string]listedPkg
+	checked map[string]*types.Package
+}
+
+func (u unitImporter) Import(path string) (*types.Package, error) {
+	if _, known := u.listed[path]; !known && u.checked[path] != nil {
+		return u.checked[path], nil
+	}
+	return u.gc.Import(path)
 }
 
 // typedChecks is the rules over one type-checked unit.
@@ -287,7 +372,9 @@ type typedChecks struct {
 	pkg      *types.Package
 	info     *types.Info
 	strict   map[string]bool
+	layers   map[string]string
 	fail     *types.Interface // the kit's fail.Fail, nil when the unit reaches none
+	cores    []*types.Package // the strict cores the unit reaches, directly or through what it imports
 	findings []typedFinding
 }
 
@@ -297,6 +384,11 @@ func (c *typedChecks) add(pos token.Pos, rule, what string) {
 
 // core says whether the unit is a core, which the syntax rules hold to discarding nothing already.
 func (c *typedChecks) core() bool { return c.unit.layer == "core" || c.unit.layer == "core shared" }
+
+// visits says whether a layer may declare a core's visitor: adapters, testkit and cores.
+func visits(layer string) bool {
+	return layer == "adapter" || layer == "testkit" || layer == "core" || layer == "core shared"
+}
 
 func (c *typedChecks) file(f *ast.File) {
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -470,18 +562,41 @@ func (c *typedChecks) typeName(t types.Type) string {
 	return types.TypeString(t, func(p *types.Package) string { return p.Name() })
 }
 
-// visitors is typed-visitor-impl over the unit's types: one that implements a strict core's *Visitor interface,
-// outside adapters, testkit and cores.
-func (c *typedChecks) visitors() {
-	switch c.unit.layer {
-	case "adapter", "testkit", "core", "core shared":
+// reachedCores is every strict core pkg reaches: the ones it imports and the ones what it imports builds on (go list's
+// Deps), as the importer that type-checked pkg loads them, so that their types are the ones pkg's code names.
+func reachedCores(pkg *types.Package, strict map[string]bool, listed map[string]listedPkg,
+	imp types.Importer) ([]*types.Package, error) {
+	paths := map[string]bool{}
+	for _, p := range pkg.Imports() {
+		for _, path := range append([]string{p.Path()}, listed[p.Path()].Deps...) {
+			paths[path] = paths[path] || strict[path]
+		}
+	}
+	var cores []*types.Package
+	for _, path := range slices.Sorted(maps.Keys(paths)) {
+		if !paths[path] {
+			continue
+		}
+		core, err := imp.Import(path)
+		if err != nil {
+			return nil, err
+		}
+		cores = append(cores, core)
+	}
+	return cores, nil
+}
+
+// visitors is typed-visitor-impl over the unit: a type that implements the *Visitor interface of a strict core the
+// unit reaches (imported or not: an adapter can hand it the core's value), outside adapters, testkit and cores. It reads
+// the types the unit declares, and the type of every expression in it, which also finds a visitor another package
+// declares (a helper that reaches no core itself) and a generic one that implements the interface only once its type
+// arguments are the core's.
+func (c *typedChecks) visitors(files []*ast.File) {
+	if visits(c.unit.layer) {
 		return
 	}
 	var ifaces []*types.TypeName
-	for _, p := range c.pkg.Imports() {
-		if !c.strict[p.Path()] {
-			continue
-		}
+	for _, p := range c.cores {
 		for _, name := range p.Scope().Names() {
 			obj, ok := p.Scope().Lookup(name).(*types.TypeName)
 			if !ok || !obj.Exported() || !strings.HasSuffix(name, "Visitor") {
@@ -492,16 +607,52 @@ func (c *typedChecks) visitors() {
 			}
 		}
 	}
+	if len(ifaces) == 0 {
+		return
+	}
+	reported := map[*types.TypeName]bool{}
+	implements := func(pos token.Pos, t types.Type, origin *types.TypeName) {
+		for _, v := range ifaces {
+			iface := v.Type().Underlying().(*types.Interface)
+			if types.Implements(t, iface) || types.Implements(types.NewPointer(t), iface) {
+				reported[origin] = true
+				c.add(pos, "typed-visitor-impl", c.typeName(t)+" implements "+v.Pkg().Name()+"."+v.Name()+" outside an adapter")
+			}
+		}
+	}
 	for id, obj := range c.info.Defs {
 		tn, ok := obj.(*types.TypeName)
 		if !ok || id.Name == "_" {
 			continue
 		}
-		for _, v := range ifaces {
-			iface := v.Type().Underlying().(*types.Interface)
-			if types.Implements(tn.Type(), iface) || types.Implements(types.NewPointer(tn.Type()), iface) {
-				c.add(id.Pos(), "typed-visitor-impl", tn.Name()+" implements "+v.Pkg().Name()+"."+v.Name()+" outside an adapter")
-			}
+		if named, ok := tn.Type().(*types.Named); ok && named.TypeParams().Len() > 0 {
+			continue // a generic type is read where it is instantiated, below
 		}
+		implements(id.Pos(), tn.Type(), tn)
+	}
+	seen := map[*types.Named]bool{}
+	for _, f := range files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			e, ok := n.(ast.Expr)
+			if !ok {
+				return true
+			}
+			t := c.info.Types[e].Type
+			if p, ok := t.(*types.Pointer); ok {
+				t = p.Elem()
+			}
+			named, ok := t.(*types.Named)
+			if !ok || seen[named] {
+				return true
+			}
+			seen[named] = true
+			origin := named.Origin().Obj()
+			if reported[origin] || origin.Pkg() == nil || origin.Pkg() == c.pkg && named.TypeArgs().Len() == 0 ||
+				c.strict[origin.Pkg().Path()] || visits(c.layers[origin.Pkg().Path()]) {
+				return true // read with its declaration above, or declared where a visitor may be
+			}
+			implements(e.Pos(), named, origin)
+			return true
+		})
 	}
 }

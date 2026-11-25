@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/domainkit/outcome"
 	"github.com/nwverse/persona/server/internal/domainkit/slot"
 	"github.com/nwverse/persona/server/internal/proto"
+	"planted/helper"
 )
 
 // peek decides on a tally's total in application code, whatever its methods' parameters are spelled.
@@ -25,6 +26,11 @@ func (p *peek) VisitCard(slot.Slot, fleetcount.Why)                   {}
 func (p *peek) VisitAgentByCard(_, _ slot.Slot, _ fleetcount.Why)     {}
 func (p *peek) VisitCardUnder(slot.Slot)                              {}
 func (p *peek) VisitTotal(total fleetcount.RowCount)                  { p.total = total }
+
+// Peeker is a helper's generic type, a tally visitor once instantiated with the core's types.
+func Peeker(total *fleetcount.RowCount) fleetcount.TallyVisitor {
+	return helper.NewPeek[slot.Slot, fleetcount.Why, instant.Instant](total) // planted: typed-visitor-impl
+}
 
 // host has a method of a visitor's name and no visitor's set: it implements none.
 type host struct{}
