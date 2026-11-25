@@ -113,9 +113,13 @@ func TestHerdrCoreStatusAndAgent(t *testing.T) {
 		{"claude-code", "idle", "claude", "claude", proto.StatusIdle},
 		{"claude-code", "error", "claude", "claude", proto.StatusUnknown},
 		{"codex", "working", "codex", "codex", proto.StatusWorking},
+		{"traex", "working", "traex", traexAgent, proto.StatusWorking},
+		{"traecli", "done", "traecli", traexAgent, proto.StatusDone},
+		{"codex", "done", "traecli", traexAgent, proto.StatusDone},
 		{"grok-build", "idle", "grok", "", ""},            // not a program the node drives: left for a compatible CLI
 		{"", "", "claude", "claude", proto.StatusUnknown}, // has not reported yet
 		{"", "", "/opt/bin/codex", "codex", proto.StatusUnknown},
+		{"", "", "/opt/bin/traecli", traexAgent, proto.StatusUnknown},
 		{"", "", "zsh", "", ""},
 		{"claude-code", "done", "zsh", "", ""},      // claude exited: its last state stays on the terminal
 		{"claude-code", "done", "-zsh", "", ""},     // a login shell
@@ -147,10 +151,15 @@ func TestHerdrCoreStatusAndAgent(t *testing.T) {
 // hcSession is a node with one claude session in herdr-core terminal t1.
 func hcSession(t *testing.T) (*Node, *fakeHC) {
 	t.Helper()
+	return hcSessionWithPID(t, 4242)
+}
+
+func hcSessionWithPID(t *testing.T, pid int) (*Node, *fakeHC) {
+	t.Helper()
 	n, _, hc, home := hcNode(t)
 	writeTranscript(t, home, hcCwd, sidA, time.Now().Add(-time.Minute), `{"type":"custom-title","customTitle":"x"}`)
-	writeClaudePID(t, home, 4242, sidA)
-	hc.setTerminals(hcTerminal("t1", "claude-code", "idle", 4242, "claude", hcCwd, "", "", ""))
+	writeClaudePID(t, home, pid, sidA)
+	hc.setTerminals(hcTerminal("t1", "claude-code", "idle", pid, "claude", hcCwd, "", "", ""))
 	if m := byID(listSessions(t, n)); m[sidA].PaneID != "herdr-core:t1" {
 		t.Fatalf("not listed: %v", m)
 	}
@@ -218,9 +227,11 @@ func TestHerdrCoreSendRefusedByHerdrCore(t *testing.T) {
 // The claude exited and the terminal is back at its shell, its last state still on it: the shell does not get the
 // message as a command — refused before anything is typed.
 func TestHerdrCoreSendAfterTheAgentExited(t *testing.T) {
-	n, hc := hcSession(t)
-	exited := hcTerminal("t1", "claude-code", "done", 4242, "claude", hcCwd, "", "", "")
-	exited["foreground"] = map[string]any{"pid": 4241, "name": "zsh", "argv": []string{"-zsh"}, "cwd": hcCwd}
+	pid, exit := idleTerminalTestProcess(t)
+	n, hc := hcSessionWithPID(t, pid)
+	exit()
+	exited := hcTerminal("t1", "claude-code", "done", pid, "claude", hcCwd, "", "", "")
+	exited["foreground"] = map[string]any{"pid": pid - 1, "name": "zsh", "argv": []string{"-zsh"}, "cwd": hcCwd}
 	hc.setTerminals(exited)
 	_, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "rm -rf build"})
 	if code, _ := refusalOf(t, err); code != "not_delivered" {

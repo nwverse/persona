@@ -394,6 +394,7 @@ func (s *Service) withdrawOutsideDecision(ctx context.Context, caller *outsideCa
 	out.Ask = copyAcceptAsk(&b.outside[id].Ask)
 	b.mu.Unlock()
 	s.askChanged(ctx)
+	s.todoPushOver(cur.AskTodoID)
 	s.closeOutsideBacking(ctx, cur.AskTodoID)
 	return &out, nil
 }
@@ -449,6 +450,7 @@ func (s *Service) answerOutside(ctx context.Context, id, asked string, answer ou
 	s.askChanged(ctx)
 	s.updateAskCards(ctx, id, cp)
 	if !stays {
+		s.todoPushOver(id)
 		s.recordOutsideDecision(ctx, id, &cp)
 		s.closeOutsideBacking(ctx, id)
 	}

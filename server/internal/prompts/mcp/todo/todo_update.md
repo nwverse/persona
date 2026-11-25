@@ -1,4 +1,4 @@
-Update supplied fields immediately, including task to-dos; no confirmation. Omitted fields stay; "" clears notes/due/remind/project/part_of/audience, [] clears after. New remind notifies again. Close/reopen via todo_complete/todo_reopen.{{template "shared/mcp_language" .}}
+Update supplied fields immediately, including task to-dos; no confirmation. Omitted fields stay; "" clears notes/due/remind/project/part_of/audience/direction_id, [] clears after. New remind notifies again. Close/reopen via todo_complete/todo_reopen.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -42,6 +42,10 @@ Update supplied fields immediately, including task to-dos; no confirmation. Omit
     "audience": {
       "type": "string",
       "description": "human, autonomous, or \"\" clears."
+    },
+    "direction_id": {
+      "type": "string",
+      "description": "Direction id, or \"\" clears."
     },
     "part_of": {
       "type": "string",

@@ -55,6 +55,7 @@ type Facts struct {
 	Kind            string       `json:"kind,omitempty"`
 	SeenAt          *time.Time   `json:"seen_at,omitempty"`
 	PartOf          string       `json:"part_of,omitempty"`
+	After           []string     `json:"after,omitempty"`
 	// Ask is the to-do's own open ask, DecisionReview its decision round and whether the owner chose Don't handle on it.
 	Ask            *Ask            `json:"ask,omitempty"`
 	DecisionReview *DecisionReview `json:"decision_review,omitempty"`
@@ -140,9 +141,11 @@ type Parked struct {
 	Evidence  *ParkEvidence `json:"evidence,omitempty"`
 }
 
-// ParkEvidence carries only the owner-request link the projection reads; the other evidence stays on the listed to-do.
+// ParkEvidence carries the fields of parked evidence the projection reads (owner-request link and shared-blocker root cause).
 type ParkEvidence struct {
 	Kind          string `json:"kind,omitempty"`
+	Target        string `json:"target,omitempty"`
+	URL           string `json:"url,omitempty"`
 	InteractionID string `json:"interaction_id,omitempty"`
 }
 

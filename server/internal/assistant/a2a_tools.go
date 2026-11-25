@@ -33,6 +33,10 @@ func (s *Service) a2aTool(ctx context.Context, ref a2aRef, name string, args jso
 	if err != nil {
 		return proto.TextResult(err.Error(), true)
 	}
+	if text, ok := out.(string); ok {
+		// a2a_read: a conversation to read, as agent_read gives it; it changes no task, so nothing to deliver.
+		return proto.TextResult(text, false)
+	}
 	s.a2aSignal()
 	data, err := json.Marshal(out)
 	if err != nil {
@@ -55,6 +59,7 @@ type a2aToolArgs struct {
 	Tier           string `json:"tier"`
 	PermissionMode string `json:"permission_mode"`
 	Presets        bool   `json:"presets"`
+	Turns          int    `json:"turns"`
 }
 
 type a2aTaskView struct {
@@ -97,6 +102,7 @@ func (s *Service) a2aToolCall(ctx context.Context, st a2aStore, cfg assistantwir
 	if err := json.Unmarshal(args, &a); err != nil {
 		return nil, errA2AInvalid
 	}
+	a.a2aRef = s.a2aResolve(ctx, cfg, a.a2aRef) // an id the session's conversation went by: its row now (a2a_resolve.go)
 	var t *a2aTask
 	var err error
 	switch name {
@@ -105,6 +111,8 @@ func (s *Service) a2aToolCall(ctx context.Context, st a2aStore, cfg assistantwir
 			return map[string]any{"sessions": s.a2aDiscover(ctx, cfg, c.Ref, a.Machine), "computers": s.a2aComputers(ctx, cfg, a.Machine)}, nil
 		}
 		return s.a2aDiscover(ctx, cfg, c.Ref, a.Machine), nil
+	case "a2a_read":
+		return s.a2aRead(ctx, cfg, c.Ref, a.a2aRef, a.Turns)
 	case "a2a_get":
 		if a.Task == "" {
 			return s.a2aInbox(ctx, st, cfg, c, a.Before)

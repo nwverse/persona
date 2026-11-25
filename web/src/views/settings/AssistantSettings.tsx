@@ -8,9 +8,10 @@ import { BASE } from "../../lib/base";
 import { settingsHref } from "./nav";
 import { SUPERVISE_PURPOSE } from "../../lib/background-supervisor";
 import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../../lib/api";
-import { MANAGER_HEADER } from "../../lib/manager-choice";
+import { MANAGER_HEADER, useKnownDefault } from "../../lib/manager-choice";
 import { mainRuntimeDetails, type MainExecution } from "../../lib/main-runtime";
 import { PERMISSION_MODES } from "../../lib/session-actions";
+import { ASSISTANT_PAGES_FEATURE } from "../../lib/extension-ui";
 import { ConfigurationManager } from "./ConfigurationManager";
 import { AgentAutoNaming, supportsAgentAutoNaming, type AgentAutoNamingState } from "./AgentAutoNaming";
 import { aboutMeSaves } from "./about-me-saves";
@@ -57,6 +58,7 @@ interface AssistantState extends AgentAutoNamingState, CacheKeepaliveState {
   task_workspace_preference?: "prefer-existing" | "prefer-new";
   /** "Fold background rounds" (#4314, docs/assistant/assistant.md "Background rounds"): on by default; unset from a hub before it (on). */
   main_background_folded?: boolean;
+  fold_routine_relay_replies?: boolean;
   /** "Show scheduled task chats" in the sidebar's Recent (#8324): off by default, one value for all of the user's
    *  devices; unset from a hub before it (no switch). All chats' ⋯ menu has the same switch (lib/recent-task-chats.ts). */
   recent_task_chats?: boolean;
@@ -95,6 +97,9 @@ interface AssistantState extends AgentAutoNamingState, CacheKeepaliveState {
   /** "Suggest the next message" (#4644, docs/assistant/assistant.md "Next-message suggestions"): off by default; unset
    *  from a hub before it. */
   next_suggestions?: boolean;
+  /** "Let Persona make dashboards" (#15017): off by default (absent is off); the switch is shown only when the hub
+   *  announces `assistant_pages`, and only for the default manager, which alone has Dashboards. */
+  dashboards?: boolean;
   /** "Run Claude chats in interactive Claude Code" (#10058, docs/assistant/assistant.md "Interactive Claude Code"): off
    *  by default; unset from a hub before it. */
   claude_interactive?: boolean;
@@ -131,6 +136,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
   const scopedApi: typeof api = (path, init) => api(path, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), [MANAGER_HEADER]: manager } });
   const [directionNotes] = useState(() => directionNotesDeps(scopedApi));
   const persona = usePersona();
+  const defaultId = useKnownDefault();
   const machines = useStore((s) => s.machines);
   const [info, setInfo] = useState<AssistantState | null>(null);
   // where and with what the main chat runs (docs/assistant/assistant.md "Main conversation execution on the web"): kept
@@ -143,6 +149,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
   const [open, setOpen] = useState<{ file: MemoryFile; index?: boolean } | null>(null);
   const [quietBusy, setQuietBusy] = useState(false);
   const [foldBusy, setFoldBusy] = useState(false);
+  const [relayBusy, setRelayBusy] = useState(false);
   const [recentBusy, setRecentBusy] = useState(false);
   const [startBusy, setStartBusy] = useState(false);
   const [permissionBusy, setPermissionBusy] = useState(false);
@@ -232,6 +239,23 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
     }
   };
 
+  // Dashboards (#15017): only the owner changes it, the hub confirms the value shown
+  const pagesAnnounced = useStore((s) => s.features.includes(ASSISTANT_PAGES_FEATURE));
+  const [dashboardsBusy, setDashboardsBusy] = useState(false);
+  const setDashboards = async (on: boolean) => {
+    setDashboardsBusy(true);
+    setInfo((i) => (i ? { ...i, dashboards: on } : i));
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { dashboards: on } });
+      setInfo((i) => (i ? { ...i, dashboards: r.dashboards === true } : i));
+    } catch (e) {
+      setInfo((i) => (i ? { ...i, dashboards: !on } : i));
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally {
+      setDashboardsBusy(false);
+    }
+  };
+
   const [interactiveBusy, setInteractiveBusy] = useState(false);
   const setInteractive = async (on: boolean) => {
     setInteractiveBusy(true);
@@ -289,6 +313,18 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
     } finally {
       setFoldBusy(false);
     }
+  };
+
+  const setRelayReplies = async (on: boolean) => {
+    setRelayBusy(true);
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { fold_routine_relay_replies: on } });
+      if (r.manager !== manager || r.fold_routine_relay_replies !== on) throw new Error(t("settings-assistantsettings.relay_unconfirmed"));
+      setInfo((i) => i ? { ...i, fold_routine_relay_replies: on } : i);
+      void refreshAssistant().catch(() => {});
+    } catch (e) {
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally { setRelayBusy(false); }
   };
 
   const setRecentTaskChats = async (on: boolean) => {
@@ -446,6 +482,14 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         </Row>
       </Group>
 
+      {typeof info?.fold_routine_relay_replies === "boolean" && (
+        <Group footer={t("settings-assistantsettings.relay_replies_footer")} anchor="relay-replies">
+          <Row label={t("settings-assistantsettings.relay_replies")}>
+            <Switch on={info.fold_routine_relay_replies} onChange={(on) => void setRelayReplies(on)} disabled={relayBusy} label={t("settings-assistantsettings.relay_replies")} />
+          </Row>
+        </Group>
+      )}
+
       {/* Show scheduled task chats in the sidebar's Recent (#8324): only from a hub that has the setting */}
       {typeof info?.recent_task_chats === "boolean" && (
         <Group title={t("settings-assistantsettings.recent_task_chats_title")} footer={t("settings-assistantsettings.recent_task_chats_footer")} anchor="recent-task-chats">
@@ -460,6 +504,15 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         <Group anchor="next-suggestions" footer={t("settings-assistantsettings.next_suggestions_footer")}>
           <Row label={t("settings-assistantsettings.next_suggestions")}>
             <Switch on={info.next_suggestions} onChange={(on) => void setSuggestions(on)} disabled={suggestBusy} label={t("settings-assistantsettings.next_suggestions")} />
+          </Row>
+        </Group>
+      )}
+
+      {/* Dashboards (#15017): only from a hub whose default manager has them, and only for that manager */}
+      {pagesAnnounced && info && manager === defaultId && (
+        <Group anchor="dashboards" footer={t("settings-assistantsettings.dashboards_footer")}>
+          <Row label={t("settings-assistantsettings.dashboards")}>
+            <Switch on={info.dashboards === true} onChange={(on) => void setDashboards(on)} disabled={dashboardsBusy} label={t("settings-assistantsettings.dashboards")} />
           </Row>
         </Group>
       )}
