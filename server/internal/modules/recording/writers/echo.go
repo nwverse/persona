@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"encoding/json"

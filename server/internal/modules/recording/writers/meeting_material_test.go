@@ -1,65 +1,17 @@
-package kb
+package writers
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/recordingwire"
 )
-
-// putMeetingMinutes stores minutes for recording id as the minutes round would: minutes.json and minutes.md next to
-// its meta.json. The round itself is the recording module's (internal/modules/recording/writers); this is the files
-// it leaves, for the tests of what reads, trims and deletes them.
-func putMeetingMinutes(t *testing.T, e *Engine, id string, m Minutes) {
-	t.Helper()
-	raw, err := json.MarshalIndent(&m, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	st := e.Store
-	st.recFilesMu.Lock()
-	defer st.recFilesMu.Unlock()
-	st.metaMu.Lock()
-	defer st.metaMu.Unlock()
-	if _, err := os.Stat(st.path(KindRecording, id, "meta.json")); err != nil {
-		t.Fatalf("minutes of %s: %v", id, err)
-	}
-	if err := writeFile(st.path(KindRecording, id, "minutes.json"), append(raw, '\n')); err != nil {
-		t.Fatalf("minutes of %s: %v", id, err)
-	}
-	if err := writeFile(st.path(KindRecording, id, "minutes.md"), []byte(strings.TrimSpace(m.Markdown)+"\n")); err != nil {
-		t.Fatalf("minutes of %s: %v", id, err)
-	}
-}
-
-// changeRecording rewrites recording id's meta.json with fn applied.
-func changeRecording(t *testing.T, e *Engine, id string, fn func(r *Recording)) {
-	t.Helper()
-	changeRecordingMeta(t, e, id, fn)
-}
-
-// markPrivate sets recording id's private mark.
-func markPrivate(t *testing.T, e *Engine, id string, private bool) {
-	t.Helper()
-	if _, err := e.SetPrivate(id, private); err != nil {
-		t.Fatalf("mark %s: %v", id, err)
-	}
-}
-
-func changeRecordingMeta(t *testing.T, e *Engine, id string, fn func(r *Recording)) {
-	t.Helper()
-	r := recordingNow(t, e, id)
-	fn(r)
-	if err := e.Store.putEntity(KindRecording, id, r, &r.Tagging, false); err != nil {
-		t.Fatal(err)
-	}
-}
 
 // The material holds only the four sources: this meeting's upload title, calendar hint, live sentences and answered
 // questions; earlier meetings' minutes (only from recordings that are meetings by kind or by request); their
@@ -77,7 +29,7 @@ func TestMeetingMaterialOnlyMeetingMaterial(t *testing.T) {
 	u.Calendar = &RecordingCalendar{Title: "Design review sync", Attendees: []string{"Ada", "Bo"}, Location: "Room 3"}
 	u.Segments = []RecordingSegment{{Start: 0, End: 2, Text: "SECRET-THIS-TRANSCRIPT"}}
 	putRecording(t, e, recID, u, now)
-	if _, err := e.Apply(KindRecording, recID, Update{Pinned: &pinned}); err != nil {
+	if _, err := e.Apply(KindRecording, recID, kb.Update{Pinned: &pinned}); err != nil {
 		t.Fatal(err)
 	}
 	changeRecording(t, e, recID, func(r *Recording) {
@@ -123,7 +75,7 @@ func TestMeetingMaterialOnlyMeetingMaterial(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []*Project{
+	for _, p := range []*kb.Project{
 		{Slug: "export", Name: "Export", Status: "active", Goal: "SECRET-GOAL", MyRole: "SECRET-ROLE", OneLine: "SECRET-ONELINE", People: []string{"lark-ada"}},
 		{Slug: "archive", Name: "Archive", Status: "done"},
 		{Slug: "noise", Name: "SECRET-IGNORED-PROJECT", Status: "ignored"},
@@ -133,7 +85,7 @@ func TestMeetingMaterialOnlyMeetingMaterial(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := e.Store.PutSummary(KindProject, "export", "SECRET-PROJECT-SUMMARY"); err != nil {
+	if err := e.Store.PutSummary(kb.KindProject, "export", "SECRET-PROJECT-SUMMARY"); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.Store.AppendLog("export", now, "Persona", "SECRET-PROJECT-LOG"); err != nil {
@@ -189,23 +141,23 @@ func TestMeetingMaterialOnlyMeetingMaterial(t *testing.T) {
 	markPrivate(t, e, bare, false) // no minutes: still nothing
 
 	// The rest of the knowledge base.
-	chat := &Chat{ID: "lark-team", Source: "lark", SourceID: "team", Kind: "group", Name: "SECRET-CHAT-NAME"}
+	chat := &kb.Chat{ID: "lark-team", Source: "lark", SourceID: "team", Kind: "group", Name: "SECRET-CHAT-NAME"}
 	if err := e.Store.PutChat(chat); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Store.AppendMessages(chat, []Line{{At: now.Add(-time.Hour), Sender: "Ada", Text: "SECRET-CHAT-MESSAGE about the export cap"}}); err != nil {
+	if err := e.Store.AppendMessages(chat, []kb.Line{{At: now.Add(-time.Hour), Sender: "Ada", Text: "SECRET-CHAT-MESSAGE about the export cap"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Store.PutSummary(KindChat, chat.ID, "SECRET-CHAT-SUMMARY"); err != nil {
+	if err := e.Store.PutSummary(kb.KindChat, chat.ID, "SECRET-CHAT-SUMMARY"); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Store.PutPerson(&Person{ID: "lark-ada", Source: "lark", SourceID: "ada", Name: "Ada", Note: "SECRET-PERSON-NOTE"}); err != nil {
+	if err := e.Store.PutPerson(&kb.Person{ID: "lark-ada", Source: "lark", SourceID: "ada", Name: "Ada", Note: "SECRET-PERSON-NOTE"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Store.PutItem(&Item{Kind: KindDoc, ID: "d1", Title: "SECRET-DOC about the export cap", At: now}); err != nil {
+	if err := e.Store.PutItem(&kb.Item{Kind: kb.KindDoc, ID: "d1", Title: "SECRET-DOC about the export cap", At: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Store.PutItem(&Item{Kind: KindEvent, ID: "ev1", Title: "SECRET-EVENT", At: now}); err != nil {
+	if err := e.Store.PutItem(&kb.Item{Kind: KindEvent, ID: "ev1", Title: "SECRET-EVENT", At: now}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -340,7 +292,7 @@ func TestLatestLines(t *testing.T) {
 
 // The answering model's material has the latest photos' words within its bound (that it has the listed photos'
 // words and never a deleted photo's is the recording module's test of the same name).
-func TestMeetingMaterialPhotos(t *testing.T) {
+func TestMeetingMaterialLatestPhotos(t *testing.T) {
 	long := []PhotoText{{N: 1, Text: "old"}, {N: 2, Caption: "ab", Text: "cdefgh"}, {N: 3, Text: "xyz"}}
 	if got := latestPhotos(long, 7); len(got) != 2 || got[0] != (PhotoText{N: 2, Caption: "ab", Text: "cd"}) || got[1].N != 3 {
 		t.Fatalf("latest %+v", got)

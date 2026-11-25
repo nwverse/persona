@@ -23,8 +23,8 @@ import (
 // recording module switched off or left out of the build, a recording stored earlier is still listed, opened
 // (the knowledge routes, kb_list, kb_get) and found by search, its files byte for byte as they were; the module's
 // rounds write nothing; the user can still delete it. It runs the same in every build (default,
-// persona_without_recording, persona_core_only): the recording is written by the knowledge base's own writers before
-// the service opens, as a hub with the module would have left it.
+// persona_without_recording, persona_core_only): the recording is written through the knowledge base's own commit
+// before the service opens, as a hub with the module would have left it.
 
 const (
 	moduleOffRec     = "44444444-4444-4444-8444-444444444444" // a meeting with its transcript and minutes
@@ -38,6 +38,46 @@ var moduleOffMinutes = kb.Minutes{Version: 1, Revision: 1, Title: "Export review
 	Decisions: []kb.MinutesItem{{Text: "This version keeps the quota", At: 20}},
 	Markdown:  "# Export review\n\n## Points\n\n- [00:00:10] Entries over 4 MB are dropped by the export\n\n## Decisions\n\n- [00:00:20] This version keeps the quota"}
 
+// seedModuleOffUpload stores upload u of a meeting as recording id the way the module's upload leaves it, through the
+// knowledge base's own commit (the storage port): meeting.json first when the upload names hub transcription, then
+// meta.json, segments.json and transcript.md under the undo journal. The upload is the module's
+// (internal/modules/recording/writers); a Core test, which runs without the module too, writes the files it leaves.
+func seedModuleOffUpload(t *testing.T, e *kb.Engine, id string, u recordingwire.RecordingUpload, now time.Time) {
+	t.Helper()
+	core, rid := kb.RecordingCore(e), recordingwire.ID(id)
+	locks := core.Locks()
+	locks.Recordings.Lock()
+	defer locks.Recordings.Unlock()
+	r := &recordingwire.Recording{ID: id, Revision: u.Revision, StartedAt: u.StartedAt.UTC(), Duration: u.Duration,
+		Language: u.Language, Device: u.Device, Title: u.Title, Complete: u.Complete, Kind: u.Kind,
+		Segments: len(u.Segments), Chars: recordingwire.RecordChars(u.Segments), Updated: now.UTC()}
+	if recordingwire.TranscriptionMode(u.Transcription) == recordingwire.TranscriptionHub {
+		m := recordingwire.Meeting{Transcription: &recordingwire.MeetingTranscription{Mode: recordingwire.TranscriptionHub}}
+		recordingwire.SettleTranscription(m.Transcription, now)
+		recordingwire.BumpRevs(&m, recordingwire.MeetingParts(recordingwire.Meeting{}, m))
+		raw, err := json.MarshalIndent(&m, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(core.Path(rid, recordingwire.FileMeeting)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		locks.Files.Lock()
+		err = core.WriteDurable(core.Path(rid, recordingwire.FileMeeting), append(raw, '\n'))
+		locks.Files.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Conv = &m
+	}
+	recordingwire.PlanMinutes(r)
+	recordingwire.PlanRecap(r)
+	r.Name = core.RecordingName(r)
+	if err := core.CommitRecording(r, u.Segments); err != nil {
+		t.Fatalf("seed %s: %v", id, err)
+	}
+}
+
 // seedModuleOffRecordings writes the two recordings into dir the way a hub with the module does.
 func seedModuleOffRecordings(t *testing.T, dir string, now time.Time) {
 	t.Helper()
@@ -47,13 +87,11 @@ func seedModuleOffRecordings(t *testing.T, dir string, now time.Time) {
 	}
 	e := &kb.Engine{Store: st, Owner: "Owner", Logf: func(string, ...any) {}}
 	put := func(id string, start time.Time, texts ...string) {
-		u := kb.RecordingUpload{Revision: 1, StartedAt: start, Duration: float64(10 * len(texts)), Language: "en-US", Device: "phone", Complete: true, Kind: kb.RecordingMeeting}
+		u := recordingwire.RecordingUpload{Revision: 1, StartedAt: start, Duration: float64(10 * len(texts)), Language: "en-US", Device: "phone", Complete: true, Kind: kb.RecordingMeeting}
 		for i, text := range texts {
 			u.Segments = append(u.Segments, kb.RecordingSegment{Start: float64(10 * i), End: float64(10*i + 9), Text: text})
 		}
-		if p, err := e.PutRecording(id, u, now); err != nil || p.Status != kb.RecordingStored {
-			t.Fatalf("seed %s: %+v %v", id, p, err)
-		}
+		seedModuleOffUpload(t, e, id, u, now)
 	}
 	put(moduleOffRec, now.Add(-2*time.Hour), "Hello, today we review the export", "Ada says entries over 4 MB are dropped by the export", "Then this version keeps the quota zebrafish", "Bo adds the regression test by Friday")
 	// The photo, as the module's intake leaves it: the image, photos.json and photos.md, written through the store's
@@ -347,12 +385,10 @@ func TestStoredAudioStaysUntouchedWithoutTheModule(t *testing.T) {
 	e := &kb.Engine{Store: st, Owner: "Owner", Logf: func(string, ...any) {}}
 	e.TranscriptionReady = func() bool { return true }
 	const id = "88888888-8888-4888-8888-888888888888"
-	u := kb.RecordingUpload{Revision: 1, StartedAt: now.Add(-time.Hour), Duration: 10, Language: "en-US", Device: "phone", Kind: kb.RecordingMeeting,
+	u := recordingwire.RecordingUpload{Revision: 1, StartedAt: now.Add(-time.Hour), Duration: 10, Language: "en-US", Device: "phone", Kind: kb.RecordingMeeting,
 		Segments: []kb.RecordingSegment{{Start: 0, End: 9, Text: "Hello"}}}
 	u.SetTranscription(kb.TranscriptionHub, nil)
-	if p, err := e.PutRecording(id, u, now); err != nil || p.Status != kb.RecordingStored {
-		t.Fatalf("seed: %+v %v", p, err)
-	}
+	seedModuleOffUpload(t, e, id, u, now)
 	pcm := make([]byte, 2*kb.AudioRate*2) // two seconds
 	for i := range pcm {
 		pcm[i] = byte(i*7 + 1)

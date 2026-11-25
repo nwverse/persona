@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"net/http"
 	"path"
 	"slices"
@@ -558,7 +559,7 @@ func (s *Service) minutesDays(ctx context.Context) int {
 }
 
 // meetingRoles are the values of meeting_attendance_default, off (the default) first.
-var meetingRoles = []string{kb.AttendanceOff, kb.AttendanceListener, kb.AttendanceParticipant}
+var meetingRoles = []string{recordingwire.AttendanceOff, recordingwire.AttendanceListener, recordingwire.AttendanceParticipant}
 
 // meetingAttendanceDefault is the role a meeting recording pre-selects (meeting_attendance_default, off by default).
 func (s *Service) meetingAttendanceDefault(ctx context.Context) string {
@@ -570,7 +571,7 @@ func meetingAttendanceOf(v Settings) string {
 	if r := v.MeetingAttendanceDefault; r != nil && slices.Contains(meetingRoles, *r) {
 		return *r
 	}
-	return kb.AttendanceOff
+	return recordingwire.AttendanceOff
 }
 
 // settingsLastGood is savedSettings, except that a transient read failure serves the settings read last when there

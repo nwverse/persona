@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"net/http"
 	"net/http/httptest"
 	"path"
@@ -418,10 +419,10 @@ func TestMinutesPastMeetingTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	const id = "44444444-4444-4444-8444-444444444444"
-	up := kb.RecordingUpload{Revision: 1, StartedAt: start, Duration: 30, Device: "phone", Complete: true, Kind: kb.RecordingMeeting,
+	up := recordingwire.RecordingUpload{Revision: 1, StartedAt: start, Duration: 30, Device: "phone", Complete: true, Kind: kb.RecordingMeeting,
 		Segments: []kb.RecordingSegment{{Start: 0, End: 9, Text: "Ada: the export drops large entries"},
 			{Start: 10, End: 19, Text: "we keep the cap"}, {Start: 20, End: 29, Text: "Bo adds the regression test by Friday"}}}
-	if st, err := e.PutRecording(id, up, start.Add(time.Minute)); err != nil || st.Status != kb.RecordingStored {
+	if st, err := recW(e).PutRecording(id, up, start.Add(time.Minute)); err != nil || st.Status != recordingwire.RecordingStored {
 		t.Fatalf("put: %v %v", st, err)
 	}
 	if n := e.RecordingProvider().WriteMinutes(ctx, 2); n != 1 {
@@ -515,9 +516,9 @@ func TestKBGetImportedMeetingListsItsRecording(t *testing.T) {
 		}
 	}
 	const id = "55555555-5555-4555-8555-555555555555"
-	up := kb.RecordingUpload{Revision: 1, StartedAt: start, Duration: 120, Device: "phone", Complete: true, Kind: kb.RecordingMeeting,
+	up := recordingwire.RecordingUpload{Revision: 1, StartedAt: start, Duration: 120, Device: "phone", Complete: true, Kind: kb.RecordingMeeting,
 		Segments: []kb.RecordingSegment{{Start: 0, End: 9, Text: "we keep the cap"}}}
-	if st, err := e.PutRecording(id, up, start.Add(3*time.Minute)); err != nil || st.Status != kb.RecordingStored {
+	if st, err := recW(e).PutRecording(id, up, start.Add(3*time.Minute)); err != nil || st.Status != recordingwire.RecordingStored {
 		t.Fatalf("put: %v %v", st, err)
 	}
 	e.RecordingProvider().WriteMinutes(context.Background(), 2)
@@ -941,7 +942,9 @@ func TestMeetingRoomTools(t *testing.T) {
 		return b.String()
 	}
 	// Each line's offset, then the clock time a batch gives it in the user's zone (what a highlight's said_at copies).
-	clock := func(sec float64) string { return kb.LiveClock(*rec, sec, loc) }
+	clock := func(sec float64) string { // the module's LiveClock: the moment's "15:04" in the user's zone
+		return rec.StartedAt.Add(time.Duration(sec * float64(time.Second))).In(loc).Format("15:04")
+	}
 	if got := text(call("meeting_lines", `{"to":100}`)); got != "[1:01 · "+clock(61)+"] Ada: keep the cap." {
 		t.Fatalf("lines %q", got)
 	}
