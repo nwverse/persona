@@ -106,7 +106,13 @@ def item_detail(expected):
     return detail
 
 
-SAMPLES = {"recents.schema.json": recent_setups, "todo-view.schema.json": todo_views}
+def wire_ids():
+    """(definition, sample) of every ID and AgentRef in ids/ids.json."""
+    for where, c in domain_cases("ids"):
+        yield c["expected"]["definition"], f"{where}.expected.value", c["expected"]["value"]
+
+
+SAMPLES = {"ids.schema.json": wire_ids, "recents.schema.json": recent_setups, "todo-view.schema.json": todo_views}
 
 
 def walk(doc, schema, value, at, reached):
@@ -177,6 +183,12 @@ def declared(language, text, names):
     return found
 
 
+# core's opaque agentref (server/internal/agentref) declares MachineID, SessionID and InteractionID on purpose: they are
+# not copies of the contract IDs but their opaque counterparts, which an adapter converts once (typed core plan 2.3).
+# Exempt only that package's files and only those names; any other Go file declaring them still fails.
+OPAQUE_COUNTERPARTS = (("go", "/internal/agentref/", {"MachineID", "SessionID", "InteractionID"}),)
+
+
 def hand_copies(schemas, read, tracked):
     """(file, name) of every declaration of a wire name outside the generated files. schemas: the wire schemas by file
     name; tracked: the repository's files; read(rel) their text."""
@@ -189,7 +201,8 @@ def hand_copies(schemas, read, tracked):
             for rel in tracked:
                 if rel in generated or not rel.endswith(suffixes):
                     continue
-                out += [(rel, name) for name in declared(language, read(rel), names)]
+                exempt = set().union(*[n for lang, part, n in OPAQUE_COUNTERPARTS if lang == language and part in "/" + rel])
+                out += [(rel, name) for name in declared(language, read(rel), names) if name not in exempt]
     return sorted(set(out))
 
 
@@ -346,6 +359,16 @@ class WireSchema(unittest.TestCase):
             ("harmony/Widget.ets", "Widget"), ("server/group.go", "Later"), ("server/local.go", "Widget"),
             ("web/generic.ts", "Thing"), ("web/thing.ts", "Thing"),
         ])
+
+    def test_agentref_exemption_is_narrow(self):
+        schemas = {"ids.schema.json": {"x-out": {"go": "server/internal/wireids/ids_gen.go"}, "$defs": {"SessionID": {}, "TodoID": {}}}}
+        files = {
+            "server/internal/agentref/ref.go": "type SessionID struct{}\n",  # core's opaque counterpart
+            "server/internal/other/ref.go": "type SessionID string\n",
+            "server/internal/agentref/other.go": "type TodoID string\n",  # not a name the exemption covers
+        }
+        self.assertEqual(hand_copies(schemas, files.__getitem__, sorted(files)), [
+            ("server/internal/agentref/other.go", "TodoID"), ("server/internal/other/ref.go", "SessionID")])
 
     def test_empty_strings_are_samples(self):
         # "" is a value, not an absent field: a generated type must write it back (Go omitempty would not).
