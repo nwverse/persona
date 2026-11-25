@@ -12,7 +12,6 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/connector"
-	"github.com/nwverse/persona/server/internal/modules/lark/feishubot"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -459,7 +458,7 @@ func TestInboxReplyPolicyWorkbenchFeishuActionDispatchLegacySchema(t *testing.T)
 	const text = "Synthetic rendered card submitted through FeishuAction"
 	finalReviewInstallMirror(h, it, text)
 	value := replyPolicyWorkbenchActionValue(t, h.draftCard(context.Background(), *it, text, nil, "").JSON(), "send")
-	action := &feishubot.CardAction{}
+	action := &botcard.CardAction{}
 	action.Action.Value = value
 	action.Action.FormValue = map[string]any{"text": text}
 	action.Context.MessageID = "synthetic-real-feishu-action-card"

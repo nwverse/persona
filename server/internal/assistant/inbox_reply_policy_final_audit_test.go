@@ -11,7 +11,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
-	"github.com/nwverse/persona/server/internal/modules/lark/feishubot"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -166,7 +165,7 @@ func TestInboxReplyPolicyWorkbenchStaleRedraftRejectedLegacySchema(t *testing.T)
 	finalReviewInstallMirror(h, it, replacement)
 	const generated = "Draft generated from the matching Workbench card"
 	calls := replyPolicyDraftSequenceModel(t, h, nil, generated, `{"category":"ordinary_coordination"}`)
-	action := &feishubot.CardAction{}
+	action := &botcard.CardAction{}
 	action.Action.Value = actionValue
 	action.Action.FormValue = map[string]any{"text": oldText, "instruction": "Synthetic stale redraft instruction"}
 	action.Context.MessageID = "synthetic-stale-redraft-card"
@@ -189,7 +188,7 @@ func TestInboxReplyPolicyWorkbenchStaleRedraftRejectedLegacySchema(t *testing.T)
 	// A current rendered card must still redraft. Without this positive control, rejecting every redraft as stale
 	// would satisfy the negative assertions above without preserving the Workbench operation at all.
 	matchingValue := replyPolicyWorkbenchActionValue(t, h.draftCard(context.Background(), *it, replacement, nil, "").JSON(), "redraft")
-	matching := &feishubot.CardAction{}
+	matching := &botcard.CardAction{}
 	matching.Action.Value = matchingValue
 	matching.Action.FormValue = map[string]any{"text": replacement, "instruction": "Synthetic matching-version redraft instruction"}
 	matching.Context.MessageID = "synthetic-matching-redraft-card"
@@ -348,7 +347,7 @@ func TestInboxReplyPolicyWorkbenchRenderedCardSendLegacySchema(t *testing.T) {
 	const text = "Synthetic rendered Workbench draft accepted by its real callback"
 	finalReviewInstallMirror(h, it, text)
 	actionValue := replyPolicyWorkbenchActionValue(t, h.draftCard(context.Background(), *it, text, nil, "").JSON(), "send")
-	action := &feishubot.CardAction{}
+	action := &botcard.CardAction{}
 	action.Action.Value = actionValue
 	action.Action.FormValue = map[string]any{"text": text}
 	action.Context.MessageID = "synthetic-matching-workbench-card"
