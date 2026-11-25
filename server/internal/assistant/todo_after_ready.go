@@ -541,6 +541,17 @@ func (s *Service) maybeEmitTodoReady(ctx context.Context, candidate Todo) {
 	}
 	cfg := s.settings(ctx)
 	to := s.todoReadySupervisor(ctx, cfg, candidate)
+	// The sweep takes a snapshot before reading the plans and prerequisites. A workspace waiter can
+	// finish its automatic dispatch in the meantime. Its cleared queue is no longer a request to start it.
+	if s.isWorkspaceDispatching(candidate.ID) {
+		return
+	}
+	current, ok := s.todoNow(candidate.ID)
+	if !ok || current.DoneAt != nil || current.Cancelled() || current.StartError != "" || todoHasActiveAgent(current) ||
+		current.PlanID != candidate.PlanID || current.Origin != candidate.Origin || current.PartOf != candidate.PartOf ||
+		todoReadyKey(current) != key {
+		return
+	}
 	s.signal(superviseSignal{
 		Todo: candidate.ID,
 		Kind: sigTodoReady,

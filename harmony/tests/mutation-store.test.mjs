@@ -3,12 +3,15 @@ import assert from 'node:assert/strict';
 import {registerHooks, stripTypeScriptTypes} from 'node:module';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
+import {DatabaseSync} from 'node:sqlite';
 
 globalThis.__personaMutationTestUUID = randomUUID;
 registerHooks({
   resolve(specifier, context, next) {
+    if (specifier==='@kit.ArkData' || specifier==='@kit.AbilityKit') return {url:'persona-test:'+specifier,shortCircuit:true};
     if (specifier.endsWith('/core/StorageOwnership')) return {url:new URL(specifier+'.ts',context.parentURL).href,shortCircuit:true};
     if (specifier.endsWith('/core/ScheduleTemplates')) return {url:new URL(specifier+'.ts',context.parentURL).href,shortCircuit:true};
+    if (specifier.endsWith('/core/PhoneSettingsPermissions')) return {url:new URL(specifier+'.ts',context.parentURL).href,shortCircuit:true};
     if (specifier === './ClientModel' && context.parentURL?.endsWith('/ManagementModel.ets')) return {url:'persona-test:client',shortCircuit:true};
     if (specifier === '@kit.ArkTS') return {url:'persona-test:arkts',shortCircuit:true};
     if (specifier.endsWith('/platform/LocalStore')) return {url:'persona-test:local',shortCircuit:true};
@@ -19,6 +22,8 @@ registerHooks({
   load(url,context,next) {
     if (url === 'persona-test:client') return {format:'module',source:'export class ClientModel {}',shortCircuit:true};
     if (url === 'persona-test:arkts') return {format:'module',source:'export const util={generateRandomUUID:globalThis.__personaMutationTestUUID};',shortCircuit:true};
+    if (url==='persona-test:@kit.ArkData') return {format:'module',source:'export const relationalStore={SecurityLevel:{S3:3},ConflictResolution:{ON_CONFLICT_REPLACE:1},getRdbStore:async()=>globalThis.worktreeTestRdb};',shortCircuit:true};
+    if (url==='persona-test:@kit.AbilityKit') return {format:'module',source:'export const common={};',shortCircuit:true};
     if (url === 'persona-test:local') return {format:'module',source:'export class LocalStore {}',shortCircuit:true};
     if (url === 'persona-test:transport') return {format:'module',source:'export class EndpointConfig {} export class HubTransport {async request(...args){return globalThis.__personaRequest(...args)} async requestBytes(...args){return globalThis.__personaRequestBytes(...args)}} export class HttpFailure extends Error {constructor(status,code,resultUnknown=false,resultPending=false){super(code);this.status=status;this.code=code;this.resultUnknown=resultUnknown;this.resultPending=resultPending;}}',shortCircuit:true};
     if (url.endsWith('/core/ScheduleTemplates.ts')) return {format:'module',source:stripTypeScriptTypes(readFileSync(new URL(url),'utf8')),shortCircuit:true};
@@ -67,6 +72,41 @@ test('manual confirmation releases only an unknown operation',async()=>{
   const record=await queue.begin('/messages','POST','payload');
   await queue.acknowledge(record.id);assert.equal(queue.blocked().length,1);
   await queue.finish(record,'unknown');await queue.acknowledge(record.id);assert.equal(queue.blocked().length,0);
+});
+
+test('manual release rechecks admission in the queue and preserves a pending or replaced owner',async()=>{
+  const store=new MemoryStore(), journal=new MutationStore(store,'rename-owner');
+  const record=await journal.begin('/worktree/rename','POST','payload');
+  await journal.finish(record,'unknown');
+  let current=true;
+  const stale=journal.acknowledge(record.id,()=>current);
+  current=false; await stale;
+  assert.equal(journal.record(record.id).state,'unknown');
+  record.confirmedPending=true;
+  await journal.acknowledge(record.id,()=>true);
+  assert.equal(record.state,'unknown');
+  record.confirmedPending=false;
+  await Promise.all([journal.finish(record,'pending'),journal.acknowledge(record.id,()=>true)]);
+  assert.equal(record.state,'pending');
+  await journal.finish(record,'unknown');
+  await journal.acknowledge(record.id,()=>true);
+  const reopened=new MutationStore(store,'rename-owner'); await reopened.load();
+  assert.equal(reopened.record(record.id).state,'checked'); assert.equal(reopened.blocked().length,0);
+});
+
+test('a long-blocked manual rename remains recoverably checked across terminal history pruning',async()=>{
+  const local=new MemoryStore(), journal=new MutationStore(local,'old-worktree');
+  const old=await journal.begin('/worktree/rename','POST','name');
+  await journal.finish(old,'unknown');
+  for(let i=0;i<100;i++) {
+    const recent=await journal.begin('/independent/'+i,'POST','data');
+    await journal.finish(recent,'done');
+  }
+  local.failNext=true;
+  await assert.rejects(journal.acknowledge(old.id,()=>true)); assert.equal(old.state,'unknown');
+  await journal.acknowledge(old.id,()=>true);
+  const restored=new MutationStore(local,'old-worktree'); await restored.load();
+  assert.equal(restored.record(old.id).state,'checked');
 });
 
 test('history cleanup failure does not turn a confirmed result into an unindexed unknown',async()=>{
@@ -160,6 +200,30 @@ test('an uncertain file upload cannot be submitted again after restart',async()=
 
 const {ManagementModel,ManagementRow}=await import('../entry/src/main/ets/models/ManagementModel.ets');
 const {HttpFailure}=await import('persona-test:transport');
+test('AI twin keeps only its own permission, saves the actual revision, and can explicitly follow Agents again',async()=>{
+ const id='inbox.agent',endpoint='/api/v1/model-config/purposes/'+id,patches=[];
+ let permission='plan',revision=3,modelName='',conflict=false;
+ const detail=()=>({purpose:{id,kind:'launcher',category_id:'agent.new',revision,fields:['provider','model','effort','permission_mode'],
+   override:{permission_mode:permission,model:modelName},effective:{provider:'launcher.claude',permission_mode:'bypassPermissions'}},providers:[{id:'launcher.claude',kind:'launcher',agent:'claude'}]});
+ const model=managementClient(async(path,method='GET',body)=>{
+   if(path==='/api/v1/model-config')return {purposes:[{id}]};
+   if(path.includes('/providers/'))return {models:[]};
+   assert.equal(path,endpoint);
+   if(method==='PATCH'){patches.push(body);if(conflict)throw new HttpFailure(409,'conflict');assert.equal(body.revision,revision++);permission=body.permission_mode;modelName=body.model;}
+   return detail();
+ }),page=new ManagementModel();
+ await page.load('models',model);assert.equal(page.purposePermissionInEffect(),'default');assert.equal(page.purposeChanged(),false);
+ assert.deepEqual(page.permissionChoices(),['default','acceptEdits','auto','bypassPermissions']);
+ page.changePurposeDraft('permission_mode','plan');assert.equal(page.purposeChanged(),false);
+ page.changePurposeDraft('permission_mode','acceptEdits');assert.equal(await page.savePurpose(model),true);
+ page.changePurposeDraft('model','test-choice');assert.equal(await page.savePurpose(model),true);
+ assert.deepEqual(patches.map(p=>p.permission_mode),['acceptEdits','acceptEdits']);
+ page.restoreInboxInheritance();conflict=true;assert.equal(await page.savePurpose(model),false);assert.equal(page.purposeConflict,true);
+ assert.equal(page.purposeDraft.permissionMode,'');assert.equal(await page.savePurpose(model),false);assert.equal(patches.length,3);
+ conflict=false;await page.selectPurpose(model,id);assert.equal(page.purposeDraft.permissionMode,'acceptEdits');
+ page.restoreInboxInheritance();assert.equal(await page.savePurpose(model),true);assert.equal(patches.at(-1).permission_mode,null);
+ assert.equal(page.purposePermissionInEffect(),'default');
+});
 function managementClient(call){return {epoch:42,forgottenEpoch:0,forgottenProfile:'',profile:{id:'hub-profile',manager:'personal'},features:[],scope(){return 'hub:'+this.profile.manager;},connectionGeneration(){return this.epoch},owns(g,s){return g===this.epoch&&s===this.scope()},repo:()=>({call}),target:()=> 'session'};}
 test('settings can be reopened repeatedly regardless of connection generation',async()=>{
  const model=managementClient(async()=>({items:[{id:'one',connector:'mail'}]})),page=new ManagementModel();
@@ -585,6 +649,111 @@ test('an extension without sign-in omits auth state without reporting a detail f
   assert.deepEqual(page.auth,{});assert.equal(page.extensionDetail.id,'native-check');
   assert.equal(!!page.error,status!==404&&status!==405);
  }
+});
+
+test('new Agent uses the selected host worktree and keeps a directory-only start compatible', async () => {
+  const {ResourceRow} = await import('../entry/src/main/ets/models/Wire.ets');
+  const machine = ResourceRow.from({id: 'mac', manager: 'work', online: true}, 'machine');
+  const bodies = [];
+  const transport = {request: async (path, method, payload) => {
+    assert.equal(path, '/api/v1/sessions');
+    assert.equal(method, 'POST');
+    bodies.push(JSON.parse(payload));
+    return JSON.stringify({session: {session_id: 'created', machine_id: 'mac'}});
+  }};
+  const repo = new HubRepository({managerId: 'work', hubId: 'home'}, undefined, () => {}, 'work', transport);
+  const created = await repo.createAgent('Synthetic task', machine, '/repo/feature', 'codex', 'a', '', () => true, 'wt-01', 'paseo');
+  assert.equal(created.session, 'created');
+  assert.deepEqual(bodies[0], {machine_id: 'mac', cwd: '/repo/feature', launcher: 'codex', prompt: 'Synthetic task', workspace_id: 'wt-01', host: 'paseo'});
+  await repo.createAgent('Synthetic task', machine, '/repo', '', 'b');
+  assert.equal('workspace_id' in bodies[1], false);
+  assert.equal('host' in bodies[1], false);
+  assert.equal('model' in bodies[1], false);
+  assert.equal('effort' in bodies[1], false);
+  await repo.createAgent('Synthetic task', machine, '/repo/feature', 'codex', 'c', '', () => true, 'wt-01', 'paseo', 'test-model', 'high');
+  assert.deepEqual(bodies[2], {machine_id:'mac', cwd:'/repo/feature', launcher:'codex', prompt:'Synthetic task',
+    workspace_id:'wt-01', host:'paseo', model:'test-model', effort:'high'});
+});
+
+test('a removed-rename check atomically compares both original SQLite views and retains the request and full journal history',async t=>{
+  const {LocalStore}=await import('../entry/src/main/ets/platform/LocalStore.ets');
+  const db=new DatabaseSync(':memory:');t.after(()=>{db.close();delete globalThis.worktreeTestRdb;});
+  let afterWrite=()=>{};
+  globalThis.worktreeTestRdb={
+    async querySql(sql,args=[]){
+      const rows=db.prepare(sql).all(...args);let i=-1;
+      return {goToNextRow(){return ++i<rows.length;},goToFirstRow(){i=0;return rows.length>0;},
+        getString(col){return Object.values(rows[i])[col];},close(){}};
+    },
+    async executeSql(sql,args=[]){db.prepare(sql).run(...args);if(sql.startsWith('INSERT OR REPLACE'))afterWrite();},
+    async insert(_table,row){db.prepare('INSERT OR REPLACE INTO client_state(key,value) VALUES (?,?)').run(row.key,row.value);},
+    async beginTransaction(){db.exec('BEGIN IMMEDIATE');},async commit(){db.exec('COMMIT');},async rollBack(){db.exec('ROLLBACK');}
+  };
+  const local=new LocalStore('test-removed-rename.db');await local.open({});
+  const scope='hub|manager',prefix='view:'+scope+':worktree-request:',index='mutations:'+scope;
+  const id=randomUUID(),path='/api/v1/machines/lab/worktree/rename';
+  const target=(group,machine,ws)=>JSON.stringify([scope,group,'manager',machine,'herdr',ws,'/lab/'+ws,'rename']);
+  const old=target('hub','lab','retired'),oldKey=prefix+old,newKey=prefix+target('hub','lab','current');
+  const stored={id,path,method:'POST',state:'unknown',createdAt:'2024-01-01T00:00:00Z',payload:'',requiresReceipt:false,confirmedPending:false};
+  const snapshot=JSON.stringify({id,action:'rename',target:old,path,payload:JSON.stringify({workspace_id:'retired',kind:'herdr',name:'Earlier'})});
+  const ids=[id],otherRaw=new Map();
+  for(let i=0;i<100;i++){
+    const terminal='past-'+i;ids.push(terminal);const raw=JSON.stringify({...stored,id:terminal,state:'done',requiresReceipt:true});
+    otherRaw.set(terminal,raw);await local.put(index+':'+terminal,raw);
+  }
+  await local.put(index,JSON.stringify({ids}));await local.put(index+':'+id,JSON.stringify(stored));await local.put(oldKey,snapshot);
+  const foreign='view:other|manager:worktree-request:'+target('other','lab','retired');await local.put(foreign,snapshot);
+  const otherMachine=prefix+target('hub','elsewhere','retired');await local.put(otherMachine,snapshot);
+  const currentOwnerPrefix=prefix+JSON.stringify([scope,'hub','manager','lab','herdr']).slice(0,-1)+',';
+  assert.deepEqual(await local.keys(currentOwnerPrefix,id),[oldKey]);
+  const journal=new MutationStore(local,scope);await journal.load();const r=journal.record(id);
+  const confirm=(guard=()=>true)=>journal.acknowledgeRemovedRename(r,scope,oldKey,snapshot,newKey,guard);
+  await local.put(oldKey,snapshot+' ');await assert.rejects(confirm(),/request_updated/);await local.put(oldKey,snapshot);
+  const duplicate=prefix+target('hub','lab','same-uuid-on-another-form');
+  await local.put(duplicate,snapshot);await assert.rejects(confirm(),/request_updated/);await local.remove(duplicate);
+  await local.put(newKey,'another sheet');await assert.rejects(confirm(),/request_updated/);await local.remove(newKey);
+  let current=true;afterWrite=()=>{current=false;};await assert.rejects(confirm(()=>current),/scope_retired/);afterWrite=()=>{};
+  assert.equal(r.state,'unknown');assert.deepEqual(JSON.parse(await local.get(index)).ids,ids);assert.deepEqual(JSON.parse(await local.get(index+':'+id)),stored);
+  assert.equal(await confirm(),true);assert.deepEqual(JSON.parse(await local.get(index+':'+id)),{...stored,state:'checked'});
+  assert.deepEqual(JSON.parse(await local.get(index)).ids,[...ids.slice(1),id]);assert.equal(await local.get(oldKey),snapshot);
+  assert.equal(await local.get(foreign),snapshot);assert.equal(await local.get(otherMachine),snapshot);
+  for (const [key,raw] of otherRaw)assert.equal(await local.get(index+':'+key),raw);
+  assert.equal(await confirm(),false);assert.equal(journal.blocked().length,0);
+  const restored=new MutationStore(local,scope);await restored.load();assert.equal(restored.record(id).state,'checked');
+  assert.equal(await local.get(oldKey),snapshot);
+});
+test('the task retry explicitly preserves the ordinary empty request through the journal and transport',async()=>{
+ const local=new MemoryStore(),repo=new HubRepository({managerId:'owner',hubId:'test'},local);
+ const writes=[];globalThis.__personaRequest=async(path,method,body,id)=>{writes.push({method,body,id});return '{"ok":true}';};
+ const acknowledged=result=>result.ok===true,path='/api/v1/todos/task/retry?manager=owner';
+ await repo.call(path,'POST',{},'',()=>true,false,acknowledged,true);
+ await repo.call(path,'POST',{launcher:'codex'},'',()=>true,false,acknowledged);
+ await repo.call('/other','POST',{},'',()=>true,false,acknowledged);
+ assert.deepEqual(writes.map(({body})=>body),['','{"launcher":"codex"}','{}']);
+ assert.equal(new Set(writes.map(x=>x.id)).size,3);assert.equal(repo.mutations.blocked().length,0);
+});
+
+test('model catalog pushes only disclosed editable uses and never falls back to a different purpose',async()=>{
+ const core={id:'agent.new',category_id:'agent.new',uses:[{id:'inbox.agent',name:'Inbox AI twin'}],fields:[]};
+ const offered={id:'inbox.agent',category_id:'agent.new',kind:'launcher',fields:['permission_mode']};
+ const readOnly={id:'legacy.child',category_id:'agent.new',fields:[]};
+ let rows=[offered,readOnly,core],requests=[];
+ const model=managementClient(async(path,verb='GET')=>{
+   requests.push([path,verb]);
+   if(path==='/api/v1/model-config')return {purposes:rows};
+   const id=path.split('/').at(-1);
+   return {purpose:{...rows.find(r=>r.id===id),revision:7,override:{},effective:{}}};
+ }),page=new ManagementModel();
+ await page.load('models_catalog',model);
+ assert.deepEqual(page.modelCatalogRows().map(r=>r.id),['agent.new','inbox.agent']);
+ assert.deepEqual(requests,[['/api/v1/model-config','GET']]);
+ await page.load('model_purpose',model,'inbox.agent');assert.equal(page.selectedId,'inbox.agent');
+ assert.equal(requests.at(-1)[0],'/api/v1/model-config/purposes/inbox.agent');
+ requests=[];await page.load('model_purpose',model,'legacy.child');
+ assert.equal(page.error,'no_capability');assert.equal(page.selectedId,'');assert.deepEqual(page.purpose,{});
+ assert.deepEqual(requests,[['/api/v1/model-config','GET']]);
+ rows=[{id:'old-real-use'},{id:'inbox.agent'}];await page.load('models_catalog',model);
+ assert.deepEqual(page.modelCatalogRows().map(r=>r.id),['old-real-use']);
 });
 
 const {sessionModeAvailable, sessionModelLauncher} = await import('../entry/src/main/ets/models/SessionModes.ets');
