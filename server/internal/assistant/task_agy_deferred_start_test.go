@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -177,7 +178,7 @@ func TestAgyDeferredStartAdoptedAfterLostAnswerStillActivates(t *testing.T) {
 	}
 }
 
-type deferredStartLinkFailStore struct{ Store }
+type deferredStartLinkFailStore struct{ *repositorystore.Store }
 
 func (s *deferredStartLinkFailStore) LinkTodoAgentWithSource(context.Context, string, string, string, string, string, string, string, string, string, time.Time) ([]string, error) {
 	return nil, errors.New("injected deferred-start link failure")
@@ -189,7 +190,7 @@ func TestAgyDeferredStartCleansUpDefiniteFailures(t *testing.T) {
 			var s *Service
 			var f *fakeHub
 			if failure == "link" {
-				s, f = newQuietServiceOn(t, &deferredStartLinkFailStore{Store: todoTestDB(t)})
+				s, f = newQuietServiceOn(t, &deferredStartLinkFailStore{Store: repositorystore.New(todoTestDB(t))})
 			} else {
 				s, f = newQuietService(t)
 				f.failSend = &rpc.Error{Code: "mcp_start_failed", Message: "the MCP server could not start"}
@@ -197,8 +198,11 @@ func TestAgyDeferredStartCleansUpDefiniteFailures(t *testing.T) {
 			prepareDeferredAgy(f)
 			planAgyLeader(t, s)
 			waitFor(t, "the deferred start to fail", func() bool { return onlyTodo(s).DoneAt != nil })
-			if got := agyCallSessions(f, "session.close"); !slices.Equal(got, []string{"s1"}) {
-				t.Fatalf("the unused ACP session was not closed exactly once: %v", got)
+			if got := agyCallSessions(f, deviceSessionStop); !slices.Equal(got, []string{"s1"}) {
+				t.Fatalf("the unused ACP Agent was not stopped exactly once: %v", got)
+			}
+			if got := agyCallSessions(f, "session.close"); len(got) != 0 {
+				t.Fatalf("the failed start closed the user's terminal: %v", got)
 			}
 			if got := agyCallSessions(f, DeviceSessionSend); len(got) != map[string]int{"link": 0, "activation": 1}[failure] {
 				t.Fatalf("first prompt sends after %s failure: %v", failure, got)
@@ -224,6 +228,9 @@ func TestAgyDeferredStartUnknownActivationKeepsTheLinkedSession(t *testing.T) {
 	}
 	if got := agyCallSessions(f, "session.close"); len(got) != 0 {
 		t.Fatalf("an uncertain first prompt closed a session that may be running: %v", got)
+	}
+	if got := agyCallSessions(f, deviceSessionStop); len(got) != 0 {
+		t.Fatalf("an uncertain first prompt stopped a session that may be running: %v", got)
 	}
 	if got := f.started(); len(got) != 1 {
 		t.Fatalf("an uncertain activation opened another Agent: %+v", got)
