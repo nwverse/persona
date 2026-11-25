@@ -66,7 +66,7 @@ Optional (for each one present, the SDK declares the capability in `runtime.hell
 | `editQueue({session_id, keep})` | `caps.queue_edit`: keep the given queue indexes in that order. Return the original `{queue, images?}`; each `images` entry is the message's image array or `null`. Refuse an empty queue with `nothing_queued`, and invalid indexes with `queue_changed`. |
 | `sendNow({session_id})` | `caps.queue_send_now`: start delivering the waiting messages without waiting for the active turn to finish naturally. Refuse an empty queue with `nothing_queued`. The SDK answers `{sent: true}` on success. |
 | `interrupt({session_id})` | Stop the running turn. Resolve to `{settled: true}` once the turn has actually ended, and throw when it could not be stopped; resolving to nothing means "asked to stop, not confirmed" (#8097). A turn waiting on the user (a dialog, a card) must end too |
-| `rename` / `close` / `start({cwd, prompt, client_msg_id})` | Interrupt, rename, close, create from the phone (with `start` and a configured `launcher`, the new-session form gains a launcher field). If present, `client_msg_id` identifies the first message, just as in `send`. Antigravity can also receive `images` on start, with or without text. The apps offer Rename and Close on its rows from `capabilities.rename` / `capabilities.close`, which carry `caps.rename` (not on a sub-Agent's row) and `caps.close` (#6294) |
+| `rename` / `close` / `start({cwd, prompt, client_msg_id, defer_mcp?})` | Interrupt, rename, close, create from the phone (with `start` and a configured `launcher`, the new-session form gains a launcher field). If present, `client_msg_id` identifies the first message, just as in `send`. Antigravity can also receive `images` on start, with or without text. The apps offer Rename and Close on its rows from `capabilities.rename` / `capabilities.close`, which carry `caps.rename` (not on a sub-Agent's row) and `caps.close` (#6294) |
 | `hasLocalClient(sessionId)` | Whether this runtime's own UI is open for that session (decides who gets permission requests first, see below) |
 | `unlistedTranscripts()` | The Claude session ids of sessions of its own that `listSessions()` no longer lists (archived in the runtime), or nothing while it cannot say yet; no capability is declared. See "Runtimes that run Claude Code" below |
 | `modes({session_id, permission_mode, effort, model})` | Switching permission mode / reasoning effort from the phone (`caps.modes`; optional model changes require `createRuntime` option `modelSwitch: true`, advertised as `caps.model`; values are Persona's: `default` / `acceptEdits` / `plan` / `auto` / `bypassPermissions`, `low` … `max`). The apps show the mode chips on its rows whose agent is `claude` or the runtime's own, never Paseo's catch-all `paseo` (`capabilities.modes`, `docs/protocol/protocol.md` "Codex sources and capabilities"). A row may take modes and model away from its own session in its `capabilities` (`modes: false`, `model: false`: Paseo's archived agents, #8133), and a row whose agent is not `claude` may list the levels `effort` takes for it (`efforts`, weakest first), which the apps offer alone on it, and the permission modes it takes (`capabilities.permission_modes`, #8261: `default`, its own approval, and `bypassPermissions` where it has an Allow all), between which the apps offer a two-state switch, "Launcher default" and Allow all; node drops both where the runtime declared no `caps.modes` or the row took modes away, and `permission_modes` where the Claude Code chips stand |
@@ -93,6 +93,7 @@ session of the runtime's has it, so that a start whose answer the hub never got 
 will have, `starting: true`, and finish in the background: keep listing that row until the session runs, and should it fail, list it
 as `offline` with `start_error` for a while rather than letting it vanish; a message sent to it meanwhile waits for it (resolve to
 `{queued: true}` when it goes later than the call's wait), and is refused once the start failed (Paseo, `docs/integrations/paseo.md`).
+An Antigravity supervised-task start may carry `defer_mcp: true`. A Companion that supports it creates the real ACP session and applies its model and mode, but returns its row with `starting: true` before attaching MCP or sending the first prompt. After the hub has linked the session's task role and supervision relationship, it activates that row with the ordinary first `session.send` (the same `client_msg_id`): the send resumes the ACP session with its Persona MCP servers, then prompts it. Closing the row before that send discards the unused session. An older Companion ignores the unknown field and completes the start normally, so the hub sends the first message separately only when the answer actually has `starting: true`; an immediate answer is never given a duplicate prompt.
 The node does not take a session it saw listed only as starting or as failed for one of the runtime's once it leaves the list: a
 Claude session whose takeover failed is the machine's again, sent to as a session not running. `readonly: true` (`caps.readonly`): a `start` with `permission_mode: "plan"` (an ordinary
 plan-mode start, or a read-only task on a non-Claude runtime, #3238) runs in a read-only mode before its first prompt, or throws `readonly_unsupported` — never falling back to a writable
@@ -611,6 +612,14 @@ response, tool result or error has been exported). A failed summary read is logg
 with SQLite's result-code text only, and once more when reads recover, with the number of failures. The lines carry no
 session IDs, message text or paths; under `personad node` they appear in the node log after `agy runtime:`.
 
+A settled Persona-owned ACP reply writes `.persona-turn-completion` beside the conversation's history-epoch file (mode
+0600). It stores SHA-256 fingerprints of the branch and actual settled reply index: one for the full reply and one for
+its byte length and first/last eight characters so truncated exports can match, never message text. After a restart, a
+`summary_behind` row becomes `done` only while the current export matches that settled turn; a missing or mismatched
+marker, including one followed by later native work, leaves `unknown`. Starting another prompt or issuing a native rewind clears
+the marker, and a known or pending native-cut check suppresses recovery. Transcript-only status rules and the step-count
+coverage check above are unchanged.
+
 What subagents and background tasks send back reaches the CLI companion's chat (#14625). agy 1.5.15 writes each
 as a `SYSTEM_MESSAGE` step whose body is `[Message] … sender=<id> … content=<text>`; the companion maps it to a
 `notice` item with a `task` note (`integrations/antigravity/lib/map.js`): a subagent's report or its "has gone idle"
@@ -756,6 +765,7 @@ Persona tool by name (#7333). The proxy declares only the tools larger than `per
 declared and never the one deferred, however many small tools connectors add (sizes are what agy declares of a tool: its
 name, description and input schema). The others stay callable through it: `persona_call` with no name lists every tool,
 and those left out with their description and arguments (#10756).
+A role-bearing task start uses `defer_mcp` as described under "What to implement": the real ACP session id exists and the task's role link is committed before the first MCP attach and prompt, so that first catalog already has the correct leader or worker scope (#15327). This ordering is independent of the direct server versus assistant proxy choice above.
 
 Implementation: `integrations/antigravity/lib/runtime.js`, `integrations/antigravity/lib/acp.js` and `integrations/antigravity/lib/policy.js`.
 

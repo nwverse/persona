@@ -36,6 +36,10 @@ describe("sync view", () => {
     // a missing or odd hour falls back to the hub's default
     expect(asSyncView({ ...view(), schedule_hour: 99 })?.schedule_hour).toBe(3);
     expect(asSyncView({ available: true, bots: [], bindings: [] })?.accounts).toEqual([]);
+    // im_poll is preserved when boolean and omitted when absent (older hub)
+    expect(asSyncView({ ...view(), im_poll: true })?.im_poll).toBe(true);
+    expect(asSyncView({ ...view(), im_poll: false })?.im_poll).toBe(false);
+    expect(asSyncView(view())?.im_poll).toBeUndefined();
   });
 
   it("treats a missing route as absent and every other failure as one", () => {

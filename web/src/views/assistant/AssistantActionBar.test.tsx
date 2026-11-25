@@ -4,10 +4,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatDate, t } from "../../i18n";
 import { getFeedState, loadFeed, type FeedItem, type TaskPlan } from "../../lib/feed";
+import { chooseManager, resetManagerChoice } from "../../lib/manager-choice";
 import { setAgentOpenMode } from "../../lib/agent-open";
 import { closePanel, getPanel } from "../../lib/panel";
 import { loadPages } from "../../lib/lazy-page";
 import { getState, putTodo, refresh, refreshTodos, reset, upsertSession } from "../../lib/store";
+import { interactionID } from "../../lib/ids-wire";
 import type { Todo } from "../../lib/todos";
 import { stateName } from "../../lib/state-labels";
 import { usageLimitLabel } from "../../lib/usage-limit";
@@ -1267,7 +1269,7 @@ describe("Assistant Needs you / In progress trays", () => {
 
     // Plain unescalated screen card on a quiet task (even with view needs_you / agent_asks): stays out of main chat
     // Needs you per D19 until explicitly escalated via ask_escalate.
-    todo = { ...todo, quiet: true, view: { phase: "needs_you", section: "needs_you", reason: "agent_asks", rank: 0, asks: [{ id: "run:demo/worker", kind: "question", home: "run", interaction: screenID }] } };
+    todo = { ...todo, quiet: true, view: { phase: "needs_you", section: "needs_you", reason: "agent_asks", rank: 0, asks: [{ id: "run:demo/worker", kind: "question", home: "run", interaction: interactionID(screenID) }] } };
     moreInteractions = [{ ...baseScreen, delegating: false }];
     await act(async () => {
       await refresh();
@@ -1366,5 +1368,57 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(writes.slice(before)).toEqual([`/api/v1/interactions/${permID}/resolve`]);
     const call = vi.mocked(fetch).mock.calls.find(([url, init]) => String(url) === `/api/v1/interactions/${permID}/resolve` && init?.method === "POST");
     expect(JSON.parse(String(call?.[1]?.body))).toEqual({ allow: true });
+  });
+
+  it("excludes another manager's tasks and standalone agents from ActionBar trays and TaskDock (#15645)", async () => {
+    mainChat = conversation;
+    todo = { ...todo, manager: "assistant" };
+    const secondTodo: Todo = {
+      id: "second-task",
+      manager: "m-second",
+      title: "Second assistant task",
+      origin: conversation,
+      created_at: at,
+      updated_at: at,
+      agents: [{ machine_id: "box-second", session_id: "sec-worker", linked_at: at }],
+    };
+    const defaultDecision: Todo = {
+      id: "default-decision",
+      manager: "assistant",
+      title: "Default assistant decision",
+      origin: "default-main",
+      created_at: at,
+      updated_at: at,
+      supervision: { supervisor: "default-main", state: "needs_user", reviews: [], updated_at: at },
+    };
+    moreTodos = [secondTodo, defaultDecision];
+    moreSessions = [
+      { machine_id: "demo", session_id: "default-solo", manager: "assistant", title: "Default solo agent", cwd: "/demo", state: "working", status: "working", updated_at: at } as Session,
+      { machine_id: "box-second", session_id: "sec-worker", manager: "m-second", title: "Second task agent", cwd: "/sec", state: "working", status: "working", updated_at: at } as Session,
+      { machine_id: "box-second", session_id: "sec-solo", manager: "m-second", title: "Second solo agent", cwd: "/sec", state: "working", status: "working", updated_at: at } as Session,
+    ];
+    const dockHost = document.createElement("div");
+    document.body.append(dockHost);
+    const dockRoot = createRoot(dockHost);
+    try {
+      act(() => chooseManager("m-second"));
+      await act(async () => {
+        await refresh();
+        await refreshTodos();
+        for (const s of moreSessions) upsertSession(s);
+      });
+      act(() => dockRoot.render(<StrictMode><TaskDock conversation={conversation} /></StrictMode>));
+      // Only m-second's task and standalone agent count; assistant's task, decision, and solo agent stay out.
+      expect(entry("needs").textContent).toBe(label.needs);
+      expect(entry("running").textContent).toBe(`${label.running}2`);
+      expect(dockHost.textContent).toContain("Second assistant task");
+      expect(dockHost.textContent).toContain("Second solo agent");
+      expect(dockHost.textContent).not.toContain("Default solo agent");
+      expect(dockHost.textContent).not.toContain("Demo task");
+    } finally {
+      act(() => dockRoot.unmount());
+      dockHost.remove();
+      act(() => resetManagerChoice());
+    }
   });
 });

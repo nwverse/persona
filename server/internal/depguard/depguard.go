@@ -20,7 +20,7 @@ var Platforms = []string{"linux/amd64", "linux/arm64", "darwin/arm64", "darwin/a
 // its own (relayproto with the push relay, shareproof with the sharing ingress, passwordpake with the web app's
 // password WASM) is the hub's too, as is a push to a browser (webpush, the hub's Web Push).
 var HubOwn = []string{"cmd/persona-hub", "internal/hub", "internal/hubcli", "internal/hubedge", "internal/apns",
-	"internal/mdns", "internal/passwordpake", "internal/proxyproto", "internal/pushcrypto", "internal/relay",
+	"internal/lookmedia", "internal/mdns", "internal/operations/recovery", "internal/passwordpake", "internal/proxyproto", "internal/pushcrypto", "internal/relay",
 	"internal/relayproto", "internal/shareproof", "internal/webasset", "internal/webpush"}
 
 // Shared are the packages both programs link (the wire types, the database, the configuration, identity, the update
@@ -41,7 +41,7 @@ var HubOwn = []string{"cmd/persona-hub", "internal/hub", "internal/hubcli", "int
 var Shared = []string{"internal/acceptloop", "internal/aiwire", "internal/apierr", "internal/approval", "internal/assistantwire",
 	"internal/bus", "internal/channel", "internal/clitext", "internal/compat", "internal/connectorwire", "internal/conversationlog", "internal/db",
 	"internal/devicewire", "internal/dialogwire", "internal/errreport", "internal/extwire", "internal/i18n",
-	"internal/identity", "internal/kbwire", "internal/larksyncwire", "internal/lazyre", "internal/link", "internal/mailwire", "internal/managerconf", "internal/memtrim", "internal/modelretry", "internal/netaddr",
+	"internal/identity", "internal/kbwire", "internal/larksyncwire", "internal/lazyre", "internal/link", "internal/linkwire", "internal/mailwire", "internal/managerconf", "internal/memtrim", "internal/modelretry", "internal/netaddr",
 	"internal/netproxy", "internal/nodeproto", "internal/operations/backup", "internal/osproc", "internal/pgdocker", "internal/preview", "internal/procinfo", "internal/procs", "internal/prompts",
 	"internal/proto", "internal/rpc", "internal/screen", "internal/secretkey", "internal/sessionhistory", "internal/sessionlist", "internal/sessionorigin", "internal/sessionsearch", "internal/streams",
 	"internal/textfmt", "internal/tokenuse", "internal/transcript", "internal/update", "internal/workspaceboard"}

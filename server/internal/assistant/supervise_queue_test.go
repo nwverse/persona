@@ -35,6 +35,7 @@ func queuedDigestFixture(t *testing.T, titles ...string) (*Service, *fakeHub, []
 	if s.queuedFor("conv1") != 1 {
 		t.Fatal("expected one digest")
 	}
+	waitFor(t, "the backfill's read of the to-dos", s.spaceBackfillScanIdle)
 	return s, f, tasks
 }
 
@@ -131,8 +132,8 @@ func (unreadableDigestTasks) Setting(context.Context, string, any) (bool, error)
 
 func TestQueuedDigestKeepsUnreadableTasks(t *testing.T) {
 	s, f, _ := queuedDigestFixture(t, "Recoverable example")
-	oldStore := s.store
-	s.store = func() Store { return unreadableDigestTasks{} }
+	oldStore := s.storeAccessor()
+	s.setStore(func() Store { return unreadableDigestTasks{} })
 	s.todos.mu.Lock()
 	s.todos.loaded = false
 	s.todos.mu.Unlock()
@@ -141,7 +142,7 @@ func TestQueuedDigestKeepsUnreadableTasks(t *testing.T) {
 	if len(f.notices()) != 0 || s.queuedFor("conv1") != 1 {
 		t.Fatal("unknown task state sent or dropped")
 	}
-	s.store = oldStore
+	s.setStore(oldStore)
 	s.todos.mu.Lock()
 	s.todos.loaded = true
 	s.todos.mu.Unlock()
@@ -155,13 +156,13 @@ func TestQueuedDigestKeepsFailedCheckpoint(t *testing.T) {
 	s, f, tasks := queuedDigestFixture(t, "Accepted example", "Recoverable example")
 	closeTodo(t, s, tasks[0].ID)
 	st := &memStore{failPut: errors.New("synthetic checkpoint failure")}
-	oldStore := s.store
-	s.store = func() Store { return st }
+	oldStore := s.storeAccessor()
+	s.setStore(func() Store { return st })
 	drainQueuedDigest(t, s, f)
 	if len(f.notices()) != 0 || s.queuedFor("conv1") != 1 {
 		t.Fatal("failed checkpoint sent or lost work")
 	}
-	s.store = oldStore
+	s.setStore(oldStore)
 	drainQueuedDigest(t, s, f)
 	if len(f.notices()) != 1 || strings.Contains(f.notices()[0], "Accepted example") {
 		t.Fatal("checkpoint recovery failed")

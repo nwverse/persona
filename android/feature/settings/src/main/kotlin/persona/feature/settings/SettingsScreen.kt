@@ -535,6 +535,10 @@ private fun SettingsPageContent(
             itemsIndexed(entries) { index, (destination, title) -> JGroupItem(GroupPosition.of(index, entries.size)) {
                 JRow(stringResource(title), onClick = { open(destination) })
             } }
+            val displaySettings = services.agentsDisplay.takeUnless { services.demo }
+            if (displaySettings != null) item("herdr-tab-name") {
+                AgentHerdrTabNameSetting(displaySettings)
+            }
         }
         "desktops" -> DesktopsPage(deviceController, services.desktops.takeUnless { services.demo }, paired && services.deviceSettings != null, back)
         "storage" -> StoragePage(back, services.clearCacheFiles, footer = deviceFeedback)

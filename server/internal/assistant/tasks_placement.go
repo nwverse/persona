@@ -197,25 +197,43 @@ func (s *Service) taskDirectoryExists(ctx context.Context, machine, dir string) 
 	return exists
 }
 
+// deferredTaskStart is the first input of a Companion session that answered Starting after defer_mcp. It is activated
+// through the ordinary idempotent session.send path only after the task role and supervision relationship are linked.
+type deferredTaskStart struct {
+	text        string
+	images      []proto.Image
+	clientMsgID string
+}
+
 // startTaskAgent starts the agent for t on its machine (another when its launcher does not work there: t says which)
 // and answers the machine's id and the session's: the machine it reached is the one the agent is linked to (looking it
 // up again after the start could find another, or none). A failed start counts against the launcher there.
 func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (mid, sid string, err error) {
 	p := newPlacement(t.Machine, "enforce")
-	if prev := t.Placement; prev != nil && prev.TaskID == "" && t.Reroute != nil {
-		// Start on the landing shown on the plan card and retain the preview's candidate evidence.
-		p.Requested, p.ReasonKey = prev.Requested, prev.ReasonKey
+	if prev := t.Placement; prev != nil && (prev.TaskID == "" && t.Reroute != nil || prev.ReasonKey == placementReasonExtension || prev.ReasonKey == placementReasonFallback) {
+		// Start on the landing shown on the plan card or chosen by automatic placement, retaining its audit evidence.
+		if prev.ID != "" && (prev.ReasonKey == placementReasonExtension || prev.ReasonKey == placementReasonFallback) {
+			p.ID = prev.ID
+			if !prev.At.IsZero() {
+				p.At = prev.At
+			}
+		}
+		p.Requested, p.ReasonKey, p.Reason = prev.Requested, prev.ReasonKey, prev.Reason
 		p.Candidates = prev.cloneCandidates()
 	}
 	p.TaskID = t.TodoID
 	ctx = context.WithValue(ctx, placementKey{}, p)
 	defer func() { s.finishPlanPlacement(ctx, p, t, sid, err) }()
 	t.startedAgent = ""
+	t.deferredStart = nil
 	if err := s.checkClaimedGatewayStart(ctx, *t); err != nil {
 		return "", "", err
 	}
 	if err := s.checkRequestStart(ctx, *t); err != nil {
 		return "", "", err
+	}
+	if (t.HandoffID != "" || t.HandoffOperationID != "") && (t.Permission != "" || t.Readonly) {
+		t.preservePermission = true
 	}
 	t.normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
 	settledPermission := t.Permission
@@ -323,6 +341,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		if err != nil && t.admissionRelease != nil {
 			t.admissionRelease()
 			t.admissionRelease = nil
+			t.admissionClaimMachine = ""
 		}
 	}()
 	if err != nil {
@@ -425,6 +444,11 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		s.grantScheduleKind(ctx, id, *t)
 	}
 	prompt := t.Prompt
+	if t.HandoffID != "" {
+		if handoffSummary := strings.TrimSpace(s.todoHandoffSummary(ctx, t.HandoffID)); handoffSummary != "" {
+			prompt = handoffSummary + "\n\n" + prompt
+		}
+	}
 	if t.backendWorkspace() {
 		rows, err := json.Marshal(t.WorkspaceResolved.Repositories)
 		if err != nil {
@@ -546,7 +570,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			params["images"] = todoProtoImages(rows)
 		}
 	}
-	params["cwd"], params["prompt"], params["tab_name"] = t.Cwd, prompt, s.tabName(ctx, t.Title)
+	params["cwd"], params["prompt"], params["tab_name"] = t.Cwd, prompt, localTabName(t.Title)
 	if t.WaitInputID != "" {
 		params["client_msg_id"] = t.WaitInputID
 	}
@@ -606,6 +630,22 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	clearStandardSpeed(params)
 	s.setPlanThen(ctx, m.ID, params)
+	deferredImages, _ := params["images"].([]proto.Image)
+	// A role-bearing Companion start must not attach MCP before linkPlanAgent can answer its identity-scoped tools/list.
+	// The real ACP id comes back first; only a Companion that actually answers Starting is activated after the link.
+	if companion && (t.Role == roleLeader || t.Parent != "") && (prompt != "" || len(deferredImages) > 0) {
+		params["defer_mcp"] = true
+		if id, _ := params["client_msg_id"].(string); id == "" {
+			params["client_msg_id"] = newStartSessionID() // the post-link send has the same once-only identity as an immediate start
+		}
+	}
+	noteDeferredStart := func(session proto.Session) {
+		if params["defer_mcp"] != true || !session.Starting {
+			return
+		}
+		clientMsgID, _ := params["client_msg_id"].(string)
+		t.deferredStart = &deferredTaskStart{text: prompt, images: append([]proto.Image(nil), deferredImages...), clientMsgID: clientMsgID}
+	}
 	callNode := func() error {
 		if err := s.checkContinuationScope(t); err != nil {
 			return err
@@ -651,6 +691,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		if companionAway(err, companion) && !t.Readonly {
 			companion = false
 			delete(params, "host")
+			delete(params, "defer_mcp")
 			s.logf("task %s: start: the Antigravity companion is not connected on %s; starting in its default host", t.TodoID, m.ID)
 			if err := s.checkContinuationScope(t); err != nil {
 				return "", "", err
@@ -677,6 +718,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 					cancel()
 					if found {
 						t.startedAgent = cmp.Or(session.Agent, fit.snapshot)
+						noteDeferredStart(session)
+						s.nameAgentTabLater(agentTabNameStart(m.ID, session, params["tab_name"].(string), t.Title))
 						return m.ID, session.SessionID, nil
 					}
 				}
@@ -688,6 +731,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			if sess, ok := s.adoptTaskStartSession(ctx, m, s.startLauncher(ctx, picked), t.Cwd, expectID, knownIDs); ok {
 				s.logf("task %s: start answered late on %s; adopted session %s from the machine's own list", t.TodoID, m.ID, sess.SessionID)
 				t.startedAgent = cmp.Or(sess.Agent, fit.snapshot)
+				noteDeferredStart(sess)
+				s.nameAgentTabLater(agentTabNameStart(m.ID, sess, params["tab_name"].(string), t.Title))
 				return m.ID, sess.SessionID, nil
 			}
 			// Nothing found, and the link took the answer (it closed, or the machine is not reachable now): the
@@ -701,6 +746,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 					if sess, ok := s.adoptTaskStartSessionUntil(ctx, m, s.startLauncher(ctx, picked), t.Cwd, expectID, knownIDs, startMayHaveArrived(err, sentAt)); ok {
 						s.logf("task %s: start's link dropped; adopted session %s on %s after it reconnected", t.TodoID, sess.SessionID, m.ID)
 						t.startedAgent = cmp.Or(sess.Agent, fit.snapshot)
+						noteDeferredStart(sess)
+						s.nameAgentTabLater(agentTabNameStart(m.ID, sess, params["tab_name"].(string), t.Title))
 						return m.ID, sess.SessionID, nil
 					}
 				}
@@ -757,6 +804,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		t.noteWhy(i18n.T(s.lang(ctx), "assistant-tasks.ultracode_skipped", i18n.Args{"reason": skipped}))
 	}
 	t.startedAgent = cmp.Or(res.Session.Agent, fit.snapshot)
+	noteDeferredStart(res.Session)
+	s.nameAgentTabLater(agentTabNameStart(m.ID, res.Session, params["tab_name"].(string), t.Title))
 	return m.ID, res.Session.SessionID, nil
 }
 

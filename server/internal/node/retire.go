@@ -66,7 +66,7 @@ func (n *Node) retire(ctx context.Context, id string, closeTerminal, afterExit b
 		return n.closeExited(ctx, id)
 	}
 	defer unlock()
-	if !cause.AllowsSupervisorResume() || cause == proto.StopRestart {
+	if !cause.AllowsSupervisorResume() || cause == proto.StopRestart || cause == proto.StopTimeout {
 		cause = proto.StopUser
 	}
 	if err := n.closeWithCause(ctx, id, cause); err != nil {

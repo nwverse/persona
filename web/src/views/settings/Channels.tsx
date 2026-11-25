@@ -12,6 +12,7 @@ import {
   type Channel, type ChannelDetail, type ChannelPrompt, type ChannelTarget, type ChannelTargetOverride, type ChannelTone,
 } from "../../lib/channels";
 import { canSendStep, fieldInput } from "../../lib/connectors";
+import { ConnectorExternalSourceSettings } from "../../features/external-sources/ExternalSourceSettingsEntry";
 import { otherManager, ownedSub, pinManager, useChosenManager } from "../../lib/manager-choice";
 import { isOpenBeside } from "./open-beside";
 import { ago } from "../../lib/format";
@@ -403,6 +404,7 @@ export function ChannelPage({ id, manager: named, onBack, onSettings, headerBack
         </Group>
       )}
 
+      {d.installed && d.kind !== "app" && <ConnectorExternalSourceSettings ids={[d.id]} manager={manager} />}
       <TargetPicker open={picking} current={d.target} onClose={() => setPicking(false)} onPick={(target) => (setPicking(false), void change("target", { target }))} />
       <Dialog
         open={unbinding}

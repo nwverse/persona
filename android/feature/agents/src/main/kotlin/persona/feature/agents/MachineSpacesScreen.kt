@@ -100,7 +100,8 @@ private fun LazyListScope.projectSection(
                     SlotRow(line.agent, null, AgentRowMetadata(), now, compact = false, pinned = line.agent.id in preferences.pins.sessions,
                         muted = preferences.mutes.mutes(line.agent), depth = 0, position = GroupPosition.Single, located = false,
                         onOpen = { onOpenAgent(line.agent) }, menuItems = null,
-                        sideUnread = sideUnread, onOpenSide = onOpenSide?.let { cb -> { side -> cb(line.agent, side) } })
+                        sideUnread = sideUnread, onOpenSide = onOpenSide?.let { cb -> { side -> cb(line.agent, side) } },
+                        preferHerdrTabName = preferences.prefersHerdrTabName(line.agent.session))
                 }
                 is ProjectLine.Project -> {
                     val project = line.project

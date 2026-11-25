@@ -58,7 +58,7 @@ func (t PlanTask) claimedGatewayStart() bool {
 }
 
 func (t PlanTask) startWithoutReplay() bool {
-	return t.RequestGate != "" || t.claimedGatewayStart()
+	return t.RequestGate != "" || t.claimedGatewayStart() || t.HandoffID != ""
 }
 
 func (s *Service) gatewayPool(ctx context.Context, launcher string) (GatewayQuotaPool, bool) {

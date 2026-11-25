@@ -6,9 +6,7 @@ package kb
 import (
 	"cmp"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"sort"
 	"strings"
 	"time"
@@ -54,10 +52,9 @@ type Recording = recordingwire.Recording
 
 var (
 	// ErrRecordingDeleted: the recording was deleted (a tombstone); the phone must not upload it again.
-	ErrRecordingDeleted = errors.New("this recording was deleted")
+	ErrRecordingDeleted = recordingwire.ErrRecordingDeleted
 	// ErrBadRecording wraps what is wrong with an upload.
-	ErrBadRecording = errors.New("invalid recording")
-	uuidRe          = lazyre.New(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	ErrBadRecording = recordingwire.ErrBadRecording
 )
 
 // RecordingID is id as stored (lowercase), false when it is not a UUID.

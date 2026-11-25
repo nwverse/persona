@@ -314,3 +314,35 @@ func TestDuplicateIDKeepsTheFirst(t *testing.T) {
 		t.Fatalf("loaded %+v, skipped %q", k.Modules(), k.Skipped("a"))
 	}
 }
+
+type fakeRunner struct{ modapi.ScheduleFactsRunner }
+type fakeFeedPort struct{ modapi.FeedPort }
+type fakePromptPort struct{ modapi.PromptPort }
+
+// NewWithPorts hands narrow core ports to Host during registration and serves the module's registered Runner.
+func TestNewWithPortsServesPortsAndRunner(t *testing.T) {
+	wantFeed := fakeFeedPort{}
+	wantPrompt := fakePromptPort{}
+	wantRunner := fakeRunner{}
+	var gotFeed modapi.FeedPort
+	var gotPrompt modapi.PromptPort
+	m := fake{info: info("b", "x.b"), reg: func(h modapi.Host) error {
+		gotFeed, gotPrompt = h.Feed(), h.Prompts()
+		if err := h.AddSetting(setting("x.b")); err != nil {
+			return err
+		}
+		return h.AddScheduleFacts(modapi.ScheduleFacts{
+			Setting: "x.b",
+			Waits:   func(json.RawMessage) modapi.WaitRules { return rules{} },
+			Runner:  wantRunner,
+		})
+	}}
+	k := NewWithPorts([]modapi.Module{m}, nil, modapi.Ports{Feed: wantFeed, Prompts: wantPrompt}, t.Logf)
+	if !k.Loaded("b") || gotFeed != wantFeed || gotPrompt != wantPrompt {
+		t.Fatalf("ports not forwarded: loaded=%v feed=%v prompt=%v", k.Loaded("b"), gotFeed, gotPrompt)
+	}
+	f, ok := k.ScheduleFacts()
+	if !ok || f.Runner != wantRunner {
+		t.Fatalf("runner not served: ok=%v runner=%v", ok, f.Runner)
+	}
+}

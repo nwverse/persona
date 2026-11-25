@@ -54,7 +54,7 @@ func TestAssistantStartAuthorizesRuntimeDiscovery(t *testing.T) {
 		t.Run(origin, func(t *testing.T) {
 			s, devices, f, extensions := privacyService(t)
 			store := &memStore{}
-			s.store = func() Store { return store }
+			s.setStore(func() Store { return store })
 			f.setSessions("other")
 			assertStartingAssistantTools(t, s, "other", "", false)
 			started := 0

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"math"
 	"os"
 	"path/filepath"
@@ -78,7 +78,7 @@ func sprintMeeting(t *testing.T, e *testEngine, start time.Time) {
 		{2408, "Is the cap per entry or per recording? Not decided."},
 	}
 	u := RecordingUpload{Revision: 1, StartedAt: start, Duration: 4200, Language: "en-US", Device: "phone", Complete: true,
-		Kind: kb.RecordingMeeting, Calendar: &kb.RecordingCalendar{Title: "Sprint review", Attendees: []string{"Ada", "Bo", "Cy"}, Location: "Room 3"}}
+		Kind: recordingwire.RecordingMeeting, Calendar: &recordingwire.RecordingCalendar{Title: "Sprint review", Attendees: []string{"Ada", "Bo", "Cy"}, Location: "Room 3"}}
 	for _, l := range lines {
 		u.Segments = append(u.Segments, RecordingSegment{Start: l.at, End: l.at + 9, Text: l.text})
 	}
@@ -531,7 +531,7 @@ func TestMinutesOverviewLenient(t *testing.T) {
 	// A stray ** outside the texts that may carry marks (the title, the place, a name, a deadline as said) is taken
 	// out too: the names still match the calendar and the transcript, so the point and the action keep their owners.
 	r := &Recording{ID: recID, StartedAt: time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone), Duration: 600,
-		Calendar: &kb.RecordingCalendar{Attendees: []string{"Ada"}}}
+		Calendar: &recordingwire.RecordingCalendar{Attendees: []string{"Ada"}}}
 	read := []minutesLine{{N: 1, At: 0, Text: "first"}, {N: 2, At: 10, Text: "Bo says second"}, {N: 3, At: 20, Text: "third, in Room 3"}}
 	var a minutesAnswer
 	if err := json.Unmarshal([]byte(`{"title":"**Weekly** sync","where":"**Room 3**","attendees":["**Bo**"],`+
