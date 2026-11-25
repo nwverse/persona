@@ -34,7 +34,7 @@ beforeEach(() => {
   root = createRoot(host);
 });
 afterEach(() => { act(() => root.unmount()); host.remove(); });
-function draw(style: WorkLineStyle, s: Segment, live: boolean, expand: (f: Item) => Promise<void> = async () => {}, streaming?: string) {
+function draw(style: WorkLineStyle, s: Segment, live: boolean, expand: (f: Item) => Promise<boolean | void> = async () => {}, streaming?: string) {
   const ctx: ChatContextValue = { tasks: emptyTaskIndex(), subagents: [], scope: "x:", lineStyle: style };
   act(() => root.render(<ChatContext.Provider value={ctx}><SegmentView key={segmentIdentity(s)} seg={s} live={live} mid="m" sid="s" expandFold={expand} streaming={streaming} /></ChatContext.Provider>));
 }
@@ -241,5 +241,39 @@ describe.each(["assistant", "agents"] as const)("%s folded history", (style) => 
     for (const n of [1, 2, 3, 5, 6, 7]) expect(detailText()).toContain(`echo ${n}`);
     expect(detailText()).toContain("Earlier progress.");
     expect(host.querySelectorAll('[data-work-group] > button span[style*="width: 11px"]')).toHaveLength(0);
+  });
+  it("stops rendering the fold loading spinner on failure while keeping live steps and retry working", async () => {
+    let steps: Step[] = [fold(1, 5), tool(6, false)];
+    let rejectNext = true;
+    const expand = vi.fn(async (f: Item) => {
+      if (rejectNext) throw new Error("409 missing_generation");
+      steps = steps.flatMap((s) => s.kind === "fold" && s.item.id === f.id ? calls(f.seq, f.fold!.through_seq) : [s]);
+      draw(style, seg(steps), true, expand);
+      return true;
+    });
+    draw(style, seg(steps), true, expand);
+    tap();
+    await settle();
+    expect(host.textContent).toContain("没能取回这段过程");
+    expect(host.textContent).not.toContain("正在取 10 条");
+    expect(detailText()).toContain("echo 6");
+    const retry = host.querySelector<HTMLButtonElement>('[role="status"] button')!;
+    expect(retry.textContent).toBe("重试");
+    rejectNext = false;
+    act(() => retry.click());
+    await settle();
+    expect(host.textContent).not.toContain("没能取回这段过程");
+    expect(host.textContent).not.toContain("正在取 10 条");
+    for (const n of [1, 2, 3, 4, 5, 6]) expect(detailText()).toContain(`echo ${n}`);
+  });
+  it("shows Retry and stops spinning when expandFold resolves incomplete (false)", async () => {
+    const expand = vi.fn(async () => false);
+    draw(style, seg([fold(1, 5)]), false, expand);
+    tap();
+    await settle();
+    expect(expand).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("没能取回这段过程");
+    expect(host.textContent).not.toContain("正在取 10 条");
+    expect(detail()).toBeNull();
   });
 });
