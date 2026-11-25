@@ -958,10 +958,34 @@ func TestReadOnlySuppressesFiveSideEffectsAndFiltersData(t *testing.T) {
 		`{"type":"interaction","interaction":{"id":"h","machine_id":"m1","session_id":"sh"}}`,
 		`{"type":"items","machine_id":"m1","session_id":"sh","items":[]}`,
 		`{"type":"delta","machine_id":"m1","session_id":"sh","text":"secret"}`,
+		`{"type":"acme_custom_event","payload":"secret"}`,
+		`{"type":"mail_accounts","accounts":[]}`,
+		`{"type":"messaging","text":"dm"}`,
+		`{"type":"lark","feed_ids":["f1"]}`,
+		`{"type":"extension_auth","id":"ext1"}`,
+		`{"type":"model_profile","profile":"x"}`,
+		`{"type":"interaction_reanswered","id":"ix_ok","resolution":{"text":"secret"}}`,
+		`{"type":"items","items":[]}`,
 	} {
 		if out := noScopeClient.readOnlySocketFrame([]byte(dropped)); out != nil {
 			t.Fatalf("readOnlySocketFrame did not drop %s -> %s", dropped, out)
 		}
+	}
+	// Allowlisted core view events pass unchanged, and sessions_list strips any changed/since keys.
+	for _, allowed := range []string{
+		`{"type":"todos"}`,
+		`{"type":"directions"}`,
+		`{"type":"inbox"}`,
+		`{"type":"machines","machines":[]}`,
+		`{"type":"navigation","pages":[]}`,
+		`{"type":"interaction_resolved","id":"ix_ok"}`,
+	} {
+		if out := noScopeClient.readOnlySocketFrame([]byte(allowed)); out == nil {
+			t.Fatalf("readOnlySocketFrame unexpectedly dropped core event %s", allowed)
+		}
+	}
+	if out := noScopeClient.readOnlySocketFrame([]byte(`{"type":"sessions_list","revision":2,"since":1,"changed":["m1/sh"]}`)); out == nil || strings.Contains(string(out), "changed") || strings.Contains(string(out), "since") {
+		t.Fatalf("sessions_list defense-in-depth strip = %s", out)
 	}
 	// Health events pass ONLY when health scope is granted.
 	if out := healthScopeClient.readOnlySocketFrame([]byte(`{"type":"health_intake","date":"2026-11-26"}`)); out == nil {
@@ -1193,4 +1217,136 @@ func TestReadOnlyRevokeSingleAllAndSwitchCircuitBreaker(t *testing.T) {
 	h.cfg.Security.AllowReadOnlySessions = false
 	h.broadcastMachines()
 	waitWSClosed(c5, wsCloseReadOnlyExpired)
+}
+
+func TestReadOnlyWebSocketDefaultDenyCustomExtensionEventsLiveAndReplay(t *testing.T) {
+	h := newTestHub(t)
+	h.cfg.Security.AllowReadOnlySessions = true
+	store := newReadOnlyTestStore()
+	h.store = store
+	store.insertRawToken("jd_full_ext_events", db.DeviceToken{ID: "dev_full_ext_events", Name: "Full", Kind: "web", Role: roleFull})
+
+	// Declare a third-party extension API contribution with a custom broadcast event.
+	h.keepExtReport("assistant", &extwire.Report{
+		EventsDeclared: true,
+		APIs: []extwire.APIPrefix{
+			{Prefix: "acme-ext", Events: []string{"acme_custom_event"}},
+		},
+	})
+
+	mux := h.routes()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	ro := mintReadOnlySession(t, mux, h.cfg.Token, `{"label":"ws-default-deny"}`)
+
+	type helloFrame struct {
+		Type        string `json:"type"`
+		EventStream string `json:"event_stream"`
+		EventSeq    int64  `json:"event_seq"`
+		Resumed     bool   `json:"resumed"`
+	}
+	dialAndReadHello := func(tok, query string) (*websocket.Conn, helloFrame) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/v1/ws?token=" + tok
+		if query != "" {
+			url += "&" + query
+		}
+		conn, _, err := websocket.Dial(ctx, url, nil)
+		if err != nil {
+			t.Fatalf("dial %s: %v", url, err)
+		}
+		t.Cleanup(func() { _ = conn.CloseNow() })
+		_, raw, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatalf("read hello: %v", err)
+		}
+		var hf helloFrame
+		if err := json.Unmarshal(raw, &hf); err != nil || hf.Type != "hello" {
+			t.Fatalf("hello frame = %s (err=%v)", raw, err)
+		}
+		return conn, hf
+	}
+	readUntilType := func(conn *websocket.Conn, stopType string) []string {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var seen []string
+		for {
+			_, raw, err := conn.Read(ctx)
+			if err != nil {
+				t.Fatalf("read until %s (seen=%v): %v", stopType, seen, err)
+			}
+			var env struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(raw, &env); err != nil {
+				t.Fatalf("decode ws frame %s: %v", raw, err)
+			}
+			seen = append(seen, env.Type)
+			if env.Type == stopType {
+				return seen
+			}
+		}
+	}
+
+	// 1. Live WebSocket delivery: both clients connect before the broadcasts.
+	roLive, roHello := dialAndReadHello(ro.Token, "")
+	fullLive, fullHello := dialAndReadHello("jd_full_ext_events", "")
+	if roHello.EventStream == "" || roHello.EventStream != fullHello.EventStream {
+		t.Fatalf("event streams differ: ro=%+v full=%+v", roHello, fullHello)
+	}
+	resumeStream := fullHello.EventStream
+	resumeAfter := fullHello.EventSeq
+
+	// Relay a custom third-party extension event, non-allowlisted manager events, and finally an allowlisted core event ("todos") as barrier.
+	for _, msg := range []string{
+		`{"type":"acme_custom_event","secret":"ext-only-payload"}`,
+		`{"type":"mail_accounts","accounts":["private"]}`,
+		`{"type":"messaging","text":"private-dm"}`,
+		`{"type":"todos"}`,
+	} {
+		if err := h.relayBroadcastFrom("assistant", json.RawMessage(msg)); err != nil {
+			t.Fatalf("relayBroadcastFrom(%s): %v", msg, err)
+		}
+	}
+
+	fullLiveTypes := readUntilType(fullLive, "todos")
+	for _, want := range []string{"acme_custom_event", "mail_accounts", "messaging", "todos"} {
+		if !slices.Contains(fullLiveTypes, want) {
+			t.Fatalf("full live WS missed %q: got %v", want, fullLiveTypes)
+		}
+	}
+	roLiveTypes := readUntilType(roLive, "todos")
+	for _, forbidden := range []string{"acme_custom_event", "mail_accounts", "messaging"} {
+		if slices.Contains(roLiveTypes, forbidden) {
+			t.Fatalf("readonly live WS received forbidden event %q: got %v", forbidden, roLiveTypes)
+		}
+	}
+
+	// 2. Eventlog replay (reconnect/resume): both clients resume from before the broadcasts.
+	resumeQuery := fmt.Sprintf("event_stream=%s&event_seq=%d", resumeStream, resumeAfter)
+	fullResume, fullResHello := dialAndReadHello("jd_full_ext_events", resumeQuery)
+	if !fullResHello.Resumed {
+		t.Fatalf("full resume hello was not resumed: %+v", fullResHello)
+	}
+	roResume, roResHello := dialAndReadHello(ro.Token, resumeQuery)
+	if !roResHello.Resumed {
+		t.Fatalf("readonly resume hello was not resumed: %+v", roResHello)
+	}
+
+	fullReplayTypes := readUntilType(fullResume, "todos")
+	for _, want := range []string{"acme_custom_event", "mail_accounts", "messaging", "todos"} {
+		if !slices.Contains(fullReplayTypes, want) {
+			t.Fatalf("full replay WS missed %q: got %v", want, fullReplayTypes)
+		}
+	}
+	roReplayTypes := readUntilType(roResume, "todos")
+	for _, forbidden := range []string{"acme_custom_event", "mail_accounts", "messaging"} {
+		if slices.Contains(roReplayTypes, forbidden) {
+			t.Fatalf("readonly replay WS received forbidden event %q: got %v", forbidden, roReplayTypes)
+		}
+	}
 }

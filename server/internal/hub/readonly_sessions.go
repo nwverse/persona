@@ -589,8 +589,39 @@ func (h *Hub) hiddenFromReadOnly(ix proto.Interaction) bool {
 	return h.hiddenFromExtensions(ix)
 }
 
-// readOnlySocketFrame filters outbound WS frames for roleReadOnly clients before writing to the socket.
-// Returning nil drops the frame completely.
+// readOnlyAllowedSocketEvents is the default-deny allowlist of core WebSocket event types
+// forwarded unchanged to roleReadOnly clients. Event types that require scope, space-session,
+// or private-card filtering are handled explicitly in readOnlySocketFrame; every unlisted
+// event type (including custom third-party extension events and non-core manager broadcasts)
+// is dropped by default.
+var readOnlyAllowedSocketEvents = map[string]bool{
+	// Transport / protocol
+	"hello":            true,
+	"client_hello_ack": true,
+	"pong":             true,
+	"error":            true,
+	"hub_restarting":   true,
+
+	// Shell bootstrap (Group A)
+	"machines":   true,
+	"managers":   true,
+	"endpoints":  true,
+	"navigation": true,
+	"fleet":      true,
+	"desktops":   true,
+
+	// Core views (Group B)
+	"directions":           true,
+	"todos":                true,
+	"inbox":                true,
+	"agents":               true,
+	"agents.prefs":         true,
+	"agents.triage":        true,
+	"interaction_resolved": true,
+}
+
+// readOnlySocketFrame filters outbound WS frames for roleReadOnly clients using a strict
+// default-deny allowlist before writing to the socket. Returning nil drops the frame completely.
 func (c *client) readOnlySocketFrame(data []byte) []byte {
 	var frame map[string]json.RawMessage
 	if json.Unmarshal(data, &frame) != nil {
@@ -600,12 +631,23 @@ func (c *client) readOnlySocketFrame(data []byte) []byte {
 	if json.Unmarshal(frame["type"], &typ) != nil || typ == "" {
 		return nil
 	}
+	if readOnlyAllowedSocketEvents[typ] {
+		return data
+	}
 	switch typ {
-	case "tool_call", "notify", "extension_ui_stream",
-		"terminal", "terminal_control",
-		"herdr_state", "herdr_focus", "herdr_end", "herdr_data",
-		"fs_changed", "lock_test", "file_transfer", "held_start":
-		return nil
+	case "sessions_list":
+		_, hasChanged := frame["changed"]
+		_, hasSince := frame["since"]
+		if !hasChanged && !hasSince {
+			return data
+		}
+		delete(frame, "changed")
+		delete(frame, "since")
+		out, err := json.Marshal(frame)
+		if err != nil {
+			return nil
+		}
+		return out
 	case "health_intake", "health_items", "health_strength":
 		if !slices.Contains(c.scopes, readOnlyScopeHealth) {
 			return nil
@@ -664,7 +706,10 @@ func (c *client) readOnlySocketFrame(data []byte) []byte {
 		if c.hub != nil {
 			var mid string
 			var revs map[string]json.RawMessage
-			if json.Unmarshal(frame["machine_id"], &mid) == nil && json.Unmarshal(frame["revs"], &revs) == nil && mid != "" && len(revs) > 0 {
+			if json.Unmarshal(frame["machine_id"], &mid) != nil || json.Unmarshal(frame["revs"], &revs) != nil || mid == "" {
+				return nil
+			}
+			if len(revs) > 0 {
 				changed := false
 				for sid := range revs {
 					if !c.hub.scopedPublicSession(mid, sid) {
@@ -695,13 +740,13 @@ func (c *client) readOnlySocketFrame(data []byte) []byte {
 			var mid, sid string
 			_ = json.Unmarshal(frame["machine_id"], &mid)
 			_ = json.Unmarshal(frame["session_id"], &sid)
-			if mid != "" && sid != "" && !c.hub.scopedPublicSession(mid, sid) {
+			if mid == "" || sid == "" || !c.hub.scopedPublicSession(mid, sid) {
 				return nil
 			}
 		}
 		return data
 	default:
-		return data
+		return nil
 	}
 }
 
