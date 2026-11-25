@@ -6,7 +6,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -63,7 +62,7 @@ func (s *Service) InteractionAnnounced(_ context.Context, p InteractionAnnounced
 	}
 	c.announced[p.Interaction.ID] = true
 	c.mu.Unlock()
-	go s.feishuInteraction(p.Interaction)
+	go s.larkModule().AskAnnounced(p.Interaction)
 	go s.channelInteraction(p.Interaction)
 	go s.taskAsks(p.Interaction)
 	s.boardChanged()
@@ -106,7 +105,7 @@ func (s *Service) InteractionEnded(_ context.Context, p InteractionEnded) {
 	}
 	// Taken back because the user wrote in the conversation: what they write next is not a late answer to it.
 	inChat := p.Resolution != nil && p.Resolution.Dismiss && p.Resolution.Reason == proto.DismissedInChat && p.Resolution.AnsweredBy == ""
-	s.feishuInteractionEnded(p.Interaction, how, inChat)
+	s.larkModule().AskEnded(p.Interaction, how, inChat)
 	s.channelInteractionEnded(p.Interaction, inChat)
 	s.boardChanged()
 }
@@ -238,5 +237,5 @@ func (s *Service) channelsCatchUp(ctx context.Context) {
 	for _, a := range gone {
 		s.channelInteractionDone(proto.Interaction{ID: a.ID})
 	}
-	s.closeEndedBotCards(ctx, pending, true)
+	s.larkModule().AsksCatchUp(ctx, pending)
 }

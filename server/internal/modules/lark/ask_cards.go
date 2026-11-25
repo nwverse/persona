@@ -1,5 +1,26 @@
 package lark
 
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/url"
+	"slices"
+	"strconv"
+	"strings"
+
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
+	"github.com/nwverse/persona/server/internal/channel"
+	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/textfmt"
+)
+
+// The cards of what Persona and the agents ask (asks.go), laid out from the interaction and what the core says of it
+// (assistantwire.AskView): the card asking it, and the small grey card it becomes once it is over.
+
 const (
 	maxFormQuestions     = 6     // more questions than this are answered in the app (keeps the form under ~200 components)
 	maxFormOptions       = 20    // options shown per question
@@ -17,11 +38,10 @@ const (
 	maxCardJSONBytes     = 24000 // serialized size above which safeCard falls back (Feishu rejects ~30 KB)
 )
 
-// interactionCard is the card asking ix, with the app's choices.
-func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *botcard.Card {
-	l := s.botLang(ctx)
-	place, secondary := s.feishuAgentPlace(ctx, ix)
-	place = s.ixTaskPlace(ctx, ix, place)
+// interactionCard is the card asking ix, with the app's choices; v is what the core says of it (Host.AskView).
+func interactionCard(l i18n.Lang, ix proto.Interaction, v assistantwire.AskView) *botcard.Card {
+	place, secondary := feishuAgentPlace(v)
+	place = ixTaskPlace(v, place)
 	where := botcard.EscapeMarkdown(place)
 	val := func(extra map[string]any) map[string]any {
 		v := map[string]any{"a": "ix", "id": ix.ID}
@@ -30,21 +50,21 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *bo
 		}
 		return v
 	}
-	open := s.openButton(ctx, ix.MachineID, ix.SessionID)
+	open := openPage(v)
 	// The "more" menu every card ends its row of actions with: dismissing it where it can be, and its conversation.
 	menu := func(dismiss bool) botcard.Button {
 		var items []botcard.MenuItem
 		if dismiss {
 			items = append(items, botcard.MenuItem{Label: i18n.T(l, "assistant-feishu_cards.dismiss"), Value: map[string]any{"dismiss": "1"}})
 		}
-		if label, web := s.openLink(ctx, ix.MachineID, ix.SessionID); web != "" {
+		if label, web := v.OpenLabel, v.OpenURL; web != "" {
 			items = append(items, botcard.MenuItem{Label: label, URL: web, PC: botcard.SidebarURL(web)})
 		}
 		return botcard.Overflow(val(nil), items...)
 	}
 	switch ix.Kind {
 	case proto.IxQuestion:
-		c := s.ixCard(ctx, ix, "assistant-feishu_cards.tag_question", i18n.T(l, "assistant-feishu_cards.question_summary", i18n.Args{"question": firstQuestion(ix)}))
+		c := ixCard(l, v, "assistant-feishu_cards.tag_question", i18n.T(l, "assistant-feishu_cards.question_summary", i18n.Args{"question": firstQuestion(ix)}))
 		if len(ix.Questions) == 1 && !ix.Questions[0].MultiSelect && len(ix.Questions[0].Options) <= 4 {
 			q := ix.Questions[0]
 			c.Markdown(questionText(l, q))
@@ -97,7 +117,7 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *bo
 		}
 		return safeCard(l, c.Buttons(menu(true)), open)
 	case proto.IxPlan:
-		c := s.ixCard(ctx, ix, "assistant-feishu_cards.tag_plan", i18n.T(l, "assistant-feishu_cards.plan_summary"))
+		c := ixCard(l, v, "assistant-feishu_cards.tag_plan", i18n.T(l, "assistant-feishu_cards.plan_summary"))
 		c.Markdown(botcard.CardMarkdown(clipPlan(ix.Plan, i18n.T(l, "assistant-feishu_cards.plan_clipped"))))
 		// Approving to run on its own lets the agent go on without asking: Feishu's dialog asks first.
 		c.Buttons(
@@ -110,15 +130,15 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *bo
 			botcard.Submit(i18n.T(l, "assistant-feishu_cards.send_back"), botcard.Danger, "plan_reject", val(map[string]any{"approve": "0"})))
 		return safeCard(l, c, open)
 	case proto.IxPermission:
-		c := s.ixCard(ctx, ix, "assistant-feishu_cards.tag_permission", i18n.T(l, "assistant-feishu_cards.permission_summary", i18n.Args{"tool": ixToolName(ix)}))
+		c := ixCard(l, v, "assistant-feishu_cards.tag_permission", i18n.T(l, "assistant-feishu_cards.permission_summary", i18n.Args{"tool": v.Tool}))
 		var b strings.Builder
-		fmt.Fprintf(&b, "**%s**", botcard.EscapeMarkdown(ixToolName(ix)))
+		fmt.Fprintf(&b, "**%s**", botcard.EscapeMarkdown(v.Tool))
 		if ix.Reason != "" {
 			fmt.Fprintf(&b, "\n%s", botcard.EscapeMarkdown(clip(ix.Reason, maxPermissionReason)))
 		}
 		c.Markdown(b.String())
 		if sum := strings.TrimSpace(ix.Summary); sum != "" {
-			if !ownerActionProposal(ix) {
+			if !v.ExactProposal {
 				sum = clip(sum, 2500)
 			}
 			c.Markdown("```\n" + strings.ReplaceAll(sum, "```", "'''") + "\n```")
@@ -164,10 +184,10 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *bo
 		return safeCard(l, c.Buttons(append(bs, menu(false))...), open)
 	case proto.IxScreen:
 		summary := i18n.T(l, "assistant-feishu_cards.screen_summary")
-		if terminalQuestion(ix) {
+		if v.Terminal {
 			summary = ix.Dialog.Question + " · " + place
 		}
-		c := s.ixCard(ctx, ix, "assistant-feishu_cards.tag_screen", summary)
+		c := ixCard(l, v, "assistant-feishu_cards.tag_screen", summary)
 		if d := ix.Dialog; d != nil {
 			q := d.Question
 			if d.Detail != "" {
@@ -220,7 +240,7 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *bo
 		}
 		return safeCard(l, c, open)
 	case proto.IxElicitation:
-		return safeCard(l, s.elicitationCard(ctx, ix, open, menu(false)), open)
+		return safeCard(l, elicitationCard(l, ix, v, open, menu(false)), open)
 	}
 	return safeCard(l, botcard.NewCard(where, botcard.Grey, "").Subtitle(secondary).Buttons(open), open)
 }
@@ -276,8 +296,7 @@ var elicitationURLRe = lazyre.New(`(?i)^https?://[^/\\?#@]`)
 
 // elicitationCard is an MCP server asking to authorize (a link) or to fill in a form: what it asks on the card, its
 // link as a button; a form is filled in the app (its values may be secrets), so only its fields' names are shown.
-func (s *Service) elicitationCard(ctx context.Context, ix proto.Interaction, open, menu botcard.Button) *botcard.Card {
-	l := s.botLang(ctx)
+func elicitationCard(l i18n.Lang, ix proto.Interaction, v assistantwire.AskView, open, menu botcard.Button) *botcard.Card {
 	var msg, link, host string
 	var fields []string
 	if e := ix.Elicitation; e != nil {
@@ -298,7 +317,7 @@ func (s *Service) elicitationCard(ctx context.Context, ix proto.Interaction, ope
 			slices.Sort(fields)
 		}
 	}
-	c := s.ixCard(ctx, ix, "assistant-feishu_cards.tag_elicitation",
+	c := ixCard(l, v, "assistant-feishu_cards.tag_elicitation",
 		i18n.T(l, "assistant-feishu_cards.elicitation_summary", i18n.Args{"message": clip(oneLine(msg), 60)}))
 	if msg != "" {
 		c.Markdown(botcard.EscapeMarkdown(clip(msg, 2000)))
@@ -361,11 +380,11 @@ var ixKindTags = map[string]string{proto.IxQuestion: "assistant-feishu_cards.tag
 	proto.IxPermission: "assistant-feishu_cards.tag_permission", proto.IxScreen: "assistant-feishu_cards.tag_screen",
 	proto.IxElicitation: "assistant-feishu_cards.tag_elicitation"}
 
-// ixWho is who asks, for a card's header: the task its agent works on, with the task's direction (ixTask), or else the
-// agent; and under it the agent, its computer and the session's other name (feishuAgentPlaceParts), the parts it has.
-func (s *Service) ixWho(ctx context.Context, ix proto.Interaction) (title, sub string) {
-	agent, machine, secondary := s.feishuAgentPlaceParts(ctx, ix)
-	task, same := s.ixTask(ctx, ix)
+// ixWho is who asks, for a card's header: the task its agent works on, with the task's direction (AskView.Task), or
+// else the agent; and under it the agent, its computer and the session's other name, the parts it has.
+func ixWho(v assistantwire.AskView) (title, sub string) {
+	agent, machine, secondary := v.Agent, v.Machine, v.Secondary
+	task, same := v.Task, v.TaskSame
 	switch {
 	case task == "":
 		return agent, dotJoin(machine, secondary)
@@ -376,16 +395,20 @@ func (s *Service) ixWho(ctx context.Context, ix proto.Interaction) (title, sub s
 }
 
 // ixCard starts the card asking ix: who asks in the header, orange (the owner is to act), its kind as a tag.
-func (s *Service) ixCard(ctx context.Context, ix proto.Interaction, kind, summary string) *botcard.Card {
-	title, sub := s.ixWho(ctx, ix)
-	return botcard.NewCard(title, botcard.Orange, summary).Subtitle(sub).Tag(i18n.T(s.botLang(ctx), kind), botcard.Orange)
+func ixCard(l i18n.Lang, v assistantwire.AskView, kind, summary string) *botcard.Card {
+	title, sub := ixWho(v)
+	return botcard.NewCard(title, botcard.Orange, summary).Subtitle(sub).Tag(i18n.T(l, kind), botcard.Orange)
 }
 
 // answeredCard is an interaction's card once it is over: grey and small, what it asked in a line and how it ended,
 // its conversation's page as a link in small text; no buttons.
-func (s *Service) answeredCard(ctx context.Context, ix proto.Interaction, how string) *botcard.Card {
-	l := s.botLang(ctx)
-	title, sub := s.ixWho(ctx, ix)
+func (s core) answeredCard(ctx context.Context, ix proto.Interaction, how string) *botcard.Card {
+	return answeredCardOf(s.botLang(ctx), ix, s.h.AskView(ctx, ix), how)
+}
+
+// answeredCardOf is answeredCard from what the core says of ix.
+func answeredCardOf(l i18n.Lang, ix proto.Interaction, v assistantwire.AskView, how string) *botcard.Card {
+	title, sub := ixWho(v)
 	c := botcard.NewCard(title, botcard.Grey, how).Subtitle(sub)
 	if kind := ixKindTags[ix.Kind]; kind != "" {
 		c.Tag(i18n.T(l, kind), botcard.Neutral)
@@ -406,9 +429,9 @@ func (s *Service) answeredCard(ctx context.Context, ix proto.Interaction, how st
 			asked = append(asked, strings.TrimSpace(i18n.T(l, "assistant-feishu_cards.clipped")))
 		}
 	case proto.IxPermission:
-		asked = append(asked, botcard.EscapeMarkdown(ixToolName(ix)+" "+clip(oneLine(ix.Summary), 200)))
+		asked = append(asked, botcard.EscapeMarkdown(v.Tool+" "+clip(oneLine(ix.Summary), 200)))
 	case proto.IxPlan:
-		asked = append(asked, botcard.EscapeMarkdown(clip(planTitle(ix.Plan), 200)))
+		asked = append(asked, botcard.EscapeMarkdown(clip(textfmt.PlanTitle(ix.Plan), 200)))
 	}
 	if len(asked) > 0 {
 		c.Markdown("<font color='grey'>" + strings.Join(asked, "\n") + "</font>")
@@ -416,19 +439,28 @@ func (s *Service) answeredCard(ctx context.Context, ix proto.Interaction, how st
 	c.Markdown("**✓ " + botcard.EscapeMarkdown(how) + "**")
 	// The conversation's page rides on the card as a link, and the button on safeCard's short card, which takes its
 	// place when this one would exceed Feishu's size budget.
-	if label, web := s.openLink(ctx, ix.MachineID, ix.SessionID); web != "" && boardLinkOK(web) {
+	if label, web := v.OpenLabel, v.OpenURL; web != "" && v.OpenInline {
 		c.Meta("[" + botcard.EscapeMarkdown(label) + "](" + web + ")")
 	}
-	return safeCard(l, c, s.openButton(ctx, ix.MachineID, ix.SessionID))
+	return safeCard(l, c, openPage(v))
 }
 
-func (s *Service) ixWhere(ctx context.Context, ix proto.Interaction) string {
-	place, _ := s.feishuAgentPlace(ctx, ix)
-	return s.ixTaskPlace(ctx, ix, place)
+// openPage is the button that opens the conversation's page; nil (Card.Buttons leaves it out) when the hub has no
+// http(s) address for it.
+func openPage(v assistantwire.AskView) botcard.Button {
+	if v.OpenURL == "" {
+		return nil
+	}
+	return botcard.PageBtn(v.OpenLabel, v.OpenURL)
 }
 
-func (s *Service) ixTaskPlace(ctx context.Context, ix proto.Interaction, place string) string {
-	task, same := s.ixTask(ctx, ix)
+func ixWhere(v assistantwire.AskView) string {
+	place, _ := feishuAgentPlace(v)
+	return ixTaskPlace(v, place)
+}
+
+func ixTaskPlace(v assistantwire.AskView, place string) string {
+	task, same := v.Task, v.TaskSame
 	switch {
 	case task == "":
 		return place
@@ -438,10 +470,9 @@ func (s *Service) ixTaskPlace(ctx context.Context, ix proto.Interaction, place s
 	return task + " · " + place
 }
 
-
 // feishuAgentPlace identifies the session even when the node supplied no title.
-func (s *Service) feishuAgentPlace(ctx context.Context, ix proto.Interaction) (place, secondary string) {
-	agent, machine, secondary := s.feishuAgentPlaceParts(ctx, ix)
+func feishuAgentPlace(v assistantwire.AskView) (place, secondary string) {
+	agent, machine, secondary := v.Agent, v.Machine, v.Secondary
 	if machine == "" {
 		return agent, secondary
 	}

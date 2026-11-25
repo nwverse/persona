@@ -598,18 +598,32 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
   (`Message`, `Action`, `Owner`, `Recalled`, `View`, which the Service's `Feishu*` methods pass on), what the core asks
   (`StatusKept`, `Route`, `SetTarget`, `RememberThread`, `Send`, `CardsWaiting`, `CardNudged`, `TopicAnchor`,
   `LegacyRuns`, `NudgeTick`, which the core's nudge sweep runs once a minute) and `Book`, which runs a function on the
-  chat's records under its lock for the core's cards, standing board and companion bots (it shrinks as they move).
+  chat's records under its lock for the core's standing board, workbench pin and companion bots (it shrinks as they
+  move).
   What the chat asks of the core is the host's chat group: where a target is and the run a message starts
   (`feishu_route.go`, which other channels use too), an interaction answered or closed, an acceptance pressed, the
   main conversation's model, and the to-do, decision and question ledgers of a topic (`TodoOfThread`, `ThreadRoutes`,
   `TopicDecision`, `OpenTodo`), which stay in the core. The chat's times are module timings (`turn_wait`,
   `topic_lookup_wait`, `card_answer_wait`, `start_card_window`, `form_window`), its clock the core's per-instance knob;
   `Layer.Wait` also waits for the chat's messages being handled and the agents and forms a press starts.
+- **The agents' cards are the module's** (`server/internal/modules/lark/asks.go`, `ask_cards.go`): the card of a
+  question, a permission, a plan or a terminal dialog, where it goes, the card it becomes once over, and the cards
+  closed while their node is away. The core tells the chat through the interaction port, `larkhost.Asks`
+  (`AskAnnounced`, `AskPost`, `AskWanted`, `AskEnded`, `AskDetached`, `AskBack`, `AsksCatchUp`: nothing, and no card
+  wanted, without the module), next to the generic channels' own fan-out (`channelInteraction`). What a card says of
+  the core crosses as data, one value per question: `Host.AskView` (`assistantwire.AskView`: who asks, the task and
+  its direction, the conversation's page, the core's wording of the interaction; built in
+  `server/internal/assistant/ask_view.go`), `Host.AskRoute` (`assistantwire.AskRoute`: the runs of the chat on the
+  conversation, from the channels' runs), `Host.AskSensitive` (the exit policy of its words, asked only for a card the
+  chat does not drive with "all cards" on, since it may wait for the text to be tagged) and `Host.AskState` (the
+  core's live record: ended, still up). The module reads nothing else of the core for a card.
 - **Tests**: the turns' own tests run in the module on a fake core (`server/internal/modules/lark/service_test.go`:
   the channels' runs, their finishing, folding and dropping, and the hub's transport; `chat_fake_test.go`: the chat's
   host methods as the core answers the plain case); the assistant's tests of the turns through the channels' pipeline
   stay in `internal/assistant` and skip without the module (`needsLarkLayer`), and its tests of the chat hand it the
-  owner's messages and presses as the hub does (`server/internal/assistant/lark_chat_test.go`).
+  owner's messages and presses as the hub does (`server/internal/assistant/lark_chat_test.go`); its tests of the
+  agents' cards drive the interaction port with the real core behind it
+  (`server/internal/assistant/lark_asks_test.go`).
 - **With the module absent** (`persona_without_lark`, `persona_core_only`) the port is `larkhost.None`, a bot switched
   off: its status reads without an error as neither on nor ready (so an acceptance ask is card-less and a briefing
   goes out by push, as with the bot off), it supports nothing, a post or a reply answers `larkhost.ErrNoChannel`, and

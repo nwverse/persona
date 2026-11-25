@@ -3,24 +3,75 @@ package assistant
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"maps"
-	"net/url"
 	"slices"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
-	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
+
+// What the core says of an agent's question, permission, plan or terminal dialog to the chat that shows it as a card
+// (the lark module's asks.go and ask_cards.go, #13404): who asks and for which task, the conversation's page and the
+// core's wording of it as one value (ixView), where its card goes as the channels' runs say (ixRoute), and whether
+// its words are sensitive (ixSensitive). The cards themselves, their state and their answers are the module's.
+
+// ixView is what ix's card says of the core (assistantwire.AskView).
+func (s *Service) ixView(ctx context.Context, ix proto.Interaction) assistantwire.AskView {
+	var v assistantwire.AskView
+	v.Agent, v.Machine, v.Secondary = s.feishuAgentPlaceParts(ctx, ix)
+	v.Task, v.TaskSame = s.ixTask(ctx, ix)
+	v.OpenLabel, v.OpenURL = s.openLink(ctx, ix.MachineID, ix.SessionID)
+	v.OpenInline = boardLinkOK(v.OpenURL)
+	v.Tool = ixToolName(ix)
+	if v.Terminal = terminalQuestion(ix); v.Terminal {
+		v.TerminalText = terminalQuestionText(ix)
+	}
+	v.ExactProposal = ownerActionProposal(ix)
+	return v
+}
+
+// ixRoute is where ix's card goes (assistantwire.AskRoute): whether a run of the chat is on its conversation, the
+// runs it answers to (interactionRuns), and whether its conversation is the main one.
+func (s *Service) ixRoute(ctx context.Context, ix proto.Interaction) assistantwire.AskRoute {
+	var out assistantwire.AskRoute
+	for _, r := range s.channelRuns(channel.Feishu) {
+		if r.MachineID == ix.MachineID && r.SessionID == ix.SessionID {
+			out.Driven = true
+			break
+		}
+		// The hub's own approvals (mail_send) do not name the conversation: one on the assistant's machine while a
+		// Persona run goes on is most likely that run's.
+		if ix.SessionID == "" && r.TargetKind != targetAgent && r.MachineID == ix.MachineID {
+			out.Driven = true
+			break
+		}
+	}
+	private, topic := s.interactionRuns(ix)
+	if private != nil {
+		out.Private = &assistantwire.AskRun{ReplyTo: private.ReplyTo}
+	}
+	if topic != nil {
+		out.Topic = &assistantwire.AskRun{ReplyTo: topic.ReplyTo, To: runTo(s.runExts(topic, "chat", "thread"))}
+	}
+	out.Main = ix.SessionID != "" && s.isMainOn(ctx, ix.MachineID, ix.SessionID)
+	return out
+}
+
+// ixSensitive: ix's card says something sensitive (its words and its track's default categories): "all cards" does
+// not take it, only a chat that drives its conversation (health.go, info_use.go).
+func (s *Service) ixSensitive(ctx context.Context, ix proto.Interaction) bool {
+	return s.exitPolicy(ctx, interactionText(ix), ix.SessionID, s.ixSpace(ctx, ix)).Redact
+}
+
+// ixState is the core's live record of interaction id: ended (interaction.ended came, maybe while its card was
+// being sent) and pending (it is up now).
+func (s *Service) ixState(id string) (ended, pending bool) {
+	_, pending = s.pendingIx(id)
+	return s.interactionEnded(id), pending
+}
 
 // interactionRuns are the runs that decide where ix's card goes: the latest asked in the owner's DM and the latest
 // asked in a topic, of the conversation it belongs to (either may be nil). While a /read of the conversation goes on,

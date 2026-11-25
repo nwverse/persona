@@ -688,7 +688,11 @@ func (s *Service) sendReports() {
 func (s *Service) postReportAsks(items []*reportItem) {
 	for _, it := range items {
 		if it.state == reportNeeds && it.ix != nil && !s.botCardOut(it.ix.ID) {
-			s.feishuInteractionAlways(*it.ix)
+			// Its card goes out whatever the cards switches say; answering it goes as any card's (the hub checks the
+			// owner pressed it).
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			s.larkModule().AskPost(ctx, *it.ix)
+			cancel()
 		}
 	}
 }

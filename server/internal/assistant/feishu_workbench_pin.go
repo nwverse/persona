@@ -164,7 +164,7 @@ func (s *Service) workbenchBringCard(ctx context.Context, id string) {
 			s.logf("bots: workbench: withdraw a card: %v", err)
 		}
 	}
-	s.postInteractionCard(ctx, ix)
+	s.larkModule().AskPost(ctx, ix)
 }
 
 func wbT(l i18n.Lang, key string, args ...i18n.Args) string {
