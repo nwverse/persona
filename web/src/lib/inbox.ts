@@ -143,6 +143,8 @@ export interface InboxItem {
   connector?: InboxConnector;
   /** Only in GET /inbox/{id}: the conversation as text. */
   context?: string;
+  /** Only in GET /inbox/{id}: the knowledge base chat it came from, when there is one (#15356). */
+  kb_chat?: { id: string; path?: string } | null;
   agent?: InboxAgent;
   /** Deterministic PR/Issue auto-forward status and linked to-do metadata (#12492). */
   todo_forward?: InboxTodoForward;
