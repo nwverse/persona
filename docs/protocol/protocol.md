@@ -6528,6 +6528,18 @@ A dispatched token supports read-only reconciliation and retains the ten-minute 
 windows. The web checks `worktree/status` before offering herdr checkout deletion. Closing remains available for a main
 checkout.
 
+A paired device checking its Herdr checkout deletion may receive `state:"present",can_revoke_preview:true`.
+It can then explicitly surrender that unused confirmation by checking the same token with both `reconcile:true` and
+`revoke_preview:true`. The hub supplies the authenticated device identity. The node serializes surrender with native
+dispatch and returns `state:"preview_revoked",removed:false,revoked_preview_token:<original token>` only if the old
+confirmation can no longer run. A repeated check returns the same receipt, including after a lost response.
+The client can request a fresh preview and ask for the force and branch choices again. Already-dispatched
+confirmations and older nodes retain their existing read-only recovery behavior. Revocation requires a retained
+preview from the same node and authenticated device, within the 24-hour window.
+Other full clients holding the same token can still confirm it or check the actual workspace, as before.
+Only the enrolled device that obtained the preview can surrender it or read its revocation receipt.
+After surrender, all confirmations with the old token are refused.
+
 Removal requires runtime `worktree.remove-branch-policy.v1` and `worktree.archive-failure-blocking.v1`; folder unregister also requires `folder-workspace.unique-id-mutation.v1`. Folder workspace keys use `folderWorkspace.delete` with `requireUniqueId:true`; folder-project children use host-qualified `worktree.rm`. Neither recursively deletes the user's folder. Git removal sends `runHooks:true`, `waitForBackgroundRemoval:true` and explicit branch policy without hook/PTY waivers.
 
 Deletion returns `{workspace_id,removed,state,branch_deleted?}`. Only `removed:true,state:"removed"` is completion: the runtime result must agree with catalog absence and checkout disappearance (folder unregister checks catalog absence). Background acceptance returns `removing`; transport uncertainty returns `unknown`; reconciliation may return `present`. Use `{workspace_id,kind:"orca",preview_token,reconcile:true}` on the same route for read-only reconciliation; it never repeats removal. A dispatched token is consumed for mutation and retained for reconciliation for up to 24 hours. Node restart invalidates tokens; refresh the authoritative inventory and review the outcome before a fresh deletion attempt. Runtime refusals, including archive failures, remain errors. Orca does not currently accept an expected workspace instance or dirty fingerprint in `worktree.rm`, so checks protect stale confirmations but do not form an atomic transaction with concurrent external filesystem/runtime changes.
@@ -6600,6 +6612,11 @@ as it is (so switching one rule there does not turn blocks into hides); the apps
 is chosen. Matching is lexical and case-sensitive; a home reached through a link (`/home/me -> /data/home/me`,
 `NodeInfo.home_real`) matches under either name, and the node also matches a working folder with its links
 followed. Empty is the default.
+
+Managers supporting conditional replacement return `supports_expected_rules: true`. A client may then send the
+exact rules from its read as `expected_rules` alongside `rules` (including an empty array for the first rule).
+A concurrent change returns HTTP 409 without writing. Read again before applying the edit. Clients that omit
+`expected_rules` retain the original replacement behavior.
 
 **Block** (#10053). The manager sends the computer's enabled block patterns in `node.configure`
 (`agent_dirs_blocked: [...]`, `[]` when none block) when its node connects and again whenever they change, then lists

@@ -311,12 +311,16 @@ func moduleStore(v *Settings, key string, raw json.RawMessage) error {
 	return errors.New(key + " has no place in the assistant's settings")
 }
 
+func unavailableModuleSetting(key string) error {
+	return errors.New(key + " is not available: its module is off")
+}
+
 // moduleSettingGet is persona_settings' get of a module setting: the value in force.
 func (s *Service) moduleSettingGet(key string) func(ctx context.Context) (string, error) {
 	return func(ctx context.Context) (string, error) {
 		m, ok := s.modules.Setting(key)
 		if !ok {
-			return "", errors.New(key + " is not available: its module is off")
+			return "", unavailableModuleSetting(key)
 		}
 		return string(m.Value(moduleStored(s.settings(ctx), key))), nil
 	}
@@ -330,7 +334,7 @@ func (s *Service) moduleSettingSet(key, cardKey, applied string) func(ctx contex
 	return func(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
 		m, ok := s.modules.Setting(key)
 		if !ok {
-			return nil, errors.New(key + " is not available: its module is off")
+			return nil, unavailableModuleSetting(key)
 		}
 		next, err := m.Check(raw)
 		if err != nil {

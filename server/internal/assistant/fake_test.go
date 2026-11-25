@@ -64,6 +64,7 @@ type fakeHub struct {
 	rcFiles             map[string]string                  // a machine's launchers.list rc_file (its shell follows: bash or zsh)
 	slowLaunchers       map[string]bool                    // a machine whose launchers.list answers only when the call gives up
 	launcherGate        chan struct{}                      // when set, every launchers.list answer waits for this gate
+	onLauncherModels    func(context.Context, string)      // before the requested launcher returns its models, under mu
 	failLauncherRefresh bool                               // launchers.list with refresh:true fails, ordinary reads still answer
 	launcherListParams  []map[string]any                   // launchers.list params in order
 	agentModels         map[string][]proto.AgentModel      // the nodes' launchers.models, by launcher
@@ -292,6 +293,9 @@ func (f *fakeHub) setLocale(locale string) {
 // Background refreshes can reach the same node independently of the action under test.
 type deviceCallsForTest struct{}
 
+// sessionListOfflineForTest lets a test drop a node read on one request while unrelated background reads proceed.
+type sessionListOfflineForTest struct{}
+
 // afterListCall marks the context of the call a test arms afterList for (listHooked).
 type afterListCall struct{}
 
@@ -309,6 +313,9 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		f.mu.Unlock()
 		if check && ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		if offline, ok := ctx.Value(sessionListOfflineForTest{}).(func(string) bool); ok && offline(p.Device) {
+			return nil, fmt.Errorf("%s: %w", p.Device, apierr.ErrOffline)
 		}
 	}
 	if p.Method == DeviceSessionGet {
@@ -395,6 +402,9 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	result, err := f.deviceCall(ctx, p)
 	if hooks.after != nil {
 		hooks.after(read)
+	}
+	if hooks.afterCall != nil {
+		hooks.afterCall(p)
 	}
 	return result, err
 }
@@ -631,6 +641,12 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		return json.Marshal(map[string]any{"launchers": f.launcherList})
 	case assistantwire.DeviceLaunchersModels:
 		name, _ := a["name"].(string)
+		if f.onLauncherModels != nil {
+			f.onLauncherModels(ctx, name)
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		models := f.agentModels[name]
 		if models == nil {
 			models = []proto.AgentModel{}
@@ -1801,7 +1817,8 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 	}))
 	t.Cleanup(srv.Close)
 	key := filepath.Join(t.TempDir(), "key")
-	if err := os.WriteFile(key, []byte("k"), 0o600); err != nil {
+	// ai shares a quota hold by address and credential. A recycled test port belongs to a new fixture.
+	if err := os.WriteFile(key, []byte(randomHex(16)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	f.hello.Models.AI = ai.Config{BaseURL: srv.URL, APIKeyFile: key, Model: "fake"}

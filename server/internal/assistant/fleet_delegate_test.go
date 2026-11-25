@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -431,8 +432,35 @@ func TestDelegateFailedCallForgets(t *testing.T) {
 		return DelegateResult{Answer: true, Answers: map[string]string{q.Question: q.Options[0].Label}}, nil
 	})
 	first := delegateQuestion("ix_f1")
+	// The app can receive the escalated card before the goroutine that sent it returns.
+	// Check the failed claim at that handoff as well as actually submitting the next question.
+	claimedAtHandoff := make(chan bool, 1)
+	df.f.mu.Lock()
+	df.f.onTell = func() {
+		shown := df.shownAs(first.ID)
+		if len(shown) == 0 || shown[len(shown)-1].Delegating {
+			return
+		}
+		df.s.work.mu.Lock()
+		claimed := slices.ContainsFunc(df.s.work.delegated[[2]string{first.MachineID, first.SessionID}],
+			func(ask delegatedAsk) bool { return ask.id == first.ID })
+		df.s.work.mu.Unlock()
+		select {
+		case claimedAtHandoff <- claimed:
+		default:
+		}
+	}
+	df.f.mu.Unlock()
 	firstAnswered := df.ask(first)
 	waitDelegate(t, "the push", func() bool { return df.pushedFor(first.ID) != nil })
+	select {
+	case claimed := <-claimedAtHandoff:
+		if claimed {
+			t.Error("the failed call still owns the question as the app receives its escalation")
+		}
+	default:
+		t.Error("the app was not told the question had escalated")
+	}
 	if res := answerOf(t, df.ask(delegateQuestion("ix_f2"))); res.AnsweredBy != proto.AnsweredByAssistant {
 		t.Fatalf("after a failed call: %+v", res)
 	}
