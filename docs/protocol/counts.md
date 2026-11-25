@@ -6,10 +6,11 @@ managers in a surface's scope (`docs/plans/plan-derived-counts.md`, #11679). **W
 users see one number for each name on every screen and device; Agents users can trust that the badge, the list and the
 Lock Screen agree. This doc is the contract: what the view holds, what each count id means, and how a count may change.
 
-**Status (#15512):** the schema, its generated types and the wire samples exist; nothing sends, relays or draws a view
-yet. The manager tells it at step 7a of the plan, the hub relays it at step 7b (with its rows in
-`docs/protocol/protocol.md`: the `counts` message, the `counts_view` feature and the roster's `counts_view` flag), and
-the clients draw it from steps 8 to 10. Until a client draws the view, every number it shows is still its own.
+**Status (#15512, #15650, #15893):** the schema, its generated types and the wire samples exist, each manager tells
+the hub its view (step 7a of the plan, "The manager's view" below), and the hub relays it to the clients that ask
+(step 7b, "The hub's relay" below; its rows in `docs/protocol/protocol.md` "Counts view"). No client draws a view yet:
+they do from steps 8 to 10, keeping views as `spec/fixtures/counts/views.json` says. Until a client draws the view,
+every number it shows is still its own.
 
 ## The view
 
@@ -45,6 +46,60 @@ core draw no badges; the schema guards both languages against a hand-written cop
 | `build` | The manager build that made the view, so a number can be read against the definition that build applies ("Changing a count") |
 | `counts` | Each count the manager works out, by id. A count a build does not work out is absent, which means unknown, never 0 |
 | `totals` | Optional: each count's `n` again, by id ("Totals") |
+
+## The manager's view
+
+- **Capability and event.** A manager that tells its view names `counts_view` in its `manager.hello` capabilities and
+  tells the hub the one-way bus event `counts.view`, whose params are the view (`CapabilityCountsView` and
+  `EventCountsView` in `server/internal/assistantwire/counts.go`). A hub from before step 7b drops the event, as it
+  drops any event it does not know.
+- **When.** The manager's live round (`liveLoop`, `server/internal/assistant/counts_view.go`) makes the view from the
+  agents and cards it builds the Live Activity's state and Persona Link's summary from, and tells it after the state,
+  so the three agree and a badge is never ahead of the lists the round published. A round whose counts and totals did
+  not change tells nothing; a change goes up one `rev`, with a new `as_of`. After each handshake the last view is told
+  again as it was, so a hub that restarted has it. Each run of the manager draws a new `epoch`, and `build` is the
+  manager's version.
+- **Who writes what.** `fleetcount.AgentsNeedsYou` decides the rows on the Agents list's surface; package assistant
+  calls it, then the adapter's `Fleet.View` (`server/internal/assistant/fleetcount/fleetcountadapt/view.go`), which
+  writes `counts` and `totals` in one pass over the decided rows, so a total never disagrees with its rows. Package
+  assistant adds `epoch`, `rev`, `as_of` and `build`. `spec/fixtures/counts/surfaces.json` names `Fleet.View` as the
+  count's `producer`, and the adapter's tests hold it to the table.
+- **The bound.** A view takes at most 16 KB as JSON (`CountsViewMaxBytes`), the most the hub keeps.
+  `keys` and `held` list at most 200 rows each: the counted rows first, since they are the number, then the held ones,
+  each list stopping at the first row that would pass the bound (1 KB is kept for the rest of the view). The counted
+  rows `keys` leaves out are `more`; a held row the bound leaves out is not listed, and counts nowhere either way.
+
+## The hub's relay
+
+The hub is transport: it passes each manager's view on as the manager wrote it and works out no count
+(`server/internal/hub/counts_view.go`). It imports no counting core, domain kit or adapter, which
+`server/internal/hub/architecture_guard_test.go` and the archguard's `path-no-core` rule hold.
+
+- **What it keeps.** The last view of each manager's current bus connection, compacted, when the view is a JSON object
+  of at most `CountsViewMaxBytes` with a non-empty string `epoch` and a whole `rev` of 0 or more. It reads nothing else
+  of it, and drops a view that is not one, or that comes from a manager whose hello did not name `counts_view`. The view
+  goes with the connection: a hub that restarted has none until each manager connects again and tells its last one.
+- **What it sends.** `{"type":"counts","manager":"<id>","view":{…}}` when a manager tells a view that differs from its
+  last one, and for every kept view, by manager id, as a client connects (after `machines`, before the session lists)
+  or names the feature in a `client_hello`; `"view": null` when the connection of a manager that told one ends.
+  `manager` is always there, the built-in assistant's id included, as a client keeps one view per hub and manager. An
+  app never gets a manager's view after a newer one: relays and the views sent at connect are queued under one lock.
+- **To whom.** Only full-role clients that ask for the feature `counts_view` (`?features=` or `client_hello`): a view
+  lists every waiting session and card of a manager, so it reaches only what may read them all. Scoped and answer-only
+  devices get no `counts` message whatever they ask. `counts` is one of the hub's own message types
+  (`hubMessageTypes`), so no manager can broadcast one.
+- **Feature and flag (D10).** The hub lists the feature `counts_view` always, from the proto feature list
+  (`server/internal/proto/features_counts.go`): hub features reach a client only in the hello, so a feature that
+  followed the managers would switch the client's rule on every redeploy. Each roster entry says `counts_view: true`
+  while that manager is online and its hello named the capability. A client takes a manager as absent, and draws the
+  surfaces whose scope holds it from its fallback, when the hello lacks the feature, the manager's entry is online
+  without the flag, or it never kept a view of that manager; offline and `view: null` are not absence.
+- **What a client keeps (D13).** The last view per hub and manager, persisted, through `view: null`, going offline and a
+  hub restart; a new epoch replaces it whatever its rev, and a lower rev within an epoch loses. It is dropped when the
+  roster no longer lists the manager, at sign-out and on D10's explicit absence. `spec/fixtures/counts/views.json`
+  writes each case as given, one transport event and then (`spec/fixtures/counts/README.md`, "Kept views"); each
+  client's reducer replays it from steps 8 to 10, and `TestTheHubReplaysTheRestartCases` replays its restart cases
+  through the hub.
 
 ## A count
 
@@ -86,9 +141,9 @@ each row's reason as a `Why` and knows no wire shape, and the hub never decodes 
 `server/internal/assistant/fleetcount/fleetcountadapt` is the only code that writes a `Why` as its wire word, through
 its `WhyVisitor` (`whyWord` in `server/internal/assistant/fleetcount/fleetcountadapt/fleet.go`): a new `Why` case adds
 a method to `WhyVisitor`, so the adapter does not compile until the case has a spelling. A spelling the wire lacks is a
-new value of `CountsHeldReason` in the schema, which older clients read as unknown. `TestViewSamplesAreFleetcountsRows`
-in that package holds the samples to the rows `fleetcount` decides for the needs-you cases they name, each held reason
-spelled by `whyWord`.
+new value of `CountsHeldReason` in the schema, which older clients read as unknown; until then `Fleet.View` lists a row
+for that reason in neither list, as it does a quiet task's. `TestViewSamplesAreFleetcountsRows` in that package holds
+the samples to what `Fleet.View` writes for the needs-you cases they name, each held reason spelled by `whyWord`.
 
 ## Count ids
 
@@ -104,13 +159,17 @@ The Agents that wait for the owner: one row per waiting session, folded to the s
 no session counts 1; Persona conversations, quiet tasks' agents, muted agents (in `held`), directory-hidden sessions
 (`docs/protocol/protocol.md`, "Agent directory visibility") and sessions whose only cards are held (in `held`) are left
 out; a card its task's supervisor holds is in no row. Pinned by `spec/fixtures/needs-you` (`badge_rows`), decided by
-`fleetcount.AgentsNeedsYou` on its badge surface. In the view from step 7a.
+`fleetcount.AgentsNeedsYou` on its badge surface, written by `fleetcountadapt`'s `Fleet.View`. In the view since step 7a
+(#15650).
 
 ### Later ids
 
 `inbox_unread`, `inbox_action`, `todos_needs_you` and `persona_cards` come one at a time, each after its decision in
 the plan's section 6 (D7, D8, D9), each with its fixture and its line here. `surfaces.json` lists their rules until
-then. The composer's Needs you is not a count id: it stays the `assistant_needs` payload of
+then. Until the Inbox and the to-dos have cores of their own, such a count comes into the view as one more input of
+`Fleet.View`: the number package assistant works out today (the Inbox items' `status()` fold, the to-do projection's
+`Counts()`), never a record made for it. Once the view's schema carries an id, its row in `surfaces.json` names its
+`producer`, and the guard fails until it does. The composer's Needs you is not a count id: it stays the `assistant_needs` payload of
 `docs/design/proposals/todos-redesign.md`.
 
 ## Changing a count
@@ -157,7 +216,10 @@ rules. The fallbacks are deleted at step 13 on conditions, not a date (D14):
 ```sh
 python3 scripts/gen/extension_schema.py --check
 python3 scripts/test/test_wire_schema.py
+python3 -B scripts/test/test_counts_surfaces.py
 (cd server && go test -count=1 ./internal/assistantwire/ ./internal/assistant/fleetcount/...)
+(cd server && go test -count=1 -run 'CountsView|TheHelloNamesTheCountsView' ./internal/assistant/)
+(cd server && go test -count=1 -run 'CountsView|KeptViews|RestartCases|EpochAndRev|TestBroadcastTypes' ./internal/hub/)
 (cd apple/Packages/PersonaWire && swift test --filter CountsWireTests)
 (cd android && ./gradlew :core:contracts:test --tests '*CountsWireTest*' --max-workers=4)
 (cd web && npx vitest run src/lib/counts-wire.test.ts)
