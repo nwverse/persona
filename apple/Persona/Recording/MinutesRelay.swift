@@ -13,6 +13,8 @@ import WatchConnectivity
     private let library = RecordingLibrary.shared
     private var started = false
     private var known: [UUID: WatchMinutes.Meeting] = [:]
+    /// The meetings whose minutes the hub holds back while its recording module is off (`detail.paused`, #15214).
+    private var paused: Set<UUID> = []
     private var loop: Task<Void, Never>?
 
     /// From `MeetingRecorder.start()` at launch.
@@ -56,9 +58,20 @@ import WatchConnectivity
         for entry in meetings where known[entry.id]?.state != .ready && RecordingSync.shared.status(entry) == .synced {
             guard let answer = try? await RecordingMinutesModel.fetch(entry.id, api) else { continue }
             known[entry.id] = Self.short(entry, minutes: answer.detail.minutes, status: answer.detail.meta?.state)
+            // Held back while the hub's recording module is off (#15214): not worth asking again every three minutes.
+            if answer.detail.paused?.isModuleOff == true { paused.insert(entry.id) } else { paused.remove(entry.id) }
         }
         push(meetings)
-        return meetings.contains { (known[$0.id]?.state ?? .writing) == .writing }
+        return Self.stillWriting(meetings.map { ($0.id, known[$0.id]?.state) }, paused: paused,
+                                 recording: RecordingModule.allowance)
+    }
+
+    /// Whether the follow keeps asking: while some minutes are still being written, and something can write them. With
+    /// the hub's recording module off, or for the ones it says are paused for that, nothing does (#15214).
+    nonisolated static func stillWriting(_ meetings: [(UUID, WatchMinutes.Meeting.State?)], paused: Set<UUID>,
+                                         recording: RecordingAllowance) -> Bool {
+        guard recording == .on else { return false }
+        return meetings.contains { ($0.1 ?? .writing) == .writing && !paused.contains($0.0) }
     }
 
     /// What a recording's page just read: the watch hears it without a second request.
