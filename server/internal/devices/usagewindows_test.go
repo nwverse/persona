@@ -809,4 +809,35 @@ func TestMergeUsageAccountsDoesNotClobberHealthyPoolOnSharedModelReset(t *testin
 			t.Fatalf("perm %v: partial sample matching conflicting accounts must stay separate: got %d: %+v", perm, len(got), got)
 		}
 	}
+
+	// End-to-end through usageWindowsHub.poll: node-a reports both A0 and A1 (assigned origins node-a/0 and node-a/1)
+	// while node-b reports newer B; poll must keep A0's healthy Claude 0% pool intact and merge B with A1.
+	var hub usageWindowsHub
+	polled := hub.poll(context.Background(), []usageSource{
+		{id: "node-a", name: "node-a", online: true, ask: func(context.Context) (proto.UsageSnapshot, error) {
+			return proto.UsageSnapshot{Enabled: true, Accounts: []proto.UsageNodeAccount{
+				{UsageAccount: proto.UsageAccount{Provider: "agy", Name: "Antigravity", SampledAt: now.Add(-5 * time.Minute), Windows: a0.Windows}},
+				{UsageAccount: proto.UsageAccount{Provider: "agy", Name: "Antigravity", SampledAt: now.Add(-3 * time.Minute), Windows: a1.Windows}},
+			}}, nil
+		}},
+		{id: "node-b", name: "node-b", online: true, ask: func(context.Context) (proto.UsageSnapshot, error) {
+			return proto.UsageSnapshot{Enabled: true, Accounts: []proto.UsageNodeAccount{
+				{UsageAccount: proto.UsageAccount{Provider: "agy", Name: "Antigravity", SampledAt: now.Add(-time.Minute), Windows: b.Windows}},
+			}}, nil
+		}},
+	}, now)
+	if len(polled) != 2 {
+		t.Fatalf("poll: want 2 accounts (healthy A0 and merged A1+B), got %d: %+v", len(polled), polled)
+	}
+	healthyFound := false
+	for _, acct := range polled {
+		for _, w := range acct.Windows {
+			if w.Model == "Claude and GPT models" && w.UsedPercent == 0 && w.ResetsAt != nil && w.ResetsAt.Equal(tC0) && slices.Equal(acct.Machines, []string{"node-a"}) {
+				healthyFound = true
+			}
+		}
+	}
+	if !healthyFound {
+		t.Fatalf("poll: healthy A0 Claude pool was not preserved intact: %+v", polled)
+	}
 }
