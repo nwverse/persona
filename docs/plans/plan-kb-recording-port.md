@@ -34,8 +34,8 @@ that, as an exception, the port may be about 30 methods wide so that these write
 led there and the result:
 
 - **Measured coupling** (go/types over `internal/kb`, not a text search). The five writer files named, outside
-  themselves, 33 methods and 8 fields of `Store` and `Engine`, 34 package-level functions of `internal/kb`, about 20
-  unexported constants and 4 error values. In the other direction, writers that stay in `internal/kb` until PRs 4 and 5
+  themselves, 31 methods and 13 fields of `Store` and `Engine`, 34 package-level functions of `internal/kb`, 34
+  constants and 4 error values. In the other direction, writers that stay in `internal/kb` until PRs 4 and 5
   called 8 of the moved functions (the upload: `repairDayRecap`, `rebaseRecap`, `pruneRecapNotes`; the photos:
   `putMinutes`, `renderMinutes`, `remakeMinutes`, `quietMinutes`, `dropOverviewPhotos`).
 - **The port, `recordingwire.Core`, is 31 methods** (`server/internal/recordingwire/core.go`; adapter

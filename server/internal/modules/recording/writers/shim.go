@@ -18,13 +18,13 @@ import (
 	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
-// The writers were written as methods of the knowledge base's Engine and Store. Here those two names are this
-// package's own: an Engine and a Store that hold the storage port (recordingwire.Core) and give the writers every
-// member they used under the name it had, each a call of the port. So the writers' bodies are the ones that were in
+// The writers were written as methods of the knowledge base's Engine and Store. Here those two are this package's
+// own engine and store: they hold the storage port (recordingwire.Core) and give the writers every member they used
+// under the name it had, each a call of the port. So the writers' bodies are the ones that were in
 // internal/kb, and this file is the whole of the adaptation: what a name means here is read below, not in the body.
 
-// Engine is the knowledge base's engine as the writers see it: the port behind Store, the models and the evening
-// clock as the port has them when the Engine is made (Writers.engine makes one a call), and the module's callbacks.
+// engine is the knowledge base's engine as the writers see it: the port behind Store, the models and the evening
+// clock as the port has them when it is made (Writers.engine makes one a call), and the module's callbacks.
 type engine struct {
 	Store *store
 	// Model and ModelFor are the engine's model and its model per purpose (recordingwire.Writer.Models).
@@ -44,7 +44,7 @@ type engine struct {
 	minutesCall, minutesPart int
 }
 
-// Store is the knowledge base's store as the writers see it: the port, and the store's locks under their names.
+// store is the knowledge base's store as the writers see it: the port, and the store's locks under their names.
 type store struct {
 	core     recordingwire.Core
 	readOnly bool
