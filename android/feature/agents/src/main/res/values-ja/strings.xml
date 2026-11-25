@@ -260,7 +260,9 @@
     <string name="agents_dialog_rename_text">タブ名はherdrに同期されます。セッション名はClaudeの/renameで変更され、Macのclaude --resumeにも表示されます。</string>
     <string name="agents_dialog_rename_text_tern">タブ名はTernに同期されます。セッション名はClaudeの/renameで変更され、Macのclaude --resumeにも表示されます。</string>
     <string name="agents_dialog_rename_text_rex">タブ名はRexに同期されます。セッション名はClaudeの/renameで変更され、Macのclaude --resumeにも表示されます。</string>
+    <string name="agents_dialog_rename_text_unified">herdr のタブ名を変更します。CLI がセッション名の変更に対応している場合は、そちらも変更します。</string>
     <string name="agents_dialog_save">保存</string>
+    <string name="agents_dialog_name">名前</string>
     <string name="agents_dialog_tab_name">タブ名（herdrのタブ）</string>
     <string name="agents_dialog_tab_name_tern">タブ名（Ternのタブ）</string>
     <string name="agents_dialog_tab_name_rex">タブ名（Rexのタブ）</string>

@@ -69,6 +69,27 @@ type pageStore interface {
 	RemoveAssistantPageWithReason(context.Context, string, string, string, time.Time) (*db.AssistantPageRow, bool, error)
 	PurgeAssistantPages(context.Context, time.Time) (int64, error)
 	TrimAssistantPageActions(context.Context, time.Time) (int64, error)
+	// Dashboards phase 2: watch pages, readings, grants and routine binding (#13020)
+	SetAssistantPageOverview(context.Context, string, bool, time.Time) (*db.AssistantPageRow, bool, error)
+	SetAssistantPageAlert(context.Context, string, bool, time.Time) (*db.AssistantPageRow, bool, error)
+	RecordAssistantPageAlertState(context.Context, string, bool, *time.Time, time.Time) (*db.AssistantPageRow, error)
+	EvaluateAssistantPageAlert(context.Context, string, bool, time.Duration, time.Time) (*db.AssistantPageRow, bool, error)
+	PauseAssistantPage(context.Context, string, bool, time.Time) (*db.AssistantPageRow, bool, error)
+	BindAssistantPageRoutine(context.Context, string, string, time.Time) (*db.AssistantPageRow, bool, error)
+	UnbindAssistantPageRoutine(context.Context, string, time.Time) (*db.AssistantPageRow, string, error)
+	UnbindAssistantPageByRoutine(context.Context, string, time.Time) (*db.AssistantPageRow, error)
+	AssistantPageByRoutine(context.Context, string) (*db.AssistantPageRow, error)
+	MarkAssistantPageRefresh(context.Context, string, string, time.Time) (*db.AssistantPageRow, error)
+	ClearAssistantPageRefresh(context.Context, string, time.Time) (*db.AssistantPageRow, bool, error)
+	AddAssistantPageReading(context.Context, db.NewAssistantPageReading) (*db.AssistantPageRow, *db.AssistantPageReadingRow, error)
+	AssistantPageReadings(context.Context, string, int) ([]db.AssistantPageReadingRow, error)
+	AssistantPagesReadings(context.Context, []string, int) (map[string][]db.AssistantPageReadingRow, error)
+	GrantAssistantPageData(context.Context, db.AssistantPageGrantRow) (*db.AssistantPageGrantRow, error)
+	RevokeAssistantPageData(context.Context, string, string, string) (bool, error)
+	HasAssistantPageDataGrant(context.Context, string, string, string) (bool, error)
+	AssistantPageGrants(context.Context, string) ([]db.AssistantPageGrantRow, error)
+	DeleteAssistantPageWithRoutine(context.Context, string) (bool, string, error)
+	PurgeAssistantPagesWithRoutines(context.Context, time.Time) (int64, []string, error)
 }
 
 func (s *Service) pageStore() (pageStore, bool) {
@@ -397,6 +418,9 @@ func (r *pageRequest) ownerAction(ctx context.Context, from, action, id string) 
 	case "persona.remove":
 		p, changed, err = r.st.RemoveAssistantPage(ctx, id, db.AssistantPageRemovedByOwner, r.now)
 		if err == nil {
+			if changed {
+				r.s.pageRoutineRemoved(ctx, id, p.RoutineID)
+			}
 			r.s.pagesTold(ctx, id, changed)
 			return r.indexResult(ctx, p, toast("removed_toast"))
 		}
@@ -408,12 +432,19 @@ func (r *pageRequest) ownerAction(ctx context.Context, from, action, id string) 
 		case errors.Is(err, db.ErrAssistantPageTitleTaken):
 			return again(toast("title_taken"))
 		case err == nil:
+			if changed {
+				r.s.pageRoutineRestored(ctx, id, p.RoutineID)
+			}
 			r.s.pagesTold(ctx, id, changed)
 			return again(toast("restored"))
 		}
 	case "persona.delete":
-		changed, err = r.st.DeleteAssistantPage(ctx, id)
+		var routine string
+		changed, routine, err = r.st.DeleteAssistantPageWithRoutine(ctx, id)
 		if err == nil {
+			if changed {
+				r.s.pageRoutineDeleted(ctx, id, routine)
+			}
 			r.s.pagesTold(ctx, id, changed)
 			return r.indexResult(ctx, nil, toast("deleted"))
 		}
