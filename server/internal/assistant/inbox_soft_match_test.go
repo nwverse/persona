@@ -46,6 +46,8 @@ func TestInboxSoftMatchBoundaries(t *testing.T) {
 		{name: "partial group", title: "Example Review Extended", prompt: "Alice Example"},
 		{name: "short public text", title: "Example Review", prompt: "Thanks everyone", change: func(s *Service, it *InboxItem) { it.Sender = "Other"; it.Preview = "Thanks everyone" }},
 		{name: "full URL", title: "Example Review", prompt: "Inspect https://example.com/issues/7", change: func(s *Service, it *InboxItem) { it.Preview = "https://example.com/issues/7" }, want: true},
+		{name: "URL path punctuation is identity", title: "Example Review", prompt: "Inspect https://example.com/issues/7", change: func(s *Service, it *InboxItem) { it.Preview = "https://example.com/issues/7)" }},
+		{name: "URL query is identity", title: "Example Review", prompt: "Inspect https://example.com/issues/7?version=2", change: func(s *Service, it *InboxItem) { it.Preview = "https://example.com/issues/7?version=1" }},
 		{name: "same domain", title: "Example Review", prompt: "Inspect https://example.com/issues/8", change: func(s *Service, it *InboxItem) { it.Preview = "https://example.com/issues/7" }},
 		{name: "two topics", title: "Example Review", prompt: "Alice Example", change: func(s *Service, it *InboxItem) {
 			other := softTestItem("example:two", it.ArrivedAt)

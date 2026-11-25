@@ -107,8 +107,6 @@ var softURL = regexp.MustCompile(`https?://[^\s<>"\x60]+`)
 func softURLs(text string) []string {
 	var out []string
 	for _, u := range softURL.FindAllString(text, -1) {
-		// i18n-ignore: punctuation adjacent to verbatim source URLs, not displayed text.
-		u = strings.TrimRight(u, ".,;!?)。；，！）")
 		// A bare origin is not a discriminating URL.
 		rest := u[strings.Index(u, "://")+3:]
 		if i := strings.IndexByte(rest, '/'); i >= 0 && len(rest[i:]) > 1 {
