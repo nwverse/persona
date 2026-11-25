@@ -313,6 +313,194 @@ describe("ActionRow with controlled props", () => {
     expectNoDefaultSingletons();
   });
 
+  it("clears abandoned loading state when an in-flight key settles away and returns (path 1: resolve and reject)", async () => {
+    const stepA = makeStep(
+      "Bash",
+      { command: "cat a.log" },
+      { id: "race-a", result: { id: "race-a-r", text: "preview A", full_size: 50_000 } },
+    );
+    const stepB = makeStep(
+      "Bash",
+      { command: "cat b.log" },
+      { id: "race-b", result: { id: "race-b-r", text: "preview B", full_size: 50_000 } },
+    );
+    const more = () => host.querySelector<HTMLButtonElement>("[data-full-text]");
+
+    // Subcase 1a: keyA resolves while viewing keyB -> returning to keyA must be idle and clickable.
+    let resolveA1!: (v: string) => void;
+    let rejectA2!: (err: Error) => void;
+    let calls = 0;
+    const loadFullText = vi.fn((_item: Item) => {
+      calls += 1;
+      if (calls === 1) return new Promise<string>((resolve) => { resolveA1 = resolve; });
+      if (calls === 2) return new Promise<string>((_resolve, reject) => { rejectA2 = reject; });
+      return Promise.resolve("recovered A");
+    });
+
+    await mount({ step: stepA, expanded: true, taskBadge: null, loadFullText });
+    act(() => more()!.click());
+    await flush();
+    expect(more()?.getAttribute("data-full-text")).toBe("loading");
+    expect(more()?.disabled).toBe(true);
+    expect(loadFullText).toHaveBeenCalledTimes(1);
+
+    await mount({ step: stepB, expanded: true, taskBadge: null, loadFullText });
+    await act(async () => {
+      resolveA1("settled while away");
+      await Promise.resolve();
+    });
+    await flush();
+
+    // Returning to keyA must NOT be permanently stuck in loading.
+    await mount({ step: stepA, expanded: true, taskBadge: null, loadFullText });
+    expect(more()?.getAttribute("data-full-text")).toBe("idle");
+    expect(more()?.disabled).toBe(false);
+
+    // Subcase 1b: keyA rejects while viewing keyB -> returning to keyA must also be idle and loadable.
+    act(() => more()!.click());
+    await flush();
+    expect(more()?.getAttribute("data-full-text")).toBe("loading");
+    expect(loadFullText).toHaveBeenCalledTimes(2);
+
+    await mount({ step: stepB, expanded: true, taskBadge: null, loadFullText });
+    await act(async () => {
+      rejectA2(new Error("failed while away"));
+      await Promise.resolve();
+    });
+    await flush();
+
+    await mount({ step: stepA, expanded: true, taskBadge: null, loadFullText });
+    expect(more()?.getAttribute("data-full-text")).toBe("idle");
+    expect(more()?.disabled).toBe(false);
+
+    act(() => more()!.click());
+    await flush();
+    expect(loadFullText).toHaveBeenCalledTimes(3);
+    expect(host.querySelector("[data-inline-detail]")?.textContent).toContain("recovered A");
+    expect(more()).toBeNull();
+    expectNoDefaultSingletons();
+  });
+
+  it("ignores stale ABA settlements so an older keyA request never overwrites or deadlocks a newer keyA request (path 2)", async () => {
+    const stepA = makeStep(
+      "Bash",
+      { command: "cat a.log" },
+      { id: "aba-a", result: { id: "aba-a-r", text: "preview A", full_size: 50_000 } },
+    );
+    const stepB = makeStep(
+      "Bash",
+      { command: "cat b.log" },
+      { id: "aba-b", result: { id: "aba-b-r", text: "preview B", full_size: 50_000 } },
+    );
+    const more = () => host.querySelector<HTMLButtonElement>("[data-full-text]");
+
+    // Subcase 2a: stale p1 resolves while fresh p3 is in flight -> must not overwrite p3.
+    let resolveP1!: (v: string) => void;
+    let resolveP3!: (v: string) => void;
+    let calls = 0;
+    const loadFullTextA = vi.fn((item: Item) => {
+      calls += 1;
+      if (calls === 1) return new Promise<string>((resolve) => { resolveP1 = resolve; });
+      if (item.id === "aba-b-r") return Promise.resolve("full B");
+      return new Promise<string>((resolve) => { resolveP3 = resolve; });
+    });
+
+    await mount({ step: stepA, expanded: true, taskBadge: null, loadFullText: loadFullTextA });
+    act(() => more()!.click());
+    await flush();
+    expect(more()?.getAttribute("data-full-text")).toBe("loading");
+
+    // Switch to keyB and finish p2.
+    await mount({ step: stepB, expanded: true, taskBadge: null, loadFullText: loadFullTextA });
+    act(() => more()!.click());
+    await flush();
+    expect(host.querySelector("[data-inline-detail]")?.textContent).toContain("full B");
+
+    // Return to keyA and start fresh p3 while p1 is still pending.
+    await mount({ step: stepA, expanded: true, taskBadge: null, loadFullText: loadFullTextA });
+    expect(more()?.getAttribute("data-full-text")).toBe("idle");
+    act(() => more()!.click());
+    await flush();
+    expect(more()?.getAttribute("data-full-text")).toBe("loading");
+    expect(loadFullTextA).toHaveBeenCalledTimes(3);
+
+    // Late p1 resolves -> must be ignored; p3 stays loading.
+    await act(async () => {
+      resolveP1("stale p1 output");
+      await Promise.resolve();
+    });
+    await flush();
+    expect(more()?.getAttribute("data-full-text")).toBe("loading");
+    expect(host.querySelector("[data-inline-detail]")?.textContent).not.toContain("stale p1 output");
+
+    // Fresh p3 resolves -> wins cleanly.
+    await act(async () => {
+      resolveP3("fresh p3 output");
+      await Promise.resolve();
+    });
+    await flush();
+    expect(host.querySelector("[data-inline-detail]")?.textContent).toContain("fresh p3 output");
+    expect(more()).toBeNull();
+
+    // Subcase 2b: stale p1 rejects while fresh p3 is in flight -> must not flip to failed or deadlock retry.
+    const stepA2 = makeStep(
+      "Bash",
+      { command: "cat a2.log" },
+      { id: "aba-a2", result: { id: "aba-a2-r", text: "preview A2", full_size: 50_000 } },
+    );
+    const stepB2 = makeStep(
+      "Bash",
+      { command: "cat b2.log" },
+      { id: "aba-b2", result: { id: "aba-b2-r", text: "preview B2", full_size: 50_000 } },
+    );
+    let rejectStale!: (err: Error) => void;
+    let rejectFresh!: (err: Error) => void;
+    let calls2 = 0;
+    const loadFullTextB = vi.fn((item: Item) => {
+      calls2 += 1;
+      if (calls2 === 1) return new Promise<string>((_resolve, reject) => { rejectStale = reject; });
+      if (item.id === "aba-b2-r") return Promise.resolve("full B2");
+      if (calls2 === 3) return new Promise<string>((_resolve, reject) => { rejectFresh = reject; });
+      return Promise.resolve("retried p4 output");
+    });
+
+    await mount({ step: stepA2, expanded: true, taskBadge: null, loadFullText: loadFullTextB });
+    act(() => more()!.click());
+    await flush();
+    await mount({ step: stepB2, expanded: true, taskBadge: null, loadFullText: loadFullTextB });
+    act(() => more()!.click());
+    await flush();
+    await mount({ step: stepA2, expanded: true, taskBadge: null, loadFullText: loadFullTextB });
+    act(() => more()!.click());
+    await flush();
+    expect(more()?.getAttribute("data-full-text")).toBe("loading");
+
+    // Stale p1 rejects -> must be ignored; p3 stays loading.
+    await act(async () => {
+      rejectStale(new Error("stale failure"));
+      await Promise.resolve();
+    });
+    await flush();
+    expect(more()?.getAttribute("data-full-text")).toBe("loading");
+    expect(more()?.disabled).toBe(true);
+
+    // Fresh p3 rejects -> transitions to failed and clears pending so retry succeeds immediately.
+    await act(async () => {
+      rejectFresh(new Error("fresh failure"));
+      await Promise.resolve();
+    });
+    await flush();
+    expect(more()?.getAttribute("data-full-text")).toBe("failed");
+    expect(more()?.disabled).toBe(false);
+
+    act(() => more()!.click());
+    await flush();
+    expect(loadFullTextB).toHaveBeenCalledTimes(4);
+    expect(host.querySelector("[data-inline-detail]")?.textContent).toContain("retried p4 output");
+    expect(more()).toBeNull();
+    expectNoDefaultSingletons();
+  });
+
   it("renders tool images through renderImage without mounting default Thumb", async () => {
     const imgA: Item = { id: "img-a", seq: 3, role: "user", kind: "image" };
     const imgB: Item = { id: "img-b", seq: 4, role: "user", kind: "image" };

@@ -289,13 +289,18 @@ function useControlledFullText(
     const promise: Promise<void> = Promise.resolve()
       .then(() => loadRef.current(item))
       .then((text) => {
-        if (mounted.current && current.current === key) {
+        if (!mounted.current || pending.current?.promise !== promise) return;
+        if (current.current === key) {
           setWhole({ key, text });
           setStatus({ key, state: "idle" });
+        } else {
+          setStatus((prev) => (prev?.key === key ? undefined : prev));
         }
       })
       .catch(() => {
-        if (mounted.current && current.current === key) setStatus({ key, state: "failed" });
+        if (!mounted.current || pending.current?.promise !== promise) return;
+        if (current.current === key) setStatus({ key, state: "failed" });
+        else setStatus((prev) => (prev?.key === key ? undefined : prev));
       })
       .finally(() => {
         if (pending.current?.promise === promise) pending.current = null;
