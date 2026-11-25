@@ -70,6 +70,8 @@ type conversationSwitchBatch struct {
 	FirstTurn bool `json:"first_turn,omitempty"`
 	// Fallback marks a batch the usage-limit fallback opened (limit_fallback.go).
 	Fallback *conversationSwitchFallback `json:"fallback,omitempty"`
+	// MachineFallback marks a batch automatic cross-machine failover opened (machine_fallback.go).
+	MachineFallback *conversationSwitchMachineFallback `json:"machine_fallback,omitempty"`
 }
 
 type conversationSwitchState struct {
@@ -247,6 +249,11 @@ func (s *Service) planConversationSwitchItem(ctx context.Context, state conversa
 	}
 	item.Before = conversationExecutionNow(machine, row, c)
 	item.Target.Machine = cmp.Or(item.Target.Machine, item.Before.Machine)
+	if require == nil {
+		// advanceLogicalConversation inherits the source permission mode when omitted;
+		// record that same effective mode so restore_batch_id's fence matches the prepared segment.
+		item.Target.PermissionMode = cmp.Or(item.Target.PermissionMode, item.Before.PermissionMode)
+	}
 	if c != nil && c.Switch != nil {
 		return refuse("another logical switch is still running")
 	}
@@ -305,6 +312,9 @@ func (s *Service) planConversationSwitches(ctx context.Context, state conversati
 			continue
 		}
 		require := old.Target
+		if require.PermissionMode == "" {
+			require.PermissionMode = old.Before.PermissionMode
+		}
 		items = append(items, s.planConversationSwitchItem(ctx, state, st, old.Machine, old.ConversationID, old.Before, &require, resolve))
 	}
 	return items, checkConversationSwitchUnique(items)
@@ -421,14 +431,28 @@ func (s *Service) runConversationSwitchItem(ctx context.Context, st logicalSwitc
 		return true
 	}
 	automaticRestore := batch.RestoreOf != "" && batch.FirstTurn
+	machineFallback := batch.MachineFallback != nil
 	row, known := s.session(ctx, item.Machine, item.ConversationID)
 	if !known || !row.Assistant || row.PaneID != "" || row.IsDeleted() {
 		// Disconnected nodes can lose their cached row before their next snapshot. An explicit deletion is final.
 		if automaticRestore && !row.IsDeleted() && s.limitRestoreNodeOffline(ctx, item.Machine) {
 			return false
 		}
-		item.Outcome, item.Reason = conversationSwitchRefused, "the conversation is no longer available"
-		return true
+		if machineFallback && !row.IsDeleted() && s.machinePhysicallyOffline(ctx, item.Machine) && s.isFailoverEligibleOffline(ctx, item.Machine, item.ConversationID) {
+			row = proto.Session{
+				MachineID:      item.Machine,
+				SessionID:      item.ConversationID,
+				Assistant:      true,
+				Launcher:       item.Before.Launcher,
+				Model:          item.Before.Model,
+				Effort:         item.Before.Effort,
+				PermissionMode: item.Before.PermissionMode,
+			}
+			known = true
+		} else {
+			item.Outcome, item.Reason = conversationSwitchRefused, "the conversation is no longer available"
+			return true
+		}
 	}
 	c, err := st.LogicalConversation(ctx, item.Machine, item.ConversationID)
 	if err != nil {
@@ -451,6 +475,7 @@ func (s *Service) runConversationSwitchItem(ctx context.Context, st logicalSwitc
 	_, err = s.beginLogicalSwitch(ctx, item.Machine, item.ConversationID, logicalSwitchRequest{
 		OperationID: item.OperationID, ExpectedEpoch: item.ExpectedEpoch, MachineID: item.Target.Machine,
 		Launcher: item.Target.Launcher, Model: item.Target.Model, Effort: item.Target.Effort, PermissionMode: permission,
+		AllowOfflineSource: machineFallback,
 	})
 	// The row can still be cached when the original launcher's live check finds its link down.
 	// Keep this automatic return's durable operation and recheck its epoch and settings on the next pass.
@@ -491,7 +516,11 @@ func (s *Service) runConversationSwitchesLocked(ctx context.Context, state *conv
 			}
 		}
 	}
-	if s.limitFallbacksLocked(ctx, state, time.Now()) {
+	now := time.Now()
+	if s.limitFallbacksLocked(ctx, state, now) {
+		changed = true
+	}
+	if s.machineFallbacksLocked(ctx, state, now) {
 		changed = true
 	}
 	return changed

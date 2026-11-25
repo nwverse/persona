@@ -229,6 +229,11 @@ dynamically (`screen/DisplayMenu.tsx`, namespace `screen-displays`): the build m
 catalog, so the first screen does not grow and nothing has to wait for it at run time. Gating ScreenView's own rendering
 on `i18nRest()` does not pass the build: the check reads which namespaces a chunk names, not when it reads them.
 
+Since #14404 the live screen is the screen-share module's page of its own (`web/src/modules/screen-share/standalone.tsx`):
+its namespaces (`screen-share-*`) are the module's catalog, loaded before its code, so they are in no first screen at all.
+What that file imports statically still runs without waiting for the rest of the catalog, so a core key it reads must be
+in the startup list; the build still names one that is not.
+
 ## A mouse event sent again comes out on whole pixels (#5729)
 
 Keeping a drag inside a clipping box meant stopping a move outside it and dispatching a new `MouseEvent` at the nearest
@@ -1552,4 +1557,5 @@ without one read `notes › Agents`; every Agent row under it then ended with `<
 the headings' names. Give both projections the same rule: a level that only repeats its heading's name is left out, and
 the heading takes the row's marks and menu. A host that does not say which workspace is the main checkout (herdr has no
 `is_main`) leaves it to the folder, the workspace at the repository's own folder, and that guess may only mark and
-order the tree: actions keep reading what the host said.
+order the tree: actions keep reading what the host said. Guess only for a host that names no project: a desktop app's
+project lists each of its folders as its own `project_path`, so the section's first folder wore the home mark (#14497).

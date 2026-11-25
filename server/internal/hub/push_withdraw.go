@@ -31,8 +31,9 @@ const (
 	// news on the lock screen, and the app clears it when it next lists the cards.
 	withdrawKept = 30 * time.Minute
 	// ownerCardKept: as withdrawKept for one of the assistant's own cards (a plan waiting for Start, a decision, a
-	// failed start: Notification.CardID). The app never lists those as pending interactions, so nothing else clears
-	// their push: it stays on the lock screen until the card is over, however late, and the hub remembers it as long.
+	// needs-user ask, a failed start: Notification.CardID / TodoAskCardID). The app never lists those as pending
+	// interactions, so nothing else clears their push: it stays on the lock screen until the card is over, however
+	// late, and the hub remembers it as long.
 	ownerCardKept = 7 * 24 * time.Hour
 	// withdrawGather: cards over within this of the first go in one push ("always allow" settles several at once).
 	withdrawGather = 5 * time.Second
@@ -82,9 +83,9 @@ func (p *Pusher) sendCard(manager string, policy pushPolicy, build localized, id
 		return ""
 	}
 	policy.manager = manager
-	if policy.level != assistantwire.LevelP0 || p.attentionNow().Active() {
+	if policy.level != assistantwire.LevelP0 || p.attentionNow().Active() || p.hasActiveGradingLayerFor(manager) {
 		// Extract before applyPushGrading's mode check too: enabling push grading between checks must not hold a source-less card.
-		// An immersive block lets through the cards of the session in focus, which it knows by the source.
+		// An immersive block or an extension grading layer may inspect the session in focus, which it knows by the source.
 		policy = pushPolicyWithSource(policy, build(i18n.Default))
 	}
 	if allow, reason := p.applyPushGrading(policy); !allow {
@@ -123,8 +124,8 @@ const apnsCollapseMax = 64
 
 func (p *Pusher) cardPushedTo(id, device string) { p.cardPushedFor(id, device, withdrawKept) }
 
-// ownerCardPushedTo is cardPushedTo for one of the assistant's own cards (Notification.CardID): remembered for
-// ownerCardKept.
+// ownerCardPushedTo is cardPushedTo for one of the assistant's own cards (Notification.CardID / TodoAskCardID):
+// remembered for ownerCardKept.
 func (p *Pusher) ownerCardPushedTo(id, device string) { p.cardPushedFor(id, device, ownerCardKept) }
 
 func (p *Pusher) cardPushedFor(id, device string, keep time.Duration) {
@@ -136,6 +137,11 @@ func (p *Pusher) cardPushedFor(id, device string, keep time.Duration) {
 		if !c.kept(now) {
 			delete(w.pushed, old)
 		}
+	}
+	if q := w.queue[device]; q != nil && len(q.ids) > 0 {
+		// A fresh push for the same id (e.g. a superseded to-do decision's new round) supersedes any queued withdrawal
+		// from the earlier round so the delayed background push cannot wipe the new alert.
+		q.ids = slices.DeleteFunc(q.ids, func(queued string) bool { return queued == id })
 	}
 	c, ok := w.pushed[id]
 	if !ok {

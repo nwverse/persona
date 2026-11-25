@@ -648,6 +648,7 @@ func (s *Service) historyLoop(ctx context.Context) {
 	for {
 		s.logicalSweep(ctx)
 		s.wakeConversationSwitches()
+		s.machineFallbackSweep(ctx, time.Now())
 		if st := s.historyDB(ctx); st != nil {
 			s.historySweep(ctx, st)
 		} else if st, ok := s.store().(conversationHistoryStore); ok {

@@ -6,7 +6,8 @@
 // by leaving the flag out, every older hub keeps it on, and Settings › General › Optional features can turn it off
 // in a browser. Off, the composer has no voice button and no call can start; typing and sending are unchanged.
 import { t, byLanguage, type CatalogModule } from "../../i18n";
-import { moduleFeature, type ModuleDescriptor } from "../../core/module-host";
+import { moduleFeature } from "../../core/module-flags";
+import type { ModuleDescriptor } from "../../core/module-host";
 
 export const voice: ModuleDescriptor = {
   id: "voice",
