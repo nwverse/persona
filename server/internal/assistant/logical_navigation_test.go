@@ -5,10 +5,10 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/nwverse/persona/server/internal/conversationlog"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 func TestLogicalNavigationProjectsCompactIndexAndScopedPreviews(t *testing.T) {
@@ -45,7 +45,7 @@ func TestLogicalNavigationProjectsCompactIndexAndScopedPreviews(t *testing.T) {
 		if json.Unmarshal(raw, &p) != nil || !p.Valid() {
 			t.Fatalf("invalid source preview request: %s", raw)
 		}
-		previewed = append(previewed, p.SessionID)
+		previewed = append(previewed, string(p.SessionID))
 		if len(p.Positions) != 1 || p.Positions[0].ID != "question#0" {
 			t.Fatalf("forwarded an unrelated request: %s", raw)
 		}
@@ -64,7 +64,7 @@ func TestLogicalNavigationProjectsCompactIndexAndScopedPreviews(t *testing.T) {
 	preview := func(history string) proto.InputPreviews {
 		t.Helper()
 		p := proto.InputPreviewRequest{SessionID: "side-chat", History: history, Positions: []proto.UserInputRef{
-			{ID: "question#0", Seq: 5}, {ID: secondID, Seq: 7}, {ID: "late#0", Seq: 8},
+			{ID: "question#0", Seq: 5}, {ID: proto.UserInputItemID(secondID), Seq: 7}, {ID: "late#0", Seq: 8},
 		}}
 		b, _ := json.Marshal(p)
 		raw, handled, err := s.logicalCall(ctx, "server", proto.MethodSessionInputPreviews, b)
@@ -75,7 +75,8 @@ func TestLogicalNavigationProjectsCompactIndexAndScopedPreviews(t *testing.T) {
 		return out
 	}
 	// The prepared segment is private and the active segment already has its frozen boundary.
-	p := proto.InputPreviewRequest{SessionID: "side-chat", History: prepared.History, Positions: []proto.UserInputRef{{ID: secondID, Seq: 7}}}
+	p := proto.InputPreviewRequest{SessionID: "side-chat", History: prepared.History,
+		Positions: []proto.UserInputRef{{ID: proto.UserInputItemID(secondID), Seq: 7}}}
 	b, _ := json.Marshal(p)
 	raw, _, err := s.logicalCall(ctx, "server", proto.MethodSessionInputPreviews, b)
 	var preparedPreviews proto.InputPreviews
@@ -205,9 +206,9 @@ func TestLogicalNavigationRejectsChangedHistoryWithoutRetry(t *testing.T) {
 				}
 				return proto.ItemsWindow{History: "replaced", FromSeq: 2, ToSeq: 4, Items: []proto.Item{}}, nil
 			})
-			p := any(proto.InputPreviewRequest{SessionID: c.SessionID, History: c.History, Positions: []proto.UserInputRef{{ID: "first", Seq: 3}}})
+			p := any(proto.InputPreviewRequest{SessionID: wireids.SessionID(c.SessionID), History: c.History, Positions: []proto.UserInputRef{{ID: "first", Seq: 3}}})
 			if method == proto.MethodSessionItemsWindow {
-				p = proto.ItemsWindowRequest{SessionID: c.SessionID, FromSeq: 3, ThroughSeq: 4, History: c.History}
+				p = proto.ItemsWindowRequest{SessionID: wireids.SessionID(c.SessionID), FromSeq: 3, ThroughSeq: 4, History: c.History}
 			}
 			b, _ := json.Marshal(p)
 			for range 2 {
@@ -244,8 +245,7 @@ func TestLogicalNavigationRejectsReadThatRacesPreparingFreeze(t *testing.T) {
 		if json.Unmarshal(raw, &req) != nil || req.BeforeSeq != 0 {
 			t.Fatalf("source was already frozen: %s", raw)
 		}
-		target := conversationlog.Segment{ID: "two", MachineID: "server", SessionID: "target-chat", Engine: "pi", SourceHistory: "h2"}
-		if err := d.PrepareConversationSegment(ctx, "server", "side-chat", "switch", target, 6); err != nil {
+		if err := d.PrepareConversationSegment(ctx, "server", "side-chat", "switch", logicalFixtureTarget("pi"), 6); err != nil {
 			t.Fatal(err)
 		}
 		return proto.InputPreviews{History: "h1", Inputs: []proto.UserInputPosition{{ID: "question", Seq: 5, Answer: "After the freeze"}}}, nil

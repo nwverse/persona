@@ -10,6 +10,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 func invalidNavigation(ctx context.Context) error {
@@ -26,7 +27,7 @@ func (s *Service) logicalInputPreviews(ctx context.Context, st logicalConversati
 	}
 	out := proto.InputPreviews{History: c.History, Inputs: []proto.UserInputPosition{}}
 	for _, seg := range visibleSegments(c) {
-		scoped := proto.InputPreviewRequest{SessionID: seg.SessionID}
+		scoped := proto.InputPreviewRequest{SessionID: wireids.SessionID(seg.SessionID)}
 		if seg.FrozenEnd != nil {
 			scoped.BeforeSeq = *seg.FrozenEnd + 1
 		}
@@ -35,15 +36,15 @@ func (s *Service) logicalInputPreviews(ctx context.Context, st logicalConversati
 			if seq <= 0 || (scoped.BeforeSeq > 0 && seq >= scoped.BeforeSeq) {
 				continue
 			}
-			sourceID := ref.ID
+			sourceID := string(ref.ID)
 			if seg.Ordinal > 1 {
-				segmentID, itemID, ok := proto.ParseSegmentItemID(ref.ID)
-				if !ok || segmentID != seg.ID || seg.ItemID(itemID) != ref.ID {
+				segmentID, itemID, ok := proto.ParseSegmentItemID(sourceID)
+				if !ok || segmentID != seg.ID || seg.ItemID(itemID) != sourceID {
 					continue
 				}
 				sourceID = itemID
 			}
-			scoped.Positions = append(scoped.Positions, proto.UserInputRef{ID: sourceID, Seq: seq})
+			scoped.Positions = append(scoped.Positions, proto.UserInputRef{ID: proto.UserInputItemID(sourceID), Seq: seq})
 		}
 		if len(scoped.Positions) == 0 {
 			continue
@@ -82,10 +83,10 @@ func (s *Service) logicalItemsWindow(ctx context.Context, st logicalConversation
 		return nil, db.ErrConversationHistoryChanged
 	}
 	out := proto.ItemsWindow{History: c.History, Items: []proto.Item{}}
-	var coverage []conversationlog.Range
+	haveCoverage, hasGap := false, false
 	var knownEnd int
 	for _, seg := range visibleSegments(c) {
-		scoped := proto.ItemsWindowRequest{SessionID: seg.SessionID,
+		scoped := proto.ItemsWindowRequest{SessionID: wireids.SessionID(seg.SessionID),
 			FromSeq: max(1, p.FromSeq-seg.Offset), ThroughSeq: p.ThroughSeq - seg.Offset}
 		if seg.FrozenEnd != nil {
 			end, err := seg.Seq(*seg.FrozenEnd)
@@ -122,7 +123,13 @@ func (s *Service) logicalItemsWindow(ctx context.Context, st logicalConversation
 		if probeNext {
 			continue
 		}
-		coverage = conversationlog.MergeRanges(coverage, conversationlog.Range{From: from, Through: to})
+		if haveCoverage {
+			hasGap = hasGap || out.ToSeq != from
+		} else {
+			out.FromSeq = from
+			haveCoverage = true
+		}
+		out.ToSeq = to
 		out.MoreAfter = out.MoreAfter || (seg.FrozenEnd == nil && source.MoreAfter)
 		for _, it := range source.Items {
 			projected, visible, err := seg.Project(it, c.MachineID, c.SessionID, c.History)
@@ -137,14 +144,12 @@ func (s *Service) logicalItemsWindow(ctx context.Context, st logicalConversation
 	if err := s.checkLogicalRead(ctx, st, c); err != nil {
 		return nil, err
 	}
-	switch len(coverage) {
-	case 0:
+	if hasGap {
+		return nil, errors.New("incomplete logical item window")
+	}
+	if !haveCoverage {
 		out.FromSeq = min(p.FromSeq-1, knownEnd)
 		out.ToSeq = out.FromSeq
-	case 1:
-		out.FromSeq, out.ToSeq = coverage[0].From, coverage[0].Through
-	default:
-		return nil, errors.New("incomplete logical item window")
 	}
 	out.HasMore = out.FromSeq > 0
 	out.MoreAfter = out.MoreAfter || out.ToSeq < knownEnd

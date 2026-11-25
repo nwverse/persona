@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 func visibleSegments(c *db.LogicalConversation) []conversationlog.Segment {
@@ -253,7 +254,7 @@ func (s *Service) logicalHistoryPage(ctx context.Context, st logicalConversation
 		if source.History == "" && p.After != nil && seg.FrozenEnd != nil {
 			from := max(1, *p.After+1-seg.Offset)
 			through := from + min(*seg.FrozenEnd-from, 2*proto.MaxWindowRadius)
-			scoped := proto.ItemsWindowRequest{SessionID: seg.SessionID, FromSeq: from, ThroughSeq: through, BeforeSeq: *seg.FrozenEnd + 1}
+			scoped := proto.ItemsWindowRequest{SessionID: wireids.SessionID(seg.SessionID), FromSeq: from, ThroughSeq: through, BeforeSeq: *seg.FrozenEnd + 1}
 			var window proto.ItemsWindow
 			if err := s.physicalHistoryCall(ctx, seg.MachineID, proto.MethodSessionItemsWindow, scoped, &window); err == nil && window.Matches(scoped) {
 				source = historyPage{Items: window.Items, History: window.History, FromSeq: &window.FromSeq, ToSeq: &window.ToSeq, MoreAfter: window.MoreAfter}

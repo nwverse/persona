@@ -3,6 +3,8 @@ package proto
 import (
 	"math"
 	"unicode/utf8"
+
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 const (
@@ -21,10 +23,13 @@ const (
 	MaxNavigationHistory = 256
 )
 
+// UserInputItemID is the opaque item identity carried by a navigation position.
+type UserInputItemID string
+
 // UserInputRef identifies a particular input, including inputs sharing a source line.
 type UserInputRef struct {
-	ID  string `json:"id"`
-	Seq int    `json:"seq"`
+	ID  UserInputItemID `json:"id"`
+	Seq int             `json:"seq"`
 }
 
 // UserInputPosition identifies one genuine input and carries optional excerpts for navigation.
@@ -36,7 +41,9 @@ type UserInputPosition struct {
 	Attachments int    `json:"attachments,omitempty"`
 }
 
-func (p UserInputPosition) Ref() UserInputRef { return UserInputRef{ID: p.ID, Seq: p.Seq} }
+func (p UserInputPosition) Ref() UserInputRef {
+	return UserInputRef{ID: UserInputItemID(p.ID), Seq: p.Seq}
+}
 
 func (p UserInputPosition) WithoutExcerpts() UserInputPosition {
 	return UserInputPosition{ID: p.ID, Seq: p.Seq}
@@ -51,10 +58,10 @@ type UserInputIndex struct {
 
 // InputPreviewRequest reads exact positions in a source. BeforeSeq is the exclusive end of a frozen segment.
 type InputPreviewRequest struct {
-	SessionID string         `json:"session_id"`
-	Positions []UserInputRef `json:"positions"`
-	BeforeSeq int            `json:"before_seq,omitempty"`
-	History   string         `json:"history,omitempty"`
+	SessionID wireids.SessionID `json:"session_id"`
+	Positions []UserInputRef    `json:"positions"`
+	BeforeSeq int               `json:"before_seq,omitempty"`
+	History   string            `json:"history,omitempty"`
 }
 
 func (p InputPreviewRequest) Valid() bool {
@@ -105,11 +112,11 @@ func (p InputPreviews) Matches(request InputPreviewRequest) bool {
 
 // ItemsWindowRequest describes a closed source-line interval without walking from the newest page.
 type ItemsWindowRequest struct {
-	SessionID  string `json:"session_id"`
-	FromSeq    int    `json:"from_seq"`
-	ThroughSeq int    `json:"through_seq"`
-	BeforeSeq  int    `json:"before_seq,omitempty"` // frozen end plus one, including for runtime history probes
-	History    string `json:"history,omitempty"`
+	SessionID  wireids.SessionID `json:"session_id"`
+	FromSeq    int               `json:"from_seq"`
+	ThroughSeq int               `json:"through_seq"`
+	BeforeSeq  int               `json:"before_seq,omitempty"` // frozen end plus one, including for runtime history probes
+	History    string            `json:"history,omitempty"`
 }
 
 func (p ItemsWindowRequest) Valid() bool {

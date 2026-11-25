@@ -101,7 +101,8 @@ func (r runtimeNavigation) verify(ctx context.Context, sid string, before int, h
 }
 
 func (r runtimeNavigation) InputPreviews(ctx context.Context, p proto.InputPreviewRequest) (proto.InputPreviews, error) {
-	tail, err := r.probe(ctx, p.SessionID, p.BeforeSeq)
+	sid := string(p.SessionID)
+	tail, err := r.probe(ctx, sid, p.BeforeSeq)
 	if err != nil {
 		return proto.InputPreviews{}, err
 	}
@@ -114,18 +115,19 @@ func (r runtimeNavigation) InputPreviews(ctx context.Context, p proto.InputPrevi
 		if through < from {
 			return nil, nil
 		}
-		page, err := r.rangePage(ctx, p.SessionID, from, through, tail.History)
+		page, err := r.rangePage(ctx, sid, from, through, tail.History)
 		verify = verify || page.History == ""
 		return page.Items, err
 	})
 	if err == nil && verify {
-		err = r.verify(ctx, p.SessionID, p.BeforeSeq, tail.History)
+		err = r.verify(ctx, sid, p.BeforeSeq, tail.History)
 	}
 	return out, err
 }
 
 func (r runtimeNavigation) ItemsWindow(ctx context.Context, p proto.ItemsWindowRequest) (proto.ItemsWindow, error) {
-	tail, err := r.probe(ctx, p.SessionID, p.BeforeSeq)
+	sid := string(p.SessionID)
+	tail, err := r.probe(ctx, sid, p.BeforeSeq)
 	if err != nil {
 		return proto.ItemsWindow{}, err
 	}
@@ -142,17 +144,17 @@ func (r runtimeNavigation) ItemsWindow(ctx context.Context, p proto.ItemsWindowR
 	if from == to {
 		return out, nil
 	}
-	page, err := r.rangePage(ctx, p.SessionID, from+1, to, tail.History)
+	page, err := r.rangePage(ctx, sid, from+1, to, tail.History)
 	if err != nil {
 		return proto.ItemsWindow{}, err
 	}
 	if page.History == "" {
-		if err := r.verify(ctx, p.SessionID, p.BeforeSeq, tail.History); err != nil {
+		if err := r.verify(ctx, sid, p.BeforeSeq, tail.History); err != nil {
 			return proto.ItemsWindow{}, err
 		}
 	}
 	out.Items = proto.WithoutImageData(page.Items)
-	r.node.toolViews.attach(p.SessionID, out.Items, false, nil)
-	r.node.ttft.annotate(p.SessionID, out.Items, false)
+	r.node.toolViews.attach(sid, out.Items, false, nil)
+	r.node.ttft.annotate(sid, out.Items, false)
 	return out, nil
 }

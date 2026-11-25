@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // sessionNavigation handles targeted views on the same authorized path as ordinary transcript pages.
@@ -44,7 +45,7 @@ func (h *Hub) sessionNavigation(w http.ResponseWriter, r *http.Request, m *Machi
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	w.Header().Set("Cache-Control", "no-store")
-	session := r.PathValue("sid")
+	session := wireids.SessionID(r.PathValue("sid"))
 	if preview {
 		p := proto.InputPreviewRequest{SessionID: session, History: history}
 		if len(q["preview"]) > proto.MaxInputPreviews {
@@ -53,7 +54,7 @@ func (h *Hub) sessionNavigation(w http.ResponseWriter, r *http.Request, m *Machi
 		}
 		for _, value := range q["preview"] {
 			seq, id, _ := strings.Cut(value, ":")
-			p.Positions = append(p.Positions, proto.UserInputRef{Seq: navigationNumber(seq), ID: id})
+			p.Positions = append(p.Positions, proto.UserInputRef{Seq: navigationNumber(seq), ID: proto.UserInputItemID(id)})
 		}
 		if !p.Valid() {
 			writeErr(w, http.StatusBadRequest, i18n.Err("chat-navigation.invalid"))
@@ -134,7 +135,7 @@ func (h *Hub) sessionItemsWindow(ctx context.Context, w http.ResponseWriter, r *
 	}
 	lang := h.requestLang(r)
 	out.Items = clientItemsCompat(lang, h.requestWants(r, featureCardRing), h.requestWants(r, featureMarkdownCloseout), h.requestWants(r, proto.FeatureToolViews), localizedItems(lang, h.withInjected(out.Items)))
-	h.ttft.annotate(m.cfg.ID, p.SessionID, out.Items, false)
+	h.ttft.annotate(m.cfg.ID, string(p.SessionID), out.Items, false)
 	out.Items = proto.WithoutImageData(out.Items)
 	writeItemsJSON(w, out)
 }
