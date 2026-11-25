@@ -57,8 +57,8 @@ import { escapeCancelsEdit, escapeCountsForEdit, upStartsEdit, type EditLastBox 
 import { t } from "../../i18n";
 import type { ComposerAction } from "../../core/module-host";
 
-// Drawn only while an attached image is edited: its own chunk, fetched by the idle preload or the first edit (lib/lazy-page.ts).
-const ImageEditor = lazyPage(() => import("./ImageEditor").then((m) => m.ImageEditor), { idle: true });
+// Preload the editor once an image is attached, when there is something to edit.
+const ImageEditor = lazyPage(() => import("./ImageEditor").then((m) => m.ImageEditor));
 // The + / @ panel, drawn only while it is open: its own chunk and words, fetched by the idle preload or the first opening.
 const ComposerPanel = lazyPage(() => import("./ComposerPanel").then((m) => m.ComposerPanel), { idle: true });
 const AssistantComposerPanel = lazyPage(() => import("./AssistantComposerPanel").then((m) => m.AssistantComposerPanel));
@@ -361,6 +361,7 @@ export const Composer = memo(function Composer({
   const roomForImage = (size: number) => pictureRoom([...attsNow.current.map((a) => a.data.length), ...Array<number>(reading.current).fill(0)], size, limits());
   // appends at once to the ref as well, so a second paste or draft image in the same tick sees it
   const appendImage = (a: Attachment) => {
+    void ImageEditor.preload().catch(() => {});
     attsNow.current = [...attsNow.current, a];
     setAtts((cur) => [...cur, a]);
   };

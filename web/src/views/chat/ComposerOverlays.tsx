@@ -45,11 +45,11 @@ function PastedBlocks({ pastedBlocks, onRemove, onExpand }: PasteProps) {
         preview === block ? "border-accent/40 bg-accent-tint text-accent-ink" : "border-line bg-inset text-ink-2 hover:bg-hover",
       )}>
         <button type="button" onClick={() => setPreviewId((id) => id === block.id ? null : block.id)}
-          className="inline-flex min-w-0 items-center gap-1.5 truncate" title={t("chat-composer.pasted_preview_hint")}>
+          className="inline-flex min-w-0 items-center gap-1.5 truncate" title={t("chat-composeroverlays.pasted_preview_hint")}>
           <Icon name="paste" size={12} className="shrink-0 opacity-75" />
-          <span className="truncate">{t("chat-composer.pasted_chip", { count: block.text.length })}</span>
+          <span className="truncate">{t("chat-composeroverlays.pasted_chip", { count: block.text.length })}</span>
         </button>
-        <button type="button" aria-label={t("chat-composer.pasted_remove")} onClick={() => onRemove(block.id)}
+        <button type="button" aria-label={t("chat-composeroverlays.pasted_remove")} onClick={() => onRemove(block.id)}
           className="ml-0.5 flex size-4 shrink-0 items-center justify-center rounded-[4px] text-ink-3 transition-colors hover:bg-hover hover:text-ink">
           <Icon name="x" size={10} stroke={2.4} />
         </button>
@@ -65,9 +65,9 @@ function PastedPreview({ pastedText, onExpand }: { pastedText: string; onExpand:
   return (
     <div className="rounded-[8px] border border-line bg-inset p-2 text-label">
       <div className="mb-1 flex items-center justify-between gap-2 text-ink-3">
-        <span>{t("chat-composer.pasted_stats", { lines: lines.length, chars: pastedText.length })}</span>
+        <span>{t("chat-composeroverlays.pasted_stats", { lines: lines.length, chars: pastedText.length })}</span>
         <button type="button" onClick={onExpand} className="font-medium text-accent-ink hover:underline">
-          {t("chat-composer.pasted_expand")}
+          {t("chat-composeroverlays.pasted_expand")}
         </button>
       </div>
       <pre className="max-h-28 overflow-hidden font-mono text-submeta leading-[1.45] whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">{snippet}</pre>
@@ -117,8 +117,8 @@ function ExpandedComposer({ editLabel, value, placeholder, selection, onChange, 
         <button
           type="button"
           data-testid="composer-collapse"
-          aria-label={t("chat-composer.collapse")}
-          title={t("chat-composer.collapse")}
+          aria-label={t("chat-composeroverlays.collapse")}
+          title={t("chat-composeroverlays.collapse")}
           onClick={() => onCollapse(sel())}
           className="touch-hit flex size-9 items-center justify-center rounded-[10px] text-ink-2 transition-colors hover:bg-hover hover:text-ink"
         >
@@ -168,21 +168,21 @@ function SuggestionPill({ text, onFill, onSend }: SuggestionProps) {
         type="button"
         onMouseDown={(e) => e.preventDefault()}
         onClick={onFill}
-        aria-label={t("chat-composer.suggestion_label", { suggestion: text })}
-        title={hasFinePointer() ? t("chat-composer.suggestion_use_hint") : undefined}
+        aria-label={t("chat-composeroverlays.suggestion_label", { suggestion: text })}
+        title={hasFinePointer() ? t("chat-composeroverlays.suggestion_use_hint") : undefined}
         className="touch-hit flex min-w-0 flex-1 items-center gap-2 rounded-full py-1 pr-1 pl-2.5 text-left transition-colors hover:bg-hover"
       >
         <Icon name="sparkles" size={13} stroke={2} className="shrink-0 text-accent" />
         <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-2">{text}</span>
-        <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-accent">{t("chat-composer.suggestion_use")}</span>
+        <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-accent">{t("chat-composeroverlays.suggestion_use")}</span>
       </button>
       {onSend && (
         <button
           type="button"
           onMouseDown={(e) => e.preventDefault()}
           onClick={onSend}
-          aria-label={t("chat-composer.suggestion_send")}
-          title={t("chat-composer.suggestion_send")}
+          aria-label={t("chat-composeroverlays.suggestion_send")}
+          title={t("chat-composeroverlays.suggestion_send")}
           className="touch-hit flex size-7 shrink-0 items-center justify-center rounded-full text-ink-3 transition-[background-color,color,transform] duration-150 hover:bg-hover hover:text-ink active:scale-[0.94]"
         >
           <Icon name="up" size={15} stroke={2.4} />
