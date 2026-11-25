@@ -325,6 +325,7 @@ export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
   const currentIndex = indexOf(marked);
   const focusedMark = preview ?? pending;
   const focusedIndex = previewIndex >= 0 ? previewIndex : indexOf(pending);
+  const focusTarget = previewTick?.id ?? (shown.some((tick) => tick.id === active) ? active : shown.at(-1)?.id);
   const previewMark = markOf(previewTick);
   const previewTitle = previewTick && labelOf(previewTick);
   const railHeight = height + M.padding * 2;
@@ -382,7 +383,7 @@ export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
       data-nav-source={total === undefined ? "loaded" : "server"}
       tabIndex={0}
       data-nav-touch={touch || undefined}
-      className="pointer-events-none absolute inset-y-0 z-10 flex flex-col justify-center"
+      className="group/nav pointer-events-none absolute inset-y-0 z-10 flex flex-col justify-center focus-visible:outline-none"
       style={{ left: M.edgeGap, width: M.width, touchAction: touch ? "none" : undefined }}
       onMouseEnter={() => {
         if (touch) return;
@@ -513,7 +514,7 @@ export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
             data-question-follow={q?.follows ? "" : undefined}
             aria-current={isCurrent ? "true" : undefined}
             aria-describedby={tick.id === preview ? previewId : undefined}
-            className="pointer-events-auto relative flex shrink-0 items-center"
+            className={cx("pointer-events-auto relative flex shrink-0 items-center", tick.id === focusTarget && "rounded-control group-focus-visible/nav:outline group-focus-visible/nav:-outline-offset-1 group-focus-visible/nav:outline-accent")}
             style={{ height: plan.pitch, paddingLeft: M.tickInset }}
             onMouseEnter={() => { if (!touch) pick(tick.id); }}
             onClick={() => {
