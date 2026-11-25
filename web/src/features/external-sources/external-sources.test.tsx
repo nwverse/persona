@@ -134,7 +134,7 @@ beforeEach(async () => {
           return new Response(null, { status: 204 });
         }
         if (path.startsWith("/assistant/external-source-bindings/") && method === "PUT") {
-          const id = path.split("/").at(-1);
+          const id = path.slice(path.lastIndexOf("/") + 1);
           const next = { ...body as BindingInput, id };
           bindings = bindings.map((binding) => binding.id === id ? next : binding);
           return ok(next);
