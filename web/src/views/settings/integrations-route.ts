@@ -13,6 +13,7 @@ export type IntegrationsRoute =
   | { kind: "channel"; id: string; manager?: string }
   | { kind: "connector"; id: string; manager?: string }
   | { kind: "page"; id: string; ui: string; manager?: string }
+  | { kind: "sources"; state?: string; manager?: string }
   | { kind: "catalog" }
   | { kind: "item"; market: string; id: string; manager?: string }
   | { kind: "markets" }
@@ -55,6 +56,20 @@ export function parseIntegrationsSub(sub: string | null | undefined): Integratio
   if (sub === "-sent") return { kind: "sent" };
   if (sub === "-market") return { kind: "catalog" };
   if (sub === "-markets") return { kind: "markets" };
+  if (sub === "-sources") return { kind: "sources" };
+  if (sub.startsWith("-sources@") || sub.startsWith("-sources/")) {
+    const rest = sub.slice("-sources".length);
+    const slash = rest.indexOf("/");
+    const head = slash >= 0 ? rest.slice(0, slash) : rest;
+    const manager = head.startsWith("@") ? head.slice(1) : "";
+    const rawState = slash >= 0 ? rest.slice(slash + 1) : "";
+    const state = rawState ? decodePathPart(rawState) : "";
+    return {
+      kind: "sources",
+      ...(state ? { state } : {}),
+      ...(manager ? { manager } : {}),
+    };
+  }
 
   const item = /^-market\/([^/]+)\/([^/@]+)(?:@([^/]+))?$/.exec(sub);
   if (item) {
@@ -115,6 +130,10 @@ export function formatIntegrationsSub(route: IntegrationsRoute): string | null {
       return `-market/${route.market}/${withManager(route.id, route.manager)}`;
     case "page":
       return `ext:${withManager(route.id, route.manager)}/ui/${route.ui}`;
+    case "sources": {
+      const base = withManager("-sources", route.manager);
+      return route.state ? `${base}/${encodeURIComponent(route.state)}` : base;
+    }
     case "builtin":
       return `builtin:${withManager(route.id, route.manager)}`;
     case "extension":
@@ -126,9 +145,17 @@ export function formatIntegrationsSub(route: IntegrationsRoute): string | null {
   }
 }
 
-/** Whether a route shows an integration detail view eligible for two-column split-pane layout on desktop. */
+/** Whether a route shows an integration detail view eligible for two-column split-pane layout on desktop.
+ *  Global Data Flow (`kind: "sources"` without `state`) stays full-width single-scroll so `SourcesGraph` has room;
+ *  an individual source detail (`kind: "sources"` with `state`, such as a standalone push source) uses split-pane. */
 export function isIntegrationDetailRoute(route: IntegrationsRoute): boolean {
-  return route.kind === "builtin" || route.kind === "extension" || route.kind === "channel" || route.kind === "connector";
+  return (
+    route.kind === "builtin" ||
+    route.kind === "extension" ||
+    route.kind === "channel" ||
+    route.kind === "connector" ||
+    (route.kind === "sources" && Boolean(route.state))
+  );
 }
 
 /** Maps a legacy `connectors` / `channels` / `extensions` tab+sub into the unified `integrations` sub + optional filter. */
@@ -177,7 +204,7 @@ export function legacyToIntegrations(
 export function integrationsToLegacy(
   sub: string | null | undefined,
   filter?: string | null,
-): { tab: LegacyIntegrationTab; sub: string | null } {
+): { tab: LegacyIntegrationTab | "sources"; sub: string | null } {
   const route = parseIntegrationsSub(sub);
   switch (route.kind) {
     case "list": {
@@ -188,6 +215,8 @@ export function integrationsToLegacy(
     }
     case "sent":
       return { tab: "connectors", sub: "-sent" };
+    case "sources":
+      return { tab: "sources", sub: null };
     case "catalog":
       return { tab: "extensions", sub: "-market" };
     case "markets":

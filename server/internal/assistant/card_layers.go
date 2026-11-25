@@ -360,9 +360,6 @@ func (s *Service) cardsLoadedLocked(ctx context.Context) bool {
 
 // cardStore is the database the counts are kept in, nil for none.
 func (s *Service) cardStore() Store {
-	if s.store == nil {
-		return nil
-	}
 	return s.store()
 }
 

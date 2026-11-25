@@ -225,10 +225,8 @@ type Store struct {
 	recFilesMu sync.RWMutex // acquire before metaMu for recording snapshots and recovery
 	liveMu     sync.Mutex   // a live log's read-modify-write (live.go); after recMu, before recFilesMu
 	meetMu     sync.Mutex   // meeting.json's read-modify-write (meeting.go); after recMu, before liveMu
-	// audioMapMu guards audioRecs, hub-mode recordings' audio state (recording_audio.go); a leaf lock. Each one's own
-	// mutex comes after liveMu and before recFilesMu.
-	audioMapMu sync.Mutex
-	audioRecs  map[string]*audioRec
+	// A hub-mode recording's audio has a mutex of its own in the recording module (internal/modules/recording/writers,
+	// audioRec.mu), taken after liveMu and before recFilesMu; an audio append holds recFilesMu for reading.
 	// recordings is the recording module's write side once it hooked a knowledge base on this store (recording_port.go:
 	// the audio touch points of delete, retention and the trim); nil without the module.
 	recordings        atomic.Pointer[recordingwire.Provider]

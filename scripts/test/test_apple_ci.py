@@ -277,6 +277,18 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertIn("ci_run 'Generate core-only Apple project' 120 env PERSONA_CORE_ONLY=YES xcodegen generate", core_only)
         self.assertIn("ci_run 'Core-only iOS build' 1800", core_only)
         self.assertIn("ci_run 'Generate Apple project again (whole)' 120 xcodegen generate", core_only)
+        # And the domain packages' black-box tests with their symbol graphs, and the client domain guard over them and
+        # over the device build's log (docs/server/architecture.md "Domain model", 'Client modules').
+        domain = script[script.index('  # Domain packages (docs/server/architecture.md'):
+                        script.index('  # Blocking calls on the main actor')]
+        self.assertIn('--swift-packages', domain)
+        self.assertIn('--disable-testable-imports', domain)
+        self.assertIn('PERSONA_DOMAIN_SYMBOL_GRAPHS="$DOMAIN_GRAPHS"', domain)
+        domain_log = script[script.index('  # A domain result the app drops'):
+                            script.index('  fi\n  if [ "$LANE" = all ] || [ "$LANE" = ios-core-only ]; then')]
+        self.assertIn('PERSONA_APP_BUILD_LOGS="$OUTPUT/ios-device.log"', domain_log)
+        device_log = ' 2>&1 | tee "$OUTPUT/ios-device.log"'
+        self.assertIn('-disableAutomaticPackageResolution "${UNSIGNED[@]}" build' + device_log, script)
         for lane in ('ios', 'ios-focused', 'ios-regressions'):
             current = script.replace('ci_run "Download matching $platform 26.0 simulator runtime" 1200 python3 "$CI_ROOT/scripts/ci/apple_runtime.py" --platform "$platform" --download',
                                      'ci_run "Download matching $platform 26.0 simulator runtime" 1200 xcodebuild -downloadPlatform "$platform" -architectureVariant universal')
@@ -383,6 +395,7 @@ class AppleCIPreparationTests(unittest.TestCase):
             current = current.replace(wire, '')
             current = current.replace(modules, '')
             current = current.replace(core_only, '')
+            current = current.replace(domain, '').replace(domain_log, '').replace(device_log, '')
             model_runtime = '''    # This focused lane runs no Watch or device batch, so it prepares only iOS.
     if [ "$LANE" = ios-model-picker ] && [ "$platform" = watchOS ]; then
       continue
