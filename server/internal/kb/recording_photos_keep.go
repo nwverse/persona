@@ -146,9 +146,6 @@ func (s *Store) putPhotosTextLocked(id string, b *photoBook, start time.Time, zo
 	return true, writeRecordingFile(md, []byte(out.String()))
 }
 
-// photoLabel marks a photo's line in photos.md and in the minutes' input.
-const photoLabel = recordingwire.PhotoLabel
-
 // photoLine is a photo as photos.md and the minutes' input have it: "[P3] 14:32:05 photo: caption · text · note".
 func photoLine(n int, clock, words string) string { return recordingwire.PhotoLine(n, clock, words) }
 

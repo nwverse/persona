@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"cmp"
@@ -12,38 +12,10 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/recordingwire"
-)
-
-// Re-exported from recordingwire.
-const (
-	RecapDueEvening  = recordingwire.RecapDueEvening
-	RecapDueComplete = recordingwire.RecapDueComplete
-	RecapDueCutoff   = recordingwire.RecapDueCutoff
-	RecapDueAsked    = recordingwire.RecapDueAsked
-	RecapDueRepair   = recordingwire.RecapDueRepair
-)
-
-// Re-exported from recordingwire.
-const (
-	FinalComplete = recordingwire.FinalComplete
-	FinalCutoff   = recordingwire.FinalCutoff
 )
 
 // recapWaiting: a try ran out of time and the next is not due yet.
 func recapWaiting(t *RecapTarget, now time.Time) bool { return now.Before(t.RetryAt) }
-
-// RecapSpan is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type RecapSpan = recordingwire.RecapSpan
-
-// Re-exported from recordingwire.
-const (
-	RecapMeeting = recordingwire.RecapMeeting
-	RecapOutside = recordingwire.RecapOutside
-)
-
-// DayRecapEntry is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type DayRecapEntry = recordingwire.DayRecapEntry
 
 // armRecap makes a recap of r due for reason, as r is now; one still due is settled by the same recap, so it gives
 // way (the newer reason says what kind of recap it is: a final one's is complete or cutoff).
@@ -82,7 +54,7 @@ func (s *Store) putRecap(id string, rc *DayRecap) (bool, error) {
 		return false, err
 	}
 	wrote, err := s.recapFilesLocked(id, func() error {
-		if err := writeFile(s.path(KindRecording, id, recapMarkdown), []byte(strings.TrimSpace(rc.Markdown)+"\n")); err != nil {
+		if err := s.writeFile(s.path(KindRecording, id, recapMarkdown), []byte(strings.TrimSpace(rc.Markdown)+"\n")); err != nil {
 			return err
 		}
 		if rc.Summary != "" {
@@ -106,7 +78,7 @@ func (s *Store) putRecap(id string, rc *DayRecap) (bool, error) {
 		}
 	}
 	if wrote, err = s.recapFilesLocked(id, func() error {
-		return writeFile(s.path(KindRecording, id, recapFile), append(raw, '\n'))
+		return s.writeFile(s.path(KindRecording, id, recapFile), append(raw, '\n'))
 	}); err != nil || !wrote {
 		return wrote, err
 	}
@@ -170,7 +142,7 @@ func (s *Store) mendRecapFiles(r *Recording) error {
 		return nil
 	case sumOK:
 		_, err := s.recapFilesLocked(r.ID, func() error {
-			return writeFile(s.path(KindRecording, r.ID, recapMarkdown), []byte(strings.TrimSpace(rc.Markdown)+"\n"))
+			return s.writeFile(s.path(KindRecording, r.ID, recapMarkdown), []byte(strings.TrimSpace(rc.Markdown)+"\n"))
 		})
 		return err
 	}
@@ -199,7 +171,7 @@ func (e *Engine) repairDayRecap(r *Recording, u *RecordingUpload) (recapped bool
 		rc.Version = max(rc.Version, r.RecapVersion) + 1
 		zone := st.Zone()
 		if u.TZ != "" {
-			if l, err := dayLocation(u.TZ); err == nil {
+			if l, err := st.dayLocation(u.TZ); err == nil {
 				zone = l
 			}
 		}
@@ -284,9 +256,6 @@ func gapsWithin(gaps []CoverageGap, from, to float64) []CoverageGap {
 	return out
 }
 
-// RecapTodo is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type RecapTodo = recordingwire.RecapTodo
-
 // recapTodoNear is how far apart in time two actions with the same who and what may be and still be one task: one
 // said again later in the day is another.
 const recapTodoNear = 15 * 60
@@ -345,7 +314,7 @@ func rememberTodo(r *Recording, a MinutesAction, todo string) bool {
 // where it has the task near the same time and nowhere else, and one written later even after a version that left it
 // out.
 func (e *Engine) SetDayRecapTodos(rawID string, version int, confirmed []MinutesAction) (*DayRecap, error) {
-	id, ok := RecordingID(rawID)
+	id, ok := e.Store.RecordingID(rawID)
 	if !ok {
 		return nil, ErrNotFound
 	}

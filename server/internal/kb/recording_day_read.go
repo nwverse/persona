@@ -45,6 +45,10 @@ func (s *Store) RecordingZone(r *Recording) *time.Location {
 	return s.Zone()
 }
 
+// SetClock gives the engine its clock (nil: time.Now): a test of the recordings' writers, here or in the recording
+// module, sets the time a round runs at.
+func (e *Engine) SetClock(now func() time.Time) { e.clock = now }
+
 // now is the engine's clock (a test sets clock).
 func (e *Engine) now() time.Time {
 	if e.clock != nil {

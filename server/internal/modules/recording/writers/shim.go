@@ -1,0 +1,275 @@
+package writers
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io/fs"
+	"os"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/kbwire"
+	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/recordingwire"
+	"github.com/nwverse/persona/server/internal/textfmt"
+)
+
+// The writers were written as methods of the knowledge base's Engine and Store. Here those two names are this
+// package's own: an Engine and a Store that hold the storage port (recordingwire.Core) and give the writers every
+// member they used under the name it had, each a call of the port. So the writers' bodies are the ones that were in
+// internal/kb, and this file is the whole of the adaptation: what a name means here is read below, not in the body.
+
+// Engine is the knowledge base's engine as the writers see it: the port behind Store, the models and the evening
+// clock as the port has them when the Engine is made (Writers.engine makes one a call), and the module's callbacks.
+type Engine struct {
+	Store *Store
+	// Model and ModelFor are the engine's model and its model per purpose (recordingwire.Writer.Models).
+	Model    Model
+	ModelFor func(string) Model
+	// MinutesWritten is told when a recording's minutes for its current revision are written; DayRecapWritten once a
+	// day of the recap the day's push goes with (took: the push ids it took; an error leaves the push due).
+	MinutesWritten  func(ctx context.Context, r Recording, m Minutes)
+	DayRecapWritten func(ctx context.Context, r Recording, d DayRecap) (took []string, err error)
+	// DayRecapClock is the evening routine's time of day (recordingwire.Writer.DayRecapClock).
+	DayRecapClock func() (hour, minute int)
+
+	// jobLeft is what a job has left of its time (tests); nil: ctx's deadline.
+	jobLeft func(ctx context.Context) time.Duration
+	// minutesCall and minutesPart are the runes of transcript one minutes call and one part read (tests); 0:
+	// minutesOneCall and minutesChunk.
+	minutesCall, minutesPart int
+}
+
+// Store is the knowledge base's store as the writers see it: the port, and the store's locks under their names.
+type Store struct {
+	core     recordingwire.Core
+	readOnly bool
+	// recMu guards a recording's read-compare-write, recFilesMu its files and the commit recovery, metaMu every
+	// entry's meta.json: the store's own locks (recordingwire.Writer.Locks), acquired in this order.
+	recMu, recFilesMu, metaMu sync.Locker
+}
+
+func newStore(core recordingwire.Core) *Store {
+	l := core.Locks()
+	return &Store{core: core, readOnly: core.ReadOnly(), recMu: l.Recordings, recFilesMu: l.Files, metaMu: l.Meta}
+}
+
+// The types the writers name, under the names they had.
+type (
+	Model             = recordingwire.Model
+	Item              = recordingwire.CalendarItem
+	Tagging           = kbwire.Tagging
+	RecordingSegment  = kbwire.RecordingSegment
+	Recording         = recordingwire.Recording
+	RecordingUpload   = recordingwire.RecordingUpload
+	MeetingRef        = recordingwire.MeetingRef
+	CoverageGap       = recordingwire.CoverageGap
+	RecapTarget       = recordingwire.RecapTarget
+	RecapSpan         = recordingwire.RecapSpan
+	RecapTodo         = recordingwire.RecapTodo
+	DayRecap          = recordingwire.DayRecap
+	DayRecapEntry     = recordingwire.DayRecapEntry
+	Minutes           = recordingwire.Minutes
+	MinutesItem       = recordingwire.MinutesItem
+	MinutesPoint      = recordingwire.MinutesPoint
+	MinutesAction     = recordingwire.MinutesAction
+	MinutesOverview   = recordingwire.MinutesOverview
+	MinutesConclusion = recordingwire.MinutesConclusion
+	MinutesGroup      = recordingwire.MinutesGroup
+	MinutesTopic      = recordingwire.MinutesTopic
+	MinutesBullet     = recordingwire.MinutesBullet
+	photoBook         = recordingwire.PhotoBook
+)
+
+// The constants and errors the writers name.
+const (
+	KindRecording = recordingwire.KindRecording
+	KindMeeting   = recordingwire.KindMeeting
+	KindEvent     = recordingwire.KindEvent
+
+	RecordingDay   = recordingwire.RecordingDay
+	MinutesPending = recordingwire.MinutesPending
+	MinutesReady   = recordingwire.MinutesReady
+	MinutesFailed  = recordingwire.MinutesFailed
+	PartPhotos     = recordingwire.PartPhotos
+	AITitleMinutes = recordingwire.AITitleMinutes
+
+	GapPaused      = recordingwire.GapPaused
+	GapInterrupted = recordingwire.GapInterrupted
+	GapStopped     = recordingwire.GapStopped
+	GapPending     = recordingwire.GapPending
+	GapLost        = recordingwire.GapLost
+	GapErased      = recordingwire.GapErased
+
+	RecapDueEvening  = recordingwire.RecapDueEvening
+	RecapDueComplete = recordingwire.RecapDueComplete
+	RecapDueCutoff   = recordingwire.RecapDueCutoff
+	RecapDueAsked    = recordingwire.RecapDueAsked
+	RecapDueRepair   = recordingwire.RecapDueRepair
+	FinalComplete    = recordingwire.FinalComplete
+	FinalCutoff      = recordingwire.FinalCutoff
+	RecapMeeting     = recordingwire.RecapMeeting
+	RecapOutside     = recordingwire.RecapOutside
+
+	recapFile      = recordingwire.RecapFile
+	recapMarkdown  = recordingwire.RecapMarkdown
+	recapNotesFile = recordingwire.RecapNotesFile
+
+	// PurposeMeetingMinutes is the model purpose every call of a minutes job asks for (#7980): the whole transcript, or
+	// each part's notes and their merge, with the summary card in the same answers.
+	PurposeMeetingMinutes = recordingwire.PurposeMeetingMinutes
+)
+
+var (
+	ErrNotFound           = kbwire.ErrNotFound
+	ErrReadOnly           = kbwire.ErrReadOnly
+	ErrTranscriptExpired  = recordingwire.ErrTranscriptExpired
+	ErrTranscriptionFinal = recordingwire.ErrTranscriptionFinal
+)
+
+// The rules of a recording's stored state, which the knowledge base applies too (recordingwire/rules.go).
+var (
+	MinutesTaskKey     = recordingwire.MinutesTaskKey
+	clockAt            = recordingwire.ClockAt
+	coverageTo         = recordingwire.CoverageTo
+	dayStart           = recordingwire.DayStart
+	hourStart          = recordingwire.HourStart
+	isMeeting          = recordingwire.GetsMinutes
+	minutesPhotos      = recordingwire.MinutesPhotos
+	minutesSpan        = recordingwire.MinutesSpan
+	photoLine          = recordingwire.PhotoLine
+	planMinutes        = recordingwire.PlanMinutes
+	planRecap          = recordingwire.PlanRecap
+	recapFailed        = recordingwire.RecapFailed
+	recordingEnd       = recordingwire.RecordingEnd
+	sortDaySegments    = recordingwire.SortDaySegments
+	transcriptionDone  = recordingwire.TranscriptionDone
+	transcriptionHolds = recordingwire.TranscriptionHolds
+	taggingFieldLocked = kbwire.TaggingFieldLocked
+	clip               = textfmt.Clip
+)
+
+// Small helpers the knowledge base has under the same names (store.go, edit.go, language.go, hub_segments_read.go).
+
+func calendarTitle(r *Recording) string     { return r.CalendarTitle() }
+func hubMode(m *recordingwire.Meeting) bool { return m != nil && m.Transcription.Hub() }
+func storedLang(lang string) i18n.Lang      { return i18n.Lang(lang).Or(i18n.ZhHans) }
+func seconds(sec float64) time.Duration     { return time.Duration(sec * float64(time.Second)) }
+func oneLine(s string) string               { return clip(strings.Join(strings.Fields(s), " "), 200) }
+func clipRunes(s string, n int) string      { return clip(strings.Join(strings.Fields(s), " "), n) }
+func removeStrings(list, remove []string) []string {
+	return slices.DeleteFunc(slices.Clone(list), func(v string) bool { return slices.Contains(remove, v) })
+}
+
+func addUnique(list []string, v ...string) []string {
+	for _, x := range v {
+		if x != "" && !slices.Contains(list, x) {
+			list = append(list, x)
+		}
+	}
+	return list
+}
+
+// readJSON reads the JSON file p into out; false when there is no such file.
+func readJSON(p string, out any) (bool, error) {
+	raw, err := os.ReadFile(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, json.Unmarshal(raw, out)
+}
+
+// titleRunes and titleLine are the title writers' (internal/kb/recording_title.go, which moves here with PR 4 of
+// docs/plans/plan-kb-recording-port.md and replaces this copy): a title a model gave, as one clean line.
+const titleRunes = 60
+
+func titleLine(s string) string {
+	s = strings.Join(strings.Fields(stripMarks(s)), " ")
+	s = strings.TrimSpace(strings.Trim(s, "\"'“”‘’「」『』《》"))
+	return clipAtMost(s, titleRunes)
+}
+
+// The photo book's two questions (recordingwire.PhotoBook).
+
+func dropUnlistedPhotos(m *Minutes, b photoBook)                { b.DropUnlisted(m) }
+func citedChanged(b photoBook, before, after map[int]bool) bool { return b.CitedChanged(before, after) }
+
+// The store's members the writers call, each the port's.
+
+func (s *Store) ReadOnly() bool                            { return s.core.ReadOnly() }
+func (s *Store) Zone() *time.Location                      { return s.core.Zone() }
+func (s *Store) RecordingZone(r *Recording) *time.Location { return s.core.RecordingZone(r) }
+func (s *Store) Recording(id string) (*Recording, bool)    { return s.core.Recording(id) }
+func (s *Store) Recordings() []*Recording                  { return s.core.Recordings() }
+func (s *Store) Items(kind string) []*Item                 { return s.core.CalendarItems(kind) }
+func (s *Store) ReadMinutes(id string) (*Minutes, error)   { return s.core.ReadMinutes(id) }
+func (s *Store) readRecap(id string) (*DayRecap, error)    { return s.core.ReadRecap(id) }
+func (s *Store) readPhotos(id string) (photoBook, error)   { return s.core.PhotoBook(id) }
+func (s *Store) recordingName(r *Recording) string         { return s.core.RecordingName(r) }
+func (s *Store) recoverRecordingLocked(id string) error    { return s.core.RecoverRecording(id) }
+func (s *Store) bumpPhotosRev(id string, start time.Time) error {
+	return s.core.BumpPhotosRev(id, start)
+}
+func (s *Store) writeFile(p string, data []byte) error           { return s.core.WriteFile(p, data) }
+func (s *Store) dayLocation(name string) (*time.Location, error) { return s.core.DayLocation(name) }
+func (s *Store) RecordingID(raw string) (string, bool)           { return s.core.RecordingID(raw) }
+func (s *Store) photoWords(p recordingwire.PhotoText, clipped bool) string {
+	return s.core.PhotoWords(p, clipped)
+}
+func (s *Store) TranscriptOfRecord(hubMode bool, device, hub []RecordingSegment) []RecordingSegment {
+	return s.core.TranscriptOfRecord(hubMode, device, hub)
+}
+func (s *Store) recordingSnapshot(id string) (map[string][]byte, error) {
+	return s.core.RecordingSnapshot(id)
+}
+func (s *Store) recordSnapshot(id string) (map[string][]byte, *recordingwire.Meeting, recordingwire.HubTranscript, error) {
+	return s.core.RecordSnapshot(id)
+}
+
+// path, entityPath, notify, putEntity and putSummary take the entry's kind as the knowledge base's do; the writers
+// only ever name a recording.
+func (s *Store) path(_, id string, parts ...string) string { return s.core.Path(id, parts...) }
+func (s *Store) entityPath(_, id string) string            { return s.core.Path(id, "meta.json") }
+func (s *Store) notify(_, id, what string)                 { s.core.Notify(id, what) }
+func (s *Store) putEntity(_, _ string, r *Recording, _ *Tagging, _ bool) error {
+	return s.core.PutMeta(r)
+}
+func (s *Store) putSummary(_, id, text string, _ bool) error { return s.core.PutSummary(id, text) }
+
+// The engine's members the writers call.
+
+func (e *Engine) now() time.Time                                 { return e.Store.core.Now() }
+func (e *Engine) logf(f string, a ...any)                        { e.Store.core.Logf(f, a...) }
+func (e *Engine) recordingName(r *Recording) string              { return e.Store.core.RecordingName(r) }
+func (e *Engine) PhotoTexts(id string) []recordingwire.PhotoText { return e.Store.core.PhotoTexts(id) }
+func (e *Engine) dropAudio(id string, why error) error           { return e.Store.core.DropAudio(id, why) }
+func (e *Engine) meetingChanged(id string, parts []string)       { e.Store.core.MeetingChanged(id, parts) }
+func (e *Engine) outputLang(r *Recording) i18n.Lang              { return i18n.Lang(e.Store.core.OutputLang(r)) }
+func (e *Engine) daySpan(r *Recording, now time.Time) (time.Time, time.Time) {
+	return e.Store.core.DaySpan(r, now)
+}
+func (e *Engine) recordedWithin(r *Recording, now, from, to time.Time) bool {
+	return e.Store.core.RecordedWithin(r, now, from, to)
+}
+func (e *Engine) index(_, id, name string, t Tagging, one string, updated time.Time) {
+	e.Store.core.Index(id, name, t, one, updated)
+}
+func (e *Engine) writingOwner(lang i18n.Lang) prompts.KBOwner {
+	owner, language := e.Store.core.WritingOwner(string(lang))
+	return prompts.KBOwner{Owner: owner, Language: language}
+}
+
+// modelFor is the model for purpose id: the engine's model per purpose, else its model.
+func (e *Engine) modelFor(id string) Model {
+	if e.ModelFor != nil {
+		return e.ModelFor(id)
+	}
+	return e.Model
+}

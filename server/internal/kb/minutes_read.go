@@ -40,19 +40,20 @@ func (s *Store) ReadMinutes(id string) (*Minutes, error) {
 	return &m, nil
 }
 
-// recordingEnd is when r ended: ended_at, else its start plus what was recorded (at least a minute).
-func recordingEnd(r *Recording) time.Time { return recordingwire.RecordingEnd(r) }
-
 // calendarTitle is the phone calendar's title of r, else the matched calendar item's ("" without either).
 func calendarTitle(r *Recording) string { return r.CalendarTitle() }
 
-func clockAt(start time.Time, sec float64, zone *time.Location) string { return recordingwire.ClockAt(start, sec, zone) }
+func clockAt(start time.Time, sec float64, zone *time.Location) string {
+	return recordingwire.ClockAt(start, sec, zone)
+}
 
 // clipRunes is s on one line, at most n runes ("…" marking a cut).
 func clipRunes(s string, n int) string { return clip(strings.Join(strings.Fields(s), " "), n) }
 
 // minutesSpan is the recording's start and end in the user's zone, to the second: the span minutes are about.
-func minutesSpan(r *Recording, zone *time.Location) (time.Time, time.Time) { return recordingwire.MinutesSpan(r, zone) }
+func minutesSpan(r *Recording, zone *time.Location) (time.Time, time.Time) {
+	return recordingwire.MinutesSpan(r, zone)
+}
 
 // minutesSpanOf fills Start and End of minutes written before they were (#4713) from their recording.
 func minutesSpanOf(m *Minutes, r *Recording, zone *time.Location) {
@@ -83,3 +84,43 @@ func minutesWithSpan(raw []byte, r *Recording, zone *time.Location) []byte {
 	}
 	return out
 }
+
+// MinutesItem is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type MinutesItem = recordingwire.MinutesItem
+
+// MinutesPoint is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type MinutesPoint = recordingwire.MinutesPoint
+
+// MinutesAction is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type MinutesAction = recordingwire.MinutesAction
+
+// PurposeMeetingMinutes is the model purpose every call of a minutes job asks for (#7980): the whole transcript, or each
+// part's notes and their merge, with the summary card in the same answers. It follows Information processing until it
+// is set apart in Model settings (docs/assistant/model-config.md "Meeting minutes and the in-meeting conversation
+// (#7980)"); the recordings' summaries and the day recap stay on kb.compress.
+const PurposeMeetingMinutes = recordingwire.PurposeMeetingMinutes
+
+// PurposeMeetingAnswer is the model purpose a question asked during a meeting is answered on, and PurposeMeetingRoom the
+// one an attended meeting's room conversation starts on (#7980); the meeting recording module asks for them.
+const (
+	PurposeMeetingAnswer = recordingwire.PurposeMeetingAnswer
+	PurposeMeetingRoom   = recordingwire.PurposeMeetingRoom
+)
+
+// MinutesOverview is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type MinutesOverview = recordingwire.MinutesOverview
+
+// MinutesConclusion is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type MinutesConclusion = recordingwire.MinutesConclusion
+
+// MinutesGroup is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type MinutesGroup = recordingwire.MinutesGroup
+
+// MinutesTopic is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type MinutesTopic = recordingwire.MinutesTopic
+
+// MinutesBullet is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type MinutesBullet = recordingwire.MinutesBullet
+
+// MinutesTaskKey is what makes an action the same task in minutes made again: who and what.
+func MinutesTaskKey(a MinutesAction) string { return recordingwire.MinutesTaskKey(a) }

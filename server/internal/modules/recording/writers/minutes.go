@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"bytes"
@@ -15,32 +15,9 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/nwverse/persona/server/internal/ai"
+	ai "github.com/nwverse/persona/server/internal/aiwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
-	"github.com/nwverse/persona/server/internal/recordingwire"
-)
-
-// MinutesItem is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type MinutesItem = recordingwire.MinutesItem
-
-// MinutesPoint is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type MinutesPoint = recordingwire.MinutesPoint
-
-// MinutesAction is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type MinutesAction = recordingwire.MinutesAction
-
-// PurposeMeetingMinutes is the model purpose every call of a minutes job asks for (#7980): the whole transcript, or each
-// part's notes and their merge, with the summary card in the same answers. It follows Information processing until it
-// is set apart in Model settings (docs/assistant/model-config.md "Meeting minutes and the in-meeting conversation
-// (#7980)"); the recordings' summaries and the day recap stay on kb.compress.
-const PurposeMeetingMinutes = "meeting.minutes"
-
-// PurposeMeetingAnswer is the model purpose a question asked during a meeting is answered on, and PurposeMeetingRoom the
-// one an attended meeting's room conversation starts on (#7980); the meeting recording module asks for them.
-const (
-	PurposeMeetingAnswer = "meeting.answer"
-	PurposeMeetingRoom   = "meeting.room"
 )
 
 var (
@@ -73,10 +50,10 @@ func (s *Store) putMinutes(id string, m *Minutes) (bool, error) {
 	if _, err := os.Stat(s.path(KindRecording, id, "meta.json")); err != nil {
 		return false, nil
 	}
-	if err := writeFile(s.path(KindRecording, id, "minutes.json"), append(raw, '\n')); err != nil {
+	if err := s.writeFile(s.path(KindRecording, id, "minutes.json"), append(raw, '\n')); err != nil {
 		return false, err
 	}
-	if err := writeFile(s.path(KindRecording, id, "minutes.md"), []byte(strings.TrimSpace(m.Markdown)+"\n")); err != nil {
+	if err := s.writeFile(s.path(KindRecording, id, "minutes.md"), []byte(strings.TrimSpace(m.Markdown)+"\n")); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -90,7 +67,7 @@ func (e *Engine) AskMinutes(rawID string) error {
 	if e.Store.ReadOnly() {
 		return ErrReadOnly
 	}
-	id, ok := RecordingID(rawID)
+	id, ok := e.Store.RecordingID(rawID)
 	if !ok {
 		return ErrNotFound
 	}
@@ -132,7 +109,7 @@ func quietMinutes(r *Recording) bool { return r.MinutesQuiet > 0 && r.MinutesQui
 // ErrNotFound without minutes. Minutes written again since get them by task instead (byTask: MinutesTaskKey → to-do
 // id), on their actions without one; without byTask that is ErrMinutesStale.
 func (e *Engine) SetMinutesTodos(rawID string, version int, todos, byTask map[string]string) (*Minutes, error) {
-	id, ok := RecordingID(rawID)
+	id, ok := e.Store.RecordingID(rawID)
 	if !ok {
 		return nil, ErrNotFound
 	}
@@ -465,7 +442,7 @@ func (e *Engine) writeMinutes(ctx context.Context, id string) error {
 	if err := json.Unmarshal(files["segments.json"], &device); err != nil {
 		return err
 	}
-	segs := TranscriptOfRecord(hubMode(meeting), device, hub.Segments)
+	segs := e.Store.TranscriptOfRecord(hubMode(meeting), device, hub.Segments)
 	// Minutes made from the final transcript take the hub's audio with them once written (storeMinutes).
 	final := transcriptionDone(&r)
 	zone := e.Store.Zone()
@@ -482,7 +459,7 @@ func (e *Engine) writeMinutes(ctx context.Context, id string) error {
 	// deleted from now on makes them again (photosRemake), and one deleted is cited by nothing stored
 	// (storeMinutes).
 	for _, p := range e.PhotoTexts(id) {
-		if t := photoWords(p, true); t != "" {
+		if t := e.Store.photoWords(p, true); t != "" {
 			lines = append(lines, minutesLine{Photo: p.N, At: p.At, Text: t})
 		}
 	}
@@ -951,9 +928,6 @@ func keepTodos(m, old *Minutes) {
 		}
 	}
 }
-
-// MinutesTaskKey is what makes an action the same task in minutes made again: who and what.
-func MinutesTaskKey(a MinutesAction) string { return recordingwire.MinutesTaskKey(a) }
 
 // renderMinutes is minutes.md: the minutes with clock times, sections without anything left out; an item citing a
 // photo ends with its number. Its headings and fixed words are in the minutes' language (kb-minutes.json). Minutes

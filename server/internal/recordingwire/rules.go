@@ -1,6 +1,7 @@
 package recordingwire
 
 import (
+	"errors"
 	"sort"
 	"strconv"
 	"strings"
@@ -218,3 +219,14 @@ func SortDaySegments(segs []kbwire.RecordingSegment) {
 
 // MinutesTaskKey is what makes an action the same task in minutes made again: who and what.
 func MinutesTaskKey(a MinutesAction) string { return a.Who + "\x00" + a.What }
+
+// ErrTranscriptExpired: the recording was trimmed; only its minutes are kept.
+var ErrTranscriptExpired = errors.New("the transcript expired; only the minutes are kept")
+
+// The model purposes of the meeting recordings' calls (docs/assistant/model-config.md): the minutes job, a question
+// asked during a meeting, an attended meeting's room conversation.
+const (
+	PurposeMeetingMinutes = "meeting.minutes"
+	PurposeMeetingAnswer  = "meeting.answer"
+	PurposeMeetingRoom    = "meeting.room"
+)

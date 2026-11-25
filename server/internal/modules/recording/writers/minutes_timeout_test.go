@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"context"
@@ -31,17 +31,17 @@ func (m *slowModel) JSONMax(ctx context.Context, _, _ string, _ int, out any) er
 }
 
 // minutesWaitOver ends recording id's wait for its next minutes try, as if the time had passed.
-func minutesWaitOver(t *testing.T, e *Engine, id string) {
+func minutesWaitOver(t *testing.T, e *testEngine, id string) {
 	t.Helper()
 	st := e.Store
-	st.recMu.Lock()
-	defer st.recMu.Unlock()
+	ws(st).recMu.Lock()
+	defer ws(st).recMu.Unlock()
 	r, ok := st.Recording(id)
 	if !ok {
 		t.Fatalf("recording %s is gone", id)
 	}
 	r.MinutesRetryAt = time.Now().Add(-time.Second)
-	if err := st.putEntity(KindRecording, r.ID, r, &r.Tagging, false); err != nil {
+	if err := ws(st).putEntity(KindRecording, r.ID, r, &r.Tagging, false); err != nil {
 		t.Fatal(err)
 	}
 }

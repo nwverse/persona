@@ -9,9 +9,6 @@ import (
 	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
-// minutesHubWait is how long a hub-mode meeting's minutes wait for its final transcript after the complete upload.
-const minutesHubWait = recordingwire.MinutesHubWait
-
 // Re-exported from recordingwire.
 var (
 	ErrHubTranscribes     = recordingwire.ErrHubTranscribes
@@ -74,10 +71,6 @@ type TranscriptionView = recordingwire.TranscriptionView
 
 // hubTranscription is r's hub-mode transcription, nil when r is not transcribed on the hub.
 func hubTranscription(r *Recording) *MeetingTranscription { return recordingwire.HubTranscription(r) }
-
-// transcriptionHolds: r's minutes wait for its final transcript: hub mode, the state not final nor failed, at most
-// minutesHubWait after the complete upload.
-func transcriptionHolds(r *Recording, now time.Time) bool { return recordingwire.TranscriptionHolds(r, now) }
 
 // transcriptionDone: r is transcribed on the hub and its final pass has run or failed.
 func transcriptionDone(r *Recording) bool { return recordingwire.TranscriptionDone(r) }

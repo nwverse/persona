@@ -235,3 +235,14 @@ func headAndTail(s string, head, tail int) string {
 	r := []rune(s)
 	return string(r[:head]) + "\n…（中间省略）…\n" + string(r[len(r)-tail:])
 }
+
+// stripMarks and clipAtMost are the minutes overview's helpers titleLine uses; the overview moved to the recording
+// module with the minutes' writers, and these copies go there with the title writers (plan-kb-recording-port.md, PR 4).
+func stripMarks(s string) string { return strings.ReplaceAll(s, "**", "") }
+
+func clipAtMost(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return clip(s, n-1)
+}

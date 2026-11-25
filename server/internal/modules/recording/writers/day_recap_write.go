@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"cmp"
@@ -434,7 +434,7 @@ func (s *Store) putRecapNotes(id string, n recapNotes) error {
 	if _, err := os.Stat(s.path(KindRecording, id, "meta.json")); err != nil {
 		return nil // writeFile makes missing directories: a recording deleted meanwhile must stay gone
 	}
-	return writeFile(path, append(raw, '\n'))
+	return s.writeFile(path, append(raw, '\n'))
 }
 
 // keepRecapNotes writes recording id's notes again with only the chunks of keep (its chunks now) when they hold

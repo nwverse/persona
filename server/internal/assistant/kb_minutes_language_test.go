@@ -55,7 +55,7 @@ func TestMinutesFollowTheOwnersLanguage(t *testing.T) {
 		model.mu.Lock()
 		model.systems = nil
 		model.mu.Unlock()
-		if n := e.WriteMinutes(context.Background(), 2); n != 1 {
+		if n := e.RecordingProvider().WriteMinutes(context.Background(), 2); n != 1 {
 			t.Fatalf("%s: wrote %d", tc.id, n)
 		}
 		model.mu.Lock()

@@ -1,0 +1,101 @@
+package writers
+
+import (
+	"context"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/recordingwire"
+)
+
+// Writers is the recordings' write side of one knowledge base (recordingwire.Provider): the minutes and day-recap
+// writers of this package over the storage port, and, until they move here too, the knowledge base's own remaining
+// writers (recordingwire.WritersInCore). The module makes one in its hook and gives it to the knowledge base.
+type Writers struct {
+	recordingwire.WritersInCore
+	core recordingwire.Core
+
+	// MinutesWritten is told when a recording's minutes for its current revision are written; DayRecapWritten once a
+	// day of the recap the day's push goes with (took: the push ids it took; an error leaves the push due). The module
+	// sets them before the knowledge base is used.
+	MinutesWritten  func(ctx context.Context, r Recording, m Minutes)
+	DayRecapWritten func(ctx context.Context, r Recording, d DayRecap) (took []string, err error)
+
+	// What tests set on the engine a call makes (Engine.jobLeft, minutesCall, minutesPart).
+	jobLeft                  func(ctx context.Context) time.Duration
+	minutesCall, minutesPart int
+}
+
+// New is the write side of the knowledge base behind core; rest is its writers that are still its own code.
+func New(core recordingwire.Core, rest recordingwire.WritersInCore) *Writers {
+	return &Writers{WritersInCore: rest, core: core}
+}
+
+// Of is the Writers a knowledge base was given as its provider; nil when p is another provider (no module).
+func Of(p recordingwire.Provider) *Writers {
+	w, _ := p.(*Writers)
+	return w
+}
+
+// engine is the knowledge base's engine as the writers see it now: its models and evening clock as they stand, the
+// module's callbacks.
+func (w *Writers) engine() *Engine {
+	e := &Engine{Store: newStore(w.core), MinutesWritten: w.MinutesWritten, DayRecapWritten: w.DayRecapWritten,
+		DayRecapClock: w.core.DayRecapClock(), jobLeft: w.jobLeft, minutesCall: w.minutesCall, minutesPart: w.minutesPart}
+	e.Model, e.ModelFor = w.core.Models()
+	return e
+}
+
+// The rounds (recordingwire.Provider).
+
+func (w *Writers) WriteMinutes(ctx context.Context, max int) int {
+	return w.engine().WriteMinutes(ctx, max)
+}
+func (w *Writers) WriteDayRecaps(ctx context.Context, max int) int {
+	return w.engine().WriteDayRecaps(ctx, max)
+}
+
+// TellDayRecap tells the module of recap d of day recording r as a round does for a push that is due
+// (DayRecapWritten): the push ids it took, and an error while some destination has not taken it.
+func (w *Writers) TellDayRecap(ctx context.Context, r Recording, d DayRecap) ([]string, error) {
+	return w.DayRecapWritten(ctx, r, d)
+}
+
+// The requests of the module's routes.
+
+// AskMinutes has recording id's minutes (a day recording's recap) made again at the next round.
+func (w *Writers) AskMinutes(id string) error { return w.engine().AskMinutes(id) }
+
+// SetMinutesTodos records the to-dos made of the actions of version of recording id's minutes.
+func (w *Writers) SetMinutesTodos(id string, version int, todos, byTask map[string]string) (*Minutes, error) {
+	return w.engine().SetMinutesTodos(id, version, todos, byTask)
+}
+
+// SetDayRecapTodos records the to-dos made of the actions of version of day recording id's recap.
+func (w *Writers) SetDayRecapTodos(id string, version int, confirmed []MinutesAction) (*DayRecap, error) {
+	return w.engine().SetDayRecapTodos(id, version, confirmed)
+}
+
+// What the writers still in the knowledge base call of these (recordingwire.MinutesFromCore).
+
+func (w *Writers) PutMinutes(id string, m *Minutes) (bool, error) {
+	return newStore(w.core).putMinutes(id, m)
+}
+func (w *Writers) RenderMinutes(m *Minutes, start time.Time, zone *time.Location) string {
+	return renderMinutes(m, start, zone)
+}
+func (w *Writers) RemakeMinutes(r *Recording)     { remakeMinutes(r) }
+func (w *Writers) QuietMinutes(r *Recording) bool { return quietMinutes(r) }
+func (w *Writers) DropOverviewPhotos(m *Minutes, cites func(n int) bool) {
+	dropOverviewPhotos(m, cites)
+}
+func (w *Writers) RepairDayRecap(r *Recording, u *RecordingUpload) (bool, error) {
+	return w.engine().repairDayRecap(r, u)
+}
+func (w *Writers) RebaseRecap(r *Recording, recapped bool, now time.Time) {
+	rebaseRecap(r, recapped, now)
+}
+func (w *Writers) PruneRecapNotes(r *Recording, segs []RecordingSegment) error {
+	return newStore(w.core).pruneRecapNotes(r, segs)
+}
+
+var _ recordingwire.Provider = (*Writers)(nil)
