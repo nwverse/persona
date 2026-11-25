@@ -1,0 +1,218 @@
+package kb
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// The fingerprint is the Lark module's larksync.MessageFingerprint too: this vector is the written rule's, so both
+// sides are held to the same bytes.
+func TestMessageFingerprintVector(t *testing.T) {
+	at := time.Unix(1700000001, 0)
+	const want = "ce93960aa5566b787ca3ad5000ad646f8b1376bd5721b7db45d6b1aca780553e"
+	if got := messageFingerprint("  Example   Team ", "Example Sender", at, "Hello\n  World "); got != want {
+		t.Fatalf("fingerprint %s, want %s", got, want)
+	}
+	if messageFingerprint("Example Team", "Example Sender", at.Add(time.Second), "hello world") == want {
+		t.Fatal("1700000002 is another 2-second bucket")
+	}
+	if messageFingerprint("Example Team", "Example Sender", at.Add(-time.Second), "hello world") != want {
+		t.Fatal("1700000000 and 1700000001 share a bucket")
+	}
+}
+
+// alignAt is a time whose 2-second bucket starts at it, an hour ago (inside the text days, clear of the cutoff).
+func alignAt() time.Time {
+	return time.Now().Add(-time.Hour).Truncate(time.Minute).Add(10 * time.Second)
+}
+
+func alignEngine(t *testing.T) (*Engine, *int) {
+	t.Helper()
+	e := testEngine(t, nil)
+	align := NewGatewayAligner(e.Store)
+	calls := 0
+	e.Align = func(src Source, sc SourceChat, m SourceMessage) bool {
+		calls++
+		return align(src, sc, m)
+	}
+	return e, &calls
+}
+
+func readCrosswalk(t *testing.T, s *Store) map[string]string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(s.Dir, KindChat, crosswalkFile))
+	if err != nil {
+		t.Fatalf("crosswalk: %v", err)
+	}
+	var w map[string]string
+	if err := json.Unmarshal(raw, &w); err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
+func receiptIDs(t *testing.T, s *Store, chat string) map[string]time.Time {
+	t.Helper()
+	var r messageReceipts
+	if _, err := readJSON(s.path(KindChat, chat, ingestReceipts), &r); err != nil {
+		t.Fatal(err)
+	}
+	return r.IDs
+}
+
+// A message the sync reads that the gateway archived (same chat name, sender, body, bucket) is not written again and
+// pairs the chats; another body, or the same body from another sender, is kept.
+func TestGatewayAlignerSkipsWhatTheGatewayArchived(t *testing.T) {
+	e, calls := alignEngine(t)
+	ctx := context.Background()
+	at := alignAt()
+	gw := SourceChat{ID: "f1", Name: "Example Team", Kind: "group"}
+	if n, err := e.Ingest(ctx, named("lark"), gw, []SourceMessage{
+		{ID: "g1", SenderID: "u1", SenderName: "Example Sender", Text: "Synthetic   status update", At: at},
+		{ID: "g2", SenderID: "u1", SenderName: "Example Sender", Text: "Second synthetic line", At: at.Add(20 * time.Second)},
+	}); err != nil || n != 2 {
+		t.Fatalf("gateway ingest: %d, %v", n, err)
+	}
+	if *calls != 2 {
+		t.Fatalf("the aligner is asked about every new message: %d calls", *calls)
+	}
+	sync := SourceChat{ID: "oc_1", Name: " example  team", Kind: "group"}
+	n, err := e.Ingest(ctx, named("larksync"), sync, []SourceMessage{
+		{ID: "om_1", SenderID: "ou_1", SenderName: "Example Sender", Text: "synthetic status update", At: at.Add(time.Second)},
+		{ID: "om_2", SenderID: "ou_1", SenderName: "Example Sender", Text: "A different synthetic body", At: at.Add(time.Second)},
+		{ID: "om_3", SenderID: "ou_2", SenderName: "Another Sender", Text: "Synthetic status update", At: at.Add(time.Second)},
+		{ID: "om_4", SenderID: "ou_1", SenderName: "Example Sender", Text: "Synthetic status update", At: at.Add(5 * time.Second)},
+	})
+	if err != nil || n != 3 {
+		t.Fatalf("sync ingest: added %d, want 3 (om_2, om_3 and om_4, two buckets later), %v", n, err)
+	}
+	text := e.Store.Since("larksync-oc_1", time.Time{}, 1<<20)
+	if strings.Contains(text, "Example Sender: synthetic status update") || !strings.Contains(text, "A different synthetic body") ||
+		!strings.Contains(text, "Another Sender: Synthetic status update") {
+		t.Fatalf("sync archive:\n%s", text)
+	}
+	if w := readCrosswalk(t, e.Store); w["larksync-oc_1"] != "lark-f1" || len(w) != 1 {
+		t.Fatalf("crosswalk %v", w)
+	}
+	if _, ok := receiptIDs(t, e.Store, "larksync-oc_1")["om_1"]; !ok {
+		t.Fatal("the duplicate is received: its ID is in the receipts")
+	}
+
+	// Received: the same message again is not asked about. A batch of only a duplicate keeps its receipt too.
+	before := *calls
+	if n, err := e.Ingest(ctx, named("larksync"), sync, []SourceMessage{
+		{ID: "om_1", SenderID: "ou_1", SenderName: "Example Sender", Text: "synthetic status update", At: at.Add(time.Second)},
+		{ID: "om_5", SenderID: "ou_1", SenderName: "Example Sender", Text: "Second synthetic line", At: at.Add(21 * time.Second)},
+	}); err != nil || n != 0 {
+		t.Fatalf("again: %d, %v", n, err)
+	}
+	if *calls != before+1 {
+		t.Fatalf("om_1 was asked about again: %d calls, want %d", *calls, before+1)
+	}
+	if _, ok := receiptIDs(t, e.Store, "larksync-oc_1")["om_5"]; !ok {
+		t.Fatal("a batch of only duplicates records them")
+	}
+	if c, _ := e.Store.Chat("larksync-oc_1"); c.Messages != 3 {
+		t.Fatalf("messages %d, want 3", c.Messages)
+	}
+}
+
+// Once paired, a chat compares within its pair only, whatever the names say; a chat never stored keeps no file.
+func TestGatewayAlignerFollowsTheCrosswalk(t *testing.T) {
+	e, _ := alignEngine(t)
+	ctx := context.Background()
+	at := alignAt()
+	if _, err := e.Ingest(ctx, named("lark"), SourceChat{ID: "f2", Name: "Gateway name", Kind: "group"}, []SourceMessage{
+		{ID: "g1", SenderName: "Example Sender", Text: "Paired synthetic text", At: at},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Ingest(ctx, named("lark"), SourceChat{ID: "f3", Name: "Sync name", Kind: "group"}, []SourceMessage{
+		{ID: "g2", SenderName: "Example Sender", Text: "Same-name synthetic text", At: at},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	walk, _ := json.Marshal(map[string]string{"larksync-oc_2": "lark-f2"})
+	if err := os.WriteFile(filepath.Join(e.Store.Dir, KindChat, crosswalkFile), walk, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n, err := e.Ingest(ctx, named("larksync"), SourceChat{ID: "oc_2", Name: "Sync name", Kind: "group"}, []SourceMessage{
+		{ID: "om_1", SenderName: "Example Sender", Text: "Paired synthetic text", At: at},
+		{ID: "om_2", SenderName: "Example Sender", Text: "Same-name synthetic text", At: at},
+	})
+	if err != nil || n != 1 {
+		t.Fatalf("added %d, want 1 (the pair's message skipped, the same-name chat not consulted): %v", n, err)
+	}
+	if !strings.Contains(e.Store.Since("larksync-oc_2", time.Time{}, 1<<20), "Same-name synthetic text") {
+		t.Fatal("a chat outside the pair is not compared")
+	}
+	// Only duplicates for a chat not stored yet: nothing is written, not even an empty chat.
+	if n, err := e.Ingest(ctx, named("larksync"), SourceChat{ID: "oc_3", Name: "Gateway name", Kind: "group"}, []SourceMessage{
+		{ID: "om_3", SenderName: "Example Sender", Text: "Paired synthetic text", At: at},
+	}); err != nil || n != 0 {
+		t.Fatalf("only a duplicate: %d, %v", n, err)
+	}
+	if _, ok := e.Store.Chat("larksync-oc_3"); ok {
+		t.Fatal("an empty chat was stored")
+	}
+}
+
+// A gateway line its receipts do not bind (no IDs) is compared by its minute; other sources are never aligned.
+func TestGatewayAlignerMinuteLinesAndOtherSources(t *testing.T) {
+	e, _ := alignEngine(t)
+	ctx := context.Background()
+	at := alignAt()
+	if _, err := e.Ingest(ctx, named("lark"), SourceChat{ID: "f4", Name: "Example Team", Kind: "group"}, []SourceMessage{
+		{SenderName: "Example Sender", Text: "Unbound synthetic text", At: at},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := e.Ingest(ctx, ownedArchiveSource{named: "feed", owner: "example"}, SourceChat{ID: "x", Name: "Example Team"}, []SourceMessage{
+		{ID: "x1", SenderName: "Example Sender", Text: "Unbound synthetic text", At: at},
+	}); err != nil || n != 1 {
+		t.Fatalf("another source is never aligned: %d, %v", n, err)
+	}
+	n, err := e.Ingest(ctx, ownedArchiveSource{named: "larksync", owner: "larksync"}, SourceChat{ID: "oc_4", Name: "Example Team"}, []SourceMessage{
+		{ID: "om_1", SenderName: "Example Sender", Text: "Unbound synthetic text", At: at.Add(30 * time.Second)},
+		{ID: "om_2", SenderName: "Example Sender", Text: "Unbound synthetic text", At: at.Add(2 * time.Minute)},
+	})
+	if err != nil || n != 1 {
+		t.Fatalf("added %d, want 1 (the same minute skipped, two minutes later kept): %v", n, err)
+	}
+}
+
+func TestSyncMessageAsALineWouldNameIt(t *testing.T) {
+	for _, c := range []struct {
+		m            SourceMessage
+		sender, body string
+	}{
+		{SourceMessage{SenderName: "Example Sender", Text: " text "}, "Example Sender", "text"},
+		{SourceMessage{Mine: true, SenderName: "Owner", Text: "text"}, "我", "text"}, // i18n-ignore: archive data
+		{SourceMessage{Text: "text"}, "?", "text"},
+		{SourceMessage{SenderName: "S", Text: "look [image]", Media: []string{"ref"}}, "S", "look"},
+		{SourceMessage{SenderName: "S", Text: "[file report.pdf]", Media: []string{"ref"}}, "S", ""},
+		{SourceMessage{SenderName: "S", Text: "literal [image]"}, "S", "literal [image]"},
+	} {
+		if sender, body, _ := syncMessage(c.m); sender != c.sender || body != c.body {
+			t.Errorf("%+v: %q %q, want %q %q", c.m, sender, body, c.sender, c.body)
+		}
+	}
+}
+
+func TestAlignDaysNearMidnight(t *testing.T) {
+	zone := time.UTC
+	if got := alignDays(time.Date(2026, 3, 2, 12, 0, 0, 0, zone), zone); len(got) != 1 || got[0] != "2026-03-02" {
+		t.Errorf("noon: %v", got)
+	}
+	if got := alignDays(time.Date(2026, 3, 2, 0, 3, 0, 0, zone), zone); len(got) != 2 || got[1] != "2026-03-01" {
+		t.Errorf("after midnight: %v", got)
+	}
+	if got := alignDays(time.Date(2026, 3, 2, 23, 58, 0, 0, zone), zone); len(got) != 2 || got[1] != "2026-03-03" {
+		t.Errorf("before midnight: %v", got)
+	}
+}

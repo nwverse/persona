@@ -68,6 +68,9 @@ export type Route =
   | { name: "extension"; extension: string; ui: string }
   // the source subscription pages (#2041), their first state in ?state=
   | { name: "subscriptions" }
+  // where Feishu / Lark sends the owner back after allowing a bot's app to read as them (`?code=&state=`, the daily sync's
+  // authorization, views/settings/LarkOAuthReturn.tsx); the page reads its query itself
+  | { name: "lark-oauth" }
   // an address that is no page of the app (mistyped, or left from an older version): said so, with the way to Overview,
   // instead of Overview drawn under the wrong address (web usability audit item 42); `path` is the address as it came
   | { name: "not-found"; path: string };
@@ -108,6 +111,7 @@ export function parse(path: string, search = ""): Route {
   if (p[0] === "workspace-board") return { name: "workspace-board" };
   if (p[0] === "requests" && p[1]) return { name: "request", id: p[1] };
   if (p[0] === "overview") return { name: "home" };
+  if (p[0] === "lark-oauth" && !p[1]) return { name: "lark-oauth" };
   if (p[0] === "history") return p[1] ? { name: "history", origin: p[1] } : { name: "history" };
   const module = moduleRouteAt(p);
   if (module === "absent") return notFound(path, search);
@@ -259,6 +263,8 @@ export function routePath(r: Route): string {
       return `/extension/${encodeURIComponent(r.extension)}/${encodeURIComponent(r.ui)}`;
     case "subscriptions":
       return "/subscriptions";
+    case "lark-oauth":
+      return "/lark-oauth";
     case "not-found":
       return r.path;
     default:
