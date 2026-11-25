@@ -29,15 +29,11 @@ func (s *Service) checkOwnerResultBeforeAccept(ctx context.Context, t Todo) erro
 			return errOwnerResultNeedsReview
 		}
 	}
-	if t.InboxItem == "" {
-		return nil
-	}
-	if err := s.inboxReady(ctx); err != nil {
+	group, err := s.inboxItemIsGroup(ctx, t.InboxItem)
+	if err != nil {
 		return err
 	}
-	s.inbox.mu.Lock()
-	defer s.inbox.mu.Unlock()
-	if it := s.inbox.items[t.InboxItem]; it != nil && (it.Kind == KindGroup || it.Kind == KindMention || it.Lark != nil && it.Lark.IsGroup) {
+	if group {
 		return errOwnerResultNeedsReview
 	}
 	return nil
