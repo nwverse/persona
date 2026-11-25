@@ -6,9 +6,8 @@ managers in a surface's scope (`docs/plans/plan-derived-counts.md`, #11679). **W
 users see one number for each name on every screen and device; Agents users can trust that the badge, the list and the
 Lock Screen agree. This doc is the contract: what the view holds, what each count id means, and how a count may change.
 
-**Status (#15512, #15650, #15896):** the schema, its generated types and the wire samples exist, and each manager tells
-the hub its view (step 7a of the plan, "The manager's view" below) with `agents_needs_you` and, once it has counted its
-to-dos, `todos_needs_you` (step 12's server part for the To-dos). Nothing relays or draws a view yet: the hub relays it
+**Status (#15512, #15650):** the schema, its generated types and the wire samples exist, and each manager tells the
+hub its view (step 7a of the plan, "The manager's view" below). Nothing relays or draws a view yet: the hub relays it
 at step 7b (with its rows in `docs/protocol/protocol.md`: the `counts` message, the `counts_view` feature and the
 roster's `counts_view` flag), and the clients draw it from steps 8 to 10. Until a client draws the view, every number it
 shows is still its own.
@@ -61,18 +60,18 @@ core draw no badges; the schema guards both languages against a hand-written cop
   not change tells nothing; a change goes up one `rev`, with a new `as_of`. After each handshake the last view is told
   again as it was, so a hub that restarted has it. Each run of the manager draws a new `epoch`, and `build` is the
   manager's version.
+- **The to-dos' counts (#15896).** The manager keeps the counts of the last read of its whole to-do list, the ones
+  `GET /api/v1/todos` answers with (every read of the list, of one to-do or of the places works the whole list out), in
+  `server/internal/assistant/counts_view.go`, and the next round hands them to `Fleet.View` (below), which writes
+  `todos_needs_you` from them; `surfaces.json` names it as that count's `producer` too. Every `{"type":"todos"}` makes
+  each app read the list again, which keeps the new counts; when none did a second after one, the manager reads the
+  list itself, so the number follows the list while no app is open. Until a run has counted its to-dos, each round has
+  it read the list, one read at a time, and the view leaves `todos_needs_you` out.
 - **Who writes what.** `fleetcount.AgentsNeedsYou` decides the rows on the Agents list's surface; package assistant
   calls it, then the adapter's `Fleet.View` (`server/internal/assistant/fleetcount/fleetcountadapt/view.go`), which
-  writes `counts` and `totals` in one pass over the decided rows, so a total never disagrees with its rows. It is
-  handed the to-do list's counts too, as package assistant last kept them, and writes `todos_needs_you` from them.
-  Package assistant adds `epoch`, `rev`, `as_of` and `build`. `spec/fixtures/counts/surfaces.json` names `Fleet.View`
-  as each count's `producer`, and the adapter's tests hold it to the table.
-- **The to-dos' counts.** The manager keeps the counts of the last read of its whole to-do list, the ones
-  `GET /api/v1/todos` answers with (every read of the list, of one to-do or of the places works the whole list out), in
-  `server/internal/assistant/counts_view.go`, and the next round tells them. Every `{"type":"todos"}` makes each app
-  read the list again, which keeps the new counts; when none did a second after one, the manager reads the list itself,
-  so the number follows the list while no app is open. Until a run has counted its to-dos, each round has it read the
-  list, one read at a time, and the view leaves `todos_needs_you` out.
+  writes `counts` and `totals` in one pass over the decided rows, so a total never disagrees with its rows. Package
+  assistant adds `epoch`, `rev`, `as_of` and `build`. `spec/fixtures/counts/surfaces.json` names `Fleet.View` as the
+  count's `producer`, and the adapter's tests hold it to the table.
 - **The bound.** A view takes at most 16 KB as JSON (`CountsViewMaxBytes`), the most the hub keeps from step 7b on.
   `keys` and `held` list at most 200 rows each: the counted rows first, since they are the number, then the held ones,
   each list stopping at the first row that would pass the bound (1 KB is kept for the rest of the view). The counted
