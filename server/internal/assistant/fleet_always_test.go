@@ -395,6 +395,8 @@ func TestInboxWholeBashHardeningEdgeCases(t *testing.T) {
 			reconnectDone <- r
 		}()
 		deadline := time.Now().Add(2 * time.Second)
+		tick := time.NewTicker(10 * time.Millisecond)
+		defer tick.Stop()
 		for {
 			cur := s.pendingInteractions()
 			if len(cur) == 1 && cur[0].AlwaysHonored != nil && !*cur[0].AlwaysHonored && len(cur[0].AlwaysKeys) == 0 {
@@ -403,7 +405,7 @@ func TestInboxWholeBashHardeningEdgeCases(t *testing.T) {
 			if time.Now().After(deadline) {
 				t.Fatalf("resumable reconnect did not sanitize pending card: %+v", cur)
 			}
-			time.Sleep(10 * time.Millisecond)
+			<-tick.C
 		}
 		if err := s.resolve("ix_reconnect_upgrade", proto.Resolution{Allow: &yes, Always: true}); err != nil {
 			t.Fatal(err)
