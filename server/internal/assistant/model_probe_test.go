@@ -17,20 +17,21 @@ import (
 )
 
 type modelProbeTestResult struct {
-	Index         int            `json:"index"`
-	ID            string         `json:"id"`
-	Label         string         `json:"label"`
-	OK            bool           `json:"ok"`
-	MS            int64          `json:"ms"`
-	HTTPStatus    int            `json:"http_status"`
-	Error         string         `json:"error"`
-	RetryAfter    string         `json:"retry_after"`
-	BlockTypes    []string       `json:"block_types"`
-	Text          string         `json:"text"`
-	TextTruncated bool           `json:"text_truncated"`
-	Usage         map[string]int `json:"usage"`
-	Attempts      int            `json:"attempts"`
-	Effort        string         `json:"effort"`
+	Index               int            `json:"index"`
+	ID                  string         `json:"id"`
+	Label               string         `json:"label"`
+	OK                  bool           `json:"ok"`
+	MS                  int64          `json:"ms"`
+	HTTPStatus          int            `json:"http_status"`
+	Error               string         `json:"error"`
+	RetryAfter          string         `json:"retry_after"`
+	BlockTypes          []string       `json:"block_types"`
+	Text                string         `json:"text"`
+	TextTruncated       bool           `json:"text_truncated"`
+	GenerationTruncated bool           `json:"generation_truncated"`
+	Usage               map[string]int `json:"usage"`
+	Attempts            int            `json:"attempts"`
+	Effort              string         `json:"effort"`
 }
 
 type modelProbeTestOutput struct {
@@ -173,6 +174,83 @@ func TestModelProbeWireProtocolsAndResults(t *testing.T) {
 	}
 }
 
+func TestModelProbeUnicodeLabelsMatchSchema(t *testing.T) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"type":"message","content":[{"type":"text","text":"ok"}]}`))
+	}))
+	defer gateway.Close()
+	s, _ := modelProbeTestService(t, "messages", gateway.URL)
+	id, label := strings.Repeat("界", 128), strings.Repeat("例", 128)
+	args := fmt.Sprintf(`{"provider":"managed","samples":[{"id":%q,"label":%q,"user":"x"}]}`, id, label)
+	out, _ := runModelProbeTest(t, s, args)
+	if len(out.Results) != 1 || !out.Results[0].OK || out.Results[0].ID != id || out.Results[0].Label != label {
+		t.Fatalf("128-code-point labels rejected: %+v", out)
+	}
+}
+
+func TestModelProbeTerminalOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		api           string
+		response      string
+		ok            bool
+		truncated     bool
+		errorContains string
+	}{
+		{name: "Messages HTTP 200 error", api: "messages", response: `{"type":"error","message":"overloaded"}`, errorContains: "overloaded"},
+		{name: "Messages refusal", api: "messages", response: `{"type":"message","stop_reason":"refusal","content":[]}`, errorContains: "refusal"},
+		{name: "Messages token limit", api: "messages", response: `{"type":"message","stop_reason":"max_tokens","content":[{"type":"text","text":"partial"}]}`, ok: true, truncated: true},
+		{name: "Chat DONE without a reply", api: "chat", response: "data: [DONE]\n\n", errorContains: "without a reply"},
+		{name: "Chat blank reply", api: "chat", response: "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"  \"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", errorContains: "without a reply"},
+		{name: "Chat token limit", api: "chat", response: "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n", ok: true, truncated: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(tc.response))
+			}))
+			defer gateway.Close()
+			s, _ := modelProbeTestService(t, tc.api, gateway.URL)
+			out, _ := runModelProbeTest(t, s, `{"provider":"managed","samples":[{"user":"ping"}]}`)
+			if len(out.Results) != 1 {
+				t.Fatalf("terminal result = %+v", out)
+			}
+			got := out.Results[0]
+			if got.OK != tc.ok || got.GenerationTruncated != tc.truncated || got.HTTPStatus != http.StatusOK {
+				t.Fatalf("terminal sample = %+v", got)
+			}
+			if tc.ok && (out.Succeeded != 1 || out.Failed != 0 || got.Text != "partial") {
+				t.Fatalf("truncated success = %+v", out)
+			}
+			if !tc.ok && (out.Succeeded != 0 || out.Failed != 1 || !strings.Contains(got.Error, tc.errorContains)) {
+				t.Fatalf("terminal failure = %+v", out)
+			}
+		})
+	}
+}
+
+func TestModelProbeMessagesOffAlwaysDisablesThinking(t *testing.T) {
+	var body map[string]any
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"type":"message","content":[{"type":"text","text":"ok"}]}`))
+	}))
+	defer gateway.Close()
+	s, _ := modelProbeTestService(t, "messages", gateway.URL)
+	out, _ := runModelProbeTest(t, s, `{"provider":"managed","model":"sonnet-5-5","effort":"off","samples":[{"user":"ping"}]}`)
+	if len(out.Results) != 1 || !out.Results[0].OK {
+		t.Fatalf("effort=off result = %+v", out)
+	}
+	thinking, _ := body["thinking"].(map[string]any)
+	if thinking["type"] != "disabled" {
+		t.Fatalf("effort=off silently changed the wire request: %v", body)
+	}
+	if _, present := body["output_config"]; present {
+		t.Fatalf("effort=off retained a degraded output effort: %v", body)
+	}
+}
+
 func TestModelProbeInheritsProviderModelAndEffort(t *testing.T) {
 	var body map[string]any
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +274,6 @@ func TestModelProbeSerialAndConcurrentOrder(t *testing.T) {
 		t.Run(fmt.Sprintf("concurrency_%d", concurrency), func(t *testing.T) {
 			entered := make(chan struct{}, 4)
 			release := make(chan struct{}, 4)
-			defer close(release)
 			var active, maximum atomic.Int32
 			gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var body struct {
@@ -220,6 +297,7 @@ func TestModelProbeSerialAndConcurrentOrder(t *testing.T) {
 				_, _ = fmt.Fprintf(w, `{"type":"message","content":[{"type":"text","text":%q}]}`, body.Messages[len(body.Messages)-1].Content)
 			}))
 			defer gateway.Close()
+			defer close(release) // release blocked handlers before Close waits for them, including after a timeout failure
 			s, _ := modelProbeTestService(t, "messages", gateway.URL)
 			type answer struct {
 				out modelProbeTestOutput
@@ -359,6 +437,7 @@ func TestModelProbeValidatesEverythingBeforeSending(t *testing.T) {
 		{"unsupported API", `{"provider":"managed","api":"responses","samples":[{"user":"x"}]}`},
 		{"prompt too large", `{"provider":"managed","samples":[{"system":"` + strings.Repeat("s", 8192) + `","user":"` + strings.Repeat("u", 8193) + `"}]}`},
 		{"id too large", `{"provider":"managed","samples":[{"id":"` + strings.Repeat("i", 129) + `","user":"x"}]}`},
+		{"Unicode id too large", `{"provider":"managed","samples":[{"id":"` + strings.Repeat("界", 129) + `","user":"x"}]}`},
 		{"label too large", `{"provider":"managed","samples":[{"label":"` + strings.Repeat("l", 129) + `","user":"x"}]}`},
 		{"concurrency zero", `{"provider":"managed","concurrency":0,"samples":[{"user":"x"}]}`},
 		{"concurrency high", `{"provider":"managed","concurrency":5,"samples":[{"user":"x"}]}`},
@@ -394,6 +473,9 @@ func TestModelProbeChatCompatibilityRetriesAreReportedAndNotCached(t *testing.T)
 		case 2:
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"error":{"message":"max_tokens is not supported; use max_completion_tokens"}}`))
+		case 3:
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = w.Write([]byte(`{"error":{"message":"stream_options.include_usage is not supported"}}`))
 		default:
 			_, _ = w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
 		}
@@ -401,7 +483,7 @@ func TestModelProbeChatCompatibilityRetriesAreReportedAndNotCached(t *testing.T)
 	defer gateway.Close()
 	s, _ := modelProbeTestService(t, "chat", gateway.URL)
 	out, _ := runModelProbeTest(t, s, `{"provider":"managed","effort":"off","max_tokens":19,"samples":[{"user":"ping"}]}`)
-	if len(requests) != 3 || len(out.Results) != 1 || !out.Results[0].OK || out.Results[0].Attempts != 3 || out.Results[0].Effort != "" {
+	if len(requests) != 4 || len(out.Results) != 1 || !out.Results[0].OK || out.Results[0].Attempts != 4 || out.Results[0].Effort != "" {
 		t.Fatalf("retry result = %+v, requests = %v", out, requests)
 	}
 	if requests[0]["reasoning_effort"] != "none" {
@@ -412,6 +494,12 @@ func TestModelProbeChatCompatibilityRetriesAreReportedAndNotCached(t *testing.T)
 	}
 	if _, present := requests[2]["max_tokens"]; present || requests[2]["max_completion_tokens"] != float64(19) {
 		t.Fatalf("token compatibility retry = %v", requests[2])
+	}
+	if _, present := requests[2]["stream_options"]; !present {
+		t.Fatalf("stream_options was dropped before its rejection: %v", requests[2])
+	}
+	if _, present := requests[3]["stream_options"]; present {
+		t.Fatalf("stream_options compatibility retry = %v", requests[3])
 	}
 	if ai.OmitChatEffort(gateway.URL, fakeKey, "saved-model", "", "off") {
 		t.Fatal("read-only model_probe wrote Chat compatibility state")

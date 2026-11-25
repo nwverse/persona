@@ -75,7 +75,7 @@
   "mcp_tools.assistant#mail_save_attachment": 1007,
   "mcp_tools.assistant#mail_search": 1177,
   "mcp_tools.assistant#mail_send": 1089,
-  "mcp_tools.assistant#model_probe": 1529,
+  "mcp_tools.assistant#model_probe": 1485,
   "mcp_tools.assistant#model_profile_capture": 446,
   "mcp_tools.assistant#model_profile_get": 408,
   "mcp_tools.assistant#model_profile_rollback": 255,

@@ -23,7 +23,7 @@ import (
 const (
 	modelProbeMaxSamples       = 10
 	modelProbeMaxPromptBytes   = 16 << 10
-	modelProbeMaxLabelBytes    = 128
+	modelProbeMaxLabelRunes    = 128
 	modelProbeMaxTokens        = 1024
 	modelProbeMaxTimeout       = 30
 	modelProbeMaxResponseBytes = 1 << 20
@@ -50,19 +50,20 @@ type modelProbeSample struct {
 }
 
 type modelProbeResult struct {
-	Index         int            `json:"index"`
-	ID            string         `json:"id,omitempty"`
-	Label         string         `json:"label,omitempty"`
-	OK            bool           `json:"ok"`
-	MS            int64          `json:"ms"`
-	HTTPStatus    int            `json:"http_status,omitempty"`
-	Error         string         `json:"error,omitempty"`
-	RetryAfter    string         `json:"retry_after,omitempty"`
-	BlockTypes    []string       `json:"block_types"`
-	Text          string         `json:"text"`
-	TextTruncated bool           `json:"text_truncated,omitempty"`
-	Usage         map[string]int `json:"usage,omitempty"`
-	Attempts      int            `json:"attempts"`
+	Index               int            `json:"index"`
+	ID                  string         `json:"id,omitempty"`
+	Label               string         `json:"label,omitempty"`
+	OK                  bool           `json:"ok"`
+	MS                  int64          `json:"ms"`
+	HTTPStatus          int            `json:"http_status,omitempty"`
+	Error               string         `json:"error,omitempty"`
+	RetryAfter          string         `json:"retry_after,omitempty"`
+	BlockTypes          []string       `json:"block_types"`
+	Text                string         `json:"text"`
+	TextTruncated       bool           `json:"text_truncated,omitempty"`
+	GenerationTruncated bool           `json:"generation_truncated,omitempty"`
+	Usage               map[string]int `json:"usage,omitempty"`
+	Attempts            int            `json:"attempts"`
 	// Effort is what the final compatibility attempt actually sent, not merely what the caller requested. An empty
 	// value after a rejected-field retry says the answer did not verify the requested effort.
 	Effort string `json:"effort"`
@@ -112,8 +113,8 @@ func decodeModelProbeInput(args json.RawMessage) (modelProbeInput, error) {
 		if len(sample.System)+len(sample.User) > modelProbeMaxPromptBytes {
 			return in, fmt.Errorf("model_probe: samples[%d] system+user exceeds %d bytes", i, modelProbeMaxPromptBytes)
 		}
-		if len(sample.ID) > modelProbeMaxLabelBytes || len(sample.Label) > modelProbeMaxLabelBytes {
-			return in, fmt.Errorf("model_probe: samples[%d] id and label must be at most %d bytes", i, modelProbeMaxLabelBytes)
+		if utf8.RuneCountInString(sample.ID) > modelProbeMaxLabelRunes || utf8.RuneCountInString(sample.Label) > modelProbeMaxLabelRunes {
+			return in, fmt.Errorf("model_probe: samples[%d] id and label must be at most %d Unicode code points", i, modelProbeMaxLabelRunes)
 		}
 	}
 	return in, nil
@@ -127,6 +128,19 @@ func modelProbeInt(value *int, fallback, low, high int, name string) (int, error
 		return 0, fmt.Errorf("model_probe: %s must be in %d..%d", name, low, high)
 	}
 	return *value, nil
+}
+
+func applyModelProbeEffort(body map[string]any, api, model, effort string) bool {
+	if !ai.ApplyReasoningEffort(body, api, model, effort) {
+		return false
+	}
+	// This diagnostic must verify the requested off wire format, not the runtime's model-specific low-effort fallback.
+	// In particular, an off result always means Messages sent thinking.type=disabled and Chat sent reasoning_effort=none.
+	if api == "messages" && ai.ChatNoThinking(effort) {
+		body["thinking"] = map[string]any{"type": "disabled"}
+		delete(body, "output_config")
+	}
+	return true
 }
 
 func (s *Service) toolModelProbe(ctx context.Context, args json.RawMessage) (string, error) {
@@ -174,7 +188,7 @@ func (s *Service) toolModelProbe(ctx context.Context, args json.RawMessage) (str
 	}
 	// Validate protocol/effort compatibility before starting any worker. Chat's model-specific values are validated by
 	// its gateway, as in providerTest; Messages rejects an unknown product effort locally.
-	if !ai.ApplyReasoningEffort(map[string]any{}, t.api, t.model, t.effort) {
+	if !applyModelProbeEffort(map[string]any{}, t.api, t.model, t.effort) {
 		return "", errors.New("model_probe: unsupported effort for this protocol")
 	}
 
@@ -238,12 +252,12 @@ func (t probeTarget) runModelProbeSample(ctx context.Context, sample modelProbeS
 		payload["stream"] = true
 		payload["stream_options"] = map[string]any{"include_usage": true}
 	}
-	if !ai.ApplyReasoningEffort(payload, t.api, t.model, t.effort) {
+	if !applyModelProbeEffort(payload, t.api, t.model, t.effort) {
 		out.Error = "unsupported effort for this protocol"
 		return out
 	}
 
-	renamedTokens, droppedEffort := false, false
+	renamedTokens, droppedEffort, droppedStreamOptions := false, false, false
 	var res *http.Response
 	var err error
 	for {
@@ -259,7 +273,7 @@ func (t probeTarget) runModelProbeSample(ctx context.Context, sample modelProbeS
 		}
 		out.HTTPStatus = res.StatusCode
 		out.RetryAfter = res.Header.Get("Retry-After")
-		if t.api != "chat" || res.StatusCode != http.StatusBadRequest {
+		if t.api != "chat" || (res.StatusCode != http.StatusBadRequest && res.StatusCode != http.StatusUnprocessableEntity) {
 			break
 		}
 		raw, readErr := io.ReadAll(io.LimitReader(res.Body, 4096))
@@ -270,7 +284,7 @@ func (t probeTarget) runModelProbeSample(ctx context.Context, sample modelProbeS
 		}
 		fieldRejected := ai.ChatRejectsReasoningEffort(raw)
 		offValueRejected := !fieldRejected && ai.ChatNoThinking(t.effort) && ai.ChatRejectsNoEffortValue(raw)
-		if readErr == nil && !droppedEffort && payload["reasoning_effort"] != nil && (fieldRejected || offValueRejected) {
+		if readErr == nil && res.StatusCode == http.StatusBadRequest && !droppedEffort && payload["reasoning_effort"] != nil && (fieldRejected || offValueRejected) {
 			// Unlike providerTest, a read-only diagnostic must not teach the process-wide compatibility cache.
 			droppedEffort = true
 			delete(payload, "reasoning_effort")
@@ -278,10 +292,15 @@ func (t probeTarget) runModelProbeSample(ctx context.Context, sample modelProbeS
 			out.Effort = ""
 			continue
 		}
-		if readErr == nil && !renamedTokens && payload["max_tokens"] != nil && ai.ChatRequiresCompletionTokens(raw) {
+		if readErr == nil && res.StatusCode == http.StatusBadRequest && !renamedTokens && payload["max_tokens"] != nil && ai.ChatRequiresCompletionTokens(raw) {
 			renamedTokens = true
 			delete(payload, "max_tokens")
 			payload["max_completion_tokens"] = maxTokens
+			continue
+		}
+		if readErr == nil && !droppedStreamOptions && payload["stream_options"] != nil && ai.ChatRejectsStreamOptions(raw) {
+			droppedStreamOptions = true
+			delete(payload, "stream_options")
 			continue
 		}
 		res.Body = io.NopCloser(bytes.NewReader(raw))
@@ -378,7 +397,9 @@ func readModelProbeMessages(body io.Reader, out *modelProbeResult, text *strings
 		return err
 	}
 	var response struct {
-		Content []struct {
+		Type       string `json:"type"`
+		StopReason string `json:"stop_reason"`
+		Content    []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
@@ -388,9 +409,16 @@ func readModelProbeMessages(body io.Reader, out *modelProbeResult, text *strings
 	if err := json.Unmarshal(raw, &response); err != nil {
 		return fmt.Errorf("decode Messages response: %w", err)
 	}
+	if response.Type == "error" {
+		return fmt.Errorf("Messages response error: %s", gatewayMessage(raw))
+	}
 	if rawError := bytes.TrimSpace(response.Error); len(rawError) > 0 && !bytes.Equal(rawError, []byte("null")) {
 		return fmt.Errorf("Messages response error: %s", gatewayMessage(raw))
 	}
+	if response.StopReason == "refusal" {
+		return errors.New("Messages response stopped at refusal")
+	}
+	out.GenerationTruncated = response.StopReason == "max_tokens"
 	for _, block := range response.Content {
 		modelProbeBlockType(out, block.Type)
 		if block.Type == "text" {
@@ -457,6 +485,7 @@ func readModelProbeChat(body io.Reader, out *modelProbeResult, text *strings.Bui
 			}
 			if choice.FinishReason != "" {
 				finished = true
+				out.GenerationTruncated = choice.FinishReason == "length"
 			}
 		}
 		return false
@@ -472,6 +501,9 @@ func readModelProbeChat(body io.Reader, out *modelProbeResult, text *strings.Bui
 	}
 	if !done && !finished {
 		return fmt.Errorf("Chat stream ended without a completed reply: %w", io.ErrUnexpectedEOF)
+	}
+	if strings.TrimSpace(text.String()) == "" && !out.GenerationTruncated {
+		return errors.New("Chat stream ended without a reply")
 	}
 	return nil
 }

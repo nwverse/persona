@@ -1,4 +1,4 @@
-Run bounded diagnostic samples through a saved provider. This sends inference requests but never changes Persona configuration. Only the provider's stored URL, credentials, headers and route are used; none can be supplied or returned. Results stay in sample order, with status, latency, content-block types, redacted text (at most 8 KiB) and optional numeric usage. Chat compatibility retries are reported per sample; 429 responses are not retried and include Retry-After.{{template "shared/mcp_language" .}}
+Run bounded samples through a saved provider; real inference, configuration unchanged. Saved connection settings only; no overrides or secrets in output. Ordered results: status, latency, block types, usage, redacted text (8 KiB cap), generation_truncated for token limits. Messages off sends thinking.type=disabled; Chat off sends reasoning_effort=none. Retries reported; 429 returns Retry-After without retry.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -15,8 +15,8 @@ Run bounded diagnostic samples through a saved provider. This sends inference re
         "properties": {
           "id": {"type": "string", "maxLength": 128},
           "label": {"type": "string", "maxLength": 128},
-          "system": {"type": "string", "maxLength": 16384},
-          "user": {"type": "string", "minLength": 1, "maxLength": 16384}
+          "system": {"type": "string", "description": "system+user <=16384 UTF-8 bytes"},
+          "user": {"type": "string", "minLength": 1}
         },
         "additionalProperties": false,
         "required": ["user"]
