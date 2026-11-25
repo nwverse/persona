@@ -187,7 +187,7 @@ What switched off means, by seam (each port follows `Set.On`; a build without th
 | `server/internal/builtinext` (`AddProgram`) | `volc`, `voice` | The extension host starts no `personad volc` / `personad voice`, a `hub.json` entry's included (`ProgramOff`: it fails as the unknown subcommand would). The subcommand stays in the binary |
 | `server/internal/botport` | `lark` | No bot client is made: the bot cannot be bound, registered or started |
 | `server/internal/cliport` | `lark` | `lark.cli` is not read (logged at start) and the extension host's lark-cli integration is off |
-| `server/internal/larkhost` | `lark` | The outbound channel port is `larkhost.None`, as without the module |
+| `server/internal/larkhost` | `lark` | The outbound channel port is `larkhost.None`, as without the module; the core's pushes to the chat return `nil` without a log or a retry, and `notify_user`'s copy report records the Feishu copy as `skipped` (told nowhere in its answer) |
 | `server/internal/knowledgeuihost` | `knowledge-ui` | No layer: no `kb_history_*` tool or import, the selection page's chat list answers as a source without history, days carry no sent marks |
 | `server/internal/healthhost` | `health` | No layer: the intake and items routes answer 404, no `health_intake` tool, no `health_intake` or `health_items` capability, no water reminders |
 | `server/internal/recordinghost` | `recording` | No layer: the recording routes answer 404, no audio socket, room tools, final passes or meeting capabilities |
