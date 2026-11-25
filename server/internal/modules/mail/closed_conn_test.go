@@ -6,13 +6,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -77,16 +80,26 @@ func selects(command string) bool {
 func (p *hangupProxy) serve(n int, client, server net.Conn) {
 	var mu sync.Mutex
 	tag := ""
+	var hungUp atomic.Bool
 	go func() {
 		r := bufio.NewReader(client)
 		for {
 			line, err := r.ReadString('\n')
+			if hungUp.Load() {
+				// Drain what the client sent after the hang-up: closing a socket with unread input sends a reset,
+				// and the client would read "connection reset" instead of the server's clean close.
+				if err != nil {
+					client.Close()
+					return
+				}
+				continue
+			}
 			if f := strings.Fields(line); len(f) > 1 && p.after(n, line) {
 				mu.Lock()
 				tag = f[0]
 				mu.Unlock()
 			}
-			if _, werr := server.Write([]byte(line)); werr != nil || err != nil {
+			if _, werr := server.Write([]byte(line)); (werr != nil && !hungUp.Load()) || err != nil {
 				return
 			}
 		}
@@ -102,8 +115,14 @@ func (p *hangupProxy) serve(n int, client, server net.Conn) {
 		mu.Unlock()
 		if hangup {
 			p.hung.Add(1)
-			client.Close()
+			hungUp.Store(true)
 			server.Close()
+			// End the client's side with a clean close (FIN); the reader above drains and then closes it.
+			if tc, ok := client.(*net.TCPConn); ok {
+				tc.CloseWrite()
+			} else {
+				client.Close()
+			}
 			return
 		}
 	}
@@ -252,16 +271,16 @@ func TestConnectionThatKeepsEndingIsReportedInWords(t *testing.T) {
 	if !errors.As(err, &unreachable) || unreachable.Account != "acc_test" {
 		t.Fatalf("err = %v, want UnreachableError", err)
 	}
-	if !errors.Is(err, net.ErrClosed) && !strings.Contains(errors.Unwrap(err).Error(), "closed") &&
-		!strings.Contains(errors.Unwrap(err).Error(), "EOF") {
-		t.Fatalf("the raw error %v is not kept in the chain", errors.Unwrap(err))
+	var searchFailure *stepError
+	if !errors.As(unreachable, &searchFailure) || !isHangupCause(searchFailure.err) {
+		t.Fatalf("error chain contains %v, want the raw disconnect cause", errors.Unwrap(unreachable))
 	}
 	if n := logins.Load(); n != connTries {
 		t.Fatalf("%d logins, want %d", n, connTries)
 	}
 	lines := logs()
 	if !hasLine(lines, "mail: acc_test: search INBOX failed at search (try 1 of 2, reconnecting): ", "") ||
-		!hasLine(lines, "mail: acc_test: search INBOX failed at search (try 2 of 2, giving up): ", "") {
+		!hasLine(lines, "mail: acc_test: search INBOX failed at search (try 2 of 2, giving up): ", searchFailure.err.Error()) {
 		t.Fatalf("log %q, want both tries", lines)
 	}
 
@@ -292,6 +311,52 @@ func TestConnectionThatKeepsEndingIsReportedInWords(t *testing.T) {
 				json.RawMessage(`{"account_id":"acc_test","query":"invoice"}`), nil)
 			if !res.IsError || len(res.Content) != 1 || res.Content[0].Text != c.want {
 				t.Fatalf("mail_search = %+v, want %q", res, c.want)
+			}
+		})
+	}
+}
+
+func isHangupCause(err error) bool {
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	// go-imap formats a read error while looking for the next response tag with %v.
+	message := err.Error()
+	return strings.HasPrefix(message, "in response: cannot read tag: read tcp ") &&
+		strings.HasSuffix(message, ": "+syscall.ECONNRESET.Error())
+}
+
+func TestIsHangupCause(t *testing.T) {
+	reset := &net.OpError{
+		Op:  "read",
+		Net: "tcp",
+		Addr: &net.TCPAddr{
+			IP:   net.IPv4(127, 0, 0, 1),
+			Port: 143,
+		},
+		Err: os.NewSyscallError("read", syscall.ECONNRESET),
+	}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"closed", net.ErrClosed, true},
+		{"EOF", io.EOF, true},
+		{"unexpected EOF", io.ErrUnexpectedEOF, true},
+		{"wrapped reset", reset, true},
+		{"formatted reset", fmt.Errorf("in response: cannot read tag: %v", reset), true},
+		{"unrelated response", errors.New("mailbox closed by policy"), false},
+		{"unrelated reset text", errors.New("IMAP status: " + syscall.ECONNRESET.Error()), false},
+		{"missing cause", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isHangupCause(tc.err); got != tc.want {
+				t.Fatalf("isHangupCause(%v) = %t, want %t", tc.err, got, tc.want)
 			}
 		})
 	}

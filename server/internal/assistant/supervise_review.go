@@ -189,6 +189,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	restartUserCheck := t.Supervision.state(t) == reviewUserCheck && verdict != reviewAccepted
 	deliveryNote := ""
 	if verdict == reviewAccepted { // delivery_gate: owner wait & criteria first, then PR/issue/deploy gate (supervise_review_delivery.go)
+		ctx = withFollowupWatchHints(ctx)
 		if t.DoneAt == nil && t.Supervision != nil && t.Supervision.Waits != nil && !withdraw {
 			w := *t.Supervision.Waits
 			return "", ownerWaitError(t.ID, &w)
@@ -267,7 +268,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	withdrawGone := false // withdraw_needs_user, but the task stopped waiting for the user meanwhile: nothing is written
 	if ledger {
 		v, _, err = s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
-			if withdraw && v.State != reviewNeedsUser {
+			if withdraw && v.State != reviewNeedsUser && v.Waits == nil {
 				withdrawGone = true
 				return false
 			}
@@ -388,7 +389,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	b.mu.Lock()
 	b.init()
 	var keys []string
-	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigAllStopped, sigTimedOut, sigOrphaned, sigOverdue, sigEstimateDue, sigRecheck, sigUndecidable, sigDeliveryHold, sigOwnerCannot, sigParkedDue, sigCardlessWait} {
+	for _, k := range []string{sigReview, sigReviewNudge, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigAllStopped, sigTimedOut, sigOrphaned, sigRecovered, sigOverdue, sigEstimateDue, sigRecheck, sigUndecidable, sigDeliveryHold, sigOwnerCannot, sigParkedDue, sigCardlessWait} {
 		key := t.ID + "|" + k
 		delete(b.pending, key) // reviewed: what waited is answered
 		keys = append(keys, key)
@@ -489,6 +490,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			return fmt.Sprintf("Task %s is cancelled and closed; its agents are being stopped and archived (their terminals stay; archived, not deleted: "+
 				"agent_unarchive brings one back), and the cards they had waiting end. Tell the user only if they need to know.", t.ID), nil
 		}
+		s.autoSeeAcceptedTodo(ctx, t.ID, conclusion.Outcome, a.UserCheck)
 		authorized := isMain || background || t.Supervision != nil && t.Supervision.Supervisor == self ||
 			t.Supervision == nil && t.Origin == self
 		cleanup := s.finishTaskTerminal(ctx, t, acceptedHere && authorized && a.Outcome != outcomeCannot && !a.UserCheck)
@@ -678,7 +680,9 @@ func withdrawNeedsUserError(t Todo, self string, isMain bool) error {
 	if t.Supervision == nil || !isMain && t.Supervision.Supervisor != self {
 		return fmt.Errorf("task %s: only its supervisor or the main conversation withdraws its needs_user", t.ID)
 	}
-	if t.DoneAt != nil || t.Supervision.state(t) != reviewNeedsUser {
+	// A judge's owner wait the supervisor holds (noteOwnerWait) is withdrawn the same way: the supervisor found it is
+	// not the user's and the work is done.
+	if t.DoneAt != nil || t.Supervision.state(t) != reviewNeedsUser && t.Supervision.Waits == nil {
 		return fmt.Errorf("task %s does not wait for the user (needs_user): nothing to withdraw; review it as usual", t.ID)
 	}
 	return nil
@@ -978,10 +982,12 @@ func ownerWaitError(id string, w *OwnerWait) error {
 	if w.Reason != "" {
 		why = fmt.Sprintf(" (the done judge: %q)", w.Reason)
 	}
-	return fmt.Errorf("task %s stopped on a decision only the owner can make%s: accepting it would close the task and lose "+
-		"that decision. Review it needs_user as a decision they can answer (why_owner, reason, recommend, options, "+
-		"cost_of_waiting); if the owner already decided, send their answer to its agent with agent_send and review the "+
-		"work it does next; or cancelled when it is no longer wanted", id, why)
+	return fmt.Errorf("task %s stopped on a decision its agent says only the owner can make%s: accepting it would close "+
+		"the task and lose that decision. If it is the owner's (goals, what only they know, speaking as them, spending, "+
+		"an irreversible step they have not agreed to, an action only they can do), review it needs_user as a decision "+
+		"they can answer (why_owner, reason, recommend, options, cost_of_waiting); otherwise decide it yourself, or if "+
+		"the owner already decided, send the answer to its agent with agent_send and review the work it does next; or "+
+		"cancelled when it is no longer wanted", id, why)
 }
 
 // reworkCapError refuses a rework past its cap (either the strict stalled/low-ROI cap or the overall

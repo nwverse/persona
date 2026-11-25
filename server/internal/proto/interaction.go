@@ -95,20 +95,24 @@ type Interaction struct {
 	Manager string `json:"manager,omitempty"`
 	// Private: a Just me turn raised it (docs/assistant/meeting-minutes.md "Just me"): its push and the Fleet Live
 	// Activity say nothing of what it asks, as a health conversation's card, and it never goes to Lark or a channel.
-	Private      bool       `json:"private,omitempty"`
-	ID           string     `json:"id"`
-	MachineID    string     `json:"machine_id"`
-	SessionID    string     `json:"session_id"`
-	SessionTitle string     `json:"session_title,omitempty"`
-	TaskTitle    string     `json:"task_title,omitempty"` // the task its agent works for (docs/assistant/unified-entry.md), set when sent to clients
-	Cwd          string     `json:"cwd,omitempty"`
-	Kind         string     `json:"kind"`
-	CreatedAt    time.Time  `json:"created_at"`
-	ExpiresAt    time.Time  `json:"expires_at"`
-	ToolName     string     `json:"tool_name,omitempty"`
-	ToolUseID    string     `json:"tool_use_id,omitempty"`
-	Questions    []Question `json:"questions,omitempty"`
-	Plan         string     `json:"plan,omitempty"`
+	Private      bool      `json:"private,omitempty"`
+	ID           string    `json:"id"`
+	MachineID    string    `json:"machine_id"`
+	SessionID    string    `json:"session_id"`
+	SessionTitle string    `json:"session_title,omitempty"`
+	TaskTitle    string    `json:"task_title,omitempty"` // the task its agent works for (docs/assistant/unified-entry.md), set when sent to clients
+	Cwd          string    `json:"cwd,omitempty"`
+	Kind         string    `json:"kind"`
+	CreatedAt    time.Time `json:"created_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	// SeenAt is when the user first viewed an owner-only timed card in an app; nil while unseen.
+	SeenAt *time.Time `json:"seen_at,omitempty"`
+	// SeenTTLSeconds is the countdown length (in seconds) that starts once SeenAt is recorded.
+	SeenTTLSeconds int        `json:"seen_ttl_seconds,omitempty"`
+	ToolName       string     `json:"tool_name,omitempty"`
+	ToolUseID      string     `json:"tool_use_id,omitempty"`
+	Questions      []Question `json:"questions,omitempty"`
+	Plan           string     `json:"plan,omitempty"`
 	// An explicit independent session review (tool persona_session_review) keeps the report beside its ordinary
 	// question-card fallback. Older clients ignore these additive fields and retain every other card's decoding.
 	ReviewReport      string          `json:"review_report,omitempty"`
@@ -212,6 +216,9 @@ type Interaction struct {
 	// FoldedUnder is its session's Session.FoldedUnder: the listed session whose chat shows the card when the asking
 	// session is a child folded under it (docs/protocol/protocol.md "Session hierarchy"). Set when sent to clients.
 	FoldedUnder string `json:"folded_under,omitempty"`
+	// FoldedUnderMachineID is its session's Session.FoldedUnderMachineID: the machine of FoldedUnder when the parent
+	// lives on another computer; empty when on the same machine. Set beside FoldedUnder when sent to clients.
+	FoldedUnderMachineID string `json:"folded_under_machine_id,omitempty"`
 	// FoldedAs is its session's Session.FoldedAs: "worker" when the asking session is a tab's worker folded under its
 	// lead (#5180), "side" when it is a side session (#7944). Set beside FoldedUnder when sent to clients.
 	FoldedAs string `json:"folded_as,omitempty"`

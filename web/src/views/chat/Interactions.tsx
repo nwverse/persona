@@ -36,7 +36,6 @@ import { cardState } from "../../lib/card-focus";
 import { href, onLinkClick, type Route } from "../../lib/router";
 import { t } from "../../i18n";
 import { StatusMark } from "../../ui/StatusMark";
-import { useVoiceAsking } from "../../lib/voice/calls";
 import { InteractionMarks, ModuleCard, useCardRenderer } from "../../core/ChatSlots";
 import { useComposition } from "../../lib/ime";
 import { ErrorNotice } from "../../ui/ErrorNotice";
@@ -107,8 +106,6 @@ type CardKeys = ReturnType<typeof useCardKeys>;
  * so the footer's `sticky` follows the dock's scrolling and the buttons stay at its bottom edge while the card is taller
  * than the dock. `-bottom-1` cancels the dock's `p-1` (`bottom-0` would leave 4px of the body under the buttons).
  */
-/** The card the voice is asking about (docs/web/web.md "Voice"): InteractionCard says so, Card marks its kicker row. */
-const AskedByVoice = createContext(false);
 /** What modules mark the card with (core/module-host.ts `interaction.asked`): Card draws it in its kicker row. */
 const CardMarks = createContext<React.ReactNode>(null);
 /** The answer on its way for the card, as a line for its footer ("Sending: Allowed"); empty when none, or for its first
@@ -130,7 +127,6 @@ const StackCount = createContext(0);
 const QueueSlot = createContext<{ position: number; total: number; open: boolean; onToggle: () => void } | null>(null);
 
 export function Card({ title, titleContent, kicker, onDismiss, busy, children, footer, looking = false, cardKeys, tapGuard }: { title: string; titleContent?: React.ReactNode; kicker: string; onDismiss?: () => void; busy?: boolean; children: React.ReactNode; footer: React.ReactNode; looking?: boolean; cardKeys?: CardKeys; tapGuard?: { ref: RefObject<HTMLDivElement | null> } }) {
-  const asked = useContext(AskedByVoice);
   const marks = useContext(CardMarks);
   const sending = useContext(SendingAnswer);
   const from = useContext(AskedFrom);
@@ -167,13 +163,6 @@ export function Card({ title, titleContent, kicker, onDismiss, busy, children, f
             <div className={cx("mb-0.5 flex items-center gap-1.5 text-[11px] font-medium", looking ? "text-ink-3" : "text-attention")}>
               <StatusMark state={looking ? "working" : "needs_you"} size="sm" label={false} />
               {kicker}
-              {/* the card stays a quiet surface: a neutral chip, the voice's color only on its mark */}
-              {asked && (
-                <span data-testid="voice-asking" className="ml-0.5 inline-flex min-w-0 items-center gap-1 rounded-full bg-inset px-1.5 py-px text-[10.5px] font-medium whitespace-nowrap text-ink-2 shadow-hairline">
-                  <Icon name="voice" size={10} stroke={2.4} className="shrink-0 text-ai" />
-                  <span className="truncate">{t("voice.asking_mark")}</span>
-                </span>
-              )}
               {marks}
             </div>
             <div ref={head} className="text-[13.5px] font-medium text-ink">{titleContent ?? title}</div>
@@ -342,6 +331,25 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
   });
   // paging to another question shows a new option set: its answers restart the guard window
   const tapGuard = useChatCardTapGuard(ix, `:q${qi}`);
+  const toggleRef = useRef<(label: string) => void>(() => {});
+
+  useEffect(() => {
+    if (!q || busy || (!canApprove && !localOnly)) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
+      if (e.key >= "1" && e.key <= "9") {
+        const opt = q.options?.[Number(e.key) - 1];
+        if (!opt || (localOnly && opt.action !== "defer")) return;
+        e.preventDefault();
+        toggleRef.current(opt.label);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [q, busy, canApprove, localOnly]);
+
   if (!q) return null;
   const looking = isDelegating(ix);
   const picks = recommendedLabels(qs, ix.delegate?.recommend);
@@ -393,7 +401,7 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
     if (singleChoice && !hasCustomAnswer) void send(label);
     else if (!q.multi_select && !last) slide.current = window.setTimeout(() => setQi((i) => Math.min(qs.length - 1, i + 1)), 380);
   };
-
+  toggleRef.current = toggle;
   return (
     <Card
       kicker={q.header || t("chat-interactions.question")}
@@ -429,7 +437,7 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
                 </button>
               </>
             )}
-            {q.multi_select && <span className="text-[11.5px] text-ink-3">{t("chat-interactions.multi_select")}</span>}
+            {q.multi_select && <span className="text-submeta text-ink-3">{t("chat-interactions.multi_select")}</span>}
           </span>
           <SendArrow ready={last ? all : answered(qi) && allowed(qi)} busy={busy} kbd={keys.focused} label={last ? t("chat-interactions.send_answer") : t("chat-interactions.next_question")} onClick={() => (last ? void send() : advance())} />
         </>
@@ -649,7 +657,21 @@ export function permissionFrom(ix: Pick<Interaction, "agent_id" | "agent_type" |
  * nothing Enter submits: the commands run on a click on Run, never on a key pressed while typing. The card's own keys
  * are only Esc back to the composer — no digits (they are the password), no Enter (never a key runs these commands).
  */
+const ownerCardsSeenSent = new Set<string>();
+
+/** Report once when an unseen owner-only timed card is displayed so the server can start its post-view countdown. */
+function useOwnerCardSeen(ix: Interaction) {
+  useEffect(() => {
+    if (!ix.seen_ttl_seconds || ix.seen_at || ownerCardsSeenSent.has(ix.id)) return;
+    ownerCardsSeenSent.add(ix.id);
+    void fetch(`/api/v1/interactions/${encodeURIComponent(ix.id)}/seen`, { method: "POST" }).catch(() => {
+      ownerCardsSeenSent.delete(ix.id);
+    });
+  }, [ix.id, ix.seen_at, ix.seen_ttl_seconds]);
+}
+
 function SecretRunCard({ ix }: { ix: Interaction }) {
+  useOwnerCardSeen(ix);
   const [busy, setBusy] = useState<"run" | "decline" | null>(null);
   const [password, setPassword] = useState("");
   const input = useRef<HTMLInputElement>(null);
@@ -745,6 +767,7 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
  * each variable with the item it comes from, the Agent and its computer, where it runs and what it is asked.
  */
 function SecretHandoffCard({ ix }: { ix: Interaction }) {
+  useOwnerCardSeen(ix);
   const [busy, setBusy] = useState<"allow" | "always" | "deny" | null>(null);
   const keys = useCardKeys();
   const tapGuard = useChatCardTapGuard(ix);
@@ -858,7 +881,7 @@ function SupervisorHeldCard({ ix }: { ix: Interaction }) {
         </p>
       }
     >
-      {detail && detail !== title && <p className="text-label leading-snug break-words whitespace-pre-wrap text-ink-2">{detail}</p>}
+      {detail && detail !== title && <p className="text-meta leading-snug break-words whitespace-pre-wrap text-ink-2">{detail}</p>}
     </Card>
   );
 }
@@ -982,7 +1005,7 @@ function PlainScreenCard({ ix }: { ix: Interaction }) {
           )}
         </div>
       ) : (
-        <pre className="max-h-56 overflow-auto rounded-[8px] bg-[#1b1c1f] px-3 py-2 font-mono text-[11.5px] leading-[1.5] whitespace-pre text-[#e6e7e9]">{ix.screen}</pre>
+        <pre className="max-h-56 overflow-auto rounded-[8px] bg-[var(--term-bg,#1b1c1f)] px-3 py-2 font-mono text-[11.5px] leading-[1.5] whitespace-pre text-[var(--term-fg,#e6e7e9)]">{ix.screen}</pre>
       )}
     </Card>
   );
@@ -1444,7 +1467,6 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
     : ix.kind === "elicitation" ? <ElicitationCard ix={ix} />
     // a kind the core has no card for, drawn by the module that names it (core/module-host.ts `cardRenderers`)
     : renderer ? <ModuleCard key={ix.id} module={renderer} interaction={ix} /> : <ScreenCard ix={ix} />;
-  const asked = useVoiceAsking(ix);
   const marks = <InteractionMarks interaction={ix} />;
   // a permission card says it in its body (PermissionBody); a secret run's or hand-off's card has none, so it says it here
   const from = ix.folded_under && (ix.kind !== "permission" || isSecretRun(ix) || isSecretHandoff(ix)) ? permissionFrom(ix) : "";
@@ -1456,8 +1478,7 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
   // card stays mounted for its local defer/dismiss actions; QuestionCard disables every message-sending control instead.
   return (
     <div data-card={ix.id} className="contents">
-      <AskedByVoice.Provider value={asked}>
-        <CardMarks.Provider value={marks}>
+      <CardMarks.Provider value={marks}>
         <SendingAnswer.Provider value={line}>
           <AskedFrom.Provider value={from}>
             <CardAbout.Provider value={about}>
@@ -1469,8 +1490,7 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
             </CardAbout.Provider>
           </AskedFrom.Provider>
         </SendingAnswer.Provider>
-        </CardMarks.Provider>
-      </AskedByVoice.Provider>
+      </CardMarks.Provider>
     </div>
   );
 }
@@ -1490,7 +1510,7 @@ export function TurnCards({ asks }: { asks: readonly TurnAsk[] }) {
  * screen (#1996) they sit in a box that scrolls on its own; while the keyboard is up, one line for all of them (tapping
  * it puts the keyboard away), and on a phone on its side one line until tapped.
  */
-export function PendingCards({ interactions, answered, delegated = [], offerNext, narrow, short = false, keyboard, onDismissKeyboard }: {
+export function PendingCards({ interactions, answered, delegated = [], offerNext, narrow, short = false, keyboard, onDismissKeyboard, reveal }: {
   interactions: Interaction[];
   answered: Answered[];
   /** The questions the assistant answered for the user (#544): shown with the answered ones, until put away. */
@@ -1502,6 +1522,8 @@ export function PendingCards({ interactions, answered, delegated = [], offerNext
   short?: boolean;
   keyboard: boolean;
   onDismissKeyboard: () => void;
+  /** Open the short-screen fold when the composer points to an existing card. */
+  reveal?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const count = interactions.length;
@@ -1511,6 +1533,7 @@ export function PendingCards({ interactions, answered, delegated = [], offerNext
   useEffect(() => {
     if (!count) setOpen(false);
   }, [count]);
+  useEffect(() => { if (short && reveal) setOpen(true); }, [short, reveal]);
   // the cards cut off below the box (each Card says): while any is, a stack of two or more says how many it holds
   const [cutCards, setCutCards] = useState<ReadonlySet<string>>(() => new Set());
   const report = useCallback((key: string, cut: boolean) => setCutCards((had) => {
@@ -1523,7 +1546,7 @@ export function PendingCards({ interactions, answered, delegated = [], offerNext
   const ids = interactions.map((ix) => ix.id).join("\n");
   const run = useRun(ids);
   const slot = useSlotFocus(interactions[0]?.id);
-  const { full, summary } = cardFold(count, { narrow, keyboard, open, short });
+  const { full, summary } = cardFold(count, { narrow, keyboard, open: open || (short && reveal === true), short });
   if (!count && !answered.length && !delegated.length) return null;
   const shown = showsAnswered({ narrow, keyboard, open, short });
   const done = shown

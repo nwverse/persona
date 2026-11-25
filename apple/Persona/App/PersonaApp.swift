@@ -290,7 +290,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // `-openAgentsFresh YES`: the Agents list's saved look forgotten (AgentsListTests).
         if d.bool(forKey: "openAgentsFresh") {
             for k in ["dev.machineFilter", HubFilter.key, "dev.grouping", "dev.sort", "dev.compact", "dev.folded", AgentRowStyle.key,
-                      "agents.list.width", "agents.list.closed"] { d.removeObject(forKey: k) }
+                      "agents.list.width", "agents.list.closed", SeenRows.key, SeenRows.noticedKey] { d.removeObject(forKey: k) }
         }
         // `-openSplitFresh YES`: the lists beside the pages shown (SplitListTests, #2624, #4206).
         if d.bool(forKey: "openSplitFresh") {
@@ -307,21 +307,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             model.composerContexts = [:]
             model.composerComments = [:]
         }
-        // `-openScreenFresh YES`: no Mac's Screen Sharing sign-in remembered, One-Tap Unlock off (ScreenPasswordTests, #1322).
-        if d.bool(forKey: "openScreenFresh") {
-            ScreenCredentials.forgetAll()
-            ScreenUnlock.forgetAll()
-        }
-        #if DEBUG
-        // `-openScreenDemo YES`: open the live-screen page on a placeholder Mac (no hub needed) for screenshots of the
-        // picture switcher and the connection-stats overlay; pair with -showScreenStatsDemo / -showScreenFallbackDemo (#3954).
-        if d.bool(forKey: "openScreenDemo") {
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(600))
-                AppModel.shared.screenOpen = ScreenOpen(machine: MachineRef(id: "Studio"))
-            }
-        }
-        #endif
+        // `-openScreenFresh` and `-openScreenDemo` belong to the screen-share module (its launch hook).
         // `-showLarkSendFresh YES`: no Feishu draft and no outbox (unsent, failed messages) from an earlier run:
         // LarkSendTests found earlier runs' failed messages and drafts in the chat (#1627).
         if d.bool(forKey: "showLarkSendFresh") {
@@ -777,7 +763,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         content.body = ask.verdict ?? todo.title
         content.subtitle = todo.title
         content.categoryIdentifier = NotificationActions.decideCategory
-        content.userInfo = ["machine_id": "test", "session_id": "test",
+        content.userInfo = ["machine_id": "test", "session_id": "test", "todo_id": todo.id,
                             "todo": ["id": todo.id, "asked_at": ask.askedAt, "recommend": ask.recommend ?? ""]]
         try? await center.add(UNNotificationRequest(identifier: "test-decide", content: content,
                                                      trigger: UNTimeIntervalNotificationTrigger(timeInterval: 3, repeats: false)))

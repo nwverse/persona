@@ -6,9 +6,36 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
+
+const agyRFC3339Pattern = `\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})`
+
+var agyToolResultHeaderRe = lazyre.New(`^(?:Created At: ` + agyRFC3339Pattern + `\r?\nCompleted At: ` + agyRFC3339Pattern + `(?:\r?\n|$))+`)
+
+// StripToolResultTimestampHeaders removes one or more leading Antigravity
+// Created At / Completed At RFC3339 wrapper header pairs (and an immediately
+// following Output: line when preceded by those headers) while leaving ordinary
+// text untouched.
+func StripToolResultTimestampHeaders(text string) string {
+	if !strings.HasPrefix(text, "Created At: ") {
+		return text
+	}
+	loc := agyToolResultHeaderRe.FindStringIndex(text)
+	if loc == nil {
+		return text
+	}
+	rest := text[loc[1]:]
+	if strings.HasPrefix(rest, "Output:\n") {
+		return rest[len("Output:\n"):]
+	}
+	if strings.HasPrefix(rest, "Output:\r\n") {
+		return rest[len("Output:\r\n"):]
+	}
+	return rest
+}
 
 // HasUserVisibleAction reports a successful Persona tool action that already answered
 // or reached the owner directly, as it would be recognized in a folded work row.
@@ -87,7 +114,7 @@ func supervisionFinishVisibility(result proto.Item) string {
 	var disposition struct {
 		Visibility string `json:"visibility"`
 	}
-	if json.Unmarshal([]byte(result.Text), &disposition) != nil {
+	if json.Unmarshal([]byte(StripToolResultTimestampHeaders(result.Text)), &disposition) != nil {
 		return ""
 	}
 	return disposition.Visibility
@@ -118,9 +145,20 @@ func supervisionUserAction(run []proto.Item, uses map[string]proto.Item) bool {
 			}
 		case "task_review":
 			var input struct {
-				Verdict string `json:"verdict"`
+				Verdict   string `json:"verdict"`
+				UserCheck bool   `json:"user_check"`
 			}
-			if json.Unmarshal(use.ToolInput, &input) == nil && (input.Verdict == "accepted" || input.Verdict == "needs_user") {
+			if json.Unmarshal(use.ToolInput, &input) != nil {
+				continue
+			}
+			internalAccepted := false
+			if input.Verdict == "accepted" && !input.UserCheck {
+				var disposition struct {
+					Background bool `json:"background"`
+				}
+				internalAccepted = json.Unmarshal([]byte(StripToolResultTimestampHeaders(result.Text)), &disposition) == nil && disposition.Background
+			}
+			if (input.Verdict == "accepted" || input.Verdict == "needs_user") && !internalAccepted {
 				return true
 			}
 		}

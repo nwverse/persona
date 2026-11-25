@@ -103,10 +103,15 @@ function onNotification(msg) {
 }
 
 if (ignoreTerm) {
-  process.on('SIGTERM', () => {})
+  process.on('SIGTERM', () => record({ term: process.pid }))
   setInterval(() => {}, 60_000)
 }
-record({ started: process.pid })
+record({
+  started: process.pid,
+  fakeExtensionCredential: process.env.EXAMPLE_EXTENSION_CREDENTIAL ?? null,
+  fakeExtensionAccount: process.env.EXAMPLE_EXTENSION_ACCOUNT ?? null,
+  path: process.env.PATH ?? '',
+})
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
 rl.on('line', (line) => {
   if (!line.trim()) return
