@@ -794,15 +794,16 @@ func (s *Service) activateDeferredTaskStart(ctx context.Context, t *PlanTask, mi
 	return s.call(ctx, mid, DeviceSessionSend, params, nil)
 }
 
-// closeDeferredTaskStart discards a newly created ACP session that provably never got its first prompt. It is not used
-// for an uncertain activation: that session may already be running and remains linked for recovery instead.
+// closeDeferredTaskStart discards a newly created ACP session that provably never got its first prompt. It stops only
+// the Agent and leaves the user's terminal open. It is not used for an uncertain activation: that session may already
+// be running and remains linked for recovery instead.
 func (s *Service) closeDeferredTaskStart(ctx context.Context, t *PlanTask, mid, sid string) {
 	if t.deferredStart == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
 	defer cancel()
-	if err := s.call(ctx, mid, "session.close", map[string]any{"session_id": sid}, nil); err != nil {
+	if err := s.call(ctx, mid, deviceSessionStop, map[string]any{"session_id": sid}, nil); err != nil {
 		s.logf("task %s: close deferred Companion session %s/%s: %v", t.TodoID, mid, sid, err)
 	}
 }

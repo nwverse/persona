@@ -6452,6 +6452,12 @@ export type AssistantEventSeverity = "info" | "warning" | "critical" | (string &
 export const ASSISTANT_EVENT_SEVERITIES = ["info", "warning", "critical"] as const;
 
 /**
+ * Where the thing an event's key names is now, in the extension's own words (firing, resolved, ...): a label each
+ * extension chooses. Free text, not a closed set.
+ */
+export type AssistantEventState = string;
+
+/**
  * assistant.event (assistant.events): one event for the assistant's main conversation. The assistant gets it as
  * something an extension observed, never as the user's words, and decides what to tell the user. An event with the
  * same key as one of this extension's still waiting behind a running turn replaces it, unless replace is false.
@@ -6470,7 +6476,7 @@ export interface AssistantEventParams {
   /** What the extension suggests be done about it: a suggestion for the assistant to weigh, not an order. */
   action_hint?: string;
   /** Where the thing the key names is now, in the extension's words (firing, resolved, ...). */
-  state?: string;
+  state?: AssistantEventState;
   /** false keeps an earlier event with the same key as its own message instead of replacing it. Absent is true. */
   replace?: boolean;
 }
