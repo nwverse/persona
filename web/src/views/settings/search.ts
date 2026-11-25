@@ -231,8 +231,9 @@ const INTEGRATIONS_ANCHOR_SUB: Record<string, string | undefined> = {
 
 /** The search box's matches: categories by label / hint, and page groups and settings by their heading or label.
  *  When `integrationsV2` is true, collapses `channels`/`connectors`/`extensions`/`sources` into `integrations` and remaps
- *  their indexed groups so quick search jumps directly to the unified Integrations & Extensions view. */
-export function searchSettings(query: string, integrationsV2 = false): { tabs: Tab[]; groups: SearchGroup[] } {
+ *  their indexed groups so quick search jumps directly to the unified Integrations & Extensions view.
+ *  `hasWebShells` exposes the Advanced › Appearance Web Shell row only when at least one web_shells extension is installed. */
+export function searchSettings(query: string, integrationsV2 = false, hasWebShells = false): { tabs: Tab[]; groups: SearchGroup[] } {
   const q = fold(query);
   if (!q) return { tabs: [], groups: [] };
   const featureEntries = moduleSwitchEntries();
@@ -254,13 +255,16 @@ export function searchSettings(query: string, integrationsV2 = false): { tabs: T
     }
     return false;
   };
+  const baseIndex: SearchGroup[] = hasWebShells
+    ? [...SEARCH_INDEX, { tab: "advanced", group: t("settings-webshell.label"), anchor: "web-shell" }]
+    : SEARCH_INDEX;
   const indexed = integrationsV2
-    ? SEARCH_INDEX.map((g) => {
+    ? baseIndex.map((g) => {
         if (!isLegacyIntegrationTab(g.tab)) return g;
         const hint = g.anchor === "inbox-sources" ? words(g.hint ?? "", t("settings-integrations.view_sources")) : g.hint;
         return { ...g, tab: "integrations" as Tab, sub: INTEGRATIONS_ANCHOR_SUB[g.anchor], ...(hint ? { hint } : {}) };
       })
-    : SEARCH_INDEX;
+    : baseIndex;
   return {
     tabs: searchableTabs.filter(tabMatches),
     groups: [...indexed, ...featureEntries].filter((g) => has(g.group, g.hint)),

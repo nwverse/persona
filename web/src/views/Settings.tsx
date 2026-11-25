@@ -16,6 +16,7 @@ import { composing } from "../lib/send-history";
 import { Button, cx, Dialog, EASE, IconButton, Loading, Menu, Spinner, toast, useMenu } from "../ui/atoms";
 import { Icon, type IconName } from "../ui/icons";
 import { ExtensionThemePicker } from "../ui/ExtensionThemePicker";
+import { useWebShells, WebShellPicker } from "./settings/WebShellPicker";
 import { setTheme, useTheme, type Theme } from "./theme";
 import { Group, Row, Pill, RowConfirm, Switch } from "./settings/SettingsParts";
 import { LanguageRow } from "./settings/LanguageRow";
@@ -311,7 +312,8 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // Settings search: filters the sidebar categories, and jumps to a group or a setting's row inside a page (scroll +
   // brief highlight).
   const [query, setQuery] = useState("");
-  const search = searchSettings(query, integrationsV2);
+  const hasWebShells = useWebShells().length > 0;
+  const search = searchSettings(query, integrationsV2, hasWebShells);
   // Inbox Sources' relationship view (#5741) takes the wide page while it is shown; the list keeps its width.
   const [sourcesGraph, setSourcesGraph] = useState(false);
   const [scrollAnchor, setScrollAnchor] = useState<string | null>(null);
@@ -803,6 +805,7 @@ function Advanced() {
     <Group title={t("settings.appearance")} anchor="appearance">
       <ThemeColorPicker />
       <ExtensionThemePicker />
+      <WebShellPicker />
       <FontRows />
       <SidebarIconsRow />
     </Group>

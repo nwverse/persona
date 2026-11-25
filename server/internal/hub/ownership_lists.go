@@ -23,11 +23,12 @@ import (
 // mergedLists are the list routes whose answer the hub merges over every manager (route → the array that is the
 // list); each item gets "manager". The rest of the answer is the default manager's.
 var mergedLists = map[string]string{
-	"GET /api/v1/inbox":      "items",
-	"GET /api/v1/todos":      "todos",
-	"GET /api/v1/extensions": "extensions",
-	"GET /api/v1/plugins":    "plugins",
-	"GET /api/v1/connectors": "connectors",
+	"GET /api/v1/inbox":                   "items",
+	"GET /api/v1/todos":                   "todos",
+	"GET /api/v1/extensions":              "extensions",
+	"GET /api/v1/extensions/-/web-shells": "web_shells",
+	"GET /api/v1/plugins":                 "plugins",
+	"GET /api/v1/connectors":              "connectors",
 }
 
 // pagedLists are list routes paged by a cursor (route → the array that is the list): a cursor is one manager's, so
@@ -198,6 +199,10 @@ func (h *Hub) mergeList(w http.ResponseWriter, r *http.Request, key string, ask 
 	}
 	if key == "todos" {
 		writeTaggedList(w, r, key, answers, todoListSums(answers)) // the counts added up (todo_view.go)
+		return
+	}
+	if key == "web_shells" {
+		writeMergedWebShells(w, answers)
 		return
 	}
 	writeMerged(w, key, answers)

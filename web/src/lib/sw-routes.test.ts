@@ -29,6 +29,11 @@ describe("service worker routes", () => {
       expect(at(p)).toBe("pass"); expect(at(p, "navigate")).toBe("pass");
     }
   });
+  it("passes web_shell escape-hatch navigations directly to the hub", () => {
+    expect(at("/?shell=builtin", "navigate")).toBe("pass");
+    expect(at("/settings?tab=advanced&shell=builtin", "navigate")).toBe("pass");
+  });
+
   it("keeps hashed assets and the root's icons and manifest", () => {
     expect(at("/assets/main-NaR2WL1g.js", "cors")).toBe("asset");
     expect(at("/assets/KaTeX_Main-Regular-B22Nviop.woff2", "cors")).toBe("asset");

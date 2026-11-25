@@ -95,6 +95,7 @@ describe("service worker page loads", () => {
     expect(mustFollow(new Response(null, { status: 500 }))).toBe(false);
     expect(mustFollow(html())).toBe(false);
     expect(isShell(html())).toBe(true);
+    expect(isShell(new Response("<html>custom</html>", { status: 200, headers: { "Content-Type": "text/html", "X-Persona-Web-Shell": "ext/main" } }))).toBe(false);
     expect(isShell(followed("https://login.example.com/"))).toBe(false);
     expect(isShell(new Response("{}", { headers: { "Content-Type": "application/json" } }))).toBe(false);
   });

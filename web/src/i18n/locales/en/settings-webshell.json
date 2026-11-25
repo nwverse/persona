@@ -1,0 +1,5 @@
+{
+  "label": "Web interface shell",
+  "default": "Built-in (default)",
+  "hint": "Switch between installed Web/Desktop UI extensions for this browser. Append ?shell=builtin to any URL to return here."
+}
