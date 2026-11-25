@@ -3,7 +3,7 @@
 // the core (Host), each in terms both sides name (the standard library, the contracts and the leaf libraries). The
 // composition root (internal/modules/all) provides the module in the init of its file, under the module's build
 // constraint; without it nothing is provided and the core runs with no Health intake: no intake routes, no
-// health_intake tool or capability, no water reminders.
+// health_intake tool, no health_intake or health_items capability, no water reminders.
 //
 // The module is provided while the program initializes, before main runs, and only read afterwards.
 package healthhost
@@ -25,13 +25,24 @@ const ModuleID = "health"
 
 // Tool is the assistant tool the module serves (its description and schema are in prompts/mcp).
 const Tool = "health_intake"
+const StrengthTool = "health_strength"
+const CardPrefix = "health-strength-"
+
+type ToolCall = assistantwire.HealthToolCall
+type CardAction = assistantwire.HealthCardAction
+type CardResult = assistantwire.HealthCardResult
 
 // Layer is what the core asks of the Health module.
 type Layer interface {
+	// Items returns the owner's added health items in order, without saving defaults.
+	Items(ctx context.Context) ([]string, error)
+	CardAction(context.Context, CardAction) (CardResult, error)
+	WorkoutReceived(context.Context, assistantwire.StrengthWorkout) error
+	WorkoutReport(context.Context, string, string) (assistantwire.StrengthReportPrompt, bool, error)
 	// Routes registers the module's HTTP routes through handle, in their order.
 	Routes(handle func(pattern string, fn http.HandlerFunc))
 	// Tool runs the health_intake tool; the core has checked that the caller is a Health conversation.
-	Tool(ctx context.Context, args json.RawMessage) (string, error)
+	Tool(ctx context.Context, call ToolCall) (string, error)
 	// ReminderLoop sends the water reminders the owner switched on until ctx ends.
 	ReminderLoop(ctx context.Context)
 }
@@ -56,6 +67,26 @@ type ImportStore = interface {
 	HealthIntakeFinishWaterImport(ctx context.Context, settings, reminder, receipt any) error
 }
 
+type StrengthStore = interface {
+	HealthStrengthExercises(context.Context, bool) ([]assistantwire.StrengthExercise, error)
+	HealthStrengthExerciseSave(context.Context, assistantwire.StrengthExercise) (assistantwire.StrengthExercise, bool, error)
+	HealthStrengthExerciseDelete(context.Context, string) (bool, error)
+	HealthStrengthSetAdd(context.Context, []assistantwire.StrengthSet) ([]assistantwire.StrengthSet, error)
+	HealthStrengthSetUndo(context.Context, string) (*assistantwire.StrengthSet, bool, error)
+	HealthStrengthSets(context.Context, assistantwire.StrengthSetFilter) ([]assistantwire.StrengthSet, error)
+	HealthStrengthWorkoutAdd(context.Context, assistantwire.StrengthWorkout) (int, error)
+	HealthStrengthWorkout(context.Context, string) (*assistantwire.StrengthWorkout, error)
+	HealthStrengthWorkoutLatest(context.Context, time.Time, time.Time) (*assistantwire.StrengthWorkout, error)
+	HealthStrengthDraftCreate(context.Context, assistantwire.StrengthDraft, assistantwire.StrengthCard) error
+	HealthStrengthDraft(context.Context, string) (*assistantwire.StrengthDraft, error)
+	HealthStrengthDraftByCard(context.Context, string) (*assistantwire.StrengthDraft, error)
+	HealthStrengthDrafts(context.Context, string) ([]assistantwire.StrengthDraft, error)
+	HealthStrengthDraftEdit(context.Context, string, int64, json.RawMessage, json.RawMessage, time.Time) (assistantwire.StrengthDraft, assistantwire.StrengthCard, error)
+	HealthStrengthDraftConfirm(context.Context, string, int64, []assistantwire.StrengthSet, json.RawMessage, json.RawMessage, time.Time) (assistantwire.StrengthDraft, assistantwire.StrengthCard, []assistantwire.StrengthSet, error)
+	HealthStrengthDraftDiscard(context.Context, string, int64, json.RawMessage, json.RawMessage, time.Time) (assistantwire.StrengthDraft, assistantwire.StrengthCard, error)
+	HealthStrengthDraftMove(context.Context, string, int64, json.RawMessage, assistantwire.StrengthCard) (assistantwire.StrengthDraft, error)
+}
+
 // WaterExtensions exposes only the legacy water extension's migration, never arbitrary extension files.
 type WaterExtensions = interface {
 	WaterExtension(ctx context.Context, withState bool) (*assistantwire.WaterExtension, error)
@@ -68,6 +99,10 @@ type Host interface {
 	// Settings is nil when the manager has no store; IntakeStore and ImportStore are nil when its store keeps no intake.
 	Settings() Settings
 	IntakeStore() IntakeStore
+	StrengthStore() StrengthStore
+	CardShown(context.Context, assistantwire.StrengthCard)
+	CardChanged(context.Context, assistantwire.StrengthCard)
+	PageLink(context.Context, string, string) string
 	ImportStore() ImportStore
 	// WaterExtensions is nil when the hub offers no water extension migration.
 	WaterExtensions() WaterExtensions

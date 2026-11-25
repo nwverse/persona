@@ -42,6 +42,7 @@ func (t *Todo) setPlan(row db.TodoRow) {
 	t.Responsible = cloneResponsible(row.Responsible)
 	t.Audience = row.Audience
 	t.DirectionID = row.DirectionID
+	t.ItemType = row.ItemType
 }
 
 // keepPlan writes t's plan, project and the owner's marks (seen, restored, Someday) into row: a row made in memory for a
@@ -63,6 +64,7 @@ func (t *Todo) keepPlan(row *db.TodoRow) {
 	row.Responsible = cloneResponsible(t.Responsible)
 	row.Audience = t.Audience
 	row.DirectionID = t.DirectionID
+	row.ItemType = t.ItemType
 }
 
 // todoRowOf is todo t as a row (what memory has of it; the store-less PATCH changes it).
@@ -111,6 +113,7 @@ type todoPlanIn struct {
 	Priority    *string         `json:"priority"`
 	Audience    *string         `json:"audience"`
 	DirectionID *string         `json:"direction_id"`
+	ItemType    *string         `json:"item_type"`
 }
 
 // edit puts the plan into e; an error says which field could not be read.
@@ -231,7 +234,7 @@ func (s *Service) createTodoFromWithImages(ctx context.Context, title, notes, in
 
 // createDirectionTodo makes a piece of leader's direction (#5846): a todo with plan's due date, reminder, priority and
 // project, opened by the leader and supervised by it, with no agent and no done_when, as a Lark topic opens one
-// (feishu_thread_open.go). So the direction tree lists it under that direction (as not started until an agent works on
+// (the lark module's thread_open.go). So the direction tree lists it under that direction (as not started until an agent works on
 // it, direction_tree.go), and task_plan's todo_id can run an agent on it later instead of opening a second todo.
 func (s *Service) createDirectionTodo(ctx context.Context, leader, title, notes string, plan db.TodoEdit, bindings ...*repository.CreateBindings) (Todo, error) {
 	now := time.Now().UTC()
@@ -274,6 +277,11 @@ func (s *Service) createPieceTodo(ctx context.Context, conversation, title, note
 func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo, error) {
 	if e.Audience != nil {
 		if err := db.ValidateTodoAudience(*e.Audience); err != nil {
+			return Todo{}, err
+		}
+	}
+	if e.ItemType != nil {
+		if err := db.ValidateTodoItemType(strings.TrimSpace(*e.ItemType)); err != nil {
 			return Todo{}, err
 		}
 	}
@@ -345,6 +353,7 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		// Done by the user: what the task came to goes in its decisions and its projects' timelines (#2820). cur
 		// still has the agents that were working on it.
 		s.goRecordTaskOutcome(cur, *row.DoneAt)
+		s.todoPushOver(id)
 		s.askTodoClosed(context.WithoutCancel(ctx), id, row.Title) // a question's to-do closed unanswered (ask_todo.go)
 		maySatisfyAfter := row.StartError == "" && row.DoneBy != db.DoneByCancelled
 		s.onTodoWorkspaceReleased(ctx, cur, maySatisfyAfter)
@@ -373,6 +382,7 @@ func (s *Service) deleteTodo(ctx context.Context, id string) error {
 	if err := s.removeTodo(ctx, id); err != nil {
 		return err
 	}
+	s.todoPushOver(id)
 	s.askTodoClosed(context.WithoutCancel(ctx), id, cur.Title) // a question's to-do deleted unanswered (ask_todo.go)
 	s.onTodoWorkspaceReleased(ctx, cur, false)
 	return nil

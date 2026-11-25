@@ -878,7 +878,8 @@ func (d *Devices) List() []Summary {
 func (d *Devices) summaryOf(m *Machine) Summary {
 	m.mu.Lock()
 	s := Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
-		HomeReal: m.info.HomeReal, DataDir: m.info.DataDir, Online: m.online || m.warmLocked(time.Now())}
+		HomeReal: m.info.HomeReal, DataDir: m.info.DataDir, Executable: m.info.Executable,
+		Online: m.online || m.warmLocked(time.Now())}
 	m.mu.Unlock()
 	s.Trust = d.machineTrust(m)
 	s.Reachable = m.reachable()
@@ -980,7 +981,11 @@ func (d *Devices) Relist(ctx context.Context, id string) error {
 type Summary struct {
 	ID, Name, Kind, SSHHost, Home, DataDir, Trust string
 	// HomeReal is Home with its links followed, when the node says it is another path (proto.NodeInfo.HomeReal).
-	HomeReal          string
+	HomeReal string
+	// Executable is the file its node runs from (proto.NodeInfo.Executable), as the node.info its connection began with
+	// said: the same for as long as that connection lasts. "" from a node that does not say. The assistant names it to
+	// the Agents there without asking the node again (assistant/task_handoff.go, nodeExecutable).
+	Executable        string
 	Online, Reachable bool
 }
 

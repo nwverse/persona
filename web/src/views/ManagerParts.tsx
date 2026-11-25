@@ -1,8 +1,8 @@
 // The assistant title shares the sidebar head's identity. Offline restrictions still apply only with multiple managers
 // (docs/assistant/managers.md "Clients"). The switcher itself is views/AssistantSwitcher.tsx.
-import { useRef, useState } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../i18n";
-import { managerOrder, multiManager, useRoster, type Manager } from "../lib/managers";
+import { currentRoster, managerOrder, multiManager, subscribeRoster, useRoster, type Manager } from "../lib/managers";
 import { useShownManager } from "../lib/manager-choice";
 import { ago } from "../lib/format";
 import { api, enc, errorText } from "../lib/api";
@@ -23,12 +23,20 @@ export function useAssistantTitle(): string {
  *  synced …"; undefined when it is online, unknown, or the hub has one manager. Such a conversation can't be sent to,
  *  wherever it was opened from (the inbox, a notification, the Agents list). */
 export function useManagerOffline(id: string | undefined): string | undefined {
-  const roster = useRoster();
-  if (!id || !multiManager(roster)) return undefined;
-  const m = roster.managers.find((x) => x.id === id);
-  if (!m || m.online || m.installing) return undefined;
-  const when = ago(m.last_seen);
-  return when ? t("settings-managers.offline_composer", { name: m.name, time: when }) : t("settings-managers.offline_composer_never", { name: m.name });
+  const line = () => {
+    const m = offlineEntry(id);
+    if (!m) return undefined;
+    const when = ago(m.last_seen);
+    return when ? t("settings-managers.offline_composer", { name: m.name, time: when }) : t("settings-managers.offline_composer_never", { name: m.name });
+  };
+  return useSyncExternalStore(subscribeRoster, line, line);
+}
+
+function offlineEntry(id: string | undefined): Manager | null {
+  const roster = currentRoster();
+  if (!id || !multiManager(roster)) return null;
+  const manager = roster.managers.find((m) => m.id === id);
+  return manager && !manager.online && !manager.installing ? manager : null;
 }
 
 /** The current assistant while it is offline (several assistants only), and what the pages say of it. */
@@ -48,15 +56,14 @@ export interface ShownOffline {
 /** The shown manager when it is offline (only with more than one): the assistant page then can't send, and the lists
  *  the hub merges say it is offline (OfflineState). */
 export function useShownOffline(): ShownOffline | null {
-  const roster = useRoster();
   const shown = useShownManager();
-  if (!multiManager(roster)) return null;
-  const m = roster.managers.find((x) => x.id === shown);
-  if (!m || m.online || m.installing) return null;
+  const entry = () => offlineEntry(shown);
+  const m = useSyncExternalStore(subscribeRoster, entry, entry);
+  if (!m) return null;
   const when = ago(m.last_seen);
   return {
     manager: m,
-    isDefault: m.id === roster.default,
+    isDefault: m.id === currentRoster()?.default,
     composer: when ? t("settings-managers.offline_composer", { name: m.name, time: when }) : t("settings-managers.offline_composer_never", { name: m.name }),
     body: t("settings-managers.offline_body", { name: m.name }),
     title: t("settings-managers.offline_page_title", { name: m.name }),

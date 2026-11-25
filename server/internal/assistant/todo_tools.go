@@ -283,6 +283,7 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 		Kind               string          `json:"kind"`
 		Audience           string          `json:"audience"`
 		DirectionID        string          `json:"direction_id"`
+		ItemType           string          `json:"item_type"`
 		PartOf             json.RawMessage `json:"part_of"`
 		After              json.RawMessage `json:"after"`
 		RepositoryBindings json.RawMessage `json:"repository_bindings"`
@@ -328,6 +329,13 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 	plan.Audience = &aud
 	if dir := strings.TrimSpace(a.DirectionID); dir != "" {
 		plan.DirectionID = &dir
+	}
+	if s.settings(ctx).todosV2On() && strings.TrimSpace(a.ItemType) != "" {
+		it, err := todoItemType(a.ItemType)
+		if err != nil {
+			return "", err
+		}
+		plan.ItemType = &it
 	}
 	if err := s.setTodoProject(ctx, &a.Project, &plan); err != nil {
 		return "", err
@@ -395,6 +403,7 @@ func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args
 		Project     json.RawMessage `json:"project"`
 		Audience    json.RawMessage `json:"audience"`
 		DirectionID json.RawMessage `json:"direction_id"`
+		ItemType    json.RawMessage `json:"item_type"`
 		PartOf      json.RawMessage `json:"part_of"`
 		After       json.RawMessage `json:"after"`
 	}
@@ -450,6 +459,20 @@ func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args
 		}
 		changed = changed || set
 	}
+	if s.settings(ctx).todosV2On() && a.ItemType != nil {
+		v, set, err := optionalText(a.ItemType, "item_type")
+		if err != nil {
+			return "", err
+		}
+		if set {
+			it, err := todoItemType(v)
+			if err != nil {
+				return "", err
+			}
+			e.ItemType = &it
+			changed = true
+		}
+	}
 	pieces, err := pieceArgs(a.PartOf, a.After)
 	if err != nil {
 		return "", err
@@ -489,10 +512,16 @@ func (s *Service) toolTodoDone(ctx context.Context, machine, self, name string, 
 	if complete && t.isConcern() {
 		return "", fmt.Errorf("%s is a concern: it closes only when you report its outcome to the user with concern_report", t.ID)
 	}
-	supervisor := supervisorOf(t)
-	direct := complete && self != "" && t.PlanID == "" && s.hello(ctx).Assistant.CompleteAgentlessTodos && !todoHasAgents(t) &&
-		(supervisor == self || supervisor == "" && t.Origin == self)
-	if todoHasWork(t) && !direct {
+	var needsConfirm bool
+	if complete && s.settings(ctx).todosV2On() {
+		needsConfirm = s.todoHasActiveAgents(ctx, t)
+	} else {
+		supervisor := supervisorOf(t)
+		direct := complete && self != "" && t.PlanID == "" && s.hello(ctx).Assistant.CompleteAgentlessTodos && !todoHasAgents(t) &&
+			(supervisor == self || supervisor == "" && t.Origin == self)
+		needsConfirm = todoHasWork(t) && !direct
+	}
+	if needsConfirm {
 		key := "assistant-todos.reopen_card"
 		if complete {
 			key = "assistant-todos.complete_card"

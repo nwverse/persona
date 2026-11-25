@@ -67,7 +67,7 @@ func TestProjectionDirectionTreeFiveStateCompat(t *testing.T) {
 		td.Supervision.State = reviewNeedsUser
 		td.Supervision.Reviews = []TaskReview{{At: recent, Verdict: reviewNeedsUser, Reason: "Choose A or B"}}
 	}))
-	// 3. can_wait deferred decision -> projection can_wait/can_wait <-> tree needs_you (legacy waiting)
+	// 3. can_wait deferred decision -> projection can_wait/can_wait <-> tree working (not urgent needs_you)
 	deadline := now.Add(24 * time.Hour)
 	reversible := true
 	canWaitOptions := []DecisionOption{{Label: "Option A", LeadsTo: "Fast"}, {Label: "Option B", LeadsTo: "Slow"}}
@@ -78,7 +78,7 @@ func TestProjectionDirectionTreeFiveStateCompat(t *testing.T) {
 			Options: canWaitOptions, Deadline: &deadline, Reversible: &reversible,
 		}}
 	}))
-	// 4. Supervisor-held ask (delegating) -> projection working/persona_working <-> tree needs_you (legacy triage lacks card delegation)
+	// 4. Supervisor-held ask (delegating) -> projection working/persona_working <-> tree working (aligned with projection)
 	idSupHeld := e.task("Supervisor held ask", lead(withAgent("mac", "s-held")))
 	// 5. Pending review (idle agent) -> projection just_finished/finished_unseen <-> tree review
 	idReview := e.task("Pending review", lead(withAgent("mac", "s-idle-recent"), func(td *Todo) {
@@ -187,8 +187,8 @@ func TestProjectionDirectionTreeFiveStateCompat(t *testing.T) {
 	}{
 		{"agent_ask", idAgentAsk, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonAgentAsks, treeNeedsYou},
 		{"owner_decide", idOwnerDecide, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonOwnerDecides, treeNeedsYou},
-		{"can_wait", idCanWait, assistantwire.TodoListSectionCanWait, assistantwire.TodoReasonCanWait, treeNeedsYou},
-		{"supervisor_held", idSupHeld, assistantwire.TodoListSectionWorking, assistantwire.TodoReasonPersonaWorking, treeNeedsYou},
+		{"can_wait", idCanWait, assistantwire.TodoListSectionCanWait, assistantwire.TodoReasonCanWait, treeWorking},
+		{"supervisor_held", idSupHeld, assistantwire.TodoListSectionWorking, assistantwire.TodoReasonPersonaWorking, treeWorking},
 		{"pending_review", idReview, assistantwire.TodoListSectionJustFinished, assistantwire.TodoReasonFinishedUnseen, treeReview},
 		{"pending_review_running", idReviewRunning, assistantwire.TodoListSectionWorking, assistantwire.TodoReasonAgentRunning, treeWorking},
 		{"working", idWorking, assistantwire.TodoListSectionWorking, assistantwire.TodoReasonAgentRunning, treeWorking},

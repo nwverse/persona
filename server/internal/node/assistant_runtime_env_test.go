@@ -141,3 +141,112 @@ func TestRuntimeAssistantEnvironmentCapabilityBoundary(t *testing.T) {
 		}
 	}
 }
+
+// Local runtimes accepting dedicated-worker environments must receive per-session PERSONA_CATEGORIES on subsequent
+// turns, session.modes, and session.fork, and omit PERSONA_CATEGORIES when categories_unknown is set rather than
+// falling back to the directory's default general value.
+func TestRuntimeAssistantEnvironmentHonorsPerSessionCategories(t *testing.T) {
+	n, hub := runtimeNode(t)
+	assistantHub(hub)
+	cwd := prepareRuntimeAssistantEnvironment(t, n, false)
+	prepareCategoriesDir(t, n, ".persona/assistant", []string{})
+	hello := assistantRuntimeHello()
+	hello["caps"].(map[string]any)["assistant_environment"] = true
+	hello["caps"].(map[string]any)["fork"] = true
+	host := dialRuntime(t, n, hello)
+	forkSeq := 0
+	host.answer = func(method string, params json.RawMessage) (any, error) {
+		switch method {
+		case "session.start":
+			return map[string]any{"session": proto.Session{SessionID: "session-a1", Cwd: cwd, Status: proto.StatusIdle}}, nil
+		case "session.fork":
+			forkSeq++
+			fid := "session-a1-fork-" + string(rune('0'+forkSeq))
+			return map[string]any{"session_id": fid, "session": proto.Session{SessionID: fid, Cwd: cwd, Status: proto.StatusIdle}}, nil
+		default:
+			return map[string]any{"ok": true}, nil
+		}
+	}
+	raw, err := nodeCall(t, n, "assistant.send", map[string]any{"launcher": "dsh", "cwd": cwd, "text": "turn 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started struct {
+		SessionID string `json:"session_id"`
+	}
+	_ = json.Unmarshal(raw, &started)
+	id := started.SessionID
+	if id != "session-a1" {
+		t.Fatalf("assistant.send = %s", raw)
+	}
+	if err := host.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{
+		{SessionID: id, Cwd: cwd, Status: proto.StatusIdle},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "runtime session listed", func() bool {
+		_, _, ok := n.runtimes.rowOf(id)
+		return ok
+	})
+
+	// Turn 1 uses the prepared directory's default general categories (PERSONA_CATEGORIES=).
+	startEnv := runtimeAssistantEnvironment(t, host.got("session.start")[0])
+	if val, ok := startEnv[categoriesEnv]; !ok || val != "" {
+		t.Fatalf("session.start %s: ok=%v val=%q, want empty string", categoriesEnv, ok, val)
+	}
+	turn1Env := runtimeAssistantEnvironment(t, host.got("session.send")[0])
+	if val, ok := turn1Env[categoriesEnv]; !ok || val != "" {
+		t.Fatalf("turn 1 session.send %s: ok=%v val=%q, want empty string", categoriesEnv, ok, val)
+	}
+
+	// Turn 2 with accumulated sensitive categories updates session.send, session.modes, and session.fork env.
+	if _, err := nodeCall(t, n, "assistant.send", map[string]any{
+		"session_id": id, "launcher": "dsh", "cwd": cwd, "text": "turn 2",
+		"categories": []string{"finance", "emotion"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	turn2Env := runtimeAssistantEnvironment(t, host.got("session.send")[1])
+	if val, ok := turn2Env[categoriesEnv]; !ok || val != "emotion,finance" {
+		t.Fatalf("turn 2 session.send %s: ok=%v val=%q, want emotion,finance", categoriesEnv, ok, val)
+	}
+	if _, err := nodeCall(t, n, "session.modes", map[string]any{"session_id": id, "permission_mode": "plan"}); err != nil {
+		t.Fatal(err)
+	}
+	modes1Env := runtimeAssistantEnvironment(t, host.got("session.modes")[0])
+	if val, ok := modes1Env[categoriesEnv]; !ok || val != "emotion,finance" {
+		t.Fatalf("session.modes %s: ok=%v val=%q, want emotion,finance", categoriesEnv, ok, val)
+	}
+	if _, err := nodeCall(t, n, "session.fork", map[string]any{"session_id": id, "at_item_id": "item-1"}); err != nil {
+		t.Fatal(err)
+	}
+	fork1Env := runtimeAssistantEnvironment(t, host.got("session.fork")[0])
+	if val, ok := fork1Env[categoriesEnv]; !ok || val != "emotion,finance" {
+		t.Fatalf("session.fork %s: ok=%v val=%q, want emotion,finance", categoriesEnv, ok, val)
+	}
+
+	// Turn 3 with categories_unknown omits PERSONA_CATEGORIES across session.send, session.modes, and session.fork.
+	if _, err := nodeCall(t, n, "session.send", map[string]any{
+		"session_id": id, "text": "turn 3", "categories_unknown": true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	turn3Env := runtimeAssistantEnvironment(t, host.got("session.send")[2])
+	if val, ok := turn3Env[categoriesEnv]; ok {
+		t.Fatalf("turn 3 session.send %s: got %q, want absent", categoriesEnv, val)
+	}
+	if _, err := nodeCall(t, n, "session.modes", map[string]any{"session_id": id, "permission_mode": "auto"}); err != nil {
+		t.Fatal(err)
+	}
+	modes2Env := runtimeAssistantEnvironment(t, host.got("session.modes")[1])
+	if val, ok := modes2Env[categoriesEnv]; ok {
+		t.Fatalf("session.modes unknown %s: got %q, want absent", categoriesEnv, val)
+	}
+	if _, err := nodeCall(t, n, "session.fork", map[string]any{"session_id": id, "at_item_id": "item-2"}); err != nil {
+		t.Fatal(err)
+	}
+	fork2Env := runtimeAssistantEnvironment(t, host.got("session.fork")[1])
+	if val, ok := fork2Env[categoriesEnv]; ok {
+		t.Fatalf("session.fork unknown %s: got %q, want absent", categoriesEnv, val)
+	}
+}

@@ -123,6 +123,25 @@ those two cases as well.
 `scripts/test/test_counts_agreement.py` holds the differ to these rules, and reads the real fixture's marks as known
 differences.
 
+## View samples
+
+`view_samples.json` holds wire samples of the per-manager counts view (`schema/wire/counts.schema.json`, the contract
+in `docs/protocol/counts.md`; step 6 of the plan, #15512): `{"version": 1, "cases": [...]}`, each case with a `name`, a
+`description`, an `input` and `expected.view`, the view as the manager writes it.
+
+- A case whose `input.needs_you` names a case of `spec/fixtures/needs-you` holds, as `counts.agents_needs_you`, the rows
+  `fleetcount` decides for that case on the Agents list: the counted rows in `keys`, the muted and held ones in `held`,
+  each reason as the adapter spells it, and a quiet task's agent in neither. `TestViewSamplesAreFleetcountsRows`
+  (`server/internal/assistant/fleetcount/fleetcountadapt`) checks it, and that `totals` repeats `n`.
+- A case without `input` shows a shape no fixture case gives: rows past the listed `keys` (`more`), and a manager
+  build that does not work a count out (absent, never 0).
+
+`scripts/test/test_wire_schema.py` holds every sample to the schema, and the generated types write each back unchanged
+in Go (`server/internal/assistantwire/counts_gen_test.go`), Swift
+(`apple/Packages/PersonaWire/Tests/PersonaWireTests/CountsWireTests.swift`), Kotlin
+(`android/core/contracts/src/test/kotlin/persona/core/contracts/CountsWireTest.kt`) and the web
+(`web/src/lib/counts-wire.test.ts`). A new count id adds samples here with its schema field.
+
 ## CI and check-fast
 
 CI's lanes already select these files: `spec/**` runs the Android and Apple lanes, whose replays carry the switch,

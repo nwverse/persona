@@ -24,6 +24,9 @@ vi.mock("../lib/router", async (orig) => ({ ...(await orig<typeof import("../lib
 const toast = vi.hoisted(() => vi.fn());
 vi.mock("../ui/atoms", async (orig) => ({ ...(await orig<typeof import("../ui/atoms")>()), toast }));
 
+const feed = await import("../lib/feed");
+const store = await import("../lib/store");
+const { TodoAskLine, TodoAskPanel } = await import("./TodoAsk");
 const { TodosView } = await import("./Todos");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -54,6 +57,7 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   seed(before);
+  vi.restoreAllMocks();
 });
 
 const flush = () => act(async () => {
@@ -241,5 +245,148 @@ describe("a to-do's page", () => {
   it("shows nothing while the to-do waits on nothing", async () => {
     await drawList([todo({ ask: undefined })], "t1");
     expect(host.querySelector("[data-testid=todo-ask-panel]")).toBeNull();
+  });
+});
+
+describe("controlled to-do ask callbacks", () => {
+  it("uses every supplied callback without the default feed, router, store, API, or toast", async () => {
+    const accept = vi.spyOn(feed, "acceptBrief").mockRejectedValue(new Error("unexpected default accept"));
+    const route = vi.spyOn(feed, "setRoute").mockImplementation(() => {});
+    const refresh = vi.spyOn(store, "refreshTodos").mockResolvedValue();
+    const onAccept = vi.fn().mockResolvedValue("handled");
+    const onOpenConversation = vi.fn();
+    const onRefresh = vi.fn();
+    const onNotice = vi.fn();
+    const item = todo();
+    act(() => root.render(
+      <TodoAskPanel
+        todo={item}
+        onAccept={onAccept}
+        onOpenConversation={onOpenConversation}
+        onRefresh={onRefresh}
+        onNotice={onNotice}
+      />,
+    ));
+    await flush();
+    const panel = host.querySelector<HTMLElement>("[data-testid=todo-ask-panel]")!;
+    act(() => panel.querySelector("button")!.click());
+    await flush();
+    expect(onAccept).toHaveBeenCalledWith("t1", ASKED);
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    expect(onNotice).toHaveBeenCalledWith("已经处理过了", "ok");
+    expect(host.querySelector("[data-ask-done=handled]")).not.toBeNull();
+
+    const conversation = [...panel.querySelectorAll("button")].find((button) => button.textContent === "去对话里回答")!;
+    act(() => conversation.click());
+    expect(onOpenConversation).toHaveBeenCalledWith(item, decide);
+    expect(accept).not.toHaveBeenCalled();
+    expect(route).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalled();
+    expect(api).not.toHaveBeenCalled();
+  });
+
+  it("reports a controlled failure and leaves the row retryable without default fallbacks", async () => {
+    const accept = vi.spyOn(feed, "acceptBrief").mockRejectedValue(new Error("unexpected default accept"));
+    const refresh = vi.spyOn(store, "refreshTodos").mockResolvedValue();
+    const onAccept = vi.fn().mockRejectedValue(new Error("panel offline"));
+    const onRefresh = vi.fn();
+    const onNotice = vi.fn();
+    act(() => root.render(<TodoAskLine todo={todo()} onAccept={onAccept} onRefresh={onRefresh} onNotice={onNotice} />));
+    await flush();
+    act(() => askButton()!.click());
+    await flush();
+    expect(onAccept).toHaveBeenCalledWith("t1", ASKED);
+    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining("panel offline"), "error");
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(askButton()!.disabled).toBe(false);
+    expect(accept).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalled();
+    expect(api).not.toHaveBeenCalled();
+  });
+
+  it("refreshes after an ordinary controlled accept", async () => {
+    const accept = vi.spyOn(feed, "acceptBrief").mockRejectedValue(new Error("unexpected default accept"));
+    const refresh = vi.spyOn(store, "refreshTodos").mockResolvedValue();
+    const onAccept = vi.fn().mockResolvedValue("accepted");
+    const onRefresh = vi.fn().mockResolvedValue(undefined);
+    const onNotice = vi.fn();
+    act(() => root.render(<TodoAskLine todo={todo()} onAccept={onAccept} onRefresh={onRefresh} onNotice={onNotice} />));
+    await flush();
+    act(() => askButton()!.click());
+    await flush();
+    expect(onAccept).toHaveBeenCalledWith("t1", ASKED);
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    expect(onNotice).toHaveBeenCalledWith("已按推荐来", "ok");
+    expect(host.querySelector("[data-ask-done=taken]")).not.toBeNull();
+    expect(accept).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalled();
+    expect(api).not.toHaveBeenCalled();
+  });
+
+  it("uses a supplied refresh with default accept after ordinary success", async () => {
+    const accept = vi.spyOn(feed, "acceptBrief").mockResolvedValue("accepted");
+    const refresh = vi.spyOn(store, "refreshTodos").mockResolvedValue();
+    const onRefresh = vi.fn().mockResolvedValue(undefined);
+    act(() => root.render(<TodoAskLine todo={todo()} onRefresh={onRefresh} />));
+    await flush();
+    act(() => askButton()!.click());
+    await flush();
+    expect(accept).toHaveBeenCalledWith("t1", ASKED);
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    expect(refresh).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith("已按推荐来", "ok");
+    expect(host.querySelector("[data-ask-done=taken]")).not.toBeNull();
+  });
+
+  it("recovers when controlled accept throws before returning a promise", async () => {
+    const onAccept = vi.fn(() => { throw new Error("synchronous offline"); });
+    const onNotice = vi.fn();
+    act(() => root.render(<TodoAskLine todo={todo()} onAccept={onAccept} onNotice={onNotice} />));
+    await flush();
+    act(() => askButton()!.click());
+    await flush();
+    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining("synchronous offline"), "error");
+    expect(askButton()!.disabled).toBe(false);
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it("reports a controlled refresh failure without reopening the answered round", async () => {
+    const onAccept = vi.fn().mockResolvedValue("accepted");
+    const onRefresh = vi.fn().mockRejectedValue(new Error("refresh offline"));
+    const onNotice = vi.fn();
+    act(() => root.render(<TodoAskLine todo={todo()} onAccept={onAccept} onRefresh={onRefresh} onNotice={onNotice} />));
+    await flush();
+    act(() => askButton()!.click());
+    await flush();
+    expect(onNotice).toHaveBeenNthCalledWith(1, "已按推荐来", "ok");
+    expect(onNotice).toHaveBeenNthCalledWith(2, expect.stringContaining("refresh offline"), "error");
+    expect(host.querySelector("[data-ask-done=taken]")).not.toBeNull();
+    expect(askButton()).toBeNull();
+    expect(toast).not.toHaveBeenCalled();
+  });
+});
+
+describe("default to-do ask compatibility", () => {
+  it("falls back to acceptBrief, setRoute, navigate, refreshTodos, and toast without callbacks", async () => {
+    const accept = vi.spyOn(feed, "acceptBrief").mockResolvedValue("handled");
+    const route = vi.spyOn(feed, "setRoute").mockImplementation(() => {});
+    const refresh = vi.spyOn(store, "refreshTodos").mockResolvedValue();
+    act(() => root.render(<TodoAskPanel todo={todo()} />));
+    await flush();
+    const panel = host.querySelector<HTMLElement>("[data-testid=todo-ask-panel]")!;
+    act(() => panel.querySelector("button")!.click());
+    await flush();
+    expect(accept).toHaveBeenCalledWith("t1", ASKED);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith("已经处理过了", "ok");
+
+    const conversation = [...panel.querySelectorAll("button")].find((button) => button.textContent === "去对话里回答")!;
+    act(() => conversation.click());
+    expect(route).toHaveBeenCalledWith("conv1", "t1", ASKED);
+    expect(navigate).toHaveBeenCalledWith({ name: "persona", sid: "conv1" });
   });
 });

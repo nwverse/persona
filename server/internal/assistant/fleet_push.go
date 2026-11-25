@@ -214,9 +214,9 @@ func (s *Service) noteStop(machine, sid string, p map[string]any) {
 
 // notifyFinished decides, after the delay, whether this end of a turn is worth a push and to which devices. The delay
 // is a timer: a goroutine asleep through it would hold a stack per pending turn end (#2472).
-func (s *Service) notifyFinished(machine, id string, gen int) {
+func (s *Service) notifyFinished(machine, id string, gen int, end supervisionEnd) {
 	t := s.notifyTimings()
-	s.afterTurnCompletion(t.doneDelay(), func() { s.notifyFinishedNow(machine, id, gen, t) })
+	s.afterTurnCompletion(t.doneDelay(), func() { s.notifyFinishedNow(machine, id, gen, t, end) })
 }
 
 // afterTurnCompletion owns a delayed completion so a fixture can stop one still pending and drain one already running
@@ -243,7 +243,7 @@ func (s *Service) afterTurnCompletion(delay time.Duration, run func()) {
 }
 
 // notifyFinishedNow is notifyFinished once its delay is over, with the timings it was read with.
-func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings) {
+func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings, end supervisionEnd) {
 	if s.justMeNow(machine, id) {
 		// A Just me turn: never on a screen but the meeting page (meeting_justme.go). Over all the same unless its
 		// background work goes on (the turn that work's report wakes keeps the mark): its start and its hold are not
@@ -294,7 +294,12 @@ func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings)
 		return // the turn goes on: its mark waits for how it ends
 	}
 	// A supervision turn about a failed start ended: what it left of the start ends too (start_remedy.go, #2570).
-	go s.remedyTurnEnded(context.Background(), id)
+	if end.retained {
+		end.hold, _ = s.clearSupervisionHold(context.Background(), end.key, end.hold.At)
+	}
+	if !end.hold.At.IsZero() {
+		go s.remedyFinishedStarts(context.Background(), end)
+	}
 	// "Only long-running turns" is for turns the user started: a quick answer is read where it was asked. A morning briefing or a task notice
 	// has nobody waiting for it; a quick one was never pushed and the user had to go and look (#3438). The mark is
 	// used up by this turn whether it is pushed or dropped (notify_user, seen, muted): left over, the user's own next
@@ -325,7 +330,7 @@ func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings)
 		return
 	}
 	// A turn a follow-up (supervision) message started, finished normally (#3124): what the user needs to know went out with notify_user.
-	if s.supervising(id) && assistantwire.SupervisedFinish(sess, true) {
+	if assistantwire.SupervisedFinish(sess, !end.hold.At.IsZero()) {
 		return
 	}
 	if s.quietBackgroundReply(machine, sess) {
@@ -365,6 +370,20 @@ func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings)
 	if !strings.HasPrefix(head, "⚠️") && !strings.HasPrefix(head, "⏳") && !sess.AwaitsReply && !redact {
 		if counts := s.briefPush(id, s.lang(context.Background()), report); counts != "" {
 			text = counts
+		}
+	}
+	if links := s.consumeSideSupervisionLinks(id); len(links) > 0 && !redact {
+		var missing []string
+		for _, link := range links {
+			if link != "" && !strings.Contains(text, link) {
+				missing = append(missing, link)
+			}
+		}
+		if len(missing) > 0 {
+			if text != "" {
+				text += "\n"
+			}
+			text += strings.Join(missing, "\n")
 		}
 	}
 	s.deliver(Notification{Kind: assistantwire.NotifyDone, DeviceID: machine, Subtitle: place, SessionID: id, Title: head,
