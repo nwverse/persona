@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -138,16 +137,6 @@ func (s *Service) nudgeLoop(ctx context.Context) {
 	}
 }
 
-// ---- the cards closed when their node went away (feishu_cards.go) ----
-
-// detachedCards are the Feishu cards closed because their node's connection ended (feishuDetach), by interaction id,
-// kept for resumeGrace in case the same card comes back (feishuCardBack). The chat's lock is taken inside mu, never
-// the other way round.
-type detachedCards struct {
-	mu    sync.Mutex
-	cards map[string]detachedCard
-}
-
 // ---- the chat's clock ----
 
 // larkNow is the chat's clock: the time now, or the one a test set.
@@ -221,11 +210,7 @@ func (h larkHost) StartRun(ctx context.Context, rt assistantwire.ChatResolved, t
 func (h larkHost) Hello(ctx context.Context) Hello        { return h.s.hello(ctx) }
 func (h larkHost) AnswerLanguage(locale string) string    { return answerLanguage(locale) }
 func (h larkHost) NoReplyCommand(text string) bool        { return noReplyCommand(text) }
-func (h larkHost) FinalStatus(status string) bool         { return finalStatus(status) }
-func (h larkHost) ChatRefused(err error) bool             { return chatRefused(err) }
 func (h larkHost) IxToolName(ix proto.Interaction) string { return ixToolName(ix) }
-
-func (h larkHost) FirstQuestion(ix proto.Interaction) string { return firstQuestion(ix) }
 
 func (h larkHost) ReminderTodo(ctx context.Context, todoID string) *prompts.BotTodo {
 	todo, ok, err := h.s.todo(ctx, todoID)
@@ -299,7 +284,6 @@ func (h larkHost) SessionLink(web, machine, session string, assistant bool) stri
 
 func (h larkHost) FeishuRuns() int                             { return len(h.s.channelRuns(channel.Feishu)) }
 func (h larkHost) VisiblePending() []proto.Interaction         { return h.s.visiblePendingInteractions() }
-func (h larkHost) IxKindTag(kind string) string                { return ixKindTags[kind] }
 func (h larkHost) PendingQuestion(ix proto.Interaction) string { return pendingQuestion(ix) }
 
 func (h larkHost) StandingBoardCommand(ctx context.Context) bool {
@@ -354,13 +338,21 @@ func (h larkHost) ResolutionText(l i18n.Lang, ix proto.Interaction, r proto.Reso
 	return resolutionText(l, ix, r)
 }
 
-func (h larkHost) AnsweredCard(ctx context.Context, ix proto.Interaction, how string) *botcard.Card {
-	return h.s.answeredCard(ctx, ix, how)
+// ---- the agents' cards (ask_view.go) ----
+
+func (h larkHost) AskView(ctx context.Context, ix proto.Interaction) assistantwire.AskView {
+	return h.s.ixView(ctx, ix)
 }
 
-func (h larkHost) CardDone(ctx context.Context, messageID string, ix proto.Interaction, how string) {
-	h.s.botCardDone(ctx, messageID, ix, how)
+func (h larkHost) AskRoute(ctx context.Context, ix proto.Interaction) assistantwire.AskRoute {
+	return h.s.ixRoute(ctx, ix)
 }
+
+func (h larkHost) AskSensitive(ctx context.Context, ix proto.Interaction) bool {
+	return h.s.ixSensitive(ctx, ix)
+}
+
+func (h larkHost) AskState(id string) (ended, pending bool) { return h.s.ixState(id) }
 
 func (h larkHost) ResolveInteraction(ctx context.Context, id string, r proto.Resolution, action string) (bool, error) {
 	return h.s.resolveInteraction(ctx, channel.Feishu, id, r, action)
@@ -444,11 +436,6 @@ func (s *Service) startChatAgent(ctx context.Context, machine string, params map
 func (h larkHost) StartChannelRun(r *channel.Run) { h.s.startChannelRun(r) }
 
 // ---- the nudges ----
-
-func (h larkHost) CardLook(ctx context.Context, id string) (proto.Interaction, bool) {
-	ix, end := h.s.botCardLook(ctx, id)
-	return ix, end == cardWaiting
-}
 
 // AgentGone: the agent ix asks for is no longer in its computer's list (a list that is read, and does not have it).
 func (h larkHost) AgentGone(ix proto.Interaction) bool {

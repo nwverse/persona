@@ -1540,7 +1540,7 @@ func (s *Service) cancelMachineInteractions(machineID string) {
 		}
 	}
 	s.fleet.mu.Unlock()
-	s.feishuDetach(ids)
+	s.larkModule().AskDetached(ids, resumeGrace)
 	for _, id := range ids {
 		if s.endPreparedByID(id, "cancelled", "The computer that owned this approval disconnected; nothing changed.") {
 			continue
@@ -1563,7 +1563,7 @@ func (s *Service) cancelSessionInteractions(machineID, sessionID string) {
 	if len(ids) == 0 {
 		return
 	}
-	s.feishuDetach(ids)
+	s.larkModule().AskDetached(ids, resumeGrace)
 	for _, id := range ids {
 		if s.endPreparedByID(id, "cancelled", "The superseded Agent was released during node recovery; nothing changed.") {
 			continue
