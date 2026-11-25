@@ -295,6 +295,24 @@ func TestSearchFindsChatsByWhatWasSaid(t *testing.T) {
 	}
 }
 
+func TestSearchHidesInlineReferenceTrailersInOlderRows(t *testing.T) {
+	s, _, store := searchService(t)
+	body := "Use Review.\n\n<!-- persona-inline-v1 [[7,6,\"opaque-anchor\"]] -->"
+	err := store.PutSearchItems(t.Context(), "server", "trip", "", 1, []db.SearchItemRow{{
+		Seq: 1, ItemID: "inline#0", Role: "user", Body: body, Folded: chatsearch.Fold(body),
+	}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := searchFor(t, s, "Review")
+	if len(result.Results) != 1 || len(result.Results[0].Hits) != 1 || result.Results[0].Hits[0].Snippet != "Use Review." {
+		t.Fatalf("search for prose: %+v", result.Results)
+	}
+	if result := searchFor(t, s, "opaque-anchor"); len(result.Results) != 0 {
+		t.Fatalf("search for an anchor found %+v", result.Results)
+	}
+}
+
 // What a conversation gains is read after its cursor; a rewritten transcript is read again from the start; a read
 // that fails waits; a working conversation is read at most every few seconds.
 func TestSearchIndexKeepsUp(t *testing.T) {

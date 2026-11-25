@@ -527,6 +527,8 @@ type TaskRun struct {
 	// Facts: the run's facts Persona worked out (RenderBriefFacts), above the task's prompt; "" for a task without them.
 	Facts string
 	State string // formatted scheduled-task state and update instructions
+	// PageHeader: for a routine bound to a dashboard page (#13020), the rendered page_routine_run header.
+	PageHeader string
 }
 
 func RenderTaskRun(t TaskRun) string { return render("assistant/task_run", t) }
