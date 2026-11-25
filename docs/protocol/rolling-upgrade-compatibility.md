@@ -66,7 +66,8 @@
 | New manager, older node | `assistant.prepare.claude_md` retains the complete work and rich-view procedures. The older node ignores `work_guide_md` and `views_guide_md`, so it never refers to a built-in skill its binary does not carry. |
 | Older manager, new node | An absent `views_guide_md` keeps the manager's complete rich-view procedure. Existing `work_guide_md` behavior is unchanged. |
 | New manager and node | The node syncs both native skill roots before writing instructions. It selects compact rich-view guidance only when both managed `persona-views` copies are ready; if work guidance was requested, its readiness is checked independently. |
-| Local same-name skill | A newly introduced built-in does not adopt or replace an existing `persona-views` directory. The node retains the complete instructions because that local directory is not a verified managed copy. |
+| Local same-name skill | A newly introduced built-in does not adopt or replace an existing `persona-views` directory. The node retains the complete instructions because that local directory is not a verified managed copy. Ownership is marked inside the managed directory, so replacing it with a personal copy also restores the complete instructions. |
+| Node downgrade before the next prepare | The shared legacy inventory does not list `persona-views`. An older node therefore does not remove it as an unknown managed built-in, and a process resumed with compact instructions can still read the on-demand skill. The next prepare from an older manager restores the complete inline procedure. |
 
 ### MCP namespace / tools
 

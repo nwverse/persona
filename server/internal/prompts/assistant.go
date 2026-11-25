@@ -71,6 +71,8 @@ type AssistantClaudeMD struct {
 	PhoneTools bool
 	// PhoneCalendar keeps calendar-specific guidance conditional on that device tool being available.
 	PhoneCalendar bool
+	// PhoneCalendarWrite keeps the exact-occurrence safeguards when only calendar update/delete tools are mounted.
+	PhoneCalendarWrite bool
 	// FullViewGuide retains the complete rich-view procedure for older nodes and nodes where the managed
 	// persona-views skill is not ready. The default is the compact, on-demand form.
 	FullViewGuide bool

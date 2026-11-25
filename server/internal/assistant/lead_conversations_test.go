@@ -572,6 +572,52 @@ func TestDirectionEndWaitsForAnIdleRoleChange(t *testing.T) {
 	}
 }
 
+func TestDirectionFirstPinWhileSideWorksKeepsItsRole(t *testing.T) {
+	s, f := notesEnv(t)
+	ctx := context.Background()
+	side := mustSupervisionRole(t, prompts.SupervisionRoleSide)
+	todo, err := s.createTodo(ctx, "Keep the side work", "", "conv_side", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, todo.ID, "conv_side", []string{"Kept"}, 30)
+	listLeads(f, proto.Session{SessionID: "conv_side", Status: proto.StatusIdle})
+	if got := dispatchedPolicy(t, s, "conv_side"); got != side {
+		t.Fatalf("side before its first pin: %q", got)
+	}
+	// No direction record existed for that side send, so no RoleInEffect was recorded either.
+	listLeads(f, proto.Session{SessionID: "conv_side", Status: proto.StatusWorking})
+	if _, err := s.makeDirection(ctx, "conv_side", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := dispatchedPolicy(t, s, "conv_side"); got != side {
+		t.Fatalf("the first pin changed a working legacy side's policy: %q", got)
+	}
+	listLeads(f, proto.Session{SessionID: "conv_side", Status: proto.StatusIdle})
+	if got := dispatchedPolicy(t, s, "conv_side"); got != mustSupervisionRole(t, prompts.SupervisionRoleLeader) {
+		t.Fatalf("the idle send did not take the leader role: %q", got)
+	}
+}
+
+func TestDirectionFirstEndWhileLegacyLeaderWorksKeepsItsRole(t *testing.T) {
+	s, f := notesEnv(t)
+	ctx := context.Background()
+	leader := mustSupervisionRole(t, prompts.SupervisionRoleLeader)
+	todo, err := s.createTodo(ctx, "Keep the legacy lead", "", "conv_lead", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, todo.ID, "conv_lead", []string{"Kept"}, 30)
+	listLeads(f, proto.Session{SessionID: "conv_lead", Status: proto.StatusWorking})
+	if ended, err := s.endDirection(ctx, "conv_lead"); err != nil || !ended {
+		t.Fatalf("end: %v %v", ended, err)
+	}
+	// The pre-upgrade record had no RoleInEffect. The transition itself records the leader baseline.
+	if got := dispatchedPolicy(t, s, "conv_lead"); !strings.HasPrefix(got, leader) {
+		t.Fatalf("the first unpin changed a working legacy leader's policy: %q", got)
+	}
+}
+
 // A lead with no block in effect recorded yet (from before #11392, or never sent to since) keeps what it runs on when
 // the owner's first save or first clear comes while it works; the first idle send then carries the notes as they are.
 func TestDirectionNotesFirstSaveWhileTheLeadWorks(t *testing.T) {

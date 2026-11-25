@@ -194,6 +194,7 @@ func (s *Service) makeDirection(ctx context.Context, id, project, newProject, ti
 		}); err != nil {
 			return nil, err
 		}
+		s.directionRolesChanged(ctx, cfg.Leaders, s.settings(ctx).Leaders)
 		s.settingsChanged(ctx)
 	}
 	if project == "" && newProject != "" {
@@ -266,6 +267,7 @@ func (s *Service) endDirection(ctx context.Context, id string) (bool, error) {
 	}); err != nil {
 		return false, err
 	}
+	s.directionRolesChanged(ctx, cfg.Leaders, s.settings(ctx).Leaders)
 	b := &s.directions
 	b.mu.Lock()
 	if s.directionsLocked(ctx) {

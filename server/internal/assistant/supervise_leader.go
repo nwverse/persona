@@ -462,6 +462,7 @@ func (s *Service) leadersChange(ctx context.Context, cfg Settings, in []string) 
 			}); err != nil {
 				return "", err
 			}
+			s.directionRolesChanged(ctx, before, list)
 			// A lead taken out ends its direction as Unpin does: its open tasks go to main's supervision.
 			handed := 0
 			for _, id := range before {

@@ -263,6 +263,50 @@ func (s *Service) leaderPolicy(ctx context.Context, id, policy string, idle bool
 	return policy, nil
 }
 
+// directionRolesChanged records the role a conversation ran on immediately before leader membership changed. Older
+// records and side conversations without a direction record have no RoleInEffect yet; without this baseline their first
+// busy send after a pin or unpin would present the new role and the node would refuse the owner's message.
+func (s *Service) directionRolesChanged(ctx context.Context, before, after []string) {
+	machine := s.settings(ctx).MachineID
+	b := &s.directions
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.directionsLocked(ctx) {
+		return
+	}
+	changed := false
+	for _, transition := range []struct {
+		ids, other []string
+		role       prompts.SupervisionRole
+		ended      bool
+	}{
+		{ids: before, other: after, role: prompts.SupervisionRoleLeader, ended: true},
+		{ids: after, other: before, role: prompts.SupervisionRoleSide},
+	} {
+		for _, id := range transition.ids {
+			if slices.Contains(transition.other, id) {
+				continue
+			}
+			d := b.m[id]
+			if d == nil {
+				now := b.clock()
+				d = &direction{MachineID: machine, By: directionByAssistant, At: now}
+				if transition.ended {
+					d.EndedAt = &now
+				}
+				b.m[id] = d
+			}
+			if d.RoleInEffect == "" {
+				d.RoleInEffect = string(transition.role)
+				changed = true
+			}
+		}
+	}
+	if changed {
+		s.saveDirectionsLocked(ctx)
+	}
+}
+
 // notesInEffect is the notes block and leader/side role conversation id's policy carries on this send (#11392). A send
 // that finds it idle takes both as they are now and keeps them with the direction's record; any other send takes those
 // in effect, so edits and owner pin changes wait for an idle process instead of changing its fingerprint at work.

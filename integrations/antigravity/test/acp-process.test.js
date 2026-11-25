@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, relative } from 'node:path'
+import { basename, dirname, join, relative } from 'node:path'
 import { describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { AgyAcpClient } from '../lib/acp.js'
@@ -75,6 +75,30 @@ describe('agy acp process lifecycle', () => {
 
   it('resolves a path-like relative agy before changing the launch directory', TIMEOUT, async (t) => {
     const { client, cwds } = fakeClient(t, 'ok', { bin: relative(process.cwd(), process.execPath) })
+    await client.ensureStarted()
+    assert.equal(cwds().length, 1)
+  })
+
+  it('resolves a relative PATH entry before changing the launch directory', TIMEOUT, async (t) => {
+    const { client, cwds } = fakeClient(t, 'ok', {
+      bin: basename(process.execPath),
+      env: { PATH: relative(process.cwd(), dirname(process.execPath)) },
+    })
+    await client.ensureStarted()
+    assert.equal(cwds().length, 1)
+  })
+
+  it('preserves symlink and parent-directory executable resolution', TIMEOUT, async (t) => {
+    const root = mkdtempSync(join(tmpdir(), 'agy-link-'))
+    t.after(() => rmSync(root, { recursive: true, force: true }))
+    const target = join(root, 'target')
+    mkdirSync(join(target, 'inner'), { recursive: true })
+    symlinkSync(process.execPath, join(target, 'node'))
+    symlinkSync(join(target, 'inner'), join(root, 'link'))
+    // The kernel follows link into target/inner before .., so this names target/node.
+    // Lexically collapsing link/.. would instead name the nonexistent root/node.
+    const bin = relative(process.cwd(), root) + '/link/../node'
+    const { client, cwds } = fakeClient(t, 'ok', { bin })
     await client.ensureStarted()
     assert.equal(cwds().length, 1)
   })

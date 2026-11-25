@@ -75,6 +75,9 @@ func (s *Service) assistantPrompt(ctx context.Context, here string, larkCLI bool
 		if tool.Name == "phone_calendar_events" {
 			d.PhoneCalendar = true
 		}
+		if tool.Name == "phone_calendar_update_event" || tool.Name == "phone_calendar_delete_event" {
+			d.PhoneCalendarWrite = true
+		}
 	}
 	devices := s.devices(ctx)
 	if i := slices.IndexFunc(devices, func(d Device) bool { return d.ID == here }); i >= 0 {

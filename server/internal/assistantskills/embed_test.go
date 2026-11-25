@@ -336,7 +336,65 @@ func TestViewsGuideLeavesANewNameCollisionInPlace(t *testing.T) {
 					t.Fatalf("the handmade skill lost a file: %q, %v", b, err)
 				}
 			}
+			// A same-name skill in the user's own directory must not make Sync delete the handmade workspace copy.
+			skill(t, user, "persona-views", "A different user skill")
+			if err := Sync(dir, user, Selection{}, quiet); err != nil {
+				t.Fatal(err)
+			}
+			b, err := os.ReadFile(filepath.Join(dir, "persona-views", "SKILL.md"))
+			if err != nil || !strings.Contains(string(b), "Personal view construction") {
+				t.Fatalf("user linking replaced the handmade workspace skill: %s, %v", b, err)
+			}
+			if _, err := os.Lstat(filepath.Join(dir, "persona-views")); err != nil {
+				t.Fatal(err)
+			}
 		})
+	}
+}
+
+func TestViewsGuideOldNodeStampCannotDeleteManagedCopy(t *testing.T) {
+	dir, user := t.TempDir(), t.TempDir()
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+	if err := Sync(dir, user, Selection{}, quiet); err != nil {
+		t.Fatal(err)
+	}
+	stamp, err := os.ReadFile(filepath.Join(dir, builtinStamp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An older node removes an unknown built-in only when the shared stamp says this binary installed it.
+	if slices.Contains(installedNames(stamp), viewsGuideName) {
+		_ = os.RemoveAll(filepath.Join(dir, viewsGuideName)) // the older node's removal rule
+	}
+	if !viewsGuideInstalled(dir) {
+		t.Fatal("the older node's inventory would delete the skill a resumed compact prompt references")
+	}
+}
+
+func TestViewsGuideReplacementIsNotManaged(t *testing.T) {
+	dir, user := t.TempDir(), t.TempDir()
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+	if err := Sync(dir, user, Selection{}, quiet); err != nil {
+		t.Fatal(err)
+	}
+	if !viewsGuideInstalled(dir) {
+		t.Fatal("the initial managed guide is not ready")
+	}
+	if err := os.RemoveAll(filepath.Join(dir, viewsGuideName)); err != nil {
+		t.Fatal(err)
+	}
+	skill(t, dir, viewsGuideName, "Personal replacement")
+	for range 2 {
+		if err := Sync(dir, user, Selection{}, quiet); err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(filepath.Join(dir, viewsGuideName, "SKILL.md"))
+		if err != nil || !strings.Contains(string(b), "Personal replacement") {
+			t.Fatalf("the personal replacement was adopted or overwritten: %s, %v", b, err)
+		}
+		if viewsGuideInstalled(dir) {
+			t.Fatal("a replacement without Persona's in-directory marker is still considered managed")
+		}
 	}
 }
 

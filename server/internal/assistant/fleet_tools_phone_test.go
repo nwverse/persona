@@ -105,8 +105,21 @@ func TestAssistantInstructionsRequireDevicePhoneTools(t *testing.T) {
 
 	h.set(0, "phone_calendar_create_event")
 	if withCreate := s.claudeMD(context.Background(), "", false); strings.Contains(withCreate, "phone_reminders_create") ||
-		strings.Contains(withCreate, "手机日历（`phone_calendar_events`）") {
-		t.Error("calendar create alone injected reminder procedures or the unavailable calendar query tool")
+		strings.Contains(withCreate, "手机日历（`phone_calendar_events`）") || strings.Contains(withCreate, "occurrence_start") {
+		t.Error("calendar create alone injected reminder, query, or update procedures")
+	}
+
+	h.set(0, "phone_calendar_events", "phone_calendar_update_event", "phone_calendar_delete_event")
+	withCalendarWrites := s.claudeMD(context.Background(), "", false)
+	for _, want := range []string{"occurrence_start", "`span` 只在用户说了「以后都…」时用 `future`"} {
+		if !strings.Contains(withCalendarWrites, want) {
+			t.Errorf("calendar update/delete lost safeguard %q", want)
+		}
+	}
+	for _, unwanted := range []string{"phone_contacts_search", "phone_reminders_create", "快捷指令只能", "家庭设备先"} {
+		if strings.Contains(withCalendarWrites, unwanted) {
+			t.Errorf("calendar update/delete injected unrelated procedure %q", unwanted)
+		}
 	}
 }
 
