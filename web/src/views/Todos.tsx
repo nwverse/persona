@@ -2,6 +2,7 @@ import { decisionSourceLabel } from "../lib/todo-decision-label";
 import { NewTodoRepositoryBindings, TodoRepositoryBindings, useRepositoryRequestContext } from "../ui/TaskRepositoryBindingsEditor";
 import { cleanRepositoryDraft, createTodoWithRepositories, repositoryDuplicateLink, validRepositoryDraft, type CreateRepositoryBindings, type RepositoryCatalog } from "../lib/task-repositories";
 import { hasRequestPieces } from "../lib/request-pieces";
+import { ExternalSourcesEntry } from "../features/external-sources/ExternalSourcesEntry";
 import { defaultManager, MANAGER_HEADER, sameManager, useShownManager } from "../lib/manager-choice";
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type InputHTMLAttributes, type ReactNode, type RefObject } from "react";
@@ -199,20 +200,36 @@ function boardRoute(id?: string): Route {
   return { name: "todos", view: "board", ...(id ? { id } : {}) };
 }
 
-export function TodosView({
-  selectedId,
-  view,
-  mode: routeMode,
-  date,
-  onToggleSidebar,
-}: {
+type TodosViewProps = {
   selectedId?: string;
   /** The calendar (#2029) or read-only progress board (#12713) rather than the list; calendar mode/day from the address. */
   view?: "calendar" | "board";
   mode?: CalendarMode;
   date?: string;
   onToggleSidebar?: () => void;
-}) {
+  manager?: string;
+};
+
+const DirectionDetail = lazyPage(() => import("../features/external-sources/DirectionDetail").then((m) => m.DirectionDetail), { listed: false });
+
+export function TodosView({ directionId, ...props }: TodosViewProps & { directionId?: string }) {
+  return directionId
+    ? <PageBoundary page="direction-detail">
+        <Suspense fallback={<Loading />}>
+          <DirectionDetail id={directionId} manager={props.manager} onToggleSidebar={props.onToggleSidebar} />
+        </Suspense>
+      </PageBoundary>
+    : <TodoListView {...props} />;
+}
+
+function TodoListView({
+  selectedId,
+  manager: selectedManager,
+  view,
+  mode: routeMode,
+  date,
+  onToggleSidebar,
+}: TodosViewProps) {
   const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
   const repositoryManager = useShownManager();
   // with several assistants, the current one's to-dos (docs/assistant/managers.md "Clients"); a link to another assistant's
@@ -220,9 +237,15 @@ export function TodosView({
   const everyTodo = useStore((s) => s.todos);
   const ownTodos = useScoped(everyTodo);
   const todos = useMemo(() => {
+    if (selectedId && selectedManager) {
+      const chosen = everyTodo.find((td) => td.id === selectedId && sameManager(td.manager, selectedManager));
+      if (chosen && ownTodos.includes(chosen)) return ownTodos;
+      const others = ownTodos.filter((td) => td.id !== selectedId);
+      return chosen ? [...others, chosen] : others;
+    }
     const linked = selectedId && !ownTodos.some((x) => x.id === selectedId) ? everyTodo.filter((x) => x.id === selectedId) : [];
     return linked.length ? [...ownTodos, ...linked] : ownTodos;
-  }, [everyTodo, ownTodos, selectedId]);
+  }, [everyTodo, ownTodos, selectedId, selectedManager]);
   const todosLoaded = useStore((s) => s.todosLoaded);
   const todosError = useStore((s) => s.todosError);
   const todosSupported = useStore((s) => s.todosSupported);
@@ -614,7 +637,7 @@ export function TodosView({
     const open = new Map(filteredUncompleted.filter((td) => placed.open.has(td.id)).map((td) => [td.id, td]));
     return directionTree.directions
       .map((d) => ({ d, todos: (d.tasks ?? []).map((task) => open.get(task.id)).filter((td): td is Todo => !!td) }))
-      .filter((g) => g.todos.length > 0)
+      .filter((g) => !g.d.secretary || g.todos.length > 0)
       .map(({ d, todos }) => ({ d, todos, title: directionTitle(d, leaderTitles?.find((c) => c.session_id === d.id)?.title) }));
   }, [grouping, byDirection, directionTree, filteredUncompleted, placed, leaderTitles]);
   // open to-dos no 常驻 section lists: the hub nests a worker's to-do under its leader's Agent instead of listing it
@@ -1219,7 +1242,7 @@ export function TodosView({
               >
                 {todosError}
               </Empty>
-            ) : (filteredUncompleted.length === 0 || (grouping === "direction" && directionSections.length === 0 && directionUnlisted === 0 && directionRest.length === 0)) && filteredCompleted.length === 0 && filteredCancelled.length === 0 ? (
+            ) : (grouping === "direction" ? directionSections.length === 0 && directionUnlisted === 0 && directionRest.length === 0 : filteredUncompleted.length === 0) && filteredCompleted.length === 0 && filteredCancelled.length === 0 ? (
               offline && todos.length === 0 ? (
                 <OfflineState offline={offline} ring="ring-surface" className="py-14" />
               ) : search.trim() ? (
@@ -1315,6 +1338,7 @@ export function TodosView({
                       <TodoDirectionSection
                         key={g.d.id}
                         direction={g.d}
+                        manager={repositoryManager}
                         title={g.title}
                         todos={g.todos}
                         views={views}
@@ -1834,6 +1858,7 @@ function HiddenWaitingLine({ count, filter, onShowAll }: { count: number; filter
  *  folding title, the to-dos in the tree's order. */
 const TodoDirectionSection = memo(function TodoDirectionSection({
   direction,
+  manager,
   title,
   todos,
   views,
@@ -1845,6 +1870,7 @@ const TodoDirectionSection = memo(function TodoDirectionSection({
   onMenu,
 }: {
   direction: Direction;
+  manager: string;
   title: string;
   todos: readonly Todo[];
   views: ReadonlyMap<string, TodoRowView>;
@@ -1859,6 +1885,7 @@ const TodoDirectionSection = memo(function TodoDirectionSection({
   const [folded, toggle] = useFolded(`todos-direction:${direction.id}`, false, { holds });
   return (
     <div className="mt-1 first:mt-0" data-testid="todo-group" data-group={`direction:${direction.secretary ? "secretary" : direction.id}`}>
+      <div className="flex min-w-0 items-center">
       <button type="button" aria-expanded={!folded} onClick={toggle} className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-control px-2 text-left text-[12px] text-ink-2 hover:bg-hover [@media(pointer:coarse)]:min-h-11">
         <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
         <Icon name={direction.secretary ? "person" : "target"} size={12} stroke={2} className="shrink-0 text-ink-3" />
@@ -1866,6 +1893,9 @@ const TodoDirectionSection = memo(function TodoDirectionSection({
         {folded && <OwnerMarkCount count={ownerCount(todos, views)} />}
         <DirectionCountsText direction={direction} />
       </button>
+      {!direction.secretary && <IconButton icon="info" label={t("external-sources.direction_details")}
+        onClick={() => navigate({ name: "todos", direction: direction.id, manager })} />}
+      </div>
       {!folded && (
         <div className="flex flex-col gap-1 pl-2 pt-0.5">
           {todos.map((todo) => (
@@ -3820,9 +3850,11 @@ function TodoDetail({
 
       <TodoImages todo={todo} owner={owner} />
 
-      <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id}
-        prStatus={todo.pr_status} otherPRs={todo.other_prs} legacyPRs={legacyPR ? [legacyPR] : []} version={todo.updated_at} todosV2={todosV2}
-        onRepositoriesCount={todosV2 === true ? setRepositoryCount : undefined} />
+      <ExternalSourcesEntry manager={todo.manager ?? defaultManager()} kind="todo" id={todo.id} title={todo.title}>
+        <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id}
+          prStatus={todo.pr_status} otherPRs={todo.other_prs} legacyPRs={legacyPR ? [legacyPR] : []} version={todo.updated_at} todosV2={todosV2}
+          onRepositoriesCount={todosV2 === true ? setRepositoryCount : undefined} />
+      </ExternalSourcesEntry>
       {isWorkGoalV2 && childTodos.length > 0 && (
         <section className="mt-6" data-testid="todo-detail-subtasks">
           <div className="mb-2 text-submeta font-medium tracking-[0.04em] text-ink-3">
