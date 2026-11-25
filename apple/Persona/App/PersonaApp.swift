@@ -763,7 +763,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         content.body = ask.verdict ?? todo.title
         content.subtitle = todo.title
         content.categoryIdentifier = NotificationActions.decideCategory
-        content.userInfo = ["machine_id": "test", "session_id": "test",
+        content.userInfo = ["machine_id": "test", "session_id": "test", "todo_id": todo.id,
                             "todo": ["id": todo.id, "asked_at": ask.askedAt, "recommend": ask.recommend ?? ""]]
         try? await center.add(UNNotificationRequest(identifier: "test-decide", content: content,
                                                      trigger: UNTimeIntervalNotificationTrigger(timeInterval: 3, repeats: false)))
