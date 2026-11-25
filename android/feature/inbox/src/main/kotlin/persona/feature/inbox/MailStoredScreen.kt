@@ -21,7 +21,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import persona.core.designsystem.*
-import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.inbox.*
 import persona.core.navigation.Navigator
 
@@ -70,7 +70,7 @@ internal fun MailStoredScreen(repository: InboxRepository, route: MailRoute, nav
             }
         },
         bottomBar = {
-            if (record != null) DecisionButtons(JAction(stringResource(R.string.inbox_hand_to_ai), PhIcons.Robot) { handingOff = true },
+            if (record != null) DecisionButtons(JAction(stringResource(R.string.inbox_hand_to_ai)) { handingOff = true },
                 Modifier.imePadding().padding(Tokens.Space.m))
         }) {
         item("status") {
@@ -96,7 +96,7 @@ internal fun MailStoredScreen(repository: InboxRepository, route: MailRoute, nav
             }
         }
         record.item.summary?.takeIf { it.isNotBlank() }?.let { summary ->
-            item("summary") { JNotice(summary, Modifier.padding(top = Tokens.Space.m), title = stringResource(R.string.inbox_ai_summary), icon = PhIcons.Sparkle) }
+            item("summary") { JNotice(summary, Modifier.padding(top = Tokens.Space.m), title = stringResource(R.string.inbox_ai_summary), icon = PersonaIcons.ai) }
         }
         item("body") {
             Column(Modifier.padding(top = Tokens.Space.m)) {
