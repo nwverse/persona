@@ -22,6 +22,7 @@ import { acceptanceStands, latestReview, parkedLine, progressLine } from "../../
 import { acceptedAtRest, askOptions, isCancelled, openAsk, interruption, orphanedLine, stoppedReason, waitingLine, TODO_STATUS_INFO, type Todo, type TodoStatus } from "../../lib/todos";
 import { Button, toast, cx, useNow } from "../../ui/atoms";
 import { AcceptRow } from "./Brief";
+import { TaskActivityDetail } from "./TaskActivityDetail";
 import { BriefingMark } from "./BriefingMark";
 import { DecisionRow } from "./DecisionRow";
 import { ExpiredQuestion } from "./ExpiredQuestion";
@@ -162,11 +163,11 @@ export function WaitingTaskRow({ rowKey, todo, status, countsOpenAttr, tasks }: 
       <div className="flex min-w-0 items-center gap-2">
         <Icon name={cutOff ? "info" : "hand"} className={cx("shrink-0", cutOff ? "text-red" : "text-attention")} />
         <button type="button" onClick={() => openTask(todo.id)} className="min-w-0 flex-1 truncate text-left hover:underline">{todo.title}</button>
-        <span className={cx("shrink-0 text-xs", cutOff ? "text-ink" : "text-ink-2")}>{waitsLabel(todo, status)}</span>
+        <span className={cx("shrink-0 text-xs", cutOff ? "text-ink" : "text-ink-2")}>{waitsLabel(todo, status, task?.status === status ? task.wait : undefined)}</span>
       </div>
       {unattended && <div className="pl-6 text-xs text-ink-2">{t("assistant-task-details.tray_unattended")}</div>}
       {unattended && <div className="flex min-w-0 flex-col gap-1 break-words pl-6 text-xs text-ink-2">
-        <span data-task-status={agentKey}>{agentRowLabel(agentKey, task?.lead)}</span>
+        <span data-task-status={agentKey}>{agentRowLabel(agentKey, task?.lead, task?.wait)}</span>
         {chip && <span data-task-todo-state>{todoChipLabel(chip)}</span>}
       </div>}
       {line && <div className={cx("truncate pl-6 text-xs", cutOff ? "text-ink" : "text-ink-2")}>{line}</div>}
@@ -208,7 +209,9 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, fres
   const liveWork = !finished && state !== "cancelled" ? activity : undefined;
   const liveLine = backgroundWorkLine(liveWork);
   // parked by its supervisor (#3804): the row says so, until when and why, ahead of what its agent last did
-  const parked = liveWork || finished || state === "cancelled" ? undefined : parkedLine(todo);
+  const agentActive = !finished && state !== "cancelled" && task?.active;
+  const active = liveWork || agentActive || ["working", "waiting", "unread"].includes(state);
+  const parked = active || finished || state === "cancelled" ? undefined : parkedLine(todo);
   // the status column is the Agent's own state, drawn with the Agents' marks; the to-do's own state is its chip (#6492)
   const agentKey = agentRowKey({ live: !!liveWork, status: state, lead: task?.lead, todo: !!todo, starting });
   const rowIsFinished = !countsOpen && finished;
@@ -243,13 +246,13 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, fres
           <span className="min-w-0 truncate text-sm font-semibold" title={title}>{title}</span>
           {chip && <span data-task-todo-state className="max-w-1/2 shrink-0 truncate rounded-full bg-field px-1.5 text-xs text-ink-2">{todoChipLabel(chip)}</span>}
         </div>
-        <tasks.BackgroundWorkDetail activity={liveWork} detail={detail} pr={prNumber ? t("assistant-tasks.progress_pr", { number: prNumber }) : undefined} />
+        <TaskActivityDetail activity={liveWork} todo={active && todo?.supervision?.parked?.waiting_on === "date" ? todo : undefined} detail={detail} pr={prNumber ? t("assistant-tasks.progress_pr", { number: prNumber }) : undefined} />
         {!finished && state !== "cancelled" && meter && <TaskProgressMeter value={meter.value} total={meter.total} blocked={blocked} title={title} />}
       </div>
       {/* the status in its own right-aligned column (the rows' states scan down it), then the row's end: › where it opens
           something, ✓ once finished, ⓘ for a usage limit (#5569) */}
-      <span data-task-status={isNew ? "just_finished" : rowIsFinished ? "done" : agentKey} className={cx("col-start-2 row-start-2 min-w-0 break-words text-xs sm:max-w-[40%] sm:shrink-0 sm:text-right", isNew ? "text-green" : rowIsFinished ? "text-ink-2" : agentRowTone(agentKey))}>
-        {isNew ? stateName("just_finished") : rowIsFinished ? (accepted ? t("assistant-tasks.review_accepted") : TODO_STATUS_INFO.done.label) : agentRowLabel(agentKey, task?.lead)}
+      <span data-task-status={isNew ? "just_finished" : rowIsFinished ? "done" : agentKey} data-task-wait={!isNew && agentKey === "waiting" ? task?.wait ?? "unknown" : undefined} className={cx("col-start-2 row-start-2 min-w-0 break-words text-xs sm:max-w-[40%] sm:shrink-0 sm:text-right", isNew ? "text-green" : rowIsFinished ? "text-ink-2" : agentRowTone(agentKey, task?.wait))}>
+        {isNew ? stateName("just_finished") : rowIsFinished ? (accepted ? t("assistant-tasks.review_accepted") : TODO_STATUS_INFO.done.label) : agentRowLabel(agentKey, task?.lead, task?.wait)}
       </span>
       <span className="col-start-3 row-start-1 flex w-4 shrink-0 justify-center">
         {finished ? <Icon name="check" className="text-green" /> : state === "usage_limit" ? <Icon name="info" className="text-orange" /> : <Icon name="chevronRight" className="text-ink-3" />}

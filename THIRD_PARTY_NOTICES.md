@@ -17,6 +17,8 @@ The build collects their full license texts in a generated
 
 ## Brand marks
 
+The Harmony phone resources named `machine_os_*.svg` reuse the operating-system marks from the iOS brand catalog and the Apple mark from Simple Icons 15.0.0. Simple Icons provides the SVG paths under CC0. The marks remain subject to their owners’ brand terms.
+
 `apple/Persona/Resources/Assets.xcassets/Brands` and `apple/PersonaWatch/Assets.xcassets/Brands` hold other products' marks
 (`web/src/views/inbox/lark.svg` is a copy of `brand-lark` for the web inbox, and
 `android/core/designsystem/src/main/res/drawable/brand_lark.xml`, `brand_claude.xml`, `brand_openai.xml` and `brand_trae.xml`

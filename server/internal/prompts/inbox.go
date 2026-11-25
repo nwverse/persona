@@ -39,6 +39,12 @@ type InboxTriage struct {
 
 func RenderInboxTriage(t InboxTriage) string { return render("inbox/triage", t) }
 
+// RenderInboxReplyPolicyReview is the legacy schema's independent second review. The shared legacy/compiled reply-policy
+// declarations are below with the upstream localized prompt declarations.
+func RenderInboxReplyPolicyReview() string {
+	return render("inbox/reply_policy_review", nil)
+}
+
 // InboxGroup is the system prompt that relates a conversation's new messages to its events (inbox/group, #1680).
 type InboxGroup struct {
 	Owner string // "" is the Chinese "you"
@@ -165,6 +171,9 @@ type InboxAgent struct {
 	Item     InboxItem
 	Task     string // what to do: the triage's summary ("" the default)
 	Reason   string // the triage's reason
+	// ReplyPolicy adds the drafting restrictions only when this item is in an enabled policy's scope. False leaves the
+	// legacy prompt byte-identical when the feature is absent or disabled.
+	ReplyPolicy bool
 	// Resumed: the conversation that handled the event is gone; Recap and Chain are where it got to.
 	Resumed bool
 	Recap   string
@@ -360,11 +369,21 @@ type InboxReplyPolicy struct {
 	Rules      string   // optional extra classification guidance, trimmed
 }
 
-func RenderInboxReplyPolicy(p InboxReplyPolicy) string { return render("inbox/reply_policy", p) }
+func RenderInboxReplyPolicy(p ...InboxReplyPolicy) string {
+	if len(p) == 0 {
+		return render("inbox/reply_policy_legacy", nil)
+	}
+	return render("inbox/reply_policy", p[0])
+}
 
-// InboxReplyPolicyInput is the Inbox item (and optional proposed/final reply text) passed to the reply-policy
-// classifier (inbox/reply_policy_input).
+// InboxReplyPolicyInput combines the legacy owner-edit fields with the upstream localized item fields. Each renderer
+// selects its own template: legacy Text/Original/Edit never flow into the compiled schema's item presentation.
 type InboxReplyPolicyInput struct {
+	// Legacy Task 2 input.
+	Text     string
+	Original string
+	Edit     bool
+	// Upstream compiled-policy input.
 	Language  string // Native language name; empty preserves the legacy Chinese output.
 	Title     string
 	Sender    string
@@ -375,5 +394,10 @@ type InboxReplyPolicyInput struct {
 }
 
 func RenderInboxReplyPolicyInput(in InboxReplyPolicyInput) string {
+	legacy := in.Text != "" || in.Original != "" || in.Edit ||
+		(in.Language == "" && in.Title == "" && in.Sender == "" && in.Source == "" && in.Kind == "" && in.Context == "" && in.ReplyText == "")
+	if legacy {
+		return render("inbox/reply_policy_legacy_input", in)
+	}
 	return render("inbox/reply_policy_input", in)
 }

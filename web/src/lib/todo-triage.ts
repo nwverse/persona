@@ -56,6 +56,7 @@ export function waitingForMerge(todo: Todo, lookup: SessionLookup | undefined, n
   if (todo.done_at || !openMergePRs(todo, now).length) return false;
   const status = todoStatus(todo, lookup);
   if (status === "failed" || status === "needs_you" || status === "interrupted" || status === "working" || status === "waiting") return false;
+  if (hasActiveAgentWork(todo, lookup)) return false;
   if (reviewState(todo) === "user_check") return false;
   if (!decisionDismissed(todo) && waitsForOwner(todo)) return false;
   return true;
@@ -103,6 +104,15 @@ function ms(at: string | null | undefined): number {
   if (!at) return 0;
   const v = Date.parse(at);
   return Number.isNaN(v) ? 0 : v;
+}
+
+/** Unread on one session does not hide another session's live turn or background work. */
+export function hasActiveAgentWork(todo: Todo, lookup: SessionLookup | undefined): boolean {
+  return (todo.agents ?? []).some((a) => {
+    if (a.released_at || a.start_error) return false;
+    const background = lookup?.(a.machine_id, a.session_id)?.background_working;
+    return background || ["working", "waiting"].includes(todoStatus({ ...todo, agents: [a] }, lookup));
+  });
 }
 
 /** The last moment the to-do or any of its agents moved: its own times, its supervision's (reviews, reports), its
@@ -202,6 +212,7 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
   if (!todo.done_at && review === "parked") return at("parked", "parked");
   if (status === "working" || status === "waiting") return at("working", "agent_running");
   if (todo.done_at) return at(todo.kind === "concern" && fresh(ms(todo.done_at)) ? "just_done" : "done", "closed");
+  if (!settled && hasActiveAgentWork(todo, lookup)) return at("working", "agent_running");
   // A fallback date is not a state transition: keep overdue waits visible until the hub actually wakes them.
   if (!concern && acceptanceStands(todo)) return at("done", "accepted");
   // Live is delivery, not acceptance: an unreviewed live task stays open and awaiting review, however old or seen (#5732).

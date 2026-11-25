@@ -38,8 +38,8 @@ import {
   type TodayBody,
 } from "../../lib/feed";
 import { backgroundWorkLine, type BackgroundWork } from "../../lib/background-work";
-import { workflowCounts } from "../../lib/workflows";
 import { dockAgents, type DockAgent, heldDelivery, isRemovable, mostUrgentAgent, openAsk, taskNow, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { hasActiveAgentWork } from "../../lib/todo-triage";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { openAgent, openTask } from "../../lib/handoff";
 import { navigate } from "../../lib/router";
@@ -55,6 +55,7 @@ import { AcceptRow, BriefCard } from "./Brief";
 
 // A plan task's brief (#3822) comes with the first plan card that has one, as the decision row does.
 const PlanBrief = lazy(() => import("./TaskBrief").then((m) => ({ default: m.PlanBrief })));
+const TaskActivityDetail = lazyPage(() => import("./TaskActivityDetail").then((m) => m.TaskActivityDetail));
 const HeldPushesEntry = lazyPage(() => import("./HeldPushes").then((m) => m.HeldPushesEntry));
 
 // A decision's row comes with the tray's first decision, not with the first screen (startup-preload's budget); the
@@ -121,11 +122,11 @@ export function useTaskLookup() {
 function taskNowIn(s: State, todo: Todo, plans: Record<string, TaskPlan>): TaskNow {
   const lookup = answeredLookup(taskSessionLookup(s), s.interactions, s.answered);
   const status = statusOf(todo, lookup, plans);
-  return { status, lead: mostUrgentAgent(todo, lookup)?.session, wait: waitOf(todo, status, lookup) };
+  return { status, lead: mostUrgentAgent(todo, lookup)?.session, wait: waitOf(todo, status, lookup), active: hasActiveAgentWork(todo, lookup) };
 }
 
 /** A task's status, lead agent and, while it waits, what it waits on (#11090, lib/todo-wait-reason.ts waitOf). */
-type TaskNow = { status: TodoStatus; lead?: Session; wait?: WaitReason };
+type TaskNow = { status: TodoStatus; lead?: Session; wait?: WaitReason; active: boolean };
 
 /** A task's status and lead agent (undefined without the task). */
 export function useTaskNow(todo: Todo | undefined): TaskNow | undefined {
@@ -384,6 +385,46 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
   );
 }
 
+function planDispatchReason(dispatch: PlanTask["dispatch"]): string {
+  if (!dispatch || !dispatch.reason || dispatch.reason === "only") return "";
+  const rawArgs = dispatch.args ?? {};
+  const args: Record<string, string | number> = {};
+  for (const [k, v] of Object.entries(rawArgs)) {
+    if (typeof v === "string" || typeof v === "number") args[k] = v;
+  }
+  // dispatch.candidate is the 0-based index into the tier's candidates (the same index as /candidates); people count from 1
+  const candidate = typeof dispatch.candidate === "number" && dispatch.candidate >= 0 ? dispatch.candidate + 1 : 1;
+  const tier = args.tier ?? dispatch.tier ?? "";
+  const base: Record<string, string | number> = { ...args, tier, candidate };
+  const detail = args.detail ?? args.cause ?? args.provider ?? "";
+
+  switch (dispatch.reason) {
+    case "first":
+      return t("assistant-tasks.dispatch_reason_first", base);
+    case "score":
+      if (args.minutes !== undefined && args.first_pass !== undefined && args.headroom !== undefined) {
+        return t("assistant-tasks.dispatch_reason_score", base);
+      }
+      return t("assistant-tasks.dispatch_reason_score_short", base);
+    case "quota":
+      return detail
+        ? t("assistant-tasks.dispatch_reason_quota_detail", { ...base, detail })
+        : t("assistant-tasks.dispatch_reason_quota", base);
+    case "unavailable":
+      return t("assistant-tasks.dispatch_reason_unavailable", base);
+    case "kept":
+      return t("assistant-tasks.dispatch_reason_kept", base);
+    case "switched":
+      return detail
+        ? t("assistant-tasks.dispatch_reason_switched_detail", { ...base, detail })
+        : t("assistant-tasks.dispatch_reason_switched", base);
+    case "over_pace":
+      return t("assistant-tasks.dispatch_reason_over_pace", base);
+    default:
+      return t("assistant-tasks.dispatch_reason_fallback", { ...base, reason: dispatch.reason });
+  }
+}
+
 function PlanTaskRow({ n, task, numbered, ultra, busy, onUltra }: { n: number; task: PlanTask; numbered: boolean; ultra?: { on: boolean; blocked: string }; busy?: boolean; onUltra: (on: boolean) => void }) {
   const machines = useStore((s) => s.machines);
   const machine = machines.find((m) => m.id === task.machine)?.name ?? task.machine;
@@ -421,6 +462,10 @@ function PlanTaskRow({ n, task, numbered, ultra, busy, onUltra }: { n: number; t
       {/* it is asked for where it can't run: say it starts without */}
       {ultra?.blocked && ultra.on && <div className="text-label text-orange">{t("ultracode.plan_blocked", { reason: ultra.blocked })}</div>}
       {task.why && <div className="text-label text-ink-2">{task.why}</div>}
+      {(() => {
+        const dispatchLine = planDispatchReason(task.dispatch);
+        return dispatchLine ? <div data-testid="plan-task-dispatch" className="text-label text-ink-3">{dispatchLine}</div> : null;
+      })()}
       {/* what the task will be held to, shown before "Start" confirms it (#3822) */}
       {task.brief && (
         <Suspense fallback={null}>
@@ -681,7 +726,7 @@ const LazyMessageDraft = lazy(() => import("./MessageDraft"));
 // a hand-off conversation's write-back (#5932): loaded with the first such card
 const LazyHandoffCard = lazy(() => import("./HandoffCard").then((m) => ({ default: m.HandoffCard })));
 const LazyUrgentCallLine = lazy(() => import("./UrgentCallLine").then((m) => ({ default: m.UrgentCallLine })));
-export const draftTasks = { useTodo, useTaskNow, progressOf, TaskMark, openTask, useRetrying, retryTaskNow, taskInteraction, taskAsk, BackgroundWorkDetail };
+export const draftTasks = { useTodo, useTaskNow, progressOf, TaskMark, openTask, useRetrying, retryTaskNow, taskInteraction, taskAsk };
 
 function MessageCard({ item }: { item: FeedItem }) {
   return <Suspense fallback={null}><LazyMessageDraft item={item} tasks={draftTasks} /></Suspense>;
@@ -807,21 +852,7 @@ function TaskHandoffs({ item }: { item: FeedItem }) {
 /** One slot, one row: live task/session state wins over historical feed metadata. `fresh`: a Finished row the owner has
  *  not opened since it finished (#10922), drawn as new with Just finished's mark and word, as the To-dos page names it. */
 export function ProgressTaskRow(props: { card: TaskCardMetadata; conversation: string; activity?: BackgroundWork; countsOpen: boolean; fresh?: boolean; onOpen?: () => void }) {
-  return <Suspense fallback={<Loading />}><ProgressTaskPart {...props} tasks={draftTasks} /></Suspense>;
-}
-
-/** Workflow counts never disappear behind an ellipsized phase, even on a narrow tray or with large text. */
-function BackgroundWorkDetail({ activity, detail, pr }: { activity?: BackgroundWork; detail?: string; pr?: string }) {
-  if (!activity?.workflow || !activity.workflows) return <div className="truncate text-xs text-ink-2" title={detail}>{[detail, pr].filter(Boolean).join(" · ")}</div>;
-  const other = activity.tasks || activity.subagents ? backgroundWorkLine({ ...activity, workflows: 0, workflow: undefined }) : undefined;
-  return <>
-    <div className="flex min-w-0 items-center gap-1 text-xs text-ink-2" title={detail}>
-      <span className="min-w-0 truncate">{activity.workflow.phase || t("chat-runningstatusbar.background_workflow")}</span>
-      <span className="shrink-0 whitespace-nowrap tabular-nums"> · {workflowCounts(activity.workflow)}{activity.workflows > 1 ? ` · ${t("chat-runningstatusbar.more_workflows", { count: activity.workflows - 1 })}` : ""}</span>
-    </div>
-    {(activity.tasks || activity.subagents || pr) ? <div className="truncate text-xs text-ink-2" title={other}>{[activity.tasks || activity.subagents ? other : undefined, pr].filter(Boolean).join(" · ")}</div> : null}
-  </>;
-}
+  return <Suspense fallback={<Loading />}><ProgressTaskPart {...props} tasks={draftTasks} /></Suspense>;}
 
 /** One row of Needs you (lib/assistant-entries): a task or an Agent with the cards it asks, a plan to start, a task to
  *  decide on or review, a message to send. */
@@ -989,7 +1020,7 @@ function RunningAgentRow({ session, activity }: { session: Session; activity?: B
       <span className="flex w-4 shrink-0 justify-center"><StatusMark state="working" /></span>
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-semibold">{sessionTitle(session)}</div>
-        {detail && <BackgroundWorkDetail activity={activity} detail={detail} />}
+        {detail && <Suspense fallback={null}><TaskActivityDetail activity={activity} detail={detail} /></Suspense>}
       </div>
       <span className="max-w-[40%] shrink-0 truncate text-right text-xs text-ink-2">{stateName("working")}</span>
       <span className="flex w-4 shrink-0 justify-center"><Icon name="chevronRight" className="text-ink-3" /></span>
@@ -1075,8 +1106,9 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
     const row = conversations?.find((c) => c.session_id === id);
     return row ? conversationTitle(row) : t("assistant-tasks.needs_group_another");
   };
-  // The badge and the rows it opens share directUserWaiting: current direct questions, owner-only decisions and
-  // explicit acceptance. Unstarted/failed work, Agent permissions, terminal dialogs and generic retries stay out.
+  // The badge and the rows it opens share directUserWaiting: current direct questions, owner-only decisions,
+  // explicit acceptance, and escalated or hub-projected task cards. Unstarted/failed work, unescalated Agent
+  // permissions/terminal dialogs, delegating cards and generic retries stay out.
   // Other trays keep the existing To-dos open-work rule (#3331).
   const badgeOf = (items: { kind: string; countsOpen?: boolean }[]) =>
     items.reduce((n, item) => n + (item.kind === "task" ? (item.countsOpen ? 1 : 0) : 1), 0);

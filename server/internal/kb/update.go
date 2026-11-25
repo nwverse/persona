@@ -208,7 +208,7 @@ type (
 	Evidence   = kbwire.Evidence
 )
 
-var ErrNotFound = errors.New("not found")
+var ErrNotFound = kbwire.ErrNotFound
 
 // Get reads one entity. recentChars bounds a chat's latest messages in bytes, a recording's transcript in characters
 // (0: none).
@@ -290,6 +290,11 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 			raw := recording["transcript.md"]
 			d.Recent = clip(string(raw), recentChars)
 		}
+		if e.recordings == nil { // without the recording module: what waits for it is said, never rewritten
+			if r, ok := e.Store.Recording(id); ok {
+				d.Paused = e.recordingPaused(r)
+			}
+		}
 	}
 	if kind == KindChat && recentChars > 0 {
 		d.Recent = e.Store.Since(id, time.Now().AddDate(0, 0, -7), recentChars)
@@ -331,7 +336,7 @@ func (e *Engine) itemEntries(refs []string) []Entry {
 		}
 		if kind == KindRecording {
 			if r, ok := e.Store.Recording(id); ok {
-				by[kind] = append(by[kind], recordingEntry(r))
+				by[kind] = append(by[kind], e.recordingEntryOf(r))
 			}
 			continue
 		}
@@ -557,7 +562,7 @@ func (e *Engine) apply(kind, id string, uu UserUpdate, le linkEdit, writer strin
 			if ok {
 				p.Chats = addUnique(p.Chats, c.ID)
 				le.linked(&p.Tagging, "chats", c.ID)
-				p.People = addUnique(p.People, p.kept("people", c.People)...) // not the people the user took off it
+				p.People = addUnique(p.People, taggingKept(&p.Tagging, "people", c.People)...) // not the people the user took off it
 			}
 		}
 		if u.Log != "" {
@@ -773,6 +778,9 @@ func (e *Engine) apply(kind, id string, uu UserUpdate, le linkEdit, writer strin
 		r, ok := e.Store.Recording(id)
 		if !ok {
 			return "", ErrNotFound
+		}
+		if uu.ExpectedPinned != nil && r.Pinned != *uu.ExpectedPinned {
+			return "", ErrConflict
 		}
 		tagUpdate(u, &r.Tagging)
 		protectUpdate(u, &r.Tagging, le)

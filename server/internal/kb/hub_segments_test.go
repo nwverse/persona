@@ -191,9 +191,6 @@ func TestHubTranscriptCountsAsText(t *testing.T) {
 	if r := recordingNow(t, e, recID); r.Chars != len("Bo owns the vendor follow-up.") || r.MinutesState != MinutesPending {
 		t.Fatalf("hub text %+v", r)
 	}
-	if err := e.AskMinutes(recID); err != nil {
-		t.Fatalf("ask: %v", err)
-	}
 	// The next upload (the phone still has nothing) keeps counting the hub's.
 	putRecording(t, e, recID, hubUpload(2, now.Add(-time.Hour), true, nil), now)
 	if r := recordingNow(t, e, recID); r.Chars == 0 {

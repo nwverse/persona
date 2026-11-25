@@ -7,7 +7,8 @@
     "ts": "web/src/lib/todo-view-wire.ts",
     "swift": "apple/Packages/PersonaWire/Sources/PersonaWire/TodoViewWire.swift",
     "go": "server/internal/assistantwire/todo_view_gen.go",
-    "kotlin": "android/core/contracts/src/main/kotlin/persona/core/contracts/generated/TodoViewWire.kt"
+    "kotlin": "android/core/contracts/src/main/kotlin/persona/core/contracts/generated/TodoViewWire.kt",
+    "arkts": "harmony/entry/src/main/ets/models/TodoViewWire.ets"
   },
   "x-guard": ["arkts", "rust"],
   "x-reserved": ["AssistantNeeds"],

@@ -91,12 +91,13 @@ export function todoChipState(o: { toStart: boolean; status: string; done: boole
   if (review === "accepted" || o.status === "accepted") return t("assistant-tasks.review_accepted");
   if (review === "cancelled" || o.status === "cancelled") return t("assistant-tasks.review_cancelled");
   if (o.done || o.status === "done") return stateName("done");
-  if (review === "parked") return t("assistant-tasks.review_parked");
+  const agentBusy = o.status === "working" || o.status === "waiting" || o.status === "needs_you" || o.status === "unread";
+  if (review === "parked") return agentBusy ? undefined : t("assistant-tasks.review_parked");
   if (review === "needs_user") return t("assistant-tasks.review_needs_user");
   // Execution and the supervisor ledger are independent: resuming an Agent does not erase the to-do's review state.
   if (review === "pending_review") return t("assistant-tasks.review_pending");
   if (review === "rework") return t("assistant-tasks.review_rework", { round: o.todo?.supervision?.round ?? 1 });
-  if (o.stage === "merge" && o.pr) return t("assistant-tasks.todo_waiting_merge");
+  if (o.stage === "merge" && o.pr) return agentBusy ? undefined : t("assistant-tasks.todo_waiting_merge");
   return o.todo ? t("assistant-tasks.review_ongoing") : undefined;
 }
 
