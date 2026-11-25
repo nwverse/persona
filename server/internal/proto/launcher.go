@@ -520,8 +520,7 @@ func trimBasePathSuffix(base, suffix string) string {
 // Antigravity CLI. The node starts them with the two ignored rather than refusing the start (node/control.go, #8151).
 var WorkAgentTypes = []string{"pi", "cursor", "agy"}
 
-// NoModeAgentTypes are the other agents the node starts in a terminal, traex and Oh My Pi: it refuses a start of one
-// that names a permission mode or effort (node/control.go).
+// NoModeAgentTypes are the other terminal agents whose starts refuse Persona permission modes, TRAE CLI and Oh My Pi.
 var NoModeAgentTypes = []string{"traex", "omp"}
 
 // IsWorkAgentType: agent is one of WorkAgentTypes.

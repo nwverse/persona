@@ -422,7 +422,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if !t.preservePermission && t.CallerPermission != nil && t.Permission == "" && modes {
 		t.Permission = s.taskPermission(ctx, t.Machine, nil)
 	}
-	if !modes { // traex, omp…: no mode and no effort, whatever a default or a tier filled in (launcher_modes.go)
+	if !startTakesEffort(fit.agent) {
 		delete(params, "effort")
 		t.Effort = ""
 	}
