@@ -41,6 +41,9 @@ type (
 
 const (
 	FeishuText          = assistantwire.FeishuText
+	FeishuReact         = assistantwire.FeishuReact
+	FeishuUnreact       = assistantwire.FeishuUnreact
+	FeishuMessages      = assistantwire.FeishuMessages
 	FeishuResource      = assistantwire.FeishuResource
 	FeishuSave          = assistantwire.FeishuSave
 	FeishuUserName      = assistantwire.FeishuUserName
@@ -109,7 +112,7 @@ func contextText(s string) string {
 	return strings.ReplaceAll(strings.TrimSpace(prompts.ContextBody(s)), "\n", "\n      ")
 }
 
-// botTargetOf is the target a run of the chat answers (the core's feishu_progress.go).
+// botTargetOf is the target a run of the chat answers (the core's run_progress.go).
 func botTargetOf(r *channel.Run) botTarget {
 	kind := r.TargetKind
 	if kind == "" || kind == targetMain {

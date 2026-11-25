@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -33,7 +34,7 @@ func (f *fakeMemoryReader) MemorySourceReads(_ context.Context, b extmgr.MemoryR
 	if onRead != nil {
 		onRead(n)
 	}
-	if b.PageLimit != memoryExtensionPageLimit || b.Pages != memoryExtensionPages || b.Entries != memoryExtensionMost ||
+	if b.PageLimit != memoryExtensionPageLimit || b.ReadTimeout != memoryExtensionReadTimeout || b.TotalMost != memoryExtensionTotalMost ||
 		b.CallTimeout != memoryExtensionCallTimeout || b.AnswerMost != memoryExtensionAnswerMost {
 		return []extmgr.MemorySourceRead{{Err: errors.New("unexpected bounds")}}
 	}
@@ -389,5 +390,39 @@ func TestMostImportantWithin(t *testing.T) {
 	}
 	if got := mostImportantWithin(entries, 1); len(got) != 0 {
 		t.Errorf("%s", entryIDList(got))
+	}
+}
+
+// A targeted recall reaches the last page of a large source after it passes through mapping, the shared cache and
+// the public tool handler. The output budget is applied after the tag match, not to a prefix of the source.
+func TestDecisionsQueryMemoryBeyondFirstThousand(t *testing.T) {
+	s, _, st, _ := memoryAssembleService(t)
+	s.memoryEntries = &memEntrySource{}
+	s.store = func() Store { return &entriesMemStore{infoCategoryMemStore: st} }
+	var pages []wire.MemoryEntriesResult
+	for start := 0; start < 24001; start += 200 {
+		page := wire.MemoryEntriesResult{Tagged: true}
+		for i := start; i < min(start+200, 24001); i++ {
+			e := wire.MemoryEntry{ID: fmt.Sprintf("qa-%d", i), Text: "qa: unrelated filler", Status: "active"}
+			if i == 24000 {
+				e.Text, e.Subjects = "qa: late project entry", []string{"qa-late-project"}
+			}
+			page.Entries = append(page.Entries, e)
+		}
+		pages = append(pages, page)
+	}
+	s.memoryExtension = &memoryExtensionCache{r: &fakeMemoryReader{out: []extmgr.MemorySourceRead{{Pages: pages}}}}
+	raw, err := s.toolEntries(t.Context(), "qa-machine", "qa-main", "decisions_query", json.RawMessage(`{"tag":"qa-late-project"}`))
+	var out struct {
+		Memory []recalledMemory `json:"memory"`
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Memory) != 1 || out.Memory[0].ID != memoryExtensionIDPrefix+"qa-24000" {
+		t.Fatalf("late entry not recalled: %s", raw)
 	}
 }

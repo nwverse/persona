@@ -52,7 +52,6 @@ import type { Machine, Session } from "../lib/types";
 import { Collapse, cx, EASE, Kbd, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../ui/atoms";
 import { StatusMark } from "../ui/StatusMark";
 import { Icon } from "../ui/icons";
-import { HerdrNotices as HerdrNoticesContent } from "./agents/HerdrNotices";
 import { HubNoticeLine as HubNoticeLineContent } from "./agents/HubNoticeRow";
 import { DeleteSessionDialog, RenameDialog, RenameSpaceDialog } from "./chat/SessionDialogs";
 import { AGENT_ARCHIVES_FEATURE } from "../lib/agent-archives";
@@ -68,6 +67,7 @@ import { usePanes } from "../lib/terminal-panes";
 import { buildTerminalTree, shellsOnly, type TermSpace } from "../lib/terminals";
 import type { LinkTargetSpace } from "./LinkTodoDialog";
 import { lazyDialog } from "./LazyOverlay";
+import { lazyPage } from "../lib/lazy-page";
 import { FoldScope, useFolded } from "../lib/use-folded";
 import { clipsOverflow, glideBox, glideStyle, sameBox, type GlideBox, type Span } from "../lib/glide";
 import { AGENTS_FOLD, onGrouping, pagedAgentList } from "../lib/sidebar-api";
@@ -98,8 +98,28 @@ export { useNavPages, type NavPage } from "./SidebarParts";
 export { AgentRow, PersonaRow, SessionRow } from "./SidebarRows";
 export { SidebarRail } from "./SidebarRail";
 
+// The "herdr isn't running" rows (#1916) draw nothing until a computer's herdr is read as stopped, so their code, its
+// polling and their words are off the first screen and load with the sidebar's first render (#14339). Drawn only once
+// the chunk is in, never suspending: a Suspense here would hold the sidebar's other updates (a navigation) while it
+// loads. A chunk that will not load is reported, and the next mount asks again.
+const HerdrNoticesContent = lazyPage(() => import("./agents/HerdrNotices").then((m) => m.HerdrNotices));
+export const HerdrNotices = memo(function HerdrNotices() {
+  const [ready, setReady] = useState(HerdrNoticesContent.ready);
+  useEffect(() => {
+    if (ready) return;
+    let live = true;
+    HerdrNoticesContent.preload().then(
+      () => live && setReady(true),
+      (error: unknown) => reportBoundary(error, "herdr_notices", isChunkError(error)),
+    );
+    return () => {
+      live = false;
+    };
+  }, [ready]);
+  return ready ? <HerdrNoticesContent /> : null;
+});
+
 // Skip parent pushes with unchanged props; each leaf still receives its own state and subscription updates.
-const HerdrNotices = memo(HerdrNoticesContent);
 const HubNoticeLine = memo(HubNoticeLineContent);
 const NodePrompt = memo(NodePromptContent);
 const SidebarUsage = memo(SidebarUsageContent);

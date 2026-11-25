@@ -1,8 +1,9 @@
-package assistant
+package lark
 
 import (
 	"net/url"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
@@ -10,14 +11,11 @@ import (
 // botAnswerCards is how many cards one answer takes at most; the rest is in the app.
 const botAnswerCards = 5
 
-// answerCardMaxBytes bounds one complete answer card's JSON: Feishu refuses cards past ~30 KB; keep 2 KB margin.
-const answerCardMaxBytes = 28000
+// botAnswerPiece is how many runes one card of an answer holds: a card holds about 30 KB.
+const botAnswerPiece = 6000
 
-// botAnswerCard is one card of an answer and what is sent instead when Feishu refuses it.
-type botAnswerCard struct {
-	card     *botcard.Card
-	fallback string
-}
+// answerCardMaxBytes bounds one complete answer card's JSON (the core's push uses the same bound).
+const answerCardMaxBytes = assistantwire.AnswerCardMaxBytes
 
 // answerCards lays out a final answer as the bot's cards (RenderAnswer: header, sections, tables, links, tag):
 // process panel on the first when steps is not nil, foot under the last, a note when cut short. The panel is

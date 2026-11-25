@@ -156,6 +156,10 @@ func (s *Service) postViewAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	text, values, err := viewReplyMessage(v, key, in)
+	if err != nil && pageOfferAction(in.Action) && s.pageOffer(r.Context(), key) {
+		writeViewChanged(w, *row, v) // a draft no longer offered (expired, withdrawn): the card says so now
+		return
+	}
 	if err != nil {
 		apierr.Write(w, http.StatusBadRequest, err)
 		return
@@ -171,6 +175,11 @@ func (s *Service) postViewAction(w http.ResponseWriter, r *http.Request) {
 
 // commitViewAction stores the card's one selection with its outbox message, then delivers it.
 func (s *Service) commitViewAction(w http.ResponseWriter, r *http.Request, st viewActionStore, a db.AssistantViewActionRow, version int64, answer func(db.AssistantViewActionRow)) {
+	// A draft dashboard's Keep or Not now takes effect here, in the request, before the card's answer is stored and
+	// delivered in the background (pages_tool.go): the sidebar has the page even while the conversation's computer is off.
+	if s.applyPageOffer(w, r, st, a) {
+		return
+	}
 	stored, first, err := st.BeginAssistantViewAction(r.Context(), a, version)
 	if errors.Is(err, db.ErrAssistantViewVersion) {
 		viewChangedNow(w, r, st, a.Conversation, a.Key)

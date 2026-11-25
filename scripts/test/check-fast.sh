@@ -572,13 +572,17 @@ GO_GUARD_TESTS='^(TestHubAnswersOnlyItsOwnRoutes|TestHubDoesNotImportTheManager|
 '|TestRepositoryRetrievalGuidanceContract|TestEveryStartPathIsSupervisedOrOptedOut)$'
 
 # job_go_guards runs both guard commands, the second one also when the first failed, so one run names every failure.
+# In diff mode the first runs with CI_BASE_SHA set to the merge-base check-fast resolved, so archguard's
+# TestDomainLayers holds each domain count to the lower of its baseline and its count there, as the sleep ratchet's
+# --base does; --all is a full-tree run, held to the baseline only.
 job_go_guards() {
   [ "$HAVE_GO" -eq 1 ] || skip "go not found"
   JOB_SLOT=go
-  local _inner=$((TIMEOUT_GO_TEST - 10)) _rc=0
+  local _inner=$((TIMEOUT_GO_TEST - 10)) _rc=0 _base=""
   [ "$_inner" -lt 5 ] && _inner=5
-  in_dir server step "$TIMEOUT_GO_TEST" "go test ${GO_GUARD_PKGS[*]}" \
-    go test -count=1 -timeout "${_inner}s" "${GO_GUARD_PKGS[@]}" || _rc=$?
+  [ "$ALL" -eq 1 ] || _base=$MB
+  in_dir server step "$TIMEOUT_GO_TEST" "CI_BASE_SHA=$_base go test ${GO_GUARD_PKGS[*]}" \
+    env "CI_BASE_SHA=$_base" go test -count=1 -timeout "${_inner}s" "${GO_GUARD_PKGS[@]}" || _rc=$?
   in_dir server step "$TIMEOUT_GO_TEST" "go test -run <guard tests> ${GO_GUARD_TEST_PKGS[*]}" \
     go test -count=1 -timeout "${_inner}s" -run "$GO_GUARD_TESTS" "${GO_GUARD_TEST_PKGS[@]}" || _rc=$?
   return "$_rc"

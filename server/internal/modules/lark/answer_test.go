@@ -1,4 +1,4 @@
-package assistant
+package lark
 
 import (
 	"encoding/json"
@@ -29,7 +29,6 @@ func cardTags(t *testing.T, c botAnswerCard) ([]string, string) {
 }
 
 func TestAnswerCards(t *testing.T) {
-	needsLarkLayer(t) // the chat is the lark module's
 	if got := answerCards(i18n.ZhHans, nil, "# 标题\n正文", true, []string{"step"}, "foot"); got != nil {
 		t.Fatalf("quiet: %v", got)
 	}
@@ -63,7 +62,6 @@ func TestAnswerCards(t *testing.T) {
 
 // The panel is outside RenderAnswer's body byte budget: on a packed first card it shrinks until measured card.JSON() fits, oldest hidden first.
 func TestAnswerCardsPanelBudget(t *testing.T) {
-	needsLarkLayer(t) // the chat is the lark module's
 	// '<' expands to "&#60;" in card Markdown, packing the first card's answer near its byte budget.
 	packed := "# H\n" + strings.Repeat("<", 2400) + strings.Repeat("字", 3600)
 	t.Run("pathological on packed card", func(t *testing.T) {
@@ -103,7 +101,6 @@ func TestAnswerCardsPanelBudget(t *testing.T) {
 // A chart in an answer (persona-card, #3140) is written as numbers before the answer is cut into cards: one longer
 // than a card's budget does not vanish into an empty card, and one across the cut does not show its JSON.
 func TestAnswerCardsWriteChartsAsNumbersBeforeCutting(t *testing.T) {
-	needsLarkLayer(t) // the chat is the lark module's
 	var pts []string
 	for i := 1; i <= 300; i++ {
 		pts = append(pts, fmt.Sprintf(`{"label":"d%d","value":%d}`, i, 8000+i))

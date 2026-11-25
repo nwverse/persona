@@ -1019,8 +1019,10 @@ process also leaves the message unsent for the existing retry path.
 The idle clock, last actual context and attempt latch are kept in the node's existing Postgres-backed session
 record. User activity resets the clock on receipt, even while a send lock is held. A context reduction also restarts
 the idle interval. Dropping below the token threshold rearms compaction; context must then grow back over it and the
-new interval must elapse. Otherwise there is at most one attempt per idle interval, including failed attempts and
-node restarts. The manager carries this node-owned state opaquely through `db.NodeSession` and the existing
+new interval must elapse. When Claude Code explicitly reports that the summary was empty, the next eligible
+unattended delivery at least five minutes later can try once more. Other failures leave the existing attempt limit in
+place. The attempt and its retry are kept across node restarts. The manager carries this node-owned state
+opaquely through `db.NodeSession` and the existing
 `node_model` settings row, including the policy, idle timestamp, last actual context and attempt latch; no new table
 or migration is needed. A newly observed conversation or a changed policy starts a conservative fresh idle interval rather
 than guessing when the user last spoke.
@@ -1029,7 +1031,8 @@ than guessing when the user last spoke.
 
 The compaction before an idle process is let go (the "Idle compaction" bullet above) is the cheap one: the process is
 still running and the prompt cache, which lasts about an hour, still holds its context, so the summary reads the cache
-and whoever writes next starts from a small context. For the main chat, both of its numbers can be set (#12008):
+and whoever writes next starts from a small context. In the main chat, the session reports whether the compaction
+finished or failed and preserves Claude Code's reason when available. Both release settings can be changed (#12008):
 
 | Setting | Unset | Saved |
 | --- | --- | --- |
