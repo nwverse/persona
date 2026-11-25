@@ -263,7 +263,7 @@ func (h *Manager) larkSyncRunHeld(ctx context.Context, key, mode string, rt *lar
 	}
 	app, err := h.larkSyncApp(ctx, &st, b.BotID)
 	if err != nil {
-		h.larkSyncFinish(ctx, key, mode, larksyncwire.Result{}, err, nil)
+		h.larkSyncFinish(ctx, key, mode, larksyncwire.Result{}, err, nil, false, 0)
 		return err
 	}
 	reader := h.readerOf(rt)
@@ -286,7 +286,7 @@ func (h *Manager) larkSyncRunHeld(ctx context.Context, key, mode string, rt *lar
 		App: app, Backfill: larkSyncBackfill, Budget: budget}
 	cursors, err := store.LarkSyncCursors(ctx, key)
 	if err != nil {
-		h.larkSyncFinish(ctx, key, mode, larksyncwire.Result{}, nil, err)
+		h.larkSyncFinish(ctx, key, mode, larksyncwire.Result{}, nil, err, false, 0)
 		return err
 	}
 	token, handed := h.larkSyncTokenFunc(key)
@@ -309,12 +309,23 @@ func (h *Manager) larkSyncRunHeld(ctx context.Context, key, mode string, rt *lar
 	}
 	var commitErr error
 	var chats, docs int
+	madeProgress := false
+	backfillVer := 0
 	if runErr == nil {
+		moved := larkSyncMovedCursors(res)
+		madeProgress = larkSyncMadeProgress(cursors, res, moved)
 		var rows []db.LarkSyncOutbox
 		rows, chats, docs = larkSyncOutboxRows(binding, res, h.bots.sync.clock())
-		commitErr = store.CommitLarkSyncRun(ctx, key, larkSyncMovedCursors(res), idx.records(), rows)
+		commitErr = store.CommitLarkSyncRun(ctx, key, moved, idx.records(), rows)
+		if commitErr == nil && tier == larksyncwire.TierFull && b.BackfillVersion < larkSyncBackfillVersion {
+			repaired, done := h.larkSyncBackfillSenderNames(ctx, store, binding, &st, reader, token, handed)
+			chats += repaired
+			if done {
+				backfillVer = larkSyncBackfillVersion
+			}
+		}
 	}
-	if gone := h.larkSyncFinish(ctx, key, mode, res, runErr, commitErr); gone {
+	if gone := h.larkSyncFinish(ctx, key, mode, res, runErr, commitErr, madeProgress, backfillVer); gone {
 		// The binding was removed while it ran: what the run committed stays in the knowledge base, its cursors go.
 		h.larkSyncForget(ctx, key)
 		return errLarkSyncNoBinding
@@ -328,6 +339,209 @@ func (h *Manager) larkSyncRunHeld(ctx context.Context, key, mode string, rt *lar
 		}
 	}
 	return errors.Join(runErr, commitErr)
+}
+
+// larkSyncMadeProgress reports whether a run delivered any content or advanced at least one cursor beyond its
+// pre-run value. Used by ModeIM scheduling so a partial run that made forward progress keeps the 15-minute cadence
+// instead of backing off for an hour.
+func larkSyncMadeProgress(prev map[string]string, res larksyncwire.Result, moved map[string]string) bool {
+	if len(res.Messages) > 0 || len(res.Docs) > 0 {
+		return true
+	}
+	for k, v := range moved {
+		if v != "" && v != prev[k] {
+			return true
+		}
+	}
+	return false
+}
+
+// larkSyncBackfillSenderNames performs a one-time, idempotent sender-name backfill for chat messages synced before
+// #15486 (which landed in the outbox and knowledge base with empty SenderName). It scans chat outbox rows in sequence
+// order, skips messages that already have a newer named outbox entry, restricts lookups to messages belonging to
+// binding.Key (verified through lark_sync_index for multi-tenant isolation), resolves unique user open_ids via
+// larksyncwire.NameResolver, and emits repair chat batches so kb.Engine.Ingest can fill in sender names (and re-run
+// gateway alignment) in place. done is true when the binding can be marked at larkSyncBackfillVersion.
+func (h *Manager) larkSyncBackfillSenderNames(
+	ctx context.Context,
+	store larkSyncStore,
+	binding larksyncwire.Binding,
+	st *larkSyncState,
+	reader larksyncwire.Syncer,
+	token func(ctx context.Context) (string, error),
+	handed func() string,
+) (repairedChats int, done bool) {
+	resolver, ok := reader.(larksyncwire.NameResolver)
+	if !ok {
+		return 0, false
+	}
+	type candidate struct {
+		chat kbwire.SourceChat
+		msg  kbwire.SourceMessage
+	}
+	candidates := map[string]candidate{}
+	var order []string
+	var after int64
+	for {
+		rows, err := store.LarkSyncOutboxAfter(ctx, db.LarkSyncChat, after, 100)
+		if err != nil {
+			h.logf("lark sync: %s: sender-name backfill scan: %v", binding.Key, err)
+			return 0, false
+		}
+		for _, row := range rows {
+			after = row.Seq
+			var cb connector.ChatBatch
+			if err := json.Unmarshal(row.Payload, &cb); err != nil {
+				continue
+			}
+			for _, m := range cb.Messages {
+				if m.ID == "" || m.Mine {
+					continue
+				}
+				if strings.TrimSpace(m.SenderName) != "" {
+					delete(candidates, m.ID)
+					continue
+				}
+				if m.SenderID == "" || strings.HasPrefix(m.SenderID, "cli_") {
+					continue
+				}
+				if _, exists := candidates[m.ID]; !exists {
+					order = append(order, m.ID)
+				}
+				candidates[m.ID] = candidate{chat: cb.Chat, msg: m}
+			}
+		}
+		if len(rows) < 100 {
+			break
+		}
+	}
+	if len(candidates) == 0 {
+		return 0, true
+	}
+
+	// Count authorized chat-enabled bindings so a single-binding setup can still repair legacy outbox rows whose
+	// index entries are absent, while multi-binding setups strictly scope lookups to this binding's own messages.
+	fullBindings := 0
+	for _, b := range st.bindings {
+		if !b.authorized() {
+			continue
+		}
+		t := b.Tier
+		if !larksyncwire.ValidTier(t) {
+			t = st.tierOf(b.BotID)
+		}
+		if t == larksyncwire.TierFull {
+			fullBindings++
+		}
+	}
+	owned := map[string]candidate{}
+	var ownedOrder []string
+	keys := make([]string, 0, len(candidates))
+	ids := make([]string, 0, len(candidates))
+	for _, id := range order {
+		if _, ok := candidates[id]; ok {
+			ids = append(ids, id)
+			keys = append(keys, larksyncwire.KeyMessage+id)
+		}
+	}
+	indexMap := map[string]larksyncwire.IndexRecord{}
+	for start := 0; start < len(keys); start += 100 {
+		end := min(start+100, len(keys))
+		got, err := store.LarkSyncIndex(ctx, keys[start:end])
+		if err != nil {
+			h.logf("lark sync: %s: sender-name backfill index: %v", binding.Key, err)
+			return 0, false
+		}
+		for k, v := range got {
+			indexMap[k] = v
+		}
+	}
+	for _, id := range ids {
+		c := candidates[id]
+		rec, exists := indexMap[larksyncwire.KeyMessage+id]
+		mine := false
+		if exists {
+			mine = slices.ContainsFunc(rec.Sources, func(s larksyncwire.SourceRef) bool { return s.Binding == binding.Key })
+		} else if fullBindings <= 1 {
+			mine = true
+		}
+		if mine {
+			owned[id] = c
+			ownedOrder = append(ownedOrder, id)
+		}
+	}
+	if len(owned) == 0 {
+		return 0, true
+	}
+
+	uniqueSenders := map[string]bool{}
+	var openIDs []string
+	for _, id := range ownedOrder {
+		sid := owned[id].msg.SenderID
+		if !uniqueSenders[sid] {
+			uniqueSenders[sid] = true
+			openIDs = append(openIDs, sid)
+		}
+	}
+	slices.Sort(openIDs)
+
+	resolveBinding := binding
+	resolveBinding.Budget = 2 * time.Minute
+	names, err := resolver.ResolveUserNames(ctx, resolveBinding, token, openIDs)
+	if larkSyncKindOf(err) == larksyncwire.ErrKindAuth && ctx.Err() == nil {
+		if refused := handed(); refused != "" {
+			if _, rerr := h.larkSyncAccessToken(ctx, binding.Key, refused); rerr == nil {
+				names, err = resolver.ResolveUserNames(ctx, resolveBinding, token, openIDs)
+			}
+		}
+	}
+	if err != nil {
+		h.logf("lark sync: %s: sender-name backfill resolve: %v", binding.Key, err)
+	}
+	if len(names) == 0 {
+		// Complete when every lookup finished without a fatal/scope/deadline error (e.g. only deleted/external users).
+		return 0, err == nil
+	}
+
+	byChat := map[string]*connector.ChatBatch{}
+	var chatOrder []string
+	for _, id := range ownedOrder {
+		c := owned[id]
+		name := strings.TrimSpace(names[c.msg.SenderID])
+		if name == "" {
+			continue
+		}
+		cb := byChat[c.chat.ID]
+		if cb == nil {
+			chatCopy := c.chat
+			cb = &connector.ChatBatch{Chat: chatCopy}
+			byChat[c.chat.ID] = cb
+			chatOrder = append(chatOrder, c.chat.ID)
+		}
+		msgCopy := c.msg
+		msgCopy.SenderName = name
+		if cb.Chat.Kind == "dm" && cb.Chat.Name == "" && !msgCopy.Mine {
+			cb.Chat.Name = name
+		}
+		cb.Messages = append(cb.Messages, msgCopy)
+	}
+	var repairRows []db.LarkSyncOutbox
+	for _, cid := range chatOrder {
+		cb := byChat[cid]
+		slices.SortStableFunc(cb.Messages, func(x, y kbwire.SourceMessage) int { return x.At.Compare(y.At) })
+		raw, merr := json.Marshal(cb)
+		if merr != nil {
+			continue
+		}
+		repairRows = append(repairRows, db.LarkSyncOutbox{Kind: db.LarkSyncChat, CanonicalKey: "chat:" + cid, Payload: raw})
+	}
+	if len(repairRows) > 0 {
+		if cerr := store.CommitLarkSyncRun(ctx, binding.Key, nil, nil, repairRows); cerr != nil {
+			h.logf("lark sync: %s: sender-name backfill commit: %v", binding.Key, cerr)
+			return 0, false
+		}
+	}
+	return len(repairRows), err == nil
 }
 
 // larkSyncMovedCursors are the cursors of res to save: none of a resource that failed (the reader should not have
@@ -407,8 +621,10 @@ func larkSyncOutboxRows(b larksyncwire.Binding, res larksyncwire.Result, now tim
 
 // larkSyncFinish keeps how a run of key went: its health, last error, counts and when it runs next. A failed run
 // (an error before the hand-over, or the hand-over itself) counts towards the binding's circuit. IM incremental runs
-// (ModeIM) advance NextIMRunAt without disturbing the daily full run's NextRunAt. gone: the binding was removed meanwhile.
-func (h *Manager) larkSyncFinish(ctx context.Context, key, mode string, res larksyncwire.Result, runErr, commitErr error) (gone bool) {
+// (ModeIM) advance NextIMRunAt without disturbing the daily full run's NextRunAt; when a ModeIM run was partial only
+// because a large chat hit its budget/cap while still making forward progress, NextIMRunAt stays at 15 minutes
+// (larkSyncIMEvery) instead of backing off for an hour. gone: the binding was removed meanwhile.
+func (h *Manager) larkSyncFinish(ctx context.Context, key, mode string, res larksyncwire.Result, runErr, commitErr error, madeProgress bool, backfillVer int) (gone bool) {
 	now := h.bots.sync.clock()
 	_, err := h.larkSyncChange(context.WithoutCancel(ctx), func(st *larkSyncState) error {
 		b := st.binding(key)
@@ -420,6 +636,9 @@ func (h *Manager) larkSyncFinish(ctx context.Context, key, mode string, res lark
 			b.LastIMRunAt = now
 		} else {
 			b.LastRunAt = now
+		}
+		if backfillVer > b.BackfillVersion {
+			b.BackfillVersion = backfillVer
 		}
 		health, detail := larksyncwire.HealthOK, ""
 		failed := false
@@ -467,10 +686,22 @@ func (h *Manager) larkSyncFinish(ctx context.Context, key, mode string, res lark
 				b.NextRunAt = now.Add(wait)
 				b.NextIMRunAt = b.NextRunAt
 			}
-		case res.Partial || health == larksyncwire.HealthRateLimited:
+		case health == larksyncwire.HealthRateLimited:
 			b.Failures = 0
 			if imOnly {
 				b.NextIMRunAt = now.Add(larkSyncPartialNext)
+			} else {
+				b.NextRunAt = now.Add(larkSyncPartialNext)
+				b.NextIMRunAt = b.NextRunAt
+			}
+		case res.Partial:
+			b.Failures = 0
+			if imOnly {
+				if madeProgress && health != larksyncwire.HealthScopeMissing {
+					b.NextIMRunAt = now.Add(larkSyncIMEvery)
+				} else {
+					b.NextIMRunAt = now.Add(larkSyncPartialNext)
+				}
 			} else {
 				b.NextRunAt = now.Add(larkSyncPartialNext)
 				b.NextIMRunAt = b.NextRunAt

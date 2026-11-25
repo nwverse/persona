@@ -385,6 +385,13 @@ type Syncer interface {
 	Media(ctx context.Context, b Binding, token func(ctx context.Context) (string, error), ref string, limit int64) ([]byte, string, error)
 }
 
+// NameResolver is optionally implemented by a Syncer to resolve user display names by open_id using a binding's user
+// access token (used by the one-time sender-name backfill for pre-#15486 messages). Non-user ids and per-user lookup
+// errors are omitted; a missing contact scope or auth/context error is returned alongside any names resolved so far.
+type NameResolver interface {
+	ResolveUserNames(ctx context.Context, b Binding, token func(ctx context.Context) (string, error), openIDs []string) (map[string]string, error)
+}
+
 // Provider is what the Lark module provides for the sync (botport.Provider.Sync).
 type Provider struct {
 	// NewUserAuth is the OAuth client; accounts, when not "", replaces the accounts site and open is the open
