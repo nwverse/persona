@@ -424,6 +424,31 @@ describe("Built-in services", () => {
     expect(section("inbox")!.textContent).toContain("org/noisy");
     expect(requests.some((r) => r.url.includes("/bots/feishu"))).toBe(false);
   });
+
+  it("omits the Back button when onBack is undefined (desktop split-pane / phone) and renders it when provided", async () => {
+    const onBack = vi.fn();
+    for (const target of [
+      { kind: "builtin", id: "mail" } as const,
+      { kind: "builtin", id: "feishu-bot" } as const,
+      { kind: "extension", id: "larkx" } as const,
+    ]) {
+      act(() => {
+        root.render(<IntegrationDetail target={target} />);
+      });
+      await flush();
+      const hiddenBack = [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes(t("settings-integrations.back")));
+      expect(hiddenBack, `${target.id} without onBack`).toBeUndefined();
+
+      act(() => {
+        root.render(<IntegrationDetail target={target} onBack={onBack} />);
+      });
+      await flush();
+      const visibleBack = [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes(t("settings-integrations.back")));
+      expect(visibleBack, `${target.id} with onBack`).toBeDefined();
+      act(() => visibleBack!.click());
+    }
+    expect(onBack).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("Composite extension (connector + channel + sectioned config + lifecycle)", () => {

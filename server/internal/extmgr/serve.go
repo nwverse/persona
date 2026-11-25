@@ -768,6 +768,24 @@ func (h *Manager) ConnectorTool(name string) bool {
 	return h.connectors != nil && h.connectors.Offers(name)
 }
 
+// InboxVisibilityPreflight reports the provider's explicit visibility-enforcement declaration without running the tool.
+func (h *Manager) InboxVisibilityPreflight(name string) bool {
+	return h.connectors != nil && h.connectors.InboxVisibilityPreflight(name)
+}
+
+// InboxVisibilitySource resolves any registered connector tool to its source id. The assistant uses this positive
+// registry lookup rather than recognizing one vendor's tool names: an older arbitrary source must fail closed too.
+func (h *Manager) InboxVisibilitySource(name string) (string, bool) {
+	if h.connectors == nil || !h.connectors.Offers(name) {
+		return "", false
+	}
+	c := h.connectors.Owner(name)
+	if c == nil {
+		return "", false
+	}
+	return c.ID(), true
+}
+
 // ToolAccess classifies every tool CallTool can dispatch, without running it. Connector reads are declared by the
 // connector; its Actions are writes. Subscription dry runs only read, while save/run can change or notify. Computer,
 // browser and iPhone control are actions for this policy even when an individual invocation only observes.

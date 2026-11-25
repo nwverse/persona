@@ -264,6 +264,9 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 			s.Title = c.Name
 		}
 		n.setSessionContext(&s, m)
+		if s.ContextTokens > 0 && c.pid > 0 && paneEnvOfPID != nil {
+			setClaudeProcessWindow(&s, paneEnvOfPID(c.pid))
+		}
 		s.ModelFallback = m.modelFallback
 		s.Activity, s.ActivityAt = m.activityOf()
 		s.PermissionMode, s.Effort = n.currentModes(id, m)

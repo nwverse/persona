@@ -1548,6 +1548,8 @@ struct ChatView: View {
             RecapCard(items: items).chatPinned("recap-" + line.id) // where the open recap folds to (`dismissRecap`)
         case .viewed(_, let images):
             ViewedImagesRow(images: images).equatable()
+        case .toolViews(_, let views):
+            ToolViewAttachmentsRow(views: views, link: $link).equatable()
         }
     }
 
@@ -2887,6 +2889,7 @@ struct ChatView: View {
                 }
                 if !cardsDocked, !pendingCards.isEmpty {
                     PendingCards(cards: pendingCards, room: footerRoom)
+                        .stackSegment() // keep the deepest card subtree out of the page's opaque view chain (#15274)
                         .environment(\.cardSources, cardSources)
                         .task(id: CardSourceInputs(cards: pendingCards.map(\.id), count: store.items.count, last: store.items.last?.id)) {
                             findCardSources()
@@ -7010,6 +7013,7 @@ struct QueueStrip: View {
     /// (#8144).
     var agentName = "Claude"
     private var agent: String { persona ?? agentName }
+    private let relays: [QueuedRelay?]
     @State private var busy = false
     @State private var expanded = false
     /// Messages from other conversations collapse into one line until the owner opens them (#6394).
@@ -7018,6 +7022,19 @@ struct QueueStrip: View {
     @State private var rowHeight: CGFloat = 0
     @Environment(\.dynamicTypeSize) private var typeSize
     private static let visibleRows: CGFloat = 3
+
+    init(key: SessionKey, queued: [String], own: Int, sending: [PendingMessage] = [], photoMarks: [Int] = [],
+         steers: Bool = false, persona: String? = nil, agentName: String = "Claude") {
+        self.key = key
+        self.queued = queued
+        self.own = own
+        self.sending = sending
+        self.photoMarks = photoMarks
+        self.steers = steers
+        self.persona = persona
+        self.agentName = agentName
+        relays = queued.dropFirst(own).map { QueuedRelay($0) }
+    }
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
@@ -7063,7 +7080,10 @@ struct QueueStrip: View {
     }
 
     private var tray: some View { ThemedIcon("tray.and.arrow.down").accessibilityHidden(true) }
-    private var title: Text { Text("\(total) queued · \(agent) will handle them in order [Queue Strip]") }
+    private var title: Text {
+        if relays.contains(where: { $0?.noWake == true }) { return Text("\(total) queued [Queue Strip]") }
+        return Text("\(total) queued · \(agent) will handle them in order [Queue Strip]")
+    }
 
     /// The tray, the title on one line and Send Now at the end.
     private var oneLine: some View {
@@ -7263,9 +7283,17 @@ struct QueueStrip: View {
     @ViewBuilder
     private func relayedRow(_ i: Int) -> some View {
         let q = queued[i]
-        let draft = QueuedDraft(q)
+        let relay = relays[i - own]
+        let draft = QueuedDraft(relay?.text ?? q)
+        let source = relay.map { String(localized: "From \($0.source)") }
+        let body = QueuedWords.spoken(draft)
+        let words = [source, body].compactMap { $0 }.joined(separator: " · ")
+        let noWake = relay?.noWake == true
         Menu {
-            Button { UIPasteboard.general.string = draft.text.isEmpty ? q : draft.text } label: { Label("Copy [Readiness Views d37380]", systemImage: Theme.Icon.copy) }
+            Button {
+                let copy = QueuedDraft(q).text
+                UIPasteboard.general.string = copy.isEmpty ? q : copy
+            } label: { Label("Copy [Readiness Views d37380]", systemImage: Theme.Icon.copy) }
         } label: {
             HStack(alignment: .top, spacing: Theme.Space.s) {
                 Text("\(i + 1)")
@@ -7274,8 +7302,9 @@ struct QueueStrip: View {
                     .scaledFrame(width: Theme.Size.badge, height: Theme.Size.badge)
                     .background(Theme.accent.opacity(0.14), in: .circle)
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    if let source { Text(source).font(Theme.Font.labelStrong).lineLimit(1) }
                     QueuedWords(draft: draft)
-                    Text("Arrives when this turn ends [Queue Strip]")
+                    (noWake ? Text("Arrives with the next message [Queue Strip]") : Text("Arrives when this turn ends [Queue Strip]"))
                         .font(Theme.Font.caption).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
@@ -7286,7 +7315,9 @@ struct QueueStrip: View {
             .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
         }
         .disabled(busy)
-        .accessibilityLabel(Text("Item \(i + 1): \(QueuedWords.spoken(draft)), arrives when this turn ends [Queue Strip]"))
+        .accessibilityLabel(noWake
+            ? Text("Item \(i + 1): \(words), arrives with the next message [Queue Strip]")
+            : Text("Item \(i + 1): \(words), arrives when this turn ends [Queue Strip]"))
         .accessibilityIdentifier("queue-item")
         .accessibilityHint(Text("Copy [Readiness Views d37380]"))
     }
@@ -7481,6 +7512,8 @@ struct ChatLine: Identifiable {
         case day(Date)
         /// The images an exchange's work looked at, between it and the answer (`ViewedImages`, docs/protocol/protocol.md「Images viewed this turn」).
         case viewed(id: String, images: [ViewedImage])
+        /// Declarative extension views emitted out-of-band by a turn's tool calls (`ToolViews`).
+        case toolViews(id: String, views: [ExtensionView])
         /// A part of a long finished answer, a row of its own (#4970, `AnswerParts`): the first has the answer's id.
         case answerPart(item: Item, part: AnswerParts.Part, index: Int, count: Int)
         /// A permission mode change the hub recorded, at the end of the exchange it happened in (#10297,
@@ -7508,6 +7541,7 @@ struct ChatLine: Identifiable {
             case .placeMap(let m): "map-" + m.callID
             case .day(let d): "day-\(Int(d.timeIntervalSince1970))"
             case .viewed(let id, _): id
+            case .toolViews(let id, _): id
             case .answerPart(let item, _, let index, _): index == 0 ? item.id : item.id + "/part-\(index)"
             case .modeChange(let id, _): id
             case .modelChange(let id, _, _): id
@@ -7560,6 +7594,7 @@ struct ChatLine: Identifiable {
         return line
     }
     static func viewed(id: String, images: [ViewedImage]) -> Self { Self(.viewed(id: id, images: images)) }
+    static func toolViews(id: String, views: [ExtensionView]) -> Self { Self(.toolViews(id: id, views: views)) }
     static func answerPart(item: Item, part: AnswerParts.Part, index: Int, count: Int) -> Self {
         Self(.answerPart(item: item, part: part, index: index, count: count))
     }

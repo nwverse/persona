@@ -260,20 +260,31 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertNotIn("ci_run 'Collect regular iPad diagnostic evidence'", script)
         original_script = subprocess.run(['git', 'show', 'af32ff9d9459e4faafbba63cd93b3901bd487534:scripts/ci/apple.sh'], cwd=ROOT,
                                          check=True, capture_output=True, text=True).stdout
+        current = script.replace('ci_run "Download matching $platform 26.0 simulator runtime" 1200 python3 "$CI_ROOT/scripts/ci/apple_runtime.py" --platform "$platform" --download',
+                                 'ci_run "Download matching $platform 26.0 simulator runtime" 1200 xcodebuild -downloadPlatform "$platform" -architectureVariant universal')
         # The packages lane's PersonaWire tests came later (#12734) and are pinned on their own.
         wire = script[script.index('  # The wire layer every app target links,'):script.index("  ci_run 'PersonaKit unit tests'")]
         self.assertIn("ci_run 'PersonaWire unit tests'", wire)
         # So did the module registry's package tests (#13432), pinned on their own as well.
         modules = script[script.index('  # The module contract and registry (#13432'):script.index("  ci_run 'Persona Input build'")]
         self.assertIn("ci_run 'PersonaModuleAPI unit tests'", modules)
+        # The restored menu bar App has its own SwiftPM tests (#15026), outside apple/project.yml.
+        link_app = script[script.index('  # The Persona Link menu bar App'):script.index("  ci_run 'Persona Screen build'")]
+        self.assertIn("ci_run 'Persona Link menu bar unit tests'", link_app)
+        self.assertIn('apple/PersonaLink/App', link_app)
         # And the core-only build without the moved feature modules (#14017), split into its own lane in #14496.
         core_only = script[script.index('  fi\n  if [ "$LANE" = all ] || [ "$LANE" = ios-core-only ]; then'):script.index('fi\nif [ "$LANE" = ios18 ]; then')]
         self.assertIn("ci_run 'Generate core-only Apple project' 120 env PERSONA_CORE_ONLY=YES xcodegen generate", core_only)
         self.assertIn("ci_run 'Core-only iOS build' 1800", core_only)
         self.assertIn("ci_run 'Generate Apple project again (whole)' 120 xcodegen generate", core_only)
         for lane in ('ios', 'ios-focused', 'ios-regressions'):
-            current = script.replace('      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" \\\n      --derived-data "$output/ios-tests" &',
+            current = script.replace('ci_run "Download matching $platform 26.0 simulator runtime" 1200 python3 "$CI_ROOT/scripts/ci/apple_runtime.py" --platform "$platform" --download',
+                                     'ci_run "Download matching $platform 26.0 simulator runtime" 1200 xcodebuild -downloadPlatform "$platform" -architectureVariant universal')
+            current = current.replace('      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" \\\n      --derived-data "$output/ios-tests" &',
                                      '      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" &')
+            current = current.replace(link_app, '''  # The independent Link package contains only Persona Screen, built as mac-link.sh builds it; PersonaScreenCore's tests
+  # cover its capture decisions. There is no menu-bar app or separate Link UI test target to build.
+''')
             offline_generation = script[script.index('  OFFLINE_PROFILE=full'):
                                        script.index("  # A generic destination must retain the host's single runnable architecture.")]
             current = current.replace(offline_generation, '')
@@ -788,7 +799,9 @@ class AppleCIPreparationTests(unittest.TestCase):
     def test_runtime_remains_pinned_to_minimum_compiler(self):
         script = SCRIPT.read_text()
         self.assertIn('for platform in iOS watchOS; do', script)
-        self.assertIn('xcodebuild -downloadPlatform "$platform" -architectureVariant universal', script)
+        helper = (ROOT / 'scripts/ci/apple_runtime.py').read_text()
+        self.assertIn('apple_runtime.py" --platform "$platform" --download', script)
+        self.assertIn('["xcodebuild", "-downloadPlatform", platform, "-architectureVariant", "universal"]', helper)
         self.assertIn('--platform "$platform"', script)
         self.assertNotIn("-buildVersion 26.0", script)
         self.assertIn('--profile stock --runtime "$4"', script)
@@ -1085,6 +1098,38 @@ class AppleRuntimeTests(unittest.TestCase):
         watch = self.runtime("26.0", platform="watchOS")
         self.assertEqual(apple_runtime.select([ios, watch], "watchOS"), watch["identifier"])
         self.assertIsNone(apple_runtime.select([ios], "watchOS"))
+
+    def test_runtime_download_retries_within_the_existing_budget(self):
+        calls = []
+        sleeps = []
+        now = iter([0, 0, 5, 5, 15, 15])
+        responses = iter([subprocess.CompletedProcess([], 70), subprocess.CompletedProcess([], 0)])
+        def run(command, timeout):
+            calls.append((command, timeout))
+            return next(responses)
+        self.assertEqual(apple_runtime.download("watchOS", runner=run, sleeper=sleeps.append, clock=lambda: next(now)), 0)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(sleeps, [10])
+        self.assertEqual(calls[0][0], ["xcodebuild", "-downloadPlatform", "watchOS", "-architectureVariant", "universal"])
+        self.assertEqual(calls[0][1], 1200)
+        self.assertEqual(calls[1][1], 1195)
+        self.assertEqual(apple_runtime.select([self.runtime("26.0", platform="watchOS")], "watchOS"),
+                         "com.apple.CoreSimulator.SimRuntime.watchOS-26-0")
+        self.assertIsNone(apple_runtime.select([self.runtime("26.1", platform="watchOS")], "watchOS"))
+
+    def test_runtime_download_preserves_persistent_failure_and_timeout(self):
+        calls = []
+        def fail(command, timeout):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 70)
+        self.assertEqual(apple_runtime.download("watchOS", runner=fail, sleeper=lambda _: None,
+                                                clock=iter([0, 0, 0, 0, 0, 0]).__next__), 70)
+        self.assertEqual(len(calls), 3)
+        def timeout(command, timeout):
+            raise subprocess.TimeoutExpired(command, timeout)
+        self.assertEqual(apple_runtime.download("iOS", runner=timeout, sleeper=lambda _: None,
+                                                clock=iter([0, 0]).__next__), 124)
+
         self.assertIsNone(apple_runtime.select([self.runtime("26.2", platform="watchOS")], "watchOS"))
 
     def test_highest_compatible_patch_wins_without_selecting_newer_minor(self):

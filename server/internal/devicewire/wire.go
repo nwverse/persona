@@ -486,6 +486,11 @@ var Routes = []string{
 	// A computer's diagnosis and cache cleanup (#8037, internal/devices diagnosis.go).
 	"GET /api/v1/machines/{mid}/diagnosis",
 	"POST /api/v1/machines/{mid}/cleanup",
+	// A computer's disk usage map and its guarded trash (#14576, internal/devices usagemap.go).
+	"GET /api/v1/machines/{mid}/storage/usage",
+	"POST /api/v1/machines/{mid}/storage/trash",
+	"POST /api/v1/machines/{mid}/storage/trash/undo",
+	"POST /api/v1/machines/{mid}/storage/trash/purge",
 	"GET /api/v1/machines/{mid}/claude-dirs",
 	"PUT /api/v1/machines/{mid}/claude-dirs/blocked",
 	// Hidden Agent folders, beside the blocked Claude config folders (internal/devices agentdirs.go).

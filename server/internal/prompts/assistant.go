@@ -115,6 +115,7 @@ type AssistantHealthClaudeMD struct {
 	HealthDir      string
 	Language       string
 	Water          bool // The owner's added intake items; false when the Health module is absent or unavailable.
+	Strength       bool
 	Protein        bool
 	ItemsAvailable bool // The module can add items, including when neither intake item is added yet.
 }
@@ -937,6 +938,7 @@ type SuperviseEntry struct {
 	Ask             string              // needs_you: what it asks
 	Recommend       string              // escalated: the option the leader recommends
 	LeaderGone      bool                // decide: its task leader agent cannot be reached, so the supervisor takes the task over
+	SupervisorGone  bool                // decide: its assigned Assistant supervisor cannot receive the relay, so main takes over
 	Background      bool                // escalated: by the background supervisor, not a leader conversation (#4927)
 	DoneWhen        []string            // what done means
 	Round           int                 // reworks so far
@@ -1187,6 +1189,8 @@ type RuntimeInstructions struct {
 	Dir       string
 	Index     string // MEMORY.md, trimmed
 	Truncated bool   // Index is the start of a longer one
+	// MemoryTools tells remote runtimes (caps.remote_agent) to read and write shared memory via memory_read / memory_write.
+	MemoryTools bool
 	// Gates are the skills' gated commands this machine runs as tools (a plugin's assistant.gate with a tool).
 	Gates []RuntimeGate
 }
@@ -1365,9 +1369,6 @@ func RenderWorkspaceMention(w WorkspaceMention) string {
 	return render("assistant/workspace_mention", w)
 }
 
-// RenderWorkoutReport describes one consented workout, never a medical diagnosis.
-func RenderWorkoutReport(data string) string { return render("assistant/workout_report", data) }
-
 // SuperviseCloseout is an agent's own closeout as a supervision message shows it: its claim, to be checked.
 type SuperviseCloseout struct {
 	Status, Waiting   string
@@ -1426,11 +1427,13 @@ func RenderTodoDirection(d DirectionNotes) string {
 
 // SegmentHandoff continues the same logical conversation on a new engine.
 type SegmentHandoff struct {
-	Language string
-	Summary  string
-	Recent   []HandoffTurn
-	Text     string
-	Partial  bool
+	Language     string
+	FromLauncher string
+	FromModel    string
+	Summary      string
+	Recent       []HandoffTurn
+	Text         string
+	Partial      bool
 }
 
 func RenderSegmentHandoff(h SegmentHandoff) string { return render("assistant/segment_handoff", h) }
