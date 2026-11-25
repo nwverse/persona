@@ -944,7 +944,10 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
   };
 
   const outline = (
-    <aside className="hidden w-[208px] shrink-0 flex-col border-r border-line bg-surface md:flex md:h-full">
+    <aside
+      data-graph-outline-pane=""
+      className="hidden w-[208px] shrink-0 flex-col border-r border-line bg-surface md:flex md:h-full @min-[60rem]:w-[260px] @min-[80rem]:w-[300px]"
+    >
       <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
         <span className="min-w-0 flex-1 truncate text-meta font-semibold text-ink">{t("extensions-viewbody.graph_outline")}</span>
         <span className="shrink-0 text-submeta text-ink-3 tabular-nums">{laid.order.length}</span>
@@ -1129,7 +1132,7 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
       {timelineOpen && (
         <div className="max-h-40 overflow-y-auto pb-1">
           <div className="flex items-end gap-1.5 px-3">
-            <span className="w-[148px] shrink-0" />
+            <span className="w-[148px] shrink-0 @min-[60rem]:w-[200px]" />
             <div ref={trackRef} className="relative h-5 flex-1">
               {ticks.map((tick, i) => (
                 <span
@@ -1159,7 +1162,7 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
                 }}
                 className={cx("flex w-full items-center gap-1.5 px-3 text-left transition-colors hover:bg-hover", activeId === n.id && "bg-hover")}
               >
-                <span className="flex w-[148px] shrink-0 items-center gap-1.5">
+                <span className="flex w-[148px] shrink-0 items-center gap-1.5 @min-[60rem]:w-[200px]">
                   <span aria-hidden className="size-1.5 shrink-0 rounded-full" style={{ background: color }} />
                   <span className="min-w-0 flex-1 truncate text-submeta text-ink" title={n.title}>{n.title}</span>
                 </span>
@@ -1196,7 +1199,10 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
   const canvasBandClass = full ? "min-h-[180px] md:h-full" : timedNodes.length > 0 && timelineOpen ? "graph-canvas-timed" : "graph-canvas";
   const room = (
     <div
-      className={cx(full ? "flex h-full min-h-0 w-full flex-col overflow-hidden rounded-card border border-line bg-surface" : "graph-shell relative flex w-full flex-col")}
+      className={cx(
+        "@container",
+        full ? "flex h-full min-h-0 w-full flex-col overflow-hidden rounded-card border border-line bg-surface" : "graph-shell relative flex w-full flex-col",
+      )}
       onKeyDown={(e) => {
         if (e.key !== "Escape" || !activeInspectorNode) return;
         e.preventDefault();
