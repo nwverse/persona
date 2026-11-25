@@ -282,6 +282,7 @@ func TestMachineFallbackMovesMainWhenOfflinePastThresholdAndDrainsUndelivered(t 
 		cfg.MachineID = "server"
 		cfg.Main = "main-chat"
 		cfg.MainMachineID = "server"
+		cfg.Leaders = nil
 		cfg.Launcher = "claude"
 		cfg.MachineFallbacks = []string{"work-pc", "backup-a", "backup-b"}
 		cfg.MachineFallbackMinutes = &mins
@@ -441,6 +442,7 @@ func TestMachineFallbackReconnectNoSplitBrainAndEpochFenceProtectsManualChange(t
 		cfg.MachineID = "server"
 		cfg.Main = "main-chat"
 		cfg.MainMachineID = "server"
+		cfg.Leaders = nil
 		cfg.Launcher = "claude"
 		cfg.MachineFallbacks = []string{"backup-a"}
 		cfg.MachineFallbackMinutes = &mins
