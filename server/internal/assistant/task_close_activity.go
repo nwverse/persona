@@ -19,11 +19,12 @@ const taskActivityKey = "assistant.task_activity"
 const activityUnknown = "the user's recent session activity could not be loaded"
 
 type taskActivityBook struct {
-	mu       sync.Mutex
-	writing  sync.Mutex
-	loaded   bool
-	times    map[string]time.Time
-	retiring map[string]map[*taskRetirement]struct{}
+	mu           sync.Mutex
+	writing      sync.Mutex
+	loaded       bool
+	times        map[string]time.Time
+	ownerExcerpt map[string]string
+	retiring     map[string]map[*taskRetirement]struct{}
 }
 
 type taskRetirement struct{ cancel context.CancelFunc }
@@ -146,9 +147,13 @@ func (s *Service) taskUserActivityAt(machine, session string) (time.Time, bool) 
 
 type taskCloseHoldError struct {
 	todo, why string
+	work      *taskCloseWork
 }
 
 func (e *taskCloseHoldError) Error() string {
+	if e.work != nil {
+		return fmt.Sprintf("task %s cannot be closed: the user has an unfinished request in Agent %q (%s)", e.todo, e.work.title, e.work.items)
+	}
 	return fmt.Sprintf("task %s cannot be closed: %s. Leave the task open and retry after the user leaves the "+
 		"conversation and has been inactive for 10 minutes; do not stop or archive its Agent", e.todo, e.why)
 }
@@ -159,6 +164,13 @@ func (s *Service) taskCloseActivityError(ctx context.Context, t Todo, now time.T
 	}
 	s.loadSeen(ctx)
 	_ = s.loadTaskActivity(ctx)
+	return s.taskCloseSnapshotError(t, now)
+}
+
+func (s *Service) taskCloseSnapshotError(t Todo, now time.Time) error {
+	if work := s.taskCloseWorkSnapshot(t, now); work != nil {
+		return &taskCloseHoldError{todo: t.ID, work: work}
+	}
 	return s.taskCloseActivitySnapshotError(t, now)
 }
 

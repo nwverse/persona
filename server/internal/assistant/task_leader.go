@@ -765,9 +765,14 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	if t.DoneAt != nil && (a.Verdict == reviewRework || a.Verdict == reviewNeedsUser) {
 		return "", fmt.Errorf("task %s is done already (%s): hand out a new worker for what is left", t.ID, cmp.Or(t.DoneReason, "closed"))
 	}
+	if a.Verdict == reviewAccepted {
+		if err := s.todoCloseDeclineError(ctx, t); err != nil {
+			return "", err
+		}
+	}
 	if a.Verdict == reviewAccepted || a.Verdict == reviewCancelled {
 		if err := s.taskCloseActivityError(ctx, t, time.Now()); err != nil {
-			return "", s.deferTaskReview(ctx, t.ID, err)
+			return "", s.taskCloseToolError(ctx, s.deferTaskReview(ctx, t.ID, err))
 		}
 	}
 	var up string // the conversation a needs_user goes to: whoever handed the leader its task
@@ -819,7 +824,7 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 		return true
 	}, closing)
 	if err != nil {
-		return "", s.deferTaskReview(ctx, t.ID, err)
+		return "", s.taskCloseToolError(ctx, s.deferTaskReview(ctx, t.ID, err))
 	}
 	if criteriaErr != nil {
 		return "", criteriaErr

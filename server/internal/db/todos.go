@@ -377,6 +377,9 @@ type TodoEdit struct {
 	Title, Notes *string
 	InboxItem    *string
 	Done         *bool
+	// CloseGuard reads the caller's current in-memory close protections while the edit can still be rolled back.
+	// It must not access the database.
+	CloseGuard func() error
 	// RestartWork starts a new work round when Done is false even if the task was already open.
 	RestartWork bool
 	SetDue      bool
@@ -540,6 +543,9 @@ func (d *DB) EditTodo(ctx context.Context, id string, e TodoEdit, updatedAt time
 			}
 		}
 		updated = cur
+		if cur.DoneAt != nil && e.Done != nil && *e.Done && e.CloseGuard != nil {
+			return e.CloseGuard()
+		}
 		return nil
 	})
 	if err != nil {

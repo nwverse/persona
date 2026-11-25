@@ -262,9 +262,10 @@ func receiptID(todo string, e taskTurn) string {
 // taskTurnsDoc is the ledger as it is kept: the turns by todo, and since when it is kept (a turn that ended before
 // was handled, or not, by a manager that kept none: it is not taken up again).
 type taskTurnsDoc struct {
-	Since       time.Time                 `json:"since"`
-	Turns       map[string]taskTurn       `json:"turns"`
-	InboxEvents map[string]taskInboxEvent `json:"inbox_events,omitempty"`
+	Since         time.Time                 `json:"since"`
+	Turns         map[string]taskTurn       `json:"turns"`
+	InboxEvents   map[string]taskInboxEvent `json:"inbox_events,omitempty"`
+	CloseDeclines map[string]time.Time      `json:"close_declines,omitempty"`
 }
 
 // turnLook is the row of a task's last agent as the sweep last looked at it: it looks again when the row moved. A row
@@ -502,7 +503,7 @@ func (s *Service) pruneTurns(ctx context.Context) {
 	}
 	b := &s.tasks.turns
 	b.mu.Lock()
-	if !s.turnsLocked(ctx) || len(b.doc.Turns)+len(b.doc.InboxEvents) == 0 {
+	if !s.turnsLocked(ctx) || len(b.doc.Turns)+len(b.doc.InboxEvents)+len(b.doc.CloseDeclines) == 0 {
 		b.mu.Unlock()
 		return
 	}
@@ -512,6 +513,9 @@ func (s *Service) pruneTurns(ctx context.Context) {
 	}
 	for _, e := range b.doc.InboxEvents {
 		ids = append(ids, e.Todo)
+	}
+	for id := range b.doc.CloseDeclines {
+		ids = append(ids, id)
 	}
 	b.mu.Unlock()
 	var gone []string
@@ -533,6 +537,7 @@ func (s *Service) pruneTurns(ctx context.Context) {
 			delete(b.closed, SessionRef{MachineID: e.Machine, SessionID: e.Session})
 		}
 		delete(b.doc.Turns, id)
+		delete(b.doc.CloseDeclines, id)
 		delete(b.tries, id)
 		for key := range b.looked {
 			if key.Todo == id {

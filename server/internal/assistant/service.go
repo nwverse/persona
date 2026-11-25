@@ -1093,6 +1093,7 @@ func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 }
 
 func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) {
+	s.rememberTaskCloseExcerpt(r, text)
 	s.rememberSessionActivity(ctx, r.MachineID, r.SessionID)
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
 	if exitText(text) {

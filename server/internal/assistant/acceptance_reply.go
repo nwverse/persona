@@ -329,6 +329,17 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 		b.mu.Unlock()
 		return s.answerOutside(ctx, id, asked, outsideAnswer{Option: recommend}, byDefault)
 	}
+	if ownerCheck && !resumeOwnerPass {
+		if work := s.unconfirmedTaskClose(ctx, t); work != nil {
+			b.mu.Unlock()
+			return acceptResult{}, errCloseNotConfirmed
+		}
+	}
+	if resumeOwnerPass {
+		// The accepted ask already records the owner's approval. Recovery may
+		// finish its partial write without issuing a second confirmation.
+		ctx = context.WithValue(ctx, ownerCloseKey{}, ownerCloseConfirmation{todo: t.ID, reopened: t.ReopenedAt, recovering: true})
+	}
 	if todoOK && !byDefault {
 		var err error
 		completeDismissal, err = s.prepareDismissalForAnswer(ctx, t)

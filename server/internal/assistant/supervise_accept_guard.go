@@ -39,6 +39,7 @@ var (
 		`卡在用户|缺(?:少|的是)用户(?:才知道)?(?:的)?(?:信息|资料)`) // i18n-ignore: matches the original report text
 	// The agent's own closeout report (its work report's Status line) says the work is not finished or is blocked.
 	// Only an explicit non-done status matches: runtimes that write no report must never block an accept.
+	acceptWaitingRe    = lazyre.New(`(?im)^[ \t]*[-*][ \t]*Waiting[ \t]*[:：][ \t]*([^\r\n]*)`)             // i18n-ignore: matches the original report
 	acceptCloseoutRe   = lazyre.New(`(?im)^\s*[-*]\s*Status\s*[:：]\s*(not_done|blocked|waiting|unsure)\b`) // i18n-ignore: matches the original report's status delimiters
 	acceptCloseoutZhRe = lazyre.New(`(?m)^\s*[-*]\s*状态\s*[:：]\s*(没做完|未完成|卡住|阻塞|受阻|等待中|在等)`)                // i18n-ignore: matches the original report text
 )
@@ -72,6 +73,13 @@ func (s *Service) acceptGuardEvidence(ctx context.Context, t Todo, note, reason 
 // acceptGuardBlock says why a bare accepted must not close task t, "" when the result settles the task. matched names
 // the signal that fired, for the refusal message and the tests.
 func acceptGuardBlock(evidence string) (matched, why string) {
+	for _, line := range acceptWaitingRe.FindAllStringSubmatch(evidence, -1) {
+		switch strings.ToLower(strings.TrimSpace(line[1])) {
+		case "", "none", "n/a", "-", "—":
+		default:
+			return "closeout_waiting", "the agent's closeout lists unfinished follow-up in Waiting"
+		}
+	}
 	switch {
 	case acceptCloseoutRe.MatchString(evidence) || acceptCloseoutZhRe.MatchString(evidence):
 		return "closeout_not_done", "the agent's closeout status is not done (not finished, blocked or waiting)"
@@ -87,6 +95,8 @@ func acceptGuardBlock(evidence string) (matched, why string) {
 func acceptGuardRefusal(matched string) string {
 	base := "bare accepted refused: "
 	switch matched {
+	case "closeout_waiting":
+		base += "the agent’s closeout lists unfinished follow-up in Waiting. Resolve the wait or use needs_user when only the owner can unblock it"
 	case "closeout_not_done":
 		base += "the agent's own closeout says the work is not done. Re-review with verdict rework to send the gap back " +
 			"to the agent, or needs_user when only the owner can unblock it (why_owner, reason, recommend, options)"

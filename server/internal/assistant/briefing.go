@@ -450,6 +450,25 @@ func (s *Service) acceptTryFromBrief(ctx context.Context, id, askedAt string) (a
 	return s.acceptTryAsDismissalLocked(ctx, id, "", at, false)
 }
 
+// acceptTryFromApp asks before taking an owner Pass that would close a live Agent's work.
+// The answer path revalidates the round after the user responds to the card.
+func (s *Service) acceptTryFromApp(ctx context.Context, id, askedAt string) (acceptResult, error) {
+	t, ok := s.todoNow(id)
+	if ok && t.DoneAt == nil && userCheckAsked(t) {
+		a, found := s.askCopy(id)
+		at, err := time.Parse(timeKeyLayout, askedAt)
+		if err == nil && found && a.AskedAt.Equal(at) && a.AcceptedAt.IsZero() && !acceptAskStale(&a, t) {
+			if work := s.taskCloseWorkSnapshot(t, time.Now()); work != nil {
+				ctx, err = s.confirmOwnerTaskClose(ctx, t, work, true)
+				if err != nil {
+					return acceptResult{}, err
+				}
+			}
+		}
+	}
+	return s.acceptTryFromBrief(ctx, id, askedAt)
+}
+
 // briefGrace is how long after the morning briefing's time the acceptance reminders wait when that briefing lists the tasks
 // to verify itself: if it has not gone out by then they are sent one by one as before.
 const briefGrace = 60

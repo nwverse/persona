@@ -189,7 +189,12 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	closesTask := verdict == reviewCancelled || verdict == reviewAccepted && !a.UserCheck
 	if closesTask {
 		if err := s.taskCloseActivityError(ctx, t, time.Now()); err != nil {
-			return "", s.deferTaskReview(ctx, t.ID, err)
+			return "", s.taskCloseToolError(ctx, s.deferTaskReview(ctx, t.ID, err))
+		}
+	}
+	if verdict == reviewAccepted {
+		if err := s.todoCloseDeclineError(ctx, t); err != nil {
+			return "", err
 		}
 	}
 	restartUserCheck := t.Supervision.state(t) == reviewUserCheck && !closesTask && verdict != reviewAccepted
@@ -368,7 +373,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		closing.closed, err = s.reviewDoneTodo(ctx, t.ID, closing.reason, closing.accepted)
 	}
 	if err != nil {
-		return "", s.deferTaskReview(ctx, t.ID, err)
+		return "", s.taskCloseToolError(ctx, s.deferTaskReview(ctx, t.ID, err))
 	}
 	if criteriaErr != nil {
 		return "", criteriaErr
@@ -795,11 +800,13 @@ func (s *Service) reviewDoneTodoWithSupervision(ctx context.Context, id, reason 
 // reviewDoneTodoLocked commits the closure while todos.writing is held and returns its post-commit effects.
 func (s *Service) reviewDoneTodoLocked(ctx context.Context, id, reason string, accepted bool, ledger *Supervision, ownerPass bool) (bool, func(), error) {
 	guard := func() error {
-		if ownerPass {
-			return nil // the owner explicitly completed this verification round
-		}
 		if t, ok := s.todoNow(id); ok {
-			return s.taskCloseActivitySnapshotError(t, time.Now())
+			if !ownerPass {
+				return s.taskCloseSnapshotError(t, time.Now())
+			}
+			if work := s.unconfirmedTaskClose(ctx, t); work != nil {
+				return &taskCloseHoldError{todo: t.ID, work: work}
+			}
 		}
 		return nil
 	}
@@ -841,7 +848,7 @@ func (s *Service) reviewDoneTodoLocked(ctx context.Context, id, reason string, a
 	var activityErr error
 	_, doneKeys, ok := s.setTodoRow(id, row, func(t *Todo) bool {
 		if !persisted && !ownerPass {
-			if activityErr = s.taskCloseActivitySnapshotError(*t, time.Now()); activityErr != nil {
+			if activityErr = s.taskCloseSnapshotError(*t, time.Now()); activityErr != nil {
 				return false
 			}
 		}

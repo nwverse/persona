@@ -1226,7 +1226,21 @@ func (s *Service) todoRoutes() {
 			return
 		}
 		e.PartOf, e.After = links.PartOf, links.After
-		resTodo, err := s.editTodo(r.Context(), id, e)
+		ctx := r.Context()
+		if e.Done != nil && *e.Done {
+			if work := s.taskCloseWorkSnapshot(cur, time.Now()); work != nil {
+				if !fullRole(r) {
+					apierr.WriteCode(w, http.StatusConflict, "todo_close_active", &taskCloseHoldError{todo: id, work: work})
+					return
+				}
+				ctx, err = s.confirmOwnerTaskClose(ctx, cur, work, false)
+				if err != nil {
+					apierr.WriteCode(w, http.StatusUnprocessableEntity, "todo_close_not_confirmed", err)
+					return
+				}
+			}
+		}
+		resTodo, err := s.editTodo(ctx, id, e)
 		if err != nil {
 			if errors.Is(err, db.ErrTodoNotFound) {
 				apierr.Write(w, http.StatusNotFound, err)
@@ -1234,6 +1248,8 @@ func (s *Service) todoRoutes() {
 				apierr.WriteCode(w, http.StatusConflict, "outside_decision_pending", err)
 			} else if errors.Is(err, db.ErrConcernUnreported) {
 				apierr.Write(w, http.StatusConflict, err) // report its outcome instead: POST …/decisions {source: "reported"}
+			} else if hold := (*taskCloseHoldError)(nil); errors.As(err, &hold) {
+				apierr.WriteCode(w, http.StatusConflict, "todo_close_active", i18n.Err("assistant-todos.close_not_confirmed"))
 			} else if pe := (*pieceError)(nil); errors.As(err, &pe) {
 				apierr.Write(w, http.StatusBadRequest, err) // another write changed the request since it was checked
 			} else {
@@ -2076,7 +2092,7 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 	defer unlock()
 	guard := func() error {
 		if t, ok := s.todoNow(id); ok {
-			return s.taskCloseActivitySnapshotError(t, time.Now())
+			return s.taskCloseSnapshotError(t, time.Now())
 		}
 		return nil
 	}
@@ -2109,7 +2125,7 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 	var activityErr error
 	_, doneKeys, ok := s.setTodoRow(id, row, func(t *Todo) bool {
 		if st == nil {
-			if activityErr = s.taskCloseActivitySnapshotError(*t, time.Now()); activityErr != nil {
+			if activityErr = s.taskCloseSnapshotError(*t, time.Now()); activityErr != nil {
 				return false
 			}
 		}
