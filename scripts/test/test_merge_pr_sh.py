@@ -31,7 +31,7 @@ CONFIG_ENV = set(_privacy_check.CONFIG_ENV)
 sys.path.insert(0, str(SCRIPTS / "operations"))
 import pr_watch_merge  # noqa: E402
 
-RATCHET_SCRIPTS = ("changed_ratchets.py", "sleep_ratchet.py", "web_font_ratchet.py", "ratchet_base.py")  # scripts/ci
+RATCHET_SCRIPTS = ("changed_ratchets.py", "sleep_ratchet.py", "web_font_ratchet.py", "wire_types_ratchet.py", "ratchet_base.py")  # scripts/ci
 GO_TEST = "server/internal/demo/demo_test.go"
 
 FAKE_GH = r'''

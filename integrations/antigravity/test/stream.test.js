@@ -56,6 +56,31 @@ test('AGY streams one assistant message at a time across tool calls', { timeout:
   await until('live text cleared at completion', () => node.last('session.delta')?.text === '', 15_000)
 })
 
+for (const withTool of [true, false]) {
+  test(`AGY keeps text before a following thought in event order (tool: ${withTool})`, { timeout: 20_000 }, async (t) => {
+    const { node, update, chunk, promptCount, runtime } = await fixture(t)
+    await node.peer.call('session.send', { session_id: SESSION, text: 'Inspect.' })
+    await promptCount(1)
+    await chunk('I will inspect the file.')
+    update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Check its contents first.' } })
+    await until('thought after text is pushed', () => node.last('session.items')?.items.some((item) => item.kind === 'thinking'))
+    if (withTool) {
+      update({ sessionUpdate: 'tool_call', toolCallId: 'read', name: 'read_file' })
+      await until('tool after thought is pushed', () => node.last('session.items')?.items.some((item) => item.kind === 'tool_use'))
+    }
+    update({ end: true })
+    await until('turn settles before the final order is checked', () => runtime.idle() && node.last('session.delta')?.text === '')
+    const page = await node.peer.call('session.items', { session_id: SESSION })
+    assert.equal(page.items.filter((item) => item.role === 'assistant' && item.kind === 'text' && item.text === 'I will inspect the file.').length, 1)
+    assert.deepEqual(page.items.map((item) => [item.role, item.kind, item.text ?? item.tool_name]), [
+      ['user', 'text', 'Inspect.'],
+      ['assistant', 'text', 'I will inspect the file.'],
+      ['assistant', 'thinking', 'Check its contents first.'],
+      ...withTool ? [['assistant', 'tool_use', 'Read']] : [],
+    ])
+  })
+}
+
 test('AGY normalizes closed local file:// links while streaming without rewriting incomplete URLs', { timeout: 20_000 }, async (t) => {
   const { node, update, chunk, promptCount } = await fixture(t)
   await node.peer.call('session.send', { session_id: SESSION, text: 'Show the file.' })
@@ -874,18 +899,20 @@ test('pre-tool text is committed and partial user export keeps live history stab
 })
 
 test('queued sends acknowledge the queue and defer options until execution', async (t) => {
-  const { node, calls, update, promptCount } = await fixture(t)
+  const { node, calls, update, chunk, promptCount } = await fixture(t)
   await node.peer.call('session.send', { session_id: SESSION, text: 'First.' })
   await promptCount(1)
   const count = calls().length
   const result = await node.peer.call('session.send', { session_id: SESSION, text: 'Second.', model: 'next-model', mode: 'plan' })
   assert.equal(result.queued, true)
   assert.equal(calls().slice(count).some((call) => call.method === 'session/set_model' || call.method === 'session/set_mode'), false)
+  await chunk('First answer.')
   update({ end: true })
   await promptCount(2)
   const nextCalls = calls().slice(count)
   assert.ok(nextCalls.some((call) => call.method === 'session/set_model'))
   assert.ok(nextCalls.some((call) => call.method === 'session/set_mode'))
+  await chunk('Second answer.')
   update({ end: true })
 })
 
@@ -900,7 +927,7 @@ test('plan-mode starts advertise readonly support', async (t) => {
 
 for (const text of ['invalid-once', 'invalid-always']) {
   test(`stale sessions get one clean resume retry: ${text}`, async (t) => {
-    const { node, calls, update, promptCount } = await fixture(t)
+    const { node, calls, update, chunk, promptCount } = await fixture(t)
     const before = calls().length
     await node.peer.call('session.send', { session_id: SESSION, text })
     await promptCount(2)
@@ -910,6 +937,7 @@ for (const text of ['invalid-once', 'invalid-always']) {
       await until('retry failure published', () => node.last('runtime.sessions')?.sessions.find((s) => s.session_id === SESSION)?.turn_error === 'Invalid session')
       assert.equal(calls().filter((call) => call.method === 'session/prompt').length, 2)
     } else {
+      await chunk('The session resumed.')
       update({ end: true })
       await until('retried turn ends', () => node.last('runtime.sessions')?.sessions.find((s) => s.session_id === SESSION)?.status !== 'working')
     }
@@ -1036,10 +1064,11 @@ test('whitespace before a tool call does not allocate a text step', async (t) =>
 })
 
 test('a queued preparation failure remains visible after its queued acknowledgement', async (t) => {
-  const { node, update, promptCount } = await fixture(t)
+  const { node, update, chunk, promptCount } = await fixture(t)
   await node.peer.call('session.send', { session_id: SESSION, text: 'First.' })
   await promptCount(1)
   assert.equal((await node.peer.call('session.send', { session_id: SESSION, text: 'Queued.', model: 'invalid-model' })).queued, true)
+  await chunk('First answer.')
   update({ end: true })
   await until('queued failure published', () => node.last('runtime.sessions')?.sessions.find((row) => row.session_id === SESSION)?.turn_error?.includes('Unknown model'))
   const row = node.last('runtime.sessions').sessions.find((row) => row.session_id === SESSION)

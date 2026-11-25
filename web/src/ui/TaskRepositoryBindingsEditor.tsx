@@ -5,12 +5,15 @@ import { useRepositoryRequestContext as useRequestContext } from "../lib/use-rep
 import { t } from "../i18n";
 import { ApiError, errorText } from "../lib/api";
 import {
-  cleanRepositoryDraft, isExtensionProvider, loadRepositoryCatalog, loadTaskRepositories, repositoryDraft, repositoryLinkKindLabel,
-  repositoryLinkView, repositoryProviderName, saveTaskRepositories, validRepositoryAlias,
-  validRepositoryDraft, validRequestedRef, repositoryDuplicateLink,
+  cleanRepositoryDraft, formatRequestedRef, isExtensionProvider, isReferenceRepositoryLink, loadRepositoryCatalog, loadTaskRepositories,
+  partitionTaskRepositories, repositoryDraft, repositoryLinkKindLabel, repositoryLinkView, repositoryProviderName,
+  saveTaskRepositories, validRepositoryAlias, validRepositoryDraft, validRequestedRef, repositoryDuplicateLink,
   type CreateRepositoryBindings, type RepositoryCatalog, type RepositoryRequestContext, type RepositoryLinkInput, type RequestedRef,
-  type RepositoryLinkLabel, type RepositoryLinkView, type TaskRepository, type TaskRepositoryInput, type TaskRepositoryLink, type TaskRepositorySet,
+  type RepositoryLinkLabel, type RepositoryLinkView, type TaskRepository, type TaskRepositoryInput, type TaskRepositoryLink,
+  type TaskRepositoryRole, type TaskRepositorySet,
 } from "../lib/task-repositories";
+import { normalizedPR } from "../lib/todo-triage";
+import type { PRFacts } from "../lib/todos";
 import type { RepositoryIdentity } from "../lib/repository-identity";
 import { Group, Pill, Row, RowFailed, settingsInputClass } from "../views/settings/SettingsParts";
 import { Button, Collapse, Dialog, IconButton, Loading, Menu, toast, useMenu } from "./atoms";
@@ -42,8 +45,8 @@ const SourceNote = ({ name }: { name: string }) => <p role="status" data-reposit
  * the full value in its tooltip. An extension's source is named after the address, so a narrow line cuts its name
  * before the repository's path.
  */
-function RepositoryRow({ identity, name, source, children }: { identity: RepositoryIdentity; name?: string; source?: string; children?: React.ReactNode }) {
-  return <div className="flex items-center gap-2.5 px-4 py-2" data-repository-row>
+function RepositoryRow({ identity, name, source, role, children }: { identity: RepositoryIdentity; name?: string; source?: string; role?: TaskRepositoryRole; children?: React.ReactNode }) {
+  return <div className="flex items-center gap-2.5 px-4 py-2" data-repository-row data-repo-role={role}>
     <RepositoryMark provider={identity.provider} />
     <a href={identity.canonical_url} target="_blank" rel="noreferrer noopener" title={source ? `${identity.canonical_url} · ${source}` : identity.canonical_url}
       className="flex touch-hit min-w-0 flex-1 items-center gap-2">
@@ -59,7 +62,7 @@ function RepositoryRow({ identity, name, source, children }: { identity: Reposit
  * source may name the kinds its own way (`labels`, shown as given); a pasted address its source has not read yet is
  * the address itself, said to be checked on save.
  */
-function LinkRow({ identity, view, labels, onRemove, disabled }: { identity: RepositoryIdentity; view: RepositoryLinkView; labels?: readonly RepositoryLinkLabel[]; onRemove?: () => void; disabled?: boolean }) {
+function LinkRow({ identity, view, labels, pr, referenceBadge, onRemove, disabled }: { identity: RepositoryIdentity; view: RepositoryLinkView; labels?: readonly RepositoryLinkLabel[]; pr?: PRFacts; referenceBadge?: boolean; onRemove?: () => void; disabled?: boolean }) {
   if (view.pending) {
     return <div className="flex items-start gap-2 py-2 pr-4 pl-10" data-repository-link data-link-pending>
       <span data-link-icon="link" className="mt-0.5 shrink-0 text-ink-3"><Icon name="link" size={14} /></span>
@@ -77,15 +80,22 @@ function LinkRow({ identity, view, labels, onRemove, disabled }: { identity: Rep
     ?? t(view.kind === "issue" ? "task-repositories.issue" : "task-repositories.pull_request");
   const icon = view.kind === "issue" ? "target" : identity.provider === "gitlab" ? "merge" : "pullRequest";
   const tag = linkTag(identity, view);
+  const title = view.title || pr?.title?.trim();
+  const state = pr?.state === "open" && pr.draft ? "draft" : pr?.state;
+  const tones = { open: "green", draft: undefined, merged: "accent", closed: "red" } as const;
   return <div className="flex items-start gap-2 py-2 pr-4 pl-10" data-repository-link>
     <span data-link-icon={icon} className="mt-0.5 shrink-0 text-ink-3"><Icon name={icon} size={14} /></span>
-    <a href={view.url} target="_blank" rel="noreferrer noopener" aria-label={`${kind} ${tag} · ${identity.path}${view.title ? ` · ${view.title}` : ""}`}
-      className="flex touch-hit min-w-0 flex-1 items-start gap-2 text-meta leading-snug text-ink-3 hover:underline">
-      {view.title
-        ? <><span className="min-w-0 break-words">{view.title}</span><span className="shrink-0 font-medium tabular-nums text-accent-ink">{tag}</span></>
-        : <><span className="shrink-0">{kind}</span><span className="shrink-0 font-medium tabular-nums text-accent-ink">{tag}</span></>}
-      <Icon name="external" size={11} className="mt-1 ml-auto shrink-0 text-ink-3" />
-    </a>
+    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+      <a href={view.url} target="_blank" rel="noreferrer noopener" aria-label={`${kind} ${tag} · ${identity.path}${title ? ` · ${title}` : ""}`}
+        className="flex touch-hit min-w-0 flex-auto items-start gap-2 text-meta leading-snug text-ink-3 hover:underline">
+        <span className="min-w-0 break-words">{title || kind}</span>
+        <span className="shrink-0 font-medium tabular-nums text-accent-ink">{tag}</span>
+        <Icon name="external" size={11} className="mt-1 ml-auto shrink-0 text-ink-3" />
+      </a>
+      {referenceBadge && <span data-link-role="reference"><Pill>{t("task-repositories.link_role_reference")}</Pill></span>}
+      {state && <Pill tone={tones[state]}>{t(`session-gitpr.state_${state}`)}</Pill>}
+      {pr?.state === "open" && pr.conflicts && <Pill tone="orange">{t("task-repositories.pr_conflict")}</Pill>}
+    </div>
     {onRemove && <IconButton icon="x" size={24} iconSize={12} className="-mt-0.5" label={t("task-repositories.remove_link", { link: tag })} onClick={onRemove} disabled={disabled} />}
   </div>;
 }
@@ -285,11 +295,32 @@ const isUnsupported = (error: unknown) => error instanceof ApiError && error.sta
 
 /** A to-do's own PR, as the page already parses it (the editor does not read the stage bar, a first-screen chunk). */
 type LegacyPR = { url: string; text: string };
-type TodoRepositoryBindingsProps = { manager: string; owner: string; todoId: string; legacyPRs?: LegacyPR[]; version?: unknown };
+type TodoRepositoryBindingsProps = { manager: string; owner: string; todoId: string; legacyPRs?: LegacyPR[]; prStatus?: PRFacts; otherPRs?: PRFacts[]; version?: unknown; todosV2?: boolean; onRepositoriesCount?: (count: number) => void };
+
+function hasNewPRLinkTitle(previous: Map<string, PRFacts>, current: Map<string, PRFacts>, saved?: TaskRepositorySet) {
+  if (previous === current) return false;
+  const changed = (url: string) => {
+    const title = current.get(url)?.title?.trim();
+    return !!title && title !== previous.get(url)?.title?.trim();
+  };
+  // While a read is in flight we don't yet know which links its answer will contain.
+  if (!saved) return [...current.keys()].some(changed);
+  return saved.repositories.some(({ links }) => links.some((link) => link.kind === "pull_request" && changed(normalizedPR(link.canonical_url))));
+}
+
 export function TodoRepositoryBindings(props: TodoRepositoryBindingsProps) {
   return <TodoRepositoryBindingsSession key={`${props.owner}:${props.manager}:${props.todoId}`} {...props} />;
 }
-function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [], version }: TodoRepositoryBindingsProps) {
+function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [], prStatus, otherPRs, version, todosV2, onRepositoriesCount }: TodoRepositoryBindingsProps) {
+  const prByURL = useMemo(() => {
+    const facts = new Map<string, PRFacts>();
+    if (prStatus) facts.set(normalizedPR(prStatus.url), prStatus);
+    for (const pr of otherPRs ?? []) {
+      const url = normalizedPR(pr.url);
+      if (!facts.has(url)) facts.set(url, pr); // Earlier observations arrive newest first.
+    }
+    return facts;
+  }, [prStatus, otherPRs]);
   const context = useRequestContext(manager, owner);
   const [catalog, setCatalog] = useState<RepositoryCatalog>();
   const [saved, setSaved] = useState<TaskRepositorySet>();
@@ -308,8 +339,7 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
   const loads = useRef(0);
   const editingNow = useRef(editing);
   editingNow.current = editing;
-  const versionNow = useRef(version);
-  versionNow.current = version;
+  const versionNow = useRef(0);
   // A version change while the dialog is open or opening must not start a competing read: its answer could replace the
   // user's draft or the revision the dialog edits from. It is remembered and read after the dialog closes instead.
   const editorPending = useRef(false);
@@ -319,10 +349,10 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
   const busyOwner = useRef(0);
   const beginBusy = useCallback(() => { const token = ++busyOwner.current; setBusy(true); return token; }, []);
   const endBusy = useCallback((token: number) => { if (token === busyOwner.current) setBusy(false); }, []);
-  const inFlight = useRef<{ id: number; version: unknown; promise: Promise<TaskRepositorySet | undefined> } | undefined>(undefined);
+  const inFlight = useRef<{ id: number; version: number; promise: Promise<TaskRepositorySet | undefined> } | undefined>(undefined);
   // A read belongs to the version it began from. Reusing one that began before a version change would answer with the
   // state before the notification; the invalidated read returns undefined, so a fresh one is needed instead.
-  const startRead = useCallback((forVersion: unknown) => {
+  const startRead = useCallback((forVersion: number) => {
     const id = ++loads.current;
     const promise = loadTaskRepositories(context, todoId).then(
       (result) => id === loads.current && context.isCurrent() ? result : undefined,
@@ -336,10 +366,9 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
     if (editingNow.current || editorPending.current) { pendingRefresh.current = true; return; }
     setSaved(result); setDraft(repositoryDraft(result.repositories)); setUnsupported(false);
   }, [context]);
-  // Viewing reads the store: the Agent keeps it, so the detail is its newest word without opening an editor. StrictMode
-  // runs this effect twice (and the version re-runs it), so a second run adopts the read that is still current instead
-  // of starting a duplicate; one that did not would leave the section on its spinner for good.
+  // Viewing and editing share the same read generation so a late result cannot replace a newer repository revision.
   const [attempt, setAttempt] = useState(0);
+  const previousNotice = useRef<{ version: unknown; attempt: number; prByURL: Map<string, PRFacts> }>(undefined);
   const refresh = useCallback(async () => {
     if (!context.isCurrent()) return;
     const busy = beginBusy();
@@ -364,9 +393,15 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
   }, [context, beginBusy, endBusy, applyLoaded, startRead]);
   useEffect(() => {
     if (!context.isCurrent()) return;
+    const previous = previousNotice.current;
+    previousNotice.current = { version, attempt, prByURL };
+    // A manager title write advances the repository revision independently of the to-do's updated_at.
+    if (previous && Object.is(previous.version, version) && previous.attempt === attempt
+      && !hasNewPRLinkTitle(previous.prByURL, prByURL, inFlight.current ? undefined : saved)) return;
+    versionNow.current++;
     if (editingNow.current || editorPending.current) { pendingRefresh.current = true; return; }
     void refresh();
-  }, [context, todoId, version, attempt, refresh]);
+  }, [context, version, attempt, prByURL, saved, refresh]);
   // A completed close (save or cancel) fulfils the refresh that was held back while editing.
   useEffect(() => {
     if (editing || editorPending.current || !pendingRefresh.current || !context.isCurrent()) return;
@@ -440,10 +475,59 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
     finally { lock.current = false; endBusy(busy); }
   };
   const repositories = saved?.repositories ?? [];
+  useEffect(() => {
+    onRepositoriesCount?.(repositories.length);
+  }, [onRepositoriesCount, repositories.length]);
+  const matrix = useMemo(() => (todosV2 === true && repositories.length ? partitionTaskRepositories(repositories) : undefined), [todosV2, repositories]);
   const cleanDraft = cleanRepositoryDraft(draft);
   const duplicateLinks = repositoryDuplicateLink(cleanDraft, identities, saved?.repositories);
   const dirty = !!saved && JSON.stringify(cleanDraft) !== JSON.stringify(repositoryDraft(saved.repositories));
   if (unsupported && !legacyPRs.length) return null;
+  const renderMatrixGroup = (role: TaskRepositoryRole, rows: readonly TaskRepository[]) => {
+    if (!rows.length) return null;
+    const isTarget = role === "target";
+    return <Fragment key={role}>
+      <div data-repo-matrix-group={role} className="flex flex-wrap items-center justify-between gap-2 bg-inset px-4 py-1.5 text-submeta text-ink-3">
+        <span className="font-medium text-ink-2">{t(isTarget ? "task-repositories.role_target" : "task-repositories.role_reference")} ({rows.length})</span>
+        <span>{t(isTarget ? "task-repositories.role_target_hint" : "task-repositories.role_reference_hint")}</span>
+      </div>
+      {rows.map((repository) => {
+        const source = extensionSource(repository.source_snapshot.identity, repository.source_snapshot.provider_name, repository.provider_state);
+        const refLabel = formatRequestedRef(repository.requested_ref);
+        return <Fragment key={repository.repo_id}>
+          <RepositoryRow identity={repository.source_snapshot.identity} source={source?.name} role={role}>
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+              <span data-repo-role-badge={role}>
+                <Pill tone={isTarget ? "accent" : undefined}>
+                  {t(isTarget ? "task-repositories.role_target" : "task-repositories.role_reference")}
+                </Pill>
+              </span>
+              {refLabel && <span data-repo-ref={repository.requested_ref.value} title={repository.requested_ref.value}>
+                <Pill>
+                  <span className="inline-flex items-center gap-1">
+                    <Icon name="branch" size={11} />
+                    <span className="max-w-28 truncate">{refLabel}</span>
+                  </span>
+                </Pill>
+              </span>}
+              {source?.unavailable && <Pill>{t("task-repositories.unavailable")}</Pill>}
+              {!!repository.links.length && <Pill>{repository.links.length}</Pill>}
+            </div>
+          </RepositoryRow>
+          {repository.links.map((link) => {
+            const view = repositoryLinkView(repository.source_snapshot.identity, link);
+            return view ? <LinkRow key={`${link.kind}:${link.number}`} identity={repository.source_snapshot.identity} view={view} labels={repository.link_kinds}
+              pr={link.kind === "pull_request" ? prByURL.get(normalizedPR(link.canonical_url)) : undefined}
+              referenceBadge={isTarget && isReferenceRepositoryLink(link)} /> : null;
+          })}
+          {source?.unavailable && <SourceNote name={source.name} />}
+          {!!repository.catalog_state && repository.catalog_state !== "current" && <p role="status" data-repository-note className="py-2 pr-4 pl-10 text-submeta leading-snug text-ink-3">
+            {t(repository.catalog_state === "removed" ? "task-repositories.catalog_removed" : repository.catalog_state === "identity_changed" ? "task-repositories.identity_changed" : "task-repositories.unlisted")}
+          </p>}
+        </Fragment>;
+      })}
+    </Fragment>;
+  };
   return <section className="mt-6" data-todo-repositories>
     <Group title={t("task-repositories.section")} right={!unsupported &&
       // It stays enabled while the editor opens: a disabled button that had the focus drops it to the page, and the
@@ -455,23 +539,29 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
         ? legacyPRs.map((p) => <Row key={p.url} icon="pullRequest" hint={t("task-repositories.legacy_note")}
             label={<a href={p.url} target="_blank" rel="noreferrer noopener" className="text-accent-ink hover:underline">{p.text}</a>} />)
         : <>
-          {repositories.map((repository) => {
-            const source = extensionSource(repository.source_snapshot.identity, repository.source_snapshot.provider_name, repository.provider_state);
-            return <Fragment key={repository.repo_id}>
-              <RepositoryRow identity={repository.source_snapshot.identity} source={source?.name}>
-                {source?.unavailable && <Pill>{t("task-repositories.unavailable")}</Pill>}
-                {!!repository.links.length && <Pill>{repository.links.length}</Pill>}
-              </RepositoryRow>
-              {repository.links.map((link) => {
-                const view = repositoryLinkView(repository.source_snapshot.identity, link);
-                return view ? <LinkRow key={`${link.kind}:${link.number}`} identity={repository.source_snapshot.identity} view={view} labels={repository.link_kinds} /> : null;
+          {matrix
+            ? <div data-repo-matrix className="divide-y divide-line">
+                {renderMatrixGroup("target", matrix.target)}
+                {renderMatrixGroup("reference", matrix.reference)}
+              </div>
+            : repositories.map((repository) => {
+                const source = extensionSource(repository.source_snapshot.identity, repository.source_snapshot.provider_name, repository.provider_state);
+                return <Fragment key={repository.repo_id}>
+                  <RepositoryRow identity={repository.source_snapshot.identity} source={source?.name}>
+                    {source?.unavailable && <Pill>{t("task-repositories.unavailable")}</Pill>}
+                    {!!repository.links.length && <Pill>{repository.links.length}</Pill>}
+                  </RepositoryRow>
+                  {repository.links.map((link) => {
+                    const view = repositoryLinkView(repository.source_snapshot.identity, link);
+                    return view ? <LinkRow key={`${link.kind}:${link.number}`} identity={repository.source_snapshot.identity} view={view} labels={repository.link_kinds}
+                      pr={link.kind === "pull_request" ? prByURL.get(normalizedPR(link.canonical_url)) : undefined} /> : null;
+                  })}
+                  {source?.unavailable && <SourceNote name={source.name} />}
+                  {!!repository.catalog_state && repository.catalog_state !== "current" && <p role="status" data-repository-note className="py-2 pr-4 pl-10 text-submeta leading-snug text-ink-3">
+                    {t(repository.catalog_state === "removed" ? "task-repositories.catalog_removed" : repository.catalog_state === "identity_changed" ? "task-repositories.identity_changed" : "task-repositories.unlisted")}
+                  </p>}
+                </Fragment>;
               })}
-              {source?.unavailable && <SourceNote name={source.name} />}
-              {!!repository.catalog_state && repository.catalog_state !== "current" && <p role="status" data-repository-note className="py-2 pr-4 pl-10 text-submeta leading-snug text-ink-3">
-                {t(repository.catalog_state === "removed" ? "task-repositories.catalog_removed" : repository.catalog_state === "identity_changed" ? "task-repositories.identity_changed" : "task-repositories.unlisted")}
-              </p>}
-            </Fragment>;
-          })}
           {!saved && !error && <div className="px-4 py-3"><Loading /></div>}
           {/* A successful answer is the store's whole word, even empty: the manager imports the legacy history once and
               honours an explicit removal, so `pr_url` is a fallback for a missing route (above) and nowhere else. */}

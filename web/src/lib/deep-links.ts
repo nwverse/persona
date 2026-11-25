@@ -32,7 +32,7 @@ export const DEEP_KB_KINDS = ["projects", "topics", "chats", "people", "docs", "
  *  the two the same). */
 export const DEEP_SETTINGS_TABS: Record<string, string | null> = {
   general: null, persona: null, prompts: null, notifications: null, models: "purpose", agents: null, channels: "channel",
-  connectors: "connector", sources: null, extensions: "extension", shortcuts: null, devices: null, hub: null,
+  connectors: "connector", sources: "state", extensions: "extension", integrations: "integration", shortcuts: null, advanced: null, devices: null, hub: null,
   managers: null, knowledge: null, avatar: null, labs: null,
 };
 
@@ -100,6 +100,11 @@ export function pageOfPath(path: string, search = ""): DeepPage | null {
       return p.length === 2 ? clean({ page: "machine", id: p[1]!, range: v("range") }) : null;
     case "settings":
       if (p.length === 2 && p[1] === "sent") return { page: "settings", tab: "connectors", item: SENT };
+      if (p.length >= 2 && (p[1] === "sources" || p[1]!.startsWith("sources@"))) {
+        const pathManager = p[1]!.startsWith("sources@") ? p[1]!.slice("sources@".length) || undefined : undefined;
+        const item = p.length > 2 ? p.slice(2).join("/") : v("state");
+        return clean({ page: "settings", tab: "sources", item, manager: v("manager") ?? pathManager });
+      }
       return p.length === 1 ? settingsPage(q) : null;
     case "extension":
     case "plugin":

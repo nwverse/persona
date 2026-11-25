@@ -435,14 +435,18 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 	if codexOnRemote(argv) {
 		argv = append(argv, "-C", st.Cwd)
 	}
-	argv = append(argv, "resume", id)
+	thread := id
+	if _, raw, ok := n.codexThread(id); ok && raw != "" {
+		thread = raw
+	}
+	argv = append(argv, "resume", thread)
 	dir, err := os.MkdirTemp(n.dir, "codex-start-")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(dir)
 	file := filepath.Join(dir, "start.json")
-	b, _ := json.Marshal(codexStartFile{Source: sourceSession(st.ModelSource, id), Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), Dir: st.Cwd})
+	b, _ := json.Marshal(codexStartFile{Source: sourceSession(st.ModelSource, id), SourceHosts: sourceHostsFor(st.ModelSource), Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), Dir: st.Cwd})
 	if err := os.WriteFile(file, b, 0o600); err != nil {
 		return err
 	}

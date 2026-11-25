@@ -56,9 +56,9 @@ class ChatTableShotsTest {
     @Test fun incomingTablesInEveryStyleAndAtLargeTextSizes() {
         var scene by mutableStateOf(Scene(AppStyle.Glass, dark = false, fontScale = 1f))
         rule.setContent {
-            PersonaTheme(style = scene.style, darkTheme = scene.dark, reduceMotion = true) {
-                val density = LocalDensity.current
-                CompositionLocalProvider(LocalDensity provides Density(density.density, scene.fontScale)) {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, scene.fontScale)) {
+                PersonaTheme(style = scene.style, darkTheme = scene.dark, reduceMotion = true) {
                     Column(Modifier.width(360.dp).background(PersonaTheme.palette.background)) {
                         Box(Modifier.testTag("wide")) {
                             MessageContent(Item("wide", role = "assistant", kind = "text", text = wideTable), user = false)
@@ -101,9 +101,9 @@ class ChatTableShotsTest {
         }
         var current by mutableStateOf(scenes.first())
         rule.setContent {
-            PersonaTheme(style = current.scene.style, darkTheme = current.scene.dark, reduceMotion = true) {
-                val density = LocalDensity.current
-                CompositionLocalProvider(LocalDensity provides Density(density.density, current.scene.fontScale)) {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, current.scene.fontScale)) {
+                PersonaTheme(style = current.scene.style, darkTheme = current.scene.dark, reduceMotion = true) {
                     Box(Modifier.testTag("numbered").width(360.dp).background(PersonaTheme.palette.background)) {
                         MessageContent(Item("numbered-${current.language}", role = "assistant", kind = "text",
                             text = current.markdown), user = false)

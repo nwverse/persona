@@ -21,7 +21,7 @@ import (
 // fields differ from them (a field added, renamed, retyped or retagged by a change that did not update this file),
 // appendSession leaves every session to the reflect encoder: the session is sent whole, only slower, until its line
 // here and this hash are brought up to date. TestSessionWireMatchesReflect fails meanwhile and prints the new hash.
-const sessionWireLayout = 0xa8b13db3cab31849
+const sessionWireLayout = 0x3a4a9b026ed8443a
 
 var sessionWireCurrent = sessionLayout() == sessionWireLayout && hierarchyLayout() == hierarchyWireLayout
 
@@ -41,7 +41,7 @@ const (
 
 // hierarchyWireLayout is the layout hash of SessionHierarchy and SessionChildren, whose members appendSession writes
 // on the row: while either differs, appendSession leaves every session to the reflect encoder, as for sessionWireLayout.
-const hierarchyWireLayout = 0xec57eb10ec16d2c2
+const hierarchyWireLayout = 0xcbafbe8c1840ae26
 
 // hierarchyLayout hashes SessionHierarchy's fields, then SessionChildren's.
 func hierarchyLayout() uint64 {
@@ -138,6 +138,9 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.boolean(`"effort_change_failed":`, s.EffortChangeFailed, true)
 	w.boolean(`"context_restart_recommended":`, s.ContextRestartRecommended, true)
 	w.boolean(`"off_launcher":`, s.OffLauncher, true)
+	if s.BackgroundStalledSince != 0 {
+		w.time(`"background_stalled_since":`, s.BackgroundStalledSince.Time())
+	}
 	if s.Ultracode != nil {
 		w.boolean(`"ultracode":`, *s.Ultracode, false)
 	}
@@ -293,8 +296,12 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 		w.str(`"creation_id":`, h.CreationID, true)
 		w.str(`"asking_parent_session_id":`, h.AskingParentSessionID, true)
 		w.str(`"folded_under":`, h.FoldedUnder, true)
+		w.str(`"folded_under_machine_id":`, h.FoldedUnderMachineID, true)
 		w.str(`"folded_as":`, h.FoldedAs, true)
 		w.str(`"folded_side":`, h.FoldedSide, true)
+		w.str(`"parent_machine_id":`, h.ParentMachineID, true)
+		w.str(`"a2a_task_id":`, h.A2ATaskID, true)
+		w.str(`"subagent_origin":`, h.SubagentOrigin, true)
 		if c := h.Children; c != nil {
 			w.key(`"children":`)
 			w.open()

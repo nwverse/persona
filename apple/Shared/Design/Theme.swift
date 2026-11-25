@@ -1,8 +1,6 @@
 import SwiftUI
 #if os(iOS)
 import UIKit
-#elseif os(macOS)
-import AppKit
 #endif
 import PersonaWire
 
@@ -97,13 +95,8 @@ nonisolated enum Theme {
         static let chipRadius: CGFloat = 4
         static let rule: CGFloat = 1
         static let hostRotation = Angle.degrees(90)
-        #if os(macOS)
-        static var title: SwiftUI.Font { Font.body }
-        static var titleUnread: SwiftUI.Font { Font.bodyStrong }
-        #else
         static var title: SwiftUI.Font { Font.caption }
         static var titleUnread: SwiftUI.Font { Font.captionStrong }
-        #endif
         static var meta: SwiftUI.Font { Font.label }
         static var agent: SwiftUI.Font { Font.label }
     }
@@ -197,19 +190,9 @@ nonisolated enum Theme {
     static let monogramFill = Color(uiColor: .secondarySystemFill)
     #endif
 
-    /// A name's disc without a picture (`Monogram`) and its letter's color: the neutral disc in the label's color, or on
-    /// the Mac in a style with hued monograms (Lark, `StyleSpec.MacChrome.monogramHues`) the hue the name picks, the same
-    /// one on every launch, with a white letter. The iPhone, iPad and watch keep the neutral disc in every style.
+    /// A name's disc without a picture (`Monogram`) and its letter's color: the neutral disc in the label's color, in every
+    /// style.
     static func monogram(_ name: String) -> (fill: Color, ink: Color?) {
-        #if os(macOS)
-        let hues = spec.mac.monogramHues
-        if !hues.isEmpty {
-            // FNV-1a over the name: `hashValue` is seeded per process, so a person's color would change on every launch.
-            var h: UInt32 = 2_166_136_261
-            for s in name.unicodeScalars { h = (h ^ s.value) &* 16_777_619 }
-            return (hues[Int(h % UInt32(hues.count))], onSolid)
-        }
-        #endif
         return (monogramFill, nil)
     }
 
@@ -343,52 +326,6 @@ nonisolated enum Theme {
     /// The terminal grid (its own size setting), the Live Activity (system limits), the share card (a rendered
     /// image) and glyphs drawn to a frame are the exceptions.
     enum Font {
-        #if os(macOS)
-        // The Mac's text styles are smaller than the iPhone's and spaced differently (body 13, subheadline 11,
-        // footnote and caption 10): the iPhone's choices gave 10 pt times and sources next to 17 pt replies (#779).
-        // The Mac has its own sizes (`Level.size`; the user chose body 13, nothing under 11) in the system font, times
-        // `scale`. Text styles do not follow Dynamic Type on the Mac, so Small / Standard / Large move these through `scale`
-        // (#833), and the window is drawn again when it changes (`macLook`).
-        /// Small / Standard / Large on the Mac: how much larger the text is than the sizes at Standard (`Theme.textScale` of the
-        /// app's text size: body 12 / 13 / 14). Set by `AppModel.textSize`, on the main thread.
-        nonisolated(unsafe) static var scale: CGFloat = 1
-        /// Nothing is drawn under 11 pt (#779): at Small the 11 pt levels (caption, label, code) stay 11, the rest go down.
-        static let smallest: CGFloat = 11
-        /// A level's point size at the current `scale`.
-        static func pointSize(_ level: Level) -> CGFloat { max(level.size * scale, smallest) }
-        private static func sized(_ level: Level, _ weight: SwiftUI.Font.Weight = .regular, design: SwiftUI.Font.Design = .default) -> SwiftUI.Font {
-            .system(size: pointSize(level), weight: weight, design: design)
-        }
-        /// The home page's greeting, the welcome page (24 bold).
-        static var display: SwiftUI.Font { sized(.display, .bold) }
-        /// A detail page's or a sheet's title (18 semibold).
-        static var title: SwiftUI.Font { sized(.title, .semibold) }
-        /// Titles of rows, cards, panels and Markdown headings below the first (13 semibold).
-        static var heading: SwiftUI.Font { sized(.heading, .semibold) }
-        /// Messages, replies, mail and documents (13).
-        static var body: SwiftUI.Font { sized(.body) }
-        /// Previews, subtitles, descriptions in cards (12).
-        static var secondary: SwiftUI.Font { sized(.secondary) }
-        /// Times, places, states, meta lines (11).
-        static var caption: SwiftUI.Font { sized(.caption) }
-        /// A list's section header: the caption's size, semibold, in the secondary color (11).
-        static var sectionHeader: SwiftUI.Font { sized(.caption, .semibold) }
-        /// Chips, badges, counts, small labels on controls (11).
-        static var label: SwiftUI.Font { sized(.label) }
-        /// Code, diffs, paths, terminal snippets (11).
-        static var code: SwiftUI.Font { sized(.code, design: .monospaced) }
-
-        static var bodyStrong: SwiftUI.Font { sized(.body, .semibold) }
-        static var bodyHeavy: SwiftUI.Font { sized(.body, .bold) }
-        static var secondaryStrong: SwiftUI.Font { sized(.secondary, .semibold) }
-        static var secondaryMedium: SwiftUI.Font { sized(.secondary, .medium) }
-        static var captionStrong: SwiftUI.Font { sized(.caption, .semibold) }
-        static var captionMedium: SwiftUI.Font { sized(.caption, .medium) }
-        static var captionHeavy: SwiftUI.Font { sized(.caption, .bold) }
-        static var labelStrong: SwiftUI.Font { sized(.label, .semibold) }
-        static var labelMedium: SwiftUI.Font { sized(.label, .medium) }
-        static var labelHeavy: SwiftUI.Font { sized(.label, .bold) }
-        #else
         /// The home page's greeting, the welcome page (28 bold).
         static let display = SwiftUI.Font.title.bold()
         /// A detail page's or a sheet's title: a mail's subject, a document, a profile, the settings header (22).
@@ -429,7 +366,6 @@ nonisolated enum Theme {
         /// follows Dynamic Type with the rest.
         static var uiBody: UIFont { .preferredFont(forTextStyle: .body) }
         #endif
-        #endif
     }
 
     /// The levels' sizes at the default text size and their line heights (a multiple of the size, as in CSS), for
@@ -438,15 +374,6 @@ nonisolated enum Theme {
         case display, title, heading, body, secondary, caption, label, code
 
         var size: CGFloat {
-            #if os(macOS)
-            switch self { // `Theme.Font` on the Mac (#779)
-            case .display: 24
-            case .title: 18
-            case .heading, .body: 13
-            case .secondary: 12
-            case .caption, .label, .code: 11
-            }
-            #else
             switch self {
             case .display: 28
             case .title: 22
@@ -455,7 +382,6 @@ nonisolated enum Theme {
             case .caption, .code: 13
             case .label: 12
             }
-            #endif
         }
 
         var lineHeight: CGFloat {
@@ -717,13 +643,24 @@ nonisolated enum Theme {
         static let scenePinCharWidth: CGFloat = 9
         static let scenePinBaseWidth: CGFloat = 40
         static let scenePinHeight: CGFloat = 32
-        // A pin pill's estimated width, for keeping pins apart: its icon, the gap before its state, the widest its
+        // A pin pill's estimated width, for keeping pins apart: the gap before its state, the widest its
         // text may grow, and the width of one wide (CJK) character.
-        static let scenePinIconWidth: CGFloat = 18
         static let scenePinStateGap: CGFloat = 6
         static let scenePinTextMaxWidth: CGFloat = 180
         static let scenePinWideCharWidth: CGFloat = 13.5
         static let sceneLabelHeight: CGFloat = 22
+        // An extension's interactive map (UI version 12): page share, compact preview, inline chat tool-view height,
+        // companion list cap, route strokes and pin sizes.
+        static let mapPageShare: CGFloat = 0.56
+        static let mapPageMinHeight: CGFloat = 260
+        static let mapPageMaxHeight: CGFloat = 520
+        static let mapPreviewHeight: CGFloat = 200
+        static let mapToolHeight: CGFloat = 220
+        static let mapListMaxHeight: CGFloat = 220
+        static let mapRouteStroke: CGFloat = 5
+        static let mapRouteDimStroke: CGFloat = 3.5
+        static let mapOriginDot: CGFloat = 12
+        static let mapPinSize: CGFloat = 28
     }
 
     /// UI version 11's 3D `scene` component (#12544): calm architectural material defaults when a shape omits `color`,
@@ -737,6 +674,11 @@ nonisolated enum Theme {
         static let maxPitch: Double = 90
         static let minZoom: Double = 0.5
         static let maxZoom: Double = 4.0
+        /// A full-screen view taller than it is wide (an upright iPhone) opens at least this steep (#14335): a wide home
+        /// fills the width either way, and looking down more lets the floor plan take more of the height.
+        static let tallViewPitch: Double = 60
+        /// A pin whose spot is on screen keeps its pill at least this far inside the viewport's edges (#14335).
+        static let pinEdgeInset: CGFloat = 4
         /// The cutaway (#13036): the outer walls between the camera and the rooms are drawn this high (metres above
         /// their bottom); a wall counts as facing the camera from this cosine on, and as an outer wall when the ground
         /// this far past its camera-side face is not a floor (a prism no higher than the floor top); a shape within
@@ -777,6 +719,19 @@ nonisolated enum Theme {
         static let lampAttenuationEnd: CGFloat = 2.4
         static let maxOmniLights: Int = 8
         static let glassOpacity: CGFloat = 0.42
+        static var ground: Color { StyleSpec.current.usesGlass ? Theme.groupedCard : Theme.card }
+    }
+
+    /// UI version 12's declarative `map` component: region fitting padding, minimum span so single-point views keep
+    /// street context, unselected route dimming, and adaptive card/sheet ground.
+    enum Map {
+        static let fitPadding: Double = 1.35
+        static let minSpanDegrees: Double = 0.008
+        static let minSpanMeters: Double = 700
+        static let unselectedOpacity: Double = 0.42
+        static let gridStepFraction: CGFloat = 0.25
+        static let gridLineOpacity: Double = 0.08
+        static let vectorRouteOpacity: Double = 0.92
         static var ground: Color { StyleSpec.current.usesGlass ? Theme.groupedCard : Theme.card }
     }
 
@@ -904,8 +859,6 @@ nonisolated enum Theme {
         @MainActor static var reduced: Bool {
             #if os(iOS) || os(visionOS)
             UIAccessibility.isReduceMotionEnabled
-            #elseif os(macOS)
-            NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             #else
             false
             #endif

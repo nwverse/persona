@@ -2,12 +2,15 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"path"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/identity"
@@ -104,15 +107,34 @@ type trackEntry struct {
 	DirName  string
 	Builtin  bool
 	Archived bool
-	Revision int64
+	// ArchivedAt is when it was archived (nil: it is not).
+	ArchivedAt *time.Time
+	Revision   int64
+	// Config is the track's effective config: its kind's, with the track's template, default categories and override
+	// (track_kinds.go). Every decision a kind makes reads it, never the kind's name.
+	Config assistantwire.TrackKindConfig
+	// Override is what the track sets apart from its kind (config_override), as stored.
+	Override []byte
 }
 
 // builtinTracks are the tracks every manager has whatever its store holds: the health space, of kind space, with the
 // health template and the health category as its overrides of that kind's defaults, in the manager's health
 // directory.
 func (s *Service) builtinTracks() []trackEntry {
-	return []trackEntry{{Slug: SpaceHealth, Kind: trackKindSpace, DefaultCategories: []string{categoryHealth},
-		Template: trackTemplateHealth, DirName: identity.HealthDirName(s.id), Builtin: true, Revision: 1}}
+	e := trackEntry{Slug: SpaceHealth, Kind: trackKindHealth, DefaultCategories: []string{categoryHealth},
+		Template: trackTemplateHealth, DirName: identity.HealthDirName(s.id), Builtin: true, Revision: 1}
+	e.Config, _ = effectiveTrackConfig(builtinKindConfigs()[trackKindHealth], e.Template, e.DefaultCategories, nil)
+	return []trackEntry{e}
+}
+
+// builtinKinds are the kinds every manager has, in builtinKindOrder.
+func builtinKinds() []kindEntry {
+	cfgs := builtinKindConfigs()
+	out := make([]kindEntry, 0, len(builtinKindOrder))
+	for _, slug := range builtinKindOrder {
+		out = append(out, kindEntry{Slug: slug, Config: cfgs[slug], Builtin: true, Revision: 1})
+	}
+	return out
 }
 
 // defaultTrackDir is where a new track of this manager keeps its directory: tracks/<slug> (tracks-<id>/<slug>), the
@@ -132,42 +154,118 @@ type trackStore interface {
 	Tracks(ctx context.Context) ([]db.Track, error)
 }
 
-var _ trackStore = (*db.DB)(nil)
+// trackKindStore reads the user's kinds (assistant_track_kinds).
+type trackKindStore interface {
+	TrackKinds(ctx context.Context) ([]db.TrackKind, error)
+}
+
+var (
+	_ trackStore     = (*db.DB)(nil)
+	_ trackKindStore = (*db.DB)(nil)
+)
 
 // trackRegistryTTL bounds how long the manager keeps what it read of the registry.
 const trackRegistryTTL = 30 * time.Second
 
 // trackRegistry caches the registry: read at most once a TTL, and dropped when the registry changes.
 type trackRegistry struct {
-	mu   sync.Mutex
-	at   time.Time
-	list []trackEntry
+	mu    sync.Mutex
+	at    time.Time
+	list  []trackEntry
+	kinds []kindEntry
 }
 
 // tracks are the registered tracks, archived ones included: the built-in ones as the manager has them, then those its
-// store registered. A row that is not valid here (its slug, template, categories or directory) is left out and logged:
-// its conversations get the policy of an unknown track, the strictest. A store that cannot be read leaves the
-// built-in ones (and what it read last).
+// store registered. A row that is not valid here (its slug, template, categories, directory, kind or override) is left
+// out and logged: its conversations get the policy of an unknown track, the strictest. So is a row whose kind is not
+// enabled (unknown, or newer than this manager). A store that cannot be read leaves the built-in ones (and what it read
+// last).
 func (s *Service) tracks(ctx context.Context) []trackEntry {
+	list, _ := s.registry(ctx)
+	return list
+}
+
+// trackKinds are the kinds: the built-in ones, then the user's (disabled ones included, saying why).
+func (s *Service) trackKinds(ctx context.Context) []kindEntry {
+	_, kinds := s.registry(ctx)
+	return kinds
+}
+
+// registry reads (or gives what it read within the TTL of) the tracks and the kinds.
+func (s *Service) registry(ctx context.Context) ([]trackEntry, []kindEntry) {
 	r := &s.trackReg
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.list != nil && time.Since(r.at) < trackRegistryTTL {
-		return r.list
+		return r.list, r.kinds
 	}
-	list := s.builtinTracks()
+	list, kinds := s.builtinTracks(), builtinKinds()
+	if s.trackKindsExt != nil {
+		raw, err := s.trackKindsExt.DomainTrackKindsJSON(ctx)
+		if err != nil {
+			s.logf("track kinds: extensions: %v", err)
+		} else {
+			var items []struct {
+				ID     string                        `json:"id"`
+				Title  string                        `json:"title"`
+				Config assistantwire.TrackKindConfig `json:"config"`
+			}
+			if err := json.Unmarshal(raw, &items); err != nil {
+				s.logf("track kinds: extensions: %v", err)
+			}
+			for _, item := range items {
+				if !identity.ValidTrackSlug(item.ID) || slices.Contains(builtinKindOrder, item.ID) {
+					s.logf("track kinds: extension kind %q is reserved or invalid", item.ID)
+					continue
+				}
+				cfg, err := normalKindConfig(item.Config)
+				k := kindEntry{Slug: item.ID, Title: item.Title, Config: cfg, Extension: true, Revision: 1}
+				if err != nil {
+					k.Disabled = kindDisabledInvalid
+					s.logf("track kinds: extension kind %q: %v", item.ID, err)
+				}
+				kinds = append(kinds, k)
+			}
+		}
+	}
 	st, ok := s.store().(trackStore)
 	if !ok {
-		r.list, r.at = list, time.Now()
-		return list
+		r.list, r.kinds, r.at = list, kinds, time.Now()
+		return list, kinds
+	}
+	if ks, ok := s.store().(trackKindStore); ok {
+		rows, err := ks.TrackKinds(ctx)
+		if err != nil {
+			s.logf("track kinds: read: %v", err)
+			if r.list != nil {
+				return r.list, r.kinds
+			}
+			return list, kinds
+		}
+		for _, row := range rows {
+			if row.Builtin || slices.Contains(builtinKindOrder, row.Slug) {
+				continue // the built-in ones are the manager's
+			}
+			k := kindEntry{Slug: row.Slug, Title: row.Title, Revision: row.Revision}
+			cfg, err := parseKindConfig(row.Config)
+			switch {
+			case errors.Is(err, errKindSchema):
+				k.Disabled = kindDisabledSchema
+			case err != nil:
+				s.logf("track kinds: %q is not valid here: %v", row.Slug, err)
+				k.Disabled = kindDisabledInvalid
+			}
+			k.Config = cfg
+			kinds = append(kinds, k)
+		}
 	}
 	rows, err := st.Tracks(ctx)
 	if err != nil {
 		s.logf("tracks: read: %v", err)
 		if r.list != nil {
-			return r.list
+			return r.list, r.kinds
 		}
-		return list
+		return list, kinds
 	}
 	for _, row := range rows {
 		if row.Builtin || row.Slug == SpaceHealth {
@@ -175,7 +273,10 @@ func (s *Service) tracks(ctx context.Context) []trackEntry {
 		}
 		e := trackEntry{Slug: row.Slug, Kind: row.Kind, Title: row.Title, Icon: row.Icon, Description: row.Description,
 			DefaultCategories: row.DefaultCategories, Template: row.Template, DirName: row.DirName,
-			Archived: row.ArchivedAt != nil, Revision: row.Revision}
+			Archived: row.ArchivedAt != nil, ArchivedAt: row.ArchivedAt, Revision: row.Revision, Override: row.ConfigOverride}
+		if e.Kind == "" {
+			e.Kind = trackKindSpace // a row from before kinds were told
+		}
 		if e.DirName == "" {
 			e.DirName = s.defaultTrackDir(e.Slug)
 		}
@@ -184,10 +285,29 @@ func (s *Service) tracks(ctx context.Context) []trackEntry {
 			s.logf("tracks: %q is not valid here (categories v%d): left out", e.Slug, infoCategoriesVersion)
 			continue
 		}
+		k, ok := kindOf(kinds, e.Kind)
+		if !ok || k.Disabled != "" {
+			s.logf("tracks: %q is of kind %q, not enabled here: left out", e.Slug, e.Kind)
+			continue
+		}
+		if e.Config, err = effectiveTrackConfig(k.Config, e.Template, e.DefaultCategories, e.Override); err != nil {
+			s.logf("tracks: %q: %v: left out", e.Slug, err)
+			continue
+		}
 		list = append(list, e)
 	}
-	r.list, r.at = list, time.Now()
-	return list
+	r.list, r.kinds, r.at = list, kinds, time.Now()
+	return list, kinds
+}
+
+// kindOf is kind slug among kinds.
+func kindOf(kinds []kindEntry, slug string) (kindEntry, bool) {
+	for _, k := range kinds {
+		if k.Slug == slug {
+			return k, true
+		}
+	}
+	return kindEntry{}, false
 }
 
 // tracksChanged drops what the manager read of the registry, so the next lookup reads it again.
@@ -222,7 +342,28 @@ func (s *Service) trackPolicy(ctx context.Context, space string) TrackPolicy {
 	if !ok {
 		return policyOf(infoUse{SourceTrack: space})
 	}
-	return policyOf(infoUse{Categories: e.DefaultCategories, Known: true, SourceTrack: space})
+	return policyOf(infoUse{Categories: e.DefaultCategories, Known: true, SourceTrack: space, Rules: e.Config.Usage})
+}
+
+// trackKindOf is the kind of track space: the main track's (orchestration) for "", a registered track's own, "" for a
+// track the registry does not know.
+func (s *Service) trackKindOf(ctx context.Context, space string) string {
+	if space == "" {
+		return trackKindOrchestration
+	}
+	if e, ok := s.trackEntryOf(ctx, space); ok {
+		return e.Kind
+	}
+	return ""
+}
+
+// trackRules are the usage rules of track space (its effective config's, #13472): none for the main space or a track
+// the registry does not know (its information is taken for sensitive anyway).
+func (s *Service) trackRules(ctx context.Context, space string) []assistantwire.TrackUsageRule {
+	if e, ok := s.trackEntryOf(ctx, space); ok {
+		return e.Config.Usage
+	}
+	return nil
 }
 
 // trackKnown: slug is the main space ("") or a registered track that is not archived: what a conversation, a task or

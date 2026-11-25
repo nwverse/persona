@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/modelretry"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -34,15 +35,20 @@ import (
 type fleetBook struct {
 	mu           sync.Mutex
 	interactions map[string]*pending
-	seen         map[[2]string]time.Time // (machine, session) -> when the user last looked at it
-	seenLoaded   bool                    // seen holds the table's times (loadSeen succeeded once)
-	stateSince   map[[2]string]stateMark // (machine, session) -> its state and when it entered it
-	notified     map[string]time.Time    // assistant conversation -> when it last pushed with notify_user
+	seen         map[[2]string]time.Time      // (machine, session) -> when the user last looked at it
+	seenLoaded   bool                         // seen holds the table's times (loadSeen succeeded once)
+	stateSince   map[[2]string]stateMark      // (machine, session) -> its state and when it entered it
+	stateListed  map[string]bool              // scratch ids for pruning stateSince, cleared and reused under mu
+	upstream     map[[2]string]upstreamStreak // (machine, session) -> consecutive no-work upstream 5xx turns (fleet_upstream.go)
+	notified     map[string]time.Time         // assistant conversation -> when it last pushed with notify_user
 	// reportSent: assistant conversation -> when a scheduled run or a task notice was sent into it (noteReportTurn):
 	// the turn it starts is pushed however short it is.
 	reportSent map[string]time.Time
 	// cardTell serializes telling the hub a card with checking it is still held (fleet_ix.go tellCard).
 	cardTell sync.Mutex
+	// A card can be withdrawn while it is being told. Reconnect takes both locks to order its
+	// complete inventory with new cards and withdrawals on the same connection.
+	cardEnd sync.Mutex
 	// codexAnnounced: Codex card id -> when it was announced (fleet_ix_codex.go)
 	codexAnnounced map[string]time.Time
 	// codexEnded: Codex card id -> when the node stopped listing it (fleet_ix_codex.go)
@@ -98,9 +104,21 @@ type fleetBook struct {
 	// asks: what each session's last words ask, while they stay the same (fleet_asks.go).
 	asks asksMemo
 	// folds: what each machine's last complete list folded its children under (fleet_fold.go), for the rows and
-	// cards sent without the rest of the list.
-	foldMu sync.Mutex
-	folds  map[string]sessionFold
+	// cards sent without the rest of the list. foldMeta / crossParents / crossChildren track only machines
+	// participating in cross-machine subagent hierarchies so unrelated machines stay on the local fast path.
+	foldMu        sync.Mutex
+	folds         map[string]sessionFold
+	foldMeta      map[string][]foldEntry
+	crossParents  map[string]map[string]bool // childMachine -> referenced parentMachines
+	crossChildren map[string]map[string]bool // parentMachine -> referencing childMachines
+
+	// subagents: durable child (machine, session) -> parent/task provenance restored on demand by visible
+	// target identity from a2a_tasks, legacy dispatches, and task_spawn todo agents (subagent_index.go).
+	subagentsMu           sync.RWMutex
+	subagentsLegacyLoaded bool
+	subagents             map[[2]string]subagentLink
+	subagentsChecked      map[string]map[string]struct{} // machine -> checked sessionIDs
+	subagentsByTask       map[string][2]string
 
 	// rep is the last snapshot's parts the session lists show (fleetTakeSnapshot).
 	rep fleetReport
@@ -120,6 +138,8 @@ type fleetBook struct {
 	live liveState // the Live Activity's content as last told (fleet_live.go)
 
 	started sync.Once
+	// The first reconnect and the first arriving card both wait for prior-process cleanup.
+	restored sync.Once
 
 	q        fleetQueue // what the nodes' events start for the assistant, in order (fleet_follow.go)
 	followMu sync.Mutex
@@ -180,6 +200,31 @@ func guard(err *error) {
 func (g guardedStore) InsertInteraction(ctx context.Context, ix proto.Interaction) (err error) {
 	defer guard(&err)
 	return g.st.InsertInteraction(ctx, ix)
+}
+
+// resolvedInteractionInserter is the atomic history write and final outcome update used by reversible-setting
+// auto-approval. A store without both fails closed: the setting is not changed without its queryable decision record.
+type resolvedInteractionInserter interface {
+	InsertResolvedInteraction(ctx context.Context, ix proto.Interaction, res *proto.Resolution) error
+	MarkResolvedInteractionOutcome(ctx context.Context, id string, created time.Time, outcome string, at time.Time) error
+}
+
+func (g guardedStore) InsertResolvedInteraction(ctx context.Context, ix proto.Interaction, res *proto.Resolution) (err error) {
+	defer guard(&err)
+	st, ok := g.st.(resolvedInteractionInserter)
+	if !ok {
+		return errNoTable
+	}
+	return st.InsertResolvedInteraction(ctx, ix, res)
+}
+
+func (g guardedStore) MarkResolvedInteractionOutcome(ctx context.Context, id string, created time.Time, outcome string, at time.Time) (err error) {
+	defer guard(&err)
+	st, ok := g.st.(resolvedInteractionInserter)
+	if !ok {
+		return errNoTable
+	}
+	return st.MarkResolvedInteractionOutcome(ctx, id, created, outcome, at)
 }
 
 func (g guardedStore) FinishInteraction(ctx context.Context, id, status string, res *proto.Resolution) (err error) {
@@ -356,10 +401,18 @@ func turnErrorCode(text string) string {
 		// Before the classes below: a gateway's words for it may say "not supported" next to "model". The node resent
 		// the turn once with every tool loaded and starts the conversation that way from now on (#10365).
 		return proto.TurnErrorToolSearchUnsupported
+	case assistantwire.ImageLimitErrorText(t):
+		// Accumulated pictures pushed the request past the model API's size or multi-image limit (#13045).
+		return proto.TurnErrorImagesTooLarge
+	case modelretry.AccountExhausted(t):
+		// Explicit upstream account-pool exhaustion (#13372): ahead of model_route in case the message also names the model.
+		return proto.TurnErrorUpstreamUnavailable
 	}
 	switch classifyLauncherError(t) { // the launcher health checks' classes (launcher_health.go)
 	case errKindUsageLimit:
 		return proto.TurnErrorRateLimited
+	case errKindUpstream:
+		return proto.TurnErrorUpstreamUnavailable
 	case errKindAuth:
 		return proto.TurnErrorAuthFailed
 	case errKindModelRoute:
@@ -393,6 +446,13 @@ func sessionTurnErrorCode(c proto.Session) string {
 			return proto.TurnErrorModelFallbackUnavailable
 		}
 	}
+	// Preserve a node's transcript-streak upstream_unavailable code (#13372), including on a 503 whose words also
+	// matched model_route, while keeping auth, sign-in, 429 and tool-search codes ahead of it.
+	if c.TurnErrorCode == proto.TurnErrorUpstreamUnavailable &&
+		(code == "" || code == proto.TurnErrorUpstreamUnavailable ||
+			(code == proto.TurnErrorModelRoute && modelretry.UpstreamServerError(c.TurnError))) {
+		return proto.TurnErrorUpstreamUnavailable
+	}
 	return code
 }
 
@@ -409,7 +469,7 @@ func signedOut(c proto.Session) bool {
 // agent's record says so).
 func userTurnError(code string) bool {
 	switch code {
-	case proto.TurnErrorNotLoggedIn, proto.TurnErrorAuthFailed, proto.TurnErrorModelRoute, proto.TurnErrorModelFallbackUnavailable:
+	case proto.TurnErrorNotLoggedIn, proto.TurnErrorAuthFailed, proto.TurnErrorModelRoute, proto.TurnErrorModelFallbackUnavailable, proto.TurnErrorImagesTooLarge:
 		return true
 	}
 	return false
@@ -443,7 +503,13 @@ func (s *Service) fillStateMarks(machine string, list []proto.Session, now time.
 	// The list is the node's whole list, kept across a disconnect (devices.Machine.setSessions): a session no longer
 	// in it has ended. Forget its mark and its hook flag. A hook flag for a session never listed yet (its hook came
 	// before the node's next list) has no mark and stays.
-	listed := make(map[string]bool, len(list))
+	listed := s.fleet.stateListed
+	if listed == nil {
+		listed = make(map[string]bool, len(list))
+		s.fleet.stateListed = listed
+	} else {
+		clear(listed)
+	}
 	for _, sess := range list {
 		listed[sess.SessionID] = true
 	}
@@ -458,20 +524,22 @@ func (s *Service) fillStateMarks(machine string, list []proto.Session, now time.
 // backgroundWaiting (Session.BackgroundWaiting, #6045): working only because of background work, and that work only
 // waits: the node found its background commands waiting, and no subagent or workflow runs (those are work).
 func backgroundWaiting(sess proto.Session) bool {
-	if !sess.BackgroundWorking || !sess.BackgroundWaiting {
-		return false
-	}
+	return sess.BackgroundWorking && sess.BackgroundWaiting && !backgroundIsWork(sess)
+}
+
+// backgroundIsWork: a subagent or workflow runs, which is work whatever its background commands do.
+func backgroundIsWork(sess proto.Session) bool {
 	for _, a := range sess.Subagents {
 		if a.Running {
-			return false
+			return true
 		}
 	}
 	for _, w := range sess.Workflows {
 		if w.Running {
-			return false
+			return true
 		}
 	}
-	return !slices.ContainsFunc(sess.Background, func(t proto.BackgroundTask) bool { return t.Kind == "agent" || t.Kind == "workflow" })
+	return slices.ContainsFunc(sess.Background, func(t proto.BackgroundTask) bool { return t.Kind == "agent" || t.Kind == "workflow" })
 }
 
 func backgroundRunning(sess proto.Session) bool {
