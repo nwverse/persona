@@ -35,21 +35,23 @@ type todoProjection struct {
 func (s *Service) todoProjectionOf(ctx context.Context, list []listedTodo, now time.Time) todoProjection {
 	facts := s.todoFactsOf(ctx, list)
 	if len(facts) > 0 && facts[0].TodosV2 {
-		s.populateTodoRepoGates(ctx, list)
+		reposByTodo := s.populateTodoRepoGates(ctx, list)
+		populateTodoItemTypes(list, reposByTodo)
 	}
 	return todoProjection{facts: facts, views: projection.Views(facts, now)}
 }
 
 // populateTodoRepoGates computes and attaches the weakest-link Target Repo delivery gate summary
-// to each listed to-do that has bound repositories. Callers must invoke this only when todos_v2 is enabled.
-func (s *Service) populateTodoRepoGates(ctx context.Context, list []listedTodo) {
+// to each listed to-do that has bound repositories, and returns the loaded repository bindings by to-do ID.
+// Callers must invoke this only when todos_v2 is enabled.
+func (s *Service) populateTodoRepoGates(ctx context.Context, list []listedTodo) map[string][]repository.TaskRepository {
 	ids := make([]string, len(list))
 	for i := range list {
 		ids[i] = list[i].ID
 	}
 	reposByTodo := s.loadOpenTodoRepositories(ctx, ids)
 	if len(reposByTodo) == 0 {
-		return
+		return reposByTodo
 	}
 	for i := range list {
 		bound := reposByTodo[list[i].ID]
@@ -58,6 +60,7 @@ func (s *Service) populateTodoRepoGates(ctx context.Context, list []listedTodo) 
 		}
 		list[i].RepoGate = aggregateRepoGate(buildRepoGateInputs(list[i].Todo, bound))
 	}
+	return reposByTodo
 }
 
 func buildRepoGateInputs(t Todo, bound []repository.TaskRepository) []repoGateRepo {
