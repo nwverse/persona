@@ -71,8 +71,8 @@ core draw no badges; the schema guards both languages against a hand-written cop
   `GET /api/v1/todos` answers with (every read of the list, of one to-do or of the places works the whole list out), in
   `server/internal/assistant/counts_view.go`, and the next round tells them. Every `{"type":"todos"}` makes each app
   read the list again, which keeps the new counts; when none did a second after one, the manager reads the list itself,
-  so the number follows the list while no app is open. Until a run has counted its to-dos, each of its rounds asks the
-  manager to read the list, and the view leaves `todos_needs_you` out.
+  so the number follows the list while no app is open. Until a run has counted its to-dos, each round has it read the
+  list, one read at a time, and the view leaves `todos_needs_you` out.
 - **The bound.** A view takes at most 16 KB as JSON (`CountsViewMaxBytes`), the most the hub keeps from step 7b on.
   `keys` and `held` list at most 200 rows each: the counted rows first, since they are the number, then the held ones,
   each list stopping at the first row that would pass the bound (1 KB is kept for the rest of the view). The counted
