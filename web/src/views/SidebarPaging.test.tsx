@@ -96,6 +96,8 @@ async function render(paged: boolean, pins = emptyPins, saved?: string, agentsOn
 
 beforeEach(() => {
   localStorage.clear();
+  // these tests are about the groupings as they were: By to-do, the default before By project (knowledge base)
+  localStorage.setItem("persona.agentGrouping", "todo");
   reset();
   // Settings › Agents: the Filter is on for these tests (it is off until the hub says so)
   seedAgentsDisplay({ show_botmux: true, configured: true, show_filter: true });
@@ -124,7 +126,7 @@ for (const paged of [false, true]) {
     });
     it.each(["machine", "space", "repo", "state", "todo"])("honors saved %s grouping under the same bar", async (saved) => {
       const { fetch } = await render(paged, emptyPins, saved);
-      expect(chosen()).toBe({ todo: "待办", machine: "机器", repo: "仓库", space: "项目", state: "状态" }[saved]);
+      expect(chosen()).toBe({ todo: "待办", machine: "机器", repo: "仓库", space: "空间", state: "状态" }[saved]);
       expect(localStorage.getItem("persona.agentGrouping")).toBe(saved);
       // every grouping but By repository is paged where the hub pages (#6662)
       const complete = !paged || saved === "repo";

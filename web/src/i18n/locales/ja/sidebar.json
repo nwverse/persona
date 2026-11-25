@@ -168,5 +168,9 @@
   "module_recording": "会議の録音",
   "module_recording_hint": "Persona で録音した内容の議事録、一日のまとめ、文字起こし、写真をナレッジの項目で表示します。",
   "subagents_running": "{count} 件が実行中",
-  "subagents_need_you": "{count} 件が確認待ち"
+  "subagents_need_you": "{count} 件が確認待ち",
+  "kbproject_unassigned": "未分類",
+  "kbproject_all_seen_other": "{count} 件・すべて確認済み",
+  "kbproject_needs_only": "対応が必要な Agent だけです（上に表示）",
+  "kbproject_all_seen_one": "{count} 件・すべて確認済み"
 }

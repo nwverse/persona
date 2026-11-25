@@ -2580,6 +2580,24 @@ The web app can be installed on a phone's home screen / a computer's desktop and
 - **Settings › General › This browser › Install as app** (`lib/pwa.ts`): when the browser offers an install prompt (Chrome, Edge) it is an "Install" button;
   on iPhone / iPad it points to "Add to Home Screen" in Safari's share menu, Safari on Mac to **File › Add to Dock**, other browsers on http explain that https is needed, and the rest point to the browser menu. Already in a standalone window, it shows "Installed".
 
+## Agents by project (knowledge base)
+
+The sidebar's Agents list (and the phone's Agents page, the same block) opens **By project** for a browser that never
+chose a grouping (`lib/agent-groups.ts`, `persona.agentGrouping` = `kbproject`); a grouping chosen before stays. An
+Agent's project is the `project` of the open to-do it works on (the session's own to-do, else the first open to-do
+listing it), so it needs no new hub field. The headings follow the Overview board: a project pinned to Overview
+(`overview_pinned`) is a heading for everything under it, otherwise the top-level project is; a sub-project's Agents sit
+under that heading with "› sub-project" on the row. Inside a project the Agents are split by state (Working, Waiting,
+Just finished, Seen folded); the ones that need the user are listed once, in a Needs you section above every project,
+and the project heading carries their number. Agents on no to-do, on a to-do in no project or marked Temporary go to
+Unassigned, last. A project whose Agents are all seen folds at first. Rows use `SessionRow`'s `label`: the to-do's
+title when the Agent is that to-do's only one, else the session title cut by `shortTitle` (`lib/agent-projects.ts`).
+
+By project reads the complete list, as By repository does: the hub's paged list counts by to-do, not by project
+(`lib/sidebar-api.ts` `pagedAgentList`). The project names, parents and pins come from `GET /kb/projects` through
+`lib/todo-projects.ts`, read only while the grouping is shown. The herdr spaces that were called "By project" are
+"By space" now. Check it with `node web/e2e/agents-by-kb-project.mjs` against the mock hub (`MOCK_TODO_PROJECTS=1`).
+
 ## Sharing an Agent session (#3605)
 
 The Agent chat's **⋯** menu has **Share…** (`src/sharing/`), a dialog over the server sharing contract (#3604):

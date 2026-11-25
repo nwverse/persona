@@ -14,8 +14,9 @@ export const GROUPING_KEY = "persona.agentGrouping";
 export function pagedAgentList(o: { bounded: boolean; byTodo: boolean; todosSupported: boolean; pins: { sessions: string[]; spaces: string[] }; stored: string | null; several: boolean }): boolean {
   const grouping = agentGrouping(o.stored);
   // a hub without todos shows by machine, a by-todo choice kept for when it has them
-  const shown = !o.todosSupported && grouping === "todo" ? "machine" : grouping;
-  return o.bounded && !o.several && o.pins.sessions.length === 0 && o.pins.spaces.length === 0 && shown !== "repo" && (shown !== "todo" || o.byTodo);
+  const shown = !o.todosSupported && (grouping === "todo" || grouping === "kbproject") ? "machine" : grouping;
+  // By project (knowledge base) places each Agent by its to-do's project on the page: the complete list, as By repository
+  return o.bounded && !o.several && o.pins.sessions.length === 0 && o.pins.spaces.length === 0 && shown !== "repo" && shown !== "kbproject" && (shown !== "todo" || o.byTodo);
 }
 
 // ── fold all / open all ──────────────────────────────────

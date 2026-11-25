@@ -97,6 +97,8 @@ const online = (features: string[] = []) => {
 
 beforeEach(() => {
   localStorage.clear();
+  // these tests are about the groupings as they were: By to-do, the default before By project (knowledge base)
+  localStorage.setItem("persona.agentGrouping", "todo");
   reset();
   // Settings › Agents: the Filter is on for these tests (it is off until the hub says so)
   seedAgentsDisplay({ show_botmux: true, configured: true, show_filter: true });
@@ -163,7 +165,7 @@ describe("By to-do whose to-dos cannot be read (audit item 27)", () => {
     expect(getState().todosError).not.toBeNull();
     // not every Agent under one name: by status, the stored choice kept
     expect(checked()).toBe("按状态");
-    expect(localStorage.getItem("persona.agentGrouping")).toBeNull();
+    expect(localStorage.getItem("persona.agentGrouping")).toBe("todo");
     const [said] = alerts();
     expect(said).toContain(t("sidebar.todos_read_failed", { error: "" }).replace(/[:：]\s*$/, ""));
     expect(said).toMatch(/500/);

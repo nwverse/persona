@@ -52,6 +52,8 @@ beforeEach(() => {
   seedAgentsDisplay({ show_botmux: true, configured: true, show_filter: true });
   resetAgentListFilters();
   localStorage.clear();
+  // these tests are about the groupings as they were: By to-do, the default before By project (knowledge base)
+  localStorage.setItem("persona.agentGrouping", "todo");
   closed = 0;
   // reset() keeps the hub's features: the paged case's are its own
   Object.assign(getState(), { loaded: true, features: [], machines, sessions: { mac: sessions.filter((s) => s.machine_id === "mac"), box: sessions.filter((s) => s.machine_id === "box") } });

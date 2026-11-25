@@ -176,5 +176,9 @@
   "module_recording": "Meeting recording",
   "module_recording_hint": "Minutes, all-day recaps, transcripts and photos of what you record with Persona, on its entries in Knowledge.",
   "subagents_running": "{count} running",
-  "subagents_need_you": "{count} need you"
+  "subagents_need_you": "{count} need you",
+  "kbproject_unassigned": "Unassigned",
+  "kbproject_all_seen_one": "{count} · all seen",
+  "kbproject_all_seen_other": "{count} · all seen",
+  "kbproject_needs_only": "Only Agents that need you, listed above"
 }
