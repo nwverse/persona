@@ -33,7 +33,7 @@ func ParseBareIDs(text string) (map[string]bool, error) {
 	return names, nil
 }
 
-// WithBareIDs turns contract-bare-id on: a bare ID field of a contract package whose "<Type>.<Field>" is in names
+// WithBareIDs turns contract-bare-id on: a bare ID field of a contract package whose "<Type>.<Field>" is not in names
 // fails. Without it (nil) the rule does not run.
 func (idx Index) WithBareIDs(names map[string]bool) Index {
 	idx.bareIDs = names
