@@ -293,11 +293,25 @@ final class TodosV1PlacesTests: XCTestCase {
         XCTAssertFalse(element("todo.calendar.newTitle").exists, "not the calendar's own sheet")
     }
 
-    /// An hour on the calendar's day, below its strip and its all-day row: by its column when the column is an element.
+    /// An hour on the calendar's day that is on screen, below its strip and its all-day row: half way between the first
+    /// two hour lines in sight, found by their labels in the hours' column, in the day's column. The day opens scrolled
+    /// to its first timed to-do or to now, so which hours are in sight depends on the time of day; the column is the
+    /// whole day tall, and its middle is off screen in the evening (a tap there landed on the bar above the hours).
     @MainActor private func hourOnTheCalendar() -> XCUICoordinate {
-        let hours = element("todo.calendar.axis")
-        return hours.exists ? hours.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            : app.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.7))
+        let column = element("todo.calendar.axis")
+        guard column.exists else { return app.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.7)) }
+        let day = column.frame
+        // The hours' scroll view, the innermost holding the column: what of the column it shows is what is on screen.
+        let scroll = app.scrollViews.containing(.any, identifier: "todo.calendar.axis").allElementsBoundByIndex
+            .filter { $0.frame.intersects(day) }.min { $0.frame.height < $1.frame.height }
+        let within: XCUIElement = scroll ?? app
+        let shown = within.frame.intersection(day).intersection(app.frame)
+        // The labels left of the column, wholly in sight: each sits on its hour's line (the now line's time among them).
+        let lines = within.staticTexts.allElementsBoundByIndex.map(\.frame)
+            .filter { $0.maxX <= day.minX + 1 && $0.minY >= shown.minY && $0.maxY <= shown.maxY }
+            .map(\.midY).sorted()
+        let y = lines.count >= 2 ? (lines[0] + lines[1]) / 2 : shown.midY
+        return app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: shown.midX, dy: y))
     }
 
     /// A project picked in All Projects… that the title menu does not list (the mock's Garden, nothing open in it) is
