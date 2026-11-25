@@ -342,11 +342,11 @@ func TestSendNowOffer(t *testing.T) {
 		"❯ x\n  ⎿  Queued · ctrl+enter to send now  ":            "ctrl+enter",
 		"❯ fix the ctrl+c\n  ⎿  Queued · ctrl+enter to send now": "ctrl+enter",
 		// Antigravity CLI (agy) queued line hint
-		"Check the tests... (alt+m to send immediately)":          "alt+m",
-		"❯ Check the tests... (Alt+M to send immediately)":        "alt+m",
-		"Fix foo(bar) (opt+m to send immediately)":                "alt+m",
-		"  (alt+m to send immediately)":                           "alt+m",
-		"Check the tests... (alt+m to send immediately)  ":        "alt+m",
+		"Check the tests... (alt+m to send immediately)":   "alt+m",
+		"❯ Check the tests... (Alt+M to send immediately)": "alt+m",
+		"Fix foo(bar) (opt+m to send immediately)":         "alt+m",
+		"  (alt+m to send immediately)":                    "alt+m",
+		"Check the tests... (alt+m to send immediately)  ": "alt+m",
 	} {
 		if _, keys := sendNowOffer(screen); strings.Join(keys, " ") != want {
 			t.Errorf("keys %q, want %q in\n%s", keys, want, screen)

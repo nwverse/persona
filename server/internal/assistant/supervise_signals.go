@@ -294,8 +294,8 @@ type superviseBook struct {
 	told             map[string]time.Time // conversation → last accepted supervision message
 	timer            *time.Timer
 	timerAt          time.Time
-	lastOutageSince  time.Time // monotonic outage-episode anchor for distinct recovery digest keys (#13158)
-	stopped          bool // set by stopSuperviseTimers under mu; stops timer callbacks and prevents re-arming
+	lastOutageSince  time.Time      // monotonic outage-episode anchor for distinct recovery digest keys (#13158)
+	stopped          bool           // set by stopSuperviseTimers under mu; stops timer callbacks and prevents re-arming
 	off              supervisionOff // the automatic-supervision switch's memory (supervise_switch.go)
 
 	resuming map[[2]string]struct{} // fingerprints of offline leader sends in flight, under dedupMu

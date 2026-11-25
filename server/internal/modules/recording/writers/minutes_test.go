@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/kbwire"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"os"
 	"slices"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	ai "github.com/nwverse/persona/server/internal/aiwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -35,13 +37,13 @@ func (m *funcModel) JSONMax(_ context.Context, system, user string, _ int, out a
 // meetingUpload is a complete meeting recording of the given lines, 10 seconds each, started at start.
 func meetingUpload(rev int64, start time.Time, texts ...string) RecordingUpload {
 	u := recUpload(rev, start, true, texts...)
-	u.Kind = kb.RecordingMeeting
+	u.Kind = recordingwire.RecordingMeeting
 	return u
 }
 
 func putRecording(t *testing.T, e *testEngine, id string, u RecordingUpload, now time.Time) {
 	t.Helper()
-	if st, err := e.PutRecording(id, u, now); err != nil || st.Status != kb.RecordingStored {
+	if st, err := e.PutRecording(id, u, now); err != nil || st.Status != recordingwire.RecordingStored {
 		t.Fatalf("put %s: %v %v", id, st, err)
 	}
 }
@@ -83,11 +85,11 @@ func TestMinutesWritten(t *testing.T) {
 	now := time.Date(2026, 11, 10, 16, 0, 0, 0, goldenZone)
 	start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	u := meetingUpload(1, start, "大家好，今天评审导出", "Ada 说导出超过 4 MB 的条目会被丢掉", "那这一版先保留上限", "Bo 你周五前补上回归测试", "上限按条还是按录音算还没定")
-	u.Calendar = &kb.RecordingCalendar{Title: " 发布评审 ", Attendees: []string{"Ada", " Cy ", "Ada", ""}, Location: ""}
+	u.Calendar = &recordingwire.RecordingCalendar{Title: " 发布评审 ", Attendees: []string{"Ada", " Cy ", "Ada", ""}, Location: ""}
 	ended := start.Add(50 * time.Second)
 	u.EndedAt = &ended
 	putRecording(t, e, recID, u, now)
-	if r := recordingNow(t, e, recID); r.MinutesState != MinutesPending || r.Name != "发布评审" || r.Kind != kb.RecordingMeeting {
+	if r := recordingNow(t, e, recID); r.MinutesState != MinutesPending || r.Name != "发布评审" || r.Kind != recordingwire.RecordingMeeting {
 		t.Fatalf("after upload: state %q name %q kind %q", r.MinutesState, r.Name, r.Kind)
 	}
 	addPhoto(t, e, recID, photoUpload(1, 25, "白板", "导出上限：每条 4 MB"), false)
@@ -312,7 +314,7 @@ func TestImportedMeetingAfterTheMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if i := slices.IndexFunc(d.Links, func(l kb.Entry) bool { return l.Kind == KindMeeting && l.ID == "m1" }); i < 0 || d.Links[i].Source != "lark" {
+	if i := slices.IndexFunc(d.Links, func(l kbwire.Entry) bool { return l.Kind == KindMeeting && l.ID == "m1" }); i < 0 || d.Links[i].Source != "lark" {
 		t.Errorf("links: %+v", d.Links)
 	}
 	if o := recordingNow(t, e, old); o.ImportedMeeting != nil {
@@ -517,24 +519,24 @@ func TestRecordingUploadKindAndCalendar(t *testing.T) {
 	now := time.Now()
 	u := recUpload(1, now.Add(-time.Minute), false, "一句")
 	u.Kind = " Meeting "
-	u.Calendar = &kb.RecordingCalendar{Title: "  ", Attendees: []string{" ", ""}}
+	u.Calendar = &recordingwire.RecordingCalendar{Title: "  ", Attendees: []string{" ", ""}}
 	putRecording(t, e, recID, u, now)
-	if r := recordingNow(t, e, recID); r.Kind != kb.RecordingMeeting || r.Calendar != nil || r.MinutesState != MinutesPending {
+	if r := recordingNow(t, e, recID); r.Kind != recordingwire.RecordingMeeting || r.Calendar != nil || r.MinutesState != MinutesPending {
 		t.Fatalf("%q %+v %q", r.Kind, r.Calendar, r.MinutesState)
 	}
 	u.Revision, u.Kind = 2, ""
 	putRecording(t, e, recID, u, now)
-	if r := recordingNow(t, e, recID); r.Kind != kb.RecordingNote || r.MinutesState != "" {
+	if r := recordingNow(t, e, recID); r.Kind != recordingwire.RecordingNote || r.MinutesState != "" {
 		t.Fatalf("note: %q %q", r.Kind, r.MinutesState)
 	}
 	for _, bad := range []RecordingUpload{
 		{Kind: "lecture"},
-		{Calendar: &kb.RecordingCalendar{Title: strings.Repeat("长", maxCalendarTitle+1)}},
-		{Calendar: &kb.RecordingCalendar{Title: "t", Attendees: make([]string, maxCalendarAttendees+1)}},
-		{Calendar: &kb.RecordingCalendar{Title: "t", Attendees: []string{strings.Repeat("名", maxCalendarName+1)}}},
+		{Calendar: &recordingwire.RecordingCalendar{Title: strings.Repeat("长", maxCalendarTitle+1)}},
+		{Calendar: &recordingwire.RecordingCalendar{Title: "t", Attendees: make([]string, maxCalendarAttendees+1)}},
+		{Calendar: &recordingwire.RecordingCalendar{Title: "t", Attendees: []string{strings.Repeat("名", maxCalendarName+1)}}},
 	} {
 		bad.Revision, bad.StartedAt, bad.Device = 3, now, "phone"
-		if _, err := e.PutRecording(recID, bad, now); !errors.Is(err, kb.ErrBadRecording) {
+		if _, err := e.PutRecording(recID, bad, now); !errors.Is(err, recordingwire.ErrBadRecording) {
 			t.Errorf("%+v: %v", bad, err)
 		}
 	}
@@ -666,7 +668,7 @@ func TestMinutesRemade(t *testing.T) {
 func TestMinutesAnswerRules(t *testing.T) {
 	e := goldenEngine(t, nil)
 	r := &Recording{ID: recID, StartedAt: time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone), Duration: 600,
-		Calendar: &kb.RecordingCalendar{Attendees: []string{"Ada"}}}
+		Calendar: &recordingwire.RecordingCalendar{Attendees: []string{"Ada"}}}
 	read := []minutesLine{{N: 1, At: 0, Text: "we will ship on Friday, planning with Ann"}, {N: 2, At: 10, Text: "张三 来写测试"}}
 	build := func(reply string) (*Minutes, error) {
 		var a minutesAnswer

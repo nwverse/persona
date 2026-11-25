@@ -56,6 +56,10 @@ func TestMain(m *testing.M) {
 		}
 		return
 	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "eventer" { // assistant.event from a real program (extension_assistant_event_test.go)
+		serveEventExtensionForTest()
+		return
+	}
 	if os.Getenv("PERSONA_TEST_PLUGIN") == "boxed" {
 		serveBoxedExtensionForTest()
 		return

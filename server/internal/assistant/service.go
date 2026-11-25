@@ -245,6 +245,7 @@ type Service struct {
 	interrupts interruptBook
 
 	titles           titleBook              // titles.go
+	extEvents        extEventBook           // extension_event.go
 	phoneKept        keptPhoneTools         // fleet_tools.go: the phone's tools as the hub last listed them
 	agentNames       agentNamingBook        // agent_naming.go
 	prefs            settingsBook           // profile.go
@@ -486,6 +487,7 @@ func New(o Options) *Service {
 	defer reg.Seal()       // New returns it sealed: registering later is a defect
 	// saved's legacy untyped ports, until #15222 types them; a new module takes typed ports through its NewModule.
 	reg.Register(saved.NewModule(func() any { return s.store() }, s.event))
+	reg.Register(externalSourceRoutes{service: s})
 	s.resourceRoutes()
 	s.repositoryRoutes()
 	s.repoMirrorRoutes()
