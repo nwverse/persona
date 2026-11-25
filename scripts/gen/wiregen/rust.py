@@ -179,6 +179,8 @@ def gen_rust(defs: dict[str, Def], *, header: list[str] | None = None, defects: 
                    "a value this side does not know. Unset: nothing is called. Set it once, before decoding starts.")
         out += [f"pub static {hook}: std::sync::OnceLock<fn(&str, &str)> = std::sync::OnceLock::new();", ""]
     for d in defs.values():
+        if d.external:
+            raise SchemaError(f"{d.name} of {d.external}: Rust does not take a shared file's IDs yet")
         if d.kind == "enum" and d.closed:
             out += closed_enum(d)
         elif d.kind == "enum":

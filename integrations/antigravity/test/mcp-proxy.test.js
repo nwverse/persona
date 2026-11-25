@@ -23,7 +23,7 @@ function storedVersion(marker) {
 }
 
 /** The proxy in front of the fake server, with a call(method, params) that resolves to the response. */
-function proxied(t, tools, proxy = PROXY) {
+function proxied(t, tools, { proxy = PROXY, proxyArgs = [] } = {}) {
   const args = []
   if (tools) {
     const dir = mkdtempSync(join(tmpdir(), 'persona-mcp-proxy-'))
@@ -31,7 +31,7 @@ function proxied(t, tools, proxy = PROXY) {
     args.push(join(dir, 'tools.json'))
     writeFileSync(args[0], JSON.stringify(tools))
   }
-  const proc = spawn(process.execPath, [proxy, process.execPath, FAKE, ...args], { stdio: ['pipe', 'pipe', 'inherit'] })
+  const proc = spawn(process.execPath, [proxy, ...proxyArgs, process.execPath, FAKE, ...args], { stdio: ['pipe', 'pipe', 'inherit'] })
   t.after(() => proc.kill())
   const waiting = new Map()
   createInterface({ input: proc.stdout }).on('line', (line) => {
@@ -127,7 +127,7 @@ describe('MCP proxy (#7333)', { timeout: 15_000 }, () => {
     const proxy = join(dir, 'mcp-proxy.mjs')
     writeFileSync(proxy, readFileSync(PROXY))
     const big = { name: 'kb_search', description: 'Search the knowledge base. '.repeat(20), inputSchema: { type: 'object', properties: {} } }
-    const { call } = proxied(t, [big], proxy)
+    const { call } = proxied(t, [big], { proxy })
     const res = await call('tools/list', {})
     assert.deepEqual(res.result.tools.map((x) => x.name), ['kb_search', 'persona_call'])
   })
@@ -254,18 +254,22 @@ describe('MCP declaration enums (#9944)', { timeout: 15_000 }, () => {
 })
 
 describe('mcpServers', () => {
-  it('allows a regular agent to keep ordinary tools alongside a separate scoped A2A server', () => {
+  it('routes regular agent persona tools through the agent proxy while keeping persona_a2a separate', () => {
     const agent = mcpServers('/bin/personad', 'agy-1', false, 'test-ticket')
     const chat = mcpServers('/bin/personad', 'agy-2', true, 'test-ticket')
-    assert.deepEqual(agent.map(({ name }) => name), ['persona', 'persona_a2a'])
-    assert.ok(agent[0].env.every(({ name }) => name !== 'PERSONA_A2A_TOKEN'))
+    assert.deepEqual(agent.map(({ name, command, args }) => [name, command, args]), [
+      ['persona', process.execPath, [PROXY, '--agent', '/bin/personad', 'mcp']],
+      ['persona_a2a', '/bin/personad', ['mcp']],
+    ])
+    assert.ok(agent[0].env.every(({ name }) => name !== 'PERSONA_A2A_TOKEN' && name !== 'PERSONA_ASSISTANT'))
     assert.ok(agent[0].env.some(({ name, value }) => name === 'PERSONA_MCP_EXCLUDE_A2A' && value === '1'))
     assert.ok(agent[1].env.some(({ name, value }) => name === 'PERSONA_A2A_TOKEN' && value === 'test-ticket'))
     assert.ok(chat[0].env.every(({ name }) => name !== 'PERSONA_A2A_TOKEN'))
   })
-  it('passes one persona server; an assistant chat\'s through the proxy', () => {
+  it('passes agent chats through --agent proxy and assistant chats through default proxy', () => {
     const agent = mcpServers('/bin/personad', 'agy-1', false)
-    assert.deepEqual(agent.map((s) => [s.name, s.command, s.args]), [['persona', '/bin/personad', ['mcp']]])
+    assert.deepEqual(agent.map((s) => [s.name, s.command, s.args]), [['persona', process.execPath, [PROXY, '--agent', '/bin/personad', 'mcp']]])
+    assert.ok(agent[0].env.every((e) => e.name !== 'PERSONA_ASSISTANT'))
     const chat = mcpServers('/bin/personad', 'agy-1', true)
     assert.deepEqual(chat.map((s) => [s.name, s.command, s.args]), [['persona', process.execPath, [PROXY, '/bin/personad', 'mcp']]])
     assert.ok(chat[0].env.some((e) => e.name === 'PERSONA_ASSISTANT' && e.value === '1'))
@@ -333,6 +337,98 @@ describe('mcpServers', () => {
     const [server] = compat.mcpServers('/bin/personad', 'agy-reconnected', true)
     assert.equal(server.args[0], join(realpathSync(store), 'current', 'antigravity', 'mcp-proxy.mjs'))
     assert.ok(existsSync(server.args[0]))
+  })
+})
+
+describe('MCP proxy --agent mode (#15822)', { timeout: 15_000 }, () => {
+  const bulkSecondary = Array.from({ length: 34 }, (_, i) => ({
+    name: i < 29 ? `phone_tool_${i}` : `mail_tool_${i - 29}`,
+    description: `Secondary phone or mail tool ${i}. `.repeat(24),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Identifier for this phone or mail item' },
+        payload: { type: 'string', description: 'Payload data for this operation' },
+      },
+    },
+  }))
+  const reportTool = {
+    name: 'report_to_supervisor',
+    description: 'Report progress, questions, blockers, or done criteria to your supervisor. '.repeat(26),
+    inputSchema: { type: 'object', required: ['kind', 'text'], properties: { kind: { type: 'string', enum: ['progress', 'question', 'blocked', 'done'] }, text: { type: 'string' } } },
+  }
+  const spawnTool = {
+    name: 'task_spawn',
+    description: 'Start a separate coding Agent on your current supervised task. '.repeat(10),
+    inputSchema: { type: 'object', required: ['title', 'prompt'], properties: { title: { type: 'string' }, prompt: { type: 'string' } } },
+  }
+  const leaderPlanTool = {
+    name: 'task_plan',
+    description: 'Hand part of your own task to workers beneath the task you lead. '.repeat(36),
+    inputSchema: { type: 'object', required: ['tasks'], properties: { tasks: { type: 'array', items: { type: 'object', properties: { role: { type: 'string', enum: ['worker'] } } } } } },
+  }
+  const leaderReviewTool = {
+    name: 'task_review',
+    description: 'Close, send back or hand up one of your direct worker tasks. '.repeat(26),
+    inputSchema: { type: 'object', required: ['todo_id', 'verdict'], properties: { todo_id: { type: 'string' }, verdict: { type: 'string', enum: ['accepted', 'rework', 'needs_user', 'cancelled'] }, ready: { type: 'boolean', enum: [true] } } },
+  }
+  const smallCore = { name: 'todo_repositories_get', description: 'Read saved repositories.', inputSchema: { type: 'object', properties: { id: { type: 'string' } } } }
+  const bigCore = {
+    name: 'file_transfer',
+    description: 'Copy files between enrolled computers through Persona. '.repeat(18),
+    inputSchema: { type: 'object', required: ['direction'], properties: { direction: { type: 'string', enum: ['send', 'fetch', 'list'] } } },
+  }
+  const toolBytes = (tool) => Buffer.byteLength(JSON.stringify({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema }))
+
+  it('keeps leader task_plan, task_review, report_to_supervisor and task_spawn declared within budget while keeping secondary tools callable via persona_call', async (t) => {
+    const catalog = [...bulkSecondary, reportTool, smallCore, bigCore, leaderPlanTool, leaderReviewTool, spawnTool]
+    const { call } = proxied(t, catalog, { proxyArgs: ['--agent'] })
+    const listed = await call('tools/list', {})
+    const declared = listed.result.tools
+    const names = declared.map((x) => x.name)
+    for (const required of ['report_to_supervisor', 'file_transfer', 'task_plan', 'task_review', 'task_spawn', 'persona_call']) {
+      assert.ok(names.includes(required), `missing required declared tool ${required}: ${names}`)
+    }
+    assert.ok(!names.includes('todo_repositories_get'), 'small core tool stays behind persona_call so persona_call stays smallest')
+    assert.ok(!names.includes('machines_list'), 'assistant-only tool must never be invented')
+    const dispatch = declared.find((x) => x.name === 'persona_call')
+    assert.ok(declared.every((x) => x === dispatch || toolBytes(x) > toolBytes(dispatch)), 'persona_call remains the smallest declared tool')
+    const reviewDeclared = declared.find((x) => x.name === 'task_review')
+    assert.equal(reviewDeclared.inputSchema.properties.ready.enum, undefined, 'boolean enum is projected out for agy')
+    const weightedBytes = declared.reduce((sum, x) => sum + toolBytes(x) + 256, 0)
+    assert.ok(weightedBytes <= 26_000, `leader declarations stayed compact (${weightedBytes} B) instead of overflowing agy eager budget`)
+
+    // Direct calls and persona_call work for declared leader tools and overflow secondary tools alike.
+    const planCall = await call('tools/call', { name: 'task_plan', arguments: { tasks: [] } })
+    assert.deepEqual(JSON.parse(planCall.result.content[0].text), { name: 'task_plan', args: { tasks: [] } })
+    const summary = (await call('tools/call', { name: 'persona_call', arguments: {} })).result.content[0].text
+    assert.match(summary, /- mail_tool_4:/)
+    assert.match(summary, /- todo_repositories_get:/)
+    assert.doesNotMatch(summary, /- task_plan:/)
+    const overflowCall = await call('tools/call', { name: 'persona_call', arguments: { name: 'mail_tool_4', arguments: { id: 'p1' } } })
+    assert.deepEqual(JSON.parse(overflowCall.result.content[0].text), { name: 'mail_tool_4', args: { id: 'p1' } })
+  })
+
+  it('never exposes task_plan, task_review or machines_list to a worker whose upstream catalog omits them', async (t) => {
+    const workerCatalog = [...bulkSecondary, reportTool, smallCore, bigCore, spawnTool]
+    const { call } = proxied(t, workerCatalog, { proxyArgs: ['--agent'] })
+    const listed = await call('tools/list', {})
+    const declared = listed.result.tools
+    const names = declared.map((x) => x.name)
+    assert.ok(names.includes('report_to_supervisor'))
+    assert.ok(names.includes('task_spawn'))
+    assert.ok(names.includes('persona_call'))
+    for (const forbidden of ['task_plan', 'task_review', 'machines_list']) {
+      assert.ok(!names.includes(forbidden), `worker declared forbidden tool ${forbidden}`)
+    }
+    const summary = (await call('tools/call', { name: 'persona_call', arguments: {} })).result.content[0].text
+    for (const forbidden of ['task_plan', 'task_review', 'machines_list']) {
+      assert.ok(!summary.includes(forbidden), `worker persona_call summary mentioned forbidden tool ${forbidden}`)
+      const direct = await call('tools/call', { name: forbidden, arguments: {} })
+      assert.match(direct.error.message, new RegExp(`unknown tool ${forbidden}`))
+      const via = await call('tools/call', { name: 'persona_call', arguments: { name: forbidden, arguments: {} } })
+      assert.match(via.error.message, new RegExp(`unknown tool ${forbidden}`))
+    }
   })
 })
 

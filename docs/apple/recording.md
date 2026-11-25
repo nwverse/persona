@@ -128,6 +128,51 @@ The hub writes minutes for a meeting recording once its text is complete (#2710;
 - Read from `GET /api/v1/kb/recordings/{id}`: `detail.minutes` (`version`, `title`, `when`, `start` / `end` (RFC 3339 with the user's offset), `where`, `attendees`, `points`, `decisions`, `actions` with `id` / `who` / `what` / `by` / `due_date` / `todo_id`, `open`, and since #6563 `overview` and `markdown`), `detail.meta.minutes_state` and `detail.meta.trimmed_at`. Sections a hub leaves out are empty.
 - Mock hub: `MOCK_RECORDING_MINUTES=ready|pending|failed` (`scripts/mock/mock_hub.py`; `POST /mock/recording_minutes` switches it) writes made-up minutes in that shape from a meeting's own sentences when it is stored complete (`when`, `start` and `end` from its start and length, as the hub writes them), leaves them pending, or fails them. `POST /mock/recording_trim {"id"}` turns a stored one with minutes or a day recap into a trimmed recording (its transcript expired); `MOCK_RECORDING_DAYS` and `MOCK_MINUTES_DAYS` start the two retentions. Its minutes carry `version` and action ids. `POST …/minutes/todos` makes the to-dos (`409 minutes_stale` for an old version), `POST …/minutes` keeps the shown minutes while the next version is written (3 s later in `ready` mode), and `POST /mock/recording_minutes_rewrite {"id"}` writes the next version at once. `MOCK_RECORDING_MINUTES_SHAPE=legacy|overview|malformed` (`POST /mock/recording_minutes {"mode", "shape"}`; default `legacy`, which `MinutesCardsUITests` keeps as its baseline) picks the minutes' shape (#6563, `docs/assistant/meeting-minutes.md` "Summary card (#6563)"): `overview` adds the summary card, `malformed` a broken one beside the legacy minutes (the app shows the four cards), and every shape carries the hub's `markdown`. In `overview` every sentence that neither decides, assigns nor leaves something open is a point, and each transcript minute is a topic titled by the subject its first line names before a colon (`导出：…`), so a sample with lines in at least four minutes gets four topics in two groups (`docs/operations/testing.md` "Mock-data screenshots" has the rest). `-showMeetingSample overview` opens a five-minute sprint review written for it (`RecordingSamples.installOverviewMeeting`); the `minutes` sample stays the four cards' baseline. Day recordings are on by default (`MOCK_NO_RECORDING_DAY=1` disables them); `MOCK_DAY_RECAP=ready|pending|failed|none` sets their recap mode (default `ready`), and `POST /mock/recording_day {"on": true, "recap": "ready"}` switches it (`GET` reads it back).
 
+## With the hub's recording module off (#15214)
+
+The hub can turn the recording module off (`module.recording` in its hello, `docs/apple/ios.md` "Modules"). The rule is the
+owner's (#13430): a module that is off takes away its new activity and entry points; what it produced earlier stays listed,
+readable, searchable and the user's to delete. On the iPhone and iPad:
+
+- **One allowance.** `RecordingModule.allowance` (`apple/Persona/Recording/RecordingModule.swift`) is `RecordingAllowance`
+  (`on` / `off`), computed from the module registry's hub answer by `HubModules.allows` with the descriptor id `recording`.
+  Recording is not a packaged Apple module yet, so it is not in `Modules.builtIn`; it only has the module's id and so its
+  flag. Off only when the hello has `modules` and lacks `module.recording`; an older hub, or none heard yet, is on. Views
+  read it in `body` (a set lookup) and hand it down; the sync and the minutes model take it as a dependency.
+- **Hidden when off** (not disabled): Start Meeting and the next start's options (Recordings section, the Meetings page's
+  bottom bar and ⋯, the calendar's Start, the composer's + menu row); the All-Day Recording switch and its consent row
+  (the switch stays while all-day recording is on, so it can still be turned off); in a recording that still runs, the
+  question, Talk, Just Me, Bookmark, photos, Speaker, Invite and the page menu (Pause and Stop / End stay: it must be
+  possible to stop); on a stored recording Rename, Retry / Regenerate minutes, Add to To-Dos, Private Meeting, Talk
+  about this meeting and the follow-up composer, Hand to Agent, and a photo's Retry / Delete Photo
+  (`MeetingRoomOffers.moduleOff`). In the start's place the Recordings section says, once, that meeting recording is off
+  on this hub and that the recordings already there stay.
+- **Kept**: the lists (Still on This iPhone, All Meetings), search, deep links, the transcript, stored minutes with Copy
+  and Share, the day recap, photos, the conversation so far, Recording Details, and on-device transcription of a
+  recording that only this iPhone has (language, Resume / Stop Transcribing). A recording never synced stays listed and
+  readable; it is not uploaded while the module is off.
+- **Delete stays.** With the module off `RecordingSync` asks nothing of the module's routes (no list, no upload, so no
+  "sync isn't supported" footer) and sends deletes to the knowledge base's own route, `DELETE /api/v1/kb/recordings/{id}`
+  (`RecordingSync.deletePath`): `200 {"deleted": bool}` settles the delete either way (false: the hub no longer has it),
+  `410` too; a refusal (`kb_read_only`) or a `404` from a hub without that route leaves it pending, as before. With the
+  module on the route and the pass are unchanged.
+- **Paused.** The hub marks a stored recording whose minutes or upload wait for the module with `paused: "module_off"` on
+  its knowledge list entry and detail. The app decodes it into `RecordingPause` (`moduleOff`, or `unknown` with the hub's
+  word: a reason this app doesn't know changes nothing). Pending minutes then read **Paused** with one calm line in the
+  place of "Writing the minutes…" (`RecordingMinutesModel.State.paused`, `RecordingPausedNote`; "Minutes paused" on the
+  meeting page), the 15-second follow stops (`waiting` is false), shown minutes lose "Updating…", the wrap-up ends
+  without a spinning step, the watch relay stops asking every three minutes, and a Meetings row carries a Paused pill.
+  The same holds, without the hub's field, for anything still "on its way" while the app's own hello says the module is
+  off (`RecordingMinutesModel.held`): a recording that never reached the hub has nothing to wait for.
+- **No automatic `…/live`.** The meeting page and the recording page do not start their watch of the room while the
+  module is off (`MeetingRoomOffers.liveWatch`); the page reads from the knowledge base and the phone's own copy.
+- **With the module on**, or a hub that sends no `modules` marker, every screen is as before.
+- **Not yet** (outer surfaces, tracked on #15214): App Intents / Shortcuts / Siri, the Live Activity's and notifications'
+  actions, the Home Screen and Control widgets, the quick action and the Apple Watch still start a local recording.
+  visionOS compiles the same sources and was not built or checked for this change.
+- Tests: `RecordingModuleOffTests`, `ModulesTests.recordingFollowsItsHubFlag`. Mock hub: `MOCK_HUB_MODULES=<flags without
+  module.recording>` turns the module off for the app.
+
 ## Persona in meetings
 
 Persona can attend a meeting being recorded on the iPhone (#2981; the iPhone side is #3375). The contract, with every field and error, is [meeting-minutes.md](../assistant/meeting-minutes.md) "Attending a meeting"; this is what the app does with it. Only a hub that lists the `meeting_attendance` feature gets any of it: with another hub the Recordings page, the upload and the Live Activity are exactly as before. The redesign (#3862) replaces the attending session with the meeting's own room conversation and a meeting page, on a hub that lists `meeting_conversation`: [meeting-minutes.md](../assistant/meeting-minutes.md) "Meeting conversation (#3862)". The iPhone does phase 1 of it, phase 2, the live view, phase 3, photos, phase 4, realtime voice, and phase 6, talking about any recording ("The meeting conversation (#3862)" below); a meeting started on a hub without it, or before the hub listed it, keeps everything this section describes.

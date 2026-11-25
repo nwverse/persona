@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
@@ -310,6 +311,7 @@ func fillMail(it *InboxItem, a assistantwire.InboxMailAccount, msgs []assistantw
 		it.Mail.UIDs = append(it.Mail.UIDs, m.UID)
 	}
 	it.Mail.MessageID, it.Mail.From = newest.MessageID, newest.From
+	setInboxExternalPath(it, "", connector.InboxThing{})
 	it.Mail.Direct = false
 	for _, to := range newest.To {
 		if strings.EqualFold(to.Email, a.Email) {

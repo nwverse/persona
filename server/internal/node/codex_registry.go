@@ -928,6 +928,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 				s.Effort = m.effort
 				m.turnErr.set(&s)
 				setContext(&s, m)
+				s.Goal, s.Plan = m.goal, m.plan
 				title, ok := threadTitleIn(src.home, src.thread, pass)
 				if !ok {
 					emitUnavailable(id, src)

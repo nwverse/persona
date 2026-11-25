@@ -96,6 +96,24 @@ export function totalCounts(counts: ReadonlyMap<string, LeaderCounts>, ids: read
   return out;
 }
 
+/** Tally only the rows currently visible under the Persona chats section (deduplicated) so hidden/omitted directions,
+ *  main-chat open plans, and folded/unlisted chats never inflate the section header above the visible rows beneath it. */
+export function visibleSectionCounts(
+  counts: ReadonlyMap<string, LeaderCounts>,
+  directionIds: readonly string[],
+  visibleRecentIds: readonly string[] = [],
+): LeaderCounts {
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const id of directionIds) {
+    if (id && !seen.has(id)) { seen.add(id); ids.push(id); }
+  }
+  for (const id of visibleRecentIds) {
+    if (id && !seen.has(id)) { seen.add(id); ids.push(id); }
+  }
+  return totalCounts(counts, ids);
+}
+
 const listeners = new Set<() => void>();
 let names: Map<string, string> = new Map();
 let counts: Map<string, LeaderCounts> = new Map();
