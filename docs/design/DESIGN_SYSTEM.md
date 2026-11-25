@@ -4582,3 +4582,21 @@ measure for a moment first, and one neutral offload provider; `-tab settings -op
   in its top leading corner: the same round `chromeSurface` button, the whole 44 pt corner answering
   (`tapTargetFrame`), and the same action named for VoiceOver (**Edit Avatar**, **Delete Avatar**). Never a context
   menu: the grid is one Form row (`docs/apple/persona.md` "Uploading an image").
+
+## Per-slot file drop targets (#15612)
+
+Audience: everyday people customizing Persona's avatar (web and iPad / Mac). Dragging is additive: the default click /
+tap path and keyboard-reachable **Choose** / **Change** buttons stay in place, each with a spoken label naming its slot.
+
+- **One target under the pointer**: each picture slot (main picture, each state row, an open state's crop box, and on
+  the picker the Upload card and uploaded cards that offer Edit) handles only its own drag events (`stopPropagation` on
+  web), never another slot's. Built-in cards and uploaded cards without Edit do not highlight or accept drops.
+- **Same highlight, zero layout shift**: a targeted slot uses the existing drop-zone tokens — dashed accent border and
+  accent tint fill (`border-accent` / `outline-accent` + `bg-accent-tint`, or the crop box's 2 px accent ring) — in both
+  light and dark, with transparent resting borders or inset outlines so rows and cards do not shift when hovered.
+- **Near-miss guard**: while the dialog is open, a window-level guard swallows stray file drags/drops (`preventDefault`,
+  `dropEffect = "none"`), and the picker grid does the same, so a miss between slots, on the dialog's title or footer,
+  or on the backdrop never opens the file in the browser tab.
+- **Same validation and user control**: dropped files run through the exact same type/size validation and animated-image
+  decoder as chosen files. Dropping on a picker card only opens the upload or edit dialog with the file ready to crop;
+  nothing is saved until Upload / Save, and **Keep current** / Cancel reverts it (principle 3).
