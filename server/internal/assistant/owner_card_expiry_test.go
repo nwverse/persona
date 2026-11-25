@@ -84,11 +84,10 @@ func TestOwnerOnlyCardStaysPendingUntilSeenThenExpires(t *testing.T) {
 			}
 
 			// Waiting past the short post-view TTL must NOT expire an unseen card.
-			time.Sleep(260 * time.Millisecond)
 			select {
 			case r := <-done:
 				t.Fatalf("unseen card expired early: %+v", r)
-			default:
+			case <-time.After(260 * time.Millisecond):
 			}
 			if _, ok := ft.s.pendingIx(tc.ix.ID); !ok {
 				t.Fatal("unseen card vanished from pending interactions")
@@ -120,7 +119,7 @@ func TestOwnerOnlyCardStaysPendingUntilSeenThenExpires(t *testing.T) {
 			firstExpires := afterSeen.ExpiresAt
 
 			// Repeated seen receipts must be idempotent and never extend the countdown.
-			time.Sleep(30 * time.Millisecond)
+			<-time.After(30 * time.Millisecond)
 			ft.s.markInteractionSeen(context.Background(), tc.ix.ID)
 			afterSecond, ok := ft.s.pendingIx(tc.ix.ID)
 			if ok && (!afterSecond.SeenAt.Equal(firstSeenAt) || !afterSecond.ExpiresAt.Equal(firstExpires)) {

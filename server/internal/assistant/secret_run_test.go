@@ -376,11 +376,10 @@ func TestSecretRunExpiresWithoutRunning(t *testing.T) {
 	done := r.call(secretArgs)
 	ix := r.card()
 	// Before the user sees the card, it must not expire after secretRunCardWait.
-	time.Sleep(350 * time.Millisecond)
 	select {
 	case res := <-done:
 		t.Fatalf("unseen card expired early: %s", resultText(res))
-	default:
+	case <-time.After(350 * time.Millisecond):
 	}
 	// Once viewed in the app, the countdown starts and expires it.
 	if !r.s.markInteractionSeen(context.Background(), ix.ID) {

@@ -77,7 +77,7 @@ func TestOwnerPresentWakesSupervisorOnAppOnlineAndDedupes(t *testing.T) {
 	s.FleetEvent(context.Background(), assistantwire.EventClients, offlineRaw)
 	s.FleetEvent(context.Background(), assistantwire.EventClients, onlineRaw)
 	s.ownerAppeared(context.Background(), "user_spoke", "other_chat")
-	time.Sleep(100 * time.Millisecond)
+	<-time.After(100 * time.Millisecond)
 
 	if got := len(sentTextsTo(f, "sup1")); got != 1 {
 		t.Fatalf("supervisor nudged %d times for the same matter, want 1", got)
@@ -124,7 +124,7 @@ func TestOwnerPresentWakesSupervisedTaskOnUserSpokeAndDedupes(t *testing.T) {
 	// Speaking again or app coming online must not repeat the nudge for the same waiting round.
 	s.UserSpoke(ctx, SessionRef{MachineID: "server", SessionID: "other_chat"})
 	s.ownerAppeared(ctx, "app_online", "")
-	time.Sleep(150 * time.Millisecond)
+	<-time.After(150 * time.Millisecond)
 
 	if got := len(sentTextsTo(f, "conv1")); got != before+1 {
 		t.Fatalf("supervisor got %d messages for same task wait, want %d", got, before+1)
@@ -164,7 +164,7 @@ func TestOwnerPresentSkipsWhenLiveOwnerCardAlreadyPending(t *testing.T) {
 	})
 
 	s.ownerAppeared(ctx, "app_online", "")
-	time.Sleep(150 * time.Millisecond)
+	<-time.After(150 * time.Millisecond)
 	if got := len(sentTextsTo(f, "conv1")); got != before {
 		t.Fatalf("expected no extra nudges while live owner card is pending, got %d (before=%d)", got, before)
 	}
