@@ -3184,6 +3184,16 @@ a page's title is "Ownership line (#15017)" below. What the iPhone and iPad do o
   `Theme.Font.label`, secondary), as Knowledge's day page draws its chat.
 - **Over HTTP only.** Every extension id that starts with "-" is a manager's and is drawn over HTTP, never the native page
   stream. `assistant_pages` (no payload) reads the places again, coalesced, and a reconnect reads them once more.
+- **Watch pages (#13020).** Still no new component: the hub's watch section is a `metric` (a tripped reading's number in
+  the caution tone with the warning icon in the quiet ink, as on the web; a status light's icon in its named hue; a
+  trend's `spark` under the number, caution when tripped) and, for a table, a `table` under it. A watch page's index row
+  carries the reading as its value, a trend's spark before it, and a status light's or a tripped watch's icon on the
+  icon tile in its color (an empty watch keeps the page's own icon). The footer is the hub's too: caption lines
+  (Checked … · next check, Checking now…, Updates paused), one-line buttons (Refresh now, Pause / Resume updates) and the
+  Alert me row with a system switch, which shows a change at once and puts the old value back when the hub refuses it.
+- **No watch cards in Settings.** Settings home and Settings › Extensions draw extensions' `overview_card` places; one
+  whose extension id starts with "-" (Dashboards' watch cards, `g_…`, which the hub lists only to the web's Overview) is
+  never asked for or drawn there.
 
 ## Sidebar icon colors (#10822)
 
