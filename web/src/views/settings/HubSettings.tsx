@@ -425,13 +425,13 @@ function UpdateVersionRow({ latest, backups, activeBackup, selectedID, disabled,
     <Row label={t("settings-hubsettings.update_version")} stackOnNarrow>
       <div className="relative w-full min-w-0 max-w-full">
         <select aria-label={t("settings-hubsettings.update_version")}
-          className={cx(settingsInputClass, "peer min-w-0 max-w-full tabular-nums max-sm:absolute max-sm:inset-0 max-sm:h-full max-sm:opacity-0")}
+          className={cx(settingsInputClass, "peer min-w-0 max-w-full tabular-nums max-sm:absolute max-sm:inset-0 max-sm:h-full max-sm:opacity-0 max-sm:disabled:opacity-0")}
           value={selected.id} disabled={disabled} onChange={e => onSelect(e.target.value)}>
           {options.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
         </select>
         {/* Native select text is single-line. Paint its selected option with wrapping on narrow screens. */}
         <span aria-hidden className="pointer-events-none flex min-h-11 items-center gap-2 rounded-control bg-field px-2.5 py-1.5 text-label text-ink shadow-inset-field tabular-nums peer-focus:shadow-[inset_0_0_0_1px_var(--accent)] peer-disabled:opacity-60 sm:hidden">
-          <span className="min-w-0 flex-1 break-words">{selected.label}</span>
+          <span className="min-w-0 flex-1 break-words">{selected.label.replaceAll(" · ", " ·\u00a0")}</span>
           <Icon name="chevron" size={12} className="shrink-0 text-ink-3" />
         </span>
       </div>

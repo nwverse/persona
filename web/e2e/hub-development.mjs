@@ -98,9 +98,11 @@ try {
     assert.match(await pipeline.innerText(), /personad \(linux-amd64\) · Items 3\/4/);
     assert.equal(await pipeline.evaluate(el => el.scrollWidth > el.clientWidth), false, 'Pipeline horizontal overflow');
     if (width === 390) {
-      const selectedVersion = page.getByRole('combobox', { name: 'Update version' }).locator('..').locator(':scope > [aria-hidden="true"]');
+      const picker = page.getByRole('combobox', { name: 'Update version' });
+      assert.equal(await picker.evaluate(el => getComputedStyle(el).opacity), '0', 'Disabled native text stays hidden under the wrapping label');
+      const selectedVersion = picker.locator('..').locator(':scope > [aria-hidden="true"]');
       assert.equal(await selectedVersion.isVisible(), true);
-      assert.match(await selectedVersion.innerText(), /2026-11-13 18:23:45 · b{12}/);
+      assert.match(await selectedVersion.innerText(), /2026-11-13 18:23:45 ·\s+b{12}/);
       assert.equal(await selectedVersion.evaluate(el => el.scrollWidth > el.clientWidth), false, 'Selected version horizontal overflow');
     }
     await pipeline.evaluate(el => el.scrollIntoView({ block: 'center' }));
