@@ -100,6 +100,8 @@ func (s *Service) tool(ctx context.Context, call ToolCall) proto.ToolResult {
 		return s.resourceTool(ctx, call.MachineID, call.SessionID, call.Name, args)
 	case "persona_settings":
 		return s.toolPersonaSettings(ctx, call, args) // settings_tool.go
+	case externalSourcesReadTool, externalSourcesWriteTool:
+		return s.toolExternalSources(ctx, call, args)
 	case "task_plan", "agent_start", "conversation_new":
 		// The optional dispatch policy is checked first: it can refuse a model's call where the task-agent refusal
 		// below still lets a scheduled conversation through. The hub's own starts (an inbox hand-off) come through
