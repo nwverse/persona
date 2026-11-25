@@ -203,7 +203,9 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 	switch method {
 	case "session.items":
 		if p.UserInputs {
-			index, err := n.runtimeUserInputs(ctx, p.SessionID, func(params any) (json.RawMessage, error) { return call("session.items", params) })
+			index, err := n.runtimeUserInputs(ctx, p.SessionID, p.BeforeSeq, func(params any) (json.RawMessage, error) {
+				return call("session.items", params)
+			})
 			return index, err, true
 		}
 		out, err := call("session.items", params)

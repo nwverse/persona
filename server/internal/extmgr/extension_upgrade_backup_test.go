@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/extension/host"
 )
 
 // writeUIData writes name in example-ui's data directory.
@@ -183,4 +186,219 @@ func TestExtensionAutoUpgradeRequiredBackupFails(t *testing.T) {
 	if got := readUIData(h, "memory.json"); got != `{"schema":1}` {
 		t.Fatalf("data: %s", got)
 	}
+}
+
+// Non-OnCall extensions declaring upgrade.health_check (such as connector extensions without on_startup or on_http+RPC
+// extensions) start in StateStopped until held or invoked. watchUpgrade must wait for StateRunning instead of calling
+// upgrade.health on a stopped non-OnCall process (which returns ErrNotRunning and causes a false rollback), while still
+// lazily starting OnCall extensions and rolling back genuinely unhealthy ones.
+func TestWatchUpgradeNonOnCallHealthCheckWaitsForRunning(t *testing.T) {
+	setupStoppedHealthCheckProc := func(t *testing.T, onCall bool, unhealthy string) (*Manager, *host.Proc) {
+		t.Helper()
+		h, mux, phone, mk, dir, mid := upgradeHub(t)
+		editManifest(t, dir, func(m map[string]any) { m["upgrade"] = map[string]any{"health_check": true} })
+		autoUpgradeTo(t, h, mk, dir, mid, "1.1.0")
+		// Wait for autoUpgradeTo's background watchUpgrade goroutine to settle before replacing byID["example-ui"].
+		waitLong(t, "1.1.0 watch settled", func() bool {
+			_, d := call(t, mux, "GET", "/api/v1/plugins/example-ui/-/", phone, "")
+			n, _ := d["upgrade_note"].(map[string]any)
+			return n["kind"] == "upgraded" && n["to"] == "1.1.0"
+		})
+
+		// Replace the running startup proc with a stopped non-Startup proc matching specOf for a connector/on_http
+		// extension (OnCall=false) or a lazy on_call extension (OnCall=true).
+		h.extensions.mu.Lock()
+		old := h.extensions.byID["example-ui"]
+		delete(h.extensions.byID, "example-ui")
+		h.extensions.mu.Unlock()
+		if old != nil && old.proc != nil {
+			old.proc.Stop()
+		}
+
+		self, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := []string{"PERSONA_TEST_PLUGIN=ui", "EXAMPLE_UI_VERSION=1.1.0"}
+		if unhealthy != "" {
+			env = append(env, "EXAMPLE_UI_UNHEALTHY="+unhealthy)
+		}
+		p := host.Start(t.Context(), host.Spec{
+			ID:      "example-ui",
+			Name:    "example-ui",
+			Command: self,
+			Dir:     h.extensions.reg.DataDir("example-ui"),
+			Env:     env,
+			RPC:     true,
+			Startup: false,
+			OnCall:  onCall,
+		})
+		t.Cleanup(p.Stop)
+		if st, _ := p.Status(); st != host.StateStopped {
+			t.Fatalf("initial proc state = %q, want %q", st, host.StateStopped)
+		}
+		h.extensions.mu.Lock()
+		h.extensions.byID["example-ui"] = &hubExtension{id: "example-ui", proc: p}
+		h.extensions.mu.Unlock()
+		return h, p
+	}
+
+	t.Run("unheld non-OnCall stopped proc does not falsely roll back", func(t *testing.T) {
+		h, _ := setupStoppedHealthCheckProc(t, false, "")
+		ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+		defer cancel()
+
+		rolledBack, why := h.extensions.watchUpgrade(ctx, "example-ui")
+		if rolledBack {
+			t.Fatalf("unheld non-OnCall extension was falsely rolled back: %q", why)
+		}
+		if v := installedVersion(h); v != "1.1.0" {
+			t.Fatalf("installed version = %s, want 1.1.0", v)
+		}
+	})
+
+	t.Run("held non-OnCall connector-style start passes upgrade.health after reaching StateRunning", func(t *testing.T) {
+		h, p := setupStoppedHealthCheckProc(t, false, "")
+		done := make(chan struct{})
+		var (
+			rolledBack bool
+			why        string
+		)
+		go func() {
+			defer close(done)
+			rolledBack, why = h.extensions.watchUpgrade(t.Context(), "example-ui")
+		}()
+
+		timer := time.NewTimer(50 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-done:
+			t.Fatalf("watchUpgrade returned before Hold() started the process: rolledBack=%v why=%q", rolledBack, why)
+		case <-timer.C:
+		}
+		release := p.Hold()
+		defer release()
+
+		<-done
+		if rolledBack {
+			t.Fatalf("healthy non-OnCall extension was falsely rolled back: %q", why)
+		}
+		if v := installedVersion(h); v != "1.1.0" {
+			t.Fatalf("installed version = %s, want 1.1.0", v)
+		}
+	})
+
+	t.Run("held non-OnCall unhealthy extension rolls back with real health error after reaching StateRunning", func(t *testing.T) {
+		h, p := setupStoppedHealthCheckProc(t, false, "index missing")
+		done := make(chan struct{})
+		var (
+			rolledBack bool
+			why        string
+		)
+		go func() {
+			defer close(done)
+			rolledBack, why = h.extensions.watchUpgrade(t.Context(), "example-ui")
+		}()
+
+		timer := time.NewTimer(50 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-done:
+			t.Fatalf("watchUpgrade returned before Hold() started the process: rolledBack=%v why=%q", rolledBack, why)
+		case <-timer.C:
+		}
+		release := p.Hold()
+		defer release()
+
+		<-done
+		if !rolledBack {
+			t.Fatal("unhealthy non-OnCall extension was not rolled back")
+		}
+		if !strings.Contains(why, "index missing") {
+			t.Fatalf("rollback reason = %q, want substring %q", why, "index missing")
+		}
+		if v := installedVersion(h); v != "1.0.0" {
+			t.Fatalf("installed version = %s, want 1.0.0 after rollback", v)
+		}
+	})
+
+	t.Run("control OnCall extension lazily starts from StateStopped for upgrade.health", func(t *testing.T) {
+		h, _ := setupStoppedHealthCheckProc(t, true, "lazy broken")
+		rolledBack, why := h.extensions.watchUpgrade(t.Context(), "example-ui")
+		if !rolledBack {
+			t.Fatal("unhealthy OnCall extension was not rolled back")
+		}
+		if !strings.Contains(why, "lazy broken") {
+			t.Fatalf("rollback reason = %q, want substring %q", why, "lazy broken")
+		}
+		if v := installedVersion(h); v != "1.0.0" {
+			t.Fatalf("installed version = %s, want 1.0.0 after rollback", v)
+		}
+	})
+
+	t.Run("superseded watchUpgrade preserves newer backup and inflight tracking", func(t *testing.T) {
+		h, p := setupStoppedHealthCheckProc(t, false, "")
+		key := h.extensions.reg.StorageKeyOf("example-ui")
+
+		// Start watching 1.1.0 while stopped.
+		done := make(chan struct{})
+		var rolledBack bool
+		go func() {
+			defer close(done)
+			rolledBack, _ = h.extensions.watchUpgrade(t.Context(), "example-ui")
+		}()
+
+		timer := time.NewTimer(40 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-done:
+			t.Fatal("watchUpgrade exited prematurely before superseding")
+		case <-timer.C:
+		}
+
+		// Simulate a newer 1.2.0 upgrade taking over the pending backup, inflight marker, and process slot.
+		h.extensions.upgradeBackups.hold(key, pendingBackup{from: "1.1.0", to: "1.2.0", backup: "backup-1.1.0.tar.gz"})
+		u := h.extensionUpgrades()
+		u.mu.Lock()
+		if u.inflight == nil {
+			u.inflight = map[string]string{}
+		}
+		u.inflight[key] = "1.2.0"
+		u.mu.Unlock()
+
+		h.extensions.mu.Lock()
+		h.extensions.byID["example-ui"] = &hubExtension{id: "example-ui"}
+		h.extensions.mu.Unlock()
+		// Trigger a state change on the old proc so the superseded watchUpgrade wakes immediately.
+		release := p.Hold()
+		defer release()
+		<-done
+
+		if rolledBack {
+			t.Fatal("superseded watchUpgrade rolled back")
+		}
+		if got, ok := h.extensions.upgradeBackups.take(key, "1.2.0"); !ok || got.backup != "backup-1.1.0.tar.gz" {
+			t.Fatalf("superseded watchUpgrade dropped newer version's pending backup: %+v, ok=%v", got, ok)
+		}
+		u.watched(t.Context(), "example-ui", "1.0.0", "1.1.0", false, "")
+		u.mu.Lock()
+		inflight := u.inflight[key]
+		u.mu.Unlock()
+		if inflight != "1.2.0" {
+			t.Fatalf("superseded watched() clobbered newer inflight version: got %q, want %q", inflight, "1.2.0")
+		}
+	})
+
+	t.Run("canceled context during upgradeHealth does not roll back", func(t *testing.T) {
+		h, _ := setupStoppedHealthCheckProc(t, true, "")
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		rolledBack, why := h.extensions.watchUpgrade(ctx, "example-ui")
+		if rolledBack {
+			t.Fatalf("canceled watchUpgrade rolled back: %q", why)
+		}
+		if v := installedVersion(h); v != "1.1.0" {
+			t.Fatalf("installed version = %s, want 1.1.0", v)
+		}
+	})
 }

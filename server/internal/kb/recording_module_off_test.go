@@ -69,7 +69,7 @@ func moduleOffFixture(t *testing.T) (on, off *Engine, m *captureModel, now time.
 	t.Helper()
 	m = &captureModel{reply: minutesReply}
 	on = goldenEngine(t, m)
-	on.SetRecordingProvider(RecordingWriters(on))
+	on.SetRecordingProvider(hookedWriters(on))
 	now = time.Date(2026, 11, 10, 16, 0, 0, 0, goldenZone)
 	start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	putRecording(t, on, recID, meetingUpload(1, start, "大家好，今天评审导出", "Ada 说导出超过 4 MB 的条目会被丢掉", "那这一版先保留上限", "Bo 你周五前补上回归测试", "上限按条还是按录音算还没定"), now)
@@ -219,7 +219,7 @@ func TestRecordingInFlightIsPausedWithoutTheModule(t *testing.T) {
 	// The module is back: nothing is paused, and the stored state is still the one its round takes up (pending; that
 	// the round then writes the minutes is the module's test, TestMinutesResumeWhenTheModuleIsBack).
 	back := &Engine{Store: off.Store, Model: off.Model, Owner: off.Owner, Logf: off.Logf}
-	back.SetRecordingProvider(RecordingWriters(back))
+	back.SetRecordingProvider(hookedWriters(back))
 	if d, list := paused(back); d != "" || list[recID2] != "" || recordingNow(t, back, recID2).MinutesState != MinutesPending {
 		t.Errorf("back with the module: paused %q %v, state %q", d, list, recordingNow(t, back, recID2).MinutesState)
 	}
@@ -285,8 +285,24 @@ func TestRecordingProviderIsNeverNil(t *testing.T) {
 	}
 	e.Store.recordingAudio().AudioDropped(recID, ErrNotFound)
 	e.Store.recordingAudio().AudioClosed(recID)
-	e.SetRecordingProvider(RecordingWriters(e))
-	if _, ok := e.Store.recordingAudio().(recordingWriters); !ok {
+	e.SetRecordingProvider(hookedWriters(e))
+	if _, ok := e.Store.recordingAudio().(hookedProvider); !ok {
 		t.Errorf("the store's audio side is %T after the module's hook", e.Store.recordingAudio())
 	}
+}
+
+// hookedProvider stands for the recording module's provider in these tests (the module's own is
+// internal/modules/recording/writers, which this package cannot import): a knowledge base that was hooked, whose
+// summary round is this package's and whose other rounds write nothing here.
+type hookedProvider struct {
+	recordingwire.NoProvider
+	rest recordingwire.WritersInCore
+}
+
+func (p hookedProvider) SummarizeRecordings(ctx context.Context, max int) int {
+	return p.rest.SummarizeRecordings(ctx, max)
+}
+
+func hookedWriters(e *Engine) recordingwire.Provider {
+	return hookedProvider{rest: RecordingWriters(e)}
 }

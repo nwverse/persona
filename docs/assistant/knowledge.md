@@ -94,12 +94,16 @@ What it wrote earlier stays the user's: stored recordings are still listed, open
 `kb_get`: transcript, minutes, day recap, photo texts) and found by search, and their files are not touched. Their
 tags, pinned facts and projects can still be edited, they can still be deleted (`DELETE /api/v1/kb/recordings/{id}`,
 "App API" below), and retention (`recording_days`, `minutes_days`) keeps its schedule. What stops is everything that
-makes new data: uploads, appends, transcription, minutes, titles, recaps and summaries.
+makes new data: uploads, appends, transcription, minutes, titles, recaps and summaries. The writers of a
+recording's minutes, recap, title, photos, audio and hub transcript are the module's code
+(`server/internal/modules/recording/writers`); the knowledge base keeps the readers, delete, retention with the trim
+and the recovery.
 
-A stored photo's image is read through the same route with or without the module, `GET /api/v1/recordings/{id}/photos/{n}`:
-the knowledge base's own read-only route (`assistant/kb_recording_media.go`, full credentials only), answering as the
-module's did before it moved. Photo upload, list and delete are the module's. No route serves stored audio, with the
-module or without: the chunks of a recording in flight are the module's input and stay on disk untouched.
+Stored photos are read through the same routes with or without the module: `GET /api/v1/recordings/{id}/photos` lists
+them and `GET …/photos/{n}` serves an image. These are the knowledge base's own read-only routes
+(`assistant/kb_recording_media.go`, full credentials only), answering as the module's did before they moved. Photo
+upload and delete are the module's. No route serves stored audio, with the module or without: the chunks of a
+recording in flight are the module's input and stay on disk untouched.
 
 A recording that was in flight when the module went (an upload not complete, minutes or a recap `pending`, a hub
 transcription `live` or `finishing`) is shown as stored, with `paused: "module_off"` on its list entry and its detail.
@@ -272,7 +276,7 @@ assistant is not connected, the knowledge base closes once no lane runs; a lane 
    Aliases collected before these rules are pruned when the knowledge base opens (`PruneProjectAliases`): another unmerged project's name or slug, the project's own name, repeats, generic ones,
    and everything past the first 12 go; names of projects merged into it (directly or through another merged project) stay and do not count. An alias two unmerged projects share stays on both (whose it is cannot be told),
    and projects whose aliases are locked (set by hand) are not touched.
-   Rewrite dirty project summaries, at most 3 calls per round with failed ones counted (#4246), each from the old summary + latest 40 timeline entries + bounded `memory.jsonl` records + summaries of up to 8 related chats; a failed one waits like a chat whose compression failed. Person / chat / project associations are written into each
+   Rewrite dirty project summaries, at most 3 calls per round with failed ones counted (#4246), each from the old summary + latest 40 timeline entries + bounded `memory.jsonl` records + summaries of up to 8 related chats, the most recently summarized (`compressed_at`; before #15308 the first 8 linked, so a project with dozens of chats read where it started); a failed one waits like a chat whose compression failed. Person / chat / project associations are written into each
    `meta.json` bidirectionally. Long-term projects (`long`) never revert to short-term.
    The memory input has at most 5 outcomes, 5 effective decisions and 3 pitfalls, newest first by kind. Each decision keeps its reason, the outcome matched by its durable record ID (never the legacy turn/item tuple), source time and verification; distinct conflicting IDs stay separate, and missing fields stay unrecorded. `summary.md` has a fixed **Decisions and reasons** section. The exact memory records join the frozen-input commit guard and freshness evidence, so a change during the model call cannot commit a stale summary. For freshness, each bounded record's ID and content hash are compared with the summary's recorded cutoff; new or changed records contribute to the existing uncovered-evidence review count. A `memory.jsonl` with no usable records (missing, empty, malformed or unreadable) adds no memory block, creates no file and needs no migration; the old summary/timeline/chat input is unchanged.
 3b. **Topics** (#3783, `kb/topic_distill.go`, `kb/topic_merge.go`; "Topics" below): in the topics lane, at most 2 distill calls (new timeline lines or a changed chat summary → candidate

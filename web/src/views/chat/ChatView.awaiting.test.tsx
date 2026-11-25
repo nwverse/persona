@@ -6,6 +6,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Item, Session } from "../../lib/types";
 import { getQuotes, setQuotes } from "../../lib/drafts";
+import { contextXML, withContexts } from "../../lib/context-xml";
+import { inlineBody } from "../../lib/inline-message";
+import type { ContextRef } from "../../lib/links";
+import { skillContext } from "../../lib/skill-mentions";
 
 vi.hoisted(() => {
   const g = globalThis as Record<string, unknown>;
@@ -93,6 +97,25 @@ describe("editing the last Claude prompt (#2945, #4503)", () => {
   // past EDIT_SEND_SETTLE_MS: the wait for Claude's box after a rewind (#4605)
   const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 2000)); });
   const rewound = (input_cleared = true) => new Response(JSON.stringify({ prompt, restore: "conversation", input_cleared, code_restored: false }));
+
+  it("restores the last message's inline references and leading quote into the composer", async () => {
+    const skill = skillContext({ id: "review", name: "Review", source: "Project", description: "Look for edge cases." });
+    const file: ContextRef = { id: "notes", kind: "file", title: "notes.md", url: "", text: "docs/notes.md", attrs: { path: "docs/notes.md" } };
+    const body = withContexts([skill], `> Quoted words\n\n${inlineBody(["Use ", skill, " on ", file, "."])}`);
+    transcript.items = items().map((item) => item.id === "u2#0" ? { ...item, text: `${body}\n\n${contextXML(file)}` } : item);
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    expect(editButton()).toBeDefined();
+    await act(async () => { editButton()!.click(); await vi.dynamicImportSettled(); });
+    const field = () => host.querySelector("[data-composer-input]");
+    await vi.waitFor(async () => {
+      await act(async () => { await vi.dynamicImportSettled(); });
+      expect([...field()!.querySelectorAll("[data-inline-mention]")].map((token) => token.textContent)).toEqual(["Review", "notes.md"]);
+    });
+    expect(field()?.textContent).toBe("Use Review on notes.md.");
+    expect(getQuotes("hub/c1").list).toMatchObject([{ text: "Quoted words" }]);
+    expect(rewinds()).toHaveLength(0);
+  });
 
   it.each(["Esc Esc", "↑"])("%s puts the last prompt in the box to edit; the rewind runs only when the edit is sent", async (how) => {
     let finish!: () => void;

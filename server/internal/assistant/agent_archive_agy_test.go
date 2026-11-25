@@ -124,7 +124,7 @@ func TestAgyCloseOnTheConversationsRowSticks(t *testing.T) {
 	}
 
 	restarted, _ := archiveTestService(t)
-	restarted.s.store = func() Store { return ft.st }
+	restarted.s.setStore(func() Store { return ft.st })
 	restarted.d.setSessions("mac", []proto.Session{again})
 	if got := archivedIDs(t, restarted.s); !got[agyTestConversation] || len(got) != 1 {
 		t.Fatalf("Archived after the manager restarted: %v", got)

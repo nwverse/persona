@@ -112,7 +112,7 @@ missing quietly.
 | `hub_routes` | Yes | `Host.AddHubRoute(pattern, handler)`: the assistant serves the declared `METHOD /api/v1/…` route only while the module is loaded |
 | `mcp_tools` | Yes | `Host.AddMCPTool(...)`: the assistant lists and dispatches the declared tool only while the module is loaded |
 | `background_jobs` | Yes | `Host.AddBackgroundJob(name, run)`: `Service.Run` starts the declared loop under its context; an absent module starts none |
-| `schedules`: `facts` | Yes | `Host.AddScheduleFacts(modapi.ScheduleFacts)`: the wait rules of the facts a scheduled routine with facts on opens with |
+| `schedules`: `facts` | Yes | `Host.AddScheduleFacts(modapi.ScheduleFacts)`: the wait rules and `ScheduleFactsRunner` for scheduled routines with facts or reports, using narrow `Host` ports (`Tasks`, `Todos`, `Inbox`, `Later`, `Schedule`, `Feed`, `Delivery`, `DayRecap`, `Prompts`) |
 | `schedules` (others), `prompt_sections`, `db_migrations`, `i18n_namespaces`, `node_programs`, `channel_kinds`, `frame_handlers`, `push_categories`, `shell_places`, `chat_card_kinds`, `composer_actions`, `chat_accessories` | Not yet | Declared but not served: each gets a `Host` method when its first module moves (#13408 remaining work, #13400 to #13403) |
 
 Route validation uses the real `http.ServeMux` conflict rules, including equivalent wildcard patterns, against the core
@@ -433,15 +433,19 @@ platform compiles cannot hide a violation (`TestModuleGuardsSeeEveryBuild` prove
 
 ### The briefing pilot
 
-The daily briefing (`internal/assistant/briefing*.go`) is a module (#13430, decision 3). This first step moves the
-part that is self-contained behind the contract; the facts' gathering, the Lark card and delivery stay in package
-assistant and move as the host learns to serve them.
+The daily briefing (`internal/assistant/briefing*.go`) is a module (#13430, decision 3; #13845). Fact gathering, the
+evening all-day recording summary, the `brief` chat feed item, the model-failure fallback, the wait-row setting and the
+wait rules live in `server/internal/modules/briefing` behind narrow `modapi.Host` ports; the Lark card renderer
+(`briefing_card.go`) and HTTP routes (`briefRoutes` in `briefing_feed.go`) stay in package assistant until a neutral
+`Card` model and the `hub_routes` slot land.
 
 - **The module owns** (`server/internal/modules/briefing`): the `assistant.briefing_waits` setting (its type, defaults,
-  validation and card text) and the wait rules of the briefing's per-direction rows (when stopped work counts as waiting,
-  how rows are ordered, how many are shown).
+  validation and card text), the wait rules of the briefing's per-direction rows, routine fact gathering (`FactsAt`,
+  Inbox follow-up filtering, in-progress sorting, per-run retention and schedule lifecycle hooks), the evening day
+  recording summary (`Day`, `BoundDay`), the `brief` feed item body and writer, and the model-failure fallback lifecycle.
 - **The core keeps** the stored value (the `briefing_waits` field of the assistant's settings, byte for byte as before),
-  the setting's description in `persona_settings`, and the gathering of the rows from the ledgers it owns.
+  the setting's description in `persona_settings`, the ledgers behind the narrow `modapi.Ports` adapters
+  (`server/internal/assistant/modules_ports.go`), the Lark card renderer (`briefing_card.go`) and `briefRoutes`.
 - **With the module absent** a routine with facts on opens with no facts and keeps no briefing run, so its answer goes
   out as a routine with facts off does (no brief item, no briefing rows on the Lark card); a daily report gets the north
   star's lines alone; the acceptance reminders wait for no briefing; `assistant.briefing_waits` is hidden from
@@ -504,7 +508,7 @@ manifest declares `feature: module.recording`, which the kernel announces while 
   meeting turns against tool calls, hub transcription end to end) stay in `internal/assistant` and skip without the
   module (`needsRecordingModule`).
 - **With the module absent** (`persona_without_recording`, `persona_core_only`, or switched off) the recording routes
-  answer 404, the audio socket is unknown (so are the photo upload, list and delete routes), the hello names none of the nine meeting and recording capabilities (so
+  answer 404, the audio socket is unknown (so are the photo upload and delete routes; the list stays readable below), the hello names none of the nine meeting and recording capabilities (so
   the hub announces none of their feature flags), no room tool is offered and no final pass or attending feeder runs
   (`TestRecordingFollowsItsModule`). The recordings already stored stay in the knowledge base, **listed, readable
   and searchable, byte for byte unchanged** ("A module that is off keeps what the user has" above):
@@ -518,44 +522,66 @@ manifest declares `feature: module.recording`, which the kernel announces while 
   | Delete (`DELETE /api/v1/kb/recordings/{id}`) | Works: the knowledge base's own route, always there |
   | Retention (`recording_days`, `minutes_days`) | Runs as configured (`kb.RetentionWithoutRecordingModule`, the one decision point) |
   | Crash recovery of an interrupted upload | Runs when the store opens, as ever |
-  | New recordings, uploads, appends, the audio socket, photos, rename, the minutes and recap routes | Gone: the module's routes answer 404 |
+  | New recordings, uploads, appends, the audio socket, photo upload and deletion, rename, the minutes and recap routes | Gone: the module's routes answer 404 |
   | The minutes, titles and recap lanes, summaries, the sweep of hub transcripts after a prune | Run and do nothing: no model call, no file written |
-  | A stored photo's image (`GET /api/v1/recordings/{id}/photos/{n}`) | Works: Core's own read-only route (`assistant/kb_recording_media.go`), the same path and response with the module on or off; adding, listing and deleting photos stay the module's |
+  | Stored photos (`GET /api/v1/recordings/{id}/photos` and `GET …/photos/{n}`) | Work: Core's own read-only routes (`assistant/kb_recording_media.go`), the same paths and responses with the module on or off; adding and deleting photos stay the module's |
   | Stored audio | No route has ever served it (the chunks are the final pass's input, deleted after it); the chunk files of a recording in flight stay on disk untouched and the module resumes from them |
 
 - **Reader, kept writes and writers** (`docs/plans/plan-kb-recording-port.md`, PR 2): in `server/internal/kb` every
   recording file is split by what its code is. `<file>_read.go` is the read path (list, get, the transcript of
   record, minutes and recap readers, the search view with the undo-journal overlay) and `<file>_keep.go` the writes
   that exist without the module (delete, retention with the trim, the undo-journal commit and the recovery in
-  `NewStore`, the `meeting.json` update primitive, the photo book the trim needs): both are Core. `<file>.go` keeps
-  the writers (uploads, appends, audio, photos, live log, meeting writers, transcription, titles, summaries), which
-  later PRs move into the module. Reads, delete, retention and recovery call no writer.
-- **The minutes and day-recap writers are in the module** (PR 3): `server/internal/modules/recording/writers` holds
-  `minutes.go`, `minutes_overview.go`, `minutes_timeout.go`, `day_recap.go` and `day_recap_write.go`, moved from
+  `NewStore`, the `meeting.json` update primitive, the photo book the trim needs): both are Core. No `<file>.go` of
+  writers is left there but one: `recordings_summary.go`, the summary round, which is the knowledge base's own
+  summarise, tag and link-to-projects of an entry applied to a recording and still runs only with the module (below).
+  Reads, delete, retention and recovery call no writer.
+- **Every recording writer but the summary round is in the module** (PRs 3, 4 and 5):
+  `server/internal/modules/recording/writers` holds `minutes.go`, `minutes_overview.go`, `minutes_timeout.go`,
+  `day_recap.go` and `day_recap_write.go` (PR 3), `recording_title.go`, `recording_photos.go`,
+  `recording_audio.go`, `transcription.go` and `hub_segments.go` (PR 4), and `recordings.go` (the upload),
+  `recording_day.go` (a day's appends), `live.go` (the live log), `meeting.go` and `meeting_material.go`
+  (meeting.json and the material of an answer), `recording_upload_rest.go` and `echo.go` (PR 5), moved from
   `internal/kb` with their bodies unchanged. They reach the store through the **storage port**, `recordingwire.Core`,
   which the knowledge base implements (`kb.RecordingCore`, `server/internal/kb/recording_core.go`) and hands to the
-  module in its hook (`recordinghost.Layer.Hook`). The port has two groups. `Reader` (15 methods) is the knowledge
-  base's own read path, the functions every other reader calls. `Writer` (17 methods) is the write primitives
-  (`PutMeta`, `PutSummary`, `WriteFile`, `RecoverRecording`, `BumpPhotosRev`), the change feed and the index, the
-  engine's clock, log, models and output language, and `Locks`: the store's three locks the writers take themselves
-  (recordings, then files, then meta; the order is the store's and did not change). It is wider than the plan's first
+  module in its hook (`recordinghost.Layer.Hook`). The port has two groups, 46 methods. `Reader` (22) is the knowledge
+  base's own read path, the functions every other reader calls, with the photo book as stored, the hub's
+  transcript, the tombstones, one committed file of a recording, and the three settings the upload reads (the
+  retention days, whether the hub can transcribe, whether an answer may hold earlier meetings). `Writer` (24) is the
+  write primitives (`CommitRecording`, the upload's commit under the undo journal; `PutMeta`, `PutSummary`,
+  `WriteFile`, `WriteDurable`,
+  `RecoverRecording`, `BumpPhotosRev`, `PutPhotoBook`, `PutPhotoText`, `UpdateMeetingLocked`), the change feed, the
+  index and its purge, the engine's clock, log, models and output language, and `Locks`: the store's locks the
+  writers take themselves (recordings, then meeting, then files, then meta, and the files lock's read side for an
+  audio append; the order is the store's and did not change). **The live log's lock and the audio writers' state
+  are the module's**: `liveMu` and the per-recording audio mutex with the map of them (`storeState` in `shim.go`)
+  left `kb.Store` with their writers; nothing in Core took either. The six locks in their order, which did not
+  change: `recMu` (Core: delete, retention and a hand edit take it too), `meetMu` (Core: the trim takes it),
+  `liveMu` (the module), the audio mutex (the module), `recFilesMu` and `metaMu` (Core: readers, the commit, the
+  recovery, every entry's meta.json). The state is
+  one per store: a second engine over the same store gets writers that share the first ones' state
+  (`Writer.Provider`), so a delete, the trim and retention reach the audio an open socket writes through
+  (`AudioDropped`, `AudioClosed`), and with no module there is no state and both are no-ops. An audio append is a
+  plain call: no goroutine, and the files lock's read side through one interface call. The echo rule
+  (`server/internal/modules/recording/writers/echo.go`) moved with the upload's cleaner: Core's track recordings,
+  which run that cleaner on an upload the module's route hands them, take it from the route as a
+  `recordingwire.UploadCleaner` (`recordinghost.Host.PutSpaceRecordingRoute`) instead of calling it in `internal/kb`.
+  The port is wider than the plan's first
   sketch because the writers read and write the store in many places; the alternative was to leave them in Core. The
   package has its own `engine` and `store` over the port (`shim.go`), so that a writer's body reads as it did. The
   rules of a recording's stored state that both sides apply (`PlanMinutes`, `PlanRecap`, `RecordingEnd`, the hub
   transcription checks) are pure functions in `recordingwire` (`rules.go`). **The port is strongly typed**: a
   recording's id is `recordingwire.ID`, its files `recordingwire.File`, and what was a string with a few meanings is
   a closed set (`Change`, `MeetingPart`, `CalendarKind`, `Purpose`, each with `Known`); derived values (the output
-  language, the owner's name for the model, a file's path) are computed by Core and handed out. The stored JSON and
+  language, the owner's name for the model, a file's path, whether a recording was deleted, whether a model error
+  puts the work off) are computed by Core and handed out. The stored JSON and
   the knowledge base's own call sites keep their text.
 - **The write side is a provider** (`recordingwire.Provider`): the four background rounds (`WriteMinutes`,
   `TitleRecordings`, `WriteDayRecaps`, `SummarizeRecordings`), `AfterPrune` (the module's part of the retention round)
   and the audio writers' two touch points with delete and retention (`AudioDropped`, `AudioClosed`). The module's
-  provider is `writers.Writers`: the minutes and recap rounds are its own code, and the others are carried to the
-  knowledge base's remaining writers (`recordingwire.WritersInCore`, `kb.RecordingWriters`) until they move. While
-  the upload and the photo writers are still in `internal/kb`, they call the eight functions of the minutes and
-  recap writers they need through the provider too (`recordingwire.MinutesFromCore`: `PutMinutes`, `RenderMinutes`,
-  `RemakeMinutes`, `QuietMinutes`, `DropOverviewPhotos`, `RepairDayRecap`, `RebaseRecap`, `PruneRecapNotes`); each
-  goes when its caller moves. The module's
+  provider is `writers.Writers`: all of them are its own code but the summary round, which it carries to the
+  knowledge base's own (`recordingwire.WritersInCore`, `kb.RecordingWriters`, `server/internal/kb/recordings_summary.go`):
+  that round names the retry book, the tag and project machinery and a project's log, none of them about recordings,
+  so it stays in Core and runs only with the module. The audio touch points take a `recordingwire.ID`. The module's
   `Hook` gives it to the knowledge base (`kb.Engine.SetRecordingProvider`); without the module the knowledge base
   holds `recordingwire.NoProvider`, a value whose methods do nothing, so no call site checks for the module. The
   assistant's lanes and its retention tick call the rounds through `kb.Engine.RecordingProvider()`

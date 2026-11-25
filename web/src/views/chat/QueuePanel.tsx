@@ -82,9 +82,9 @@ export function QueuePanel({ session, draftKey, canEdit, persona, pending = [], 
   const agent = persona ?? agentLabel(session);
   const runtimeSource = session.source_kind === "runtime";
   const runtime = persona === undefined && runtimeSource;
-  const editable = canEdit && (session.capabilities?.queue_edit ?? !runtime);
-  // a Claude takes queued messages at its next step, and can be given them now (#6088); so does a Persona chat's (#4342)
-  const takesNow = canEdit && (session.capabilities?.queue_send_now ?? (!runtime && (session.agent === "claude" || (persona !== undefined && own > 0))));
+  const editable = canEdit && (session.capabilities?.queue_edit ?? (!runtime && session.agent !== "agy"));
+  // a Claude or agy takes queued messages at its next step, and can be given them now (#6088, #14871); so does a Persona chat's (#4342)
+  const takesNow = canEdit && (session.capabilities?.queue_send_now ?? (!runtime && (session.agent === "claude" || session.agent === "agy" || (persona !== undefined && own > 0))));
   const path = sessionPath(session.machine_id, session.session_id);
   const listId = useId();
   const explainId = useId();
@@ -176,7 +176,7 @@ export function QueuePanel({ session, draftKey, canEdit, persona, pending = [], 
   const toBox = (always: boolean) => {
     const at = document.activeElement;
     if (!hasFinePointer() || !(always || !at || at === document.body || region.current?.contains(at))) return;
-    region.current?.closest("[data-composer-top]")?.parentElement?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
+    region.current?.closest("[data-composer-top]")?.parentElement?.querySelector<HTMLElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
   };
   const editQueue = (keep: number[]) =>
     inSendOrder(outboxKey(session.machine_id, session.session_id), async () => {

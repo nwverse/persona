@@ -3,13 +3,15 @@ import PersonaWire
 import SwiftUI
 
 extension TodosListDeps {
-    /// The app's: the shared store and outbox, the hub, the knowledge base's projects and the app's toast.
+    /// The app's: the shared store and outbox, the hub, the knowledge base's projects, the app's toast, and what answers
+    /// the rows' asks.
     @MainActor static var live: TodosListDeps {
         let app = AppModel.shared
         return TodosListDeps(store: TodoStore.shared, outbox: TodoOutbox.shared, api: { app.api }, now: { Date() },
                              calendar: { TodoCalendar.userCalendar }, projects: { TodoProjects.shared.list },
                              toast: { app.toast = $0 }, show: { app.show($0) },
-                             assistive: { UIAccessibility.isVoiceOverRunning || UIAccessibility.isSwitchControlRunning })
+                             assistive: { UIAccessibility.isVoiceOverRunning || UIAccessibility.isSwitchControlRunning },
+                             asks: .shared)
     }
 }
 
@@ -157,6 +159,7 @@ struct TodoListView: View {
             .refreshable { await model.refresh() }
             .onScrollGeometryChange(for: TodoListEdges.self) { TodoListEdges($0) } action: { _, edges in
                 sight.covered = edges.top
+                sight.floor = edges.floor
                 sight.atEnd = edges.atEnd
                 lines.covered = edges.top
             }
@@ -178,6 +181,16 @@ struct TodoListView: View {
                 if placedIn != nil, sight.restedAtEnd { backToTheEnd(proxy) }
             }
             .onDisappear { model.hold.set(.outOfSight, true) }
+            // A row's card unfolded by the owner's tap (Options ⌄): once it has laid out, its foot is brought above the
+            // foot toolbar if it fell under it, and no further; a card already in sight moves nothing.
+            .onChange(of: model.cardUnfolded) { _, unfolded in
+                guard let key = unfolded?.key else { return }
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(300)) // the unfold's `Motion.state`, and its layout
+                    guard model.cardUnfolded?.key == key, let bottom = sight.bottoms[key], bottom > sight.floor else { return }
+                    withAnimation(Theme.Motion.reduced ? nil : Theme.Motion.state) { proxy.scrollTo(key, anchor: .bottom) }
+                }
+            }
             // A choice re-files the list from its top, once the list has the new rows. Its guard line starts in sight, so
             // the subtitle waits until it scrolls away again.
             .onChange(of: model.choice) { _, _ in
@@ -311,9 +324,13 @@ struct TodoListView: View {
             .onDisappear {
                 sight.visible.remove(key)
                 sight.middles[key] = nil
+                sight.bottoms[key] = nil
             }
-            // Where its middle is in the list's frame, kept unobserved: whether the bars cover it.
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).midY } action: { sight.middles[key] = $0 }
+            // Where its middle and its foot are in the list's frame, kept unobserved: whether the bars cover it.
+            .onGeometryChange(for: TodoRowSpan.self) { TodoRowSpan($0.frame(in: .scrollView)) } action: {
+                sight.middles[key] = $0.middle
+                sight.bottoms[key] = $0.bottom
+            }
             .id(key)
             // The row's list traits on its outermost view, where the list reads them (`TodoListCell.insets`).
             .listRowInsets(TodoListCell.insets)
@@ -950,12 +967,26 @@ private extension View {
 /// very end (a list shorter than its frame has no end to come back to).
 struct TodoListEdges: Equatable {
     var top: CGFloat
+    /// Where the foot toolbar begins in the list's frame: what is below it is under the bar.
+    var floor: CGFloat
     var atEnd: Bool
 
     init(_ g: ScrollGeometry) {
         top = g.contentInsets.top
+        floor = g.containerSize.height - g.contentInsets.bottom
         let end = g.contentSize.height + g.contentInsets.bottom - g.containerSize.height
         atEnd = end > -g.contentInsets.top && g.contentOffset.y >= end - 1
+    }
+}
+
+/// Where a row is in the list's frame, as the geometry reports it.
+nonisolated struct TodoRowSpan: Equatable, Sendable {
+    var middle: CGFloat
+    var bottom: CGFloat
+
+    init(_ frame: CGRect) {
+        middle = frame.midY
+        bottom = frame.maxY
     }
 }
 
@@ -964,10 +995,12 @@ struct TodoListEdges: Equatable {
 @MainActor final class TodoListSight {
     /// The rows drawn, the ones under the bars included.
     var visible: Set<String> = []
-    /// Each drawn row's middle in the list's frame.
+    /// Each drawn row's middle and foot in the list's frame.
     var middles: [String: CGFloat] = [:]
-    /// How much of the list's top the bars cover.
+    var bottoms: [String: CGFloat] = [:]
+    /// How much of the list's top the bars cover, and where the foot toolbar begins.
     var covered: CGFloat = 0
+    var floor: CGFloat = .infinity
     /// The list is at its very end now; it came to rest there; a finger moves it.
     var atEnd = false
     private(set) var restedAtEnd = false
