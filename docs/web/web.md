@@ -1467,7 +1467,8 @@ and receives its ordinary finished notification. Settings › Assistant › **Fo
 (`fold_routine_relay_replies`, #11899) keeps those replies in the expandable record and quiets that notification when
 **Fold background rounds** is also on. A hub that omits the opt-in keeps the default and hides the new switch. Changing
 either setting preserves the other. Explicit user promotions (including P0, requested results and decisions) remain visible
-and notify. Leader conversations keep their completed replies visible. Needs you groups rows by the task's supervising conversation (`needsYouBySupervisor`,
+and notify. On Web, an explicitly promoted main-conversation relay keeps its incoming handoff behind a collapsed source
+row; expanding that row reveals the original while the answer and interaction cards stay visible. Leader conversations keep their completed replies visible. Needs you groups rows by the task's supervising conversation (`needsYouBySupervisor`,
 `lib/assistant-entries.ts`) when more than one has rows. `e2e/background-rounds.mjs` checks it in a real browser with
 synthetic data and takes the screenshots; with the switch off the chat is pixel-identical to a build without the feature.
 
