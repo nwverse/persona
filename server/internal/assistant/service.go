@@ -210,8 +210,9 @@ type Service struct {
 	// retryNow is the clock a due retry checks the task's time against (retryStillDue; nil: time.Now, tests set it).
 	retryNow func() time.Time
 
-	mux    *http.ServeMux
-	routes []string
+	mux            *http.ServeMux
+	routes         []string
+	routeFallbacks []string // internal path-only fallbacks: not relayed, but included in module conflict checks
 
 	standingJudgeModel jsonModel  // nil: the configured agent.delegate model; tests can supply a deterministic model.
 	standingMu         sync.Mutex // standing_authorizations.go: revocation and automatic answers serialize
@@ -434,6 +435,7 @@ func New(o Options) *Service {
 	if s.logf == nil {
 		s.logf = func(string, ...any) {}
 	}
+	s.expireSupervisionHolds(context.Background(), time.Now())
 	// The kept old keys too while a rotation keeps them (keyrotate.go).
 	s.models.secret = secretkey.NewWithFallback(o.SecretKey)
 	s.archiveRoutes()
@@ -534,6 +536,13 @@ func (s *Service) handle(pattern string, fn http.HandlerFunc) {
 	if _, path, _ := strings.Cut(pattern, " "); strings.HasPrefix(path, "/api/v1/todos/{id}") {
 		fn = s.todoScoped(fn) // what an extension is not shown of a to-do, at every route of one (todo_scope.go)
 	}
+	s.mux.HandleFunc(pattern, fn)
+}
+
+// handleFallback adds an internal path-only fallback. It is not a relayed route, but loadModules still checks its
+// registration against proposed module routes so a conflict is rejected before ServeMux can panic.
+func (s *Service) handleFallback(pattern string, fn http.HandlerFunc) {
+	s.routeFallbacks = append(s.routeFallbacks, pattern)
 	s.mux.HandleFunc(pattern, fn)
 }
 
@@ -786,10 +795,14 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			}
 		}
 	}
-	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p[holdPushesParam] != true && !meetingSource(p) {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || sessionSend) &&
+		p[holdPushesParam] != true && !(p[holdPushesParam] == false && roundKind == proto.SourceSupervision) && !meetingSource(p) {
 		// A meeting's batch is no one speaking there either: its turn is a side exchange (meeting_turns.go).
-		if id, _ := p["session_id"].(string); id != "" && s.supervising(id) {
-			s.releasePushes(ctx, id) // something else speaks there: its turns are pushed again (a supervision message holds them anew)
+		if id, _ := p["session_id"].(string); id != "" {
+			if err := s.releasePushes(ctx, id); err != nil {
+				laterTaken(false)
+				return beforeNodeWrite(method, err)
+			}
 		}
 	}
 	var round *roundStart
@@ -1169,7 +1182,12 @@ func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn
 func (s *Service) TurnEnded(ctx context.Context, r SessionRef) {
 	s.a2aRecipientIdle(ctx, a2aRef{r.MachineID, r.SessionID})
 	s.approvalAnswerTurnEnded(r)
-	s.turnEnded(ctx, r, s.meetingTurnEnded(r.MachineID, r.SessionID))
+	meeting := s.meetingTurnEnded(r.MachineID, r.SessionID)
+	if !meeting && ctx.Value(supervisionEndKey{}) == nil {
+		end := s.remedyTurnEnded(ctx, r.SessionID)
+		ctx = context.WithValue(ctx, supervisionEndKey{}, end)
+	}
+	s.turnEnded(ctx, r, meeting)
 }
 
 // turnEnded is TurnEnded; meeting: the turn was a meeting's batch's (meeting_turns.go), a side exchange that is

@@ -508,7 +508,7 @@ manifest declares `feature: module.recording`, which the kernel announces while 
   meeting turns against tool calls, hub transcription end to end) stay in `internal/assistant` and skip without the
   module (`needsRecordingModule`).
 - **With the module absent** (`persona_without_recording`, `persona_core_only`, or switched off) the recording routes
-  answer 404, the audio socket is unknown (so are the photo upload, list and delete routes), the hello names none of the nine meeting and recording capabilities (so
+  answer 404, the audio socket is unknown (so are the photo upload and delete routes; the list stays readable below), the hello names none of the nine meeting and recording capabilities (so
   the hub announces none of their feature flags), no room tool is offered and no final pass or attending feeder runs
   (`TestRecordingFollowsItsModule`). The recordings already stored stay in the knowledge base, **listed, readable
   and searchable, byte for byte unchanged** ("A module that is off keeps what the user has" above):
@@ -522,9 +522,9 @@ manifest declares `feature: module.recording`, which the kernel announces while 
   | Delete (`DELETE /api/v1/kb/recordings/{id}`) | Works: the knowledge base's own route, always there |
   | Retention (`recording_days`, `minutes_days`) | Runs as configured (`kb.RetentionWithoutRecordingModule`, the one decision point) |
   | Crash recovery of an interrupted upload | Runs when the store opens, as ever |
-  | New recordings, uploads, appends, the audio socket, photos, rename, the minutes and recap routes | Gone: the module's routes answer 404 |
+  | New recordings, uploads, appends, the audio socket, photo upload and deletion, rename, the minutes and recap routes | Gone: the module's routes answer 404 |
   | The minutes, titles and recap lanes, summaries, the sweep of hub transcripts after a prune | Run and do nothing: no model call, no file written |
-  | A stored photo's image (`GET /api/v1/recordings/{id}/photos/{n}`) | Works: Core's own read-only route (`assistant/kb_recording_media.go`), the same path and response with the module on or off; adding, listing and deleting photos stay the module's |
+  | Stored photos (`GET /api/v1/recordings/{id}/photos` and `GET …/photos/{n}`) | Work: Core's own read-only routes (`assistant/kb_recording_media.go`), the same paths and responses with the module on or off; adding and deleting photos stay the module's |
   | Stored audio | No route has ever served it (the chunks are the final pass's input, deleted after it); the chunk files of a recording in flight stay on disk untouched and the module resumes from them |
 
 - **Reader, kept writes and writers** (`docs/plans/plan-kb-recording-port.md`, PR 2): in `server/internal/kb` every

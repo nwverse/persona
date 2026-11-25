@@ -215,7 +215,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 					return string(body), marshalErr
 				}
 				if a.Verdict == reviewAccepted || a.Verdict == reviewNeedsUser {
-					s.promoteSupervision(self)
+					err = s.promoteSupervision(self)
 				}
 			}
 		}
@@ -310,6 +310,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if s.exitPolicy(ctx, a.Title+"\n"+a.Body, self, space).Redact {
 			a.Title, a.Body = s.redactedNotice(ctx, s.lang(ctx), space)
 		}
+		if err := s.promoteSupervision(self); err != nil {
+			return "", err
+		}
 		// Asked for explicitly: every device, the Feishu bot too, and no separate push when this turn ends. pushResult holds
 		// it to its track's push_cap (track_attention.go), and the track tells immersive mode where it is from.
 		res, err := s.pushResult(withCard(ctx, cardNotifyUser), Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body,
@@ -328,7 +331,6 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			copies = s.channelsCopied(machine, self, a.Title, a.Body)
 		}
 		s.recordNotify(ctx, machine, self, notifyMissed(res)) // an interruption when a device took it (north_star.go)
-		s.promoteSupervision(self)
 		return notifyAnswerText(s.lang(ctx), res, copies.wait(notifyCopyWait)), nil
 	case "urgent_call":
 		return s.toolUrgentCall(ctx, machine, self, args) // urgent_call_tool.go
@@ -1374,7 +1376,9 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 	if proto.HasDuplicateQuestionText(ix.Questions) {
 		return "", i18n.Err("hub-hub.duplicate_question")
 	}
-	s.promoteSupervision(sessionID)
+	if err := s.promoteSupervision(sessionID); err != nil {
+		return "", err
+	}
 	if a.Wait != nil && !*a.Wait {
 		return s.askLaterStart(ctx, ix)
 	}
