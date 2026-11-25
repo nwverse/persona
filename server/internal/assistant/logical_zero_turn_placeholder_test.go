@@ -396,6 +396,9 @@ func TestZeroTurnPlaceholderSendSelfHealsAndDeliversFirstTurn(t *testing.T) {
 			rig.s.logicalSweep(ctx)
 			return len(rig.sentTo("recovered-seg-1")) == 1
 		})
+		// The fake node records the send while the sweep goroutine is still in the call; the sweep accepts the first
+		// turn, closing the switch, only after the call returns (#15989).
+		conversationSwitchTestSettle(t, rig.s)
 
 		if stale := rig.sentTo("prepared-zero-turn"); len(stale) != 0 {
 			t.Fatalf("message dispatched to vanished 0-turn segment: %+v", stale)
@@ -738,6 +741,7 @@ func TestZeroTurnSlowListLagDoesNotRollbackOrTriggerRecovery(t *testing.T) {
 			rig.s.logicalSweep(ctx)
 			return len(rig.sentTo("recovered-seg-1")) == 1
 		})
+		conversationSwitchTestSettle(t, rig.s) // the switch closes after the send returns (#15989)
 
 		if stale := rig.sentTo("side-chat"); len(stale) != 0 {
 			t.Fatalf("healthy prepared target was rolled back to old segment: %+v", stale)
