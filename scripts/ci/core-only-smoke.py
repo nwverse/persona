@@ -130,11 +130,15 @@ MODULE_EXTENSIONS = {"imessageport": "imessage"}
 MODULE_ROUTES = {"mail": "/api/v1/mail/accounts", "recording": "/api/v1/recordings"}
 
 
-# The recordings the knowledge base holds before the hub starts (server/internal/kb/recording_fixture_test.go writes them
-# with the knowledge base's own writers, as a hub with the recording module leaves them): a meeting with its transcript
+# The recordings the knowledge base holds before the hub starts
+# (server/internal/modules/recording/writers/recording_fixture_test.go writes them with the knowledge base and the
+# recording module's writers, as a hub with the recording module leaves them): a meeting with its transcript
 # and minutes, and one whose minutes were still to be written. KEPT_WORDS are found by search: a word of the transcript
 # and one of the minutes.
 KEPT_RECORDING, KEPT_PENDING = "6f1c2a3b-0000-4000-8000-00000000c0de", "6f1c2a3b-0000-4000-8000-00000000beef"
+# The first holds one photo (attachments/p1.jpg); the third is a hub-transcribed meeting in flight with two seconds of
+# audio held (attachments/audio/0.pcm), which no route serves: it is the module's own input, kept untouched.
+KEPT_AUDIO = "6f1c2a3b-0000-4000-8000-00000000a0d1"
 KEPT_WORDS = ("quokka", "wombat")
 
 
@@ -143,7 +147,7 @@ def seed_recordings(home, server=SERVER):
     data = home / ".persona/data"
     data.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, PERSONA_RECORDING_FIXTURE_DIR=str(data))
-    r = run(["go", "test", "-count=1", "-run", "^TestWriteRecordingFixture$", "./internal/kb/"], 600, cwd=server, env=env)
+    r = run(["go", "test", "-count=1", "-run", "^TestWriteRecordingFixture$", "./internal/modules/recording/writers/"], 600, cwd=server, env=env)
     if r.returncode != 0:
         raise Failed("writing the kept recordings: " + (r.stdout + r.stderr).strip()[-2000:])
     check(recording_files(home), f"the fixture wrote no recording under {data}")
@@ -160,7 +164,17 @@ def files_changed(before, after):
     return sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
 
 
-def kept_recordings(base, token, module_on):
+def http_raw(url, token=None):
+    """http for a body that is not text: (status, headers, bytes)."""
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"} if token else {})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status, resp.headers, resp.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers, e.read()
+
+
+def kept_recordings(base, token, module_on, home=None):
     """What the knowledge base's own routes answer for the kept recordings, as (check, ok, detail) rows: listed,
     opened and found, with or without the recording module; `paused` only without it, on the one in flight."""
     rows = []
@@ -191,14 +205,27 @@ def kept_recordings(base, token, module_on):
         status, body = get(f"/api/v1/kb-search?results=1&q={word}")
         rows.append((f"search finds the stored recording by {word!r} {state} the module",
                      status == 200 and KEPT_RECORDING in json.dumps(body), f"status {status}, {json.dumps(body)[:300]}"))
+    if home is not None:  # the stored photo, read back through the route: the file's bytes, with or without the module
+        files = recording_files(home)
+        stored = files.get(f"{KEPT_RECORDING}/attachments/p1.jpg")
+        status, headers, raw = http_raw(f"{base}/api/v1/recordings/{KEPT_RECORDING}/photos/1", token)
+        rows.append((f"a stored photo is served {state} the module, its bytes those of attachments/p1.jpg (GET /api/v1/recordings/{{id}}/photos/1)",
+                     stored is not None and status == 200 and raw == stored and headers.get("Content-Type") == "image/jpeg"
+                     and headers.get("X-Content-Type-Options") == "nosniff" and headers.get("Cache-Control") == "private, no-store",
+                     f"status {status}, {len(raw)} bytes of {len(stored or b'')}, {headers.get('Content-Type')}"))
+        status, _, _ = http_raw(f"{base}/api/v1/recordings/{KEPT_RECORDING}/photos/2", token)
+        rows.append((f"a photo that is not listed answers 404 {state} the module", status == 404, f"status {status}"))
+        chunk = files.get(f"{KEPT_AUDIO}/attachments/audio/0.pcm")
+        rows.append((f"the audio held for the recording in flight is on disk {state} the module (2 s of PCM, attachments/audio/0.pcm)",
+                     chunk is not None and len(chunk) == 4 * 16000, f"{len(chunk or b'')} bytes"))
     return rows, d
 
 
-def check_kept(base, token, module_on):
+def check_kept(base, token, module_on, home=None):
     """kept_recordings as the smoke's own checks; the opened recording's detail."""
     deadline = time.monotonic() + 90  # the knowledge base opens with the manager's first use of it
     while True:
-        rows, detail = kept_recordings(base, token, module_on)
+        rows, detail = kept_recordings(base, token, module_on, home)
         if all(ok for _, ok, _ in rows) or time.monotonic() > deadline:
             break
         time.sleep(2)
@@ -485,7 +512,7 @@ def main():
         else:
             check(not loaded, f"a core-only manager loaded modules: {loaded}")
             expect(base, token, loaded, [], ids, programs, connectors, module_exts, flags=False)
-        opened = check_kept(base, token, "recording" in loaded)
+        opened = check_kept(base, token, "recording" in loaded, home)
         if off:
             rest = [i for i in ids if i not in off]
             for phase, disabled, present, absent in (("off", off, rest, off), ("on again", [], ids, [])):
@@ -501,7 +528,7 @@ def main():
                     check(not changed, f"files under recordings/ changed while the recording module was off: {changed}")
                 loaded = wait_ready(hub, base, log, mark)
                 expect(base, token, loaded, present, absent, programs, connectors, module_exts)
-                again = check_kept(base, token, "recording" in loaded)
+                again = check_kept(base, token, "recording" in loaded, home)
                 if "recording" in off:
                     check(again == opened, f"the stored recording's detail differs ({phase}): {json.dumps(again)[:400]} / {json.dumps(opened)[:400]}")
                 print(f"restarted with modules {json.dumps({'disabled': disabled})} (in {', '.join(dbs)}): "

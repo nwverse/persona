@@ -97,11 +97,13 @@ export function fetchSources() {
   return api<{ sources: AgentSourceStatus[] | null }>("/agents").then((r) => r.sources ?? []);
 }
 
-export function fetchMessages(id: string, cursor?: string, limit = 50) {
+export function fetchMessages(id: string, cursor?: string, limit = 50, signal?: AbortSignal) {
   const q = new URLSearchParams({ limit: String(limit) });
   if (cursor) q.set("cursor", cursor);
-  return api<MessagePage>(`${agentPath(id)}/messages?${q}`).then((p) => ({ ...p, messages: p.messages ?? [] }));
+  return api<MessagePage>(`${agentPath(id)}/messages?${q}`, { signal }).then((p) => ({ ...p, messages: p.messages ?? [] }));
 }
+
+export const personalAgentDraftKey = (id: string) => `agent:${id}`;
 
 export function fetchAgentOutbox(id: string, limit = 100) {
   const q = new URLSearchParams({ session_id: id, limit: String(limit) });

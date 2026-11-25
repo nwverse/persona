@@ -56,7 +56,10 @@ type agyParentSubagentInfo struct {
 	children  map[string]bool
 }
 
-var agyEmbeddedUUIDRe = lazyre.New(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
+var (
+	agyEmbeddedUUIDRe   = lazyre.New(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
+	agySubagentSenderRe = lazyre.New(`(?i)\bsender=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`)
+)
 
 // reportedAgyConversation is the conversation herdr's antigravity-cli integration reports for a pane's row. Persona's own
 // hooks report too (agyhooks.go): agyReportedLocked is the two together.
@@ -147,23 +150,23 @@ func isAgySubagentHead(stepType, stepSource string) bool {
 	return false
 }
 
-func probeAgyTranscriptFile(root *os.Root, rel string) agyTranscriptKind {
+func probeAgyTranscriptFile(root *os.Root, rel string) (agyTranscriptKind, string) {
 	info, err := root.Stat(rel)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return agyTranscriptMissing
+			return agyTranscriptMissing, ""
 		}
-		return agyTranscriptUnreadable
+		return agyTranscriptUnreadable, ""
 	}
 	if !info.Mode().IsRegular() {
-		return agyTranscriptMissing
+		return agyTranscriptMissing, ""
 	}
 	f, err := root.Open(rel)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return agyTranscriptMissing
+			return agyTranscriptMissing, ""
 		}
-		return agyTranscriptUnreadable
+		return agyTranscriptUnreadable, ""
 	}
 	defer f.Close()
 
@@ -173,17 +176,18 @@ func probeAgyTranscriptFile(root *os.Root, rel string) agyTranscriptKind {
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				// Ignore any trailing line without a newline so in-progress writes wait for completion.
-				return agyTranscriptEmpty
+				return agyTranscriptEmpty, ""
 			}
-			return agyTranscriptUnreadable
+			return agyTranscriptUnreadable, ""
 		}
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 || line[0] != '{' {
 			continue
 		}
 		var head struct {
-			Type   string `json:"type"`
-			Source string `json:"source"`
+			Type    string `json:"type"`
+			Source  string `json:"source"`
+			Content string `json:"content"`
 		}
 		if json.Unmarshal(line, &head) != nil {
 			continue
@@ -192,33 +196,63 @@ func probeAgyTranscriptFile(root *os.Root, rel string) agyTranscriptKind {
 			continue
 		}
 		if isAgySubagentHead(head.Type, head.Source) {
-			return agyTranscriptSubagent
+			var sender string
+			if m := agySubagentSenderRe.FindStringSubmatch(head.Content); len(m) == 2 {
+				sender = strings.ToLower(m[1])
+			}
+			return agyTranscriptSubagent, sender
 		}
-		return agyTranscriptNormal
+		return agyTranscriptNormal, ""
 	}
-	return agyTranscriptEmpty
+	return agyTranscriptEmpty, ""
 }
 
-func probeAgyConversation(dir, conversation string) agyTranscriptKind {
+func probeAgyConversationWithSender(dir, conversation string) (agyTranscriptKind, string) {
 	if dir == "" || conversation == "" || !uuidRe.MatchString(conversation) {
-		return agyTranscriptMissing
+		return agyTranscriptMissing, ""
 	}
 	root, err := agyBrain(dir, conversation)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return agyTranscriptMissing
+			return agyTranscriptMissing, ""
 		}
-		return agyTranscriptUnreadable
+		return agyTranscriptUnreadable, ""
 	}
 	defer root.Close()
 
-	kind := probeAgyTranscriptFile(root, agyTranscriptPath)
+	kind, sender := probeAgyTranscriptFile(root, agyTranscriptPath)
 	if kind == agyTranscriptMissing || kind == agyTranscriptEmpty {
-		if full := probeAgyTranscriptFile(root, agyFullTranscriptPath); full == agyTranscriptSubagent || full == agyTranscriptNormal {
-			return full
+		if full, fullSender := probeAgyTranscriptFile(root, agyFullTranscriptPath); full == agyTranscriptSubagent || full == agyTranscriptNormal {
+			return full, fullSender
 		}
 	}
+	return kind, sender
+}
+
+func probeAgyConversation(dir, conversation string) agyTranscriptKind {
+	kind, _ := probeAgyConversationWithSender(dir, conversation)
 	return kind
+}
+
+// resolveAgySubagentParent walks sender=<uuid> references in opening SYSTEM_MESSAGE
+// steps up to 4 hops to recover the owning normal parent conversation when cold-binding
+// a pane whose herdr report was overwritten by a subagent PreInvocation hook.
+func resolveAgySubagentParent(dir, subagent string) string {
+	seen := map[string]bool{strings.ToLower(subagent): true}
+	cur := subagent
+	for range 4 {
+		kind, sender := probeAgyConversationWithSender(dir, cur)
+		if kind != agyTranscriptSubagent || sender == "" || seen[sender] {
+			return ""
+		}
+		seen[sender] = true
+		parentKind, _ := probeAgyConversationWithSender(dir, sender)
+		if parentKind == agyTranscriptNormal {
+			return sender
+		}
+		cur = sender
+	}
+	return ""
 }
 
 func extractAgyParentSubagents(root *os.Root, raw []byte, parent string) (bool, map[string]bool) {
@@ -425,8 +459,13 @@ func (n *Node) agyConversation(id, pane string) string {
 		if bound.conversation == "" || bound.conversation == raw {
 			switch probeAgyConversation(dir, raw) {
 			case agyTranscriptSubagent:
-				next = agyPaneBinding{}
-				result = ""
+				if parent := resolveAgySubagentParent(dir, raw); parent != "" {
+					next = agyPaneBinding{conversation: parent, verified: true}
+					result = parent
+				} else {
+					next = agyPaneBinding{}
+					result = ""
+				}
 			case agyTranscriptNormal:
 				next = agyPaneBinding{conversation: raw, verified: true}
 				result = raw
@@ -454,10 +493,14 @@ func (n *Node) agyConversation(id, pane string) string {
 			n.mu.Unlock()
 			continue
 		}
-		if keepBound && n.agyConversationClaimedElsewhereLocked(pane, bound.conversation) {
+		if (keepBound || (next.conversation != "" && next.conversation != raw)) &&
+			n.agyConversationClaimedElsewhereLocked(pane, next.conversation) {
 			delete(n.agyBound, pane)
 			n.mu.Unlock()
-			continue
+			if keepBound {
+				continue
+			}
+			return ""
 		}
 		if next.conversation == "" {
 			delete(n.agyBound, pane)
@@ -716,14 +759,12 @@ func (h agyHistory) page(p agyPageParams) any {
 
 func (h agyHistory) pageWith(p agyPageParams, id string, tv *toolViewTracker) any {
 	if p.UserInputs {
-		index := proto.UserInputIndex{History: h.token, Inputs: []proto.UserInputPosition{}}
-		for _, it := range h.items {
-			if agyUserInput(it) && (len(index.Inputs) == 0 || index.Inputs[len(index.Inputs)-1].Seq != it.Seq) {
-				index.Inputs = append(index.Inputs, proto.UserInputPosition{ID: it.ID, Seq: it.Seq})
-			}
+		items := h.items
+		if p.BeforeSeq > 0 {
+			items = items[:agyIndex(items, p.BeforeSeq)]
 		}
-		index.Total = len(index.Inputs)
-		return index
+		inputs := transcript.UserInputPositions(items)
+		return proto.UserInputIndex{History: h.token, Inputs: inputs, Total: len(inputs)}
 	}
 	uses := h.toolUses()
 	items := h.items
@@ -881,6 +922,9 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 		}
 	}
 	if conversation := n.agyConversation(id, pane); conversation != "" {
+		if workers := n.agySwarmWorkers(conversation); len(workers) > 0 {
+			info["swarm_workers"] = workers
+		}
 		var breakdown *proto.ContextBreakdown
 		if runtimeRow, _, ok := n.runtimes.rowOf(agyAgent + "-" + conversation); ok {
 			if runtimeRow.Model != "" {

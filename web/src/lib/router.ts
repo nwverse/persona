@@ -324,14 +324,16 @@ export function showsSession(r: Route, mid: string, sid: string): boolean {
   return (r.name === "session" || r.name === "tab") && r.mid === mid && r.sid === sid;
 }
 
+export function subscribeRoute(listener: () => void) {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
 export function useRoute(): Route {
   // The query is part of the route (/todos?id=…): a change to it alone must re-render too. The revision also covers
   // replacing the current entry's state at an unchanged address (#12055).
   useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
+    subscribeRoute,
     () => revision,
   );
   const at = location.pathname + location.search;

@@ -187,7 +187,7 @@ What switched off means, by seam (each port follows `Set.On`; a build without th
 | `server/internal/builtinext` (`AddProgram`) | `volc`, `voice` | The extension host starts no `personad volc` / `personad voice`, a `hub.json` entry's included (`ProgramOff`: it fails as the unknown subcommand would). The subcommand stays in the binary |
 | `server/internal/botport` | `lark` | No bot client is made: the bot cannot be bound, registered or started |
 | `server/internal/cliport` | `lark` | `lark.cli` is not read (logged at start) and the extension host's lark-cli integration is off |
-| `server/internal/larkhost` | `lark` | The outbound channel port is `larkhost.None`, as without the module |
+| `server/internal/larkhost` | `lark` | The outbound channel port is `larkhost.None`, as without the module; the core's pushes to the chat return `nil` without a log or a retry, and `notify_user`'s copy report records the Feishu copy as `skipped` (told nowhere in its answer) |
 | `server/internal/knowledgeuihost` | `knowledge-ui` | No layer: no `kb_history_*` tool or import, the selection page's chat list answers as a source without history, days carry no sent marks |
 | `server/internal/healthhost` | `health` | No layer: the intake and items routes answer 404, no `health_intake` tool, no `health_intake` or `health_items` capability, no water reminders |
 | `server/internal/recordinghost` | `recording` | No layer: the recording routes answer 404, no audio socket, room tools, final passes or meeting capabilities |
@@ -504,7 +504,7 @@ manifest declares `feature: module.recording`, which the kernel announces while 
   meeting turns against tool calls, hub transcription end to end) stay in `internal/assistant` and skip without the
   module (`needsRecordingModule`).
 - **With the module absent** (`persona_without_recording`, `persona_core_only`, or switched off) the recording routes
-  answer 404, the audio socket is unknown, the hello names none of the nine meeting and recording capabilities (so
+  answer 404, the audio socket is unknown (so are the photo upload, list and delete routes), the hello names none of the nine meeting and recording capabilities (so
   the hub announces none of their feature flags), no room tool is offered and no final pass or attending feeder runs
   (`TestRecordingFollowsItsModule`). The recordings already stored stay in the knowledge base, **listed, readable
   and searchable, byte for byte unchanged** ("A module that is off keeps what the user has" above):
@@ -520,18 +520,42 @@ manifest declares `feature: module.recording`, which the kernel announces while 
   | Crash recovery of an interrupted upload | Runs when the store opens, as ever |
   | New recordings, uploads, appends, the audio socket, photos, rename, the minutes and recap routes | Gone: the module's routes answer 404 |
   | The minutes, titles and recap lanes, summaries, the sweep of hub transcripts after a prune | Run and do nothing: no model call, no file written |
-  | Photo images and stored audio (`GET /api/v1/recordings/{id}/photos/…`, the audio routes) | Not reachable: they are the module's routes; the files stay on disk |
+  | A stored photo's image (`GET /api/v1/recordings/{id}/photos/{n}`) | Works: Core's own read-only route (`assistant/kb_recording_media.go`), the same path and response with the module on or off; adding, listing and deleting photos stay the module's |
+  | Stored audio | No route has ever served it (the chunks are the final pass's input, deleted after it); the chunk files of a recording in flight stay on disk untouched and the module resumes from them |
 
 - **Reader, kept writes and writers** (`docs/plans/plan-kb-recording-port.md`, PR 2): in `server/internal/kb` every
   recording file is split by what its code is. `<file>_read.go` is the read path (list, get, the transcript of
   record, minutes and recap readers, the search view with the undo-journal overlay) and `<file>_keep.go` the writes
   that exist without the module (delete, retention with the trim, the undo-journal commit and the recovery in
   `NewStore`, the `meeting.json` update primitive, the photo book the trim needs): both are Core. `<file>.go` keeps
-  the writers (uploads, appends, audio, photos, live log, meeting writers, transcription, minutes, recaps, titles,
-  summaries), which later PRs move into the module. Reads, delete, retention and recovery call no writer.
+  the writers (uploads, appends, audio, photos, live log, meeting writers, transcription, titles, summaries), which
+  later PRs move into the module. Reads, delete, retention and recovery call no writer.
+- **The minutes and day-recap writers are in the module** (PR 3): `server/internal/modules/recording/writers` holds
+  `minutes.go`, `minutes_overview.go`, `minutes_timeout.go`, `day_recap.go` and `day_recap_write.go`, moved from
+  `internal/kb` with their bodies unchanged. They reach the store through the **storage port**, `recordingwire.Core`,
+  which the knowledge base implements (`kb.RecordingCore`, `server/internal/kb/recording_core.go`) and hands to the
+  module in its hook (`recordinghost.Layer.Hook`). The port has two groups. `Reader` (15 methods) is the knowledge
+  base's own read path, the functions every other reader calls. `Writer` (17 methods) is the write primitives
+  (`PutMeta`, `PutSummary`, `WriteFile`, `RecoverRecording`, `BumpPhotosRev`), the change feed and the index, the
+  engine's clock, log, models and output language, and `Locks`: the store's three locks the writers take themselves
+  (recordings, then files, then meta; the order is the store's and did not change). It is wider than the plan's first
+  sketch because the writers read and write the store in many places; the alternative was to leave them in Core. The
+  package has its own `engine` and `store` over the port (`shim.go`), so that a writer's body reads as it did. The
+  rules of a recording's stored state that both sides apply (`PlanMinutes`, `PlanRecap`, `RecordingEnd`, the hub
+  transcription checks) are pure functions in `recordingwire` (`rules.go`). **The port is strongly typed**: a
+  recording's id is `recordingwire.ID`, its files `recordingwire.File`, and what was a string with a few meanings is
+  a closed set (`Change`, `MeetingPart`, `CalendarKind`, `Purpose`, each with `Known`); derived values (the output
+  language, the owner's name for the model, a file's path) are computed by Core and handed out. The stored JSON and
+  the knowledge base's own call sites keep their text.
 - **The write side is a provider** (`recordingwire.Provider`): the four background rounds (`WriteMinutes`,
   `TitleRecordings`, `WriteDayRecaps`, `SummarizeRecordings`), `AfterPrune` (the module's part of the retention round)
   and the audio writers' two touch points with delete and retention (`AudioDropped`, `AudioClosed`). The module's
+  provider is `writers.Writers`: the minutes and recap rounds are its own code, and the others are carried to the
+  knowledge base's remaining writers (`recordingwire.WritersInCore`, `kb.RecordingWriters`) until they move. While
+  the upload and the photo writers are still in `internal/kb`, they call the eight functions of the minutes and
+  recap writers they need through the provider too (`recordingwire.MinutesFromCore`: `PutMinutes`, `RenderMinutes`,
+  `RemakeMinutes`, `QuietMinutes`, `DropOverviewPhotos`, `RepairDayRecap`, `RebaseRecap`, `PruneRecapNotes`); each
+  goes when its caller moves. The module's
   `Hook` gives it to the knowledge base (`kb.Engine.SetRecordingProvider`); without the module the knowledge base
   holds `recordingwire.NoProvider`, a value whose methods do nothing, so no call site checks for the module. The
   assistant's lanes and its retention tick call the rounds through `kb.Engine.RecordingProvider()`
@@ -542,8 +566,9 @@ manifest declares `feature: module.recording`, which the kernel announces while 
   `paused: "module_off"` for such a recording (`Detail.Paused`, `Entry.Paused`; `kb.Engine.recordingPaused`), computed
   when read and never written, so the files do not change and the module resumes from the stored state.
 - **Checked** by `TestRecordingsStayReadableWithoutTheModule`, `TestRecordingInFlightIsPausedWithoutTheModule` and
-  `TestRecordingDeleteAndRetentionWithoutTheModule` (`internal/kb`), `TestStoredRecordingsOutliveTheirModule`
-  (`internal/assistant`, in every build), and on running hubs by the two gates above, which compare every file under
+  `TestRecordingDeleteAndRetentionWithoutTheModule` (`internal/kb`, black-box over the stored files with no
+  provider), `TestMinutesResumeWhenTheModuleIsBack` (`internal/modules/recording/writers`),
+  `TestStoredRecordingsOutliveTheirModule` (`internal/assistant`, in every build), and on running hubs by the two gates above, which compare every file under
   `recordings/` before and after the module is off.
 
 ### Health
@@ -565,6 +590,9 @@ which the kernel announces while it is loaded (it left `modapi.ClientModules` wi
   aliases); the `health_intake` table and its SQL stay in `internal/db`; the tool's description stays in
   `server/internal/prompts/mcp/health`. The Health *space* (its conversations' directory, policies and outbound
   confirmation, `server/internal/assistant/health.go`) is core: every core tool's space check reads it.
+  Tell Health (#14714, `server/internal/assistant/health_tell.go`) also belongs to the core, alongside workout uploads:
+  it stores receipts and controls Health conversations, their delivery and their training-chat pointer. Its route
+  and `health_tell` capability remain available when the Health data module is absent or switched off.
 - **Tests**: the module's tests run on a fake core (`fakecore_test.go`); the water import's acceptance also runs on the
   real SQL (`health (test) internal/db` in `module_services.txt`). The core's tests of how the module meets the rest of
   the manager (the tool's space guard, the intake page fitted for older apps, the push outbox, the module's absence)
@@ -580,6 +608,9 @@ which the kernel announces while it is loaded (it left `modapi.ClientModules` wi
   owns `health_strength`, its managed `health-strength-` cards and `strength.*` states under `-health-intake`.
   The core dispatches reserved card actions before its generic outbox, persists strength workout windows through
   `WorkoutReceived` before upload acknowledgment, and asks `WorkoutReport` for current inputs inside `runTask`.
+  `WorkoutReport` returns `assistantwire.StrengthReportPrompt` (the prompt and workout start time) so a successful
+  strength report can continue the training chat for the workout's local start day. Without the module, Tell Health
+  still opens Health conversations, but reports do not select training chats and instructions omit strength guidance.
   No module, no added strength item, an unknown window or assembly errors keep the stored task prompt; other workouts
   remain byte-identical. Module absence also removes `health_strength` from hello and refuses its card buttons, while
   retaining all stored strength data. No additional page route or hub business logic is introduced.
@@ -665,8 +696,7 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
   (`Message`, `Action`, `Owner`, `Recalled`, `View`, which the Service's `Feishu*` methods pass on), what the core asks
   (`StatusKept`, `Route`, `SetTarget`, `RememberThread`, `Send`, `CardsWaiting`, `CardNudged`, `TopicAnchor`,
   `LegacyRuns`, `NudgeTick`, which the core's nudge sweep runs once a minute) and `Book`, which runs a function on the
-  chat's records under its lock for the core's standing board, workbench pin and companion bots (it shrinks as they
-  move).
+  chat's records under its lock for the core's cards (`owner_action_reply.go`, `reports.go`; it goes when they move).
   What the chat asks of the core is the host's chat group: where a target is and the run a message starts
   (`feishu_route.go`, which other channels use too), an interaction answered or closed, an acceptance pressed, the
   main conversation's model, and the to-do, decision and question ledgers of a topic (`TodoOfThread`, `ThreadRoutes`,
@@ -684,6 +714,27 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
   conversation, from the channels' runs), `Host.AskSensitive` (the exit policy of its words, asked only for a card the
   chat does not drive with "all cards" on, since it may wait for the text to be tagged) and `Host.AskState` (the
   core's live record: ended, still up). The module reads nothing else of the core for a card.
+- **The standing board, the pinned workbench and the companion bots are the module's**
+  (`server/internal/modules/lark/board.go`, `workbench_pin.go`, `companions.go`): when the "waiting for you" card is
+  edited (the settle timer and its lock), how it is sent and replaced, the workbench's pin, its loop and the button
+  every card carries, and the notices a notifications companion long-polls. The core tells them through
+  `larkhost.Board` (`BoardChanged`, `WorkbenchOn`, `WorkbenchStamp`, `DivertNotices`: nothing, the card unchanged and
+  `false` without the module). The rows (what waits and for how long, `board_rows.go`) and the waiting list as a card
+  stay the core's, since the briefing and the acceptance rounds read them too; the module asks for the card as of a
+  time (`Host.BoardCard`) and for whether the pending cards are read (`Host.FleetReady`). The four routes the companions
+  use (`PUT …/feishu/companions`, `GET …/feishu/notices`, `POST …/feishu/notices/action`, `POST …/feishu/workbench`)
+  are the module's `hub_routes`, served through the kernel only while it is on: with the module off or built out they
+  answer 404 (before, an off bot answered from the core). The request tells the module which manager's layer it is for
+  (`larkhost.WithLayer`, put on it where the core registers a module's routes). The stored chat state
+  (`bots.feishu.state`: the board's message, the companions) is only ever written by the module's code; switching it
+  off neither rewrites nor deletes it, and it is read again when the module comes back. Locks, the same before and after the move: the board's `run` (one send or edit at a time) is the outermost; under it
+  the board reads the chat's records (the chat's lock, through `Book`) and, through `Host.WorkbenchBoard` or
+  `Host.BoardCard`, the core's pending cards, ended set, acceptance book (`loadAcceptLocked`) and to-dos, each taken and
+  released in turn, none held across the next, so the core's locks are never taken inside the board's own. The board's
+  `mu` and the companions' `mu` and the workbench's flag are leaves, never held across a call out. A core caller of
+  `BoardChanged` may hold its own lock (`channels_handler.go`, `todos.go`): the call takes only the chat's lock and the
+  board's `mu`, as `boardChanged` did, and never waits for `run`. The acceptance rounds cross as data
+  (`Host.WorkbenchBoard`'s rows).
 - **Tests**: the turns' own tests run in the module on a fake core (`server/internal/modules/lark/service_test.go`:
   the channels' runs, their finishing, folding and dropping, and the hub's transport; `chat_fake_test.go`: the chat's
   host methods as the core answers the plain case); the assistant's tests of the turns through the channels' pipeline

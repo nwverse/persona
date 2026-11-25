@@ -839,17 +839,17 @@ func (c *Client) JSONMax(ctx context.Context, system, user string, maxTokens int
 }
 
 // ErrNoObject: the reply holds no JSON object at all.
-var ErrNoObject = errors.New("ai: no JSON object in reply")
+var ErrNoObject = aiwire.ErrNoObject
 
 // ErrUnterminated: the reply's JSON object never closes (and the reply was not cut off at max_tokens).
-var ErrUnterminated = errors.New("ai: unterminated JSON object in reply")
+var ErrUnterminated = aiwire.ErrUnterminated
 
 // ErrTruncated: the reply stopped at max_tokens before the answer was complete, even with the room doubled.
-var ErrTruncated = errors.New("ai: reply cut off at max_tokens")
+var ErrTruncated = aiwire.ErrTruncated
 
 // ErrRefused: the model declined the request (the Messages API's stop_reason "refusal", e.g. a safety classifier).
 // The same input is declined again, so sending it as is once more only spends a call.
-var ErrRefused = errors.New("ai: the model declined to answer")
+var ErrRefused = aiwire.ErrRefused
 
 // RefusalError is ErrRefused with what the upstream said: StopReason is "refusal" (the Messages API's stop_reason, a
 // Responses API refusal part or a Chat Completions refusal delta) or "content_filter" (an incomplete response's reason
