@@ -9,33 +9,36 @@ import (
 )
 
 func TestDispatchReuseStopsPlanAndDirectStart(t *testing.T) {
-	s, f, _ := briefService(t, "")
-	todo, err := s.createTodo(t.Context(), "Investigate coverage", "", "conv1", "")
-	if err != nil {
-		t.Fatal(err)
+	calls := []struct {
+		name string
+		args any
+	}{
+		{"task_plan", briefTask(nil)},
+		{"agent_start", map[string]any{"machine": "box", "cwd": "/code/app", "prompt": "Investigate coverage",
+			"worktree": map[string]string{"branch": "new-work"}}},
 	}
-	session := "01a20000-0000-7000-8000-000000000001"
-	if err := s.linkTodoAgent(t.Context(), todo.ID, "box", session, "coverage", "/code/app", "claude"); err != nil {
-		t.Fatal(err)
-	}
-	for _, reference := range []string{todo.ID, session, session[:8]} {
-		f.setItems(proto.Item{ID: "request", Role: "user", Kind: proto.KindText, Text: "Continue work on " + reference})
-		for _, call := range []struct {
-			name string
-			args any
-		}{
-			{"task_plan", briefTask(nil)},
-			{"agent_start", map[string]any{"machine": "box", "cwd": "/code/app", "prompt": "Investigate coverage",
-				"worktree": map[string]string{"branch": "new-work"}}},
-		} {
-			got, refused := tool(t, s, call.name, call.args)
-			if !refused || !strings.Contains(got, todo.ID) || !strings.Contains(got, "distinct_from") {
-				t.Fatalf("%s with %s: expected reuse choice, got %v %s", call.name, reference, refused, got)
+	for _, call := range calls {
+		t.Run(call.name, func(t *testing.T) {
+			s, f, _ := briefService(t, "")
+			todo, err := s.createTodo(t.Context(), "Investigate coverage", "", "conv1", "")
+			if err != nil {
+				t.Fatal(err)
 			}
-			if n := todoCount(s); n != 1 || len(f.started()) != 0 {
-				t.Fatalf("%s changed state: todos=%d starts=%d", call.name, n, len(f.started()))
+			session := "01a20000-0000-7000-8000-000000000001"
+			if err := s.linkTodoAgent(t.Context(), todo.ID, "box", session, "coverage", "/code/app", "claude"); err != nil {
+				t.Fatal(err)
 			}
-		}
+			for _, reference := range []string{todo.ID, session, session[:8]} {
+				f.setItems(proto.Item{ID: "request", Role: "user", Kind: proto.KindText, Text: "Continue work on " + reference})
+				got, refused := tool(t, s, call.name, call.args)
+				if !refused || !strings.Contains(got, todo.ID) || !strings.Contains(got, "distinct_from") {
+					t.Fatalf("expected reuse choice for %s: %v %s", reference, refused, got)
+				}
+				if n := todoCount(s); n != 1 || len(f.started()) != 0 {
+					t.Fatalf("refusal changed state: todos=%d starts=%d", n, len(f.started()))
+				}
+			}
+		})
 	}
 }
 
