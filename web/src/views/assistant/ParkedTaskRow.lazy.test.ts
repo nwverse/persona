@@ -41,7 +41,7 @@ describe("wait information stays off the first screen", () => {
     expect(entry).not.toContain("function TaskProgressMeter(");
     expect(details).toContain("export function ProgressTaskRow(");
     expect(details).toContain("function TaskProgressMeter(");
-    expect(details).toContain("tasks.BackgroundWorkDetail");
+    expect(details).toContain("<TaskActivityDetail ");
     expect(details).toContain('data-task-status={isNew ? "just_finished" : rowIsFinished ? "done" : agentKey}');
   });
 
