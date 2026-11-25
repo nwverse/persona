@@ -101,6 +101,10 @@ func (s *Service) feishuTodoPush(ctx context.Context, machine, session, title, b
 // feishuPushToldTodo is feishuPushTold, with a to-do only on the reminder path. Ordinary notify_user passes nil and
 // keeps its conversation link, context-free reply routing and body exactly as before.
 func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, title, body, key string, r *copyReport, todo *Todo) error {
+	if s.larkAbsent() {
+		r.skipped(channel.Feishu) // no module: nothing to send, nothing to retry, nothing failed
+		return nil
+	}
 	reminder, _ := ctx.Value(todoReminderSendKey{}).(*todoReminderSend)
 	private, space := false, ""
 	if todo != nil {
