@@ -353,8 +353,10 @@ repair worker may not edit baselines (`docs/operations/main-verification.md`), s
   you like, and send the result as a PR of its own; nothing depends on it running.
 - **Not count ratchets.** The permission allowlists stay strict, because a stale line there is a standing permission:
   `server/internal/hub/testdata/hub_routes_allowed.txt`, `server/internal/hub/testdata/hub_store_methods.txt`, the
-  `server/internal/hub/testdata/route_scopes.txt` golden, `TestMovedClustersStayOut`'s names and `inboxBookBridge`. Name lists such as
-  `scripts/test/doc_sections_known.txt` and `scripts/test/committed_screenshots_baseline.txt` keep their own rules.
+  `server/internal/hub/testdata/route_scopes.txt` golden, `TestMovedClustersStayOut`'s names, `inboxBookBridge`, and the
+  defect sites, `server/internal/archguard/testdata/recover_sites.txt` and
+  `server/internal/archguard/testdata/catch_sites.txt` (`docs/server/architecture.md` "Validated and sealed"). Name lists
+  such as `scripts/test/doc_sections_known.txt` and `scripts/test/committed_screenshots_baseline.txt` keep their own rules.
 - **Apple's ratchets** (`TokenRatchetTests` and the other PersonaTests baselines, `scripts/test/apple_perf_baseline.json`,
   `scripts/test/apple_state_initial_values_baseline.json`, `scripts/test/apple_isolation_baseline.json`) still fail when a count falls
   below its baseline; they change in a separate PR verified on a Mac.
