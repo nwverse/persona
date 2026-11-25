@@ -2553,9 +2553,10 @@ to the page of every entry of that kind (`views/knowledge/KBDetail.tsx`): button
 in the body, sections after the entry's facts, sections after the code directories, dialogs, and whether the page leaves
 its profile out. The page lays itself out as a function of those parts (`ModuleKBDetailParts`); the module's component
 (`ModuleCode.KBDetail`) calls its hooks and hands the page its parts. Its code loads when an entry of that kind opens;
-until it is in, or with no module on for the kind, the page draws with none. One module per kind. While the module is
+until it is in, or with no module on for the kind, the page draws with none. One module per kind. While a module is
 off, an entry of its kind is absent: its address routes as an unknown one, an open one says it is not there, and the
-lists and searches that would show it leave it out.
+lists and searches that would show it leave it out. Existing recordings are the exception: their data stays in Core,
+so the default Knowledge panel keeps their routes, rows and search results and renders a read-only detail.
 
 **Pages of their own** (#14404, `standalonePages`). A module may draw a page with no app shell (no sign-in flow, no
 sidebar), named by its address' first segment: the screen-share module's `/screen/<machine>`. The modules that have
@@ -2606,9 +2607,12 @@ Agent, the latest hand-off, its facts, the private mark, the minutes or an all-d
 conversation, the questions, the photos and the transcript, with their strings (`recording.json`,
 `recording-handoff.json`) and the recording's view of its entry (`recording-view.ts`: its transcript lines, an all-day
 recording's parts of the day, its meeting's room, follow-up and photos). Its switch's name and description come from
-`sidebar.json`. It names the `recordings` kind. When switched off, the Meetings list reads only the imported meetings. Its hub flag is `module.recording`: off on a hub that publishes module flags
-without it, or where a browser switches it off. The
-recording settings (how long recordings and minutes are kept, Settings › Persona) stay in core for now.
+`sidebar.json`. It names the `recordings` kind. When switched off, the Meetings list and search keep existing
+recordings, and `views/knowledge/RecordingReadOnlyDetail.tsx` renders their stored minutes, recaps, transcripts and
+photos read-only, without importing the module or showing its write and live controls. A photo list that is
+unavailable (including a 404 from a hub before the list read moved into Core) hides only the photo section. Its hub
+flag is `module.recording`: off on a hub that publishes module flags without it, or where a browser switches it off.
+The recording settings (how long recordings and minutes are kept, Settings › Persona) stay in core for now.
 
 **The pilot: health.** The Health page (`web/src/modules/health/`, docs/assistant/health.md) is the first module. Its
 route (`/health`, `/health/new`, `/health/<id>`, and `/tracks/health…`), its water and protein pages (the reserved
