@@ -3,7 +3,7 @@
 Who this serves: people who change Persona Core or build a panel on it. The default web panel is the executable
 reference consumer; an alternative panel uses the same hub endpoints and wire data, not web UI code.
 
-Last reviewed: 2026-11-25, against `origin/main` `e6d31f377b1c1598b4e997da912892dd5ef314b6`.
+Last reviewed: 2026-11-25, against `origin/main` `2f5e26f5fd7879d78cdf0dedb940c994206a5c7a`.
 This is a source-verified description of the current contract, not a new compatibility promise or a freeze on every
 field. HTTP routes and WebSocket names in the tables are guarded against source drift by
 `scripts/test/test_core_panel_contract.py`.
