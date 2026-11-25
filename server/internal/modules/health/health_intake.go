@@ -59,6 +59,7 @@ type healthIntakeDay struct {
 }
 
 type healthIntakeView struct {
+	Items          []string          `json:"items"`
 	WaterExtension string            `json:"water_extension,omitempty"`
 	Water          healthIntakeKind  `json:"water"`
 	Protein        healthIntakeKind  `json:"protein"`
@@ -201,6 +202,11 @@ func (s *Service) getHealthIntake(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v.WaterExtension, err = s.pendingWaterExtension(r.Context())
+	if err != nil {
+		intakeUnavailable(w)
+		return
+	}
+	v.Items, err = s.Items(r.Context())
 	if err != nil {
 		intakeUnavailable(w)
 		return

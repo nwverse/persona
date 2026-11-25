@@ -134,7 +134,8 @@ type assistantProc struct {
 	manual        bool // an explicit /compact (manual or idle-aware delivery): its end is reported
 	requested     bool // its first request was logged
 	// release: the main conversation's release policy as the reaper last read it from its record (assistant_reap.go).
-	release assistantRelease
+	release           assistantRelease
+	releaseCompaction bool // the main-chat compaction before releasing the process reports its end
 	// tui: started as interactive Claude Code through `personad assistant-tui` (assistant_tui.go). tuiNote: why it
 	// runs claude -p although interactive was asked for (the bridge fell back, or a recent fallback holds new starts
 	// off); "" when it runs as asked.
@@ -969,6 +970,14 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return "", err
 		}
 	}
+	if title, preparing := ctx.Value(segmentTitleKey{}).(string); preparing && p.cx != nil {
+		// Codex writes the empty rollout when named. The receipt must remain resumable after idle release.
+		if err := p.cx.call(ctx, "thread/name/set", map[string]any{"threadId": id, "name": title}, nil); err != nil {
+			n.logf("assistant %s: could not persist prepared Codex thread: %v", short(id), err)
+			n.stopAssistantProcess(id)
+			return "", refusal("missing_generation", i18n.T(i18n.From(ctx), "assistant-conversation_segments.missing_generation"), nil)
+		}
+	}
 	if startTier != "" {
 		// Acknowledge the native setting before persisting or exposing the new conversation. This process is either a
 		// cold start or an adopted spare, so a refusal must stop it rather than leave an unused conversation behind.
@@ -1324,6 +1333,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			ParentToolUseID *string                     `json:"parent_tool_use_id"`
 			IsError         bool                        `json:"is_error"`
 			Result          string                      `json:"result"`
+			Errors          json.RawMessage             `json:"errors"`
 			Reason          string                      `json:"reason"` // tuiFallbackSubtype: why interactive did not start
 			ModelUsage      map[string]claudeModelUsage `json:"modelUsage"`
 		}
@@ -1385,12 +1395,12 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 				n.forgetCacheWarm(p.id)
 				p.mu.Lock()
 				p.context = ev.Compact.Post
-				manual := p.manual
-				p.manual = false
+				report := p.manual || p.releaseCompaction
+				p.manual, p.releaseCompaction = false, false
 				p.mu.Unlock()
 				n.recordIdleCompactionContext(p.id, ev.Compact.Post)
 				n.contextCompacted(p.id)
-				if manual {
+				if report {
 					n.compactionEnded(p.id, "")
 				}
 				continue
@@ -1514,9 +1524,9 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 				}
 			}
 			p.mu.Lock()
-			manual := p.manual
+			reportCompaction := p.manual || p.releaseCompaction
 			contextTokens := p.context
-			p.manual = false
+			p.manual, p.releaseCompaction = false, false
 			window := reportedWindow(ev.ModelUsage, p.replyModel)
 			changed, idleAt := p.followWindow(window), p.compactIdleAt
 			p.compacting = false
@@ -1538,8 +1548,10 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			if changed {
 				n.logger.Printf("assistant %s: the model's window is %d tokens, idle compaction at %d", p.id[:8], window, idleAt)
 			}
-			if manual { // an explicit /compact ended without a boundary: it did not compact
-				n.compactionEnded(p.id, compactFailure(ev.IsError, ev.Result))
+			if reportCompaction { // /compact ended without a boundary
+				var details []string
+				_ = json.Unmarshal(ev.Errors, &details)
+				n.compactionEnded(p.id, compactFailure(ev.IsError, ev.Result, details...))
 			}
 			if f, err := n.file(p.id); err == nil {
 				n.refresh(p.id, f)

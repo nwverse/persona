@@ -133,7 +133,7 @@ setting; the 4 GB Gradle daemon and non-heap allocations are separate.
 | Platform / reusable workflow | Local entry | Checks | Hosted runner | Planning duration (warm / cold) |
 | --- | --- | --- | --- | --- |
 | Server / `.github/workflows/server-test.yml` | `scripts/ci/server.sh` | gofmt, vet, complete Go tests against disposable Postgres 18, build, Windows cross-build/vet, the programs and tunnel tests with `server/build-tags.txt`, extension schema/examples/SDK bundle, Go SDK tests; hub route/architecture, prompts and hub i18n guards are Go tests | ubuntu-latest | 8–15 / 15–30 min |
-| Web / `.github/workflows/web-test.yml` | `scripts/ci/web.sh` | npm ci, scoped ESLint, TypeScript, complete Vitest, production build and privacy | ubuntu-latest | 2–4 / 4–7 min |
+| Web / `.github/workflows/web-test.yml` | `scripts/ci/web.sh` | npm ci, scoped ESLint, TypeScript, complete Vitest in two disjoint native file shards, production build and privacy; the core-only build and suite use the same two shards | ubuntu-latest, two lanes | 2–4 / 4–7 min |
 | Android / `.github/workflows/android-test.yml` | `scripts/ci/android.sh` | i18n/token/motion checker tests, translations/literals, token and motion ratchets, all-module lint and unit-test variants, debug APK | ubuntu-latest, two lanes | 8–15 / 15–30 min (branch runs with main's caches measured 15–18 min, #3056); each shard's job timeout is 90 minutes, while individual checks retain their own timeout and final verdict |
 | Apple / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios` and `scripts/ci/apple.sh macos` | PersonaKit/iOS/Watch/HTML and Mac build/unit tests, and in the iOS lane the isolation lint with its own tests (`scripts/test/isolation-lint.sh`; `docs/apple/performance.md`, "Isolation lint") and the no-CallKit check of the device and simulator apps (`scripts/release/check_no_callkit.py`; `docs/operations/release.md`, "No CallKit"); synthetic configuration, no distribution signing; real results remain visible | macos-26 runners, Xcode 26.0.1 (Swift 6.2) | queue and execution measured separately |
 | iOS 18.6 compatibility / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios18` | offline `PersonaTests` at the deployment floor, with iPhone 16 Pro and iPad layout coverage, separate HTML batches and a test-host restart check | macos-15 (arm64), Xcode 26.3 | one runner for up to 150 minutes per manual dispatch, about 8.86 GB to download a missing runtime |
@@ -141,6 +141,13 @@ setting; the 4 GB Gradle daemon and non-heap allocations are separate.
 | Rust core / `.github/workflows/core-test.yml` | `scripts/ci/core.sh` | rustfmt, clippy, the shared core's unit tests and the fixtures it implements (directly and through its runtime), generated codecs up to date, the HarmonyOS NAPI binding linted for `aarch64-unknown-linux-ohos` with its `ohos` feature (the Rust target only, no SDK and nothing linked) and its notices, the generated ArkTS codec against the real runtime on the host (`harmony/tests/core-host/`, Node.js from the workflow) plus the two existing ArkTS core tests, release library, an independently compiled C11 client and dynamic-export check on Linux (not Swift/Apple ABI); the Android lane also builds it for `:core:rustcore`'s binding tests | ubuntu-latest | measured on the first runs |
 | Runtimes / `.github/workflows/runtimes-test.yml` | `scripts/ci/runtimes.sh` | TypeScript SDK typecheck/test/portability, every runtime integration's npm tests | ubuntu-latest | 2–4 / 4–7 min |
 | Container and Release / `.github/workflows/release.yml` | `scripts/ci/hub-image.sh` | amd64 build; isolated Compose Postgres, HTTP/TLS health, pairing, web, admin isolation, file ownership/0600; publication remains amd64+arm64, then a version-tag run creates the GitHub Release | ubuntu-latest | 8–15 / 15–30 min |
+
+Web's hosted workflow sets `PERSONA_WEB_TEST_SHARD` to `1/2` and `2/2` on two independent runners, with `fail-fast: false`.
+Vitest partitions both the ordinary and core-only test files natively, so their shard union is the complete suite and the
+partitions do not overlap. The small Node regression wrapper runs only on shard 1; local `npm test` and `npm run
+test:core-only` leave the variable unset and still run everything. An explicitly requested local shard uses the same
+contract. Each hosted lane repeats lint, typecheck and the production/core-only builds: this reduces wall-clock latency at
+the cost of repeated runner setup and compilation, not by dropping tests or raising a deadline (#14907).
 
 These planning estimates predate sharding and are not measured success claims; use job timestamps and each script's PASS/FAIL/TIMEOUT
 durations for an actual run. Parallelism reduces wall-clock latency but can increase total runner minutes through repeated setup and
@@ -305,6 +312,7 @@ repair worker may not edit baselines (`docs/operations/main-verification.md`), s
 | Web hard-coded text | CJK strings per `web/src` file | `web/src/i18n/hardcoded-baseline.json` | `web/src/i18n/catalog.test.ts` (web lane) | `UPDATE_I18N_BASELINE=1` |
 | Prompt sizes | bytes per instruction section, tool description and supervision event | `server/internal/assistant/testdata/prompt_sizes.json` | `TestPromptSizeRatchet` (server lane) | `PROMPT_SIZE_UPDATE=1` |
 | Inbox book readers | places per file that reach the Inbox's in-memory book | `inboxBookReaders` in `server/internal/archguard/inbox_slice_test.go` | `TestInboxBookStaysInTheInbox` (server lane) | by hand |
+| Domain rules | the domain rules' findings per package in server code that predates them, and the application and library packages' exported-field records, named primitive types (adapters' too), `DoneAt` / `DoneBy` writes and uses of an adapter's `Wire` (`docs/server/architecture.md` "Domain model") | `server/internal/archguard/testdata/domain_layers/baseline.txt` | `TestDomainLayers` (server lane; check-fast, with its merge base) and each declared package's `rules_test.go` | `DOMAIN_LAYERS_UPDATE=1`, which also takes an allowance whose type landed into its count; `scripts/test/name_freezes.py pending --write --only domain_layers_baseline`, on a checkout of `main`, drops one whose PRs closed; `scripts/test/name_freezes.py moves` carries a moved package's lines |
 | Android text | hard-coded Chinese / Japanese and English UI text per Kotlin file | each module's `i18n-baseline.json` and `i18n-english-baseline.json` | `scripts/app/android_i18n_check.py` (Android lane, check-fast) | `--update` |
 | Android tokens | hard-coded values and Material 3 components per file | `android/core/designsystem/tools/token-baseline.json` | `scripts/app/android_token_baseline.py` (Android lane, check-fast) | `--update-baseline` |
 | Android motion | literal animation specs per file | `android/core/designsystem/tools/motion-baseline.json` | `scripts/app/android_motion_baseline.py` (Android lane, check-fast) | `--update-baseline` |
@@ -319,13 +327,19 @@ repair worker may not edit baselines (`docs/operations/main-verification.md`), s
   has room, so the slack a fall leaves under a baseline cannot be spent by the next change. An entry the merge base's baseline does
   not have yet is the change's own (a file the web font's `--update` let take sizes that moved to it, or a raise the sleep ratchet
   refuses anyway), and only the baseline holds it. check-fast's diff mode runs the sleep ratchet with `--base` (it does not run
-  the other two), and hosted CI sets `CI_BASE_SHA`.
+  the other two), and hosted CI sets `CI_BASE_SHA` for its guards job. archguard's `TestDomainLayers` reads `CI_BASE_SHA`
+  itself and holds the domain counts more strictly: every count, one the merge base's baseline lacks included, may not
+  rise above its count at the merge base, and a name or allowance its lists add over the merge base's, or a count line
+  raised or added so that it gives more room than there, fails unless it followed code that moved
+  (`scripts/test/name_freezes.py moves`; `docs/server/architecture.md` "The rules and their checks").
+  check-fast's diff mode sets it to its merge base for the repo-wide guards, while the hosted server lane, a shallow
+  clone without it, holds them to the baseline only.
 - **With no base, only the baseline holds**, so a full-tree run on `main` checks only `count > baseline`. There is no fallback to
   the clone's `origin/main`: it is only as fresh as the last fetch, and main verification pins `HEAD` by SHA without moving it
   (`docs/operations/main-verification.md`), so right after a merge it usually names the parent and would hold the merged files to
   the parent's counts, a limit `merge-pr.sh` does not apply. A hosted run on `main` gets `origin/main` of its own fresh clone, so
   its merge base is `HEAD`. The never-raise checks on the baseline files themselves keep their defaults (the clone's default
-  branch for the sleep ratchet, `origin/main` for the prompt-language ratchet). The ratchets inside `go test`, vitest and the
+  branch for the sleep ratchet, `origin/main` for the prompt-language ratchet). The other ratchets inside `go test`, vitest and the
   Android scripts know no base and check only the baseline, as does `changed_ratchets.py` at merge time.
 - **Merge time does not hold a file to its merge-base count.** `scripts/hooks/merge-pr.sh` (through `changed_ratchets.py`, which
   covers the sleep and web font ratchets) refuses a merge that raises a count above its baseline, but one that raises a count back
@@ -712,6 +726,16 @@ DOCKER=<docker client> python3 scripts/ci/module-e2e.py --modules voice,health,r
   page while off) in light and dark, and its chunks: none may be requested once the app has the hello. A chunk an off
   module's page fetches during a reload, before the hello is applied, is a `WARN` (#14431); `--strict-before-hello`
   makes it a failure.
+- **What the user already has stays** (#13430, `docs/architecture/core-and-modules.md` "A module that is off keeps
+  what the user has"): for `recording`, two recordings written by the knowledge base's own writers
+  (`TestWriteRecordingFixture` in `server/internal/kb`, run with `PERSONA_RECORDING_FIXTURE_DIR`) are in the temporary
+  home's knowledge base before the hub first starts: a meeting with its transcript and minutes, and one whose minutes
+  were still to be written. In every phase they are listed, opened and found by search through the knowledge base's
+  own routes; while off, the opened recording's detail equals the `on` phase's, the one in flight says
+  `paused: "module_off"`, and every file under `recordings/` is byte for byte what it was when the phase began.
+  `scripts/ci/core-only-smoke.py` checks the same on a core-only hub and with `--switched-off recording`. The web row
+  still expects the web app to hide a recording's entry while the module is off: that is the web app's behaviour
+  today, and its change is a client follow-up.
 - **Output**: a `PASS` / `WARN` / `FAIL` line per phase, module and check, the evidence JSON (`--evidence`, default
   `<shots>/evidence.json`: commit, the settings row, the manager line, the hello's module flags, what the browser got and
   requested), and screenshots `<phase>-<scheme>-<name>.png` in `--shots` (this machine's name is masked; never commit
@@ -1080,6 +1104,17 @@ does not drive the direction's running mark. It is off by default and composes w
 legacy 404 intact. `python3 -I scripts/mock/test_direction_tree_mock.py` checks the fixture and its reset behavior.
 `OutsideDirectionsUITests` uses it through `PERSONA_OUTSIDE_DIRECTIONS_HUB` for the mixed sidebar's interactions and for
 sidebar / To-dos / Agents captures in light and dark, at default and AX5 text (`PERSONA_SHOTS` saves them).
+
+`MOCK_DASHBOARDS=1|off|empty|removed|pinned` (`scripts/mock/dashboards_mock.py`, #15017) plays the default manager's
+Dashboards for the clients: the `assistant_pages` feature, the `dashboards` switch in `GET`/`PUT /api/v1/assistant`, the
+`-pages` places appended to `GET /api/v1/extensions/-/ui` (the index while a page is kept or one waits in Recently
+removed, then up to three pinned pages) and their pages over `POST /api/v1/extensions/-pages/-/ui/{index|pg_…}`. A tap on
+the running page's Done today answers the toast and a footer line "Received"; `GET /mock/dashboards?advance=1` moves it
+on to delivered, working and the page's update. Pinning, removing and the switch push `assistant_pages` and
+`extension_ui {invalidate}`. `off` keeps the pages with the switch off and `empty` has the switch on with nothing kept:
+both list nothing, for before / after captures; `removed` lists the index alone; `pinned` three pinned pages. Without
+`MOCK_EXTENSIONS=1` it also announces UI slots and lists only its own places. `python3 scripts/mock/test_dashboards_mock.py`
+checks it.
 
 **No new switch in `mock_hub.py` (#12737).** Most of what `mock_hub.py` gains comes with a new `MOCK_*` switch (89 of the 195
 commits that changed it from 2026-11-14 to 2026-11-22 added one, with 72% of its net added lines), so its switch names are

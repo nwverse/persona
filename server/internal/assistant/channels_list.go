@@ -172,7 +172,7 @@ func (s *Service) channelDetail(ctx context.Context, id string) (channel.Detail,
 	case channel.Feishu:
 		d.SettingsURL = "settings/connectors/feishu-bot"
 		d.Waiting = s.channelWaiting(id)
-		d.Waiting.Asks = s.feishuCardsWaiting()
+		d.Waiting.Asks = s.larkModule().CardsWaiting()
 	case channel.App:
 	default:
 		if v.Source == channel.SourcePlugin && v.Plugin != "" {
