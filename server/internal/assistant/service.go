@@ -209,6 +209,8 @@ type Service struct {
 	todoAskAfter time.Duration
 	// retryNow is the clock a due retry checks the task's time against (retryStillDue; nil: time.Now, tests set it).
 	retryNow func() time.Time
+	// machineNow is the clock collectMachineSnapshots checks sample freshness and silent-node age against (nil: time.Now, tests set it).
+	machineNow func() time.Time
 
 	mux            *http.ServeMux
 	routes         []string
@@ -640,7 +642,8 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			return beforeNodeWrite(method, err)
 		}
 	}
-	if method == DeviceSessionItems || method == DeviceAssistantHandoff || method == "session.item" || method == "session.image" {
+	if method == DeviceSessionItems || method == DeviceAssistantHandoff || method == "session.item" || method == "session.image" ||
+		method == proto.MethodSessionInputPreviews || method == proto.MethodSessionItemsWindow {
 		raw, err := json.Marshal(params)
 		if err != nil {
 			return err
@@ -993,6 +996,10 @@ func (s *Service) event(ctx context.Context, ev map[string]any) {
 			return
 		}
 	}
+	s.broadcastEvent(ctx, ev)
+}
+
+func (s *Service) broadcastEvent(ctx context.Context, ev any) {
 	raw, err := json.Marshal(ev)
 	if err != nil {
 		return

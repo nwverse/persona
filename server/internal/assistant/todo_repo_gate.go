@@ -1,21 +1,21 @@
-package projection
+package assistant
 
 import "strings"
 
 // Weakest-link delivery gate states across a to-do's bound Target Repos under todos_v2.
 const (
-	RepoGateBlockedCI       = "blocked_ci"
-	RepoGateBlockedConflict = "blocked_conflict"
-	RepoGateBlockedChanges  = "blocked_changes"
-	RepoGateAwaitingReview  = "awaiting_review"
-	RepoGateChecksPending   = "checks_pending"
-	RepoGateMissingPR       = "missing_pr"
-	RepoGateReady           = "ready"
-	RepoGateReferenceOnly   = "reference_only"
+	repoGateBlockedCI       = "blocked_ci"
+	repoGateBlockedConflict = "blocked_conflict"
+	repoGateBlockedChanges  = "blocked_changes"
+	repoGateAwaitingReview  = "awaiting_review"
+	repoGateChecksPending   = "checks_pending"
+	repoGateMissingPR       = "missing_pr"
+	repoGateReady           = "ready"
+	repoGateReferenceOnly   = "reference_only"
 )
 
-// RepoGatePR is a single delivery pull request observation belonging to a bound repository.
-type RepoGatePR struct {
+// repoGatePR is a single delivery pull request observation belonging to a bound repository.
+type repoGatePR struct {
 	URL       string
 	State     string // "open", "merged", "closed", or "" (unobserved)
 	Draft     bool
@@ -24,16 +24,16 @@ type RepoGatePR struct {
 	Conflicts bool
 }
 
-// RepoGateRepo is one bound repository's delivery gate input for AggregateRepoGate.
-type RepoGateRepo struct {
+// repoGateRepo is one bound repository's delivery gate input for aggregateRepoGate.
+type repoGateRepo struct {
 	RepoKey   string       // deterministic canonical identifier (e.g. canonical URL or repo ID)
 	RepoLabel string       // human-readable repository name (e.g. "owner/repo")
 	IsTarget  bool         // true when the repo has delivery/default links or no links; false for reference-only repos
-	PRs       []RepoGatePR // delivery PRs belonging to this repository
+	PRs       []repoGatePR // delivery PRs belonging to this repository
 }
 
-// RepoGate is the weakest-link ("barrel rule") delivery gate summary across a to-do's bound Target Repos.
-type RepoGate struct {
+// repoGate is the weakest-link ("barrel rule") delivery gate summary across a to-do's bound Target Repos.
+type repoGate struct {
 	State          string `json:"state"`
 	TargetCount    int    `json:"target_count"`
 	ReadyCount     int    `json:"ready_count"`
@@ -61,11 +61,11 @@ const (
 	gateSeverityBlockedCI       = 6
 )
 
-// AggregateRepoGate computes a deterministic weakest-link ("barrel rule") delivery gate summary
+// aggregateRepoGate computes a deterministic weakest-link ("barrel rule") delivery gate summary
 // across a to-do's bound repositories. Reference-only repositories (IsTarget == false) are counted
 // in ReferenceCount and strictly ignored for blocking and readiness calculations.
 // Returns nil when repos is empty.
-func AggregateRepoGate(repos []RepoGateRepo) *RepoGate {
+func aggregateRepoGate(repos []repoGateRepo) *repoGate {
 	if len(repos) == 0 {
 		return nil
 	}
@@ -91,8 +91,8 @@ func AggregateRepoGate(repos []RepoGateRepo) *RepoGate {
 	}
 
 	if targetCount == 0 {
-		return &RepoGate{
-			State:          RepoGateReferenceOnly,
+		return &repoGate{
+			State:          repoGateReferenceOnly,
 			TargetCount:    0,
 			ReadyCount:     0,
 			ReferenceCount: refCount,
@@ -101,8 +101,8 @@ func AggregateRepoGate(repos []RepoGateRepo) *RepoGate {
 	}
 
 	if worst == nil {
-		return &RepoGate{
-			State:          RepoGateReady,
+		return &repoGate{
+			State:          repoGateReady,
 			TargetCount:    targetCount,
 			ReadyCount:     readyCount,
 			ReferenceCount: refCount,
@@ -110,7 +110,7 @@ func AggregateRepoGate(repos []RepoGateRepo) *RepoGate {
 		}
 	}
 
-	return &RepoGate{
+	return &repoGate{
 		State:          worst.state,
 		TargetCount:    targetCount,
 		ReadyCount:     readyCount,
@@ -121,7 +121,7 @@ func AggregateRepoGate(repos []RepoGateRepo) *RepoGate {
 	}
 }
 
-func evaluateTargetRepo(repo RepoGateRepo) repoGateEval {
+func evaluateTargetRepo(repo repoGateRepo) repoGateEval {
 	name := strings.TrimSpace(repo.RepoLabel)
 	if name == "" {
 		name = strings.TrimSpace(repo.RepoKey)
@@ -146,7 +146,7 @@ func evaluateTargetRepo(repo RepoGateRepo) repoGateEval {
 	if activeOrMerged == 0 {
 		return repoGateEval{
 			severity: gateSeverityMissingPR,
-			state:    RepoGateMissingPR,
+			state:    repoGateMissingPR,
 			repo:     name,
 			reason:   "missing_pr",
 		}
@@ -154,7 +154,7 @@ func evaluateTargetRepo(repo RepoGateRepo) repoGateEval {
 	return *worst
 }
 
-func evaluateTargetPR(repoName string, pr RepoGatePR) repoGateEval {
+func evaluateTargetPR(repoName string, pr repoGatePR) repoGateEval {
 	url := strings.TrimSpace(pr.URL)
 	state := strings.ToLower(strings.TrimSpace(pr.State))
 	review := strings.ToLower(strings.TrimSpace(pr.Review))
@@ -163,7 +163,7 @@ func evaluateTargetPR(repoName string, pr RepoGatePR) repoGateEval {
 	if state == "merged" || state == "ready" {
 		return repoGateEval{
 			severity: gateSeverityReady,
-			state:    RepoGateReady,
+			state:    repoGateReady,
 			repo:     repoName,
 			pr:       url,
 		}
@@ -172,7 +172,7 @@ func evaluateTargetPR(repoName string, pr RepoGatePR) repoGateEval {
 	if isRepoGateCheckFailure(checks) {
 		return repoGateEval{
 			severity: gateSeverityBlockedCI,
-			state:    RepoGateBlockedCI,
+			state:    repoGateBlockedCI,
 			repo:     repoName,
 			pr:       url,
 			reason:   "ci_failed",
@@ -181,7 +181,7 @@ func evaluateTargetPR(repoName string, pr RepoGatePR) repoGateEval {
 	if pr.Conflicts {
 		return repoGateEval{
 			severity: gateSeverityBlockedConflict,
-			state:    RepoGateBlockedConflict,
+			state:    repoGateBlockedConflict,
 			repo:     repoName,
 			pr:       url,
 			reason:   "merge_conflicts",
@@ -190,7 +190,7 @@ func evaluateTargetPR(repoName string, pr RepoGatePR) repoGateEval {
 	if review == "changes_requested" {
 		return repoGateEval{
 			severity: gateSeverityBlockedChanges,
-			state:    RepoGateBlockedChanges,
+			state:    repoGateBlockedChanges,
 			repo:     repoName,
 			pr:       url,
 			reason:   "changes_requested",
@@ -199,7 +199,7 @@ func evaluateTargetPR(repoName string, pr RepoGatePR) repoGateEval {
 	if pr.Draft {
 		return repoGateEval{
 			severity: gateSeverityAwaitingReview,
-			state:    RepoGateAwaitingReview,
+			state:    repoGateAwaitingReview,
 			repo:     repoName,
 			pr:       url,
 			reason:   "draft_pr",
@@ -208,7 +208,7 @@ func evaluateTargetPR(repoName string, pr RepoGatePR) repoGateEval {
 	if review == "required" || review == "review_required" || review == "pending" {
 		return repoGateEval{
 			severity: gateSeverityAwaitingReview,
-			state:    RepoGateAwaitingReview,
+			state:    repoGateAwaitingReview,
 			repo:     repoName,
 			pr:       url,
 			reason:   "review_required",
@@ -217,7 +217,7 @@ func evaluateTargetPR(repoName string, pr RepoGatePR) repoGateEval {
 	if checks == "pending" {
 		return repoGateEval{
 			severity: gateSeverityChecksPending,
-			state:    RepoGateChecksPending,
+			state:    repoGateChecksPending,
 			repo:     repoName,
 			pr:       url,
 			reason:   "checks_pending",
@@ -226,14 +226,14 @@ func evaluateTargetPR(repoName string, pr RepoGatePR) repoGateEval {
 	if review == "approved" && (checks == "success" || checks == "none") {
 		return repoGateEval{
 			severity: gateSeverityReady,
-			state:    RepoGateReady,
+			state:    repoGateReady,
 			repo:     repoName,
 			pr:       url,
 		}
 	}
 	return repoGateEval{
 		severity: gateSeverityChecksPending,
-		state:    RepoGateChecksPending,
+		state:    repoGateChecksPending,
 		repo:     repoName,
 		pr:       url,
 		reason:   "pr_open",

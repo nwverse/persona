@@ -254,3 +254,27 @@ func larkBypassSafe(c larkCall) bool {
 	}
 	return httpMethod.MatchString(c.Method) && !strings.Contains(c.Path, "$")
 }
+
+// larkCallOutwardWrite reports whether c is a gated connector write acting as the owner
+// (not a read-only call and not an explicit lark-cli --as bot call).
+func larkCallOutwardWrite(c larkCall) bool {
+	if larkRead(c) {
+		return false
+	}
+	if c.CLI && c.Method == "CLI" && flagValue(c.Args, "--as") == "bot" {
+		return false
+	}
+	return true
+}
+
+// wholeCommandOutwardWrite reports whether a complex-command gate card for title is an outward
+// write as the owner, matching the gate's write wording and excluding read-only or bot-only calls.
+func wholeCommandOutwardWrite(v larkVerdict, write bool, title string) bool {
+	if title == "" || wholeCommandReads(v, write) {
+		return false
+	}
+	if write || len(v.calls) == 0 || v.unknown || v.dynamic || v.unparsed {
+		return true
+	}
+	return slices.ContainsFunc(v.calls, larkCallOutwardWrite)
+}
