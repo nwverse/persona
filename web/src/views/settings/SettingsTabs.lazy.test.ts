@@ -58,12 +58,15 @@ describe("the Extensions and Connectors pages boundary", () => {
     // the pages render through these in Settings.navigation / Settings.groups tests (loadPages)
   });
 
-  it("lazily loads SourcesUI inside Integrations without statically importing SourcesUI or SourcesGraph", () => {
+  it("lazily loads SourcesUI in Settings and Integrations without statically importing SourcesUI or SourcesGraph", () => {
+    const settings = readFileSync(new URL("../Settings.tsx", import.meta.url), "utf8");
     const integrations = readFileSync(new URL("./Integrations.tsx", import.meta.url), "utf8");
     const detail = readFileSync(new URL("./IntegrationDetail.tsx", import.meta.url), "utf8");
     const staticSources = /^import\s+(?!type\b)[^;]*from\s+["'][^"']*subscriptions\/Sources(?:UI|Graph)["']/m;
+    expect(settings).not.toMatch(staticSources);
     expect(integrations).not.toMatch(staticSources);
     expect(detail).not.toMatch(staticSources);
+    expect(settings).toMatch(/lazyPage\(\(\) => import\("\.\/subscriptions\/SourcesUI"\)\.then\(\(m\) => m\.SourcesUI\)\)/);
     expect(integrations).toMatch(/lazyPage\(\(\) => import\("\.\.\/subscriptions\/SourcesUI"\)\.then\(\(m\) => m\.SourcesUI\)\)/);
   });
 });

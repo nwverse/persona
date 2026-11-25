@@ -707,34 +707,48 @@ func (ps *extensions) changed(c extension.Change) {
 // automatic upgrade goes back with the old version (extension_upgrade_backup.go).
 func (ps *extensions) watchUpgrade(ctx context.Context, id string) (rolledBack bool, why string) {
 	key := ps.reg.StorageKeyOf(id)
-	defer ps.upgradeBackups.drop(key) // kept on disk; only the hold on it for a rollback ends
+	p := ps.reg.Get(id)
+	to := ""
+	checks := false
+	if p != nil {
+		to = p.Record.Version
+		checks = p.Manifest.UpgradeHealthCheck()
+	}
+	defer ps.upgradeBackups.drop(key, to) // kept on disk; only the hold on this version's backup ends
 	hp := ps.get(id)
 	if hp == nil || hp.proc == nil {
 		return false, ""
 	}
 	wctx, cancel := context.WithTimeout(ctx, host.ReadyWithin+5*time.Second)
 	defer cancel()
-	checks := ps.reg.Get(id) != nil && ps.reg.Get(id).Manifest.UpgradeHealthCheck()
+	onCall := hp.proc.Spec().OnCall
 	for wctx.Err() == nil {
+		if ps.get(id) != hp {
+			return false, ""
+		}
+		ch := hp.proc.Changes()
 		state, why := hp.proc.Status()
 		switch {
-		case state == host.StateRunning, state == host.StateStopped && checks:
+		case state == host.StateRunning, state == host.StateStopped && checks && onCall:
 			if !checks {
 				return false, ""
 			}
 			why := ps.upgradeHealth(wctx, id, hp)
-			if why == "" {
+			if why == "" || ps.get(id) != hp || ctx.Err() != nil {
 				return false, ""
 			}
 			ps.logf("plugin %s: the new version fails its health check (%s): back to the one before", id, why)
 			return ps.rollBackUpgrade(ctx, id, hp, why)
 		case state == host.StateError:
+			if ps.get(id) != hp || ctx.Err() != nil {
+				return false, ""
+			}
 			ps.logf("plugin %s: the new version does not come up (%s): back to the one before", id, why)
 			return ps.rollBackUpgrade(ctx, id, hp, why)
 		}
 		select {
 		case <-wctx.Done():
-		case <-hp.proc.Changes():
+		case <-ch:
 		}
 	}
 	return false, ""

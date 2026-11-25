@@ -16,7 +16,7 @@ import { ago, clock } from "../../lib/format";
 import {
   addSyncScopes, approvalOf, authorizeSyncBot, bindingsOf, bindingTitle, botTitle, createSyncBot, healthOf, leaveFor,
   needsAuthorize, oauthRedirectURI, orderedBots, pollSyncAuthorize, reauthSoon, registerSyncBot, rememberReturn,
-  removeSyncBinding, removeSyncBot, runSyncBinding, setSyncSchedule, syncView, tierText, TIER_DOCS, TIERS,
+  removeSyncBinding, removeSyncBot, runSyncBinding, setSyncSchedule, syncView, tierText, TIER_DOCS, TIER_FULL, TIERS,
   updateSyncBinding, type LarkSyncAuthorize, type LarkSyncBinding, type LarkSyncBot, type LarkSyncView,
 } from "../../lib/lark-sync";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
@@ -31,7 +31,7 @@ const RUNNING_POLL_MS = 5000;
 /** Where the add / authorize flow is: choosing, step 1 (an app that may read as the owner), or step 2 (allowing it). */
 type Flow =
   | { phase: "choose" }
-  | { phase: "register"; bot: string; tier: string; prompt: ConnectorPrompt; scopes: boolean }
+  | { phase: "register"; bot: string; tier: string; prompt: ConnectorPrompt; scopes: boolean; upgrade?: boolean; again?: boolean }
   | { phase: "authorize"; bot: string; tier: string; again: boolean; answer?: LarkSyncAuthorize; prompt?: ConnectorPrompt; error?: string };
 
 /** `appID`: the chat bot's app, read again when it changes (created by scanning above the section). */
@@ -111,8 +111,27 @@ export function LarkSyncSection({ appID }: { appID?: string }) {
   const bots = orderedBots(view);
   const primary = bots.find((b) => b.primary);
   const startAuthorize = (bot: string, tier: string, again = false) => setFlow({ phase: "authorize", bot, tier, again });
-  // A failed registration starts again from the choice; a new bot that never got its app is not kept.
+  // Upgrading an existing bot/binding to full_with_im: first add the IM scopes to the app (QR), then authorize again.
+  const startUpgrade = async (bot: string, again: boolean) => {
+    setBusy(`upgrade:${bot}`);
+    try {
+      const prompt = await addSyncScopes(bot, TIER_FULL);
+      if (!live.current) return;
+      if (prompt.done) startAuthorize(bot, TIER_FULL, again);
+      else setFlow({ phase: "register", bot, tier: TIER_FULL, prompt, scopes: true, upgrade: true, again });
+      setError("");
+    } catch (e) {
+      if (live.current) setError(t("settings-larksync.error_with", { what: t("settings-larksync.upgrade_failed"), error: errorText(e) }));
+    } finally {
+      if (live.current) setBusy("");
+    }
+  };
+  // A failed registration starts again from the choice (or retries adding scopes when upgrading); a new bot that never got its app is not kept.
   const restartRegistration = async (f: Extract<Flow, { phase: "register" }>) => {
+    if (f.upgrade) {
+      await startUpgrade(f.bot, !!f.again);
+      return;
+    }
     setFlow({ phase: "choose" });
     if (f.scopes) return;
     try {
@@ -156,10 +175,12 @@ export function LarkSyncSection({ appID }: { appID?: string }) {
             confirm={confirm}
             setConfirm={setConfirm}
             onConnect={() => startAuthorize(b.bot_id, b.tier || TIER_DOCS)}
+            onUpgradeBot={() => void startUpgrade(b.bot_id, false)}
             onResume={() => void resume(b)}
             onRemoveBot={() => void change(t("settings-larksync.remove_bot_failed"), `bot:${b.bot_id}`, () => removeSyncBot(b.bot_id)).then(() => setConfirm(""))}
             onToggle={(x, on) => void change(on ? t("settings-larksync.enable_failed") : t("settings-larksync.disable_failed"), x.key, () => updateSyncBinding(x.key, { enabled: on }))}
             onRun={(x) => void change(t("settings-larksync.run_failed"), x.key, () => runSyncBinding(x.key), t("settings-larksync.run_started"))}
+            onUpgrade={(x) => void startUpgrade(x.bot_id, true)}
             onReauthorize={(x) => startAuthorize(x.bot_id, x.tier || b.tier || TIER_DOCS, true)}
             onRemove={(x) => void change(t("settings-larksync.remove_failed"), x.key, () => removeSyncBinding(x.key)).then(() => setConfirm(""))}
           />
@@ -198,14 +219,15 @@ export function LarkSyncSection({ appID }: { appID?: string }) {
         <RegisterStep
           key={flow.bot}
           flow={flow}
+          isPrimary={flow.bot === primary?.bot_id}
           onPrompt={(prompt) => setFlow((f) => (f?.phase === "register" ? { ...f, prompt } : f))}
-          onDone={() => startAuthorize(flow.bot, flow.tier)}
+          onDone={() => startAuthorize(flow.bot, flow.tier, !!flow.again)}
           onCancel={() => setFlow(null)}
           onRestart={() => void restartRegistration(flow)}
         />
       )}
       {flow?.phase === "authorize" && (
-        <AuthorizeStep key={`${flow.bot}:${flow.again}`} flow={flow} setFlow={setFlow} onDone={finished} onCancel={() => setFlow(null)} />
+        <AuthorizeStep key={`${flow.bot}:${flow.tier}:${flow.again}`} flow={flow} setFlow={setFlow} onDone={finished} onCancel={() => setFlow(null)} />
       )}
     </>
   );
@@ -218,17 +240,19 @@ function hourText(h: number): string {
 
 // ── the list ───────────────────────────────────────────
 
-function BotBlock({ view, bot, busy, confirm, setConfirm, onConnect, onResume, onRemoveBot, onToggle, onRun, onReauthorize, onRemove }: {
+function BotBlock({ view, bot, busy, confirm, setConfirm, onConnect, onUpgradeBot, onResume, onRemoveBot, onToggle, onRun, onUpgrade, onReauthorize, onRemove }: {
   view: LarkSyncView;
   bot: LarkSyncBot;
   busy: string;
   confirm: string;
   setConfirm: (key: string) => void;
   onConnect: () => void;
+  onUpgradeBot: () => void;
   onResume: () => void;
   onRemoveBot: () => void;
   onToggle: (b: LarkSyncBinding, on: boolean) => void;
   onRun: (b: LarkSyncBinding) => void;
+  onUpgrade: (b: LarkSyncBinding) => void;
   onReauthorize: (b: LarkSyncBinding) => void;
   onRemove: (b: LarkSyncBinding) => void;
 }) {
@@ -237,6 +261,8 @@ function BotBlock({ view, bot, busy, confirm, setConfirm, onConnect, onResume, o
   // No app yet: the chat bot's is created above (its own setup); a sync bot's setup was left half way, to go on with
   // while its registration lasts, or to remove.
   const ready = bot.has_secret !== false;
+  const botWithoutChat = (bot.tier || TIER_DOCS) !== TIER_FULL;
+  const upgradingBot = busy === `upgrade:${bot.bot_id}`;
   const hint = !ready
     ? bot.primary ? t("settings-larksync.chat_bot_first") : bot.registering ? t("settings-larksync.bot_setup_open") : t("settings-larksync.bot_unfinished")
     : bindings.length ? tierText(bot.tier) : t("settings-larksync.no_accounts");
@@ -245,7 +271,13 @@ function BotBlock({ view, bot, busy, confirm, setConfirm, onConnect, onResume, o
       <Row icon={bot.primary ? "chat" : "link"} label={botTitle(bot)} hint={hint} wrapHint stackOnNarrow>
         {/* On a phone the controls go under the name, the row's width, and wrap there rather than run off the edge. */}
         <div className="flex min-w-0 flex-wrap items-center gap-2 max-sm:w-full">
+          {ready && botWithoutChat && !bindings.length && <Pill tone="orange">{t("settings-larksync.no_chat_badge")}</Pill>}
           {approval && <Pill tone={approval.tone}>{approval.text}</Pill>}
+          {ready && botWithoutChat && !bindings.length && (
+            <Button tone="secondary" icon="plus" busy={upgradingBot} disabled={!!busy} onClick={onUpgradeBot}>
+              {t("settings-larksync.upgrade_to_full")}
+            </Button>
+          )}
           {ready && (
             <Button tone="quiet" icon="plus" onClick={onConnect}>
               {t("settings-larksync.connect_account")}
@@ -273,11 +305,15 @@ function BotBlock({ view, bot, busy, confirm, setConfirm, onConnect, onResume, o
           key={b.key}
           view={view}
           b={b}
+          botTier={bot.tier}
           busy={busy === b.key}
+          upgrading={upgradingBot}
+          anyBusy={!!busy}
           confirming={confirm === b.key}
           setConfirm={setConfirm}
           onToggle={(on) => onToggle(b, on)}
           onRun={() => onRun(b)}
+          onUpgrade={() => onUpgrade(b)}
           onReauthorize={() => onReauthorize(b)}
           onRemove={() => onRemove(b)}
         />
@@ -286,14 +322,18 @@ function BotBlock({ view, bot, busy, confirm, setConfirm, onConnect, onResume, o
   );
 }
 
-function BindingRow({ view, b, busy, confirming, setConfirm, onToggle, onRun, onReauthorize, onRemove }: {
+function BindingRow({ view, b, botTier, busy, upgrading, anyBusy, confirming, setConfirm, onToggle, onRun, onUpgrade, onReauthorize, onRemove }: {
   view: LarkSyncView;
   b: LarkSyncBinding;
+  botTier?: string;
   busy: boolean;
+  upgrading: boolean;
+  anyBusy: boolean;
   confirming: boolean;
   setConfirm: (key: string) => void;
   onToggle: (on: boolean) => void;
   onRun: () => void;
+  onUpgrade: () => void;
   onReauthorize: () => void;
   onRemove: () => void;
 }) {
@@ -301,9 +341,11 @@ function BindingRow({ view, b, busy, confirming, setConfirm, onToggle, onRun, on
   const state = healthOf(b);
   const soon = reauthSoon(b);
   const authorize = needsAuthorize(b);
+  const withoutChat = (b.tier || botTier || TIER_DOCS) !== TIER_FULL;
   return (
     <div data-lark-sync-binding={b.key}>
       <Row label={name} hint={statusLine(b)} wrapHint stackOnNarrow>
+        {withoutChat && <Pill tone="orange">{t("settings-larksync.no_chat_badge")}</Pill>}
         <Pill tone={state.tone}>{state.text}</Pill>
         <Switch on={b.enabled} disabled={busy || authorize} label={t("settings-larksync.enabled_label", { name })} onChange={onToggle} />
       </Row>
@@ -318,6 +360,11 @@ function BindingRow({ view, b, busy, confirming, setConfirm, onToggle, onRun, on
         {!authorize && (
           <Button tone="secondary" icon="retry" busy={busy && !confirming} disabled={!b.enabled || !!b.running} onClick={onRun}>
             {b.running ? t("settings-larksync.running") : t("settings-larksync.run_now")}
+          </Button>
+        )}
+        {withoutChat && (
+          <Button tone="secondary" icon="plus" busy={upgrading} disabled={anyBusy} onClick={onUpgrade}>
+            {t("settings-larksync.upgrade_to_full")}
           </Button>
         )}
         <RowConfirm
@@ -358,7 +405,7 @@ function ChooseStep({ primary, onCancel, onPrompt }: {
   onCancel: () => void;
   onPrompt: (bot: string, tier: string, prompt: ConnectorPrompt, scopes: boolean) => void;
 }) {
-  const [tier, setTier] = useState(TIER_DOCS);
+  const [tier, setTier] = useState(TIER_FULL);
   const [label, setLabel] = useState("");
   const [region, setRegion] = useState(() => (primary?.domain?.includes("larksuite") ? "lark" : "feishu"));
   const [busy, setBusy] = useState<"" | "new" | "chat">("");
@@ -390,6 +437,7 @@ function ChooseStep({ primary, onCancel, onPrompt }: {
           ))}
         </select>
       </Row>
+      {tier === TIER_DOCS && <SettingsHint caution>{t("settings-larksync.tier_docs_no_chat")}</SettingsHint>}
       <Row label={t("settings-larksync.name_label")} hint={t("settings-larksync.name_hint")} wrapHint stackOnNarrow>
         <input
           value={label}
@@ -424,8 +472,9 @@ function ChooseStep({ primary, onCancel, onPrompt }: {
   );
 }
 
-function RegisterStep({ flow, onPrompt, onDone, onCancel, onRestart }: {
+function RegisterStep({ flow, isPrimary, onPrompt, onDone, onCancel, onRestart }: {
   flow: Extract<Flow, { phase: "register" }>;
+  isPrimary: boolean;
   onPrompt: (p: ConnectorPrompt) => void;
   onDone: () => void;
   onCancel: () => void;
@@ -449,8 +498,11 @@ function RegisterStep({ flow, onPrompt, onDone, onCancel, onRestart }: {
   };
   // A failed registration (expired, declined) comes back with its error and stays so until started again: not asked again.
   useStepPolling(isPolled(flow.prompt) && !flow.prompt.error ? flow.prompt : null, send, 3);
+  const title = !flow.scopes
+    ? t("settings-larksync.step_create")
+    : isPrimary ? t("settings-larksync.step_scopes") : t("settings-larksync.step_bot_scopes");
   return (
-    <Group title={flow.scopes ? t("settings-larksync.step_scopes") : t("settings-larksync.step_create")} footer={t("settings-larksync.step_create_footer")}>
+    <Group title={title} footer={t("settings-larksync.step_create_footer")}>
       <PromptBody prompt={flow.prompt} onCancel={onCancel} onRestart={onRestart} />
     </Group>
   );

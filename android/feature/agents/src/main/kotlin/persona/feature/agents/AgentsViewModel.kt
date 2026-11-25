@@ -1039,7 +1039,7 @@ internal class AgentsViewModel(
                     interactions.replyOwnerApproval(latest, phrase)
                     ResolveOutcome()
                 } ?: interactions.resolveOutcome(interaction.id, resolution,
-                    handoffCard = interaction.isSecretHandoff && resolution.allow == true)
+                    handoffCard = (latest.isSecretHandoff || latest.secretRun?.delivery == "env") && resolution.allow == true)
                 _delivery.update { it + (interaction.id to RequestDelivery.Sent) }
                 val effective = if (outcome.already) outcome.resolution else resolution
                 // The notice outlives the card: it keeps the answer without a password card's typed value (#1581).

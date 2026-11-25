@@ -617,7 +617,7 @@ func TestPRFollowupBriefingSurfacesUnwatchedHonestly(t *testing.T) {
 		t.Fatalf("save stale obs: ok=%v err=%v", ok, err)
 	}
 
-	body := (&briefFacts{At: now, l: i18n.En}).body(s, "Morning")
+	body := s.briefBodyOf(&briefFacts{At: now, Lang: string(i18n.En)}, "Morning")
 	gotByTodo := map[string]briefBodyPRFollowup{}
 	for _, row := range body.PRFollowups {
 		gotByTodo[row.TodoID] = row
@@ -660,7 +660,7 @@ func TestPRFollowupBriefingSurfacesUnwatchedHonestly(t *testing.T) {
 
 	// Verify zh-Hans and ja localizations render distinct unwatched notes too.
 	for _, lang := range []i18n.Lang{i18n.ZhHans, i18n.Ja} {
-		locBody := (&briefFacts{At: now, l: lang}).body(s, "Brief")
+		locBody := s.briefBodyOf(&briefFacts{At: now, Lang: string(lang)}, "Brief")
 		found := false
 		for _, row := range locBody.PRFollowups {
 			if row.TodoID == "todo_gh_unwatched" && row.Note != "" && strings.Contains(row.Note, "github.com") {
@@ -675,7 +675,7 @@ func TestPRFollowupBriefingSurfacesUnwatchedHonestly(t *testing.T) {
 	// Once GitHub reconnects and sweeps successfully, the recovered GitHub PRs drop out of the unwatched briefing list.
 	s.deploy.forge = &statusForge{status: TodoPRStatus{State: "open", HeadOID: "h9"}}
 	s.sweepPRFollowups(ctx, now.Add(time.Minute))
-	afterBody := (&briefFacts{At: now.Add(2 * time.Minute), l: i18n.En}).body(s, "Morning")
+	afterBody := s.briefBodyOf(&briefFacts{At: now.Add(2 * time.Minute), Lang: string(i18n.En)}, "Morning")
 	if len(afterBody.PRFollowups) != 1 || afterBody.PRFollowups[0].TodoID != "todo_unsupported" {
 		t.Fatalf("after GitHub recovery, only unsupported host should remain unwatched in briefing, got %+v", afterBody.PRFollowups)
 	}

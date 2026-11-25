@@ -15,7 +15,7 @@ import { LOOP_TEXT, loopHint } from "../../lib/loop-command";
 import { WORKFLOWS_COMMAND } from "../../lib/background-panel";
 import { credentialOwner } from "../../lib/api";
 import { composerEntryDrop, dragHasEntry, droppedEntry } from "../../lib/entry-drag";
-import { uuid } from "../../lib/format";
+import { baseName, uuid } from "../../lib/format";
 import { lazyPage } from "../../lib/lazy-page";
 import { enterSends, hasFinePointer, useMedia } from "../../lib/viewport";
 import { focusTaken } from "../../lib/dock-focus";
@@ -26,11 +26,17 @@ import { base64File, releaseAttachments } from "../../lib/attachments";
 import { imageLimitsFor, MAX_PICTURE_SOURCE, pictureRoom, type ImageLimits } from "../../lib/image-limits";
 import { addFiles as addComposerFiles, filesBusy, MAX_FILES, readyFiles, restoreFiles, splitFileTags, takeReadyFiles, useComposerFiles, withFiles } from "../../lib/composer-files";
 import { activateComposer, addContext, getContexts, newContext, registerComposer, removeContext, useContexts, withContexts, type ContextRef, type ComposerHandle } from "../../lib/links";
-import { addQuote, applyDraft, getQuotes, onDraftEvent, parseQuotes, removeQuote, replaceNeedsConfirm, sendDraft, setQuotes, splitQuotes, storeDraft, useQuotes, withQuoteBlock, withUnsent, type DraftImage } from "../../lib/drafts";
+import { addQuote, getQuotes, onDraftEvent, parseQuotes, removeQuote, replaceNeedsConfirm, sendDraft, setQuotes, splitQuotes, storeDraft, useQuotes, withQuoteBlock, type DraftEvent, type DraftImage } from "../../lib/drafts";
 import type { EditedImage } from "../../lib/image-edit";
-import { mentionAt, replaceToken, sessionQuote, workspaceContext, type MentionToken } from "../../lib/mentions";
+import { mentionAt, sessionQuote, workspaceContext, type MentionToken } from "../../lib/mentions";
 import { machineWithHub } from "../../lib/mesh";
 import { skillContext, skillDraft, splitSkillDraft } from "../../lib/skill-mentions";
+import { contextXML } from "../../lib/context-xml";
+import {
+  editorText, inlineMessage, INLINE_TRAILER_START, joinInline, loadInlineMessage, readInlineDraft, sliceInline,
+  writeInlineDraft, type InlineDocument, type InlineSelection,
+} from "../../lib/inline-mentions";
+import { parseUserText } from "../../lib/turns";
 import { getState } from "../../lib/store";
 import { AttachmentTiles } from "../../ui/AttachmentTray";
 import { FileTiles } from "./FileTiles";
@@ -38,6 +44,8 @@ import { Button, cx, Dialog, EASE, Spinner, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { ContextChips, ContextChipList } from "../link/ContextChips";
 import { ForwardBars } from "./ForwardCard";
+import { ComposerField, preloadInlineField } from "./ComposerField";
+import type { InlineMentionInputHandle } from "./InlineMentionInput";
 import { QuoteBars } from "./Quote";
 import type { ComposerPanelHandle, MentionRow, MentionSource, PanelPick } from "./ComposerPanel";
 import { OverlayBoundary } from "../LazyOverlay";
@@ -49,10 +57,10 @@ import { escapeCancelsEdit, escapeCountsForEdit, upStartsEdit, type EditLastBox 
 import { t } from "../../i18n";
 import type { ComposerAction } from "../../core/module-host";
 
-// Drawn only while an attached image is edited: its own chunk, fetched by the idle preload or the first edit (lib/lazy-page.ts).
-const ImageEditor = lazyPage(() => import("./ImageEditor").then((m) => m.ImageEditor), { idle: true });
-// The + / @ panel, drawn only while it is open: its own chunk and words, fetched by the idle preload or the first opening.
-const ComposerPanel = lazyPage(() => import("./ComposerPanel").then((m) => m.ComposerPanel), { idle: true });
+// Preload the editor once an image is attached, when there is something to edit.
+const ImageEditor = lazyPage(() => import("./ImageEditor").then((m) => m.ImageEditor));
+// The + / @ panel loads on picker intent.
+const ComposerPanel = lazyPage(() => import("./ComposerPanel").then((m) => m.ComposerPanel));
 const AssistantComposerPanel = lazyPage(() => import("./AssistantComposerPanel").then((m) => m.AssistantComposerPanel));
 const ComposerOverlay = lazyPage(() => import("./ComposerOverlays").then((m) => m.ComposerOverlay));
 const preloadComposerOverlay = () => void ComposerOverlay.preload().catch(() => {});
@@ -134,6 +142,10 @@ function parseSlash(draft: string) {
   return m ? m[1].toLowerCase() : null;
 }
 
+function joinDrafts(first: InlineDocument, second: InlineDocument): InlineDocument {
+  return first.length && second.length ? joinInline(first, ["\n"], second) : first.length ? first : second;
+}
+
 /** A picked picture made ready for a message (scaled down as on the iPhone, lib/image-scale.ts, loaded here), or null when
  *  the page cannot read it or bring it under the limits: it goes as a file. */
 async function readImage(file: File, limits: ImageLimits): Promise<Attachment | null> {
@@ -184,7 +196,7 @@ export const Composer = memo(function Composer({
   top,
 }: {
   draftKey: string;
-  /** Prompt editing reuses selection, menus and serialization, without chat sends, uploads, history or stored drafts. */
+  /** Prompt editing shares the draft document format and keeps its own wire serialization. */
   editor?: { text: string; refs: ContextRef[]; onChange: (text: string, refs: ContextRef[]) => void; label: string };
   placeholder: string;
   machineId?: string;
@@ -250,8 +262,11 @@ export const Composer = memo(function Composer({
     const owner = credentialOwner(), scope = conversationDeletionScope();
     return () => owner === credentialOwner() && scope === conversationDeletionScope() && !conversationKeyDeleted(draftKey);
   }, [draftKey]);
-  const [chatDraft, setDraft] = useState(() => editor ? "" : splitSkillDraft(storedValue(`draft:${draftKey}`) ?? "").text);
-  const draft = editor?.text ?? chatDraft;
+  const [chatDraft, setDraft] = useState<InlineDocument>(() => editor ? [] : readInlineDraft(splitSkillDraft(storedValue(`draft:${draftKey}`) ?? "").text));
+  const promptDoc = useMemo(() => readInlineDraft(editor?.text ?? ""), [editor?.text]);
+  const doc = editor ? promptDoc : chatDraft;
+  const draft = useMemo(() => editorText(doc), [doc]);
+  const hasInline = doc.some((part) => typeof part !== "string");
   const editingPrompt = Boolean(editor);
   const [atts, setAtts] = useState<Attachment[]>([]);
   // The suggestion just sent with its arrow: it stays on the hub until the agent starts, and each tap would be a new message.
@@ -266,7 +281,6 @@ export const Composer = memo(function Composer({
   const uploading = files.some((f) => f.state === "waiting" || f.state === "uploading");
   const filesReady = files.some((f) => f.file);
   const [pastedBlocks, setPastedBlocks] = useState<PastedBlock[]>([]);
-  const [previewPasteId, setPreviewPasteId] = useState<string | null>(null);
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [active, setActive] = useState(0);
@@ -289,7 +303,7 @@ export const Composer = memo(function Composer({
     // held down, the key repeats: one fresh ask, not one per repeat
     if (!repeat) blocked?.onNudge?.();
   };
-  const input = useRef<HTMLTextAreaElement>(null);
+  const input = useRef<InlineMentionInputHandle>(null);
   // an input method's composition (CJK): its Enter picks a candidate, and "/" or "@" typed in it opens no menu yet
   const ime = useComposition();
   const lastEscape = useRef<number | null>(null);
@@ -309,12 +323,13 @@ export const Composer = memo(function Composer({
   // text picked in the link panel waits here (lib/links.ts), and "AI edit" sends through this composer
   const chatContexts = useContexts(draftKey);
   const contexts = editor?.refs ?? chatContexts;
-  const changeText = (text: string) => editor ? editor.onChange(text, contexts) : setDraft(text);
+  const changeDocument = (value: InlineDocument) => editor ? editor.onChange(writeInlineDraft(value), contexts) : setDraft(value);
+  const changeText = (text: string) => changeDocument(readInlineDraft(text));
   const restoreSkills = (text: string) => {
     const split = splitSkillDraft(text);
     getContexts(draftKey).filter((r) => r.kind === "skill").forEach((r) => removeContext(draftKey, r.id));
     split.skills.forEach((r) => addContext(draftKey, r));
-    return split.text;
+    return readInlineDraft(split.text);
   };
   const skillEnvironment = editingPrompt && !mention ? "" : JSON.stringify([machineId, mention?.cwd, mention?.skills]);
   const catalogMemory = useMemo<import("./useSkillCatalog").CatalogMemory>(() => ({}), [skillEnvironment, draftKey]);
@@ -322,7 +337,7 @@ export const Composer = memo(function Composer({
   useEffect(() => {
     setActive(0);
     if (editingPrompt && !skillEnvironment) return;
-    if (previousSkillEnvironment.current && previousSkillEnvironment.current !== skillEnvironment && contexts.some((r) => r.kind === "skill")) {
+    if (previousSkillEnvironment.current && previousSkillEnvironment.current !== skillEnvironment && [...contexts, ...doc].some((part) => typeof part !== "string" && part.kind === "skill")) {
       toast(t("chat-composer.skills_changed"), "error");
     }
     previousSkillEnvironment.current = skillEnvironment;
@@ -346,6 +361,7 @@ export const Composer = memo(function Composer({
   const roomForImage = (size: number) => pictureRoom([...attsNow.current.map((a) => a.data.length), ...Array<number>(reading.current).fill(0)], size, limits());
   // appends at once to the ref as well, so a second paste or draft image in the same tick sees it
   const appendImage = (a: Attachment) => {
+    void ImageEditor.preload().catch(() => {});
     attsNow.current = [...attsNow.current, a];
     setAtts((cur) => [...cur, a]);
   };
@@ -393,10 +409,9 @@ export const Composer = memo(function Composer({
     if (editingPrompt) return;
     const from = shownKey.current;
     shownKey.current = draftKey;
-    const held = input.current?.value ?? "";
-    if (carryDraft && from !== draftKey && (held || attsNow.current.length)) {
+    if (carryDraft && from !== draftKey && (doc.length || attsNow.current.length)) {
       // the same conversation re-addressed: what is being typed stays, saved under its new key only
-      storeDraft(draftKey, held);
+      storeDraft(draftKey, skillDraft(getContexts(from), writeInlineDraft(doc)));
       storeDraft(from, "");
       return;
     }
@@ -405,107 +420,129 @@ export const Composer = memo(function Composer({
     releaseAttachments(attsNow.current);
     setAtts([]);
     setPastedBlocks([]);
-    setPreviewPasteId(null);
     // not on a touch screen alone: there the focus brings the keyboard up over the conversation just opened. Nor when
     // the person already went to another field or a dialog by then.
     if (!autoFocus || !hasFinePointer()) return;
     const timer = setTimeout(() => {
       const el = input.current;
-      if (el && !focusTaken(document.activeElement, el)) el.focus({ preventScroll: true });
+      if (el && !focusTaken(document.activeElement, el.element)) el.focus({ preventScroll: true });
     }, 0);
     return () => clearTimeout(timer);
   }, [draftKey, autoFocus]);
 
   // "Quote" / "Edit" / a queued message pulled back / an edited picture, from the chat (lib/drafts.ts)
-  const draftNow = useRef(draft);
-  draftNow.current = draft;
-  useEffect(
-    () =>
-      editingPrompt ? undefined : onDraftEvent(draftKey, (e) => {
-        if (!canWriteDraft()) return;
-        // a send from an earlier box of this conversation failed: its words come back even while sending is off
-        if (e.type === "unsent") {
-          const split = splitSkillDraft(e.text);
-          split.skills.forEach((r) => addContext(draftKey, r));
-          setDraft((cur) => withUnsent(cur, split.text));
+  const draftNow = useRef(doc);
+  draftNow.current = doc;
+  useEffect(() => {
+    if (editingPrompt) return;
+    let lastReplace = 0;
+    function applyEvent(e: DraftEvent) {
+      if (!canWriteDraft()) return;
+      // a send from an earlier box of this conversation failed: its words come back even while sending is off
+      if (e.type === "unsent") {
+        const split = splitSkillDraft(e.text);
+        split.skills.forEach((r) => addContext(draftKey, r));
+        setDraft((cur) => joinDrafts(readInlineDraft(split.text), cur));
+        return;
+      }
+      if (!canTake.current) return;
+      if (e.type === "image") {
+        const room = roomForImage(e.image.data.length);
+        if (room !== "ok") {
+          spillLater(base64File(e.image.name, e.image.mime, e.image.data), room);
           return;
         }
-        if (!canTake.current) return;
-        if (e.type === "image") {
-          const room = roomForImage(e.image.data.length);
-          if (room !== "ok") {
-            spillLater(base64File(e.image.name, e.image.mime, e.image.data), room);
-            return;
-          }
-          appendImage(fromDraftImage(e.image, uuid(), e.edited));
-          input.current?.focus({ preventScroll: true });
-          return;
-        }
-        if (e.type === "quote") {
-          // the input keeps what is typed; the bar shows the quote, a new one in place of the last
-          addQuote(draftKey, { text: e.text.trim(), from: e.from, ts: e.ts, task: e.task }, false);
-          requestAnimationFrame(() => input.current?.focus({ preventScroll: true }));
-          return;
-        }
-        // other words in place of an edit's (Edit as new, a rewind's message): no longer an edit
-        const startsEdit = e.type === "replace" && Boolean(e.edit);
-        if (e.type === "replace" && !startsEdit) editNow.current?.cancel();
-        // "Edit" a message sent with files: they go back to their tiles (#8361), the words to the input
-        const sentFiles = e.type === "replace" ? splitFileTags(e.text) : null;
-        const overflow = sentFiles ? restoreFiles(draftKey, sentFiles.files) : [];
-        // "Edit" a message sent with a quote: the quote goes back to the bar, the words to the input
-        const selected = sentFiles ? splitSkillDraft(withFiles(sentFiles.text, overflow)) : null;
-        const split = e.type === "replace" ? splitQuotes(selected!.text) : null;
-        const nextQuotes = e.type === "replace" ? (split ? parseQuotes(split.quotes) : []) : null;
-        const next = split ? split.rest : selected ? selected.text : applyDraft(draftNow.current, e);
-        // "Edit" or a rewind over unsent words, quotes or comments puts the message in at once, with no question first:
-        // the notice's Undo brings back what was typed, the quotes on the bar and where the caret was (#2450). An empty
-        // bar, or one that would send the same blocks, loses nothing.
-        const before = getQuotes(draftKey).list;
-        const dropsQuotes = before.length > 0 && withQuoteBlock(before, "") !== withQuoteBlock(nextQuotes ?? [], "");
-        const kept =
-          nextQuotes && (replaceNeedsConfirm(draftNow.current, next) || dropsQuotes || getContexts(draftKey).some((r) => r.kind === "skill"))
-            ? { text: draftNow.current, skills: getContexts(draftKey).filter((r) => r.kind === "skill"), quotes: before, caret: input.current?.selectionStart ?? draftNow.current.length }
-            : null;
-        if (kept) {
-          toast(t("chat-composer.replaced"), "ok", {
-            label: t("chat-composer.undo"),
-            run: () => {
-              if (!canWriteDraft()) return;
-              if (startsEdit) editNow.current?.cancel();
-              setQuotes(draftKey, kept.quotes);
-              restoreSkills(skillDraft(kept.skills, kept.text));
-              // the box went away or shows another conversation: the words go back to this one's stored draft
-              if (!mounted.current || keyNow.current !== draftKey) {
-                storeDraft(draftKey, skillDraft(kept.skills, kept.text));
-                return;
-              }
-              setDraft(kept.text);
-              setDismissed(false);
-              requestAnimationFrame(() => {
-                const el = input.current;
-                if (!el) return;
-                el.focus({ preventScroll: true });
-                el.setSelectionRange(kept.caret, kept.caret);
-                setCaret(kept.caret);
-              });
-            },
-          });
-        }
-        if (nextQuotes) setQuotes(draftKey, nextQuotes);
-        if (selected) restoreSkills(skillDraft(selected.skills, selected.text));
-        setDraft(next);
-        setDismissed(false);
-        requestAnimationFrame(() => {
-          const el = input.current;
-          if (!el) return;
-          el.focus({ preventScroll: true });
-          el.setSelectionRange(next.length, next.length);
-          setCaret(next.length);
+        appendImage(fromDraftImage(e.image, uuid(), e.edited));
+        input.current?.focus({ preventScroll: true });
+        return;
+      }
+      if (e.type === "quote") {
+        // the input keeps what is typed; the bar shows the quote, a new one in place of the last
+        addQuote(draftKey, { text: e.text.trim(), from: e.from, ts: e.ts, task: e.task }, false);
+        requestAnimationFrame(() => input.current?.focus({ preventScroll: true }));
+        return;
+      }
+      // other words in place of an edit's (Edit as new, a rewind's message): no longer an edit
+      const startsEdit = e.type === "replace" && Boolean(e.edit);
+      if (e.type === "replace" && !startsEdit) editNow.current?.cancel();
+      // "Edit" a message sent with files: they go back to their tiles (#8361), the words to the input
+      const sentFiles = e.type === "replace" ? splitFileTags(e.text) : null;
+      const overflow = sentFiles ? restoreFiles(draftKey, sentFiles.files) : [];
+      // "Edit" a message sent with a quote: the quote goes back to the bar, the words to the input
+      const selected = sentFiles ? splitSkillDraft(withFiles(sentFiles.text, overflow)) : null;
+      const parsed = sentFiles?.text.includes(INLINE_TRAILER_START) ? parseUserText(sentFiles.text) : null;
+      const restored = parsed?.inlineTrailer && inlineMessage()?.readInlineBody(parsed.text + parsed.inlineTrailer, parsed.contexts);
+      const replaced = restored ? joinDrafts(restored.document, readInlineDraft(withFiles("", overflow))) : readInlineDraft(selected?.text ?? "");
+      const replacementText = editorText(replaced);
+      const split = e.type === "replace" ? splitQuotes(replacementText) : null;
+      const nextQuotes = e.type === "replace" ? (split ? parseQuotes(split.quotes) : []) : null;
+      const next = split ? sliceInline(replaced, replacementText.length - split.rest.length) : selected ? replaced : joinDrafts(draftNow.current, readInlineDraft(e.text));
+      // "Edit" or a rewind over unsent words, quotes or comments puts the message in at once, with no question first:
+      // the notice's Undo brings back what was typed, the quotes on the bar and where the caret was (#2450). An empty
+      // bar, or one that would send the same blocks, loses nothing.
+      const before = getQuotes(draftKey).list;
+      const dropsQuotes = before.length > 0 && withQuoteBlock(before, "") !== withQuoteBlock(nextQuotes ?? [], "");
+      const kept =
+        nextQuotes && (replaceNeedsConfirm(writeInlineDraft(draftNow.current), writeInlineDraft(next)) || dropsQuotes || getContexts(draftKey).some((r) => r.kind === "skill"))
+          ? { text: writeInlineDraft(draftNow.current), skills: getContexts(draftKey).filter((r) => r.kind === "skill"), quotes: before, caret: input.current?.selection()[0] ?? editorText(draftNow.current).length }
+          : null;
+      if (kept) {
+        toast(t("chat-composer.replaced"), "ok", {
+          label: t("chat-composer.undo"),
+          run: () => {
+            if (!canWriteDraft()) return;
+            if (startsEdit) editNow.current?.cancel();
+            setQuotes(draftKey, kept.quotes);
+            const previous = restoreSkills(skillDraft(kept.skills, kept.text));
+            // the box went away or shows another conversation: the words go back to this one's stored draft
+            if (!mounted.current || keyNow.current !== draftKey) {
+              storeDraft(draftKey, skillDraft(kept.skills, kept.text));
+              return;
+            }
+            setDraft(previous);
+            setDismissed(false);
+            requestAnimationFrame(() => {
+              const el = input.current;
+              if (!el) return;
+              el.focus({ preventScroll: true });
+              el.setSelectionRange(kept.caret, kept.caret);
+              setCaret(kept.caret);
+            });
+          },
         });
-      }),
-    [draftKey, canWriteDraft, editingPrompt],
-  );
+      }
+      if (nextQuotes) setQuotes(draftKey, nextQuotes);
+      if (restored && parsed) {
+        restoreSkills("");
+        for (const ref of parsed.contexts) if (!restored.used.has(ref)) {
+          addContext(draftKey, { ...newContext(ref.kind as ContextRef["kind"], ref.title ?? "", ref.url ?? "", ref.text), attrs: ref.attrs });
+        }
+      } else if (selected) restoreSkills(skillDraft(selected.skills, selected.text));
+      setDraft(next);
+      setDismissed(false);
+      requestAnimationFrame(() => {
+        const el = input.current;
+        if (!el) return;
+        el.focus({ preventScroll: true });
+        const end = editorText(next).length;
+        el.setSelectionRange(end, end);
+        setCaret(end);
+      });
+    }
+    const unsubscribe = onDraftEvent(draftKey, (e) => {
+      if (e.type !== "replace") return applyEvent(e);
+      const request = ++lastReplace;
+      if (!e.text.includes(INLINE_TRAILER_START) || inlineMessage()) return applyEvent(e);
+      void loadInlineMessage().then(() => {
+        if (request === lastReplace) applyEvent(e);
+      }, () => {
+        if (request !== lastReplace || !canWriteDraft()) return;
+        if (e.edit) editNow.current?.cancel();
+        toast(t("chat-composer.reference_load_failed"), "error");
+      });
+    });
+    return () => { lastReplace++; unsubscribe(); };
+  }, [draftKey, canWriteDraft, editingPrompt]);
 
   // What is typed goes into the conversation's stored draft 250 ms after the last key; one still waiting is written at
   // once when the box goes away or moves to another conversation, and when the page is hidden (closed, reloaded,
@@ -527,10 +564,10 @@ export const Composer = memo(function Composer({
       savedFor.current = draftKey;
       return;
     }
-    unsaved.current = { key: draftKey, text: draft, current: canWriteDraft };
+    unsaved.current = { key: draftKey, text: writeInlineDraft(doc), current: canWriteDraft };
     const t = setTimeout(saveDraft, 250);
     return () => clearTimeout(t);
-  }, [draft, draftKey, saveDraft, contexts, canWriteDraft, editingPrompt]);
+  }, [doc, draftKey, saveDraft, contexts, canWriteDraft, editingPrompt]);
   useEffect(() => {
     // visibilitychange to hidden reaches mobile WebViews that never fire pagehide; saveDraft is a no-op without unsaved words
     const flushOnHidden = () => {
@@ -549,7 +586,7 @@ export const Composer = memo(function Composer({
   // the words the box was last measured with: while it only grows past the cap, it is not measured again
   const sizedFor = useRef({ draft: "", compact });
   useLayoutEffect(() => {
-    const el = input.current;
+    const el = input.current?.element;
     if (!el) return;
     const was = sizedFor.current;
     const breaks = (text: string) => text.split("\n").length;
@@ -585,7 +622,7 @@ export const Composer = memo(function Composer({
     const cap = COMPOSER_LINES * line + pad;
     const over = offersExpand(lineCount(h - pad, line), COMPOSER_LINES);
     setGrow((g) => (g.cap === cap && g.over === over ? g : { cap, over }));
-  }, [draft, compact, grow.over, ime.composing]);
+  }, [doc, compact, grow.over, ime.composing]);
   const showExpand = compact && grow.over && !disabled;
   useEffect(() => {
     if (!compact || disabled) setExpanded(false);
@@ -605,7 +642,7 @@ export const Composer = memo(function Composer({
   // your saved prompts (#7329) after the chat's own commands, read once a box has the focus or a "/"
   const savedPrompts = useSavedPromptRows(focused || draft.startsWith("/"));
   const allCommands = useMemo(() => [...commands, ...savedPrompts, ...promptCommands(quickPrompts)], [commands, savedPrompts, quickPrompts]);
-  const query = dismissed ? null : parseSlash(draft);
+  const query = dismissed || hasInline ? null : parseSlash(draft);
   // A /loop draft gets a line under the box saying what it will do (only where the menu offers /loop: Claude agents).
   const loop = commands.some((c) => c.text === LOOP_TEXT) ? loopHint(draft) : null;
   // Keep bare "/" focused on commands; a non-empty "/<keyword>" also matches against the active skill catalog.
@@ -618,21 +655,24 @@ export const Composer = memo(function Composer({
   useEffect(() => setActive(0), [query]);
 
   // @: the token just before the caret (lib/mentions.ts)
-  const atToken = !disabled && mention && focused && !dismissed && query === null && caret <= draft.length ? mentionAt(draft, caret) : null;
+  const atToken = !disabled && mention && focused && !dismissed && query === null && caret >= 0 && caret <= draft.length ? mentionAt(draft, caret) : null;
   const token = atToken && (!ime.composing || menusShown.current.at) ? atToken : null;
   const mOpen = Boolean(token);
   menusShown.current = { slash: slashOpen, at: mOpen };
+  useEffect(() => {
+    const picking = mOpen || slashSkillActive || plusOpen;
+    if (picking) preloadInlineField();
+    if ((picking || hasInline) && !inlineMessage()) void loadInlineMessage().catch(() => {});
+  }, [mOpen, slashSkillActive, plusOpen, hasInline]);
 
-  const trackCaret = () => {
-    const el = input.current;
-    if (el) setCaret(el.selectionStart);
-  };
+  const trackCaret = ([from, to]: InlineSelection) => setCaret(from === to ? from : -1);
 
   // Editing the last message (#4503): the words the box got when it began, so an untouched edit counts as the history
   // entry shown (↑ goes on to older messages, ↓ back to an empty box); each of those ends the edit, its quotes with it.
+  const historyDraft = useMemo(() => skillDraft(contexts, writeInlineDraft(doc)), [contexts, doc]);
   const editStart = useRef<string | null>(null);
   if (!editingLast) editStart.current = null;
-  else if (editStart.current === null) editStart.current = draft;
+  else if (editStart.current === null) editStart.current = historyDraft;
   const leaveEdit = () => {
     if (!editNow.current) return;
     setQuotes(draftKey, []);
@@ -641,7 +681,8 @@ export const Composer = memo(function Composer({
   // ↑ / ↓ recall and Ctrl+R search of what was sent (useSendHistory.ts); desktop only
   const history = useSendHistory({
     draftKey,
-    draft: skillDraft(contexts, draft),
+    draft: historyDraft,
+    editorText: draft,
     setDraft: (text) => {
       leaveEdit();
       setDraft(restoreSkills(text));
@@ -655,8 +696,8 @@ export const Composer = memo(function Composer({
   const cancelEdit = () => {
     const edit = editNow.current;
     if (!edit) return;
-    setDraft("");
-    draftNow.current = "";
+    setDraft([]);
+    draftNow.current = [];
     unsaved.current = null;
     storeDraft(draftKey, "");
     setQuotes(draftKey, []);
@@ -675,23 +716,21 @@ export const Composer = memo(function Composer({
     menu: Boolean(slashOpen || mOpen || history.searching || document.querySelector("[role=dialog],[role=menu]")),
   });
 
-  // `text` at the caret (or the end), a space before it when it would touch a word: a dropped Files entry, a file from the +
-  const insertText = (text: string) => {
-    const el = input.current;
-    const at = el ? Math.min(el.selectionStart, draft.length) : draft.length;
-    const before = draft.slice(0, at);
-    const lead = before && !/\s$/.test(before) ? " " : "";
-    changeText(before + lead + text + draft.slice(at));
-    const caret = at + lead.length + text.length;
-    setCaret(caret);
-    requestAnimationFrame(() => {
-      input.current?.focus({ preventScroll: true });
-      input.current?.setSelectionRange(caret, caret);
-    });
+  const replaceAtCaret = (insert: InlineDocument, at: MentionToken | null, space = false) => {
+    if (ime.tracker.current.active) return;
+    const [from, to] = at ? [at.start, at.end] : input.current?.selection() ?? [draft.length, draft.length];
+    const lead = space && (!at || typeof insert[0] !== "string" && insert[0]?.kind === "file") && from > 0 && !/\s/.test(draft[from - 1]) ? " " : "";
+    const end = space && draft[to] === " " ? to + 1 : to;
+    const addition = joinInline([lead], insert, space ? [" "] : []);
+    input.current?.replaceRange([from, end], addition);
   };
 
-  // A row of the + / @ panel: a session goes with the message as a quote, not as text (PromptItems.quote), a workspace as
-  // a context the hub fills in; a file as `@path `. In place of the typed @ token (`at`), or at the caret from the +.
+  const fileReference = (path: string, title: string): ContextRef => ({
+    id: `file:${path}`, kind: "file", title, url: "", text: path,
+    attrs: { path, ...(mention?.referenceFiles ?? { ...(machineId ? { machine: machineId } : {}), ...(mention?.cwd ? { cwd: mention.cwd } : {}) }) },
+  });
+
+  // Replace the query from @ or /, or use the selection the field kept while the + search had focus.
   const pickRow = (r: MentionRow, at: MentionToken | null) => {
     let ref: ContextRef | undefined;
     if (r.kind === "session") {
@@ -705,47 +744,21 @@ export const Composer = memo(function Composer({
     } else if (r.kind === "repository") {
       const c = r.context;
       ref = { ...newContext("repository", c.title, c.url, c.text), attrs: c.attrs };
-    } else if (r.kind === "file" && !r.dir && mention?.referenceFiles) {
-      const path = r.insert.slice(1, -1);
-      ref = { id: `file:${path}`, kind: "file", title: r.name, url: "", text: path, attrs: { path, ...mention.referenceFiles } };
+    } else if (r.kind === "file") {
+      if (r.dir && mention?.referenceFiles) return;
+      ref = fileReference(r.insert.slice(1, r.dir ? undefined : -1), r.name);
     }
-    if (ref) {
-      const out = at ? replaceToken(draft, at, "") : undefined;
-      if (editor) {
-        const refs = contexts.filter((existing) => existing.id !== ref.id);
-        editor.onChange(out?.text ?? draft, [...refs, ref]);
-      } else {
-        addContext(draftKey, ref);
-        if (out) setDraft(out.text);
-      }
-      if (out) setCaret(out.caret);
-      requestAnimationFrame(() => {
-        input.current?.focus({ preventScroll: true });
-        if (out) input.current?.setSelectionRange(out.caret, out.caret);
-      });
-      return;
-    }
-    if (r.kind !== "file") return;
-    if (!at) return insertText(r.insert);
-    const out = replaceToken(draft, at, r.insert);
-    changeText(out.text);
-    setCaret(out.caret);
-    requestAnimationFrame(() => {
-      input.current?.focus({ preventScroll: true });
-      input.current?.setSelectionRange(out.caret, out.caret);
-    });
+    if (ref) replaceAtCaret([ref], at, true);
   };
   // The panel's own rows: the file picker, Plan mode. From a typed @ the token goes first, as cindy's.
   const pickPanel = (p: PanelPick, at: MentionToken | null) => {
+    if (p.kind === "browse") return replaceAtCaret([p.insert], at);
     if (p.kind === "row") {
       if (!at) setPlusOpen(false);
       return pickRow(p.row, at);
     }
-    if (at) {
-      const out = replaceToken(draft, at, "");
-      setDraft(out.text);
-      setCaret(out.caret);
-    } else setPlusOpen(false);
+    if (at) replaceAtCaret([], at);
+    else setPlusOpen(false);
     if (p.action === "attach") {
       fileInput.current?.click();
       // from the +, the caret goes back to the box as after any other pick (the dialog hands the focus back to it)
@@ -772,7 +785,7 @@ export const Composer = memo(function Composer({
     if (disabled) setPlusOpen(false);
   }, [disabled]);
 
-  // A Files panel entry dropped on the box: `@path ` at the caret, as the @ menu types it
+  // A Files panel entry dropped on the box becomes the same reference as a picker result.
   const dropEntry = (e: React.DragEvent): boolean => {
     const entry = droppedEntry(e.dataTransfer);
     if (!entry) return false;
@@ -782,7 +795,8 @@ export const Composer = memo(function Composer({
       toast(drop.toast);
       return true;
     }
-    insertText(drop.text);
+    const path = drop.text.slice(1, -1);
+    replaceAtCaret([fileReference(path, baseName(path.replace(/\/$/, "")) || path)], null, true);
     return true;
   };
 
@@ -841,7 +855,7 @@ export const Composer = memo(function Composer({
   // in, "Send now" sends it as it is (the node drops it once the agent works again)
   const pill = suggestion && suggestion !== sentPill && !editingLast && !blocked && !draft && !pastedBlocks.length && !atts.length && !contexts.length && !quote && !working && !needsYou && !disabled ? suggestion : null;
   const fillSuggestion = (text: string) => {
-    setDraft(text);
+    setDraft([text]);
     setDismissed(true);
     setCaret(text.length);
     requestAnimationFrame(() => {
@@ -864,13 +878,24 @@ export const Composer = memo(function Composer({
   // (#6476), from Enter and the send buttons alike. Where the chat has no such picker, the words are sent as typed.
   const pickerCommand = (text: string) => {
     const opened = openPickerCommand(draftKey, text);
-    if (opened) setDraft("");
+    if (opened) setDraft([]);
     return opened;
   };
 
-  const submit = async (text = draft, now = false) => {
-    if (!canWriteDraft()) return;
+  const submit = async (value = doc, now = false) => {
+    if (!canWriteDraft() || ime.tracker.current.active) return;
+    const text = editorText(value);
     if (pickerCommand(text)) return;
+    let codec = inlineMessage();
+    if (!codec && hasInline) {
+      try {
+        codec = await loadInlineMessage();
+      } catch {
+        if (mounted.current && keyNow.current === draftKey && canWriteDraft()) toast(t("chat-composer.reference_load_failed"), "error");
+        return;
+      }
+      if (!mounted.current || keyNow.current !== draftKey || draftNow.current !== value || !canWriteDraft()) return;
+    }
     const refs = getContexts(draftKey);
     const q = getQuotes(draftKey).list;
     // a file still on its way holds the message, as a video does on the phone (#8361); the words stay in the box
@@ -880,9 +905,9 @@ export const Composer = memo(function Composer({
     }
     const hasFiles = readyFiles(draftKey).length > 0;
     const sentPasted = pastedBlocks;
-    const fullText = sentPasted.length
-      ? [...sentPasted.map((b) => b.text), ...(text.trim() ? [text] : [])].join("\n\n")
-      : text;
+    const fullDoc = sentPasted.length ? joinInline([sentPasted.map((b) => b.text).join("\n\n")], text.trim() ? ["\n\n"] : [], text.trim() ? value : []) : value;
+    const fullText = codec?.inlineBody(fullDoc) ?? editorText(fullDoc);
+    const selected = codec?.inlineReferences(value) ?? [];
     if (editor || disabled || blocked || loadingDraft || (!fullText.trim() && !atts.length && !hasFiles && !refs.length && !q.length)) return;
     // Any message spends the suggestion shown: it stays on the hub until the agent starts (#4644).
     if (suggestion) setSentPill(suggestion);
@@ -902,13 +927,12 @@ export const Composer = memo(function Composer({
     // (onSend false) puts them back; one that failed stays in the chat as a failed bubble.
     const sent = atts;
     const sentFiles = takeReadyFiles(draftKey);
-    setDraft("");
-    draftNow.current = "";
+    setDraft([]);
+    draftNow.current = [];
     unsaved.current = null;
     storeDraft(draftKey, "");
     setAtts([]);
     setPastedBlocks([]);
-    setPreviewPasteId(null);
     refs.forEach((r) => removeContext(draftKey, r.id));
     setQuotes(draftKey, []);
     // Ready for the next message now, not when the hub answers (the chat sends them in order). Back to the box only with
@@ -921,23 +945,29 @@ export const Composer = memo(function Composer({
     const said = !fullText.trim() && !sent.length && sentFiles.length ? t("chat-composer.see_files") : fullText;
     const body = withFiles(withQuoteBlock(q, said), sentFiles);
     const quoteReply = !edit && q.some((x) => !x.comment);
-    const ok = await onSend({ text: withContexts(refs, body, sent.length > 0), images: sent.map((a) => ({ mime: a.mime, data: a.data })),
+    const leading = [...refs.filter((r) => r.kind !== "skill" || !selected.some((s) => s.kind === "skill" && s.attrs?.ref === r.attrs?.ref)),
+      ...selected.filter((r) => r.kind !== "file")];
+    // Only scheduled prompts can execute leading file selections. Live chats keep their native @path, with the
+    // file's display metadata after the prose where promptcontent.Files does not see a selection.
+    const liveFiles = selected.filter((r) => r.kind === "file");
+    const wire = withContexts(leading, body, sent.length > 0) + (liveFiles.length ? `\n\n${liveFiles.map(contextXML).join("\n")}` : "");
+    const ok = await onSend({ text: wire, images: sent.map((a) => ({ mime: a.mime, data: a.data })),
       ...(now && queues ? { sendNow: true } : {}),
       ...(quoteReply ? { quoteReply: true } : {}), ...(committed ? { edit: committed } : {}) });
     if (!canWriteDraft()) { releaseAttachments(sent); return; }
     if (ok && now && queues) await onSendNow?.();
     if (ok) {
-      history.record(skillDraft(refs, fullText));
+      history.record(skillDraft(refs, writeInlineDraft(fullDoc)));
       releaseAttachments(sent);
     } else {
       // the box closed or shows another conversation now: the words go back to this conversation's draft (its open
       // box, or the stored one), not into the box; the pictures are not put back there, only freed
       if (mounted.current && keyNow.current === draftKey) {
-        setDraft((cur) => withUnsent(cur, text));
+        setDraft((cur) => joinDrafts(value, cur));
         if (sentPasted.length) setPastedBlocks((cur) => [...sentPasted, ...cur]);
         setAtts((cur) => [...sent, ...cur]);
       } else {
-        if (fullText) sendDraft(draftKey, { type: "unsent", text: fullText });
+        if (fullDoc.length) sendDraft(draftKey, { type: "unsent", text: writeInlineDraft(fullDoc) });
         releaseAttachments(sent);
       }
       refs.forEach((r) => addContext(draftKey, r));
@@ -946,7 +976,7 @@ export const Composer = memo(function Composer({
       const overflow = restoreFiles(draftKey, sentFiles);
       if (overflow.length) {
         const restored = withFiles("", overflow);
-        if (mounted.current && keyNow.current === draftKey) setDraft((cur) => withUnsent(cur, restored));
+        if (mounted.current && keyNow.current === draftKey) setDraft((cur) => joinDrafts([restored], cur));
         else sendDraft(draftKey, { type: "unsent", text: restored });
       }
       // the quotes back above this conversation's box (kept for it when the box shows another one or closed)
@@ -957,14 +987,14 @@ export const Composer = memo(function Composer({
   const pick = (c: Command | MentionRow) => {
     if ("kind" in c) {
       setDismissed(true);
-      // The lone /word is the same kind of token as @word: replace it with no text and keep the exact opaque reference.
+      // The lone /word is the same kind of query as @word.
       pickRow(c, { start: 0, end: draft.length, query: "" });
       return;
     }
     const apply = () => {
       // `/permissions` opens the permission menu at once; where the chat has no picker it goes in the box as any command
       if (c.text === PERMISSIONS_COMMAND && requestPermissionPicker(draftKey)) {
-        setDraft("");
+        setDraft([]);
         setDismissed(true);
         return;
       }
@@ -984,8 +1014,6 @@ export const Composer = memo(function Composer({
     }
     apply();
   };
-
-  const previewPaste = pastedBlocks.find((b) => b.id === previewPasteId) ?? null;
 
   const MentionPanel = mention?.workspaces || mention?.repositories ? AssistantComposerPanel : ComposerPanel;
   const slashProps = {
@@ -1039,7 +1067,7 @@ export const Composer = memo(function Composer({
         </Suspense>
       )}
 
-      {pill && <Suspense fallback={null}><ComposerOverlay text={pill} onFill={() => fillSuggestion(pill)} onSend={suggestionRisky ? undefined : () => { setSentPill(pill); void submit(pill); }} /></Suspense>}
+      {pill && <Suspense fallback={null}><ComposerOverlay text={pill} onFill={() => fillSuggestion(pill)} onSend={suggestionRisky ? undefined : () => { setSentPill(pill); void submit([pill]); }} /></Suspense>}
 
       <div
         className={cx(
@@ -1076,7 +1104,7 @@ export const Composer = memo(function Composer({
             </button>
           </div>
         )}
-        {editor ? <ContextChipList refs={contexts} onRemove={(id) => editor.onChange(draft, contexts.filter((r) => r.id !== id))} /> : <ContextChips draftKey={draftKey} />}
+        {editor ? <ContextChipList refs={contexts} onRemove={(id) => editor.onChange(editor.text, contexts.filter((r) => r.id !== id))} /> : <ContextChips draftKey={draftKey} />}
         <ForwardBars draftKey={draftKey} onRemove={() => input.current?.focus()} />
         {quote && (
           <QuoteBars
@@ -1101,79 +1129,25 @@ export const Composer = memo(function Composer({
         )}
         {pastedBlocks.length > 0 && (
           <div className="flex flex-col gap-1.5 px-0.5 pt-0.5">
-            <div className="flex flex-wrap items-center gap-1.5">
-              {pastedBlocks.map((b) => {
-                const open = previewPasteId === b.id;
-                return (
-                  <span
-                    key={b.id}
-                    className={cx(
-                      "inline-flex h-6.5 max-w-full items-center gap-1 rounded-[8px] border px-2 text-label transition-colors",
-                      open ? "border-accent/40 bg-accent-tint text-accent-ink" : "border-line bg-inset text-ink-2 hover:bg-hover",
-                    )}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setPreviewPasteId((cur) => (cur === b.id ? null : b.id))}
-                      className="inline-flex min-w-0 items-center gap-1.5 truncate"
-                      title={t("chat-composer.pasted_preview_hint")}
-                    >
-                      <Icon name="paste" size={12} className="shrink-0 opacity-75" />
-                      <span className="truncate">{t("chat-composer.pasted_chip", { count: b.text.length })}</span>
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={t("chat-composer.pasted_remove")}
-                      onClick={() => {
-                        setPastedBlocks((cur) => cur.filter((x) => x.id !== b.id));
-                        if (previewPasteId === b.id) setPreviewPasteId(null);
-                      }}
-                      className="ml-0.5 flex size-4 shrink-0 items-center justify-center rounded-[4px] text-ink-3 transition-colors hover:bg-hover hover:text-ink"
-                    >
-                      <Icon name="x" size={10} stroke={2.4} />
-                    </button>
-                  </span>
-                );
-              })}
-            </div>
-            {previewPaste && (() => {
-              const allLines = previewPaste.text.split(/\r?\n/);
-              const snippet = allLines.slice(0, 6).join("\n") + (allLines.length > 6 ? "\n…" : "");
-              return (
-                <div className="rounded-[8px] border border-line bg-inset p-2 text-label">
-                  <div className="mb-1 flex items-center justify-between gap-2 text-ink-3">
-                    <span>{t("chat-composer.pasted_stats", { lines: allLines.length, chars: previewPaste.text.length })}</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        changeText(draft ? `${draft}\n\n${previewPaste.text}` : previewPaste.text);
-                                  setPastedBlocks((cur) => cur.filter((x) => x.id !== previewPaste.id));
-                        setPreviewPasteId(null);
-                        input.current?.focus();
-                      }}
-                      className="font-medium text-accent-ink hover:underline"
-                    >
-                      {t("chat-composer.pasted_expand")}
-                    </button>
-                  </div>
-                  <pre className="max-h-28 overflow-hidden font-mono text-submeta leading-[1.45] whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">{snippet}</pre>
-                </div>
-              );
-            })()}
+            <Suspense fallback={null}><ComposerOverlay pastedBlocks={pastedBlocks}
+              onRemove={(id) => setPastedBlocks((cur) => cur.filter((block) => block.id !== id))}
+              onExpand={(id, text) => {
+                changeDocument(joinInline(doc, [draft ? "\n\n" : "", text]));
+                setPastedBlocks((cur) => cur.filter((block) => block.id !== id));
+                input.current?.focus();
+              }} /></Suspense>
           </div>
         )}
         {/* a field that turns disabled loses focus with no blur event: the keyboard is down, say so */}
         <DisabledBlur disabled={Boolean(disabled)} focused={focused} onBlur={() => { setFocused(false); onFocusChange?.(false); }} />
         <div className="relative">
-        <textarea
-          ref={input}
-          data-composer-input
-          rows={1}
-          value={draft}
+        <ComposerField
+          inputRef={input}
+          composerInput
+          value={doc}
           disabled={disabled}
           {...ime.handlers}
           readOnly={loadingDraft}
-          aria-busy={loadingDraft || undefined}
           onFocus={() => {
             if (!editor) activateComposer(handle);
             setFocused(true);
@@ -1185,15 +1159,13 @@ export const Composer = memo(function Composer({
             setFocused(false);
             onFocusChange?.(false);
           }}
-          onChange={(e) => {
-            const next = e.target.value;
-            if (parseSlash(next) !== query) setActive(0);
-            changeText(next);
-                setDismissed(false);
-            setCaret(e.target.selectionStart);
+          onChange={(next, selection) => {
+            if (parseSlash(editorText(next)) !== query) setActive(0);
+            changeDocument(next);
+            setDismissed(false);
+            trackCaret(selection);
           }}
-          onSelect={trackCaret}
-          onClick={trackCaret}
+          onSelectionChange={trackCaret}
           onPaste={(e) => {
             const files = Array.from(e.clipboardData.files);
             if (files.length) {
@@ -1240,7 +1212,8 @@ export const Composer = memo(function Composer({
             if (history.onKeyDown(e)) return;
             if (mOpen) {
               // ↑ ↓ move in the panel, unmodified Enter / Tab pick its row (none while it is empty or still loading)
-              if ((e.key === "ArrowDown" || e.key === "ArrowUp" || pickEnter || e.key === "Tab") && panel.current?.key(e.key)) {
+              const browseFolder = e.key === "ArrowRight" && !e.shiftKey && !e.altKey && !modEnter && caret === draft.length;
+              if ((e.key === "ArrowDown" || e.key === "ArrowUp" || browseFolder || pickEnter || e.key === "Tab") && panel.current?.key(e.key)) {
                 e.preventDefault();
                 return;
               }
@@ -1301,14 +1274,14 @@ export const Composer = memo(function Composer({
               e.preventDefault();
               // any Enter while blocked says why (also an empty box or attachments only): submit() would do nothing
               if (blocked) nudgeBlocked(e.repeat);
-              else void submit(draft, modEnter && Boolean(onSendNow));
+              else void submit(doc, modEnter && Boolean(onSendNow));
             }
           }}
           placeholder={pill && hasFinePointer() ? t("chat-composer.suggestion", { suggestion: pill }) : placeholder}
-          aria-label={editor?.label ?? t("chat-composer.message")}
+          label={editor?.label ?? t("chat-composer.message")}
           title={!editor && hasFinePointer() ? (onEditLastMessage ? t("composer.history_hint_edit") : t("composer.history_hint")) : undefined}
           style={{ maxHeight: grow.cap ? `min(${grow.cap}px, ${INPUT_MAX})` : INPUT_MAX }}
-          className={cx("min-h-[calc(1lh+var(--spacing)*1.5)] w-full resize-none overflow-y-auto bg-transparent px-2 pt-1.5 text-[14px] leading-[21px] text-ink outline-none [@media(pointer:coarse)]:text-[16px] [@media(pointer:coarse)]:leading-[24px] [overflow-wrap:anywhere] placeholder:text-ink-3 disabled:opacity-50", showExpand && "pr-8")}
+          className={cx("min-h-[calc(1lh+var(--spacing)*1.5)] w-full resize-none overflow-y-auto bg-transparent px-2 pt-1.5 text-[14px] leading-[21px] text-ink outline-none [@media(pointer:coarse)]:text-[16px] [@media(pointer:coarse)]:leading-[24px] [overflow-wrap:anywhere] placeholder:text-ink-3 disabled:opacity-50 aria-disabled:opacity-50", showExpand && "pr-8")}
         />
         {showExpand && (
           <button
@@ -1421,11 +1394,11 @@ export const Composer = memo(function Composer({
         <Suspense fallback={null}>
           <ComposerOverlay
             editLabel={editor?.label}
-            value={draft}
+            value={doc}
             placeholder={placeholder}
-            selection={[input.current?.selectionStart ?? draft.length, input.current?.selectionEnd ?? draft.length]}
+            selection={input.current?.selection() ?? [draft.length, draft.length]}
             onChange={(v) => {
-              changeText(v);
+              changeDocument(v);
               setDismissed(false);
             }}
             onCollapse={(sel) => {

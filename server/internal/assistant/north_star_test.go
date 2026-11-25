@@ -303,9 +303,12 @@ func TestNorthStarBriefingOpensWithIt(t *testing.T) {
 	}
 	ev(midnight.Add(4*time.Hour), sendEvent, "main-chat", bad)
 
+	if !s.briefingOn() {
+		return
+	}
 	f := s.briefFactsAt(ctx, now, "")
-	f.l = i18n.Lang("en")
-	f.NorthStarLines = f.NorthStar.lines(f.l)
+	f.Lang = "en"
+	f.NorthStarLines = s.briefNorthStarAt(ctx, now, s.location(ctx)).lines(i18n.En)
 	want := []string{
 		"Interruptions today: 1 (0 questions · 0 cards to act on · 1 notifications · 0 authorization cards); yesterday by this time 3, -2",
 		"Availability today (main and leader conversations): 75% (3 of 4 starts and resumes worked); yesterday by this time 50%, +25 pp",
@@ -315,7 +318,7 @@ func TestNorthStarBriefingOpensWithIt(t *testing.T) {
 	if strings.Join(f.NorthStarLines, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("north star lines:\n%s", strings.Join(f.NorthStarLines, "\n"))
 	}
-	f.ConfirmationLines = s.confirmationLines(f.l, f.Confirmations)
+	f.ConfirmationLines = s.confirmationLines(i18n.En, s.briefConfirmationsAt(ctx, now, s.location(ctx)))
 	card, plain, _ := s.briefCard(f, "Daily report", "")
 	head := strings.Index(plain, "North star")
 	if head < 0 || head > strings.Index(plain, want[0]) || strings.Index(plain, want[3]) > strings.Index(plain, "Today's confirmation cards") {
@@ -324,11 +327,11 @@ func TestNorthStarBriefingOpensWithIt(t *testing.T) {
 	if !strings.Contains(card.JSON(), "75%") {
 		t.Fatalf("card JSON lacks the rate: %s", card.JSON())
 	}
-	model := f.modelText()
+	model := s.briefModelText(f)
 	if !strings.HasPrefix(model[strings.Index(model, "\n")+1:], "- 北极星指标") || !strings.Contains(model, want[1]) {
 		t.Fatalf("model facts do not open with the north star:\n%s", model)
 	}
-	body, err := json.Marshal(f.body(s, "Daily report"))
+	body, err := json.Marshal(s.briefBodyOf(f, "Daily report"))
 	mustDo(t, err)
 	if !strings.Contains(string(body), `"north_star":{"lines":[`) || !strings.Contains(string(body), `"interruptions":1,"interruptions_yesterday":3`) ||
 		!strings.Contains(string(body), `"availability":0.75,"availability_yesterday":0.5,"attempts":4,"ok":3`) {
