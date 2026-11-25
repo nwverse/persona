@@ -40,6 +40,22 @@ type OutsideDecisionRequest struct {
 	CostOfWaiting string                  `json:"cost_of_waiting"`
 	Reversible    *bool                   `json:"reversible"`
 	AllowDefault  *bool                   `json:"allow_default,omitempty"`
+	Write         *OutsideWriteApproval   `json:"write,omitempty"`
+}
+
+// OutsideWriteApproval binds an outside decision to one exact Agent API write.
+// The decision id is the capability presented by the caller; every field must
+// match again when the Agent API consumes it.
+type OutsideWriteApproval struct {
+	Version       int       `json:"version"`
+	Audience      string    `json:"audience"`
+	Method        string    `json:"method"`
+	Path          string    `json:"path"`
+	Query         string    `json:"query,omitempty"`
+	BodySHA256    string    `json:"body_sha256"`
+	Account       string    `json:"account,omitempty"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	ApproveOption string    `json:"approve_option"`
 }
 
 // OutsideDecisionSource is the authenticated kind and display name of the
@@ -78,6 +94,7 @@ type OutsideDecision struct {
 	Deadline      *time.Time              `json:"deadline,omitempty"`
 	CreatedAt     time.Time               `json:"created_at"`
 	WithdrawnAt   *time.Time              `json:"withdrawn_at,omitempty"`
+	ConsumedAt    *time.Time              `json:"consumed_at,omitempty"`
 	Answer        *OutsideDecisionAnswer  `json:"answer,omitempty"`
 }
 

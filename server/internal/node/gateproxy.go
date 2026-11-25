@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -245,6 +246,40 @@ func (p *gateProxy) close() {
 	}
 }
 
+func gateAgentAudience(path, authValue string) string {
+	if !strings.HasPrefix(path, "/agent/v1/") {
+		return ""
+	}
+	token, ok := strings.CutPrefix(authValue, "Bearer ")
+	if !ok || token == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(token))
+	return "agent-api:" + hex.EncodeToString(sum[:])
+}
+
+func gateActionApproval(ctx context.Context, n *Node, needed bool, audience string) proto.LarkActionApproval {
+	if !needed || audience == "" || n.peer == nil {
+		return proto.LarkActionApproval{}
+	}
+	id, err := randomHex(16)
+	if err != nil {
+		return proto.LarkActionApproval{}
+	}
+	approval := proto.LarkActionApproval{ID: "odc_act" + id, ExpiresAt: time.Now().Add(gateGrantFor).UTC(), Audience: audience}
+	ctx, cancel := context.WithTimeout(ctx, gateReportFor)
+	defer cancel()
+	var reply struct {
+		OK bool `json:"ok"`
+	}
+	if err := n.peer.Call(ctx, proto.MethodLarkApprove, approval, &reply); err != nil || !reply.OK {
+		// Rolling upgrade: an older manager cannot register it. Do not invent a
+		// header; an enforcing Agent API refuses and its client can raise a decision.
+		return proto.LarkActionApproval{}
+	}
+	return approval
+}
+
 // grant lets c, which larkCheck let through for session and the way through says, go once through command's gate.
 func (p *gateProxy) grant(command, session string, c larkCall, through proto.LarkLetThrough) {
 	g := gateGrant{command: command, method: strings.ToUpper(c.Method), path: c.Path, query: gateQueryKey(c.Query), until: time.Now().Add(gateGrantFor),
@@ -422,6 +457,9 @@ func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		session, through = firstNonEmpty(gr.session, session), gr.through
 	}
+	upstreamPath := strings.TrimSuffix(up.Path, "/") + restPath
+	approval := gateActionApproval(r.Context(), n, !g.Relay && !larkRead(c) && through.Kind != "",
+		gateAgentAudience(upstreamPath, gateAuthValue(g.Auth.Value, g.Env)))
 	sw := &statusWriter{ResponseWriter: w}
 	if !larkRead(c) {
 		sw.reply = &replyCopy{}
@@ -442,7 +480,7 @@ func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			out := pr.Out
 			out.URL.Scheme, out.URL.Host, out.Host = up.Scheme, up.Host, up.Host
-			out.URL.Path = strings.TrimSuffix(up.Path, "/") + restPath
+			out.URL.Path = upstreamPath
 			out.URL.RawPath = strings.TrimSuffix(up.EscapedPath(), "/") + "/" + rest
 			out.URL.RawQuery = r.URL.RawQuery
 			for name := range out.Header {
@@ -454,6 +492,10 @@ func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				out.Header.Set("Origin", up.Scheme+"://"+up.Host)
 			}
 			out.Header.Set(g.Auth.Header, gateAuthValue(g.Auth.Value, g.Env))
+			if approval.ID != "" {
+				out.Header.Set("x-persona-decision", approval.ID)
+				out.Header.Set("x-persona-decision-expires", approval.ExpiresAt.Format(time.RFC3339Nano))
+			}
 		},
 		FlushInterval: -1, // streams (events, long polls) go as they come
 		ErrorLog:      log.New(io.Discard, "", 0),

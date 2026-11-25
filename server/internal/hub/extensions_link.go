@@ -719,8 +719,12 @@ func localizedPayload(payloads map[string]map[string]any, lang i18n.Lang) map[st
 // extTokenPrefix starts every extension's token (the manager makes them).
 const extTokenPrefix = "pext_"
 
-// roleExtension is an extension's token.
-const roleExtension = "extension"
+// roleExtension is an extension's token. roleDecision is the public,
+// single-request capability presented by the Agent API to consume an owner decision.
+const (
+	roleExtension = "extension"
+	roleDecision  = "decision"
+)
 
 // authorizeExtension asks the manager whose token tok is and whether it opens r's route on the hub's mux: the
 // principal (ok false: no such token), and when it does not open the route, the scope it lacks (opens false).

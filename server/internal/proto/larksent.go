@@ -3,11 +3,25 @@ package proto
 import (
 	"encoding/json"
 	"strings"
+	"time"
 )
 
 // MethodLarkSent is the node's request that tells the manager of a write its gate proxy forwarded and the API accepted
 // (node/gateproxy.go), so the manager keeps it in the sent-as-user ledger (docs/extensions/connectors.md "Sent as the user").
 const MethodLarkSent = "lark.sent"
+
+// MethodLarkApprove registers one gate-approved request before the proxy sends
+// it, so an independently enforcing API can consume the same one-use approval.
+const MethodLarkApprove = "lark.approve"
+
+// LarkActionApproval is a short-lived capability for one gate-approved write.
+// Its id is random; only the Agent credential's hash, never the credential or
+// request body, crosses this RPC.
+type LarkActionApproval struct {
+	ID        string    `json:"id"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Audience  string    `json:"audience"`
+}
 
 // How the node's gate let a write through (LarkSent.LetThrough.Kind), in the ledger's terms.
 const (

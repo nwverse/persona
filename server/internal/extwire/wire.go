@@ -24,6 +24,7 @@ var Routes = []string{
 	"/api/v1/plugins/",
 	"/api/v1/connectors",
 	"/api/v1/connectors/",
+	"POST /api/v1/connector-decisions/{id}/consume",
 	"/api/v1/bots/",
 	"/api/v1/channels/{id}/bind",
 	"/api/v1/mail/",

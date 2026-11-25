@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 	"unicode"
@@ -35,15 +36,17 @@ import (
 type outsideAnswer = assistantwire.OutsideDecisionAnswer
 
 type outsideDecision struct {
-	ID          string    `json:"id"`
-	Caller      string    `json:"caller"`
-	Ref         string    `json:"ref,omitempty"`
-	Fingerprint string    `json:"fingerprint"`
-	TodoID      string    `json:"todo_id,omitempty"`
-	AskTodoID   string    `json:"ask_todo_id"`
-	SourceKind  string    `json:"source_kind"`
-	SourceName  string    `json:"source_name"`
-	Ask         acceptAsk `json:"ask"`
+	ID          string                              `json:"id"`
+	Caller      string                              `json:"caller"`
+	Ref         string                              `json:"ref,omitempty"`
+	Fingerprint string                              `json:"fingerprint"`
+	TodoID      string                              `json:"todo_id,omitempty"`
+	AskTodoID   string                              `json:"ask_todo_id"`
+	SourceKind  string                              `json:"source_kind"`
+	SourceName  string                              `json:"source_name"`
+	Write       *assistantwire.OutsideWriteApproval `json:"write,omitempty"`
+	ConsumedAt  *time.Time                          `json:"consumed_at,omitempty"`
+	Ask         acceptAsk                           `json:"ask"`
 }
 
 type outsideCaller struct {
@@ -96,6 +99,14 @@ func cloneOutsideDecisions(in map[string]*outsideDecision) map[string]*outsideDe
 		}
 		cp := *rec
 		cp.Ask = copyAcceptAsk(&rec.Ask)
+		if rec.Write != nil {
+			write := *rec.Write
+			cp.Write = &write
+		}
+		if rec.ConsumedAt != nil {
+			consumed := *rec.ConsumedAt
+			cp.ConsumedAt = &consumed
+		}
 		out[id] = &cp
 	}
 	return out
@@ -127,6 +138,10 @@ func outsideView(rec *outsideDecision) assistantwire.OutsideDecision {
 	if a.OutsideAnswer != nil {
 		answer := *a.OutsideAnswer
 		out.Answer = &answer
+	}
+	if rec.ConsumedAt != nil {
+		consumed := *rec.ConsumedAt
+		out.ConsumedAt = &consumed
 	}
 	return out
 }
@@ -195,6 +210,14 @@ func normalizeOutsideDecision(in assistantwire.OutsideDecisionRequest) (reviewDe
 			fmt.Errorf("ref must be at most %d characters without '#'", decisionRefMax))
 	}
 	allowDefault := in.AllowDefault == nil || *in.AllowDefault
+	if in.Write != nil {
+		if allowDefault {
+			return reviewDecision{}, "", false, "", outsideErr(http.StatusBadRequest, "invalid_decision", errors.New("a write approval cannot have a default answer"))
+		}
+		if err := validateOutsideWrite(in.Write, d.Options); err != nil {
+			return reviewDecision{}, "", false, "", outsideErr(http.StatusBadRequest, "invalid_decision", err)
+		}
+	}
 	in.TodoID = strings.TrimSpace(in.TodoID)
 	in.Ref = strings.TrimSpace(in.Ref)
 	in.Title, in.Background, in.WhyOwner = d.Reason, background, d.WhyOwner
@@ -207,6 +230,41 @@ func normalizeOutsideDecision(in assistantwire.OutsideDecisionRequest) (reviewDe
 	raw, _ := json.Marshal(in)
 	sum := sha256.Sum256(raw)
 	return d, background, allowDefault, hex.EncodeToString(sum[:]), nil
+}
+
+func validateOutsideWrite(w *assistantwire.OutsideWriteApproval, options []DecisionOption) error {
+	if w.Version != 1 {
+		return errors.New("write.version must be 1")
+	}
+	if w.Audience == "" || strings.TrimSpace(w.Audience) != w.Audience || len(w.Audience) > 200 {
+		return errors.New("write.audience must be 1–200 trimmed characters")
+	}
+	switch w.Method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+	default:
+		return errors.New("write.method is not supported")
+	}
+	if !strings.HasPrefix(w.Path, "/agent/v1/") || strings.ContainsAny(w.Path, "?#\r\n") || len(w.Path) > 8192 {
+		return errors.New("write.path must be one concrete /agent/v1 path without query or fragment")
+	}
+	if len(w.Query) > 8192 || strings.ContainsAny(w.Query, "\r\n") {
+		return errors.New("write.query is too long or contains a newline")
+	}
+	hash, err := hex.DecodeString(w.BodySHA256)
+	if err != nil || len(hash) != 32 || strings.ToLower(w.BodySHA256) != w.BodySHA256 {
+		return errors.New("write.body_sha256 must be 64 lowercase hex characters")
+	}
+	if strings.TrimSpace(w.Account) != w.Account || len(w.Account) > 64 {
+		return errors.New("write.account must be at most 64 trimmed characters")
+	}
+	now := time.Now()
+	if w.ExpiresAt.IsZero() || !w.ExpiresAt.After(now) || w.ExpiresAt.After(now.Add(15*time.Minute)) {
+		return errors.New("write.expires_at must be in the next 15 minutes")
+	}
+	if w.ApproveOption == "" || exactDecisionOption(w.ApproveOption, options) != w.ApproveOption {
+		return errors.New("write.approve_option must exactly name the option that permits the write")
+	}
+	return nil
 }
 
 func (s *Service) outsideByRefLocked(caller *outsideCaller, ref, fingerprint string) (*outsideDecision, error) {
@@ -276,6 +334,9 @@ func (s *Service) raiseOutsideDecision(ctx context.Context, caller *outsideCalle
 
 	now := time.Now().UTC()
 	id := "odc_" + randomHex(8)
+	if in.Write != nil {
+		id = "odc_" + randomHex(16)
+	}
 	askTodoID := "todo_od_" + randomHex(8)
 	// This row is the decision's one owner-facing home, not a quiet background
 	// round: it must be in Needs-you lists and badges. NoCard below only keeps
@@ -296,8 +357,13 @@ func (s *Service) raiseOutsideDecision(ctx context.Context, caller *outsideCalle
 	if allowDefault && a.Reversible && !neverDefault(a.WhyOwner) {
 		a.Deadline = now.Add(decisionDefaultAfter)
 	}
+	var write *assistantwire.OutsideWriteApproval
+	if in.Write != nil {
+		cp := *in.Write
+		write = &cp
+	}
 	rec := &outsideDecision{ID: id, Caller: caller.key, Ref: strings.TrimSpace(in.Ref), Fingerprint: fingerprint,
-		TodoID: todoID, AskTodoID: askTodoID, SourceKind: caller.kind, SourceName: caller.name, Ask: copyAcceptAsk(&a)}
+		TodoID: todoID, AskTodoID: askTodoID, SourceKind: caller.kind, SourceName: caller.name, Write: write, Ask: copyAcceptAsk(&a)}
 
 	b.mu.Lock()
 	b.asks[askTodoID], b.outside[id] = &a, rec
@@ -528,6 +594,48 @@ func outsideHTTPCaller(r *http.Request) (*outsideCaller, error) {
 	return nil, outsideErr(http.StatusForbidden, "forbidden", i18n.ErrEnglish("http-status.forbidden"))
 }
 
+// consumeOutsideWrite atomically spends one owner-approved write. The Agent API
+// calls this without the original caller's credentials: the high-entropy
+// decision id is the capability, and the complete request fingerprint is
+// checked again before the persisted consumed marker is written.
+func (s *Service) consumeOutsideWrite(ctx context.Context, id string, in assistantwire.OutsideWriteApproval) (time.Time, error) {
+	b := &s.accept
+	b.writing.Lock()
+	defer b.writing.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.loadAcceptLocked(ctx) {
+		return time.Time{}, outsideErr(http.StatusServiceUnavailable, "store_unavailable", errAcceptStore)
+	}
+	rec := b.outside[id]
+	if rec == nil || rec.Write == nil {
+		return time.Time{}, outsideErr(http.StatusNotFound, "decision_not_found", errOutsideNotFound)
+	}
+	if rec.ConsumedAt != nil {
+		return time.Time{}, outsideErr(http.StatusConflict, "decision_consumed", errors.New("the write approval was already consumed"))
+	}
+	answer := rec.Ask.OutsideAnswer
+	if rec.Ask.AcceptedAt.IsZero() {
+		return time.Time{}, outsideErr(http.StatusConflict, "decision_unanswered", errors.New("the write decision has not been answered"))
+	}
+	if answer == nil || answer.AnsweredBy != assistantwire.OutsideAnswerOwner || exactDecisionOption(answer.Option, rec.Ask.Options) != rec.Write.ApproveOption {
+		return time.Time{}, outsideErr(http.StatusForbidden, "decision_not_approved", errors.New("the owner did not approve this write"))
+	}
+	now := time.Now().UTC()
+	if !rec.Write.ExpiresAt.After(now) {
+		return time.Time{}, outsideErr(http.StatusForbidden, "decision_expired", errors.New("the write approval has expired"))
+	}
+	if !reflect.DeepEqual(in, *rec.Write) {
+		return time.Time{}, outsideErr(http.StatusForbidden, "decision_scope_mismatch", errors.New("the request does not match the approved write"))
+	}
+	rec.ConsumedAt = &now
+	if err := s.saveAcceptErrLocked(ctx); err != nil {
+		rec.ConsumedAt = nil
+		return time.Time{}, outsideErr(http.StatusServiceUnavailable, "store_unavailable", errors.Join(errOutsideStore, err))
+	}
+	return rec.Write.ExpiresAt, nil
+}
+
 func writeOutsideError(w http.ResponseWriter, err error) {
 	var failure *outsideFailure
 	if errors.As(err, &failure) {
@@ -571,6 +679,25 @@ func (s *Service) outsideDecisionRoutes() {
 			}
 		}
 		writeOutsideError(w, err)
+	})
+	s.handle("POST /api/v1/decisions/{id}/consume", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(RoleHeader) != "decision" {
+			writeTypedNothing(w, http.StatusForbidden, "permission_denied", errors.New("only the Agent API may consume a write decision"))
+			return
+		}
+		var in assistantwire.OutsideWriteApproval
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&in); err != nil {
+			writeTypedNothing(w, http.StatusBadRequest, "invalid_decision", err)
+			return
+		}
+		expires, err := s.consumeOutsideWrite(r.Context(), r.PathValue("id"), in)
+		if err != nil {
+			writeOutsideError(w, err)
+			return
+		}
+		apierr.WriteJSON(w, map[string]any{"ok": true, "expires_at": expires})
 	})
 	s.handle("POST /api/v1/decisions/{id}/withdraw", func(w http.ResponseWriter, r *http.Request) {
 		caller, err := outsideHTTPCaller(r)

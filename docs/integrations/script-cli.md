@@ -103,6 +103,41 @@ A raise document contains the required question and its context, 2–4 options w
 
 Unlike `ask`, these commands never wait for an answer, reconnect to a blocking interaction, spool in standby or fall back to the terminal. A script polls with `get` at its own cadence. Raise documents and ids are bounded (64 KiB JSON input, 30-second request timeout); question text still goes to the owner's devices, so do not put secrets in it. The equivalent HTTP routes, complete response fields and `decisions.raise` extension scope are in `../protocol/protocol.md` ("Decisions raised outside a supervisor").
 
+### One exact Agent API write
+
+A script running on a computer with a Persona node can ask for one Agent API write by adding `write` to the decision. The card names the real method and path; the request body and token do not need to appear on it. The fingerprint covers the raw query, canonical JSON or raw-byte body hash, account, instance audience and expiry. The option that permits the write must be named exactly, and `allow_default` must be `false`.
+
+```json
+{
+  "title": "Allow Agent API POST /agent/v1/conversations/123/messages?",
+  "background": "A local script requested this exact write once. Approval expires in ten minutes.",
+  "why_owner": "visible_to_others",
+  "options": [
+    {"label": "Deny", "leads_to": "Nothing is sent"},
+    {"label": "Approve", "leads_to": "This exact request runs once"}
+  ],
+  "recommend": "Deny",
+  "cost_of_waiting": "The write stays blocked.",
+  "reversible": false,
+  "allow_default": false,
+  "write": {
+    "version": 1,
+    "audience": "agent-api:<sha256 of the full agent token>",
+    "method": "POST",
+    "path": "/agent/v1/conversations/123/messages",
+    "query": "",
+    "body_sha256": "<sha256 of the canonical JSON body>",
+    "account": "",
+    "expires_at": "<RFC 3339, at most 15 minutes ahead>",
+    "approve_option": "Approve"
+  }
+}
+```
+
+The Agent API's `ol.sh` implements this flow after `AGENT_APPROVAL_REQUIRED`: it raises the decision, waits for the owner, and retries the identical request once with `x-persona-decision` and `x-persona-decision-expires`. Denial never retries. The decision id is a 128-bit, one-use capability, not a long-term private key; changing any fingerprint field, using a default answer, or replaying it fails closed. The Agent API also persists consumption, so a restart does not make the id reusable.
+
+A write already approved through Persona's connector gate or node command gate does not raise this second decision. That gate's original card, rule, or **Always allow in this session** becomes a separate one-use action approval. A node gate sends that capability only to a concrete `/agent/v1/...` upstream and binds it to the injected Agent credential's hash; generic third-party gates receive no approval header. Session Always therefore covers repeated writes to the remembered route while every execution still consumes a fresh capability; without it, writes ask one at a time. Upgrade the manager before upgrading execution nodes and the Agent API server: an older manager cannot register an action approval, and the enforcing server refuses rather than bypassing it.
+
 | Exit code | `decision` |
 | --- | --- |
 | 0 | The request succeeded; a raise or poll may still be `pending` |

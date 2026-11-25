@@ -71,6 +71,8 @@ type (
 	Manifest           = connectorwire.Manifest
 )
 
+type ActionApprovalRegistrar = connectorwire.ActionApprovalRegistrar
+
 const (
 	StateOK            = connectorwire.StateOK
 	StateNotConfigured = connectorwire.StateNotConfigured
@@ -123,6 +125,12 @@ var (
 	Write      = connectorwire.Write
 	RecallerOf = connectorwire.RecallerOf
 	CheckKinds = connectorwire.CheckKinds
+)
+
+var (
+	ActionApprovalID            = connectorwire.ActionApprovalID
+	RegisterActionApproval      = connectorwire.RegisterActionApproval
+	WithActionApprovalRegistrar = connectorwire.WithActionApprovalRegistrar
 )
 
 // Egress is defined in the leaf library netproxy, so a connector built as a module reaches it too; the old name stays.

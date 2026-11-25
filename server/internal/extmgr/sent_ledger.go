@@ -58,6 +58,7 @@ type sentTrace struct {
 func (h *Manager) newConnectors(rules []connector.Rule) *connector.Registry {
 	r := connector.NewRegistry(rules)
 	r.SetSent(h.recordSent)
+	r.SetActionApprovals(h.registerActionApproval)
 	return r
 }
 
@@ -400,6 +401,26 @@ func recordedTarget(fields map[string]any) (map[string]any, string, error) {
 		brief = append(brief, name+" "+fmt.Sprint(v))
 	}
 	return target, strings.Join(brief, ", "), nil
+}
+
+// RecordNodeActionApproval answers lark.approve before a gate-approved write is
+// forwarded. The connected machine is authenticated here; no request body or
+// raw credential crosses the RPC, only the Agent credential's audience hash.
+func (h *Manager) RecordNodeActionApproval(ctx context.Context, machineID string, raw json.RawMessage) (any, error) {
+	if h.machineByID(machineID) == nil {
+		return nil, &rpc.Error{Code: extension.CodePermissionDenied, Message: "lark.approve: not from a computer of this manager"}
+	}
+	var p proto.LarkActionApproval
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, &rpc.Error{Code: "invalid_params", Message: "lark.approve: " + err.Error()}
+	}
+	if !validAgentAPIAudience(p.Audience) {
+		return nil, &rpc.Error{Code: "invalid_params", Message: "lark.approve: an Agent API audience is required"}
+	}
+	if err := h.actionApprovals.registerForAudience(p.ID, p.ExpiresAt, p.Audience); err != nil {
+		return nil, &rpc.Error{Code: "invalid_params", Message: "lark.approve: " + err.Error()}
+	}
+	return map[string]any{"ok": true}, nil
 }
 
 // RecordNodeSent answers a node's lark.sent (proto.MethodLarkSent, node/gateproxy.go): its gate proxy forwarded a write

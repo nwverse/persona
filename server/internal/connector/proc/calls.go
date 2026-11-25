@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connector/serve"
@@ -96,7 +97,23 @@ func (c *Conn) Collect(ctx context.Context) ([]connector.InboxThing, error) {
 	return out.Things, err
 }
 
+func actionRequestID() string {
+	var id [16]byte
+	_, _ = rand.Read(id[:])
+	return hex.EncodeToString(id[:])
+}
+
+func registerActionApproval(ctx context.Context, seed string) error {
+	return connector.RegisterActionApproval(ctx, connector.ActionApprovalID(seed), time.Now().Add(15*time.Minute).UTC())
+}
+
 func (c *Conn) Reply(ctx context.Context, r connector.InboxReply) error {
+	if r.ClientID == "" {
+		r.ClientID = actionRequestID()
+	}
+	if err := registerActionApproval(ctx, "reply:"+r.ClientID); err != nil {
+		return err
+	}
 	return c.call(ctx, serve.MReply, r, nil)
 }
 
@@ -162,10 +179,12 @@ func (c *Conn) Do(ctx context.Context, name string, args json.RawMessage) (strin
 // DoRef is Do with the message_ref the program answered, when it did (connector.RefActions): a program that does not
 // know the field answers the text alone, and the ref is empty.
 func (c *Conn) DoRef(ctx context.Context, name string, args json.RawMessage) (connector.DoResult, error) {
-	var id [16]byte
-	_, _ = rand.Read(id[:])
+	id := actionRequestID()
+	if err := registerActionApproval(ctx, "action:"+id); err != nil {
+		return connector.DoResult{}, err
+	}
 	var out serve.CallResult
-	err := c.call(ctx, serve.MDo, serve.DoParams{Name: name, Args: args, RequestID: hex.EncodeToString(id[:]), CallFrom: serve.CallFromContext(ctx)}, &out)
+	err := c.call(ctx, serve.MDo, serve.DoParams{Name: name, Args: args, RequestID: id, CallFrom: serve.CallFromContext(ctx)}, &out)
 	return connector.DoResult{Text: out.Text, MessageRef: out.MessageRef}, err
 }
 

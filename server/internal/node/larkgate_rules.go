@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -36,7 +37,29 @@ func larkDecision(cfg proto.AssistantLark, c larkCall) string {
 	if c.Gate < 0 || c.Gate >= len(cfg.Gates) {
 		return "confirm"
 	}
-	return decideLark(cfg.Gates[c.Gate].Rules, c)
+	rules := cfg.Gates[c.Gate].Rules
+	read := c.Method == "GET" || c.Method == "HEAD"
+	bodyScoped := read && slices.ContainsFunc(rules, func(candidate proto.LarkRule) bool {
+		return len(candidate.Body) > 0 &&
+			(candidate.Method == "*" || strings.EqualFold(candidate.Method, c.Method)) &&
+			pathMatches(candidate.Path, c.Path)
+	})
+	if action, ok := matchLark(rules, c); ok {
+		if read && action == "confirm" {
+			rule, _ := firstLark(rules, c)
+			if rule.Method == "*" && strings.Trim(rule.Path, "/") == "**" && len(rule.Body) == 0 && !bodyScoped {
+				return "allow"
+			}
+		}
+		return action
+	}
+	// A command gate's explicit exceptions come first. An ordinary GET/HEAD is
+	// a read even when the gate only declares its writes and a catch-all, but a
+	// body-scoped rule still has to match before that read can go.
+	if read && !bodyScoped {
+		return "allow"
+	}
+	return "confirm"
 }
 
 // larkRead: a call that only reads (lark-cli's own read risk or a command it does not have, a GET / HEAD).
@@ -45,15 +68,6 @@ func larkRead(c larkCall) bool {
 		return larkCLIReads(c.Risk)
 	}
 	return c.Method == "GET" || c.Method == "HEAD"
-}
-
-// decideLark: the action for a call, from the rules in order (the first match); none matching is confirmed.
-
-func decideLark(rules []proto.LarkRule, c larkCall) string {
-	if action, ok := matchLark(rules, c); ok {
-		return action
-	}
-	return "confirm"
 }
 
 // matchLark is the action of the first rule that matches the call.
@@ -167,6 +181,9 @@ func larkSummaryWithContext(gates []proto.CommandGate, calls []larkCall, context
 			b.WriteString("\n\n")
 		}
 		what := "写操作"
+		if larkRead(c) {
+			what = "读操作"
+		}
 		for _, a := range larkActions {
 			if a.re.MatchString(c.Method + " " + c.Path) {
 				what = a.what
