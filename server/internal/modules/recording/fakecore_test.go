@@ -284,7 +284,7 @@ func (s *Service) KB(context.Context) (*kb.Engine, error) {
 	}
 	e := &kb.Engine{Store: st, Logf: func(string, ...any) {}, TranscriptionReady: s.transcriptionReady,
 		ModelFor: func(string) kb.Model { return s.Model(kb.PurposeMeetingMinutes) }}
-	s.Recordings.Hook(e)
+	s.Recordings.Hook(e, kb.RecordingCore(e))
 	e.ObserveChanges()
 	s.eng = e
 	return e, nil

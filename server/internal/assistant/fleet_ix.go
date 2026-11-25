@@ -271,7 +271,13 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 		}
 	}
 	inAssistant := s.ixInAssistant(ctx, ix)
-	ix = nodeCard(ix, s.fleetStore() != nil, s.ixPolicy(ctx, ix).ConfirmOutbound, inAssistant)
+	inboxWholeBash := s.isInboxWholeBashAlways(ctx, ix)
+	if inboxWholeBash {
+		ix.AlwaysKeys = nil
+	}
+	confirms := s.ixPolicy(ctx, ix).ConfirmOutbound || inboxWholeBash ||
+		(ix.ToolName == "Bash" && len(ix.AlwaysKeys) == 0 && s.isInboxOrigin(ctx, ix.MachineID, ix.SessionID, false))
+	ix = nodeCard(ix, s.fleetStore() != nil, confirms, inAssistant)
 	if ix.Kind == proto.IxPermission {
 		l := s.lang(ctx)
 		ix.ToolTitle = personaToolTitle(l, ix.ToolName, ix.ToolInput)
@@ -329,6 +335,17 @@ func (s *Service) waitInteractionPrepared(ctx context.Context, ix proto.Interact
 // notification for server-owned proposal groups. The notification is closed
 // after the pending entry and its announcement exist, before this waiter blocks.
 func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction, prepared *preparedApproval, ready chan<- struct{}) (proto.Resolution, error) {
+	var registered func(*pending)
+	if ready != nil {
+		registered = func(*pending) { close(ready) }
+	}
+	return s.waitRegisteredInteraction(ctx, ix, prepared, registered)
+}
+
+func (s *Service) waitRegisteredInteraction(ctx context.Context, ix proto.Interaction, prepared *preparedApproval, registered func(*pending)) (proto.Resolution, error) {
+	// The node may send its first request while FleetUp is still restoring the last manager's cards.
+	// Do not let that recovery cancel a card this process is about to persist.
+	s.restoreInteractions(ctx)
 	ix = cleanTitle(ix)
 	// Only an operation registered by this process can advertise clarification.
 	ix.CanClarify = prepared != nil
@@ -351,6 +368,12 @@ func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction
 		restartPrepared := false
 		s.fleet.mu.Lock()
 		if p := s.fleet.interactions[ix.ID]; p != nil && p.local == nil {
+			if !p.claimed && len(p.ix.AlwaysKeys) > 0 && len(ix.AlwaysKeys) == 0 && ix.AlwaysHonored != nil && !*ix.AlwaysHonored {
+				// Reclaiming a resumable card after origin registration or a manager upgrade must not
+				// retain a previously stripped/disallowed Always option (#15267).
+				p.ix.AlwaysKeys = nil
+				p.ix.AlwaysHonored = ix.AlwaysHonored
+			}
 			if p.prepared != nil {
 				// The reconnecting hook is now the caller whose lifetime governs the
 				// initial wait. The disconnected context must not expire a card its
@@ -390,8 +413,8 @@ func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction
 			if ix.Kind == proto.IxElicitation && !s.elicitationReachable(ix) {
 				_ = s.resolve(ix.ID, proto.Resolution{Dismiss: true})
 			}
-			if ready != nil {
-				close(ready)
+			if registered != nil {
+				registered(p)
 			}
 			// Resumable node cards reconnect through reporter-less interaction.create requests; MCP elicitation cards
 			// are not resumable, so this branch never has a wait reporter to restore.
@@ -483,8 +506,8 @@ func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction
 	if prepared != nil {
 		s.startPreparedTimer(p)
 	}
-	if ready != nil {
-		close(ready)
+	if registered != nil {
+		registered(p)
 	}
 	resume := pushMCPInteraction(ctx, ix)
 	defer resume()
@@ -1131,8 +1154,24 @@ func (s *Service) finished(p *pending) {
 	}
 	s.channelsEnded(p.ix, how)
 	// the app marks a question the assistant answered, and why (docs/assistant/assistant.md)
-	s.hub.Tell(assistantwire.EventFleetResolved, done)
+	s.tellResolved(done)
 	s.publishSessions(p.ix.MachineID)
+}
+
+// The hub treats omissions from a reconnect inventory as resolutions. Order the read and the
+// write together so a delayed snapshot cannot remove a new card or restore a withdrawn one.
+func (s *Service) tellPendingInteractions() {
+	s.fleet.cardTell.Lock()
+	defer s.fleet.cardTell.Unlock()
+	s.fleet.cardEnd.Lock()
+	defer s.fleet.cardEnd.Unlock()
+	s.hub.Tell(assistantwire.EventFleetInteractions, assistantwire.FleetInteractions{Interactions: s.pendingInteractions()})
+}
+
+func (s *Service) tellResolved(done assistantwire.FleetResolved) {
+	s.fleet.cardEnd.Lock()
+	defer s.fleet.cardEnd.Unlock()
+	s.hub.Tell(assistantwire.EventFleetResolved, done)
 }
 
 // pendingInteractions is the authoritative pending inventory for transport and lifecycle operations.
@@ -1452,10 +1491,46 @@ func alwaysCard(ix proto.Interaction) bool {
 		len(ix.AlwaysKeys) <= maxAlwaysKeys && len(ix.Fields) == 0
 }
 
+type interactionOriginKey struct{}
+
+func withInteractionOrigin(ctx context.Context, origin string) context.Context {
+	return context.WithValue(ctx, interactionOriginKey{}, origin)
+}
+
+func interactionOrigin(ctx context.Context) string {
+	origin, _ := ctx.Value(interactionOriginKey{}).(string)
+	return origin
+}
+
+// isInboxOrigin checks the node's attested interaction.create origin hint first (covering the
+// first-turn window before Start records the origin and transient store errors), then the
+// manager's origin book. When failClosed is true, an unreadable origin book is treated as Inbox.
+func (s *Service) isInboxOrigin(ctx context.Context, machine, session string, failClosed bool) bool {
+	if interactionOrigin(ctx) == OriginInbox {
+		return true
+	}
+	b := &s.origins
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.originsLocked(ctx) {
+		return failClosed
+	}
+	o := b.m[session]
+	return o != nil && o.Origin == OriginInbox && (o.MachineID == "" || s.sameMachine(machine, o.MachineID))
+}
+
+// isInboxWholeBashAlways reports whether ix asks for a whole-tool "tool:Bash" session grant on an
+// Inbox handling conversation. Inbox turns process untrusted external messages, so a single Always
+// click on a benign read command must never auto-approve arbitrary later shell mutations (#15267).
+func (s *Service) isInboxWholeBashAlways(ctx context.Context, ix proto.Interaction) bool {
+	return slices.Contains(ix.AlwaysKeys, "tool:Bash") &&
+		s.isInboxOrigin(ctx, ix.MachineID, ix.SessionID, true)
+}
+
 // alwaysAllowed: every key ix names was granted with "Always allow in this session" in its conversation.
 func (s *Service) alwaysAllowed(ctx context.Context, ix proto.Interaction) (proto.Resolution, bool) {
 	st := s.fleetStore()
-	if st == nil || !alwaysCard(ix) {
+	if st == nil || !alwaysCard(ix) || s.isInboxWholeBashAlways(ctx, ix) {
 		return proto.Resolution{}, false
 	}
 	ok, err := st.AlwaysAllowed(ctx, ix.SessionID, ix.AlwaysKeys)
@@ -1480,6 +1555,10 @@ func (s *Service) keepAlways(ix proto.Interaction, r proto.Resolution) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), historyTimeout)
+	if s.isInboxWholeBashAlways(ctx, ix) {
+		cancel()
+		return
+	}
 	err := st.AllowAlways(ctx, ix.SessionID, ix.ToolName, ix.AlwaysKeys)
 	cancel()
 	if err != nil {
@@ -1579,12 +1658,17 @@ func (s *Service) cancelSessionInteractions(machineID, sessionID string) {
 // question asked again (#4568). A card that was on its way up to the user finds its route again (restoreRoute); one
 // the assistant was deciding on goes on (resumeDelegations). Both before the hub gets the full list (FleetUp).
 func (s *Service) restoreInteractions(ctx context.Context) {
-	st, ok := s.store().(interface {
-		ExpireStaleInteractions(ctx context.Context) ([]proto.Interaction, []string, error)
-	})
-	if !ok {
-		return
+	st, ok := s.store().(staleInteractionStore)
+	if ok {
+		s.fleet.restored.Do(func() { s.restoreStoredInteractions(context.WithoutCancel(ctx), st) })
 	}
+}
+
+type staleInteractionStore interface {
+	ExpireStaleInteractions(context.Context) ([]proto.Interaction, []string, error)
+}
+
+func (s *Service) restoreStoredInteractions(ctx context.Context, st staleInteractionStore) {
 	resumable, cancelled, err := func() (out []proto.Interaction, cancelled []string, err error) {
 		defer guard(&err) // a test's store may not keep the table
 		return st.ExpireStaleInteractions(ctx)
@@ -1602,7 +1686,31 @@ func (s *Service) restoreInteractions(ctx context.Context) {
 		}
 	}
 	for _, id := range cancelled {
-		s.hub.Tell(assistantwire.EventFleetResolved, assistantwire.FleetResolved{ID: id})
+		s.tellResolved(assistantwire.FleetResolved{ID: id})
+	}
+	for i := range resumable {
+		if s.isInboxWholeBashAlways(ctx, resumable[i]) {
+			resumable[i].AlwaysKeys = nil
+			notKept := false
+			resumable[i].AlwaysHonored = &notKept
+		}
+	}
+	if recStore, ok := s.store().(interactionRecorder); ok && len(cancelled) > 0 {
+		for _, id := range cancelled {
+			readCtx, cancel := context.WithTimeout(ctx, historyTimeout)
+			rec, err := func() (rec *db.InteractionRecord, err error) {
+				defer guard(&err)
+				return recStore.InteractionRecord(readCtx, id)
+			}()
+			cancel()
+			if err != nil {
+				s.logf("read invalidated interaction %s: %v", id, err)
+				continue
+			}
+			if rec != nil {
+				s.recordRestartInvalidation(ctx, rec.Interaction)
+			}
+		}
 	}
 	var back []proto.Interaction
 	s.fleet.mu.Lock()

@@ -179,9 +179,6 @@ func (h larkHost) RecallRun(messageID string) {
 	h.s.recallChannelRun(channel.Feishu, messageID, channel.ClientMsgID(channel.Feishu, messageID))
 }
 
-func (h larkHost) WorkbenchOn(f FeishuFeatures, ready bool) { h.s.workbenchOn(f, ready) }
-func (h larkHost) WorkbenchActive() bool                    { return h.s.workbench.on.Load() }
-
 func (h larkHost) ResolveTarget(ctx context.Context, t botTarget) (assistantwire.ChatResolved, error) {
 	rt, err := h.s.resolveBotTarget(ctx, t)
 	return chatResolved(rt), err
@@ -289,10 +286,6 @@ func (h larkHost) FeishuRuns() int                             { return len(h.s.
 func (h larkHost) VisiblePending() []proto.Interaction         { return h.s.visiblePendingInteractions() }
 func (h larkHost) PendingQuestion(ix proto.Interaction) string { return pendingQuestion(ix) }
 
-func (h larkHost) StandingBoardCommand(ctx context.Context) bool {
-	return h.s.standingBoardCommand(ctx)
-}
-
 func (h larkHost) MainChat(ctx context.Context) (string, string) {
 	cfg := h.s.settings(ctx)
 	return cfg.Main, cfg.mainRouteMachine()
@@ -356,6 +349,8 @@ func (h larkHost) AskSensitive(ctx context.Context, ix proto.Interaction) bool {
 }
 
 func (h larkHost) AskState(id string) (ended, pending bool) { return h.s.ixState(id) }
+
+func (h larkHost) AskPending(id string) (proto.Interaction, bool) { return h.s.pendingIx(id) }
 
 func (h larkHost) ResolveInteraction(ctx context.Context, id string, r proto.Resolution, action string) (bool, error) {
 	return h.s.resolveInteraction(ctx, channel.Feishu, id, r, action)
@@ -454,8 +449,6 @@ func (h larkHost) AgentGone(ix proto.Interaction) bool {
 func (h larkHost) ApprovalNudgeDeadline(ix proto.Interaction) (time.Time, bool) {
 	return h.s.approvalNudgeDeadline(ix)
 }
-
-func (h larkHost) BoardChanged() { h.s.boardChanged() }
 
 // ---- the to-dos of topics and of requests from elsewhere ----
 

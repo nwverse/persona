@@ -65,6 +65,7 @@ export interface Manifest {
    * executable; writes and arbitrary command lines are not part of this contract.
    */
   host_integrations?: HostIntegrationSpec[];
+  upgrade?: UpgradeSpec;
 }
 
 /**
@@ -136,6 +137,24 @@ export interface AuthSpec {
    * do leave it out of its pages.
    */
   page?: string;
+}
+
+/**
+ * What the extension asks of the hub around an automatic upgrade (docs "Backup before an upgrade"). The hub snapshots
+ * the data directory before every automatic upgrade whether or not this is there. Hubs before it refuse the manifest.
+ */
+export interface UpgradeSpec {
+  /** auto (the default): the upgrade goes ahead when the snapshot fails; required: no snapshot, no upgrade. */
+  backup?: string;
+  /**
+   * Before the snapshot the hub calls upgrade.prepare on the installed version's program; an error stops the upgrade.
+   */
+  prepare?: boolean;
+  /**
+   * Once the new version is up the hub calls its upgrade.health; an error rolls the upgrade back and restores the
+   * snapshot.
+   */
+  health_check?: boolean;
 }
 
 export interface Dependency {
@@ -4891,6 +4910,20 @@ export interface ConnectorKBItem {
    * recently). The knowledge base's selection keeps documents by them; leave out what the program cannot tell.
    */
   signals?: string[];
+  /**
+   * The content's identity across sources (feishu_doc:<obj_token>): items from two sources with the same key are kept
+   * once, with both in sources.
+   */
+  canonical_key?: string;
+  /** Other ids other sources store the same content under (a wiki node token). */
+  aliases?: string[];
+  /** Only grows: an item handed over with a lower revision than the stored one does not replace it. */
+  revision?: number;
+  body_hash?: string;
+  /** The item's text (a document as Markdown, a meeting's transcript), bounded by the source. */
+  content?: string;
+  /** Every place the content was read from. */
+  sources?: ConnectorKBSourceRef[];
   importance?: string;
   relevance?: number;
   tags?: string[];
@@ -4902,6 +4935,17 @@ export interface ConnectorKBItem {
   provenance?: Record<string, ConnectorKBProvenance>;
   /** The store's: the links the user removed, by list. A connector's is ignored. */
   excluded?: Record<string, string[]>;
+}
+
+/**
+ * One place a knowledge-base item was read from.
+ */
+export interface ConnectorKBSourceRef {
+  channel: string;
+  binding?: string;
+  account?: string;
+  entry?: string;
+  seen_at?: string;
 }
 
 /**
@@ -7349,6 +7393,12 @@ export interface MemoryEntriesResult {
   has_more: boolean;
   /** Opaque: what to send as after for the next page; required in practice whenever has_more is true. */
   after?: string;
+  /**
+   * The bytes of standing entries' text the program wants a standing channel to carry (its own setting, say). The hub
+   * keeps this budget apart from its own memory ledger's, caps it at 8192 and takes the largest any page states; left
+   * out or 0: 4096. Entries past it are left out, the most important kept.
+   */
+  standing_bytes?: number;
 }
 
 /**

@@ -16,6 +16,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/recordinghost"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // A module that is off keeps what the user has (docs/architecture/core-and-modules.md, the rule of #13430): with the
@@ -30,13 +31,12 @@ const (
 	moduleOffPending = "55555555-5555-4555-8555-555555555555" // a meeting whose minutes were not written yet
 )
 
-// moduleOffMinutes is the model's answer the fixture's minutes are written from.
-type moduleOffMinutes struct{}
-
-func (moduleOffMinutes) JSONMax(_ context.Context, _, _ string, _ int, out any) error {
-	return json.Unmarshal([]byte(`{"title": "Export review", "points": [{"text": "Entries over 4 MB are dropped by the export", "line": 2}],
-		"decisions": [{"text": "This version keeps the quota", "line": 3}]}`), out)
-}
+// moduleOffMinutes is the minutes the fixture's first recording has, as the recording module's minutes round leaves
+// them (the round is the module's own; a Core test writes the files it leaves).
+var moduleOffMinutes = kb.Minutes{Version: 1, Revision: 1, Title: "Export review", When: "today",
+	Points:    []kb.MinutesPoint{{Text: "Entries over 4 MB are dropped by the export", At: 10}},
+	Decisions: []kb.MinutesItem{{Text: "This version keeps the quota", At: 20}},
+	Markdown:  "# Export review\n\n## Points\n\n- [00:00:10] Entries over 4 MB are dropped by the export\n\n## Decisions\n\n- [00:00:20] This version keeps the quota"}
 
 // seedModuleOffRecordings writes the two recordings into dir the way a hub with the module does.
 func seedModuleOffRecordings(t *testing.T, dir string, now time.Time) {
@@ -45,8 +45,7 @@ func seedModuleOffRecordings(t *testing.T, dir string, now time.Time) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &kb.Engine{Store: st, Model: moduleOffMinutes{}, Owner: "Owner", Logf: func(string, ...any) {}}
-	e.SetRecordingProvider(kb.RecordingWriters(e))
+	e := &kb.Engine{Store: st, Owner: "Owner", Logf: func(string, ...any) {}}
 	put := func(id string, start time.Time, texts ...string) {
 		u := kb.RecordingUpload{Revision: 1, StartedAt: start, Duration: float64(10 * len(texts)), Language: "en-US", Device: "phone", Complete: true, Kind: kb.RecordingMeeting}
 		for i, text := range texts {
@@ -57,10 +56,62 @@ func seedModuleOffRecordings(t *testing.T, dir string, now time.Time) {
 		}
 	}
 	put(moduleOffRec, now.Add(-2*time.Hour), "Hello, today we review the export", "Ada says entries over 4 MB are dropped by the export", "Then this version keeps the quota zebrafish", "Bo adds the regression test by Friday")
-	if n := e.RecordingProvider().WriteMinutes(context.Background(), 2); n != 1 {
-		t.Fatalf("seed: wrote %d minutes, want 1", n)
+	// The photo, as the module's intake leaves it: the image, photos.json and photos.md, written through the store's
+	// own primitives (the intake is the module's; a Core test writes the files it leaves).
+	core, rid := kb.RecordingCore(e), recordingwire.ID(moduleOffRec)
+	book := recordingwire.PhotoBook{Next: 2, Rev: 1, Photos: []recordingwire.StoredPhoto{{N: 1, ID: moduleOffPhoto.ID, At: moduleOffPhoto.At,
+		Mime: moduleOffPhoto.Mime, Width: moduleOffPhoto.Width, Height: moduleOffPhoto.Height, Text: moduleOffPhoto.Text,
+		Caption: moduleOffPhoto.Caption, AddedAt: now.UTC(), Digest: moduleOffPhoto.Digest}}}
+	photos := core.Path(rid, recordingwire.DirAttachments)
+	if err := os.MkdirAll(photos, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	files := core.Locks().Files
+	files.Lock()
+	err = core.WriteDurable(filepath.Join(photos, book.Photos[0].FileName()), moduleOffPhoto.Data)
+	if err == nil {
+		err = core.PutPhotoBook(rid, &book, now.Add(-2*time.Hour), core.Zone())
+	}
+	files.Unlock()
+	if err != nil {
+		t.Fatalf("seed photo: %v", err)
+	}
+	// The minutes, as the module's round leaves them: minutes.json and minutes.md, and meta.json saying they are ready.
+	raw, err := json.MarshalIndent(moduleOffMinutes, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta map[string]any
+	metaPath := st.Path(kb.KindRecording, moduleOffRec, "meta.json")
+	if b, err := os.ReadFile(metaPath); err != nil || json.Unmarshal(b, &meta) != nil {
+		t.Fatalf("seed: meta.json: %v", err)
+	}
+	meta["minutes_version"], meta["minutes_rev"], meta["minutes_state"] = 1, 1, kb.MinutesReady
+	metaRaw, _ := json.MarshalIndent(meta, "", "  ")
+	for name, data := range map[string][]byte{"minutes.json": append(raw, '\n'), "minutes.md": []byte(moduleOffMinutes.Markdown + "\n"),
+		"meta.json": append(metaRaw, '\n')} {
+		if err := os.WriteFile(st.Path(kb.KindRecording, moduleOffRec, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	put(moduleOffPending, now.Add(-time.Hour), "The second meeting is about the schedule", "A proposal is due next Wednesday")
+}
+
+// moduleOffPhoto is the photo the fixture's first meeting holds: bytes that no decoder would accept, as the store
+// keeps what the phone sent.
+var moduleOffPhoto = kb.PhotoUpload{ID: "66666666-6666-4666-8666-666666666666", At: 12, Mime: kb.PhotoJPEG,
+	Data: []byte("\xff\xd8 photo bytes of the whiteboard \xff\xd9"), Width: 1600, Height: 1200, Text: "whiteboard", Caption: "Plan",
+	Digest: "66666666|photo"}
+
+// moduleOffGet is a GET with the given credentials role header ("" for none): the status, headers and raw body.
+func moduleOffGet(s *Service, path, role string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", path, nil)
+	if role != "" {
+		r.Header.Set(RoleHeader, role)
+	}
+	s.ServeHTTP(w, r)
+	return w
 }
 
 func moduleOffFiles(t *testing.T, dir string) map[string]string {
@@ -141,6 +192,37 @@ func TestStoredRecordingsOutliveTheirModule(t *testing.T) {
 	_ = json.Unmarshal(out["detail"], &d)
 	if code != http.StatusOK || d.Paused != kb.PausedModuleOff || !strings.Contains(string(d.Meta), `"minutes_state":"pending"`) {
 		t.Errorf("the pending recording's detail: %d, paused %q, meta %s", code, d.Paused, d.Meta)
+	}
+	// A stored photo's image is read with the module off, as the module served it: the stored bytes, their type, the
+	// headers; the same refusals for a missing photo or recording and for a device without full credentials.
+	photo := "/api/v1/recordings/" + moduleOffRec + "/photos/1"
+	if w := moduleOffGet(s, photo, ""); w.Code != http.StatusOK || w.Body.String() != string(moduleOffPhoto.Data) ||
+		w.Header().Get("Content-Type") != kb.PhotoJPEG || w.Header().Get("X-Content-Type-Options") != "nosniff" ||
+		w.Header().Get("Cache-Control") != "private, no-store" {
+		t.Errorf("the stored photo: %d %q %v", w.Code, w.Body.String(), w.Header())
+	}
+	if w := moduleOffGet(s, photo, roleFull); w.Code != http.StatusOK {
+		t.Errorf("the stored photo with full credentials: %d", w.Code)
+	}
+	if w := moduleOffGet(s, photo, "scoped"); w.Code != http.StatusForbidden {
+		t.Errorf("the stored photo without full credentials: %d", w.Code)
+	}
+	for path, want := range map[string]int{
+		"/api/v1/recordings/" + moduleOffRec + "/photos/2":                 http.StatusNotFound,
+		"/api/v1/recordings/" + moduleOffRec + "/photos/zero":              http.StatusNotFound,
+		"/api/v1/recordings/" + moduleOffPending + "/photos/1":             http.StatusNotFound,
+		"/api/v1/recordings/77777777-7777-4777-8777-777777777777/photos/1": http.StatusNotFound,
+	} {
+		if w := moduleOffGet(s, path, ""); w.Code != want {
+			t.Errorf("GET %s: %d, want %d", path, w.Code, want)
+		}
+	}
+	// What the module adds or removes about photos stays its own.
+	if code, _ := moduleOffRequest(t, s, "DELETE", "/api/v1/recordings/"+moduleOffRec+"/photos/1"); code != http.StatusNotFound && code != http.StatusMethodNotAllowed {
+		t.Errorf("deleting a photo through the module's route: %d without the module", code)
+	}
+	if code, _ := moduleOffRequest(t, s, "GET", "/api/v1/recordings/"+moduleOffRec+"/photos"); code != http.StatusNotFound {
+		t.Errorf("the module's photo list: %d without the module", code)
 	}
 	// Found by search: a line of the transcript, and the minutes.
 	for _, q := range []string{"zebrafish", "Export review"} {
@@ -249,5 +331,107 @@ func TestKBRecordingDeleteWithTheModule(t *testing.T) {
 	}
 	if code, _ := moduleOffRequest(t, s, "GET", "/api/v1/recordings"); code != http.StatusOK {
 		t.Errorf("GET /api/v1/recordings with the module: %d", code)
+	}
+}
+
+// The stored audio of a recording in flight is the module's input, never a thing the Core reads out (no route serves
+// it, with the module or without): with the module off its chunk files stay on disk byte for byte as they were,
+// and the module resumes from them when it is back.
+func TestStoredAudioStaysUntouchedWithoutTheModule(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	dir := t.TempDir()
+	st, err := kb.NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &kb.Engine{Store: st, Owner: "Owner", Logf: func(string, ...any) {}}
+	e.TranscriptionReady = func() bool { return true }
+	const id = "88888888-8888-4888-8888-888888888888"
+	u := kb.RecordingUpload{Revision: 1, StartedAt: now.Add(-time.Hour), Duration: 10, Language: "en-US", Device: "phone", Kind: kb.RecordingMeeting,
+		Segments: []kb.RecordingSegment{{Start: 0, End: 9, Text: "Hello"}}}
+	u.SetTranscription(kb.TranscriptionHub, nil)
+	if p, err := e.PutRecording(id, u, now); err != nil || p.Status != kb.RecordingStored {
+		t.Fatalf("seed: %+v %v", p, err)
+	}
+	pcm := make([]byte, 2*kb.AudioRate*2) // two seconds
+	for i := range pcm {
+		pcm[i] = byte(i*7 + 1)
+	}
+	// The audio, as the module's writers leave it: a chunk file named by its first sample (they are the module's; a
+	// Core test writes the file).
+	chunk := filepath.Join(id, "attachments", "audio", "0.pcm")
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, "recordings", chunk)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "recordings", chunk), pcm, 0o600); err != nil {
+		t.Fatalf("seed audio: %v", err)
+	}
+	before := moduleOffFiles(t, dir)
+	if before[chunk] != string(pcm) {
+		t.Fatalf("the fixture's chunk is not the stored audio (%d bytes)", len(before[chunk]))
+	}
+	f := newFakeHub()
+	f.mu.Lock()
+	f.hello.KB = &KBSettings{}
+	f.mu.Unlock()
+	ms := &memStore{}
+	s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return ms }, Logf: testLogf(t), KB: &KBOptions{Dir: dir},
+		ModulesOff: []string{recordinghost.ModuleID}}))
+	t.Cleanup(s.kbEnd)
+	if code, out := moduleOffRequest(t, s, "GET", "/api/v1/kb/recordings/"+id); code != http.StatusOK || !strings.Contains(string(out["detail"]), kb.PausedModuleOff) {
+		t.Errorf("the in-flight recording's detail: %d %s", code, out["detail"])
+	}
+	for _, path := range []string{"/api/v1/recordings/" + id + "/audio", "/api/v1/kb/recordings/" + id + "/audio"} {
+		if w := moduleOffGet(s, path, ""); w.Code != http.StatusNotFound {
+			t.Errorf("GET %s: %d, no route serves stored audio", path, w.Code)
+		}
+	}
+	ctx := context.Background()
+	kbEng(t, s).PruneRecordings(now)
+	for _, l := range s.kbLaneSet(&kbRounds{}).lanes {
+		l.run(ctx, kbEng(t, s))
+	}
+	if after := moduleOffFiles(t, dir); !reflect.DeepEqual(after, before) {
+		t.Errorf("recording files changed or appeared without the module")
+	}
+}
+
+// With the module the same Core route answers, with the same bytes and headers, and the module's own photo routes sit
+// beside it (one owner per route: registering both would have panicked).
+func TestStoredPhotoWithTheModule(t *testing.T) {
+	needsRecordingModule(t)
+	now := time.Now().Truncate(time.Second)
+	dir := t.TempDir()
+	seedModuleOffRecordings(t, dir, now)
+	f := newFakeHub()
+	f.mu.Lock()
+	f.hello.KB = &KBSettings{}
+	f.mu.Unlock()
+	ms := &memStore{}
+	s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return ms }, Logf: testLogf(t), KB: &KBOptions{Dir: dir}}))
+	t.Cleanup(s.kbEnd)
+	photo := "/api/v1/recordings/" + moduleOffRec + "/photos/1"
+	if w := moduleOffGet(s, photo, ""); w.Code != http.StatusOK || w.Body.String() != string(moduleOffPhoto.Data) || w.Header().Get("Content-Type") != kb.PhotoJPEG {
+		t.Errorf("the stored photo with the module: %d %q", w.Code, w.Body.String())
+	}
+	if code, _ := moduleOffRequest(t, s, "GET", "/api/v1/recordings/"+moduleOffRec+"/photos"); code != http.StatusOK {
+		t.Errorf("the module's photo list: %d", code)
+	}
+	if code, out := moduleOffRequest(t, s, "DELETE", photo); code != http.StatusOK || string(out["deleted"]) != "true" {
+		t.Errorf("the module's photo delete: %d %v", code, out)
+	}
+	if w := moduleOffGet(s, photo, ""); w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "photo_not_found") {
+		t.Errorf("a deleted photo: %d %s", w.Code, w.Body.String())
+	}
+	for _, n := range []string{"9", "0", "abc", "-1"} {
+		if w := moduleOffGet(s, "/api/v1/recordings/"+moduleOffRec+"/photos/"+n, ""); w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "photo_not_found") {
+			t.Errorf("photo %s: %d %s", n, w.Code, w.Body.String())
+		}
+	}
+	if code, _ := moduleOffRequest(t, s, "DELETE", "/api/v1/kb/recordings/"+moduleOffRec); code != http.StatusOK {
+		t.Fatalf("delete: %d", code)
+	}
+	if w := moduleOffGet(s, photo, ""); w.Code != http.StatusGone || !strings.Contains(w.Body.String(), "recording_deleted") {
+		t.Errorf("a photo of a deleted recording: %d %s", w.Code, w.Body.String())
 	}
 }

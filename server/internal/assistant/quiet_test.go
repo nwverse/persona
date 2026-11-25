@@ -23,13 +23,18 @@ func newQuietService(t testing.TB) (*Service, *fakeHub) {
 // newQuietServiceOn is newQuietService with st as its database (nil: none).
 func newQuietServiceOn(t testing.TB, st Store) (*Service, *fakeHub) {
 	t.Helper()
-	old := quietNoticeDelay
-	quietNoticeDelay = 30 * time.Millisecond
-	t.Cleanup(func() { quietNoticeDelay = old })
-	reachA, reachB, reachM := agentReachAttempts, agentReachBackoff, agentReachMax
-	agentReachAttempts, agentReachBackoff, agentReachMax = 2, time.Millisecond, 200*time.Millisecond
-	t.Cleanup(func() { agentReachAttempts, agentReachBackoff, agentReachMax = reachA, reachB, reachM })
+	if quietNoticeDelay != 30*time.Millisecond {
+		old := quietNoticeDelay
+		quietNoticeDelay = 30 * time.Millisecond
+		t.Cleanup(func() { quietNoticeDelay = old })
+	}
+	if agentReachAttempts != 2 || agentReachBackoff != time.Millisecond || agentReachMax != 200*time.Millisecond {
+		reachA, reachB, reachM := agentReachAttempts, agentReachBackoff, agentReachMax
+		agentReachAttempts, agentReachBackoff, agentReachMax = 2, time.Millisecond, 200*time.Millisecond
+		t.Cleanup(func() { agentReachAttempts, agentReachBackoff, agentReachMax = reachA, reachB, reachM })
+	}
 	s, f := newTaskServiceOn(t, st)
+	t.Cleanup(s.stopQuietTimers)
 	f.inbox = newFakeInbox()
 	shortSupervise(t, s)
 	f.mu.Lock()
@@ -566,13 +571,17 @@ func TestQueuedNeedsNoticeRecheckedAtDrain(t *testing.T) {
 			idleLark.Status = proto.StatusIdle
 			switch tc.mode {
 			case "unreachable":
+				f.mu.Lock()
 				f.sessionsFail["box"] = 100
+				f.mu.Unlock()
 				s.drainRelays("server", []proto.Session{idleLark})
 				time.Sleep(50 * time.Millisecond) // longer than the bounded retries, far below their cap
 				if q, sent := s.queuedFor("lark1"), f.sentTo("lark1"); q != 1 || sent != 0 {
 					t.Fatalf("an unreachable node was read as answered: %d queued, %d sent", q, sent)
 				}
+				f.mu.Lock()
 				f.sessionsFail["box"] = 0
+				f.mu.Unlock()
 				agentTurn(s, f, proto.StatusWorking, "", 0) // the node is back and the agent continues
 				s.drainRelays("server", []proto.Session{idleLark})
 			case "removed":

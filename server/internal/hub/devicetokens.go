@@ -92,6 +92,9 @@ type principal struct {
 	// extOpens, extScope: an extension's token opens the request's route (the manager said), else the scope it lacks.
 	extOpens bool
 	extScope string
+
+	// A persisted device credential supplied this identity. Pairing codes and extensions have IDs too.
+	registeredDevice bool
 }
 
 type principalKey struct{}
@@ -215,7 +218,7 @@ func (h *Hub) lookupToken(ctx context.Context, tok string) (principal, bool, err
 		}
 		c = cachedToken{at: time.Now(), used: time.Now()}
 		if dt != nil {
-			c.p = &principal{ID: dt.ID, Name: dt.Name, Role: dt.Role, Kind: dt.Kind, Machine: dt.MachineID, Scopes: dt.Scopes}
+			c.p = &principal{ID: dt.ID, registeredDevice: true, Name: dt.Name, Role: dt.Role, Kind: dt.Kind, Machine: dt.MachineID, Scopes: dt.Scopes}
 		}
 		t.mu.Lock()
 		if c.p != nil && t.isRevoked(c.p.ID) {

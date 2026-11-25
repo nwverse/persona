@@ -2,7 +2,7 @@ package kb
 
 import (
 	"encoding/json"
-	"errors"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"os"
 	"slices"
 	"time"
@@ -28,7 +28,7 @@ var trimKept = []string{"meta.json", "minutes.json", "minutes.md", meetingFile, 
 	recapMarkdown}
 
 // ErrTranscriptExpired: the recording was trimmed; there is no transcript left to make minutes of.
-var ErrTranscriptExpired = errors.New("the transcript expired; only the minutes are kept")
+var ErrTranscriptExpired = recordingwire.ErrTranscriptExpired
 
 // hasMinutes: recording id has minutes that can be read.
 func (s *Store) hasMinutes(id string) bool {

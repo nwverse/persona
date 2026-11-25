@@ -1,6 +1,248 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Activity" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activity"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "健身圆环"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アクティビティ"
+          }
+        }
+      }
+    },
+    "Add Protein in Health" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add Protein in Health"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在健康里添加蛋白质"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアでたんぱく質を追加"
+          }
+        }
+      }
+    },
+    "Add Water in Health" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add Water in Health"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在健康里添加喝水"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアで水分を追加"
+          }
+        }
+      }
+    },
+    "Changed elsewhere. Updated to the latest health items." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Changed elsewhere. Updated to the latest health items."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "别处刚改过，已更新"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ほかの端末で変更されました。最新の項目に更新しました。"
+          }
+        }
+      }
+    },
+    "Choose what appears in Health. Removing an item keeps its records." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose what appears in Health. Removing an item keeps its records."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择健康主页显示的项目。移除项目会保留记录。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアに表示する項目を選びます。項目を外しても記録は残ります。"
+          }
+        }
+      }
+    },
+    "Couldn't confirm delivery to Health. Open Health to check this message." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't confirm delivery to Health. Open Health to check this message."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このメッセージがヘルスケアに届いたか確認できませんでした。ヘルスケアで確認してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未能确认这句话是否送达健康，请打开健康查看。"
+          }
+        }
+      }
+    },
+    "Couldn't confirm sending to Health. Check Health before trying again. %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't confirm sending to Health. Check Health before trying again. %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアへの送信を確認できませんでした。再試行する前にヘルスケアを確認してください。%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未能确认是否交给健康，请先打开健康看看，再决定是否重试。%@"
+          }
+        }
+      }
+    },
+    "Enter something to tell Health." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter something to tell Health."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアに伝えたい内容を入力してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入要告诉健康的话。"
+          }
+        }
+      }
+    },
+    "First add Water in Health" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "First add Water in Health"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先在健康里添加喝水"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先にヘルスケアで水分を追加してください"
+          }
+        }
+      }
+    },
+    "Health Items" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Health Items"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "健康项"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケア項目"
+          }
+        }
+      }
+    },
+    "In Shortcuts, create an automation for Apple Watch Workout · Strength Training Starts, then add Tell Health with “Strength training has started”. Health plans today from your last workout. You can also say it in a Health chat. The system decides whether confirmation is needed." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In Shortcuts, create an automation for Apple Watch Workout · Strength Training Starts, then add Tell Health with “Strength training has started”. Health plans today from your last workout. You can also say it in a Health chat. The system decides whether confirmation is needed."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ショートカットで「Apple Watchワークアウト・筋力トレーニングの開始」のオートメーションを作り、「ヘルスケアに伝える」に「筋力トレーニングを始めました」と入力します。前回のワークアウトをもとに今日の計画を立てます。ヘルスケアのチャットで伝えることもできます。確認が必要かどうかはシステムが決めます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在快捷指令里创建自动化：“Apple Watch 体能训练 · 力量训练开始”，接着添加“告诉健康：力量训练开始了”。健康会按上次训练排好今天的计划。没配自动化，也能在健康对话里说；能否免确认由系统决定。"
+          }
+        }
+      }
+    },
     "Move the water extension's records and settings into Health and turn off the extension. Its water page on Android will disappear." : {
       "localizations" : {
         "en" : {
@@ -130,6 +372,248 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "本"
+          }
+        }
+      }
+    },
+    "Not Now [Health Items]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not Now"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂不"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今はしない"
+          }
+        }
+      }
+    },
+    "Open Persona to select and sync a hub before telling Health." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Persona to select and sync a hub before telling Health."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先にPersonaを開き、ハブを選んで同期してからヘルスケアに伝えてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先打开 Persona，选择并同步中枢，再告诉健康。"
+          }
+        }
+      }
+    },
+    "Send a sentence to Health, such as “Strength training has started”." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Send a sentence to Health, such as “Strength training has started”."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「筋力トレーニングを始めました」などのひと言をヘルスケアに送ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "把一句话交给健康，例如“力量训练开始了”。"
+          }
+        }
+      }
+    },
+    "Sending to Health…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sending to Health…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアに送信中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在交给健康…"
+          }
+        }
+      }
+    },
+    "Sent to Health" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sent to Health"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアに送りました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已交给健康"
+          }
+        }
+      }
+    },
+    "Strength Training" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Strength Training"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "筋力トレーニング"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "力量训练"
+          }
+        }
+      }
+    },
+    "Tell Health" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tell Health"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアに伝える"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "告诉健康"
+          }
+        }
+      }
+    },
+    "Tell Health ${text}" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tell Health ${text}"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "告诉健康 ${text}"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアに ${text} と伝える"
+          }
+        }
+      }
+    },
+    "Tell Health · Preview" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tell Health · Preview"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアに伝える · プレビュー"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "告诉健康 · 预览"
+          }
+        }
+      }
+    },
+    "This hub doesn't support Tell Health yet. Update the hub first." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This hub doesn't support Tell Health yet. Update the hub first."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このハブはまだ「ヘルスケアに伝える」に対応していません。先にハブを更新してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台中枢还不支持“告诉健康”，请先更新中枢。"
+          }
+        }
+      }
+    },
+    "This text is too long. Send a shorter message to Health." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This text is too long. Send a shorter message to Health."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文章が長すぎます。短くしてヘルスケアに送ってください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这段话太长了，请缩短后再告诉健康。"
           }
         }
       }
@@ -1280,6 +1764,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "すべて表示"
+          }
+        }
+      }
+    },
+    "What would you like to track?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What would you like to track?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "想记录什么？"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "何を記録しますか？"
           }
         }
       }
@@ -9049,6 +9555,29 @@
       },
       "extractionState" : "manual"
     },
+    "%@ %@ per core" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ per core"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ コアあたり %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 每核 %2$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "%@ %@ used" : {
       "localizations" : {
         "zh-Hans" : {
@@ -11449,6 +11978,29 @@
           }
         }
       }
+    },
+    "%@ per core" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ per core"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コアあたり %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每核 %1$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "%@ project" : {
       "localizations" : {
@@ -17527,13 +18079,13 @@
               "one" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%1$lld under heavy load"
+                  "value" : "%1$lld with high readings"
                 }
               },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%1$lld under heavy load"
+                  "value" : "%1$lld with high readings"
                 }
               }
             }
@@ -17542,13 +18094,13 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld台が高負荷"
+            "value" : "%1$lld台の指標が高め"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld 台负载偏高"
+            "value" : "%1$lld 台指标偏高"
           }
         }
       },
@@ -29677,6 +30229,29 @@
         }
       }
     },
+    "Agents you read stay where they were, marked as seen, until you pull down to refresh." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agents you read stay where they were, marked as seen, until you pull down to refresh."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確認したエージェントは、引き下げて更新するまで、確認済みとしてその場に残ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "看过的 Agent 会以「已看」留在原处，下拉刷新后才移走。"
+          }
+        }
+      }
+    },
     "Agents · %lld" : {
       "shouldTranslate" : true,
       "localizations" : {
@@ -33229,6 +33804,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "An agent you open or mark as seen from Unread or Just Finished keeps its place, marked as seen, until you pull down to refresh, tap Clear Seen or choose a filter. With Leave When the Chat Closes it moves to Seen as soon as you leave its chat." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "An agent you open or mark as seen from Unread or Just Finished keeps its place, marked as seen, until you pull down to refresh, tap Clear Seen or choose a filter. With Leave When the Chat Closes it moves to Seen as soon as you leave its chat."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「未確認」や「完了したばかり」から開いたり確認済みにしたりしたエージェントは、引き下げて更新するか、「確認済みを片付ける」をタップするか、フィルタを選ぶまで、確認済みとしてその場に残ります。「チャットを閉じたら移す」では、チャットを閉じるとすぐに確認済みに移ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从「完成未看」或「刚做完待看」打开或标为已看的 Agent，会以「已看」留在原处，直到你下拉刷新、点「清理已看」或选择筛选。选「离开就移走」时，离开对话就会移到「已看」。"
+          }
+        }
+      }
     },
     "An extension market is an index of extensions published by a repository or website. Add one to list its extensions here and install them directly." : {
       "localizations" : {
@@ -41755,6 +42353,29 @@
         }
       }
     },
+    "Change in Settings" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change in Settings"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定で変更"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "去设置里修改"
+          }
+        }
+      }
+    },
     "check and tick [To-dos Line]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -50022,6 +50643,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Clear Seen (%lld)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Seen (%lld)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確認済みを片付ける（%lld）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清理已看（%lld）"
+          }
+        }
+      }
     },
     "Clear Sign-in for %@?" : {
       "localizations" : {
@@ -88726,7 +89370,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "CPU高負荷"
+            "value" : "CPU使用率が高い"
           }
         },
         "zh-Hans" : {
@@ -99422,6 +100066,29 @@
         }
       }
     },
+    "Leave When the Chat Closes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leave When the Chat Closes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "チャットを閉じたら移す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离开就移走"
+          }
+        }
+      }
+    },
     "Leave Worktree" : {
       "localizations" : {
         "en" : {
@@ -101416,51 +102083,28 @@
       },
       "extractionState" : "manual"
     },
-    "Load %lld%%" : {
+    "Load %@ per core" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Load %1$lld%%"
+            "value" : "Load %1$@ per core"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "負荷%1$lld%%"
+            "value" : "負荷 コアあたり %1$@"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "负载 %1$lld%%"
+            "value" : "负载 每核 %1$@"
           }
         }
       },
       "extractionState" : "manual"
-    },
-    "Load %lld%% [Home Widgets]" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Load %lld%%"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "负载 %lld%%"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "負荷 %lld%%"
-          }
-        }
-      }
     },
     "Load (1 min)" : {
       "localizations" : {
@@ -101733,6 +102377,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "加载更早的回复"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Load is the number of threads running or waiting for a CPU, averaged over a minute (Linux also counts threads waiting for the disk). It isn't a percentage: above 1 per core, some threads are waiting. On a Mac, work at background priority may run on only some of the cores, so threads can wait while CPU stays low." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Load is the number of threads running or waiting for a CPU, averaged over a minute (Linux also counts threads waiting for the disk). It isn't a percentage: above 1 per core, some threads are waiting. On a Mac, work at background priority may run on only some of the cores, so threads can wait while CPU stays low."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "負荷は、実行中またはCPUを待っているスレッドの数の1分平均です（Linuxではディスクを待つスレッドも数えます）。使用率ではありません。コアあたり1を超えると、待っているスレッドがあります。Macではバックグラウンド優先度の処理が一部のコアでしか動かないことがあり、CPU使用率が低くても待ちが出ます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "负载 = 正在运行和排队等 CPU 的线程数（1 分钟平均；Linux 上也算等磁盘的线程），不是占用率；每核超过 1 表示有线程在等；Mac 上后台优先级的任务可能只用部分核心，所以 CPU 不高时也会排队。"
           }
         }
       },
@@ -157112,6 +157779,29 @@
       },
       "extractionState" : "manual"
     },
+    "Seen Agents" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seen Agents"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確認済みのエージェント"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "看过的 Agent"
+          }
+        }
+      }
+    },
     "Seen [State Names]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -169469,6 +170159,29 @@
       },
       "extractionState" : "manual"
     },
+    "Stay Until Refresh" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stay Until Refresh"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新まで残す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "留到刷新"
+          }
+        }
+      }
+    },
     "Step %lld of %lld" : {
       "localizations" : {
         "en" : {
@@ -174403,6 +175116,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ToDoから外しました"
+          }
+        }
+      }
+    },
+    "Takes the agents you have read out of this section." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Takes the agents you have read out of this section."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確認したエージェントをこのセクションから外します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "把你看过的 Agent 移出这一段。"
           }
         }
       }
@@ -221821,19 +222557,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agents list layout rows cards compact"
+            "value" : "Agents list layout rows cards compact seen agents stay refresh"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agents 列表 布局 行 卡片 紧凑"
+            "value" : "Agents 列表 布局 行 卡片 紧凑 看过的 Agent 已看 留到刷新"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agents 一覧 レイアウト 行 カード コンパクト"
+            "value" : "Agents 一覧 レイアウト 行 カード コンパクト 確認済みのエージェント 更新まで残す"
           }
         }
       }
@@ -235105,6 +235841,182 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "显示占用空间的内容"
+          }
+        }
+      }
+    },
+    "Add entry" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add entry"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加条目"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "項目を追加"
+          }
+        }
+      }
+    },
+    "Each entry has its own secret, stored separately and never shown again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Each entry has its own secret, stored separately and never shown again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每个条目都有单独的密钥，单独存储且保存后不再显示。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "各項目には個別のシークレットがあり、別々に保存され、保存後は再表示されません。"
+          }
+        }
+      }
+    },
+    "Entry %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entry %1$lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "条目 %1$lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "項目 %1$lld"
+          }
+        }
+      }
+    },
+    "Remove entry" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove entry"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除条目"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "項目を削除"
+          }
+        }
+      }
+    },
+    "Save this entry before setting its secret." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Save this entry before setting its secret."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存此条目后才能设置密钥。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この項目を保存してからシークレットを設定してください。"
+          }
+        }
+      }
+    },
+    "Saving a changed address clears that entry's secret." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saving a changed address clears that entry's secret."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存更改后的地址会清除该条目的密钥。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更したアドレスを保存すると、その項目のシークレットは消去されます。"
+          }
+        }
+      }
+    },
+    "Secret" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "密钥"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "シークレット"
+          }
+        }
+      }
+    },
+    "The entry and its saved secret are deleted when you save." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The entry and its saved secret are deleted when you save."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存时将删除此条目及其已保存的密钥。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存すると、この項目と保存済みのシークレットが削除されます。"
           }
         }
       }

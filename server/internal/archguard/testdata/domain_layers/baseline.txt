@@ -17,7 +17,7 @@
 # These packages predate the rules; their counts only fall; do not copy their shapes. Copy server/internal/domainkit,
 # server/internal/agentref and its adapter, and the compliant twins in
 # server/internal/archguard/testdata/domainrules/planted (assistant/fleetcount and its adapter), or start with
-# python3 scripts/new_domain_slice.py. assistant/chatsearch depends on impure packages (prompts, transcript, lazyre, compat, proto, the
+# python3 scripts/gen/new_domain_slice.py. assistant/chatsearch depends on impure packages (prompts, transcript, lazyre, compat, proto, the
 # SDK's wire and golang.org/x/text): its imports stay frozen here until it is converted.
 cmd/persona-link app-named-primitive 1
 internal/agents app-exported-record 23
@@ -169,7 +169,7 @@ internal/kb app-exported-record ProjectRef #13784 #13891 #13914 #14029 #14104 #1
 internal/kb app-exported-record ProjectTree #13784 #13891 #13914 #14029 #14104 #14362 #14934
 internal/kb app-exported-record TreeError #13784 #13891 #13914 #14029 #14104 #14362 #14934
 internal/kb app-exported-record TreeMove #13784 #13891 #13914 #14029 #14104 #14362 #14934
-internal/kb app-named-primitive 4
+internal/kb app-named-primitive 1
 internal/lark app-exported-record 2
 internal/larkperson app-exported-record ConversationScope #13145
 internal/larkperson app-exported-record DeliveryRequest #13145
@@ -212,6 +212,7 @@ internal/modules/phone-extra/iphone app-exported-record 12
 internal/modules/phone-extra/iphonectl app-exported-record 34
 internal/modules/phone-extra/iphonectl app-named-primitive 3
 internal/modules/recording app-named-primitive 1
+internal/modules/recording/writers app-named-primitive 3
 internal/modules/screen-share/screenlink app-exported-record 5
 internal/modules/screen-share/vncbench app-named-primitive 1
 internal/modules/voice app-exported-record 6

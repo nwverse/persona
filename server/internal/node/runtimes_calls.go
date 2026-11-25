@@ -203,7 +203,9 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 	switch method {
 	case "session.items":
 		if p.UserInputs {
-			index, err := n.runtimeUserInputs(ctx, p.SessionID, func(params any) (json.RawMessage, error) { return call("session.items", params) })
+			index, err := n.runtimeUserInputs(ctx, p.SessionID, p.BeforeSeq, func(params any) (json.RawMessage, error) {
+				return call("session.items", params)
+			})
 			return index, err, true
 		}
 		out, err := call("session.items", params)
@@ -389,6 +391,11 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 			if s.SessionID == p.SessionID {
 				info["cwd"], info["model"], info["agent"], info["last_activity"] = s.Cwd, s.Model, s.Agent, s.UpdatedAt
 				info["permission_mode"], info["effort"] = s.PermissionMode, s.Effort
+				if conversation, ok := strings.CutPrefix(s.SessionID, agyAgent+"-"); h.agent() == agyAgent && ok {
+					if workers := n.agySwarmWorkers(conversation); len(workers) > 0 {
+						info["swarm_workers"] = workers
+					}
+				}
 				if h.agent() == agyAgent {
 					if s.ContextTokens > 0 || s.OutputTokens > 0 {
 						info["context_tokens"] = int(s.ContextTokens)

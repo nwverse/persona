@@ -44,11 +44,45 @@ import PersonaWire
         #expect(state(o.land([machine: [session(state: "unread", updated: 101)]], at: t0 + 2)) == .idle)
     }
 
-    @Test func theHubRecordingItLetsItGo() {
+    @Test func aRecordedMarkSettlesForFifteenSecondsFromItsFirstConfirmation() {
         var o = marked()
-        let out = o.land([machine: [session(state: "idle", seen: 500)]], at: t0 + 1)
-        #expect(state(out) == .idle)
+        let recorded = session(state: "idle", seen: 500)
+        _ = o.land([machine: [recorded]], at: t0 + 1)
+        #expect(o.marks[key] != nil)
+        // Another list can still carry the pre-open row. It stays seen, and the recorded mark is never sent again.
+        #expect(state(o.land([machine: [session(state: "unread")]], at: t0 + 2)) == .idle)
+        #expect(o.due(at: t0 + SeenOutbox.confirmWithin + 1).isEmpty)
+        #expect(o.nextDue(at: t0 + SeenOutbox.confirmWithin + 1) == nil)
+        #expect(o.unanswered(group: "", at: t0 + SeenOutbox.confirmWithin + 1).isEmpty)
+        // A repeated confirmation does not move the first confirmation's deadline.
+        _ = o.land([machine: [recorded]], at: t0 + 5)
+        #expect(state(o.land([machine: [session(state: "unread")]], at: t0 + 15.999)) == .idle)
+        #expect(o.marks[key] != nil)
+        #expect(state(o.land([machine: [session(state: "unread")]], at: t0 + 16.001)) == .unread)
         #expect(o.marks.isEmpty)
+    }
+
+    @Test func aSettlingMarkHoldsOnlyOldSeenAtAndEndsOnNewActivity() {
+        var o = marked()
+        let recorded = session(state: "idle", seen: 500)
+        _ = o.land([machine: [recorded]], at: t0 + 1)
+        #expect(state(o.land([machine: [session(state: "unread", seen: 0)]], at: t0 + 2)) == .idle)
+        // A list that already carries the authoritative seen_at is not overwritten by the settling hold.
+        #expect(state(o.land([machine: [session(state: "unread", seen: 500)]], at: t0 + 2)) == .unread)
+        #expect(o.marks[key] != nil)
+
+        let activities = [
+            (session(state: "unread", updated: 150), AgentState.unread),
+            (session(state: "working"), AgentState.working),
+            (session(state: "needs_you"), AgentState.needsYou),
+        ]
+        for (activity, expected) in activities {
+            var outbox = marked()
+            _ = outbox.land([machine: [recorded]], at: t0 + 1)
+            #expect(state(outbox.land([machine: [session(state: "unread")]], at: t0 + 2)) == .idle)
+            #expect(state(outbox.land([machine: [activity]], at: t0 + 3)) == expected)
+            #expect(outbox.marks.isEmpty)
+        }
     }
 
     @Test func aTurnFinishedAfterTheMarkIsUnread() {
@@ -77,7 +111,7 @@ import PersonaWire
         #expect(o.marks[key] != nil)
     }
 
-    @Test func aStaleJustFinishedFrameStaysSeenUntilAcknowledgedOrANewTurn() throws {
+    @Test func aStaleJustFinishedFrameStaysSeenThroughSettlingOrUntilANewTurn() throws {
         var row = session(state: "idle")
         row.work = try JSON.decoder.decode(WorkState.self, from: Data(#"{"phase":"done","line":"Merged","just_finished":true}"#.utf8))
         var outbox = SeenOutbox()
@@ -93,7 +127,8 @@ import PersonaWire
         row.seenAt = row.seenAt?.addingTimeInterval(10)
         row.markLocallySeen()
         _ = outbox.land([machine: [row]], at: t0 + 1)
-        #expect(outbox.marks.isEmpty)
+        #expect(outbox.marks[key] != nil)
+        #expect(outbox.due(at: t0 + SeenOutbox.confirmWithin + 1).isEmpty)
     }
 
     @Test func openingAndMarkingAllClearJustFinishedBeforeTheHubAnswers() throws {
@@ -154,6 +189,31 @@ import PersonaWire
         #expect(outbox.unanswered(group: "", at: t0) == [key])
         outbox.answered(key, markID: current)
         #expect(outbox.unanswered(group: "", at: t0).isEmpty)
+    }
+
+    @Test func returningToASettlingChatDoesNotSendAgain() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let hub = FakeHub(), model = AppModel(stateFolder: folder), socket = SyncSocket()
+        var sent: [String] = []
+        socket.onReceive = { frame in
+            if frame["type"] as? String == "seen", let id = frame["session_id"] as? String { sent.append(id) }
+        }
+        model.linkHooksForTests = (try #require(hub.client.transport), { socket })
+        model.connectOnly(.demo)
+        socket.deliver?(Data(#"{"type":"hello","features":[]}"#.utf8))
+        model.applySessions([machine: [session(state: "unread")]])
+        model.visibleSession = key
+        model.markSeen(key)
+        #expect(sent == [key.sessionID])
+
+        model.applySessions([machine: [session(state: "idle", seen: 500)]])
+        sent = []
+        model.markSeen(key) // returning to the chat while the recorded mark settles
+        #expect(sent.isEmpty)
+        model.forgetSeen()
+        model.markSeen(key) // an already-seen chat without a settling mark keeps the old direct send
+        #expect(sent == [key.sessionID])
     }
 
     @Test func aReturningPairingRetriesAndAFreshPairingGetsNoOldMarks() async throws {

@@ -85,6 +85,27 @@
     }
   },
   {
+    "name": "ask_user_withdraw",
+    "description": "Withdraw a pending ask_user question card created by this conversation when it is no longer needed. Only cancels this conversation's own ask_user question; another conversation's card and user-owned approvals, plans or screen dialogs are rejected. Repeated calls on an already-ended card of this conversation are idempotent.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "interaction_id"
+      ],
+      "properties": {
+        "interaction_id": {
+          "type": "string",
+          "description": "the pending ask_user interaction ID (ix_…)"
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional short reason why the question is no longer needed"
+        }
+      }
+    },
+    "defer_loading": true
+  },
+  {
     "name": "notify_user",
     "description": "Send the user a push notification right now (works when the app is closed). Tapping it opens this conversation. Use for results of scheduled runs and anything time-sensitive; ordinary replies already notify. In the hub's push grading, a notice from a conversation other than the main one is held for the briefing instead of alerting unless it is P0; the tool answer then says it was moved to the briefing, so treat the user as not alerted.",
     "input_schema": {
@@ -1850,7 +1871,7 @@
   },
   {
     "name": "model_profiles_list",
-    "description": "List editable model profiles, current profile, changed fields, rollback and recent audit events. Profiles contain model settings only, never credentials.",
+    "description": "List profiles, active profile, drift, rollback previews and audit events. Model settings only, never credentials.",
     "input_schema": {
       "type": "object",
       "properties": {},
@@ -1859,7 +1880,7 @@
   },
   {
     "name": "model_profile_get",
-    "description": "Inspect one model profile by id. See its purpose bindings, launcher model fields and named execution tiers (the Agent presets). Add, change or remove a tier with persona_settings key model_profiles.tiers; other fields are edited through the model-profiles HTTP API. Saving does not apply purpose or launcher settings.",
+    "description": "Inspect a profile. Edit bindings with persona_settings model_profiles.bindings, tiers with model_profiles.tiers, or capture with model_profile_capture. Saving does not apply purposes/launchers.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -1877,7 +1898,7 @@
   },
   {
     "name": "model_profile_switch",
-    "description": "Switch atomically to a model profile by id when the user asks (for example economy or performance). Saves a before-image for model_profile_rollback and records actor/time. Applies on next model call or Agent start; does not interrupt running work. Inspect profiles first; do not assume economy needs any particular model.",
+    "description": "Switch atomically to a profile by id; inspect first. Saves a rollback point and affects new model calls/Agent starts, not running work.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -1895,11 +1916,29 @@
   },
   {
     "name": "model_profile_rollback",
-    "description": "Undo the last model-profile switch using its saved before-image. Restores only touched model settings, not launcher credentials. Inspect the rollback preview with model_profiles_list first; a second rollback redoes the switch.",
+    "description": "Undo the latest profile switch, restoring touched model settings only. Inspect the preview first; another rollback may redo it.",
     "input_schema": {
       "type": "object",
       "properties": {},
       "additionalProperties": false
+    },
+    "defer_loading": true
+  },
+  {
+    "name": "model_profile_capture",
+    "description": "Capture current purposes/launcher model fields into an existing profile with exact before/after phone approval. Preserves tiers, rechecks revision and reads back. Does not change current configuration; switch to apply.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Existing profile id from model_profiles_list"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ]
     },
     "defer_loading": true
   },

@@ -54,8 +54,9 @@ async function fixture(t, extra = {}) {
   await until('rewind inventory', () => node.last('runtime.sessions')?.sessions.length)
   const calls = () => readFileSync(join(home, 'calls.jsonl'), 'utf8').split('\n').filter(Boolean).map(JSON.parse)
   const rewind = (extra = {}) => node.peer.call('session.rewind', { session_id: SESSION, prompt: 'Repeat', occurrence: 1, prompts_after: 0, restore: 'conversation', ...extra })
-  const restart = async () => {
+  const restart = async (update) => {
     await runtime.stop()
+    await update?.()
     const before = node.all('runtime.sessions').length
     runtime = createAgyRuntime(options)
     runtime.start()
@@ -272,6 +273,147 @@ test('a restart changes the history only when projected steps were outstanding (
   assert.deepEqual(texts(restarted), records.map((step) => step.content))
   await restart()
   assert.equal((await items()).history, restarted.history, 'nothing was outstanding')
+})
+
+test('a companion restart preserves a settled Persona-owned ACP turn while the native summary lags (#12003)', async (t) => {
+  const { node, runtime, home, transcript, db, calls, restart } = await fixture(t, {
+    promptPlan: [{ reply: 'Third answer', export: true }],
+  })
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+  await until('Persona-owned ACP prompt settled', () => runtime.idle())
+  const prompts = () => calls().filter((call) => call.method === 'session/prompt').length
+  assert.equal(prompts(), 1)
+  const exported = readFileSync(transcript, 'utf8').trim().split('\n').map(JSON.parse)
+  assert.deepEqual(exported.slice(-2).map((step) => step.content), ['Third', 'Third answer'])
+  const summary = db.prepare('SELECT status, step_count FROM conversation_summaries WHERE conversation_id = ?').get(RAW)
+  assert.equal(summary.status, 'CASCADE_RUN_STATUS_IDLE')
+  assert.ok(summary.step_count <= exported.at(-1).step_index, 'the native summary still lags the export')
+  const markerPath = join(home, 'config/brain', RAW, '.persona-turn-completion')
+  const marker = readFileSync(markerPath, 'utf8')
+  assert.ok(!marker.includes('Third'), 'the marker stores hashes, not prompt or reply text')
+  if (process.platform !== 'win32') assert.equal(statSync(markerPath).mode & 0o777, 0o600)
+
+  await restart()
+  const row = node.last('runtime.sessions').sessions.find((session) => session.session_id === SESSION)
+  assert.equal(prompts(), 1, 'the restart does not send the settled prompt again')
+  assert.equal(row.status, 'done')
+})
+
+test('a companion restart recovers a settled ACP reply exported while stopped (#12003)', async (t) => {
+  const { node, runtime, transcript, calls, restart } = await fixture(t, {
+    promptPlan: [{ reply: 'Third answer' }],
+  })
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+  await until('Persona-owned ACP prompt settled', () => runtime.idle())
+  await restart(() => {
+    const turn = [
+      { step_index: 4, type: 'USER_INPUT', content: 'Third' },
+      { step_index: 5, type: 'PLANNER_RESPONSE', content: 'Third answer' },
+    ].map((step) => ({ ...step, status: 'DONE', created_at: later }))
+    appendFileSync(transcript, turn.map((step) => JSON.stringify(step)).join('\n') + '\n')
+  })
+  const row = node.last('runtime.sessions').sessions.find((session) => session.session_id === SESSION)
+  assert.equal(row.status, 'done')
+  assert.equal(calls().filter((call) => call.method === 'session/prompt').length, 1)
+})
+
+test('a companion restart leaves a lagging native summary unknown without settled ACP evidence (#12003)', async (t) => {
+  const { node, transcript, calls, restart } = await fixture(t)
+  await restart(() => {
+    const turn = [
+      { step_index: 4, type: 'USER_INPUT', content: 'Third' },
+      { step_index: 5, type: 'PLANNER_RESPONSE', content: 'Third answer' },
+    ].map((step) => ({ ...step, status: 'DONE', created_at: later }))
+    appendFileSync(transcript, turn.map((step) => JSON.stringify(step)).join('\n') + '\n')
+  })
+  const row = node.last('runtime.sessions').sessions.find((session) => session.session_id === SESSION)
+  assert.equal(row.status, 'unknown', 'trailing response text is not terminal evidence')
+  assert.equal(calls().filter((call) => call.method === 'session/prompt').length, 0)
+})
+
+test('a settled ACP turn does not complete later native work after a restart (#12003)', async (t) => {
+  const { node, runtime, transcript, calls, restart } = await fixture(t, {
+    promptPlan: [{ reply: 'Third answer', export: true }],
+  })
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+  await until('Persona-owned ACP prompt settled', () => runtime.idle())
+  await restart(() => {
+    appendFileSync(transcript, JSON.stringify({ step_index: 6, type: 'GENERIC', content: 'Later native activity', status: 'DONE', created_at: '2026-01-01T00:02:00Z' }) + '\n')
+  })
+  const row = node.last('runtime.sessions').sessions.find((session) => session.session_id === SESSION)
+  assert.equal(row.status, 'unknown', 'the old ACP result is not evidence for later native work')
+  assert.equal(calls().filter((call) => call.method === 'session/prompt').length, 1)
+})
+
+test('an empty export cannot crash settled ACP recovery (#12003)', async (t) => {
+  const { node, runtime, transcript, db } = await fixture(t, { promptPlan: [{ reply: 'Third answer' }] })
+  writeFileSync(transcript, '')
+  db.exec('UPDATE conversation_summaries SET step_count = 0')
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+  await until('Persona-owned ACP prompt settled', () => runtime.idle())
+  await until('empty-export inventory', () => node.last('runtime.sessions')?.sessions[0]?.status === 'unknown')
+})
+
+test('a companion restart uses the settled reply index after tool calls (#12003)', async (t) => {
+  const { node, runtime, restart } = await fixture(t, {
+    promptPlan: [{ reply: 'Third answer', toolStart: true, tool: true, export: true }],
+  })
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+  await until('Persona-owned ACP prompt settled', () => runtime.idle())
+  await restart()
+  const row = node.last('runtime.sessions').sessions.find((session) => session.session_id === SESSION)
+  assert.equal(row.status, 'done')
+})
+
+test('a native rewind clears settled-turn recovery evidence (#12003)', async (t) => {
+  const { node, runtime, restart, rewind } = await fixture(t, {
+    promptPlan: [{ reply: 'Third answer', export: true }],
+  })
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+  await until('Persona-owned ACP prompt settled', () => runtime.idle())
+  await rewind()
+  await restart()
+  const stale = node.last('runtime.sessions').sessions.find((session) => session.session_id === SESSION)
+  if (stale.last_text === 'Third answer') assert.notEqual(stale.status, 'done', 'an abandoned reply cannot be restored as done')
+  const page = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(texts(page), records.slice(0, 2).map((step) => step.content), 'native cut reconciliation removes the abandoned tail')
+})
+
+test('a failed validation after native rewind cannot restore abandoned evidence (#12003)', async (t) => {
+  const { node, runtime, restart, rewind } = await fixture(t, {
+    promptPlan: [{ reply: 'Third answer', export: true }], badAfterRevertLength: true,
+  })
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+  await until('Persona-owned ACP prompt settled', () => runtime.idle())
+  await assert.rejects(rewind(), /Reload its history/)
+  await restart()
+  const stale = node.last('runtime.sessions').sessions.find((session) => session.session_id === SESSION)
+  if (stale.last_text === 'Third answer') assert.notEqual(stale.status, 'done', 'a mutated native rewind cannot revive its abandoned reply')
+})
+
+test('a companion restart recovers a truncated settled reply (#12003)', async (t) => {
+  const reply = '## Report\n' + 'A detailed report row.\n'.repeat(200) + '\nEnd of report.'
+  const { node, runtime, restart } = await fixture(t, {
+    promptPlan: [{ reply, export: true, truncateReply: { head: '## Report\n', tail: '\nEnd of report.' } }],
+  })
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+  await until('Persona-owned ACP prompt settled', () => runtime.idle())
+  await restart()
+  const row = node.last('runtime.sessions').sessions.find((session) => session.session_id === SESSION)
+  assert.equal(row.status, 'done')
+})
+
+test('a failed follow-up cannot restore the previous settled reply (#12003)', async (t) => {
+  const { node, runtime, restart } = await fixture(t, {
+    promptPlan: [{ reply: 'Third answer', export: true }, { error: 'Synthetic failure' }],
+  })
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+  await until('Persona-owned ACP prompt settled', () => runtime.idle())
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Fourth' })
+  await until('the follow-up fails', () => runtime.idle())
+  await restart()
+  const row = node.last('runtime.sessions').sessions.find((session) => session.session_id === SESSION)
+  assert.equal(row.status, 'unknown')
 })
 
 test('a restart with an unreadable history epoch does not reuse the history of projected steps (#12014)', {

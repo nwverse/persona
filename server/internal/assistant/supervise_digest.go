@@ -27,16 +27,21 @@ const superviseTool = "supervise"
 // conversation that dispatched its task (routeTo). A signal that no longer holds (answered, done, reviewed meanwhile) is
 // dropped.
 func (s *Service) sendDigest(ctx context.Context) {
+	b := &s.supervise
+	b.digestMu.Lock()
+	defer b.digestMu.Unlock()
+	s.sendDigestLocked(ctx)
+}
+
+func (s *Service) sendDigestLocked(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
 	if err := s.restoreFailedStartBatches(ctx); err != nil {
 		s.logf("supervise: could not restore deferred failed starts: %v", err)
 	}
 	s.revalidateFailedStartDeferrals(ctx)
 	b := &s.supervise
-	b.digestMu.Lock()
-	defer b.digestMu.Unlock()
-	if ctx.Err() != nil {
-		return
-	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		b.mu.Lock()
 		b.init()
@@ -53,6 +58,9 @@ func (s *Service) sendDigest(ctx context.Context) {
 	b.dedupMu.Lock()
 	defer b.dedupMu.Unlock()
 	b.mu.Lock()
+	if b.timer != nil {
+		b.timer.Stop()
+	}
 	if !s.autoSupervisionOn(ctx) {
 		// Switched off while this digest waited for its turn: nothing is taken out of the gather, and the withdrawal
 		// empties it.
@@ -926,7 +934,7 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 			return prompts.SuperviseEntry{}, false
 		}
 	case sigReview:
-		if st != reviewPending || v.handoffResult() != nil {
+		if st != reviewPending || v.handoffResult() != nil || g.Recipient != "" && g.Recipient != v.Supervisor {
 			return prompts.SuperviseEntry{}, false
 		}
 		if g.externalPRReview() {
