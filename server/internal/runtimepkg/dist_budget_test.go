@@ -34,11 +34,12 @@ import (
 // Subsequent runtime fixes on main (#15269, #15275, #13312, #12952, #15475) bring the total to 265,362 B.
 // Antigravity shared ACP exit cleanup (#15756) and always-allow permission choices (#15785) bring the total to 265,686 B.
 // Antigravity permission mode persistence across companion restarts and resume re-application (#15807) add 273 B (265,959 B).
+// Antigravity agent-mode MCP proxy budgeting for non-assistant leader and worker catalogs (#15822) adds 253 B (266,212 B).
 // Following an Antigravity conversation past a rewind's abandoned export tail and rewinding a cut that hides ranges at
-// its matching visible step (#14297) add 332 B (266,291 B).
+// its matching visible step (#14297) add 330 B (266,542 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 266_291
+	const budget = 266_542
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

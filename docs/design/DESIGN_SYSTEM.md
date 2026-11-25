@@ -2461,6 +2461,19 @@ control when it sits lower in the row.
 
 - **Edit diffs use the existing side panel (#9160)**: an edit row opens a Changes panel at that file and call, not a modal that hides the conversation. The panel gives the exchange's edited files a tree and keeps the selected diff beside a scrollable conversation on wide screens; a scope switch reads the whole session, including folded history. Live edits never move the reader to another file: the current diff appends in place, and other files use a new-changes pill. The old modal had no room for that navigation and could not leave the explanation and diff visible together; the existing panel already supplies the container, narrow-screen return and session memory, so no second viewer remains.
 
+### 4.7.2 Web chat question rail
+
+People revisiting earlier exchanges in Assistant and Agents can browse the whole question index in the left gutter.
+The 44 px-wide track uses 8 px marks with a 7 px minimum pitch. The small rows work as one scrub strip, with a
+focusable keyboard entry, spoken positions and a preview of the selected question. This density makes older
+positions reachable in a single track. Short narrow chats use their ordinary message column. A phone-width pane
+with a long index gives the strip its own space so it cannot cover the message text.
+
+The wheel belongs to an overflowing track and leaves the transcript in place. The reading position uses a stronger
+mark and follows chat scrolling when the track is idle. Previews appear on demand with locally available excerpts
+first. Selecting a question opens and highlights its context. Jump to bottom restores the latest messages. The
+implementation and checks are in [User-input rail](../web/web.md#user-input-rail-15813).
+
 ### 4.8 Pending requests
 
 Task decisions on the web reuse the task-routing chip for **Answer in chat** (#5929). It identifies the task and
@@ -2992,6 +3005,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Text size setting | Small/Standard/Large | same ratios | none | missing on Android |
 | Sidebar session preview | Long-press menu | Fine-pointer hover card (#15342) | Preview in the action sheet | platform-specific disclosure |
 | Composer references | Picker results use each client's existing composer | Inline references at the caret (#15409) | Picker results use each client's existing composer | platform-specific editing |
+| Chat question rail | Outside scope of #15813 | Dense scroll track and on-demand preview and jump | Outside scope of #15813 | Web interaction |
 | Assistant update status | Outside scope of #15687 | Live update and idle-restart notice in Assistant | Outside scope of #15687 | web change |
 | Tokens source | hand-written | hand-written | generated from `spec/tokens` | Apple and Android drift fails a test; the web is unchecked |
 
@@ -3230,6 +3244,11 @@ item states its own scope, then one configuration form per module. Where a featu
 (Terminal settings), it shows the current value read-only with a button that opens the same Labs page in a `Dialog` over
 the page (never navigating away, so nothing open behind it, such as a chat's unsent draft, is unmounted) instead of a
 second switch, so there is one place to change it.
+
+The Labs reminder (#15802) helps people who want to try a feature find it in Settings. The main sidebar's Settings
+entry and the Settings category list put a still accent dot beside their existing labels when an experiment is available,
+off and unseen. The labels include the reminder for screen readers. The dots clear on opening the Labs category. Each new
+card keeps a small `Pill` beside the experiment's title for that visit, using the existing description.
 
 Admit a temporary trial of a real feature or a choice between the stable and new implementations of one capability.
 Keep the stable default and a lossless rollback, with a linked tracking issue for graduation or removal. Put shipped
