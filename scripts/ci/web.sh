@@ -22,7 +22,7 @@ rc=$?
 set -e
 cat receiver-mutation.log
 [ "$rc" -ne 0 ]
-rg -q "Illegal invocation" receiver-mutation.log
+grep -q "Illegal invocation" receiver-mutation.log
 echo "RECEIVER_MUTATION_DETECTED=1"
 '
 ci_run 'Production browser bundle' 600 bash -c 'cd web && npm run build'
