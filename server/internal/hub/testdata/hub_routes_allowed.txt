@@ -111,6 +111,7 @@ GET {link.StreamPath}
 GET {peerPath}
 GET /i/{code}
 GET /i/{code}/docker
+PATCH /api/v1/looks/uploads/{id} # the hub keeps the looks: personas/ is its own directory (look_uploads.go)
 PATCH /api/v1/machines/{mid}/files/entry
 PATCH /api/v1/managers/{id}
 POST /api/v1/admin/devices/pair

@@ -11,6 +11,11 @@ import Observation
     typealias Fetch = @MainActor (SessionListQuery, String?, String?) async throws -> Page
     private(set) var rows: [Row] = []
     private(set) var counts: SessionListCounts?
+    /// Incremented whenever `counts` is replaced by a hub answer or cleared, so views can key local adjustments
+    /// to the exact counts snapshot (#13524).
+    private(set) var countsGeneration: UInt64 = 0
+    /// IDs whose unread count was already deducted from the current `counts` by `keepSeen` (#13524).
+    private(set) var seenAdjustedUnreadIDs: Set<String> = []
     /// IDs whose rows arrived in the same answer as `counts`; nil means a separate, authoritative counts read.
     @ObservationIgnored private var countRowIDs: Set<String>?
     private(set) var total = 0
@@ -84,7 +89,7 @@ import Observation
         taskID = nil
         self.query = query
         rows = []
-        counts = nil
+        setHubCounts(nil)
         countRowIDs = nil
         loaded = false
         loading = false
@@ -213,7 +218,7 @@ import Observation
                     self.rows = self.unique(page.sessions)
                     self.complete = complete
                     self.paged = page.isPaged && !complete
-                    if !self.paged { self.counts = nil }
+                    if !self.paged { self.setHubCounts(nil) }
                     self.snapshotRevision = page.revision
                     self.revision = page.revision
                 } else {
@@ -234,7 +239,7 @@ import Observation
                 if self.paged {
                     if let embedded {
                         self.countRowIDs = Set(page.sessions.map(self.id))
-                        self.counts = embedded
+                        self.setHubCounts(embedded)
                     } else if separateCounts {
                         self.countRowIDs = nil
                     }
@@ -250,7 +255,7 @@ import Observation
                     let counts = try await self.fetchCounts(self.query)
                     try Task.checkCancellation()
                     guard self.generation == gen else { return }
-                    self.counts = counts
+                    self.setHubCounts(counts)
                     self.countRowIDs = nil
                 }
                 if !self.hasMore { self.overlays = [:]; self.removed = [] }
@@ -337,7 +342,7 @@ import Observation
                     .sorted { $0.key < $1.key }.map { $0.value }
                 if self.complete { rows += beyond } // a new session belongs to the whole collection
                 self.countRowIDs = embeddedCounts == nil ? nil : embeddedIDs
-                if !self.complete { self.counts = counts }
+                if !self.complete { self.setHubCounts(counts) }
                 if rows != self.rows { self.rows = rows; self.changed?(rows) }
                 if !self.complete, !beyond.isEmpty { self.outside?(beyond) }
                 if self.hasMore {
@@ -399,7 +404,7 @@ import Observation
         hasMore = page.hasMore == true && page.nextCursor != nil
         let embedded = first.isPaged ? first.counts : nil
         countRowIDs = embedded == nil ? nil : Set(first.sessions.map(id))
-        if let embedded { counts = embedded }
+        if let embedded { setHubCounts(embedded) }
         overlays = [:]
         removed = []
         loaded = true
@@ -410,10 +415,16 @@ import Observation
             let counts = try await fetchCounts(query)
             try Task.checkCancellation()
             guard generation == gen else { return }
-            self.counts = counts
+            self.setHubCounts(counts)
             countRowIDs = nil
         }
         published?()
+    }
+
+    private func setHubCounts(_ value: SessionListCounts?) {
+        counts = value
+        countsGeneration &+= 1
+        seenAdjustedUnreadIDs = []
     }
 
     private func unique(_ rows: [Row]) -> [Row] {
@@ -432,7 +443,11 @@ extension SessionListModel where Row == Session {
         var justFinished = 0
         for i in visible.indices where visible[i].needsSeen() && marked(visible[i]) {
             if countRowIDs?.contains(id(visible[i])) == true {
-                if visible[i].state == .unread { unread += 1 }
+                // A folded parent with unread sides stays Unread even after its own row is marked seen (#13524).
+                if visible[i].state == .unread, (visible[i].children?.sidesUnread ?? 0) == 0 {
+                    unread += 1
+                    seenAdjustedUnreadIDs.insert(id(visible[i]))
+                }
                 if visible[i].work?.justFinished == true { justFinished += 1 }
             }
             visible[i].markLocallySeen()

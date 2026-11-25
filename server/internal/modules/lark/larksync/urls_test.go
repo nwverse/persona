@@ -70,6 +70,7 @@ func TestMessageFingerprint(t *testing.T) {
 		{"next bucket", "Team", "Alex", "hello world", at.Add(2 * time.Second), false},
 		{"another body", "Team", "Alex", "hello there", at, false},
 		{"another sender", "Team", "Sam", "hello world", at, false},
+		{"empty sender differs from named sender", "Team", "", "hello world", at, false},
 		{"another chat", "Other", "Alex", "hello world", at, false},
 	}
 	for _, c := range cases {
@@ -77,6 +78,25 @@ func TestMessageFingerprint(t *testing.T) {
 		if (got == base) != c.same {
 			t.Errorf("%s: same = %v, want %v", c.name, got == base, c.same)
 		}
+	}
+
+	// Empty sender degrades to a deterministic senderless fingerprint that matches internal/kb/align_gateway.go.
+	noSenderAt := time.Unix(1700000001, 0)
+	noSender := MessageFingerprint("  Example   Team ", "", noSenderAt, "Hello\n  World ")
+	if want := specFingerprint("example team", "", noSenderAt, "hello world"); noSender != want {
+		t.Fatalf("senderless fingerprint = %s, want %s", noSender, want)
+	}
+	if got := MessageFingerprint("Example Team", "   ", noSenderAt.Add(-time.Second), "hello world"); got != noSender {
+		t.Errorf("whitespace sender / same bucket = %s, want %s", got, noSender)
+	}
+	if got := MessageFingerprint("Example Team", "", noSenderAt.Add(time.Second), "hello world"); got == noSender {
+		t.Error("senderless fingerprint must still separate 2-second buckets")
+	}
+	if got := MessageFingerprint("Example Team", "", noSenderAt, "hello there"); got == noSender {
+		t.Error("senderless fingerprint must still separate message bodies")
+	}
+	if got := MessageFingerprint("Other Team", "", noSenderAt, "hello world"); got == noSender {
+		t.Error("senderless fingerprint must still separate chats")
 	}
 }
 
