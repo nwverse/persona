@@ -208,7 +208,7 @@ func (c *codexConn) deliver(ctx context.Context, live, text string, images []pro
 	}
 	n.ttft.arm(c.p.id, sentAt, res.Turn.ID)
 	c.mu.Lock()
-	if res.Turn.ID != "" {
+	if res.Turn.ID != "" && c.endedTurnID != res.Turn.ID {
 		c.turnID = res.Turn.ID
 	}
 	c.mu.Unlock()

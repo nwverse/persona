@@ -105,6 +105,12 @@ rows and follows committed edits, including role changes, without maintaining a 
 The lookup reads explicit bindings and projected links from one snapshot. The repository write paths and delivery
 gate keep their own existing contracts.
 
+For opted-in sources, the manager commits Inbox writes and routing receipts together. The receipt uses the
+canonical object and provider event identity. The worker resolves a policy from the store snapshot, reserves a
+single action owner, and uses the existing conversation relay or task activity feed for delivery. Each routed
+source version bypasses the automatic legacy task routes. The worker owns its Postgres journal and schedules
+digest work independently of the hub's source collections.
+
 ## Contract packages
 
 The parts (the hub, the managers, the node on each computer, extensions) talk only through contracts, and the Go packages that define them hold only types, constants and trivial pure helpers:

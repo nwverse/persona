@@ -246,16 +246,29 @@ def gen_go(defs: dict[str, Def], calls: list[Call] | None = None, *, header: lis
             disc = d.discriminator
             out += comment("// ", named(d.name, d.doc) + f" One struct for every variant: {disc} says which fields "
                                   "mean something.")
+            tag_type = d.name + go_field(disc) if d.closed else "string"  # x-enum "closed": a named tag type
             out.append(f"type {d.name} struct {{")
-            out.append(f"\t{go_field(disc)} string `json:\"{disc}\"`")
+            out.append(f"\t{go_field(disc)} {tag_type} `json:\"{disc}\"`")
             for f in flat_fields(defs, d):
                 out += field_line(f, force_optional=True)
-            out += ["}", "", f"// {d.name} {disc}s.", "const ("]
+            out += ["}", ""]
+            if d.closed:
+                out += comment("// ", f"{tag_type} is which variant a {d.name} is. A {disc} this side does not know "
+                                      "keeps its raw string and is not Valid.")
+                out += [f"type {tag_type} string", ""]
+            out += [f"// {d.name} {disc}s.", "const ("]
             for v in d.variants:
-                out.append(f'\t{d.name}{camel(defs[v].tag)} = "{defs[v].tag}"')
+                typed = f" {tag_type}" if d.closed else ""
+                out.append(f'\t{d.name}{camel(defs[v].tag)}{typed} = "{defs[v].tag}"')
             out += [")", "", f"// {d.name}{plural(go_field(disc))} are the {disc}s of {d.name}, in order.",
-                    f"var {d.name}{plural(go_field(disc))} = []string{{"
-                    + ", ".join(json.dumps(defs[v].tag) for v in d.variants) + "}", ""]
+                    f"var {d.name}{plural(go_field(disc))} = []{tag_type}{{"
+                    + ", ".join((f"{d.name}{camel(defs[v].tag)}" if d.closed else json.dumps(defs[v].tag))
+                                for v in d.variants) + "}", ""]
+            if d.closed:
+                consts = ", ".join(f"{d.name}{camel(defs[v].tag)}" for v in d.variants)
+                out += [f"// Valid reports whether v is one of {d.name}{plural(go_field(disc))}.",
+                        f"func (v {tag_type}) Valid() bool {{", "\tswitch v {", f"\tcase {consts}:", "\t\treturn true",
+                        "\t}", "\treturn false", "}", ""]
             if d.preserve_required:
                 out += marshaler(d, d.name)
             if any(defs[v].since for v in d.variants):

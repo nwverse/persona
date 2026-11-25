@@ -974,7 +974,7 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 	if msg.Tool == superviseTool {
 		if hold {
 			// Register only after admission, but before dispatch: a fast MCP call may precede assistant.send's answer.
-			err = s.holdPushes(ctx, to)
+			err = s.holdPushesFor(ctx, to, msg)
 		} else {
 			err = s.noteSideSupervisionPush(ctx, to, msg)
 		}
