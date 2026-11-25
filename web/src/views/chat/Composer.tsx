@@ -38,7 +38,7 @@ import {
 } from "../../lib/inline-mentions";
 import { parseUserText } from "../../lib/turns";
 import { getState } from "../../lib/store";
-import { AttachmentTray } from "../../ui/AttachmentTray";
+import { AttachmentTiles } from "../../ui/AttachmentTray";
 import { FileTiles } from "./FileTiles";
 import { Button, cx, Dialog, EASE, Spinner, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -1090,28 +1090,26 @@ export const Composer = memo(function Composer({
             }}
           />
         )}
-        {(atts.length > 0 || pastedBlocks.length > 0) && (
+        {(atts.length > 0 || files.length > 0) && (
+          <div data-composer-attachments className="flex flex-wrap items-center gap-2 px-0.5 pt-0.5 empty:hidden">
+            <AttachmentTiles attachments={atts} onOpen={(id) => setEditing(atts.find((a) => a.id === id) ?? null)} onRemove={(id) => {
+              const att = atts.find((a) => a.id === id);
+              // an edited picture's source and edits go with it
+              if (att) releaseAttachments([att]);
+              setAtts((cur) => cur.filter((a) => a.id !== id));
+            }} />
+            <FileTiles draftKey={draftKey} files={files} />
+          </div>
+        )}
+        {pastedBlocks.length > 0 && (
           <div className="flex flex-col gap-1.5 px-0.5 pt-0.5">
-            {atts.length > 0 && (
-              <AttachmentTray attachments={atts} onOpen={(id) => setEditing(atts.find((a) => a.id === id) ?? null)} onRemove={(id) => {
-                const att = atts.find((a) => a.id === id);
-                // an edited picture's source and edits go with it
-                if (att) releaseAttachments([att]);
-                setAtts((cur) => cur.filter((a) => a.id !== id));
-              }} />
-            )}
-            {pastedBlocks.length > 0 && <Suspense fallback={null}><ComposerOverlay pastedBlocks={pastedBlocks}
+            <Suspense fallback={null}><ComposerOverlay pastedBlocks={pastedBlocks}
               onRemove={(id) => setPastedBlocks((cur) => cur.filter((block) => block.id !== id))}
               onExpand={(id, text) => {
                 changeDocument(joinInline(doc, [draft ? "\n\n" : "", text]));
                 setPastedBlocks((cur) => cur.filter((block) => block.id !== id));
                 input.current?.focus();
-              }} /></Suspense>}
-          </div>
-        )}
-        {files.length > 0 && (
-          <div className="px-0.5 pt-0.5">
-            <FileTiles draftKey={draftKey} files={files} />
+              }} /></Suspense>
           </div>
         )}
         {/* a field that turns disabled loses focus with no blur event: the keyboard is down, say so */}
