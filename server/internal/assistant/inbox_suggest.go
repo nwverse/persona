@@ -1,10 +1,12 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -143,16 +145,19 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 	if s.inboxReady(ctx) != nil {
 		return "", nil, nil, false, errInboxUnavailable
 	}
+	b := &s.inbox
+	cfg, err := s.inboxConfigFresh(ctx)
+	if err != nil {
+		// Every publication observes the current source-privacy boundary; actionable cards also need the current reply policy.
+		return "", nil, nil, false, errReplyPolicyDenied
+	}
+	replyPolicy := cfg.ReplyPolicy
+	visibility := cfg.Visibility
 	var policy replyPolicySpec
 	policyAuthorization := in.Kind == SuggestReply || in.Kind == SuggestAgent
 	if policyAuthorization {
-		cfg, err := s.inboxConfigFresh(ctx)
-		if err != nil {
-			return "", nil, nil, false, errReplyPolicyBlocked
-		}
-		policy = compileReplyPolicy(cfg.ReplyPolicy)
+		policy = compileReplyPolicy(replyPolicy)
 	}
-	b := &s.inbox
 	b.mu.Lock()
 	var it *InboxItem
 	var from *SessionRef
@@ -172,13 +177,12 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		return got, nil, false, nil
 	}
 	var waitMore bool
-	var err error
 	it, from, waitMore, err = lookup()
 	// A conversation that answers before its start returned (an agent runtime already running starts a turn at
 	// once): its item learns the conversation's id a moment later.
-	waited := false
+	waitedForAssociation := false
 	for wait := time.Now().Add(inboxDraftWait); waitMore && time.Now().Before(wait); {
-		waited = true
+		waitedForAssociation = true
 		hook := b.waitHook
 		b.mu.Unlock()
 		if hook != nil {
@@ -189,30 +193,40 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		b.mu.Lock()
 		it, from, waitMore, err = lookup()
 	}
-	if err != nil {
+	if waitedForAssociation && err == nil {
+		// The first fresh read can predate a 15-second association wait. Reread after the wait, without holding the
+		// inbox lock across the RPC, then re-resolve the item before authorizing publication.
+		itemID, waitingFrom := it.ID, from
 		b.mu.Unlock()
-		return "", nil, nil, false, err
-	}
-	if waited && policyAuthorization {
-		// The association wait can outlive both the policy and the session binding used at admission. Refresh after
-		// the wait, then prove that the same live item is still bound to this conversation before publishing anything.
-		waitingItem, waitingFrom := it, from
-		b.mu.Unlock()
-		freshCfg, freshErr := s.inboxConfigFresh(ctx)
+		cfg, freshErr := s.inboxConfigFresh(ctx)
 		b.mu.Lock()
 		if freshErr != nil {
 			b.mu.Unlock()
-			return "", nil, nil, false, errReplyPolicyBlocked
+			return "", nil, nil, false, errReplyPolicyDenied
 		}
-		liveItem, liveFrom, _, bindErr := lookup()
-		sameFrom := waitingFrom == nil && liveFrom == nil ||
-			waitingFrom != nil && liveFrom != nil && *waitingFrom == *liveFrom
-		if bindErr != nil || liveItem != waitingItem || b.items[waitingItem.ID] != waitingItem || !sameFrom {
+		associated, associatedFrom, _, associationErr := lookup()
+		sameFrom := waitingFrom == nil && associatedFrom == nil ||
+			waitingFrom != nil && associatedFrom != nil && *waitingFrom == *associatedFrom
+		if associationErr != nil {
+			b.mu.Unlock()
+			return "", nil, nil, false, associationErr
+		}
+		if associated == nil || associated != it || associated.ID != itemID || b.items[itemID] != associated || !sameFrom {
 			b.mu.Unlock()
 			return "", nil, nil, false, errNotProcessing
 		}
-		it, from = liveItem, liveFrom
-		policy = compileReplyPolicy(freshCfg.ReplyPolicy)
+		it, from = associated, associatedFrom
+		replyPolicy = cfg.ReplyPolicy
+		visibility = cfg.Visibility
+		if policyAuthorization {
+			policy = compileReplyPolicy(replyPolicy)
+		} else {
+			policy = replyPolicySpec{}
+		}
+	}
+	if err != nil {
+		b.mu.Unlock()
+		return "", nil, nil, false, err
 	}
 	if from != nil && in.Kind == SuggestTodo {
 		b.mu.Unlock()
@@ -222,7 +236,12 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		b.mu.Unlock()
 		return "", nil, nil, false, errStaleInboxTurn
 	}
-	if from == nil && (in.Kind == SuggestReply || in.Kind == SuggestAgent) && policy.appliesToItem(it) && it.Agent != nil {
+	if inboxVisibilityWithMembersExcludedLocked(b, it, visibility) {
+		b.mu.Unlock()
+		return "", nil, nil, false, errCannotReply
+	}
+	if from == nil && (in.Kind == SuggestReply || in.Kind == SuggestAgent) && it.Agent != nil &&
+		(replyPolicyItemApplies(replyPolicy, it) || policy.appliesToItem(it)) {
 		for _, note := range it.Agent.Pending {
 			if note.Name == prompts.NoteNewMessages {
 				// Collection has newer content that this turn has not seen. Classification may already have advanced while
@@ -240,6 +259,53 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		b.mu.Unlock()
 		return "", nil, nil, false, errReportedFiled
 	}
+	instructionID := ""
+	if (in.Kind == SuggestReply || in.Kind == SuggestAgent) && legacyReplyPolicyConfig(replyPolicy) && replyPolicyItemApplies(replyPolicy, it) {
+		if instruction, needsClassification := replyInstructionForSuggestion(it, in.Text, replyPolicy); instruction != nil {
+			instructionID = instruction.ID
+			if needsClassification {
+				// An unconsumed owner instruction is part of the generated replacement's authority. Intervening reported
+				// progress does not consume it; classify with the original conversation, then revalidate the whole item.
+				before := itemState(it)
+				itemID, conversation := it.ID, it.Context
+				instructionText, policy := instruction.Detail, replyPolicy
+				b.mu.Unlock()
+				category, classifyErr := s.classifyReplyPolicyInput(ctx, policy, prompts.InboxReplyPolicyInput{
+					Text: in.Text, Original: conversation + "\n\nOwner draft instruction:\n" + instructionText, Edit: true,
+				})
+				freshCfg, freshErr := s.inboxConfigFresh(ctx)
+				b.mu.Lock()
+				if freshErr != nil {
+					b.mu.Unlock()
+					return itemID, nil, nil, false, errReplyPolicyDenied
+				}
+				if b.items[itemID] != it || !bytes.Equal(before, itemState(it)) {
+					b.mu.Unlock()
+					return itemID, nil, nil, false, errStaleInboxTurn
+				}
+				if inboxVisibilityWithMembersExcludedLocked(b, it, freshCfg.Visibility) {
+					b.mu.Unlock()
+					return itemID, nil, nil, false, errCannotReply
+				}
+				visibility = freshCfg.Visibility
+				if !reflect.DeepEqual(policy, freshCfg.ReplyPolicy) {
+					b.mu.Unlock()
+					return itemID, nil, nil, false, errReplyPolicyDenied
+				}
+				replyPolicy = freshCfg.ReplyPolicy
+				if classifyErr != nil || replyRoute(category, policy) != ReplyRouteOwnerDraft {
+					b.mu.Unlock()
+					return itemID, nil, nil, false, errReplyPolicyDenied
+				}
+			}
+		}
+	}
+	if legacyReplyPolicyConfig(replyPolicy) {
+		if err := replyPolicySuggestionGate(it, in.Kind, replyPolicy); err != nil {
+			b.mu.Unlock()
+			return it.ID, nil, nil, false, err
+		}
+	}
 	for _, ch := range in.Changes {
 		if it.Doc == nil || !docOffers(*it.Doc, ch) {
 			b.mu.Unlock()
@@ -247,7 +313,6 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		}
 	}
 	var policySnap *InboxReplyPolicySnapshot
-	instructionID := ""
 	if policy.appliesToItem(it) && (in.Kind == SuggestReply || in.Kind == SuggestAgent) && it.open() {
 		instruction, needsInstructionReview := replyInstructionForSuggestion(it, in.Text, policy)
 		if instruction != nil {
@@ -255,37 +320,44 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		}
 		// Every policy-applicable reply, Agent instruction, and handback needs a snapshot bound to its exact text.
 		// An active rewrite adds its instruction to the classifier input; it never substitutes for that snapshot.
-		reviewGenerated := in.Kind == SuggestReply || in.Kind == SuggestAgent
-		if reviewGenerated {
-			itemData := snapshotItemForReplyPolicyLocked(it)
-			classifierItem := itemData
-			if needsInstructionReview {
-				classifierItem = replyPolicyItemWithInstruction(classifierItem, instruction)
-			}
-			existingSnap := cloneReplyPolicySnapshot(it.ReplyPolicy)
-			b.mu.Unlock()
-			snap, gateErr := s.gateReplyPolicySuggestion(ctx, policy, classifierItem, existingSnap, in.Text)
-			livePolicy := compileReplyPolicy(s.inboxConfig(ctx).ReplyPolicy)
-			b.mu.Lock()
-			if gateErr != nil {
-				b.mu.Unlock()
-				return "", nil, nil, false, replyPolicySuggestionErr(snap, gateErr)
-			}
-			if b.items[itemData.id] != it || !it.open() {
-				b.mu.Unlock()
-				return "", nil, nil, false, errSuggestFiled
-			}
-			if from == nil && (it.Agent == nil || in.ProcessingTurn != it.Agent.ProcessingTurn) {
-				b.mu.Unlock()
-				return "", nil, nil, false, errStaleInboxTurn
-			}
-			if !livePolicy.appliesToItem(it) || livePolicy.revision != policy.revision || replyPolicyContentVersion(it) != itemData.contentVersion ||
-				livePolicy.allowsOwnerDraft(snap, itemData.contentVersion) != nil {
-				b.mu.Unlock()
-				return "", nil, nil, false, replyPolicySuggestionErr(snap, errReplyPolicyStaleSnapshot)
-			}
-			policySnap = snap
+		itemData := snapshotItemForReplyPolicyLocked(it)
+		classifierItem := itemData
+		if needsInstructionReview {
+			classifierItem = replyPolicyItemWithInstruction(classifierItem, instruction)
 		}
+		existingSnap := cloneReplyPolicySnapshot(it.ReplyPolicy)
+		b.mu.Unlock()
+		snap, gateErr := s.gateReplyPolicySuggestion(ctx, policy, classifierItem, existingSnap, in.Text)
+		freshCfg, freshErr := s.inboxConfigFresh(ctx)
+		b.mu.Lock()
+		if freshErr != nil {
+			b.mu.Unlock()
+			return "", nil, nil, false, errReplyPolicyBlocked
+		}
+		livePolicy := compileReplyPolicy(freshCfg.ReplyPolicy)
+		if gateErr != nil {
+			b.mu.Unlock()
+			return "", nil, nil, false, replyPolicySuggestionErr(snap, gateErr)
+		}
+		if b.items[itemData.id] != it || !it.open() {
+			b.mu.Unlock()
+			return "", nil, nil, false, errSuggestFiled
+		}
+		if from == nil && (it.Agent == nil || in.ProcessingTurn != it.Agent.ProcessingTurn) {
+			b.mu.Unlock()
+			return "", nil, nil, false, errStaleInboxTurn
+		}
+		if inboxVisibilityWithMembersExcludedLocked(b, it, freshCfg.Visibility) {
+			b.mu.Unlock()
+			return "", nil, nil, false, errCannotReply
+		}
+		visibility = freshCfg.Visibility
+		if !livePolicy.appliesToItem(it) || livePolicy.revision != policy.revision || replyPolicyContentVersion(it) != itemData.contentVersion ||
+			livePolicy.allowsOwnerDraft(snap, itemData.contentVersion) != nil {
+			b.mu.Unlock()
+			return "", nil, nil, false, replyPolicySuggestionErr(snap, errReplyPolicyStaleSnapshot)
+		}
+		policySnap = snap
 	}
 	now := time.Now().UTC()
 	w := beginWrite(it)
@@ -366,6 +438,8 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 			g.Owner = &SessionRef{MachineID: it.Agent.MachineID, SessionID: it.Agent.SessionID}
 		}
 		g.SourceOf = suggestionReplyTarget(it)
+		g.ReplyInstruction = instructionID
+		snapshotReplyPolicy(g, it, replyPolicy)
 		if in.Kind == SuggestReply && !in.Handback {
 			g.MailTarget = mailTarget(*it)
 		}
@@ -520,18 +594,6 @@ func legacySuggestion(it *InboxItem) *InboxSuggestion {
 	g.At = it.UpdatedAt.UTC()
 	if a.DraftedAt != nil {
 		g.At = a.DraftedAt.UTC()
-	}
-	return g
-}
-
-// mirroredLegacyReply identifies an AI draft exposed through the old agent.draft API without treating direct owner text as a suggestion.
-func mirroredLegacyReply(it *InboxItem) *InboxSuggestion {
-	if it == nil || it.Agent == nil || it.Agent.State != AgentDrafted {
-		return nil
-	}
-	g := currentSuggestion(it)
-	if g == nil || g.Kind != SuggestReply || g.Handback || it.Agent.Draft == "" || it.Agent.Draft != g.Text || suggestionAttempt(it, g.Version) != nil {
-		return nil
 	}
 	return g
 }

@@ -38,7 +38,7 @@ type Layer interface {
 	Items(ctx context.Context) ([]string, error)
 	CardAction(context.Context, CardAction) (CardResult, error)
 	WorkoutReceived(context.Context, assistantwire.StrengthWorkout) error
-	WorkoutReport(context.Context, string, string) (string, bool, error)
+	WorkoutReport(context.Context, string, string) (assistantwire.StrengthReportPrompt, bool, error)
 	// Routes registers the module's HTTP routes through handle, in their order.
 	Routes(handle func(pattern string, fn http.HandlerFunc))
 	// Tool runs the health_intake tool; the core has checked that the caller is a Health conversation.
