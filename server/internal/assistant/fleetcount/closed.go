@@ -5,271 +5,178 @@ import (
 	"github.com/nwverse/persona/server/internal/domainkit/defect"
 )
 
-// State is a state as fleetcount knows it: working, needs you, finished or idle. The zero State is no state; only its
-// constructors make one, and Accept raises a defect on it.
+// State is where an agent's turn stands. The zero State is no state; Build refuses it.
 type State struct{ state uint8 }
 
-// StateWorking is the working state.
+// StateWorking is an agent at work.
 func StateWorking() State { return State{state: 1} }
 
-// StateNeedsYou is the needs you state.
+// StateNeedsYou is an agent waiting for the owner: the hub says so, from a card or a dialog its terminal shows.
 func StateNeedsYou() State { return State{state: 2} }
 
-// StateFinished is the finished state.
+// StateFinished is an agent whose turn ended and whose result the owner has not seen.
 func StateFinished() State { return State{state: 3} }
 
-// StateIdle is the idle state.
+// StateIdle is an agent with no turn: idle, offline, or in a state a newer peer sent.
 func StateIdle() State { return State{state: 4} }
 
-// StateVisitor is told which state it is.
-type StateVisitor interface {
-	VisitWorking()
-	VisitNeedsYou()
-	VisitFinished()
-	VisitIdle()
-}
-
-// Accept tells v which state it is; the zero State is a defect.
-func (x State) Accept(v StateVisitor) {
-	switch x.state {
-	case 1:
-		v.VisitWorking()
-	case 2:
-		v.VisitNeedsYou()
-	case 3:
-		v.VisitFinished()
-	case 4:
-		v.VisitIdle()
-	default:
-		defect.Raise("fleetcount.State.Accept", "the zero State")
-	}
-}
-
-// Role is a role as fleetcount knows it: worker or assistant. The zero Role is no role; only its constructors make one,
-// and Accept raises a defect on it.
+// Role is whose conversation an agent is. The zero Role is no role; Build refuses it.
 type Role struct{ role uint8 }
 
-// RoleWorker is the worker role.
+// RoleWorker is an agent doing a task.
 func RoleWorker() Role { return Role{role: 1} }
 
-// RoleAssistant is the assistant role.
+// RoleAssistant is one of the assistant's own conversations, the Persona tab's.
 func RoleAssistant() Role { return Role{role: 2} }
 
-// RoleVisitor is told which role it is.
-type RoleVisitor interface {
-	VisitWorker()
-	VisitAssistant()
-}
-
-// Accept tells v which role it is; the zero Role is a defect.
-func (x Role) Accept(v RoleVisitor) {
-	switch x.role {
-	case 1:
-		v.VisitWorker()
-	case 2:
-		v.VisitAssistant()
-	default:
-		defect.Raise("fleetcount.Role.Accept", "the zero Role")
-	}
-}
-
-// Lineage is a lineage as fleetcount knows it: root or subtask. The zero Lineage is no lineage; only its constructors
-// make one, and Accept raises a defect on it.
+// Lineage says whether another agent started this one. The zero Lineage is none; Build refuses it.
 type Lineage struct{ lineage uint8 }
 
-// LineageRoot is the root lineage.
+// LineageRoot is an agent nobody started: it has a row of its own.
 func LineageRoot() Lineage { return Lineage{lineage: 1} }
 
-// LineageSubtask is the subtask lineage.
+// LineageSubtask is an agent another one started (a Codex sub-agent, a runtime's session another created), which its
+// parent's row stands for on the Live Activity.
 func LineageSubtask() Lineage { return Lineage{lineage: 2} }
 
-// LineageVisitor is told which lineage it is.
-type LineageVisitor interface {
-	VisitRoot()
-	VisitSubtask()
-}
-
-// Accept tells v which lineage it is; the zero Lineage is a defect.
-func (l Lineage) Accept(v LineageVisitor) {
-	switch l.lineage {
-	case 1:
-		v.VisitRoot()
-	case 2:
-		v.VisitSubtask()
-	default:
-		defect.Raise("fleetcount.Lineage.Accept", "the zero Lineage")
-	}
-}
-
-// Muting is a muting as fleetcount knows it: heard or muted. The zero Muting is no muting; only its constructors make
-// one, and Accept raises a defect on it.
+// Muting says whether the owner muted an agent (itself, or its space). The zero Muting is none; Build refuses it.
 type Muting struct{ muting uint8 }
 
-// MutingHeard is the heard muting.
+// MutingHeard is an agent the owner hears from.
 func MutingHeard() Muting { return Muting{muting: 1} }
 
-// MutingMuted is the muted muting.
+// MutingMuted is an agent the owner muted.
 func MutingMuted() Muting { return Muting{muting: 2} }
 
-// MutingVisitor is told which muting it is.
-type MutingVisitor interface {
-	VisitHeard()
-	VisitMuted()
-}
-
-// Accept tells v which muting it is; the zero Muting is a defect.
-func (m Muting) Accept(v MutingVisitor) {
-	switch m.muting {
-	case 1:
-		v.VisitHeard()
-	case 2:
-		v.VisitMuted()
-	default:
-		defect.Raise("fleetcount.Muting.Accept", "the zero Muting")
-	}
-}
-
-// Visibility is a visibility as fleetcount knows it: listed, quiet or hidden by directory. The zero Visibility is no
-// visibility; only its constructors make one, and Accept raises a defect on it.
+// Visibility is whether the owner's lists show an agent. The zero Visibility is none; Build refuses it.
 type Visibility struct{ visibility uint8 }
 
-// VisibilityListed is the listed visibility.
+// VisibilityListed is an agent the lists show.
 func VisibilityListed() Visibility { return Visibility{visibility: 1} }
 
-// VisibilityQuiet is the quiet visibility.
+// VisibilityQuiet is a quiet task's agent: listed, while its task's main conversation tells the owner about it
+// (#1731).
 func VisibilityQuiet() Visibility { return Visibility{visibility: 2} }
 
-// VisibilityHiddenByDirectory is the hidden by directory visibility.
+// VisibilityHiddenByDirectory is an agent an Agent-folder hide rule matches: no list shows it, and its cards count
+// nowhere.
 func VisibilityHiddenByDirectory() Visibility { return Visibility{visibility: 3} }
 
-// VisibilityVisitor is told which visibility it is.
-type VisibilityVisitor interface {
-	VisitListed()
-	VisitQuiet()
-	VisitHiddenByDirectory()
-}
-
-// Accept tells v which visibility it is; the zero Visibility is a defect.
-func (x Visibility) Accept(v VisibilityVisitor) {
-	switch x.visibility {
-	case 1:
-		v.VisitListed()
-	case 2:
-		v.VisitQuiet()
-	case 3:
-		v.VisitHiddenByDirectory()
-	default:
-		defect.Raise("fleetcount.Visibility.Accept", "the zero Visibility")
+// LeftOut says whether the fleet's Live Activity and Persona Link's summary leave the agent out: a quiet task's agent
+// and a directory-hidden one are none of theirs. The zero Visibility is a defect.
+func (v Visibility) LeftOut() bool {
+	if v == (Visibility{}) {
+		defect.Raise("fleetcount.Visibility.LeftOut", "the zero Visibility")
 	}
+	return v != VisibilityListed()
 }
 
-// CardStanding is a card standing as fleetcount knows it: stands or form. The zero CardStanding is no card standing;
-// only its constructors make one, and Accept raises a defect on it.
+// Placement is where an agent's row is in the Agents list. The zero Placement is nil; Build refuses it.
+type Placement interface {
+	placement() // sealed: only this package makes one
+}
+
+// placementOwnRow is a row of the agent's own.
+type placementOwnRow struct{}
+
+// placementUnder is folded under another agent's row, the one the hub names in folded_under.
+type placementUnder struct{ under agentref.Ref }
+
+// PlacementOwnRow is an agent with a row of its own.
+func PlacementOwnRow() Placement { return placementOwnRow{} }
+
+// PlacementUnder is an agent the hub folds under another one's row (a child of a task, or a side session): its cards
+// sit under that row, which waits for it. The zero Ref is a defect.
+func PlacementUnder(under agentref.Ref) Placement {
+	if under == (agentref.Ref{}) {
+		defect.Raise("fleetcount.PlacementUnder", "the zero Ref")
+	}
+	return placementUnder{under: under}
+}
+
+func (placementOwnRow) placement() {}
+func (placementUnder) placement()  {}
+
+// CardStanding is whether a card can stand for the agent that asked it. The zero CardStanding is none; Build refuses
+// it.
 type CardStanding struct{ cardStanding uint8 }
 
-// CardStandingStands is the stands card standing.
+// CardStandingStands is a card that stands for its agent wherever the agent counts: a permission, a plan, a question
+// or a terminal dialog's card.
 func CardStandingStands() CardStanding { return CardStanding{cardStanding: 1} }
 
-// CardStandingForm is the form card standing.
+// CardStandingForm is an MCP server's form (an elicitation): it makes its agent wait in the Agents list, but the Live
+// Activity and Persona Link show the agent by its terminal dialog instead, as the legacy clients that share the Fleet
+// draw it.
 func CardStandingForm() CardStanding { return CardStanding{cardStanding: 2} }
 
-// CardStandingVisitor is told which card standing it is.
-type CardStandingVisitor interface {
-	VisitStands()
-	VisitForm()
-}
-
-// Accept tells v which card standing it is; the zero CardStanding is a defect.
-func (c CardStanding) Accept(v CardStandingVisitor) {
-	switch c.cardStanding {
-	case 1:
-		v.VisitStands()
-	case 2:
-		v.VisitForm()
-	default:
-		defect.Raise("fleetcount.CardStanding.Accept", "the zero CardStanding")
-	}
-}
-
-// Telling is a telling as fleetcount knows it: told or untold. The zero Telling is no telling; only its constructors
-// make one, and Accept raises a defect on it.
+// Telling is whether the owner was told of a card: the push rang for it. The zero Telling is none; Build refuses it.
 type Telling struct{ telling uint8 }
 
-// TellingTold is the told telling.
+// TellingTold is a card the owner was told of.
 func TellingTold() Telling { return Telling{telling: 1} }
 
-// TellingUntold is the untold telling.
+// TellingUntold is a card the owner was not told of yet: not announced, being recorded, or back from a reconnect that
+// is not known to have rung.
 func TellingUntold() Telling { return Telling{telling: 2} }
 
-// TellingVisitor is told which telling it is.
-type TellingVisitor interface {
-	VisitTold()
-	VisitUntold()
-}
-
-// Accept tells v which telling it is; the zero Telling is a defect.
-func (x Telling) Accept(v TellingVisitor) {
-	switch x.telling {
-	case 1:
-		v.VisitTold()
-	case 2:
-		v.VisitUntold()
-	default:
-		defect.Raise("fleetcount.Telling.Accept", "the zero Telling")
-	}
-}
-
-// Holding is a holding as fleetcount knows it: held by persona, held by supervisor or for the owner.
-// The zero Holding is no holding; only its constructors make one, and Accept raises a defect on it.
+// Holding is whose a card is to answer first (D11 of docs/plans/plan-derived-counts.md). The zero Holding is none;
+// Build refuses it.
 type Holding struct{ holding uint8 }
 
-// HoldingHeldByPersona is the held by persona holding.
-func HoldingHeldByPersona() Holding { return Holding{holding: 1} }
+// HoldingForTheOwner is a card that is the owner's to answer.
+func HoldingForTheOwner() Holding { return Holding{holding: 1} }
 
-// HoldingHeldBySupervisor is the held by supervisor holding.
-func HoldingHeldBySupervisor() Holding { return Holding{holding: 2} }
+// HoldingHeldByPersona is a question the assistant is still deciding whether it may answer for the owner: listed and
+// answerable, and counted nowhere in the Agents list until it is handed to the owner.
+func HoldingHeldByPersona() Holding { return Holding{holding: 2} }
 
-// HoldingForTheOwner is the for the owner holding.
-func HoldingForTheOwner() Holding { return Holding{holding: 3} }
+// HoldingHeldBySupervisor is a card its task's supervisor holds (a permission, a plan or a routed terminal question)
+// until it passes it up: the supervisor's, in no row of the owner's Agents list.
+func HoldingHeldBySupervisor() Holding { return Holding{holding: 3} }
 
-// HoldingVisitor is told which holding it is.
-type HoldingVisitor interface {
-	VisitHeldByPersona()
-	VisitHeldBySupervisor()
-	VisitForTheOwner()
-}
+// Surface is where a Needs you number and its rows are shown. The zero Surface is none; AgentsNeedsYou raises a
+// defect on it.
+type Surface struct{ surface uint8 }
 
-// Accept tells v which holding it is; the zero Holding is a defect.
-func (h Holding) Accept(v HoldingVisitor) {
-	switch h.holding {
-	case 1:
-		v.VisitHeldByPersona()
-	case 2:
-		v.VisitHeldBySupervisor()
-	case 3:
-		v.VisitForTheOwner()
-	default:
-		defect.Raise("fleetcount.Holding.Accept", "the zero Holding")
-	}
-}
+// SurfaceBadge is the Agents list's Needs you: its rows, its header, its filter and the tab's badge, as the needs-you
+// fixture (spec/fixtures/needs-you) defines them.
+func SurfaceBadge() Surface { return Surface{surface: 1} }
 
-// Why is a why as fleetcount knows it: needs you, held, muted or quiet. The zero Why is no why; only its constructors
-// make one, and Accept raises a defect on it.
+// SurfaceLiveActivity is the Fleet Live Activity on the lock screen and in the Dynamic Island.
+func SurfaceLiveActivity() Surface { return Surface{surface: 2} }
+
+// SurfaceLink is Persona Link's Needs you summary on the owner's computers, which counts as the web app's badge does.
+func SurfaceLink() Surface { return Surface{surface: 3} }
+
+// Why is why a row is listed. The zero Why is none; a Tally never holds it.
 type Why struct{ why uint8 }
 
-// WhyNeedsYou is the needs you why.
+// WhyNeedsYou is a row that waits for the owner.
 func WhyNeedsYou() Why { return Why{why: 1} }
 
-// WhyHeld is the held why.
+// WhyHeld is a row whose cards are not the owner's yet: in the Agents list, questions the assistant is still deciding
+// on (D11); in Persona Link's summary, an agent none of whose cards was handed to the owner, which it does not ring
+// for.
 func WhyHeld() Why { return Why{why: 2} }
 
-// WhyMuted is the muted why.
+// WhyMuted is a row of an agent the owner muted.
 func WhyMuted() Why { return Why{why: 3} }
 
-// WhyQuiet is the quiet why.
+// WhyQuiet is a row of a quiet task's agent, which its task's main conversation tells the owner about.
 func WhyQuiet() Why { return Why{why: 4} }
 
-// WhyVisitor is told which why it is.
+// Counted says whether a row for this reason counts in the Agents list's Needs you number. The Live Activity and
+// Persona Link's summary still count by rules of their own (docs/plans/plan-derived-counts.md, section 1), so each
+// surface's number is the total its Tally tells. The zero Why is a defect.
+func (w Why) Counted() bool {
+	if w == (Why{}) {
+		defect.Raise("fleetcount.Why.Counted", "the zero Why")
+	}
+	return w == WhyNeedsYou()
+}
+
+// WhyVisitor is told which reason a row has.
 type WhyVisitor interface {
 	VisitNeedsYou()
 	VisitHeld()
@@ -277,88 +184,32 @@ type WhyVisitor interface {
 	VisitQuiet()
 }
 
-// Accept tells v which why it is; the zero Why is a defect.
+// Accept tells v the reason; the zero Why is a defect.
 func (w Why) Accept(v WhyVisitor) {
-	switch w.why {
-	case 1:
+	switch w {
+	case WhyNeedsYou():
 		v.VisitNeedsYou()
-	case 2:
+	case WhyHeld():
 		v.VisitHeld()
-	case 3:
+	case WhyMuted():
 		v.VisitMuted()
-	case 4:
+	case WhyQuiet():
 		v.VisitQuiet()
 	default:
 		defect.Raise("fleetcount.Why.Accept", "the zero Why")
 	}
 }
 
-// Surface is a surface as fleetcount knows it: badge, live activity or link. The zero Surface is no surface; only its
-// constructors make one, and Accept raises a defect on it.
-type Surface struct{ surface uint8 }
+// RowCount is how many rows of a tally count. The zero RowCount is no rows.
+type RowCount struct{ rowCount int }
 
-// SurfaceBadge is the badge surface.
-func SurfaceBadge() Surface { return Surface{surface: 1} }
-
-// SurfaceLiveActivity is the live activity surface.
-func SurfaceLiveActivity() Surface { return Surface{surface: 2} }
-
-// SurfaceLink is the link surface.
-func SurfaceLink() Surface { return Surface{surface: 3} }
-
-// SurfaceVisitor is told which surface it is.
-type SurfaceVisitor interface {
-	VisitBadge()
-	VisitLiveActivity()
-	VisitLink()
-}
-
-// Accept tells v which surface it is; the zero Surface is a defect.
-func (x Surface) Accept(v SurfaceVisitor) {
-	switch x.surface {
-	case 1:
-		v.VisitBadge()
-	case 2:
-		v.VisitLiveActivity()
-	case 3:
-		v.VisitLink()
-	default:
-		defect.Raise("fleetcount.Surface.Accept", "the zero Surface")
+// ParseRowCount is n rows; a negative n is a defect, since only a tally counts rows.
+func ParseRowCount(n int) RowCount {
+	if n < 0 {
+		defect.Raise("fleetcount.ParseRowCount", "a negative count")
 	}
+	return RowCount{rowCount: n}
 }
 
-// Placement is a placement as fleetcount knows it: own row or under. The zero Placement is nil; only its constructors
-// make one.
-type Placement interface {
-	Accept(v PlacementVisitor)
-	placement()
-}
-
-// PlacementVisitor is told which placement it is, with what it holds.
-type PlacementVisitor interface {
-	VisitOwnRow()
-	VisitUnder(ref agentref.Ref)
-}
-
-// placementOwnRow is the own row placement.
-type placementOwnRow struct{}
-
-// placementUnder is the under placement, with its ref.
-type placementUnder struct{ ref agentref.Ref }
-
-// PlacementOwnRow is the own row placement.
-func PlacementOwnRow() Placement { return placementOwnRow{} }
-
-// PlacementUnder is the under placement with its ref; no ref is a defect.
-func PlacementUnder(ref agentref.Ref) Placement {
-	var noRef agentref.Ref
-	if ref == noRef {
-		defect.Raise("fleetcount.PlacementUnder", "the zero Ref")
-	}
-	return placementUnder{ref: ref}
-}
-
-func (placementOwnRow) Accept(v PlacementVisitor)  { v.VisitOwnRow() }
-func (x placementUnder) Accept(v PlacementVisitor) { v.VisitUnder(x.ref) }
-func (placementOwnRow) placement()                 {}
-func (placementUnder) placement()                  {}
+// Wire is the count as the wire carries it. Adapters only.
+func (r RowCount) Wire() int { return r.rowCount }

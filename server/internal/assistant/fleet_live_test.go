@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/assistant/fleetview"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -299,7 +300,7 @@ func TestBuildFleetWorkflowSince(t *testing.T) {
 			if len(st.Items) != 1 {
 				t.Fatalf("items: %+v", st.Items)
 			}
-			if got, want := st.Items[0].Since, unixSeconds(tc.want); got != want || st.WorkingSince != want {
+			if got, want := st.Items[0].Since, fleetview.UnixSeconds(tc.want); got != want || st.WorkingSince != want {
 				t.Errorf("since = %v, workingSince = %v, want %v", got, st.WorkingSince, want)
 			}
 			if tc.name == "earliest running workflow" && st.Items[0].Detail != "review · Verify · 1/3" {

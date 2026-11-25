@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/fleetview"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -68,21 +69,24 @@ func oracleNeedsYou(agents []oracleInput, ixs []proto.Interaction, counts func(o
 	return out
 }
 
+// oracleCardStands: a card stands for its agent unless it is an MCP server's form.
+func oracleCardStands(ix proto.Interaction) bool { return ix.Kind != proto.IxElicitation }
+
 func oracleLiveCounts(a oracleInput) bool { return !a.Session.IsCodexSubagent() && !a.Muted }
 
 func oracleBuildFleetIn(l i18n.Lang, agents []oracleInput, ixs []proto.Interaction) FleetState {
 	var st FleetState
 	var needs, working, unread []FleetItem
 	asked := map[string]bool{}
-	for _, n := range oracleNeedsYou(agents, ixs, oracleLiveCounts, cardStands) {
+	for _, n := range oracleNeedsYou(agents, ixs, oracleLiveCounts, oracleCardStands) {
 		sess := n.agent.Session
 		key := sess.MachineID + "/" + sess.SessionID
 		asked[key] = true
-		item := FleetItem{ID: key, Title: agentTitle(&sess, fleetTitleMax), Place: agentPlace(n.agent.Machine, &sess, fleetPlaceMax),
+		item := FleetItem{ID: key, Title: fleetview.AgentTitle(sessionTitle(&sess), fleetTitleMax), Place: fleetview.AgentPlace(n.agent.Machine, &sess, fleetPlaceMax),
 			Kind: proto.IxScreen, Detail: i18n.T(l, "hub-liveactivity.screen")}
 		if ix := n.card; ix != nil {
-			item.Kind, item.Detail = ix.Kind, clip(oneLine(interactionDetail(l, *ix)), fleetDetailMax)
-			item.Interaction, item.Since = ix.ID, unixSeconds(ix.CreatedAt)
+			item.Kind, item.Detail = ix.Kind, clip(oneLine(fleetview.InteractionDetail(l, *ix)), fleetDetailMax)
+			item.Interaction, item.Since = ix.ID, fleetview.UnixSeconds(ix.CreatedAt)
 			// #12982: no buttons for a permission without a summary or a plan without a title.
 			blind := ix.Kind == proto.IxPermission && strings.TrimSpace(ix.Summary) == "" ||
 				ix.Kind == proto.IxPlan && strings.TrimSpace(planTitle(ix.Plan)) == ""
@@ -119,8 +123,8 @@ func oracleBuildFleetIn(l i18n.Lang, agents []oracleInput, ixs []proto.Interacti
 			if since.IsZero() {
 				since = sess.UpdatedAt
 			}
-			it := FleetItem{ID: key, Title: agentTitle(&sess, fleetTitleMax), Place: agentPlace(a.Machine, &sess, fleetPlaceMax), Kind: "working",
-				Since: unixSeconds(since)}
+			it := FleetItem{ID: key, Title: fleetview.AgentTitle(sessionTitle(&sess), fleetTitleMax), Place: fleetview.AgentPlace(a.Machine, &sess, fleetPlaceMax), Kind: "working",
+				Since: fleetview.UnixSeconds(since)}
 			if sess.BackgroundWorking {
 				it.Background, it.Detail = true, backgroundDetail(l, &sess)
 				it.Progress = backgroundProgress(&sess)
@@ -130,8 +134,8 @@ func oracleBuildFleetIn(l i18n.Lang, agents []oracleInput, ixs []proto.Interacti
 			if sess.Assistant || sess.Loop != nil {
 				continue
 			}
-			unread = append(unread, FleetItem{ID: key, Title: agentTitle(&sess, fleetTitleMax), Place: agentPlace(a.Machine, &sess, fleetPlaceMax), Kind: "unread",
-				Detail: clip(oneLine(firstLine(sess.LastText)), fleetDetailMax), Since: unixSeconds(sess.UpdatedAt)})
+			unread = append(unread, FleetItem{ID: key, Title: fleetview.AgentTitle(sessionTitle(&sess), fleetTitleMax), Place: fleetview.AgentPlace(a.Machine, &sess, fleetPlaceMax), Kind: "unread",
+				Detail: clip(oneLine(firstLine(sess.LastText)), fleetDetailMax), Since: fleetview.UnixSeconds(sess.UpdatedAt)})
 		}
 	}
 	sort.SliceStable(working, func(i, j int) bool { return working[i].Since < working[j].Since })
@@ -172,7 +176,7 @@ func oracleLinkAttention(l i18n.Lang, agents []oracleInput, ixs []proto.Interact
 		return !a.Session.Assistant && !a.Session.Quiet && a.Session.State == proto.StateNeedsYou
 	}
 	stands := func(ix proto.Interaction) bool {
-		return cardStands(ix) && (handed(ix) || !ready[key(ix.MachineID, ix.SessionID)])
+		return oracleCardStands(ix) && (handed(ix) || !ready[key(ix.MachineID, ix.SessionID)])
 	}
 	needs := oracleNeedsYou(agents, cards, counts, stands)
 	slices.SortStableFunc(needs, func(a, b oracleNeeder) int {
@@ -186,11 +190,11 @@ func oracleLinkAttention(l i18n.Lang, agents []oracleInput, ixs []proto.Interact
 			break
 		}
 		sess := n.agent.Session
-		it := link.AttentionItem{MachineID: sess.MachineID, SessionID: sess.SessionID, Title: fit(agentTitle(&sess, linkTextMax), linkTextMax),
-			Place: fit(agentPlace(n.agent.Machine, &sess, linkTextMax), linkTextMax), Kind: proto.IxScreen,
+		it := link.AttentionItem{MachineID: sess.MachineID, SessionID: sess.SessionID, Title: fleetview.Fit(fleetview.AgentTitle(sessionTitle(&sess), linkTextMax), linkTextMax),
+			Place: fleetview.Fit(fleetview.AgentPlace(n.agent.Machine, &sess, linkTextMax), linkTextMax), Kind: proto.IxScreen,
 			Detail: i18n.T(l, "hub-liveactivity.screen"), Muted: n.agent.Muted, Route: sessionPath(sess.MachineID, sess.SessionID, false)}
 		if ix := n.card; ix != nil {
-			it.Kind, it.Detail, it.InteractionID = ix.Kind, fit(oneLine(interactionDetail(l, *ix)), linkDetailMax), ix.ID
+			it.Kind, it.Detail, it.InteractionID = ix.Kind, fleetview.Fit(oneLine(fleetview.InteractionDetail(l, *ix)), linkDetailMax), ix.ID
 		}
 		if since := oracleWaitingSince(n); !since.IsZero() {
 			it.Since = since.UTC().Truncate(time.Second).Format(time.RFC3339)
