@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -29,9 +30,16 @@ type launcherImportToolProvider struct {
 	Variants   []launcherImportToolProvider `json:"variants"`
 }
 
-func launcherImportToolService(t *testing.T, aliases []zshrcAlias, discoverErr error) *Service {
+func launcherImportToolService(t *testing.T, aliases []zshrcAlias, discoverErr error, stores ...Store) *Service {
 	t.Helper()
-	s, _, _ := modelService(t)
+	var s *Service
+	if len(stores) == 0 {
+		s, _, _ = modelService(t)
+	} else {
+		f := newFakeHub().withMachine()
+		f.ownModels = true
+		s = newServiceOn(t, f, stores[0])
+	}
 	profileToolsDevices(s)
 	old := zshrcAliases
 	zshrcAliases = func(context.Context, *Service, string) ([]zshrcAlias, error) { return aliases, discoverErr }
@@ -159,11 +167,19 @@ func TestLauncherImportToolStrictInputBeforeDiscovery(t *testing.T) {
 
 func TestLauncherImportToolErrorsAreRedacted(t *testing.T) {
 	s := launcherImportToolService(t, nil, errors.New("node failed with "+importKeyA+" and "+importEnvSecret))
-	result := launcherImportToolCall(t, s, `{"action":"preview","machine":"m1"}`)
-	if !result.IsError {
-		t.Fatalf("discovery error succeeded: %+v", result)
+	for _, args := range []string{
+		`{"action":"preview","machine":"m1"}`,
+		`{"action":"commit","machine":"m1","names":["gcc"]}`,
+	} {
+		result := launcherImportToolCall(t, s, args)
+		if !result.IsError || toolText(result) != errLauncherImportDiscovery.Error() {
+			t.Fatalf("discovery error result: %+v", result)
+		}
+		requireLauncherImportRedacted(t, toolText(result))
 	}
-	requireLauncherImportRedacted(t, toolText(result))
+	if len(s.pendingQuestions()) != 0 || len(s.storedLaunchers(context.Background())) != 0 {
+		t.Fatal("failed commit discovery created a card or stored a provider")
+	}
 }
 
 func TestLauncherImportToolPanicsAreRedacted(t *testing.T) {
@@ -178,6 +194,62 @@ func TestLauncherImportToolPanicsAreRedacted(t *testing.T) {
 		t.Fatalf("panic result: %+v", result)
 	}
 	requireLauncherImportRedacted(t, toolText(result))
+}
+
+func TestLauncherImportToolCommitFailuresAreSpecificRedactedAndUnlocked(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		failRead  int32
+		panicRead bool
+		want      error
+		committed bool
+	}{
+		{name: "apply", failRead: 2, want: errLauncherImportCommit},
+		{name: "readback", failRead: 3, want: errLauncherImportReadback, committed: true},
+		{name: "readback panic", failRead: 3, panicRead: true, want: errLauncherImportReadback, committed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newSettingsFaultStore()
+			s := launcherImportToolService(t, importAliases, nil, st)
+			var armed atomic.Bool
+			var reads atomic.Int32
+			st.onRead = func(st *settingsFaultStore, key string, _ int) {
+				if !armed.Load() || key != launchersManagedKey || reads.Add(1) != tc.failRead {
+					return
+				}
+				if tc.panicRead {
+					panic(errors.New("readback panic with " + importKeyA + " and " + importEnvSecret))
+				}
+				st.failRead = key
+			}
+			result := runManagedProfileTool(t, s, "launcher_import", map[string]any{
+				"action": "commit", "machine": "m1", "names": []string{"gcc2"},
+			}, true, nil, func() { armed.Store(true) })
+			text := toolText(result)
+			if !result.IsError || text != tc.want.Error() {
+				t.Fatalf("commit failure result: %+v, want %q", result, tc.want)
+			}
+			requireLauncherImportRedacted(t, text)
+			st.onRead = nil
+			st.failRead = ""
+			list := s.storedLaunchers(context.Background())
+			committed := len(list) == 1 && list[0].Name == "gcc2" && list[0].KeySealed != ""
+			if committed != tc.committed {
+				t.Fatalf("committed=%v, want %v", committed, tc.committed)
+			}
+			unlocked := make(chan struct{})
+			go func() {
+				s.models.mu.Lock()
+				s.models.mu.Unlock()
+				close(unlocked)
+			}()
+			select {
+			case <-unlocked:
+			case <-time.After(5 * time.Second):
+				t.Fatal("models mutex remained locked after the commit failure")
+			}
+		})
+	}
 }
 
 func TestLauncherImportToolCommitSealsMergesAndReadsBack(t *testing.T) {

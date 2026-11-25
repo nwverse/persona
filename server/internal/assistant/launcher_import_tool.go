@@ -67,9 +67,9 @@ type launcherImportCommitOutput struct {
 var (
 	errLauncherImportName      = errors.New("launcher_import: every name must identify a preview provider or shell alias")
 	errLauncherImportDiscovery = errors.New("launcher_import: could not discover providers; check machine availability and node version")
-	errLauncherImportCommit    = errors.New("launcher_import: import failed; check stored provider configuration and try again")
+	errLauncherImportCommit    = errors.New("launcher_import: import did not complete; check current provider state before retrying")
 	errLauncherImportReadback  = errors.New("launcher_import: import committed, but non-sensitive readback is unavailable")
-	errLauncherImportOperation = errors.New("launcher_import: operation failed without diagnostic details")
+	errLauncherImportOperation = errors.New("launcher_import: operation failed without diagnostic details; check current provider state before retrying because the outcome may be uncertain")
 )
 
 func decodeLauncherImportInput(args json.RawMessage) (launcherImportInput, error) {
@@ -253,7 +253,13 @@ func launcherImportCard(l i18n.Lang, picks []importGroup, in launcherImportInput
 	return strings.Join(lines, "\n")
 }
 
-func (s *Service) prepareLauncherImportCommit(ctx context.Context, in launcherImportInput) (*ownChange, error) {
+func (s *Service) prepareLauncherImportCommit(ctx context.Context, in launcherImportInput) (change *ownChange, err error) {
+	// Re-preparation also runs on the approval-resolution goroutine, outside toolLauncherImport's recovery stack.
+	defer func() {
+		if recover() != nil {
+			change, err = nil, errLauncherImportOperation
+		}
+	}()
 	ctx, cancel := context.WithTimeout(ctx, launcherImportOperationTimeout)
 	defer cancel()
 	groups, stored, err := s.launcherImportGroups(ctx, in)
@@ -277,16 +283,32 @@ func (s *Service) prepareLauncherImportCommit(ctx context.Context, in launcherIm
 	remote := s.importRemoteAliases(ctx, groups, body, rc, stored)
 	return &ownChange{
 		cardText: func(l i18n.Lang) string { return launcherImportCard(l, picks, in) },
-		apply: func(ctx context.Context) (string, error) {
+		apply: func(ctx context.Context) (text string, err error) {
+			committed := false
+			defer func() {
+				if recover() == nil {
+					return
+				}
+				text = ""
+				if committed {
+					err = errLauncherImportReadback
+				} else {
+					err = errLauncherImportOperation
+				}
+			}()
 			ctx, cancel := context.WithTimeout(ctx, launcherImportOperationTimeout)
 			defer cancel()
 			result, err := s.importLaunchers(ctx, groups, body, rc, remote)
 			if err != nil {
 				return "", errLauncherImportCommit
 			}
-			s.models.mu.Lock()
-			list, err := s.readStoredLaunchers(ctx)
-			s.models.mu.Unlock()
+			committed = true
+			var list []storedLauncher
+			func() {
+				s.models.mu.Lock()
+				defer s.models.mu.Unlock()
+				list, err = s.readStoredLaunchers(ctx)
+			}()
 			if err != nil {
 				return "", errLauncherImportReadback
 			}
@@ -302,6 +324,20 @@ func (s *Service) prepareLauncherImportCommit(ctx context.Context, in launcherIm
 			return launcherImportJSON(out)
 		},
 	}, nil
+}
+
+func redactedLauncherImportError(err error) error {
+	// Approval wraps some apply errors with %w. Match known fixed diagnostics, but return the sentinel itself: the
+	// original wrapper or its Error method may still contain discovered credentials.
+	for _, fixed := range []error{
+		errLauncherImportName, errLauncherImportDiscovery, errLauncherImportCommit,
+		errLauncherImportReadback, errLauncherImportOperation,
+	} {
+		if errors.Is(err, fixed) {
+			return fixed
+		}
+	}
+	return errLauncherImportOperation
 }
 
 func (s *Service) toolLauncherImport(ctx context.Context, call ToolCall, raw json.RawMessage) (text string, err error) {
@@ -328,7 +364,7 @@ func (s *Service) toolLauncherImport(ctx context.Context, call ToolCall, raw jso
 	}
 	text, err = s.ownSettingAction(ctx, call, setting, "set", raw)
 	if err != nil {
-		return "", errLauncherImportOperation
+		return "", redactedLauncherImportError(err)
 	}
 	return text, nil
 }
