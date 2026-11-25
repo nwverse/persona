@@ -1040,3 +1040,10 @@ it the CLI declares only five-minute markers on an API key or a gateway, whateve
 
 Adding an always-loaded tool to the top-level list can invalidate a warm Claude conversation prefix. Test
 the full ordered list before and after discovery and reconnection, including a different upstream order.
+
+## A supervision hold belongs to the turn that ended (#15549)
+
+Save the hold timestamp and promotion together. Clear the active record at the end of its turn and carry that
+turn's decision to the delayed push and channel mirror. Reading the conversation's current hold at notification
+time can pick up the next round. A restart test for promotion must show the hold still exists before it checks
+that a silent finish is refused.
