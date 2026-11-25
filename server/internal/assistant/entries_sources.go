@@ -76,11 +76,35 @@ func (s *Service) toolEntries(ctx context.Context, machine, session, name string
 			return "", err
 		}
 		p.Type = "decision"
-		out, err := s.listEntries(ctx, p, machine != "" && machine == s.settings(ctx).MachineID)
+		personal := machine != "" && machine == s.settings(ctx).MachineID
+		out, err := s.listEntries(ctx, p, personal)
 		if err != nil {
 			return "", err
 		}
-		b, err := json.Marshal(out)
+		// A recall (scene 2, memory_assemble.go): what the conversation's track said, general entries from elsewhere,
+		// and sensitive ones from elsewhere only when the conversation carries their categories. Filtered after the
+		// page is read, so the cursor and has_more stay the ledger's.
+		out.Entries = s.recallMemory(ctx, session, out.Entries).Entries
+		if out.Entries == nil {
+			out.Entries = []proto.AssistantEntry{}
+		}
+		// The memory extension's entries a recall returns, on the first page and beside the ledger's, so the cursor
+		// stays the ledger's (memory_extension_source.go). Filters the extension's entries have no field for (who wrote
+		// one, how far it is trusted, a status other than active) leave them out.
+		var memory []recalledMemory
+		var memoryOmitted string
+		if personal && p.After == "" {
+			if p.By != "" || p.Trust != "" || (p.Status != "" && p.Status != "active") {
+				memoryOmitted = "ledger_filters"
+			} else {
+				memory = s.recallExtensionMemory(ctx, session, p.Tag)
+			}
+		}
+		b, err := json.Marshal(struct {
+			proto.AssistantEntriesResult
+			Memory        []recalledMemory `json:"memory,omitempty"`
+			MemoryOmitted string           `json:"memory_omitted,omitempty"`
+		}{out, memory, memoryOmitted})
 		return string(b), err
 	}
 	var in struct {
@@ -142,16 +166,12 @@ func (s *Service) toolEntries(ctx context.Context, machine, session, name string
 		if q.Scope.Personal && machine != s.settings(ctx).MachineID {
 			return "", errors.New("personal quotes require the owner's machine")
 		}
-		if q.OriginSpace == "" {
-			q.OriginSpace = s.entriesSourceSpace(ctx, q.Source.Machine, q.Source.Session)
-		}
+		q.OriginSpace = s.recordedSpace(ctx, machine, session, q.Source)
 		if err := db.ValidateAssistantEntry(*q); err != nil {
 			return "", err
 		}
 	}
-	if e.OriginSpace == "" {
-		e.OriginSpace = s.entriesSourceSpace(ctx, e.Source.Machine, e.Source.Session)
-	}
+	e.OriginSpace = s.recordedSpace(ctx, machine, session, e.Source)
 	if err := db.ValidateAssistantEntry(e); err != nil {
 		return "", err
 	}
@@ -179,6 +199,20 @@ func (s *Service) toolEntries(ctx context.Context, machine, session, name string
 	}
 	b, err := json.Marshal(map[string]any{"entry": e})
 	return string(b), err
+}
+
+// recordedSpace is the track an entry conversation machine/session records from source was said in (#13532): the hub's,
+// never what the model states (a model could otherwise move a finance space's entry into a general one). The
+// recording conversation's space when it is in one, so that what a space's conversation records stays its own,
+// else the space of the conversation the entry names as its source ("" the main track, or one not found).
+func (s *Service) recordedSpace(ctx context.Context, machine, session string, source proto.AssistantEntrySource) string {
+	if own := s.entriesSourceSpace(ctx, machine, session); own != "" {
+		return own
+	}
+	if source.Machine == machine && source.Session == session {
+		return ""
+	}
+	return s.entriesSourceSpace(ctx, source.Machine, source.Session)
 }
 
 func (s *Service) entriesSourceSpace(ctx context.Context, machine, session string) string {

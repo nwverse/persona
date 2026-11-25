@@ -806,7 +806,7 @@ func (s *Service) forwardInboxToTodos(ctx context.Context) {
 		}
 	}
 	for _, it := range b.items {
-		if !it.open() || !inboxTaskLinkEligible(it) {
+		if it.VisibilityExcluded || !it.open() || !inboxTaskLinkEligible(it) {
 			continue
 		}
 		if isSelfAuthoredInboxItem(it, owner, ownEmails) {
@@ -860,6 +860,10 @@ type todoForwardDelivery struct {
 }
 
 func (s *Service) forwardOneInboxItemToTodo(ctx context.Context, it *InboxItem, snap InboxItem, m todoForwardMatch) {
+	allowed, visErr := s.inboxVisibilityModelAllowed(ctx, &snap)
+	if visErr != nil || !allowed {
+		return
+	}
 	claimed, pending, err := s.claimTodoForward(ctx, snap.ID, m.todo.ID, snap.Last)
 	if err != nil {
 		s.logf("inbox: todo forward ledger check for %s -> %s: %v", snap.ID, m.todo.ID, err)
@@ -1091,7 +1095,11 @@ func (s *Service) deliverInboxForwardToTodo(ctx context.Context, it *InboxItem, 
 			supervisorSelf = t.Origin
 		}
 		resumeWhy := fmt.Sprintf("auto-forwarded Inbox event for %s", canonicalURL)
-		if err := s.resumeAllowed(ctx, supervisorSelf, am, c, resumeWhy, nil); err != nil {
+		err := eventMayResume(c)
+		if err == nil {
+			err = s.resumeAllowed(ctx, supervisorSelf, am, c, resumeWhy, nil)
+		}
+		if err != nil {
 			return s.fallbackInboxForwardToSupervisor(ctx, it, t, canonicalURL, envelope, clip(oneLine(err.Error()), 240))
 		}
 		params := map[string]any{
@@ -1202,6 +1210,9 @@ func (s *Service) retryUncertainInboxForward(ctx context.Context, t Todo, canoni
 			supervisorSelf = t.Origin
 		}
 		resumeWhy := fmt.Sprintf("auto-forwarded Inbox event for %s", canonicalURL)
+		if err := eventMayResume(*matched); err != nil {
+			return stayUncertain(err.Error())
+		}
 		if err := s.resumeAllowed(ctx, supervisorSelf, am, *matched, resumeWhy, nil); err != nil {
 			return stayUncertain(err.Error())
 		}

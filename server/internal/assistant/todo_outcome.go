@@ -184,14 +184,15 @@ func (s *Service) outcomeAgents(ctx context.Context, t Todo) []outcomeAgent {
 		if m, ok := s.device(ctx, a.MachineID); ok {
 			name = m.Name
 		}
-		_, text := s.lastTurn(ctx, a.MachineID, a.SessionID)
+		resolved, sid, listed := s.resolveTaskSession(ctx, a.MachineID, a.SessionID)
+		_, text := s.lastTurn(ctx, a.MachineID, sid)
 		cwd := a.Cwd
-		if c, ok := s.session(ctx, a.MachineID, a.SessionID); ok {
+		if listed {
 			if text == "" {
-				text = strings.TrimSpace(c.LastText)
+				text = strings.TrimSpace(resolved.LastText)
 			}
 			if cwd == "" {
-				cwd = c.Cwd
+				cwd = resolved.Cwd
 			}
 		}
 		if text = strings.TrimSpace(text); text == "" || cutOff(text) {
@@ -632,7 +633,13 @@ func (s *Service) withProjectContextForTodo(ctx context.Context, machine, dir, l
 	if strings.TrimSpace(prompt) == "" {
 		return prompt
 	}
-	if background := s.projectHandoffContextForTodo(ctx, machine, dir, lead, t); background != "" {
+	background := s.projectHandoffContextForTodo(ctx, machine, dir, lead, t)
+	// The memory extension's entries the work bears on (memory_extension_source.go); a planned task's carry them in
+	// handOffMemory instead.
+	if memory := s.agentStartMemory(ctx, machine, strings.TrimSpace(t.Title+"\n"+prompt)); memory != "" {
+		background = strings.TrimSpace(background + "\n\n" + memory)
+	}
+	if background != "" {
 		return background + "\n\n" + prompt
 	}
 	return prompt

@@ -31,6 +31,7 @@ type fleetDevs struct {
 	order        []string
 	usage        assistantwire.UsageSummary
 	capacity     proto.CapacitySnapshot // what CapacitySnapshot answers (capacity_test.go)
+	accounts     []proto.UsageAccount   // what UsageAccounts answers (candidate_headroom_test.go)
 	gatewayRetry func(source, provider string, now time.Time) time.Time
 	// attention is every Persona Link summary handed over (SetAttention), in order.
 	attention []link.Attention
@@ -49,11 +50,15 @@ type fleetDevs struct {
 	heldLang  map[string]i18n.Lang
 	heldActs  []string
 	heldErr   error
+	// transfers: every AgentTransfer asked for, in order; transfer answers them (nil: done, with the paths asked).
+	transfers []devices.AgentTransfer
+	transfer  func(devices.AgentTransfer) (devices.AgentTransferResult, error)
 }
 
 type fleetNode struct {
 	name, home, trust string
 	homeReal          string // home with its links followed, when the node says it is another path
+	executable        string // the file its node said it runs from when its connection began ("": it did not say)
 	sessions          []proto.Session
 	lists             int // how many times its whole list was read (Sessions)
 	connected         time.Time
@@ -147,7 +152,8 @@ func (d *fleetDevs) List() []devices.Summary {
 	var out []devices.Summary
 	for _, id := range d.order {
 		n := d.machines[id]
-		out = append(out, devices.Summary{ID: id, Name: n.name, Home: n.home, HomeReal: n.homeReal, Trust: n.trust, Online: !n.away, Reachable: !n.away})
+		out = append(out, devices.Summary{ID: id, Name: n.name, Home: n.home, HomeReal: n.homeReal, Executable: n.executable, Trust: n.trust,
+			Online: !n.away, Reachable: !n.away})
 	}
 	return out
 }
@@ -166,7 +172,8 @@ func (d *fleetDevs) Summary(id string) (devices.Summary, bool) {
 	if n == nil || !slices.Contains(d.order, id) {
 		return devices.Summary{}, false
 	}
-	return devices.Summary{ID: id, Name: n.name, Home: n.home, HomeReal: n.homeReal, Trust: n.trust, Online: !n.away, Reachable: !n.away}, true
+	return devices.Summary{ID: id, Name: n.name, Home: n.home, HomeReal: n.homeReal, Executable: n.executable, Trust: n.trust,
+		Online: !n.away, Reachable: !n.away}, true
 }
 
 // Shown is the node's shownUntil and unlisted, as the devices say them.
@@ -261,6 +268,12 @@ func (d *fleetDevs) CapacitySnapshot(context.Context) proto.CapacitySnapshot {
 	return d.capacity
 }
 
+func (d *fleetDevs) UsageAccounts(context.Context) []proto.UsageAccount {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]proto.UsageAccount(nil), d.accounts...)
+}
+
 func (d *fleetDevs) GatewayRetryAt(source, provider string, now time.Time) time.Time {
 	if d.gatewayRetry != nil {
 		return d.gatewayRetry(source, provider, now)
@@ -321,10 +334,17 @@ type fleetMem struct {
 	status map[string]string
 	res    map[string]*proto.Resolution
 	recs   []db.InteractionRecord
-	always map[string]map[string]bool // session → keys
-	seen   map[[2]string]time.Time
+	// endedBy is who or what ended each interaction, as the history's ended_by keeps it (db.WithEndedBy).
+	endedBy map[string]string
+	always  map[string]map[string]bool // session → keys
+	seen    map[[2]string]time.Time
 	// insertGate, when set before the cards come, holds each interaction write until it is closed (a slow database).
 	insertGate chan struct{}
+	// resolvedInsert* controls the one-statement reversible-setting decision history write in failure and race tests.
+	resolvedInsertErr     error
+	resolvedInsertGate    chan struct{}
+	resolvedInsertStarted chan struct{}
+	resolvedOutcomeErr    error
 }
 
 func newFleetMem() *fleetMem {
@@ -349,6 +369,67 @@ func (m *fleetMem) InsertInteraction(ctx context.Context, ix proto.Interaction) 
 	return nil
 }
 
+func (m *fleetMem) InsertResolvedInteraction(ctx context.Context, ix proto.Interaction, res *proto.Resolution) error {
+	m.fmu.Lock()
+	started, gate, insertErr := m.resolvedInsertStarted, m.resolvedInsertGate, m.resolvedInsertErr
+	m.resolvedInsertStarted = nil
+	m.fmu.Unlock()
+	if started != nil {
+		close(started)
+	}
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if insertErr != nil {
+		return insertErr
+	}
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	if _, exists := m.status[ix.ID]; exists {
+		return errors.New("duplicate interaction id")
+	}
+	now := time.Now().UTC()
+	m.status[ix.ID], m.res[ix.ID] = "resolved", res
+	m.recs = append(m.recs, db.InteractionRecord{Interaction: ix, Status: "resolved", Resolution: res, ResolvedAt: &now})
+	return nil
+}
+
+func (m *fleetMem) MarkResolvedInteractionOutcome(_ context.Context, id string, created time.Time, outcome string, _ time.Time) error {
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	if m.resolvedOutcomeErr != nil {
+		return m.resolvedOutcomeErr
+	}
+	if outcome != "saved" && outcome != "not_saved" {
+		return errors.New("unknown resolved-interaction outcome")
+	}
+	if m.status[id] != "resolved" {
+		return errors.New("resolved-interaction outcome was not recorded")
+	}
+	for i := range m.recs {
+		if m.recs[i].Interaction.ID != id || !m.recs[i].Interaction.CreatedAt.Equal(created) {
+			continue
+		}
+		var input map[string]json.RawMessage
+		if err := json.Unmarshal(m.recs[i].Interaction.ToolInput, &input); err != nil {
+			return err
+		}
+		raw, _ := json.Marshal(outcome)
+		input["outcome"] = raw
+		updated, err := json.Marshal(input)
+		if err != nil {
+			return err
+		}
+		m.recs[i].Interaction.ToolInput = updated
+		return nil
+	}
+	return errors.New("resolved-interaction outcome was not recorded")
+}
+
 func (m *fleetMem) MarkInteractionResumable(_ context.Context, id string) (bool, error) {
 	m.fmu.Lock()
 	defer m.fmu.Unlock()
@@ -363,11 +444,15 @@ func (m *fleetMem) MarkInteractionResumable(_ context.Context, id string) (bool,
 	return true, nil
 }
 
-func (m *fleetMem) FinishInteraction(_ context.Context, id, status string, res *proto.Resolution) error {
+func (m *fleetMem) FinishInteraction(ctx context.Context, id, status string, res *proto.Resolution) error {
 	m.fmu.Lock()
 	defer m.fmu.Unlock()
 	if m.status[id] == "pending" {
 		m.status[id], m.res[id] = status, res
+		if m.endedBy == nil {
+			m.endedBy = map[string]string{}
+		}
+		m.endedBy[id] = db.EndedBy(ctx)
 		for i := range m.recs {
 			if m.recs[i].Interaction.ID == id {
 				m.recs[i].Status = status
@@ -375,6 +460,13 @@ func (m *fleetMem) FinishInteraction(_ context.Context, id, status string, res *
 		}
 	}
 	return nil
+}
+
+// endedAs is who or what ended interaction id, as the history keeps it.
+func (m *fleetMem) endedAs(id string) string {
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	return m.endedBy[id]
 }
 
 func (m *fleetMem) InteractionOutcome(_ context.Context, id string) (string, *proto.Resolution, error) {
@@ -633,6 +725,19 @@ func (d *fleetDevs) HeldRetry(_ context.Context, sid, msg string) (bool, error) 
 
 func (d *fleetDevs) HeldDelete(_ context.Context, sid, msg string) (bool, error) {
 	return d.heldAct("delete", sid, msg)
+}
+
+// AgentTransfer notes t and answers it with transfer (a done file at the path asked when that is nil).
+func (d *fleetDevs) AgentTransfer(_ context.Context, t devices.AgentTransfer) (devices.AgentTransferResult, error) {
+	d.mu.Lock()
+	d.transfers = append(d.transfers, t)
+	answer := d.transfer
+	d.mu.Unlock()
+	if answer != nil {
+		return answer(t)
+	}
+	return devices.AgentTransferResult{ID: "t1", Kind: proto.FilePackFile, Name: "report.pdf", Source: t.Path,
+		ResultPath: "/home/me/Downloads/Persona/report.pdf", Size: 2048, SHA256: "abababababababababababababababababababababababababababababababab"}, nil
 }
 
 // heldAct notes Retry or Delete (what) on held message msg of session sid, found on any machine or not; one found is

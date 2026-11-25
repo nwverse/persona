@@ -8,27 +8,49 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
+type codexRemoteDiag string
+
+const (
+	codexDiagNone            codexRemoteDiag = ""
+	codexDiagSocketGone      codexRemoteDiag = "socket_gone"
+	codexDiagEndpointInvalid codexRemoteDiag = "endpoint_invalid"
+	codexDiagUnreachable     codexRemoteDiag = "unreachable"
+	codexDiagHomeMismatch    codexRemoteDiag = "home_mismatch"
+	codexDiagHandshakeFailed codexRemoteDiag = "handshake_failed"
+)
+
 type codexRegistry struct {
-	mu           sync.Mutex
-	config       proto.CodexConfig
-	claudeIDs    map[string]bool
-	liveRollouts map[string]string // rollout id → what holds it open (codexHolder)
-	byPane       map[string]string
-	threads      map[string]codexSource
-	remotes      map[string]*codexRemote
-	retries      map[string]codexRetry // server id -> attempts that did not connect (codex_backoff.go)
-	report       func(proto.CodexConfig)
+	mu                sync.Mutex
+	index             codexHomeIndex
+	paneReads         codexPaneReads
+	lastRows          map[string]proto.Session // immutable last observations, reused when their home is inaccessible
+	listSeq, savedSeq uint64
+	config            proto.CodexConfig
+	claudeIDs         map[string]bool
+	liveRollouts      map[string]string          // rollout id → what holds it open (codexHolder)
+	liveEndpoints     map[string]string          // rollout id → resolved shared endpoint when held by a --listen app-server
+	liveCanQuit       map[string]bool            // rollout id → standalone CLI in a safe-quit terminal
+	stdioHomes        map[string]bool            // canonical home → a stdio app-server currently runs there
+	remoteDiags       map[string]codexRemoteDiag // resolved endpoint → last connection failure kind
+	byPane            map[string]string
+	byPanePID         map[string]int
+	threads           map[string]codexSource
+	remotes           map[string]*codexRemote
+	retries           map[string]codexRetry // server id -> attempts that did not connect (codex_backoff.go)
+	report            func(proto.CodexConfig)
 	// handed: the hub handed this connection the inventory it keeps for the computer (node.configure's codex, every
 	// connection: devices.connected). Until then the registry is a new Node's, without the threads the user joined, the
 	// homes and the app-servers the hub kept, and the hub would store it over what it kept: reports wait for it
@@ -39,12 +61,61 @@ type codexRegistry struct {
 	// checked lists the processes as scan does, and says whether it could (scanCodexProcessesChecked); nil: scan's
 	// list, taken as complete.
 	checked func() ([]codexProcess, bool)
+	// claimed: server id -> the runtime that claims the instance, which the node keeps no connection to
+	// (codex_instance_claims.go); kept per Node, so a new hub connection logs each claim once more. attach serializes
+	// checking the claims with attaching, so an instance a runtime claims meanwhile is not dialled after the claim
+	// took it.
+	claimed map[string]string
+	attach  sync.Mutex
 }
 
 type codexSource struct{ home, thread, path string }
 
 func newCodexRegistry() *codexRegistry {
-	return &codexRegistry{threads: map[string]codexSource{}, remotes: map[string]*codexRemote{}, scan: scanCodexProcesses, checked: scanCodexProcessesChecked, kick: make(chan struct{}, 1)}
+	return &codexRegistry{
+		threads:     map[string]codexSource{},
+		remotes:     map[string]*codexRemote{},
+		remoteDiags: map[string]codexRemoteDiag{},
+		scan:        scanCodexProcesses,
+		checked:     scanCodexProcessesChecked,
+		kick:        make(chan struct{}, 1),
+	}
+}
+
+func (r *codexRegistry) setRemoteDiag(endpoint string, diag codexRemoteDiag) {
+	if r == nil || endpoint == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.remoteDiags == nil {
+		r.remoteDiags = map[string]codexRemoteDiag{}
+	}
+	if diag == codexDiagNone {
+		delete(r.remoteDiags, endpoint)
+		return
+	}
+	r.remoteDiags[endpoint] = diag
+}
+
+// codexControlEndpoint is the default Unix control socket endpoint for home.
+func codexControlEndpoint(home string) string {
+	if home == "" {
+		return ""
+	}
+	return "unix://" + filepath.Join(home, "app-server-control", "app-server-control.sock")
+}
+
+// codexResolvedEndpoint normalizes a process's --listen endpoint for home; returns "" for standalone CLIs,
+// stdio app-servers, or disabled listeners.
+func codexResolvedEndpoint(home, endpoint string) string {
+	if endpoint == "" || endpoint == "stdio://" || endpoint == "off" {
+		return ""
+	}
+	if endpoint == "unix://" {
+		return codexControlEndpoint(home)
+	}
+	return endpoint
 }
 
 // canonicalCodexHome is home absolute, with its links resolved as far as it exists: a home that does not exist yet
@@ -262,6 +333,50 @@ func (n *Node) discoverCodex() {
 	}
 	scan := r.scan
 	r.mu.Unlock()
+	// The TUI's environment identifies the pane's home before any rollout or
+	// unrelated transcript directory is opened. An inherited pane variable on
+	// an app-server subprocess must not override its terminal client.
+	found := scan()
+	byPane := map[string]string{}
+	byPanePID := map[string]int{}
+	for _, p := range found {
+		if n.herdrSessionBlocked(p.herdrSession) {
+			continue
+		}
+		home := canonicalCodexHome(firstNonEmpty(p.home, n.codexHome()), n.home)
+		if home == "" {
+			continue
+		}
+		var pane string
+		switch {
+		case p.pane != "":
+			if n.hosts != nil {
+				pane = n.herdrPaneIn(p.pane, p.herdrSession)
+			} else {
+				pane = p.pane
+			}
+		case p.herdrCore != "":
+			pane = host.PaneRef{Kind: host.HerdrCore, ID: p.herdrCore}.String()
+		case p.ternPane != "":
+			pane = host.PaneRef{Kind: host.Tern, ID: p.ternPane}.String()
+		}
+		if pane != "" && (p.endpoint == "" || byPane[pane] == "") {
+			byPane[pane] = home
+		}
+		if p.endpoint == "" && p.pid > 0 {
+			pidPane := pane
+			if pidPane == "" && p.orcaPane != "" {
+				pidPane = host.PaneRef{Kind: host.Orca, ID: p.orcaPane}.String()
+			}
+			if pidPane != "" {
+				byPanePID[pidPane] = p.pid
+			}
+		}
+	}
+	r.mu.Lock()
+	r.byPane = byPane
+	r.byPanePID = byPanePID
+	r.mu.Unlock()
 	claudeIDs := map[string]bool{}
 	for _, path := range n.globProjects("*", "*.jsonl") {
 		claudeIDs[strings.TrimSuffix(filepath.Base(path), ".jsonl")] = true
@@ -269,9 +384,20 @@ func (n *Node) discoverCodex() {
 	r.mu.Lock()
 	r.claudeIDs = claudeIDs
 	r.mu.Unlock()
-	found := scan()
 	changed := false
 	liveRollouts := map[string]string{}
+	liveEndpoints := map[string]string{}
+	liveCanQuit := map[string]bool{}
+	stdioHomes := map[string]bool{}
+	for _, p := range found {
+		if n.herdrSessionBlocked(p.herdrSession) {
+			continue
+		}
+		home := canonicalCodexHome(firstNonEmpty(p.home, n.codexHome()), n.home)
+		if home != "" && p.endpoint == "stdio://" {
+			stdioHomes[home] = true
+		}
+	}
 	for pid, paths := range openCodexRollouts(found) {
 		for _, p := range found {
 			if p.pid != pid {
@@ -282,39 +408,54 @@ func (n *Node) discoverCodex() {
 				holder = codexHolderAppServer
 			}
 			home := canonicalCodexHome(firstNonEmpty(p.home, n.codexHome()), n.home)
+			sharedEndpoint := codexResolvedEndpoint(home, p.endpoint)
+			canQuit := p.endpoint == "" && runtime.GOOS != "windows" && p.hasTakeoverTerminal()
 			for _, path := range paths {
 				if !pathWithin(path, home) { // Windows paths do not tell case apart (codex_desktop.go)
 					continue
 				}
 				if thread := rolloutThreadID(home, path); thread != "" {
+					if n.herdrSessionBlocked(p.herdrSession) {
+						id := n.codexPublicID(home, thread)
+						if !n.isAssistantSession(id) && !n.keptSessions()[id] {
+							n.noteHerdrSessionID(id, p.herdrSession)
+							continue
+						}
+					}
 					id := n.registerCodex(home, thread, path)
 					liveRollouts[id] = holder
+					if sharedEndpoint != "" {
+						liveEndpoints[id] = sharedEndpoint
+					}
+					if prev, exists := liveCanQuit[id]; !exists {
+						liveCanQuit[id] = canQuit
+					} else {
+						liveCanQuit[id] = prev && canQuit
+					}
 				}
 			}
 		}
 	}
 	r.mu.Lock()
 	r.liveRollouts = liveRollouts
+	r.liveEndpoints = liveEndpoints
+	r.liveCanQuit = liveCanQuit
+	r.stdioHomes = stdioHomes
 	r.mu.Unlock()
-	byPane := map[string]string{}
 	for _, p := range found {
+		if n.herdrSessionBlocked(p.herdrSession) {
+			continue
+		}
 		home := canonicalCodexHome(firstNonEmpty(p.home, n.codexHome()), n.home)
 		if home == "" {
 			continue
-		}
-		if p.pane != "" {
-			byPane[n.herdrPaneIn(p.pane, p.herdrSession)] = home
 		}
 		r.mu.Lock()
 		if !slices.Contains(r.config.Homes, home) {
 			r.config.Homes = append(r.config.Homes, home)
 			changed = true
 		}
-		if p.endpoint != "" && p.endpoint != "stdio://" && p.endpoint != "off" {
-			endpoint := p.endpoint
-			if endpoint == "unix://" {
-				endpoint += filepath.Join(home, "app-server-control", "app-server-control.sock")
-			}
+		if endpoint := codexResolvedEndpoint(home, p.endpoint); endpoint != "" {
 			sum := sha256.Sum256([]byte(home + "\x00" + endpoint))
 			id := "discovered-" + hex.EncodeToString(sum[:12])
 			if !slices.ContainsFunc(r.config.Servers, func(s proto.CodexServer) bool { return s.Home == home && s.Endpoint == endpoint }) {
@@ -324,9 +465,6 @@ func (n *Node) discoverCodex() {
 		}
 		r.mu.Unlock()
 	}
-	r.mu.Lock()
-	r.byPane = byPane
-	r.mu.Unlock()
 	cfg := n.codexInventory()
 	// Existing official control sockets are discoverable without starting a daemon.
 	for _, home := range cfg.Homes {
@@ -370,12 +508,11 @@ func (n *Node) runCodex(ctx context.Context) {
 			scanAt = time.Now()
 		}
 		cfg := n.codexInventory()
+		deadline := time.Now().Add(codexHomeListWait)
 		for _, home := range cfg.Homes {
-			n.registerRollouts(home)
+			n.indexCodexHome(home, deadline)
 		}
-		for _, s := range cfg.Servers {
-			n.ensureCodexRemote(ctx, s)
-		}
+		n.attachCodexServers(ctx, cfg.Servers) // but not to the ones a runtime claims (codex_instance_claims.go)
 		select {
 		case <-ctx.Done():
 			n.codices.mu.Lock()
@@ -422,6 +559,10 @@ const (
 // that keeps stdio app-servers for months holds the threads they once loaded: they showed "Unread" all along.
 const codexHeldIdle = 24 * time.Hour
 
+// codexHeldWorkingStale: a held rollout with an open turn that has seen no new write or activity this long stops
+// reporting StatusWorking so runaway timers do not climb for hours when an external CLI waits on a prompt or stalls.
+const codexHeldWorkingStale = 20 * time.Minute
+
 // heldRecently: the rollout at path was written within codexHeldIdle (its last line's time or its mtime, the later).
 func heldRecently(m quickMeta, path string, pass *codexListPass) bool {
 	st, err := pass.stat(path)
@@ -435,6 +576,65 @@ func heldRecently(m quickMeta, path string, pass *codexListPass) bool {
 	return time.Since(at) < codexHeldIdle
 }
 
+// heldTurnStalled reports whether a held rollout's open turn has gone without new writes or activity for at least
+// codexHeldWorkingStale.
+func heldTurnStalled(m quickMeta, path string, pass *codexListPass) bool {
+	var at time.Time
+	if st, err := pass.stat(path); err == nil {
+		at = st.ModTime()
+	}
+	if m.turnActivityAt.After(at) {
+		at = m.turnActivityAt
+	}
+	if m.contentAt.After(at) {
+		at = m.contentAt
+	}
+	return !at.IsZero() && time.Since(at) >= codexHeldWorkingStale
+}
+
+// codexSharedReadOnlyReason explains why a rollout held by a shared --listen app-server could not be joined live.
+func (n *Node) codexSharedReadOnlyReason(home, endpoint string) string {
+	if endpoint == codexControlEndpoint(home) && codexDaemonSocketGone(home) != nil {
+		return i18n.T(i18n.Default, "codex-history.shared_socket_gone")
+	}
+	diag := codexDiagNone
+	var matched *codexRemote
+	if n.codices != nil {
+		n.codices.mu.Lock()
+		diag = n.codices.remoteDiags[endpoint]
+		for _, c := range n.codices.remotes {
+			if c.spec.Endpoint == endpoint {
+				matched = c
+				break
+			}
+		}
+		n.codices.mu.Unlock()
+	}
+	ready := false
+	if matched != nil {
+		matched.mu.Lock()
+		ready = matched.ready
+		matched.mu.Unlock()
+	}
+	switch diag {
+	case codexDiagSocketGone:
+		return i18n.T(i18n.Default, "codex-history.shared_socket_gone")
+	case codexDiagHomeMismatch:
+		return i18n.T(i18n.Default, "codex-history.shared_home_mismatch")
+	case codexDiagEndpointInvalid:
+		return i18n.T(i18n.Default, "codex-history.shared_endpoint_invalid")
+	case codexDiagUnreachable, codexDiagHandshakeFailed:
+		return i18n.T(i18n.Default, "codex-history.shared_unreachable")
+	}
+	if ready {
+		return i18n.T(i18n.Default, "codex-history.shared_not_loaded")
+	}
+	if _, _, err := validateCodexEndpoint(endpoint); err != nil {
+		return i18n.T(i18n.Default, "codex-history.shared_endpoint_invalid")
+	}
+	return i18n.T(i18n.Default, "codex-history.shared_unreachable")
+}
+
 // codexListPass holds what one session-list rebuild (sessionList, codexSessions) looks up once instead of once per row.
 // The list is rebuilt every second, and with a few hundred rollouts each thread resolved its directory's symlinks (a
 // stat per part of the path, a readlink per link), stat'ed its rollout up to three times, looked for the Codex App's
@@ -442,11 +642,14 @@ func heldRecently(m quickMeta, path string, pass *codexListPass) bool {
 // row's decoration (ultracodeRow) also resolved the data directory and rebuilt that name. It lives for one pass of one
 // caller, so nothing in it is shared or needs invalidating. A nil pass looks everything up each time.
 type codexListPass struct {
-	real    map[string]string    // directory → realPath
-	stats   map[string]codexStat // rollout path → os.Stat
-	desktop map[string]bool      // Codex home → codexDesktopAvailable
-	own     string               // assistantProject, once ownSet
-	ownSet  bool
+	unavailable      map[string]bool          // previously observed rows whose filesystem is unavailable on this pass
+	unavailableHomes map[string]bool          // Codex homes whose index or rollout cache mutex was unavailable on this pass
+	liveRows         map[string]proto.Session // healthy live Codex pane rows observed on this pass, for stall fallback
+	real             map[string]string        // directory → realPath
+	stats            map[string]codexStat     // rollout path → os.Stat
+	desktop          map[string]bool          // Codex home → codexDesktopBusAvailable
+	own              string                   // assistantProject, once ownSet
+	ownSet           bool
 	// runtimes is the runtime session each Codex thread is listed as (thread → session, runtimecodex.go): the list
 	// has that session's row, so the thread's own is left out and its subagents hang off the session.
 	runtimes map[string]codexClaim
@@ -458,6 +661,20 @@ type codexListPass struct {
 	apps map[string]*codexAppState
 	// looks is the missLook by Codex home that rolloutPathIn checks each thread with no rollout against.
 	looks map[string]*missLook
+}
+
+func (p *codexListPass) markHomeUnavailable(home string) {
+	if p == nil || home == "" {
+		return
+	}
+	if p.unavailableHomes == nil {
+		p.unavailableHomes = make(map[string]bool)
+	}
+	p.unavailableHomes[home] = true
+}
+
+func (p *codexListPass) homeUnavailable(home string) bool {
+	return p != nil && home != "" && p.unavailableHomes[home]
 }
 
 // runtimeOf is the runtime session that names Codex thread as its conversation; the zero claim when none does.
@@ -502,16 +719,23 @@ func (p *codexListPass) stat(path string) (os.FileInfo, error) {
 	return st.info, st.err
 }
 
-func (p *codexListPass) desktopAvailable(home string) bool {
+func (p *codexListPass) desktopBusAvailable(home string) bool {
 	if p == nil {
-		return codexDesktopAvailable(home)
+		return codexDesktopBusAvailable(home)
 	}
 	up, ok := p.desktop[home]
 	if !ok {
-		up = codexDesktopAvailable(home)
+		up = codexDesktopBusAvailable(home)
 		p.desktop[home] = up
 	}
 	return up
+}
+
+func (p *codexListPass) desktopAvailable(home string) bool {
+	if p.desktopBusAvailable(home) {
+		return true
+	}
+	return codexDesktopQueueCLI(home) != ""
 }
 
 // appState is loadCodexAppState with each home's state looked up once per pass.
@@ -534,9 +758,20 @@ func (p *codexListPass) missLook(home string) *missLook {
 	if p == nil {
 		return newMissLook(home)
 	}
+	if p.homeUnavailable(home) {
+		return nil
+	}
 	look := p.looks[home]
-	if look == nil || time.Since(look.at) > time.Second || relistedSince(home, look.at) {
-		look = newMissLook(home)
+	relisted := false
+	if look != nil && time.Since(look.at) <= time.Second {
+		var ok bool
+		relisted, ok = relistedSinceIn(home, look.at, p)
+		if !ok {
+			return nil
+		}
+	}
+	if look == nil || time.Since(look.at) > time.Second || relisted {
+		look = newMissLookIn(home, p)
 		p.looks[home] = look
 	}
 	return look
@@ -566,6 +801,16 @@ func (p *codexListPass) assistantProject(n *Node) string {
 	return p.own
 }
 
+func (n *Node) lastCodexRow(id string) (proto.Session, bool) {
+	if n.codices == nil {
+		return proto.Session{}, false
+	}
+	n.codices.mu.Lock()
+	row, ok := n.codices.lastRows[id]
+	n.codices.mu.Unlock()
+	return row, ok
+}
+
 func (n *Node) codexSessions(seen map[string]bool) []proto.Session {
 	return n.codexSessionsIn(seen, newCodexListPass())
 }
@@ -575,12 +820,19 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 	if n.codices == nil {
 		return nil
 	}
+	if pass == nil {
+		pass = newCodexListPass()
+	}
 	cfg := n.codexInventory()
+	deadline := time.Now().Add(codexHomeListWait)
 	for _, home := range cfg.Homes {
-		n.registerRollouts(home)
-		n.registerCodexAppThreads(home, pass) // the App's chats whose rollout is old or gone (codex_appdb.go)
+		if !n.indexCodexHome(home, deadline) {
+			pass.markHomeUnavailable(home)
+		}
 	}
 	n.codices.mu.Lock()
+	n.codices.listSeq++
+	seq, previous := n.codices.listSeq, n.codices.lastRows
 	sources := make(map[string]codexSource, len(n.codices.threads))
 	for k, v := range n.codices.threads {
 		sources[k] = v
@@ -588,6 +840,10 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 	liveRollouts := make(map[string]string, len(n.codices.liveRollouts))
 	for k, v := range n.codices.liveRollouts {
 		liveRollouts[k] = v
+	}
+	liveEndpoints := make(map[string]string, len(n.codices.liveEndpoints))
+	for k, v := range n.codices.liveEndpoints {
+		liveEndpoints[k] = v
 	}
 	n.codices.mu.Unlock()
 	var out []proto.Session
@@ -601,15 +857,40 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 		parent, root string
 	}
 	var adopted []adoption
+	emitUnavailable := func(id string, src codexSource) {
+		if last, ok := previous[id]; ok && !seen[id] && !pass.runtimeOf(src.thread).live &&
+			(!n.agentFiltered("codex", src.path) || n.keptSessions()[id]) {
+			seen[id] = true
+			out = append(out, unavailableCodexRow(last))
+			if pass.unavailable == nil {
+				pass.unavailable = make(map[string]bool)
+			}
+			pass.unavailable[id] = true
+		}
+	}
+	suppressed := map[string]bool{}
 	for id, src := range sources {
+		if pass.homeUnavailable(src.home) {
+			emitUnavailable(id, src)
+			continue // decorating it from the filesystem would wait on the same home
+		}
+		if seen[id] {
+			suppressed[id] = true
+			continue
+		}
 		src, visible := n.listedCodexSource(id, src, pass)
-		if !visible || seen[id] || n.isAssistantSessionIn(id, pass) || n.ownedAssistantSource(src.thread) {
+		if pass.homeUnavailable(src.home) {
+			emitUnavailable(id, src)
+			continue
+		}
+		if !visible || n.isAssistantSessionIn(id, pass) || n.ownedAssistantSource(src.thread) {
 			continue
 		}
 		// A runtime's session is this thread: the conversation is listed once, as that session. While the session
 		// runs, always; once it does not, unless another program has the thread (elsewhere, below).
 		claim := pass.runtimeOf(src.thread)
 		if claim.live {
+			suppressed[id] = true
 			continue
 		}
 		elsewhere := false
@@ -647,7 +928,12 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 				s.Effort = m.effort
 				m.turnErr.set(&s)
 				setContext(&s, m)
-				s.Title = threadTitle(src.home, src.thread)
+				title, ok := threadTitleIn(src.home, src.thread, pass)
+				if !ok {
+					emitUnavailable(id, src)
+					continue
+				}
+				s.Title = title
 				untitled(&s, m)
 			}
 		} else if t, ok := codexAppThreadOf(src); ok {
@@ -661,13 +947,25 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 		if holder := liveRollouts[id]; holder != "" && heldRecently(m, src.path, pass) {
 			// A stdio app-server (the Codex desktop App's own) has no way in, but the rollout it holds open says
 			// whether a turn runs; unknown put a desktop task at work under the app's quiet spaces.
+			// Bound open-turn Working by inactivity so a stalled or prompt-blocked external CLI does not climb forever.
 			s.Status = proto.StatusUnknown
+			stalled := false
 			if m.turnOpen {
-				s.Status = proto.StatusWorking
+				if heldTurnStalled(m, src.path, pass) {
+					stalled = true
+				} else {
+					s.Status = proto.StatusWorking
+				}
 			} else if m.turnClosed {
 				s.Status = proto.StatusDone // as a loaded idle thread on an app-server (codex_remote.go)
 			}
-			s.ReadOnlyReason = holder + " 正在运行，但未提供共享入口；只能同步本地历史"
+			if ep := liveEndpoints[id]; ep != "" {
+				s.ReadOnlyReason = n.codexSharedReadOnlyReason(src.home, ep)
+			} else if stalled {
+				s.ReadOnlyReason = i18n.T(i18n.Default, "codex-history.stalled_turn", i18n.Args{"holder": holder})
+			} else {
+				s.ReadOnlyReason = holder + " 正在运行，但未提供共享入口；只能同步本地历史"
+			}
 		} else if m.turnOpen && !m.turnClosed && !m.turnActivityAt.IsZero() && time.Since(m.turnActivityAt) < codexFreshWorking && time.Since(m.turnActivityAt) >= -5*time.Minute {
 			// liveRollouts refreshes every 30s; when a rollout is actively writing an open turn between scans or on
 			// hosts where lsof misses it, keep StatusWorking instead of misreporting it as stopped (#12389).
@@ -713,13 +1011,27 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 		} else if codexDesktopChatIn(src, pass) {
 			// Retain App identity and grouping when an update removes its bus, including database-only chats.
 			s.AgentName, s.AgentSurface = "Codex App", transcript.SurfaceDesktop
-			s.Capabilities.Send = pass.desktopAvailable(src.home)
+			busUp := pass.desktopBusAvailable(src.home)
+			s.Capabilities.Send = busUp || codexDesktopQueueCLI(src.home) != ""
 			elsewhere, desktopViewOnly = s.Capabilities.Send, !s.Capabilities.Send
 			s.ReadOnlyReason = i18n.T(i18n.Default, codexDesktopUnavailableKey)
 			n.placeCodexDesktopIn(&s, src, src.thread, false, pass)
+			if !busUp {
+				// Interrupting a running turn requires the legacy follower bus; native queue delivery only enqueues messages.
+				s.Capabilities.Interrupt = false
+			}
 			if s.Capabilities.Send {
 				s.ReadOnlyReason = ""
-				n.codexDesktopEffortRow(&s, src, m) // codex_desktop_effort.go
+				if busUp {
+					n.codexDesktopEffortRow(&s, src, m) // codex_desktop_effort.go
+				} else if s.Model == "" {
+					if app := codexAppThreads(src.home)[src.thread]; app.Model != "" {
+						s.Model = app.Model
+						if s.Effort == "" {
+							s.Effort = app.Effort
+						}
+					}
+				}
 			}
 		} else if o := codexThreadOrigin(src); o.desktop { // a subagent whose rollout is gone too: its database row (#8191)
 			if o.parent != "" {
@@ -732,6 +1044,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 		}
 		if claim.session != "" {
 			if !elsewhere {
+				suppressed[id] = true
 				continue // nothing else has the thread: the runtime's session, though not running, is the conversation
 			}
 			own[src.thread] = true
@@ -749,8 +1062,12 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 			s.ReadOnlyReason = stoppedReason
 			s.Capabilities.StopCause = n.stopCause(id)
 		}
-		if !desktopViewOnly && s.SourceKind == "codex_history" && !s.Capabilities.Send && !s.IsSubagent && !n.codexBlocked(id) {
-			s.Capabilities.Takeover = n.codexTakeoverRow(id, src, m, liveRollouts[id] != "" || s.Status == proto.StatusWorking)
+		if pass.homeUnavailable(src.home) {
+			emitUnavailable(id, src)
+			continue
+		}
+		if s.SourceKind == "codex_history" && !s.Capabilities.Send && !s.IsSubagent && !n.codexBlocked(id) {
+			s.Capabilities.Takeover = n.codexTakeoverRowIn(id, src, m, liveRollouts[id] != "" || s.Status == proto.StatusWorking, pass)
 		}
 		if n.codexBlocked(id) {
 			markCodexConflict(&s)
@@ -778,5 +1095,49 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 	sort.Slice(out, func(i, j int) bool { return out[i].SessionID < out[j].SessionID })
 	resolveCodexHierarchy(out)
 	slotCodexDesktop(out)
+	saved := make(map[string]proto.Session, len(out)+len(suppressed))
+	for id, last := range previous {
+		if pass.homeUnavailable(sources[id].home) || pass.unavailable[id] || suppressed[id] {
+			saved[id] = last // keep observed metadata across stalls and live/runtime ownership
+		}
+	}
+	for id, row := range pass.liveRows {
+		if !pass.unavailable[id] && !pass.homeUnavailable(sources[id].home) {
+			if src, known := sources[id]; known {
+				if prev, ok := previous[id]; ok {
+					if row.SourceKind == "" {
+						row.SourceKind = prev.SourceKind
+					}
+					if row.AgentName == "" {
+						row.AgentName = prev.AgentName
+					}
+					if row.AgentSurface == "" {
+						row.AgentSurface = prev.AgentSurface
+					}
+					if row.Title == "" {
+						row.Title = prev.Title
+					}
+				}
+				if row.SourceKind == "" {
+					row.SourceKind = "codex_history"
+				}
+				if row.SourceThreadID == "" {
+					row.SourceThreadID = src.thread
+				}
+				saved[id] = row
+			}
+		}
+	}
+	for i := range out {
+		id := out[i].SessionID
+		if !pass.unavailable[id] {
+			saved[id] = out[i]
+		}
+	}
+	n.codices.mu.Lock()
+	if seq > n.codices.savedSeq {
+		n.codices.lastRows, n.codices.savedSeq = saved, seq
+	}
+	n.codices.mu.Unlock()
 	return out
 }
