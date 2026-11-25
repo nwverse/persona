@@ -157,6 +157,7 @@ func (s *Service) nodeRequest(ctx context.Context, machine, method string, param
 	case "interaction.create":
 		var p struct {
 			Interaction proto.Interaction `json:"interaction"`
+			Origin      string            `json:"origin"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, true, err
@@ -166,6 +167,9 @@ func (s *Service) nodeRequest(ctx context.Context, machine, method string, param
 		// A write through a skill's gated command (node/larkgate.go): its plugin names what the ids are.
 		if sum, ok := s.assistantSummary(ctx, p.Interaction.ToolName, p.Interaction.Summary); ok {
 			p.Interaction.Summary = sum
+		}
+		if p.Origin != "" {
+			ctx = withInteractionOrigin(ctx, p.Origin)
 		}
 		r, err := s.nodeInteraction(ctx, p.Interaction)
 		return r, true, err
@@ -286,9 +290,13 @@ func (s *Service) FleetUp(ctx context.Context) {
 	s.fleet.sentMu.Lock()
 	s.fleet.sent, s.fleet.archived = nil, nil
 	s.fleet.sentMu.Unlock()
-	s.hub.Tell(assistantwire.EventFleetInteractions, assistantwire.FleetInteractions{Interactions: s.pendingInteractions()})
-	reviewInteractions, _ := s.sessionReviewInteractions(ctx)
-	s.askOnPhone(reviewInteractions)
+	s.tellPendingInteractions()
+	// Reconnect reads only session reviews. Other phone cards still belong to their
+	// active callers, including an ask_user started while the connection came up.
+	s.pubMu.Lock()
+	reviewInteractions, complete := s.sessionReviewInteractions(ctx)
+	s.reconcilePhoneAsks(reviewInteractions, func(id string) bool { return complete && s.sessionReviewPossible(id) })
+	s.pubMu.Unlock()
 	for _, m := range s.fleetMachines() {
 		s.publishSessions(m.ID)
 	}

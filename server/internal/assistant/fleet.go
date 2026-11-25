@@ -46,6 +46,9 @@ type fleetBook struct {
 	reportSent map[string]time.Time
 	// cardTell serializes telling the hub a card with checking it is still held (fleet_ix.go tellCard).
 	cardTell sync.Mutex
+	// A card can be withdrawn while it is being told. Reconnect takes both locks to order its
+	// complete inventory with new cards and withdrawals on the same connection.
+	cardEnd sync.Mutex
 	// codexAnnounced: Codex card id -> when it was announced (fleet_ix_codex.go)
 	codexAnnounced map[string]time.Time
 	// codexEnded: Codex card id -> when the node stopped listing it (fleet_ix_codex.go)
@@ -135,6 +138,8 @@ type fleetBook struct {
 	live liveState // the Live Activity's content as last told (fleet_live.go)
 
 	started sync.Once
+	// The first reconnect and the first arriving card both wait for prior-process cleanup.
+	restored sync.Once
 
 	q        fleetQueue // what the nodes' events start for the assistant, in order (fleet_follow.go)
 	followMu sync.Mutex

@@ -359,6 +359,7 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 			return nil, err
 		}
 		rh.logger.Printf("runtime %s %s #%d connected", hello.Runtime, hello.Version, h.serial)
+		rh.claimCodex(h, hello.CodexClaims)
 		if rh.autoCompanions && (hello.Launcher != "" || len(hello.Launchers) > 0) {
 			if n := rh.current(); n != nil && n.peer != nil {
 				_ = n.peer.Notify("launchers.changed", map[string]any{})
@@ -378,10 +379,11 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		// runtime with caps.modes; resume: a runtime with caps.resume that is the machine's engine is asked to take
 		// sessions over (runtimecontrol.go). workspaces: runtime.workspaces is kept and, for a runtime with
 		// caps.workspaces that is the machine's engine, listed as its catalog and asked to make worktrees
-		// (runtimeworkspaces.go).
+		// (runtimeworkspaces.go). codex_claims: hello's codex_claims name Codex app-server instances the node leaves
+		// to the runtime (codex_instance_claims.go), a runtime on the socket's only.
 		features := []string{"prefer_running", "resume_argv", "handover", "transcript", "launchers", "start_params", "modes", "resume", "codex_thread", "unlisted_transcripts", "workspaces", "usage"}
 		if !h.isDaemon() {
-			features = append(features, "usage_windows", "leader_tools", "supervision_policy", "a2a_mcp")
+			features = append(features, "usage_windows", "leader_tools", "supervision_policy", "a2a_mcp", "remote_agent", "memory_tools", "codex_claims")
 			if hello.Caps.Assistant {
 				features = append(features, "assistant_pids")
 			}
@@ -435,6 +437,13 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		}
 		if assistant && !p.LeaderOnly {
 			res.Tools = append(res.Tools, n.gateTools()...)
+			if h.remoteAgent() {
+				if p.SessionID == "" {
+					res.Tools = append(res.Tools, n.memoryTools()...)
+				} else if _, ok := n.sessionAllowsMemoryTools(p.SessionID); ok {
+					res.Tools = append(res.Tools, n.memoryTools()...)
+				}
+			}
 		}
 		if h.isDaemon() {
 			res.Tools = slices.DeleteFunc(res.Tools, func(tool proto.Tool) bool { return !assistantwire.IsA2ATool(tool.Name) })
@@ -469,7 +478,17 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 			return n.saveMailAttachment(ctx, p.Args, p.SessionID, assistant, n.guestOf(p.SessionID) != nil), nil
 		}
 		if g := n.gateTool(p.Name); assistant && g != nil {
+			if h.remoteAgent() {
+				rh.reg.markRemote(p.SessionID)
+				n.gates().markRemote(p.SessionID)
+			}
 			return n.assistantGateTool(ctx, g, p.SessionID, p.Args), nil
+		}
+		if isMemoryTool(p.Name) {
+			if !h.remoteAgent() || !assistant {
+				return proto.TextResult("Memory tools require a remote assistant session", true), nil
+			}
+			return n.assistantMemoryTool(ctx, p.Name, p.SessionID, p.Args), nil
 		}
 		var res json.RawMessage
 		params := map[string]any{"name": p.Name, "args": p.Args, "session_id": p.SessionID, "assistant": assistant, "guest": n.guestOf(p.SessionID) != nil}

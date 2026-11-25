@@ -127,6 +127,10 @@ type sessionState struct {
 	// extension's resume of a conversation its computer does not list passes on such a record alone, with no transcript
 	// (resumeOutsideHealth, #10941).
 	EngineRuntime string `json:"engine_runtime,omitempty"`
+	// RemoteAgent latches true when the session has been associated with a remote assistant runtime
+	// (caps.assistant && caps.remote_agent). Once latched, writes always require fresh confirmation across
+	// disconnects, ownership changes, and restarts.
+	RemoteAgent bool `json:"remote_agent,omitempty"`
 	// RoundForkOf names the base background supervisor session when a supervision round's process forked a separate
 	// Claude session id (assistant_round.go). Forked round branches inherit assistant identity and stay hidden from
 	// the ordinary Agents list across node restarts.
@@ -324,6 +328,7 @@ func (s *stateFile) adoptSwitch(id string, v sessionState) {
 		cur.Cwd, cur.StartedAt, cur.PlanThen, cur.Pane, cur.PendingSwitch = v.Cwd, v.StartedAt, v.PlanThen, v.Pane, v.PendingSwitch
 		cur.EngineHistory, cur.PendingHandoff = v.EngineHistory, v.PendingHandoff // a switch to another engine (engine_switch.go)
 		cur.EngineRuntime = v.EngineRuntime
+		cur.RemoteAgent = cur.RemoteAgent || v.RemoteAgent
 		v = cur
 	}
 	s.Sessions[id] = v
@@ -479,6 +484,9 @@ func (s *stateFile) put(id string, v sessionState) bool {
 		}
 		if v.StartOpID == "" && old.StartOpID != "" {
 			v.StartOpID = old.StartOpID
+		}
+		if old.RemoteAgent {
+			v.RemoteAgent = true // latch-only security posture: never cleared by later writes
 		}
 	}
 	s.Sessions[id] = v

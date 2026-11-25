@@ -31,6 +31,13 @@ type turns struct {
 	posts threadPoster
 	// book is the chat's state (chat_state.go).
 	book feishuBook
+	// detached are the cards closed when their node went away (asks.go).
+	detached detachedCards
+	// board, wb and comp are the standing board (board.go), the pinned workbench (workbench_pin.go) and the
+	// companion bots' notices (companions.go), each with its own lock.
+	board standingBoard
+	wb    workbenchState
+	comp  companionState
 }
 
 // wait waits for the workers, or ctx.
@@ -113,10 +120,6 @@ func (s core) botMessages(ctx context.Context, messageID string) ([]botcard.Item
 	}
 	err := s.appCall(ctx, FeishuMessages, map[string]any{"message_id": messageID}, &res)
 	return res.Items, err
-}
-
-func (s core) workbenchStamp(ctx context.Context, c *botcard.Card) *botcard.Card {
-	return s.h.WorkbenchStamp(ctx, c)
 }
 
 func (s core) runExt(r *channel.Run, key string) string { return s.h.RunExt(r, key) }

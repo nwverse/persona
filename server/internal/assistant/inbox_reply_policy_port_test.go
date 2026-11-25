@@ -6,24 +6,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
-const (
-	ReplyRouteOwnerDraft = assistantwire.ReplyRouteOwnerDraft
-	ReplyRouteBot        = assistantwire.ReplyRouteBot
-	ReplyRouteOwnerOnly  = assistantwire.ReplyRouteOwnerOnly
-	ReplyRouteNoReply    = assistantwire.ReplyRouteNoReply
-)
-
-var errReplyPolicyDenied = errReplyPolicyBlocked
-
-// replyPolicyDenied accepts upstream's typed suggestion refusal as well as the send path's sentinel error.
+// replyPolicyDenied accepts either schema's typed refusal as well as the send path's sentinel error.
 // A generic suggestion rejection does not match: the refusal must still be specifically attributable to reply policy.
 func replyPolicyDenied(err error) bool {
-	if errors.Is(err, errReplyPolicyDenied) {
+	if errors.Is(err, errReplyPolicyDenied) || errors.Is(err, errReplyPolicyBlocked) {
 		return true
 	}
 	var refusal errSuggestion
@@ -160,7 +150,7 @@ func replyPolicyTestSetReviewed(v any, value bool) {
 
 // replyPolicyTestClassifierSystem renders the configured prompt exactly as the production classifier does. Keeping
 // language, owner, category names and rules here avoids turning an upstream renderer improvement into a false red.
-func replyPolicyTestClassifierSystem(h *inboxHub, cfg assistantwire.InboxReplyPolicyConfig) string {
+func replyPolicyTestClassifierSystem(h *inboxHub, cfg any) string {
 	policy := compileReplyPolicy(cfg)
 	hello := h.hello(context.Background())
 	return prompts.RenderJSONOnly(prompts.RenderInboxReplyPolicy(prompts.InboxReplyPolicy{
@@ -169,66 +159,4 @@ func replyPolicyTestClassifierSystem(h *inboxHub, cfg assistantwire.InboxReplyPo
 		Categories: policy.names,
 		Rules:      policy.rules,
 	}))
-}
-
-func replyPolicyApplies(cfg assistantwire.InboxReplyPolicyConfig, source string) bool {
-	if !cfg.Enabled {
-		return false
-	}
-	if len(cfg.Sources) == 0 {
-		return true
-	}
-	for _, candidate := range cfg.Sources {
-		if candidate == source {
-			return true
-		}
-	}
-	return false
-}
-
-func replyPolicyItemApplies(cfg assistantwire.InboxReplyPolicyConfig, it *InboxItem) bool {
-	if it == nil {
-		return false
-	}
-	for _, source := range replyPolicySourceSet(it) {
-		if replyPolicyApplies(cfg, source) {
-			return true
-		}
-	}
-	return false
-}
-
-func replyRoute(category string, cfg assistantwire.InboxReplyPolicyConfig) string {
-	if !cfg.Enabled {
-		return ""
-	}
-	_, route, err := compileReplyPolicy(cfg).resolve(category)
-	if err != nil {
-		return ReplyRouteOwnerOnly
-	}
-	return route
-}
-
-func replyPolicySnapshotCurrent(it *InboxItem, cfg assistantwire.InboxReplyPolicyConfig) bool {
-	if it == nil || !replyPolicyItemApplies(cfg, it) {
-		return true
-	}
-	return replyPolicyClassificationCurrent(it, cfg) && replyPolicyTestRoute(it) == ReplyRouteOwnerDraft
-}
-
-func snapshotReplyPolicy(g *InboxSuggestion, it *InboxItem, cfg assistantwire.InboxReplyPolicyConfig) {
-	if g == nil || g.Kind != SuggestReply && g.Kind != SuggestAgent || !replyPolicyItemApplies(cfg, it) {
-		return
-	}
-	g.ReplyPolicy = cloneReplyPolicySnapshot(it.ReplyPolicy)
-}
-
-// These adapters keep the legacy test entry points while exercising upstream's real queue classifier and persistence.
-func (s *Service) classifyReplyPolicyInput(ctx context.Context, cfg assistantwire.InboxReplyPolicyConfig, in prompts.InboxReplyPolicyInput) (string, error) {
-	data := replyPolicyItemData{id: "reply-policy-test", context: in.Context, contentVersion: "reply-policy-test"}
-	snap, err := s.classifyReplyPolicy(ctx, compileReplyPolicy(cfg), data, in.ReplyText)
-	if snap == nil {
-		return "", err
-	}
-	return snap.Category, err
 }
