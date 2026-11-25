@@ -1,6 +1,6 @@
 // Package fleetcountadapt converts between fleetcount and the wire: the hub's sessions and pending cards in, as
-// fleetcount's agents and cards, and the rows fleetcount decides out, as the Live Activity's state and Persona Link's
-// summary.
+// fleetcount's agents and cards, and the rows fleetcount decides out, as the Live Activity's state, Persona Link's
+// summary and the manager's counts view (docs/protocol/counts.md).
 //
 //persona:layer adapter
 package fleetcountadapt
