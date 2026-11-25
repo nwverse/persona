@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../i18n";
 import { personalAgentDraftKey, type AgentSession } from "../lib/agents";
+import { resetAgentsDisplay, seedAgentsDisplay } from "../lib/agents-display";
 import { storePageDraft } from "../lib/drafts";
 import { navigate } from "../lib/router";
 import { stateName } from "../lib/state-labels";
@@ -84,6 +85,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  resetAgentsDisplay();
   reset();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -140,6 +142,16 @@ describe("sidebar row hover details", () => {
     enter(row);
     await dwell();
     expect(preview()).toBe(t("todos.kicker_line", { kicker: t("sidebar.draft") }) + "Use the second version with a smaller sidebar.");
+  });
+
+  it("keeps the conversation title in the card when the terminal tab names the row", async () => {
+    seedAgentsDisplay({ configured: true, show_botmux: true, use_herdr_tab_name: true });
+    const row = render();
+    expect(row.textContent).toContain("Review tab");
+    expect(row.textContent).not.toContain(title);
+    enter(row);
+    await dwell();
+    expect([...card()!.querySelectorAll("p")].slice(0, 2).map((p) => p.textContent)).toEqual(["Review tab", title]);
   });
 
   it("clamps the card within a narrow viewport and lifts it above the bottom edge", async () => {

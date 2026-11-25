@@ -23,7 +23,7 @@ import { ultracodeMarkShown } from "../lib/ultracode";
 import { Rolling } from "../ui/Rolling";
 import { BrandMark } from "../ui/BrandMark";
 import { OriginMark } from "../ui/ChannelMark";
-import { autoOrigin, openerFrom } from "../lib/conversation-origins";
+import { autoOrigin } from "../lib/conversation-origins";
 import { InfoTip } from "../ui/InfoTip";
 import { Icon, type IconName } from "../ui/icons";
 import { UltraMark } from "./chat/Ultracode";
@@ -355,8 +355,6 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   const source = showState && !s.assistant && !endRoom ? sessionSource(s) : undefined;
   // a Persona conversation the hub opened by itself (#3758, #5195): what opened it, in the source mark's place
   const origin = source ? undefined : autoOrigin(s);
-  // The hover card can name the extension whose icon the origin mark draws (#10358).
-  const [openerName, setOpenerName] = useState<string>();
   const hasTabAssociation = !!(s.slot_id?.trim() || s.tab_id?.trim());
   const primaryTab = sessionDisplayTab(s, preferTab);
   const associatedTab = hasTabAssociation && !primaryTab ? tabLabel(s) : "";
@@ -441,7 +439,6 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
       {...sidebarRowHover(() => ({
         title: displayTitle, session: s, titleDetail: displayTitle !== title ? title : sessionTitleDetail(s, preferTab),
         draft, working: leadActive, tab: associatedTab || structuralTabHint,
-        origin: origin ? openerFrom(origin, openerName) : undefined,
       }))}
       onMouseEnter={() => hover(k)}
       onFocus={() => hover(k)}
@@ -548,7 +545,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
           <Icon name="todo" size={10} stroke={2} />
         </span>
       )}
-      {origin && <OriginMark origin={origin} size={16} className={aside} session={s} onName={setOpenerName} />}
+      {origin && <OriginMark origin={origin} size={16} className={aside} session={s} />}
       {/* the row's ⋯ takes the end on hover: what is there steps aside instead of showing half under it */}
       {tail && <span className={cx(hintFull ? "shrink-0 whitespace-nowrap tabular-nums" : "max-w-[72px] min-w-6 shrink-[20] truncate", "text-[11px] text-ink-3", hintAside)}>{tail}</span>}
       {source && <SourceTag s={s} className={aside} />}

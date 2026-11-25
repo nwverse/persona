@@ -1,7 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../i18n";
-import { agentName } from "../lib/agent-kind";
+import { agentId, agentName } from "../lib/agent-kind";
 import { awaitsReply, justFinished, replyAsk, sessionSource, sourceName } from "../lib/agent-groups";
 import { fetchMessages, mergeMessages, personalAgentDraftKey, providerLabel, type AgentSession } from "../lib/agents";
 import { sessionHarnessLabel } from "../lib/agent-chatlist-filter";
@@ -49,11 +49,12 @@ function CardContent({ title, titleDetail, preview, children }: { title: string;
 function Launcher({ session, launcher, tool }: { session: Session; launcher: string; tool: string }) {
   const names = useProviderNames(session.manager);
   const title = launcherTitle(launcher, names);
+  if (tool && title === launcher && agentId(launcher) === agentId(session.agent)) return tool;
   const label = title === launcher ? agentName(launcher) : title;
   return <>{tool && tool.toLowerCase() !== label.toLowerCase() ? `${tool} · ${label}` : label}</>;
 }
 
-function SessionDetails({ detail }: { detail: Extract<RowHoverDetail, { session: Session }> }) {
+function SessionDetails({ detail, row }: { detail: Extract<RowHoverDetail, { session: Session }>; row: HTMLElement }) {
   const { session: s } = detail;
   const { machine, ix, awaiting, finished } = useStore((store) => {
     const machine = s.machine_id ? machineWithHub(s.machine_id, store.machines) : "";
@@ -71,7 +72,9 @@ function SessionDetails({ detail }: { detail: Extract<RowHoverDetail, { session:
   const launcher = (s.launcher || s.model_pick?.launcher)?.trim();
   const model = (s.model || s.model_pick?.model)?.trim();
   const source = sessionSource(s);
-  const sourceDetail = s.source_kind && !sessionCan(s, "send") ? sourceSubtitle(s) : detail.origin || (source && sourceName(source));
+  // The origin mark already knows whether the extension's icon and name are ready.
+  const origin = row.querySelector("[data-origin-mark]")?.getAttribute("aria-label");
+  const sourceDetail = s.source_kind && !sessionCan(s, "send") ? sourceSubtitle(s) : origin || (source && sourceName(source));
   const workspace = s.workspace_cwd || s.cwd || s.worktree || s.space_name;
   return <CardContent title={detail.title} titleDetail={detail.titleDetail} preview={preview}>
     <Detail label={t("sidebar-row-hover.status")}>
@@ -152,7 +155,7 @@ export default function SidebarRowHoverCard({ hover: { row, sidebar, detail }, o
 
   return createPortal(
     <div ref={panel} id={id} role="tooltip" data-sidebar-row-hover-card style={{ visibility: "hidden" }} className="pointer-events-none fixed z-40 overflow-hidden rounded-nav-preview border border-line bg-surface p-4 text-left shadow-nav-preview">
-      {"session" in detail ? <SessionDetails detail={detail} /> : <PersonalDetails title={detail.title} agent={detail.agent} />}
+      {"session" in detail ? <SessionDetails detail={detail} row={row} /> : <PersonalDetails title={detail.title} agent={detail.agent} />}
     </div>,
     document.body,
   );

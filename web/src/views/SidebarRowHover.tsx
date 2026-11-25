@@ -7,7 +7,7 @@ import { isContextKey } from "../ui/menu-model";
 import { lazyOverlay } from "./LazyOverlay";
 
 export type RowHoverDetail = { title: string } & (
-  | { session: Session; titleDetail?: string; draft?: ReturnType<typeof draftLine>; working?: boolean; tab?: string; origin?: string }
+  | { session: Session; titleDetail?: string; draft?: ReturnType<typeof draftLine>; working?: boolean; tab?: string }
   | { agent: AgentSession }
 );
 export type RowHover = { row: HTMLElement; sidebar: HTMLElement; detail: RowHoverDetail };
@@ -50,7 +50,6 @@ export function sidebarRowHover(read: () => RowHoverDetail) {
       for (const event of ["pointerdown", "click", "contextmenu"]) window.addEventListener(event, dismiss, capture);
       sidebar.addEventListener("scroll", dismiss, capture);
       window.addEventListener("resize", dismiss, { signal });
-      window.addEventListener("blur", dismiss, { signal });
       window.addEventListener("keydown", (event) => {
         if (event.key === "Escape" || isContextKey(event)) dismiss();
       }, capture);
