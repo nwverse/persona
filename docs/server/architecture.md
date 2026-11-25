@@ -184,7 +184,7 @@ package fleetcount
 | `core shared` | a shared kernel: value objects and closed sets only | directly under `server/internal`, outside the managers', the node's and the hub's trees | as a core |
 | `adapter` | the only code that converts between a core and contracts, rows, prompt inputs or log text | `<core>/<core>adapt`, and the edge adapters such as the HTTP failure writer | its core, shared kernels and their adapters, the kit, contracts, libraries, the standard library, third-party code |
 | `application` | orchestration: the clock, ids, IO, locks, goroutines, routes, retries and model calls | package `assistant`, the hub, the node, `cmd/*`, the managers, `domainkit/clock` | every layer but `testkit` |
-| `application seam` | a typed registration seam between application modules | `assistant/kernel` and later seams | as application |
+| `application seam` | a typed registration seam between application modules | `assistant/kernel/seam` and later seams | as application |
 | `library` | technical code with no domain concept; its records and named primitives are counted as application code's | `lazyre`, `osproc`, `db`, `prompts`, `apierr`, `i18n` and the like | the standard library, third-party code, libraries, contracts |
 | `contract` | plain wire data | exactly the packages `server/internal/archguard/testdata/contracts.txt` lists | the standard library and contracts |
 | `testkit` | test support, never a program (`package main`) | `domainkit/domaintest`, `domainkit/clock/clocktest`, `*test` packages | anything; imported only by tests and other testkit |
@@ -500,7 +500,9 @@ func Write(w http.ResponseWriter, f fail.Fail) {
 ```
 
 A programmer error is a defect (`defect.Raise`), never a returned failure, and only listed sites recover one, through
-`defect.Catch`. A stored row that fails to restore is skipped and logged with its code, never rebuilt half-valid.
+`defect.Catch` (`server/internal/archguard/testdata/catch_sites.txt`, rule `catch-site`), and every production call of
+`recover()` is listed too (`server/internal/archguard/testdata/recover_sites.txt`, rule `recover-site`; "Validated and
+sealed" below). A stored row that fails to restore is skipped and logged with its code, never rebuilt half-valid.
 
 ### Data objects and adapters
 
@@ -741,6 +743,8 @@ stated above; #15088 lists the ones known.
 | `out-unsafe` | no `unsafe`, and `reflect` only for `DeepEqual`, in a file that imports a core or the kit | the first core it imports |
 | `out-rules-import` | only tests import `domainrules` | fails at once |
 | `out-log-use` | an adapter's `Log` result only as an argument of a logging call | the package it is in |
+| `recover-site` | every production `.go` file under `server/` that calls the builtin `recover()` has a line with its reason in `server/internal/archguard/testdata/recover_sites.txt`, and every line's file still calls it; archguard's `TestRecoverOnlyAtListedSites` checks it ("Validated and sealed") | fails at once |
+| `catch-site` | every production `.go` file under `server/` that refers to `defect.Catch` has a line with its reason in `server/internal/archguard/testdata/catch_sites.txt`, and every line's file still does; archguard's `TestCatchOnlyAtListedSites` checks it ("Validated and sealed") | fails at once |
 | `adapter-name` | an adapter exports no type named like one of its core's | the adapter |
 | `adapter-exported-result` | an adapter hands out only what the section above lists, in results (a map's keys included, and what a contract's, `db`'s or `prompts`' type can be called with), through parameters (none of type `any`, `interface{}`, a type parameter or another package's type but `io.Writer` and `http.ResponseWriter`; a contract's, `db`'s or `prompts`' type only where what it can be called with takes what an adapter may hand out, what is called on what its methods and funcs return included) and in exported fields; it has no exported variable or constant, and no exported alias or named slice, map, array, func or chan type. What it does not read is listed above | the adapter |
 | `app-exported-record` | exported structs with an exported field, in undeclared, application and library packages (contracts, `db` and `prompts` aside) | the package |
@@ -794,31 +798,92 @@ of entry goes through the same design. The central lists keep the entries they h
 
 ### One registry per Service
 
-- **The registry**: the package `kernel`, under `server/internal/assistant`, holds one registry per assistant `Service`,
-  with a slot for each kind of entry. The slots are routes (installed through `Service.handle`), bus methods, tools
-  (each placed after a named anchor tool), the hooks for a settled turn and a new connection, snapshot parts, and loops.
-  `Kernel.Bus` is where any domain adds a new bus method, not only the Inbox. Not on `main` yet: the package comes with
-  step S1 of `docs/plans/plan-inbox-vertical-slice.md`.
+- **The registry**: package `seam`, under `server/internal/assistant/kernel`, holds one registry per assistant
+  `Service`, with a slot for each kind of entry. Routes (installed through `Service.handle`) are the first; bus methods,
+  tools (each placed after a named anchor tool), the hooks for a settled turn and a new connection, snapshot parts,
+  and loops come with the steps below. `Kernel.Bus` is where any domain adds a new bus method, not only the Inbox.
+  Package `kernel` itself hosts the built-in feature modules (`docs/architecture/core-and-modules.md`), which a build
+  may leave out and the owner may switch off; the modules registered here are part of Persona Core.
 - **Two ways in, one registry**:
-  - A module in a subpackage calls `Register(k)` from `New`, where its central line was. `saved` comes first: today
-    `New` calls `saved.Register(saved.Host{…})`, and S1 registers it through the kernel instead, keeping `saved.Host`
-    as saved's own adapter.
-  - A domain inside package `assistant` calls a package-level function from an `init()` in its own file:
-    `registerRoutes(name, (*Service).xRoutes)`, `registerTools(after, …)` or `registerLoop(name, (*Service).xLoop)`.
-    `New` adds them to the same registry before the modules register.
+  - A module in a subpackage is registered from `New`, where its central line was, and takes its own dependencies,
+    typed port interfaces, through its own constructor: `reg.Register(saved.NewModule(store, events))`.
+    `saved/module.go` builds `saved.Host` from what `NewModule` was given and the `Kernel`'s services, so `saved.Host`
+    stays saved's own adapter and no kernel infrastructure feeds it. saved's own store and events are not typed yet
+    (#15222, "Validated and sealed" below); a new module does not copy them.
+  - A domain inside package `assistant` calls a package-level front door from an `init()` in its own file, and its
+    names are values, validated where they are made: `registerRoutes(seam.NewModuleName("x"), (*Service).xRoutes)`,
+    `registerTools(after, …)` or `registerLoop(seam.NewLoopName("x"), (*Service).xLoop)`. `New` adds them to the same
+    registry before the modules register.
 - **One of each**: there is one route table and one list of loops, and tool placement is computed once, at the end of
-  `New`. Route order means nothing (`TestRoutesAreTheWireOnes` sorts, and `http.ServeMux` ignores it). The tools keep
+  `New`. Each registration value raises a defect where it is made, and `New` keeps one duplicate check across the
+  tables. Route order means nothing (`TestRoutesAreTheWireOnes` sorts, and `http.ServeMux` ignores it). The tools keep
   the order `server/internal/hub/testdata/prompts/mcp_tools/assistant.index.golden` pins.
+- **A seam with one catch site**: package `seam` is declared `//persona:layer application seam` and follows "Domain
+  model" ("Typed seams"), and the route handlers registered through it run under the listed catch site
+  `server/internal/assistant/kernel/seam/dispatch.go`.
 - **When each part lands**:
-  1. the kernel, with `saved` (S1);
+  1. the registry, with `saved` (S1, #15182);
   2. the Inbox's routes, bus methods, hooks and snapshot part (S4);
   3. `registerRoutes` and `registerLoop` (#7891);
   4. `registerTools`, with or just before the Inbox's tools (S5).
 
-  Until a slot exists, its entries go where they went before. The 63 route calls already in `New`, and the tools and
+  Until a slot exists, its entries go where they went before. The route calls already in `New`, and the tools and
   loops already listed, stay where they are.
 
-How each registration is checked, and when the registry closes, is written with the kernel (S1).
+How each registration is checked, and when the registry closes, is in "Validated and sealed" below.
+
+### Validated and sealed
+
+The registry is made from typed ports and takes names as values, so a registration mistake is a programmer error, a
+defect (`server/internal/domainkit/defect`), raised at the line that made it while `New` runs; every test that builds a
+`Service` runs `New`, so the first such test fails at that line. In `New`, with the ports package `assistant`
+implements in `server/internal/assistant/seam_ports.go`:
+
+```go
+reg := s.newRegistry() // the typed seam the modules register through (seam_ports.go)
+defer reg.Seal()       // New returns it sealed: registering later is a defect
+// saved's legacy untyped ports, until #15222 types them; a new module takes typed ports through its NewModule.
+reg.Register(saved.NewModule(func() any { return s.store() }, s.event))
+```
+
+A module names itself and registers through the `Kernel` it is handed (`server/internal/assistant/saved/module.go`):
+
+```go
+// Name is saved's name in the kernel.
+func (Module) Name() seam.ModuleName { return seam.NewModuleName("saved") }
+```
+
+- **Typed ports.** `seam.NewRegistry(routes RouteTable, access Access, bodies BodyErrors, defects Defects)`:
+  `RouteTable.Install` serves a route through `Service.handle`, `Access.Full` says whether a request may do
+  everything, `BodyErrors.Write` answers a body that could not be read (413 or 400), and `Defects.Report` hears of a
+  defect a route raised. A nil port is a defect.
+- **Names are values.** `seam.NewModuleName` refuses an empty name and a character outside `[a-z0-9-]`, and
+  `Registry.Register` a name another module took. `seam.NewRoute(pattern, serve)` refuses a pattern in neither
+  `assistantwire.Routes` nor `assistantwire.InboxRoutes` and a nil handler, and `Kernel.Route` a pattern already
+  registered. Only their constructors make a `ModuleName` or a `Route`: a zero one is a defect wherever it is used.
+- **The Kernel.** Only `Registry.Register` makes one, for the module it registers, and any method of a zero `Kernel`
+  is a defect. It offers the services every module uses (`Route`, `Full` and `BodyError`) and, with later steps, the
+  slots that replace central lines; never a store, an untyped event or a domain method. A module takes its own
+  dependencies through its own constructor, as typed port interfaces `New` hands it: no `any`, no map of them and no
+  runtime assertion to get a port back ("Domain model", "Typed seams").
+- **saved's legacy ports.** `saved.NewModule` is the one exception, and not an example to copy: it takes saved's store
+  as `func() any` and its events as `func(context.Context, map[string]any)`, the shape `saved.Host` always had, and
+  saved asserts its ports back out of that store at run time. It stays only because open drafts edit `saved.go` and
+  the files that make those assertions; #15222 gives saved typed ports once they land.
+- **Sealed.** `New` seals the registry before it returns. `Register`, `Kernel.Route` or `Seal` after that is a
+  defect; `Full` and `BodyError` stay open, because requests use them.
+- **One catch site.** Each route registered through the kernel is served under `defer defect.Catch(…)` in
+  `server/internal/assistant/kernel/seam/dispatch.go`: a defect raised while serving is reported (the assistant logs it
+  with its stack) and answered with 500 (`internal`), so that request fails alone and the manager goes on. Any other
+  panic, `http.ErrAbortHandler` included, goes on to net/http unchanged. archguard's `TestCatchOnlyAtListedSites`
+  keeps `defect.Catch` to the files in `server/internal/archguard/testdata/catch_sites.txt`, and
+  `TestRecoverOnlyAtListedSites` keeps every production call of `recover()` to the files in
+  `server/internal/archguard/testdata/recover_sites.txt` (rules `catch-site` and `recover-site`). Each line gives its
+  reason; a file that is not listed fails, and so does a line whose file no longer does what it permits.
+- **Its layer.** Package `seam` carries the `rules_test.go` hook, so it exports no field or variable and takes no
+  `any` ("Domain model", "Typed seams"). Its parent, package `kernel`, the feature-module host, declares no layer yet
+  (it is in `server/internal/archguard/testdata/domain_layers/undeclared.txt`): its `LoadOptions` fields, `New`'s
+  `logf func(string, ...any)` and the `modapi.Host.Logf` it implements would break those rules.
 
 ### Lists that stay package variables
 
