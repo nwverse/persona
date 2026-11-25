@@ -2,6 +2,12 @@
 
 Pitfalls, unusual behavior, and the trade-offs made at the time (originally in "Lessons" in `CLAUDE.md`; see the index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
 
+## Anchor trailers belong to the wire body (#15410)
+
+An inline reference's trailer ends one text item. A forward can join another item after it, and a paged transcript
+can cut it partway. Hide the trailer line in both cases. Global chat search also has to strip trailers from rows
+already in its index, before cutting snippets. Preserve the complete wire body for edit and replay.
+
 ## Inline HTML is not one Markdown node (#9420)
 
 An inline script or style can have its tags in separate raw HTML nodes and its body in ordinary text, emphasis or code-span nodes. Track the hidden element across nodes when building searchable prose, but keep literal code examples and ordinary preview formatting. Render separate source fields independently so an unclosed tag in one cannot hide text from another; test the real search index, not only the text helper.
