@@ -68,10 +68,35 @@ var standardStatusKeys = map[int]string{
 	http.StatusGatewayTimeout:        "http-status.timeout",
 }
 
+// WriteBody writes body, an error, with status, and notes it on w (NoteError).
 func WriteBody(w http.ResponseWriter, status int, body map[string]any) {
+	NoteError(w, status, body)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// ErrorNoter is a ResponseWriter that takes note of the error bodies written to it with WriteBody: the hub's request
+// log says a server error's code and words from them (#14490). A body passed on as bytes, such as another service's
+// answer through a reverse proxy, is never noted.
+type ErrorNoter interface {
+	NoteError(status int, body map[string]any)
+}
+
+// NoteError tells the first writer in w's Unwrap chain that takes note of errors (ErrorNoter) that body goes out with
+// status. For a body the caller built itself and writes as bytes; WriteBody notes its own.
+func NoteError(w http.ResponseWriter, status int, body map[string]any) {
+	for range 16 {
+		if n, ok := w.(ErrorNoter); ok {
+			n.NoteError(status, body)
+			return
+		}
+		u, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return
+		}
+		w = u.Unwrap()
+	}
 }
 
 func Body(status int, code string, err error) map[string]any {
@@ -258,9 +283,10 @@ var rpcFailureKeys = map[string]string{
 	proto.CodeTurnOverBackground: "rpc-errors.turn_over_background", // a Stop that found the turn over (#10828)
 	"dialog_open":                "rpc-errors.dialog_open",
 	// an owner's message to an Agent with older messages held for it (devices held.go, #10661)
-	"held_ahead":    "rpc-errors.held_ahead",
-	"held_not_kept": "rpc-errors.held_not_kept",
-	"held_full":     "rpc-errors.held_full",
+	"held_ahead":      "rpc-errors.held_ahead",
+	"held_not_kept":   "rpc-errors.held_not_kept",
+	"held_full":       "rpc-errors.held_full",
+	"held_start_full": "rpc-errors.held_start_full",
 	// the first message to a Codex opened with no first message (node/codex_waiting.go, #4961)
 	"codex_not_ready":          "rpc-errors.codex_not_ready",
 	"codex_first_text":         "rpc-errors.codex_first_text",
@@ -285,6 +311,7 @@ var rpcFailureKeys = map[string]string{
 	"node_outdated":             "rpc-errors.node_outdated",
 	// A private-profile switch is refused before any message reaches the CLI.
 	"assistant_launcher_profile_switch":  "rpc-errors.assistant_launcher_profile_switch",
+	"assistant_model_unresolved":         "rpc-errors.assistant_model_unresolved",
 	"assistant_service_tier_start_only":  "rpc-errors.assistant_service_tier_start_only",
 	"assistant_service_tier_unsupported": "rpc-errors.assistant_service_tier_unsupported",
 	"assistant_service_tier_refused":     "rpc-errors.assistant_service_tier_refused",
@@ -340,6 +367,11 @@ var rpcFailureKeys = map[string]string{
 	proto.CodeModesNotRunning:     "rpc-errors.modes_not_running",
 	proto.CodeModesUnsupported:    "rpc-errors.modes_unsupported",
 	proto.CodeEffortChangePending: "rpc-errors.effort_change_pending",
+	// session.modes on a Codex on the terminal route (node/codex_terminal_modes.go, #12572); the refusal is Codex's words
+	proto.CodeModesCodexVersion:     "rpc-errors.modes_codex_version",
+	proto.CodeModesCodexNoRollout:   "rpc-errors.modes_codex_no_rollout",
+	proto.CodeModesCodexRefused:     "rpc-errors.modes_codex_refused",
+	proto.CodeModesCodexUnconfirmed: "rpc-errors.modes_codex_unconfirmed",
 	// a message to a stopped agent: read-only, its terminal page's Resume brings it back (node stopped.go, #4754)
 	"agent_stopped":      "rpc-errors.agent_stopped",
 	"resume_not_allowed": "rpc-errors.resume_not_allowed",
@@ -402,6 +434,15 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 	code, _ := body["code"].(string)
 	key := rpcFailureKeys[code]
 	args := i18n.Args{"reason": original}
+	if code == "assistant_model_unresolved" {
+		model, _ := body["model"].(string)
+		launcher, _ := body["launcher"].(string)
+		if model != "" && launcher != "" {
+			args["model"], args["launcher"] = model, launcher
+		} else {
+			key = ""
+		}
+	}
 	if code == "assistant_supervision_runtime" {
 		var names []string
 		if values, ok := body["launchers"].([]any); ok {
@@ -449,7 +490,7 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 	// a summary that names {reason} carries the original words (git's, for a failed pull or push)
 	body["error"] = i18n.T(l, key, args)
 	switch code {
-	case "assistant_launcher_profile_switch", "assistant_service_tier_start_only", "assistant_service_tier_unsupported", "assistant_service_tier_refused":
+	case "assistant_launcher_profile_switch", "assistant_model_unresolved", "assistant_service_tier_start_only", "assistant_service_tier_unsupported", "assistant_service_tier_refused":
 		// The native diagnostic is not a person-facing instruction; the stable, translated refusal says what to do.
 		return
 	}

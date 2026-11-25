@@ -105,6 +105,8 @@ export interface Todo {
   /** The to-do whose request this one is a piece of, and the pieces it waits for (docs/assistant/todos.md "Requests in
    *  pieces"); unset for a to-do that is no piece and from hubs without them. */
   part_of?: string;
+  /** The direction (leader conversation) this to-do is grouped under (#14704); unset for none. */
+  direction_id?: string;
   after?: string[];
   /** Unmet prerequisite to-do IDs for a strict piece; an empty list means none, omission keeps legacy behavior. */
   prerequisite_blockers?: string[];
@@ -211,6 +213,8 @@ export interface TodoAsk {
   outcome?: "done" | "cannot" | "decide" | string;
   verdict: string;
   recommend?: string;
+  /** Direct evidence/PR/MR URL when present and not merely the to-do's own page (#14659). */
+  link?: string;
   asked_at: string;
   /** An owner-only terminal action on this task. Older decision cards can still name it as an option. */
   resume_terminal?: { machine_id: string; session_id: string };

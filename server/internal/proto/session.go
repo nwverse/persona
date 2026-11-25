@@ -245,6 +245,10 @@ type Session struct {
 	// apply to it, and a launcher switch to Launcher itself brings it back there. Beside EffortChangeFailed, in its
 	// padding: a Session stays in its allocation size class.
 	OffLauncher bool `json:"off_launcher,omitempty"`
+	// LogicalPlaceholder is manager-internal provenance: this row stands in for a logical conversation whose active
+	// physical segment is not listed. Its Assistant identity comes from the logical root, not from a physical Cwd.
+	// It occupies the last byte of padding before BackgroundStalledSince, keeping Session in its allocation size class.
+	LogicalPlaceholder bool `json:"-"`
 	// BackgroundStalledSince (#13744): the time since which this session's background commands have used no CPU and
 	// written no output, set only when a known worker (a build, tests, a download) runs there and that has lasted ten
 	// minutes while the turn is over. State stays working: a running tool is work, this only tells a client the work
@@ -588,6 +592,16 @@ const (
 	// CodeModesUnsupported: an agent in a terminal whose mode, effort and model are its start's (cursor, agy).
 	CodeModesUnsupported    = "modes_unsupported"
 	CodeEffortChangePending = "effort_change_pending"
+	// A Codex on the terminal route, whose model and effort the node types as `/model <model> --reasoning=<level>`
+	// (node/codex_terminal_modes.go, #12572). CodeModesCodexVersion: a Codex older than 0.169 started the session, and
+	// its /model takes no arguments. CodeModesCodexNoRollout: the session has no rollout yet to confirm a change by.
+	// CodeModesCodexRefused: Codex answered the command with a refusal; the message is Codex's own words.
+	// CodeModesCodexUnconfirmed: the command went in, and the rollout did not record the change in time (delivered
+	// "unknown": it may still have taken).
+	CodeModesCodexVersion     = "modes_codex_version"
+	CodeModesCodexNoRollout   = "modes_codex_no_rollout"
+	CodeModesCodexRefused     = "modes_codex_refused"
+	CodeModesCodexUnconfirmed = "modes_codex_unconfirmed"
 )
 
 // CodeNotLoaded is what session.items and session.item refuse with when reading the session would start its agent: an

@@ -171,6 +171,13 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 					todo = updated
 				}
 			}
+			if t.DirectionID != "" && todo.DirectionID != t.DirectionID {
+				if updated, err := s.editTodo(ctx, todo.ID, db.TodoEdit{DirectionID: &t.DirectionID}); err != nil {
+					s.logf("task %s: direction_id: %v", todo.ID, err)
+				} else {
+					todo = updated
+				}
+			}
 		} else {
 			title, retitle := s.taskTitle(ctx, t.Title, t.Prompt) // the assistant's own title stays when it is a real one
 			if t.InboxItem != "" {
@@ -179,9 +186,9 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 				s.tasks.mu.Unlock()
 			}
 			if t.containerWorkspace() && len(t.Workspace.Container.SelectedRepoIDs) > 0 {
-				todo, err = s.createTaskTodoWithRepositoriesAndAudience(ctx, t.ReservedTodoID, title, t.Prompt, p.Conversation, p.ID, t.Project, t.InboxItem, t.Audience, t.Workspace.Container.SelectedRepoIDs)
+				todo, err = s.createTaskTodoWithRepositoriesAndAudience(ctx, t.ReservedTodoID, title, t.Prompt, p.Conversation, p.ID, t.Project, t.InboxItem, t.Audience, t.DirectionID, t.Workspace.Container.SelectedRepoIDs)
 			} else {
-				todo, err = s.createTaskTodoAs(ctx, t.ReservedTodoID, title, t.Prompt, p.Conversation, p.ID, t.Project, t.InboxItem, t.Audience)
+				todo, err = s.createTaskTodoAs(ctx, t.ReservedTodoID, title, t.Prompt, p.Conversation, p.ID, t.Project, t.InboxItem, t.Audience, t.DirectionID)
 			}
 			if err != nil {
 				if t.InboxItem != "" {
@@ -829,11 +836,31 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		stop()
 	}
 	launched := err == nil
+	if !launched && t.Dispatch != nil {
+		// A failed start keeps its dispatch, with the candidate's failed starts in a row, for the next try to read
+		// (candidate_keep.go: three re-pick).
+		write, stop := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
+		if saveErr := s.patchPlanTask(write, planID, i, func(pt *PlanTask) {
+			if pt.TodoID == t.TodoID {
+				pt.Dispatch = t.Dispatch
+			}
+		}); saveErr != nil {
+			s.logf("task %s: record dispatch: %v", t.TodoID, saveErr)
+		}
+		stop()
+	}
 	if launched {
 		// The start's own context can be spent already: an unanswered start whose session was just reconciled
 		// (#6540) reaches here after taskStartTimeout, and a database write on that context fails at once, which
 		// would fail the task although its agent is running. The link gets its own time, like the bookkeeping below.
 		linkCtx, linkCancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
+		if saveErr := s.patchPlanTask(linkCtx, planID, i, func(pt *PlanTask) {
+			if pt.TodoID == t.TodoID {
+				pt.Dispatch = t.Dispatch // the latest start's: a start on no tier clears an earlier one
+			}
+		}); saveErr != nil {
+			s.logf("task %s: record dispatch: %v", t.TodoID, saveErr)
+		}
 		if t.TerminalTarget.Machine != "" {
 			if saveErr := s.patchPlanTask(linkCtx, planID, i, func(pt *PlanTask) {
 				if pt.TodoID == t.TodoID && pt.CloseTabOnAccept && pt.TerminalCleanup == "" && pt.TerminalTarget.Machine == "" {

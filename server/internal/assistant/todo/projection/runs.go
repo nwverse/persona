@@ -14,10 +14,10 @@ import (
 
 // Windows the rules use. Each is half open: the view changes at the window's end, which next_change_at names.
 const (
-	failedStartFor  = 48 * time.Hour   // row 1: a failed start needs the owner this long after the failure
-	justFinishedFor = 24 * time.Hour   // rows 6 and 9: closed work unseen, or finished work after it was seen
-	inactiveAfter   = 48 * time.Hour   // row 13: no activity this long gets the Inactive mark
-	usageLimitGrace = 10 * time.Minute // a usage limit still holds this long past its reset
+	failedStartFor             = 48 * time.Hour   // row 1: a failed start needs the owner this long after the failure
+	justFinishedFor            = 24 * time.Hour   // rows 6 and 9: closed work unseen, or finished work after it was seen
+	inactiveAfter              = 48 * time.Hour   // row 13: no activity this long gets the Inactive mark
+	usageLimitGrace            = 10 * time.Minute // a usage limit still holds this long past its reset
 	retryGrace                 = 5 * time.Minute  // a scheduled retry still counts this long past its wake_at (the hub's wakeGrace)
 	prFreshFor                 = 15 * time.Minute // PR facts count this long after they were checked
 	pendingReviewEscalateAfter = 24 * time.Hour   // todos_v2: pending_review stays in working this long, then surfaces to needs_you

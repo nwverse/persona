@@ -36,23 +36,22 @@ import { setRecentMore, useRecentCount, useRecentMore } from "../lib/sidebar-rec
 import { countsLabel, directionExternal, directionLabel, totalCounts, useDirectionNames, useLeaderCounts } from "../lib/direction-names";
 import type { ExternalDirection } from "../lib/direction-tree";
 import { SidebarDirectionRow } from "./SidebarDirections";
-import { SidebarSpaces } from "./SidebarSpaces";
 import { conversationPage } from "../lib/conversation-page";
 import { href, navigate, onLinkClick, showsSession, type Route } from "../lib/router";
 import { useScrollMemory } from "../lib/scroll-memory";
 import { retryFullAgentSessions, useAgentSessions, useFullAgentSessions } from "../lib/sessions";
+import { heldAsWorking, rowCards } from "../lib/supervisor-held";
 import { isInFlightLaunch } from "../lib/launch-handoff";
 import { getState, refresh, refreshTodos, useHubUnreachable, useStore } from "../lib/store";
 import { SESSIONS_SIDE_FOLD_FEATURE } from "../lib/side-fold";
 import { conversationTitle, mergeConversations } from "./assistant/conversations";
-import { useShownManager } from "../lib/manager-choice";
+import { sameManager, useShownManager } from "../lib/manager-choice";
 import { agentGroupLabel, agentTreeState, buildTodoTree, shareTree, worstTreeState, type TodoTree } from "../lib/todo-tree";
 import { openTodoFromTag, sortTodos, TODO_STATUS_INFO, type TodoStatus } from "../lib/todos";
 import type { Machine, Session } from "../lib/types";
 import { Collapse, cx, EASE, Kbd, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../ui/atoms";
 import { StatusMark } from "../ui/StatusMark";
 import { Icon } from "../ui/icons";
-import { HerdrNotices as HerdrNoticesContent } from "./agents/HerdrNotices";
 import { HubNoticeLine as HubNoticeLineContent } from "./agents/HubNoticeRow";
 import { DeleteSessionDialog, RenameDialog, RenameSpaceDialog } from "./chat/SessionDialogs";
 import { AGENT_ARCHIVES_FEATURE } from "../lib/agent-archives";
@@ -68,6 +67,7 @@ import { usePanes } from "../lib/terminal-panes";
 import { buildTerminalTree, shellsOnly, type TermSpace } from "../lib/terminals";
 import type { LinkTargetSpace } from "./LinkTodoDialog";
 import { lazyDialog } from "./LazyOverlay";
+import { lazyPage } from "../lib/lazy-page";
 import { FoldScope, useFolded } from "../lib/use-folded";
 import { clipsOverflow, glideBox, glideStyle, sameBox, type GlideBox, type Span } from "../lib/glide";
 import { AGENTS_FOLD, onGrouping, pagedAgentList } from "../lib/sidebar-api";
@@ -98,8 +98,28 @@ export { useNavPages, type NavPage } from "./SidebarParts";
 export { AgentRow, PersonaRow, SessionRow } from "./SidebarRows";
 export { SidebarRail } from "./SidebarRail";
 
+// The "herdr isn't running" rows (#1916) draw nothing until a computer's herdr is read as stopped, so their code, its
+// polling and their words are off the first screen and load with the sidebar's first render (#14339). Drawn only once
+// the chunk is in, never suspending: a Suspense here would hold the sidebar's other updates (a navigation) while it
+// loads. A chunk that will not load is reported, and the next mount asks again.
+const HerdrNoticesContent = lazyPage(() => import("./agents/HerdrNotices").then((m) => m.HerdrNotices));
+export const HerdrNotices = memo(function HerdrNotices() {
+  const [ready, setReady] = useState(HerdrNoticesContent.ready);
+  useEffect(() => {
+    if (ready) return;
+    let live = true;
+    HerdrNoticesContent.preload().then(
+      () => live && setReady(true),
+      (error: unknown) => reportBoundary(error, "herdr_notices", isChunkError(error)),
+    );
+    return () => {
+      live = false;
+    };
+  }, [ready]);
+  return ready ? <HerdrNoticesContent /> : null;
+});
+
 // Skip parent pushes with unchanged props; each leaf still receives its own state and subscription updates.
-const HerdrNotices = memo(HerdrNoticesContent);
 const HubNoticeLine = memo(HubNoticeLineContent);
 const NodePrompt = memo(NodePromptContent);
 const SidebarUsage = memo(SidebarUsageContent);
@@ -418,8 +438,6 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
         {sections
           .filter((g) => (g.id ? g.pages.length > 0 : !narrow))
           .map((g, i) => <PageGroup key={g.id || "pages"} group={g} more={g.id ? [] : more} first={i === 0 && !narrow} reg={reg} hover={hover} activeKey={activeKey} go={go} />)}
-        {/* the user's domain spaces (#13500), under the pages and their Health */}
-        {chats && <SidebarSpaces reg={reg} hover={hover} activeKey={activeKey} go={go} />}
 
         {chats && (
           <Section
@@ -887,6 +905,7 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
   const listMenu = useMenu();
   const machineOrder = useMemo(() => machines.map((m) => m.id), [machines]);
   const rowOrder = useMemo(() => machineSessionPresentation(machines), [machines]);
+  const rowNeedsYou = useCallback((s: Session) => runtimeNeedsYou(s) && !rowCards(getState().interactions, s.machine_id, s.session_id).heldOnly, []);
   const listItems = agentListItems({ archives, hover, onNavigate, display: { value: displayValue, sort: sortByActivity, filter: showFilter } });
   const pagedGrouping = useMemo(() => ({
     dimension: PAGED_DIMENSION[grouping],
@@ -920,7 +939,7 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
       {launches.map((launch) => <NavRow key={launch.id} k={`s:${launch.machineId}/${launch.id}`} reg={reg} hover={hover} active={activeKey === `s:${launch.machineId}/${launch.id}`} to={{ name: "session", mid: launch.machineId, sid: launch.id }} go={go} icon={launch.phase === "failed" ? "retry" : "agent"} agent={launch.phase === "failed" ? undefined : launchDisplayEngine(launch)} label={launch.text || baseName(launch.cwd) || t("sidebar.launch_untitled")} hint={launch.phase === "failed" ? t("sidebar.launch_failed") : t("sidebar.launch_background")} />)}
     </Section>}
     <PagedSessionList root={runtimeAgents} path={RUNTIME_AGENTS_PATH} identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} parentOf={sideFold ? undefined : runtimeParentIdentity} excludeIdentities={inFlightLaunchIds} event="sessions_list" grouping={pagedGrouping}
-      activeAt={runtimeActiveAt} needsYou={runtimeNeedsYou} isOpen={(s) => activeKey === `s:${s.machine_id}/${s.session_id}`}
+      activeAt={runtimeActiveAt} needsYou={rowNeedsYou} isOpen={(s) => activeKey === `s:${s.machine_id}/${s.session_id}`}
       catalog={catalog} justFinished={justFinished} placeOf={runtimePlace} failureText={agentsReadFailed} holdCounts={holdCounts}
       machineOrder={machineOrder} label={(dimension, id) => dimension === "machine" ? machineWithHub(id, machines) : id}
       renderRow={(s, within) => {
@@ -1056,6 +1075,8 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const todosSupported = useStore((s) => s.todosSupported);
   const todosLoaded = useStore((s) => s.todosLoaded);
   const todosUnread = useTodosUnread();
+  const shownManagerName = useShownManager();
+  const todosV2 = useStore((s) => Boolean(s.assistant && sameManager(s.assistant.manager ?? shownManagerName, shownManagerName) && s.assistant.todos_v2 === true));
   // the Filter menu's choices and the words ⌘K's "Filter Agents list" put on it (#6589): the list has no field of its own
   // (both come from AgentsBlock: off in Settings › Agents, the Filter is not drawn and holds nothing)
   const setDimFilters = setAgentListFilters;
@@ -1094,7 +1115,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const activityDates = useActivityDates(agents, engaged);
   const activity = useMemo(() => activityOrder(activityDates), [activityDates]);
   const rowOrder = byUpdate ? activity.byUpdated : structuralOrder;
-  const listed = useMemo(() => withoutBotmux(all, botmuxHidden), [all, botmuxHidden]);
+  const listed = useMemo(() => heldAsWorking(withoutBotmux(all, botmuxHidden), interactions), [all, botmuxHidden, interactions]);
   const previewListed = useMemo(() => [...withoutBotmux(previewAll, botmuxHidden)].sort(rowOrder), [previewAll, botmuxHidden, rowOrder]);
   const facets = useMemo(() => buildAgentFacets(listed, machines, pins), [listed, machines, pins]);
   const dimActive = hasActiveDimensionFilters(dimFilters);
@@ -1164,9 +1185,9 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const keepEmptyGroups = !filtered && live.length + offline.length > 0;
   const todoTree = useMemo(() => {
     if (shownGrouping !== "todo" || !todosLoaded) return undefined;
-    const built = buildTodoTree(unpinned, machines, todos, mutes, Date.now(), { keepEmpty: keepEmptyGroups, compareSessions: rowOrder });
+    const built = buildTodoTree(unpinned, machines, todos, mutes, Date.now(), { keepEmpty: keepEmptyGroups, compareSessions: rowOrder, todosV2 });
     return shareTree(lastTodoTree.current, byUpdate ? activity.todoTreeByUpdate(built) : built);
-  }, [unpinned, machines, shownGrouping, mutes, todos, todosLoaded, keepEmptyGroups, rowOrder, byUpdate, activity]);
+  }, [unpinned, machines, shownGrouping, mutes, todos, todosLoaded, keepEmptyGroups, rowOrder, byUpdate, activity, todosV2]);
   lastTodoTree.current = todoTree;
   const repoMachines = useMemo(() => {
     if (shownGrouping !== "repo" || !agentRepos.mod) return [];

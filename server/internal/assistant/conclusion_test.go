@@ -10,7 +10,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -397,7 +399,7 @@ func TestRecommendationThatCannotReachTheAgentIsNotTaken(t *testing.T) {
 	notTaken := i18n.T(s.botLang(ctx), "assistant-reports.accept_not_taken", i18n.Args{"error": "node down"})
 	press := &botcard.CardAction{}
 	press.Action.Value = map[string]any{"a": "accept", "id": todo.ID}
-	if r := s.botCardAction(ctx, press, ""); r == nil || r.Toast == nil ||
+	if r := s.larkModule().Action(ctx, press, ""); r == nil || r.Toast == nil ||
 		r.Toast.Type != "error" || r.Toast.Content != notTaken {
 		t.Fatalf("the Lark button: %+v", r)
 	}
@@ -687,19 +689,14 @@ func TestDecisionAnsweredInWordsStaysDecidedWhenTheSendFails(t *testing.T) {
 func TestFeishuConclusionQuestionGoesToSupervisorWithoutAnswering(t *testing.T) {
 	needsLarkLayer(t)
 	s, f, todo, _, _ := conclusionService(t, false)
-	ctx := t.Context()
 	waitsForReview(t, s, f, todo.ID, "Two options: start with ten percent or defer the rollout.")
 	reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "Which rollout do you want?", "recommend": "Start with ten percent"})
 	a := askOf(s, todo.ID)
-	status, err := s.feishuStatus(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
 	before := len(sentToAgent(f))
 	var ev botcard.MessageEvent
 	ev.Message.ChatType, ev.Message.ParentID, ev.Message.MessageType = "p2p", a.MessageID, "text"
 	ev.Message.MessageID, ev.Message.Content = "om_background", `{"text":"能补充一下这个决定的背景吗"}`
-	s.feishuMessage(ev, status, "")
+	feishuSay(t, s, f, nil, ev, "")
 	task := todoNow(s, todo.ID)
 	if got := askOf(s, todo.ID); got == nil || !got.AcceptedAt.IsZero() || task.Supervision.State != reviewNeedsUser ||
 		task.DoneAt != nil || len(sentToAgent(f)) != before {
@@ -711,7 +708,7 @@ func TestFeishuConclusionQuestionGoesToSupervisorWithoutAnswering(t *testing.T) 
 	}
 	// The existing option still answers this exact card after the clarification.
 	ev.Message.MessageID, ev.Message.Content = "om_choice", `{"text":"B"}`
-	s.feishuMessage(ev, status, "")
+	feishuSay(t, s, f, nil, ev, "")
 	if got := askOf(s, todo.ID); got == nil || got.AcceptedAt.IsZero() {
 		t.Fatalf("explicit option did not answer: %+v", got)
 	}
@@ -829,5 +826,130 @@ func TestConclusionVerificationCopyFollowsDeliveryState(t *testing.T) {
 	}
 	if got := s.todoAsks(ctx)[todo.ID].Verdict; got != wantVerdict {
 		t.Fatalf("currentDelivery-promoted verdict = %q, want %q", got, wantVerdict)
+	}
+}
+
+// askConclusion preserves a needs_user decision's Reason up to readDecision's 200-rune limit instead of re-clipping it
+// to 120 runes (#14659), while still capping values beyond 200 runes at 200.
+func TestAskConclusionPreservesDecisionReasonUpTo200Runes(t *testing.T) {
+	s, f, todo, _, _ := conclusionService(t, false)
+	waitsForReview(t, s, f, todo.ID, "MR is ready and waiting on reviewer assignment.")
+	reason180 := strings.Repeat("a", 180)
+	reviewTask(t, s, todo.ID, map[string]any{
+		"verdict":   "needs_user",
+		"reason":    reason180,
+		"recommend": "Assign reviewers now",
+	})
+	a := askOf(s, todo.ID)
+	if a == nil || a.Reason != reason180 {
+		t.Fatalf("decision reason clipped early: len=%d got=%q", utf8.RuneCountInString(a.Reason), a.Reason)
+	}
+	ask := listedAsk(t, s, todo.ID)
+	if ask == nil || ask["question"] != reason180 {
+		t.Fatalf("listed ask.question = %v, want 180-rune reason", ask["question"])
+	}
+
+	reason240 := strings.Repeat("b", 240)
+	reviewTask(t, s, todo.ID, map[string]any{
+		"verdict":   "needs_user",
+		"reason":    reason240,
+		"recommend": "Assign reviewers now",
+	})
+	a = askOf(s, todo.ID)
+	wantClipped := clip(reason240, decisionReasonMaxRunes)
+	if a == nil || a.Reason != wantClipped {
+		t.Fatalf("over-limit decision reason = %q (len=%d), want %q (len=%d)", a.Reason, utf8.RuneCountInString(a.Reason), wantClipped, utf8.RuneCountInString(wantClipped))
+	}
+}
+
+// conclusionLink follows the documented fallback order: explicit link -> stage PR / PRURL -> canonical saved
+// repository delivery PR/MR (skipping reference links) -> note/checks URL -> agent session -> to-do page (#14659).
+func TestConclusionLinkFallbackOrderIncludesRepositoryDeliveryPRs(t *testing.T) {
+	const (
+		explicitLink = "https://docs.example.com/decision/1"
+		stagePR      = "https://github.com/example/app/pull/42"
+		repoMR       = "https://gitlab.example.com/team/app/-/merge_requests/1468"
+		refPR        = "https://github.com/example/upstream/pull/99"
+		noteURL      = "https://docs.example.com/from-note"
+	)
+	st := &fakeTodoRepoStore{
+		planMemStore: &planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}},
+		repos:        map[string][]repository.TaskRepository{},
+	}
+	f := newFakeHub().withMachine()
+	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
+		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_me", PublicURL: "https://hub.example.com"}, nil
+	})
+	s := newServiceOn(t, f, st)
+	ctx := t.Context()
+	todo, err := s.createTodo(ctx, "Review MR", "Review delivery MR", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.linkTodoAgent(ctx, todo.ID, "box", "s1", "Review MR", "/code/app", "claude"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reference-only repo links do not override a URL in note/checks.
+	st.repos[todo.ID] = []repository.TaskRepository{{
+		RepoID: "repo_1",
+		Links: []repository.TaskLink{
+			{Kind: "issue", Number: "10", CanonicalURL: "https://github.com/example/app/issues/10", Role: repository.LinkRoleDelivery},
+			{Kind: "pull_request", Number: "99", CanonicalURL: refPR, Role: repository.LinkRoleReference},
+		},
+	}}
+	if got := s.conclusionLink(ctx, todoNow(s, todo.ID), conclusionInput{Note: "See " + noteURL + "."}); got != noteURL {
+		t.Fatalf("reference PR should be skipped in favor of note URL: got %q, want %q", got, noteURL)
+	}
+
+	// Saved canonical repository delivery MR wins over note/checks URL and agent session link.
+	st.repos[todo.ID] = []repository.TaskRepository{{
+		RepoID: "repo_1",
+		Links: []repository.TaskLink{
+			{Kind: "pull_request", Number: "99", CanonicalURL: refPR, Role: repository.LinkRoleReference},
+			{Kind: "pull_request", Number: "1468", CanonicalURL: repoMR, Role: repository.LinkRoleDelivery},
+		},
+	}}
+	if got := s.conclusionLink(ctx, todoNow(s, todo.ID), conclusionInput{Note: "See " + noteURL}); got != repoMR {
+		t.Fatalf("delivery repository MR fallback: got %q, want %q", got, repoMR)
+	}
+
+	// Empty role defaults to delivery (legacy saved links).
+	st.repos[todo.ID][0].Links[1].Role = ""
+	if got := s.conclusionLink(ctx, todoNow(s, todo.ID), conclusionInput{Note: "See " + noteURL}); got != repoMR {
+		t.Fatalf("empty-role delivery repository MR fallback: got %q, want %q", got, repoMR)
+	}
+
+	// Stage PR takes precedence over repository delivery MR.
+	s.setTaskStage(ctx, todo.ID, "review", stagePR)
+	if got := s.conclusionLink(ctx, todoNow(s, todo.ID), conclusionInput{Note: "See " + noteURL}); got != stagePR {
+		t.Fatalf("stage PR precedence: got %q, want %q", got, stagePR)
+	}
+
+	// Explicit in.Link takes precedence over stage PR.
+	if got := s.conclusionLink(ctx, todoNow(s, todo.ID), conclusionInput{Link: explicitLink, Note: "See " + noteURL}); got != explicitLink {
+		t.Fatalf("explicit link precedence: got %q, want %q", got, explicitLink)
+	}
+
+	// Invalid explicit link (non-http scheme) is ignored and falls back cleanly.
+	if got := s.conclusionLink(ctx, todoNow(s, todo.ID), conclusionInput{Link: "javascript:alert(1)"}); got != stagePR {
+		t.Fatalf("invalid explicit link fallback: got %q, want %q", got, stagePR)
+	}
+
+	// With no PR, repo delivery link, or note URL: falls back to agent session link, then to-do page when no agent.
+	plainTodo, err := s.createTodo(ctx, "Plain task", "No PR yet", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.linkTodoAgent(ctx, plainTodo.ID, "box", "s1", "Plain task", "/code/app", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	cur := todoNow(s, plainTodo.ID)
+	if got := s.conclusionLink(ctx, cur, conclusionInput{}); got != "https://hub.example.com/s/box/s1" {
+		t.Fatalf("agent session fallback: got %q", got)
+	}
+	cur.Agents = nil
+	if got := s.conclusionLink(ctx, cur, conclusionInput{}); got != "https://hub.example.com/todos/"+plainTodo.ID {
+		t.Fatalf("todo page fallback: got %q", got)
 	}
 }

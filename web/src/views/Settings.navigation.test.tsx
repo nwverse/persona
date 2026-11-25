@@ -177,6 +177,43 @@ describe("Settings category navigation", () => {
     }
   });
 
+  // #13398: General keeps the default appearance; the opt-in looks moved to Advanced › Appearance with no storage change
+  it("moves the non-default looks to Advanced and keeps an existing choice", async () => {
+    await mount("/settings?tab=general");
+    let region = host.querySelector('[role="region"]')!;
+    expect(region.querySelector('[data-settings-row="theme"]')).not.toBeNull();
+    expect(region.querySelector('[data-settings-row="text-size"]')).not.toBeNull();
+    expect(region.querySelector('[data-settings-row="theme-color"]')).toBeNull();
+    expect(region.querySelector('[data-settings-row="font"]')).toBeNull();
+    expect(region.querySelector('[data-settings-row="sidebar-icons"]')).toBeNull();
+
+    await act(async () => category(t("settings-nav.tab_advanced")).click());
+    expect(location.search).toBe("?tab=advanced");
+    region = host.querySelector('[role="region"]')!;
+    expect(region.getAttribute("aria-label")).toBe(t("settings-nav.tab_advanced"));
+    expect(region.querySelector('[data-settings-group="appearance"]')).not.toBeNull();
+    const color = region.querySelector('[data-settings-row="theme-color"]')!;
+    expect(region.querySelector('[data-settings-row="font"]')).not.toBeNull();
+    expect(region.querySelector('[data-settings-row="sidebar-icons"]')).not.toBeNull();
+    // the default still stores nothing
+    expect(color.querySelector('[aria-checked="true"]')?.getAttribute("aria-label")).toContain(t("ui-look.default"));
+
+    const radio = (name: string) => [...host.querySelectorAll<HTMLButtonElement>('[data-settings-row="theme-color"] [role="radio"]')]
+      .find((r) => r.getAttribute("aria-label")?.startsWith(name))!;
+    await act(async () => radio(t("ui-look.coral")).click());
+    expect(localStorage.getItem("persona.accent")).toBe("coral");
+    expect(document.documentElement.dataset.accent).toBe("coral");
+
+    // a reload lands on the same Advanced page with the same choice
+    await act(async () => root.render(null));
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    expect(location.search).toBe("?tab=advanced");
+    expect(radio(t("ui-look.coral")).getAttribute("aria-checked")).toBe("true");
+
+    await act(async () => radio(t("ui-look.default")).click());
+    expect(localStorage.getItem("persona.accent")).toBeNull();
+  });
+
   it("opens knowledge selection as the current assistant's, with no manager in the address", async () => {
     await mount("/settings?tab=models&manager=remote");
     await act(async () => category(t("settings-nav.tab_knowledge")).click());
@@ -413,9 +450,13 @@ describe("Settings category navigation", () => {
     expect(new URLSearchParams(location.search).get("extension")).toBe(to);
   });
 
-  it("keeps a connector page's own Back on a wide screen", async () => {
+  it("keeps a connector page's own Back on a wide screen and leaves legacy scroll container unchanged", async () => {
     await mount("/settings?tab=connectors&connector=github");
     expect(host.querySelector("[data-own-back]")).not.toBeNull();
+    const region = host.querySelector<HTMLElement>('[role="region"]')!;
+    expect(region.hasAttribute("data-integrations-split-host")).toBe(false);
+    expect(region.classList.contains("overflow-y-auto")).toBe(true);
+    expect(region.classList.contains("overscroll-contain")).toBe(true);
   });
 
   it.each(["/settings?tab=sent", "/settings/sent", "/settings/sent/"])("redirects %s to the secondary Sent page", async (url) => {
