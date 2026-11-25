@@ -197,6 +197,7 @@
   "chat-interactions.secret_run_card_only",
   "chat-interactions.secret_run_commands",
   "chat-interactions.secret_run_decline",
+  "chat-interactions.secret_run_env_warning",
   "chat-interactions.secret_run_kicker",
   "chat-interactions.secret_run_note",
   "chat-interactions.secret_run_run",

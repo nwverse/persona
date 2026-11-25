@@ -46,8 +46,19 @@ rows).
   the parent, and the title's ⌄ switches to the other sides. No New Side Session: the desktop app makes them.
 - **Landing**: a notification, a Needs You card or a link that names a side opens its parent with the side shown
   (`AppModel.openChat` sets `sideLanding`; a `ChatView` given a folded side opens its parent the same way).
+- **Which side keeps a parent Unread (#13524)**: when a parent row in the Agents list is Unread because one or more
+  folded sides have unseen replies (`SideFold.UnreadSummary` / `SideUnreadLine`), a line under the parent's title in the
+  unread tint shows the `sideSessions` mark, the most recent unread side's title ("+N" for other unread sides), and
+  opens that side directly in one tap via the parent's side-session view (`SideSessionOpener` -> `SideLanding`). When
+  only sides are unread the line replaces the parent's own already-seen preview; when the parent is unread too, both
+  lines show. Before folded rows load on a paged list (`roots=1`), the line shows only the unread count (non-clickable)
+  and triggers a one-shot `AppModel.refreshUnreadSides` read through `ChildSessionIndex`. Marking only the parent seen
+  keeps the parent Unread while a side is unread; marking its held sides seen takes it out of Unread counts immediately
+  (`SideFold.unreadClearedBySeen`). Rows with no unread side stay unchanged.
 - **Words** (`Localizable.xcstrings`): Side Sessions, Side Sessions (N), From Side Session · <title>, A side session
-  needs you, No Side Sessions; zh-Hans 分支会话 (「来自分支会话 · <title>」), ja 子セッション (「子セッション・<title>から」).
+  needs you, No Side Sessions, New side reply: <title>, Side session “<title>” has a new reply, Open side session
+  “<title>”, Also with new replies: <titles>, N side sessions have new replies; zh-Hans 分支会话 (「来自分支会话 · <title>」,
+  「分支新回复：<title>」), ja 子セッション (「子セッション・<title>から」, 「子セッションに新着：<title>」).
 - **Not yet**: a search hit inside a side (`search_hits[<id>].hit_session_id`) lands on the parent without the side.
 - Screenshots: `-openSession <machine>/<session> -showSideSessions chip|sheet|side` hangs three sample sides under that
   session (one asking, one working, one stopped) and opens nothing, the sheet, or the first side;
