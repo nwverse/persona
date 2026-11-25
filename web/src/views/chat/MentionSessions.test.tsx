@@ -118,7 +118,7 @@ describe("@ other sessions on a paging hub (#12983)", () => {
     expect(composerFieldText(host)).toBe("Weather app redesign ");
     await type("What changed?", true);
     await act(async () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-composer.send")}"]`)!.click());
-    expect(onSend).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(onSend).toHaveBeenCalledOnce());
     const text = onSend.mock.calls[0][0].text;
     expect(text).toContain('url="persona://session/laptop/weather"');
     expect(text).toContain("/home/me/code/weather");

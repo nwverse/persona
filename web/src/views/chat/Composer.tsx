@@ -660,11 +660,10 @@ export const Composer = memo(function Composer({
   const mOpen = Boolean(token);
   menusShown.current = { slash: slashOpen, at: mOpen };
   useEffect(() => {
-    if (mOpen || slashSkillActive || plusOpen) preloadInlineField();
-  }, [mOpen, slashSkillActive, plusOpen]);
-  useEffect(() => {
-    if (hasInline && !inlineMessage()) void loadInlineMessage().catch(() => {});
-  }, [hasInline]);
+    const picking = mOpen || slashSkillActive || plusOpen;
+    if (picking) preloadInlineField();
+    if ((picking || hasInline) && !inlineMessage()) void loadInlineMessage().catch(() => {});
+  }, [mOpen, slashSkillActive, plusOpen, hasInline]);
 
   const trackCaret = ([from, to]: InlineSelection) => setCaret(from === to ? from : -1);
 

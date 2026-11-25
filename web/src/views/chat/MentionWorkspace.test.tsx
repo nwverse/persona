@@ -94,7 +94,7 @@ describe("@ workspaces", () => {
     expect(composerFieldText(host)).toBe("Add dark mode to weather please");
     expect(box().querySelector("[data-inline-mention]")?.getAttribute("title")).toBe("/home/me/code/weather · main");
     await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="发送"]')!.click());
-    expect(onSend).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(onSend).toHaveBeenCalledOnce());
     const text = onSend.mock.calls[0][0].text;
     expect(text).toMatch(/^<persona-context kind="workspace" title="weather" url="" machine="laptop" cwd="\/home\/me\/code\/weather" branch="main">\n/);
     expect(text).toContain("工作区：weather");
