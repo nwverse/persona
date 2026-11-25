@@ -200,6 +200,27 @@ A node learns the switch at its next `node.configure` (on every connection): its
 that, which is why the manager filters the node's built-in programs itself. Client-only modules (`modapi.ClientModules`)
 have no seam; their flag goes and the clients hide them.
 
+### A module that is off keeps what the user has
+
+Switching a module off, at run time or by leaving it out of the build, **must not hide or change data the user already
+has** (the owner's rule for every module move, #13430). "Absent" above is about the module's routes, tools, jobs and
+entries, never about what it wrote earlier:
+
+- **Reading existing data is Core.** Listing, opening and searching what is on disk or in the database keeps working
+  with the module off, and the search index keeps indexing those files. The read path never goes through a module's
+  provider.
+- **The write side is the module's.** Creating, uploading, transcribing, summarising, the background rounds and the
+  entry points go with the module: with it off they do nothing, and no stored file is touched.
+- **Off never deletes and never rewrites.** Deleting stays the user's explicit action, and the retention the user
+  configured stays the user's setting: neither is a side effect of the switch. State that was in flight when the
+  module went is shown as stored and marked in the response only (below), so the module takes it up from the same
+  stored fields when it is back.
+- **A reviewer checks the off case for "old data still there, unchanged"**, not only "entry gone":
+  `scripts/ci/core-only-smoke.py` and `scripts/ci/module-e2e.py` start their hubs on a knowledge base that already
+  holds recordings and check exactly that ("Recording" below).
+
+Recordings are the first application ("Recording" below, `docs/plans/plan-kb-recording-port.md`).
+
 ### How to build and run the core alone
 
 Persona Core is a product on its own: a hub built without any module starts, serves and passes the core's tests.
@@ -485,7 +506,45 @@ manifest declares `feature: module.recording`, which the kernel announces while 
 - **With the module absent** (`persona_without_recording`, `persona_core_only`, or switched off) the recording routes
   answer 404, the audio socket is unknown, the hello names none of the nine meeting and recording capabilities (so
   the hub announces none of their feature flags), no room tool is offered and no final pass or attending feeder runs
-  (`TestRecordingFollowsItsModule`). The recordings already stored stay in the knowledge base.
+  (`TestRecordingFollowsItsModule`). The recordings already stored stay in the knowledge base, **listed, readable
+  and searchable, byte for byte unchanged** ("A module that is off keeps what the user has" above):
+
+  | With the module off | What happens |
+  | --- | --- |
+  | The knowledge list (`GET /api/v1/kb/recordings`, `kb_list`) | Works: every stored recording, as before |
+  | A recording's detail (`GET /api/v1/kb/recordings/{id}`, `kb_get`): transcript, minutes, day recap, photo texts | Works, the same response as with the module |
+  | Search (`GET /api/v1/kb-search`, `kb_search`) and the search index | Works: transcripts, minutes, recaps and photo texts stay indexed |
+  | Tags, pinned facts and projects of a recording (`PUT /api/v1/kb/recordings/{id}`, `kb_update`) | Works: the knowledge base's generic edit |
+  | Delete (`DELETE /api/v1/kb/recordings/{id}`) | Works: the knowledge base's own route, always there |
+  | Retention (`recording_days`, `minutes_days`) | Runs as configured (`kb.RetentionWithoutRecordingModule`, the one decision point) |
+  | Crash recovery of an interrupted upload | Runs when the store opens, as ever |
+  | New recordings, uploads, appends, the audio socket, photos, rename, the minutes and recap routes | Gone: the module's routes answer 404 |
+  | The minutes, titles and recap lanes, summaries, the sweep of hub transcripts after a prune | Run and do nothing: no model call, no file written |
+  | Photo images and stored audio (`GET /api/v1/recordings/{id}/photos/…`, the audio routes) | Not reachable: they are the module's routes; the files stay on disk |
+
+- **Reader, kept writes and writers** (`docs/plans/plan-kb-recording-port.md`, PR 2): in `server/internal/kb` every
+  recording file is split by what its code is. `<file>_read.go` is the read path (list, get, the transcript of
+  record, minutes and recap readers, the search view with the undo-journal overlay) and `<file>_keep.go` the writes
+  that exist without the module (delete, retention with the trim, the undo-journal commit and the recovery in
+  `NewStore`, the `meeting.json` update primitive, the photo book the trim needs): both are Core. `<file>.go` keeps
+  the writers (uploads, appends, audio, photos, live log, meeting writers, transcription, minutes, recaps, titles,
+  summaries), which later PRs move into the module. Reads, delete, retention and recovery call no writer.
+- **The write side is a provider** (`recordingwire.Provider`): the four background rounds (`WriteMinutes`,
+  `TitleRecordings`, `WriteDayRecaps`, `SummarizeRecordings`), `AfterPrune` (the module's part of the retention round)
+  and the audio writers' two touch points with delete and retention (`AudioDropped`, `AudioClosed`). The module's
+  `Hook` gives it to the knowledge base (`kb.Engine.SetRecordingProvider`); without the module the knowledge base
+  holds `recordingwire.NoProvider`, a value whose methods do nothing, so no call site checks for the module. The
+  assistant's lanes and its retention tick call the rounds through `kb.Engine.RecordingProvider()`
+  (`internal/assistant/kb_lanes.go`, `kb.go`). Before this split the lanes ran whether or not the module was loaded;
+  they now stop with it.
+- **In flight when the module goes**: an upload not complete, minutes or a day recap still `pending`, a hub
+  transcription `live` or `finishing` stay as stored. The knowledge base's responses carry a derived
+  `paused: "module_off"` for such a recording (`Detail.Paused`, `Entry.Paused`; `kb.Engine.recordingPaused`), computed
+  when read and never written, so the files do not change and the module resumes from the stored state.
+- **Checked** by `TestRecordingsStayReadableWithoutTheModule`, `TestRecordingInFlightIsPausedWithoutTheModule` and
+  `TestRecordingDeleteAndRetentionWithoutTheModule` (`internal/kb`), `TestStoredRecordingsOutliveTheirModule`
+  (`internal/assistant`, in every build), and on running hubs by the two gates above, which compare every file under
+  `recordings/` before and after the module is off.
 
 ### Health
 
