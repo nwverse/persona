@@ -63,7 +63,10 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 	if g.Kind == sigAllStopped {
 		parts = []string{g.Todo, g.Kind} // one latest group key per task and destination, not per member
 	}
-	if g.To != "" { // a card's rung (ask_route.go): each conversation hears of it; the others' keys stay as they were
+	if g.Kind == sigReview && g.Recipient != "" {
+		// A transferred review is new to the receiving supervisor. Keep the original owner's receipt intact.
+		parts = append(parts, g.Recipient)
+	} else if g.To != "" { // a card's rung (ask_route.go): each conversation hears of it; the others' keys stay as they were
 		parts = append(parts, g.To)
 	}
 	key, _ := json.Marshal(parts)

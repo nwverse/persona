@@ -335,6 +335,17 @@ func (s *Service) waitInteractionPrepared(ctx context.Context, ix proto.Interact
 // notification for server-owned proposal groups. The notification is closed
 // after the pending entry and its announcement exist, before this waiter blocks.
 func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction, prepared *preparedApproval, ready chan<- struct{}) (proto.Resolution, error) {
+	var registered func(*pending)
+	if ready != nil {
+		registered = func(*pending) { close(ready) }
+	}
+	return s.waitRegisteredInteraction(ctx, ix, prepared, registered)
+}
+
+func (s *Service) waitRegisteredInteraction(ctx context.Context, ix proto.Interaction, prepared *preparedApproval, registered func(*pending)) (proto.Resolution, error) {
+	// The node may send its first request while FleetUp is still restoring the last manager's cards.
+	// Do not let that recovery cancel a card this process is about to persist.
+	s.restoreInteractions(ctx)
 	ix = cleanTitle(ix)
 	// Only an operation registered by this process can advertise clarification.
 	ix.CanClarify = prepared != nil
@@ -402,8 +413,8 @@ func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction
 			if ix.Kind == proto.IxElicitation && !s.elicitationReachable(ix) {
 				_ = s.resolve(ix.ID, proto.Resolution{Dismiss: true})
 			}
-			if ready != nil {
-				close(ready)
+			if registered != nil {
+				registered(p)
 			}
 			// Resumable node cards reconnect through reporter-less interaction.create requests; MCP elicitation cards
 			// are not resumable, so this branch never has a wait reporter to restore.
@@ -495,8 +506,8 @@ func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction
 	if prepared != nil {
 		s.startPreparedTimer(p)
 	}
-	if ready != nil {
-		close(ready)
+	if registered != nil {
+		registered(p)
 	}
 	resume := pushMCPInteraction(ctx, ix)
 	defer resume()
@@ -1143,8 +1154,24 @@ func (s *Service) finished(p *pending) {
 	}
 	s.channelsEnded(p.ix, how)
 	// the app marks a question the assistant answered, and why (docs/assistant/assistant.md)
-	s.hub.Tell(assistantwire.EventFleetResolved, done)
+	s.tellResolved(done)
 	s.publishSessions(p.ix.MachineID)
+}
+
+// The hub treats omissions from a reconnect inventory as resolutions. Order the read and the
+// write together so a delayed snapshot cannot remove a new card or restore a withdrawn one.
+func (s *Service) tellPendingInteractions() {
+	s.fleet.cardTell.Lock()
+	defer s.fleet.cardTell.Unlock()
+	s.fleet.cardEnd.Lock()
+	defer s.fleet.cardEnd.Unlock()
+	s.hub.Tell(assistantwire.EventFleetInteractions, assistantwire.FleetInteractions{Interactions: s.pendingInteractions()})
+}
+
+func (s *Service) tellResolved(done assistantwire.FleetResolved) {
+	s.fleet.cardEnd.Lock()
+	defer s.fleet.cardEnd.Unlock()
+	s.hub.Tell(assistantwire.EventFleetResolved, done)
 }
 
 // pendingInteractions is the authoritative pending inventory for transport and lifecycle operations.
@@ -1631,12 +1658,17 @@ func (s *Service) cancelSessionInteractions(machineID, sessionID string) {
 // question asked again (#4568). A card that was on its way up to the user finds its route again (restoreRoute); one
 // the assistant was deciding on goes on (resumeDelegations). Both before the hub gets the full list (FleetUp).
 func (s *Service) restoreInteractions(ctx context.Context) {
-	st, ok := s.store().(interface {
-		ExpireStaleInteractions(ctx context.Context) ([]proto.Interaction, []string, error)
-	})
-	if !ok {
-		return
+	st, ok := s.store().(staleInteractionStore)
+	if ok {
+		s.fleet.restored.Do(func() { s.restoreStoredInteractions(context.WithoutCancel(ctx), st) })
 	}
+}
+
+type staleInteractionStore interface {
+	ExpireStaleInteractions(context.Context) ([]proto.Interaction, []string, error)
+}
+
+func (s *Service) restoreStoredInteractions(ctx context.Context, st staleInteractionStore) {
 	resumable, cancelled, err := func() (out []proto.Interaction, cancelled []string, err error) {
 		defer guard(&err) // a test's store may not keep the table
 		return st.ExpireStaleInteractions(ctx)
@@ -1654,7 +1686,7 @@ func (s *Service) restoreInteractions(ctx context.Context) {
 		}
 	}
 	for _, id := range cancelled {
-		s.hub.Tell(assistantwire.EventFleetResolved, assistantwire.FleetResolved{ID: id})
+		s.tellResolved(assistantwire.FleetResolved{ID: id})
 	}
 	for i := range resumable {
 		if s.isInboxWholeBashAlways(ctx, resumable[i]) {

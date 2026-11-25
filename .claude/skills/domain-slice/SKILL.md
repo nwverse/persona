@@ -12,7 +12,7 @@ nearby: packages with lines in `server/internal/archguard/testdata/domain_layers
 1. **Name the context and its home.** A core lives in its context's tree (`internal/assistant/<name>`,
    `internal/node/<name>`); a shared kernel (`--shared`, values and closed sets only) directly under `internal/`. Write
    the package's one sentence: it follows "Package <name> ".
-2. **Map the concepts to flags** (`python3 scripts/new_domain_slice.py --help` says what each writes): every concept a
+2. **Map the concepts to flags** (`python3 scripts/gen/new_domain_slice.py --help` says what each writes): every concept a
    value (`--value Name=string|int`, `--zero-is` when its zero is a real value, `--value Name=part:Type,…` for a value
    of parts, `--parse Name=raw:string,…` for one parsed from several raw inputs), every state, role or reason a closed set
    (`--closed Name=a,b,c`, a payload as `b(Type)`), the aggregate an entity (`--entity Name --id NameID`, `--builder`
@@ -21,7 +21,7 @@ nearby: packages with lines in `server/internal/archguard/testdata/domain_layers
 3. **Write it**, from the repository root:
 
    ```sh
-   python3 scripts/new_domain_slice.py go internal/<context>/<name> --doc "<one sentence>" <flags>
+   python3 scripts/gen/new_domain_slice.py go internal/<context>/<name> --doc "<one sentence>" <flags>
    ```
 
    It refuses a directory that exists, and a combination the rules would refuse (an entity in a shared kernel, more

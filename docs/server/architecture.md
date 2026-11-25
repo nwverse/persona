@@ -139,7 +139,7 @@ names in `server/internal/archguard/testdata/domain_layers`, which only fall: co
 (`server/internal/assistant/fleetcount`: the agents' and cards' Needs you, with its adapter `fleetcountadapt`, which
 fills the Live Activity's state and Persona Link's summary, and its testkit `fleetcounttest`) and the planted twins,
 never the packages those lists hold. A new domain package starts from the scaffold,
-`python3 scripts/new_domain_slice.py go <dir> --doc "<one sentence>" [flags]`, which writes the compliant shape with
+`python3 scripts/gen/new_domain_slice.py go <dir> --doc "<one sentence>" [flags]`, which writes the compliant shape with
 its black-box tests and its hook; its output with every flag but `--shared` is the golden
 `server/internal/archguard/testdata/scaffold`, which archguard's `TestScaffoldGoldenPasses` holds to the rules and
 `scripts/test/test_new_domain_slice.py` writes again and compares byte for byte, then compiles, vets and tests in a
