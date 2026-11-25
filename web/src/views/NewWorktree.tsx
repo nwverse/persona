@@ -1,47 +1,122 @@
 import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { t } from "../i18n";
 import { ApiError, credentialOwner, errorText, subscribeCredentialOwner } from "../lib/api";
-import { useKnownDefault } from "../lib/manager-choice";
+import { defaultManager, useKnownDefault } from "../lib/manager-choice";
 import { openNewAgent } from "../lib/new-agent";
 import { useStore } from "../lib/store";
-import { useWorkspaceCatalog, workspaceTarget } from "../lib/workspace-catalog";
+import type { Machine } from "../lib/types";
+import { useWorkspaceCatalog, workspaceTarget, type HostWorkspace, type WorkspaceCatalogSnapshot } from "../lib/workspace-catalog";
 import type { WorkspaceTarget } from "../lib/workspace-target";
-import { createdWorkspace, creationSession, repositoryDraft, samePlacement, sourceKey, unsupportedWorktreeParent, type WorktreeCreationSession } from "../lib/worktree-creation";
+import { createdWorkspace, creationSession, repositoryDraft, samePlacement, sourceKey, unsupportedWorktreeParent,
+  type CreationDraft, type CreationSnapshot, type RepositoryDraft } from "../lib/worktree-creation";
 import { openCreated, prepareWorktree, saveWorktreePreset, suggestedPath, typeBranch, typePath, worktreeAdmission,
-  worktreeProblem, worktreeSources, WORKTREE_COPY, type WorktreePrepare, type WorktreeRequest, type WorktreeSource, type WorktreeTarget } from "../lib/worktree";
+  worktreeProblem, worktreeSources, WORKTREE_COPY, type SparsePreset, type WorktreeCreated, type WorktreePrepare, type WorktreeRequest, type WorktreeSource, type WorktreeTarget } from "../lib/worktree";
 import { Button, cx, Dialog, Spinner } from "../ui/atoms";
 
-export function NewWorktree({ request, onClose }: { request: WorktreeRequest; onClose: () => void }) {
-  const [loaded, setLoaded] = useState<{ request: WorktreeRequest; session: WorktreeCreationSession }>();
-  const session = loaded?.request === request ? loaded.session : undefined;
-  const [error, setError] = useState("");
+export interface WorktreeComposerSession {
+  subscribe: (listener: () => void) => () => void; getSnapshot: () => CreationSnapshot;
+  update: (patch: Partial<CreationDraft>) => void; updateRepository: (patch: Partial<RepositoryDraft>) => void;
+  fresh: () => void; submit: (info?: WorktreePrepare) => Promise<void>;
+}
+export interface WorktreeSourcesResult { items: WorktreeSource[]; errors?: string[] | Record<string, { message?: string }>; warning?: string }
+export interface NewWorktreeProps {
+  request: WorktreeRequest; onClose: () => void;
+  session?: WorktreeComposerSession; loadSession?: (request: WorktreeRequest) => Promise<WorktreeComposerSession>;
+  owner?: string; machines?: readonly Machine[]; catalog?: WorkspaceCatalogSnapshot; defaultManager?: string;
+  isAdmitted?: (target: WorktreeTarget) => boolean;
+  onPrepare?: (source: WorktreeTarget, options: { composer: boolean; signal: AbortSignal }) => Promise<WorktreePrepare>;
+  onSearchSources?: (source: WorktreeTarget, query: string, signal?: AbortSignal) => Promise<WorktreeSourcesResult>;
+  onSavePreset?: (source: WorktreeTarget, name: string, directories: string) => Promise<{ preset: SparsePreset }>;
+  onOpenCreated?: (mid: string, created: WorktreeCreated) => void; onStartAgent?: (workspace: WorkspaceTarget) => void;
+}
+type SessionProps = NewWorktreeProps & { session: WorktreeComposerSession };
+type OwnerProps = SessionProps & { resolvedOwner: string; ownerControlled: boolean };
+type MachinesProps = OwnerProps & { resolvedMachines: readonly Machine[]; machinesControlled: boolean };
+type CatalogProps = MachinesProps & { resolvedCatalog: WorkspaceCatalogSnapshot };
+type ComposerProps = CatalogProps & { resolvedDefaultManager?: string };
+
+const sessionIds = new WeakMap<WorktreeComposerSession, number>();
+let nextSessionId = 1;
+const sessionKey = (session: WorktreeComposerSession, request: WorktreeRequest) => {
+  let id = sessionIds.get(session);
+  if (!id) { id = nextSessionId++; sessionIds.set(session, id); }
+  return `${id}:${JSON.stringify([request.target, request.source, request.parent])}`;
+};
+
+export function NewWorktree(props: NewWorktreeProps) {
+  return props.session ? <NewWorktreeOwner {...props} session={props.session} /> : <NewWorktreeLoader {...props} />;
+}
+
+function NewWorktreeLoader(props: NewWorktreeProps) {
+  const { request, onClose, loadSession } = props;
+  const [prevRequest, setPrevRequest] = useState(request);
+  const [loaded, setLoaded] = useState<{ request: WorktreeRequest; session?: WorktreeComposerSession; error?: string }>();
+  const loadGen = useRef(0);
+  const loadRef = useRef(loadSession);
+  loadRef.current = loadSession;
+  if (prevRequest !== request) { setPrevRequest(request); setLoaded(undefined); }
   useEffect(() => {
+    const gen = ++loadGen.current;
     let active = true;
-    creationSession(request).then((value) => { if (active) setLoaded({ request, session: value }); }, (e) => { if (active) setError(errorText(e)); });
-    return () => { active = false; };
+    try {
+      Promise.resolve((loadRef.current ?? creationSession)(request)).then(
+        (value) => { if (active && gen === loadGen.current) setLoaded({ request, session: value }); },
+        (e) => { if (active && gen === loadGen.current) setLoaded({ request, error: errorText(e) }); },
+      );
+    } catch (e) { if (active && gen === loadGen.current) setLoaded({ request, error: errorText(e) }); }
+    return () => { active = false; loadGen.current++; };
   }, [request]);
-  return session ? <Composer session={session} request={request} onClose={onClose} /> :
+  const current = loaded?.request === request ? loaded : undefined;
+  return current?.session ? <NewWorktreeOwner {...props} session={current.session} /> :
     <Dialog open title={t("worktree.dialog_title")} onClose={onClose} footer={<Button onClick={onClose}>{t("common.cancel")}</Button>}>
-      {error ? <p role="alert" className="text-sm text-red">{error}</p> : <p role="status" className="flex gap-2 text-sm text-ink-3"><Spinner />{WORKTREE_COPY.reading}</p>}
+      {current?.error ? <p role="alert" className="text-sm text-red">{current.error}</p> : <p role="status" className="flex gap-2 text-sm text-ink-3"><Spinner />{WORKTREE_COPY.reading}</p>}
     </Dialog>;
 }
 
+function NewWorktreeOwner(props: SessionProps) {
+  return props.owner === undefined ? <NewWorktreeWithOwner {...props} /> : <NewWorktreeMachines {...props} resolvedOwner={props.owner} ownerControlled />;
+}
+function NewWorktreeWithOwner(props: SessionProps) {
+  return <NewWorktreeMachines {...props} resolvedOwner={useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner)} ownerControlled={false} />;
+}
+function NewWorktreeMachines(props: OwnerProps) {
+  return props.machines === undefined ? <NewWorktreeWithMachines {...props} /> : <NewWorktreeCatalog {...props} resolvedMachines={props.machines} machinesControlled />;
+}
+function NewWorktreeWithMachines(props: OwnerProps) {
+  return <NewWorktreeCatalog {...props} resolvedMachines={useStore((s) => s.machines)} machinesControlled={false} />;
+}
+function NewWorktreeCatalog(props: MachinesProps) {
+  return props.catalog === undefined ? <NewWorktreeWithCatalog {...props} /> : <NewWorktreeAdmission {...props} resolvedCatalog={props.catalog} />;
+}
+function NewWorktreeWithCatalog(props: MachinesProps) {
+  return <NewWorktreeAdmission {...props} resolvedCatalog={useWorkspaceCatalog(true)} />;
+}
+function NewWorktreeAdmission(props: CatalogProps) {
+  return props.isAdmitted !== undefined || props.defaultManager !== undefined
+    ? <Composer key={sessionKey(props.session, props.request)} {...props} resolvedDefaultManager={props.defaultManager} />
+    : <NewWorktreeWithKnownDefault {...props} />;
+}
+function NewWorktreeWithKnownDefault(props: CatalogProps) {
+  return <Composer key={sessionKey(props.session, props.request)} {...props} resolvedDefaultManager={useKnownDefault()} />;
+}
+
 type Read = { key: string; info?: WorktreePrepare; error?: string; basicAvailable?: boolean };
-function Composer({ session, request, onClose }: { session: WorktreeCreationSession; request: WorktreeRequest; onClose: () => void }) {
+function Composer({
+  session, request, onClose, resolvedOwner: owner, ownerControlled, resolvedMachines: machines, machinesControlled,
+  resolvedCatalog: catalog, defaultManager: defaultManagerProp, resolvedDefaultManager, isAdmitted,
+  onPrepare, onSearchSources, onSavePreset, onOpenCreated, onStartAgent,
+}: ComposerProps) {
   const { draft, intent, storageError } = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
-  const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
-  useKnownDefault();
-  const machines = useStore((s) => s.machines);
-  const catalog = useWorkspaceCatalog(true);
   const source = draft.source;
   const key = sourceKey(source);
   const [read, setRead] = useState<Read>({ key });
+  const [prevKey, setPrevKey] = useState(key);
   const [readVersion, setReadVersion] = useState(0);
   const [error, setError] = useState("");
   const [providerQueries, setProviderQueries] = useState<Record<string, string>>({});
   const providerQuery = providerQueries[key] ?? "";
   const setProviderQuery = (value: string) => {
-    searchGeneration.current++; setSearching(false);
+    searchGeneration.current++; searchAbort.current?.abort(); setSearching(false);
     setProviderQueries((old) => ({ ...old, [key]: value }));
     setProviderRead({ key, items: [] });
   };
@@ -50,12 +125,35 @@ function Composer({ session, request, onClose }: { session: WorktreeCreationSess
   const [presetName, setPresetName] = useState("");
   const [directories, setDirectories] = useState("");
   const [savingPreset, setSavingPreset] = useState(false);
+  if (prevKey !== key) {
+    setPrevKey(key);
+    if (searching) setSearching(false);
+    if (savingPreset) setSavingPreset(false);
+    if (error) setError("");
+    if (presetName) setPresetName("");
+    if (directories) setDirectories("");
+  }
   const alive = useRef(true);
   const sourceGeneration = useRef(0);
   const searchGeneration = useRef(0);
+  const presetGeneration = useRef(0);
+  const searchAbort = useRef<AbortController | null>(null);
   const notified = useRef("");
   const launched = useRef(false);
-  const validOwner = owner === source.owner && worktreeAdmission(source);
+  const admit = (target: WorktreeTarget): boolean => {
+    if (target.owner && target.owner !== owner) return false;
+    if (isAdmitted) return isAdmitted(target);
+    if (ownerControlled || machinesControlled || defaultManagerProp !== undefined) {
+      const mgr = machines.find((m) => m.id === target.mid)?.manager || (defaultManagerProp ?? (resolvedDefaultManager || defaultManager()));
+      return !target.manager || target.manager === mgr;
+    }
+    return worktreeAdmission(target);
+  };
+  const admitRef = useRef(admit);
+  admitRef.current = admit;
+  const prepareRef = useRef(onPrepare);
+  prepareRef.current = onPrepare;
+  const validOwner = owner === source.owner && admit(source);
   const locked = Boolean(intent && intent.phase !== "refused");
   const sending = intent?.phase === "sending";
   const info = read.key === key ? read.info : undefined;
@@ -68,21 +166,28 @@ function Composer({ session, request, onClose }: { session: WorktreeCreationSess
   // Paseo's workspaces have no terminal to open (docs/integrations/paseo.md): an Agent in it is what opening it means.
   const agentOnly = source.host === "paseo";
   const startAgent = () => {
-    if (actual && !launched.current && worktreeAdmission(source)) { launched.current = true; openNewAgent({ workspace: actual }); onClose(); }
+    if (actual && !launched.current && admitRef.current(source)) {
+      launched.current = true;
+      if (onStartAgent) onStartAgent(actual);
+      else openNewAgent({ workspace: actual });
+      onClose();
+    }
   };
 
   useEffect(() => {
     alive.current = true;
-    return () => { alive.current = false; sourceGeneration.current++; searchGeneration.current++; };
+    return () => { alive.current = false; sourceGeneration.current++; searchGeneration.current++; presetGeneration.current++; searchAbort.current?.abort(); };
   }, []);
+  useEffect(() => () => { searchGeneration.current++; presetGeneration.current++; searchAbort.current?.abort(); }, [key]);
   useEffect(() => {
     const generation = ++sourceGeneration.current;
     const controller = new AbortController();
     if (!validOwner) return () => controller.abort();
-    prepareWorktree(source, { composer: !repo.basic, signal: controller.signal }).then((value) => {
-      if (!controller.signal.aborted && generation === sourceGeneration.current && worktreeAdmission(source)) setRead({ key, info: value });
+    const prepare = prepareRef.current;
+    (prepare ? prepare(source, { composer: !repo.basic, signal: controller.signal }) : prepareWorktree(source, { composer: !repo.basic, signal: controller.signal })).then((value) => {
+      if (!controller.signal.aborted && generation === sourceGeneration.current && admitRef.current(source)) setRead({ key, info: value });
     }, (e) => {
-      if (!controller.signal.aborted && generation === sourceGeneration.current && worktreeAdmission(source)) setRead({ key, error: worktreeProblem(e, WORKTREE_COPY.readFailed).text,
+      if (!controller.signal.aborted && generation === sourceGeneration.current && admitRef.current(source)) setRead({ key, error: worktreeProblem(e, WORKTREE_COPY.readFailed).text,
         basicAvailable: !repo.basic && e instanceof ApiError && e.status !== 401 && e.status !== 403
           && (worktreeProblem(e, WORKTREE_COPY.readFailed).needsUpdate || e.message.includes(t("worktree-composer.update_composer"))) });
     });
@@ -97,7 +202,7 @@ function Composer({ session, request, onClose }: { session: WorktreeCreationSess
 
   const catalogRows = catalog.owner === owner && catalog.manager === source.manager ? catalog.workspaces : [];
   const gitRows = catalogRows.filter((w) => ["orca", "herdr", "paseo"].includes(w.source) && !isFolder(w.workspace_kind) && w.available !== false && w.online !== false);
-  const choices: { row: import("../lib/workspace-catalog").HostWorkspace; target: WorkspaceTarget }[] = gitRows.map((w) => ({ row: w, target: workspaceTarget(w, catalog.owner, catalog.manager) }));
+  const choices: { row: HostWorkspace; target: WorkspaceTarget }[] = gitRows.map((w) => ({ row: w, target: workspaceTarget(w, catalog.owner, catalog.manager) }));
   if (!choices.some((c) => sourceKey(toSource(c.target)) === key)) choices.unshift({ row: { id: "", machine_id: source.mid, source: source.host || "", source_id: source.workspaceId,
     title: source.label || info?.repoName || source.cwd || "", cwd: source.cwd || "", project_name: composer?.project || info?.repoName },
     target: { machineId: source.mid, host: source.host || "", workspaceId: source.workspaceId, cwd: source.cwd || "", label: source.label, owner: source.owner, manager: source.manager } });
@@ -116,48 +221,53 @@ function Composer({ session, request, onClose }: { session: WorktreeCreationSess
   const unsupportedParent = folderParent && info && !has("folder_parent");
 
   function selectSource(next: WorkspaceTarget) {
-    sourceGeneration.current++; searchGeneration.current++;
-    setSearching(false); setSavingPreset(false); setError("");
+    sourceGeneration.current++; searchGeneration.current++; presetGeneration.current++; searchAbort.current?.abort();
+    setSearching(false); setSavingPreset(false); setError(""); setPresetName(""); setDirectories("");
     session.update({ source: toSource(next) });
   }
   const submit = () => {
     if (!validOwner || sending || offline || unsupportedParent || parentMismatch || intent?.phase === "created") return;
     setError("");
-    try { void session.submit(info).catch((e) => { if (alive.current) setError(errorText(e)); }); }
+    const generation = sourceGeneration.current;
+    try { void session.submit(info).catch((e) => { if (alive.current && generation === sourceGeneration.current) setError(errorText(e)); }); }
     catch (e) { setError(errorText(e)); }
   };
   async function search() {
     if (!has("source.github") || !validOwner || locked) return;
     const generation = ++searchGeneration.current;
+    searchAbort.current?.abort();
+    const controller = new AbortController();
+    searchAbort.current = controller;
     setSearching(true);
     try {
-      const result = await worktreeSources(source, providerQuery);
-      if (alive.current && generation === searchGeneration.current && worktreeAdmission(source)) setProviderRead({ key, items: result.items,
+      const result = await (onSearchSources ? onSearchSources(source, providerQuery, controller.signal) : worktreeSources(source, providerQuery, controller.signal));
+      if (alive.current && !controller.signal.aborted && generation === searchGeneration.current && admitRef.current(source)) setProviderRead({ key, items: result.items,
         message: [result.warning, ...Object.values(result.errors ?? {}).map((item) => typeof item === "string" ? item : item.message)].filter(Boolean).join(" · ") });
     } catch (e) {
-      if (alive.current && generation === searchGeneration.current) setProviderRead({ key, items: [], message: errorText(e) });
+      if (alive.current && !controller.signal.aborted && generation === searchGeneration.current) setProviderRead({ key, items: [], message: errorText(e) });
     } finally { if (alive.current && generation === searchGeneration.current) setSearching(false); }
   }
   async function savePreset() {
     if (!has("sparse_presets") || savingPreset || !presetName.trim() || !directories.trim() || locked) return;
     const generation = sourceGeneration.current;
+    const presetGen = ++presetGeneration.current;
     setSavingPreset(true); setError("");
     try {
-      const result = await saveWorktreePreset(source, presetName.trim(), directories);
-      if (!alive.current || generation !== sourceGeneration.current || !worktreeAdmission(source)) return;
+      const result = await (onSavePreset ? onSavePreset(source, presetName.trim(), directories) : saveWorktreePreset(source, presetName.trim(), directories));
+      if (!alive.current || generation !== sourceGeneration.current || presetGen !== presetGeneration.current || !admitRef.current(source)) return;
       // Patch the same option snapshot, preserving every edited field and the selected ref.
       setRead((old) => old.key === key && old.info?.composer ? { ...old, info: { ...old.info, composer: { ...old.info.composer,
         presets: [...old.info.composer.presets.filter((p) => p.id !== result.preset.id), result.preset] } } } : old);
       session.updateRepository({ preset: result.preset.id });
-    } catch (e) { if (alive.current && generation === sourceGeneration.current) setError(errorText(e)); }
-    finally { if (alive.current && generation === sourceGeneration.current) setSavingPreset(false); }
+    } catch (e) { if (alive.current && generation === sourceGeneration.current && presetGen === presetGeneration.current) setError(errorText(e)); }
+    finally { if (alive.current && generation === sourceGeneration.current && presetGen === presetGeneration.current) setSavingPreset(false); }
   }
 
   return <Dialog open onClose={onClose} title={intent?.created ? t("worktree.created") : t("worktree.dialog_title")}
     footer={<>
       <Button tone="quiet" onClick={onClose}>{t(intent?.created ? "worktree-composer.done" : "common.cancel")}</Button>
       {intent?.created ? agentOnly ? <Button tone="primary" disabled={!validOwner || launched.current} onClick={startAgent}>{t("worktree-composer.start_agent")}</Button> :
-        <Button tone="primary" disabled={!validOwner} onClick={() => { openCreated(source.mid, intent.created!); onClose(); }}>{t("worktree-composer.open")}</Button> :
+        <Button tone="primary" disabled={!validOwner} onClick={() => { if (!admitRef.current(source)) return; if (onOpenCreated) onOpenCreated(source.mid, intent.created!); else openCreated(source.mid, intent.created!); onClose(); }}>{t("worktree-composer.open")}</Button> :
         <Button tone="primary" busy={sending} disabled={!validOwner || offline || (!info && !intent) || Boolean(read.error && !intent) || Boolean(parentMismatch || unsupportedParent)} onClick={submit}>
           {t(locked ? "worktree-composer.check_result" : "worktree-composer.create")}</Button>}
     </>}>
@@ -167,7 +277,7 @@ function Composer({ session, request, onClose }: { session: WorktreeCreationSess
       <p className="break-all text-ink-2">{intent.created.branch}</p>
       <p className="text-ink-3">{t("worktree-composer.created_help")}</p>
       {!agentOnly && <Button disabled={launched.current} onClick={startAgent}>{t("worktree-composer.start_agent")}</Button>}
-      <Button tone="quiet" onClick={() => { notified.current = ""; session.fresh(); }}>{t("worktree-composer.create_another")}</Button>
+      <Button tone="quiet" onClick={() => { notified.current = ""; launched.current = false; session.fresh(); }}>{t("worktree-composer.create_another")}</Button>
     </div> : <form className="flex flex-col gap-3 text-sm text-ink-2" onSubmit={(e) => { e.preventDefault(); submit(); }}>
       <fieldset disabled={locked || !validOwner} className="flex min-w-0 flex-col gap-3">
         <div className="grid grid-cols-2 gap-3">
@@ -197,7 +307,7 @@ function Composer({ session, request, onClose }: { session: WorktreeCreationSess
                 <Input label={t("worktree-composer.search_source")} value={providerQuery} onChange={setProviderQuery} onEnter={() => void search()} />
                 <Button busy={searching} onClick={() => void search()}>{t("worktree-composer.search")}</Button>
                 {providerRead.key === key && providerRead.message && <Notice error>{providerRead.message}</Notice>}
-                {providerRead.key === key && providerRead.items.map((item) => <Button key={`${item.type}:${item.number}`} onClick={() => { searchGeneration.current++; setSearching(false); session.updateRepository({ provider: item }); }}>
+                {providerRead.key === key && providerRead.items.map((item) => <Button key={`${item.type}:${item.number}`} onClick={() => { searchGeneration.current++; searchAbort.current?.abort(); setSearching(false); session.updateRepository({ provider: item }); }}>
                   <span className="truncate">{`#${item.number} · ${item.title}`}</span>
                 </Button>)}
               </div>
