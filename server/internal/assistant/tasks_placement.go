@@ -201,9 +201,10 @@ func (s *Service) taskDirectoryExists(ctx context.Context, machine, dir string) 
 // deferredTaskStart is the first input of a Companion session that answered Starting after defer_mcp. It is activated
 // through the ordinary idempotent session.send path only after the task role and supervision relationship are linked.
 type deferredTaskStart struct {
-	text        string
-	images      []proto.Image
-	clientMsgID string
+	text           string
+	images         []proto.Image
+	clientMsgID    string
+	permissionMode string
 }
 
 // startTaskAgent starts the agent for t on its machine (another when its launcher does not work there: t says which)
@@ -592,7 +593,11 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if modes {
 		mode := t.Permission
 		if mode == "" { // a plan saved before task_plan settled it, or a task started another way (tasks_permission.go)
-			mode = s.taskPermission(ctx, m.ID, nil)
+			if fit.allowAll() {
+				mode = "bypassPermissions"
+			} else {
+				mode = s.taskPermission(ctx, m.ID, nil)
+			}
 		}
 		params["permission_mode"] = mode
 	} // else none, plan included: a read-only task's first message carries the constraint (above)
@@ -645,7 +650,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			return
 		}
 		clientMsgID, _ := params["client_msg_id"].(string)
-		t.deferredStart = &deferredTaskStart{text: prompt, images: append([]proto.Image(nil), deferredImages...), clientMsgID: clientMsgID}
+		permMode, _ := params["permission_mode"].(string)
+		t.deferredStart = &deferredTaskStart{text: prompt, images: append([]proto.Image(nil), deferredImages...), clientMsgID: clientMsgID, permissionMode: permMode}
 	}
 	callNode := func() error {
 		if err := s.checkContinuationScope(t); err != nil {
