@@ -32,11 +32,12 @@ import (
 // An API error agy streams as message text becomes the turn's error, kept in history and settled idle (#14628), 231 B (264,443 B).
 // Antigravity GENERIC timestamp header stripping (#13662) adds 176 B (264,619 B).
 // Subsequent runtime fixes on main (#15269, #15275, #13312, #12952, #15475) bring the total to 265,362 B.
+// Cleaning up pending asks and autonomous turns when a shared Antigravity ACP process exits (#15756) adds 163 B (265,525 B).
 // Following an Antigravity conversation past a rewind's abandoned export tail and rewinding a cut that hides ranges at
-// its matching visible step (#14297) add 332 B (265,694 B).
+// its matching visible step (#14297) add 362 B (265,887 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 265_694
+	const budget = 265_887
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

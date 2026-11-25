@@ -9,7 +9,6 @@ import (
 	"time"
 	"weak"
 
-	"github.com/nwverse/persona/server/internal/assistant/todo/blockers"
 	"github.com/nwverse/persona/server/internal/assistant/todo/stagegate"
 	"github.com/nwverse/persona/server/internal/db"
 )
@@ -36,21 +35,21 @@ func (s *Service) todoBlockerDB() todoBlockerStore {
 	return st
 }
 
-// TodoBlockerReconcileSummary reports the persisted and notification outcomes of one
+// todoBlockerReconcileSummary reports the persisted and notification outcomes of one
 // pull-based blocker reconciliation pass under todos_v2.
-type TodoBlockerReconcileSummary struct {
+type todoBlockerReconcileSummary struct {
 	Evaluated        int
 	ResolvedIDs      []string
 	EscalatedIDs     []string
 	UnblockedTodoIDs []string
-	SharedGroups     []blockers.SharedGroup
+	SharedGroups     []todoBlockerSharedGroup
 }
 
 type todoBlockerHooks struct {
 	mu          sync.RWMutex
-	registry    *blockers.Registry
+	registry    *blockerRegistry
 	onUnblocked func(ctx context.Context, todoID string)
-	fetchPR     func(ctx context.Context, targetRef string) (blockers.PRFact, bool)
+	fetchPR     func(ctx context.Context, targetRef string) (todoBlockerPRFact, bool)
 }
 
 // todoBlockerHookRegistry isolates optional per-Service blocker hooks without modifying Service fields
@@ -85,8 +84,8 @@ func (s *Service) todoBlockerHooks(create bool) *todoBlockerHooks {
 	return h
 }
 
-// setTodoBlockerRegistry installs a custom blockers.Registry on s (tests / extensions).
-func (s *Service) setTodoBlockerRegistry(reg *blockers.Registry) {
+// setTodoBlockerRegistry installs a custom blockerRegistry on s (tests / extensions).
+func (s *Service) setTodoBlockerRegistry(reg *blockerRegistry) {
 	if h := s.todoBlockerHooks(true); h != nil {
 		h.mu.Lock()
 		h.registry = reg
@@ -104,7 +103,7 @@ func (s *Service) setTodoBlockerUnblockedHook(fn func(ctx context.Context, todoI
 }
 
 // setTodoBlockerPRFetcher installs a custom PR fact fetcher for external_pr blockers.
-func (s *Service) setTodoBlockerPRFetcher(fn func(ctx context.Context, targetRef string) (blockers.PRFact, bool)) {
+func (s *Service) setTodoBlockerPRFetcher(fn func(ctx context.Context, targetRef string) (todoBlockerPRFact, bool)) {
 	if h := s.todoBlockerHooks(true); h != nil {
 		h.mu.Lock()
 		h.fetchPR = fn
@@ -112,9 +111,9 @@ func (s *Service) setTodoBlockerPRFetcher(fn func(ctx context.Context, targetRef
 	}
 }
 
-// AddTodoBlocker persists a blocker edge when todos_v2 is enabled.
+// addTodoBlocker persists a blocker edge when todos_v2 is enabled.
 // When todos_v2 is disabled, it bypasses immediately with zero side effects.
-func (s *Service) AddTodoBlocker(ctx context.Context, row db.TodoBlockerRow) (*db.TodoBlockerRow, error) {
+func (s *Service) addTodoBlocker(ctx context.Context, row db.TodoBlockerRow) (*db.TodoBlockerRow, error) {
 	if s == nil || !s.settings(ctx).todosV2On() {
 		return nil, nil
 	}
@@ -125,8 +124,8 @@ func (s *Service) AddTodoBlocker(ctx context.Context, row db.TodoBlockerRow) (*d
 	return st.UpsertTodoBlocker(ctx, row)
 }
 
-// IncrementTodoBlockerAttempts increments the persistent attempt counter for blocker id under todos_v2.
-func (s *Service) IncrementTodoBlockerAttempts(ctx context.Context, id string) (*db.TodoBlockerRow, error) {
+// incrementTodoBlockerAttempts increments the persistent attempt counter for blocker id under todos_v2.
+func (s *Service) incrementTodoBlockerAttempts(ctx context.Context, id string) (*db.TodoBlockerRow, error) {
 	if s == nil || !s.settings(ctx).todosV2On() {
 		return nil, nil
 	}
@@ -137,8 +136,8 @@ func (s *Service) IncrementTodoBlockerAttempts(ctx context.Context, id string) (
 	return st.IncrementTodoBlockerAttempts(ctx, id, time.Now().UTC())
 }
 
-// CancelTodoBlocker cancels blocker id under todos_v2.
-func (s *Service) CancelTodoBlocker(ctx context.Context, id string) (*db.TodoBlockerRow, error) {
+// cancelTodoBlocker cancels blocker id under todos_v2.
+func (s *Service) cancelTodoBlocker(ctx context.Context, id string) (*db.TodoBlockerRow, error) {
 	if s == nil || !s.settings(ctx).todosV2On() {
 		return nil, nil
 	}
@@ -149,9 +148,9 @@ func (s *Service) CancelTodoBlocker(ctx context.Context, id string) (*db.TodoBlo
 	return st.CancelTodoBlocker(ctx, id, time.Now().UTC())
 }
 
-// SharedActiveTodoBlockers returns active blockers aggregated by shared target_ref (count >= 2)
+// sharedActiveTodoBlockerGroups returns active blockers aggregated by shared target_ref (count >= 2)
 // when todos_v2 is enabled, or nil when todos_v2 is disabled.
-func (s *Service) SharedActiveTodoBlockers(ctx context.Context) ([]blockers.SharedGroup, error) {
+func (s *Service) sharedActiveTodoBlockerGroups(ctx context.Context) ([]todoBlockerSharedGroup, error) {
 	if s == nil || !s.settings(ctx).todosV2On() {
 		return nil, nil
 	}
@@ -163,10 +162,10 @@ func (s *Service) SharedActiveTodoBlockers(ctx context.Context) ([]blockers.Shar
 	if err != nil {
 		return nil, err
 	}
-	return blockers.SharedActiveBlockers(dbRowsToBlockers(rows)), nil
+	return sharedActiveTodoBlockers(dbRowsToTodoBlockers(rows)), nil
 }
 
-// ReconcileTodoBlockers performs a pull-based scan of persisted active blockers under todos_v2.
+// reconcilePersistedTodoBlockers performs a pull-based scan of persisted active blockers under todos_v2.
 //
 // When targetRef is empty, all active blockers are scanned (full fallback sweep).
 // When targetRef is non-empty, only to-dos with an active blocker on targetRef are scanned,
@@ -174,13 +173,13 @@ func (s *Service) SharedActiveTodoBlockers(ctx context.Context) ([]blockers.Shar
 // emits a to-do once every one of its active blockers has resolved.
 //
 // When todos_v2 is disabled, this method returns an empty summary with zero DB or side-effect work.
-func (s *Service) ReconcileTodoBlockers(ctx context.Context, targetRef string) (TodoBlockerReconcileSummary, error) {
+func (s *Service) reconcilePersistedTodoBlockers(ctx context.Context, targetRef string) (todoBlockerReconcileSummary, error) {
 	if s == nil || !s.settings(ctx).todosV2On() {
-		return TodoBlockerReconcileSummary{}, nil
+		return todoBlockerReconcileSummary{}, nil
 	}
 	st := s.todoBlockerDB()
 	if st == nil {
-		return TodoBlockerReconcileSummary{}, nil
+		return todoBlockerReconcileSummary{}, nil
 	}
 
 	targetRef = strings.TrimSpace(targetRef)
@@ -189,15 +188,15 @@ func (s *Service) ReconcileTodoBlockers(ctx context.Context, targetRef string) (
 	if targetRef == "" {
 		rows, err = st.ListActiveTodoBlockers(ctx)
 		if err != nil {
-			return TodoBlockerReconcileSummary{}, err
+			return todoBlockerReconcileSummary{}, err
 		}
 	} else {
 		targeted, listErr := st.ListActiveTodoBlockersByTarget(ctx, targetRef)
 		if listErr != nil {
-			return TodoBlockerReconcileSummary{}, listErr
+			return todoBlockerReconcileSummary{}, listErr
 		}
 		if len(targeted) == 0 {
-			return TodoBlockerReconcileSummary{}, nil
+			return todoBlockerReconcileSummary{}, nil
 		}
 		seenTodos := make(map[string]struct{}, len(targeted))
 		seenIDs := make(map[string]struct{}, len(targeted))
@@ -208,7 +207,7 @@ func (s *Service) ReconcileTodoBlockers(ctx context.Context, targetRef string) (
 			seenTodos[r.TodoID] = struct{}{}
 			todoRows, todoErr := st.ListTodoBlockersByTodo(ctx, r.TodoID)
 			if todoErr != nil {
-				return TodoBlockerReconcileSummary{}, todoErr
+				return todoBlockerReconcileSummary{}, todoErr
 			}
 			for _, tr := range todoRows {
 				if tr.State != db.TodoBlockerStateActive {
@@ -224,16 +223,16 @@ func (s *Service) ReconcileTodoBlockers(ctx context.Context, targetRef string) (
 	}
 
 	if len(rows) == 0 {
-		return TodoBlockerReconcileSummary{}, nil
+		return todoBlockerReconcileSummary{}, nil
 	}
 
-	active := dbRowsToBlockers(rows)
+	active := dbRowsToTodoBlockers(rows)
 	facts, err := s.buildBlockerFactSnapshot(ctx, active)
 	if err != nil {
-		return TodoBlockerReconcileSummary{}, err
+		return todoBlockerReconcileSummary{}, err
 	}
 
-	var reg *blockers.Registry
+	var reg *blockerRegistry
 	var onUnblocked func(ctx context.Context, todoID string)
 	if h := s.todoBlockerHooks(false); h != nil {
 		h.mu.RLock()
@@ -242,18 +241,18 @@ func (s *Service) ReconcileTodoBlockers(ctx context.Context, targetRef string) (
 		h.mu.RUnlock()
 	}
 
-	result := blockers.Reconcile(active, facts, reg)
+	result := reconcileTodoBlockers(active, facts, reg)
 
 	now := time.Now().UTC()
 	resolvedSet := make(map[string]struct{}, len(result.ResolvedIDs))
 	for _, id := range result.ResolvedIDs {
 		if _, err := st.ResolveTodoBlocker(ctx, id, now); err != nil {
-			return TodoBlockerReconcileSummary{}, err
+			return todoBlockerReconcileSummary{}, err
 		}
 		resolvedSet[id] = struct{}{}
 	}
 
-	remaining := make([]blockers.Blocker, 0, len(active))
+	remaining := make([]todoBlockerRecord, 0, len(active))
 	for _, b := range active {
 		if _, done := resolvedSet[b.ID]; !done {
 			remaining = append(remaining, b)
@@ -264,12 +263,12 @@ func (s *Service) ReconcileTodoBlockers(ctx context.Context, targetRef string) (
 		s.notifyTodoBlockerUnblocked(ctx, todoID, onUnblocked)
 	}
 
-	return TodoBlockerReconcileSummary{
+	return todoBlockerReconcileSummary{
 		Evaluated:        len(active),
 		ResolvedIDs:      result.ResolvedIDs,
 		EscalatedIDs:     result.EscalatedIDs,
 		UnblockedTodoIDs: result.UnblockedTodoIDs,
-		SharedGroups:     blockers.SharedActiveBlockers(remaining),
+		SharedGroups:     sharedActiveTodoBlockers(remaining),
 	}, nil
 }
 
@@ -285,16 +284,16 @@ func (s *Service) notifyTodoBlockerUnblocked(ctx context.Context, todoID string,
 	}
 }
 
-func (s *Service) buildBlockerFactSnapshot(ctx context.Context, active []blockers.Blocker) (blockers.FactSnapshot, error) {
+func (s *Service) buildBlockerFactSnapshot(ctx context.Context, active []todoBlockerRecord) (todoBlockerFactSnapshot, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
-		return blockers.FactSnapshot{}, err
+		return todoBlockerFactSnapshot{}, err
 	}
 
 	asks := s.todoAsks(ctx)
-	facts := blockers.FactSnapshot{
-		Todos:       make(map[string]blockers.TodoFact),
-		PRs:         make(map[string]blockers.PRFact),
-		MergeTrains: make(map[string]blockers.MergeTrainFact),
+	facts := todoBlockerFactSnapshot{
+		Todos:       make(map[string]todoBlockerTodoFact),
+		PRs:         make(map[string]todoBlockerPRFact),
+		MergeTrains: make(map[string]todoBlockerMergeTrainFact),
 	}
 
 	s.todos.mu.RLock()
@@ -318,7 +317,7 @@ func (s *Service) buildBlockerFactSnapshot(ctx context.Context, active []blocker
 			stage = maxStageGateStage(stage, stagegate.StageDone)
 		}
 		_, hasAsk := asks[id]
-		facts.Todos[id] = blockers.TodoFact{
+		facts.Todos[id] = todoBlockerTodoFact{
 			ID:              id,
 			Done:            cp.DoneAt != nil,
 			Accepted:        accepted,
@@ -330,7 +329,7 @@ func (s *Service) buildBlockerFactSnapshot(ctx context.Context, active []blocker
 		}
 		if cp.PRStatus != nil && strings.TrimSpace(cp.PRStatus.URL) != "" {
 			u := strings.TrimRight(strings.TrimSpace(cp.PRStatus.URL), "/")
-			facts.PRs[u] = blockers.PRFact{
+			facts.PRs[u] = todoBlockerPRFact{
 				URL:    u,
 				State:  cp.PRStatus.State,
 				Merged: strings.EqualFold(cp.PRStatus.State, "merged"),
@@ -341,7 +340,7 @@ func (s *Service) buildBlockerFactSnapshot(ctx context.Context, active []blocker
 				continue
 			}
 			u := strings.TrimRight(strings.TrimSpace(other.URL), "/")
-			facts.PRs[u] = blockers.PRFact{
+			facts.PRs[u] = todoBlockerPRFact{
 				URL:    u,
 				State:  other.State,
 				Merged: strings.EqualFold(other.State, "merged"),
@@ -352,7 +351,7 @@ func (s *Service) buildBlockerFactSnapshot(ctx context.Context, active []blocker
 
 	snap := s.mergeTrainSnapshot(ctx)
 	for _, repo := range snap.Repos {
-		mt := blockers.MergeTrainFact{
+		mt := todoBlockerMergeTrainFact{
 			RepoKey: repo.RepoKey,
 		}
 		if repo.Head != nil {
@@ -369,7 +368,7 @@ func (s *Service) buildBlockerFactSnapshot(ctx context.Context, active []blocker
 	// Pull live PR truth for any external_pr blocker not already known to be terminal.
 	queriedPRs := make(map[string]struct{})
 	for _, b := range active {
-		if b.Kind != blockers.KindExternalPR {
+		if b.Kind != todoBlockerKindExternalPR {
 			continue
 		}
 		norm := strings.TrimRight(strings.TrimSpace(b.TargetRef), "/")
@@ -394,7 +393,7 @@ func (s *Service) buildBlockerFactSnapshot(ctx context.Context, active []blocker
 	return facts, nil
 }
 
-func (s *Service) fetchBlockerPRFact(ctx context.Context, targetRef string) (blockers.PRFact, bool) {
+func (s *Service) fetchBlockerPRFact(ctx context.Context, targetRef string) (todoBlockerPRFact, bool) {
 	if h := s.todoBlockerHooks(false); h != nil {
 		h.mu.RLock()
 		fn := h.fetchPR
@@ -406,37 +405,37 @@ func (s *Service) fetchBlockerPRFact(ctx context.Context, targetRef string) (blo
 
 	f, ok := s.forge().(prStatusForge)
 	if !ok {
-		return blockers.PRFact{}, false
+		return todoBlockerPRFact{}, false
 	}
 	m := ciPRURL.FindStringSubmatch(targetRef)
 	if m == nil {
-		return blockers.PRFact{}, false
+		return todoBlockerPRFact{}, false
 	}
 	number, err := strconv.Atoi(m[2])
 	if err != nil || number <= 0 {
-		return blockers.PRFact{}, false
+		return todoBlockerPRFact{}, false
 	}
 	st, err := f.PRStatus(ctx, m[1], number)
 	if err != nil {
-		return blockers.PRFact{}, false
+		return todoBlockerPRFact{}, false
 	}
-	return blockers.PRFact{
+	return todoBlockerPRFact{
 		URL:    targetRef,
 		State:  st.State,
 		Merged: strings.EqualFold(st.State, "merged"),
 	}, true
 }
 
-func dbRowsToBlockers(rows []db.TodoBlockerRow) []blockers.Blocker {
-	out := make([]blockers.Blocker, 0, len(rows))
+func dbRowsToTodoBlockers(rows []db.TodoBlockerRow) []todoBlockerRecord {
+	out := make([]todoBlockerRecord, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, blockers.Blocker{
+		out = append(out, todoBlockerRecord{
 			ID:            r.ID,
 			TodoID:        r.TodoID,
-			Kind:          blockers.Kind(r.Kind),
+			Kind:          r.Kind,
 			TargetRef:     r.TargetRef,
 			ConditionJSON: r.ConditionJSON,
-			State:         blockers.State(r.State),
+			State:         r.State,
 			Attempts:      r.Attempts,
 		})
 	}
