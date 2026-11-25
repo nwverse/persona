@@ -221,7 +221,7 @@ func (st *preparedAttributionStore) FinishInteractionOccurrence(ctx context.Cont
 func TestRecoveredLivePreparedApprovalRecordsCleared(t *testing.T) {
 	ft := newFleetTest(t)
 	st := &preparedAttributionStore{fleetMem: ft.st}
-	ft.s.store = func() Store { return st }
+	ft.s.setStore(func() Store { return st })
 	preparedTestConversation(ft)
 	ix := detachedTestCard("ix_recovery_live_prepared_attribution")
 	done := startPreparedInteraction(t, ft, ix, approvalops.Operation{})
@@ -286,7 +286,7 @@ func (st *codexAttributionStore) FinishInteractionOccurrence(ctx context.Context
 func TestCodexSameIDReplacementRecordsCleared(t *testing.T) {
 	ft := newFleetTest(t)
 	st := &codexAttributionStore{fleetMem: ft.st}
-	ft.s.store = func() Store { return st }
+	ft.s.setStore(func() Store { return st })
 	first := proto.Interaction{ID: "ix_codex_same_id", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, CreatedAt: time.Now().UTC()}
 	raw, err := json.Marshal(map[string]any{"interactions": []proto.Interaction{first}})
 	if err != nil {

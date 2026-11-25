@@ -18,7 +18,7 @@ func TestOwnerActionRegistrationJoinNotifies(t *testing.T) {
 	ready := make(chan error, 1)
 	returned := make(chan error, 1)
 	go func() {
-		_, err := s.waitInteractionReady(context.Background(), ix, nil, ready)
+		_, err := s.waitInteractionReadyResult(context.Background(), ix, nil, ready)
 		returned <- err
 	}()
 	select {
@@ -69,7 +69,7 @@ func TestOwnerActionRegistrationErrorNotifies(t *testing.T) {
 	ready := make(chan error, 1)
 	returned := make(chan error, 1)
 	go func() {
-		_, err := s.waitInteractionReady(context.Background(), ix, nil, ready)
+		_, err := s.waitInteractionReadyResult(context.Background(), ix, nil, ready)
 		returned <- err
 	}()
 	select {
@@ -97,7 +97,7 @@ func TestOwnerActionRegistrationDoesNotReportSuccessBeforePendingEntry(t *testin
 	ready := make(chan error, 1)
 	returned := make(chan error, 1)
 	go func() {
-		_, err := s.waitInteractionReady(context.Background(), ix, nil, ready)
+		_, err := s.waitInteractionReadyResult(context.Background(), ix, nil, ready)
 		returned <- err
 	}()
 	select {

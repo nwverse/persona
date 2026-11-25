@@ -121,6 +121,9 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 			why += "; " + su(u.h.userLang(), "err_development_recovery")
 		}
 		u.mu.Lock()
+		// Finish this attempt's history before a phone sees the failure or starts another install.
+		u.recordLocked(ctx, updateRecord{FromVersion: u.h.version, ToVersion: r.Manifest.Version, ToBuild: r.Manifest.Build,
+			Started: started, Ended: time.Now(), Result: "failed", Reason: why, Auto: auto, Source: pendingSource(update.Pending{Development: r.Development}), Commit: r.Manifest.Commit, Backup: backup})
 		u.running, u.now = false, false
 		u.busy = nil
 		if r.Development != nil && r.Development.BackupID != "" {
@@ -129,8 +132,6 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 		u.setLocked("failed", "", why)
 		u.mu.Unlock()
 		u.h.broadcast(map[string]any{"type": "hub_update", "update": u.view()})
-		u.record(ctx, updateRecord{FromVersion: u.h.version, ToVersion: r.Manifest.Version, ToBuild: r.Manifest.Build,
-			Started: started, Ended: time.Now(), Result: "failed", Reason: why, Auto: auto, Source: pendingSource(update.Pending{Development: r.Development}), Commit: r.Manifest.Commit, Backup: backup})
 		u.h.logf("update to %s: %v", r.Manifest.Version, err)
 	}
 	if r.Development != nil {

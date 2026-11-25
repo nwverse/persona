@@ -88,6 +88,20 @@ internal class ChatChromeState(
         }
     }
 
+    fun renameUnified(session: Session, name: String) {
+        val service = renamer ?: return
+        val edit = SessionRename.unifiedChanges(session, name)
+        if (!canRename || !edit.changed) return
+        busy = true
+        scope.launch {
+            try {
+                if (service.renameUnified(session, name)) notice = res.getString(R.string.chat_action_renamed)
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) { notice = operationFeedback(error).text.resolve(res) }
+            finally { busy = false }
+        }
+    }
+
     /** "Session info" (GET …/info); fails when the actions are not wired, which the sheet says. */
     suspend fun info(session: Session): SessionInfo =
         actions?.info(session) ?: throw UnsupportedOperationException(res.getString(R.string.chat_action_info_unavailable))

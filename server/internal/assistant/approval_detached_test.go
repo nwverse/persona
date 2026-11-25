@@ -518,7 +518,7 @@ func TestFailedGrantRevocationKeepsRecoveryUntilAnotherRestart(t *testing.T) {
 	ft := newFleetTest(t)
 	preparedTestConversation(ft)
 	st := &grantWriteFailStore{fleetMem: ft.st}
-	ft.s.store = func() Store { return st }
+	ft.s.setStore(func() Store { return st })
 	ix := detachedTestCard("ix_revocation_write_failure")
 	if err := ft.s.approvalJournalStarted(context.Background(), ix); err != nil {
 		t.Fatal(err)
@@ -855,7 +855,7 @@ func TestLiveFinalizerRetainsItsJournalUntilHistoryIsDurable(t *testing.T) {
 		preparedTestConversation(ft)
 		ix := detachedTestCard("ix_live_history_failure")
 		st := &recoveryFailStore{restoreMem: &restoreMem{fleetMem: ft.st}}
-		ft.s.store = func() Store { return st }
+		ft.s.setStore(func() Store { return st })
 		done := startDetachedTest(t, ft, ix)
 		elapse(30 * time.Millisecond)
 		if got := awaitDetachedTest(t, done); got.err != nil || !got.res.Pending {
@@ -1733,7 +1733,7 @@ func TestFailedRelayWriteKeepsContinuationForRestart(t *testing.T) {
 	preparedTestConversation(ft)
 	st := &relayWriteFailStore{fleetMem: ft.st}
 	st.fail.Store(true)
-	ft.s.store = func() Store { return st }
+	ft.s.setStore(func() Store { return st })
 	ix := detachedTestCard("ix_relay_write_failure")
 	working := proto.Session{MachineID: "mac", SessionID: "s1", Assistant: true, Agent: "claude", Status: proto.StatusWorking, State: proto.StateWorking}
 	ft.f.setSessions("mac", working)

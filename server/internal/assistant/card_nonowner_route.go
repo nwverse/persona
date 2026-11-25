@@ -80,7 +80,10 @@ func (s *Service) scheduleFailureTarget(ctx context.Context, t Task) (string, bo
 // Cards that genuinely belong to one of the owner's six classes — secrets/forms/elicitations,
 // outward writes (mail_send, comments, etc.), approvals matching userApproval, direct-routed
 // Assistant write approvals, and unparsed or user-only terminal dialogs (trust folder, delete
-// risk, etc.) — return false so they still reach the owner as before.
+// risk, etc.) — return false so they still reach the owner as before. So do the cards of the
+// assistant's own supervising conversations (the main conversation, the background supervisor,
+// a leader), as askLadder leaves them (supervisorConversation): handed on, such a card was
+// parked where no conversation was woken for it or could hand it up (#15360).
 func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 	src := s.inputCardSource(ix, false)
 	if src != cardAgentPermission && src != cardAgentQuestion && src != cardExtensionApproval {
@@ -98,6 +101,10 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	cfg := s.settings(ctx)
+	if cfg.supervisorConversation(ix.SessionID) {
+		return false
+	}
 	// The direct bot route is an explicit owner-decision path, not a non-owner
 	// delegation. Do not park an eligible write before tellUser announces it.
 	if ix.Kind == proto.IxPermission && s.nonMainAssistantPermission(ctx, ix) && s.larkModule().AskWanted(ctx, ix) {
@@ -107,7 +114,6 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 	if !ok {
 		return false
 	}
-	cfg := s.settings(ctx)
 	home := cfg.MachineID
 	if s.devs != nil && home != "" {
 		home = s.devs.Canonical(home)

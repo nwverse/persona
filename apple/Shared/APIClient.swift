@@ -199,6 +199,8 @@ nonisolated struct APIClient: Sendable {
     var sessionLookup = false
     /// The hub's hello has `sessions_list`: session lists come in pages with a revision that `since` follows.
     var sessionList = false
+    /// The hub's hello has `sessions_page_counts`: a windowed row answer can carry its own aggregates.
+    var sessionsPageCounts = false
     /// The hub's hello has `sessions_hierarchy`: windowed lists and counts send `roots=1`. Older hubs do not, so a
     /// child stays a row of its own. A parent-session page is a separate request and never sends `roots`.
     var sessionsHierarchy = false
@@ -2413,11 +2415,12 @@ nonisolated struct APIClient: Sendable {
     }
     @discardableResult
     /// opID: one per answer (the same on every retry of it), so a retry through a hub restart presses nothing twice.
-    /// `handoffCard`: a hand-off card's own approval, which says so (`SecretHandoff.feature`) on this request alone.
+    /// `handoffCard`: a hand-off or explicit env card's own approval, which says so on this request alone.
     /// `occurrence`: the exact creation timestamp on the card whose button was pressed; the hub must not rebind an answer to a replacement.
-    func resolve(_ id: String, _ r: Resolution, opID: UUID = UUID(), occurrence: String? = nil, handoffCard: Bool = false) async throws -> ResolveResult {
+    /// `secretRunEnv` selects the env feature; otherwise the hand-off feature is used.
+    func resolve(_ id: String, _ r: Resolution, opID: UUID = UUID(), occurrence: String? = nil, handoffCard: Bool = false, secretRunEnv: Bool = false) async throws -> ResolveResult {
         var headers = occurrence.map { ["X-Persona-Interaction-Created-At": $0] } ?? [:]
-        if handoffCard { headers["X-Persona-Features"] = SecretHandoff.feature }
+        if handoffCard { headers["X-Persona-Features"] = secretRunEnv ? "secret_run_env" : SecretHandoff.feature }
         return try JSON.decoder.decode(ResolveResult.self, from: try await post("/api/v1/interactions/\(Self.pathPart(id))/resolve", body: r, opID: opID,
                                                                                  extraHeaders: headers))
     }

@@ -1299,7 +1299,7 @@ func TestPendingInteractionsIndexed(t *testing.T) {
 		sql  string
 		args []any
 	}{
-		{resumablePendingSQL, nil},
+		{startupPendingSQL, nil},
 		{cancelPendingSQL, []any{[]string{}}},
 	} {
 		q := c.sql

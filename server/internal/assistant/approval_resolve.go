@@ -266,7 +266,7 @@ func (s *Service) finishPrepared(p *pending, status string) error {
 		// The original tool call is still waiting, so its result is the one place
 		// to identify the expired interaction. A clarified card instead uses its
 		// existing durable journal below; starting another delivery would duplicate it.
-		a.outcome.Text = approvalResultText(p.ix.ID, status, a.outcome.Text)
+		a.outcome.Text = approvalResultTextWithSummary(p.ix.ID, status, safeInteractionSummary(p.ix), a.outcome.Text)
 	}
 	text := a.outcome.Text
 	journalStatus := a.reportStatus

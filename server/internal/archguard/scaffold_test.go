@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// scaffoldDir is scripts/new_domain_slice.py's golden: what it writes with every flag but --shared, in a tree laid
+// scaffoldDir is scripts/gen/new_domain_slice.py's golden: what it writes with every flag but --shared, in a tree laid
 // out like server/. scripts/test/test_new_domain_slice.py writes it again byte for byte, then compiles, vets and tests
 // it beside the other flag combinations that script lists.
 const scaffoldDir = "testdata/scaffold"

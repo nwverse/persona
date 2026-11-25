@@ -149,12 +149,14 @@ class HubInteractionCenter(
         val asked = card?.sessionKey
         val since = asked?.let { key -> sessions?.value?.firstOrNull { it.key == key }?.stateSince }
         val marked = handoffCard && resolution.allow == true && card?.isSecretHandoff == true
+        val envMarked = handoffCard && resolution.allow == true && card?.secretRun?.delivery == "env"
         val outcome = try {
             // Only an exact-occurrence caller uses the new transport method. In particular, an ID-only caller must keep
             // its existing dispatch: Kotlin interface delegation forwards a new default method straight to the delegate,
-            // bypassing the legacy resolveOutcome override on the delegating transport.
-            if (displayed != null) transport.resolveOccurrence(displayed, resolution, handoffCard = marked)
-            else if (marked) transport.resolveOutcome(id, resolution, handoffCard = true)
+            // bypassing the legacy resolveOutcome override on the delegating transport. HubChatTransport derives the
+            // env feature from this displayed card; an ordinary ID-only answer selects it explicitly below.
+            if (displayed != null) transport.resolveOccurrence(displayed, resolution, handoffCard = marked || envMarked)
+            else if (marked || envMarked) transport.resolveOutcome(id, resolution, handoffCard = true, secretRunEnv = envMarked)
             else transport.resolveOutcome(id, resolution)
         } catch (gone: InteractionGoneException) {
             lock.withLock { end(id, here = true, occurrence = card?.createdAt) }

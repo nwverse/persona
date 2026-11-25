@@ -99,6 +99,9 @@ func (s core) postInteractionCard(ctx context.Context, ix proto.Interaction) {
 	}
 	claimed := false
 	var replaced *botCard
+	post := &botCardPost{done: make(chan struct{}), card: botCard{Ix: ix}}
+	dc := &s.t.detached
+	dc.mu.Lock()
 	s.book(ctx, func(b chatBook) {
 		if current, ok := b.Card(ix.ID); ok {
 			if !current.Ix.CreatedAt.IsZero() && !ix.CreatedAt.IsZero() && ix.CreatedAt.Before(current.Ix.CreatedAt) {
@@ -115,6 +118,13 @@ func (s core) postInteractionCard(ctx context.Context, ix proto.Interaction) {
 		b.KeepCard(ix.ID, &botCard{Ix: ix})
 		claimed = true
 	})
+	if claimed {
+		if dc.posting == nil {
+			dc.posting = map[string]*botCardPost{}
+		}
+		dc.posting[ix.ID] = post
+	}
+	dc.mu.Unlock()
 	if !claimed {
 		return
 	}
@@ -125,6 +135,14 @@ func (s core) postInteractionCard(ctx context.Context, ix proto.Interaction) {
 			s.botCardDone(closeCtx, old.MessageID, old.Ix, i18n.T(s.botLang(closeCtx), "assistant-feishu_cards.handled"))
 		}(*replaced)
 	}
+	defer func() {
+		dc.mu.Lock()
+		if dc.posting[ix.ID] == post {
+			delete(dc.posting, ix.ID)
+		}
+		dc.mu.Unlock()
+		close(post.done)
+	}()
 	reply, to, topic := s.interactionPlace(ctx, ix)
 	ctx = s.sendAs(ctx, string(ix.Kind), ix.MachineID, ix.SessionID)
 	l := s.botLang(ctx)
@@ -147,7 +165,7 @@ func (s core) postInteractionCard(ctx context.Context, ix proto.Interaction) {
 	if s.interactionEnded(ix) {
 		// Answered while its card was being made (a program that answers cards at once): nobody needs to look at it,
 		// so nothing is posted and only this occurrence's claim goes (#5430). One that ends during the post is closed after it, below.
-		s.takeBotCardOccurrence(ix.ID, ix)
+		s.dropClaim(ctx, ix.ID, post)
 		return
 	}
 	// A card for a topic is a reply to its run's message and belongs under it: if that message is gone it would be a
@@ -168,11 +186,13 @@ func (s core) postInteractionCard(ctx context.Context, ix proto.Interaction) {
 	ended := s.interactionEnded(ix)
 	if err != nil {
 		s.logf("bots: card for %s: %v", ix.ID, err)
-		s.takeBotCardOccurrence(ix.ID, ix)
+		s.dropClaim(ctx, ix.ID, post)
 		return
 	}
-	kept := false
+	kept, detached := false, false
+	dc.mu.Lock()
 	s.book(ctx, func(b chatBook) {
+		post.card = botCard{MessageID: mid, Ix: ix, At: b.Now(), Thread: reply, ChatID: to.ChatID}
 		current, still := b.Card(ix.ID)
 		same := still && !differentBotCardOccurrence(current.Ix, ix)
 		if !same || ended { // answered or replaced while this occurrence was being posted
@@ -181,9 +201,18 @@ func (s core) postInteractionCard(ctx context.Context, ix proto.Interaction) {
 			}
 			return
 		}
-		b.KeepCard(ix.ID, &botCard{MessageID: mid, Ix: ix, At: b.Now(), Thread: reply, ChatID: to.ChatID})
+		if post.detached { // feishuDetach took it while Feishu had not answered: it closes this message, a reconnect reopens it
+			detached = true
+			return
+		}
+		card := post.card
+		b.KeepCard(ix.ID, &card)
 		kept = true
 	})
+	dc.mu.Unlock()
+	if detached {
+		return
+	}
 	if !kept {
 		s.botCardDone(ctx, mid, ix, i18n.T(s.botLang(ctx), "assistant-feishu_cards.handled"))
 		return
@@ -192,6 +221,23 @@ func (s core) postInteractionCard(ctx context.Context, ix proto.Interaction) {
 		// The run was asked in a topic and the card went to the DM: the topic is told where it is.
 		s.botNoteTo(ctx, topic.to, topic.reply, i18n.T(s.botLang(ctx), "assistant-feishu_cards.sent_to_dm"))
 	}
+}
+
+// dropClaim forgets card id's claim when its first post ends without a card to keep, unless feishuDetach took the card
+// meanwhile: what is kept under id then is the detached card's, or a reconnect's. A same-ID replacement's claim stays.
+func (s core) dropClaim(ctx context.Context, id string, post *botCardPost) {
+	dc := &s.t.detached
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	if post.detached {
+		return
+	}
+	s.book(ctx, func(b chatBook) {
+		current, still := b.Card(id)
+		if still && !differentBotCardOccurrence(current.Ix, post.card.Ix) {
+			b.KeepCard(id, nil)
+		}
+	})
 }
 
 // chatRefused: the hub or Feishu refused the send into a chat outright, so nothing went out: the hub's own refusal
@@ -300,9 +346,20 @@ func (s core) feishuInteractionEnded(ix proto.Interaction, how string, inChat bo
 // same card read again once the node is back opens it again (feishuCardBack). closed is shut once the close went out,
 // so the reopening lands after it.
 type detachedCard struct {
-	card   botCard
+	card botCard
+	// post is the card's first post when the node went away while it was in flight: card has no message ID then,
+	// and the post's (once done is shut) is the one closed and reopened.
+	post   *botCardPost
 	at     time.Time
 	closed chan struct{}
+}
+
+// botCardPost is a card's first post while it is in flight (postInteractionCard): a node can go away after Feishu
+// took the post but before it returned the message ID (#15323).
+type botCardPost struct {
+	done     chan struct{}
+	card     botCard // set before done is shut; no message ID when the post returned none
+	detached bool    // under detachedCards.mu: feishuDetach took the card, and closes it once the post returns
 }
 
 // feishuDetach: the cards ids are about to end because their node went away. Their Feishu cards say "Ended" as any
@@ -320,14 +377,21 @@ func (s core) feishuDetach(ids []string, grace time.Duration) {
 		}
 		for _, id := range ids {
 			c, ok := b.Card(id)
-			if !ok || c.MessageID == "" {
+			var post *botCardPost
+			if ok && c.MessageID == "" {
+				post = dc.posting[id] // posted, its message ID not back yet: closed once it is
+			}
+			if !ok || (c.MessageID == "" && post == nil) {
 				continue
+			}
+			if post != nil {
+				post.detached = true
 			}
 			b.KeepCard(id, nil) // closed here, not again by feishuInteractionDone
 			if dc.cards == nil {
 				dc.cards = map[string]detachedCard{}
 			}
-			d := detachedCard{card: c, at: now, closed: make(chan struct{})}
+			d := detachedCard{card: c, post: post, at: now, closed: make(chan struct{})}
 			dc.cards[id] = d
 			closing = append(closing, d)
 		}
@@ -336,9 +400,17 @@ func (s core) feishuDetach(ids []string, grace time.Duration) {
 	for _, d := range closing {
 		go func() {
 			defer close(d.closed)
+			card := d.card
+			if d.post != nil {
+				<-d.post.done
+				card = d.post.card
+			}
+			if card.MessageID == "" { // the post returned no message: there is nothing to close
+				return
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			s.botCardDone(ctx, d.card.MessageID, d.card.Ix, i18n.T(s.botLang(ctx), "assistant-channels.ended"))
+			s.botCardDone(ctx, card.MessageID, card.Ix, i18n.T(s.botLang(ctx), "assistant-channels.ended"))
 		}()
 	}
 }
@@ -350,6 +422,32 @@ func (s core) feishuCardBack(ix proto.Interaction, grace time.Duration) {
 	dc := &s.t.detached
 	dc.mu.Lock()
 	d, ok := dc.cards[ix.ID]
+	if ok && d.post != nil {
+		// Its first post was in flight when the node went away: wait for the post and its close, then reopen the
+		// message that post made, and only for the card's own session and generation.
+		dc.mu.Unlock()
+		select {
+		case <-d.closed:
+		case <-time.After(30 * time.Second):
+			return
+		}
+		current, pending := s.h.AskPending(ix.ID)
+		dc.mu.Lock()
+		if cur, still := dc.cards[ix.ID]; !still || cur.closed != d.closed { // another reconnect took or replaced it meanwhile
+			dc.mu.Unlock()
+			return
+		}
+		d.card = d.post.card
+		if pending && d.card.MessageID != "" {
+			owner := d.card.Ix
+			if owner.MachineID != ix.MachineID || owner.SessionID != ix.SessionID ||
+				current.MachineID != ix.MachineID || current.SessionID != ix.SessionID || !current.CreatedAt.Equal(ix.CreatedAt) {
+				dc.mu.Unlock()
+				return // a notice for another session or an older generation must not take this message
+			}
+		}
+		ok = pending && d.card.MessageID != ""
+	}
 	delete(dc.cards, ix.ID)
 	back := false
 	s.book(context.Background(), func(b chatBook) {
@@ -445,6 +543,8 @@ func (s core) closeEndedBotCards(ctx context.Context, pending map[string]proto.I
 type detachedCards struct {
 	mu    sync.Mutex
 	cards map[string]detachedCard
+	// posting are the cards' first posts in flight, by interaction id.
+	posting map[string]*botCardPost
 }
 
 // book runs f on the chat's records under the chat's lock, the state read first.

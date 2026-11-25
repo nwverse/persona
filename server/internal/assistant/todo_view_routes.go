@@ -139,10 +139,11 @@ func (s *Service) todosViewed(ctx context.Context, briefs bool) ([]listedTodo, t
 }
 
 // todoItem is GET /api/v1/todos/{id}'s answer: the to-do's row, and beside it the paper's rounds, results and recap
-// (todo_timeline.go, #10465).
+// (todo_timeline.go, #10465), plus the latest auditable context handoff when present (#12980).
 type todoItem struct {
 	Todo json.RawMessage `json:"todo"`
 	assistantwire.TodoItemDetail
+	Handoff *TodoContextHandoff `json:"handoff,omitempty"`
 }
 
 // viewedTodo is to-do id as GET /api/v1/todos/{id} answers it: its row as the list has it, with its view and its
@@ -200,7 +201,11 @@ func (s *Service) todoViewRoutes() {
 			}
 			// Its runs' sessions as its view read them: the timeline asks no computer again.
 			ext := r.Header.Get(RoleHeader) == roleExtension
-			apierr.WriteJSON(w, todoItem{Todo: raw, TodoItemDetail: s.todoItemDetail(r.Context(), t.Todo, raw, sessions, ext)})
+			item := todoItem{Todo: raw, TodoItemDetail: s.todoItemDetail(r.Context(), t.Todo, raw, sessions, ext)}
+			if !ext {
+				item.Handoff = s.latestTodoContextHandoff(r.Context(), t.ID)
+			}
+			apierr.WriteJSON(w, item)
 		}
 	})
 	// GET /api/v1/todos/places: the To-dos sidebar's places with the list's counts (assistantwire.TodoPlaces).

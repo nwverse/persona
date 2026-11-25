@@ -175,16 +175,22 @@ class HubChatTransport internal constructor(
         resolveOutcome(id, resolution, handoffCard = false)
 
     override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean): ResolveOutcome =
-        resolveOutcome(id, resolution, handoffCard, createdAt = null)
+        resolveOutcome(id, resolution, handoffCard, secretRunEnv = false, createdAt = null)
+
+    override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean, secretRunEnv: Boolean): ResolveOutcome =
+        resolveOutcome(id, resolution, handoffCard, secretRunEnv, createdAt = null)
 
     override suspend fun resolveOccurrence(interaction: Interaction, resolution: Resolution, handoffCard: Boolean): ResolveOutcome =
-        resolveOutcome(interaction.id, resolution, handoffCard, interaction.createdAt)
+        resolveOutcome(interaction.id, resolution, handoffCard,
+            secretRunEnv = interaction.secretRun?.delivery == "env", createdAt = interaction.createdAt)
 
-    private suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean, createdAt: String?): ResolveOutcome {
+    private suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean, secretRunEnv: Boolean, createdAt: String?): ResolveOutcome {
         val path = api("interactions", id, "resolve")
         val body = JsonCodec.encodeToString(resolution)
         val headers = ProtocolCompatibility.operationHeaders(newOpId()) +
-            (if (handoffCard && resolution.allow == true) mapOf("X-Persona-Features" to "secret_handoff") else emptyMap()) +
+            (if (handoffCard && resolution.allow == true) {
+                mapOf("X-Persona-Features" to if (secretRunEnv) "secret_run_env" else "secret_handoff")
+            } else emptyMap()) +
             (if (createdAt != null) mapOf("X-Persona-Interaction-Created-At" to createdAt) else emptyMap())
         val deadline = clockMillis() + resolveRetryMillis
         while (true) {

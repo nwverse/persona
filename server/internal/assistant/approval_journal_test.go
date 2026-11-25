@@ -133,7 +133,7 @@ func TestDeletedUncertainResultRetriesFailedGrantRevocation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ft := newFleetTest(t)
 		st := &grantWriteFailStore{fleetMem: ft.st}
-		ft.s.store = func() Store { return st }
+		ft.s.setStore(func() Store { return st })
 		entry := approvalJournalEntry{ID: "ix_deleted_revocation_retry", MachineID: "mac", SessionID: "deleted", Status: "failed",
 			Result: "Approval ix_deleted_revocation_retry left with an uncertain execution outcome and is no longer pending.", UpdatedAt: time.Now().UTC()}
 		row := deletedConversation{Machine: "mac", ID: "deleted", At: time.Now().UTC()}

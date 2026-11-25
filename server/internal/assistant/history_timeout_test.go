@@ -205,7 +205,7 @@ func TestInteractionResolveRowLockedPostgres(t *testing.T) {
 	var waitErr error
 	go func() {
 		defer close(done)
-		got, waitErr = s.waitInteractionReady(ctx, ix, nil, ready)
+		got, waitErr = s.waitInteractionReadyResult(ctx, ix, nil, ready)
 	}()
 	t.Cleanup(func() {
 		cancel()

@@ -31,13 +31,12 @@ type chatData struct {
 	runs     int    // the bot's runs the channels follow (FeishuRuns)
 
 	// What the chat asked of the core, in order.
-	forgot    int
-	recalled  []string
-	started   []startedRun
-	stopped   []assistantwire.ChatTarget
-	resolved  []resolvedAnswer
-	boardSaid int
-	opened    []assistantwire.ChatOpenTodo
+	forgot   int
+	recalled []string
+	started  []startedRun
+	stopped  []assistantwire.ChatTarget
+	resolved []resolvedAnswer
+	opened   []assistantwire.ChatOpenTodo
 
 	// What the core answers, when a test sets it.
 	resolve     func(t assistantwire.ChatTarget) (assistantwire.ChatResolved, error)
@@ -47,6 +46,7 @@ type chatData struct {
 	sensitive   func(ix proto.Interaction) bool
 	direct      func(ix proto.Interaction) bool
 	state       func(id string) (ended, pending bool)
+	pendingIx   func(id string) (proto.Interaction, bool)
 	deadline    func(ix proto.Interaction) (time.Time, bool)
 	gone        func(ix proto.Interaction) bool
 	todoOf      func(chat, thread string) (assistantwire.ChatTodo, bool)
@@ -136,9 +136,6 @@ func (s *Service) RecallRun(messageID string) {
 	d.recalled = append(d.recalled, messageID)
 	s.tmu.Unlock()
 }
-
-func (s *Service) WorkbenchOn(assistantwire.FeishuFeatures, bool) {}
-func (s *Service) WorkbenchActive() bool                          { return false }
 
 func (s *Service) CallApp(ctx context.Context, app, method string, params, out any) error {
 	raw, _ := json.Marshal(params)
@@ -297,8 +294,6 @@ func (s *Service) VisiblePending() []proto.Interaction { return s.ch().pending }
 
 func (s *Service) PendingQuestion(ix proto.Interaction) string { return strings.TrimSpace(ix.Summary) }
 
-func (s *Service) StandingBoardCommand(context.Context) bool { return false }
-
 func (s *Service) MainChat(context.Context) (string, string) { return s.ch().main, "server" }
 
 func (s *Service) MainModel(context.Context, string, string, i18n.Lang) (string, string, string, error) {
@@ -385,6 +380,14 @@ func (s *Service) AskState(id string) (ended, pending bool) {
 
 func (s *Service) AskStateFor(ix proto.Interaction) (ended, pending bool) { return s.AskState(ix.ID) }
 
+// AskPending is the interaction up under id: the test's (pendingIx), else none.
+func (s *Service) AskPending(id string) (proto.Interaction, bool) {
+	if f := s.ch().pendingIx; f != nil {
+		return f(id)
+	}
+	return proto.Interaction{}, false
+}
+
 func (s *Service) ResolveInteraction(ctx context.Context, id string, r proto.Resolution, action string) (bool, error) {
 	return s.ResolveInteractionAt(ctx, id, r, action, nil)
 }
@@ -434,13 +437,6 @@ func (s *Service) ApprovalNudgeDeadline(ix proto.Interaction) (time.Time, bool) 
 		return f(ix)
 	}
 	return ix.ExpiresAt, !ix.ExpiresAt.IsZero()
-}
-
-func (s *Service) BoardChanged() {
-	d := s.ch()
-	s.tmu.Lock()
-	d.boardSaid++
-	s.tmu.Unlock()
 }
 
 func (s *Service) IxToolName(ix proto.Interaction) string {

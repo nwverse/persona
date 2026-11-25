@@ -21,9 +21,10 @@ func hasRelayFrom(s *Service, to, from, needle string) bool {
 	return false
 }
 
-// Source 1 (agent_permission): non-six-class tool permissions from an unsupervised agent or from the
-// main conversation itself go to the main conversation / background supervisor instead of pushing to
-// the owner, while six-class permissions (secret/form, outward/delete approval) still push to the owner.
+// Source 1 (agent_permission): non-six-class tool permissions from an unsupervised agent go to the main
+// conversation instead of pushing to the owner, while six-class permissions (secret/form, outward/delete
+// approval) still push to the owner. The main conversation's own permission stays the user's even with a
+// background supervisor configured (#15360, TestSupervisingConversationsKeepTheirOwnCards).
 func TestAgentPermissionNonOwnerRoutedAndSixClassesStillPush(t *testing.T) {
 	e := newRouteEnv(t, nil, true)
 	setSettings(t, e.s, func(v *Settings) { v.BackgroundSupervisor = "bg1" })
@@ -43,16 +44,15 @@ func TestAgentPermissionNonOwnerRoutedAndSixClassesStillPush(t *testing.T) {
 		t.Fatal("unsupervised permission was not marked delegating")
 	}
 
-	// Main conversation's own non-six-class tool permission -> background supervisor (bg1), no owner push.
+	// Main conversation's own non-six-class tool permission -> still the owner's, not the background
+	// supervisor's (bg1): nothing would wake bg1 for it or let it hand the card up (#15360).
 	mainOwn := proto.Interaction{
 		ID: "ix_perm_main_own", MachineID: "server", SessionID: "conv1",
 		Kind: proto.IxPermission, ToolName: "Read", Summary: "/tmp/report.md",
 		CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 	}
 	mDone := e.raise(mainOwn)
-	waitFor(t, "main permission routed to background supervisor", func() bool {
-		return hasRelayFrom(e.s, "bg1", cardAgentPermission, "interaction_id="+mainOwn.ID)
-	})
+	waitFor(t, "main permission pushed to owner", func() bool { return e.pushesOf(mainOwn.ID) == 1 })
 
 	// Six-class permission (delete/outward action) -> still pushed to the owner.
 	outward := proto.Interaction{
@@ -76,11 +76,16 @@ func TestAgentPermissionNonOwnerRoutedAndSixClassesStillPush(t *testing.T) {
 	if n := e.pushesOf(unsupervised.ID); n != 0 {
 		t.Fatalf("unsupervised non-owner permission pushed %d times", n)
 	}
-	if n := e.pushesOf(mainOwn.ID); n != 0 {
-		t.Fatalf("main own non-owner permission pushed %d times", n)
+	if hasRelayFrom(e.s, "bg1", cardAgentPermission, "interaction_id="+mainOwn.ID) {
+		t.Fatal("main own permission was handed to the background supervisor")
 	}
-	if c := cardsToday(t, e.s)[cardAgentPermission]; c.N != 1 { // only outward counted under agent_permission; secret is agent_secret_form
-		t.Fatalf("agent_permission ledger = %+v, want only the 1 six-class outward permission", c)
+	if e.lastShown(mainOwn.ID).Delegating {
+		t.Fatal("main own permission is shown as held by a supervisor")
+	}
+	// The six-class outward permission and the main conversation's own one count under agent_permission; the
+	// unsupervised agent's does not (handed to main), and the secret is agent_secret_form.
+	if c := cardsToday(t, e.s)[cardAgentPermission]; c.N != 2 {
+		t.Fatalf("agent_permission ledger = %+v, want the outward permission and the main conversation's own", c)
 	}
 
 	allow := true
@@ -145,6 +150,59 @@ func TestLocalNonActionPermissionsUseNonOwnerRoute(t *testing.T) {
 			answerOf(t, answered)
 		})
 	}
+}
+
+// The assistant's own supervising conversations keep their cards (#15360). A leader's approval of a gated write that
+// userApproval leaves to a supervisor (the node's Lark gate card for a doc update as the user), a leader's question,
+// and the main conversation's own approval with no background supervisor are the user's: pushed, not shown as held
+// by a supervisor, and not handed on. Handed to the main conversation they were parked there: no turn was started for
+// them, no timeout moved them, ask_escalate could not take them without a task, and the main conversation's own card
+// waited on the main conversation itself.
+func TestSupervisingConversationsKeepTheirOwnCards(t *testing.T) {
+	e := newRouteEnv(t, nil, true) // main conversation conv1 and leader lead1 on server, no background supervisor
+	now := time.Now().UTC()
+	leadWrite := proto.Interaction{
+		ID: "ix_lead_own_write", MachineID: "server", SessionID: "lead1", Kind: proto.IxPermission, ToolName: "Lark",
+		Summary: "Write on Lark as you (complex command, shown in full)\n" +
+			"cd /tmp && timeout 60 lark-cli docs +update --doc <doc> --as user --command append --content @notes.md",
+		CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+	}
+	if why := userApproval(leadWrite); why != "" {
+		t.Fatalf("the leader's write must be one userApproval leaves to a supervisor, got %q", why)
+	}
+	leadAsk := askQuestion("ix_lead_own_question", "lead1")
+	leadAsk.MachineID = "server"
+	mainOwn := proto.Interaction{
+		ID: "ix_main_own_permission", MachineID: "server", SessionID: "conv1", Kind: proto.IxPermission,
+		ToolName: "Bash", Summary: "go test ./...", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+	}
+	allow := true
+	for _, c := range []struct {
+		ix  proto.Interaction
+		res proto.Resolution
+	}{
+		{leadWrite, proto.Resolution{Allow: &allow}},
+		{leadAsk, proto.Resolution{Answers: map[string]string{leadAsk.Questions[0].Question: "main"}}},
+		{mainOwn, proto.Resolution{Allow: &allow}},
+	} {
+		done := e.raise(c.ix)
+		waitFor(t, c.ix.ID+" pushed to the owner", func() bool { return e.pushesOf(c.ix.ID) == 1 })
+		if e.lastShown(c.ix.ID).Delegating {
+			t.Errorf("%s is shown as held by a supervisor", c.ix.ID)
+		}
+		for _, to := range []string{"conv1", "lead1"} {
+			for _, src := range []string{cardAgentPermission, cardAgentQuestion} {
+				if hasRelayFrom(e.s, to, src, "interaction_id="+c.ix.ID) {
+					t.Errorf("%s was handed to %s as %s", c.ix.ID, to, src)
+				}
+			}
+		}
+		if err := e.s.resolve(c.ix.ID, c.res); err != nil {
+			t.Fatal(err)
+		}
+		answerOf(t, done)
+	}
+	e.settle()
 }
 
 // Source 2 (agent_question): non-six-class questions and parsed non-user terminal dialogs from an
@@ -372,6 +430,12 @@ func TestScheduleFailedGoesToSupervisorOrMainAndBriefFallbackStillPushes(t *test
 		ScheduleRun{ID: "run_3", RefID: briefTask.ID, Due: now, Error: "machine offline"},
 		false,
 	)
+	if !s.modules.Loaded("briefing") {
+		if c := cardsToday(t, s)[cardBriefFallback]; c.N != 0 || len(f.pushed()) != 0 || s.briefTaskRunCount() != 0 {
+			t.Fatalf("briefing hooks without their module produced a fallback: ledger=%+v pushes=%d runs=%d", c, len(f.pushed()), s.briefTaskRunCount())
+		}
+		return
+	}
 	waitFor(t, "brief_fallback pushed to owner", func() bool {
 		return cardsToday(t, s)[cardBriefFallback].N == 1
 	})

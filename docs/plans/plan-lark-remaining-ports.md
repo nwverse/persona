@@ -281,7 +281,7 @@ Estimates, not measured.
 | --- | --- | --- | --- | --- | --- | --- |
 | 0 | Split the generic from the Feishu: move the shared helpers out of `feishu_*.go` into generically named files (link and button helpers, board rows and wait wording, `awaitingAcceptance`, session titles, target resolution, step wording); no signature change | about 550 lines move **within** the package | 0 | none (same package, same names where possible) | none | nothing: it touches the same files as every other PR; land first |
 | 1 | Rendering: progress, answer pages, step wording and the transport move; five `Host` methods go (`StepParts`, `ProgressCard`, `ProcessPanel`, `MissingPiecesNote`, `AnswerCards` become module code, `Layer.AnswerCards` for the briefing) | `feishu_progress.go`, `feishu_answer.go`, the Feishu part of `feishu_steps.go`, `feishu_transport.go` | about 450 | none | 0 | 4 (stop/route) |
-| 2 | Push port (3b) | `feishu_push.go`, then `Host` drops the pushed-lately readers it no longer needs | about 480 | none when on; with the module off, `PushKeyed` result per open question 2 | 1 (push uses `answerCards`) | 3 |
+| 2 | Push port (3b) | `feishu_push.go`, then `Host` drops the pushed-lately readers it no longer needs | about 480 | none when on; with the module off, `nil` and a skipped copy (open question 2, decided and implemented) | 1 (push uses `answerCards`) | 3 |
 | 3 | Interaction port (3a), in two steps: 3a announce, end, done, wanted; 3b renderers, detach, card back | `feishu_cards.go` Feishu part, the card-only titles | about 840 | none | 0 | 2 |
 | 4 | Board, pin, overview, companions (3c); the four routes through `AddHubRoute`; `Book` is removed | `feishu_board.go` (standing part), `feishu_workbench_pin.go`, `feishu_overview.go`, `feishu_companions.go`; `Service` loses `standing`, `workbench`, `companions` fields | about 890 | companion routes 404 when the module is off (open question 1) | 3 (the board posts through the card renderers) | none |
 | 5 | Stop and route tail (3e) | the Feishu part of `feishu_stop.go`, `feishu_route.go`; `Host.InterruptConversation` | about 120 | none | 0 | 1, 2, 3 |
@@ -337,10 +337,13 @@ Open questions that need a maintainer or owner decision before code, each with m
    them through `AddHubRoute` makes them 404 when the module is off or built out, as the contract says ("a disabled module is
    absent"). I did not check what each answers today with the bot off. *Recommendation*: 404 (the contract); the only callers
    are the companion bots and the Lark settings, both gone with the module.
-2. **`PushKeyed` and `PushTold` with the module off.** Return `ErrNoChannel` (what `Outbound.Post` returns now) or `nil` and a
-   "not applicable" entry in the copy report. Callers' handling is not read yet. *Recommendation*: `nil` plus a report entry
-   `skipped`, so a day recording's summary does not log "push failed" on a hub that has no Feishu; PR 2 confirms by reading
-   `recording_host.go:199` and its caller first.
+2. **`PushKeyed` and `PushTold` with the module off.** *Decided and implemented (#13404): `nil` and a `skipped` copy.* Reading
+   showed no push path returned `ErrNoChannel` to a caller: with the module off `None.Status` is zero without an error and
+   `Features` is not ready, so every push entry point already returned at once, logged nothing and scheduled no retry. The one
+   gap was `notify_user`'s copy report, which recorded nothing (the same as "bot not ready"). With the module absent or
+   switched off, `feishuPushToldTodo` now records one `skipped` Feishu copy (`copySkipped`, `channels_copies.go`) and returns
+   `nil`; `notifyAnswerText` leaves a skipped copy out of the answer. Module on (bot ready or not) and real post failures
+   are unchanged. The push code stays in the core: no code moved, no port added.
 3. **Are the board rows and the link helpers "Lark code"?** I classify them as the core's (briefing and acceptance use them).
    If the owner wants a `board` module instead, they are not Lark's to move. *Recommendation*: core, generic names.
 4. **`models_lark_agent_existing.go`.** Keep in the core as "an origin follows its purpose's model", or move with a new

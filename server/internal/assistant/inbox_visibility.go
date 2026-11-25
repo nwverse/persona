@@ -160,19 +160,19 @@ func (s *Service) inboxVisibilityModelAllowed(ctx context.Context, it *InboxItem
 	if err != nil {
 		return false, err
 	}
-	source := ""
-	if it != nil {
-		source = it.Source
-	}
-	if !s.inboxVisibilityProviderAllowed(cfg.Visibility, source) {
-		s.quarantineInboxVisibility(ctx, cfg.Visibility)
-		return false, nil
-	}
 	b := &s.inbox
 	b.mu.Lock()
+	source := ""
+	if it != nil {
+		if stored := b.items[it.ID]; stored != nil {
+			source = stored.Source
+		} else {
+			source = it.Source
+		}
+	}
 	excluded := inboxVisibilityWithMembersExcludedLocked(b, it, cfg.Visibility)
 	b.mu.Unlock()
-	if excluded {
+	if !s.inboxVisibilityProviderAllowed(cfg.Visibility, source) || excluded {
 		s.quarantineInboxVisibility(ctx, cfg.Visibility)
 		return false, nil
 	}

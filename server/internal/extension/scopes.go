@@ -40,13 +40,14 @@ const (
 	ScopeAssistantEntriesRead    = extwire.ScopeAssistantEntriesRead
 	ScopeTranscription           = extwire.ScopeTranscription
 	ScopeMarketRefreshOwn        = extwire.ScopeMarketRefreshOwn
+	ScopeAssistantEvents         = extwire.ScopeAssistantEvents
 )
 
 // HubScopes are the scopes, in the order the install screen lists them.
 var HubScopes = []string{ScopeKBRead, ScopeKBWrite, ScopeSentRead, ScopeInboxRead, ScopeInboxWrite, ScopeAgentsRead, ScopeAgentsControl,
 	ScopeAgentsPermissionMode, ScopeMachinesRead, ScopeMachinesPair, ScopeBrowserRun, ScopeNotify, ScopePushGrading, ScopeAssistantAsk, ScopeSpaces, ScopeAssistantRead, ScopeAssistantMemoryRead, ScopeAssistantEntriesRead,
 	ScopeTodosRead, ScopeTodosWrite, ScopeDecisionsRaise, ScopeLeadersRead, ScopeLeadersWrite, ScopeAssistantDispatchPolicy, ScopeAssistantStartDefaults, ScopeDispatchGuard, ScopeModels,
-	ScopeTranscription, ScopeMarketRefreshOwn}
+	ScopeTranscription, ScopeMarketRefreshOwn, ScopeAssistantEvents}
 
 // InEveryScope says whether a token of every scope (an extension granted the hub's full token the old way, hub_api,
 // that gets one of every scope instead) has scope s. Scopes whose authority must be agreed to by name are left out:
@@ -95,6 +96,7 @@ var scopeTitles = map[string]string{
 	ScopeAssistantEntriesRead:    "scope_assistant_entries_read",
 	ScopeTranscription:           "scope_transcription",
 	ScopeMarketRefreshOwn:        "scope_market_refresh_own",
+	ScopeAssistantEvents:         "scope_assistant_events",
 }
 
 // ScopeTitle is how the install screen says scope s; ok false for what is not a scope.

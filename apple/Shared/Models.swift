@@ -2614,16 +2614,48 @@ nonisolated struct Fold: Codable, Hashable, Sendable {
     var tasks: [FoldTasks]? = nil
     /// The hub proved this supervision round is user-visible, even while its visibility tools are folded away.
     var supervisionUser: Bool? = nil
+    /// The files the run's successful edits changed (docs/protocol/protocol.md「Folded work」 `fold.changes`):
+    /// always a list from hubs that compute it (empty when the run edited nothing); nil from older hubs.
+    var changes: [FoldChange]? = nil
     /// What the folded items used (#5426). Omitted when none of them carried usage, and from older nodes.
     var usage: [TokenUsage]? = nil
     /// Declarative UI views returned out-of-band by folded tool results (`Fold.toolViews`, UI version 12).
     var toolViews: [FoldToolView]? = nil
 
     enum CodingKeys: String, CodingKey {
-        case items, tools, thoughts, until, images, tasks, usage
+        case items, tools, thoughts, until, images, tasks, changes, usage
         case toolViews = "tool_views"
         case supervisionUser = "supervision_user"
         case throughSeq = "through_seq", throughID = "through_id"
+    }
+}
+
+/// One file a folded run's successful edits changed (`Fold.changes`, docs/protocol/protocol.md「Folded work」):
+/// the lines added and removed summed over the run's edits of that path. `exact` is false when an edit's input was
+/// clipped for good.
+nonisolated struct FoldChange: Codable, Hashable, Sendable {
+    var path: String
+    var add: Int
+    var del: Int
+    var exact: Bool
+
+    init(path: String, add: Int, del: Int, exact: Bool = true) {
+        self.path = path
+        self.add = add
+        self.del = del
+        self.exact = exact
+    }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path)
+        add = try c.decodeIfPresent(Int.self, forKey: .add) ?? 0
+        del = try c.decodeIfPresent(Int.self, forKey: .del) ?? 0
+        exact = try c.decodeIfPresent(Bool.self, forKey: .exact) ?? true
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case path, add, del, exact
     }
 }
 

@@ -9,6 +9,7 @@ import (
 
 	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -102,6 +103,94 @@ func TestApprovalMirrorDisplayKeepsOneAuthoritativeRequest(t *testing.T) {
 	}
 	<-done
 	ft.waitPending(0)
+}
+
+func TestDetachableWriteApprovalKeepsMainMirrorAndDirectButtons(t *testing.T) {
+	needsLarkLayer(t)
+	ft := newMirrorFleetTest(t)
+	ctx := context.Background()
+	ft.f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
+		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_a", PairedAt: time.Unix(100, 0),
+			Features: FeishuFeatures{Main: true, Cards: true, AllCards: false}}, nil
+	})
+	ft.f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) {
+		return map[string]any{"message_id": "om_detached_direct"}, nil
+	})
+	ix := detachedTestCard("ix_detached_direct")
+	ix.SessionID = "side"
+	ix.WriteOperation = true
+	ft.f.answerApp(AppInteractions, assistantwire.InteractionsOwnerAction, func(raw json.RawMessage) (any, error) {
+		var p map[string]any
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, err
+		}
+		if p["interaction_id"] != ix.ID || p["channel"] != channel.Feishu || p["kind"] != proto.IxPermission || p["action"] != "oa_direct" {
+			return nil, fmt.Errorf("owner action was not bound to the direct detachable approval: %+v", p)
+		}
+		return map[string]any{}, nil
+	})
+	done := startDetachedTest(t, ft, ix)
+
+	display := ft.s.pendingDisplayInteractions(ctx)
+	if len(display) != 2 || display[0].ID != ix.ID || !display[0].MirrorMain || !display[0].Detachable ||
+		display[1].ID != approvalMirrorID(display[0]) || display[1].MirrorOf != ix.ID || display[1].SessionID != "main" {
+		t.Fatalf("detachable display cards = %+v, want the authoritative original and its main copy", display)
+	}
+	waitFor(t, "the detachable approval in the direct owner chat", func() bool {
+		return len(ft.f.appParams(AppFeishu, FeishuPost)) == 1
+	})
+	posts := ft.f.appParams(AppFeishu, FeishuPost)
+	if posts[0]["chat_id"] != nil || posts[0]["in_thread"] != nil {
+		t.Fatalf("detachable approval left the owner's direct chat: %+v", posts[0])
+	}
+	var raw any
+	if err := json.Unmarshal([]byte(cardOf(posts[0])), &raw); err != nil {
+		t.Fatal(err)
+	}
+	var allow map[string]any
+	deny := false
+	var walk func(any)
+	walk = func(v any) {
+		switch v := v.(type) {
+		case map[string]any:
+			if v["a"] == "ix" {
+				if v["id"] != ix.ID || v["created_at"] != display[0].CreatedAt.UTC().Format(time.RFC3339Nano) {
+					t.Errorf("direct button occurrence = %+v, want %s at %s", v, ix.ID, display[0].CreatedAt.UTC().Format(time.RFC3339Nano))
+				}
+				if v["allow"] == "1" {
+					allow = v
+				}
+				deny = deny || v["allow"] == "0"
+			}
+			for _, child := range v {
+				walk(child)
+			}
+		case []any:
+			for _, child := range v {
+				walk(child)
+			}
+		}
+	}
+	walk(raw)
+	if allow == nil || !deny {
+		t.Fatalf("direct card lacks Allow or Deny actions: %s", cardOf(posts[0]))
+	}
+	press := &botcard.CardAction{}
+	press.Action.Value = allow
+	press.Context.MessageID = "om_detached_direct"
+	response := ft.s.larkModule().Action(ctx, press, "oa_direct")
+	select {
+	case got := <-done:
+		if got.err != nil || got.res.Allow == nil || !*got.res.Allow {
+			t.Fatalf("direct Allow did not resolve the detachable original: %+v, %v; response=%+v toast=%+v", got.res, got.err, response, response.Toast)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("direct Allow left the detachable original waiting; response=%+v toast=%+v pending=%+v", response, response.Toast, ft.s.pendingInteractions())
+	}
+	ft.waitPending(0)
+	if display := ft.s.pendingDisplayInteractions(ctx); len(display) != 0 {
+		t.Fatalf("resolved direct approval left display copies: %+v", display)
+	}
 }
 
 func TestApprovalMirrorEligibilityAndSettingOff(t *testing.T) {
@@ -840,7 +929,7 @@ func TestFeishuDirectWriteApprovalPassesNonOwnerRouting(t *testing.T) {
 	ready := make(chan error, 1)
 	returned := make(chan error, 1)
 	go func() {
-		_, err := ft.s.waitInteractionReady(ctx, ix, nil, ready)
+		_, err := ft.s.waitInteractionReadyResult(ctx, ix, nil, ready)
 		returned <- err
 	}()
 	select {

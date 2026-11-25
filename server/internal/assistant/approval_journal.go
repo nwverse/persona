@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -13,8 +14,12 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-const approvalJournalKey = "assistant.approval_clarifications"
-const approvalRestartCancelledText = "The assistant restarted, so the retained operation was cancelled without executing. Ask for a fresh approval if the change is still wanted."
+const (
+	approvalJournalKey           = "assistant.approval_clarifications"
+	approvalRestartCancelledText = "The assistant restarted, so the retained operation was cancelled without executing. Ask for a fresh approval if the change is still wanted."
+	invalidationSummaryRunes     = 200
+	invalidationLabelRunes       = 80
+)
 
 var (
 	errApprovalConversationGone = errors.New("the originating conversation no longer exists")
@@ -24,14 +29,17 @@ var (
 	errApprovalExecutionUncertain = errors.New("the earlier approval execution outcome is uncertain")
 )
 
-// approvalJournalEntry contains delivery state only. In particular it has no
-// executable callback, tool arguments, Resolution.Values or approval fields.
+// approvalJournalEntry contains delivery state and a minimal safe summary only.
+// In particular it has no executable callback, raw tool arguments, secret text,
+// Resolution.Values or approval fields.
 type approvalJournalEntry struct {
 	ID          string    `json:"id"`
 	MachineID   string    `json:"machine_id"`
 	SessionID   string    `json:"session_id"`
 	CreatedAt   time.Time `json:"created_at,omitempty"`
 	Fingerprint string    `json:"fingerprint,omitempty"`
+	Kind        string    `json:"kind,omitempty"`
+	Summary     string    `json:"summary,omitempty"`
 	Status      string    `json:"status,omitempty"`
 	Result      string    `json:"result,omitempty"`
 	// Finalized means this occurrence has a durable terminal interaction record,
@@ -47,6 +55,32 @@ type approvalJournalEntry struct {
 	// live is process-local and never persisted. A delayed startup retry must not
 	// mistake an approval created by this process for an interrupted old one.
 	live bool
+}
+
+// safeInteractionSummary extracts only the minimum safe human-readable context
+// needed for a terminal or invalidation notice. It never reads ToolInput,
+// EditableText, Screen, full Plan text, or secret prompt/field content.
+func safeInteractionSummary(ix proto.Interaction) string {
+	if ix.Secret || hasSecretField(ix) {
+		return clip(oneLine(cmp.Or(ix.ToolTitle, ix.ToolName, "secret confirmation")), invalidationLabelRunes)
+	}
+	if ix.Kind == proto.IxQuestion && len(ix.Questions) > 0 {
+		if line := strings.TrimSpace(questionLine(ix)); line != "" {
+			return clip(oneLine(line), invalidationSummaryRunes)
+		}
+	}
+	if summary := strings.TrimSpace(ix.Summary); summary != "" {
+		return clip(oneLine(summary), invalidationSummaryRunes)
+	}
+	if ix.Kind == proto.IxPlan && strings.TrimSpace(ix.Plan) != "" {
+		if title := strings.TrimSpace(planTitle(ix.Plan)); title != "" {
+			return clip(oneLine(title), invalidationSummaryRunes)
+		}
+	}
+	if ix.Kind == proto.IxElicitation && ix.Elicitation != nil && strings.TrimSpace(ix.Elicitation.Message) != "" {
+		return clip(oneLine(ix.Elicitation.Message), invalidationSummaryRunes)
+	}
+	return clip(oneLine(cmp.Or(ix.ToolTitle, ix.ToolName)), invalidationLabelRunes)
 }
 
 func (s *Service) loadApprovalJournalLocked(ctx context.Context) bool {
@@ -128,11 +162,25 @@ func (s *Service) approvalJournalStarted(ctx context.Context, ix proto.Interacti
 	if !s.loadApprovalJournalLocked(ctx) {
 		return errors.New("the clarification journal is unavailable")
 	}
-	if slices.ContainsFunc(b.list, func(a approvalJournalEntry) bool { return approvalJournalMatches(a, ix) }) {
+	summary := safeInteractionSummary(ix)
+	if i := slices.IndexFunc(b.list, func(a approvalJournalEntry) bool { return approvalJournalMatches(a, ix) }); i >= 0 {
+		oldSummary, oldKind := b.list[i].Summary, b.list[i].Kind
+		b.list[i].live = true
+		if b.list[i].Summary == "" {
+			b.list[i].Summary = summary
+		}
+		if b.list[i].Kind == "" {
+			b.list[i].Kind = ix.Kind
+		}
+		if err := s.saveApprovalJournalLocked(ctx); err != nil {
+			b.list[i].Summary, b.list[i].Kind = oldSummary, oldKind
+			return fmt.Errorf("keep the clarification result journal: %w", err)
+		}
 		return nil
 	}
 	b.list = append(b.list, approvalJournalEntry{ID: ix.ID, MachineID: ix.MachineID, SessionID: ix.SessionID,
-		CreatedAt: createdAt, Fingerprint: fingerprint, Private: ix.Private, UpdatedAt: time.Now().UTC(), live: true})
+		CreatedAt: createdAt, Fingerprint: fingerprint, Kind: ix.Kind, Summary: summary, Private: ix.Private,
+		UpdatedAt: time.Now().UTC(), live: true})
 	if err := s.saveApprovalJournalLocked(ctx); err != nil {
 		b.list = slices.DeleteFunc(b.list, func(a approvalJournalEntry) bool {
 			return approvalJournalMatches(a, ix) && a.Result == ""
@@ -156,13 +204,28 @@ func (s *Service) approvalJournalApplying(ctx context.Context, ix proto.Interact
 	if !s.loadApprovalJournalLocked(ctx) {
 		return errors.New("the clarification journal is unavailable")
 	}
+	summary := safeInteractionSummary(ix)
 	i := slices.IndexFunc(b.list, func(a approvalJournalEntry) bool { return approvalJournalMatches(a, ix) })
 	if i < 0 {
 		b.list = append(b.list, approvalJournalEntry{ID: ix.ID, MachineID: ix.MachineID, SessionID: ix.SessionID,
-			CreatedAt: createdAt, Fingerprint: fingerprint, Private: ix.Private, live: true})
+			CreatedAt: createdAt, Fingerprint: fingerprint, Kind: ix.Kind, Summary: summary, Private: ix.Private, live: true})
 		i = len(b.list) - 1
-	} else if ix.Private {
-		b.list[i].Private = true
+	} else {
+		if ix.Private {
+			b.list[i].Private = true
+		}
+		if b.list[i].Summary == "" && summary != "" {
+			b.list[i].Summary = summary
+		}
+		if b.list[i].Kind == "" && ix.Kind != "" {
+			b.list[i].Kind = ix.Kind
+		}
+		if b.list[i].CreatedAt.IsZero() {
+			b.list[i].CreatedAt = createdAt
+		}
+		if b.list[i].Fingerprint == "" {
+			b.list[i].Fingerprint = fingerprint
+		}
 	}
 	b.list[i].live = true
 	if b.list[i].Result != "" {
@@ -197,6 +260,10 @@ func (s *Service) approvalJournalAborted(ctx context.Context, ix proto.Interacti
 // approvalResultText always names the literal interaction ID and says that the
 // original card is no longer waiting, including when execution is uncertain.
 func approvalResultText(id, status, text string) string {
+	return approvalResultTextWithSummary(id, status, "", text)
+}
+
+func approvalResultTextWithSummary(id, status, summary, text string) string {
 	word := map[string]string{
 		"resolved": "applied", "approved": "approved", "covered": "covered by a newer Always allow", "denied": "denied", "expired": "expired",
 		"replaced": "replaced", "stale": "stale and cancelled", "cancelled": "cancelled", "dismissed": "dismissed",
@@ -205,7 +272,17 @@ func approvalResultText(id, status, text string) string {
 	if word == "" {
 		word = "finished"
 	}
+	if summary != "" {
+		return fmt.Sprintf("Approval %s is %s and is no longer pending. Original request: %s. %s", id, word, summary, text)
+	}
 	return fmt.Sprintf("Approval %s is %s and is no longer pending. %s", id, word, text)
+}
+
+func questionInvalidationResultText(id, summary string) string {
+	if summary != "" {
+		return fmt.Sprintf("Question %s was cancelled by a restart or upgrade and is no longer pending. Original question: %s. Nothing was applied. Create a fresh ask_user card if you still need the user's answer.", id, summary)
+	}
+	return fmt.Sprintf("Question %s was cancelled by a restart or upgrade and is no longer pending. Nothing was applied. Create a fresh ask_user card if you still need the user's answer.", id)
 }
 
 func (s *Service) approvalJournalFinished(ctx context.Context, ix proto.Interaction, status, text string, finalized bool) approvalJournalEntry {
@@ -220,14 +297,29 @@ func (s *Service) approvalJournalFinished(ctx context.Context, ix proto.Interact
 		b.mu.Unlock()
 		return approvalJournalEntry{}
 	}
+	summary := safeInteractionSummary(ix)
 	i := slices.IndexFunc(b.list, func(a approvalJournalEntry) bool { return approvalJournalMatches(a, ix) })
 	if i < 0 {
 		b.list = append(b.list, approvalJournalEntry{ID: ix.ID, MachineID: ix.MachineID, SessionID: ix.SessionID,
-			CreatedAt: createdAt, Fingerprint: fingerprint, Private: ix.Private})
+			CreatedAt: createdAt, Fingerprint: fingerprint, Kind: ix.Kind, Summary: summary, Private: ix.Private})
 		i = len(b.list) - 1
-	} else if ix.Private {
-		// Upgrade a legacy or recovered entry before its terminal delivery.
-		b.list[i].Private = true
+	} else {
+		if ix.Private {
+			// Upgrade a legacy or recovered entry before its terminal delivery.
+			b.list[i].Private = true
+		}
+		if b.list[i].Summary == "" && summary != "" {
+			b.list[i].Summary = summary
+		}
+		if b.list[i].Kind == "" && ix.Kind != "" {
+			b.list[i].Kind = ix.Kind
+		}
+		if b.list[i].CreatedAt.IsZero() {
+			b.list[i].CreatedAt = createdAt
+		}
+		if b.list[i].Fingerprint == "" {
+			b.list[i].Fingerprint = fingerprint
+		}
 	}
 	if !b.list[i].Finalized {
 		// The one live claim's honest execution result supersedes an unfinished
@@ -240,11 +332,15 @@ func (s *Service) approvalJournalFinished(ctx context.Context, ix proto.Interact
 			b.list[i].Fingerprint = fingerprint
 		}
 		b.list[i].Status = status
-		b.list[i].Result = approvalResultText(ix.ID, status, text)
+		b.list[i].Result = approvalResultTextWithSummary(ix.ID, status, b.list[i].Summary, text)
 		b.list[i].Continuation = ix.Detachable && status == "approved"
 		b.list[i].UpdatedAt = time.Now().UTC()
 	}
 	b.list[i].Finalized = b.list[i].Finalized || finalized
+	if b.handled == nil {
+		b.handled = map[string]bool{}
+	}
+	b.handled[ix.ID] = true
 	if err := s.saveApprovalJournalLocked(ctx); err != nil {
 		s.logf("save approval result %s: %v", ix.ID, err)
 	}
@@ -509,7 +605,11 @@ func (s *Service) deliverApprovalResult(a approvalJournalEntry) error {
 		// node, or a list that has not arrived yet says nothing about deletion.
 		return errors.New("the originating conversation is not currently listed")
 	}
-	msg := relayMsg{From: approvalResultFrom + a.ID, FromTitle: "Approval result", Tool: askAnswerTool,
+	title := "Approval result"
+	if a.Kind == proto.IxQuestion {
+		title = "Question result"
+	}
+	msg := relayMsg{From: approvalResultFrom + a.ID, FromTitle: title, Tool: askAnswerTool,
 		Text: a.Result, At: a.UpdatedAt, Private: a.Private, Continuation: a.Continuation, ContinuationDigest: a.Fingerprint}
 	if msg.At.IsZero() {
 		msg.At = time.Now().UTC()
@@ -599,6 +699,97 @@ func (s *Service) queueApprovalResult(machine, to string, msg relayMsg) error {
 	return nil
 }
 
+// lookupInteractionSummary backfills a safe summary from the interaction record
+// for entries persisted by an older binary before Summary was recorded.
+func (s *Service) lookupInteractionSummary(ctx context.Context, id string) string {
+	st, ok := s.store().(interactionRecorder)
+	if !ok {
+		return ""
+	}
+	readCtx, cancel := context.WithTimeout(ctx, historyTimeout)
+	rec, err := func() (rec *db.InteractionRecord, err error) {
+		defer guard(&err)
+		return st.InteractionRecord(readCtx, id)
+	}()
+	cancel()
+	if err != nil || rec == nil {
+		return ""
+	}
+	return safeInteractionSummary(rec.Interaction)
+}
+
+// shouldNotifyRestartInvalidated reports whether a non-resumable interaction
+// cancelled by startup reconciliation belongs to an assistant conversation that
+// needs a safe invalidation notice to issue a fresh card. Resumable cards keep
+// their existing restart behavior, and coding-agent / one-shot cards are untouched.
+func shouldNotifyRestartInvalidated(ix proto.Interaction) bool {
+	if ix.Resumable || ix.MachineID == "" || ix.SessionID == "" {
+		return false
+	}
+	return ix.ToolName == "ask_user" || ix.CanClarify
+}
+
+// recordRestartInvalidation queues one contextual invalidation notice on the
+// originating conversation's durable route for a non-resumable card cancelled
+// during startup reconciliation. It never duplicates an entry already handled by
+// approvalJournal and never overwrites an interrupted applying outcome.
+func (s *Service) recordRestartInvalidation(ctx context.Context, ix proto.Interaction) {
+	if !shouldNotifyRestartInvalidated(ix) {
+		return
+	}
+	summary := safeInteractionSummary(ix)
+	b := &s.approvals
+	b.mu.Lock()
+	if !s.loadApprovalJournalLocked(ctx) {
+		b.mu.Unlock()
+		return
+	}
+	if b.handled[ix.ID] {
+		b.mu.Unlock()
+		return
+	}
+	if i := slices.IndexFunc(b.list, func(a approvalJournalEntry) bool { return a.ID == ix.ID }); i >= 0 {
+		// Already tracked in the approval journal (e.g. clarifying or applying):
+		// backfill a missing summary for older pre-upgrade entries, and let
+		// recoverApprovalJournals decide the exact terminal state.
+		if b.list[i].Summary == "" && summary != "" {
+			b.list[i].Summary = summary
+			if err := s.saveApprovalJournalLocked(ctx); err != nil {
+				s.logf("save recovered approval summary %s: %v", ix.ID, err)
+			}
+		}
+		b.mu.Unlock()
+		return
+	}
+	var result string
+	if ix.Kind == proto.IxQuestion {
+		result = questionInvalidationResultText(ix.ID, summary)
+	} else {
+		result = approvalResultTextWithSummary(ix.ID, "cancelled", summary,
+			"The assistant restarted, so nothing was applied and the retained operation was cancelled without executing. Ask for a fresh approval card if the change is still wanted.")
+	}
+	b.list = append(b.list, approvalJournalEntry{
+		ID:        ix.ID,
+		MachineID: ix.MachineID,
+		SessionID: ix.SessionID,
+		Kind:      ix.Kind,
+		Summary:   summary,
+		Status:    "cancelled",
+		Result:    result,
+		Private:   ix.Private,
+		UpdatedAt: time.Now().UTC(),
+	})
+	if b.handled == nil {
+		b.handled = map[string]bool{}
+	}
+	b.handled[ix.ID] = true
+	if err := s.saveApprovalJournalLocked(ctx); err != nil {
+		s.logf("save restart invalidation %s: %v", ix.ID, err)
+	}
+	b.mu.Unlock()
+	go s.deliverApprovalResults()
+}
+
 // recoverApprovalJournals is fail-closed: no process-local operation survives a
 // manager restart. An interrupted apply is explicitly uncertain; any other
 // unfinished clarified card is cancelled without executing.
@@ -627,19 +818,50 @@ func (s *Service) recoverApprovalJournals(ctx context.Context) {
 	b.recovering, b.recoveryDone = true, false
 	var recovered []approvalJournalEntry
 	changed := false
+	var needSummary []string
+	for i := range b.list {
+		if b.list[i].Result == "" && !b.list[i].live && b.list[i].Summary == "" {
+			needSummary = append(needSummary, b.list[i].ID)
+		}
+	}
+	b.mu.Unlock()
+
+	backfilled := map[string]string{}
+	for _, id := range needSummary {
+		if summary := s.lookupInteractionSummary(ctx, id); summary != "" {
+			backfilled[id] = summary
+		}
+	}
+
+	b.mu.Lock()
 	for i := range b.list {
 		if b.list[i].Result == "" && b.list[i].live {
 			// The first load failed earlier, but this entry was created by the
 			// current process after storage recovered. It is not restart residue.
 			continue
 		}
+		if b.list[i].Status != "approved" {
+			// A continuation grant is valid only with its completed approved
+			// result. Revoke interrupted, cancelled and failed outcomes before
+			// delivery; a crashed apply must never leave an execution permit.
+			if err := s.revokeDetachedGrant(ctx, b.list[i]); err != nil {
+				s.logf("revoke interrupted approval %s: %v", b.list[i].ID, err)
+			}
+		}
+		if b.handled == nil {
+			b.handled = map[string]bool{}
+		}
+		b.handled[b.list[i].ID] = true
 		if b.list[i].Result == "" {
+			if b.list[i].Summary == "" {
+				b.list[i].Summary = backfilled[b.list[i].ID]
+			}
 			if b.list[i].Status == "applying" {
 				b.list[i].Status = "failed"
-				b.list[i].Result = approvalResultText(b.list[i].ID, "failed", "The assistant restarted while the approved operation was executing. Its execution outcome is uncertain: check current state before retrying; do not assume it applied or that nothing changed.")
+				b.list[i].Result = approvalResultTextWithSummary(b.list[i].ID, "failed", b.list[i].Summary, "The assistant restarted while the approved operation was executing. Its execution outcome is uncertain: check current state before retrying; do not assume it applied or that nothing changed.")
 			} else {
 				b.list[i].Status = "cancelled"
-				b.list[i].Result = approvalResultText(b.list[i].ID, "cancelled", "The assistant restarted, so the retained operation was cancelled without executing. Ask for a fresh approval if the change is still wanted.")
+				b.list[i].Result = approvalResultTextWithSummary(b.list[i].ID, "cancelled", b.list[i].Summary, approvalRestartCancelledText)
 			}
 			if !b.list[i].CreatedAt.IsZero() || b.list[i].Fingerprint != "" {
 				b.list[i].UpdatedAt = time.Now().UTC()

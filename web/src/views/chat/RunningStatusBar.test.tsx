@@ -161,6 +161,15 @@ describe("RunningStatusView", () => {
     expect(html).not.toContain("Prompt:");
   });
 
+  it("shows the task prompt when the Cron fields contain comma-separated lists", () => {
+    const what = "Cron: 0,15,30 * * * 1,5, Prompt: Check deploys, then report";
+    expect(formatBackgroundWhat(what)).toBe("Check deploys, then report");
+    const html = render({ live: null, working: true, command: { what, more: 0 } });
+    expect(html).toContain("Check deploys, then report");
+    expect(html).not.toContain("Cron:");
+    expect(html).not.toContain("Prompt:");
+  });
+
   it("a finished background command keeps its terminal line while it lingers, then fades without becoming Done", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-11-05T10:04:05Z"));
