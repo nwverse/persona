@@ -501,6 +501,7 @@ leaders.write        POST /api/v1/assistant/directions/{id}/progress
 -                    POST /api/v1/assistant/health/intake
 -                    POST /api/v1/assistant/health/intake/import
 -                    POST /api/v1/assistant/health/intake/ui
+-                    POST /api/v1/assistant/health/tell
 -                    POST /api/v1/assistant/health/water/reminder
 -                    POST /api/v1/assistant/health/workouts
 -                    POST /api/v1/assistant/main/clear

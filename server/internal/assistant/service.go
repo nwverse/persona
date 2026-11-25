@@ -275,9 +275,11 @@ type Service struct {
 	infoTags             infoTagCache           // info_tag.go
 	infoTagWaiting       infoTagPending         // info_use.go
 	captures             captureWork            // capture_sort.go: wakes the loop that sorts quick captures
-	spaceFill            spaceBackfill          // conversation_space_backfill.go
-	outcomeLines         outcomeLines           // todo_outcome.go
-	workerOutcomes       workerOutcomes         // worker_memory.go
+	healthTells          captureWork            // health_tell.go: wakes ordered Health delivery
+	trainingChatMu       sync.Mutex
+	spaceFill            spaceBackfill  // conversation_space_backfill.go
+	outcomeLines         outcomeLines   // todo_outcome.go
+	workerOutcomes       workerOutcomes // worker_memory.go
 	conversationWrites   sync.RWMutex
 
 	modelPicks modelPickBook // model_pick.go
@@ -352,9 +354,7 @@ type Service struct {
 	tview            todoViewBook      // todo_view_push.go: what the apps were told each to-do is filed under
 	trevision        todoRevisionBook  // todo_revision.go: the pushed read's cheap validator
 	offers           routeBook         // route.go: the directions offered for New chats
-	standing         standingBoard     // feishu_board.go: the standing "waiting for you" card
-	workbench        workbenchState    // feishu_workbench_pin.go: the pinned workbench
-	companions       companionState    // feishu_companions.go: the notices for a companion bot
+	fleetUp          atomic.Bool       // the fleet has been brought up since this process started (FleetUp): the pending cards are the real ones (lark_board.go)
 	kb               kbState           // kb.go
 	inbox            inboxBook         // inbox_book.go
 	board            boardBook         // workspace_board.go: the workspace board
@@ -449,6 +449,7 @@ func New(o Options) *Service {
 	s.infoAccessRoutes()
 	s.trackRoutes()
 	s.captureRoutes() // captures.go: quick capture
+	s.healthTellRoutes()
 	s.undeliveredRoutes()
 	s.standingAuthorizationRoutes()
 	s.ruleSuggestionRoutes()
@@ -496,7 +497,6 @@ func New(o Options) *Service {
 	s.workspaceBoardRoutes()
 	s.navigationRoutes() // navigation.go: the page the apps open on
 	s.channelRoutes()
-	s.companionRoutes()
 	s.kbInit(o.KB)
 	// The recording module's layer, before its routes (kbRoutes) and its hello capabilities (recording.go).
 	s.recOpts.timings, s.recOpts.lists = maps.Clone(o.RecordingTimings), maps.Clone(o.RecordingTimingLists)

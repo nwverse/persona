@@ -36,9 +36,9 @@ type workoutReportFault struct {
 	received int
 }
 
-func (f *workoutReportFault) WorkoutReport(ctx context.Context, id, language string) (string, bool, error) {
+func (f *workoutReportFault) WorkoutReport(ctx context.Context, id, language string) (assistantwire.StrengthReportPrompt, bool, error) {
 	if f.fail {
-		return "", false, errors.New("synthetic report failure")
+		return assistantwire.StrengthReportPrompt{}, false, errors.New("synthetic report failure")
 	}
 	return f.Layer.WorkoutReport(ctx, id, language)
 }
@@ -158,7 +158,10 @@ func TestStrengthWorkoutTaskAssemblesAtExecutionAndFallsBack(t *testing.T) {
 	}
 	fault := &workoutReportFault{Layer: s.healthMod, fail: true}
 	s.healthMod = fault
-	fallback := s.workoutPromptNow(ctx, task)
+	fallback, day := s.workoutPromptNow(ctx, task)
+	if day != "" {
+		t.Fatal("failed assembly selected a training day")
+	}
 	if fallback.Prompt != stored {
 		t.Fatal("assembly failure lost fallback")
 	}
@@ -180,7 +183,7 @@ func TestStrengthWorkoutTaskAssemblesAtExecutionAndFallsBack(t *testing.T) {
 	running := sampleWorkout()
 	raw, _ := json.Marshal(running)
 	plain := Task{Space: SpaceHealth, WorkoutID: running.ID, Prompt: string(raw)}
-	if got := s.workoutPromptNow(ctx, plain); got.Prompt != plain.Prompt {
+	if got, day := s.workoutPromptNow(ctx, plain); got.Prompt != plain.Prompt || day != "" {
 		t.Fatal("ordinary report changed")
 	}
 }
