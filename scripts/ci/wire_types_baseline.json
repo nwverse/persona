@@ -5988,6 +5988,11 @@
     "count": 1,
     "pr": "#15513",
     "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "AssistantEventParams.State": {
+    "count": 2,
+    "pr": "#15561",
+    "why": "State is free-form text owned by the extension, not a closed Persona state enum; the schema bounds its length."
    }
   },
   "bare-id": {
@@ -6152,6 +6157,20 @@
     "count": 1,
     "pr": "#15513",
     "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   }
+  },
+  "ptr-bool": {
+   "AssistantEventParams.Replace": {
+    "count": 2,
+    "pr": "#15561",
+    "why": "The public assistant.event contract makes replace optional and absent means true, so queued observations coalesce by default."
+   }
+  },
+  "raw-json": {
+   "ExtensionEvent.Params": {
+    "count": 1,
+    "pr": "#15561",
+    "why": "The manager forwards unchecked event params so the assistant applies the extension schema and strict decoding once, without accepting decoded untrusted input."
    }
   }
  }

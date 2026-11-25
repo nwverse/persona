@@ -79,6 +79,9 @@ go server/internal/archguard/wirecount core
 go server/internal/assistant core
 go server/internal/assistant/archiverecovery core
 go server/internal/assistant/chatsearch core
+go server/internal/assistant/externalbinding core
+go server/internal/assistant/externalbinding/externalbindingadapt core
+go server/internal/assistant/externalsourcestore core
 go server/internal/assistant/fleetcount core
 go server/internal/assistant/fleetcount/fleetcountadapt core
 go server/internal/assistant/fleetcount/fleetcounttest core
