@@ -1,7 +1,8 @@
 // The chat's left-gutter user-input navigator. Only this small component updates while scrolling.
 // cached content offsets are rebuilt on transcript/layout changes, never once per tick on a scroll frame.
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { activeNavRailOffset, navRailMark, NAV_RAIL_MIN_HEIGHT, planNavRailTicks, type NavRailTick } from "../../lib/nav-rail";
+import { activeNavRailOffset, navRailMark, NAV_RAIL_MIN_HEIGHT, planNavRailTicks, withInputPreview, type NavRailTick } from "../../lib/nav-rail";
+import type { UserInputPosition } from "../../lib/user-input-index";
 import { useFinePointer } from "../../lib/viewport";
 import { NAV_RAIL_METRICS as M } from "../../ui/nav-rail-metrics";
 import { cx } from "../../ui/atoms";
@@ -79,11 +80,13 @@ function isTailOnlyMutation(
   return true;
 }
 
-export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
+export function NavRail({ ticks, total, scroller, onJump, onPreview, previewAt, reset, marks }: {
   ticks: NavRailTick[];
   total?: number;
   scroller: HTMLDivElement | null;
   onJump: (id: string) => void | Promise<void>;
+  onPreview?: (index: number) => void;
+  previewAt?: (index: number) => { excerpt?: UserInputPosition; loading: boolean } | undefined;
   reset: string;
   /** Each question's state by line id in Persona chats. A follow-up's tick is shorter. These marks also allow touch
    *  navigation when the gutter fits the rail. */
@@ -93,7 +96,7 @@ export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
   /** A touch screen's rail: only with question states (the plain rail stays off without a precise pointer). */
   const touch = !finePointer && Boolean(marks);
   const enabled = finePointer || touch;
-  const markOf = (tick: NavRailTick | undefined) => (tick ? marks?.get(tick.lineId ?? tick.id) : undefined);
+  const markOf = (tick: NavRailTick | undefined) => (tick ? marks?.get(tick.lineId ?? tick.retainedLineId ?? tick.id) : undefined);
   const [height, setHeight] = useState(0);
   const [active, setActive] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
@@ -321,7 +324,14 @@ export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
   const plan = planNavRailTicks(ticks.length, height, center < 0 ? ticks.length - 1 : center);
   const shown = ticks.slice(plan.start, plan.start + plan.count);
   const previewIndex = indexOf(preview);
-  const previewTick = previewIndex >= plan.start && previewIndex < plan.start + plan.count ? ticks[previewIndex] : undefined;
+  const previewRead = previewAt?.(previewIndex);
+  const previewBase = previewIndex >= plan.start && previewIndex < plan.start + plan.count ? ticks[previewIndex] : undefined;
+  const previewTick = previewBase && withInputPreview(previewBase, previewRead?.excerpt);
+  const requestPreview = useRef(onPreview);
+  requestPreview.current = onPreview;
+  useEffect(() => {
+    if (previewBase?.loadPreview) requestPreview.current?.(previewIndex);
+  }, [previewBase?.id, previewBase?.loadPreview, previewIndex]);
   const currentIndex = indexOf(marked);
   const focusedMark = preview ?? pending;
   const focusedIndex = previewIndex >= 0 ? previewIndex : indexOf(pending);
@@ -336,7 +346,7 @@ export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
     const y = ticksTop + (previewIndex - plan.start + 0.5) * plan.pitch;
     const cardHeight = card.current.offsetHeight;
     card.current.style.top = `${Math.max(0, Math.min(y - cardHeight / 2, railHeight - cardHeight))}px`;
-  }, [previewTick, previewIndex, previewMark, railHeight, ticksTop, plan.start, plan.pitch]);
+  }, [previewTick, previewRead?.loading, previewIndex, previewMark, railHeight, ticksTop, plan.start, plan.pitch]);
 
   const dismissPreview = () => {
     previewOrigin.current = null;
@@ -494,8 +504,9 @@ export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
         </span>
       )}
       <span className="sr-only" aria-live="polite" aria-atomic="true">{announcement}</span>
-      {shown.map((tick, k) => {
+      {shown.map((base, k) => {
         const i = plan.start + k;
+        const tick = withInputPreview(base, previewAt?.(i)?.excerpt);
         const isCurrent = tick.id === active;
         const isPreview = tick.id === focusedMark;
         const emphasized = isCurrent || tick.id === pending;
@@ -555,6 +566,7 @@ export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
               </div>
             )}
             {previewTick.answerExcerpt && <p data-nav-preview-excerpt className={cx("line-clamp-3 break-words text-sm leading-relaxed text-ink-2", (previewTitle || previewMark) && "mt-2")}>{previewTick.answerExcerpt}</p>}
+            {previewRead?.loading && <p data-nav-preview-loading role="status" className="mt-2 text-sm text-ink-3">{t("chat-navrail.loading_preview")}</p>}
           </div>
         </div>
       )}
