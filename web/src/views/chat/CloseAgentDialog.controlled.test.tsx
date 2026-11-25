@@ -278,6 +278,89 @@ describe("CloseAgentDialog with controlled data and callbacks", () => {
     expect(onNotice).toHaveBeenNthCalledWith(2, t("chat-sessiondialogs.wt_remove_failed", { error: "worktree busy" }), "error");
     expectNoDefaultSingletons();
   });
+
+  it("resets worktree cleanup and loss confirmation to KEEP when switching sessions while open", async () => {
+    const sessionA = idleSession;
+    const worktreeA: WorktreeStatus = {
+      worktree: true,
+      ours: true,
+      path: "/repo/worktrees/session-a",
+      branch: "persona/session-a",
+      main_branch: "main",
+      dirty: 2,
+      unmerged: 1,
+    };
+    const sessionB: Session = {
+      ...idleSession,
+      session_id: "other-session",
+      title: "Other controlled agent",
+      cwd: "/repo/worktrees/session-b",
+    };
+    const worktreeB: WorktreeStatus = {
+      worktree: true,
+      ours: true,
+      path: "/repo/worktrees/session-b",
+      branch: "persona/session-b",
+      main_branch: "main",
+      dirty: 3,
+      unmerged: 2,
+    };
+    const onArchiveClose = vi.fn().mockResolvedValue({ ok: true });
+    const onCleanupWorktree = vi.fn().mockResolvedValue(undefined);
+    const onNotice = vi.fn();
+
+    await mount({
+      session: sessionA,
+      liveSession: sessionA,
+      features: archiveFeatures,
+      worktree: worktreeA,
+      onClosed,
+      onArchiveClose,
+      onCleanupWorktree,
+      onNotice,
+    });
+
+    await act(async () => removeRadio()!.click());
+    const deleteBranchA = document.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("chat-sessiondialogs.wt_delete_branch", { branch: "persona/session-a" })}"]`);
+    const confirmLoss = () => document.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("chat-sessiondialogs.wt_confirm_loss")}"]`);
+    expect(deleteBranchA).not.toBeNull();
+    await act(async () => deleteBranchA!.click());
+    expect(dialogButton(t("close-agent.archive_close"))?.disabled).toBe(true);
+    await act(async () => confirmLoss()!.click());
+    expect(dialogButton(t("close-agent.archive_close"))?.disabled).toBe(false);
+
+    // Switch to session B while keeping the same dialog open.
+    await mount({
+      session: sessionB,
+      liveSession: sessionB,
+      features: archiveFeatures,
+      worktree: worktreeB,
+      onClosed,
+      onArchiveClose,
+      onCleanupWorktree,
+      onNotice,
+    });
+
+    const keepRadio = [...document.querySelectorAll<HTMLButtonElement>("[role=radio]")].find((button) => button.textContent === t("chat-sessiondialogs.wt_keep"));
+    expect(keepRadio?.getAttribute("aria-checked")).toBe("true");
+    expect(removeRadio()?.getAttribute("aria-checked")).toBe("false");
+
+    // Selecting Remove on B requires fresh loss confirmation and disables the confirm button until confirmed.
+    await act(async () => removeRadio()!.click());
+    expect(dialogButton(t("close-agent.archive_close"))?.disabled).toBe(true);
+    expect(confirmLoss()?.getAttribute("aria-checked")).toBe("false");
+
+    // Switching back to KEEP and confirming B must not remove B's worktree.
+    await act(async () => keepRadio!.click());
+    expect(dialogButton(t("close-agent.archive_close"))?.disabled).toBe(false);
+    await act(async () => dialogButton(t("close-agent.archive_close"))!.click());
+    await flush();
+
+    expect(onArchiveClose).toHaveBeenCalledWith(sessionB);
+    expect(onCleanupWorktree).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expectNoDefaultSingletons();
+  });
 });
 
 describe("CloseAgentDialog default compatibility", () => {

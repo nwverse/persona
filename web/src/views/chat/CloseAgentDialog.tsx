@@ -82,12 +82,12 @@ function CloseAgentWithFeatures(props: CloseAgentLiveProps) {
 function CloseAgentWorktree(props: CloseAgentFeaturesProps) {
   if (props.worktree === undefined) return <CloseAgentWithWorktree {...props} />;
   const wt = props.worktree?.ours && props.worktree.path ? props.worktree : null;
-  return <CloseAgentDialogView {...props} wt={wt} />;
+  return <CloseAgentDialogView key={`${props.session.machine_id}/${props.session.session_id}`} {...props} wt={wt} />;
 }
 
 function CloseAgentWithWorktree(props: CloseAgentFeaturesProps) {
   const wt = useAgentWorktree(props.session, props.open);
-  return <CloseAgentDialogView {...props} wt={wt} />;
+  return <CloseAgentDialogView key={`${props.session.machine_id}/${props.session.session_id}`} {...props} wt={wt} />;
 }
 
 function CloseAgentDialogView({
