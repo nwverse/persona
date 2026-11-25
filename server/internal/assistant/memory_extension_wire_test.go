@@ -133,10 +133,10 @@ func TestMemoryExtensionBatchOfFields(t *testing.T) {
 	}
 }
 
-// Past memoryExtensionMost entries over all pages the rest are dropped.
-func TestMemoryExtensionBatchOfBounds(t *testing.T) {
+// Every page reaches the cache, including entries beyond the former 1,000-entry prefix.
+func TestMemoryExtensionBatchOfComplete(t *testing.T) {
 	var pages []wire.MemoryEntriesResult
-	for p := range memoryExtensionPages + 1 {
+	for p := range 121 {
 		page := wire.MemoryEntriesResult{Tagged: true, HasMore: true}
 		for i := range memoryExtensionPageLimit {
 			page.Entries = append(page.Entries, wire.MemoryEntry{ID: fmt.Sprintf("qa-%d-%d", p, i), Text: "qa: filler", Status: "active"})
@@ -144,8 +144,8 @@ func TestMemoryExtensionBatchOfBounds(t *testing.T) {
 		pages = append(pages, page)
 	}
 	b := memoryExtensionBatchOf(pages)
-	if len(b.Entries) != memoryExtensionMost {
-		t.Errorf("%d entries, want %d", len(b.Entries), memoryExtensionMost)
+	if len(b.Entries) != 121*memoryExtensionPageLimit {
+		t.Errorf("%d entries, want %d", len(b.Entries), 121*memoryExtensionPageLimit)
 	}
 	if b.Entries[len(b.Entries)-1].ID != "qa-0-0" {
 		t.Errorf("most important %s, want the first answered", b.Entries[len(b.Entries)-1].ID)
