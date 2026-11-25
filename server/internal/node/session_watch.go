@@ -30,6 +30,7 @@ type watch struct {
 	// reading: new lines are being read and pushed in a goroutine of their own; the pump skips the watch meanwhile.
 	reading atomic.Bool
 	live    liveWatch
+	tools   toolWatch
 	// A TRAE or Codex transcript that may need a fresh database projection on a follow tick.
 	dbHistory bool
 	agy       *agyWatch
@@ -67,6 +68,10 @@ func (n *Node) watch(id string, since int) error {
 // watchFor is watch for the hub connection that owns parent: the transcript loop ends with that connection, so a
 // resident node that opens a new Node per reconnect is not left with a reader per watch from the one before.
 func (n *Node) watchFor(parent context.Context, id string, since int) error {
+	_, dbHistory := n.codexSource(id)
+	if !dbHistory {
+		_, dbHistory = n.traexThread(id)
+	}
 	f, err := n.file(id)
 	if err != nil {
 		if !n.knownSession(id) {
@@ -81,7 +86,7 @@ func (n *Node) watchFor(parent context.Context, id string, since int) error {
 			return nil
 		}
 		wctx, cancel := context.WithCancel(parent)
-		pw := &watch{cancel: cancel}
+		pw := &watch{cancel: cancel, ctx: wctx, id: id, dbHistory: dbHistory}
 		if n.waiting == nil {
 			n.waiting = map[string]*watch{}
 		}
@@ -95,11 +100,14 @@ func (n *Node) watchFor(parent context.Context, id string, since int) error {
 				}
 				n.mu.Unlock()
 			}()
-			for i := 0; i < 120; i++ {
+			for i := 0; i < 120 || pw.dbHistory; i++ {
 				select {
 				case <-wctx.Done(): // unwatched, or the connection ended, before the transcript appeared
 					return
 				case <-time.After(500 * time.Millisecond):
+				}
+				if i%2 == 0 {
+					n.pumpTools(pw)
 				}
 				f, err := n.file(id)
 				if err != nil {
@@ -118,10 +126,6 @@ func (n *Node) watchFor(parent context.Context, id string, since int) error {
 			cancel()
 		}()
 		return nil
-	}
-	_, dbHistory := n.codexSource(id)
-	if !dbHistory {
-		_, dbHistory = n.traexThread(id)
 	}
 	n.mu.Lock()
 	if _, ok := n.watches[id]; ok {
@@ -412,6 +416,9 @@ func (n *Node) pumpWatch(w *watch, live int) {
 		return
 	}
 	w.ticks++
+	if w.ticks == 1 || w.ticks%followEvery == 0 {
+		n.pumpTools(w)
+	}
 	if w.ticks%live == 0 {
 		n.pumpLive(w) // claudestatus.go
 	}
