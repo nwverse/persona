@@ -6325,6 +6325,11 @@ the trailer available separately. `readInlineBody` in `web/src/lib/inline-messag
 against its matching context. Quote prefixes and description enrichment leave this lookup intact. A missing or
 unmatched anchor keeps its ordinary text, and unreferenced blocks keep their context display.
 
+In sent Web bubbles (#15410), the matching anchors become inline buttons and open the existing context details.
+Only anchors drawn in the prose consume a context from the collapsed Context row. The parser and bubble controls
+load when a rendered bubble has both a trailer and contexts. Copy, Forward, search and navigation previews use
+the prose. Editing the last sent message still reads the original trailer to restore the selections.
+
 ### Quote and comment blocks at the start of messages (web and iOS, #2427, #2437, #151)
 
 Web "Quote" and "Comment" use no tags or structured fields: on send they become `> ` blocks at the start of the message (`withQuoteBlock` in `web/src/lib/drafts.ts`, `web/src/lib/comments.ts`); the assistant and Agents on computers read them as text, and other clients that don't recognize them simply see `>` lines.
