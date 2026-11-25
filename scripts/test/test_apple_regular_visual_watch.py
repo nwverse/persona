@@ -14,17 +14,21 @@ import apple_regular_visual_watch as visual
 
 UDID = "11111111-1111-1111-1111-111111111111"
 OTHER = "22222222-2222-2222-1111-111111111111"
+START = "Wed Nov 25 12:00:00 2026"
+REUSED = "Wed Nov 25 12:01:00 2026"
 
 
 class ProcessScopeTests(unittest.TestCase):
     def test_only_owned_host_and_its_debugger_have_public_metadata(self):
         owned = f"/Library/Developer/CoreSimulator/Devices/{UDID}/Application/X/Persona.app/Persona"
         foreign = owned.replace(UDID, OTHER)
+        def line(pid, ppid, command, started=START, state="S"):
+            return f" {pid} {ppid} {started} {state} {command}"
         result = subprocess.CompletedProcess([], 0, "\n".join([
-            f" 41 1 Ss {owned}", " 42 41 S /usr/libexec/debugserver",
-            f" 43 999 S /usr/libexec/debugserver", f" 44 1 Ss {foreign}",
-            f" 45 1 S /private/path/Persona --private-argument",
-            f" 46 1 Ss /Library/Developer/CoreSimulator/Devices/{UDID}/ --some-launchd-argument launchd_sim",
+            line(41, 1, owned, state="Ss"), line(42, 41, "/usr/libexec/debugserver"),
+            line(43, 999, "/usr/libexec/debugserver"), line(44, 1, foreign),
+            line(45, 1, "/private/path/Persona --private-argument"),
+            line(46, 1, f"/Library/Developer/CoreSimulator/Devices/{UDID}/ --some-launchd-argument launchd_sim"),
         ]), "")
         observation = visual.scoped_processes(UDID, lambda *args, **kwargs: result)
         self.assertEqual(observation, {"query_status": "completed", "processes": [
@@ -38,15 +42,17 @@ class ProcessScopeTests(unittest.TestCase):
         owned = f"/Library/Developer/CoreSimulator/Devices/{UDID}/Application/X/Persona.app/Persona"
         launcher = f"/Library/Developer/CoreSimulator/Devices/{UDID}/ --launchd /usr/sbin/launchd_sim"
         foreign_launcher = launcher.replace(UDID, OTHER)
+        def line(pid, ppid, command, started=START, state="S"):
+            return f" {pid} {ppid} {started} {state} {command}"
         snapshots = iter([
-            "\n".join([f"46 1 Ss {launcher}", "42 46 S /usr/libexec/debugserver",
-                       f"47 1 Ss {foreign_launcher}", "43 47 S /usr/libexec/debugserver"]),
-            f"41 46 Ss {owned}",
-            f"41 1 Ss {owned}\n42 1 S /usr/libexec/debugserver",
+            "\n".join([line(46, 1, launcher), line(42, 46, "/usr/libexec/debugserver"),
+                       line(47, 1, foreign_launcher), line(43, 47, "/usr/libexec/debugserver")]),
+            line(41, 46, owned, state="Ss"),
+            line(41, 1, owned, state="Ss") + "\n" + line(42, 1, "/usr/libexec/debugserver"),
         ])
         def runner(*args, **kwargs):
             return subprocess.CompletedProcess([], 0, next(snapshots), "")
-        owned_debuggers = set()
+        owned_debuggers = {}
         first = visual.scoped_processes(UDID, runner, owned_debuggers)
         second = visual.scoped_processes(UDID, runner, owned_debuggers)
         third = visual.scoped_processes(UDID, runner, owned_debuggers)
@@ -54,8 +60,61 @@ class ProcessScopeTests(unittest.TestCase):
         self.assertEqual(second["processes"], [{"pid": 41, "ppid": 46, "state": "Ss", "name": "Persona"},
                                                {"pid": 42, "state": "not-present", "name": "debugserver"}])
         self.assertIn({"pid": 42, "ppid": 1, "state": "S", "name": "debugserver"}, third["processes"])
-        self.assertEqual(owned_debuggers, {42})
+        self.assertEqual(owned_debuggers, {42: START})
         self.assertNotIn("43", str(first) + str(second) + str(third))
+
+    def test_reappeared_debugger_pid_requires_owned_launcher_again(self):
+        launcher = f"/Library/Developer/CoreSimulator/Devices/{UDID}/ --launchd /usr/sbin/launchd_sim"
+        foreign_launcher = launcher.replace(UDID, OTHER)
+        snapshots = iter([
+            line(46, 1, launcher, state="Ss") + "\n" + line(42, 46, "/usr/libexec/debugserver"),
+            line(46, 1, launcher, state="Ss"),
+            line(47, 1, foreign_launcher, state="Ss") + "\n" + line(42, 47, "/usr/libexec/debugserver", started=REUSED),
+        ])
+        def runner(*args, **kwargs):
+            return subprocess.CompletedProcess([], 0, next(snapshots), "")
+        owned_debuggers = {}
+        first = visual.scoped_processes(UDID, runner, owned_debuggers)
+        second = visual.scoped_processes(UDID, runner, owned_debuggers)
+        reused = visual.scoped_processes(UDID, runner, owned_debuggers)
+        self.assertEqual(first["processes"], [{"pid": 42, "ppid": 46, "state": "S", "name": "debugserver"}])
+        self.assertEqual(second["processes"], [{"pid": 42, "state": "not-present", "name": "debugserver"}])
+        self.assertEqual(reused["processes"], [{"pid": 42, "state": "not-present", "name": "debugserver"}],
+                         "a foreign launcher must not revive an absent owned PID")
+        self.assertNotIn(OTHER, str(first) + str(second) + str(reused))
+        self.assertEqual(owned_debuggers, {42: START}, "the historical PID stays internal; its public state is not-present")
+
+    def test_reused_debugger_pid_with_an_owned_launcher_is_new_evidence(self):
+        launcher = f"/Library/Developer/CoreSimulator/Devices/{UDID}/ --launchd /usr/sbin/launchd_sim"
+        snapshots = iter([
+            line(46, 1, launcher, state="Ss") + "\n" + line(42, 46, "/usr/libexec/debugserver"),
+            line(46, 1, launcher, state="Ss"),
+            line(46, 1, launcher, state="Ss") + "\n" + line(42, 46, "/usr/libexec/debugserver", started=REUSED),
+        ])
+        def runner(*args, **kwargs):
+            return subprocess.CompletedProcess([], 0, next(snapshots), "")
+        owned_debuggers = {}
+        visual.scoped_processes(UDID, runner, owned_debuggers)
+        missing = visual.scoped_processes(UDID, runner, owned_debuggers)
+        restarted = visual.scoped_processes(UDID, runner, owned_debuggers)
+        self.assertEqual(missing["processes"], [{"pid": 42, "state": "not-present", "name": "debugserver"}])
+        self.assertEqual(restarted["processes"], [{"pid": 42, "ppid": 46, "state": "S", "name": "debugserver"}])
+        self.assertEqual(owned_debuggers, {42: REUSED})
+
+    def test_thread_samples_follow_only_the_validated_process_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            with mock.patch.object(visual, "scoped_processes", return_value={
+                    "query_status": "completed", "processes": [
+                        {"pid": 42, "ppid": 46, "state": "S", "name": "debugserver"},
+                        {"pid": 43, "state": "not-present", "name": "debugserver"},
+                    ]}), mock.patch.object(visual.watch, "bounded_file") as bounded:
+                visual.sample_processes(UDID, output, 0)
+            self.assertEqual(bounded.call_args.args[0], ["ps", "-M", "42"])
+            self.assertNotIn(START, (output / "process-000.json").read_text())
+        with self.assertRaises(ValueError):
+            visual.scoped_processes(UDID, owned_debuggers={42})
+        self.assertRaises(ValueError, visual.sample_processes, UDID, directory, 1, owned_debuggers={42})
 
     def test_process_query_failures_remain_distinct(self):
         for error, status in [(subprocess.TimeoutExpired("ps", 5), "query-timeout"),

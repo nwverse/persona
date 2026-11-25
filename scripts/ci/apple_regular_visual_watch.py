@@ -23,12 +23,18 @@ def scoped_processes(udid, runner=None, owned_debuggers=None):
     """Return owned host/debugger metadata, never command arguments or environment.
 
     A debugger can precede its Persona target under this simulator's launchd. Keep
-    that validated PID for this invocation when the short-lived parent disappears.
+    that validated process for this invocation when its short-lived parent exits.
+    The process start time distinguishes PID reuse; neither timestamp nor command
+    arguments are exported.
     """
     runner = runner or watch.subprocess.run
-    owned_debuggers = set() if owned_debuggers is None else owned_debuggers
+    owned_debuggers = {} if owned_debuggers is None else owned_debuggers
+    if (not isinstance(owned_debuggers, dict) or
+            not all(isinstance(key, int) and isinstance(value, str)
+                    for key, value in owned_debuggers.items())):
+        raise ValueError("owned debugger identities must map integer PIDs to start timestamps")
     try:
-        result = runner(["ps", "-axo", "pid=,ppid=,stat=,command="],
+        result = runner(["ps", "-axo", "pid=,ppid=,lstart=,stat=,command="],
                         capture_output=True, text=True, timeout=5)
     except watch.subprocess.TimeoutExpired:
         return {"query_status": "query-timeout", "processes": []}
@@ -36,7 +42,7 @@ def scoped_processes(udid, runner=None, owned_debuggers=None):
         return {"query_status": "query-failed", "processes": []}
     if result.returncode:
         return {"query_status": "query-failed", "processes": []}
-    process_pattern = re.compile(r"^\s*(\d+)\s+(\d+)\s+(\S+)\s+([^\n]*?)\s*$")
+    process_pattern = re.compile(r"^\s*(\d+)\s+(\d+)\s+(.{24})\s+(\S+)\s+([^\n]*?)\s*$")
     host_pattern = re.compile(r".*/CoreSimulator/Devices/" + re.escape(udid) +
                               r"/[^\n]*/Persona\.app/Persona$")
     records = []
@@ -44,7 +50,7 @@ def scoped_processes(udid, runner=None, owned_debuggers=None):
         match = process_pattern.match(line)
         if not match:
             continue
-        pid, ppid, state, command = match.groups()
+        pid, ppid, started, state, command = match.groups()
         executable = command.split(None, 1)[0] if command else ""
         name = executable.rsplit("/", 1)[-1]
         # launchd_sim records the simulator data directory as its first command
@@ -54,24 +60,27 @@ def scoped_processes(udid, runner=None, owned_debuggers=None):
             executable = launcher.group(1)
             name = "launchd_sim"
         if name in VISUAL_PROCESSES:
-            records.append((int(pid), int(ppid), state, name, executable, command))
-    hosts = {pid for pid, _ppid, _state, name, path, _command in records
+            records.append((int(pid), int(ppid), started, state, name, executable, command))
+    hosts = {pid for pid, _ppid, _started, _state, name, path, _command in records
              if name == "Persona" and host_pattern.fullmatch(path)}
-    launchers = {pid for pid, _ppid, _state, name, _path, command in records
+    launchers = {pid for pid, _ppid, _started, _state, name, _path, command in records
                  if name == "launchd_sim" and re.match(
                      r"^/Library/Developer/CoreSimulator/Devices/" + re.escape(udid) + r"/(?:\s|$)", command)}
     processes = []
-    for pid, ppid, state, name, _path, _command in records:
+    for pid, ppid, started, state, name, _path, _command in records:
         if name == "Persona" and pid in hosts:
             processes.append({"pid": pid, "ppid": ppid, "state": state, "name": name})
         elif name == "debugserver":
             if ppid in hosts or ppid in launchers:
-                owned_debuggers.add(pid)
-            if pid in owned_debuggers:
+                owned_debuggers[pid] = started
+            if owned_debuggers.get(pid) == started:
                 processes.append({"pid": pid, "ppid": ppid, "state": state, "name": name})
-    present_debuggers = {process["pid"] for process in processes if process["name"] == "debugserver"}
+    present_debuggers = {pid: started for pid, _ppid, started, _state, name, _path, _command in records
+                         if name == "debugserver"}
+    missing_debuggers = [pid for pid in owned_debuggers
+                         if present_debuggers.get(pid) != owned_debuggers[pid]]
     processes.extend({"pid": pid, "state": "not-present", "name": "debugserver"}
-                     for pid in owned_debuggers - present_debuggers)
+                     for pid in missing_debuggers)
     return {"query_status": "completed", "processes": sorted(processes, key=lambda item: (item["name"], item["pid"]))}
 
 
@@ -82,7 +91,7 @@ def sample_processes(udid, destination, index, runner=watch.subprocess.run, owne
         "captured_at": datetime.now(timezone.utc).isoformat(), **observation,
         "note": "Process presence is not a launch, test-bundle or readiness verdict."}, indent=2) + "\n")
     for process in observation["processes"]:
-        if "pid" not in process:
+        if "pid" not in process or "ppid" not in process:
             continue
         watch.bounded_file(["ps", "-M", str(process["pid"])],
                            destination / (label + f"-{process['name']}-{process['pid']}-threads.txt"), timeout=5)
@@ -197,7 +206,7 @@ def observe(udid, bundle, destination, seconds=VISUAL_SECONDS, scope_root=None,
     live = None
     index = 0
     system_captured = False
-    owned_debuggers = set()
+    owned_debuggers = {}
     try:
         try:
             if not stopped:

@@ -218,8 +218,10 @@ The ordinary `AboutVersionRegularVisualTests` invocation has its own observation
 and `regular-visual-context.json`, recorded immediately before its unchanged `xcodebuild`. Its scoped stream therefore
 does not inherit the preceding readiness invocation's horizon. A 15-second sampler records only PID, parent PID, state
 and process name for the owned Persona host and a debugserver validated under it or its owned launchd_sim. A debugger
-first seen before the host remains associated with this invocation, including when absent from a later sample; matching
-`ps -M` output is bounded. One read-only `launchctl print system` after 60 seconds projects only the synthetic bundle
+first seen before the host remains associated with this invocation through its process start time, including when its
+launcher exits; a missing or changed start time cannot revive that PID as owned evidence after PID reuse. The timestamp
+is internal only and never exported. Matching `ps -M` output is bounded and runs only for live validated processes.
+One read-only `launchctl print system` after 60 seconds projects only the synthetic bundle
 ID and its allowlisted `state`, `pid`, `runs` and `last exit code` fields; raw arguments, programs, paths, environment
 and arbitrary values are never exported. The visual command tees its actual stdout/stderr to `ios-about-regular.log`
 without losing its exit status. Once that invocation has started, failure diagnostics require the log, publish an
