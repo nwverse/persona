@@ -206,8 +206,12 @@ Wiki links resolve via `GET /open-apis/wiki/v2/spaces/get_node`, metadata is bat
 `POST /open-apis/drive/v1/metas/batch_query`, `docx` / `sheet` / `bitable` convert to Markdown with the existing readers,
 readable text files (`.md`, `.txt`, `.csv`, `.json`, `.yaml`, etc.) download via
 `GET /open-apis/drive/v1/files/{file_token}/download` using the user token, and non-text files keep metadata only. Every
-linked document deduplicates by `obj_token` + revision and records `message_link` in `sources[]`; unreadable documents
-(403, export disabled, oversized file) record the reason in `Note` at revision 0 without blocking the run. The scope packs and all three manual setup guides include the API permissions below.
+linked document deduplicates by `obj_token` + revision and records `message_link` in `sources[]`; unfetched links when a
+run hits its budget or rate limit are persisted per binding in `lark_sync_cursors` (`links_queue`, deduplicated by
+`obj_token`) and drained on subsequent runs (including 15-minute `ModeIM` runs) with recent live links prioritized ahead
+of historical backfill links. Unreadable documents (403, missing scope, export disabled, oversized file) record the
+reason in `Note` at revision 0 without blocking the run, and 403 / `scope_missing` links remain queued for automatic
+retry once permissions recover. The scope packs and all three manual setup guides include the API permissions below.
 
 #### Sync API scope audit
 

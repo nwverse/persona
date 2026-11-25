@@ -373,9 +373,10 @@ func (r *run) readChat(ctx context.Context, c chatInfo) error {
 	}
 	for _, m := range committedMsgs {
 		r.addMessage(resource, m, larksyncwire.EntryChat)
-		r.findMessageLeads(resource, larksyncwire.EntryMessage, m.Text)
+		backfill := old == 0 && !m.At.IsZero() && r.start.Sub(m.At) > recentLinkWindow
+		r.findMessageLeads(resource, larksyncwire.EntryMessage, m.Text, m.At, backfill)
 		for _, u := range extraURLs[m.ID] {
-			r.findMessageLeads(resource, larksyncwire.EntryMessage, u)
+			r.findMessageLeads(resource, larksyncwire.EntryMessage, u, m.At, backfill)
 		}
 	}
 	cursor := max(committedLast, old)
@@ -586,11 +587,13 @@ func (r *run) readSearch(ctx context.Context) error {
 		}
 	}
 	r.nameSenders(ctx, found)
+	searchOld := parseUnix(r.cursors[searchResource])
 	for _, m := range found {
 		r.addMessage(searchResource, m, larksyncwire.EntrySearch)
-		r.findMessageLeads(searchResource, larksyncwire.EntryMessage, m.Text)
+		backfill := searchOld == 0 && !m.At.IsZero() && r.start.Sub(m.At) > recentLinkWindow
+		r.findMessageLeads(searchResource, larksyncwire.EntryMessage, m.Text, m.At, backfill)
 		for _, u := range extraURLs[m.ID] {
-			r.findMessageLeads(searchResource, larksyncwire.EntryMessage, u)
+			r.findMessageLeads(searchResource, larksyncwire.EntryMessage, u, m.At, backfill)
 		}
 	}
 	r.moveCursor(searchResource, unixCursor(end))

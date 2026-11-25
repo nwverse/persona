@@ -97,11 +97,12 @@ import { childCall, childCardKey, childOfCall, childPlaces, childRefOfCall, exch
 import { useChildRow, useChildSessions } from "../../lib/use-child-sessions";
 import { openExpanded } from "./expanded";
 import { seekCall } from "./jump";
-import { containsInput, userInputRevision, windowUserInputs } from "../../lib/user-input-index";
-import { useRevealedInputSeq, useUserInputs } from "./useUserInputs";
+import { containsInput } from "../../lib/user-input-index";
+import type { IndexedJump } from "./ChatNavRail";
 import { useChatScrollbar } from "./useChatScrollbar";
 import { ChatLineView, closedRecap, closeRecap, dismissedError, dismissError, ErrorBanner, errorKey, OpenRecapLine } from "./Lines";
 import { useTranscript } from "./useTranscript";
+import { useTranscriptWindow } from "./useTranscriptWindow";
 import type { MessageView } from "./land-message";
 import { publishTranscript, unpublishTranscript } from "./transcript-share";
 import { useEarlierStretches } from "./useEarlierStretches";
@@ -182,6 +183,7 @@ const ShellQuestion = lazy(() => import("../ShellQuestionCard"));
 // only in a conversation that moved between Claude Code and Codex (#5054): its earlier sessions, read above the live one
 const EarlierStretches = lazy(() => import("./EarlierStretches"));
 const ChatNavRail = lazy(() => import("./ChatNavRail").then((m) => ({ default: m.ChatNavRail })));
+const TranscriptWindowPager = lazy(() => import("./TranscriptWindowPager"));
 // Recovery cards are rare: their rendering and words load only when the session actually carries a fallback record.
 const ModelFallbackCard = lazy(() => import("./ModelFallbackCard").then((m) => ({ default: m.ModelFallbackCard })));
 // A message the assistant keeps after it could not go in (#10194) is rare: its status line, Retry and Delete load only in
@@ -192,6 +194,7 @@ const BackgroundActivity = lazyDialog(() => import("./BackgroundActivity").then(
 
 const NO_FEED: FeedItem[] = [];
 const NO_DISPLAY_LINES: DisplayLine[] = [];
+const navTargetFailed = () => toast(t("chat-navrail.target_failed"), "error");
 // Below this many exchanges the ordinary immediate mount is cheaper than observing rows. Past it, completed off-screen
 // bodies mount a viewport at a time (SegmentView); their sections, estimates and live / final-two rules stay as they were.
 const CHAT_WINDOW_MIN_SEGMENTS = 40;
@@ -458,18 +461,20 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const answered = useStore((s) => Object.values(s.answered).filter((a) => ownCard(a.ix)));
   const delegated = useStore((s) => Object.values(s.delegated).filter((d) => ownCard(d.ix)));
   // the list as pushed: its updated_at and rev are what tell the page it fell behind (useTranscript)
-  const tr = useTranscript(mid, sid, { starting: Boolean(launching), updatedAt: session?.updated_at, rev: session?.rev, cache: mainCache, assistant });
+  const live = useTranscript(mid, sid, { starting: Boolean(launching), updatedAt: session?.updated_at, rev: session?.rev, cache: mainCache, assistant });
+  const { transcript: tr, key: windowKey, open: openWindow, close: closeWindow, hasLater, loadingLater, loadLater } = useTranscriptWindow(mid, sid, live, navTargetFailed);
+  const detached = windowKey !== undefined;
   const transcriptOwner = useRef<object>({});
   useEffect(() => {
-    if (!embedded) publishTranscript(transcriptOwner.current, mid, sid, tr);
-  }, [embedded, mid, sid, tr]);
+    if (!embedded) publishTranscript(transcriptOwner.current, mid, sid, live);
+  }, [embedded, mid, sid, live]);
   useEffect(() => {
     if (embedded) return;
     return () => unpublishTranscript(transcriptOwner.current, mid, sid);
   }, [embedded, mid, sid]);
   // a conversation that moved between Claude Code and Codex (#5054): its earlier sessions read above the live one, as
   // one conversation; without engine_history this is the transcript as it is
-  const earlier = useEarlierStretches(mid, sid, assistant ? undefined : session?.engine_history, tr);
+  const earlier = useEarlierStretches(mid, sid, assistant || detached ? undefined : session?.engine_history, tr);
   // what the rail's jumps and the search page back through: the live stretch, whose start ends it (#5054)
   const trNow = useRef(tr);
   trNow.current = { ...tr, hasMore: earlier.liveHasMore };
@@ -533,24 +538,24 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   ], [pending, outbox]);
   // the owner's messages the assistant keeps after they could not go in, from the row: on every device (#10194)
   // (not one this page still draws as sending: the row can come before the send's answer)
-  const keptUndelivered = shownUndelivered(session, tr.items, pending.map((p) => p.id));
+  const keptUndelivered = shownUndelivered(session, live.items, pending.map((p) => p.id));
   const outgoing = shownPending.length + visibleOutbox.filter((e) => e.state !== "failed").length;
   const persona = usePersona();
   // what the chat slots are told (core/ChatSlots.tsx): this page's own id (the same chat may be open twice, a page and a
   // side panel), and who answers here
   const pageId = useId();
   const answerer = assistant ? persona.name : session ? agentLabel(session) : "Claude";
-  const itemsNow = useRef(tr.items);
-  itemsNow.current = tr.items;
+  const itemsNow = useRef(live.items);
+  itemsNow.current = live.items;
   const readItems = useCallback(() => itemsNow.current, []);
   // the message is in, the hub has not said working yet (#3654): the live row covers that wait too
-  const segs = useMemo(() => segments(tr.items), [tr.items]);
+  const segs = useMemo(() => segments(live.items), [live.items]);
   const lastSeg = segs[segs.length - 1];
-  const endedThrough = tr.streamEndedThrough;
+  const endedThrough = live.streamEndedThrough;
   const inputAfterPreview = endedThrough !== undefined && endedThrough > 0 &&
-    tr.items.some((item) => item.seq > endedThrough && !item.queued && isUserInput(item));
-  const streamEnded = tr.streamEnded && !inputAfterPreview;
-  const replyPreview = inputAfterPreview ? "" : tr.streaming;
+    live.items.some((item) => item.seq > endedThrough && !item.queued && isUserInput(item));
+  const streamEnded = live.streamEnded && !inputAfterPreview;
+  const replyPreview = inputAfterPreview ? "" : live.streaming;
   const [awaitNow, setAwaitNow] = useState(() => Date.now());
   const turnFailure = session?.failure_reason || session?.turn_error || lastSeg?.cut ? { since: session?.state_since } : undefined;
   // a message whose wait the hub took a stop for (#2450): it is no longer worked on, so Working… and Interrupt go at
@@ -560,7 +565,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   // An existing background command can keep the row working before the next foreground turn picks up the echo.
   // background_working alone is not proof the foreground is idle; pickupStateForWait only demotes it while this turn
   // has no foreground activity yet, so a live turn keeps the real working state (review P1).
-  const foregroundActive = Boolean(tr.streaming || lastSeg?.answer ||
+  const foregroundActive = Boolean(live.streaming || lastSeg?.answer ||
     lastSeg?.steps.some((step) => step.kind === "thinking" || (step.kind === "tool" && !step.result)));
   const pickupState = pickupStateForWait(state, session?.background_working, foregroundActive);
   const inputKey = lastSeg?.user ? `${mid}/${sid}/${lastSeg.user.id}` : undefined;
@@ -574,7 +579,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   }, [inputKey, hubStateAt, observedKey]);
   // The hub can deliver its idle update with the echo or just after it. Wait for it to stay idle
   // through the handoff before offering a retry, since the input and status come from separate streams.
-  const idleAt = observedInput && observedKey === inputKey && !tr.streaming && (state === "idle" || state === "unread") &&
+  const idleAt = observedInput && observedKey === inputKey && !live.streaming && (state === "idle" || state === "unread") &&
     (hubStateAt > observedInput.hubStateAt || hubStateAt > Date.parse(lastSeg?.user?.ts ?? ""))
     ? observedInput.seenAt + RETRY_IDLE_GRACE_MS : undefined;
   const settled = idleAt !== undefined && awaitNow >= idleAt;
@@ -717,7 +722,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   editNow.current = editing;
   const editLastMessage = useCallback(() => {
     if (editLastBusy.current || !canRewind || rewindLive.get() || noRow || tr.loading || tr.error) return;
-    const last = lastEditablePrompt(items.current);
+    const last = lastEditablePrompt(itemsNow.current);
     if (!last) return;
     setEditTarget({ key: draftKey, id: last.id });
     sendDraft(draftKey, { type: "replace", text: last.raw, edit: true });
@@ -727,7 +732,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     if (!target) return true;
     if (editLastBusy.current) return false;
     // another message came after it: rewinding to before the old one would take that one too
-    if (promptsOf(items.current).at(-1)?.id !== target.id) {
+    if (promptsOf(itemsNow.current).at(-1)?.id !== target.id) {
       setEditTarget(null);
       toast(t("rewind.edit_ended"), "info");
       return false;
@@ -737,7 +742,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
       toast(t("rewind.edit_wait", { reason: block }), "error");
       return false;
     }
-    const at = rewindTarget(items.current, target.id);
+    const at = rewindTarget(itemsNow.current, target.id);
     if (!at) {
       setEditTarget(null);
       toast(t("rewind.no_text"), "error");
@@ -761,14 +766,14 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     }
   }, [mid, sid, rewindLive]);
   // The last message changed while editing (one from the phone, a rewind from the menu): the words stay as a new message.
-  const lastPromptId = useMemo(() => promptsOf(tr.items).at(-1)?.id, [tr.items]);
+  const lastPromptId = useMemo(() => promptsOf(live.items).at(-1)?.id, [live.items]);
   useEffect(() => {
-    if (!editing || editingLast || tr.loading || !tr.items.length || lastPromptId === editing.id) return;
+    if (!editing || editingLast || live.loading || !live.items.length || lastPromptId === editing.id) return;
     setEditTarget(null);
     toast(t("rewind.edit_ended"), "info");
-  }, [editing, editingLast, tr.loading, tr.items.length, lastPromptId]);
+  }, [editing, editingLast, live.loading, live.items.length, lastPromptId]);
   const editProp = useMemo(() => (editing ? { commit: commitEdit, cancel: () => setEditTarget(null) } : undefined), [editing, commitEdit]);
-  const editableLast = useMemo(() => lastEditablePrompt(tr.items), [tr.items]);
+  const editableLast = useMemo(() => lastEditablePrompt(live.items), [live.items]);
   const onEditLastMessage = canRewind && !rewindOff && !noRow && !tr.loading && !tr.error && !editingLast && editableLast ? editLastMessage : undefined;
   // the chat a forward comes from, read when Forward is picked (lib/forward.ts): a push does not draw every message again
   const forwardChat = useRef<{ session?: Session; title: string }>({ title });
@@ -795,9 +800,10 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
       images: () => items.current.filter((i) => i.kind === "image"),
       fork: canFork ? (itemId: string) => void forkAt(mid, sid, itemId, Boolean(assistant), session?.space, session?.manager) : undefined,
       assistant: Boolean(assistant),
-      rewind: canRewind ? { block: rewindLive, code: rewindCode, run: (messageId, text, restore) => rewindTo(mid, sid, draftKey, items.current, messageId, text, restore, rewindDeclared) } : undefined,
+      // Rewind identifies a prompt by counting from the live end. A detached window cannot supply that count.
+      rewind: canRewind && !detached ? { block: rewindLive, code: rewindCode, run: (messageId, text, restore) => rewindTo(mid, sid, draftKey, items.current, messageId, text, restore, rewindDeclared) } : undefined,
     }),
-    [draftKey, title, session?.manager, mainCache?.manager, canCompose, canFork, canRewind, rewindCode, rewindDeclared, rewindLive, mid, sid, assistant, persona.name, forwardFrom, picker],
+    [draftKey, title, session?.manager, mainCache?.manager, canCompose, canFork, canRewind, detached, rewindCode, rewindDeclared, rewindLive, mid, sid, assistant, persona.name, forwardFrom, picker],
   );
   // the assistant works on any computer, so its @ menu offers workspaces too
   const shownManager = useShownManager();
@@ -816,9 +822,9 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   useEffect(() => {
     // what a reload interrupted, once the hub's first page can tell what went in (a cached page cannot),
     // and not before this chat is known: a restored bubble's Retry posts without passing through deliver
-    if (tr.firstRead && !refusedNoRow) restoreOutbox(mid, sid, pending.map((p) => p.id));
-    observeMessageItems(mid, sid, tr.items);
-    const users = [...segs.slice(-4).flatMap((seg) => (seg.user && !seg.user.injected ? [seg.user] : [])), ...taggedSeen(tr.items)];
+    if (live.firstRead && !refusedNoRow) restoreOutbox(mid, sid, pending.map((p) => p.id));
+    observeMessageItems(mid, sid, live.items);
+    const users = [...segs.slice(-4).flatMap((seg) => (seg.user && !seg.user.injected ? [seg.user] : [])), ...taggedSeen(live.items)];
     users.forEach((user) => acknowledgeLaunch(mid, sid, user));
     settleOutbox(mid, sid, users);
     if (!pending.length) return;
@@ -838,7 +844,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
       return ps.filter((p) => !drop.has(p.id) && (p.waits || p.posting || state === "working" || now - (p.acceptedAt ?? p.at) < SENT_GRACE_MS));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [segs, tr.firstRead, refusedNoRow]);
+  }, [segs, live.firstRead, refusedNoRow]);
 
   // A quiet transcript must not leave accepted bubbles forever. Reloads use the same stored deadline; local
   // composer bubbles retain their existing grace while the agent works. Never expire a POST still in flight.
@@ -908,6 +914,20 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     landing.current = { row, at, quiet: 0 };
     holdLanding(1200);
   }, [holdLanding]);
+  const lit = useRef<{ el: HTMLElement; timer: number } | null>(null);
+  const unlight = useCallback(() => {
+    if (!lit.current) return;
+    clearTimeout(lit.current.timer);
+    lit.current.el.removeAttribute("data-search-hit");
+    lit.current = null;
+  }, []);
+  const lightRow = useCallback((el: HTMLElement) => {
+    unlight();
+    const ring = (el.matches("[data-user-bubble]") && el.querySelector<HTMLElement>("[data-hit-target]")) || el;
+    void ring.getBoundingClientRect(); // picking the same row restarts the highlight
+    ring.setAttribute("data-search-hit", "");
+    lit.current = { el: ring, timer: window.setTimeout(unlight, HIT_MS) };
+  }, [unlight]);
   // a smooth jump on its way (glide.ts): it reads where to go each frame, and the ResizeObserver leaves the view to it
   const gliding = useRef<(() => void) | null>(null);
   const stopGlide = useCallback(() => {
@@ -917,9 +937,12 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   // A pick owns its landing through every page, fold and animation frame. The page read itself is shared.
   const navigation = useRef(0);
   const pendingTarget = useRef<string>(undefined);
+  const railRead = useRef<AbortController | null>(null);
   const cancelNavigation = useCallback(() => {
     navigation.current++;
     pendingTarget.current = undefined;
+    railRead.current?.abort();
+    railRead.current = null;
     stopGlide();
     clearTimeout(jumping.current);
     jumping.current = 0;
@@ -973,7 +996,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const firstLiveSeq = earlier.liveItems[0]?.seq ?? Infinity;
   const liveFront = useRef(firstLiveSeq);
   liveFront.current = firstLiveSeq;
-  const historyScope = `${sessionKey}/${tr.history ?? ""}`;
+  const historyScope = `${sessionKey}/${tr.history ?? ""}/${windowKey ?? 0}`;
   const historyScopeNow = useRef(historyScope);
   historyScopeNow.current = historyScope;
   const settledHistory = useRef<{ session: string; history: string; replaceEpoch: number }>({
@@ -1049,7 +1072,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     return () => clearTimeout(late);
   }, [mid, sid, follow]);
 
-  const lastId = tr.items[tr.items.length - 1]?.id;
+  const lastId = live.items.at(-1)?.id;
   useEffect(() => {
     if (lastId && !atEnd.current) setNewSince(true);
   }, [lastId]);
@@ -1313,7 +1336,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
 
   const loadEarlierNearTop = () => {
     const el = scroller.current;
-    if (!el || el.scrollTop >= 300 || !earlier.hasMore || earlier.loadingEarlier || first.current || suppressAutoEarlier.current) return;
+    if (!el || detached || el.scrollTop >= 300 || !earlier.hasMore || earlier.loadingEarlier || first.current || suppressAutoEarlier.current) return;
     void loadWithScrollAnchor(earlier.loadEarlier);
   };
 
@@ -1329,9 +1352,8 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     holdLanding(600);
     if (atEnd.current) {
       if (leavesOnScrollbarDrag({ dragging: dragging.current, delta })) follow(false);
-    } else if (!anchor.current && !jumping.current && followsAgain({ gap, delta })) follow(true);
+    } else if (!detached && !anchor.current && !jumping.current && followsAgain({ gap, delta })) follow(true);
     captureReadingAnchor(el);
-    if (!first.current && !atEnd.current && el.scrollTop < 300) revealLoadedInputs();
     loadEarlierNearTop();
   };
 
@@ -1348,6 +1370,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     const el = scroller.current;
     if (!el) return;
     follow(true);
+    if (closeWindow()) { suppressAutoEarlier.current = true; return; }
     glideTo(() => el.scrollHeight - el.clientHeight);
   };
 
@@ -1384,7 +1407,11 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
       noteWritten(id, p.at);
       setPending((ps) => [...ps.filter((x) => x.id !== id), p]);
       // Quote replies keep an earlier reader's place; at the end, every own message still follows (#10346).
-      if (!queueing && (!out.quoteReply || atEnd.current)) follow(true);
+      if (closeWindow()) {
+        cancelNavigation();
+        suppressAutoEarlier.current = true;
+        follow(true);
+      } else if (!queueing && (!out.quoteReply || atEnd.current)) follow(true);
       const key = outboxKey(mid, sid);
       const launcher = assistant ? pickedLauncher(conversationKey(mid, sid)) : undefined;
       const model = assistant ? pickedModel(conversationKey(mid, sid)) : undefined;
@@ -1474,7 +1501,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `failed` reads only stable setters and these
-    [mid, sid, session, assistant, follow, inPage],
+    [mid, sid, session, assistant, closeWindow, cancelNavigation, follow, inPage],
   );
 
   /** Keeps a message that did not go as a failed bubble where it was sent, with why, "Retry" and "Delete", the box empty
@@ -1499,7 +1526,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const itemsListeners = useRef(new Set<() => void>());
   useEffect(() => {
     itemsListeners.current.forEach((fn) => fn());
-  }, [tr.items]);
+  }, [live.items]);
   const cancelCompactResend = useCallback(() => {
     if (!compactResendCtl.current) return;
     compactResendCtl.current.abort();
@@ -1694,7 +1721,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   // (#7341). A message of yours on its way, streaming, or an answer being written is a turn again.
   const backgroundState = backgroundTurn(session, subagents, { streaming, outgoing: outgoing > 0, awaiting });
   const backgroundOnly = backgroundState !== null;
-  const lastLive = working && !backgroundOnly && (!tr.loading || tr.items.length > 0);
+  const lastLive = !detached && working && !backgroundOnly && (!tr.loading || tr.items.length > 0);
   // the main conversation's readiness: the card for what is missing, and the send button saying it (4.4)
   const gate = useReadinessGate(isMain);
   blockedRef.current = gate.blocked;
@@ -1724,7 +1751,11 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const historyFrom = useMemo(() => (tr.hasMore ? loadedFrom(tr.items) : undefined), [tr.hasMore, tr.items]);
   // A canonical, completed silent round leaves no empty row or feed card in the main timeline. Its full projection is
   // retained for Background activity; running, legacy quiet and every promoted round keep their existing rendering.
-  const quiet = useMemo(() => splitBackgroundActivity(allLines, feed, historyFrom), [allLines, feed, historyFrom]);
+  const quiet = useMemo(() => {
+    const through = detached && Date.parse(tr.items.at(-1)?.ts ?? "");
+    const scoped = through === false ? feed : Number.isFinite(through) ? feed.filter((item) => Date.parse(item.at) <= through) : NO_FEED;
+    return splitBackgroundActivity(allLines, scoped, historyFrom);
+  }, [allLines, feed, historyFrom, detached, tr.items]);
   const lines = quiet.timeline;
   // a DayLine over the first line of each new calendar day (#8160); day-only keys keep them stable as pages and
   // midnight arrivals land. Days the earlier stretches already open with a divider are not repeated here.
@@ -1788,20 +1819,10 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const tasks = useMemo(() => stableValue(lastTasks.current, buildTaskIndex(tr.items)), [tr.items]);
   lastTasks.current = tasks;
   // Only lightweight positions are fetched for navigation; older transcript bodies wait for a selection.
-  const { seq: revealedSeq, reveal: revealLoadedInputs } = useRevealedInputSeq(`${mid}/${sid}/${tr.history ?? ""}`, tr.loading ? undefined : tr.items[0]?.seq);
   // Persona's chats mark each question's state on the rail (#13021), which then also works on touch screens
   const questionsOn = Boolean(assistant && !embedded);
   const railOn = fine || questionsOn;
-  const inputRevision = useMemo(() => userInputRevision(tr.items), [tr.items]);
-  const completeInputIndex = useUserInputs(mid, sid, tr.history, inputRevision, railOn && !tr.loading, tr.reload);
-  // the live stretch's inputs only (#5054): an earlier stretch of the live session (A → B → A) is drawn by EarlierStretches,
-  // so the inputs before the live stretch's oldest loaded item are none of the rail's
-  const liveFrom = earlier.liveItems === tr.items ? 0 : (earlier.liveItems[0]?.seq ?? Infinity);
-  const inputIndex = useMemo(() => {
-    if (!completeInputIndex) return null;
-    const inputs = completeInputIndex.inputs.filter((input) => input.seq >= liveFrom);
-    return windowUserInputs({ ...completeInputIndex, inputs, total: inputs.length }, revealedSeq);
-  }, [completeInputIndex, liveFrom, revealedSeq]);
+  const stretchStart = earlier.liveItems === tr.items ? undefined : earlier.liveItems[0]?.seq ?? Infinity;
   /** Brings a row (or a run of words) into view in the chat's own scroller (scrollIntoView would also scroll an opening
    *  group's clipped box): following the end stops, and the jump's first frames do not pick it up again (`jumping`). */
   const landRow = useCallback(
@@ -1817,44 +1838,84 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     [follow, land, glideTo],
   );
   const railJump = useCallback(
-    async (lineId: string) => {
+    async (lineId: string, indexed?: IndexedJump) => {
       const current = beginNavigation();
-      const deadline = Date.now() + 120_000;
-      const target = inputIndex?.inputs.find((input) => `seg:${input.id}` === lineId);
-      const cancelled = () => !current() || Boolean(inputIndex?.history && trNow.current.history && inputIndex.history !== trNow.current.history);
-      follow(false);
-      if (!target || containsInput(trNow.current.items, target)) {
+      const target = indexed?.input;
+      const epoch = trNow.current.replaceEpoch;
+      const cancelled = () => !current() || epoch !== trNow.current.replaceEpoch ||
+        Boolean(indexed?.history && trNow.current.history && indexed.history !== trNow.current.history);
+      const locate = () => {
         const owner = target ? lineOfItem(linesNow.current, trNow.current.items, target.id) : lineId;
         const row = owner ? scroller.current?.querySelector<HTMLElement>(`[data-line="${CSS.escape(owner)}"]`)?.firstElementChild : null;
-        if (row instanceof HTMLElement) { landRow(row, -12); return; }
-      }
-      if (target && !containsInput(trNow.current.items, target)) {
-        // Reuse ordinary backward pages, keeping history contiguous rather than inserting an isolated window.
-        await loadEarlierForSearch({
-          get: () => trNow.current,
-          load: () => loadWithScrollAnchor(() => trNow.current.loadEarlier({ waitForRetry: true })),
-          frame: nextFrame,
-          stopped: () => cancelled() || Date.now() >= deadline || containsInput(trNow.current.items, target),
-          onPage: () => {},
-          pages: Number.MAX_SAFE_INTEGER,
-          joinEarlier: true,
-        });
-        if (cancelled()) return;
-        if (!containsInput(trNow.current.items, target)) { toast(t("chat-navrail.target_failed"), "error"); return; }
+        return row instanceof HTMLElement ? { y: row.getBoundingClientRect().top, value: row } : null;
+      };
+      const landOn = (row: HTMLElement) => {
+        landRow(row, -12);
+        lightRow(row.querySelector<HTMLElement>("[data-hit-target]") ?? row);
+        return true;
+      };
+      if (cancelled()) return false;
+      const loaded = locate();
+      if (loaded) return landOn(loaded.value);
+      if (indexed && !containsInput(trNow.current.items, indexed.input)) {
+        const switchView = () => {
+          follow(false);
+          before.current = null;
+          readingAnchor.current = null;
+          first.current = false;
+          suppressAutoEarlier.current = true;
+        };
+        if (detached && containsInput(itemsNow.current, indexed.input)) {
+          closeWindow();
+          switchView();
+        } else {
+          const ctl = new AbortController();
+          railRead.current = ctl;
+          let result;
+          try {
+            const { readInputWindow } = await import("./input-navigation");
+            if (cancelled()) return false;
+            result = await readInputWindow(mid, sid, indexed.input, indexed.history, ctl.signal);
+          } catch {
+            if (!cancelled()) navTargetFailed();
+            return false;
+          } finally {
+            if (railRead.current === ctl) railRead.current = null;
+          }
+          if (cancelled()) return false;
+          if (result === "stale") { indexed.historyChanged(); return false; }
+          if (result === "unsupported") {
+            if (detached) {
+              closeWindow();
+              switchView();
+              await nextFrame();
+            } else follow(false);
+            const deadline = Date.now() + 120_000;
+            await loadEarlierForSearch({
+              get: () => trNow.current,
+              load: () => loadWithScrollAnchor(() => trNow.current.loadEarlier({ waitForRetry: true })),
+              frame: nextFrame,
+              stopped: () => cancelled() || Date.now() >= deadline || containsInput(trNow.current.items, indexed.input),
+              onPage: () => {},
+              pages: Number.MAX_SAFE_INTEGER,
+              joinEarlier: true,
+            });
+            if (cancelled()) return false;
+            if (!containsInput(trNow.current.items, indexed.input)) { navTargetFailed(); return false; }
+          } else {
+            switchView();
+            openWindow(result, indexed.historyChanged);
+          }
+        }
       }
       const result = await untilStill<HTMLElement>({
-        frame: nextFrame, now: () => performance.now(), cancelled, giveUpMs: GIVE_UP_MS,
-        locate: () => {
-          const owner = target ? lineOfItem(linesNow.current, trNow.current.items, target.id) : lineId;
-          const row = owner ? scroller.current?.querySelector<HTMLElement>(`[data-line="${CSS.escape(owner)}"]`)?.firstElementChild : null;
-          return row instanceof HTMLElement ? { y: row.getBoundingClientRect().top, value: row } : null;
-        },
+        frame: nextFrame, now: () => performance.now(), cancelled, giveUpMs: GIVE_UP_MS, locate,
       });
-      if (result === "cancelled" || cancelled()) return;
-      if (result === "missing") { toast(t("chat-navrail.target_failed"), "error"); return; }
-      landRow(result.value, -12);
+      if (result === "cancelled" || cancelled()) return false;
+      if (result === "missing") { navTargetFailed(); return false; }
+      return landOn(result.value);
     },
-    [beginNavigation, inputIndex, follow, landRow, loadWithScrollAnchor],
+    [mid, sid, beginNavigation, detached, closeWindow, openWindow, follow, landRow, lightRow, loadWithScrollAnchor],
   );
   // the calls with a terminal result: a subagent call without one is one the agent still waits on (the bar's step)
   const callsAnswered = useMemo(() => terminalCalls(tr.items, tasks), [tr.items, tasks]);
@@ -2022,13 +2083,6 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const origin = useRef<{ atEnd: boolean; line?: string; offset: number } | null>(null);
   const [picked, setPicked] = useState(false);
   // the ring on the hit gone to: one timer, restarted when another (or the same) row lights
-  const lit = useRef<{ el: HTMLElement; timer: number } | null>(null);
-  const unlight = useCallback(() => {
-    if (!lit.current) return;
-    clearTimeout(lit.current.timer);
-    lit.current.el.removeAttribute("data-search-hit");
-    lit.current = null;
-  }, []);
   useEffect(() => {
     setSearch({ open: false, query: "" });
     setPicked(false);
@@ -2061,14 +2115,9 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
       const tall = el.getBoundingClientRect().height > sc.clientHeight;
       el.scrollIntoView({ block: tall ? "start" : "center", behavior: "auto" });
       land(el, el.getBoundingClientRect().top - sc.getBoundingClientRect().top);
-      unlight();
-      // the ring hugs what it marks: your bubble itself, not its row's padding (#6426)
-      const ring = (el.matches("[data-user-bubble]") && el.querySelector<HTMLElement>("[data-hit-target]")) || el;
-      void ring.getBoundingClientRect(); // the same row picked again lights again
-      ring.setAttribute("data-search-hit", "");
-      lit.current = { el: ring, timer: window.setTimeout(unlight, HIT_MS) };
+      lightRow(el);
     },
-  }), [ctx.scope, follow, unlight, land]);
+  }), [ctx.scope, follow, lightRow, land]);
   // the work the hub folded, fetched for the search while it is open (useFoldSearch, #6281): a hit in it opens its fold
   // into the chat first, as "Jump to the step" does (jump.ts seekCall)
   const folds = useFoldSearch(mid, sid, tr.history, earlier.liveItems, search.open);
@@ -2151,7 +2200,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   ));
   // After the end marker the last reply can still be waiting for its item. Its text stays visible
   // without keeping the exchange working, even if the host already reported completion.
-  const wordsFor = (line: ChatLine) => (line.kind === "segment" || line.kind === "supervision") &&
+  const wordsFor = (line: ChatLine) => !detached && (line.kind === "segment" || line.kind === "supervision") &&
     ((line.live && streaming) || (line === lastLine && streamEnded && canShowPreview)) ? replyPreview || undefined : undefined;
   // "Retry" on the error banner and the failure note: sends "continue" alone, not what is in the box. Whether it went:
   // deliver can refuse without leaving a bubble (the setup gate, a row that cannot send, a refused launcher switch)
@@ -2189,7 +2238,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const [errorClosed, setErrorClosed] = useState(() => dismissedError(errorChat));
   useEffect(() => setErrorClosed(dismissedError(errorChat)), [errorChat]);
   const [errorRetried, setErrorRetried] = useState<string>();
-  const tailError = lastLine?.kind === "apiError" ? lastLine : undefined;
+  const tailError = !detached && lastLine?.kind === "apiError" ? lastLine : undefined;
   const tailKey = tailError ? `${errorChat}|${errorKey(tailError)}` : "";
   const bannerError =
     tailError && !working && canCompose && !stoppedLine && !failureNote && errorKey(tailError) !== errorClosed && tailKey !== errorRetried ? tailError : undefined;
@@ -2319,7 +2368,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   // Persona's own chats too (#3654), and from the moment the message is in, not from the hub's next push
   const background = useMemo(() => backgroundLine(session), [session]);
   // ✓ Done only for a turn that finished: one waiting on you, stopped or cut off by an error keeps its last words
-  const done = turnDone(state, session, lastLine, tr.items);
+  const done = !detached && turnDone(state, session, lastLine, tr.items);
   const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={runningWorking} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={!backgroundState || backgroundState.kind === "workflow" ? background : null} wait={wait} subtasks={subtasks} command={command} onStop={sessionCan(session, "interrupt") ? interrupt : undefined} /> : null;
   // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
   // the run's status. The same element while nothing in it changes: the composer is memoized.
@@ -2333,7 +2382,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const pills = planPill ? (
     <div className="flex shrink-0 items-center justify-center gap-2" data-plan-pills>
       {planPill}
-      {away && <JumpPill label={jumpLabel(newSince)} onClick={toEnd} inline />}
+      {(away || detached) && <JumpPill label={jumpLabel(newSince)} onClick={toEnd} inline />}
     </div>
   ) : null;
   // the header and the composer are memoized (a transcript push changes neither): what they get stays the same object
@@ -2345,7 +2394,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   useEffect(() => (assistant || embedded ? undefined : provideBackgroundChat(mid, sid, { stopLoop, jumpToCall: jump, hasCall })), [assistant, embedded, mid, sid, stopLoop, jump, hasCall]);
   // cached content stays up when a read fails: the pill says so, the error page is for an empty chat
   const refreshFailed = tr.items.length > 0 ? tr.error || refreshError : undefined;
-  const lastItem = assistant ? tr.items[tr.items.length - 1] : undefined;
+  const lastItem = assistant ? live.items.at(-1) : undefined;
   const lastRole = lastItem?.role;
   const lastKind = lastItem?.kind;
   const faceLast = useMemo(() => (lastRole && lastKind ? { role: lastRole, kind: lastKind } : undefined), [lastRole, lastKind]);
@@ -2614,7 +2663,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
       )}
       <div className="relative min-h-0 flex-1">
         {(tr.notLive || refreshFailed) && <NotLivePill error={refreshFailed} onReload={() => { tr.reload(); onRefresh?.(); }} lower={Boolean(picked && !search.open)} />}
-        <div ref={scrollRef} onScroll={onScroll} data-chat-scroll className="relative h-full overflow-y-auto [overflow-anchor:none]">
+        <div ref={scrollRef} onScroll={onScroll} data-chat-scroll data-chat-context-window={detached || undefined} className="relative h-full overflow-y-auto [overflow-anchor:none]">
           <ChatActionsContext.Provider value={actions}>
           <div data-chat-content className="mx-auto flex w-full max-w-[880px] flex-col gap-3.5 px-5 pt-7 pb-10 sm:px-8">
             {session?.start_error && (session.start_error_code ? (
@@ -2628,10 +2677,16 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
             {starting && !tr.loading && !outgoing && <Loading label={t("chat-chatview.starting_agent")} />}
             {/* over the content's top padding, in the scroller: starting and ending an older page move nothing on screen,
                 and nothing writes scrollTop for it (that would stop a touch fling) */}
-            {earlier.loadingEarlier && (
+            {!detached && earlier.loadingEarlier && (
               <div data-loading-earlier className="pointer-events-none absolute inset-x-0 top-1 flex justify-center">
                 <Loading label={t("chat-chatview.loading_earlier")} />
               </div>
+            )}
+            {detached && earlier.hasMore && (
+              <Suspense fallback={null}>
+                <TranscriptWindowPager direction="before" loading={earlier.loadingEarlier} disabled={loadingLater}
+                  onClick={() => void loadWithScrollAnchor(earlier.loadEarlier)} />
+              </Suspense>
             )}
             {/* also over a chat whose first page came back empty (#2450): it reads as loaded and empty, not as still loading;
                 not under a notice that the chat's details are missing */}
@@ -2696,7 +2751,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
                         offscreen={offscreen(d.line)}
                         latestReplyId={d.line.id === latestReplyLine?.id ? latestReply?.id : undefined}
                         busy={d.line.id === busySegment || undefined}
-                        retryEmpty={d.line.kind === "segment" && d.line.seg.emptyResponse ? emptyAction : undefined}
+                        retryEmpty={!detached && d.line.kind === "segment" && d.line.seg.emptyResponse ? emptyAction : undefined}
                         dockTurnClock={("live" in d.line && d.line.live && dockTurnClock) || undefined}
                       />
                     ),
@@ -2723,7 +2778,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
                   offscreen={offscreen(row.line)}
                   latestReplyId={row.line.id === latestReplyLine?.id ? latestReply?.id : undefined}
                   busy={row.line.id === busySegment || undefined}
-                  retryEmpty={row.line.kind === "segment" && row.line.seg.emptyResponse ? emptyAction : undefined}
+                  retryEmpty={!detached && row.line.kind === "segment" && row.line.seg.emptyResponse ? emptyAction : undefined}
                   dockTurnClock={("live" in row.line && row.line.live && dockTurnClock) || undefined}
                 />
               )])}
@@ -2732,7 +2787,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
             </LatestMessageTime.Provider>
             </LiveClockContext.Provider>
             {/* what is on its way, and failed messages with nothing sent after them, in the order they were written */}
-            {[...shownPending.map((p) => ({ at: p.at, el: (
+            {!detached && [...shownPending.map((p) => ({ at: p.at, el: (
               <div key={p.id} className="flex flex-col gap-3">
                 <UserBubble msg={p.msg} mid={mid} sid={sid} pending sendState="sending" />
               </div>
@@ -2746,24 +2801,30 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
               ) }))]
               .sort((a, b) => a.at - b.at)
               .map((x) => x.el)}
-            {!loadingChat && (hasFeedback || processing) && (
+            {!detached && !loadingChat && (hasFeedback || processing) && (
               <div className="flex items-center gap-2.5" data-message-feedback={sendFeedback || (processing ? "processing" : "sending")}>
                 {sendFeedback === "unknown" ? <span role="status" className="text-ink-3">{t("lib-outbox.delivery_unknown")}</span> : <Loading label={shownPending.some((p) => p.waits) ? t("ultracode.send_waits") : sendFeedback === "processing" || processing ? t("chat-segmentview.processing") : starting ? t("chat-chatview.preparing") : online ? t("chat-segmentview.sending") : t("chat-chatview.waiting_for_hub")} />}
               </div>
             )}
-            <ChatTail {...slotPage} />
+            {detached ? hasLater && (
+              <Suspense fallback={null}>
+                <TranscriptWindowPager direction="after" loading={loadingLater} disabled={earlier.loadingEarlier} onClick={loadLater} />
+              </Suspense>
+            ) : <ChatTail {...slotPage} />}
           </div>
           <CommentMarks scroller={scroller} jump={landRow} />
           </ChatActionsContext.Provider>
         </div>
         {/* NavRail uses the natural left gutter beside the centered transcript. */}
-        {railOn && (questionsOn || lines.length > 0 || inputIndex) && (
+        {railOn && (
           <Suspense fallback={null}>
-            <ChatNavRail mid={mid} sid={sid} lines={lines} items={earlier.liveItems} inputIndex={inputIndex} revealedSeq={revealedSeq}
-              scroller={scrollEl} onJump={railJump} questionsOn={questionsOn} loading={tr.loading} busy={busySegment} />
+            <ChatNavRail mid={mid} sid={sid} lines={lines} items={earlier.liveItems} retained={detached ? live.items : undefined}
+              history={live.history} replaceEpoch={live.replaceEpoch} stretchStart={stretchStart} reload={recheckTranscript}
+              scroller={scrollEl} onJump={railJump} questionsOn={questionsOn} loading={live.loading} busy={busySegment}
+              retainedBusy={detached && working && !backgroundOnly} />
           </Suspense>
         )}
-        {away && !jumpInDock && <JumpPill label={jumpLabel(newSince)} onClick={toEnd} />}
+        {(away || detached) && !jumpInDock && <JumpPill label={jumpLabel(newSince)} onClick={toEnd} />}
         {picked && !search.open && <ReturnPill onClick={backToOrigin} />}
       </div>
 
