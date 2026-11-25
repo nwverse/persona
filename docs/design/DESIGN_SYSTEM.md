@@ -4528,8 +4528,9 @@ tap path and keyboard-reachable **Choose** / **Change** buttons stay in place, e
 - **Same highlight, zero layout shift**: a targeted slot uses the existing drop-zone tokens — dashed accent border and
   accent tint fill (`border-accent` / `outline-accent` + `bg-accent-tint`, or the crop box's 2 px accent ring) — in both
   light and dark, with transparent resting borders or inset outlines so rows and cards do not shift when hovered.
-- **Near-miss guard on the container**: the enclosing dialog content and picker grid swallow stray file drags/drops
-  (`preventDefault`, `dropEffect = "none"`) so a miss between slots never opens the file in the browser tab.
+- **Near-miss guard**: while the dialog is open, a window-level guard swallows stray file drags/drops (`preventDefault`,
+  `dropEffect = "none"`), and the picker grid does the same, so a miss between slots, on the dialog's title or footer,
+  or on the backdrop never opens the file in the browser tab.
 - **Same validation and user control**: dropped files run through the exact same type/size validation and animated-image
   decoder as chosen files. Dropping on a picker card only opens the upload or edit dialog with the file ready to crop;
   nothing is saved until Upload / Save, and **Keep current** / Cancel reverts it (principle 3).

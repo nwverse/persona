@@ -87,3 +87,25 @@ export const fileDropGuard = {
     e.preventDefault();
   },
 };
+
+/**
+ * While `active` (the upload / edit dialog is open), a file dropped anywhere outside a slot (the dialog's title,
+ * footer or backdrop included) is swallowed instead of opening in the tab. Slots stop propagation, so they never
+ * reach this listener.
+ */
+export function useWindowFileDropGuard(active: boolean) {
+  useEffect(() => {
+    if (!active) return;
+    const swallow = (e: globalThis.DragEvent) => {
+      if (!hasDragFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
+    };
+    window.addEventListener("dragover", swallow);
+    window.addEventListener("drop", swallow);
+    return () => {
+      window.removeEventListener("dragover", swallow);
+      window.removeEventListener("drop", swallow);
+    };
+  }, [active]);
+}

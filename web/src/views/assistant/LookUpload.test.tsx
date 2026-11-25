@@ -586,6 +586,20 @@ describe("the upload dialog", () => {
     expect(dialog().querySelector('[data-testid="look-upload-crop"]')).toBeNull();
   });
 
+  it("swallows a near-miss drop on the footer or outside the dialog while open, and stops once closed", async () => {
+    const read = vi.fn(async () => image(600, 600));
+    act(() => root.render(<LookUploadDialog open supportsStates onClose={vi.fn()} onUploaded={vi.fn()} deps={{ read }} />));
+    const footer = dialog().querySelector("[data-dialog-footer]")!;
+    const over = dispatchDrag(footer, "dragover");
+    expect(over.ev.defaultPrevented).toBe(true);
+    expect(over.dt.dropEffect).toBe("none");
+    expect((await dispatchDrop(footer)).ev.defaultPrevented).toBe(true);
+    expect((await dispatchDrop(document.body)).ev.defaultPrevented).toBe(true);
+    expect(read).not.toHaveBeenCalled();
+    act(() => root.render(<LookUploadDialog open={false} supportsStates onClose={vi.fn()} onUploaded={vi.fn()} deps={{ read }} />));
+    expect((await dispatchDrop(document.body)).ev.defaultPrevented).toBe(false);
+  });
+
   it("picks initialFile once when opened in upload or edit mode", async () => {
     const read = vi.fn(async () => image(600, 600));
     const file = png();

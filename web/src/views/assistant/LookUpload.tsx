@@ -23,7 +23,7 @@ import { Icon } from "../../ui/icons";
 import { PRESET_COLORS } from "../../ui/look";
 import { t } from "../../i18n";
 import { useReducedMotion } from "./face-motion";
-import { fileDropGuard, useFileDrop } from "./lookDrop";
+import { fileDropGuard, useFileDrop, useWindowFileDropGuard } from "./lookDrop";
 import { StatePicturesSection, ThemeColorSection, type StateDrafts } from "./LookUploadExtras";
 import { MochiFace } from "./MochiFace";
 import { inputClass } from "./parts";
@@ -310,6 +310,8 @@ export function LookUploadDialog({
       if (croppingState) void pickStateFile(croppingState.state, file);
     },
   });
+  // A near miss on the title, the footer or the backdrop must not open the image in the tab either.
+  useWindowFileDropGuard(open);
 
   const resetStateAuto = (state: PersonaState) => {
     keptStates.current[state]?.release();
