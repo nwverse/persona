@@ -751,6 +751,7 @@ stated above; #15088 lists the ones known.
 | `app-named-primitive` | named basic types, in undeclared, application and library packages and adapters | the package |
 | `app-lifecycle-write` | assignments to a `DoneAt` or `DoneBy` field, in undeclared, application and library packages | the package |
 | `app-bridge-call` | uses of an adapter's `Wire` function, called or passed on, in undeclared, application and library packages' production code | the package |
+| `contract-bare-id` | in a contract package's production files, a struct field of plain `string` or `[]string` named `*ID`, `*Id` or `*IDs` whose `<Type>.<Field>` the wire-types baseline (`scripts/ci/wire_types_baseline.json`, bare-id in `metrics`, `wide` or `exceptions`) does not hold. Strict, no count: a field that moved between contract packages or was lifted from a Core package or module keeps its name and passes; one written anew fails at its line, a rename is a new name (add it to the baseline's `exceptions` with a PR reference) | strict |
 
 The `app-*` counts hold the habits this model replaces from spreading in code that has not moved yet, and, given a
 base, a new package starts at zero; they run only in `TestDomainLayers`, as does `layer-declared`.
