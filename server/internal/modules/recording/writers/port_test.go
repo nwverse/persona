@@ -55,8 +55,8 @@ func TestAudioStateIsOnePerStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := newTestEngine(&kb.Engine{Store: e.Store, TranscriptionReady: e.TranscriptionReady, Logf: func(string, ...any) {}})
-	if second.Writers == e.Writers || second.Writers.audio != e.Writers.audio {
-		t.Fatalf("the second engine's writers: same %v, same audio state %v", second.Writers == e.Writers, second.Writers.audio == e.Writers.audio)
+	if second.Writers == e.Writers || second.Writers.state != e.Writers.state {
+		t.Fatalf("the second engine's writers: same %v, same audio state %v", second.Writers == e.Writers, second.Writers.state == e.Writers.state)
 	}
 	if held, err := second.AudioHeld(recID); err != nil || len(held) != 1 {
 		t.Fatalf("held through the second engine: %v %v", held, err)
@@ -70,7 +70,7 @@ func TestAudioStateIsOnePerStore(t *testing.T) {
 	_ = w.Close()
 	// A store nobody hooked has no state to share: its writers start their own.
 	fresh := goldenEngine(t, nil)
-	if fresh.Writers.audio == e.Writers.audio || fresh.Writers.audio == nil {
+	if fresh.Writers.state == e.Writers.state || fresh.Writers.state == nil {
 		t.Fatal("writers of another store share the audio state")
 	}
 }

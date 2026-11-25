@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"io"
 	"net/http"
 	"slices"
@@ -14,7 +15,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -88,7 +88,10 @@ func TestMeetingPhotosInTheFollowup(t *testing.T) {
 	end := time.Now().UTC().Format(time.RFC3339)
 	r.upload(meetingRec, 2, map[string]any{"room": map[string]any{"attendance": "listener"}, "ended_at": end, "complete": true, "title": "Design review",
 		"segments": []map[string]any{{"start": 0, "end": 9, "text": "We keep the cap."}}})
-	if _, err := e.MeetingUpdate(meetingRec, func(m *kb.Meeting, _ kb.Recording) error { m.Room.State = kb.RoomEnded; return nil }); err != nil {
+	if _, err := writersOf(e).MeetingUpdate(meetingRec, func(m *recordingwire.Meeting, _ recordingwire.Recording) error {
+		m.Room.State = recordingwire.RoomEnded
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	r.do("POST", "/api/v1/recordings/"+meetingRec+"/followup", "", map[string]any{"id": callOne, "text": "Draft the email."}, http.StatusOK)
@@ -106,7 +109,7 @@ func TestMeetingPhotosInTheFollowup(t *testing.T) {
 		t.Fatalf("cited %v", ps)
 	}
 	e.PruneRecordings(time.Now().AddDate(0, 0, 30))
-	m, rec, err := e.MeetingRead(meetingRec)
+	m, rec, err := writersOf(e).MeetingRead(meetingRec)
 	if err != nil || !rec.Trimmed() {
 		t.Fatalf("not trimmed: %v", err)
 	}
@@ -134,7 +137,7 @@ func TestMeetingPhotoDeletedBeforeTheFollowup(t *testing.T) {
 		`"actions":[{"what":"Send the release note","line":1}]}`)
 	m.do("DELETE", photosPath(meetingRec)+"/1", "", nil, http.StatusOK)
 	e := m.engine()
-	meeting, rec, err := e.MeetingRead(meetingRec)
+	meeting, rec, err := writersOf(e).MeetingRead(meetingRec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,10 +216,10 @@ func TestMeetingPhotoRoutes(t *testing.T) {
 		"another type":     photoBody(t, photoOne, 1, map[string]any{"mime": "image/jpeg"}),
 		"over 1 MiB":       photoBody(t, photoOne, 1, map[string]any{"data": big}),
 		"over 4096 pixels": photoBody(t, photoOne, 1, map[string]any{"data": pngData(t, 4097, 1)}),
-		"long text":        photoBody(t, photoOne, 1, map[string]any{"text": strings.Repeat("字", kb.MaxPhotoText+1)}),
-		"long caption":     photoBody(t, photoOne, 1, map[string]any{"caption": strings.Repeat("字", kb.MaxPhotoCaption+1)}),
-		"padded text":      photoBody(t, photoOne, 1, map[string]any{"text": strings.Repeat(" ", kb.MaxPhotoText) + "X"}),
-		"padded caption":   photoBody(t, photoOne, 1, map[string]any{"caption": strings.Repeat(" ", kb.MaxPhotoCaption) + "X"}),
+		"long text":        photoBody(t, photoOne, 1, map[string]any{"text": strings.Repeat("字", recordingwire.MaxPhotoText+1)}),
+		"long caption":     photoBody(t, photoOne, 1, map[string]any{"caption": strings.Repeat("字", recordingwire.MaxPhotoCaption+1)}),
+		"padded text":      photoBody(t, photoOne, 1, map[string]any{"text": strings.Repeat(" ", recordingwire.MaxPhotoText) + "X"}),
+		"padded caption":   photoBody(t, photoOne, 1, map[string]any{"caption": strings.Repeat(" ", recordingwire.MaxPhotoCaption) + "X"}),
 		"number text":      photoBody(t, photoOne, 1, map[string]any{"text": 3}),
 		"object caption":   photoBody(t, photoOne, 1, map[string]any{"caption": map[string]any{}}),
 	} {
@@ -328,10 +331,10 @@ func TestMeetingPhotosFull(t *testing.T) {
 	m := newMeetingFixture(t)
 	m.upload(meetingRec, 1, nil)
 	id := func(i int) string { return fmt.Sprintf("c0000000-0000-4000-8000-%012d", i) }
-	for i := range kb.MaxPhotos {
+	for i := range recordingwire.MaxPhotos {
 		m.addPhoto(meetingRec, photoBody(t, id(i), float64(i), nil))
 	}
-	wantCode(t, m.do("POST", photosPath(meetingRec), "", photoBody(t, id(kb.MaxPhotos), 1, nil), http.StatusRequestEntityTooLarge), codePhotosFull)
+	wantCode(t, m.do("POST", photosPath(meetingRec), "", photoBody(t, id(recordingwire.MaxPhotos), 1, nil), http.StatusRequestEntityTooLarge), codePhotosFull)
 	if a := m.addPhoto(meetingRec, photoBody(t, id(7), 7, nil)); a["n"] != float64(8) {
 		t.Fatalf("retry %v", a)
 	}
@@ -341,7 +344,7 @@ func TestMeetingPhotosFull(t *testing.T) {
 func (r *roomFixture) photoRoomListed(id string) string {
 	r.t.Helper()
 	m := r.meeting(id)
-	if m.Room == nil || m.Room.State != kb.RoomReady {
+	if m.Room == nil || m.Room.State != recordingwire.RoomReady {
 		r.t.Fatalf("room %+v", m.Room)
 	}
 	r.f.mu.Lock()
@@ -429,10 +432,10 @@ func TestMeetingPhotoOrder(t *testing.T) {
 		{ID: "a1", Seq: 2, Role: "assistant", Kind: proto.KindText, Text: "The answer."},
 	}
 	r.f.mu.Unlock()
-	if _, err := r.engine().LiveUpdate(meetingRec, func(l *kb.Live, _ kb.Recording) error {
+	if _, err := writersOf(r.engine()).LiveUpdate(meetingRec, func(l *recordingwire.Live, _ recordingwire.Recording) error {
 		l.FedAt = l.FedAt.Add(-2 * feedBatchEvery)
-		l.Asks = append(l.Asks, kb.LiveAsk{ID: askOne, QuestionSent: "q", Question: "q", QuestionSource: askTyped, State: askPending, Via: kb.AskViaRoom,
-			Sources: []kb.AskSource{}, AskedAt: time.Now().UTC(), Attempts: []kb.AskAttempt{{K: 1, MsgID: askMsgID(askOne, 1), SentAt: time.Now().UTC()}}})
+		l.Asks = append(l.Asks, recordingwire.LiveAsk{ID: askOne, QuestionSent: "q", Question: "q", QuestionSource: askTyped, State: askPending, Via: recordingwire.AskViaRoom,
+			Sources: []recordingwire.AskSource{}, AskedAt: time.Now().UTC(), Attempts: []recordingwire.AskAttempt{{K: 1, MsgID: askMsgID(askOne, 1), SentAt: time.Now().UTC()}}})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -566,7 +569,10 @@ func TestMeetingPhotoSendFailing(t *testing.T) {
 	r.addPhoto(meetingRec, photoBody(t, photoTwo, 21, nil))
 	r.do("POST", livePath(meetingRec), "", `{"from":1,"segments":[{"start":30,"end":34,"text":"Bo: and the cap stays."}]}`, http.StatusOK)
 	e := r.engine()
-	if _, err := e.LiveUpdate(meetingRec, func(l *kb.Live, _ kb.Recording) error { l.FedAt = l.FedAt.Add(-2 * feedBatchEvery); return nil }); err != nil {
+	if _, err := writersOf(e).LiveUpdate(meetingRec, func(l *recordingwire.Live, _ recordingwire.Recording) error {
+		l.FedAt = l.FedAt.Add(-2 * feedBatchEvery)
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	one, two := "photo-"+photoOne, "photo-"+photoTwo
@@ -660,7 +666,7 @@ func TestMeetingPhotosLive(t *testing.T) {
 		}
 		return false
 	})
-	d, err := r.engine().Get(kb.KindRecording, meetingRec, 0)
+	d, err := r.engine().Get(recordingwire.KindRecording, meetingRec, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

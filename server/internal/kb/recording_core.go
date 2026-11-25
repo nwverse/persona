@@ -52,6 +52,29 @@ func (c recordingCore) Tombstoned(id recordingwire.ID) bool {
 	_, gone := c.e.Store.tombstones()[string(id)]
 	return gone
 }
+func (c recordingCore) Deleted() []recordingwire.ID {
+	stones := c.e.Store.tombstones()
+	out := make([]recordingwire.ID, 0, len(stones))
+	for id := range stones {
+		out = append(out, recordingwire.ID(id))
+	}
+	return out
+}
+func (c recordingCore) RecordingFile(id recordingwire.ID, f recordingwire.File) ([]byte, error) {
+	return c.e.Store.recordingRead(string(id), string(f))
+}
+func (c recordingCore) RecordingDays() int { return recordingDays(c.e.RecordingDays()) }
+func (c recordingCore) TranscriptionReady() bool {
+	return c.e.TranscriptionReady != nil && c.e.TranscriptionReady()
+}
+func (c recordingCore) EarlierMeetings() bool { return c.e.EarlierMeetingsInAnswers }
+func (c recordingCore) Project(slug recordingwire.ProjectSlug) (recordingwire.EarlierProject, bool) {
+	p, ok := c.e.Store.Project(string(slug))
+	if !ok {
+		return recordingwire.EarlierProject{}, false
+	}
+	return recordingwire.EarlierProject{Slug: p.Slug, Name: p.Name, Status: p.Status}, true
+}
 func (c recordingCore) HubTranscriptLocked(id recordingwire.ID) (HubTranscript, error) {
 	return c.e.Store.readHubLocked(string(id))
 }
@@ -95,6 +118,9 @@ func (c recordingCore) RecoverRecording(id recordingwire.ID) error {
 func (c recordingCore) WriteFile(path string, data []byte) error { return writeFile(path, data) }
 func (c recordingCore) WriteDurable(path string, data []byte) error {
 	return writeRecordingFile(path, data)
+}
+func (c recordingCore) CommitRecording(r *Recording, segs []RecordingSegment) error {
+	return c.e.Store.commitRecording(r, segs)
 }
 func (c recordingCore) PutMeta(r *Recording) error {
 	return c.e.Store.putEntity(KindRecording, r.ID, r, &r.Tagging, false)

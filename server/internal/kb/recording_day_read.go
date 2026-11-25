@@ -72,3 +72,14 @@ func (e *Engine) dayRecordings(keep func(r *Recording) bool) []Recording {
 	})
 	return out
 }
+
+// recordingName is Store.recordingName, a day recording's in the owner's language (Engine.DayRecordingName) unless
+// the user titled it.
+func (e *Engine) recordingName(r *Recording) string {
+	if r.Kind == RecordingDay && r.Title == "" && e.DayRecordingName != nil {
+		if n := oneLine(e.DayRecordingName(r.Day)); n != "" {
+			return n
+		}
+	}
+	return e.Store.recordingName(r)
+}

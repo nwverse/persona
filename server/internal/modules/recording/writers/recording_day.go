@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"cmp"
@@ -228,17 +228,6 @@ func joinGaps(gaps []CoverageGap, may func(a, b CoverageGap) bool) []CoverageGap
 	return out
 }
 
-// recordingName is Store.recordingName, a day recording's in the owner's language (Engine.DayRecordingName) unless
-// the user titled it.
-func (e *Engine) recordingName(r *Recording) string {
-	if r.Kind == RecordingDay && r.Title == "" && e.DayRecordingName != nil {
-		if n := oneLine(e.DayRecordingName(r.Day)); n != "" {
-			return n
-		}
-	}
-	return e.Store.recordingName(r)
-}
-
 // putDay sets a day recording's own fields from upload u (cleaned, a new base): its count, and the revisions an
 // older manager would otherwise match and summarize it at. Its text is another (TextRev): every finished chunk is
 // looked at again, and noted again when the PUT changed its lines.
@@ -300,7 +289,7 @@ func (a *RecordingAppend) check() error {
 // recording_days or trimmed; nothing written), ErrNotDay, a BaseChangedError, a SegmentsGapError, a DayFullError
 // (nothing of the request stored). The stored segments that cannot be read are an error too, with nothing written:
 // the append never takes the place of the day.
-func (e *Engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppended, error) {
+func (e *engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppended, error) {
 	id, ok := RecordingID(rawID)
 	out := RecordingAppended{ID: id}
 	if !ok {
@@ -309,7 +298,7 @@ func (e *Engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppe
 	st := e.Store
 	st.recMu.Lock()
 	defer st.recMu.Unlock()
-	if _, gone := st.tombstones()[id]; gone {
+	if gone := st.tombstoned(id); gone {
 		return out, ErrRecordingDeleted
 	}
 	r, ok := st.Recording(id)
@@ -422,7 +411,7 @@ func (e *Engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppe
 // daySegments are day recording r's stored segments (segments.json, read through a pending undo journal like every
 // read), refused when they cannot be read, do not parse, or are not as many as r says it holds: an append must never
 // commit its own batch as the whole day.
-func (s *Store) daySegments(r *Recording) ([]RecordingSegment, error) {
+func (s *store) daySegments(r *Recording) ([]RecordingSegment, error) {
 	raw, err := s.recordingRead(r.ID, "segments.json")
 	if err != nil {
 		return nil, fmt.Errorf("recording %s: segments: %w", r.ID, err)

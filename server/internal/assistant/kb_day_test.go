@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"math"
 	"net/http"
 	"strings"
@@ -63,7 +64,7 @@ func TestDaySegmentsHTTP(t *testing.T) {
 	if wantCode(t, changed, codeBaseChanged); changed["base"] != float64(100) || changed["next"] != float64(5) || changed["error"] == "" {
 		t.Fatalf("base changed: %v", changed)
 	}
-	many := make([]map[string]any, kb.MaxAppendSegments+1)
+	many := make([]map[string]any, recordingwire.MaxAppendSegments+1)
 	for i := range many {
 		many[i] = map[string]any{"start": 4000 + i, "end": 4000 + i, "text": "x"}
 	}

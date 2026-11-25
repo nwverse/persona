@@ -130,7 +130,7 @@ func (s *Service) briefDay(ctx context.Context, now time.Time, loc *time.Locatio
 	return d
 }
 
-// briefGap is a stretch of the day with no text and why (kb.CoverageGap at its clock times).
+// briefGap is a stretch of the day with no text and why (recordingwire.CoverageGap at its clock times).
 type briefGap struct {
 	from, to time.Time
 	reason   string

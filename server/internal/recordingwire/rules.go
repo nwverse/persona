@@ -1,6 +1,8 @@
 package recordingwire
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -400,4 +402,78 @@ func RecordChars(segs []kbwire.RecordingSegment) int {
 		n += utf8.RuneCountInString(sg.Text)
 	}
 	return n
+}
+
+// MeetingParts are the parts of m that differ from before, in a fixed order.
+func MeetingParts(before, after Meeting) []string {
+	var out []string
+	same := func(a, b any) bool {
+		x, _ := json.Marshal(a)
+		y, _ := json.Marshal(b)
+		return bytes.Equal(x, y)
+	}
+	if !same(roomShown(before.Room), roomShown(after.Room)) {
+		out = append(out, PartRoom)
+	}
+	if !same(before.Private, after.Private) {
+		out = append(out, PartPrivate)
+	}
+	if !same(before.Followup, after.Followup) {
+		out = append(out, PartFollowup)
+	}
+	if !same(transcriptionShown(before.Transcription), transcriptionShown(after.Transcription)) {
+		out = append(out, PartTranscription)
+	}
+	return out
+}
+
+// roomShown is room without what only the manager reads (its batching and a lean room's bookkeeping, #8253), whose
+// changes raise no revision: the apps see nothing new of it.
+func roomShown(room *MeetingRoom) *MeetingRoom {
+	if room == nil {
+		return nil
+	}
+	r := *room
+	r.Batching, r.Lean = 0, MeetingRoomLean{}
+	return &r
+}
+
+// MeetingSame: a and b are the same meeting.json (also where no part the apps read differs: the timeline, the final
+// pass's bookkeeping, a lean room's bookkeeping).
+func MeetingSame(a, b Meeting) bool {
+	x, _ := json.Marshal(a)
+	y, _ := json.Marshal(b)
+	return bytes.Equal(x, y)
+}
+
+// BumpRevs raises the revisions of parts in m.
+func BumpRevs(m *Meeting, parts []string) {
+	if len(parts) == 0 {
+		return
+	}
+	if m.Revs == nil {
+		m.Revs = map[string]int64{}
+	}
+	for _, p := range parts {
+		m.Revs[p]++
+	}
+}
+
+// transcriptionShown is what of t the apps read (TranscriptionView): PartTranscription moves when it changes, not
+// when only the timeline grows or the bookkeeping does.
+func transcriptionShown(t *MeetingTranscription) any {
+	if t == nil {
+		return nil
+	}
+	var gaps [][2]float64
+	if len(t.Gaps) > 0 {
+		gaps = t.Gaps
+	}
+	done, end, _ := t.FinalProgress()
+	return struct {
+		Mode, State, Problem string
+		Gaps                 [][2]float64
+		Fallback             bool
+		FinalDone, End       float64
+	}{t.Mode, t.State, t.Problem, gaps, t.Fallback, done, end}
 }
