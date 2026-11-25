@@ -604,7 +604,10 @@ type ownerActionExecution struct {
 func (book *ownerActionBook) consumeBuiltin(ctx context.Context, machine, session, tool string, input json.RawMessage) (*ownerActionExecution, error) {
 	canonical, err := canonicalOwnerAction(input)
 	if err != nil {
-		return nil, nil // not a prepared exact operation: use the ordinary card
+		// The built-in decoders historically accepted duplicate object keys. Do
+		// not let a non-canonical spelling select a pending/denied operation or
+		// execute once here and again through an unconsumed exact grant.
+		return nil, fmt.Errorf("built-in owner-action input is not an unambiguous JSON object: %w", err)
 	}
 	fingerprint := ownerActionDigest(canonical)
 	for attempt := 0; attempt < ownerActionCASRetries; attempt++ {

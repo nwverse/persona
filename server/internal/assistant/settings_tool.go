@@ -532,8 +532,25 @@ func (s *Service) toolPersonaSettings(ctx context.Context, call ToolCall, args j
 	if a.Action == "remove" && len(a.Value) == 0 && a.ID != "" {
 		a.Value, _ = json.Marshal(a.ID)
 	}
-	if err := s.checkPersonaSettingLocation(ctx, call, a); err != nil {
+	var execution *ownerActionExecution
+	if a.Action == "set" || a.Action == "add" || a.Action == "remove" {
+		var err error
+		execution, err = s.consumeOwnerBuiltin(ctx, call.MachineID, call.SessionID, "persona_settings", args)
+		if err != nil {
+			return proto.TextResult(err.Error(), true)
+		}
+	}
+	fail := func(err error) proto.ToolResult {
+		if execution != nil {
+			_, finishErr := s.finishOwnerBuiltin(ctx, *execution, "", err)
+			if finishErr != nil {
+				return proto.TextResult(finishErr.Error(), true)
+			}
+		}
 		return proto.TextResult(err.Error(), true)
+	}
+	if err := s.checkPersonaSettingLocation(ctx, call, a); err != nil {
+		return fail(err)
 	}
 	own := s.managedOwnSettings(ctx)
 	if a.Action == "" || a.Action == "list" {
@@ -545,14 +562,17 @@ func (s *Service) toolPersonaSettings(ctx context.Context, call ToolCall, args j
 	}
 	setting, found, err := s.lookupManagedOwnSetting(ctx, a.Key)
 	if err != nil {
-		return proto.TextResult(err.Error(), true)
+		return fail(err)
 	}
 	if found {
-		text, err := s.ownSettingActionExact(ctx, call, setting, a.Action, a.Value, args)
+		text, err := s.ownSettingActionExact(ctx, call, setting, a.Action, a.Value, execution)
 		if err != nil {
 			return proto.TextResult(err.Error(), true)
 		}
 		return proto.TextResult(text, false)
+	}
+	if execution != nil {
+		return fail(fmt.Errorf("%s is no longer a managed built-in setting", a.Key))
 	}
 	if _, ok := directionPromptSettingID(a.Key); ok {
 		return proto.TextResult(errNoDirection.Error(), true)
@@ -614,26 +634,22 @@ func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSett
 	return s.ownSettingActionExact(ctx, call, o, action, value, nil)
 }
 
-// ownSettingActionExact also recognizes the complete canonical arguments of an approved built-in batch item. Its grant
-// is consumed only after the setter has rebuilt and validated the operation, and the fresh card and revision must equal
-// the approved item. Without a grant the ordinary approval path is byte-for-byte unchanged.
-func (s *Service) ownSettingActionExact(ctx context.Context, call ToolCall, o ownSetting, action string, value, raw json.RawMessage) (string, error) {
+// ownSettingActionExact executes an optional grant already consumed by toolPersonaSettings. Consuming before setting
+// resolution and validation ensures that every failure of an approved item records its position and stops later items.
+// Without a grant the ordinary approval path is byte-for-byte unchanged.
+func (s *Service) ownSettingActionExact(ctx context.Context, call ToolCall, o ownSetting, action string, value json.RawMessage, execution *ownerActionExecution) (string, error) {
 	if action == "get" {
 		return o.get(ctx)
 	}
 	change, err := s.prepareOwnSettingAction(ctx, o, action, value)
 	if err != nil {
+		if execution != nil {
+			return s.finishOwnerBuiltin(ctx, *execution, "", err)
+		}
 		return "", err
 	}
 	l := s.lang(ctx)
 	proposal := change.card(l)
-	var execution *ownerActionExecution
-	if raw != nil {
-		execution, err = s.consumeOwnerBuiltin(ctx, call.MachineID, call.SessionID, "persona_settings", raw)
-		if err != nil {
-			return "", err
-		}
-	}
 	if execution != nil {
 		if change.apply == nil || !ownerChangeMatches(change, proposal, execution.Item) {
 			return s.finishOwnerBuiltin(ctx, *execution, "", fmt.Errorf("the setting changed after the batch card was shown: %w", approvalops.ErrStale))

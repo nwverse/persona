@@ -14,7 +14,25 @@ import (
 
 // ownerBuiltinTestStore adds the same revision-checked replacement primitive as
 // Postgres without changing the older model fixtures' fallback write path.
-type ownerBuiltinTestStore struct{ *downStore }
+type ownerBuiltinTestStore struct {
+	*downStore
+	afterPutSettings func(map[string]any)
+}
+
+func (st *ownerBuiltinTestStore) PutSettings(ctx context.Context, values map[string]any) error {
+	if st.down() {
+		return errors.New("database unavailable")
+	}
+	if err := st.downStore.PutSettings(ctx, values); err != nil {
+		return err
+	}
+	if st.afterPutSettings != nil {
+		hook := st.afterPutSettings
+		st.afterPutSettings = nil
+		hook(values)
+	}
+	return nil
+}
 
 func (st *ownerBuiltinTestStore) CompareSetting(_ context.Context, key string, revision int64, value any) (bool, error) {
 	if st.down() {
@@ -188,6 +206,13 @@ func TestOwnerBuiltinFiveItemsAdvanceCatalogAndSwitchRollback(t *testing.T) {
 		if item.Revision == nil != (wantRevisions[i] == nil) || item.Revision != nil && *item.Revision != *wantRevisions[i] {
 			t.Errorf("item %d revision = %v, want %v", i+1, item.Revision, wantRevisions[i])
 		}
+		if item.Tool == "model_profile_switch" {
+			duplicate := item
+			duplicate.Canonical = `{"id":"economy","id":"performance"}`
+			if result := callOwnerBuiltin(t, s, duplicate); !result.IsError || !strings.Contains(result.Content[0].Text, "duplicate key") {
+				t.Fatalf("duplicate-key spelling bypassed the exact switch grant: %+v", result)
+			}
+		}
 		result := callOwnerBuiltin(t, s, item)
 		if result.IsError || !strings.Contains(managedToolText(t, result), "completed") {
 			t.Fatalf("item %d execution: %+v", i+1, result)
@@ -323,6 +348,11 @@ func TestOwnerBuiltinDenialValidationAndRedaction(t *testing.T) {
 			t.Errorf("denied exact call bypassed its decision: %+v", result)
 		}
 	}
+	duplicate := batch.Items[1]
+	duplicate.Canonical = `{"id":"economy","id":"performance"}`
+	if result := callOwnerBuiltin(t, s, duplicate); !result.IsError || !strings.Contains(result.Content[0].Text, "duplicate key") {
+		t.Fatalf("duplicate-key spelling bypassed denial: %+v", result)
+	}
 	if !reflect.DeepEqual(before, managedBusinessSnapshot(t, s, st)) {
 		t.Fatal("direct calls after denial changed model state")
 	}
@@ -341,6 +371,102 @@ func TestOwnerBuiltinDenialValidationAndRedaction(t *testing.T) {
 	}
 	if strings.Contains(display, "raw-secret") || !strings.Contains(display, `"api_key": "***"`) || !strings.Contains(display, "before → after") {
 		t.Fatalf("built-in display did not retain RedactArgs: %s", display)
+	}
+}
+
+func TestOwnerBuiltinValidationFailureAfterGrantStopsBatch(t *testing.T) {
+	s, _, st, book := ownerBuiltinService(t)
+	storeProfiles(t, st, ModelProfile{ID: "performance", Name: "Performance"}, ModelProfile{ID: "economy", Name: "Economy"})
+	items := []map[string]any{
+		ownerBuiltinInput("persona_settings", map[string]any{"action": "set", "key": modelProfileBindingsKey, "value": map[string]any{
+			"profile": "performance", "purposes": map[string]any{"agent.new": map[string]any{"provider": "launcher.gw", "model": "batch-one"}}}}),
+		ownerBuiltinInput("persona_settings", map[string]any{"action": "set", "key": modelProfileBindingsKey, "value": map[string]any{
+			"profile": "economy", "purposes": map[string]any{"agent.new": map[string]any{"provider": "launcher.gw", "model": "batch-two"}}}}),
+	}
+	batch, _, _ := prepareOwnerBuiltins(t, s, book, items, true)
+	if err := s.deleteModelProfile(context.Background(), nil, "performance", ProfileActor{Kind: "device"}); err != nil {
+		t.Fatal(err)
+	}
+	result := callOwnerBuiltin(t, s, batch.Items[0])
+	if !result.IsError || !strings.Contains(result.Content[0].Text, "item 1/2") || !strings.Contains(result.Content[0].Text, "Items not executed: [2]") {
+		t.Fatalf("pre-apply validation failure did not record the stopping point: %+v", result)
+	}
+	stored, _, err := book.batch(context.Background(), batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.FailedItem != batch.Items[0].ID || stored.Items[0].State != ownerActionConsumed || stored.Items[0].Outcome != "failed" ||
+		stored.Items[1].State != ownerActionStopped || stored.Items[1].Outcome != "stopped" {
+		t.Fatalf("validation failure audit: %+v", stored)
+	}
+}
+
+func TestOwnerBuiltinCommittedSaveWithReadbackConflictIsCompleted(t *testing.T) {
+	s, _, st, book := ownerBuiltinService(t)
+	storeProfiles(t, st, ModelProfile{ID: "performance", Name: "Performance"}, ModelProfile{ID: "economy", Name: "Economy"})
+	items := []map[string]any{
+		ownerBuiltinInput("persona_settings", map[string]any{"action": "set", "key": modelProfileBindingsKey, "value": map[string]any{
+			"profile": "performance", "purposes": map[string]any{"agent.new": map[string]any{"provider": "launcher.gw", "model": "batch-one"}}}}),
+		ownerBuiltinInput("persona_settings", map[string]any{"action": "set", "key": modelProfileBindingsKey, "value": map[string]any{
+			"profile": "economy", "purposes": map[string]any{"agent.new": map[string]any{"provider": "launcher.gw", "model": "batch-two"}}}}),
+	}
+	batch, _, _ := prepareOwnerBuiltins(t, s, book, items, true)
+	var hookErr error
+	s.store().(*ownerBuiltinTestStore).afterPutSettings = func(values map[string]any) {
+		if _, ok := values[modelProfilesKey]; !ok {
+			return
+		}
+		var ps modelProfiles
+		if _, err := st.Setting(context.Background(), modelProfilesKey, &ps); err != nil {
+			hookErr = err
+			return
+		}
+		// Simulate an independent writer after the atomic save and before its
+		// read-back. The approved purposes stay committed; a new field differs.
+		ps.Profiles[0].Description = "external-after-save"
+		ps.Revision++
+		hookErr = st.memStore.PutSetting(context.Background(), modelProfilesKey, ps)
+	}
+	result := callOwnerBuiltin(t, s, batch.Items[0])
+	if hookErr != nil {
+		t.Fatal(hookErr)
+	}
+	if !result.IsError || !strings.Contains(result.Content[0].Text, "Completed items: [1]") ||
+		!strings.Contains(result.Content[0].Text, "Items not executed: [2]") || !strings.Contains(result.Content[0].Text, "stopping item completed") {
+		t.Fatalf("committed save/read-back conflict was misreported: %+v", result)
+	}
+	performance := managedProfile(t, s, "performance")
+	if performance.Purposes["agent.new"].Model != "batch-one" || performance.Description != "external-after-save" {
+		t.Fatalf("committed value or external read-back edit was lost: %+v", performance)
+	}
+	stored, _, err := book.batch(context.Background(), batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.FailedItem != batch.Items[0].ID || stored.Items[0].Outcome != "done" || stored.Items[1].State != ownerActionStopped {
+		t.Fatalf("completed/read-back failure audit: %+v", stored)
+	}
+}
+
+func TestOwnerBuiltinUnseededProfileEditSaves(t *testing.T) {
+	s, _, _, _ := ownerBuiltinService(t)
+	// No modelProfilesKey: preparation, fresh validation and apply each build
+	// built-in templates independently. Generated UpdatedAt must not cause a
+	// false exact-image conflict when every decision-relevant value is equal.
+	book, ok := newOwnerActionBook(s.store())
+	if !ok {
+		t.Fatal("missing owner-action book")
+	}
+	items := []map[string]any{ownerBuiltinInput("persona_settings", map[string]any{"action": "set", "key": modelProfileBindingsKey, "value": map[string]any{
+		"profile": "performance", "purposes": map[string]any{"agent.new": map[string]any{"provider": "launcher.gw", "model": "first-save"}}}})}
+	batch, _, _ := prepareOwnerBuiltins(t, s, book, items, true)
+	if result := callOwnerBuiltin(t, s, batch.Items[0]); result.IsError {
+		t.Fatalf("first save of an unpersisted built-in profile failed: %+v", result)
+	}
+	view := profilesOf(t, s)
+	performance := managedProfile(t, s, "performance")
+	if view.Revision != 2 || performance.Purposes["agent.new"].Model != "first-save" {
+		t.Fatalf("unseeded profile save: revision=%d profile=%+v", view.Revision, performance)
 	}
 }
 
