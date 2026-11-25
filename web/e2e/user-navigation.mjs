@@ -195,8 +195,12 @@ async function previewStyle(page, index) {
 
 async function idleMarks(page) {
   assert.equal(await page.locator(PREVIEW).count(), 0, "Idle widths are checked without a preview");
-  await page.waitForFunction((rail) => [...document.querySelectorAll(`${rail} [data-nav-mark]`)].every((mark) =>
-    Math.abs(mark.getBoundingClientRect().width - parseFloat(mark.style.width)) < 0.1), RAIL);
+  await page.waitForFunction((rail) => [...document.querySelectorAll(`${rail} [data-nav-mark]`)].every((mark) => {
+    const box = mark.getBoundingClientRect();
+    return Math.abs(box.width - parseFloat(mark.style.width)) < 0.1
+      && Math.abs(box.height - parseFloat(mark.style.height)) < 0.1
+      && Math.abs(Number(getComputedStyle(mark).opacity) - Number(mark.style.opacity)) < 0.001;
+  }), RAIL);
   const marks = await page.locator(`${RAIL} [data-nav-mark]`).evaluateAll((nodes) => nodes.map((mark) => ({
     width: mark.getBoundingClientRect().width, height: mark.getBoundingClientRect().height,
     current: mark.dataset.navMark === "current", color: getComputedStyle(mark).backgroundColor,
@@ -205,7 +209,7 @@ async function idleMarks(page) {
   assert.ok(marks.length > 1, "Compare multiple rendered marks");
   assert.ok(marks.filter((mark) => !mark.current).every((mark) => Math.abs(mark.width - 6) < 0.1 && Math.abs(mark.height - 1) < 0.1), "Idle marks stay short and thin");
   const current = marks.find((mark) => mark.current), other = marks.find((mark) => !mark.current);
-  assert.ok(current && other && current.color !== other.color && current.opacity === "1" && current.width > other.width && current.height > other.height, "The current mark has stronger color, width and thickness");
+  assert.ok(current && other && current.color !== other.color && Number(current.opacity) > 0.999 && current.width > other.width && current.height > other.height, "The current mark has stronger color, width and thickness");
   return { marks: marks.length, widths: [...new Set(marks.map((mark) => mark.width))], current };
 }
 
