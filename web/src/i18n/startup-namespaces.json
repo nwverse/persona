@@ -345,7 +345,6 @@
   "lib-new-agent.outcome_unknown",
   "lib-new-agent.start_failed",
   "lib-node-actions",
-  "lib-node-palette",
   "lib-outbox",
   "lib-palette",
   "lib-persona",

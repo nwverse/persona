@@ -154,6 +154,18 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   const q = usePalette().query;
   const setQ = setPaletteQuery;
   const { mode, text } = parseQuery(q);
+  // The node the user is on adds its menu as `>` commands (lib/node-palette.ts registers them when imported). They load
+  // the first time the palette is open, off the first screen and the idle tier; the list is drawn again once they have.
+  // A failed load is not kept: the next opening asks again (Palette.node-commands-retry.test.tsx).
+  const [nodeCommands, setNodeCommands] = useState(false);
+  useEffect(() => {
+    if (!open || nodeCommands) return;
+    let live = true;
+    void import("../lib/node-palette").then(() => live && setNodeCommands(true), () => {});
+    return () => {
+      live = false;
+    };
+  }, [open, nodeCommands]);
   const [savedPanel, setSavedPanel] = useState<SavedSearchPanel | null>(null);
   const saved = useSavedSearches(open && mode === "jump", savedPanel);
   const managing = savedPanel?.scope === saved.scope ? savedPanel : null;
@@ -344,7 +356,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
     const all = [...contextCommands({ route, pane }), ...appCommands({ bindings, available: (id) => Boolean(handlerOf(id)), run, machines: machines.map((m) => ({ id: m.id, name: m.name })), extra })];
     return filterCommands(all, text).map((cmd) => ({ kind: "command" as const, key: cmd.id, cmd }));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `route` is parsed anew each render; its path says it all
-  }, [open, mode, text, bindings, machines, pane?.mid, pane?.sid, href(route), onNewAgent, recentChats, sessions, assistant, preferTab]);
+  }, [open, mode, text, bindings, machines, pane?.mid, pane?.sid, href(route), onNewAgent, recentChats, sessions, assistant, preferTab, nodeCommands]);
   // the files under the directory of the page (#2438): listed after the conversations and panes
   const files = usePaletteFiles({ open: open && !managing, jump: mode === "jump" && !operators, text, route, pane, machinePanes });
   const shown = useMemo(() => (mode === "command" ? commands : [...hits, ...files.rows]), [mode, commands, hits, files.rows]);
