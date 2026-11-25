@@ -52,8 +52,10 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 
 // assistantRuntimeEnv is the same generated command and approved environment snapshot without process proxy addresses.
 // Runtime workers can be replaced independently of node RPCs, so Auth-held credentials and their BaseEnv stay in the node.
-func (n *Node) assistantRuntimeEnv(cwd string) []string {
-	env, _, _ := n.assistantLarkEnvWithProxy(cwd, "", false)
+// session carries the conversation id ("" on session.start) so per-session PERSONA_CATEGORIES and categories_unknown
+// apply to subsequent runtime turns, mode changes, and forks (#13246).
+func (n *Node) assistantRuntimeEnv(cwd, session string) []string {
+	env, _, _ := n.assistantLarkEnvWithProxy(cwd, session, false)
 	return env
 }
 
@@ -85,6 +87,9 @@ func (n *Node) assistantLarkEnvWithProxy(cwd, session string, openProxy bool) (e
 		"PERSONA_SPACE=" + space}
 	if kind := n.trackKind(cwd); kind != "" {
 		env = append(env, trackKindEnv+"="+kind) // track_kind_env.go
+	}
+	if cats, known := n.processCategories(cwd, session); known {
+		env = append(env, categoriesEnv+"="+cats) // categories_env.go
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

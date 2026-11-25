@@ -853,14 +853,14 @@ Set to Full page, the Agent's page opened from a card shows cindy's way-back str
 
 No new token. The two icons are added to `ui/icons.tsx` in the existing stroke grammar. iOS and Android draw these cards in the chat, one per Agent, and a card with an Agent opens that Agent's page (#5110).
 
-**Changed-files card** (web, #5157, `web/src/views/chat/TurnChanges.tsx`; cindy's `TurnChangesCard`, at the owner's request, 2026-11-12), Agents only (super rules 0 and 4): the last thing in a finished Agent exchange that edited files.
-- **Frame:** a `rounded-xl` `bg-surface` section with a 1 px `--line` border and 4 px above and below.
-- **Head** (at least 64 px, 16 px across, 12 px down, 12 px gaps): a 36 px `--field` tile (`rounded-control`) with the 18 px `fileDiff` mark in `--ink-2`; **Changed N files** (14 px medium `--ink`, one line) with `+N -N` under it (12 px mono, `--diff-add-fg` / `--diff-del-fg`, ASCII minus); **Review**, the standard secondary `Button`, on the right.
-- **Files** (under a `--line` hairline, 12 px across, 8 px down): 36 px rows (44 on a touch screen), `rounded-control`, `hover:bg-hover`: the 15 px `file` mark in `--ink-2`, the path relative to the session's folder (13 px `--ink`, truncated, the full path as its title) and its own `+N -N` (each only above zero). Three rows, then **Show N more files** ⌄ / **Show less** ⌃ (13 px `--ink-2`, 32 px, hover `--ink`).
+**Changed-files card** (web, #5157, `web/src/views/chat/TurnChanges.tsx`; iOS/iPadOS, #12016, `apple/Persona/Views/Chat/TurnChangesCard.swift`; cindy's `TurnChangesCard`, at the owner's request, 2026-11-12), Agents only (super rules 0 and 4): the last thing in a finished Agent exchange that edited files.
+- **Frame:** a `rounded-xl` `bg-surface` section with a 1 px `--line` border and 4 px above and below (on iOS/iPadOS: `Theme.card` with `Theme.Radius.card` and hairline `Theme.cardStroke`).
+- **Head** (at least 64 px, 16 px across, 12 px down, 12 px gaps): a 36 px `--field` tile (`rounded-control`) with the 18 px `fileDiff` mark in `--ink-2` (on iOS/iPadOS: `Theme.Size.wellL` `Theme.Fill.well` tile with `Theme.Icon.reviewChanges`); **Changed N files** (14 px medium `--ink`, one line; `Theme.Font.secondaryMedium` on iOS) with `+N -N` under it (`CodeChangeCounts` on iOS, omitted when uncountable); **Review**, the standard secondary `Button` (`.themedButton()` on iOS, stacked under the header at accessibility text sizes), on the right.
+- **Files** (under a `--line` hairline, 12 px across, 8 px down): 36 px rows (44 on a touch screen; `Theme.Size.tapTarget` on iOS), `rounded-control`, `hover:bg-hover`: the file mark (`FileViewer.symbol(for:)` on iOS), the path relative to the session's folder (`Theme.Font.caption`, middle-truncated on iOS, full path copyable from the context menu) and its own `+N -N` (each only above zero, omitted when clipped). Three rows, then **Show N more files** ⌄ / **Show less** ⌃ (`FoldToggle` pinned in place with `chatPinned` on iOS).
 - **Counts** are the exchange's own successful edits, the numbers each edit's row shows, counted without drawing a diff; folded work counts by the changes its fold carries, so a reload keeps the card. A fold from an older node carries none, and an exchange whose start is not on the page is missing edits: neither has a card (principle 5: no count that cannot be known).
-- **Review** opens the branch's review (commits and uncommitted work); a file row goes to its file there, or opens the file itself when the review does not list it or the file is outside the session's folder.
+- **Review** opens the branch's review (commits and uncommitted work); a file row goes to its file there (unfolded and scrolled into view on iOS `ReviewPage`), or opens the file itself (`FileViewer` on iOS) when the hub lacks review, the review fails to load or does not list that file, or the file is outside the session's folder.
 
-Deviations from cindy: no Undo / Reapply (Persona cannot apply or revert a turn's patch), the plain `file` mark instead of file-type icons, rows a finger tall on touch screens (6.3), and 评审 for Review in Chinese (the Review panel's word). The `fileDiff` and `alertCircle` marks are added to `ui/icons.tsx` (Lucide's file-diff and circle-alert, as cindy's); no new token.
+Deviations from cindy: no Undo / Reapply (Persona cannot apply or revert a turn's patch), the plain `file` mark on web (`FileViewer.symbol(for:)` on iOS), rows a finger tall on touch screens (6.3), and 评审 for Review in Chinese (the Review panel's word). On web, `fileDiff` and `alertCircle` marks are added to `ui/icons.tsx` (Lucide's file-diff and circle-alert, as cindy's); on iOS/iPadOS, zero new tokens or symbols.
 
 #### Connected Inbox message cards (#856)
 
@@ -1800,14 +1800,28 @@ The hub's link while it is down (Waiting for network, Connecting…, Updating…
 ### Web skill mentions (#5357)
 
 Reuse the composer's existing `ComposerPanel` surface for `@` and `SlashPalette` surface for `/`, their neutral sliding
-highlight, icon set, keyboard/IME/Escape behavior and context chips. A skill row has a readable name, source and
+highlight, icon set and keyboard/IME/Escape behavior. A skill row has a readable name, source and
 description; `@` uses two lines, while `/` puts them in its own 36 px row (44 px on touch). The source
-distinguishes equal names. Selecting either row adds the same removable skill chip and opaque reference rather than hiding an invocation in display text.
-Skill rows and the skill chip's remove target meet the Web 44 px touch size. The menu's loading, partial-inventory and
+distinguishes equal names. Both pickers insert the same inline skill reference with its opaque ID. Skill rows meet
+the Web 44 px touch size. The menu's loading, partial-inventory and
 failure status stays secondary and never disables ordinary chat. No new primary screen, setting, model choice or
 native client pattern is introduced. Use the existing surface/hover/ink/accent tokens in light/dark and narrow layouts.
-Ordinary Claude Code and Codex Agent chats use this same picker and chip. The catalog belongs to the actual session;
+Ordinary Claude Code and Codex Agent chats use this same picker. The catalog belongs to the actual session;
 unsupported or unavailable environments show the existing quiet failure status while text and other references remain usable.
+
+#### Inline references in the web composer (#15409)
+
+This serves people who refer to a file, folder, skill, workspace, repository or previous Agent chat while writing.
+Picking from `@` or `+` inserts the reference at the caret so it stays with the sentence it belongs to. Use the
+existing 14 px semantic icon and accent text ink on the text baseline. Hover reveals the source or full path.
+Arrow keys step past the reference in one move, and Backspace, Delete or a range selection can remove it.
+The folder row selects the folder. Its chevron or Right Arrow opens it for browsing. The scheduled prompt picker
+browses folders to choose a file in the task's execution directory.
+
+`InlineMentionInput` loads when references are used. The native field handles ordinary drafts immediately. Their
+shared document keeps the text, references and caret through local edits and the full-screen editor. Quotes, forwards,
+uploads, pasted blocks and selections brought in from a reader continue to use their existing space above the field.
+The wire format is in `docs/protocol/protocol.md` under "Tags in messages (parsed by clients)".
 
 ### 3.11 Code blocks, inline code and quotes in replies
 
@@ -2884,6 +2898,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Icons | SF Symbols | custom strokes | Phosphor, by meaning (`spec/icons/meanings.json`) | web has no map |
 | Text size setting | Small/Standard/Large | same ratios | none | missing on Android |
 | Sidebar session preview | Long-press menu | Fine-pointer hover card (#15342) | Preview in the action sheet | platform-specific disclosure |
+| Composer references | Picker results use each client's existing composer | Inline references at the caret (#15409) | Picker results use each client's existing composer | platform-specific editing |
 | Tokens source | hand-written | hand-written | generated from `spec/tokens` | Apple and Android drift fails a test; the web is unchecked |
 
 ## HarmonyOS native structure
