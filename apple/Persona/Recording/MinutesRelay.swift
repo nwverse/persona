@@ -16,6 +16,8 @@ import WatchConnectivity
     /// The meetings whose minutes the hub holds back while its recording module is off (`detail.paused`, #15214).
     private var paused: Set<UUID> = []
     private var loop: Task<Void, Never>?
+    /// The allowance the last relay went out with; nil until this run relayed anything.
+    private var relayedRecording: RecordingAllowance?
 
     /// From `MeetingRecorder.start()` at launch.
     func start() {
@@ -104,14 +106,18 @@ import WatchConnectivity
         return meeting
     }
 
-    /// The hub's recording module went on or off (`RecordingModule.tellWatch`): the meetings go again, marked or not.
+    /// The hub's recording module went on or off (`RecordingModule.tellWatch`, called at every hello): the meetings go
+    /// again, marked or not. Only when the allowance differs from the one last relayed, and never before this run
+    /// relayed anything: with nothing read yet every meeting would go as still being written, over minutes the watch
+    /// already has. The next read relays them with the allowance of that moment anyway.
     func recordingChanged() {
-        guard started, watchListens else { return }
+        guard started, watchListens, let relayedRecording, relayedRecording != RecordingModule.allowance else { return }
         push(candidates())
     }
 
     private func push(_ meetings: [RecordingEntry]) {
         let recording = RecordingModule.allowance
+        relayedRecording = recording
         let list = meetings.map { Self.relayed(known[$0.id] ?? Self.short($0, minutes: nil, status: nil), recording: recording) }
         WatchSync.shared.push(minutes: WatchMinutes(meetings: list))
     }
