@@ -195,6 +195,69 @@ describe("AlwaysPermissions with controlled props", () => {
     expect(host.textContent).toContain(t("chat-sessioninfo.always_empty"));
     expect(mocks.api).not.toHaveBeenCalled();
   });
+
+  it("isolates in-flight revoke pending, grants, restart banner, and errors across session switches with matching key_hash", async () => {
+    const sharedGrant = (tool: string): AlwaysPermissionGrant[] => [
+      { key_hash: "shared-key", tool_name: tool, created_at: "2026-11-06T01:00:00Z" },
+    ];
+    const pendingRevokes = new Map<string, {
+      resolve: (value: { restart_required?: boolean }) => void;
+      reject: (reason: Error) => void;
+    }>();
+    const loadGrants = vi.fn(async (sid: string) => {
+      if (sid === "chat/s1") return sharedGrant("Bash");
+      if (sid === "chat/s2") return sharedGrant("Bash");
+      return sharedGrant("Bash");
+    });
+    const onRevoke = vi.fn((_key: string, sid: string) => new Promise<{ restart_required?: boolean }>((resolve, reject) => {
+      pendingRevokes.set(sid, { resolve, reject });
+    }));
+    const onRestartRequired = vi.fn();
+
+    await mount({ session: "chat/s1", loadGrants, onRevoke, onRestartRequired });
+    await flush();
+    await act(async () => buttons()[0].click());
+    expect(onRevoke).toHaveBeenCalledWith("shared-key", "chat/s1");
+    expect(buttons()[0].disabled).toBe(true);
+
+    // Switching to s2 while s1's revoke is still in flight unlocks s2's buttons.
+    await mount({ session: "chat/s2", loadGrants, onRevoke, onRestartRequired });
+    await flush();
+    expect(host.textContent).toContain("Bash");
+    expect(buttons()[0].disabled).toBe(false);
+
+    // Resolving s1's revoke after switching to s2 must not delete s2's matching key_hash
+    // or show s1's restart banner on s2, while still notifying onRestartRequired for s1.
+    await act(async () => { pendingRevokes.get("chat/s1")!.resolve({ restart_required: true }); });
+    await flush();
+    expect(host.textContent).toContain("Bash");
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(onRestartRequired).toHaveBeenCalledWith("chat/s1");
+
+    // Start revoking on s2, switch to s3 and start revoking on s3; rejecting s2 must neither
+    // show an error on s3 nor clear s3's active pending lock.
+    await act(async () => buttons()[0].click());
+    expect(onRevoke).toHaveBeenLastCalledWith("shared-key", "chat/s2");
+    await mount({ session: "chat/s3", loadGrants, onRevoke, onRestartRequired });
+    await flush();
+    expect(buttons()[0].disabled).toBe(false);
+    await act(async () => buttons()[0].click());
+    expect(onRevoke).toHaveBeenLastCalledWith("shared-key", "chat/s3");
+    expect(buttons()[0].disabled).toBe(true);
+
+    await act(async () => { pendingRevokes.get("chat/s2")!.reject(new Error("s2 revoke failed")); });
+    await flush();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(buttons()[0].disabled).toBe(true);
+
+    await act(async () => { pendingRevokes.get("chat/s3")!.resolve({ restart_required: false }); });
+    await flush();
+    expect(host.textContent).toContain(t("chat-sessioninfo.always_empty"));
+    expect(mocks.api).not.toHaveBeenCalled();
+    expect(getItemSpy).not.toHaveBeenCalled();
+    expect(setItemSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe("AlwaysPermissions default compatibility", () => {
@@ -225,5 +288,31 @@ describe("AlwaysPermissions default compatibility", () => {
     await act(async () => buttons()[0].click());
     await flush();
     expect(host.textContent).toContain(t("chat-sessioninfo.always_empty"));
+  });
+
+  it("persists sessionStorage restart warning for the original session if default revoke finishes after switching sessions", async () => {
+    const shared = [{ key_hash: "shared-key", tool_name: "Bash", created_at: "2026-11-06T01:00:00Z" }];
+    let finishDelete!: (value: { restart_required: boolean }) => void;
+    mocks.api.mockImplementation((_path: string, init?: { method?: string }) => {
+      if (init?.method === "DELETE") {
+        return new Promise<{ restart_required: boolean }>((resolve) => { finishDelete = resolve; });
+      }
+      return Promise.resolve({ grants: shared });
+    });
+
+    await mount({ session: "chat/s1" });
+    await flush();
+    await act(async () => buttons()[0].click());
+    await mount({ session: "chat/s2" });
+    await flush();
+    expect(buttons()[0].disabled).toBe(false);
+
+    await act(async () => { finishDelete({ restart_required: true }); });
+    await flush();
+    expect(host.textContent).toContain("Bash");
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    expect(setItemSpy).toHaveBeenCalledWith("persona.always-restart:chat/s1", "1");
+    expect(sessionStorage.getItem("persona.always-restart:chat/s1")).toBe("1");
+    expect(sessionStorage.getItem("persona.always-restart:chat/s2")).toBeNull();
   });
 });

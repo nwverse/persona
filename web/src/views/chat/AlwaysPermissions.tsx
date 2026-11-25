@@ -1,5 +1,5 @@
 // Remembered permission grants belong to this conversation; revoke only after the hub accepts the deletion.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, enc, errorText } from "../../lib/api";
 import { ago } from "../../lib/format";
 import { t } from "../../i18n";
@@ -58,13 +58,18 @@ export function AlwaysPermissions({
   const managedRestart = isControlledRestart || Boolean(onRestartRequired);
 
   const [localGrants, setLocalGrants] = useState<AlwaysPermissionGrant[] | null>(null);
-  const [localError, setLocalError] = useState("");
-  const [localPending, setLocalPending] = useState("");
+  const [localError, setLocalError] = useState<{ session: string; message: string }>({ session, message: "" });
+  const [localPending, setLocalPending] = useState<{ session: string; key: string } | null>(null);
   const [revision, setRevision] = useState(0);
   const [localRestart, setLocalRestart] = useState<{ session: string; value: boolean }>(() => ({
     session,
     value: managedRestart ? false : needsRestart(session),
   }));
+
+  const sessionRef = useRef(session);
+  useLayoutEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
 
   const loadGrantsRef = useRef(loadGrants);
   useEffect(() => {
@@ -77,25 +82,33 @@ export function AlwaysPermissions({
     if (isControlledGrants) return;
     let live = true;
     setLocalGrants(null);
-    setLocalError("");
+    setLocalError({ session, message: "" });
     let req: Promise<AlwaysPermissionGrant[]>;
     try {
       req = loadGrantsRef.current
         ? Promise.resolve(loadGrantsRef.current(session))
         : api<{ grants: AlwaysPermissionGrant[] }>(path).then((r) => r.grants);
     } catch (e) {
-      setLocalError(errorText(e));
+      setLocalError({ session, message: errorText(e) });
       return;
     }
     req
       .then((rows) => { if (live) setLocalGrants(rows); })
-      .catch((e) => { if (live) setLocalError(errorText(e)); });
+      .catch((e) => { if (live) setLocalError({ session, message: errorText(e) }); });
     return () => { live = false; };
   }, [isControlledGrants, hasLoadGrants, path, session, revision]);
 
   const grants = isControlledGrants ? controlledGrants : localGrants;
-  const error = isControlledError ? controlledError : localError;
-  const pending = isControlledPending ? controlledPendingKey : localPending;
+  const error = isControlledError
+    ? controlledError
+    : localError.session === session
+      ? localError.message
+      : "";
+  const pending = isControlledPending
+    ? controlledPendingKey
+    : localPending?.session === session
+      ? localPending.key
+      : "";
   const restart = isControlledRestart
     ? controlledRestart
     : localRestart.session === session
@@ -106,27 +119,36 @@ export function AlwaysPermissions({
 
   const revoke = async (key: string) => {
     if (pending) return;
-    if (!isControlledPending) setLocalPending(key);
-    if (!isControlledError) setLocalError("");
+    const targetSession = session;
+    const targetPath = path;
+    if (!isControlledPending) setLocalPending({ session: targetSession, key });
+    if (!isControlledError) setLocalError({ session: targetSession, message: "" });
     try {
       const result = onRevoke
-        ? await onRevoke(key, session)
-        : await api<{ restart_required: boolean }>(`${path}/${enc(key)}`, { method: "DELETE" });
-      if (!isControlledGrants) {
+        ? await onRevoke(key, targetSession)
+        : await api<{ restart_required: boolean }>(`${targetPath}/${enc(key)}`, { method: "DELETE" });
+      const stillActive = sessionRef.current === targetSession;
+      if (stillActive && !isControlledGrants) {
         setLocalGrants((rows) => rows?.filter((row) => row.key_hash !== key) ?? null);
       }
       if (result?.restart_required) {
-        if (!isControlledRestart) setLocalRestart({ session, value: true });
+        if (stillActive && !isControlledRestart) {
+          setLocalRestart({ session: targetSession, value: true });
+        }
         if (onRestartRequired) {
-          onRestartRequired(session);
+          onRestartRequired(targetSession);
         } else if (!isControlledRestart) {
-          try { sessionStorage.setItem(restartKey(session), "1"); } catch { /* The visible warning still remains. */ }
+          try { sessionStorage.setItem(restartKey(targetSession), "1"); } catch { /* The visible warning still remains. */ }
         }
       }
     } catch (e) {
-      if (!isControlledError) setLocalError(errorText(e));
+      if (sessionRef.current === targetSession && !isControlledError) {
+        setLocalError({ session: targetSession, message: errorText(e) });
+      }
     } finally {
-      if (!isControlledPending) setLocalPending("");
+      if (!isControlledPending) {
+        setLocalPending((cur) => (cur?.session === targetSession && cur.key === key ? null : cur));
+      }
     }
   };
 
