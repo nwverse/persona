@@ -160,6 +160,7 @@ func (s *Service) setArchived(ctx context.Context, machine, id string, on bool, 
 	}
 	if on {
 		_ = s.call(ctx, machine, "assistant.cache_clear", map[string]any{"session_id": id}, nil)
+		s.handOverArchivedSide(ctx, id)
 	}
 	s.publish(ctx) // the apps get the list with the flag now
 	return true, nil
@@ -937,7 +938,8 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 	if strings.TrimSpace(text) != "" && relayWords(text) == "" {
 		text = prompts.RelayMessageText(text, source, onceID)
 	}
-	params := map[string]any{"session_id": to, "text": text, "message_source": source, "resume_only": true, holdPushesParam: msg.Tool == superviseTool,
+	hold := s.shouldHoldSupervisionPushes(ctx, to, msg)
+	params := map[string]any{"session_id": to, "text": text, "message_source": source, "resume_only": true, holdPushesParam: hold,
 		"once_id": onceID} // every try of it under one id: the node sends it once (relay_once.go)
 	if msg.Interject {
 		params["interject_background"] = true
@@ -958,8 +960,12 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 	}
 	s.availInput(machine, to, relayKind(msg), time.Now())
 	if msg.Tool == superviseTool {
-		// Register only after admission, but before dispatch: a fast MCP call may precede assistant.send's answer.
-		s.holdPushes(ctx, to)
+		if hold {
+			// Register only after admission, but before dispatch: a fast MCP call may precede assistant.send's answer.
+			s.holdPushes(ctx, to)
+		} else {
+			s.noteSideSupervisionPush(ctx, to, msg)
+		}
 	}
 	// A supervision message rendered as a round starts from the first turn (supervise_round.go): what the text says
 	// and the switch now decide, also for one queued before a restart or a change of the switch, and whatever model runs it.
@@ -1005,6 +1011,9 @@ func (s *Service) relayDelivered(ctx context.Context, to string, msg relayMsg) {
 	if msg.Tool == superviseTool {
 		s.backgroundRoundDelivered(ctx, to, msg, time.Now())
 		s.askRelayDelivered(to, msg)
+		if !s.shouldHoldSupervisionPushes(ctx, to, msg) {
+			s.noteReportTurn(to)
+		}
 		return
 	}
 	if msg.Tool == taskEndTool || msg.Tool == prFollowupTool || msg.Tool == relayRefusedTool {
