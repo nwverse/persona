@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // When the hub has no sentences, the phone's text fills the live log (docs/assistant/meeting-minutes.md "Audio from
@@ -79,7 +80,7 @@ func (r *hubRun) fallbackCheckLocked(now time.Time) {
 // setFallbackLocked turns the fallback on or off, in meeting.json too (transcription.fallback).
 func (r *hubRun) setFallbackLocked(on bool) {
 	r.fallback = on
-	if _, err := r.e.TranscriptionUpdate(r.id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
+	if _, err := writersOf(r.e).TranscriptionUpdate(r.id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 		t.Fallback = on
 		return nil
 	}); err != nil && !errors.Is(err, kb.ErrNotFound) && !errors.Is(err, kb.ErrRecordingDeleted) {
@@ -99,7 +100,7 @@ func (r *hubRun) fillLocked() {
 	for _, sg := range r.device {
 		switch {
 		case sg.End <= after || sg.Text == "":
-		case kb.CoveredShare(sg.Start, sg.End, hub) > 0.5:
+		case recordingwire.CoveredShare(sg.Start, sg.End, hub) > 0.5:
 		case r.timeline.RoleAt(sg.End, r.role) == kb.AttendanceOff:
 		case sg.Echo || kb.EchoOf(r.timeline, sg.Start, sg.End, sg.Text): // Persona's echo
 		default:

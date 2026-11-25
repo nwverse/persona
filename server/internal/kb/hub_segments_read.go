@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"slices"
-	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/recordingwire"
 )
@@ -83,9 +82,9 @@ func TranscriptOfRecord(hubMode bool, device, hub []RecordingSegment) []Recordin
 		out = append(out, sg)
 		spans = append(spans, [2]float64{sg.Start, sg.End})
 	}
-	union := UnionSpans(spans)
+	union := recordingwire.UnionSpans(spans)
 	for _, sg := range device {
-		if coveredShare(sg.Start, sg.End, union) <= 0.5 {
+		if recordingwire.CoveredByUnion(sg.Start, sg.End, union) <= 0.5 {
 			sg.Source = SourceDevice
 			out = append(out, sg)
 		}
@@ -102,15 +101,8 @@ func TranscriptOfRecord(hubMode bool, device, hub []RecordingSegment) []Recordin
 	return out
 }
 
-// recordChars is how many characters segs have without Persona's echo, which is not the meeting's text (meta.json's
-// chars: in hub mode the transcript of record's). A meeting of only Persona's echo has none, so it gets no minutes.
-func recordChars(segs []RecordingSegment) int {
-	n := 0
-	for _, sg := range MeetingLines(segs) {
-		n += utf8.RuneCountInString(sg.Text)
-	}
-	return n
-}
+// recordChars is how many characters segs have without Persona's echo (recordingwire.RecordChars).
+func recordChars(segs []RecordingSegment) int { return recordingwire.RecordChars(segs) }
 
 // hubMode: m says the recording is transcribed on the hub.
 func hubMode(m *Meeting) bool { return m != nil && m.Transcription.Hub() }
@@ -149,4 +141,12 @@ func recordOf(files map[string][]byte, m *Meeting, h HubTranscript) []RecordingS
 	var segs []RecordingSegment
 	_ = json.Unmarshal(files["segments.json"], &segs)
 	return TranscriptOfRecord(hubMode(m), segs, h.Segments)
+}
+
+// hubSegmentsOf is recording id's hub sentences (none when it has none or they cannot be read), for an upload.
+func (s *Store) hubSegmentsOf(id string) []RecordingSegment {
+	s.recFilesMu.RLock()
+	defer s.recFilesMu.RUnlock()
+	h, _ := s.readHubLocked(id)
+	return h.Segments
 }

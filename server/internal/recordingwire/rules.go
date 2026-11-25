@@ -3,11 +3,13 @@ package recordingwire
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/kbwire"
 )
@@ -222,6 +224,13 @@ func SortDaySegments(segs []kbwire.RecordingSegment) {
 // MinutesTaskKey is what makes an action the same task in minutes made again: who and what.
 func MinutesTaskKey(a MinutesAction) string { return a.Who + "\x00" + a.What }
 
+// ErrRecordingDeleted: the recording was deleted (its tombstone is there); ErrBadRecording wraps what is wrong with a
+// request about one.
+var (
+	ErrRecordingDeleted = errors.New("this recording was deleted")
+	ErrBadRecording     = errors.New("invalid recording")
+)
+
 // ErrTranscriptExpired: the recording was trimmed; only its minutes are kept.
 var ErrTranscriptExpired = errors.New("the transcript expired; only the minutes are kept")
 
@@ -231,6 +240,14 @@ const (
 	PurposeMeetingMinutes = "meeting.minutes"
 	PurposeMeetingAnswer  = "meeting.answer"
 	PurposeMeetingRoom    = "meeting.room"
+	// PurposeMeetingTitle is the live title's: Information processing's, as chat titles are.
+	PurposeMeetingTitle = "meeting.title"
+)
+
+// What an upload and the hub's transcript hold at most: segments, and bytes of text.
+const (
+	MaxRecordingSegments = 20000
+	MaxRecordingText     = 4 << 20
 )
 
 // RecordingID is id as stored (lowercase), false when it is not a UUID (8-4-4-4-12 hexadecimal digits).
@@ -318,4 +335,69 @@ func earlier(a, b time.Time) time.Time {
 		return b
 	}
 	return a
+}
+
+// SettleTranscription keeps t's own rules after a change: a hub-mode transcription has a state; once final or failed the final
+// pass has started and ended; no empty gaps or timeline.
+func SettleTranscription(t *MeetingTranscription, now time.Time) {
+	if t.Mode != TranscriptionHub {
+		*t = MeetingTranscription{Mode: t.Mode}
+		return
+	}
+	if t.State == "" {
+		t.State = TranscriptionLive
+	}
+	if t.Done() {
+		if t.FinalAt.IsZero() {
+			t.FinalAt = now.UTC()
+		}
+		if t.FinalFrom.IsZero() {
+			t.FinalFrom = t.FinalAt
+		}
+		t.FinalDone = 0
+	}
+	if len(t.Gaps) == 0 {
+		t.Gaps = nil
+	}
+	if t.Timeline != nil && len(t.Timeline.Roles) == 0 && len(t.Timeline.Speaking) == 0 {
+		t.Timeline = nil
+	}
+}
+
+// CleanLive is a sentence as the live log keeps it: a bad one is mended, never refused, since positions stay
+// contiguous. A negative start is 0, an end before the start the start; the text is one line, cut to MaxLiveText bytes
+// at a character boundary.
+func CleanLive(sg LiveSegment) LiveSegment {
+	if math.IsNaN(sg.Start) || math.IsInf(sg.Start, 0) || sg.Start < 0 {
+		sg.Start = 0
+	}
+	if math.IsNaN(sg.End) || math.IsInf(sg.End, 0) || sg.End < sg.Start {
+		sg.End = sg.Start
+	}
+	sg.Text = cutBytes(strings.Join(strings.Fields(strings.ToValidUTF8(sg.Text, "�")), " "), MaxLiveText)
+	return sg
+}
+
+// MaxLiveText is the bytes of one sentence of the live log: longer ones are cut at a character boundary.
+const MaxLiveText = 4000
+
+// MeetingLines is segs without Persona's echo: what the summary, the minutes and the follow-up read.
+func MeetingLines(segs []kbwire.RecordingSegment) []kbwire.RecordingSegment {
+	out := make([]kbwire.RecordingSegment, 0, len(segs))
+	for _, sg := range segs {
+		if !sg.Echo {
+			out = append(out, sg)
+		}
+	}
+	return out
+}
+
+// RecordChars is how many characters segs have without Persona's echo, which is not the meeting's text (meta.json's
+// chars: in hub mode the transcript of record's). A meeting of only Persona's echo has none, so it gets no minutes.
+func RecordChars(segs []kbwire.RecordingSegment) int {
+	n := 0
+	for _, sg := range MeetingLines(segs) {
+		n += utf8.RuneCountInString(sg.Text)
+	}
+	return n
 }

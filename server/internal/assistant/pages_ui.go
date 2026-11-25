@@ -418,6 +418,9 @@ func (r *pageRequest) ownerAction(ctx context.Context, from, action, id string) 
 	case "persona.remove":
 		p, changed, err = r.st.RemoveAssistantPage(ctx, id, db.AssistantPageRemovedByOwner, r.now)
 		if err == nil {
+			if changed {
+				r.s.pageRoutineRemoved(ctx, id, p.RoutineID)
+			}
 			r.s.pagesTold(ctx, id, changed)
 			return r.indexResult(ctx, p, toast("removed_toast"))
 		}
@@ -429,12 +432,19 @@ func (r *pageRequest) ownerAction(ctx context.Context, from, action, id string) 
 		case errors.Is(err, db.ErrAssistantPageTitleTaken):
 			return again(toast("title_taken"))
 		case err == nil:
+			if changed {
+				r.s.pageRoutineRestored(ctx, id, p.RoutineID)
+			}
 			r.s.pagesTold(ctx, id, changed)
 			return again(toast("restored"))
 		}
 	case "persona.delete":
-		changed, err = r.st.DeleteAssistantPage(ctx, id)
+		var routine string
+		changed, routine, err = r.st.DeleteAssistantPageWithRoutine(ctx, id)
 		if err == nil {
+			if changed {
+				r.s.pageRoutineDeleted(ctx, id, routine)
+			}
 			r.s.pagesTold(ctx, id, changed)
 			return r.indexResult(ctx, nil, toast("deleted"))
 		}

@@ -673,9 +673,11 @@ on-demand model panel, not the everyday Assistant home (#6887).
   under a finished turn's last reply, never under narration in a work summary or words still streaming. Copy message ·
   Start a new session ("Start a new chat" in Persona conversations) · ⋯ More message actions (Quote, Forward, Use as
   context) · the relative time (12 px `--ink-3`, the exact time as its tooltip). 24 × 24 round buttons 2 px apart, 14 px
-  icons, `--ink-3`, `--ink` on `--hover-2` under the pointer. Shown on hover or keyboard focus, it stays 250 ms after
-  the pointer leaves and fades over 250 ms; an open ⋯ keeps it. Touch screens keep the copy + ⋯ row under that reply;
-  the right-click / long-press menu keeps every action. A reply cut short by an error or an interruption carries
+  icons, `--ink-3`, `--ink` on `--hover-2` under the pointer. The latest finished reply keeps the full row left-aligned
+  below its text (#15428). Its resting `--ink-3` shifts to `--ink-2` on reply hover or keyboard focus within the bar.
+  Earlier bars appear on hover or keyboard focus, stay 250 ms after the pointer leaves and fade over 250 ms. An open ⋯
+  keeps the bar visible. Touch screens keep the copy + ⋯ row under a finished reply. The right-click / long-press menu
+  keeps every action. A reply cut short by an error or an interruption carries
   cindy's "This reply did not complete" line above it (13 px `--ink-2`). After the time (#5426, `TurnUsage`, cindy's
   usage cell): what the exchange cost, 6 px on, 12 px `--ink-3`, half a pixel down, "Worth $0.12" in an Agent session
   with cindy's usage card (320 px, `--surface`, `--line` border, 12 px radius, `shadow-overlay`, 16 px padding, 12 px

@@ -57,4 +57,13 @@ describe("the Extensions and Connectors pages boundary", () => {
     expect(settings).toMatch(/const Integrations = lazyPage\(\(\) => import\("\.\/settings\/Integrations"\)\.then\(\(m\) => m\.Integrations\)\)/);
     // the pages render through these in Settings.navigation / Settings.groups tests (loadPages)
   });
+
+  it("lazily loads SourcesUI inside Integrations without statically importing SourcesUI or SourcesGraph", () => {
+    const integrations = readFileSync(new URL("./Integrations.tsx", import.meta.url), "utf8");
+    const detail = readFileSync(new URL("./IntegrationDetail.tsx", import.meta.url), "utf8");
+    const staticSources = /^import\s+(?!type\b)[^;]*from\s+["'][^"']*subscriptions\/Sources(?:UI|Graph)["']/m;
+    expect(integrations).not.toMatch(staticSources);
+    expect(detail).not.toMatch(staticSources);
+    expect(integrations).toMatch(/lazyPage\(\(\) => import\("\.\.\/subscriptions\/SourcesUI"\)\.then\(\(m\) => m\.SourcesUI\)\)/);
+  });
 });
