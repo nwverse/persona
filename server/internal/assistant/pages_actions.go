@@ -408,6 +408,7 @@ func (s *Service) cleanPages(ctx context.Context, st pageStore, now time.Time) {
 		s.logf("assistant pages: expiring drafts: %v", err)
 	} else if len(expired) > 0 {
 		s.logf("assistant pages: %d drafts expired", len(expired))
+		s.expirePageOffers(ctx, expired) // their cards say Expired (pages_tool.go)
 	}
 	if n, err := st.PurgeAssistantPages(ctx, now); err != nil {
 		s.logf("assistant pages: purging: %v", err)

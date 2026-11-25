@@ -1106,7 +1106,10 @@ func TestCompletionUnknownRowListedAgainWithALaterTime(t *testing.T) {
 	row := turnRow(proto.StatusUnknown, 3, "修好了")
 	nodeListed(s, f, row)
 	var reads atomic.Int32
-	f.hookReads(receiptHooks{before: func(int) {
+	f.hookReads(receiptHooks{beforeCall: func(call DeviceCall) {
+		if call.Device != "box" {
+			return // the main conversation's relay confirmation is not a read of this Agent's transcript
+		}
 		later := row
 		later.UpdatedAt = row.UpdatedAt.Add(time.Duration(reads.Add(1)) * 3 * time.Second) // listed again with a later time, at every read
 		f.setSessions("box", later)

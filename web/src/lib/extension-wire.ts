@@ -1069,6 +1069,11 @@ export interface InitializeParams {
   plugin?: ExtensionInfo;
   /** The configuration with the schema's defaults filled in. */
   config?: unknown;
+  /**
+   * The manager's source-privacy boundary, sent only to an extension contributing a selected connector. Runtime
+   * authorization input, not extension settings persisted in the extension registry.
+   */
+  inbox_visibility?: unknown;
   secrets?: Record<string, string>;
   granted: Permissions;
   /** The contributions this run is for, by extension point. */

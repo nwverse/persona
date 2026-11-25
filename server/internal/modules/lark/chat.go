@@ -12,7 +12,6 @@ import (
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
-	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/textfmt"
 )
@@ -41,6 +40,9 @@ type (
 
 const (
 	FeishuText          = assistantwire.FeishuText
+	FeishuReact         = assistantwire.FeishuReact
+	FeishuUnreact       = assistantwire.FeishuUnreact
+	FeishuMessages      = assistantwire.FeishuMessages
 	FeishuResource      = assistantwire.FeishuResource
 	FeishuSave          = assistantwire.FeishuSave
 	FeishuUserName      = assistantwire.FeishuUserName
@@ -93,7 +95,7 @@ func randomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// dotJoin joins the parts that are not empty with " · " (the core's feishu_cards.go).
+// dotJoin joins the parts that are not empty with " · ".
 func dotJoin(parts ...string) string {
 	var out []string
 	for _, p := range parts {
@@ -109,7 +111,7 @@ func contextText(s string) string {
 	return strings.ReplaceAll(strings.TrimSpace(prompts.ContextBody(s)), "\n", "\n      ")
 }
 
-// botTargetOf is the target a run of the chat answers (the core's feishu_progress.go).
+// botTargetOf is the target a run of the chat answers (the core's run_progress.go).
 func botTargetOf(r *channel.Run) botTarget {
 	kind := r.TargetKind
 	if kind == "" || kind == targetMain {
@@ -161,8 +163,4 @@ func (s core) resolveBotTarget(ctx context.Context, t botTarget) (resolvedTarget
 
 func (s core) botAllowed(l i18n.Lang, f FeishuFeatures, t botTarget) error {
 	return s.h.Allowed(l, f, t)
-}
-
-func (s core) botCardDone(ctx context.Context, messageID string, ix proto.Interaction, how string) {
-	s.h.CardDone(ctx, messageID, ix, how)
 }

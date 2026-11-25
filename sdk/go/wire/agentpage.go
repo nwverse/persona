@@ -181,7 +181,9 @@ type AgentPageTitleRules struct {
 	// Reserved are the built-in places' names in every language the app speaks.
 	Reserved []string
 	// Owner is the owner renaming a page: only a title that is a reserved name is refused. An Agent's title is refused
-	// when it has a reserved name anywhere in it ("Inbox (2)", "收件箱 ·").
+	// when it has a reserved name in it ("Inbox (2)", "收件箱 ·"): anywhere for a name in a script written without
+	// spaces (Chinese, Japanese), as a whole word for a name in Latin letters ("Inbox · work" but not "Personal budget"
+	// for Persona, nor "Todoist export" for ToDo).
 	Owner bool
 	// Fold maps a title and a reserved name to the form they are compared in. The hub passes NFKC with case folding;
 	// this package has the standard library only, which has no normalization tables, so nil folds case alone.
@@ -205,11 +207,56 @@ func (r AgentPageTitleRules) Check(title string) (string, error) {
 		if reserved == "" {
 			continue
 		}
-		if key == reserved || !r.Owner && strings.Contains(key, reserved) {
+		if key == reserved || !r.Owner && hasReservedName(key, reserved) {
 			return "", fmt.Errorf("title: %q is the name of one of the app's own places; choose another title", name)
 		}
 	}
 	return title, nil
+}
+
+// hasReservedName says whether title has the reserved name in it, both folded alike: as a whole word when the name's
+// letters are all Latin (a letter or digit on either side makes it part of another word), anywhere otherwise.
+func hasReservedName(title, name string) bool {
+	if !latinName(name) {
+		return strings.Contains(title, name)
+	}
+	for from := 0; from <= len(title)-len(name); {
+		i := strings.Index(title[from:], name)
+		if i < 0 {
+			return false
+		}
+		start, end := from+i, from+i+len(name)
+		before, _ := utf8.DecodeLastRuneInString(title[:start])
+		after, _ := utf8.DecodeRuneInString(title[end:])
+		if start == 0 || !wordRune(before) {
+			if end == len(title) || !wordRune(after) {
+				return true
+			}
+		}
+		_, size := utf8.DecodeRuneInString(title[start:])
+		from = start + size
+	}
+	return false
+}
+
+// latinName: every letter of name is a Latin one (it has one at least).
+func latinName(name string) bool {
+	letters := false
+	for _, r := range name {
+		if unicode.IsLetter(r) {
+			if !unicode.Is(unicode.Latin, r) {
+				return false
+			}
+			letters = true
+		}
+	}
+	return letters
+}
+
+// wordRune is a character that continues a word in Latin letters: a Latin letter, a digit or a mark. A Chinese or
+// Japanese character next to it does not ("週のToDo"): those scripts put no space between words.
+func wordRune(r rune) bool {
+	return unicode.Is(unicode.Latin, r) || unicode.IsDigit(r) || unicode.IsMark(r)
 }
 
 // CheckAgentPageTitle holds a title to the characters a page's title may have (AgentPageTitleRules.Check without the

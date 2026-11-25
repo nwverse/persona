@@ -1997,7 +1997,7 @@
   },
   {
     "name": "view_show",
-    "description": "Create a persistent live card in the calling assistant conversation. Use the same View schema as persona-view and extension UI: sections of components, a required plain-text fallback, and optional named pages. The card stays at its feed position; use view_update to change it. The hub validates the View and returns field-level errors for correction. At most 64 KB per card and 200 cards per conversation. This does not send a push notification. Keep the conclusion in your normal reply too. Returns {id, version}; save the id for updates. Do not collect passwords or secrets in a card. An html component can call persona.reply / persona.open only when it has a key, and each call is confirmed by the user; the card's one reply is shared with its reply actions.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Create a live card in this assistant conversation: a View as persona-view and extension UI use (sections of components, a required plain-text fallback, optional named pages), at most 64 KB, 200 cards a conversation. It keeps its feed position; change it with view_update. Field-level errors come back for correction. No push: keep the conclusion in your reply too. Returns {id, version}. Never collect passwords or secrets. An html component with a key may call persona.reply / persona.open, each confirmed by the user; the card's one reply is shared with its reply actions.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2014,7 +2014,7 @@
   },
   {
     "name": "view_update",
-    "description": "Replace a live card created by this assistant conversation with a complete validated View. Other conversations and ordinary agents cannot modify it. Supply the version read from view_get to reject stale updates; without it the hub uses the version it reads at the start of this call. Validation or a version conflict leaves the previous card intact. Contents are stored before update notifications are coalesced (at most one per second). Returns {version}. Keep stable component keys to preserve editing and scroll state across devices.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Replace a live card of this conversation with a whole new View (rules as view_show); no other conversation or agent can. A version from view_get refuses a stale update; without one, the version read now is used. A refused update leaves the card as it was. Updates are stored at once and told at most once a second. Returns {version}. Keep component keys stable.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2042,7 +2042,7 @@
   },
   {
     "name": "view_get",
-    "description": "Read a persistent live card created by the calling assistant conversation. Returns its id, conversation, version, full View, timestamps and actions (the user's selected reply and submitted values, with pending/sent/failed delivery status; kind html is a reply from an html component's persona.reply, its text the reply the user confirmed; version is the card version the user saw when choosing). Use it before updating a card after resuming work; an id from another conversation is forbidden. Updating the card never clears a committed answer.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Read a live card of this conversation: id, version, View, times and actions (the user's reply and values, delivery pending/sent/failed; kind html is a persona.reply, its text what the user confirmed; version the one they saw). Read it before updating after resuming. An update never clears a committed answer.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -4058,7 +4058,7 @@
   },
   {
     "name": "decisions_query",
-    "description": "Decisions; scope:{executor,machine[],project[],personal}. memory[]: remembered entries this conversation may use (first page; none with by, trust or a status other than active).\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "memory[] page 1: tag words match text/subjects/facet/categories (AND, ignore case). by/trust/non-active status: memory_omitted=ledger_filters; retry tag alone. scope=ledger-only\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -4082,65 +4082,6 @@
         },
         "scope": {
           "type": "object"
-        }
-      },
-      "additionalProperties": false
-    },
-    "defer_loading": true
-  },
-  {
-    "name": "health_intake",
-    "description": "Health only: log water ml/protein g; list records/IDs, daily totals/goals (default 7d incl. today); delete UUID, repeatable; add_item after consent.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
-    "input_schema": {
-      "type": "object",
-      "required": [
-        "action"
-      ],
-      "properties": {
-        "action": {
-          "type": "string",
-          "enum": [
-            "log",
-            "list",
-            "delete",
-            "add_item"
-          ]
-        },
-        "item": {
-          "type": "string",
-          "enum": [
-            "water",
-            "protein",
-            "activity",
-            "trends"
-          ]
-        },
-        "kind": {
-          "type": "string",
-          "enum": [
-            "water",
-            "protein"
-          ]
-        },
-        "amount": {
-          "type": "number",
-          "description": "ml 1-3000; g 0.1-200; one decimal."
-        },
-        "at": {
-          "type": "string",
-          "description": "RFC3339; default now."
-        },
-        "note": {
-          "type": "string",
-          "description": "Food/portion; 4096 UTF-8 bytes; no NUL."
-        },
-        "days": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 366
-        },
-        "id": {
-          "type": "string"
         }
       },
       "additionalProperties": false

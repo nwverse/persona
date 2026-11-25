@@ -13,7 +13,6 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The fake core's side of the chat (chat.go): the settings row the chat's state is kept in, the chat's clock, and what
@@ -37,14 +36,16 @@ type chatData struct {
 	started   []startedRun
 	stopped   []assistantwire.ChatTarget
 	resolved  []resolvedAnswer
-	done      []string // "message id: how" of the cards closed
 	boardSaid int
 	opened    []assistantwire.ChatOpenTodo
 
 	// What the core answers, when a test sets it.
 	resolve     func(t assistantwire.ChatTarget) (assistantwire.ChatResolved, error)
 	answer      func(id string, r proto.Resolution) (bool, error)
-	look        func(id string) (proto.Interaction, bool)
+	view        func(ix proto.Interaction) assistantwire.AskView
+	route       func(ix proto.Interaction) assistantwire.AskRoute
+	sensitive   func(ix proto.Interaction) bool
+	state       func(id string) (ended, pending bool)
 	deadline    func(ix proto.Interaction) (time.Time, bool)
 	gone        func(ix proto.Interaction) bool
 	todoOf      func(chat, thread string) (assistantwire.ChatTodo, bool)
@@ -209,14 +210,6 @@ func (s *Service) AnswerLanguage(locale string) string {
 	return l.Name()
 }
 
-// ListSep is the core's listSep.
-func (s *Service) ListSep(l i18n.Lang) string {
-	if strings.HasPrefix(string(l), "en") {
-		return ", "
-	}
-	return "、" // i18n-ignore: the CJK enumeration comma, as the core's
-}
-
 func (s *Service) ReminderTodo(context.Context, string) *prompts.BotTodo { return nil }
 
 // NoReplyCommand is the core's noReplyCommand.
@@ -246,16 +239,15 @@ func (s *Service) ApproveOwnerAction(context.Context, botcard.MessageEvent, stri
 	return false
 }
 
-func (s *Service) StopConversation(_ context.Context, f assistantwire.FeishuFeatures, t assistantwire.ChatTarget) (string, string) {
-	if err := s.Allowed("", f, t); err != nil {
-		return "error", err.Error()
-	}
+func (s *Service) InterruptConversation(_ context.Context, rt assistantwire.ChatResolved) (string, string) {
 	d := s.ch()
 	s.tmu.Lock()
-	d.stopped = append(d.stopped, t)
+	d.stopped = append(d.stopped, assistantwire.ChatTarget{MachineID: rt.Machine, SessionID: rt.Session.SessionID})
 	s.tmu.Unlock()
-	return "success", "stopped " + t.Kind + " " + t.SessionID
+	return "success", "stopped " + rt.Session.SessionID
 }
+
+func (s *Service) TurnPending(string, string) bool { return false }
 
 func (s *Service) StopProgressCard(_ context.Context, _ assistantwire.FeishuFeatures, t assistantwire.ChatTarget, _ string) (string, string) {
 	return "info", "expired"
@@ -300,7 +292,6 @@ func (s *Service) SessionLink(web, machine, session string, _ bool) string {
 
 func (s *Service) FeishuRuns() int                     { return s.ch().runs }
 func (s *Service) VisiblePending() []proto.Interaction { return s.ch().pending }
-func (s *Service) IxKindTag(string) string             { return "" }
 
 func (s *Service) PendingQuestion(ix proto.Interaction) string { return strings.TrimSpace(ix.Summary) }
 
@@ -329,15 +320,6 @@ func (s *Service) PickModel(context.Context, string, string, proto.ModelPick, i1
 	return nil
 }
 
-// FinalStatus is the core's finalStatus.
-func (s *Service) FinalStatus(status string) bool {
-	switch status {
-	case "resolved", "dismissed", "expired", "cancelled":
-		return true
-	}
-	return false
-}
-
 // EndedText is the core's endedText.
 func (s *Service) EndedText(l i18n.Lang, status, fallback string) string {
 	switch status {
@@ -356,15 +338,40 @@ func (s *Service) ResolutionText(_ i18n.Lang, _ proto.Interaction, r proto.Resol
 	return "answered"
 }
 
-func (s *Service) AnsweredCard(_ context.Context, ix proto.Interaction, how string) *botcard.Card {
-	return botcard.NewCard(how, "", ix.ID)
+// AskView is what the core says of ix for its card: the test's (view), else the session's title as the agent and the
+// tool by its name.
+func (s *Service) AskView(_ context.Context, ix proto.Interaction) assistantwire.AskView {
+	if f := s.ch().view; f != nil {
+		return f(ix)
+	}
+	v := assistantwire.AskView{Agent: ix.SessionTitle, Tool: s.IxToolName(ix)}
+	if v.Agent == "" {
+		v.Agent = "Persona"
+	}
+	return v
 }
 
-func (s *Service) CardDone(_ context.Context, messageID string, _ proto.Interaction, how string) {
-	d := s.ch()
-	s.tmu.Lock()
-	d.done = append(d.done, messageID+": "+how)
-	s.tmu.Unlock()
+// AskRoute is where ix's card goes: the test's (route), else no run of the chat is on its conversation.
+func (s *Service) AskRoute(_ context.Context, ix proto.Interaction) assistantwire.AskRoute {
+	if f := s.ch().route; f != nil {
+		return f(ix)
+	}
+	return assistantwire.AskRoute{}
+}
+
+func (s *Service) AskSensitive(_ context.Context, ix proto.Interaction) bool {
+	if f := s.ch().sensitive; f != nil {
+		return f(ix)
+	}
+	return false
+}
+
+// AskState is the core's record of interaction id: the test's (state), else not ended and up.
+func (s *Service) AskState(id string) (ended, pending bool) {
+	if f := s.ch().state; f != nil {
+		return f(id)
+	}
+	return false, true
 }
 
 func (s *Service) ResolveInteraction(_ context.Context, id string, r proto.Resolution, action string) (bool, error) {
@@ -396,13 +403,6 @@ func (s *Service) StartAgent(context.Context, string, map[string]any) (proto.Ses
 }
 func (s *Service) StartChannelRun(r *channel.Run) { s.startChannelRun(r) }
 
-func (s *Service) CardLook(_ context.Context, id string) (proto.Interaction, bool) {
-	if f := s.ch().look; f != nil {
-		return f(id)
-	}
-	return proto.Interaction{ID: id}, true
-}
-
 func (s *Service) AgentGone(ix proto.Interaction) bool {
 	if f := s.ch().gone; f != nil {
 		return f(ix)
@@ -424,27 +424,11 @@ func (s *Service) BoardChanged() {
 	s.tmu.Unlock()
 }
 
-// ChatRefused is the core's chatRefused.
-func (s *Service) ChatRefused(err error) bool {
-	var re *rpc.Error
-	if errors.As(err, &re) && re.Code == assistantwire.CodeChatDenied {
-		return true
-	}
-	return botcard.ChatRefused(err)
-}
-
 func (s *Service) IxToolName(ix proto.Interaction) string {
 	if ix.ToolTitle != "" {
 		return ix.ToolTitle
 	}
 	return ix.ToolName
-}
-
-func (s *Service) FirstQuestion(ix proto.Interaction) string {
-	if len(ix.Questions) > 0 {
-		return ix.Questions[0].Question
-	}
-	return ""
 }
 
 func (s *Service) SourceChannels() []string                { return []string{channel.Feishu} }

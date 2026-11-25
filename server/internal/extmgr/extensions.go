@@ -1100,10 +1100,22 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		if ps.h != nil {
 			tz, locale = ps.h.userTZName(), string(ps.h.userLang())
 		}
+		var inboxVisibility json.RawMessage
+		if ps.h != nil && ps.h.cfg != nil {
+			visibility := ps.h.cfg.Inbox.Visibility
+			if err := validateInboxVisibilityCapabilities(visibility, p.Full.Connectors()); err != nil {
+				return extension.InitializeParams{}, err
+			}
+			inboxVisibility = inboxVisibilityForConnectors(visibility, p.Full.Connectors())
+		}
+		config, err := inboxVisibilityInitializeConfig(ps.reg.Config(p), inboxVisibility)
+		if err != nil {
+			return extension.InitializeParams{}, err
+		}
 		params := extension.InitializeParams{Hub: extension.HubInfo{Build: build, ExtensionPoints: extension.PointVersions(), Role: role, Timezone: tz,
 			Locale:       locale,
 			Capabilities: extension.HubCapabilities()}, Extension: info,
-			Config: ps.reg.Config(p), Secrets: secrets, Granted: p.Record.Granted, Active: map[string][]string{}}
+			Config: config, InboxVisibility: inboxVisibility, Secrets: secrets, Granted: p.Record.Granted, Active: map[string][]string{}}
 		if ps.h != nil && !ps.h.builtin() {
 			params.Hub.Manager = ps.h.opts.ManagerID
 		}
