@@ -788,25 +788,32 @@ func TestDirectionTreeUnifiesNeedsYouWithProjectionAndSeparatesUserCheck(t *test
 }
 
 func TestDirectionTreeDoesNotDoubleCountCarriedPartOfStepInNeedsYou(t *testing.T) {
+	e := treeEnv(t)
 	ctx := context.Background()
-	now := time.Date(2026, 11, 25, 13, 20, 0, 0, time.UTC)
-	e := newDirectionTreeEnv(t)
-	e.hub.add(proto.Session{
-		MachineID: "mac", SessionID: "s-step-ask", Title: "Step asking", State: proto.StateNeedsYou,
-		Status: "blocked", PendingInteractions: 1, UpdatedAt: now.Add(-5 * time.Minute), StateSince: now.Add(-5 * time.Minute),
+	now := time.Now().UTC().Truncate(time.Second)
+	recent := now.Add(-5 * time.Minute)
+
+	e.f.setSessions("mac", proto.Session{
+		MachineID: "mac", SessionID: "s-step-ask", Title: "Step asking", Status: proto.StatusBlocked, State: proto.StateNeedsYou,
+		PendingInteractions: 1, UpdatedAt: recent, StateSince: recent,
 	})
-	e.hub.interactions = []proto.Interaction{
-		{ID: "ix_step_q", MachineID: "mac", SessionID: "s-step-ask", Kind: proto.InteractionQuestion, CreatedAt: now.Add(-5 * time.Minute)},
+	e.s.fleet.mu.Lock()
+	if e.s.fleet.interactions == nil {
+		e.s.fleet.interactions = map[string]*pending{}
 	}
+	e.s.fleet.interactions["ix_step_q"] = &pending{ix: proto.Interaction{
+		ID: "ix_step_q", MachineID: "mac", SessionID: "s-step-ask", Kind: proto.IxQuestion, ToolName: "AskUserQuestion",
+		CreatedAt: recent, ExpiresAt: now.Add(time.Hour),
+	}}
+	e.s.fleet.mu.Unlock()
+
 	parentID := e.task("Parent task", func(td *Todo) {
-		td.Origin = e.leadA
-		td.Supervision = &TaskSupervision{Supervisor: e.leadA}
+		td.Supervision = &Supervision{Supervisor: "conv_lead_a", UpdatedAt: recent}
 	})
 	e.task("Child step asking owner", func(td *Todo) {
-		td.Origin = e.leadA
 		td.PartOf = parentID
 		td.Agents = []TodoAgent{{MachineID: "mac", SessionID: "s-step-ask", Title: "Step asking"}}
-		td.Supervision = &TaskSupervision{Supervisor: e.leadA}
+		td.Supervision = &Supervision{Supervisor: "conv_lead_a", UpdatedAt: recent}
 	})
 
 	tr := e.s.directionTree(ctx, now)
