@@ -373,6 +373,11 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		finishAgy := n.runtimes.agyWorkBegin(h, method, p.SessionID)
 		_, err := call("session.close", closeParams)
 		finishAgy(err, true)
+		if err == nil {
+			if gp := n.existingGates(); gp != nil {
+				gp.releaseSession(p.SessionID)
+			}
+		}
 		return okResult(err), err, true
 	case "session.archive", "session.unarchive":
 		// Its own archive (archive.go): one that has none keeps the archive Persona's alone.
