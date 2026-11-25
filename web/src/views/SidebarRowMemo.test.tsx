@@ -4,6 +4,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setAgentDetails } from "../lib/context-usage";
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
@@ -79,7 +80,7 @@ describe("a sessions push", () => {
     expect(host.querySelector('a[aria-current="page"]')?.textContent).toContain("任务 3");
   });
 
-  it("an unchanged offline row still moves its age on with the clock", async () => {
+  it("only updates an offline row on the clock while its inline detail is enabled", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     try {
       vi.setSystemTime(new Date("2026-05-01T10:00:00Z"));
@@ -90,15 +91,23 @@ describe("a sessions push", () => {
       act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
       await flush();
       const row = () => [...host.querySelectorAll("a")].find((a) => a.textContent?.includes("任务 4"))?.textContent ?? "";
+      expect(row()).toContain("任务 4");
+      expect(row()).not.toContain("刚刚");
+      previews.clear();
+      act(() => vi.advanceTimersByTime(60_000));
+      expect(previews.get("s4")).toBeUndefined();
+
+      act(() => setAgentDetails(true));
       expect(row()).toContain("刚刚");
 
       // ten minutes on, a push for another session: s4's row keeps its props (memo) but not a stale age
-      act(() => vi.advanceTimersByTime(10 * 60_000));
+      act(() => vi.advanceTimersByTime(9 * 60_000));
       act(() => upsertSession({ ...getState().sessions.mac[0], title: "任务 1（改）" }));
       await flush();
       expect(row()).not.toContain("刚刚");
       expect(row()).toMatch(/10/);
     } finally {
+      act(() => setAgentDetails(false));
       answers["/api/v1/sessions"] = { sessions };
       vi.useRealTimers();
     }

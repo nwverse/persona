@@ -4,7 +4,7 @@ import { memo, useCallback, useMemo, useState, useSyncExternalStore } from "reac
 import { formatList, t } from "../i18n";
 import { awaitsReply, justFinished, sessionSource, sourceName } from "../lib/agent-groups";
 import { addSection, arrangeSessions, assignSection, GROUP_LABEL, isDefaultView, providerLabel, refreshAgentSessions, removeSection, resetView, setView, SHOW_LABEL, SORT_LABEL, toggleProvider, togglePin, totalUnread, updateAgentPrefs, useAgentList, useAgentPrefs, viewOf, type AgentPrefs, type AgentSession, type GroupBy, type ShowMode, type SortBy } from "../lib/agents";
-import { ago, backgroundWaiting, sessionCan, sessionDisplayTab, sessionPreview, sourceSubtitle, sessionTitle, sessionTitleDetail, stateOf, tabLabel } from "../lib/format";
+import { backgroundWaiting, sessionDisplayTab, sessionPreview, sourceSubtitle, sessionTitle, sessionTitleDetail, stateOf, tabLabel } from "../lib/format";
 import { useHerdrTabName } from "../lib/agents-display";
 import { firstAndCurrent } from "../lib/persona-nav";
 import { pickMainChat } from "../lib/handoff";
@@ -296,7 +296,7 @@ function SideUnreadLine({ sides, count, open }: { sides?: readonly Session[]; co
 }
 
 // `prefix`: a word before the title (a tab's name, a pane's agent), in `prefixClass`
-type SessionRowProps = { menuLabel?: string; /** The mark at the start when the state is not shown (a Persona conversation's; pinned: the pin). */ icon?: IconName; s: Session; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; /** null: a targetless external direction, drawn as the same non-link row. */ to: Route | null; go: GoFn; tab?: boolean; label?: string; prefix?: string; prefixClass?: string; hint?: string; /** The hint is whole, never cut (a lead's counts). */ hintFull?: boolean; host?: string; showState?: boolean; showTodoTag?: boolean; onMenu?: RowMenuFn; endRoom?: boolean; /** A lead row whose own conversation is idle while something under it runs (the direction tree's `running`, #6626): draw the working arc anyway (#6230). An own needs-you / unread state still takes precedence. */ workingMark?: boolean;
+type SessionRowProps = { menuLabel?: string; /** The mark at the start when the state is not shown (a Persona conversation's; pinned: the pin). */ icon?: IconName; s: Session; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; /** null: a targetless external direction, drawn as the same non-link row. */ to: Route | null; go: GoFn; tab?: boolean; /** Plain space and tab label for older nodes without a tab association. */ tabFallback?: string; label?: string; prefix?: string; prefixClass?: string; hint?: string; /** The hint is whole, never cut (a lead's counts). */ hintFull?: boolean; host?: string; showState?: boolean; showTodoTag?: boolean; onMenu?: RowMenuFn; endRoom?: boolean; /** A lead row whose own conversation is idle while something under it runs (the direction tree's `running`, #6626): draw the working arc anyway (#6230). An own needs-you / unread state still takes precedence. */ workingMark?: boolean;
   /** 常驻 rows (#6214): the "在做 N · 等你 N" counts never fade on hover and the ⋯ sits in a reserved end slot instead
    * of covering them, so hovering removes no information. */
   keepTrailing?: boolean };
@@ -310,7 +310,7 @@ function sameProps<P extends { to: Route | null }>(a: P, b: P): boolean {
   return keys.every((key) => (key === "to" ? (a.to && b.to ? routePath(a.to) === routePath(b.to) : a.to === b.to) : Object.is(a[key], b[key])));
 }
 
-export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, active, to, go, tab, label, prefix, prefixClass, hint, hintFull, host, showState = true, showTodoTag, onMenu, menuLabel = t("sidebar.agent_actions"), endRoom, icon = "chat", workingMark = false, keepTrailing = false }: SessionRowProps) {
+export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, active, to, go, tab, tabFallback, label, prefix, prefixClass, hint, hintFull, host, showState = true, showTodoTag, onMenu, menuLabel = t("sidebar.agent_actions"), endRoom, icon = "chat", workingMark = false, keepTrailing = false }: SessionRowProps) {
   // a parent of child sessions in its folded state (#5120): one of them waiting makes it need you, one working makes it
   // work; the rows of the paged list come as the hub sends them, the other lists' folded already (lib/folded-rows.ts)
   // its side sessions' part from their rows when an open chat holds them (#7944): a side seen here shows at once
@@ -355,32 +355,19 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   const origin = source ? undefined : autoOrigin(s);
   // the extension whose own icon that mark draws, which the row's tooltip names too (#10358)
   const [openerName, setOpenerName] = useState<string>();
-  // a desktop app's runtime that can be written to: its mark says where it is and the agent's mark which agent, so the
-  // runtime's name at the end only repeats them (it stays in the tooltip); a read-only one still says why
-  const sameAsMarks = source === "desktop" && s.source_kind === "runtime" && sessionCan(s, "send");
   const hasTabAssociation = !!(s.slot_id?.trim() || s.tab_id?.trim());
   const primaryTab = sessionDisplayTab(s, preferTab);
   const associatedTab = hasTabAssociation && !primaryTab ? tabLabel(s) : "";
   const tabIdentity = associatedTab ? t("sidebar.tab_named", { label: associatedTab }) : "";
   // A structural tab row keeps its old plain-text fallback, but only a real association earns the localized identity.
-  const structuralTabHint = tab && !tabIdentity && !primaryTab ? tabLabel(s) : "";
-  const tail = [sameAsMarks ? "" : sourceSubtitle(s), hint ?? structuralTabHint, tabIdentity].filter(Boolean).join(" · ");
+  const structuralTabHint = !hasTabAssociation && tabFallback || (tab && !primaryTab ? tabLabel(s) : "");
+  const tail = [hintFull ? hint : "", tabIdentity || structuralTabHint].filter(Boolean).join(" · ");
   const preview = sessionPreview(s);
   // Settings › Appearance › show details on agent rows (#2430): a second line under an agent's title — folder · model · context · age
   const details = useAgentDetails();
   const withDetail = details && showState && !s.assistant;
-  // when it was last active, at the row's end after its hint (#4236; the work-item row, DESIGN_SYSTEM 3.4): not twice
-  // when the details line shows it; a tab's row, whose end is the room for "N agents", keeps it to offline and
-  // stateless rows without a hint, as before
-  const ageAtEnd = !withDetail && !!s.updated_at && (!endRoom || (!tail && (st === "offline" || !showState)));
-  // beside the age, a row that already carries its marks (where it was opened, its to-do) drops an ordinary hint from
-  // its end, where it would only squeeze the title; an associated tab name stays visible as the Agent's terminal identity.
-  const tailShown = !!tail && (!(ageAtEnd && (source || (showTodoTag && s.todo))) || !!tabIdentity);
-  // the age at the row's end, in the details line, or a background workflow's progress
-  // (#2935) moves on with the clock: the memo keeps an unchanged row from re-rendering on a push, so a minute tick
-  // does it, and only in a row that shows one of them. The ages read the clock when the row renders: `now` is the
-  // mount time until the first tick, and a row may only start showing an age long after it mounted
-  const showsAge = ageAtEnd || (withDetail && !!s.updated_at);
+  // The clock only updates rows with time-sensitive inline details or active work.
+  const showsAge = withDetail && !!s.updated_at;
   const now = useNow(60_000, showsAge || runningWorkflows(s).length > 0 || s.turn_error_kind === "usage_limit" || Boolean(s.background_stalled_since));
   // background commands that look stuck (#13744): it is still Working, the row says they are quiet
   const stall = showState && !s.assistant ? backgroundStall(s, now) : null;
@@ -407,12 +394,12 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   }, [row, go, to]);
   // what sits at the row's end steps aside for the hover ⋯; the open row leaves room for its ⋯ instead
   const aside = active ? undefined : "group-hover/row:invisible";
-  // A 常驻 row's counts stay on screen while the ⋯ fades in beside them (#6214): only its date can yield.
+  // A 常驻 row's counts stay on screen while the ⋯ fades in beside them (#6214).
   const hintAside = keepTrailing ? undefined : aside;
   // behind a prefix (a tab's name, a pane's agent) the title keeps room for a few characters: the prefix shrinks first
   const titleMin = prefix ? ROW_TITLE_MIN : "min-w-0";
-  // with words at the end (where it came from, a hint) the title keeps its own width first: those words give way before it does
-  const titleFirst = tailShown ? "basis-auto" : undefined;
+  // The tab's name gives way before the session title does.
+  const titleFirst = tail ? "basis-auto" : undefined;
   // one ref per key, so letting go takes out only this row's entry (keyedRefs)
   const regRow = useMemo(() => reg(k), [reg, k]);
   // words left unsent in its box, once you are not in it (#5568): in place of what it asks or did
@@ -542,12 +529,6 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
             ))}
           </span>}
         </span>
-      ) : keepTrailing ? (
-        // a lead's name reads as a row, even with nothing second to say: the ⋯'s reserved slot must not take the title's
-        // place. Drawn here, in place of the plain title, so the name shows once (it was drawn twice, "Per… Per…")
-        <span className={cx("flex-1 truncate text-meta", titleMin, titleFirst, active ? "font-medium text-ink" : "text-ink-2")}>
-          {label ?? title}
-        </span>
       ) : (
         <span className={cx("flex-1 truncate text-meta", titleMin, titleFirst, active ? "font-medium text-ink" : st === "offline" ? "text-ink-3" : "text-ink-2", st === "unread" && !active && "font-medium text-ink")}>
           {label ?? title}
@@ -565,8 +546,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
       )}
       {origin && <OriginMark origin={origin} size={16} className={aside} session={s} onName={setOpenerName} />}
       {/* the row's ⋯ takes the end on hover: what is there steps aside instead of showing half under it */}
-      {tailShown && <span className={cx(hintFull ? "shrink-0 whitespace-nowrap tabular-nums" : "max-w-[72px] min-w-6 shrink-[20] truncate", "text-[11px] text-ink-3", hintAside)}>{tail}</span>}
-      {ageAtEnd && <span data-row-age className={cx("shrink-0 text-[11px] text-ink-3", aside)}>{ago(s.updated_at, Date.now(), "narrow")}</span>}
+      {tail && <span className={cx(hintFull ? "shrink-0 whitespace-nowrap tabular-nums" : "max-w-[72px] min-w-6 shrink-[20] truncate", "text-[11px] text-ink-3", hintAside)}>{tail}</span>}
       {source && <SourceTag s={s} className={aside} />}
       {pendingCount > 0 && <span className={cx("flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10px] font-semibold text-attention tabular-nums", aside)}>{pendingCount}</span>}
     </RowTag>
@@ -824,13 +804,7 @@ export const AgentRow = memo(function AgentRow({ s, reg, hover, active, go, pinn
       >
         <AgentAvatar s={s} size={16} />
         <span className={cx("min-w-0 flex-1 truncate text-[13px]", active || unread ? "font-medium text-ink" : "text-ink-2")}>{s.title || t("lib-format.untitled_session")}</span>
-        <span className={cx("flex shrink-0 items-center", !active && "group-hover/row:invisible")}>
-          {unread ? (
-            <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold text-white tabular-nums">{s.unreadCount}</span>
-          ) : (
-            s.rankTimeMs > 0 && <span className="text-[11px] text-ink-3">{ago(new Date(s.rankTimeMs).toISOString())}</span>
-          )}
-        </span>
+        {unread && <span className={cx("flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold text-white tabular-nums", !active && "group-hover/row:invisible")}>{s.unreadCount}</span>}
       </a>
       <button
         type="button"
