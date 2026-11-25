@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -762,7 +763,7 @@ func (s *Service) recordingsAt(ctx context.Context, e *kb.Engine, kind, id strin
 }
 
 // matchedAt says whether ref names calendar item kind/id (id as stored).
-func matchedAt(ref *kb.MeetingRef, kind, id string) bool {
+func matchedAt(ref *recordingwire.MeetingRef, kind, id string) bool {
 	return ref != nil && ref.Kind == kind && kb.SafeID(ref.ID) == id
 }
 

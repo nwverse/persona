@@ -104,6 +104,10 @@ def gen_ts(defs: dict[str, Def], calls: list[Call] | None = None, header: list[s
             out += [f"export type {d.name} = string{brand};", f"/** A {d.name} from its raw string. */",
                     f"export function {lower_camel_id(d.name)}(raw: string): {d.name} {{",
                     f"  return raw{'' if flavor != 'ts' else f' as {d.name}'};", "}", ""]
+        elif d.kind == "text":
+            # A plain alias, not a brand: callers keep passing string literals.
+            out += doc(" ".join(x for x in (d.doc or f"A label: {d.name}.", "Free text, not a closed set.") if x))
+            out += [f"export type {d.name} = string;", ""]
         elif d.kind == "opaque":
             out += doc(" ".join(x for x in (d.doc, f"Opaque JSON: {sentence(d.reason)}") if x))
             out += [f"export type {d.name} = unknown;", ""]

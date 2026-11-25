@@ -489,6 +489,11 @@ var (
 )
 
 // compare holds the schema node at to the Go type g: the same JSON kind, and for an object the same fields.
+var (
+	marshalerType   = reflect.TypeFor[json.Marshaler]()
+	unmarshalerType = reflect.TypeFor[json.Unmarshaler]()
+)
+
 func (s schemas) compare(t *testing.T, at string, node map[string]any, g reflect.Type, seen map[string]bool) {
 	t.Helper()
 	for g.Kind() == reflect.Pointer {
@@ -611,6 +616,14 @@ func (s schemas) compare(t *testing.T, at string, node map[string]any, g reflect
 	case "number":
 		kind(reflect.Float64, reflect.Float32)
 	case "boolean":
+		if asString(node["x-tristate"]) != "" {
+			// An optional boolean whose absence means something: a closed type of its own that reads and writes
+			// the boolean itself (assistantwire.EventReplace).
+			if !g.Implements(marshalerType) || !reflect.PointerTo(g).Implements(unmarshalerType) {
+				t.Errorf("%s: the schema says x-tristate, Go's %s does not read and write its own JSON", at, g)
+			}
+			return
+		}
 		kind(reflect.Bool)
 	case "array":
 		kind(reflect.Slice)
