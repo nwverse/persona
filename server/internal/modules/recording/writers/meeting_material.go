@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"cmp"
@@ -35,12 +35,12 @@ type EarlierProject = recordingwire.EarlierProject
 // EarlierMaterial is the earlier meetings for a question asked during recording id's meeting (the room's
 // meeting_earlier): none while EarlierMeetingsInAnswers is off. ErrRecordingDeleted after a delete, ErrNotFound with no
 // upload of it.
-func (e *Engine) EarlierMaterial(rawID, query string) ([]EarlierMeeting, error) {
+func (e *engine) EarlierMaterial(rawID, query string) ([]EarlierMeeting, error) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return nil, ErrNotFound
 	}
-	if _, gone := e.Store.tombstones()[id]; gone {
+	if gone := e.Store.tombstoned(id); gone {
 		return nil, ErrRecordingDeleted
 	}
 	r, ok := e.Store.Recording(id)
@@ -55,7 +55,7 @@ func (e *Engine) EarlierMaterial(rawID, query string) ([]EarlierMeeting, error) 
 
 // MeetingMaterial is the material for a question asked during recording id's meeting; question ranks the earlier
 // meetings. ErrRecordingDeleted after a delete, ErrNotFound with no upload of it.
-func (e *Engine) MeetingMaterial(rawID, question string) (MeetingMaterial, error) {
+func (e *engine) MeetingMaterial(rawID, question string) (MeetingMaterial, error) {
 	l, r, err := e.LiveRead(rawID)
 	if err != nil {
 		return MeetingMaterial{}, err
@@ -132,7 +132,7 @@ func latestLines(segs []LiveSegment, n int) []LiveSegment {
 // still stored whose upload says it is a meeting (kind meeting) or whose minutes the user asked for, marked not
 // private (a meeting with no mark counts as private), with minutes written. Never one that is a meeting only because
 // a calendar item overlapped it, and never a note.
-func (e *Engine) earlierMeetings(r *Recording, question string) []EarlierMeeting {
+func (e *engine) earlierMeetings(r *Recording, question string) []EarlierMeeting {
 	here := meetingTerms{question: termsOf(question)}
 	for _, t := range []string{r.Title, calendarHintTitle(r)} {
 		if t = fold(strings.TrimSpace(t)); t != "" && !slices.Contains(here.titles, t) {
@@ -212,7 +212,7 @@ func materialMinutes(m *Minutes) Minutes {
 
 // materialProjects are the projects of slugs that are active, paused or done (not ignored or merged): name and
 // status only.
-func (e *Engine) materialProjects(slugs []string) []EarlierProject {
+func (e *engine) materialProjects(slugs []string) []EarlierProject {
 	var out []EarlierProject
 	for _, slug := range slugs {
 		p, ok := e.Store.Project(slug)

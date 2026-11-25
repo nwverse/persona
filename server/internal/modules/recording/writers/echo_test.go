@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"encoding/json"
@@ -10,7 +10,7 @@ import (
 )
 
 // meetingEchoFixtures are the cases the hub and the iOS app share (spec/fixtures/meeting-echo).
-const meetingEchoFixtures = "../../../spec/fixtures/meeting-echo/cases.json"
+const meetingEchoFixtures = "../../../../../spec/fixtures/meeting-echo/cases.json"
 
 // Every shared case: the hub's rule (isEcho) says what the phone's does (#5905).
 func TestMeetingEchoFollowsTheSharedCases(t *testing.T) {
@@ -151,12 +151,12 @@ func TestEchoOfTheTimeline(t *testing.T) {
 }
 
 // The echo rule stays in one place (echo.go: EchoOf, EchoHeld, EchoSpanClosed over isEcho): no other file of the
-// knowledge base or the assistant widens spans by the margin or reads the timeline's speaking spans itself, so a
+// recording module, the knowledge base or the assistant widens spans by the margin or reads the timeline's speaking spans itself, so a
 // refinement of the rule changes echo.go and no caller.
 func TestEchoRuleIsOneFunction(t *testing.T) {
 	allowed := map[string]bool{"echo.go": true, "transcription.go": true} // transcription.go keeps the timeline's union
 	speaking := regexp.MustCompile(`\.Speaking\b|\becho(Margin|Containment)\b|\bechoMatches\b`)
-	for _, dir := range []string{".", filepath.Join("..", "assistant")} {
+	for _, dir := range []string{".", "..", filepath.Join("..", "..", "..", "kb"), filepath.Join("..", "..", "..", "assistant")} {
 		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
 		if err != nil {
 			t.Fatal(err)
@@ -174,7 +174,7 @@ func TestEchoRuleIsOneFunction(t *testing.T) {
 			}
 			for i, line := range strings.Split(string(raw), "\n") {
 				if code, _, _ := strings.Cut(line, "//"); speaking.MatchString(code) {
-					t.Errorf("%s:%d judges sentences against the speaking spans itself (use kb.EchoOf, kb.EchoHeld, kb.EchoSpanClosed): %s",
+					t.Errorf("%s:%d judges sentences against the speaking spans itself (use writers.EchoOf, writers.EchoHeld, writers.EchoSpanClosed): %s",
 						f, i+1, strings.TrimSpace(line))
 				}
 			}

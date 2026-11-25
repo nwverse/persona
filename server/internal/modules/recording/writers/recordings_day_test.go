@@ -1,8 +1,9 @@
-package kb
+package writers
 
 import (
 	"encoding/json"
 	"errors"
+	"github.com/nwverse/persona/server/internal/kb"
 	"math"
 	"os"
 	"slices"
@@ -12,59 +13,6 @@ import (
 )
 
 // All-day recordings (recording_day.go): placeholders only.
-
-const dayID = "1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d"
-
-// dayClock is the day recordings' tests' day: 2026-11-11, recorded from 08:00 in the golden zone (Asia/Shanghai).
-var dayClock = time.Date(2026, 11, 11, 8, 0, 0, 0, goldenZone)
-
-// dayUpload is a day recording's PUT of texts, a minute apart from the day's start (8:00), covered up to the last.
-func dayUpload(rev int64, texts ...string) RecordingUpload {
-	u := RecordingUpload{Revision: rev, StartedAt: dayClock, Duration: float64(60 * len(texts)), Language: "zh-CN", Device: "watch",
-		Kind: RecordingDay, Day: "2026-11-11", TZ: "Asia/Shanghai"}
-	for i, t := range texts {
-		u.Segments = append(u.Segments, RecordingSegment{Start: float64(60 * i), End: float64(60*i + 5), Text: t})
-	}
-	u.Coverage = &RecordingCoverage{To: float64(60 * len(texts))}
-	return u
-}
-
-// dayEngine is a golden engine whose clock reads now.
-func dayEngine(t *testing.T, m Model, now *time.Time) *Engine {
-	t.Helper()
-	e := goldenEngine(t, m)
-	e.clock = func() time.Time { return *now }
-	return e
-}
-
-func ptr[T any](v T) *T { return &v }
-
-// dayAppend is an append of base at revision rev from position from.
-func dayAppend(base, rev int64, from int, segs ...RecordingSegment) RecordingAppend {
-	return RecordingAppend{Base: base, Revision: rev, From: ptr(from), Segments: segs}
-}
-
-func seg(start float64, text string) RecordingSegment {
-	return RecordingSegment{Start: start, End: start + 5, Text: text}
-}
-
-func mustPut(t *testing.T, e *Engine, id string, u RecordingUpload, now time.Time) RecordingPut {
-	t.Helper()
-	put, err := e.PutRecording(id, u, now)
-	if err != nil || put.Status != RecordingStored {
-		t.Fatalf("put %s: %+v %v", id, put, err)
-	}
-	return put
-}
-
-func mustAppend(t *testing.T, e *Engine, id string, a RecordingAppend) RecordingAppended {
-	t.Helper()
-	got, err := e.AppendRecording(id, a)
-	if err != nil || got.Status != RecordingStored {
-		t.Fatalf("append %s: %+v %v", id, got, err)
-	}
-	return got
-}
 
 // A day upload: its own fields checked and kept, base and next set (empty segments counted, each segment keeping its
 // position), never a meeting nor attended, named after its day, and listed for reconciliation with them.
@@ -425,7 +373,7 @@ func TestDayAppendErrors(t *testing.T) {
 	// Full: positions or text past the limits, nothing of the request stored.
 	r := recordingNow(t, e, dayID)
 	r.Next = maxRecordingSegments - 1
-	if err := e.Store.putEntity(KindRecording, dayID, r, &r.Tagging, false); err != nil {
+	if err := ws(e.Store).putEntity(KindRecording, dayID, r, &r.Tagging, false); err != nil {
 		t.Fatal(err)
 	}
 	var full *DayFullError
@@ -449,7 +397,7 @@ func TestDayAppendErrors(t *testing.T) {
 	// Older manager: a day recording whose meta lost its base answers base_changed with base 0.
 	r = recordingNow(t, e, dayID)
 	r.Base = 0
-	_ = e.Store.putEntity(KindRecording, dayID, r, &r.Tagging, false)
+	_ = ws(e.Store).putEntity(KindRecording, dayID, r, &r.Tagging, false)
 	var changed *BaseChangedError
 	if _, err := e.AppendRecording(dayID, dayAppend(20, 22, 2)); !errors.As(err, &changed) || changed.Base != 0 || changed.Next != 2 {
 		t.Errorf("lost base: %v", err)
@@ -479,11 +427,13 @@ func TestDayAppendErrors(t *testing.T) {
 
 	// Deleted: 410 before anything else; read-only after not found.
 	now = dayClock.Add(time.Hour)
-	ro, err := OpenReadOnly(e.Store.Dir)
+	ro, err := kb.OpenReadOnly(e.Store.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	re := &Engine{Store: ro, clock: e.clock}
+	roe := &kb.Engine{Store: ro}
+	roe.SetClock(e.clock)
+	re := readOnlyEngine(roe)
 	if _, err := re.AppendRecording(dayID, bad); !errors.Is(err, ErrReadOnly) {
 		t.Errorf("read-only: %v", err)
 	}

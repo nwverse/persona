@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"encoding/json"
@@ -43,12 +43,12 @@ var (
 
 // MeetingRead is recording id's meeting.json (empty without one) and its stored upload, also on a read-only knowledge
 // base: ErrRecordingDeleted after a delete, ErrNotFound with no upload of it.
-func (e *Engine) MeetingRead(rawID string) (Meeting, Recording, error) {
+func (e *engine) MeetingRead(rawID string) (Meeting, Recording, error) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return Meeting{}, Recording{}, ErrNotFound
 	}
-	if _, gone := e.Store.tombstones()[id]; gone {
+	if gone := e.Store.tombstoned(id); gone {
 		return Meeting{}, Recording{}, ErrRecordingDeleted
 	}
 	r, ok := e.Store.Recording(id)
@@ -66,7 +66,7 @@ func (e *Engine) MeetingRead(rawID string) (Meeting, Recording, error) {
 // unless fn fails or changed nothing; the revisions of the parts that changed go up and MeetingChanged hears of them.
 // ErrRecordingDeleted after a delete, ErrNotFound with no upload (or deleted meanwhile), ErrReadOnly on a read-only
 // knowledge base. fn runs with meeting.json locked: it must be quick and call no Engine method of the recordings.
-func (e *Engine) MeetingUpdate(rawID string, fn func(m *Meeting, r Recording) error) (Meeting, error) {
+func (e *engine) MeetingUpdate(rawID string, fn func(m *Meeting, r Recording) error) (Meeting, error) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return Meeting{}, ErrNotFound
@@ -83,7 +83,7 @@ func (e *Engine) MeetingUpdate(rawID string, fn func(m *Meeting, r Recording) er
 
 // SetPrivate sets recording id's private mark (PUT /api/v1/recordings/{id}/private): any time, a trimmed recording's
 // too. Errors in the contract's order: ErrRecordingDeleted, ErrNotFound, ErrReadOnly, ErrNotMeeting.
-func (e *Engine) SetPrivate(rawID string, private bool) (Meeting, error) {
+func (e *engine) SetPrivate(rawID string, private bool) (Meeting, error) {
 	return e.MeetingUpdate(rawID, func(m *Meeting, r Recording) error {
 		if !r.IsMeeting() {
 			return ErrNotMeeting
@@ -118,7 +118,7 @@ func uploadRoomRole(u *RecordingUpload) (role, problem string) {
 // crash between leaves a role no older manager reads. The upload's top-level attendance fields are cleared for a room
 // meeting (they are ignored beside room, and never written to its meta.json). The meeting after it, and the parts
 // that changed.
-func (e *Engine) putMeetingFields(id string, u *RecordingUpload, now time.Time) (*Meeting, []string, error) {
+func (e *engine) putMeetingFields(id string, u *RecordingUpload, now time.Time) (*Meeting, []string, error) {
 	st := e.Store
 	st.meetMu.Lock()
 	defer st.meetMu.Unlock()
@@ -166,7 +166,7 @@ func (e *Engine) putMeetingFields(id string, u *RecordingUpload, now time.Time) 
 		return nil, nil, err
 	}
 	st.recFilesMu.Lock()
-	err = writeRecordingFile(st.path(KindRecording, id, meetingFile), append(raw, '\n'))
+	err = st.writeRecordingFile(st.path(KindRecording, id, meetingFile), append(raw, '\n'))
 	st.recFilesMu.Unlock()
 	if err != nil {
 		return nil, nil, err
@@ -176,7 +176,7 @@ func (e *Engine) putMeetingFields(id string, u *RecordingUpload, now time.Time) 
 
 // RoomMeetings are the recordings that are room meetings, oldest first: what the room keeper looks at after a
 // restart.
-func (e *Engine) RoomMeetings() []Recording {
+func (e *engine) RoomMeetings() []Recording {
 	var out []Recording
 	for _, r := range e.Store.Recordings() {
 		if r.RoomMeeting() {
@@ -199,4 +199,4 @@ type RoomView = recordingwire.RoomView
 type ConvView = recordingwire.ConvView
 
 // HasMinutes: recording id has minutes that can be read.
-func (s *Store) HasMinutes(id string) bool { return s.hasMinutes(id) }
+func (s *store) HasMinutes(id string) bool { return s.hasMinutes(id) }
