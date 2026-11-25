@@ -1,5 +1,32 @@
 package assistantwire
 
+import (
+	jsonv2 "encoding/json/v2"
+	"errors"
+)
+
+const (
+	ExternalBindingsPath = "/api/v1/assistant/external-source-bindings"
+	ExternalPoliciesPath = "/api/v1/assistant/external-source-policies"
+
+	ExternalBindingsListRoute    = "GET " + ExternalBindingsPath
+	ExternalBindingsCreateRoute  = "POST " + ExternalBindingsPath
+	ExternalBindingsUpdateRoute  = "PUT " + ExternalBindingsPath + "/{id}"
+	ExternalBindingsDeleteRoute  = "DELETE " + ExternalBindingsPath + "/{id}"
+	ExternalBindingsLookupRoute  = "GET " + ExternalBindingsPath + "/lookup"
+	ExternalBindingsSummaryRoute = "GET " + ExternalBindingsPath + "/summary"
+	ExternalPoliciesReadRoute    = "GET " + ExternalPoliciesPath
+	ExternalPoliciesWriteRoute   = "PUT " + ExternalPoliciesPath
+	ExternalPolicyEffectiveRoute = "GET " + ExternalPoliciesPath + "/effective"
+)
+
+func init() {
+	Routes = append(Routes,
+		ExternalBindingsListRoute, ExternalBindingsCreateRoute, ExternalBindingsUpdateRoute, ExternalBindingsDeleteRoute,
+		ExternalBindingsLookupRoute, ExternalBindingsSummaryRoute,
+		ExternalPoliciesReadRoute, ExternalPoliciesWriteRoute, ExternalPolicyEffectiveRoute)
+}
+
 // ExternalRef identifies a node in an external source. A channel is the provider's
 // default channel when Channel is empty. Container and Item are optional path segments.
 type ExternalRef struct {
@@ -24,6 +51,20 @@ const (
 type ExternalRefNode struct {
 	Kind ExternalRefKind `json:"kind"`
 	ID   ExternalRefID   `json:"id"`
+}
+
+// UnmarshalJSON distinguishes omitted nodes from explicit empty nodes so a malformed item cannot select a parent.
+func (n *ExternalRefNode) UnmarshalJSON(data []byte) error {
+	type node ExternalRefNode
+	var in node
+	if err := jsonv2.Unmarshal(data, &in, jsonv2.RejectUnknownMembers(true)); err != nil {
+		return err
+	}
+	if in == (node{}) {
+		return errors.New("empty external reference node")
+	}
+	*n = ExternalRefNode(in)
+	return nil
 }
 
 type ExternalTargetKind string

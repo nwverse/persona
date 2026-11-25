@@ -1452,6 +1452,9 @@ repository is asked of that extension (`repo.link`) before the save, never while
 reading or opening a to-do.
 An issue/PR URL must belong to the saved provider, instance and target repository;
 links retain numeric string IDs, including IDs beyond JavaScript's integer range.
+Saved GitHub issues and pull requests also appear in the external source lookup with their delivery or reference
+role. Owners can find these connections without binding the same link again.
+[External source bindings](../protocol/protocol.md#external-source-bindings)
 When a provider extension is switched off, not running or uninstalled, its rows
 and links still read and open from what was stored (`provider_state` `off` or
 `missing` on reads), saves keep the links already there without asking it, and
