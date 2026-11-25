@@ -1,5 +1,6 @@
 // Decode untrusted JSON at the transport boundary. Unknown keys never become executable actions.
 export class Wire {
+  static readonly legacyStartedBy: string = 'started_by_jarvis';
   static payload(keys: string[], values: Object[]): Record<string, Object> {
     const result: Record<string, Object> = {}; keys.forEach((key: string, index: number) => result[key] = values[index]); return result;
   }

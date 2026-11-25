@@ -12,6 +12,7 @@ package recordinghost
 import (
 	"context"
 	"encoding/json"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"net/http"
 	"time"
 
@@ -34,8 +35,9 @@ type Layer interface {
 	Routes(engine func(http.ResponseWriter, *http.Request) *kb.Engine)
 	// AudioSocket serves GET /api/v1/recordings/{id}/audio, the phone's audio socket.
 	AudioSocket(w http.ResponseWriter, r *http.Request)
-	// Hook gives knowledge base e the module's callbacks (minutes written, live changes, day recaps).
-	Hook(e *kb.Engine)
+	// Hook gives knowledge base e the module's callbacks (minutes written, live changes, day recaps) and its write
+	// side; core is e as the storage port, which the module's writers reach the store through.
+	Hook(e *kb.Engine, core recordingwire.Core)
 	// AttendResume picks the attended meetings up again from their live logs when e opens.
 	AttendResume(e *kb.Engine)
 	// FinalPasses runs hub transcription's final passes until ctx ends.

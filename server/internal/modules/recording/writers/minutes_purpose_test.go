@@ -1,7 +1,8 @@
-package kb
+package writers
 
 import (
 	"context"
+	"github.com/nwverse/persona/server/internal/kb"
 	"slices"
 	"testing"
 	"time"
@@ -11,7 +12,7 @@ import (
 type purposeTagged struct {
 	purpose string
 	asked   *[]string
-	m       Model
+	m       kb.Model
 }
 
 func (p purposeTagged) JSONMax(ctx context.Context, system, user string, maxTokens int, out any) error {
@@ -25,7 +26,7 @@ func TestMinutesAskTheMeetingMinutesModel(t *testing.T) {
 	answers := &funcModel{f: func(int, string, string) (string, error) { return `{}`, nil }}
 	var asked []string
 	e := goldenEngine(t, nil)
-	e.ModelFor = func(purpose string) Model { return purposeTagged{purpose: purpose, asked: &asked, m: answers} }
+	e.ModelFor = func(purpose string) kb.Model { return purposeTagged{purpose: purpose, asked: &asked, m: answers} }
 	e.minutesCall, e.minutesPart = 40, 40 // a few lines a part: a long meeting, read in parts and merged
 	now := time.Date(2026, 11, 10, 18, 0, 0, 0, goldenZone)
 	putRecording(t, e, recID, meetingUpload(1, now.Add(-time.Hour), "first topic was the release date",
@@ -40,7 +41,7 @@ func TestMinutesAskTheMeetingMinutesModel(t *testing.T) {
 
 	asked = nil
 	summary := &captureModel{reply: `{"title":"Review","summary":"A review","one_line":"A review","importance":"P2","relevance":50,"tags":["review"]}`}
-	e.ModelFor = func(purpose string) Model { return purposeTagged{purpose: purpose, asked: &asked, m: summary} }
+	e.ModelFor = func(purpose string) kb.Model { return purposeTagged{purpose: purpose, asked: &asked, m: summary} }
 	if n := e.SummarizeRecordings(context.Background(), 3); n != 1 || !slices.Equal(asked, []string{"kb.compress"}) {
 		t.Fatalf("the recording's summary: %d, asked for %v", n, asked)
 	}

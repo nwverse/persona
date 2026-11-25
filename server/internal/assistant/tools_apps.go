@@ -741,7 +741,7 @@ func (s *Service) toolInboxDraft(ctx context.Context, self string, args json.Raw
 }
 
 // recordingsAt is what kb_get adds to calendar item kind/id (meetings or events, id as stored): the recordings matched
-// to it by time (kb/minutes.go matchRecordings), as their calendar item or their imported meeting (#8872), which hold
+// to it by time (modules/recording/writers/minutes.go matchRecordings), as their calendar item or their imported meeting (#8872), which hold
 // its minutes; "" when there are none.
 func (s *Service) recordingsAt(ctx context.Context, e *kb.Engine, kind, id string) string {
 	var at []kb.Entry

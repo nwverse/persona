@@ -130,8 +130,9 @@ MODULE_EXTENSIONS = {"imessageport": "imessage"}
 MODULE_ROUTES = {"mail": "/api/v1/mail/accounts", "recording": "/api/v1/recordings"}
 
 
-# The recordings the knowledge base holds before the hub starts (server/internal/kb/recording_fixture_test.go writes them
-# with the knowledge base's own writers, as a hub with the recording module leaves them): a meeting with its transcript
+# The recordings the knowledge base holds before the hub starts
+# (server/internal/modules/recording/writers/recording_fixture_test.go writes them with the knowledge base and the
+# recording module's writers, as a hub with the recording module leaves them): a meeting with its transcript
 # and minutes, and one whose minutes were still to be written. KEPT_WORDS are found by search: a word of the transcript
 # and one of the minutes.
 KEPT_RECORDING, KEPT_PENDING = "6f1c2a3b-0000-4000-8000-00000000c0de", "6f1c2a3b-0000-4000-8000-00000000beef"
@@ -146,7 +147,7 @@ def seed_recordings(home, server=SERVER):
     data = home / ".persona/data"
     data.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, PERSONA_RECORDING_FIXTURE_DIR=str(data))
-    r = run(["go", "test", "-count=1", "-run", "^TestWriteRecordingFixture$", "./internal/kb/"], 600, cwd=server, env=env)
+    r = run(["go", "test", "-count=1", "-run", "^TestWriteRecordingFixture$", "./internal/modules/recording/writers/"], 600, cwd=server, env=env)
     if r.returncode != 0:
         raise Failed("writing the kept recordings: " + (r.stdout + r.stderr).strip()[-2000:])
     check(recording_files(home), f"the fixture wrote no recording under {data}")
