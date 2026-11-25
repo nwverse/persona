@@ -58,6 +58,7 @@ import { sidebarRail, sidebarShown, useLayout } from "./lib/layout";
 import { SIDEBAR_LABEL, useShortcuts } from "./lib/use-shortcuts";
 import { Sidebar, SidebarRail } from "./views/Sidebar";
 import { SidebarResize } from "./views/SidebarResize";
+import { SidebarRowHoverHost } from "./views/SidebarRowHover";
 import { SidePanel } from "./views/SidePanel";
 import { ExtensionNavPage } from "./views/extensions/ExtensionSlots";
 import { useExtensionPlace } from "./lib/extension-slots";
@@ -682,6 +683,7 @@ function Shell() {
           <PageBoundary page={href(route)}><Suspense fallback={<PageLoading />}><PerAssistant route={route}>{main}</PerAssistant></Suspense></PageBoundary>
         </div>
       </main>
+      <SidebarRowHoverHost />
       <SidePanel />
       {paletteOpened && (
         <OverlayBoundary open={palette.open} onClose={closePalette}>

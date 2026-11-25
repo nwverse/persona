@@ -439,6 +439,12 @@ The minutes' routes serve a day recording too, so no route is added for them:
 
 ## How the hub writes the recap
 
+The recap's writer is the recording module's (`server/internal/modules/recording/writers`: `day_recap_write.go` the
+round, the notes and the push, `day_recap.go` what an upload and a confirmation do to a recap). It reaches the
+knowledge base only through the storage port (`recordingwire.Core`); reading a recap that exists (`ReadDayRecap`, the
+detail, the evening briefing) is the knowledge base's own and works without the module
+(`docs/architecture/core-and-modules.md` "Recording").
+
 ### Reading as it arrives
 
 The knowledge base loop gets a recap lane of its own (beside the minutes lane, so a long day never holds back a

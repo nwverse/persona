@@ -4,16 +4,35 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/recordingwire"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
 
-// putMeetingMinutes stores minutes for recording id as the minutes round would.
+// putMeetingMinutes stores minutes for recording id as the minutes round would: minutes.json and minutes.md next to
+// its meta.json. The round itself is the recording module's (internal/modules/recording/writers); this is the files
+// it leaves, for the tests of what reads, trims and deletes them.
 func putMeetingMinutes(t *testing.T, e *Engine, id string, m Minutes) {
 	t.Helper()
-	if ok, err := e.Store.putMinutes(id, &m); !ok || err != nil {
-		t.Fatalf("minutes of %s: %v %v", id, ok, err)
+	raw, err := json.MarshalIndent(&m, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := e.Store
+	st.recFilesMu.Lock()
+	defer st.recFilesMu.Unlock()
+	st.metaMu.Lock()
+	defer st.metaMu.Unlock()
+	if _, err := os.Stat(st.path(KindRecording, id, "meta.json")); err != nil {
+		t.Fatalf("minutes of %s: %v", id, err)
+	}
+	if err := writeFile(st.path(KindRecording, id, "minutes.json"), append(raw, '\n')); err != nil {
+		t.Fatalf("minutes of %s: %v", id, err)
+	}
+	if err := writeFile(st.path(KindRecording, id, "minutes.md"), []byte(strings.TrimSpace(m.Markdown)+"\n")); err != nil {
+		t.Fatalf("minutes of %s: %v", id, err)
 	}
 }
 
@@ -222,7 +241,7 @@ func TestMeetingMaterialOnlyMeetingMaterial(t *testing.T) {
 		t.Errorf("named %q at %q", first.Name, first.When)
 	}
 	// Its minutes have no span of their own (written before #4713): the recording's.
-	if er := recordingNow(t, e, earlier); !first.Start.Equal(er.StartedAt.Truncate(time.Second)) || !first.End.Equal(recordingEnd(er).Truncate(time.Second)) {
+	if er := recordingNow(t, e, earlier); !first.Start.Equal(er.StartedAt.Truncate(time.Second)) || !first.End.Equal(recordingwire.RecordingEnd(er).Truncate(time.Second)) {
 		t.Errorf("span %s – %s", first.Start, first.End)
 	}
 	want := Minutes{Title: "Design review", When: "2026-11-03 14:00–15:10", Attendees: []string{"Ada", "Bo"},
@@ -233,7 +252,7 @@ func TestMeetingMaterialOnlyMeetingMaterial(t *testing.T) {
 	if got, exp := fmt.Sprintf("%+v", first.Minutes), fmt.Sprintf("%+v", want); got != exp {
 		t.Errorf("minutes\n%s\nwant\n%s", got, exp)
 	}
-	if fmt.Sprint(first.Projects) != fmt.Sprint([]EarlierProject{{"export", "Export", "active"}, {"archive", "Archive", "done"}}) {
+	if fmt.Sprint(first.Projects) != fmt.Sprint([]EarlierProject{{Slug: "export", Name: "Export", Status: "active"}, {Slug: "archive", Name: "Archive", Status: "done"}}) {
 		t.Errorf("projects %+v", first.Projects)
 	}
 	if mat.Earlier[1].Name != "Weekly sync" || len(mat.Earlier[1].Projects) != 0 {

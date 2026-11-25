@@ -136,7 +136,7 @@ func TestTrimmedRecordingRoutes(t *testing.T) {
 	const id = "55555555-5555-4555-8555-555555555555"
 	segments := []map[string]any{{"start": 0, "end": 9, "text": "orchardword keep the cap"}, {"start": 10, "end": 19, "text": "write the plan"}}
 	m.upload(id, 1, map[string]any{"complete": true, "segments": segments})
-	if n := e.WriteMinutes(context.Background(), 2); n != 1 {
+	if n := e.RecordingProvider().WriteMinutes(context.Background(), 2); n != 1 {
 		t.Fatalf("wrote %d", n)
 	}
 	if n := e.PruneRecordings(time.Now().AddDate(0, 0, 20)); n != 0 {

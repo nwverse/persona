@@ -11,7 +11,10 @@ import (
 )
 
 // Profile tools expose the same operations as settings, without copying credentials into model context.
-func (s *Service) toolModelProfile(ctx context.Context, self, name string, args json.RawMessage) (string, error) {
+func (s *Service) toolModelProfile(ctx context.Context, machine, self, name string, args json.RawMessage) (string, error) {
+	if name == "model_profile_capture" {
+		return s.captureModelProfile(ctx, ToolCall{MachineID: machine, SessionID: self}, args)
+	}
 	var a struct {
 		ID string `json:"id"`
 	}
@@ -60,7 +63,7 @@ func (s *Service) applyStartTier(ctx context.Context, params map[string]any) err
 	slot := tierStartOf(ctx)
 	facts := tierFacts{}
 	if slot != nil {
-		facts.Machine = slot.machine
+		facts.Machine, facts.Keep = slot.machine, slot.keep
 	}
 	pick, err := s.pickTierCandidate(ctx, tier, facts)
 	if err != nil {

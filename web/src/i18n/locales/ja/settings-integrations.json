@@ -20,6 +20,7 @@
   "empty_all_detail": "拡張機能マーケットからチャットチャネル、データソース、ツール、テーマを追加できます。",
   "show_all": "すべて表示",
   "browse_market_action": "拡張機能マーケット",
+  "browse_market_compact": "マーケット",
   "list_partial_error": "一部の連携を読み込めませんでした：{error}",
   "status_not_configured": "未設定",
   "status_connected": "接続済み",
