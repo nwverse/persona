@@ -161,10 +161,10 @@ export function StarredBackupDialog({ stars, canWrite, speaker, onClose, onResto
     }
   };
 
-  const controlledManager = deps?.manager;
-  const controlledOwner = deps?.credentialOwner;
-  const hasCustomManager = controlledManager !== undefined || deps?.getManager !== undefined;
-  const hasCustomOwner = controlledOwner !== undefined || deps?.getCredentialOwner !== undefined;
+  const resolvedManager = deps?.manager !== undefined ? deps.manager : deps?.getManager?.();
+  const resolvedOwner = deps?.credentialOwner !== undefined ? deps.credentialOwner : deps?.getCredentialOwner?.();
+  const hasCustomManager = deps?.manager !== undefined || deps?.getManager !== undefined;
+  const hasCustomOwner = deps?.credentialOwner !== undefined || deps?.getCredentialOwner !== undefined;
   const subscribeManager = deps?.subscribeManager;
   const subscribeOwner = deps?.subscribeCredentialOwner;
 
@@ -202,7 +202,7 @@ export function StarredBackupDialog({ stars, canWrite, speaker, onClose, onResto
       }
       if (origin.current === scope) origin.current = null;
     };
-  }, [canWrite, controlledManager, controlledOwner, hasCustomManager, hasCustomOwner, subscribeManager, subscribeOwner]);
+  }, [canWrite, resolvedManager, resolvedOwner, hasCustomManager, hasCustomOwner, subscribeManager, subscribeOwner]);
 
   const download = (format: "json" | "md") => {
     const scope = origin.current;
@@ -280,7 +280,7 @@ export function StarredBackupDialog({ stars, canWrite, speaker, onClose, onResto
       if (activeOp.current === op) {
         activeOp.current = 0;
         pendingScope.current = null;
-        if (scope.current()) setWorking(undefined);
+        if (origin.current === scope) setWorking(undefined);
       }
     }
   };
@@ -317,7 +317,7 @@ export function StarredBackupDialog({ stars, canWrite, speaker, onClose, onResto
       if (activeOp.current === op) {
         activeOp.current = 0;
         pendingScope.current = null;
-        if (scope.current()) setWorking(undefined);
+        if (origin.current === scope) setWorking(undefined);
       }
     }
   };

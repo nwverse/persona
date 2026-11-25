@@ -100,10 +100,10 @@ export function useDisconnect(deps?: DisconnectBrowserDeps): { start: () => void
   useLayoutEffect(() => {
     if (lastScopeKey.current !== scopeKey) {
       lastScopeKey.current = scopeKey;
-      if (depsRef.current?.asking === undefined) setLocalAsking(false);
+      setAskingState(false);
       if (depsRef.current?.busy === undefined) setLocalBusy(false);
-      else if (abortedInFlight.current) depsRef.current.onBusyChange?.(false);
-      if (depsRef.current?.problem === undefined) setLocalProblem(null);
+      else if (abortedInFlight.current || depsRef.current.busy) depsRef.current.onBusyChange?.(false);
+      setProblemState(null);
       abortedInFlight.current = false;
     }
     return () => {

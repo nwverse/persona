@@ -482,6 +482,92 @@ describe("StarredBackupDialog controlled mode", () => {
     expectNoGlobalCalls();
   });
 
+  it("rebuilds scope, resets working state, and rechecks when getter-only identity changes with stable getter refs", async () => {
+    let selectedManager = "mgr-a";
+    let selectedOwner = "owner-1";
+    const getManager = () => selectedManager;
+    const getCredentialOwner = () => selectedOwner;
+
+    const previewA = deferred<StarredImportPreview>();
+    const previewB = deferred<StarredImportPreview>();
+    const checkB = deferred<{ can_import: boolean }>();
+    const checkOwner2 = deferred<{ can_import: boolean }>();
+
+    const checkImport = vi.fn()
+      .mockResolvedValueOnce({ can_import: true })
+      .mockReturnValueOnce(checkB.promise)
+      .mockReturnValueOnce(checkOwner2.promise);
+    const previewImport = vi.fn()
+      .mockReturnValueOnce(previewA.promise)
+      .mockReturnValueOnce(previewB.promise);
+    const restoreImport = vi.fn();
+
+    const renderDialog = () =>
+      act(async () => {
+        root.render(
+          <StarredBackupDialog
+            stars={[sampleStar]}
+            canWrite
+            speaker={(s) => s.speaker}
+            onClose={vi.fn()}
+            onRestored={vi.fn()}
+            deps={{ getManager, getCredentialOwner, checkImport, previewImport, restoreImport }}
+          />,
+        );
+      });
+
+    await renderDialog();
+    expect(checkImport).toHaveBeenCalledTimes(1);
+    expect(checkImport.mock.calls[0][0].manager).toBe("mgr-a");
+    expect(checkImport.mock.calls[0][0].credentialOwner).toBe("owner-1");
+
+    // Start preview under mgr-a; dialog enters working="preview".
+    await pickFile(500);
+    await clickButton(t("starred.backup_preview"));
+    const previewACtx = previewImport.mock.calls[0][1];
+    expect(previewACtx.signal.aborted).toBe(false);
+    expect(button(t("starred.backup_done"))?.disabled).toBe(true);
+
+    // Switch getter return value to mgr-b (same getManager function reference, no subscribeManager) and re-render.
+    selectedManager = "mgr-b";
+    await renderDialog();
+    expect(previewACtx.signal.aborted).toBe(true);
+    expect(previewACtx.isCurrent()).toBe(false);
+    expect(checkImport).toHaveBeenCalledTimes(2);
+    expect(checkImport.mock.calls[1][0].manager).toBe("mgr-b");
+    expect(button(t("starred.backup_done"))?.disabled).toBe(false);
+
+    // Resolve mgr-b capability check and settle stale previewA; controls must not stay stuck in working="preview".
+    await act(async () => {
+      checkB.resolve({ can_import: true });
+      previewA.resolve(makePreview(1));
+    });
+    expect(button(t("starred.backup_done"))?.disabled).toBe(false);
+    expect(button(t("starred.backup_choose_file"))?.disabled).toBe(false);
+    expect(button(t("starred.backup_restore"))).toBeUndefined();
+
+    // Start a preview on mgr-b, then switch getCredentialOwner return value (same function ref, no subscribeCredentialOwner).
+    await pickFile(500, undefined, "mgr-b.json");
+    await clickButton(t("starred.backup_preview"));
+    const previewBCtx = previewImport.mock.calls[1][1];
+    expect(button(t("starred.backup_done"))?.disabled).toBe(true);
+
+    selectedOwner = "owner-2";
+    await renderDialog();
+    expect(previewBCtx.signal.aborted).toBe(true);
+    expect(checkImport).toHaveBeenCalledTimes(3);
+    expect(checkImport.mock.calls[2][0]).toMatchObject({ manager: "mgr-b", credentialOwner: "owner-2" });
+
+    await act(async () => {
+      checkOwner2.resolve({ can_import: true });
+      previewB.reject(new Error("stale owner-1 preview"));
+    });
+    expect(alertText()).toBe("");
+    expect(button(t("starred.backup_done"))?.disabled).toBe(false);
+    expect(button(t("starred.backup_choose_file"))?.disabled).toBe(false);
+    expectNoGlobalCalls();
+  });
+
   it("retires scope, resets state, and closes on injected subscription change even after ABA switch back", async () => {
     let activeManager = "mgr-1";
     let activeOwner = "owner-1";

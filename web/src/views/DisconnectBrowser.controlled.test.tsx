@@ -320,6 +320,73 @@ describe("useDisconnect controlled mode", () => {
     expectNoGlobalCalls();
   });
 
+  it("clears controlled asking and problem state when scopeKey switches after a failed revoke", async () => {
+    const revokeA = vi.fn<() => Promise<Revoke>>().mockResolvedValueOnce({ ok: false, error: "HTTP 503", id: "dev_A" });
+    const revokeB = vi.fn<() => Promise<Revoke>>();
+    const signOutA = vi.fn();
+    const signOutB = vi.fn();
+    const onAskingChange = vi.fn();
+    const onBusyChange = vi.fn();
+    const onProblemChange = vi.fn();
+    let activeUnauth = () => {};
+
+    function FullyControlledSwitchHost({ account }: { account: "A" | "B" }) {
+      const [asking, setAsking] = useState(false);
+      const [busy, setBusy] = useState(false);
+      const [problem, setProblem] = useState<DisconnectProblem | null>(null);
+      const disconnect = useDisconnect({
+        scopeKey: `account-${account}`,
+        revoke: account === "A" ? revokeA : revokeB,
+        signOut: account === "A" ? signOutA : signOutB,
+        handleUnauthorized: (fn) => {
+          const before = activeUnauth;
+          activeUnauth = fn;
+          return before;
+        },
+        asking,
+        onAskingChange: (next) => { onAskingChange(next); setAsking(next); },
+        busy,
+        onBusyChange: (next) => { onBusyChange(next); setBusy(next); },
+        problem,
+        onProblemChange: (next) => { onProblemChange(next); setProblem(next); },
+        renderDialog: renderCustomDialog,
+      });
+      return (
+        <>
+          <button type="button" data-start onClick={disconnect.start}>{disconnect.busy ? "busy" : "idle"}</button>
+          {disconnect.dialog}
+        </>
+      );
+    }
+
+    await act(async () => root.render(<FullyControlledSwitchHost account="A" />));
+    const dialog = () => host.querySelector<HTMLDivElement>("[data-custom-dialog]")!;
+
+    // Account A fails disconnect, leaving problem with dev_A.
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-start]")!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-confirm]")!.click());
+    expect(dialog().dataset.problem).toBe("HTTP 503");
+    expect(onProblemChange).toHaveBeenLastCalledWith({ ok: false, error: "HTTP 503", id: "dev_A" });
+
+    // Switching scopeKey and deps to account B must notify onAskingChange(false) and onProblemChange(null).
+    await act(async () => root.render(<FullyControlledSwitchHost account="B" />));
+    expect(onAskingChange).toHaveBeenLastCalledWith(false);
+    expect(onProblemChange).toHaveBeenLastCalledWith(null);
+    expect(dialog().dataset.open).toBe("false");
+    expect(dialog().dataset.problem).toBe("");
+    expect(signOutA).not.toHaveBeenCalled();
+    expect(signOutB).not.toHaveBeenCalled();
+
+    // Opening confirmation on account B and switching back to account A also clears controlled asking.
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-start]")!.click());
+    expect(dialog().dataset.open).toBe("true");
+    await act(async () => root.render(<FullyControlledSwitchHost account="A" />));
+    expect(onAskingChange).toHaveBeenLastCalledWith(false);
+    expect(dialog().dataset.open).toBe("false");
+    expect(signOutB).not.toHaveBeenCalled();
+    expectNoGlobalCalls();
+  });
+
   it("releases controlled busy on scopeKey switch when a revoke was in flight", async () => {
     const inFlight = deferred<Revoke>();
     const onBusyChange = vi.fn();
