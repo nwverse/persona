@@ -7,13 +7,12 @@ import (
 	"strings"
 )
 
-// checkDispatchReuse handles explicit task identity before planning or starting.
-// Directory, project and title similarity remain advice given by planDuplicates.
+// checkDispatchReuse requires a choice for an exact match or a high-confidence overlap before dispatch.
 func (s *Service) checkDispatchReuse(ctx context.Context, self string, task PlanTask, request *BriefRequest) error {
 	if task.ReuseTodo != "" || strings.TrimSpace(task.Continues) != "" || self == "" {
 		return nil
 	}
-	if request == nil && task.InboxItem == "" {
+	if request == nil && task.InboxItem == "" && task.Title == "" && task.Goal == "" && task.Prompt == "" {
 		return nil
 	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
@@ -70,10 +69,21 @@ func (s *Service) checkDispatchReuse(ctx context.Context, self string, task Plan
 	if len(exact) == 0 {
 		exact = bound
 	}
-	if len(exact) != 1 {
+	var todo Todo
+	similar := false
+	switch len(exact) {
+	case 0:
+		var found bool
+		todo, found = s.similarDispatch(ctx, task, request, eligible)
+		if !found {
+			return nil
+		}
+		similar = true
+	case 1:
+		todo = exact[0]
+	default:
 		return nil
 	}
-	todo := exact[0]
 	for _, reason := range task.DistinctFrom {
 		if strings.TrimSpace(reason.TodoID) == todo.ID && strings.TrimSpace(reason.Reason) != "" {
 			return nil
@@ -89,9 +99,13 @@ func (s *Service) checkDispatchReuse(ctx context.Context, self string, task Plan
 	if len(active) == 1 {
 		target = fmt.Sprintf("machine=%s session_id=%s", active[0].MachineID, active[0].SessionID)
 	}
-	return fmt.Errorf("existing to-do %s (%q) matches this request. Use agent_send to %s if available, "+
+	match := "matches this request"
+	if similar {
+		match = "has high overlap with this dispatch"
+	}
+	return fmt.Errorf("existing to-do %s (%q) %s. Use agent_send to %s if available, "+
 		"use task_plan with continues and continues_why to replace it on the original to-do, "+
-		"or give distinct_from with this todo_id and the reason for separate work. Nothing was dispatched", todo.ID, todo.Title, target)
+		"or give distinct_from with this todo_id and the reason for separate work. Nothing was dispatched", todo.ID, todo.Title, match, target)
 }
 
 func sessionIDPrefix(token, session string) bool {

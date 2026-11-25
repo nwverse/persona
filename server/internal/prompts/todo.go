@@ -260,3 +260,6 @@ func RenderTodoProject(p TodoProject) string {
 	}
 	return render("todo/project", p)
 }
+
+// RenderDispatchReuse compares a proposed dispatch with the caller's existing tasks.
+func RenderDispatchReuse() string { return render("todo/dispatch_reuse", nil) }

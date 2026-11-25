@@ -79,6 +79,7 @@ type fakeHub struct {
 	modelExts      []assistantwire.ModelExtension // plugins.models: the extensions granted models (model_rpc.go)
 	needTriage     []string
 	ownModels      bool                         // the test sets hello.Models itself: no fake model
+	dispatchMatch  string                       // optional response from the dispatch overlap judge
 	infoTagModel   bool                         // the service tags with information categories (Service.noInfoTag off)
 	devices        []Device                     // devices.list answers these when set (else one per machine with sessions)
 	devicesFull    bool                         // devices.list says its list is complete (a machine not in it was removed)
@@ -1772,6 +1773,8 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 		case strings.Contains(in.System, `{"lessons":[`): // the lessons of an accepted task (task_lessons.go), in any language
 			f.lessonsAsked = append(f.lessonsAsked, modelCall{in.System, user})
 			reply, fail = f.lessons, f.lessons == ""
+		case strings.HasPrefix(in.System, "Check whether the proposed dispatch would duplicate"):
+			reply = cmp.Or(f.dispatchMatch, `{"candidate":0}`)
 		case strings.HasSuffix(strings.TrimSpace(in.System), jsonOnly):
 			f.judged++
 			f.judgeAsked = append(f.judgeAsked, user)
