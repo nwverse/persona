@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/connector"
-	"github.com/nwverse/persona/server/internal/modules/lark/feishubot"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -143,7 +143,7 @@ func TestInboxReplyPolicyWorkbenchOldCardCannotConfirmReplacement(t *testing.T) 
 	h.inbox.mu.Unlock()
 	finalReviewInstallMirror(h, it, "Replacement draft from another device")
 	h.in.model = fakeModel(t, `{"category":"ordinary_coordination"}`)
-	action := &feishubot.CardAction{}
+	action := &botcard.CardAction{}
 	action.Action.Value = actionValue
 	action.Action.FormValue = map[string]any{"text": oldText}
 	action.Context.MessageID = "synthetic-old-workbench-card"

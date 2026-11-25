@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/connector"
-	"github.com/nwverse/persona/server/internal/modules/lark/feishubot"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -110,7 +110,7 @@ func replyPolicyReview8DraftPosts(h *inboxHub) chan string {
 }
 
 func replyPolicyReview8WorkbenchAction(h *inboxHub, value map[string]any, form map[string]any, mid string) {
-	action := &feishubot.CardAction{}
+	action := &botcard.CardAction{}
 	action.Action.Value = value
 	action.Action.FormValue = form
 	action.Context.MessageID = mid
@@ -490,7 +490,7 @@ func TestInboxReplyPolicyWorkbenchFeishuActionDispatch(t *testing.T) {
 	finalReviewInstallMirror(h, it, text)
 	h.in.setModel(fakeModel(t, `{"category":"ordinary_coordination"}`))
 	value := replyPolicyWorkbenchActionValue(t, h.draftCard(context.Background(), *it, text, nil, "").JSON(), "send")
-	action := &feishubot.CardAction{}
+	action := &botcard.CardAction{}
 	action.Action.Value = value
 	action.Action.FormValue = map[string]any{"text": text}
 	action.Context.MessageID = "synthetic-real-feishu-action-card"
