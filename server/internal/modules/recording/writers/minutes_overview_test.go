@@ -1,10 +1,11 @@
-package kb
+package writers
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/kb"
 	"math"
 	"os"
 	"path/filepath"
@@ -19,10 +20,8 @@ import (
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
-// The summary card (#6563, docs/assistant/meeting-minutes.md "Summary card (#6563)"). Placeholders only.
-
 // overviewFixtures is the shared fixture the mock hub, the iPhone and the web check too.
-const overviewFixtures = "../../../spec/fixtures/minutes-overview/cases.json"
+const overviewFixtures = "../../../../../spec/fixtures/minutes-overview/cases.json"
 
 type overviewCase struct {
 	Name  string `json:"name"`
@@ -61,7 +60,7 @@ func overviewCases(t *testing.T) map[string]overviewCase {
 
 // sprintMeeting is the contract's example meeting: 70 minutes from 14:00, a line at each item's time, the calendar
 // naming it, its place and its people; photo 2 (at 1950 s) has words, photo 1 none.
-func sprintMeeting(t *testing.T, e *Engine, start time.Time) {
+func sprintMeeting(t *testing.T, e *testEngine, start time.Time) {
 	t.Helper()
 	lines := []struct {
 		at   float64
@@ -79,7 +78,7 @@ func sprintMeeting(t *testing.T, e *Engine, start time.Time) {
 		{2408, "Is the cap per entry or per recording? Not decided."},
 	}
 	u := RecordingUpload{Revision: 1, StartedAt: start, Duration: 4200, Language: "en-US", Device: "phone", Complete: true,
-		Kind: RecordingMeeting, Calendar: &RecordingCalendar{Title: "Sprint review", Attendees: []string{"Ada", "Bo", "Cy"}, Location: "Room 3"}}
+		Kind: kb.RecordingMeeting, Calendar: &kb.RecordingCalendar{Title: "Sprint review", Attendees: []string{"Ada", "Bo", "Cy"}, Location: "Room 3"}}
 	for _, l := range lines {
 		u.Segments = append(u.Segments, RecordingSegment{Start: l.at, End: l.at + 9, Text: l.text})
 	}
@@ -293,7 +292,7 @@ func TestMinutesOverview(t *testing.T) {
 	m := &captureModel{reply: sprintReply}
 	e := goldenEngine(t, m)
 	var told []Minutes
-	e.MinutesWritten = func(_ context.Context, _ Recording, mm Minutes) { told = append(told, mm) }
+	e.minutesWritten = func(_ context.Context, _ Recording, mm Minutes) { told = append(told, mm) }
 	start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	sprintMeeting(t, e, start)
 	if n := e.WriteMinutes(context.Background(), 2); n != 1 {
@@ -350,7 +349,7 @@ func TestMinutesOverview(t *testing.T) {
 
 // writeOne writes the minutes of a three-line English meeting (lines 1–3 at 0, 10 and 20 s) answered with reply,
 // and what the log said.
-func writeOne(t *testing.T, reply string) (*Engine, *Minutes, []string) {
+func writeOne(t *testing.T, reply string) (*testEngine, *Minutes, []string) {
 	t.Helper()
 	e := goldenEngine(t, &funcModel{f: func(int, string, string) (string, error) { return reply, nil }})
 	var mu sync.Mutex
@@ -446,14 +445,14 @@ func TestMinutesOverviewLeftOut(t *testing.T) {
 }
 
 // build decodes reply as the model's answer does (JSONMax unmarshals it) and builds the minutes from read.
-func build(t *testing.T, e *Engine, reply string, read []minutesLine) (*Minutes, error) {
+func build(t *testing.T, e *testEngine, reply string, read []minutesLine) (*Minutes, error) {
 	t.Helper()
 	var a minutesAnswer
 	if err := json.Unmarshal([]byte(reply), &a); err != nil {
 		return nil, err
 	}
 	r := &Recording{ID: recID, StartedAt: time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone), Duration: 600, Title: "Weekly sync"}
-	return e.buildMinutes(r, a, read, goldenZone, i18n.En)
+	return e.eng().buildMinutes(r, a, read, goldenZone, i18n.En)
 }
 
 var overviewRead = []minutesLine{{N: 1, At: 0, Text: "first"}, {N: 2, At: 10, Text: "second"}, {N: 3, At: 20, Text: "third"},
@@ -532,7 +531,7 @@ func TestMinutesOverviewLenient(t *testing.T) {
 	// A stray ** outside the texts that may carry marks (the title, the place, a name, a deadline as said) is taken
 	// out too: the names still match the calendar and the transcript, so the point and the action keep their owners.
 	r := &Recording{ID: recID, StartedAt: time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone), Duration: 600,
-		Calendar: &RecordingCalendar{Attendees: []string{"Ada"}}}
+		Calendar: &kb.RecordingCalendar{Attendees: []string{"Ada"}}}
 	read := []minutesLine{{N: 1, At: 0, Text: "first"}, {N: 2, At: 10, Text: "Bo says second"}, {N: 3, At: 20, Text: "third, in Room 3"}}
 	var a minutesAnswer
 	if err := json.Unmarshal([]byte(`{"title":"**Weekly** sync","where":"**Room 3**","attendees":["**Bo**"],`+
@@ -540,7 +539,7 @@ func TestMinutesOverviewLenient(t *testing.T) {
 		`"actions":[{"who":"**Bo**","what":"Send it","by":"**Friday**","due_date":"**2026-11-13**","line":3}]}`), &a); err != nil {
 		t.Fatal(err)
 	}
-	m, err := e.buildMinutes(r, a, read, goldenZone, i18n.En)
+	m, err := e.eng().buildMinutes(r, a, read, goldenZone, i18n.En)
 	if err != nil {
 		t.Fatal(err)
 	}

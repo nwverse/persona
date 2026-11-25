@@ -1,17 +1,18 @@
-package kb
+package writers
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/kb"
 	"os"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/ai"
+	ai "github.com/nwverse/persona/server/internal/aiwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
@@ -34,18 +35,18 @@ func (m *funcModel) JSONMax(_ context.Context, system, user string, _ int, out a
 // meetingUpload is a complete meeting recording of the given lines, 10 seconds each, started at start.
 func meetingUpload(rev int64, start time.Time, texts ...string) RecordingUpload {
 	u := recUpload(rev, start, true, texts...)
-	u.Kind = RecordingMeeting
+	u.Kind = kb.RecordingMeeting
 	return u
 }
 
-func putRecording(t *testing.T, e *Engine, id string, u RecordingUpload, now time.Time) {
+func putRecording(t *testing.T, e *testEngine, id string, u RecordingUpload, now time.Time) {
 	t.Helper()
-	if st, err := e.PutRecording(id, u, now); err != nil || st.Status != RecordingStored {
+	if st, err := e.PutRecording(id, u, now); err != nil || st.Status != kb.RecordingStored {
 		t.Fatalf("put %s: %v %v", id, st, err)
 	}
 }
 
-func recordingNow(t *testing.T, e *Engine, id string) *Recording {
+func recordingNow(t *testing.T, e *testEngine, id string) *Recording {
 	t.Helper()
 	r, ok := e.Store.Recording(id)
 	if !ok {
@@ -78,15 +79,15 @@ func TestMinutesWritten(t *testing.T) {
 	m := &captureModel{reply: minutesReply}
 	e := goldenEngine(t, m)
 	var told []Minutes
-	e.MinutesWritten = func(_ context.Context, r Recording, mm Minutes) { told = append(told, mm) }
+	e.minutesWritten = func(_ context.Context, r Recording, mm Minutes) { told = append(told, mm) }
 	now := time.Date(2026, 11, 10, 16, 0, 0, 0, goldenZone)
 	start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	u := meetingUpload(1, start, "大家好，今天评审导出", "Ada 说导出超过 4 MB 的条目会被丢掉", "那这一版先保留上限", "Bo 你周五前补上回归测试", "上限按条还是按录音算还没定")
-	u.Calendar = &RecordingCalendar{Title: " 发布评审 ", Attendees: []string{"Ada", " Cy ", "Ada", ""}, Location: ""}
+	u.Calendar = &kb.RecordingCalendar{Title: " 发布评审 ", Attendees: []string{"Ada", " Cy ", "Ada", ""}, Location: ""}
 	ended := start.Add(50 * time.Second)
 	u.EndedAt = &ended
 	putRecording(t, e, recID, u, now)
-	if r := recordingNow(t, e, recID); r.MinutesState != MinutesPending || r.Name != "发布评审" || r.Kind != RecordingMeeting {
+	if r := recordingNow(t, e, recID); r.MinutesState != MinutesPending || r.Name != "发布评审" || r.Kind != kb.RecordingMeeting {
 		t.Fatalf("after upload: state %q name %q kind %q", r.MinutesState, r.Name, r.Kind)
 	}
 	addPhoto(t, e, recID, photoUpload(1, 25, "白板", "导出上限：每条 4 MB"), false)
@@ -178,7 +179,7 @@ func TestMinutesCalendarAndAsking(t *testing.T) {
 	e := goldenEngine(t, model)
 	now := time.Date(2026, 11, 10, 18, 0, 0, 0, goldenZone)
 	at := func(h, m int) time.Time { return time.Date(2026, 11, 10, h, m, 0, 0, goldenZone) }
-	for _, it := range []*Item{
+	for _, it := range []*kb.Item{
 		{Kind: KindEvent, ID: "e1", Title: "周会", At: at(9, 55)},
 		{Kind: KindMeeting, ID: "m1", Title: "周会（视频）", At: at(10, 1)},
 		{Kind: KindEvent, ID: "e2", Title: "太早的会", At: at(9, 30)},
@@ -261,8 +262,8 @@ func TestImportedMeetingAfterTheMatch(t *testing.T) {
 	e := goldenEngine(t, nil) // no model: the rounds match, no minutes are written
 	at := func(h, m int) time.Time { return time.Date(2026, 11, 10, h, m, 0, 0, goldenZone) }
 	now := at(11, 0)
-	e.clock = func() time.Time { return now }
-	if err := e.Store.PutItem(&Item{Kind: KindEvent, ID: "e1", Title: "周会", At: at(9, 55)}); err != nil {
+	e.SetClock(func() time.Time { return now })
+	if err := e.Store.PutItem(&kb.Item{Kind: KindEvent, ID: "e1", Title: "周会", At: at(9, 55)}); err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.Repeat("聊了排期 ", 12), " ")[:12] // 120 s: 10:00 to 10:02
@@ -278,7 +279,7 @@ func TestImportedMeetingAfterTheMatch(t *testing.T) {
 
 	// The video meeting's record comes after the call, with another one that started earlier; and one two days back.
 	now = at(13, 0)
-	for _, it := range []*Item{
+	for _, it := range []*kb.Item{
 		{Kind: KindMeeting, ID: "m-early", Title: "早到的会", At: at(9, 50)},
 		{Kind: KindMeeting, Source: "lark", ID: "m1", Title: "周会（视频）", At: at(10, 1)},
 		{Kind: KindMeeting, ID: "m-old", Title: "两天前的会", At: at(10, 1).AddDate(0, 0, -2)},
@@ -311,7 +312,7 @@ func TestImportedMeetingAfterTheMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if i := slices.IndexFunc(d.Links, func(l Entry) bool { return l.Kind == KindMeeting && l.ID == "m1" }); i < 0 || d.Links[i].Source != "lark" {
+	if i := slices.IndexFunc(d.Links, func(l kb.Entry) bool { return l.Kind == KindMeeting && l.ID == "m1" }); i < 0 || d.Links[i].Source != "lark" {
 		t.Errorf("links: %+v", d.Links)
 	}
 	if o := recordingNow(t, e, old); o.ImportedMeeting != nil {
@@ -320,7 +321,7 @@ func TestImportedMeetingAfterTheMatch(t *testing.T) {
 }
 
 // listedMeetingID is recording id's meeting_id in the recordings list.
-func listedMeetingID(t *testing.T, e *Engine, id string) string {
+func listedMeetingID(t *testing.T, e *testEngine, id string) string {
 	t.Helper()
 	for _, en := range e.List(KindRecording, "") {
 		if en.ID == id {
@@ -453,7 +454,7 @@ func TestMinutesChunked(t *testing.T) {
 // minutes showing (pending) until new ones are written; confirmed to-dos are recorded for their version only, the
 // overview and the Markdown kept as they are.
 func TestMinutesDeleteRevisionAndTodos(t *testing.T) {
-	var e *Engine
+	var e *testEngine
 	deleteDuring := false
 	model := &funcModel{f: func(int, string, string) (string, error) {
 		if deleteDuring {
@@ -485,7 +486,7 @@ func TestMinutesDeleteRevisionAndTodos(t *testing.T) {
 	}
 	// Confirmed from version 1 while version 2 was written: linked by task in version 2.
 	mm.Version, mm.Actions[0].TodoID = 2, ""
-	if _, err := e.Store.putMinutes(recID, mm); err != nil {
+	if _, err := ws(e.Store).putMinutes(recID, mm); err != nil {
 		t.Fatal(err)
 	}
 	mm, err = e.SetMinutesTodos(recID, 1, map[string]string{"a1": "todo_x"}, map[string]string{MinutesTaskKey(mm.Actions[0]): "todo_x"})
@@ -516,24 +517,24 @@ func TestRecordingUploadKindAndCalendar(t *testing.T) {
 	now := time.Now()
 	u := recUpload(1, now.Add(-time.Minute), false, "一句")
 	u.Kind = " Meeting "
-	u.Calendar = &RecordingCalendar{Title: "  ", Attendees: []string{" ", ""}}
+	u.Calendar = &kb.RecordingCalendar{Title: "  ", Attendees: []string{" ", ""}}
 	putRecording(t, e, recID, u, now)
-	if r := recordingNow(t, e, recID); r.Kind != RecordingMeeting || r.Calendar != nil || r.MinutesState != MinutesPending {
+	if r := recordingNow(t, e, recID); r.Kind != kb.RecordingMeeting || r.Calendar != nil || r.MinutesState != MinutesPending {
 		t.Fatalf("%q %+v %q", r.Kind, r.Calendar, r.MinutesState)
 	}
 	u.Revision, u.Kind = 2, ""
 	putRecording(t, e, recID, u, now)
-	if r := recordingNow(t, e, recID); r.Kind != RecordingNote || r.MinutesState != "" {
+	if r := recordingNow(t, e, recID); r.Kind != kb.RecordingNote || r.MinutesState != "" {
 		t.Fatalf("note: %q %q", r.Kind, r.MinutesState)
 	}
 	for _, bad := range []RecordingUpload{
 		{Kind: "lecture"},
-		{Calendar: &RecordingCalendar{Title: strings.Repeat("长", maxCalendarTitle+1)}},
-		{Calendar: &RecordingCalendar{Title: "t", Attendees: make([]string, maxCalendarAttendees+1)}},
-		{Calendar: &RecordingCalendar{Title: "t", Attendees: []string{strings.Repeat("名", maxCalendarName+1)}}},
+		{Calendar: &kb.RecordingCalendar{Title: strings.Repeat("长", maxCalendarTitle+1)}},
+		{Calendar: &kb.RecordingCalendar{Title: "t", Attendees: make([]string, maxCalendarAttendees+1)}},
+		{Calendar: &kb.RecordingCalendar{Title: "t", Attendees: []string{strings.Repeat("名", maxCalendarName+1)}}},
 	} {
 		bad.Revision, bad.StartedAt, bad.Device = 3, now, "phone"
-		if _, err := e.PutRecording(recID, bad, now); !errors.Is(err, ErrBadRecording) {
+		if _, err := e.PutRecording(recID, bad, now); !errors.Is(err, kb.ErrBadRecording) {
 			t.Errorf("%+v: %v", bad, err)
 		}
 	}
@@ -586,7 +587,7 @@ func TestMinutesLateCalendar(t *testing.T) {
 	if r := recordingNow(t, e, old); r.MatchedRev != 1 {
 		t.Fatalf("an old recording nothing overlaps is not settled: rev %d", r.MatchedRev)
 	}
-	for _, it := range []*Item{
+	for _, it := range []*kb.Item{
 		{Kind: KindMeeting, ID: "m9", Title: "临时讨论", At: now.Add(-9 * time.Minute)},
 		{Kind: KindMeeting, ID: "m8", Title: "更早的讨论", At: now.Add(-3*time.Hour + time.Minute)},
 	} {
@@ -609,7 +610,7 @@ func TestMinutesLateCalendar(t *testing.T) {
 // made carried over to the same task for the same person, the same task for two people kept as two; asked again
 // while a model call was running, the minutes it brings don't settle the new request.
 func TestMinutesRemade(t *testing.T) {
-	var e *Engine
+	var e *testEngine
 	askDuring := false
 	model := &funcModel{f: func(int, string, string) (string, error) {
 		if askDuring {
@@ -634,7 +635,7 @@ func TestMinutesRemade(t *testing.T) {
 	// minutes.json one version ahead of meta.json.
 	m, _ = e.Store.ReadMinutes(recID)
 	m.Version = 5
-	if _, err := e.Store.putMinutes(recID, m); err != nil {
+	if _, err := ws(e.Store).putMinutes(recID, m); err != nil {
 		t.Fatal(err)
 	}
 	askDuring = true
@@ -665,14 +666,14 @@ func TestMinutesRemade(t *testing.T) {
 func TestMinutesAnswerRules(t *testing.T) {
 	e := goldenEngine(t, nil)
 	r := &Recording{ID: recID, StartedAt: time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone), Duration: 600,
-		Calendar: &RecordingCalendar{Attendees: []string{"Ada"}}}
+		Calendar: &kb.RecordingCalendar{Attendees: []string{"Ada"}}}
 	read := []minutesLine{{N: 1, At: 0, Text: "we will ship on Friday, planning with Ann"}, {N: 2, At: 10, Text: "张三 来写测试"}}
 	build := func(reply string) (*Minutes, error) {
 		var a minutesAnswer
 		if err := json.Unmarshal([]byte(reply), &a); err != nil {
 			t.Fatal(err)
 		}
-		return e.buildMinutes(r, a, read, goldenZone, i18n.ZhHans)
+		return e.eng().buildMinutes(r, a, read, goldenZone, i18n.ZhHans)
 	}
 	for _, empty := range []string{`{}`, `{"title":"无法总结"}`, `{"points":[{"text":"","line":1}]}`,
 		`{"headline":"只有结论","conclusions":[{"text":"定了","line":1}],"topics":[{"title":"空的"}]}`} {
@@ -741,34 +742,5 @@ func TestMinutesNoLongerMeetingAndRoundBound(t *testing.T) {
 	e.WriteMinutes(context.Background(), 2)
 	if got := len(model.calls) - calls; got != 2 {
 		t.Fatalf("%d tried in a round, want 2", got)
-	}
-}
-
-// Minutes written before they carried start and end (#4713) get them from their recording in a recording's detail;
-// every other field stays as stored, and minutes that have them are sent as they are.
-func TestMinutesWithSpan(t *testing.T) {
-	zone := time.FixedZone("UTC+8", 8*3600)
-	started := time.Date(2026, 11, 10, 6, 0, 0, 500_000_000, time.UTC)
-	ended := started.Add(70 * time.Minute)
-	r := &Recording{StartedAt: started, EndedAt: &ended}
-	old := []byte(`{"version":2,"title":"Design review","when":"2026-11-10 14:00–15:10","markdown":"# x","future":{"kept":true}}`)
-	var got map[string]any
-	if err := json.Unmarshal(minutesWithSpan(old, r, zone), &got); err != nil {
-		t.Fatal(err)
-	}
-	if got["start"] != "2026-11-10T14:00:00+08:00" || got["end"] != "2026-11-10T15:10:00+08:00" {
-		t.Errorf("span %v – %v", got["start"], got["end"])
-	}
-	if got["version"] != float64(2) || got["when"] != "2026-11-10 14:00–15:10" || got["markdown"] != "# x" || got["future"] == nil {
-		t.Errorf("stored fields changed: %v", got)
-	}
-	current := []byte(`{"version":3,"when":"x","start":"2026-11-10T14:00:00+08:00","end":"2026-11-10T15:10:00+08:00"}`)
-	for name, c := range map[string]struct {
-		raw []byte
-		r   *Recording
-	}{"has its span": {current, r}, "no recording": {old, nil}, "recording without a start": {old, &Recording{}}, "not JSON": {[]byte("{"), r}} {
-		if out := minutesWithSpan(c.raw, c.r, zone); string(out) != string(c.raw) {
-			t.Errorf("%s: %s", name, out)
-		}
 	}
 }

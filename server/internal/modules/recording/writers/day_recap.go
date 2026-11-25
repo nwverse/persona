@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"cmp"
@@ -12,38 +12,10 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/recordingwire"
-)
-
-// Re-exported from recordingwire.
-const (
-	RecapDueEvening  = recordingwire.RecapDueEvening
-	RecapDueComplete = recordingwire.RecapDueComplete
-	RecapDueCutoff   = recordingwire.RecapDueCutoff
-	RecapDueAsked    = recordingwire.RecapDueAsked
-	RecapDueRepair   = recordingwire.RecapDueRepair
-)
-
-// Re-exported from recordingwire.
-const (
-	FinalComplete = recordingwire.FinalComplete
-	FinalCutoff   = recordingwire.FinalCutoff
 )
 
 // recapWaiting: a try ran out of time and the next is not due yet.
 func recapWaiting(t *RecapTarget, now time.Time) bool { return now.Before(t.RetryAt) }
-
-// RecapSpan is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type RecapSpan = recordingwire.RecapSpan
-
-// Re-exported from recordingwire.
-const (
-	RecapMeeting = recordingwire.RecapMeeting
-	RecapOutside = recordingwire.RecapOutside
-)
-
-// DayRecapEntry is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type DayRecapEntry = recordingwire.DayRecapEntry
 
 // armRecap makes a recap of r due for reason, as r is now; one still due is settled by the same recap, so it gives
 // way (the newer reason says what kind of recap it is: a final one's is complete or cutoff).
@@ -57,7 +29,7 @@ func armRecap(r *Recording, reason string, now time.Time) {
 // askDayRecap is AskMinutes for day recording r (as read under recMu, which the caller holds): a recap from what the
 // hub has now, never a push; ErrRecordingIncomplete while it has no text. Asking again is trying again: the chunks the
 // model gave up on, or that wait after running out of time, are noted afresh (retryRecapNotes).
-func (e *Engine) askDayRecap(r *Recording) error {
+func (e *engine) askDayRecap(r *Recording) error {
 	if r.Chars == 0 {
 		return ErrRecordingIncomplete
 	}
@@ -73,7 +45,7 @@ func (e *Engine) askDayRecap(r *Recording) error {
 // unless it was deleted meanwhile (false then). recap.json goes last, so a write that failed half way leaves the
 // recap.json before it, and the next write (a PUT tried again, mendRecapFiles) writes them all again: what an erase
 // withdrew never stays in recap.md or summary.md behind a recap.json without it. The caller holds recMu.
-func (s *Store) putRecap(id string, rc *DayRecap) (bool, error) {
+func (s *store) putRecap(id string, rc *DayRecap) (bool, error) {
 	if s.readOnly {
 		return false, ErrReadOnly
 	}
@@ -82,7 +54,7 @@ func (s *Store) putRecap(id string, rc *DayRecap) (bool, error) {
 		return false, err
 	}
 	wrote, err := s.recapFilesLocked(id, func() error {
-		if err := writeFile(s.path(KindRecording, id, recapMarkdown), []byte(strings.TrimSpace(rc.Markdown)+"\n")); err != nil {
+		if err := s.writeFile(s.path(KindRecording, id, recapMarkdown), []byte(strings.TrimSpace(rc.Markdown)+"\n")); err != nil {
 			return err
 		}
 		if rc.Summary != "" {
@@ -106,7 +78,7 @@ func (s *Store) putRecap(id string, rc *DayRecap) (bool, error) {
 		}
 	}
 	if wrote, err = s.recapFilesLocked(id, func() error {
-		return writeFile(s.path(KindRecording, id, recapFile), append(raw, '\n'))
+		return s.writeFile(s.path(KindRecording, id, recapFile), append(raw, '\n'))
 	}); err != nil || !wrote {
 		return wrote, err
 	}
@@ -116,7 +88,7 @@ func (s *Store) putRecap(id string, rc *DayRecap) (bool, error) {
 
 // recapFilesLocked runs write on recording id's files under recFilesMu and metaMu, unless the recording was deleted
 // meanwhile (false then: writeFile makes missing directories, and a recording deleted must stay gone).
-func (s *Store) recapFilesLocked(id string, write func() error) (bool, error) {
+func (s *store) recapFilesLocked(id string, write func() error) (bool, error) {
 	s.recFilesMu.Lock()
 	defer s.recFilesMu.Unlock()
 	if err := s.recoverRecordingLocked(id); err != nil {
@@ -131,7 +103,7 @@ func (s *Store) recapFilesLocked(id string, write func() error) (bool, error) {
 }
 
 // summaryLocked: the user wrote recording id's summary (its meta.json locks it). The caller holds metaMu.
-func (s *Store) summaryLocked(id string) (bool, error) {
+func (s *store) summaryLocked(id string) (bool, error) {
 	var t Tagging
 	if _, err := readJSON(s.entityPath(KindRecording, id), &t); err != nil {
 		return false, err
@@ -142,7 +114,7 @@ func (s *Store) summaryLocked(id string) (bool, error) {
 // mendRecapFiles writes recording r's recap.md and summary.md again from its recap.json when they do not say what it
 // does (a write that failed half way, putRecap). A trimmed recording keeps no summary.md, and one the user wrote is
 // theirs. The caller holds recMu.
-func (s *Store) mendRecapFiles(r *Recording) error {
+func (s *store) mendRecapFiles(r *Recording) error {
 	if s.readOnly {
 		return nil
 	}
@@ -170,7 +142,7 @@ func (s *Store) mendRecapFiles(r *Recording) error {
 		return nil
 	case sumOK:
 		_, err := s.recapFilesLocked(r.ID, func() error {
-			return writeFile(s.path(KindRecording, r.ID, recapMarkdown), []byte(strings.TrimSpace(rc.Markdown)+"\n"))
+			return s.writeFile(s.path(KindRecording, r.ID, recapMarkdown), []byte(strings.TrimSpace(rc.Markdown)+"\n"))
 		})
 		return err
 	}
@@ -187,7 +159,7 @@ func (s *Store) mendRecapFiles(r *Recording) error {
 // PUT tried again after one that failed) has recap.md and summary.md written again from it when they still differ.
 // The notes of the chunks whose lines the PUT changed go with them (pruneRecapNotes). recapped: r has a recap
 // (readable or not).
-func (e *Engine) repairDayRecap(r *Recording, u *RecordingUpload) (recapped bool, err error) {
+func (e *engine) repairDayRecap(r *Recording, u *RecordingUpload) (recapped bool, err error) {
 	st := e.Store
 	rc, err := st.readRecap(r.ID)
 	if err != nil {
@@ -284,9 +256,6 @@ func gapsWithin(gaps []CoverageGap, from, to float64) []CoverageGap {
 	return out
 }
 
-// RecapTodo is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type RecapTodo = recordingwire.RecapTodo
-
 // recapTodoNear is how far apart in time two actions with the same who and what may be and still be one task: one
 // said again later in the day is another.
 const recapTodoNear = 15 * 60
@@ -344,7 +313,7 @@ func rememberTodo(r *Recording, a MinutesAction, todo string) bool {
 // (keepRecapTodos): the version confirmed on that action, one written since (a rewrite while the to-dos were made)
 // where it has the task near the same time and nowhere else, and one written later even after a version that left it
 // out.
-func (e *Engine) SetDayRecapTodos(rawID string, version int, confirmed []MinutesAction) (*DayRecap, error) {
+func (e *engine) SetDayRecapTodos(rawID string, version int, confirmed []MinutesAction) (*DayRecap, error) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return nil, ErrNotFound
