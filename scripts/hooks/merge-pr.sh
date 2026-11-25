@@ -5,7 +5,8 @@
 # with this machine's private values (docs/operations/testing.md "Privacy scan"), then squash-merges exactly the head
 # and the message it scanned and deletes the branch. CI cannot do this: it does not have the values.
 # It also refuses a merge that would leave the fixed-sleep or web font ratchet failing on main for a file the PR changes
-# (scripts/ci/changed_ratchets.py, #7977): CI runs those on main only on a schedule.
+# (scripts/ci/changed_ratchets.py, #7977): CI runs those on main only on a schedule. And it refuses one that adds a weak
+# type to the contract packages or the hub's handlers, counted on the merge result (scripts/ci/merge_wire_types.py).
 set -euo pipefail
 expect_head="${PR_WATCH_EXPECT_HEAD:-}"
 expect_base="${PR_WATCH_EXPECT_BASE:-}"
@@ -99,6 +100,10 @@ python3 "$root/scripts/privacy_check.py" --range "$base_sha..$head" --message "$
 # Only the files the PR changes, as the merge leaves them: a file main already fails is left to its own fix.
 python3 "$root/scripts/ci/changed_ratchets.py" --root "$root" --base "$base_sha" --head "$head" \
   || { echo "merge-pr: #$pr not merged: fix the ratchet failures above in the PR first" >&2; exit 1; }
+# The merge as it will land, counted: a weak type the PR adds to the contract packages or the hub's handlers is refused
+# here, not found on main later (scripts/ci/merge_wire_types.py, #15397). Needs Go; without it nothing is merged.
+python3 "$root/scripts/ci/merge_wire_types.py" --root "$root" --base "$base_sha" --head "$head" \
+  || { echo "merge-pr: #$pr not merged: type the weak fields above in the PR first" >&2; exit 1; }
 # From outside the repository, by name: gh then only merges on GitHub. (--delete-branch inside a worktree also checks
 # out the base branch locally and fails when another worktree holds it; and it fails when GitHub already deleted the
 # branch on merge.) The branch is deleted here instead, if it is still there.

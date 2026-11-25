@@ -5,6 +5,7 @@ package wire
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 )
 
@@ -5951,6 +5952,71 @@ const (
 // AssistantEventSeverities are the values of AssistantEventSeverity, in order.
 var AssistantEventSeverities = []string{"info", "warning", "critical"}
 
+// AssistantEventState: where the thing an event's key names is now, in the extension's own words (firing, resolved,
+// ...): a label each extension chooses.
+// It is free text, not a closed set of values.
+type AssistantEventState string
+
+// AssistantEventReplace: whether an event takes the place of one of the extension's with the same key still waiting
+// behind a running turn: absent and true replace, false keeps the earlier one as its own message.
+// It has three values: AssistantEventReplaceDefault (absent from the JSON), AssistantEventReplaceTrue and
+// AssistantEventReplaceFalse.
+type AssistantEventReplace uint8
+
+const (
+	// AssistantEventReplaceDefault: absent.
+	AssistantEventReplaceDefault AssistantEventReplace = iota
+	// AssistantEventReplaceTrue: true.
+	AssistantEventReplaceTrue
+	// AssistantEventReplaceFalse: false.
+	AssistantEventReplaceFalse
+)
+
+// IsZero reports AssistantEventReplaceDefault, which omitzero leaves out of the JSON.
+func (v AssistantEventReplace) IsZero() bool { return v == AssistantEventReplaceDefault }
+
+// Or is the boolean v says, or absent when v is the default.
+func (v AssistantEventReplace) Or(absent bool) bool {
+	switch v {
+	case AssistantEventReplaceTrue:
+		return true
+	case AssistantEventReplaceFalse:
+		return false
+	}
+	return absent
+}
+
+// MarshalJSON writes true or false; AssistantEventReplaceDefault is null (a field tagged omitzero leaves it out
+// instead).
+func (v AssistantEventReplace) MarshalJSON() ([]byte, error) {
+	switch v {
+	case AssistantEventReplaceDefault:
+		return []byte("null"), nil
+	case AssistantEventReplaceTrue:
+		return []byte("true"), nil
+	case AssistantEventReplaceFalse:
+		return []byte("false"), nil
+	}
+	return nil, errors.New("AssistantEventReplace: not one of its three values")
+}
+
+// UnmarshalJSON reads true or false, and null as absent; anything else fails.
+func (v *AssistantEventReplace) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*v = AssistantEventReplaceDefault
+		return nil
+	}
+	var b bool
+	if err := json.Unmarshal(data, &b); err != nil {
+		return err
+	}
+	*v = AssistantEventReplaceFalse
+	if b {
+		*v = AssistantEventReplaceTrue
+	}
+	return nil
+}
+
 // AssistantEventParams: assistant.event (assistant.events): one event for the assistant's main conversation. The
 // assistant gets it as something an extension observed, never as the user's words, and decides what to tell the user.
 // An event with the same key as one of this extension's still waiting behind a running turn replaces it, unless
@@ -5966,9 +6032,9 @@ type AssistantEventParams struct {
 	// What the extension suggests be done about it: a suggestion for the assistant to weigh, not an order.
 	ActionHint string `json:"action_hint,omitempty"`
 	// Where the thing the key names is now, in the extension's words (firing, resolved, ...).
-	State string `json:"state,omitempty"`
+	State AssistantEventState `json:"state,omitempty"`
 	// false keeps an earlier event with the same key as its own message instead of replacing it. Absent is true.
-	Replace *bool `json:"replace,omitempty"`
+	Replace AssistantEventReplace `json:"replace,omitzero"`
 }
 
 // AssistantEventDelivery: what happened to the event. delivered: sent into the idle main conversation now. queued:
