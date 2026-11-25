@@ -35,7 +35,13 @@ type threadEnv struct {
 
 func newThreadEnv(t *testing.T, st Store) *threadEnv {
 	t.Helper()
-	e := &threadEnv{todoEnv: newTodoEnv(t, st), features: FeishuFeatures{Main: true, Agents: true, Cards: true}}
+	return withFeishuThread(newTodoEnv(t, st))
+}
+
+func withFeishuThread(env *todoEnv) *threadEnv {
+	t := env.t
+	t.Helper()
+	e := &threadEnv{todoEnv: env, features: FeishuFeatures{Main: true, Agents: true, Cards: true}}
 	setSettings(t, e.s, func(v *Settings) { v.MachineID, v.Main = "server", "m1" })
 	empty := func(json.RawMessage) (any, error) { return map[string]any{}, nil }
 	e.f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {

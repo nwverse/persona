@@ -224,9 +224,7 @@ func TestCodexSamePromptStartsClaimDistinctThreads(t *testing.T) {
 
 	firstID := "aaaaaaaa-0000-4000-8000-000000000001"
 	writeThread(t, n.home, firstID, cwd, prompt)
-	rolloutCaches.Lock()
-	cacheFor(n.codexHome()).at = time.Time{} // as for the second: the cache would hide it for up to its 5 s, the wait's whole bound
-	rolloutCaches.Unlock()
+	expireRollouts(n.codexHome(), false) // as for the second: the cache would hide it for up to its 5 s, the wait's whole bound
 	var first string
 	select {
 	case first = <-ids:
@@ -244,9 +242,7 @@ func TestCodexSamePromptStartsClaimDistinctThreads(t *testing.T) {
 	}
 	secondID := "bbbbbbbb-0000-4000-8000-000000000002"
 	writeThread(t, n.home, secondID, cwd, prompt)
-	rolloutCaches.Lock()
-	cacheFor(n.codexHome()).at = time.Time{} // make the just-published second rollout visible to the next poll
-	rolloutCaches.Unlock()
+	expireRollouts(n.codexHome(), false) // make the just-published second rollout visible to the next poll
 	var second string
 	select {
 	case second = <-ids:

@@ -108,8 +108,10 @@ openMacTodo
 openMachineClipboard
 openMachineDetail
 openMachineFiles
+openMachineMonitor
 openMachinePage
 openMachines
+openMachinesFootnote
 openMailLabel
 openMailThread
 openManagerPage
@@ -293,6 +295,7 @@ showGitReload
 showHandOffNewAgent
 showHealthActivityExample
 showHealthHomeTrendsExample
+showHealthItemsEditor
 showHealthTrends
 showHerdrStart
 showHomeState
@@ -438,6 +441,7 @@ showSwiftUIJumps
 showSystemCallService
 showTaskBoard
 showTaskDetail
+showTellHealthResult
 showTerminalUpload
 showTerminalsUnlinked
 showTestNotification
