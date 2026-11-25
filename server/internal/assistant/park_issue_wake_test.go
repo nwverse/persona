@@ -78,3 +78,24 @@ func TestOpenIssueRefusalNamesTheWaysOut(t *testing.T) {
 		t.Fatal("the task stayed open")
 	}
 }
+
+// Only an evidence URL that is itself a GitHub issue enrolls the park: an issue quoted inside another URL, a longer
+// path or a number too large to read does not (#14050 review).
+func TestParkIssueURLIsTheEvidenceItself(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://github.com/o/r/issues/40":                                 "https://github.com/o/r/issues/40",
+		"https://github.com/o/r/issues/40/":                                "https://github.com/o/r/issues/40",
+		"https://github.com/o/r/issues/40#issuecomment-1":                  "https://github.com/o/r/issues/40",
+		"https://www.github.com/o/r/issues/40?x=1":                         "https://github.com/o/r/issues/40",
+		"https://example.com/wait?source=https://github.com/o/r/issues/40": "",
+		"https://github.com/o/r/issues/40/events":                          "",
+		"https://github.com/o/r/pull/40":                                   "",
+		"https://github.com/o/r/issues/99999999999999999999999":            "",
+		"see https://github.com/o/r/issues/40":                             "",
+	} {
+		r := &TaskReview{WaitingOn: parkExternalEvent, Evidence: &ParkEvidence{URL: raw}}
+		if got := parkIssueURL(r); got != want {
+			t.Errorf("parkIssueURL(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}

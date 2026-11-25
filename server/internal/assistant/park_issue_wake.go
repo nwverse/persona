@@ -2,7 +2,9 @@ package assistant
 
 import (
 	"context"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -25,11 +27,26 @@ func parkIssueURL(r *TaskReview) string {
 	if r == nil || r.Handoff != nil || r.Evidence == nil || r.WaitingOn != parkExternalEvent && r.WaitingOn != parkSomeoneElse {
 		return ""
 	}
-	m := ciIssueURL.FindStringSubmatch(r.Evidence.URL)
-	if m == nil {
+	return githubIssueURL(r.Evidence.URL)
+}
+
+// githubIssueURL is raw as a canonical GitHub issue URL when raw itself is one ("" otherwise): an issue URL quoted
+// inside another URL (a query parameter, a longer path) names no issue to watch. A query, a fragment or a trailing
+// slash is dropped; a number too large to read is refused.
+func githubIssueURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "https" && u.Scheme != "http" || !strings.EqualFold(u.Host, "github.com") && !strings.EqualFold(u.Host, "www.github.com") {
 		return ""
 	}
-	return m[0]
+	source := "https://github.com" + strings.TrimSuffix(u.EscapedPath(), "/")
+	m := ciIssueURL.FindStringSubmatch(source)
+	if m == nil || m[0] != source {
+		return ""
+	}
+	if _, err := strconv.Atoi(m[2]); err != nil {
+		return ""
+	}
+	return source
 }
 
 // sweepParkIssues reads the issue each open parked task waits on and wakes the supervisor of one whose issue closed.
