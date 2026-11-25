@@ -1178,7 +1178,7 @@ def outputs(defs: dict[str, Def]) -> dict[Path, str]:
     return {p: (s.rstrip("\n") + "\n") for p, s in out.items()}
 
 
-WIRE_TARGETS = ("ts", "swift", "go", "kotlin")
+WIRE_TARGETS = ("ts", "swift", "go", "kotlin", "arkts")
 
 
 def declared_package(out: Path, suffix: str, derived: str) -> str:
@@ -1225,6 +1225,9 @@ def wire_outputs() -> dict[Path, str]:
                 raise SchemaError(f"{path.name}: x-out kotlin is not under a kotlin source root")
             package = declared_package(kt, ".kt", ".".join(parts[parts.index("kotlin") + 1:-1]))
             out[kt] = gen_kotlin(defs, header=header, prefix="", package=package)
+        if "arkts" in targets:
+            # ArkTS accepts this schema's plain TypeScript subset: interfaces, string enums and their ordered values.
+            out[ROOT / targets["arkts"]] = gen_ts(defs, header=header)
     return out
 
 

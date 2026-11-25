@@ -12,7 +12,7 @@ import { ClientModel } from '../models/ClientModel';
 import { TodoWorkspace, TodoWorkspaceAgent, TodoWorkspaceGroup, TodoWorkspaceItem, TodoWorkspaceSection,
   TodoWorkspaceSpace, TodoWorkspaceSpaceChoice, TodoCalendarBand, TodoCalendarDrop, todoCalendarDrop, todoDropDue, todoCalendarDays, todoDayKey, todoAgentStateLabel, todoMatchesDue, TODO_DUE_FILTERS, TODO_LIST_ORDERS } from '../models/TodoWorkspace';
 import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
-import { todoHubLabel } from '../models/TodoHubView';
+import { TODO_HUB_SECTIONS, todoHubLabel } from '../models/TodoHubView';
 import { ResourceRow, Wire } from '../models/Wire';
 import { Tokens } from '../design/Tokens';
 import { tr, trError } from '../design/Strings';
@@ -761,7 +761,7 @@ export struct TodoWorkspacePage {
   }
   private foldable(section: TodoWorkspaceSection): boolean {
     if (!this.hubMode()) return this.workspace.effectiveGroup()==='status' && (section.key==='done' || section.key==='shelved');
-    return section.key === 'someday' || section.key === 'can_wait' || (section.key === 'done' && this.workspace.hubChoice !== 'done');
+    return section.key === 'someday' || section.key === TODO_HUB_SECTIONS[1] || (section.key === 'done' && this.workspace.hubChoice !== 'done');
   }
   private sectionCount(binding: BoundTodoSection): number {
     if (this.hubMode() && binding.value.key === 'needs_you') return this.workspace.hubCounts?.needsYou || 0;
