@@ -273,8 +273,10 @@ class Slice:
         if self.entity:
             taken |= {self.entity + "Visitor", self.entity + "Builder"}
             taken |= {self.entity + p.name + "Step" for p in self.parts}
+            taken.add("Known")  # a part's field, known, would clash with the entity's known check
         if self.decider:
             taken |= {"Command", "Event", "EventVisitor", "Decided", "DecidedVisitor"}
+            taken |= {"Closed", "Events"}  # a field named closed or events would clash with the entity's or Decided's
         clash = sorted(taken & set(self.names))
         if clash:
             raise Refused(f"{', '.join(clash)}: the scaffold declares that name itself; name the type otherwise")

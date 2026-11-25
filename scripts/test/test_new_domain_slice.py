@@ -141,6 +141,7 @@ class GenerateTests(unittest.TestCase):
             ("--value", "NoteID=string", "--zero-is", "x", "--entity", "Note", "--id", "NoteID"): "takes no --zero-is",
             ("--value", "Pair=left:Pair"): "its parts hold Pair again",
             ("--value", "A=left:B", "--value", "B=right:A"): "its parts hold",
+            ("--value", "Known=string", "--entity", "Box", "--id", "BoxID"): "the scaffold declares that name itself",
         }
         with tempfile.TemporaryDirectory() as work:
             for flags, says in cases.items():
