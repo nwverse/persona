@@ -929,7 +929,8 @@ func (s *Service) taskReplies(ctx context.Context, t Todo) (out []taskDoneReply,
 		if !ok {
 			continue
 		}
-		earlier, items, read := s.lastTwoTurns(ctx, m.ID, a.SessionID)
+		resolved, sid, listed := s.resolveTaskSession(ctx, m.ID, a.SessionID)
+		earlier, items, read := s.lastTwoTurns(ctx, m.ID, sid)
 		if read && taskTurnAwaitingAnswer(items) {
 			return nil, false // one unfinished agent invalidates the whole task's completion evidence
 		}
@@ -947,10 +948,8 @@ func (s *Service) taskReplies(ctx context.Context, t Todo) (out []taskDoneReply,
 				sideTurnBlocked = true
 			}
 		}
-		if text == "" {
-			if c, ok := s.session(ctx, m.ID, a.SessionID); ok {
-				text = strings.TrimSpace(c.LastText)
-			}
+		if text == "" && listed {
+			text = strings.TrimSpace(resolved.LastText)
 		}
 		if text == "" {
 			continue
@@ -1546,7 +1545,8 @@ func (s *Service) advanceFromLastReplies(ctx context.Context, t Todo) {
 		}
 		text := ""
 		var replyAt time.Time
-		if items, read := s.lastTurnItems(ctx, m.ID, a.SessionID); read {
+		resolved, sid, listed := s.resolveTaskSession(ctx, m.ID, a.SessionID)
+		if items, read := s.lastTurnItems(ctx, m.ID, sid); read {
 			_, text = turnExchange(items)
 			for i := len(items) - 1; i >= 0; i-- {
 				if it := items[i]; it.Role == "assistant" && it.Kind == proto.KindText && strings.TrimSpace(it.Text) == text {
@@ -1555,11 +1555,9 @@ func (s *Service) advanceFromLastReplies(ctx context.Context, t Todo) {
 				}
 			}
 		}
-		if text == "" {
-			if c, ok := s.session(ctx, m.ID, a.SessionID); ok && !strings.HasSuffix(c.LastText, "…") {
-				text = strings.TrimSpace(c.LastText)
-				replyAt = c.UpdatedAt
-			}
+		if text == "" && listed && !strings.HasSuffix(resolved.LastText, "…") {
+			text = strings.TrimSpace(resolved.LastText)
+			replyAt = resolved.UpdatedAt
 		}
 		if text == "" {
 			continue

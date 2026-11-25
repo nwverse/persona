@@ -15,7 +15,13 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/assistant/fleetcount"
+	"github.com/nwverse/persona/server/internal/assistant/fleetcount/fleetcountadapt"
+	"github.com/nwverse/persona/server/internal/assistant/fleetview"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/domainkit/fail"
+	// Named apart: the package's tests declare a helper called outcome.
+	kitoutcome "github.com/nwverse/persona/server/internal/domainkit/outcome"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -36,21 +42,24 @@ type (
 	FleetProgress = assistantwire.FleetProgress
 )
 
-const fleetMaxItems = 3
-
-// fleetDetailMax is how long an item's line gets, in runes, before it is clipped (with an ellipsis after);
-// fleetTitleMax and fleetPlaceMax its title and place, as the lock screen has room for them.
+// fleetMaxItems is how many agents the Live Activity lists; fleetDetailMax, fleetTitleMax and fleetPlaceMax how long
+// an item's line, title and place get (fleetview, which the needs-you rows are written with too).
 const (
-	fleetDetailMax = 60
-	fleetTitleMax  = 24
-	fleetPlaceMax  = 32
+	fleetMaxItems  = fleetview.MaxItems
+	fleetDetailMax = fleetview.DetailMax
+	fleetTitleMax  = fleetview.TitleMax
+	fleetPlaceMax  = fleetview.PlaceMax
 )
 
-// liveState is what was told the hub last.
+// liveState is what was told the hub last, and the needs-you arrays fleetSnapshot and linkCovers reuse (liveLoop
+// keeps its own).
 type liveState struct {
 	mu     sync.Mutex
 	sent   string
 	signal chan struct{}
+
+	roundMu sync.Mutex
+	round   fleetRound
 }
 
 func (l *liveState) ch() chan struct{} {
@@ -90,6 +99,7 @@ func (s *Service) liveLoop(ctx context.Context) {
 	// what the manager allocated under churn (#3197). The 15 s look takes new arrays and gives these back, so a
 	// fleet gone quiet holds no second copy of its lists.
 	var lists map[string][]proto.Session
+	round := fleetRound{logf: s.logf}
 	for {
 		select {
 		case <-ctx.Done():
@@ -104,8 +114,8 @@ func (s *Service) liveLoop(ctx context.Context) {
 		}
 		l := s.lang(context.Background())
 		agents, ixs, told := s.fleetInputsInto(lists)
-		s.tellLive(buildFleetIn(l, agents, ixs))
-		s.devs.SetAttention(linkAttention(l, agents, ixs, told)) // sent on only when it changed
+		s.tellLive(round.buildFleet(l, agents, ixs))
+		s.devs.SetAttention(round.linkAttention(l, agents, ixs, told)) // sent on only when it changed
 	}
 }
 
@@ -129,7 +139,10 @@ func (s *Service) tellLive(st FleetState) {
 // fleetSnapshot computes the fleet from every machine's sessions and the pending interactions.
 func (s *Service) fleetSnapshot() FleetState {
 	agents, ixs, _ := s.fleetInputs()
-	return buildFleetIn(s.lang(context.Background()), agents, ixs)
+	l := s.lang(context.Background())
+	s.fleet.live.roundMu.Lock()
+	defer s.fleet.live.roundMu.Unlock()
+	return s.fleet.live.round.buildFleet(l, agents, ixs)
 }
 
 // fleetInputs is every machine's agents as the fleet sees them, the pending interactions (oldest first), and which of
@@ -171,7 +184,7 @@ func (s *Service) fleetInputsInto(kept map[string][]proto.Session) ([]fleetInput
 		list := lists[i]
 		for j := range list {
 			sess := &list[j]
-			if sess.Quiet || sess.HiddenByDirectory() { // a quiet task's agent: the main conversation tells about it (#1731)
+			if fleetcountadapt.Visibility(sess).LeftOut() { // a quiet task's agent: the main conversation tells about it (#1731)
 				continue
 			}
 			agents = append(agents, fleetInput{
@@ -238,16 +251,10 @@ type fleetInput struct {
 
 // buildFleet sums agents up the way the Agents list does (docs/apple/ios.md): needs you first (oldest request first), then
 // working (longest first), then finished unseen. Muted agents, idle / offline ones, and /loop agents waiting for
-// their next tick are left out; the assistant only counts when it asks something.
+// their next tick are left out; the assistant only counts when it asks something. Which agents need you, and by which
+// card, is fleetcount's (fleetcount.AgentsNeedsYou, the Live Activity's surface).
 func buildFleet(agents []fleetInput, ixs []proto.Interaction) FleetState {
 	return buildFleetIn(i18n.Default, agents, ixs)
-}
-
-// needer is an agent that needs the user, and the card that stands for it: its oldest (nil: it waits in a terminal
-// dialog without one). card points into the cards needsYou was given.
-type needer struct {
-	agent fleetInput
-	card  *proto.Interaction
 }
 
 // agentKey is an agent's machine and session, what its cards name it by.
@@ -255,75 +262,67 @@ type agentKey = [2]string
 
 func keyOf(sess *proto.Session) agentKey { return agentKey{sess.MachineID, sess.SessionID} }
 
-// needsYou is the agents that need the user, one each, as the Agents list has them (#3571): those with a card by their
-// oldest card that stands (ixs come oldest first), then those in a terminal dialog without one, in agents' order.
-// counts says which agents count at all, stands which cards may stand for one; the assistant's own dialog never
-// counts. The Live Activity and Persona Link's summary (fleet_attention.go) differ in those, not in this. An agent whose
-// every pending card its task's supervisor holds (supervisorHeldOnly) is not the user's: it is none of them.
-func needsYou(agents []fleetInput, ixs []proto.Interaction, counts func(fleetInput) bool, stands func(proto.Interaction) bool) []needer {
-	var out []needer
-	var asked, held map[agentKey]bool
-	if len(ixs) > 0 {
-		held = supervisorHeldOnly(ixs)
-		byKey := make(map[agentKey]int, len(agents)) // the agent's place in agents: the last one listed under its key
-		for i, a := range agents {
-			if counts(a) {
-				byKey[keyOf(a.Session)] = i
-			}
-		}
-		asked = map[agentKey]bool{}
-		for i := range ixs {
-			ix := &ixs[i]
-			key := agentKey{ix.MachineID, ix.SessionID}
-			if a, ok := byKey[key]; ok && !asked[key] && !held[key] && stands(*ix) {
-				asked[key] = true
-				out = append(out, needer{agent: agents[a], card: ix})
+// liveCounted says whether an agent is on the Live Activity at all, by fleetcount's rule (Agent.Counts): muted agents
+// and subtasks are not (Codex sub-agents, and a runtime's session another one started, which its parent's row stands
+// for until it needs the user), nor quiet tasks' and directory-hidden agents, which fleetInputsInto leaves out first.
+// A session fleetcount refuses counts nowhere. A side session folded under its parent is not either: buildFleetIn
+// counts it under that row first (foldSidesIn, #7944). foldSidesIn asks it of the rows it folds; a round's own rows
+// read it from what the round built (fleetRound.onLive).
+func liveCounted(a fleetInput) bool {
+	agent, failed := kitoutcome.Unpack(fleetcountadapt.Agent(a.Session, a.Muted, 0))
+	return failed == nil && agent.Counts(fleetcount.SurfaceLiveActivity())
+}
+
+// fleetRound is what the needs-you rows keep from one round to the next: each surface's agents and cards as the
+// adapter holds them (their arrays reused, not the counting core's), the sessions the last Live Activity found waiting
+// and Persona Link's cards in their order. liveLoop keeps one; the zero fleetRound is a round over new arrays. logf,
+// when set, says when the number of sessions and cards fleetcount refused changes: they are left out of the rows,
+// never filled in.
+type fleetRound struct {
+	live, link fleetcountadapt.Fleet
+	waiting    []*proto.Session
+	cards      []proto.Interaction
+	onLive     []bool // by place in the last agents filled: fleetcount counts the agent on the Live Activity at all
+	logf       func(string, ...any)
+	refused    int
+}
+
+// fill puts a round's agents and cards into f; told says which cards the owner was told of (nil: none). onLive
+// records, for each agent, whether fleetcount counts it on the Live Activity at all (Agent.Counts), which the working
+// and finished rows follow too.
+func (r *fleetRound) fill(f *fleetcountadapt.Fleet, agents []fleetInput, ixs []proto.Interaction, told map[string]bool) {
+	f.Reset()
+	r.onLive = r.onLive[:0]
+	refused := 0
+	var first fail.Fail
+	var which string
+	for i := range agents {
+		a := &agents[i]
+		agent, failed := kitoutcome.Unpack(f.Agent(a.Machine, a.Session, a.Muted))
+		r.onLive = append(r.onLive, failed == nil && agent.Counts(fleetcount.SurfaceLiveActivity()))
+		if failed != nil {
+			if refused++; first == nil {
+				first, which = failed, "session "+a.Session.MachineID+"/"+a.Session.SessionID
 			}
 		}
 	}
-	for _, a := range agents {
-		if key := keyOf(a.Session); counts(a) && a.Session.State == proto.StateNeedsYou && !a.Session.Assistant && !asked[key] && !held[key] {
-			out = append(out, needer{agent: a})
+	for i := range ixs {
+		ix := &ixs[i]
+		if _, failed := kitoutcome.Unpack(f.Card(ix, told[ix.ID])); failed != nil {
+			if refused++; first == nil {
+				first, which = failed, "card "+ix.ID
+			}
 		}
 	}
-	return out
-}
-
-// supervisorHeldCard: a card its task's supervisor holds (routeAsk, ask_route.go): marked delegating and no question
-// (only a question is ever delegated to the assistant's own decision, which the user may still answer first). It is
-// not the user's until the supervisor escalates it (2026-11-23, D11 of docs/plans/plan-derived-counts.md).
-func supervisorHeldCard(ix proto.Interaction) bool {
-	return ix.Delegating && ix.Kind != proto.IxQuestion
-}
-
-// supervisorHeldOnly are the agents whose pending cards (ixs) are all held by their task's supervisor: their needs_you
-// is the supervisor's, not the user's (the hub's supervisor_held count, hub/sessions_list.go). Nil when there are none.
-func supervisorHeldOnly(ixs []proto.Interaction) map[agentKey]bool {
-	var held, other map[agentKey]bool
-	for _, ix := range ixs {
-		key := agentKey{ix.MachineID, ix.SessionID}
-		if supervisorHeldCard(ix) {
-			if held == nil {
-				held = map[agentKey]bool{}
-			}
-			held[key] = true
+	if refused != r.refused && r.logf != nil {
+		if first == nil {
+			r.logf("fleet: every session and card is counted again")
 		} else {
-			if other == nil {
-				other = map[agentKey]bool{}
-			}
-			other[key] = true
+			r.logf("fleet: %d sessions and cards left out of Needs you, the first %s: %s", refused, which, fleetcountadapt.Log(first))
 		}
 	}
-	for key := range other {
-		delete(held, key)
-	}
-	return held
+	r.refused = refused
 }
-
-// liveCounts: the agent is on the Live Activity at all (muted agents and subtasks are not: Codex sub-agents, and a
-// runtime's session another one started, which its parent's row stands for until it needs the user). A side session
-// folded under its parent is not either: buildFleetIn counts it under that row first (foldSidesIn, #7944).
-func liveCounts(a fleetInput) bool { return !a.Session.IsSubtask() && !a.Muted }
 
 // foldSidesIn counts each side session the Live Activity would count on its own, and each row folded through one
 // (folded_as "side" or folded_side set, fleet_fold.go), under the row it folds under, as the lists do (#7944): that
@@ -366,7 +365,7 @@ func foldSidesIn(agents []fleetInput, ixs []proto.Interaction) ([]fleetInput, []
 	for i := range agents {
 		a := &agents[i]
 		j, ok := into[keyOf(a.Session)]
-		if !ok || !liveCounts(*a) {
+		if !ok || !liveCounted(*a) {
 			continue
 		}
 		m := folded[j]
@@ -394,7 +393,7 @@ func foldSidesIn(agents []fleetInput, ixs []proto.Interaction) ([]fleetInput, []
 	outIxs := make([]proto.Interaction, len(ixs))
 	for i, ix := range ixs {
 		k := agentKey{ix.MachineID, ix.SessionID}
-		if j, ok := into[k]; ok && liveCounts(agents[at[k]]) {
+		if j, ok := into[k]; ok && liveCounted(agents[at[k]]) {
 			if _, has := folded[j]; !has {
 				folded[j] = &merged{}
 			}
@@ -429,31 +428,36 @@ func foldSidesIn(agents []fleetInput, ixs []proto.Interaction) ([]fleetInput, []
 	return out, outIxs
 }
 
-// cardStands: the card may stand for its agent (on the Live Activity and in Persona Link's summary). An elicitation
-// does not: the Fleet is shared with legacy clients, whose terminal fallback stays (the agent shows as in a dialog).
-func cardStands(ix proto.Interaction) bool { return ix.Kind != proto.IxElicitation }
-
 // shownAgent is a working or finished agent the Live Activity may list, and the time it is ordered by.
 type shownAgent struct {
 	agent *fleetInput
 	since float64
 }
 
-// buildFleetIn is buildFleet with the texts for people in l (the user's language). Every agent is counted, but only
-// the items shown (fleetMaxItems) are written out: their titles, places and lines are most of what a fleet costs.
+// buildFleetIn is buildFleet with the texts for people in l (the user's language), over arrays of its own.
 func buildFleetIn(l i18n.Lang, agents []fleetInput, ixs []proto.Interaction) FleetState {
+	var r fleetRound
+	return r.buildFleet(l, agents, ixs)
+}
+
+// buildFleet is buildFleetIn over the arrays the last round kept. Every agent is counted, but only the items shown
+// (fleetMaxItems) are written out: their titles, places and lines are most of what a fleet costs.
+func (r *fleetRound) buildFleet(l i18n.Lang, agents []fleetInput, ixs []proto.Interaction) FleetState {
 	var st FleetState
 	agents, ixs = foldSidesIn(agents, ixs)
-	needs := needsYou(agents, ixs, liveCounts, cardStands)
-	asked := make(map[agentKey]bool, len(needs))
-	for _, n := range needs {
-		asked[keyOf(n.agent.Session)] = true
+	r.fill(&r.live, agents, ixs, nil)
+	r.waiting = r.waiting[:0]
+	r.live.LiveActivity(string(l), &st, &r.waiting, sessionTitle)
+	asked := make(map[agentKey]bool, len(r.waiting))
+	for _, sess := range r.waiting {
+		asked[keyOf(sess)] = true
 	}
+	clear(r.waiting) // they point into the round's lists
 	var working, unread []shownAgent
 	for i := range agents {
 		a := &agents[i]
 		sess := a.Session
-		if !liveCounts(*a) || len(asked) > 0 && asked[keyOf(sess)] {
+		if !r.onLive[i] || len(asked) > 0 && asked[keyOf(sess)] {
 			continue
 		}
 		switch sess.State {
@@ -462,17 +466,17 @@ func buildFleetIn(l i18n.Lang, agents []fleetInput, ixs []proto.Interaction) Fle
 				st.Assistant = true
 				continue
 			}
-			working = append(working, shownAgent{a, unixSeconds(workingSince(a))})
+			working = append(working, shownAgent{a, fleetview.UnixSeconds(workingSince(a))})
 		case proto.StateUnread:
 			if sess.Assistant || sess.Loop != nil {
 				continue
 			}
-			unread = append(unread, shownAgent{a, unixSeconds(sess.UpdatedAt)})
+			unread = append(unread, shownAgent{a, fleetview.UnixSeconds(sess.UpdatedAt)})
 		}
 	}
 	sort.SliceStable(working, func(i, j int) bool { return working[i].since < working[j].since })
 	sort.SliceStable(unread, func(i, j int) bool { return unread[i].since > unread[j].since })
-	st.NeedsYou, st.Working, st.Unread = len(needs), len(working), len(unread)
+	st.Working, st.Unread = len(working), len(unread)
 	switch {
 	case st.NeedsYou > 0:
 		st.Phase = "needsYou"
@@ -484,17 +488,18 @@ func buildFleetIn(l i18n.Lang, agents []fleetInput, ixs []proto.Interaction) Fle
 	if len(working) > 0 {
 		st.WorkingSince = working[0].since
 	}
-	st.Items = make([]FleetItem, 0, min(fleetMaxItems, len(needs)+len(working)+len(unread)))
-	for _, n := range needs[:min(len(needs), fleetMaxItems)] {
-		st.Items = append(st.Items, needItem(l, n))
+	// The round's lists are let go until the next one.
+	r.live.Reset()
+	if st.Items == nil { // none needs you: LiveActivity made no room for its rows
+		st.Items = make([]FleetItem, 0, min(fleetMaxItems, len(working)+len(unread)))
 	}
 	for _, w := range working[:min(len(working), fleetMaxItems-len(st.Items))] {
 		st.Items = append(st.Items, workingItem(l, w))
 	}
 	for _, u := range unread[:min(len(unread), fleetMaxItems-len(st.Items))] {
 		sess := u.agent.Session
-		st.Items = append(st.Items, FleetItem{ID: sess.MachineID + "/" + sess.SessionID, Title: agentTitle(sess, fleetTitleMax),
-			Place: agentPlace(u.agent.Machine, sess, fleetPlaceMax), Kind: "unread",
+		st.Items = append(st.Items, FleetItem{ID: sess.MachineID + "/" + sess.SessionID, Title: fleetview.AgentTitle(sessionTitle(sess), fleetTitleMax),
+			Place: fleetview.AgentPlace(u.agent.Machine, sess, fleetPlaceMax), Kind: "unread",
 			Detail: clip(oneLine(firstLine(sess.LastText)), fleetDetailMax), Since: u.since})
 	}
 	return st
@@ -522,46 +527,11 @@ func workingSince(a *fleetInput) time.Time {
 	return since
 }
 
-// needItem is the item of an agent that needs the user, by the card that stands for it.
-func needItem(l i18n.Lang, n needer) FleetItem {
-	sess := n.agent.Session
-	item := FleetItem{ID: sess.MachineID + "/" + sess.SessionID, Title: agentTitle(sess, fleetTitleMax),
-		Place: agentPlace(n.agent.Machine, sess, fleetPlaceMax), Kind: proto.IxScreen, Detail: i18n.T(l, "hub-liveactivity.screen")}
-	if ix := n.card; ix != nil {
-		item.Kind, item.Detail = ix.Kind, clip(oneLine(interactionDetail(l, *ix)), fleetDetailMax)
-		if ix.Private { // a Just me turn's card: the Live Activity shows it without its text
-			item.Detail = i18n.T(l, "push.private_card")
-		}
-		item.Interaction, item.Since = ix.ID, unixSeconds(ix.CreatedAt)
-		if len(ix.Fields) > 0 || ix.ToolName == proto.SecretHandoffTool || !decidable(*ix) {
-			// What it asks for (a password) is filled in in the app, or (a hand-off) approved on the card only
-			// (hub/secret_handoff.go), or the card cannot say what approving does (#12982): no Allow / Deny on the
-			// activity, a tap opens the request in the app.
-			item.Interaction = ""
-		}
-	}
-	return item
-}
-
-// decidable: a card the Live Activity offers buttons for (a permission: Allow / Deny, a plan: Approve) says what
-// approving does (#12982): a permission its summary (a bare tool name says nothing about what runs), a plan its title,
-// and neither is private (a "Just me" card shows without its text). Other kinds never get buttons and keep their
-// interaction, which names the card.
-func decidable(ix proto.Interaction) bool {
-	switch ix.Kind {
-	case proto.IxPermission:
-		return !ix.Private && strings.TrimSpace(ix.Summary) != ""
-	case proto.IxPlan:
-		return !ix.Private && strings.TrimSpace(planTitle(ix.Plan)) != ""
-	}
-	return true
-}
-
 // workingItem is the item of a working agent.
 func workingItem(l i18n.Lang, w shownAgent) FleetItem {
 	sess := w.agent.Session
-	it := FleetItem{ID: sess.MachineID + "/" + sess.SessionID, Title: agentTitle(sess, fleetTitleMax),
-		Place: agentPlace(w.agent.Machine, sess, fleetPlaceMax), Kind: "working", Since: w.since}
+	it := FleetItem{ID: sess.MachineID + "/" + sess.SessionID, Title: fleetview.AgentTitle(sessionTitle(sess), fleetTitleMax),
+		Place: fleetview.AgentPlace(w.agent.Machine, sess, fleetPlaceMax), Kind: "working", Since: w.since}
 	if sess.BackgroundWorking {
 		it.Background, it.Detail = true, backgroundDetail(l, sess)
 		it.Progress = backgroundProgress(sess)
@@ -569,50 +539,14 @@ func workingItem(l i18n.Lang, w shownAgent) FleetItem {
 	return it
 }
 
-// agentTitle is the agent's title in one line of at most n runes: its project's folder when it has none.
-func agentTitle(sess *proto.Session, n int) string {
+// sessionTitle is an agent's title for people before it is clipped (fleetview.AgentTitle): its session's, its
+// project's folder when it has none.
+func sessionTitle(sess *proto.Session) string {
 	t := transcript.Title(sess.Title)
 	if t == "" || t == "Claude Code" {
 		t = path.Base(sess.Cwd)
 	}
-	return clip(oneLine(t), n)
-}
-
-// agentPlace is "machine · space › tab", the subtitle pushes use too, in at most n runes.
-func agentPlace(machine string, sess *proto.Session, n int) string {
-	place := machine
-	if sess.SpaceName != "" {
-		place += " · " + sess.SpaceName
-		if sess.SlotName != "" && sess.SlotName != fmt.Sprint(sess.SlotIndex) {
-			place += " › " + sess.SlotName
-		}
-	}
-	return clip(oneLine(place), n)
-}
-
-func interactionDetail(l i18n.Lang, ix proto.Interaction) string {
-	switch ix.Kind {
-	case proto.IxPermission:
-		if ix.Summary != "" {
-			return ix.Summary
-		}
-		return ixToolName(ix)
-	case proto.IxPlan:
-		return planTitle(ix.Plan)
-	case proto.IxQuestion:
-		if len(ix.Questions) > 0 {
-			return ix.Questions[0].Question
-		}
-		return ix.Summary
-	}
-	return i18n.T(l, "hub-liveactivity.screen")
-}
-
-func unixSeconds(t time.Time) float64 {
-	if t.IsZero() {
-		return 0
-	}
-	return float64(t.Unix())
+	return t
 }
 
 // shownWorkflow is the running workflow a background-working agent's item names: the first one (Workflows are newest

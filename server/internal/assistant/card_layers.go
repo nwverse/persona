@@ -57,6 +57,7 @@ const (
 	cardDecision           = "decision"             // todo_ask.go pushDecision: a to-do's decision with a recommendation
 	cardTodoRemind         = "todo_remind"          // todo_plan.go: a reminder the owner set
 	cardHealthWater        = "health_water"         // health_water.go: the water reminders the owner switched on
+	cardPageAlert          = "page_alert"           // pages_alert.go: a watch page's alert rule newly tripped
 	cardMinutesReady       = "minutes_ready"        // kb_minutes.go: a recording's minutes
 	cardDayRecap           = "day_recap"            // kb_day.go: the day's recap
 	cardBriefFallback      = "brief_fallback"       // briefing_fallback.go: the briefing itself, when its run failed
@@ -118,6 +119,7 @@ var cardCategories = map[string]int{
 	// their pushes are theirs to get.
 	cardTodoRemind:    cardCatDirection, // a reminder the owner set
 	cardHealthWater:   cardCatDirection, // a reminder the owner switched on
+	cardPageAlert:     cardCatDirection, // a watch page alert the owner switched on
 	cardMinutesReady:  cardCatDirection, // the minutes of a recording the owner made
 	cardDayRecap:      cardCatDirection, // the recap the owner subscribed to
 	cardBriefFallback: cardCatDirection, // the briefing the owner subscribed to, when its run failed

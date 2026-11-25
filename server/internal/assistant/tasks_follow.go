@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,6 +31,40 @@ type machineList struct {
 	err  error
 }
 
+// findListedSession finds the row in list with SessionID == id, else the unique row whose Aliases name id.
+// Returns false when no row matches or when more than one row claims the same alias.
+func findListedSession(list []proto.Session, id string) (proto.Session, bool) {
+	var aliasMatch proto.Session
+	aliases := 0
+	for _, c := range list {
+		if c.SessionID == id {
+			return c, true
+		}
+		if slices.Contains(c.Aliases(), id) {
+			aliasMatch = c
+			aliases++
+		}
+	}
+	if aliases == 1 {
+		return aliasMatch, true
+	}
+	return proto.Session{}, false
+}
+
+// resolveTaskSession resolves a todo agent's stored session id to the session currently listed on machine, following
+// proto.Session.Aliases when a pane placeholder row moved to its companion row (or vice versa).
+func (s *Service) resolveTaskSession(ctx context.Context, machine, id string) (proto.Session, string, bool) {
+	if c, ok := s.session(ctx, machine, id); ok {
+		return c, c.SessionID, true
+	}
+	if list, err := s.sessions(ctx, machine); err == nil {
+		if c, ok := findListedSession(list, id); ok {
+			return c, c.SessionID, true
+		}
+	}
+	return proto.Session{}, id, false
+}
+
 // taskAgentsIn is taskAgents with the lists already read in this pass; the machines it lists are added to lists.
 func (s *Service) taskAgentsIn(ctx context.Context, t Todo, lists machineSessions) []proto.Session {
 	var out []proto.Session
@@ -45,11 +80,8 @@ func (s *Service) taskAgentsIn(ctx context.Context, t Todo, lists machineSession
 		if l.err != nil {
 			continue
 		}
-		for _, c := range l.list {
-			if c.SessionID == a.SessionID {
-				out = append(out, c)
-				break
-			}
+		if c, ok := findListedSession(l.list, a.SessionID); ok {
+			out = append(out, c)
 		}
 	}
 	return out
@@ -110,11 +142,8 @@ func (s *Service) taskAgentsReached(ctx context.Context, t Todo) (agents []proto
 		if a.ReleasedAt != nil || a.DismissedAt != nil {
 			continue
 		}
-		for _, c := range lists[a.MachineID] {
-			if c.SessionID == a.SessionID {
-				agents = append(agents, c)
-				break
-			}
+		if c, ok := findListedSession(lists[a.MachineID], a.SessionID); ok {
+			agents = append(agents, c)
 		}
 	}
 	return agents, reached

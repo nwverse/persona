@@ -59,6 +59,9 @@ func pushArg(a string) (string, error) {
 
 // pushText is how list_followups and the tools' answers say a task's push.
 func pushText(t Task) string {
+	if t.PageID != "" {
+		return "never pushes; refreshes dashboard " + t.PageID + " in its own conversation"
+	}
 	if t.pushesOnlyAsked() && t.SessionID != "" {
 		return "pushes only what a run sends with notify_user (nothing new: no push); it runs in the conversation it came from"
 	}
