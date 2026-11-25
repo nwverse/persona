@@ -128,12 +128,16 @@ describe("To verify (user_check) visual layering and one-click Pass", () => {
     const rows = [...tray.querySelectorAll<HTMLButtonElement>("button[data-needs-row]")];
     expect(rows).toHaveLength(2);
 
-    // Expand uc-ask -> AcceptRow one-click action
-    act(() => rows[0].click());
-    expect(tray.querySelector('[data-brief-row="accept"]')).not.toBeNull();
+    // Expand uc-ask -> AcceptRow one-click action. Current main loads the acceptance card through the lazy
+    // NeedsYouPart (TaskDecision) chunk, so resolve it and poll until the accept row commits.
+    await act(async () => {
+      rows[0].click();
+      await import("./TaskDecision");
+    });
+    await expect.poll(() => tray.querySelectorAll('[data-brief-row="accept"]')).toHaveLength(1);
 
     // Expand uc-no-ask -> VerifyPassRow one-click Pass button
-    act(() => rows[1].click());
+    await act(async () => { rows[1].click(); });
     const passBtn = [...tray.querySelectorAll<HTMLButtonElement>('[data-verify-pass-row="uc-no-ask"] button')].find((b) => b.textContent === t("assistant-tasks.verify_pass"));
     expect(passBtn).toBeTruthy();
     await act(async () => passBtn!.click());

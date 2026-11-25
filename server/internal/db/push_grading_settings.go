@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -119,6 +120,57 @@ func (d *DB) DeletePushGradingLayer(ctx context.Context, _, layerKey, _, manager
 		tag, err := tx.Exec(ctx, `DELETE FROM `+d.settingsTable()+`
 			WHERE key = $1 AND value->>'manager' = $2 AND value->>'source' = $3
 			AND ($4::bigint = 0 OR COALESCE((value->>'revision')::bigint, 0) = $4)`, layerKey, manager, source, revision)
+		if err != nil {
+			return err
+		}
+		deleted = tag.RowsAffected() == 1
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return deleted, nil
+}
+
+// ClearPushGradingLayer deletes the singleton extension layer when it matches
+// the optional manager and source filters. It runs under the serialized push
+// grading write lock and never touches the owner-controlled legacy switch.
+func (d *DB) ClearPushGradingLayer(ctx context.Context, layerKey, manager, source string) (bool, error) {
+	deleted := false
+	err := d.pushGradingWrite(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `DELETE FROM `+d.settingsTable()+`
+			WHERE key = $1
+			AND ($2 = '' OR value->>'manager' = $2)
+			AND ($3 = '' OR value->>'source' = $3)`, layerKey, manager, source)
+		if err != nil {
+			return err
+		}
+		deleted = tag.RowsAffected() == 1
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return deleted, nil
+}
+
+// PrunePushGradingLayer deletes the singleton extension layer when it belongs
+// to manager and its source is no longer in keepSources (after extension
+// disable, uninstall, or push.grading scope removal). It never touches another
+// manager's layer or the owner-controlled legacy switch.
+func (d *DB) PrunePushGradingLayer(ctx context.Context, layerKey, manager string, keepSources []string) (bool, error) {
+	if strings.TrimSpace(manager) == "" {
+		return false, errors.New("push grading layer prune requires a manager")
+	}
+	if keepSources == nil {
+		keepSources = []string{}
+	}
+	deleted := false
+	err := d.pushGradingWrite(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `DELETE FROM `+d.settingsTable()+`
+			WHERE key = $1
+			AND value->>'manager' = $2
+			AND NOT (COALESCE(value->>'source', '') = ANY($3::text[]))`, layerKey, manager, keepSources)
 		if err != nil {
 			return err
 		}

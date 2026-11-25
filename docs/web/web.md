@@ -2373,6 +2373,12 @@ Settings › Labs (#9877, #14468, `web/src/views/settings/Labs.tsx`) holds tempo
 sidebar group after the hub's. The page explains Labs and renders each experiment's injected configuration source,
 which explains where the choice applies and when it takes effect.
 
+An available experiment is new until it is enabled or seen (#15802). Settings and the Labs category show a dot while any
+experiment is new. Opening Settings › Labs records the available experiments as seen and preserves the new card labels
+for that visit. The selected assistant's `labs_seen` receipts sync over the hub. Web uses browser storage when the
+assistant's settings omit the field. The renderer choice itself is still per browser. The sidebar reads the lightweight
+`web/src/lib/labs-catalog.ts` and assistant state. The configuration forms load only when needed.
+
 Each entry must meet all three admission criteria.
 
 1. It trials a real feature to validate stability or usability, or lets the user try a new implementation of the same
@@ -2460,12 +2466,13 @@ leaves the page.
 
 ### Adding, graduating and removing an entry
 
-1. **Add** an entry that meets the admission criteria and link its tracking issue. Register a source in `Labs.tsx`
-   with scope, activation and rollback in `en`, `zh-Hans` and `ja`. Add a search entry and test both paths and the
+1. **Add** an entry that meets the admission criteria and link its tracking issue. Register its ID and enabled check in
+   `labs-catalog.ts` and its source in `Labs.tsx` with scope, activation and rollback in `en`, `zh-Hans` and `ja`.
+   Add a search entry and test both paths and the
    fallback. Preserve security fixes and keep the stable path available throughout the trial.
 2. **Graduate** when the new path is ready for everyone: make it the default in a PR linked to the entry's issue, say so
    in the release notes, and keep the entry for at least one release so people can still go back.
-3. **Remove** after that release: delete the module's source, its words and the old path. Stop reading its key; leave
+3. **Remove** after that release: delete the catalog entry, the module's source, its words and the old path. Stop reading its key; leave
    stored values alone (they are ignored). An entry whose new path is abandoned is removed the same way with the old path kept.
 
 ## Modules

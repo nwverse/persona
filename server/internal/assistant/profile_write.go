@@ -37,9 +37,26 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		Glossary               json.RawMessage `json:"meeting_glossary"`
 		TranscriptionExtension json.RawMessage `json:"meeting_transcription_extension"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	var raw json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 		apierr.Write(w, http.StatusBadRequest, err)
 		return
+	}
+	if err := json.Unmarshal(raw, &in); err != nil {
+		apierr.Write(w, http.StatusBadRequest, err)
+		return
+	}
+	labsSeen, err := normalizeLabsSeen(in.LabsSeen)
+	if err != nil {
+		apierr.Write(w, http.StatusBadRequest, err)
+		return
+	}
+	if in.LabsSeen != nil {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(raw, &fields) == nil && len(fields) == 1 {
+			s.putLabsSeen(w, ctx, labsSeen)
+			return
+		}
 	}
 	if in.Permission != nil {
 		if err := json.Unmarshal(in.Permission, &in.DefaultPermissionMode); err != nil {
@@ -90,6 +107,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		in.StartDefaults.By = "owner" // this route is full credentials only
 	}
 	before := s.settings(ctx)
+	if _, err := applyLabsSeen(&before, labsSeen); err != nil {
+		apierr.Write(w, http.StatusBadRequest, err)
+		return
+	}
 	machine := before.MachineID
 	if in.MachineID != "" {
 		if _, ok := s.device(ctx, in.MachineID); !ok {
@@ -239,7 +260,12 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	errGuideChanged := errors.New("work guide setting changed")
 	errTodosV2Changed := errors.New("todos_v2 setting changed")
 	errIntegrationsV2Changed := errors.New("integrations_v2 setting changed")
-	if _, err := s.updateSettings(ctx, func(v *Settings) error {
+	var labsSeenChanged bool
+	saved, err := s.updateSettings(ctx, func(v *Settings) error {
+		var err error
+		if labsSeenChanged, err = applyLabsSeen(v, labsSeen); err != nil {
+			return err
+		}
 		if in.WorkGuide != nil && in.ExpectedWorkGuide != nil && *in.ExpectedWorkGuide != v.workGuideOn() {
 			return errGuideChanged
 		}
@@ -456,13 +482,21 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		if errors.Is(err, errGuideChanged) || errors.Is(err, errTodosV2Changed) || errors.Is(err, errIntegrationsV2Changed) {
 			apierr.WriteCode(w, http.StatusConflict, "configuration_conflict", err)
 			return
 		}
+		if errors.Is(err, errLabsSeenLimit) {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
 		apierr.Write(w, http.StatusInternalServerError, err)
 		return
+	}
+	if labsSeenChanged {
+		s.publishLabsSeen(ctx, saved.LabsSeen)
 	}
 	if guideChanged {
 		s.mcpChanges.notify()
@@ -491,7 +525,11 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		s.mcpChanges.notify()   // and the page tool with them, in every open conversation's list (pages_tool.go)
 	}
 	if in.Main != "" && in.Main != "-" && in.Main != before.Main {
-		s.handOverMainTasks(context.WithoutCancel(ctx), before.Main, in.Main) // its open tasks follow the main conversation (main_handover.go)
+		if before.Main != "" {
+			s.handOverMainTasks(context.WithoutCancel(ctx), before.Main, in.Main) // its open tasks follow the main conversation (main_handover.go)
+		} else {
+			s.handOverFormerMainTasks(context.WithoutCancel(ctx)) // after newMain / clearMain, old main sits in Former
+		}
 	}
 	apierr.WriteJSON(w, s.view(ctx, false))
 }

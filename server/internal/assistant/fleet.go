@@ -206,6 +206,29 @@ func (g guardedStore) InsertInteraction(ctx context.Context, ix proto.Interactio
 	return g.st.InsertInteraction(ctx, ix)
 }
 
+// interactionDeadlineUpdater is the durable counterpart of publishing an extended prepared-approval deadline.
+// A store that keeps interaction history but cannot update it must not leave the database advertising a stale expiry.
+type interactionDeadlineUpdater interface {
+	UpdateInteractionDeadline(ctx context.Context, id string, created, expires time.Time) error
+}
+
+func (g guardedStore) UpdateInteractionDeadline(ctx context.Context, id string, created, expires time.Time) (err error) {
+	defer guard(&err)
+	st, ok := g.st.(interactionDeadlineUpdater)
+	if !ok {
+		return errNoTable
+	}
+	return st.UpdateInteractionDeadline(ctx, id, created, expires)
+}
+
+func (s *Service) updateInteractionDeadline(ctx context.Context, id string, created, expires time.Time) error {
+	st := s.fleetStore()
+	if st == nil {
+		return nil // no interaction table: the in-memory card is the only card
+	}
+	return st.(interactionDeadlineUpdater).UpdateInteractionDeadline(ctx, id, created, expires)
+}
+
 // resolvedInteractionInserter is the atomic history write and final outcome update used by reversible-setting
 // auto-approval. A store without both fails closed: the setting is not changed without its queryable decision record.
 type resolvedInteractionInserter interface {

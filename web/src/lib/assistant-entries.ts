@@ -87,6 +87,9 @@ export interface AssistantEntriesInput {
   restored?: ReadonlyMap<string, number>;
 }
 
+/** Task states that wait on the user: an agent asks, or its turn broke off on an error (a failed start is below). */
+const WAITS_ON_YOU: ReadonlySet<TodoStatus> = new Set(["needs_you", "interrupted"]);
+
 const sessionKey = (mid: string, sid: string) => `${mid}/${sid}`;
 
 /** A task's status when some of its Agents ask under another task (`own`: its status from its own Agents alone): it
@@ -215,10 +218,15 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     // supervised task's failed start is its supervisor's to retry or remedy, and an Agent whose every card its
     // supervisor holds waits on that conversation, not on the user
     const supervised = !!todo.supervision?.supervisor;
-    const held = supervised && routed.length > 0 && ownAsks.length === 0;
+    // #15763: a card set the supervisor holds (delegating) is that conversation's whenever this task has no
+    // direct owner card of its own, supervised or routed by handNonOwnerCard.
+    const held = routed.length > 0 && ownAsks.length === 0;
+    // #15638: an interrupted run (e.g. a transient 503) under a direction supervisor stays with that supervisor
+    // until it escalates; an unsupervised personal terminal still waits on its owner.
+    const supervisedInterrupted = status === "interrupted" && supervised;
     const waits = status === "failed"
       ? bucket === "open" && !supervised
-      : !todo.done_at && (status === "needs_you" || (status === "interrupted" && !supervised)) && !held;
+      : !todo.done_at && WAITS_ON_YOU.has(status) && !supervisedInterrupted && !held;
     const decision = taskAwaitsDecision(todo);
     const deliveryApproval = heldDelivery(todo)?.unblock === "user";
     const userCheck = !todo.done_at && reviewState(todo) === "user_check";
@@ -262,10 +270,16 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   const agentsAsking: NeedsYouItem[] = [];
   const agentsRunning: RunningItem[] = [];
   for (const { session, state } of dockAgents(sessions.map((s) => lookup(s.machine_id, s.session_id) ?? s), todos, conversation, main)) {
-    if (folded.has(sessionKey(session.machine_id, session.session_id))) continue;
-    const key = `agent:${sessionKey(session.machine_id, session.session_id)}`;
-    if (state === "needs_you") agentsAsking.push({ kind: "agent", key, session, asks: asksOf.get(sessionKey(session.machine_id, session.session_id)) ?? [] });
-    else agentsRunning.push({ kind: "agent", key, session, activity: backgroundWork(session) });
+    const sk = sessionKey(session.machine_id, session.session_id);
+    if (folded.has(sk)) continue;
+    const key = `agent:${sk}`;
+    const agentAsks = asksOf.get(sk) ?? [];
+    const userAsks = agentAsks.filter((ix) => !ix.delegating);
+    if (state === "needs_you" && (agentAsks.length === 0 || userAsks.length > 0)) {
+      agentsAsking.push({ kind: "agent", key, session, asks: userAsks });
+    } else {
+      agentsRunning.push({ kind: "agent", key, session, activity: backgroundWork(session) });
+    }
   }
 
   const plansWaiting: NeedsYouItem[] = Object.values(plans)

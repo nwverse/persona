@@ -992,12 +992,28 @@ existing overview list style.
     is spoken with its action ("3 more need you, Show All"). In a place it also counts what needs the owner outside
     the place, one line for both, naming the place when that is all it counts ("2 more need you, not in Today"), and
     its Show All opens All To-dos (3.5 "To-dos places").
-  - **Search**: the system's field, scoped to the list. It looks through the titles and notes of the open to-dos on
-    the device as the words are typed (case and accents aside), keeps the sections with every fold open (and unfoldable
-    until the field is cleared), counts what matches on the headings in plain numbers, Needs you's too, so the blue
-    badge only ever says N (the drawer's number stays N), and sets the Filter's choice aside until the field is
-    cleared. Its last row, "⌕ Search Chats for “kyoto” ›", takes the words to the app's search over Persona's chats
-    (no Agents scope on an everyday page). Closed to-dos and the hub's own matches come with the search's next step.
+  - **Search**: the system's field, scoped to the list. It looks through the titles and notes of every to-do of the
+    current assistant on the device, open and closed (case and accents aside), as the words are typed (off the main
+    thread, a newer key taking over; a cleared field is the list again at once), and sets the place and the Filter's
+    choice aside until the field is cleared, when they come back. The results keep the list's sections with every fold
+    open (and unfoldable until the field is cleared), Needs you first; what closed comes last, from any day, under the
+    days the Filter's Done lists (their headings naming Done: "Done today", "Done yesterday", "Done this week", "Done
+    earlier"), the newest first. The headings count what matches in plain numbers, Needs you's too, so the blue badge
+    only ever says N (the drawer's number stays N). A to-do found by its notes says the sentence that matched as its
+    line 2, the words on the accent tint ("List controls"), on up to two lines as a hub's line 2 may take, cut only
+    when the words sit further in than about a line's worth; one found by its title keeps its line. A result keeps its
+    tick, the row's one deliberate control, but offers nothing beside its half-read words: it is found to be opened,
+    which pushes the to-do as usual (a notes match lights nothing on its page yet), and Back is the results again with
+    the words in the field. While the field has words a row draws no "· Mark Done" and no answers (no OK or Retry, no
+    Options ⌄ or its card, no Undo) and VoiceOver's actions offer none of them, until the field is cleared; an answer
+    given here still says so in line 2's place ("✓ You chose …", "Not sure your answer went through") without its Undo,
+    which is the row's again if the field is cleared while the hold lasts. Steps a to-do carries are no rows, and are
+    not searched here yet. With nothing found, the search's empty state says what it looked through ("Search looks
+    through the titles and notes of all your to-dos, including done ones."). Its last row,
+    "⌕ Search Chats for “kyoto” ›", takes the words to the app's search over Persona's chats (no Agents scope on an
+    everyday page). It is on the device only: the phone holds every to-do (`GET /api/v1/todos` returns them all), so the
+    hub has nothing to add; a merge of the hub's matches ("List controls") waits for content the phone does not hold (a
+    to-do's rounds, results and recap).
   - **⋯** (on All To-dos, Today and a project; Upcoming's holds Show as Calendar alone) arranges the list, kept on the
     device; what the list shows starts fresh each visit. **Sort By**, a section with the current order checked:
     Suggested (推荐顺序, the hub's order inside each section, the default), Recently Changed (最近更新, the old page's default
@@ -1149,6 +1165,13 @@ A section of a page about one thing (a computer's page) lists its items in place
 - **Row actions**: a swipe and the long press on iOS, a row-end ⋯ menu on the web (and on iOS's in-place rows), never a button on every row. Several at once: Select (iOS edit mode, Select All / Deselect All and "Clear N" in the bottom bar) or checkboxes with a select-all box (web). Every destructive action asks first (4.4, rung 2), naming the item, or how many.
 - Why three: the session's file card shows three rows before "Show N more files" (3.3), and on a phone a fourth row with its date already pushes the sections below a screen away. The chat's queued messages show four in full because each is one line without actions.
 
+**Web update history** (Settings › This hub) is a chronological log for people maintaining their hub.
+Show five records at a time so recent outcomes are visible at entry and older records are easy to reach.
+Each row puts its status, compact pills and time above the version change. The time stays aligned with the first
+line if the pills need to wrap. A reason or a commit absent from the target version
+adds detail underneath. For a longer log, the settings card ends with the current page, total records returned
+by the hub, and quiet Previous and Next buttons. A refresh that removes the current page moves to the last available page.
+
 #### Sessions that need the user
 
 In every grouping a list offers, a session that needs the user is visible without opening anything: in a section at the top, or by the state mark on its row, with a folded group counting it on its header. Grouping by location (computer, repository, worktree, tab) never hides it, and nobody has to pick a computer or a repository first to see their own work.
@@ -1248,7 +1271,7 @@ On the web a list keeps no standing search field of its own beside the app's one
 
 - **HarmonyOS Agents groups** (#8966): the existing native grouping Select offers By Status (default), By Machine and By Project. It reuses the native list, Select and 48 vp control tokens, not a new style or a second flat/repository/worktree taxonomy. The shared Rust projection owns pinned, quiet, folded and filtered rows and their counts. Group headers expose the current localized state/machine/space title, state counts and a 48 vp Expand/Collapse control; quiet projects have an explicit idle-projects heading. Default idle sections stay folded; the header expands them and their rows with the core's `folded`, `expanded_idle` and `expanded_quiet` settings. A folded header still exposes Needs You. All labels ship in en, zh-Hans and ja. The previous native sorter and debug shadow are deleted; no release-only platform-specific sorter remains. These rules serve people monitoring Agents and follow iOS, rather than adding an independent HarmonyOS presentation.
 
-A list row found by what is inside it, not by its own name (a Persona chat found by a message, #6283), keeps its title and puts the sentence that matched in place of its second line, the match marked as search in chat marks it (the accent tint), the line starting a few characters before the match so a narrow row still shows it (each client cuts for its own width, #7045); opening it goes to that message, ringed as a search hit. A row found by its name keeps its usual second line and opens as usual. Local matches show at once; what the server finds merges in, and a short line under the field says when the server's results may be incomplete.
+A list row found by what is inside it, not by its own name (a Persona chat found by a message, #6283), keeps its title and puts the sentence that matched in place of its second line, the match marked as search in chat marks it (the accent tint), the line starting a few characters before the match so a narrow row still shows it (each client cuts for its own width, #7045); opening it goes to that message, ringed as a search hit. A row found by its name keeps its usual second line and opens as usual. Local matches show at once; what the server finds merges in, and a short line under the field says when the server's results may be incomplete. A search over what the device already holds whole has no server pass and no such line: the iOS To-dos list's (3.4; iOS, hubs with `todo_view`, from #10465's switch-on), since the phone holds every to-do; it opens a to-do found by its notes as usual, its page lighting nothing yet.
 
 - Section headers (`JSectionHeader`) measure the complete title, count and ordinary actions in one layout pass. Only when they do not fit, the actions move into a `JMenu` and the title wraps as needed so the title and count stay fully visible; fitting layouts stay pixel-identical. The overflow decision is made during measurement, never by switching after a truncated frame. Button labels still never wrap.
 - Command rows in the composer's "/" list (`ComposerSuggestions`) measure the complete command and detail. Only when they do not fit, the detail moves below the command and wraps without a line limit; fitting rows stay pixel-identical. Quick-message and @ rows keep their single-line layout (#7322).
@@ -1311,8 +1334,9 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
     "without a due date" line and no Show Done, an empty slot opening New To-Do at that day and hour); a project, its
     to-dos, line 3 leaving its name out of every row. A step whose parent the place holds counts with its parent; one
     whose parent Today or Upcoming leaves out (a dated step of an undated to-do) is a row there. Search To-dos sets the
-    place aside as it sets the choice aside: while the field has words the list is every open to-do that matches,
-    whatever the place (places pick where, search finds any to-do).
+    place aside as it sets the choice aside: while the field has words the list is every to-do that matches, open or
+    closed, whatever the place (places pick where, search finds any to-do), and opening a result never changes the
+    place.
   - **What needs the owner elsewhere** (3.4 "Sessions that need the user"): the list's one guard line, its first line
     over the first card (`TodosGuardLine`), in every place but All To-dos also counts what needs the owner outside the
     place, and names the place when nothing it counts is the place's own: "● 2 more need you, not in Today · Show All".
@@ -3206,6 +3230,11 @@ item states its own scope, then one configuration form per module. Where a featu
 (Terminal settings), it shows the current value read-only with a button that opens the same Labs page in a `Dialog` over
 the page (never navigating away, so nothing open behind it, such as a chat's unsent draft, is unmounted) instead of a
 second switch, so there is one place to change it.
+
+The Labs reminder (#15802) helps people who want to try a feature find it in Settings. The main sidebar's Settings
+entry and the Settings category list put a still accent dot beside their existing labels when an experiment is available,
+off and unseen. The labels include the reminder for screen readers. The dots clear on opening the Labs category. Each new
+card keeps a small `Pill` beside the experiment's title for that visit, using the existing description.
 
 Admit a temporary trial of a real feature or a choice between the stable and new implementations of one capability.
 Keep the stable default and a lossless rollback, with a linked tracking issue for graduation or removal. Put shipped

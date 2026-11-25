@@ -303,12 +303,14 @@ struct TodosListModelTests {
         #expect(list.hiddenNeeds == 0 && list.groups.map(\.id) == [TodoListSection.needsYou.rawValue])
         list.choice = .todo
         list.query = "passport"
+        try await waitForListTest { list.searchedWords == "passport" }
         #expect(list.searching && list.hiddenNeeds == 0 && list.subtitle(place: "All To-dos") == "", "a search sets the choice aside")
         #expect(list.groups.map(\.id) == [TodoListSection.todo.rawValue] && list.groups[0].keys == ["/t"])
         list.query = "kyoto"
-        #expect(list.isEmpty, "nothing open matches")
+        try await waitForListTest { list.searchedWords == "kyoto" }
+        #expect(list.isEmpty, "nothing matches")
         list.query = ""
-        #expect(list.choice == .todo && list.hiddenNeeds == 1, "the choice is back once the field is cleared")
+        #expect(list.choice == .todo && list.hiddenNeeds == 1, "the choice is back at once once the field is cleared")
         list.choice = .all // Show All
         #expect(list.groups.count == 3)
     }
@@ -328,7 +330,8 @@ struct TodosListModelTests {
         await store.refresh(api: hub.client)
         try await waitForListTest { list.groups.count == 2 }
         list.query = "ryokan"
-        #expect(list.searching && list.groups.first?.folds.first?.open == true)
+        try await waitForListTest { list.searching }
+        #expect(list.groups.first?.folds.first?.open == true)
         list.toggle(TodoListSection.canWait.rawValue)
         list.query = ""
         #expect(list.unfolded.isEmpty && list.groups.first?.folds.first?.open == false, "folded, as before the search")

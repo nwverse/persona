@@ -430,16 +430,18 @@ func (s *Service) directionTreeParts(ctx context.Context, now time.Time) (*treeB
 				if a.ReleasedAt != nil && !linked || a.DismissedAt != nil {
 					continue
 				}
-				if wantCards[a.MachineID] == nil {
-					wantCards[a.MachineID] = map[string]bool{}
+				m := s.canonical(a.MachineID)
+				if wantCards[m] == nil {
+					wantCards[m] = map[string]bool{}
 				}
-				wantCards[a.MachineID][a.SessionID] = true
+				wantCards[m][a.SessionID] = true
 			}
 		}
 	}
 	lists, reached := s.agentSessionLists(ctx, undone)
 	cards := s.todoRunCards(wantCards)
-	tb := newTreeBuild(s, cfg.Main, leads, all, lists, cards, reached, now, s.location(ctx), cfg.todosV2On())
+	heldOnly := s.heldOnlySessions()
+	tb := newTreeBuild(s, cfg.Main, leads, all, lists, cards, heldOnly, reached, now, s.location(ctx), cfg.todosV2On())
 	return tb, cfg, names
 }
 
@@ -472,16 +474,17 @@ func (s *Service) directionOwners() *treeBuild {
 
 // treeBuild is one build of the tree: the to-dos placed, the sessions by machine and id, and what is nested where.
 type treeBuild struct {
-	s       *Service
-	main    string
-	leads   []string
-	todos   map[string]listedTodo
-	placed  map[string]todoTriage
-	views   map[string]assistantwire.TodoSummary
-	carried map[string]bool // open PartOf steps already rolled up into an open top-level parent
-	open    []string        // the ids the To-dos page counts open, by id
-	reached map[string]bool
-	now     time.Time
+	s        *Service
+	main     string
+	leads    []string
+	todos    map[string]listedTodo
+	placed   map[string]todoTriage
+	views    map[string]assistantwire.TodoSummary
+	carried  map[string]bool    // open PartOf steps already rolled up onto an open top-level parent
+	heldOnly map[[2]string]bool // canonical (machine, session) waiting only on Delegating cards
+	open     []string           // the ids the To-dos page counts open, by id
+	reached  map[string]bool
+	now      time.Time
 
 	sessions map[[2]string]proto.Session
 	lists    map[string][]proto.Session    // the complete lists read once for this build, by machine
@@ -512,8 +515,9 @@ type treeAttach struct {
 }
 
 func newTreeBuild(s *Service, main string, leads []string, all []listedTodo, lists map[string][]proto.Session,
-	cards map[[2]string][]proto.Interaction, reached map[string]bool, now time.Time, loc *time.Location, todosV2 bool) *treeBuild {
-	tb := &treeBuild{s: s, main: main, leads: leads, todos: map[string]listedTodo{}, views: map[string]assistantwire.TodoSummary{}, carried: map[string]bool{}, reached: reached, now: now,
+	cards map[[2]string][]proto.Interaction, heldOnly map[[2]string]bool, reached map[string]bool, now time.Time, loc *time.Location, todosV2 bool) *treeBuild {
+	tb := &treeBuild{s: s, main: main, leads: leads, todos: map[string]listedTodo{}, views: map[string]assistantwire.TodoSummary{},
+		carried: map[string]bool{}, heldOnly: heldOnly, reached: reached, now: now,
 		sessions: map[[2]string]proto.Session{}, lists: lists, listed: map[string]bool{}, codexKid: map[[2]string][]proto.Session{},
 		leaderAgent: map[[2]string][]string{}, workerAt: map[string]treeAttach{}, workersUnder: map[treeAttach][]string{}}
 	for machine, list := range lists {
@@ -546,7 +550,7 @@ func newTreeBuild(s *Service, main string, leads []string, all []listedTodo, lis
 				if a.ReleasedAt != nil && !linked || a.DismissedAt != nil {
 					continue
 				}
-				f.Interactions = append(f.Interactions, cards[[2]string{a.MachineID, a.SessionID}]...)
+				f.Interactions = append(f.Interactions, cards[[2]string{s.canonical(a.MachineID), a.SessionID}]...)
 			}
 		}
 		facts[i] = f
@@ -692,9 +696,10 @@ func isUserCheck(t listedTodo) bool {
 }
 
 // state is listed task t's state in the tree (first match wins). Needs you follows the authoritative to-do projection
-// (todo/projection) so sidebar direction counts, GET /api/v1/todos counts.needs_you, and main chat Needs you agree on
-// genuine owner-action items; user_check verification sits in review (with counts.user_check), and unescalated
-// supervised errors or supervisor-held cards stay out of needs_you.
+// (todo/projection), so sidebar direction counts, GET /api/v1/todos counts.needs_you, and main chat Needs you agree on
+// genuine owner-action items: supervisor-held (Delegating-only) cards, supervised failed starts and unescalated
+// interrupted runs, deferred can_wait decisions, user_check verification, and dismissed decisions all stay out of
+// needs_you. user_check sits in review (with counts.user_check) as the secondary "to verify" layer.
 func (tb *treeBuild) state(t listedTodo) string {
 	tr := tb.placed[t.ID]
 	v, hasView := tb.views[t.ID]
@@ -711,7 +716,7 @@ func (tb *treeBuild) state(t listedTodo) string {
 		return treeReview
 	case tr.Section != triageWorking && (t.Supervision.state(t.Todo) == reviewPending || verifyAsk):
 		return treeReview
-	case notStarted(t.Todo):
+	case notStarted(t.Todo) && !(hasView && v.Section == assistantwire.TodoListSectionWorking):
 		return treePlanned
 	case taskStuck(t.Todo, tr, tb.reached[t.ID], tb.now):
 		return treeStuck
@@ -821,11 +826,16 @@ func (tb *treeBuild) agents(id string, seen map[[2]string]bool) []treeAgent {
 }
 
 // sessionNode is the node of session machine/id: its title and state as the apps get them (title the to-do's own
-// when the session has none or was not found).
+// when the session has none or was not found). A session whose pending cards are all held by a supervisor is working,
+// not waiting on the user.
 func (tb *treeBuild) sessionNode(machine, id, title, agent string) treeAgent {
 	n := treeAgent{MachineID: machine, SessionID: id, Title: title, Agent: agent}
 	if c, ok := tb.sessions[[2]string{machine, id}]; ok {
-		n.Title, n.Agent, n.State = cmp.Or(c.Title, title), cmp.Or(agent, c.Agent), triageStateOf(c)
+		st := triageStateOf(c)
+		if st == proto.StateNeedsYou && tb.heldOnly[[2]string{tb.s.canonical(machine), id}] {
+			st = proto.StateWorking
+		}
+		n.Title, n.Agent, n.State = cmp.Or(c.Title, title), cmp.Or(agent, c.Agent), st
 	}
 	return n
 }

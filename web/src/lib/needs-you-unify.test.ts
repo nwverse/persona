@@ -103,12 +103,12 @@ describe("unify Needs you across main chat, To-dos badge, and sidebar directions
 
     // With authoritative hub views: main chat, To-dos badge, and direction tree all match on exact A-class items (3).
     const withViews: Todo[] = [
-      ...userChecks.map((u) => ({ ...u, view: { phase: "ready", section: "just_finished", reason: "finished_unseen", rank: 0 } })),
-      { ...sup503, view: { phase: "working", section: "working", reason: "persona_working", rank: 0 } },
-      { ...heldCard, view: { phase: "working", section: "working", reason: "persona_working", rank: 0 } },
-      { ...genuineDecision, view: { phase: "needs_you", section: "needs_you", reason: "owner_decides", rank: 0 } },
-      { ...directCard, view: { phase: "needs_you", section: "needs_you", reason: "agent_asks", rank: 0 } },
-      { ...unsup503, view: { phase: "needs_you", section: "needs_you", reason: "interrupted", rank: 0 } },
+      ...userChecks.map((u) => ({ ...u, view: { phase: "ready", section: "just_finished", reason: "finished_unseen", rank: 0 } as const })),
+      { ...sup503, view: { phase: "working", section: "working", reason: "persona_working", rank: 0 } as const },
+      { ...heldCard, view: { phase: "working", section: "working", reason: "persona_working", rank: 0 } as const },
+      { ...genuineDecision, view: { phase: "needs_you", section: "needs_you", reason: "owner_decides", rank: 0 } as const },
+      { ...directCard, view: { phase: "needs_you", section: "needs_you", reason: "agent_asks", rank: 0 } as const },
+      { ...unsup503, view: { phase: "needs_you", section: "needs_you", reason: "interrupted", rank: 0 } as const },
     ];
     const entriesWithViews = assistantEntries({ conversation: "main", main: "main", todos: withViews, sessions, interactions, plans: {}, feed: [], lookup, now: NOW });
     expect(entriesWithViews.verify.map((i) => i.key)).toEqual(userChecks.map((u) => `task:${u.id}`));

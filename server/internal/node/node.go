@@ -960,6 +960,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		Turns                   int           `json:"turns"`
 		LazyImages              bool          `json:"lazy_images"`
 		UserInputs              bool          `json:"user_inputs"`
+		MetaOnly                bool          `json:"meta_only"`
 		StrictRead              bool          `json:"strict_read"`
 		FoldWork                bool          `json:"fold_work"`
 		FromSeq                 int           `json:"from_seq"`
@@ -2488,6 +2489,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			}{it, true, len(it.Text)}, nil
 		}
 		return it, nil
+	case proto.MethodSessionInputPreviews, proto.MethodSessionItemsWindow:
+		return n.transcriptNavigation(ctx, p.SessionID, method, params)
 	case "session.items":
 		read := n.file
 		if p.StrictRead {
@@ -2513,6 +2516,10 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			if err := n.refreshExport(p.SessionID, f); err != nil {
 				return nil, err
 			}
+		} else if p.UserInputs && p.MetaOnly {
+			if err := n.refreshForPage(p.SessionID, f); err != nil {
+				return nil, err
+			}
 		} else if p.UserInputs {
 			if err := n.refresh(p.SessionID, f); err != nil {
 				return nil, err
@@ -2521,6 +2528,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			_ = n.refreshForPage(p.SessionID, f) // not behind a catch-up's pushes (#13677)
 		}
 		if p.UserInputs {
+			if p.MetaOnly {
+				return f.CompactUserInputs(ctx, p.BeforeSeq)
+			}
 			return f.UserInputs(ctx, p.BeforeSeq)
 		}
 		// Items are kept without their image data; a caller that did not ask for lazy images (an older hub) gets it.
