@@ -49,7 +49,7 @@ func seedModuleOffUpload(t *testing.T, e *kb.Engine, id string, u recordingwire.
 	locks.Recordings.Lock()
 	defer locks.Recordings.Unlock()
 	r := &recordingwire.Recording{ID: id, Revision: u.Revision, StartedAt: u.StartedAt.UTC(), Duration: u.Duration,
-		Language: u.Language, Device: u.Device, Complete: u.Complete, Kind: u.Kind,
+		Language: u.Language, Device: u.Device, Title: u.Title, Complete: u.Complete, Kind: u.Kind,
 		Segments: len(u.Segments), Chars: recordingwire.RecordChars(u.Segments), Updated: now.UTC()}
 	if recordingwire.TranscriptionMode(u.Transcription) == recordingwire.TranscriptionHub {
 		m := recordingwire.Meeting{Transcription: &recordingwire.MeetingTranscription{Mode: recordingwire.TranscriptionHub}}

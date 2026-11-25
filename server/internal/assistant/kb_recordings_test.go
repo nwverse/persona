@@ -100,10 +100,9 @@ func TestKBSearchKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	const id = "33333333-3333-4333-8333-333333333333"
-	if _, err := recW(e).PutRecording(id, recordingwire.RecordingUpload{Revision: 1, StartedAt: time.Now().UTC(), Device: "phone", Kind: "meeting", Title: "Vendor review",
-		Segments: []kb.RecordingSegment{{Text: "we keep the orchard vendor", End: 1}}}, time.Now()); err != nil {
-		t.Fatal(err)
-	}
+	// Stored through the knowledge base's own commit: this test runs without the recording module too.
+	seedModuleOffUpload(t, e, id, recordingwire.RecordingUpload{Revision: 1, StartedAt: time.Now().UTC(), Device: "phone", Kind: "meeting", Title: "Vendor review",
+		Segments: []kb.RecordingSegment{{Text: "we keep the orchard vendor", End: 1}}}, time.Now())
 	get := func(path string, want int) string {
 		t.Helper()
 		r := httptest.NewRecorder()
