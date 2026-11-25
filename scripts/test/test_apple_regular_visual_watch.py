@@ -66,6 +66,8 @@ class ProcessScopeTests(unittest.TestCase):
     def test_reappeared_debugger_pid_requires_owned_launcher_again(self):
         launcher = f"/Library/Developer/CoreSimulator/Devices/{UDID}/ --launchd /usr/sbin/launchd_sim"
         foreign_launcher = launcher.replace(UDID, OTHER)
+        def line(pid, ppid, command, started=START, state="S"):
+            return f" {pid} {ppid} {started} {state} {command}"
         snapshots = iter([
             line(46, 1, launcher, state="Ss") + "\n" + line(42, 46, "/usr/libexec/debugserver"),
             line(46, 1, launcher, state="Ss"),
@@ -86,6 +88,8 @@ class ProcessScopeTests(unittest.TestCase):
 
     def test_reused_debugger_pid_with_an_owned_launcher_is_new_evidence(self):
         launcher = f"/Library/Developer/CoreSimulator/Devices/{UDID}/ --launchd /usr/sbin/launchd_sim"
+        def line(pid, ppid, command, started=START, state="S"):
+            return f" {pid} {ppid} {started} {state} {command}"
         snapshots = iter([
             line(46, 1, launcher, state="Ss") + "\n" + line(42, 46, "/usr/libexec/debugserver"),
             line(46, 1, launcher, state="Ss"),
