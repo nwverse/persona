@@ -126,7 +126,7 @@ import { forgetReveals, undoReveals } from "./search-reveal";
 import { openForward, peekJump, takeJump, type ForwardChat, type ForwardPick } from "../../lib/forward";
 import { pickParts } from "./picking-parts";
 import type { MessagePick } from "../../lib/message-pick";
-import { foldHolding, lineOfItem, loadEarlierForSearch, untilStill, type ChatSearchHit, type SearchLoadOutcome } from "../../lib/chat-search";
+import { foldHolding, lineItemIds, lineOfItem, loadEarlierForSearch, untilStill, type ChatSearchHit, type SearchLoadOutcome } from "../../lib/chat-search";
 import { chatFiles } from "../../lib/mentions";
 import { OutboxBubbles } from "./OutboxBubbles";
 import { MainRuntimeSlot } from "../assistant/MainRuntimeSlot";
@@ -571,7 +571,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const working = state === "working" || streaming || outgoing > 0 || awaiting;
   // The user's time stays in its row until the finished reply can show its own. An item that lands
   // while the turn is still running otherwise removes a line above the live work and moves it up.
-  const latestTime = (!working && lastSeg?.answer?.ts) || lastSeg?.user?.ts;
+  const latestReply = working ? undefined : lastSeg?.answer;
+  const latestTime = latestReply?.ts || lastSeg?.user?.ts;
   // still starting only until the conversation has anything in it: the flag the caller passes may outlive the start
   const starting = Boolean(launching) && !tr.items.length && !tr.streaming && state !== "working";
   // a new conversation with its first message on the way and no transcript yet (#1697): the lines the transcript opens
@@ -1649,8 +1650,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         if (target && (target.closest("input, textarea, select, [contenteditable='true']") || target.isContentEditable)) return;
         const sel = window.getSelection();
         if (sel && !sel.isCollapsed) return;
-        const ta = composerBox.current?.querySelector("textarea");
-        if (ta && !ta.disabled) ta.focus();
+        const field = composerBox.current?.querySelector<HTMLElement>(COMPOSER_INPUT);
+        if (field && !field.matches(":disabled,[aria-disabled=true]")) field.focus();
       }
     };
     addEventListener("keydown", key);
@@ -2131,6 +2132,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // Close Plan in the pill's flyout hides it until the plan changes (cindy's PinnedPlanPanel)
   const [planClosed, closePlan] = usePlanClosed(`${mid}/${sid}`, plan);
   const lastLine = lines[lines.length - 1];
+  const latestReplyLine = latestReply && lines.findLast((line) => (
+    line.kind === "segment" ? line.seg.answer?.id === latestReply.id : line.kind === "supervision" && lineItemIds(line).includes(latestReply.id)
+  ));
   // After the end marker the last reply can still be waiting for its item. Its text stays visible
   // without keeping the exchange working, even if the host already reported completion.
   const wordsFor = (line: ChatLine) => (line.kind === "segment" || line.kind === "supervision") &&
@@ -2178,7 +2182,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // the banner's buttons go with it: the keyboard goes back to the composer, not on a touch screen alone (that would raise
   // the keyboard). Called on a press, by when the composer's box (declared below) is there.
   const backToComposer = () => {
-    if (fine) composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
+    if (fine) composerBox.current?.querySelector<HTMLElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
   };
   // gone at once; a retry that did not go brings it back, as nothing else on the page could retry then
   const retryError = () => {
@@ -2246,7 +2250,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     shown.current = view;
     if (!fine) return;
     const frame = requestAnimationFrame(() => {
-      const field = view === "term" ? termLayer.current?.querySelector("textarea") : composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT);
+      const field = view === "term" ? termLayer.current?.querySelector("textarea") : composerBox.current?.querySelector<HTMLElement>(COMPOSER_INPUT);
       field?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
@@ -2271,7 +2275,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     if (!dockFocus.current || !lostWith(dockFocus.current, document.activeElement, document.body)) return;
     dockFocus.current = null;
     setCardField(false);
-    if (fine) composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
+    if (fine) composerBox.current?.querySelector<HTMLElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
   });
   // the run's time counts from the turn's start, as its "Working…" does (not from the session's last state change)
   const stateSince = session?.state_since;
@@ -2390,7 +2394,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       short={short && !cardField}
       keyboard={keyboard}
       reveal={commandInSlot && commandReveal?.pending === true}
-      onDismissKeyboard={() => composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT)?.blur()}
+      onDismissKeyboard={() => composerBox.current?.querySelector<HTMLElement>(COMPOSER_INPUT)?.blur()}
     />
   );
 
@@ -2669,6 +2673,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                         exhausted={d.line.kind === "apiError" && d.line.id === lastLine?.id ? exhausted : undefined}
                         assistant={assistant}
                         offscreen={offscreen(d.line)}
+                        latestReplyId={d.line.id === latestReplyLine?.id ? latestReply?.id : undefined}
                         busy={d.line.id === busySegment || undefined}
                         retryEmpty={d.line.kind === "segment" && d.line.seg.emptyResponse ? emptyAction : undefined}
                         dockTurnClock={("live" in d.line && d.line.live && dockTurnClock) || undefined}
@@ -2695,6 +2700,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                   exhausted={row.line.kind === "apiError" && row.line.id === lastLine?.id ? exhausted : undefined}
                   assistant={assistant}
                   offscreen={offscreen(row.line)}
+                  latestReplyId={row.line.id === latestReplyLine?.id ? latestReply?.id : undefined}
                   busy={row.line.id === busySegment || undefined}
                   retryEmpty={row.line.kind === "segment" && row.line.seg.emptyResponse ? emptyAction : undefined}
                   dockTurnClock={("live" in row.line && row.line.live && dockTurnClock) || undefined}
@@ -2729,7 +2735,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           <CommentMarks scroller={scroller} jump={landRow} />
           </ChatActionsContext.Provider>
         </div>
-        {/* A transient edge overlay; native scrolling and the centered text column keep their existing layout. */}
+        {/* NavRail uses the natural left gutter beside the centered transcript. */}
         {questionsOn && (
           <Suspense fallback={null}>
             <QuestionMarksHost mid={mid} sid={sid} on={questions.on} lines={lines} busy={questions.busy} ticks={railTicks} scroller={scrollEl} onMarks={setQuestionMarks} onOpened={setQuestionOpened} />
@@ -2845,7 +2851,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             <CommandWaitingNotice interactions={docked} mid={mid} sid={sid} queueHeld={commandQueueHeld} dock={dockAbove}
               focusId={commandReveal?.pending ? commandReveal.id : undefined} keyboard={keyboard} onFocused={commandRevealed}
               onAnswer={(id) => {
-                composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT)?.blur();
+                composerBox.current?.querySelector<HTMLElement>(COMPOSER_INPUT)?.blur();
                 setCommandReveal({ id, pending: true });
               }} />
           </Suspense>

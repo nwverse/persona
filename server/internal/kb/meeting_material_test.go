@@ -4,16 +4,37 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
+
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
-// putMeetingMinutes stores minutes for recording id as the minutes round would.
+// putMeetingMinutes stores minutes for recording id as the minutes round would: minutes.json and minutes.md next to
+// its meta.json. The round itself is the recording module's (internal/modules/recording/writers); this is the files
+// it leaves, for the tests of what reads, trims and deletes them.
 func putMeetingMinutes(t *testing.T, e *Engine, id string, m Minutes) {
 	t.Helper()
-	if ok, err := e.Store.putMinutes(id, &m); !ok || err != nil {
-		t.Fatalf("minutes of %s: %v %v", id, ok, err)
+	raw, err := json.MarshalIndent(&m, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := e.Store
+	st.recFilesMu.Lock()
+	defer st.recFilesMu.Unlock()
+	st.metaMu.Lock()
+	defer st.metaMu.Unlock()
+	if _, err := os.Stat(st.path(KindRecording, id, "meta.json")); err != nil {
+		t.Fatalf("minutes of %s: %v", id, err)
+	}
+	if err := writeFile(st.path(KindRecording, id, "minutes.json"), append(raw, '\n')); err != nil {
+		t.Fatalf("minutes of %s: %v", id, err)
+	}
+	if err := writeFile(st.path(KindRecording, id, "minutes.md"), []byte(strings.TrimSpace(m.Markdown)+"\n")); err != nil {
+		t.Fatalf("minutes of %s: %v", id, err)
 	}
 }
 
@@ -222,7 +243,7 @@ func TestMeetingMaterialOnlyMeetingMaterial(t *testing.T) {
 		t.Errorf("named %q at %q", first.Name, first.When)
 	}
 	// Its minutes have no span of their own (written before #4713): the recording's.
-	if er := recordingNow(t, e, earlier); !first.Start.Equal(er.StartedAt.Truncate(time.Second)) || !first.End.Equal(recordingEnd(er).Truncate(time.Second)) {
+	if er := recordingNow(t, e, earlier); !first.Start.Equal(er.StartedAt.Truncate(time.Second)) || !first.End.Equal(recordingwire.RecordingEnd(er).Truncate(time.Second)) {
 		t.Errorf("span %s – %s", first.Start, first.End)
 	}
 	want := Minutes{Title: "Design review", When: "2026-11-03 14:00–15:10", Attendees: []string{"Ada", "Bo"},
@@ -233,7 +254,7 @@ func TestMeetingMaterialOnlyMeetingMaterial(t *testing.T) {
 	if got, exp := fmt.Sprintf("%+v", first.Minutes), fmt.Sprintf("%+v", want); got != exp {
 		t.Errorf("minutes\n%s\nwant\n%s", got, exp)
 	}
-	if fmt.Sprint(first.Projects) != fmt.Sprint([]EarlierProject{{"export", "Export", "active"}, {"archive", "Archive", "done"}}) {
+	if fmt.Sprint(first.Projects) != fmt.Sprint([]EarlierProject{{Slug: "export", Name: "Export", Status: "active"}, {Slug: "archive", Name: "Archive", Status: "done"}}) {
 		t.Errorf("projects %+v", first.Projects)
 	}
 	if mat.Earlier[1].Name != "Weekly sync" || len(mat.Earlier[1].Projects) != 0 {
@@ -314,5 +335,28 @@ func TestLatestLines(t *testing.T) {
 	}
 	if got := latestLines(nil, materialLiveRunes); len(got) != 0 {
 		t.Fatalf("none: %+v", got)
+	}
+}
+
+// The answering model's material has the latest photos' words within its bound (that it has the listed photos'
+// words and never a deleted photo's is the recording module's test of the same name).
+func TestMeetingMaterialPhotos(t *testing.T) {
+	long := []PhotoText{{N: 1, Text: "old"}, {N: 2, Caption: "ab", Text: "cdefgh"}, {N: 3, Text: "xyz"}}
+	if got := latestPhotos(long, 7); len(got) != 2 || got[0] != (PhotoText{N: 2, Caption: "ab", Text: "cd"}) || got[1].N != 3 {
+		t.Fatalf("latest %+v", got)
+	}
+	// The bound holds for captions and notes too: the older photo is cut to what is left, caption first.
+	full := []PhotoText{{N: 1, Caption: strings.Repeat("c", MaxPhotoCaption), Text: "t", Note: strings.Repeat("n", MaxPhotoNote)},
+		{N: 2, Text: strings.Repeat("x", materialPhotoRunes-1)}}
+	got := latestPhotos(full, materialPhotoRunes)
+	words := 0
+	for _, p := range got {
+		words += utf8.RuneCountInString(p.Caption + p.Text + p.Note)
+	}
+	if words != materialPhotoRunes || len(got) != 2 || got[0] != (PhotoText{N: 1, Caption: "c"}) {
+		t.Fatalf("%d runes: %+v", words, got[0])
+	}
+	if got := latestPhotos([]PhotoText{{N: 1, Caption: "ab", Text: "cd", Note: "ef"}}, 5); got[0] != (PhotoText{N: 1, Caption: "ab", Text: "cd", Note: "e"}) {
+		t.Fatalf("cut %+v", got)
 	}
 }

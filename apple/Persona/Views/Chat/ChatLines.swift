@@ -86,6 +86,11 @@ struct ChatLines {
     var childSessions: [SessionKey: Session] = [:]
     /// History has been read back to the start, so a child that started earlier can sit in the first exchange.
     var historyComplete = false
+    /// Emit a compact Changed Files card after the final answer of each completed Agent exchange (#12016).
+    /// Always false for Assistant conversations and subagent views.
+    var includeTurnChanges = false
+    /// Session working directory used to normalize relative edit paths and relativize displayed file paths.
+    var turnChangesCwd: String? = nil
 
     /// The two read-only views of the main conversation. A completed silent round is removed before `unfold`, so an
     /// open work/supervision flag cannot put its tool rows back into the default timeline.
@@ -455,10 +460,22 @@ struct ChatLines {
                                          start: seg.user?.firstTS ?? (k == 0 ? wokeAt : nil) ?? seg.rows.first?.firstTS ?? t.startedAt,
                                          end: Self.workEnd(ending) ?? seg.rows.last?.lastTS))
                     }
-                    // Between the work and the answer: what the work looked at. Its id stays as pictures come in and
-                    // the answer changes, so the strip grows sideways in place.
+                    // Between the work and the answer: what the work looked at and out-of-band tool UI views. Its id
+                    // stays as items arrive so the row updates in place while the turn runs.
                     out += Self.viewed("vi-" + (seg.user?.id ?? opening ?? seg.rows.first?.id ?? t.id), items)
-                    if let last { out.append(.row(seg.rows[last])) }
+                    out += Self.toolViews("tv-" + (seg.user?.id ?? opening ?? seg.rows.first?.id ?? t.id), items)
+                    if let last {
+                        out.append(.row(seg.rows[last]))
+                        if includeTurnChanges, !live, idleCompaction,
+                           seg.user != nil || seg.rows.first?.userInput != nil,
+                           !(k == segments.count - 1 && !t.trailing.isEmpty),
+                           case .assistant(let answer) = seg.rows[last],
+                           APIErrorInfo.parse(answer.text) == nil,
+                           let changes = TurnChanges.of(items, cwd: turnChangesCwd) {
+                            let id = "tc-" + (seg.user?.id ?? seg.rows.first?.userInput?.id ?? answer.id)
+                            out.append(.turnChanges(id: id, changes: changes))
+                        }
+                    }
                     out += after.sorted().map { .row(seg.rows[$0]) }
                     if opening != nil, out.count > firstLine {
                         // A wake opens where a message would be, whether its notice is drawn or only its work/reply is.
@@ -731,6 +748,11 @@ struct ChatLines {
     static func viewed(_ id: String, _ work: [WorkItem]) -> [ChatLine] {
         let images = ViewedImages.of(work)
         return images.isEmpty ? [] : [.viewed(id: id, images: images)]
+    }
+
+    static func toolViews(_ id: String, _ work: [WorkItem]) -> [ChatLine] {
+        let views = ToolViews.of(work)
+        return views.isEmpty ? [] : [.toolViews(id: id, views: views)]
     }
 
     static func photos(_ rows: [ChatRow]) -> [Item] {

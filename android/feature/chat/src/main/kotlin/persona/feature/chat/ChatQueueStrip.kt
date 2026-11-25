@@ -17,6 +17,7 @@ import persona.core.designsystem.LocalPersonaName
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.rememberCopy
 import persona.core.designsystem.QueueStrip
+import persona.core.designsystem.RelayedQueueItem
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.operationFeedback
 import persona.core.domain.sort.canSend
@@ -93,8 +94,8 @@ private val SEND_NOW_REFUSALS = setOf("nothing_queued", "send_now_unsupported", 
  * draft on a new line), "Copy" and "Delete"; for Claude in a terminal pane and Persona's conversations
  * ([reordersQueue]) also "Move up" / "Move down", and on Glass the line's "Send now" at one press (#7170, as the web
  * since #7154). TalkBack reads what that confirmation used to say with the button. In Persona's conversation the line
- * names Persona, and the messages relayed from other conversations or the system come last ([ownQueued]), each saying
- * it arrives when the chat is free and offering only "Copy". Editing and moving go
+ * names Persona, and the messages relayed from other conversations or the system come last ([ownQueued]), offering
+ * only "Copy". Quiet relays say they arrive with the next message. Editing and moving go
  * through the node's session.queue.edit (POST …/queue {keep}): it pulls the whole queue out of the agent and puts the
  * kept ones back in the order given, and answers with what was queued, so a pulled-back message is read from that
  * answer. Send now is POST …/queue/send-now. Only for a session the phone may send to. [initiallyExpanded]: opened from
@@ -183,14 +184,22 @@ internal fun ChatQueueStrip(
     val ownItems = queued.take(own).mapIndexed { index, text ->
         composerMessagePreview(text, if (photoCounts.getOrElse(index) { 0 } > 0) "" else photoMark, videoMark)
     }
-    val relayedItems = queued.drop(own).map { text -> composerMessagePreview(text, photoMark, videoMark) }
+    val relayedItems = queued.drop(own).map { raw ->
+        val relay = QueuedRelay.parse(raw)
+        val preview = composerMessagePreview(relay?.text ?: raw, photoMark, videoMark)
+        val text = relay?.let { resources.getString(R.string.chat_queue_relayed_from, it.source, preview) } ?: preview
+        val note = if (relay?.noWake == true) resources.getString(R.string.chat_queue_relayed_note_no_wake) else null
+        RelayedQueueItem(text, note)
+    }
     val relayedSummary = relayedItems.takeIf { it.isNotEmpty() }?.let {
         resources.getQuantityString(R.plurals.chat_queue_relayed_summary, it.size, it.size)
     }
+    val title = if (relayedItems.any { it.note != null }) resources.getString(R.string.chat_queue_count, queued.size)
+        else queueTitle(queued.size, persona ?: session.agentLabel, resources)
     // A new session's queue starts folded (Glass), as each chat's does on iOS. The title counts everything waiting;
     // inside, the owner's own rows stay editable and the relayed backlog is the collapsed summary line (#6394).
     key(session.key) {
-        QueueStrip(queueTitle(queued.size, persona ?: session.agentLabel, resources),
+        QueueStrip(title,
             ownItems,
             onItem = { index -> queued.getOrNull(index)?.let { picked = index to it } }, busy = busy, enabled = enabled,
             sendNow = sendNowLabel.takeIf { steers && own > 0 },
@@ -222,5 +231,5 @@ internal fun ChatQueueStrip(
                 QueueAction.Delete -> edit(index, delete = true)
             }
         }
-    }, onDismiss = { picked = null }, title = composerMessagePreview(text))
+    }, onDismiss = { picked = null }, title = relayedItems.getOrNull(index - own)?.text ?: composerMessagePreview(text))
 }

@@ -25,8 +25,11 @@ import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, C
 import { helloDeviceId } from "./device-id";
 import { currentLanguage } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
+import { justFinished } from "./agent-groups";
+import { stateOf } from "./format";
 import { timeMs } from "./times";
-import { NO_PINS, pinsOf, type AgentPins } from "./pins";
+import { agentKey, NO_PINS, pinsOf, type AgentPins } from "./pins";
+import { holdNotedSeen, recordMarkedSeen, releaseOpenSeen, releaseSeen, resetSeenVisit } from "./seen-rows";
 import type { AssistantInfo, Interaction, Item, Machine, MeshHub, Session } from "./types";
 import type { Resolution } from "./answered";
 import { answersIn, type DelegatedAnswer, type Reanswer } from "./delegate";
@@ -197,6 +200,12 @@ function set(patch: Partial<State>) {
   state = holdSeen(next, patch);
   state = settleLaunchState(state, patch);
   if (viewed.size && ("sessions" in patch || "sessionSummaries" in patch || "assistant" in patch)) seeViewed(false);
+  if ("sessions" in patch || "sessionSummaries" in patch) {
+    const updated: Session[] = [];
+    if ("sessions" in patch) for (const rows of Object.values(state.sessions)) updated.push(...rows);
+    if ("sessionSummaries" in patch) updated.push(...state.sessionSummaries);
+    if (updated.length) holdNotedSeen(updated);
+  }
   if (pushing) notifySoon();
   else notify();
 }
@@ -271,6 +280,10 @@ runtimeSessions.subscribe(() => {
     listedFull = next;
   }
   if (rows !== state.sessionSummaries || counts !== state.sessionCounts) set({ sessionSummaries: rows, sessionCounts: counts });
+});
+runtimeAgents.subscribe(() => {
+  const { rows } = runtimeAgents.getSnapshot();
+  if (rows.length) holdNotedSeen(rows);
 });
 onRuntimeChanges((upsert, remove) => {
   for (const row of upsert) if (rowHints.has(runtimeIdentity(row))) rowHints.set(runtimeIdentity(row), row);
@@ -886,7 +899,7 @@ export function connect() {
     if (stopped) return;
     // an attempt that never got a hello carries no status: ask the hub once whether a sign-in layer in front of it has
     // expired (lib/edge-auth.ts); a socket that was live just dropped, and its reconnect attempt is the one to ask about
-    if (!wasLive && !restartNotice && ev.code !== 1001) void probeEdge(undefined, probeCredential);
+    if (!wasLive && !restartNotice && ev.code !== 1001) void probeEdge(undefined, probeCredential, setLinkError);
     const now = Date.now();
     const restart = restartNotice || ev.code === 1001;
     // the drop starts while online; a restart announced on a later attempt stretches its grace
@@ -910,11 +923,24 @@ export function connect() {
   };
 }
 
+const setLinkError = (reason: string) => {
+  const msg = reason.trim();
+  if (msg && msg !== state.link.lastError) set({ link: { ...state.link, lastError: msg } });
+};
+
 // The hub answered while it refused the socket: a browser can't read why a WebSocket handshake failed, so one ordinary
 // read asks. A credential it no longer takes (removed in Settings › Devices, or the hub forgot it) answers 401, which
 // api() hands to the sign-in page with "signed out" (App.tsx handleUnauthorized) instead of retrying as if the hub were
-// out of reach. The read's own failures change nothing: the socket keeps retrying.
-const probeCredential = () => api("/machines", { timeout: 15_000 }).catch(() => {});
+// out of reach. Other HTTP/API rejections surface their error detail in ConnectionDetails; network errors change nothing.
+const probeCredential = () =>
+  api("/machines", { timeout: 15_000 }).then(
+    () => {
+      if (state.link.lastError) set({ link: { ...state.link, lastError: undefined } });
+    },
+    (e: unknown) => {
+      if (e instanceof ApiError && e.status >= 400 && e.message) setLinkError(e.message);
+    },
+  );
 
 // The grace is over and the socket is still not back: show it as before.
 function showDrop() {
@@ -1026,7 +1052,7 @@ function onMessage(msg: Record<string, unknown>) {
       setSideFold(Array.isArray(msg.features) && (msg.features as unknown[]).includes(SESSIONS_SIDE_FOLD_FEATURE));
       set({
         conn: "online",
-        link: { ...state.link, nextTry: 0, restarting: false, networkUp: true },
+        link: { ...state.link, nextTry: 0, restarting: false, networkUp: true, lastError: undefined },
         version: String(msg.server_version ?? ""),
         features: Array.isArray(msg.features) ? (msg.features as string[]) : [],
         pushGrading: msg.push_grading === true,
@@ -1252,6 +1278,8 @@ export function savePins(pins: AgentPins): Promise<void> {
 /** "Mark all as seen": every finished one of these nobody has seen (Unread, Just finished) is seen now, in one update of the list (iOS AppModel.markSeen). The
  * hub pushes the sessions back as seen; the list does not wait for it, and each waits in the seen outbox until it does. */
 export function markSeen(list: Session[]) {
+  // Mark all as seen lets every row in its scope go at once, including ones already read and held in place (#12585).
+  releaseSeen(list.map(agentKey));
   const keys = new Set<string>();
   const retained = new Map(Object.values(state.sessions).flat().map((s) => [runtimeIdentity(s), s]));
   const changedAt = (s: Session) => Math.max(timeMs(s.updated_at), timeMs(s.state_since), timeMs(s.seen_at));
@@ -1889,6 +1917,9 @@ export function markSeenLocally(mid: string, sid: string) {
     send({ type: "seen", machine_id: mid, session_id: sid });
     return;
   }
+  if (s && (stateOf(s) === "unread" || justFinished(s, state.mutes))) {
+    recordMarkedSeen(s, stateOf(s) === "idle" ? "just_finished" : "unread", viewed.has(runtimeIdentity(s)));
+  }
   set({ seen: { ...state.seen, [runtimeIdentity(s!)]: deliverSeen(mid, sid, mark) } });
   scheduleSeenCheck();
 }
@@ -1925,7 +1956,10 @@ export function viewSession(mid: string, sid: string): () => void {
   return () => {
     const n = (viewed.get(id) ?? 1) - 1;
     if (n > 0) viewed.set(id, n);
-    else viewed.delete(id);
+    else {
+      viewed.delete(id);
+      releaseOpenSeen(`${mid}/${sid}`);
+    }
   };
 }
 
@@ -1987,6 +2021,7 @@ function resendSeen() {
 
 export function reset() {
   resetAgentsDisplay();
+  resetSeenVisit();
   disconnect();
   clearConversationDeletions();
   resetMessageFeedback();

@@ -173,11 +173,16 @@ class HubChatTransport internal constructor(
     override suspend fun resolveOutcome(id: String, resolution: Resolution): ResolveOutcome =
         resolveOutcome(id, resolution, handoffCard = false)
 
-    override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean): ResolveOutcome {
+    override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean): ResolveOutcome =
+        resolveOutcome(id, resolution, handoffCard, secretRunEnv = false)
+
+    override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean, secretRunEnv: Boolean): ResolveOutcome {
         val path = api("interactions", id, "resolve")
         val body = JsonCodec.encodeToString(resolution)
         val headers = ProtocolCompatibility.operationHeaders(newOpId()) +
-            if (handoffCard && resolution.allow == true) mapOf("X-Persona-Features" to "secret_handoff") else emptyMap()
+            if (handoffCard && resolution.allow == true) {
+                mapOf("X-Persona-Features" to if (secretRunEnv) "secret_run_env" else "secret_handoff")
+            } else emptyMap()
         val deadline = clockMillis() + resolveRetryMillis
         while (true) {
             try {

@@ -157,6 +157,8 @@ describe("Agents list Filter menu (#4397) on the title row, the search in ⌘K (
     expect(rows[0].getAttribute("data-pinned")).toBe("true");
     expect(rows[0].textContent).toContain("Mac Studio");
     expect(rows[0].textContent).toContain("orca");
+    expect(rows[0].textContent).not.toContain("Codex");
+    expect(rows[1].textContent).not.toContain("Claude Code");
 
     // a facet page: pick one machine, the menu stays open and the chip appears
     await openFilterMenu();

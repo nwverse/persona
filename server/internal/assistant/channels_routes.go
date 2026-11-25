@@ -106,7 +106,7 @@ func (s *Service) channelRoutes() {
 		}
 		s.forgetChannelTurns(v.ID)
 		if v.ID == channel.Feishu {
-			s.feishuUnpaired()
+			s.larkModule().Unpaired()
 		}
 		detail(w, r, v.ID)
 	}))

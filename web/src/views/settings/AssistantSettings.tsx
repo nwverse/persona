@@ -8,9 +8,10 @@ import { BASE } from "../../lib/base";
 import { settingsHref } from "./nav";
 import { SUPERVISE_PURPOSE } from "../../lib/background-supervisor";
 import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../../lib/api";
-import { MANAGER_HEADER } from "../../lib/manager-choice";
+import { MANAGER_HEADER, useKnownDefault } from "../../lib/manager-choice";
 import { mainRuntimeDetails, type MainExecution } from "../../lib/main-runtime";
 import { PERMISSION_MODES } from "../../lib/session-actions";
+import { ASSISTANT_PAGES_FEATURE } from "../../lib/extension-ui";
 import { ConfigurationManager } from "./ConfigurationManager";
 import { AgentAutoNaming, supportsAgentAutoNaming, type AgentAutoNamingState } from "./AgentAutoNaming";
 import { aboutMeSaves } from "./about-me-saves";
@@ -96,6 +97,9 @@ interface AssistantState extends AgentAutoNamingState, CacheKeepaliveState {
   /** "Suggest the next message" (#4644, docs/assistant/assistant.md "Next-message suggestions"): off by default; unset
    *  from a hub before it. */
   next_suggestions?: boolean;
+  /** "Let Persona make dashboards" (#15017): off by default (absent is off); the switch is shown only when the hub
+   *  announces `assistant_pages`, and only for the default manager, which alone has Dashboards. */
+  dashboards?: boolean;
   /** "Run Claude chats in interactive Claude Code" (#10058, docs/assistant/assistant.md "Interactive Claude Code"): off
    *  by default; unset from a hub before it. */
   claude_interactive?: boolean;
@@ -132,6 +136,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
   const scopedApi: typeof api = (path, init) => api(path, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), [MANAGER_HEADER]: manager } });
   const [directionNotes] = useState(() => directionNotesDeps(scopedApi));
   const persona = usePersona();
+  const defaultId = useKnownDefault();
   const machines = useStore((s) => s.machines);
   const [info, setInfo] = useState<AssistantState | null>(null);
   // where and with what the main chat runs (docs/assistant/assistant.md "Main conversation execution on the web"): kept
@@ -231,6 +236,23 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
     } finally {
       setSuggestBusy(false);
+    }
+  };
+
+  // Dashboards (#15017): only the owner changes it, the hub confirms the value shown
+  const pagesAnnounced = useStore((s) => s.features.includes(ASSISTANT_PAGES_FEATURE));
+  const [dashboardsBusy, setDashboardsBusy] = useState(false);
+  const setDashboards = async (on: boolean) => {
+    setDashboardsBusy(true);
+    setInfo((i) => (i ? { ...i, dashboards: on } : i));
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { dashboards: on } });
+      setInfo((i) => (i ? { ...i, dashboards: r.dashboards === true } : i));
+    } catch (e) {
+      setInfo((i) => (i ? { ...i, dashboards: !on } : i));
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally {
+      setDashboardsBusy(false);
     }
   };
 
@@ -482,6 +504,15 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         <Group anchor="next-suggestions" footer={t("settings-assistantsettings.next_suggestions_footer")}>
           <Row label={t("settings-assistantsettings.next_suggestions")}>
             <Switch on={info.next_suggestions} onChange={(on) => void setSuggestions(on)} disabled={suggestBusy} label={t("settings-assistantsettings.next_suggestions")} />
+          </Row>
+        </Group>
+      )}
+
+      {/* Dashboards (#15017): only from a hub whose default manager has them, and only for that manager */}
+      {pagesAnnounced && info && manager === defaultId && (
+        <Group anchor="dashboards" footer={t("settings-assistantsettings.dashboards_footer")}>
+          <Row label={t("settings-assistantsettings.dashboards")}>
+            <Switch on={info.dashboards === true} onChange={(on) => void setDashboards(on)} disabled={dashboardsBusy} label={t("settings-assistantsettings.dashboards")} />
           </Row>
         </Group>
       )}

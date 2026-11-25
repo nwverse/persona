@@ -17,17 +17,10 @@ func drainFleetBackground(t *testing.T, s *Service, cancel context.CancelFunc) {
 	t.Helper()
 	cancel()
 
-	// A retry callback may still be restoring todos before it takes dedupMu. Cancel its context, wait for the whole
-	// callback, then disarm anything left; a callback that was already due observes the cancellation before any I/O.
-	digest := &s.supervise
-	digest.digestMu.Lock()
-	digest.mu.Lock()
-	if digest.timer != nil {
-		digest.timer.Stop()
-		digest.timer, digest.timerAt = nil, time.Time{}
-	}
-	digest.mu.Unlock()
-	digest.digestMu.Unlock()
+	// A retry callback may still be restoring todos before it takes dedupMu. Mark timers stopped, wait for the whole
+	// callback, and disarm anything left; a callback that already fired observes the stop before any I/O.
+	s.stopSuperviseTimers()
+	s.stopQuietTimers()
 
 	names := &s.agentNames
 	names.mu.Lock()
