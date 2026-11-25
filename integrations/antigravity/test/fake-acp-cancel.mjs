@@ -21,7 +21,7 @@ const send = (o) => process.stdout.write(`${JSON.stringify(o)}\n`)
 let nextId = 1
 const turns = new Map() // sessionId -> { id, mode, cancelled, open: Set of permission request ids }
 
-function askPermission(sessionId, toolCallId, toolCall = { title: 'run_command', rawInput: { command: 'ls' } }) {
+function askPermission(sessionId, toolCallId, toolCall = { title: 'run_command', rawInput: { command: 'ls' } }, options) {
   const id = `perm-${nextId++}`
   send({
     jsonrpc: '2.0',
@@ -30,10 +30,10 @@ function askPermission(sessionId, toolCallId, toolCall = { title: 'run_command',
     params: {
       sessionId,
       toolCall: { toolCallId, ...toolCall },
-      options: [
+      options: options === undefined ? [
         { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
         { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
-      ],
+      ] : options,
     },
   })
   return id
@@ -75,6 +75,10 @@ function onRequest(msg) {
       if (mode === 'ask' || mode.startsWith('ask-shape ')) {
         const toolCall = mode === 'ask' ? undefined : JSON.parse(mode.slice('ask-shape '.length))
         turn.open.add(askPermission(sessionId, 'call-1', toolCall))
+      }
+      if (mode.startsWith('ask-options ')) {
+        const options = JSON.parse(mode.slice('ask-options '.length))
+        turn.open.add(askPermission(sessionId, 'call-1', undefined, options))
       }
       if (mode === 'updates' || mode === 'unrelated-updates') {
         let count = 0
