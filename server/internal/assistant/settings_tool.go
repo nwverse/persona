@@ -32,6 +32,8 @@ type ownSetting struct {
 	set func(ctx context.Context, v json.RawMessage) (*ownChange, error)
 	// cardTitle localizes a dynamic setting's title (direction.<id>.prompt); static keys use settingTitles instead.
 	cardTitle func(l i18n.Lang) string
+	// toolName is the managed wrapper's card name; empty is persona_settings.
+	toolName string
 	// change is a setting's other actions (a list's add and remove: tasks.trust), in place of set.
 	change func(ctx context.Context, action string, v json.RawMessage) (*ownChange, error)
 }
@@ -448,6 +450,11 @@ func (s *Service) allOwnSettings() []ownSetting {
 				return fmt.Sprint(machineFallbackMinutesOf(s.settings(ctx))), nil
 			},
 			set: s.setMachineFallbackMinutes},
+		{Setting: Setting{Key: modelProfileBindingsKey, Title: "Model profile purpose and launcher bindings", Actions: getSet,
+			About: "one model profile's purpose bindings and managed-launcher model fields; set atomically patches the named profile at the revision read for its approval card, without applying current settings or changing tiers",
+			Value: `{"profile": id from model_profiles_list, "purposes": {purpose id: {provider, model, effort, permission_mode} | null}, "launchers": {launcher name: {model field: string | null}}}; a purpose object replaces that whole binding, null or {} inherits on the next switch; omitted launcher fields stay unchanged, null or "" clears to the launcher default on the next switch (model cannot be cleared)`},
+			get: s.getModelProfileBindings,
+			set: s.setModelProfileBindings},
 		{Setting: Setting{Key: "model_profiles.tiers", Title: "Agent presets (the model profiles' tiers)", Actions: getSet,
 			About: "the Agent presets: each model profile's named tiers, what agent_start / task_plan's tier and the New Agent " +
 				"form's presets run on (launcher, model, effort) and when to use each; get lists every profile's, set adds, " +
@@ -591,8 +598,12 @@ func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSett
 	if action == "set" && s.hello(ctx).Assistant.AutoApproveReversibleSettings && reversibleSettingAutoApproved(o.Key) && change.reversible != nil {
 		return s.applyAutomaticReversibleSetting(ctx, call, o.Key, proposal, change.reversible)
 	}
+	toolName := o.toolName
+	if toolName == "" {
+		toolName = "persona_settings"
+	}
 	outcome, err := s.waitPreparedCard(ctx, proto.Interaction{ID: "ix_" + randomHex(6), MachineID: call.MachineID, SessionID: call.SessionID,
-		Kind: proto.IxPermission, ToolName: "persona_settings", Summary: proposal, ToolInput: shown, SessionTitle: "Persona",
+		Kind: proto.IxPermission, ToolName: toolName, Summary: proposal, ToolInput: shown, SessionTitle: "Persona",
 		CreatedAt: now, ExpiresAt: now.Add(settingCardWait)}, approvalops.Operation{
 		Replacement: call.MachineID + "\x00" + call.SessionID + "\x00setting\x00" + o.Key,
 		Denied:      "The user declined the change: nothing changed.",
@@ -705,7 +716,7 @@ var settingTitles = map[string]string{modulesKey: "title_modules", standingAutho
 	"assistant.machine_fallbacks": "title_machine_fallbacks", "assistant.machine_fallback_minutes": "title_machine_fallback_minutes",
 	"assistant.recording_days": "title_recording_days", "assistant.delivery_gate": "title_delivery_gate", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders", "assistant.briefing_waits": "title_briefing_waits", "assistant.background_supervisor_keeps_context": "title_background_supervisor_keeps_context", "assistant.chat_reply_relay": "title_chat_reply_relay",
-	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.task_lessons": "title_task_lessons", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "assistant.auto_supervision_messages": "title_auto_supervision_messages", "inbox.todo_forward.enabled": "title_inbox_todo_forward", "assistant.pr_events_route_to_agent": "title_pr_events_route_to_agent", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", "model_profiles.tiers": "title_model_tiers",
+	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.task_lessons": "title_task_lessons", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "assistant.auto_supervision_messages": "title_auto_supervision_messages", "inbox.todo_forward.enabled": "title_inbox_todo_forward", "assistant.pr_events_route_to_agent": "title_pr_events_route_to_agent", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", modelProfileBindingsKey: "title_model_bindings", "model_profiles.tiers": "title_model_tiers",
 	"assistant.load_all_tools":                "title_load_all_tools",
 	"assistant.meeting_transcription_default": "title_meeting_transcription_default",
 	"assistant.meeting_attendance_default":    "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days",

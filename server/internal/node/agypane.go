@@ -924,6 +924,9 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 		}
 	}
 	if conversation := n.agyConversation(id, pane); conversation != "" {
+		if workers := n.agySwarmWorkers(conversation); len(workers) > 0 {
+			info["swarm_workers"] = workers
+		}
 		var breakdown *proto.ContextBreakdown
 		if runtimeRow, _, ok := n.runtimes.rowOf(agyAgent + "-" + conversation); ok {
 			if runtimeRow.Model != "" {

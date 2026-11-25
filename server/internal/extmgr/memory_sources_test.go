@@ -230,16 +230,18 @@ func TestMemoryPagesIncomplete(t *testing.T) {
 func TestMemoryPagesRefused(t *testing.T) {
 	ctx := context.Background()
 	for name, raw := range map[string]string{
-		"null":             `null`,
-		"no entries":       `{"tagged": true, "has_more": false}`,
-		"entries null":     `{"entries": null, "tagged": true, "has_more": false}`,
-		"entries a string": `{"entries": "qa", "tagged": true, "has_more": false}`,
-		"no tagged":        `{"entries": [], "has_more": false}`,
-		"tagged a string":  `{"entries": [], "tagged": "yes", "has_more": false}`,
-		"no has_more":      `{"entries": [], "tagged": true}`,
-		"after a number":   `{"entries": [], "tagged": true, "has_more": false, "after": 2}`,
-		"after too long":   `{"entries": [], "tagged": true, "has_more": false, "after": "` + strings.Repeat("a", memoryAfterMost+1) + `"}`,
-		"too many":         `{"entries": [` + strings.TrimSuffix(strings.Repeat(`{},`, memoryPageEntriesMost+1), ",") + `], "tagged": true, "has_more": false}`,
+		"null":                    `null`,
+		"no entries":              `{"tagged": true, "has_more": false}`,
+		"entries null":            `{"entries": null, "tagged": true, "has_more": false}`,
+		"entries a string":        `{"entries": "qa", "tagged": true, "has_more": false}`,
+		"no tagged":               `{"entries": [], "has_more": false}`,
+		"tagged a string":         `{"entries": [], "tagged": "yes", "has_more": false}`,
+		"no has_more":             `{"entries": [], "tagged": true}`,
+		"after a number":          `{"entries": [], "tagged": true, "has_more": false, "after": 2}`,
+		"after too long":          `{"entries": [], "tagged": true, "has_more": false, "after": "` + strings.Repeat("a", memoryAfterMost+1) + `"}`,
+		"too many":                `{"entries": [` + strings.TrimSuffix(strings.Repeat(`{},`, memoryPageEntriesMost+1), ",") + `], "tagged": true, "has_more": false}`,
+		"standing_bytes negative": `{"entries": [], "tagged": true, "has_more": false, "standing_bytes": -1}`,
+		"standing_bytes a string": `{"entries": [], "tagged": true, "has_more": false, "standing_bytes": "4096"}`,
 	} {
 		f := &fakeMemoryCaller{pages: map[string]json.RawMessage{"": json.RawMessage(raw)}}
 		if pages, err := readMemoryPages(ctx, f, "memory", memoryTestBounds()); err == nil {
@@ -375,5 +377,22 @@ func TestMemoryWithheldTools(t *testing.T) {
 	}
 	if got := strings.Join(servers, ","); got != "qaotherrecall" {
 		t.Errorf("assistant MCP servers = %s", got)
+	}
+}
+
+// A page's standing_bytes, the budget the program wants for its standing entries (#15312), goes through as stated:
+// the assistant caps it. Left out, it is 0.
+func TestMemoryPageStandingBytes(t *testing.T) {
+	ctx := context.Background()
+	for raw, want := range map[string]int{
+		`{"entries": [], "tagged": true, "has_more": false, "standing_bytes": 6144}`:        6144,
+		`{"entries": [], "tagged": true, "has_more": false, "standing_bytes": 99999999999}`: 1 << 30,
+		`{"entries": [], "tagged": true, "has_more": false}`:                                0,
+	} {
+		f := &fakeMemoryCaller{pages: map[string]json.RawMessage{"": json.RawMessage(raw)}}
+		pages, err := readMemoryPages(ctx, f, "memory", memoryTestBounds())
+		if err != nil || len(pages) != 1 || pages[0].StandingBytes != want {
+			t.Errorf("%s: %+v, %v; want standing_bytes %d", raw, pages, err, want)
+		}
 	}
 }

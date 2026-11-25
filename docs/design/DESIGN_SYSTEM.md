@@ -875,6 +875,10 @@ sending identity or confirmation behavior.
 
 The web Agent conversation header's **Session overview** list button toggles a panel from the right side of the toolbar (`web/src/views/chat/ChatView.tsx`, `web/src/views/chat/SessionOverview.tsx`). The panel uses the app's surface and keeps its own scroll. It sits beside the conversation when there is room and above the transcript in a narrow conversation. The reader can keep it open while working in the chat. The environment and context sections use the current session's metadata. The subagent row shows running and ended counts and opens the tree on demand. Background activity uses the Background tasks panel's list rows, workflow details, output viewer and loop controls. A detail opened from the overview hides the mounted overview instead of squeezing it; Back or Escape closes the detail and restores the overview's scroll and originating row's focus. While the overview stays open, Cmd+B can close and reopen its detail. Turning the overview off or leaving its conversation closes the dependent detail and removes it from Cmd+B memory, so a later toggle cannot expose a stale origin. List-origin details keep ordinary Cmd+B memory. The finished task disclosure counts distinct terminal notices in the loaded transcript. The overview and its disclosures start closed.
 
+Antigravity sessions with a Swarm roster (#13749) show a **Swarm** disclosure in Session overview. Its count is the
+number of workers in the native roster. Expanding it shows read-only worker names and activity states in the
+existing overview list style.
+
 ### 3.4 Lists and rows
 
 - Web History (#10240) is an Agents destination for non-running sessions, grouped by local activity day. It shares folded sidebar state and visibility before filtering; day counts equal the displayed filtered rows, including only loaded content-search matches. The primary switch stays Assistant / Agents. Agents + owns New Agent, New terminal and Open terminals; History never starts on a remembered terminal inventory (details in `docs/web/web.md`).
@@ -1840,6 +1844,7 @@ The watch widget extension doesn't build `Theme`, so complications take their fo
   bar; inline keeps the name, amount and unit. They share the phone's blue/amber `HealthIntakePalette`, system accent
   grouping, and the `.xxxLarge` text cap with shrinking. VoiceOver reads name, total, goal and unit. On a failed read,
   cached values remain, identified in the rectangle and VoiceOver; an old hub's 403 says Update the hub instead.
+  An intake response whose `items` omits this kind says **Add Water in Health** or **Add Protein in Health** (#14715); a missing field preserves the older behavior.
   No watch app page or Health permission is added. Hub choice lives on the complication; the default is the default
   paired group, or the only available group. Data and 15-minute refresh rules are in `docs/apple/home-widgets.md`.
 
@@ -2420,6 +2425,11 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   are To Decide (the pager's cards), Needs you (its rows) and, in an Agent's chat, "N pending". An Agent's chat keeps the
   stack; the wrap-up chips stay chips after the entries. The two paragraphs below are the web and Android, and iOS
   before #12831.
+  Android command-input requests (#14568) show the command and its linkable output in the existing chat card and Agents
+  request sheet. The field starts masked when the request calls for it, offers Show / Hide, and stays out of Autofill.
+  Send hands the line to the command and clears the field. Not now replies without a line. At standard text sizes the
+  existing decision footer keeps both actions visible while the command, output and field scroll. At large sizes they
+  scroll with the form. The keyboard action puts the keyboard away. A refusal stays attached to the pending request.
   What the conversation's tasks ask is a card of its own above the entries (iOS `TaskQuestions` until #12831, #4339 C10): the oldest
   question of their Agents, under its task's name with the ask mark in the needs-you tone and, at the end of that line,
   "N more" for the tasks' other questions; it is answered there, and the next comes up once it is. The three numbers

@@ -365,11 +365,13 @@ type Host interface {
 	// The agents' cards (asks.go, ask_cards.go): what a card says of the core as one value (who asks, the task, the
 	// conversation's page, the core's wording of the interaction), where it goes as the channels' runs say now, whether
 	// its words are sensitive (asked only for a card the chat does not drive, with "all cards" on: it may wait for
-	// the text to be tagged), and the core's live record of it (ended: interaction.ended came; pending: it is up).
+	// the text to be tagged), and the core's live record of it (ended: interaction.ended came; pending: it is up;
+	// AskPending: the interaction up under id now, which a card back after a reconnect must be).
 	AskView(ctx context.Context, ix proto.Interaction) assistantwire.AskView
 	AskRoute(ctx context.Context, ix proto.Interaction) assistantwire.AskRoute
 	AskSensitive(ctx context.Context, ix proto.Interaction) bool
 	AskState(id string) (ended, pending bool)
+	AskPending(id string) (proto.Interaction, bool)
 
 	// The nudges (nudge.go): a card's agent gone, a prepared card's deadline, the standing board told a card was
 	// nudged, the tool a permission asks about.

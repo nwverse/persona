@@ -52,6 +52,7 @@ from urllib.parse import parse_qs, urlparse
 
 # The domains, loaded in this order: an earlier domain's route wins, and features and help lines follow it.
 DOMAINS = [
+    "health_tell_mock",  # Tell Health acceptance and duplicate receipts (#14715)
     "health_intake_mock",  # Health intake records, pages and water migration (#13176, #13636)
     "desktops_mock",  # desktop client registration (hub/desktops.go), GET /mock/desktops, MOCK_DESKTOPS
     "bg_stalled_mock",  # an Agent whose background work stalled, still Working (#13744), MOCK_BG_STALLED
@@ -77,6 +78,7 @@ DOMAINS = [
     "question_rail_mock",  # the main chat's question rail states and read marks (#13021), MOCK_QUESTION_RAIL
     "hub_modules_mock",  # a hub that publishes module flags: `modules` and `module.<id>` (#13849), MOCK_HUB_MODULES
     "usage_map_mock",  # the disk usage map: scan, trash, cleanup and an offload provider (#14576), MOCK_USAGE_MAP
+    "machine_load_mock",  # moderate CPU with work queued on some cores: MOCK_LOAD_QUEUE (#12519)
     "dashboards_mock",  # Dashboards: the -pages places and pages, the `dashboards` switch (#15017), MOCK_DASHBOARDS
 ]
 

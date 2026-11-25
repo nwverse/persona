@@ -1,6 +1,248 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Activity" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activity"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "健身圆环"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アクティビティ"
+          }
+        }
+      }
+    },
+    "Add Protein in Health" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add Protein in Health"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在健康里添加蛋白质"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアでたんぱく質を追加"
+          }
+        }
+      }
+    },
+    "Add Water in Health" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add Water in Health"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在健康里添加喝水"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアで水分を追加"
+          }
+        }
+      }
+    },
+    "Changed elsewhere. Updated to the latest health items." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Changed elsewhere. Updated to the latest health items."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "别处刚改过，已更新"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ほかの端末で変更されました。最新の項目に更新しました。"
+          }
+        }
+      }
+    },
+    "Choose what appears in Health. Removing an item keeps its records." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose what appears in Health. Removing an item keeps its records."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择健康主页显示的项目。移除项目会保留记录。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアに表示する項目を選びます。項目を外しても記録は残ります。"
+          }
+        }
+      }
+    },
+    "Couldn't confirm delivery to Health. Open Health to check this message." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't confirm delivery to Health. Open Health to check this message."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このメッセージがヘルスケアに届いたか確認できませんでした。ヘルスケアで確認してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未能确认这句话是否送达健康，请打开健康查看。"
+          }
+        }
+      }
+    },
+    "Couldn't confirm sending to Health. Check Health before trying again. %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't confirm sending to Health. Check Health before trying again. %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアへの送信を確認できませんでした。再試行する前にヘルスケアを確認してください。%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未能确认是否交给健康，请先打开健康看看，再决定是否重试。%@"
+          }
+        }
+      }
+    },
+    "Enter something to tell Health." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter something to tell Health."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアに伝えたい内容を入力してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入要告诉健康的话。"
+          }
+        }
+      }
+    },
+    "First add Water in Health" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "First add Water in Health"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先在健康里添加喝水"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先にヘルスケアで水分を追加してください"
+          }
+        }
+      }
+    },
+    "Health Items" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Health Items"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "健康项"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケア項目"
+          }
+        }
+      }
+    },
+    "In Shortcuts, create an automation for Apple Watch Workout · Strength Training Starts, then add Tell Health with “Strength training has started”. Health plans today from your last workout. You can also say it in a Health chat. The system decides whether confirmation is needed." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In Shortcuts, create an automation for Apple Watch Workout · Strength Training Starts, then add Tell Health with “Strength training has started”. Health plans today from your last workout. You can also say it in a Health chat. The system decides whether confirmation is needed."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ショートカットで「Apple Watchワークアウト・筋力トレーニングの開始」のオートメーションを作り、「ヘルスケアに伝える」に「筋力トレーニングを始めました」と入力します。前回のワークアウトをもとに今日の計画を立てます。ヘルスケアのチャットで伝えることもできます。確認が必要かどうかはシステムが決めます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在快捷指令里创建自动化：“Apple Watch 体能训练 · 力量训练开始”，接着添加“告诉健康：力量训练开始了”。健康会按上次训练排好今天的计划。没配自动化，也能在健康对话里说；能否免确认由系统决定。"
+          }
+        }
+      }
+    },
     "Move the water extension's records and settings into Health and turn off the extension. Its water page on Android will disappear." : {
       "localizations" : {
         "en" : {
@@ -130,6 +372,248 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "本"
+          }
+        }
+      }
+    },
+    "Not Now [Health Items]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not Now"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂不"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今はしない"
+          }
+        }
+      }
+    },
+    "Open Persona to select and sync a hub before telling Health." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Persona to select and sync a hub before telling Health."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先にPersonaを開き、ハブを選んで同期してからヘルスケアに伝えてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先打开 Persona，选择并同步中枢，再告诉健康。"
+          }
+        }
+      }
+    },
+    "Send a sentence to Health, such as “Strength training has started”." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Send a sentence to Health, such as “Strength training has started”."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「筋力トレーニングを始めました」などのひと言をヘルスケアに送ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "把一句话交给健康，例如“力量训练开始了”。"
+          }
+        }
+      }
+    },
+    "Sending to Health…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sending to Health…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアに送信中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在交给健康…"
+          }
+        }
+      }
+    },
+    "Sent to Health" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sent to Health"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアに送りました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已交给健康"
+          }
+        }
+      }
+    },
+    "Strength Training" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Strength Training"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "筋力トレーニング"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "力量训练"
+          }
+        }
+      }
+    },
+    "Tell Health" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tell Health"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアに伝える"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "告诉健康"
+          }
+        }
+      }
+    },
+    "Tell Health ${text}" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tell Health ${text}"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "告诉健康 ${text}"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアに ${text} と伝える"
+          }
+        }
+      }
+    },
+    "Tell Health · Preview" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tell Health · Preview"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアに伝える · プレビュー"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "告诉健康 · 预览"
+          }
+        }
+      }
+    },
+    "This hub doesn't support Tell Health yet. Update the hub first." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This hub doesn't support Tell Health yet. Update the hub first."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このハブはまだ「ヘルスケアに伝える」に対応していません。先にハブを更新してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台中枢还不支持“告诉健康”，请先更新中枢。"
+          }
+        }
+      }
+    },
+    "This text is too long. Send a shorter message to Health." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This text is too long. Send a shorter message to Health."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文章が長すぎます。短くしてヘルスケアに送ってください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这段话太长了，请缩短后再告诉健康。"
           }
         }
       }
@@ -1280,6 +1764,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "すべて表示"
+          }
+        }
+      }
+    },
+    "What would you like to track?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What would you like to track?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "想记录什么？"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "何を記録しますか？"
           }
         }
       }

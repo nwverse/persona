@@ -18,6 +18,7 @@ class ServerModuleSteps(unittest.TestCase):
                 (root / name).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(ROOT / name, root / name)
             (root / "scripts/ci/common.sh").write_text('''CI_IMPLEMENTATION_ROOT=$PWD
+ci_run() { ci_run_step "$@"; }
 ci_run_step() {
     printf '%s\\t%s\\t%s\\t%s\\t%s\\n' "$lane" "$1" "$2" "$GOFLAGS" "${*:3}" >> "$TEST_STEPS"
 }
