@@ -77,9 +77,6 @@ try {
     const run = { theme, settingsLoaded: false, health: false, errors };
     result.runs.push(run);
     await page.goto(`${origin}/settings?tab=managers`);
-    // This row is rendered by ManagersSettings only after the shared GET's JSON reaches the component.
-    await page.getByRole("button", { name: new RegExp(name) }).last().waitFor();
-    run.settingsLoaded = true;
     const controls = await page.evaluate(async () => {
       const direct = (await fetch("/api/v1/health")).ok;
       const entry = { fetcher: fetch };
@@ -92,6 +89,9 @@ try {
     assert.ok(controls.direct && controls.bound);
     assert.match(controls.memberError, /Illegal invocation/);
     run.health = controls.direct;
+    // This row is rendered by ManagersSettings only after the shared GET's JSON reaches the component.
+    await page.getByRole("region", { name: "Assistants", exact: true }).getByRole("button", { name: new RegExp(name) }).waitFor();
+    run.settingsLoaded = true;
     assert.deepEqual(errors, []);
     assert.ok(reads.includes("/managers"));
     assert.deepEqual(writes, []);
@@ -100,6 +100,10 @@ try {
     await context.close();
   }
   result.status = "passed";
+} catch (error) {
+  result.status = "failed";
+  result.error = error.message;
+  throw error;
 } finally {
   await browser?.close();
   await new Promise((done) => server.close(done));
