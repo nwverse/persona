@@ -24,7 +24,8 @@ const AT = "2026-11-10T08:00:00Z";
 const sid = "decision-row-demo";
 const direction = "direction-demo";
 const askLabel = { en: "Ask in main chat", "zh-Hans": "在主对话问", ja: "メインチャットで聞く" };
-const sendLabel = { en: "Send", "zh-Hans": "发送", ja: "送信" };
+const discussionContext = { en: "The owner is asking about this pending decision.", "zh-Hans": "用户在询问这项待定决策。" };
+const composerInput = "[data-composer-input]";
 const RESPONSES = ["decide_yourself", "not_what_i_asked", "explain_first"];
 const menuWords = {
   en: ["You decide", "This isn't what I asked for", "Tell me the background first"],
@@ -230,25 +231,43 @@ async function run(browser, size, theme, language) {
         await rollout.waitFor();
         await openFolded(page);
       }
-      await rollout.getByRole("button", { name: askLabel[language], exact: true }).click();
-      const dialog = page.getByRole("dialog", { name: askLabel[language] });
-      const send = dialog.getByRole("button", { name: sendLabel[language], exact: true });
-      assert(await send.isDisabled(), "a blank question cannot be sent");
+      const input = page.locator(composerInput);
+      if (source === "main") await input.fill("Existing draft");
+      const askButton = rollout.getByRole("button", { name: askLabel[language], exact: true });
+      await askButton.click();
+      await page.waitForURL(base + `/persona/${sid}`);
+      const draftQuote = page.locator("[data-quotes]").filter({ hasText: "Example rollout" });
+      await draftQuote.waitFor();
+      assert.equal(await page.getByRole("dialog").count(), 0, "the composer opens without a dialog");
+      assert.equal(writes.length, 0, "opening the composer only adds a draft quote");
+      if (source === "main") {
+        assert.equal(await input.textContent(), "Existing draft");
+        await draftQuote.getByRole("button").click();
+        await draftQuote.waitFor({ state: "detached" });
+        assert.equal(await input.textContent(), "Existing draft");
+        await page.locator('[data-tray-entry="needs"]').click();
+        await rollout.waitFor();
+        await openFolded(page);
+        await askButton.click();
+        await draftQuote.waitFor();
+      }
       const question = `What would change for existing users? (${source})`;
-      await dialog.getByRole("textbox").fill(question);
-      if (source === "main") await page.screenshot({ path: name("ask-dialog") });
+      await input.fill(question);
+      if (source === "main") await page.screenshot({ path: name("ask-composer") });
       const response = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/v1/sessions/demo/${sid}/messages`);
-      await send.click();
+      await page.getByTestId("composer-send").click();
       assert.equal((await response).status(), 200);
-      await dialog.waitFor({ state: "hidden" });
+      await draftQuote.waitFor({ state: "detached" });
       assert.equal(new URL(page.url()).pathname, `/persona/${sid}`);
       const write = writes.at(-1);
       assert.equal(writes.length, 1, "the chat send is the only write");
       assert.equal(write.path, `/sessions/demo/${sid}/messages`);
-      assert.match(write.body.text, /任务「Example rollout」（todo id: demo-rollout）/);
+      assert.match(write.body.text, /^> 任务「Example rollout」（todo id: demo-rollout）/);
       const decision = list.find((todo) => todo.id === "demo-rollout").ask;
       assert(write.body.text.includes(decision.question));
       for (const option of decision.options) assert(write.body.text.includes(`${option.label}: ${option.leads_to}`));
+      assert(write.body.text.includes(language === "en" ? `Recommended: ${decision.recommend}` : `推荐：${decision.recommend}`));
+      assert(write.body.text.includes(discussionContext[language]));
       assert(write.body.text.endsWith(`\n\n${question}`));
       const message = page.locator("[data-bubble-text]").filter({ hasText: question });
       await message.waitFor();
@@ -277,10 +296,10 @@ async function run(browser, size, theme, language) {
     // Other… opens the originating conversation with this decision routed to its composer, so the owner can add a
     // condition in words instead of choosing an unchanged suggestion (#10760).
     await custom.locator("span[data-decision-tail] button").first().click();
-    await page.locator("textarea").last().waitFor();
+    await page.locator(composerInput).waitFor();
     assert.equal(new URL(page.url()).pathname, `/persona/${sid}`);
     await page.getByText("Example custom decision", { exact: false }).first().waitFor();
-    await page.locator("textarea").last().fill("先 Resume，但把提醒改到周四");
+    await page.locator(composerInput).fill("先 Resume，但把提醒改到周四");
     await page.screenshot({ path: name("custom-answer") });
     const customAnswer = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/v1/assistant/conversations/${sid}/route`);
     await page.getByTestId("composer-send").click();

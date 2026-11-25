@@ -11,7 +11,8 @@ import { clock } from "../../lib/format";
 import { setAgentOpenMode } from "../../lib/agent-open";
 import { closePanel, getPanel } from "../../lib/panel";
 import { decisionLaterKey } from "../../lib/assistant-entries";
-import { parseQuote, splitQuote } from "../../lib/drafts";
+import { storedValue } from "../../lib/compatibility";
+import { getQuotes, parseQuote, setQuotes, splitQuote, storeDraft, withQuoteBlock } from "../../lib/drafts";
 import { getState, putTodo, refresh, refreshTodos, reset } from "../../lib/store";
 import type { Todo, TodoAsk } from "../../lib/todos";
 import { AssistantActionBar } from "./Tasks";
@@ -59,6 +60,7 @@ let needsInput: boolean;
 let postGate: Promise<void> | undefined;
 let listStatus: number;
 let assistantStatus: number;
+let assistantMain: string;
 let refusal: Record<string, unknown> | undefined; // a POST's error body other than the offline one
 
 async function mount() {
@@ -84,7 +86,7 @@ async function mount() {
     if (path.endsWith("/assistant") && assistantStatus !== 200) return new Response("{}", { status: assistantStatus });
     const body = path.includes("/feed") ? { items: feed, plans: { [plan.id]: plan }, task_cards: [{ id: `plan:${plan.id}:0`, plan_id: plan.id, index: 0, todo_id: todo.id, at, updated_at: at, state: "accepted" }] }
       : path.includes("/todos") ? { todos: [todo] }
-      : path.endsWith("/assistant") ? { machine_id: "new-chat-node", main_machine_id: "main-node", main: "main-chat", conversations: [] }
+      : path.endsWith("/assistant") ? { machine_id: "new-chat-node", main_machine_id: "main-node", main: assistantMain, conversations: [] }
       : path.includes("/sessions") ? { sessions: [{ machine_id: "demo", session_id: "worker", title: "Demo agent", state: needsInput ? "needs_you" : "idle", status: "idle", updated_at: at, ...(turnError ? { turn_error: "Synthetic transient error", turn_error_kind: "transient" } : {}) }] } : {};
     return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
   }));
@@ -121,11 +123,15 @@ beforeEach(() => {
   postGate = undefined;
   listStatus = 200;
   assistantStatus = 200;
+  assistantMain = "main-chat";
   refusal = undefined;
 });
 afterEach(() => {
   act(() => root.unmount());
   setRoute("main-chat", null);
+  setQuotes("main-node/main-chat", []);
+  setQuotes("persona-new", []);
+  storeDraft("main-node/main-chat", "");
   host.remove();
   history.replaceState(null, "", "/");
   setAgentOpenMode("panel");
@@ -145,33 +151,28 @@ const openMenu = () => act(() => row().querySelector<HTMLButtonElement>(`button[
 const flush = () => act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
 describe("a decision in the Needs you tray", () => {
-  it("sends a quoted question to main even with a pending Other route and leaves the round answerable", async () => {
+  it("opens the existing main composer with a decision quote and clears an earlier task reply route", async () => {
     await mount();
-    setRoute("main-chat", todo.id, at);
+    const key = "main-node/main-chat";
+    const question = decision.recommend!; // even words equal to an option can be discussed there
+    storeDraft(key, question);
+    act(() => setRoute("main-chat", todo.id, at));
     const open = [...row().querySelectorAll("button")].find((button) => button.textContent === t("assistant-decisionrow.ask_in_main_chat"));
     expect(open).toBeDefined();
-    act(() => open!.click());
-    const dialog = document.querySelector('[role="dialog"]')!;
-    const send = [...dialog.querySelectorAll("button")].find((button) => button.textContent === t("chat-composer.send"))!;
-    expect(send.disabled).toBe(true);
-    const input = dialog.querySelector("textarea")!;
-    const question = decision.recommend!; // even text equal to an option is only a question on this path
-    act(() => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, question);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
     assistantStatus = 503;
-    await act(async () => send.click());
-    expect(dialog.querySelector('[role="alert"]')).not.toBeNull();
-    expect(input.value).toBe(question);
-    expect(posts).toHaveLength(0);
+    await act(async () => open!.click());
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(getQuotes(key).list).toHaveLength(0);
+    expect(getFeedState().routes["main-chat"]).toEqual({ todoId: todo.id, askedAt: at });
+    expect(storedValue(`draft:${key}`)).toBe(question);
     assistantStatus = 200;
-    await act(async () => { send.click(); send.click(); });
-    expect(posts).toHaveLength(1);
-    expect(posts[0].path).toBe("/api/v1/sessions/main-node/main-chat/messages");
+    await act(async () => { open!.click(); open!.click(); });
+    expect(posts).toHaveLength(0); // attaching a quote leaves the send to the owner
     expect(opened()).toBe("/persona/main-chat");
-    const message = posts[0].body as { text: string };
-    const split = splitQuote(message.text)!;
+    expect(getFeedState().routes["main-chat"]).toBeUndefined();
+    expect(getQuotes(key).list).toHaveLength(1);
+    expect(storedValue(`draft:${key}`)).toBe(question);
+    const split = splitQuote(withQuoteBlock(getQuotes(key).list, question))!;
     const quoted = parseQuote(split.quote);
     expect(split.rest).toBe(question);
     expect(quoted.task).toEqual({ title: todo.title, id: todo.id });
@@ -190,6 +191,17 @@ describe("a decision in the Needs you tray", () => {
       expect(row()?.querySelector("[data-decision-row]")).toBeTruthy();
     });
     expect(optionButtons().every((button) => !button.disabled)).toBe(true);
+  });
+
+  it("attaches the quote to the main starter when the current assistant has no main chat yet", async () => {
+    assistantMain = "";
+    await mount();
+    const open = [...row().querySelectorAll("button")].find((button) => button.textContent === t("assistant-decisionrow.ask_in_main_chat"))!;
+    await act(async () => open.click());
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(opened()).toBe("/");
+    expect(getQuotes("persona-new").list[0]?.task?.id).toBe(todo.id);
+    expect(posts).toHaveLength(0);
   });
 
   it("opens a legacy manual-resume option on its terminal without answering the decision", async () => {
