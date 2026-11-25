@@ -403,6 +403,9 @@ func (s *Service) supervisePlanTask(ctx context.Context, id, supervisor string, 
 		} else if s.isLeader(ctx, supervisor) || s.liveSideSupervisor(ctx, supervisor) {
 			v.SupervisorSource = "plan"
 		}
+		if t.MultiIssueReport && v.Investigation == nil {
+			v.Investigation = &investigationFindings{}
+		}
 		if t.Continues == "" {
 			v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, cleanDoneWhen(t.DoneWhen), t.ExpectMinutes
 			return true

@@ -102,7 +102,8 @@ type Supervision struct {
 	// Progress: what its agent last reported to the supervisor (report_to_supervisor, agent_control.go). A live
 	// reading kept in memory only (the next report brings it back after a restart), and apart from UpdatedAt, which
 	// names the review a task waits for.
-	Progress *TaskProgress `json:"progress,omitempty"`
+	Progress      *TaskProgress          `json:"progress,omitempty"`
+	Investigation *investigationFindings `json:"investigation_findings,omitempty"`
 }
 
 // assigned records a current ownership decision, rather than a pre-policy legacy ledger.
@@ -265,6 +266,7 @@ func (v *Supervision) clone() *Supervision {
 		at := *v.CardlessToldAt
 		out.CardlessToldAt = &at
 	}
+	out.Investigation = v.Investigation.clone()
 	out.Parked = out.parked()
 	return &out
 }
@@ -326,6 +328,10 @@ func supervisionFromRow(r db.TodoSupervisionRow) *Supervision {
 		PendingSince: r.PendingSince, CardlessToldAt: r.CardlessToldAt, UpdatedAt: r.UpdatedAt}
 	_ = json.Unmarshal(r.Reviews, &v.Reviews)
 	v.StalledReworkRounds = v.stalledReworkRounds()
+	if len(r.InvestigationFindings) != 0 {
+		v.Investigation = &investigationFindings{}
+		_ = json.Unmarshal(r.InvestigationFindings, v.Investigation)
+	}
 	if len(r.AutoReview) > 0 {
 		var a AutoReview
 		if json.Unmarshal(r.AutoReview, &a) == nil {
@@ -406,14 +412,17 @@ func (v *Supervision) applyReworkAccounting(kind string) (round, stalled int) {
 
 func (v *Supervision) row(todoID string) db.TodoSupervisionRow {
 	raw, _ := json.Marshal(v.Reviews)
-	var auto, waits json.RawMessage
+	var auto, waits, investigation json.RawMessage
 	if v.AutoReview != nil {
 		auto, _ = json.Marshal(v.AutoReview)
 	}
 	if v.Waits != nil {
 		waits, _ = json.Marshal(v.Waits)
 	}
-	return db.TodoSupervisionRow{TodoID: todoID, Supervisor: v.Supervisor, SupervisorSource: v.SupervisorSource, DoneWhen: v.DoneWhen, Criteria: v.Criteria, ExpectMinutes: v.ExpectMinutes,
+	if v.Investigation != nil {
+		investigation, _ = json.Marshal(v.Investigation)
+	}
+	return db.TodoSupervisionRow{TodoID: todoID, InvestigationFindings: investigation, Supervisor: v.Supervisor, SupervisorSource: v.SupervisorSource, DoneWhen: v.DoneWhen, Criteria: v.Criteria, ExpectMinutes: v.ExpectMinutes,
 		State: v.State, Round: v.Round, Reviews: raw, AutoReview: auto, Waits: waits, PendingSince: v.PendingSince, CardlessToldAt: v.CardlessToldAt, UpdatedAt: v.UpdatedAt}
 }
 

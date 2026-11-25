@@ -295,15 +295,23 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		f(id)
 	}
 	reopening := e.Done != nil && !*e.Done
+	s.todos.writing.Lock()
 	if reopening {
 		// Keep a concurrent ledger writer from publishing an older state over the reopened row.
 		s.supervise.writeMu.Lock()
 	}
-	s.todos.writing.Lock()
 	unlock := func() {
-		s.todos.writing.Unlock()
 		if reopening {
 			s.supervise.writeMu.Unlock()
+		}
+		s.todos.writing.Unlock()
+	}
+	if e.Done != nil && *e.Done {
+		if current, ok := s.todoNow(id); ok && current.DoneAt == nil {
+			if err := s.investigationCloseError(ctx, current); err != nil {
+				unlock()
+				return Todo{}, err
+			}
 		}
 	}
 	if links {

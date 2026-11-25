@@ -293,6 +293,18 @@ func (s *Service) supervisedWorking(ctx context.Context, t Todo) {
 	}
 	s.forgetSupervisePending(keys...)
 	b.mu.Unlock()
+	if t.Supervision != nil && t.Supervision.Investigation != nil {
+		// A new working turn needs its own declaration. Older findings remain in the ledger.
+		if _, _, err := s.updateSupervisionGuarded(ctx, t.ID, func(cur Todo) bool { return cur.DoneAt == nil }, func(v *Supervision) bool {
+			if v.Investigation == nil || v.Investigation.Stale || v.Investigation.Version == 0 {
+				return false
+			}
+			v.Investigation.Stale = true
+			return true
+		}); err != nil {
+			s.logf("task %s: invalidate investigation review: %v", t.ID, err)
+		}
+	}
 	if st := t.Supervision.state(t); st != reviewPending && st != reviewParked && st != reviewTimedOut && st != reviewClosing && (t.Supervision == nil || t.Supervision.Waits == nil) {
 		return
 	}
