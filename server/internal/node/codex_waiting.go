@@ -390,15 +390,9 @@ func (n *Node) newCodexThreads(w *codexWait, held codexHeld) []newThread {
 	if r, err := filepath.EvalSymlinks(w.cwd); err == nil {
 		resolved = r
 	}
-	homes := []string{n.codexHome()}
-	for _, h := range n.codexInventory().Homes {
-		if h != homes[0] {
-			homes = append(homes, h)
-		}
-	}
 	var out []newThread
 	seen := map[string]bool{}
-	for _, home := range homes {
+	for _, home := range n.codexRolloutHomes(w.pane) {
 		for _, r := range rollouts(home) {
 			if r.sub || (r.cwd != w.cwd && r.cwd != resolved) || r.mtime.Before(w.began.Add(-time.Second)) {
 				continue
