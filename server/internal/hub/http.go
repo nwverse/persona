@@ -1703,22 +1703,23 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 
 func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 	var msg struct {
-		Type       string          `json:"type"`
-		MachineID  string          `json:"machine_id"`
-		SessionID  string          `json:"session_id"`
-		SinceSeq   int             `json:"since_seq"`
-		LazyImages bool            `json:"lazy_images"`
-		FoldWork   bool            `json:"fold_work"`
-		DeviceName string          `json:"device_name"`
-		DeviceID   string          `json:"device_id"` // register_phone / register_desktop: the app's id for pushes
-		Platform   string          `json:"platform"`
-		Simulator  bool            `json:"simulator"`
-		Tools      []proto.Tool    `json:"tools"`
-		CallID     string          `json:"call_id"`
-		Content    []proto.Content `json:"content"`
-		IsError    bool            `json:"is_error"`
-		Epoch      string          `json:"epoch"`
-		AfterSeq   int             `json:"after_seq"`
+		Type          string          `json:"type"`
+		MachineID     string          `json:"machine_id"`
+		SessionID     string          `json:"session_id"`
+		InteractionID string          `json:"interaction_id"`
+		SinceSeq      int             `json:"since_seq"`
+		LazyImages    bool            `json:"lazy_images"`
+		FoldWork      bool            `json:"fold_work"`
+		DeviceName    string          `json:"device_name"`
+		DeviceID      string          `json:"device_id"` // register_phone / register_desktop: the app's id for pushes
+		Platform      string          `json:"platform"`
+		Simulator     bool            `json:"simulator"`
+		Tools         []proto.Tool    `json:"tools"`
+		CallID        string          `json:"call_id"`
+		Content       []proto.Content `json:"content"`
+		IsError       bool            `json:"is_error"`
+		Epoch         string          `json:"epoch"`
+		AfterSeq      int             `json:"after_seq"`
 		// terminal_subscribe, terminal_input: the grid the app drives the terminal at (docs/integrations/terminal.md)
 		Control  *termCtl `json:"control"`
 		Takeover bool     `json:"takeover"`
@@ -1893,6 +1894,10 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 	case "seen":
 		if m := h.localMachine(msg.MachineID); m != nil && msg.SessionID != "" {
 			h.markSeen(m.cfg.ID, msg.SessionID)
+		}
+	case "interaction_seen":
+		if c.role == roleFull && !c.runtimeCLI && msg.InteractionID != "" {
+			h.markInteractionSeen(msg.InteractionID)
 		}
 	case "tool_result":
 		if c.role != roleFull {
