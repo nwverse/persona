@@ -3,7 +3,7 @@
 <persona-supervision level="triage" />
 
 1. 任务「修登录崩溃」（todo_1，signal=escalated）：负责它的 leader 对话判断要用户决定，它的 Agent 在等的卡片已经发给用户（要推到远端分支，需要你同意）
-   验收标准：未记录
+   验收标准见待办，需要时用 todo_get 取原文
    leader 推荐：允许
    - 卡片 interaction_id=ix_2（machine=box，权限，session_id=e5f6a7b8）：
      允许运行 Bash：git push
