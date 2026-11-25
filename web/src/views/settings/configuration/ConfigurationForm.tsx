@@ -12,7 +12,7 @@
 // option replaces the old one locally (the wire value stays an array), so a replacement never shows two chosen or a
 // too-many error. Drafts stay through any failure or conflict. One write at a time, and a conflict or an uncertain write
 // needs Reload first.
-import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { formatList, t } from "../../../i18n";
 import { ConfigurationController, draftValue, type FieldState, type FormState, type Problem } from "../../../lib/configuration/controller";
 import { ERROR_CODES, fieldValue, sameValue, scalarLength, type ConfigurationField, type ConfigurationSource, type FieldValue, type KnownField } from "../../../lib/configuration/contract";
@@ -32,7 +32,7 @@ export function problemText(p: Problem): string {
 }
 
 /** The form for `source`. A source with another `key` is another resource: the form starts over for it. */
-export function ConfigurationForm({ source, guidance }: { source: ConfigurationSource; guidance?: ConfigurationGuidance }) {
+export function ConfigurationForm({ source, guidance, headingBadge }: { source: ConfigurationSource; guidance?: ConfigurationGuidance; headingBadge?: ReactNode }) {
   const [ctl, setCtl] = useState<ConfigurationController | null>(null);
   useEffect(() => {
     const c = new ConfigurationController(source, guidance);
@@ -44,7 +44,7 @@ export function ConfigurationForm({ source, guidance }: { source: ConfigurationS
   }, [source.key]);
   useLayoutEffect(() => ctl?.setGuidance(guidance), [ctl, guidance]);
   if (!ctl || ctl.source.key !== source.key) return <FormLoading />;
-  return <Form ctl={ctl} />;
+  return <Form ctl={ctl} headingBadge={headingBadge} />;
 }
 
 function FormLoading() {
@@ -57,7 +57,7 @@ function FormLoading() {
   );
 }
 
-function Form({ ctl }: { ctl: ConfigurationController }) {
+function Form({ ctl, headingBadge }: { ctl: ConfigurationController; headingBadge?: ReactNode }) {
   const s = useSyncExternalStore(ctl.subscribe, ctl.snapshot);
   const heading = useRef<HTMLHeadingElement>(null);
   const previouslyConfirming = useRef(false);
@@ -81,7 +81,10 @@ function Form({ ctl }: { ctl: ConfigurationController }) {
   return (
     <section aria-label={doc.title} data-configuration={doc.id}>
       <div className="mb-1.5 px-1">
-        <h2 ref={heading} tabIndex={-1} className="text-label font-medium text-ink-3">{doc.title}</h2>
+        <div className="flex items-center gap-2">
+          <h2 ref={heading} tabIndex={-1} className="text-label font-medium text-ink-3">{doc.title}</h2>
+          {headingBadge}
+        </div>
         {doc.description && <p className="mt-0.5 text-submeta leading-relaxed text-ink-3">{doc.description}</p>}
         <Notes notes={ctl.guidance?.notes} />
       </div>

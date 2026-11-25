@@ -3224,6 +3224,11 @@ item states its own scope, then one configuration form per module. Where a featu
 the page (never navigating away, so nothing open behind it, such as a chat's unsent draft, is unmounted) instead of a
 second switch, so there is one place to change it.
 
+The Labs reminder (#15802) helps people who want to try a feature find it in Settings. The main sidebar's Settings
+entry and the Settings category list put a still accent dot beside their existing labels when an experiment is available,
+off and unseen. The labels include the reminder for screen readers. The dots clear on opening the Labs category. Each new
+card keeps a small `Pill` beside its heading for that visit, using the existing experiment description.
+
 Admit a temporary trial of a real feature or a choice between the stable and new implementations of one capability.
 Keep the stable default and a lossless rollback, with a linked tracking issue for graduation or removal. Put shipped
 module switches in General › Optional features using the same configuration form. Keep other lasting preferences,
