@@ -83,6 +83,7 @@
   "scope_todos_read": "View to-dos",
   "scope_todos_write": "Create and edit to-dos and link chats to them (no deletion)",
   "scope_tasks_schedule": "Schedule pending tasks onto computers (constraints and metadata only; no task prompts or hidden spaces)",
+  "scope_agents_archive_idle": "Archive and close long-idle coding-agent sessions with audit logging (never working, main, direction-lead, open-todo, or waiting-card sessions)",
   "scope_decisions_raise": "Ask you for decisions and read or withdraw its own requests",
   "scope_leaders_read": "View directions and what they report",
   "scope_leaders_write": "Create directions and report their progress",

@@ -397,6 +397,20 @@ order hello, machines, counts, then session lists; TestBroadcastTypes, `test_doc
 guard pass, apart from `TestHubAnswersOnlyItsOwnRoutes`, which already fails on main (#9485) and is compared with
 `origin/main`.
 
+*Landed (#15893):* the relay (`hub/counts_view.go`): the hub keeps each manager's last view on its bus connection,
+compacted and checked only for its object, `epoch`, `rev` and bound, and sends it to full-role apps that ask, at connect
+between `machines` and the session lists, after a `client_hello` that names the feature, and as `view: null` when the
+connection ends; relays and connect-time sends share `h.mu`, so an app never gets a manager's view after a newer one.
+`spec/fixtures/counts/views.json` writes D13's cases as given, one transport event (`arrived`, `arrivedEmpty`,
+`wentOffline`, `restarted`, `leftRoster`, `signedOut`) and then, with its section in the fixtures' README;
+`TestTheHubReplaysTheRestartCases` replays its restart cases through the hub, and `test_wire_schema.py` holds each of
+its views to the schema. What differs, and why: the hub feature is appended from `proto/features_counts.go`, the proto
+feature seam (`docs/server/architecture.md` "Registering a domain's entries"), which heads features()' static list, so
+it is listed always and no line of `hub/extensions_link.go` changes; the roster carries the `counts_view` flag and not
+the view, so a client has one source of views, the WebSocket, and the roster read every `managers` push asks for does
+not grow by up to 16 KB per manager, which also leaves no view on the roster to keep from scoped, answer-only and
+extension tokens; the mock domain module waits for step 8, the first step that draws a view and screenshots it.
+
 **8. Android reads `agents_needs_you`.** *Change:* ShellCounts and the switcher's agents share read the view, with the
 overlay and the frozen fallback, and the switcher adds its Persona-conversation part by today's rule (section 3.3 item
 7), so a Persona conversation's card stays on it; HubManagers.kt decodes the generated type. Step 3's Android mark
