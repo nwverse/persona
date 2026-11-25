@@ -229,17 +229,18 @@ func (s *Service) modelProfileOwnChange(p *modelProfileProposal, lang i18n.Lang)
 	if len(p.changed) == 0 {
 		return &ownChange{summary: i18n.T(lang, "assistant-settings_tool.model_profile_unchanged", i18n.Args{"profile": p.id})}
 	}
-	return &ownChange{applyChecksProposal: true, cardText: func(l i18n.Lang) string {
-		lines := make([]string, 0, len(p.changed)+2)
-		for _, field := range p.changed {
-			lines = append(lines, modelProfileCardChange(l, p.id, field, p.before, p.after))
-		}
-		if p.capture {
-			lines = append(lines, i18n.T(l, "assistant-settings_tool.model_profile_capture_note"))
-		}
-		lines = append(lines, i18n.T(l, "assistant-settings_tool.model_profile_save_only"))
-		return strings.Join(lines, "\n")
-	}, apply: func(ctx context.Context) (string, error) { return s.applyModelProfileProposal(ctx, p) }}
+	return &ownChange{applyChecksProposal: true, revision: &p.revision, modelProfileWrite: true,
+		profileAfter: map[string]ModelProfile{p.id: cloneModelProfile(p.after)}, cardText: func(l i18n.Lang) string {
+			lines := make([]string, 0, len(p.changed)+2)
+			for _, field := range p.changed {
+				lines = append(lines, modelProfileCardChange(l, p.id, field, p.before, p.after))
+			}
+			if p.capture {
+				lines = append(lines, i18n.T(l, "assistant-settings_tool.model_profile_capture_note"))
+			}
+			lines = append(lines, i18n.T(l, "assistant-settings_tool.model_profile_save_only"))
+			return strings.Join(lines, "\n")
+		}, apply: func(ctx context.Context) (string, error) { return s.applyModelProfileProposal(ctx, p) }}
 }
 
 func (s *Service) applyModelProfileProposal(ctx context.Context, p *modelProfileProposal) (string, error) {
