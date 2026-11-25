@@ -2,7 +2,8 @@
 // categories are in the left sidebar and /settings is "General"; phone width, /settings is the list (as on iOS), a category is
 // /settings?tab=… pushed over it, and Back goes back to the list. An item's page (an extension, a channel, a connector) is
 // pushed over its category's page the same way at any width, so Back steps out of it one level (#2800).
-import { enabledSettingsTabs, registeredModules } from "../../core/module-host";
+import { registeredModules } from "../../core/module-host";
+import { enabledSettingsTabs } from "../../core/module-settings";
 import { t } from "../../i18n";
 import { settingsTab } from "../../lib/channels";
 import type { IconName } from "../../ui/icons";
