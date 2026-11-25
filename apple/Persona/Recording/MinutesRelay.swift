@@ -57,7 +57,8 @@ import WatchConnectivity
         let meetings = candidates()
         for entry in meetings where known[entry.id]?.state != .ready && RecordingSync.shared.status(entry) == .synced {
             guard let answer = try? await RecordingMinutesModel.fetch(entry.id, api) else { continue }
-            known[entry.id] = Self.short(entry, minutes: answer.detail.minutes, status: answer.detail.meta?.state)
+            known[entry.id] = Self.short(entry, minutes: answer.detail.minutes, status: answer.detail.meta?.state,
+                                         paused: answer.detail.paused)
             // Held back while the hub's recording module is off (#15214): not worth asking again every three minutes.
             if answer.detail.paused?.isModuleOff == true { paused.insert(entry.id) } else { paused.remove(entry.id) }
         }
@@ -86,14 +87,32 @@ import WatchConnectivity
     }
 
     /// The watch's short version of one meeting.
-    nonisolated static func short(_ entry: RecordingEntry, minutes: RecordingMinutes?, status: String?) -> WatchMinutes.Meeting {
+    nonisolated static func short(_ entry: RecordingEntry, minutes: RecordingMinutes?, status: String?,
+                                  paused: RecordingPause? = nil) -> WatchMinutes.Meeting {
         let ready = minutes.map { !$0.isEmpty || status == "ready" } ?? false
         return WatchMinutes.meeting(id: entry.id, title: entry.displayTitle, date: entry.createdAt,
-                                    minutes: ready ? minutes : nil, failed: status == "failed")
+                                    minutes: ready ? minutes : nil, failed: status == "failed", paused: paused)
+    }
+
+    /// One meeting as the watch gets it (#15214): minutes still being written are marked paused while this phone's hub
+    /// has its recording module off, whatever the hub said (a recording that never reached the hub has no answer of its
+    /// own), so the watch reads Paused, not Writing, for ever. With the module on the meeting goes as it is.
+    nonisolated static func relayed(_ meeting: WatchMinutes.Meeting, recording: RecordingAllowance) -> WatchMinutes.Meeting {
+        guard recording == .off, meeting.state == .writing, meeting.paused == nil else { return meeting }
+        var meeting = meeting
+        meeting.paused = .moduleOff
+        return meeting
+    }
+
+    /// The hub's recording module went on or off (`RecordingModule.tellWatch`): the meetings go again, marked or not.
+    func recordingChanged() {
+        guard started, watchListens else { return }
+        push(candidates())
     }
 
     private func push(_ meetings: [RecordingEntry]) {
-        let list = meetings.map { known[$0.id] ?? Self.short($0, minutes: nil, status: nil) }
+        let recording = RecordingModule.allowance
+        let list = meetings.map { Self.relayed(known[$0.id] ?? Self.short($0, minutes: nil, status: nil), recording: recording) }
         WatchSync.shared.push(minutes: WatchMinutes(meetings: list))
     }
 
