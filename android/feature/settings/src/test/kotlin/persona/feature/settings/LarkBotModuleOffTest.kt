@@ -324,10 +324,13 @@ class LarkBotModuleOffShotsTest {
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
         var scene by mutableStateOf(Scene.ChannelsOn)
+        var fontScale by mutableStateOf(1f)
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
-                CompositionLocalProvider(LocalHubFeatures provides scene.features) {
-                    key(style, dark, scene) {
+                val density = androidx.compose.ui.platform.LocalDensity.current
+                CompositionLocalProvider(LocalHubFeatures provides scene.features,
+                    androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(density.density, fontScale)) {
+                    key(style, dark, scene, fontScale) {
                         Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
                             SettingsScreen(services(RecordingChannels(), RecordingBot()), initialPage = scene.page, onBack = {})
                         }
@@ -348,6 +351,12 @@ class LarkBotModuleOffShotsTest {
             File(out(), "lark-$name-$language-${s.name.lowercase()}-${if (d) "dark" else "light"}.png").outputStream()
                 .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         }
+        // The line at the largest text size: it wraps and is not cut off.
+        style = AppStyle.Glass; dark = false; scene = Scene.BotOff; fontScale = 2f
+        rule.waitUntil(5_000) { rule.onAllNodesWithText(offLine).fetchSemanticsNodes().isNotEmpty() }
+        rule.waitForIdle()
+        File(out(), "lark-bot-off-$language-glass-light-font2.png").outputStream()
+            .use { rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
     @Config(sdk = [35], qualifiers = "en-w400dp-h900dp-xhdpi") @Test fun english() = shots("en")
