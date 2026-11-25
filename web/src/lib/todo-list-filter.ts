@@ -18,10 +18,12 @@ export const TODO_KIND_FILTERS: readonly TodoKindFilter[] = ["all", "todos", "ta
 export const isTodoListFilter = (v: unknown): v is TodoListFilter => TODO_LIST_FILTERS.includes(v as TodoListFilter);
 export const isTodoListSort = (v: unknown): v is TodoListSort => TODO_LIST_SORTS.includes(v as TodoListSort);
 
-/** Whether a to-do is an Agent / supervised task rather than a personal to-do (#14642).
- *  Explicit `audience` (#14619) wins when set; otherwise falls back to legacy task signals
- *  (linked agents, supervision, assistant conversation origin, plan/brief, or failed agent start). */
-export function isAgentTask(todo: Pick<Todo, "audience" | "agents" | "supervision" | "origin" | "plan_id" | "brief" | "start_error">): boolean {
+/** Whether a to-do is an Agent / supervised task rather than a personal to-do (#14642, #15758).
+ *  Server-derived `item_type` wins when set, then explicit `audience` (#14619); otherwise falls back
+ *  to legacy task signals (linked agents, supervision, assistant conversation origin, plan/brief, or failed agent start). */
+export function isAgentTask(todo: Pick<Todo, "item_type" | "audience" | "agents" | "supervision" | "origin" | "plan_id" | "brief" | "start_error">): boolean {
+  if (todo.item_type === "task") return true;
+  if (todo.item_type === "personal") return false;
   if (todo.audience === "autonomous") return true;
   if (todo.audience === "human") return false;
   return Boolean(
