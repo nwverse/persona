@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -358,4 +360,381 @@ func TestLarkSyncBackfillSenderNamesIdempotentAndScoped(t *testing.T) {
 	if rowsAfter, _ := w.store.LarkSyncOutboxAfter(ctx, db.LarkSyncChat, 4, 10); len(rowsAfter) != 0 {
 		t.Fatalf("unexpected extra outbox rows after idempotent rerun: %d", len(rowsAfter))
 	}
+}
+
+// Missing contact access may occur only in legacy sender repair, after the main sync has already committed.
+// It must reach settings health without losing progress; a renewed grant lets the scheduler retry the pending
+// repair without a manual run or cursor reset, including when the first attempt resolved only some names.
+func TestLarkSyncSenderRepairRetriesAfterReauthorization(t *testing.T) {
+	for _, tc := range []struct{ partialNames, completed bool }{{false, false}, {true, false}, {false, true}} {
+		t.Run(fmt.Sprintf("partial_names=%v/completed=%v", tc.partialNames, tc.completed), func(t *testing.T) {
+			w := newLarkWorld(t)
+			ctx := context.Background()
+			w.addSyncBot(t, "bsync", "cli_sync", larksyncwire.TierFull)
+			key, acc := w.adopt(t, "bsync", "ou_owner", "access-old", "refresh-old", 24*time.Hour)
+			if _, err := w.h.larkSyncChange(ctx, func(st *larkSyncState) error {
+				st.binding(key).Tier = larksyncwire.TierFull
+				if tc.completed {
+					st.binding(key).BackfillVersion = larkSyncBackfillVersion
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			batch := connector.ChatBatch{
+				Chat: kbwire.SourceChat{ID: "oc_example", Name: "Example group", Kind: "group"},
+				Messages: []kbwire.SourceMessage{
+					{ID: "om_one", SenderID: "ou_one", At: w.now().Add(-time.Hour), Text: "example one"},
+					{ID: "om_two", SenderID: "ou_two", At: w.now().Add(-time.Minute), Text: "example two"},
+				},
+			}
+			raw, err := json.Marshal(batch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := w.store.CommitLarkSyncRun(ctx, key, map[string]string{"im:oc_example": "100"}, nil,
+				[]db.LarkSyncOutbox{{Kind: db.LarkSyncChat, CanonicalKey: "chat:oc_example", Payload: raw}}); err != nil {
+				t.Fatal(err)
+			}
+			var calls atomic.Int32
+			var granted atomic.Bool
+			w.mu.Lock()
+			w.resolveNames = func(_ context.Context, _ larksyncwire.Binding, _ func(context.Context) (string, error), ids []string) (map[string]string, error) {
+				calls.Add(1)
+				if !granted.Load() {
+					names := map[string]string{}
+					if tc.partialNames {
+						names["ou_one"] = "Example One"
+					}
+					return names, &larksyncwire.Error{Kind: larksyncwire.ErrKindScope, Msg: "contact:contact.base:readonly required"}
+				}
+				out := map[string]string{}
+				for _, id := range ids {
+					out[id] = "Example " + id
+				}
+				return out, nil
+			}
+			w.mu.Unlock()
+			w.script("bsync", acc, func(_ context.Context, _ larksyncwire.Binding, _ func(context.Context) (string, error), _ map[string]string, _ larksyncwire.Index) (larksyncwire.Result, error) {
+				res := larksyncwire.Result{Cursors: map[string]string{"im:oc_example": "200"}}
+				if tc.completed && !granted.Load() {
+					res.Errors = []larksyncwire.ResourceError{{Resource: "sender_names", Kind: larksyncwire.ErrKindScope, Detail: "contact:contact.base:readonly required"}}
+				}
+				return res, nil
+			})
+			if err := w.h.larkSyncRunMode(ctx, key, larksyncwire.ModeIM); err != nil {
+				t.Fatal(err)
+			}
+			b := w.binding(t, key)
+			if b.Health != larksyncwire.HealthScopeMissing || b.BackfillVersion != 0 || !strings.Contains(b.LastError, "contact:contact.base:readonly") {
+				t.Fatalf("repair refusal not exposed or incorrectly completed: health=%s version=%d error=%s", b.Health, b.BackfillVersion, b.LastError)
+			}
+			if got := w.store.cursorsOf(key)["im:oc_example"]; got != "200" {
+				t.Fatalf("readable sync progress lost: cursor=%s", got)
+			}
+			// Simulate the authorization callback with a newly expanded grant. No real account is contacted.
+			w.advance(time.Minute)
+			st, err := w.h.larkSyncLoad(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			app, err := w.h.larkSyncApp(ctx, &st, "bsync")
+			if err != nil {
+				t.Fatal(err)
+			}
+			granted.Store(true)
+			_, err = w.h.larkSyncAdopt(ctx, "bsync", larkSyncPendingKey("bsync"), larksyncwire.TierFull, app, larksyncwire.Token{
+				AccessToken: "access-new", RefreshToken: "refresh-new", OpenID: "ou_owner", TenantKey: "t1",
+				ExpiresAt: w.now().Add(24 * time.Hour), Scopes: larksyncwire.ScopesFor(larksyncwire.TierFull),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if b = w.binding(t, key); b.BackfillVersion != 0 || !b.NextRunAt.Equal(w.now()) || !b.NextIMRunAt.Equal(w.now()) {
+				t.Fatal("authorization did not preserve pending repair and make both schedules due")
+			}
+			w.h.larkSyncTick(ctx)
+			wantCalls := int32(2)
+			if tc.completed {
+				wantCalls = 1
+			}
+			if b = w.binding(t, key); b.Health != larksyncwire.HealthOK || b.BackfillVersion != larkSyncBackfillVersion || calls.Load() != wantCalls {
+				t.Fatalf("scheduler did not recover repair: health=%s version=%d calls=%d", b.Health, b.BackfillVersion, calls.Load())
+			}
+			rows, err := w.store.LarkSyncOutboxAfter(ctx, db.LarkSyncChat, 1, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			repaired := map[string]bool{}
+			for _, row := range rows {
+				var cb connector.ChatBatch
+				if err := json.Unmarshal(row.Payload, &cb); err != nil {
+					t.Fatal(err)
+				}
+				for _, m := range cb.Messages {
+					if m.SenderName != "" {
+						repaired[m.ID] = true
+					}
+				}
+			}
+			if len(repaired) != 2 {
+				t.Fatalf("repair did not deliver both sender names: %v", repaired)
+			}
+			w.advance(larkSyncIMEvery)
+			w.h.larkSyncTick(ctx)
+			if calls.Load() != wantCalls {
+				t.Fatal("completed repair was not idempotent")
+			}
+		})
+	}
+}
+
+func TestLarkSyncOldRunCannotPostponeRenewedGrant(t *testing.T) {
+	w := newLarkWorld(t)
+	ctx := context.Background()
+	w.addSyncBot(t, "bsync", "cli_sync", larksyncwire.TierFull)
+	key, acc := w.adopt(t, "bsync", "ou_owner", "example-old", "example-refresh", 24*time.Hour)
+	started, resume := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	w.script("bsync", acc, func(_ context.Context, _ larksyncwire.Binding, _ func(context.Context) (string, error), _ map[string]string, _ larksyncwire.Index) (larksyncwire.Result, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-resume
+			return larksyncwire.Result{Errors: []larksyncwire.ResourceError{{Resource: "sender_names", Kind: larksyncwire.ErrKindScope}}}, nil
+		}
+		return larksyncwire.Result{}, nil
+	})
+	done := make(chan error, 1)
+	go func() { done <- w.h.larkSyncRun(ctx, key) }()
+	t.Cleanup(func() {
+		select {
+		case <-resume:
+		default:
+			close(resume)
+		}
+	})
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old run did not start")
+	}
+	w.advance(time.Minute)
+	w.adopt(t, "bsync", "ou_owner", "example-new", "example-new-refresh", 24*time.Hour)
+	close(resume)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("old run did not finish")
+	}
+	b := w.binding(t, key)
+	if b.Health != larksyncwire.HealthOK || !b.NextRunAt.Equal(w.now()) || b.BackfillVersion != 0 {
+		t.Fatalf("old run overwrote renewed grant: health=%s due=%v repair=%d", b.Health, b.NextRunAt, b.BackfillVersion)
+	}
+	w.h.larkSyncTick(ctx)
+	if calls.Load() != 2 {
+		t.Fatal("renewed grant did not automatically run on the next tick")
+	}
+}
+
+// One-time dropped-links remediation scans already-synced chat outbox messages owned by a binding, skips links whose
+// document already has body content in lark_sync_index (or a synced wiki alias with body content in the doc outbox),
+// skips other bindings' messages, merges missing links into PendingLinksCursor without duplicating already-queued
+// tokens, passes AuthorizedAt/GrantedScopes to the Syncer, sets LinksBackfillVersion, and is idempotent on reruns.
+func TestLarkSyncBackfillDroppedLinksIdempotentAndScoped(t *testing.T) {
+	w := newLarkWorld(t)
+	ctx := context.Background()
+
+	w.addSyncBot(t, "bsyncA", "cli_a", larksyncwire.TierFull)
+	w.addSyncBot(t, "bsyncB", "cli_b", larksyncwire.TierFull)
+	keyA, accA := w.adopt(t, "bsyncA", "ou_owner_a", "acc-a", "ref-a", 24*time.Hour)
+	keyB, _ := w.adopt(t, "bsyncB", "ou_owner_b", "acc-b", "ref-b", 24*time.Hour)
+	if _, err := w.h.larkSyncChange(ctx, func(st *larkSyncState) error {
+		st.binding(keyA).Tier = larksyncwire.TierFull
+		st.binding(keyA).BackfillVersion = larkSyncBackfillVersion // isolate dropped-links remediation
+		st.binding(keyB).Tier = larksyncwire.TierFull
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	seedChat := func(cb connector.ChatBatch) db.LarkSyncOutbox {
+		raw, err := json.Marshal(cb)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return db.LarkSyncOutbox{Kind: db.LarkSyncChat, CanonicalKey: "chat:" + cb.Chat.ID, Payload: raw}
+	}
+	seedDoc := func(it kbwire.Item) db.LarkSyncOutbox {
+		raw, err := json.Marshal(it)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return db.LarkSyncOutbox{Kind: db.LarkSyncDoc, CanonicalKey: it.CanonicalKey, Payload: raw}
+	}
+	at := w.now().Add(-2 * time.Hour)
+	if err := w.store.CommitLarkSyncRun(ctx, keyA, map[string]string{
+		larksyncwire.PendingLinksCursor: `["doxAlreadyQueued"]`,
+	}, []larksyncwire.IndexRecord{
+		{Key: larksyncwire.KeyMessage + "om_a1", Kind: "message", Sources: []larksyncwire.SourceRef{{Binding: keyA, Entry: larksyncwire.EntryChat}}},
+		{Key: larksyncwire.KeyMessage + "om_b1", Kind: "message", Sources: []larksyncwire.SourceRef{{Binding: keyB, Entry: larksyncwire.EntryChat}}},
+		{Key: larksyncwire.KeyDoc + "doxFetched", Kind: "doc", Revision: 3, BodyHash: "body-hash-1"},
+		{Key: larksyncwire.KeyDoc + "doxStub", Kind: "doc", Revision: 0, BodyHash: ""},
+	}, []db.LarkSyncOutbox{
+		seedChat(connector.ChatBatch{
+			Chat: kbwire.SourceChat{ID: "oc_1", Name: "Example Group", Kind: "group"},
+			Messages: []kbwire.SourceMessage{
+				{
+					ID: "om_a1", SenderID: "ou_peer", SenderName: "Peer", At: at,
+					Text: "https://my.feishu.cn/docx/doxFetched " +
+						"https://my.feishu.cn/docx/doxStub " +
+						"https://my.feishu.cn/docx/doxDropped " +
+						"https://my.feishu.cn/wiki/wikFetched " +
+						"https://my.feishu.cn/wiki/wikDropped " +
+						"https://my.feishu.cn/docx/doxAlreadyQueued",
+				},
+				{
+					ID: "om_b1", SenderID: "ou_other", SenderName: "Other", At: at.Add(time.Minute),
+					Text: "https://my.feishu.cn/docx/doxOtherTenant",
+				},
+			},
+		}),
+		seedDoc(kbwire.Item{
+			Kind:         "docs",
+			CanonicalKey: larksyncwire.KeyDoc + "doxFromWikFetched",
+			Aliases:      []string{"wikFetched"},
+			Revision:     2,
+			BodyHash:     "wiki-body-hash",
+			Content:      "already synced wiki doc",
+		}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var extractCalls, mergeCalls atomic.Int32
+	w.mu.Lock()
+	w.extractDocLinks = func(text string) []larksyncwire.PendingLinkCandidate {
+		extractCalls.Add(1)
+		var out []larksyncwire.PendingLinkCandidate
+		for _, field := range splitSpaces(text) {
+			switch {
+			case hasPrefix(field, "https://my.feishu.cn/docx/"):
+				tok := field[len("https://my.feishu.cn/docx/"):]
+				out = append(out, larksyncwire.PendingLinkCandidate{Token: tok, ObjType: "docx", URL: field})
+			case hasPrefix(field, "https://my.feishu.cn/wiki/"):
+				tok := field[len("https://my.feishu.cn/wiki/"):]
+				out = append(out, larksyncwire.PendingLinkCandidate{Token: tok, ObjType: "wiki", URL: field})
+			}
+		}
+		return out
+	}
+	w.mergePendingLinks = func(existingCursor string, add []larksyncwire.PendingLinkCandidate) (string, int) {
+		mergeCalls.Add(1)
+		var list []string
+		_ = json.Unmarshal([]byte(existingCursor), &list)
+		have := map[string]bool{}
+		for _, tok := range list {
+			have[tok] = true
+		}
+		added := 0
+		for _, c := range add {
+			if have[c.Token] {
+				continue
+			}
+			have[c.Token] = true
+			list = append(list, c.Token)
+			added++
+		}
+		if added == 0 {
+			return existingCursor, 0
+		}
+		slices.Sort(list)
+		raw, _ := json.Marshal(list)
+		return string(raw), added
+	}
+	w.mu.Unlock()
+
+	var seenCursor string
+	var seenAuthAt time.Time
+	var seenScopes []string
+	w.script("bsyncA", accA, func(_ context.Context, b larksyncwire.Binding, _ func(context.Context) (string, error), cursors map[string]string, _ larksyncwire.Index) (larksyncwire.Result, error) {
+		seenCursor = cursors[larksyncwire.PendingLinksCursor]
+		seenAuthAt = b.AuthorizedAt
+		seenScopes = slices.Clone(b.GrantedScopes)
+		return larksyncwire.Result{}, nil
+	})
+
+	// Run 1: remediates missing links (doxDropped, doxStub, wikDropped), skipping doxFetched, wikFetched,
+	// doxAlreadyQueued (no duplicate), and binding B's doxOtherTenant.
+	if err := w.h.larkSyncRunMode(ctx, keyA, larksyncwire.ModeIM); err != nil {
+		t.Fatal(err)
+	}
+	if seenAuthAt.IsZero() || len(seenScopes) == 0 {
+		t.Fatalf("binding auth metadata not passed to Syncer: AuthorizedAt=%v Scopes=%v", seenAuthAt, seenScopes)
+	}
+	wantQueue := `["doxAlreadyQueued","doxDropped","doxStub","wikDropped"]`
+	if seenCursor != wantQueue {
+		t.Fatalf("run 1 received links_queue = %s, want %s", seenCursor, wantQueue)
+	}
+	if got := w.store.cursorsOf(keyA)[larksyncwire.PendingLinksCursor]; got != wantQueue {
+		t.Fatalf("persisted links_queue = %s, want %s", got, wantQueue)
+	}
+	if got := w.binding(t, keyA).LinksBackfillVersion; got != larkSyncLinksBackfillVersion {
+		t.Fatalf("LinksBackfillVersion = %d, want %d", got, larkSyncLinksBackfillVersion)
+	}
+	extractAfterRun1 := extractCalls.Load()
+	mergeAfterRun1 := mergeCalls.Load()
+
+	// Run 2: LinksBackfillVersion already set -> skips remediation completely.
+	if err := w.h.larkSyncRunMode(ctx, keyA, larksyncwire.ModeIM); err != nil {
+		t.Fatal(err)
+	}
+	if extractCalls.Load() != extractAfterRun1 || mergeCalls.Load() != mergeAfterRun1 {
+		t.Fatalf("run 2 re-ran remediation despite LinksBackfillVersion=%d", larkSyncLinksBackfillVersion)
+	}
+
+	// Run 3: even if LinksBackfillVersion is manually reset to 0 after doxDropped is indexed with body content,
+	// remediation is completely idempotent (zero duplicates added, queue unchanged).
+	if err := w.store.CommitLarkSyncRun(ctx, keyA, nil, []larksyncwire.IndexRecord{
+		{Key: larksyncwire.KeyDoc + "doxDropped", Kind: "doc", Revision: 1, BodyHash: "now-has-body"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.h.larkSyncChange(ctx, func(st *larkSyncState) error {
+		st.binding(keyA).LinksBackfillVersion = 0
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.h.larkSyncRunMode(ctx, keyA, larksyncwire.ModeIM); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.store.cursorsOf(keyA)[larksyncwire.PendingLinksCursor]; got != wantQueue {
+		t.Fatalf("after idempotent reset rerun: links_queue = %s, want %s", got, wantQueue)
+	}
+}
+
+func splitSpaces(s string) []string {
+	var out []string
+	cur := ""
+	for i := 0; i < len(s); i++ {
+		if s[i] == ' ' || s[i] == '\n' || s[i] == '\t' {
+			if cur != "" {
+				out = append(out, cur)
+				cur = ""
+			}
+			continue
+		}
+		cur += string(s[i])
+	}
+	if cur != "" {
+		out = append(out, cur)
+	}
+	return out
+}
+
+func hasPrefix(s, p string) bool {
+	return len(s) >= len(p) && s[:len(p)] == p
 }

@@ -138,6 +138,31 @@ func TestUserInputPositionsKeepsAutomationInItsOwnExchange(t *testing.T) {
 	}
 }
 
+func TestCompactInputIndexAndPreviewsShareLegacyClassification(t *testing.T) {
+	items := []proto.Item{
+		{ID: "question#0", Seq: 1, Role: "user", Kind: proto.KindText, Text: "Question"},
+		{ID: "reply#0", Seq: 2, Role: "assistant", Kind: proto.KindText, Text: "**Visible** reply"},
+		{ID: "pictures#0", Seq: 3, Role: "user", Kind: proto.KindImage},
+		{ID: "pictures#1", Seq: 3, Role: "user", Kind: proto.KindImage},
+		{ID: "loop#0", Seq: 4, Role: "user", Kind: proto.KindText, Text: "[Image #1] /loop daily"},
+		{ID: "unrelated#0", Seq: 5, Role: "assistant", Kind: proto.KindText, Text: "Scheduled reply"},
+	}
+	var compact CompactInputIndex
+	compact.Add(items[4:]) // A runtime reads newest pages first and keeps siblings together.
+	compact.Add(items[:4])
+	got := compact.Index("fixture")
+	want := []proto.UserInputPosition{{ID: "question#0", Seq: 1}, {ID: "pictures#0", Seq: 3}}
+	if got.Total != len(want) || got.History != "fixture" || !reflect.DeepEqual(got.Inputs, want) {
+		t.Fatalf("compact index: %+v", got)
+	}
+	previews := UserInputPreviewsFor(items, []proto.UserInputRef{
+		{ID: "pictures#0", Seq: 3}, {ID: "question#0", Seq: 1}, {ID: "question#0", Seq: 5},
+	})
+	if legacy := UserInputPositions(items); !reflect.DeepEqual(previews, legacy) {
+		t.Fatalf("previews %+v, legacy %+v", previews, legacy)
+	}
+}
+
 func TestUserInputsIncludesColdCompactedHistoryAndRewrite(t *testing.T) {
 	old := windowBytes
 	windowBytes = 512
@@ -165,12 +190,45 @@ func TestUserInputsIncludesColdCompactedHistoryAndRewrite(t *testing.T) {
 	if got := len(UserInputPositions(initial)); got != 2 {
 		t.Fatalf("tail inputs = %d", got)
 	}
+	coldBase := f.base
+	if coldBase <= 10 {
+		t.Fatalf("fixture unexpectedly warm: %d", coldBase)
+	}
+	// A fresh node can seek an old position before it has served a full index or any earlier page.
+	previews, err := f.InputPreviews(t.Context(), proto.InputPreviewRequest{Positions: []proto.UserInputRef{
+		{ID: "input-001#0", Seq: 1}, {ID: "input-002#0", Seq: 3}, {ID: "stale#0", Seq: 4},
+	}, BeforeSeq: 4})
+	wantPreviews := []proto.UserInputPosition{
+		{ID: "input-001#0", Seq: 1, Preview: "Synthetic input 001.", Answer: "Synthetic answer 001."},
+		{ID: "input-002#0", Seq: 3, Preview: "Synthetic input 002."},
+	}
+	if err != nil || !reflect.DeepEqual(previews.Inputs, wantPreviews) {
+		t.Fatalf("bounded cold previews %+v, %v", previews, err)
+	}
+	window, err := f.ItemsWindow(t.Context(), proto.ItemsWindowRequest{FromSeq: 3, ThroughSeq: 5})
+	if err != nil || window.FromSeq != 2 || window.ToSeq != 5 || !window.HasMore || !window.MoreAfter ||
+		len(window.Items) != 3 || window.Items[0].ID != "input-002#0" || window.History != previews.History {
+		t.Fatalf("detached cold window %+v, %v", window, err)
+	}
+	compact, err := f.CompactUserInputs(t.Context(), 0)
+	if err != nil || compact.Total != 36 || f.base != coldBase {
+		t.Fatalf("compact count %d backed the file up from %d to %d, error %v", compact.Total, coldBase, f.base, err)
+	}
+	compactFrozen, err := f.CompactUserInputs(t.Context(), 4)
+	if err != nil || compactFrozen.Total != 2 || compactFrozen.Inputs[1] != wantPreviews[1].WithoutExcerpts() {
+		t.Fatalf("exclusive compact bound: %+v, %v", compactFrozen, err)
+	}
 	index, err := f.UserInputs(context.Background(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if index.Total != 36 || len(index.Inputs) != 36 || index.Inputs[0].ID != "input-001#0" {
 		t.Fatalf("index %+v", index)
+	}
+	for i, it := range index.Inputs {
+		if compact.History != index.History || compact.Inputs[i] != it.WithoutExcerpts() {
+			t.Fatalf("compact position %d differs from legacy: %+v vs %+v", i, compact.Inputs[i], it)
+		}
 	}
 	if first, last := index.Inputs[0], index.Inputs[35]; first.Preview != "Synthetic input 001." || first.Answer != "Synthetic answer 001." ||
 		last.Preview != "Synthetic input 036." || last.Answer != "Synthetic answer 036." {

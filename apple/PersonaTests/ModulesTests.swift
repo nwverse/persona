@@ -168,6 +168,35 @@ struct ModulesTests {
         }
     }
 
+    // Recording (#15214): not a packaged module on Apple yet, so the registry lists none; its allowance is read from the
+    // same hub answer by the same rule, and follows each hello.
+    @Test func recordingFollowsItsHubFlag() {
+        #expect(RecordingModule.descriptor.feature == "module.recording")
+        withDefaults { d in
+            let s = ModuleState(group: "home", defaults: d, isEnabled: { $0.descriptor.id == "voice" })
+            @MainActor func allowance() -> RecordingAllowance { RecordingAllowance(hub: s.registry.hub) }
+            #expect(allowance() == .on, "nothing heard yet")
+            s.heard(["file_upload"], from: "home", isHub: true, defaults: d)
+            #expect(allowance() == .on, "an older hub leaves it on")
+            s.heard(["modules", "module.recording"], from: "home", isHub: true, defaults: d)
+            #expect(allowance() == .on)
+            s.heard(["modules", "module.voice"], from: "home", isHub: true, defaults: d)
+            #expect(allowance() == .off)
+            #expect(s.registry.offByHub.isEmpty, "recording is no listed module: voice stays on, and nothing else is turned off")
+            #expect(s.registry.isActive("voice"))
+            s.heard(["modules", "module.voice", "module.recording"], from: "home", isHub: true, defaults: d)
+            #expect(allowance() == .on, "back on with the flag")
+            // Another hub's hello changes nothing until that hub is the one followed.
+            s.heard(["modules"], from: "work", isHub: false, defaults: d)
+            #expect(allowance() == .on)
+            s.follow("work", features: [], defaults: d)
+            #expect(allowance() == .off)
+            // The remembered answer, before the next launch's hello.
+            #expect(RecordingAllowance(hub: HubModuleMemory.remembered("work", in: d)) == .off)
+            #expect(RecordingAllowance(hub: HubModuleMemory.remembered("home", in: d)) == .on)
+        }
+    }
+
     @Test func glassesAreGatedByTheirHubFlag() {
         #expect(GlassesModule().descriptor.feature == "module.glasses")
     }
