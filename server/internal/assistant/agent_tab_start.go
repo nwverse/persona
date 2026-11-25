@@ -20,6 +20,18 @@ func agentTabNameStart(machine string, c proto.Session, requested, nameFrom stri
 	}
 }
 
+// Budgets for the detached start-naming job (#15674). Unlike the synchronous agents.tab_name and
+// autoname callers, this goroutine blocks no start, so its model budget can cover a cold CLI
+// launcher plus the first reasoning turn, which regularly passes tabName's eight-second cap. Both
+// stay finite so a stuck model cannot leak the goroutine; tests compress these vars.
+var (
+	// agentTitleAsyncTimeout bounds only the agent.title model call.
+	agentTitleAsyncTimeout = 30 * time.Second
+	// agentTabLaterTimeout bounds the whole job: the model call, delayed tab identity resolution and
+	// the guarded rename, leaving headroom after a model answer that spends the model budget.
+	agentTabLaterTimeout = 45 * time.Second
+)
+
 // nameAgentTabLater finishes a start's model naming off its caller's path. A start with no usable session/tab identity
 // is left to the ordinary background naming pass rather than guessing which session or user-chosen label to replace.
 func (s *Service) nameAgentTabLater(p assistantwire.AgentTabNameStart) {
@@ -36,9 +48,9 @@ func (s *Service) nameAgentTabLater(p assistantwire.AgentTabNameStart) {
 	b.mu.Unlock()
 	go func() {
 		defer b.runs.Done()
-		ctx, cancel := context.WithTimeout(s.runCtx(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(s.runCtx(), agentTabLaterTimeout)
 		defer cancel()
-		name := s.tabName(ctx, p.NameFrom)
+		name := s.tabNameWithTimeout(ctx, p.NameFrom, agentTitleAsyncTimeout)
 		if name == "" || name == p.ExpectedTabName {
 			return
 		}

@@ -22,8 +22,10 @@ var planTools = map[string]bool{claudeDesktopPlan: true, "TodoWrite": true, "Tas
 
 // PlanMarkers are the bytes a line calling a plan tool contains, for readers that skip the other lines. A call's
 // result line does not name its tool: such readers also take the lines holding Meta.PlanPending's ids.
+// `update_plan"` matches Claude Desktop's mcp__ccd_turn__update_plan as well as Codex's update_plan and
+// functions.update_plan without expanding the node's Aho-Corasick marker table.
 var PlanMarkers = [][]byte{[]byte(`"name":"TodoWrite"`), []byte(`"name":"TaskCreate"`), []byte(`"name":"TaskUpdate"`),
-	[]byte(`"name":"TaskList"`), []byte(`"name":"` + claudeDesktopPlan + `"`)}
+	[]byte(`"name":"TaskList"`), []byte(`update_plan"`), []byte(`"plan_update"`)}
 
 // planCurrentLen (runes): the step in progress is one line on a task card and in the snapshot.
 const planCurrentLen = 120
@@ -154,6 +156,9 @@ func (m *Meta) pendingIDs() {
 	m.planPending = nil // a new slice: a copy of the Meta may hold the old one
 	for id := range m.planUses {
 		m.planPending = append(m.planPending, []byte(id))
+	}
+	for _, call := range m.codexPlanCalls {
+		m.planPending = append(m.planPending, []byte(call.id))
 	}
 }
 

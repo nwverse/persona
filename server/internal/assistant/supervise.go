@@ -666,13 +666,10 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 		}
 	}
 	for _, c := range agents {
-		if c.State != proto.StateWorking {
+		if c.State != proto.StateWorking || aliveBackgroundWork(c, now) {
 			continue
 		}
-		moved := c.UpdatedAt
-		if c.ActivityAt != nil && c.ActivityAt.After(moved) {
-			moved = *c.ActivityAt
-		}
+		moved := stalledSessionMoved(c)
 		if still := now.Sub(moved); !moved.IsZero() && still >= stallAfter(v.ExpectMinutes) {
 			return "卡住 " + humanDuration(still), 2
 		}
