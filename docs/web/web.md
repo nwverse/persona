@@ -2457,10 +2457,13 @@ modules are registered before any address is routed. Importing the list loads no
 **When a module is there.** A module is *on* when the hub serves it and this browser has not switched it off. The hub
 flag rule is the same on every client (agreed on #13844; `MODULES_FEATURE` and `moduleFeature` in `module-host.ts` are
 the one place the names live): a module's `feature` is `module.<id>`; a hub that publishes module flags also announces
-the marker `modules`; a module with a `feature` is off only when the hello has `modules` and lacks its flag. Before the
-hello, and with an older hub whose hello has no `modules`, every module is on, so defaults never change and nothing
-waits on the hello to draw; a later hello that adds or drops the flag turns it on or off at once. Otherwise it is *off*,
-and an off module is absent:
+the marker `modules`; a module with a `feature` is off only when the hello has `modules` and lacks its flag. Each hub's
+last module flags are remembered per hub (`localStorage` `persona.modules.hub:<origin><base>`, written only when they
+change, removed when a hello lacks `modules` or on sign-out, #14431): on a reload, before the new hello arrives, the host
+uses that remembered answer, so a module the hub switched off is never drawn and its chunk is never fetched while
+waiting for the hello. A hub never seen before, and an older hub whose hello has no `modules`, keep every module on so
+defaults never change and nothing waits on the hello to draw; a later hello that adds or drops a flag turns it on or off
+at once. Otherwise it is *off*, and an off module is absent:
 
 - no sidebar entry, and no switch it could have left behind (the start page falls back as for a removed page);
 - its addresses route as unknown ones (`not-found`), aliases included;

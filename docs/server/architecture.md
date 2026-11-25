@@ -729,7 +729,7 @@ stated above; #15088 lists the ones known.
 | `core-test-package` | a core's and the kit's tests are black-box | the package |
 | `core-hook` | a declared domain or seam package has the `rules_test.go` hook | fails at once |
 | `seam-exported-field` | a seam exports no field or variable | the package |
-| `seam-any` | a seam's exported signatures take no untyped value | the package |
+| `seam-any` | a seam's exported function and method signatures, including interface methods, and its exported non-struct port types carry only typed values | the package |
 | `out-dot-import` | no dot import of a core or the kit | the core |
 | `out-alias` | no alias of a core's or the kit's type | the core |
 | `out-literal` | no literal of a core's or the kit's type outside it, tests and the zero literal included | the core |

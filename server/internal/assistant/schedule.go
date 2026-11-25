@@ -3544,15 +3544,18 @@ func (s *Service) deleteTaskRoute(w http.ResponseWriter, r *http.Request) {
 	apierr.WriteJSON(w, map[string]any{"ok": true})
 }
 
-// runTaskRoute is "Run now": the task runs now; a one-off is then done, a repeating one keeps its schedule.
-func (s *Service) runTaskRoute(w http.ResponseWriter, r *http.Request) {
-	now := time.Now()
-	sc, err := s.lockedSchedule(r.Context())
+// errTaskNotFound is returned by runTaskNow when no scheduled task has the given id.
+var errTaskNotFound = i18n.Err("assistant-schedule.gone")
+
+// runTaskNow starts scheduled task id immediately at now: a one-off is marked done, a repeating task keeps its
+// schedule. Returns errScheduleUnavailable / errScheduleSave on storage failure, errTaskNotFound when id is missing,
+// or errTaskBusy when the task's last run is still active.
+func (s *Service) runTaskNow(ctx context.Context, id string, now time.Time) (proto.Session, error) {
+	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
-		apierr.Write(w, http.StatusServiceUnavailable, err)
-		return
+		return proto.Session{}, err
 	}
-	i := sc.indexLocked(r.PathValue("id"))
+	i := sc.indexLocked(id)
 	var t Task
 	if i >= 0 {
 		t = sc.tasks[i]
@@ -3565,22 +3568,31 @@ func (s *Service) runTaskRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.saveLocked(sc, tasks); err != nil {
 			sc.mu.Unlock()
-			apierr.Write(w, http.StatusServiceUnavailable, err)
-			return
+			return proto.Session{}, err
 		}
 	}
 	sc.mu.Unlock()
 	if i < 0 {
-		apierr.Write(w, http.StatusNotFound, i18n.Err("assistant-schedule.gone"))
-		return
+		return proto.Session{}, errTaskNotFound
 	}
 	s.broadcastSchedule()
-	sess, err := s.runTask(t, now, now, true, false)
-	if errors.Is(err, errTaskBusy) {
+	return s.runTask(t, now, now, true, false)
+}
+
+// runTaskRoute is "Run now": the task runs now; a one-off is then done, a repeating one keeps its schedule.
+func (s *Service) runTaskRoute(w http.ResponseWriter, r *http.Request) {
+	sess, err := s.runTaskNow(r.Context(), r.PathValue("id"), time.Now())
+	switch {
+	case errors.Is(err, errScheduleUnavailable), errors.Is(err, errScheduleSave):
+		apierr.Write(w, http.StatusServiceUnavailable, err)
+		return
+	case errors.Is(err, errTaskNotFound):
+		apierr.Write(w, http.StatusNotFound, err)
+		return
+	case errors.Is(err, errTaskBusy):
 		apierr.Write(w, http.StatusConflict, i18n.Err("assistant-schedule.busy_wait"))
 		return
-	}
-	if err != nil {
+	case err != nil:
 		apierr.Call(w, err)
 		return
 	}
