@@ -247,7 +247,7 @@ describe("itemCoalescer coherency across page commits, replays, reads, rewrites,
     items([said(9, "Buffered before empty replay")], 8);
     expect(tr.items.map((i) => i.id)).not.toContain("a9#0");
     vi.advanceTimersByTime(5);
-    act(() => listener!.items!({ items: [], has_more: true } as ItemsEvent));
+    act(() => listener!.items!({ machine_id: "macbook", session_id: "a1f3c2d4-0000-4000-8000-000000000001", items: [], from_seq: 9, to_seq: 9, has_more: true }));
     await act(async () => void vi.advanceTimersByTime(100));
     expect(tr.items.find((i) => i.id === "a9#0")?.text).toBe("Buffered before empty replay");
   });
