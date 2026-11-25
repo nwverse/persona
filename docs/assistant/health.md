@@ -317,7 +317,7 @@ The original rule from #4329 (implemented in #4385) resumed the latest health ch
 
 | Client | Where |
 | --- | --- |
-| Web | `/health` stays on the home; `/health/new` remains an alias for it. `HealthPage` / `Health` and the header buttons `HealthChatActions` are in `modules/health/Health.tsx`. Tests: `entry.test.ts`, `Health.conversation.test.tsx` |
+| Web | `/health` stays on the home; `/health/new` remains an alias for it. `HealthPage` / `Health` and the header buttons `HealthChatActions` are in `modules/health/Health.tsx`. With the module off, the same `/health…` and `/tracks/health…` addresses open the default-panel read-only archive for existing conversations, reports and memory. Tests: `entry.test.ts`, `Health.conversation.test.tsx`, `HealthReadOnly.test.tsx` |
 | iOS (iPhone and iPad) | the sidebar's **Health** opens the home, with all open health conversations listed newest first. `AssistantView.enterHealth()` synchronously returns to the root and presents the home; the embedded Sidebar layout selects Health as its page root. Entry does not wait for the conversation list. **New Chat** in a health conversation still returns to the home (`HealthModel.newOpensHealth`); the first message in its composer starts a new health conversation. `-openAssistantPage health` / `-openShellPage health` still open the home. Tests: `HealthModelTests`, `HealthEntryUITests`, the Health upload case in `TreeSwapFoldTests` |
 | Android | the assistant sidebar's **Health** opens the home immediately (`AssistantScreen.openHealth`); `HealthEntry.history` keeps its chat list ordered. See "Android entry point" below |
 

@@ -75,6 +75,29 @@ class ModuleRegistryTest {
         assertEquals(listOf(plain, gated), registry.active(setOf("modules", "module.knowledge-ui")))
     }
 
+    /** The hub's Lark module (#15995): the same rule under its own flag, apart from the Lark extension's `lark`. */
+    @Test fun theHubsLarkModuleFollowsTheSameRule() {
+        assertEquals("lark", HubModule.Lark.id)
+        assertEquals("module.lark", HubModule.Lark.feature)
+        // No hello yet, demo mode and an older hub without the marker: on.
+        assertTrue(ModuleRegistry.isActive(HubModule.Lark, emptySet()))
+        assertTrue(ModuleRegistry.isActive(HubModule.Lark, setOf("extensions", "lark", "lark_attachments")))
+        // A flag without the marker changes nothing, and neither does its absence.
+        assertTrue(ModuleRegistry.isActive(HubModule.Lark, setOf("module.lark")))
+        assertTrue(ModuleRegistry.isActive(HubModule.Lark, setOf("module.recording")))
+        // A hub that publishes module flags: on with its flag, off without it, whatever the other modules are.
+        assertTrue(ModuleRegistry.isActive(HubModule.Lark, setOf("modules", "module.lark")))
+        assertFalse(ModuleRegistry.isActive(HubModule.Lark, setOf("modules")))
+        assertFalse(ModuleRegistry.isActive(HubModule.Lark, setOf("modules", "module.recording", "module.voice")))
+        // The Lark extension's own feature is not the module's flag: `lark` neither turns the module on nor off.
+        assertFalse(ModuleRegistry.isActive(HubModule.Lark, setOf("modules", "lark", "lark_moments")))
+        assertTrue(ModuleRegistry.isActive(HubModule.Lark, setOf("modules", "module.lark")))
+        // Each hub module answers for itself.
+        assertTrue(ModuleRegistry.isActive(HubModule.Recording, setOf("modules", "module.recording")))
+        assertFalse(ModuleRegistry.isActive(HubModule.Recording, setOf("modules", "module.lark")))
+        assertEquals(listOf(HubModule.Recording, HubModule.Lark), HubModule.entries)
+    }
+
     @Test fun aFlagWithoutTheMarkerChangesNothing() {
         assertEquals(listOf(plain, gated), registry.active(setOf("module.voice")))
     }

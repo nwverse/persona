@@ -126421,6 +126421,30 @@
         }
       }
     },
+    "Off on this hub": {
+      "comment": "the watch face's Record complication, second line, while the hub's recording module is off; very short",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off on this hub"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このhubではオフ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 hub 已关闭"
+          }
+        }
+      }
+    },
     "Off, scroll sideways": {
       "localizations": {
         "en": {
@@ -237472,6 +237496,29 @@
         }
       }
     },
+    "Drop an image here" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drop an image here"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画像をここにドロップ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将图片拖放到此处"
+          }
+        }
+      }
+    },
     "Edit Avatar" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -237560,6 +237607,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "現在の画像のままにする"
+          }
+        }
+      }
+    },
+    "Makes an avatar from an image of your own, or drop an image here" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Makes an avatar from an image of your own, or drop an image here"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自分の画像からアバターを作成するか、画像をここにドロップします"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用你自己的图片制作形象，或将图片拖放到此处"
           }
         }
       }
