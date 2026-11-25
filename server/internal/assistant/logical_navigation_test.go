@@ -8,7 +8,6 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
-	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 func TestLogicalNavigationProjectsCompactIndexAndScopedPreviews(t *testing.T) {
@@ -206,9 +205,9 @@ func TestLogicalNavigationRejectsChangedHistoryWithoutRetry(t *testing.T) {
 				}
 				return proto.ItemsWindow{History: "replaced", FromSeq: 2, ToSeq: 4, Items: []proto.Item{}}, nil
 			})
-			p := any(proto.InputPreviewRequest{SessionID: wireids.SessionID(c.SessionID), History: c.History, Positions: []proto.UserInputRef{{ID: "first", Seq: 3}}})
+			p := any(proto.InputPreviewRequest{SessionID: proto.NavigationSessionID(c.SessionID), History: c.History, Positions: []proto.UserInputRef{{ID: "first", Seq: 3}}})
 			if method == proto.MethodSessionItemsWindow {
-				p = proto.ItemsWindowRequest{SessionID: wireids.SessionID(c.SessionID), FromSeq: 3, ThroughSeq: 4, History: c.History}
+				p = proto.ItemsWindowRequest{SessionID: proto.NavigationSessionID(c.SessionID), FromSeq: 3, ThroughSeq: 4, History: c.History}
 			}
 			b, _ := json.Marshal(p)
 			for range 2 {

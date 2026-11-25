@@ -10,7 +10,6 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
-	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 func invalidNavigation(ctx context.Context) error {
@@ -27,7 +26,7 @@ func (s *Service) logicalInputPreviews(ctx context.Context, st logicalConversati
 	}
 	out := proto.InputPreviews{History: c.History, Inputs: []proto.UserInputPosition{}}
 	for _, seg := range visibleSegments(c) {
-		scoped := proto.InputPreviewRequest{SessionID: wireids.SessionID(seg.SessionID)}
+		scoped := proto.InputPreviewRequest{SessionID: proto.NavigationSessionID(seg.SessionID)}
 		if seg.FrozenEnd != nil {
 			scoped.BeforeSeq = *seg.FrozenEnd + 1
 		}
@@ -86,7 +85,7 @@ func (s *Service) logicalItemsWindow(ctx context.Context, st logicalConversation
 	haveCoverage, hasGap := false, false
 	var knownEnd int
 	for _, seg := range visibleSegments(c) {
-		scoped := proto.ItemsWindowRequest{SessionID: wireids.SessionID(seg.SessionID),
+		scoped := proto.ItemsWindowRequest{SessionID: proto.NavigationSessionID(seg.SessionID),
 			FromSeq: max(1, p.FromSeq-seg.Offset), ThroughSeq: p.ThroughSeq - seg.Offset}
 		if seg.FrozenEnd != nil {
 			end, err := seg.Seq(*seg.FrozenEnd)

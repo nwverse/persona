@@ -3,8 +3,6 @@ package proto
 import (
 	"math"
 	"unicode/utf8"
-
-	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 const (
@@ -25,6 +23,9 @@ const (
 
 // UserInputItemID is the opaque item identity carried by a navigation position.
 type UserInputItemID string
+
+// NavigationSessionID identifies the session that owns a navigation request.
+type NavigationSessionID string
 
 // UserInputRef identifies a particular input, including inputs sharing a source line.
 type UserInputRef struct {
@@ -58,10 +59,10 @@ type UserInputIndex struct {
 
 // InputPreviewRequest reads exact positions in a source. BeforeSeq is the exclusive end of a frozen segment.
 type InputPreviewRequest struct {
-	SessionID wireids.SessionID `json:"session_id"`
-	Positions []UserInputRef    `json:"positions"`
-	BeforeSeq int               `json:"before_seq,omitempty"`
-	History   string            `json:"history,omitempty"`
+	SessionID NavigationSessionID `json:"session_id"`
+	Positions []UserInputRef      `json:"positions"`
+	BeforeSeq int                 `json:"before_seq,omitempty"`
+	History   string              `json:"history,omitempty"`
 }
 
 func (p InputPreviewRequest) Valid() bool {
@@ -112,11 +113,11 @@ func (p InputPreviews) Matches(request InputPreviewRequest) bool {
 
 // ItemsWindowRequest describes a closed source-line interval without walking from the newest page.
 type ItemsWindowRequest struct {
-	SessionID  wireids.SessionID `json:"session_id"`
-	FromSeq    int               `json:"from_seq"`
-	ThroughSeq int               `json:"through_seq"`
-	BeforeSeq  int               `json:"before_seq,omitempty"` // frozen end plus one, including for runtime history probes
-	History    string            `json:"history,omitempty"`
+	SessionID  NavigationSessionID `json:"session_id"`
+	FromSeq    int                 `json:"from_seq"`
+	ThroughSeq int                 `json:"through_seq"`
+	BeforeSeq  int                 `json:"before_seq,omitempty"` // frozen end plus one, including for runtime history probes
+	History    string              `json:"history,omitempty"`
 }
 
 func (p ItemsWindowRequest) Valid() bool {

@@ -12,7 +12,6 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
-	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // sessionNavigation handles targeted views on the same authorized path as ordinary transcript pages.
@@ -45,7 +44,7 @@ func (h *Hub) sessionNavigation(w http.ResponseWriter, r *http.Request, m *Machi
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	w.Header().Set("Cache-Control", "no-store")
-	session := wireids.SessionID(r.PathValue("sid"))
+	session := proto.NavigationSessionID(r.PathValue("sid"))
 	if preview {
 		p := proto.InputPreviewRequest{SessionID: session, History: history}
 		if len(q["preview"]) > proto.MaxInputPreviews {
