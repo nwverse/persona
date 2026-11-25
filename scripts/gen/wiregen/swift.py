@@ -92,7 +92,7 @@ def gen_swift(defs: dict[str, Def], header: list[str] | None = None, prefix: str
             return ".null"
         if d.kind == "enum":
             return '.unknown("")' if d.closed else '""'
-        if d.kind == "id":
+        if d.kind in ("id", "text"):
             return f'{swift_name(t.ref)}("")'
         if d.kind == "union":
             raise SchemaError(f"a required field of union type {t.ref}: not in the subset")
@@ -210,7 +210,7 @@ def gen_swift(defs: dict[str, Def], header: list[str] | None = None, prefix: str
 
     def id_type(d: Def) -> list[str]:
         name = swift_name(d.name)
-        lines = comment("/// ", d.doc or f"{d.name}: an ID.")
+        lines = comment("/// ", d.doc or f"{d.name}: {'a label (free text, not a closed set)' if d.kind == 'text' else 'an ID'}.")
         lines += ["/// It encodes as the bare string.",
                   f"public nonisolated struct {name}: RawRepresentable, Codable, Hashable, Sendable, CustomStringConvertible {{",
                   "    public let rawValue: String", "",
@@ -226,7 +226,7 @@ def gen_swift(defs: dict[str, Def], header: list[str] | None = None, prefix: str
     for d in defs.values():
         if d.kind == "enum" and d.closed:
             out += closed_enum(d)
-        elif d.kind == "id":
+        elif d.kind in ("id", "text"):
             out += id_type(d)
         elif d.kind == "opaque":
             out += comment("/// ", " ".join(x for x in (d.doc, f"Opaque JSON: {sentence(d.reason)}") if x))

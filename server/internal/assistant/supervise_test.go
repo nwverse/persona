@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -141,6 +142,60 @@ func TestWatchSignals(t *testing.T) {
 	b := watchSignals(Todo{ID: "t", Supervision: sup}, []proto.Session{waiting(4 * time.Minute)}, now.Add(time.Minute))
 	if a[0].Key != b[0].Key || a[0].Minutes != 4 || b[0].Minutes != 5 {
 		t.Fatalf("the same wait: %+v / %+v", a[0], b[0])
+	}
+}
+
+func TestWatchSignalsIgnoresAliveBackgroundWork(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-2 * time.Hour)
+	fresh := now.Add(-2 * time.Minute)
+	future := now.Add(10 * time.Minute)
+	todo := Todo{ID: "t", Supervision: &Supervision{Supervisor: "main"}}
+	base := proto.Session{
+		MachineID: "box", SessionID: "s1", Status: proto.StatusDone, State: proto.StateWorking,
+		BackgroundWorking: true, UpdatedAt: old,
+	}
+	for _, tc := range []struct {
+		name      string
+		edit      func(*proto.Session)
+		wantStall bool
+	}{
+		{"running workflow", func(c *proto.Session) {
+			c.Workflows = []proto.Workflow{{RunID: "wf_1", TaskID: "w1", Status: proto.WorkflowRunning, Running: true, Phase: "Verify", AgentsDone: 4, StartedAt: old, UpdatedAt: fresh}}
+		}, false},
+		{"running subagent", func(c *proto.Session) {
+			c.Subagents = []proto.Subagent{{ID: "sub1", Running: true, StartedAt: old, UpdatedAt: fresh}}
+		}, false},
+		{"active background shell", func(c *proto.Session) {
+			c.Status = proto.StatusWorking
+			c.Background = []proto.BackgroundTask{{ID: "sh1", Kind: "shell", StartedAt: old}}
+		}, false},
+		{"unexpired monitor", func(c *proto.Session) {
+			c.Background = []proto.BackgroundTask{{ID: "m1", Kind: "monitor", StartedAt: old, ExpiresAt: &future}}
+		}, false},
+		{"stalled workflow", func(c *proto.Session) {
+			c.Status = proto.StatusWorking
+			c.Workflows = []proto.Workflow{{RunID: "wf_dead", TaskID: "w2", Status: proto.WorkflowStalled, Running: false, StartedAt: old, UpdatedAt: old}}
+		}, true},
+		{"waiting background shell", func(c *proto.Session) {
+			c.Status = proto.StatusWorking
+			c.BackgroundWaiting = true
+			c.Background = []proto.BackgroundTask{{ID: "sh2", Kind: "shell", StartedAt: old}}
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := base
+			tc.edit(&c)
+			sigs := watchSignals(todo, []proto.Session{c}, now)
+			gotStall := slices.ContainsFunc(sigs, func(g superviseSignal) bool { return g.Kind == sigStalled })
+			if gotStall != tc.wantStall {
+				t.Fatalf("watchSignals = %+v, stalled=%v want %v", sigs, gotStall, tc.wantStall)
+			}
+			label, _ := taskHealth(todo, []proto.Session{c}, now)
+			if !tc.wantStall && strings.HasPrefix(label, "卡住") {
+				t.Fatalf("taskHealth flagged alive background work as stuck: %q", label)
+			}
+		})
 	}
 }
 

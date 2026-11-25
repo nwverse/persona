@@ -343,15 +343,14 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	}
 	// Supervisors orchestrate on the owner's behalf (decision rights, 2026-11-23): a plan from the main conversation or
 	// a direction lead is the supervisor's own release, so it starts at once, read-only or writable, whether or not the
-	// owner asked for it in so many words (user_requested only records where the work came from). It waits for the
-	// owner's Start only when a task needs them: a request gate, a track that confirms every hand-off (health), or a
-	// task that spends money, speaks outward as the owner or takes an irreversible step they have not agreed to
-	// (owner_step). Also in a lead a hand-over of the owner's quoted words went into (#11699): words handed to the wrong
-	// lead start work in the wrong place, which is reversible and its supervisor's to set right, none of the six. Not in a
-	// scheduled round, where "the user asked for this" is only the model's word. An ordinary conversation's plan is not
-	// its supervisor's release: as before.
-	orchestrates := scope == nil && (s.isLeader(ctx, sessionID) || (s.isMainOn(ctx, machine, sessionID) && !s.mainPlansWait)) &&
-		!s.inScheduledTurn(ctx, machine, sessionID)
+	// owner asked for it in so many words (user_requested only records where the work came from). This holds in
+	// scheduled follow-up and check-in rounds in that supervisor's own conversation too (user_requested is still cleared
+	// above). It waits for the owner's Start only when a task needs them: a request gate, a track that confirms every
+	// hand-off (health), or a task that spends money, speaks outward as the owner or takes an irreversible step they
+	// have not agreed to (owner_step). Also in a lead a hand-over of the owner's quoted words went into (#11699): words
+	// handed to the wrong lead start work in the wrong place, which is reversible and its supervisor's to set right, none
+	// of the six. Ordinary conversations and standalone scheduled tasks are not a supervisor's release: as before.
+	orchestrates := scope == nil && (s.isLeader(ctx, sessionID) || (s.isMainOn(ctx, machine, sessionID) && !s.mainPlansWait))
 	// A plan from a conversation hands its prompts to agents outside it (scene 3): what it says, titles first (they are
 	// what its push shows), decides once whether it waits for "Start" and what its push says (health.go). A leader's
 	// workers (scope) need no decision.
