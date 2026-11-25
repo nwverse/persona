@@ -359,7 +359,7 @@ func (n *Node) setModelAndModes(ctx context.Context, id, model, mode, effort str
 			return false, n.codexDesktopModes(ctx, id, src, model, mode, effort)
 		}
 		// A Codex in a pane on the terminal route: Codex's own /model, typed into its box (codex_terminal_modes.go).
-		if t, why, ok := n.codexOnTerminal(id); ok {
+		if t, why, ok := n.codexOnTerminalCtx(ctx, id, true); ok {
 			if err := n.switchingRefusal(id); err != nil {
 				return false, err
 			}

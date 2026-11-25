@@ -12527,6 +12527,40 @@
         }
       }
     },
+    "%lld side sessions have new replies": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld side session has a new reply"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld side sessions have new replies"
+                }
+              }
+            }
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld件の子セッションに新しい返信があります"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld 个分支会话有新回复"
+          }
+        }
+      }
+    },
     "%lld sites": {
       "extractionState": "manual",
       "localizations": {
@@ -26073,6 +26107,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "サインイン済みでも使用"
+          }
+        }
+      }
+    },
+    "Also with new replies: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Also with new replies: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ほかにも新しい返信：%@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "另有新回复：%@"
           }
         }
       }
@@ -112970,6 +113026,28 @@
       },
       "extractionState": "manual"
     },
+    "New side reply: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New side reply: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "子セッションに新着：%@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "分支新回复：%@"
+          }
+        }
+      }
+    },
     "New space": {
       "extractionState": "manual",
       "localizations": {
@@ -132025,6 +132103,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "未解决的评审意见 · %1$lld"
+          }
+        }
+      }
+    },
+    "Open side session “%@”": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open side session “%@”"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "子セッション「%@」を開く"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开分支会话「%@」"
           }
         }
       }
@@ -169288,6 +169388,28 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Side session “%@” has a new reply": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Side session “%@” has a new reply"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "子セッション「%@」に新しい返信があります"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "分支会话「%@」有新回复"
+          }
+        }
+      }
     },
     "Side sessions started from this session show up here.": {
       "localizations": {
@@ -219195,6 +219317,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "注意：%1$@"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Warning: the typed password goes directly to every command listed above via PERSONA_SECRET. Encoded output may evade redaction.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warning: the typed password goes directly to every command listed above via PERSONA_SECRET. Encoded output may evade redaction."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "警告：入力したパスワードは PERSONA_SECRET を通じて上記の各コマンドに直接渡されます。エンコードされた出力はマスキングを回避する場合があります。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "警告：你输入的密码会通过 PERSONA_SECRET 直接传给上面列出的每一条命令。编码后的输出可能绕过脱敏。"
           }
         }
       },

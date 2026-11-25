@@ -2373,7 +2373,10 @@ final class AppModel {
     private func drainChildRefresh(_ key: SessionKey, initialAPI: APIClient) async {
         while true {
             let api = childRefreshAPIs[key] ?? initialAPI
-            await childIndex.refresh(parent: key, api: api)
+            await childIndex.refresh(parent: key, api: api) { [weak self] rows in
+                guard let self else { return rows }
+                return self.seenOutbox.landRows(rows, at: Date())
+            }
             childRowsRead(key)
             var gate = childHints[key] ?? FetchHint()
             let pending = gate.finish()
@@ -2403,6 +2406,20 @@ final class AppModel {
                 childHints[key] = gate
             }
         }
+    }
+
+    /// Reads a paged parent's folded side sessions while the Agents list names an unread side (#13524, web `HoldSides`):
+    /// shares `childIndex` and `childHints` with `refreshOpenChildren`, no timer, no-op on complete-list hubs.
+    func refreshUnreadSides(_ key: SessionKey) async {
+        guard sideFoldGroups.contains(key.group),
+              features(key.group).contains(ChildSessions.feature),
+              sessionLists.isPaged(key.group),
+              let api = api(key.group),
+              socket(key.group)?.state == .connected else { return }
+        let parent = sessionsByMachine[key.machineRef]?.first { $0.sessionID == key.sessionID } ?? session(key)
+        guard (parent?.children?.sidesUnread ?? 0) > 0 else { return }
+        if childIndex.isLoaded(key), childIndex.knownNow(key).contains(where: SideFold.isSideRow) { return }
+        await runChildRefresh(key, api: api, hint: nil, force: false)
     }
 
     private func finishChildRefresh(for key: SessionKey) {
@@ -3111,7 +3128,9 @@ final class AppModel {
     /// replaces its inside, docs/apple/ios-state.md).
     func applySessions(_ byMachine: [MachineRef: [Session]], complete: Bool = true) {
         if complete { reconcileHeldRetries(byMachine) }
-        let byMachine = seenOutbox.land(byMachine, at: Date())
+        let marksBefore = seenOutbox.marks.count
+        let byMachine = seenOutbox.land(byMachine, at: Date(), dropMissing: complete)
+        if seenOutbox.marks.count != marksBefore { seenRevision &+= 1 }
         var lists = sessionsByMachine
         var olds: [(old: [Session], new: [Session])] = []
         for (machineID, list) in byMachine {
@@ -3681,8 +3700,8 @@ final class AppModel {
         await resolve(ix, r)
     }
 
-    /// `handoffCard`: the hand-off card's own buttons answer; an approval of one from anywhere else is refused here, as
-    /// the hub would refuse it (`SecretHandoff`).
+    /// `handoffCard`: the hand-off or explicit env card's own buttons answer; an approval of one from anywhere else is
+    /// refused here, as the hub would refuse it (`SecretHandoff`, `SecretRunRequest.delivery`).
     func resolve(_ ix: Interaction, _ r: Resolution, handoffCard: Bool = false) async {
         // To the hub of the interaction's own group (docs/protocol/multi-hub.md「Connections and routing」).
         // A stopped Agent's work card still takes the answers that send it nothing: put off, or dismissed (#6839).
@@ -3692,6 +3711,11 @@ final class AppModel {
         }
         let handoff = ix.isSecretHandoff && r.allow == true
         if handoff && !handoffCard {
+            toast = Toast(String(localized: "Approve it on its card in the chat."), style: .error)
+            return
+        }
+        let env = SecretRunRequest(ix.toolInput)?.delivery == "env" && r.allow == true
+        if env && !handoffCard {
             toast = Toast(String(localized: "Approve it on its card in the chat."), style: .error)
             return
         }
@@ -3726,7 +3750,10 @@ final class AppModel {
                 Haptics.success()
                 return
             }
-            let res = try await OpRetry.untilDelivered { try await api.resolve(ix.id, r, opID: op, handoffCard: handoff) }
+            let res = try await OpRetry.untilDelivered {
+                try await api.resolve(ix.id, r, opID: op, handoffCard: (handoff || env) && handoffCard,
+                                      secretRunEnv: env && handoffCard)
+            }
             if res.already == true, let existing = res.resolution, existing.answeredBy == AssistantAnswer.assistant, ix.kind == .question {
                 // The assistant answered first: its answer shows in the chat, where the user may change it.
                 keepDelegated(ix, AssistantAnswer(answers: existing.answers ?? [:], reason: existing.reason ?? ""))
@@ -4153,10 +4180,16 @@ final class AppModel {
         }
     }
 
+    /// Bumped whenever local seen marks change so paged Unread counts update immediately (#13524).
+    private(set) var seenRevision: UInt64 = 0
+
+    func seenMark(_ key: SessionKey) -> SeenOutbox.Mark? { seenOutbox.marks[key] }
+
     /// The user looked at this session: finished work stops being "unread" (docs/protocol/agent-states.md).
     func markSeen(_ key: SessionKey) {
         sendSeen(key)
-        // Optimistic: flip the local copy right away.
+        // Optimistic: flip the local copy right away (in `sessionsByMachine`, `childIndex`, or both on paged hubs).
+        var machineChanged = false
         if var list = sessionsByMachine[key.machineRef], let i = list.firstIndex(where: { $0.sessionID == key.sessionID }),
            list[i].needsSeen() {
             if list[i].state == .unread || list[i].showsJustFinished(muted: isMuted(list[i])) {
@@ -4175,6 +4208,12 @@ final class AppModel {
             }
             list[i].markLocallySeen()
             sessionsByMachine[key.machineRef] = list
+            machineChanged = true
+        }
+        let childChanged = childIndex.markLocallySeen([key])
+        if childChanged && !machineChanged { sessionsChanged() }
+        if machineChanged || childChanged {
+            seenRevision &+= 1
             sessionLists.markSeen([key], model: self)
         }
     }
@@ -4236,6 +4275,7 @@ final class AppModel {
     /// Retire marks and their held row when their pairing is forgotten. Reconnecting keeps both.
     func forgetSeen(in groups: Set<String>? = nil) {
         seenOutbox.forget(groups: groups)
+        seenRevision &+= 1
         if let heldInList, groups?.contains(heldInList.group) ?? true {
             self.heldInList = nil
             heldJustFinished = false
@@ -4290,16 +4330,23 @@ final class AppModel {
         guard !unread.isEmpty else { return }
         for key in unread { sendSeen(key) }
         var lists = sessionsByMachine
+        var machinesChanged = false
         for (machine, keys) in Dictionary(grouping: unread, by: \.machineRef) {
             guard var list = lists[machine] else { continue }
             var remaining = Set(keys.map(\.sessionID))
             for i in list.indices {
                 if remaining.isEmpty { break }
-                if remaining.remove(list[i].sessionID) != nil { list[i].markLocallySeen() }
+                if remaining.remove(list[i].sessionID) != nil {
+                    list[i].markLocallySeen()
+                    machinesChanged = true
+                }
             }
             lists[machine] = list
         }
-        sessionsByMachine = lists
+        if machinesChanged { sessionsByMachine = lists }
+        let childrenChanged = childIndex.markLocallySeen(Set(unread))
+        if childrenChanged && !machinesChanged { sessionsChanged() }
+        seenRevision &+= 1
         sessionLists.markSeen(unread, model: self)
         Haptics.success()
     }
