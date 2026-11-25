@@ -111,3 +111,18 @@ public struct Phase: Sendable {
 
     public static func draft(_ since: Instant) -> Phase { Phase(phase: .open, since: since) }
 }
+
+/// A primitive under another name beside another field, and a static wire and an operator that hand a field out.
+public struct Label: Sendable {
+    private typealias Raw = String
+    private let raw: Raw, wakes: Instant
+
+    private init(raw: Raw, wakes: Instant) {
+        self.raw = raw
+        self.wakes = wakes
+    }
+
+    public static func wire(_ label: Label) -> Instant { label.wakes }
+
+    public static prefix func ~ (label: Label) -> Instant { label.wakes }
+}

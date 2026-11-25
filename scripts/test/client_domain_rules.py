@@ -108,10 +108,10 @@ RULES = {
         "name each requirement visit<Part>, taking domain values",
         _SWIFT_GOOD + "Sources/PersonaPlantedDomain/Item.swift (ItemVisitor)"),
     "swift-boundary": (
-        "the boundary conversion is the one way out, and an @_spi member of another shape is a second way in or out "
-        "that the symbol graph does not show",
-        "mark only `public var wire` with @_spi(Boundary) (the kit may mark an init too), and @_spi(Clock) only the "
-        "kit's init of Now",
+        "the boundary conversion is the one way out, and an @_spi member of another shape, or a static or free wire, "
+        "is a second way in or out that the symbol graph does not show",
+        "mark only an instance's `public var wire` with @_spi(Boundary) (the kit may mark an init too), and "
+        "@_spi(Clock) only the kit's init of Now; a static or free function or property is not named wire",
         _SWIFT_GOOD + "Sources/PersonaPlantedDomain/Item.swift (ItemID.wire)"),
     "swift-throws": (
         "an expected failure is a value the caller has to read, and a thrown Error is neither typed nor visited",
@@ -139,6 +139,12 @@ RULES = {
         "give the field a value type of its own, a single-field struct over the primitive made through a static parse, "
         "and write every stored property's type",
         _SWIFT_GOOD + "Sources/PersonaPlantedDomain/Item.swift (Item, ItemID)"),
+    "swift-alias": (
+        "an alias is another type under a new name, so the rules that read type names (a primitive beside other "
+        "fields, a primitive in the API, an identity type) read the old type as a new one",
+        "name the type itself, or give the concept a value type of its own: a single-field struct over the primitive "
+        "made through a static parse",
+        _SWIFT_GOOD + "Sources/PersonaPlantedDomain/Item.swift (ItemID)"),
     "swift-primitive-api": (
         "a String or Int in the public API is a concept without a type, and every caller decides on it",
         "take and return value types; raw input enters only through a static parse, and a Bool only as a computed "
@@ -238,10 +244,10 @@ RULES = {
         "name each function visit<Part>, taking domain values",
         _KOTLIN_GOOD + "domain/src/main/kotlin/persona/core/planted/domain/Item.kt (ItemVisitor)"),
     "kotlin-boundary": (
-        "the boundary conversion is the one way out, and a member of another shape behind the opt-in is a second way "
-        "in or out that the API rules do not read",
-        "mark only `fun wire()` with @DomainBoundary (the kit may mark a companion function too), and @ClockRead only "
-        "a companion function of the kit",
+        "the boundary conversion is the one way out, and a member of another shape behind the opt-in, or a companion "
+        "or top-level wire(), is a second way in or out that the API rules do not read",
+        "mark only a member `fun wire()` with @DomainBoundary (the kit may mark a companion function too), and "
+        "@ClockRead only a companion function of the kit; a companion or top-level function is not named wire",
         _KOTLIN_GOOD + "domain/src/main/kotlin/persona/core/planted/domain/Item.kt (ItemId.wire)"),
     "kotlin-generic": (
         "a type parameter carries a caller's object inside the core, where the core can neither check nor own it",
@@ -276,6 +282,12 @@ RULES = {
         "give the field a value type of its own, a class over the primitive made through companion parse, and write "
         "every stored property's type",
         _KOTLIN_GOOD + "domain/src/main/kotlin/persona/core/planted/domain/Item.kt (Item, ItemId)"),
+    "kotlin-alias": (
+        "an alias is another type under a new name, so the rules that read type names (a primitive beside other "
+        "fields, a primitive in the API, an identity class) read the old type as a new one",
+        "name the type itself, or give the concept a value type of its own: a class over the primitive made through "
+        "companion parse",
+        _KOTLIN_GOOD + "domain/src/main/kotlin/persona/core/planted/domain/Item.kt (ItemId)"),
     "kotlin-primitive-api": (
         "a String or Int in the public API is a concept without a type, and every caller decides on it",
         "take and return value types; raw input enters only through companion parse, and a Boolean only as a "
@@ -353,7 +365,11 @@ MAX_PARAMS = 4
 SWIFT_PRIMITIVES = frozenset((
     "String", "Character", "Substring", "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "Int128", "UInt", "UInt8",
     "UInt16", "UInt32", "UInt64", "UInt128", "Double", "Float", "Float16", "Float80", "CGFloat", "Decimal",
-    "TimeInterval", "Date", "UUID", "Data", "URL", "Any", "AnyObject", "AnyHashable"))
+    "TimeInterval", "Date", "UUID", "Data", "URL", "Any", "AnyObject", "AnyHashable",
+    # The standard library's own aliases of them.
+    "Float32", "Float64", "UnicodeScalar", "CBool", "CChar", "CChar16", "CChar32", "CWideChar", "CSignedChar",
+    "CUnsignedChar", "CShort", "CUnsignedShort", "CInt", "CUnsignedInt", "CLong", "CUnsignedLong", "CLongLong",
+    "CUnsignedLongLong", "CFloat", "CDouble"))
 KOTLIN_PRIMITIVES = frozenset((
     "String", "CharSequence", "Char", "Boolean", "Byte", "Short", "Int", "Long", "UByte", "UShort", "UInt", "ULong",
     "Float", "Double", "Number", "Any", "ByteArray", "ShortArray", "IntArray", "LongArray", "FloatArray", "DoubleArray",
@@ -504,7 +520,9 @@ def strip(text, language, keep_strings=False):
 # Tokens
 
 Token = namedtuple("Token", "v line start end first")
-_TOKEN = re.compile(r"`[^`\n]+`|[A-Za-z_][A-Za-z0-9_]*|\d[\w.]*|->|::|\?\.|\?:|!!|\.\.[.<]?|&&|\|\||[=!<>]=|\S")
+# A number keeps its fraction (1.5e3) but not a member after it, so `$0.snoozed(` reads as a call.
+_TOKEN = re.compile(r"`[^`\n]+`|[A-Za-z_][A-Za-z0-9_]*|\d\w*(?:\.\d\w*)*|->|::|\?\.|\?:|!!|\.\.[.<]?|&&|\|\||"
+                    r"[=!<>]=|\S")
 
 
 def tokens(text):
@@ -561,14 +579,111 @@ def _field_read(body, inputs, receiver, fields, implicit_return=False):
 
 
 # ---------------------------------------------------------------------------------------------------------------------
+# Dropped results
+
+
+def _expression_at(text, start):
+    """The expression of stripped source from start to the end of its statement: a newline or ; outside brackets, unless
+    the next line goes on with `.` (a chain broken over lines)."""
+    depth, i, n = 0, start, len(text)
+    while i < n:
+        c = text[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                break
+            depth -= 1
+        elif c == ";" and depth == 0:
+            break
+        elif c == "\n" and depth == 0:
+            rest = text[i + 1:i + 200].lstrip()
+            if not rest.startswith((".", "?.")) or rest.startswith(".."):
+                break
+        i += 1
+    return text[start:i]
+
+
+def _type_receiver(values, i):
+    """For the call whose name is values[i]: the type the code calls it on (`Uri` in `Uri.parse(raw)`, a capitalised
+    name before the dot), or None for a value, a chain or no receiver."""
+    if i >= 2 and values[i - 1] in (".", "?.") and _ident(values[i - 2]) and values[i - 2][:1].isupper():
+        return values[i - 2]
+    return None
+
+
+def _after_call(values, i):
+    """From the ( or { after a called name, the index past its arguments and trailing lambdas."""
+    n = len(values)
+    while i < n and values[i] in ("(", "{"):
+        depth = 0
+        while i < n:
+            depth += values[i] in ("(", "[", "{")
+            depth -= values[i] in (")", "]", "}")
+            i += 1
+            if depth == 0:
+                break
+    return i
+
+
+def _dropped_calls(expr, functions, declared):
+    """The domain functions whose results the expression after `_ =` or `val _ =` drops, in order: each call of one
+    (`name(`, or `name {` with a trailing lambda) that is no other call's argument, leads on to no further call
+    (`.fold(...)` reads it), is not assigned inside a lambda, and is not made on a type the domain modules do not
+    declare (`Uri.parse(raw)` is Uri's). A call on a value is counted by its name: its type is not in the text."""
+    toks = tokens(expr)
+    values = [t.v for t in toks]
+    n = len(values)
+    out, parens, assigned = [], 0, [False]  # assigned: per lambda, whether its current statement assigns
+    for i, value in enumerate(values):
+        if i and toks[i].first and value not in (".", "?."):
+            assigned[-1] = False  # a new line inside a lambda is a new statement
+        if value in ("(", "["):
+            parens += 1
+        elif value in (")", "]"):
+            parens -= 1
+        elif value == "{":
+            assigned.append(False)
+        elif value == "}":
+            if len(assigned) > 1:
+                assigned.pop()
+        elif value == "=" and not parens:  # inside parentheses it names an argument
+            assigned[-1] = True
+        elif value in (";", "->", "in"):
+            assigned[-1] = False
+        if parens or assigned[-1] or value not in functions or i + 1 >= n or values[i + 1] not in ("(", "{"):
+            continue
+        if i and values[i - 1] in ("fun", "func", "::"):
+            continue
+        receiver = _type_receiver(values, i)
+        if receiver is not None and receiver not in declared:
+            continue
+        end = _after_call(values, i + 1)
+        if end < n and (values[end] in (".", "?.") or (values[end] in ("!!", "!", "?") and end + 1 < n
+                                                        and values[end + 1] in (".", "?."))):
+            continue
+        out.append(value)
+    return out
+
+
+def _called_on_other_types(line, name, declared):
+    """Whether a line of stripped source calls name, and only on types the domain modules do not declare
+    (`Draft.parse(raw)`)."""
+    values = [t.v for t in tokens(line)]
+    receivers = [_type_receiver(values, i) for i, v in enumerate(values)
+                 if v == name and i + 1 < len(values) and values[i + 1] in ("(", "{")]
+    return bool(receivers) and all(r is not None and r not in declared for r in receivers)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
 # Kotlin declarations
 
 
 class KtDecl:
-    """A Kotlin declaration the rules read: a class, interface or object with its members, a function, a property or a
-    secondary constructor. What function and accessor bodies declare is not API, so they are skipped; a function's
-    body and a property's getter are kept as token values, for the rule that a body returning an input's field is a
-    getter."""
+    """A Kotlin declaration the rules read: a class, interface or object with its members, a function, a property, a
+    secondary constructor or a type alias. What function and accessor bodies declare is not API, so they are skipped; a
+    function's body and a property's getter are kept as token values, for the rule that a body returning an input's
+    field is a getter."""
 
     def __init__(self, kind, name, line, mods, annos, parent):
         self.kind, self.name, self.line, self.mods, self.annos, self.parent = kind, name, line, mods, annos, parent
@@ -656,6 +771,15 @@ class _KtParser:
                     i = self.skip_brackets(i)
             elif keyword == "init" and self.v(k + 1) == "{":
                 i = self.skip_brackets(k + 1)
+            elif keyword == "typealias" and _ident(self.v(k + 1)):
+                decl = KtDecl("typealias", self.v(k + 1), self.t[k].line, mods, annos, owner)
+                owner.children.append(decl)
+                i = k + 2
+                if self.v(i) == "<":
+                    decl.generic = True
+                    i = self.skip_angles(i)
+                if self.v(i) == "=":
+                    i, decl.type = self.type_until(i + 1, ())
             else:
                 i = self.skip_expression(k + 1)
         return i
@@ -1268,6 +1392,9 @@ def _kotlin_decl_rules(decl, add, module, declared, fields):
         return
     if decl.kind == "constructor":
         return
+    if decl.kind == "typealias":  # whatever its visibility: a private one hides a primitive from the field rules too
+        add(decl.line, "kotlin-alias", f"{decl.name} is a type alias of {' '.join(decl.type or []) or 'another type'}")
+        return
     if decl.kind in ("val", "var") and decl.parent.kind == "file" and decl.receiver is None \
             and "const" not in decl.mods:
         add(decl.line, "kotlin-state", f"{decl.name} is package-level state")
@@ -1282,6 +1409,8 @@ def _kotlin_decl_rules(decl, add, module, declared, fields):
     is_fun = decl.kind == "fun"
     label = (f"{owner}.{name}" if owner else name) + ("()" if is_fun else "")
     key = ".".join(path)
+    if is_fun and name == "wire" and not method:  # marked or not: the boundary is a member's
+        add(decl.line, "kotlin-boundary", f"{label} is a companion or top-level wire(), not a member's")
     # A member behind an opt-in is the boundary the way Swift's @_spi members are: the API rules below leave it to
     # kotlin-boundary, which allows only the shapes of the documented boundary.
     if marks:
@@ -1325,8 +1454,10 @@ def _kotlin_decl_rules(decl, add, module, declared, fields):
             if not told:
                 add(decl.line, "kotlin-accessor", f"{label} hands out {' '.join(decl.type)}")
                 handed_out = True
-        # Whatever it returns and wherever it is declared, a body that only returns an input's field is a getter.
-        read = None if identity or handed_out or name in ("id", "wire") else _field_read(
+        # Whatever it returns and wherever it is declared, a body that only returns an input's field is a getter; a
+        # member id() of the module's own identity class is the one the rule above lets through.
+        member_identity = method and name == "id" and not decl.params and _kt_identity(decl.type, declared)
+        read = None if identity or handed_out or member_identity else _field_read(
             decl.body, {p.name for p in decl.params}, "this" if method else None, fields)
         if read and (decl.type != ["Boolean"] or read[1] in fields):
             add(decl.line, "kotlin-accessor", f"{label} hands state out, returning {read[0]}")
@@ -1447,10 +1578,16 @@ def kotlin_build_logic_findings(files):
     return found
 
 
-def kotlin_outside_findings(path, text, place, visitors, functions=frozenset(), ctx=None):
+# A file that uses a domain module or the kit: it imports one, or names one in full (persona.core.domain, an older
+# module, is not one).
+_KT_USES_DOMAIN = re.compile(r"\bpersona\s*\.\s*core\s*\.\s*(?:(?!domain\b)[a-z0-9_]+\s*\.\s*domain|domainkit)\b")
+
+
+def kotlin_outside_findings(path, text, place, visitors, functions=frozenset(), ctx=None, declared=frozenset()):
     """Findings for Android code outside the domain modules' main sources. place: "adapt", "kit-adapt", "test" or
     "other"; visitors: the domain visitor interfaces' names; functions: the public functions the domain modules
-    declare; ctx: an adapt package's context."""
+    declare, and declared their classes (kotlin_declared); ctx: an adapt package's context. Only a file that imports a
+    domain module or the kit, or names one in full, is read for dropped results."""
     stripped = strip(text, "kotlin")
     found = []
     for m in re.finditer(r"\b(DomainBoundary|ClockRead)\b", stripped):
@@ -1477,9 +1614,9 @@ def kotlin_outside_findings(path, text, place, visitors, functions=frozenset(), 
             if hit:
                 found.append(Finding(path, _line_of(stripped, m.start()), "kotlin-visitor-impl",
                                      f"an object implements {', '.join(hit)}"))
-    if functions and place in ("adapt", "other"):
-        for m in re.finditer(r"\bval\s+_\s*(?::[^=\n]*)?=\s*([^\n;]*)", stripped):
-            called = [name for name in re.findall(r"\b([A-Za-z_]\w*)\s*[({]", m.group(1)) if name in functions]
+    if functions and place in ("adapt", "other") and _KT_USES_DOMAIN.search(stripped):
+        for m in re.finditer(r"\bval\s+_\s*(?::[^=\n]*)?=(?!=)\s*", stripped):
+            called = _dropped_calls(_expression_at(stripped, m.end()), functions, declared)
             if called:
                 found.append(Finding(path, _line_of(stripped, m.start()), "kotlin-app-discard",
                                      f"drops the result of {called[0]}"))
@@ -1970,10 +2107,24 @@ def _swift_told(result, owner):
         (result or [])[:1] == ["Outcome"] and _first_type_argument(result) in (owner, "Self") and "?" not in plain)
 
 
+def _swift_func_name(toks, i):
+    """For the func or subscript at i: (its name, the index after it). An operator's name is its symbols (`~`, `<~>`),
+    up to its parameter list."""
+    n = len(toks)
+    if toks[i].v == "subscript":
+        return "subscript", i + 1
+    if i + 1 < n and _ident(toks[i + 1].v):
+        return toks[i + 1].v, i + 2
+    j = i + 1
+    while j < n and toks[j].v not in ("(", "{") and not _ident(toks[j].v) and not toks[j].first:
+        j += 1
+    return "".join(t.v for t in toks[i + 1:j]), j
+
+
 def _swift_function(toks, i):
     """For the func or subscript at i: (parameter names, result tokens, body token values or None)."""
     n = len(toks)
-    j = i + 1 if toks[i].v == "subscript" else i + 2
+    _, j = _swift_func_name(toks, i)
     if j < n and toks[j].v == "<":
         j = _swift_close(toks, j, "<", ">") + 1
     inputs = set()
@@ -2019,13 +2170,14 @@ def _swift_getter(body):
 
 
 def _swift_hands_out(toks, i, scope, fields):
-    """For the public func, subscript or var at i: (its label, what its body returns) when the body only returns an
-    input's field, else None. An instance member is read only when it returns what swift-accessor lets through in the
-    symbol graph (nothing, a Bool, its type or an Outcome of it); `id`, `wire` and @_spi members are left to their own
-    rules."""
+    """For the public func (an operator included), subscript or var at i: (its label, what its body returns) when the
+    body only returns an input's field, else None. An instance member is read only when it returns what swift-accessor
+    lets through in the symbol graph (nothing, a Bool, its type or an Outcome of it), so an `id` of the target's own
+    <Name>ID type is that rule's; @_spi members are swift-boundary's. Every other function, `id` and `wire`
+    included, is read."""
     n = len(toks)
     mods = _swift_modifiers(toks, i)
-    name = "subscript" if toks[i].v == "subscript" else toks[i + 1].v
+    name = toks[i + 1].v if toks[i].v == "var" else _swift_func_name(toks, i)[0]
     member = scope.kind != "file" and not mods & {"static", "class"}
     if toks[i].v == "var":
         annotated, j, follows = _swift_binding(toks, i)
@@ -2035,7 +2187,7 @@ def _swift_hands_out(toks, i, scope, fields):
         inputs, result = set(), annotated or []
     else:
         inputs, result, body = _swift_function(toks, i)
-    if name in ("id", "wire") or "@_spi" in mods or body is None or (member and not _swift_told(result, scope.name)):
+    if "@_spi" in mods or body is None or (member and not _swift_told(result, scope.name)):
         return None
     read = _field_read(("block", body), inputs, "self" if member else None, fields, implicit_return=True)
     if read and (result != ["Bool"] or read[1] in fields):
@@ -2113,16 +2265,34 @@ def swift_source_findings(path, text, target, fields=None):
             add(tok.line, "swift-state", "uses @unchecked")
         elif _SWIFT_UNSAFE.match(value):
             add(tok.line, "swift-state", f"uses {value}")
+        # A type alias, whatever its access and wherever it is: a private one hides a primitive from the field rules.
+        if value == "typealias" and prev != "import" and _ident(after):
+            j = i + 2
+            if j < n and toks[j].v == "<":
+                j = _swift_close(toks, j, "<", ">") + 1
+            aliased = []
+            if j < n and toks[j].v == "=":
+                j += 1
+                while j < n and not toks[j].first and toks[j].v not in (";", "{", "}"):
+                    aliased.append(toks[j].v)
+                    j += 1
+            label = f"{scope.name}.{after}" if scope.name else after
+            add(tok.line, "swift-alias", f"{label} is a type alias of {''.join(aliased) or 'another type'}")
         if in_code:
             continue
         # Tell, don't ask: whatever it returns and wherever it is declared, a body that only returns an input's field
         # is a getter; an instance member that returns another type is swift-accessor's in the symbol graph already.
         if value in ("func", "subscript", "var") and scope.kind != "protocol" and scope.exposed \
                 and _swift_public(_swift_modifiers(toks, i), scope) \
-                and (value == "subscript" or (i + 1 < n and _ident(toks[i + 1].v))):
+                and i + 1 < n and (value != "var" or _ident(toks[i + 1].v)):
             handed = _swift_hands_out(toks, i, scope, fields)
             if handed:
                 add(tok.line, "swift-accessor", f"{handed[0]} hands state out, returning {handed[1]}")
+            mods = _swift_modifiers(toks, i)
+            if value != "subscript" and toks[i + 1].v == "wire" and (scope.kind == "file"
+                                                                     or mods & {"static", "class"}):
+                label = f"{scope.name}.wire" if scope.name else "wire"
+                add(tok.line, "swift-boundary", f"{label} is a static or free wire, not an instance's `var wire`")
         if value == "@" and after == "_spi" and i + 4 < n and toks[i + 2].v == "(":
             group, keyword, name = _swift_spi_target(toks, i)
             label = f"{scope.name}.{name}" if scope.name else name
@@ -2221,6 +2391,14 @@ def swift_public_functions(texts):
     return names
 
 
+def swift_declared(texts):
+    """The types the Domain targets and the kit declare, for telling their functions from another type's."""
+    names = set()
+    for text in texts:
+        names.update(re.findall(r"\b(?:struct|enum|class|actor|protocol)\s+([A-Z]\w*)", strip(text, "swift")))
+    return names
+
+
 def swift_visitors(texts):
     names = set()
     for text in texts:
@@ -2232,9 +2410,16 @@ _SWIFT_CONFORMANCE_HEAD = re.compile(
     r"\b(?:struct|class|enum|actor|extension)\s+[\w.]+(?:\s*<[^>{]*>)?\s*:\s*([^{]*)\{")
 
 
-def swift_outside_findings(path, text, role, visitors, functions, app):
+# A file that uses a Domain target or the kit: it imports one.
+_SWIFT_USES_DOMAIN = re.compile(r"\bimport\s+(?:(?:typealias|struct|class|enum|protocol|let|var|func)\s+)?"
+                                r"(?:PersonaDomainKit\w*|\w*Domain)\b")
+
+
+def swift_outside_findings(path, text, role, visitors, functions, app, declared=frozenset()):
     """Findings for a Swift file outside the Domain targets and the kit. role: the target role of the file ("adapt",
-    "kit-adapt", "test-domain" or "other"); app: whether the file is app code (apple/Persona, apple/Shared)."""
+    "kit-adapt", "test-domain" or "other"); app: whether the file is app code (apple/Persona, apple/Shared);
+    functions and declared: the public functions and the types the Domain targets and the kit declare. Only a file
+    that imports a Domain target or the kit is read for dropped results."""
     stripped = strip(text, "swift")
     found = []
     for m in _SWIFT_IMPORT.finditer(stripped):
@@ -2255,9 +2440,9 @@ def swift_outside_findings(path, text, role, visitors, functions, app):
             if hit:
                 found.append(Finding(path, _line_of(stripped, m.start()), "swift-visitor-impl",
                                      f"conforms to {', '.join(hit)}"))
-    if (app or role == "adapt") and functions and re.search(r"\bimport\s+(?:PersonaDomainKit|\w*Domain)\b", stripped):
-        for m in re.finditer(r"(?<![\w.])_\s*=\s*([^\n;]*)", stripped):
-            called = [name for name in re.findall(r"\b([A-Za-z_]\w*)\s*\(", m.group(1)) if name in functions]
+    if (app or role == "adapt") and functions and _SWIFT_USES_DOMAIN.search(stripped):
+        for m in re.finditer(r"(?<![\w.])_\s*=(?!=)\s*", stripped):
+            called = _dropped_calls(_expression_at(stripped, m.end()), functions, declared)
             if called:
                 found.append(Finding(path, _line_of(stripped, m.start()), "swift-app-discard",
                                      f"drops the result of {called[0]}"))
@@ -2266,20 +2451,46 @@ def swift_outside_findings(path, text, role, visitors, functions, app):
 
 _UNUSED = re.compile(r"(?:(?P<file>/[^\s:]+\.swift):(?P<line>\d+):(?:\d+:)?\s*)?(?:warning: )?result of (?:call to "
                      r"'(?P<call>[^'(]+)(?:\([^']*\))?'|'(?P<init>[^']+)' initializer) is unused")
-_APPLE_PATH = re.compile(r"/(apple/[A-Z].*)$")
+_APPLE_PATH = re.compile(r"^.*/(apple/[A-Z].*)$")  # the last apple/ in the path: the repository's
 
 
-def swift_build_log_findings(name, text, functions):
-    """Unused-result warnings in an app build log (plain or an Xcode activity log's text) naming a domain function."""
+def swift_build_log_paths(text, functions):
+    """The repository paths under apple/ where a build log's unused-result warnings name a domain function, for
+    swift_build_log_findings' sources."""
+    paths = set()
+    for m in _UNUSED.finditer(text):
+        inside = _APPLE_PATH.search(m.group("file") or "")
+        if inside and (m.group("call") or m.group("init")) in functions:
+            paths.add(inside.group(1))
+    return sorted(paths)
+
+
+def swift_build_log_findings(name, text, functions, declared=frozenset(), sources=None):
+    """Unused-result warnings in an app build log (plain or an Xcode activity log's text) naming a domain function.
+    sources: {repository path: text} of the files under apple/ the log names (swift_build_log_paths), read from the
+    tree. A warning in a file counts only when the file is one of them, imports a Domain target or the kit, and on that
+    line calls the function on something other than a type the domain modules do not declare (`Draft.parse(raw)`): a
+    dependency's or a generated file cannot call a domain function. A warning the log places in no file counts by its
+    name alone."""
+    sources = sources or {}
     found = []
     for m in _UNUSED.finditer(text):
         called = m.group("call") or m.group("init")
         if called not in functions:
             continue
         path, line = name, 0
-        inside = _APPLE_PATH.search(m.group("file") or "")
-        if inside:
+        if m.group("file"):
+            inside = _APPLE_PATH.search(m.group("file"))
+            source = sources.get(inside.group(1)) if inside else None
+            if source is None:
+                continue
+            stripped = strip(source, "swift")
+            if not _SWIFT_USES_DOMAIN.search(stripped):
+                continue
             path, line = inside.group(1), int(m.group("line"))
+            lines = stripped.split("\n")
+            if 0 < line <= len(lines) and _called_on_other_types(lines[line - 1], called, declared):
+                continue
         found.append(Finding(path, line, "swift-app-discard", f"drops the result of {called} (build warning)"))
     return sorted(set(found))
 
@@ -2538,6 +2749,7 @@ def scan_apple(root, apple_sh=None, graphs_dir=None, build_logs=()):
             findings.extend(swift_source_findings(rel, text, target, fields))
     visitors = swift_visitors(core_texts)
     functions = swift_public_functions(core_texts)
+    types = swift_declared(core_texts)
     core_dirs = {t.sources for t in cores}
     roles = {t.sources: t.role for t in targets}
     declared = {t.name for t in targets}
@@ -2559,7 +2771,7 @@ def scan_apple(root, apple_sh=None, graphs_dir=None, build_logs=()):
                     and not (app and b"_ =" in data) and role != "adapt":
                 continue
             findings.extend(swift_outside_findings(rel, data.decode("utf-8", errors="replace"), role, visitors,
-                                                   functions, app))
+                                                   functions, app, types))
     for package in sorted({t.package for t in cores}):
         if not any(t.package == package and t.role == "test-domain" for t in targets):
             findings.append(Finding(package + "/Package.swift", 0, "swift-testable",
@@ -2581,7 +2793,9 @@ def scan_apple(root, apple_sh=None, graphs_dir=None, build_logs=()):
             findings.extend(swift_graph_findings(target.name, graphs,
                                                  swift_closed_sets(target_texts.get(target.name, []))))
     for log in build_logs:
-        findings.extend(swift_build_log_findings(str(log), read_build_log(log), functions))
+        text = read_build_log(log)
+        sources = {rel: _read(root / rel) for rel in swift_build_log_paths(text, functions) if (root / rel).is_file()}
+        findings.extend(swift_build_log_findings(str(log), text, functions, types, sources))
     return Scan(modules, sorted(set(findings)), inspected)
 
 
@@ -2697,6 +2911,7 @@ def scan_android(root, build_logic=True):
                 findings.extend(kotlin_source_findings(rel, text, module.kind, ctx, declared, fields))
     visitors = kotlin_visitors(core_texts)
     functions = kotlin_public_functions(core_texts)
+    types = kotlin_declared(core_texts)
     android = root / "android"
     if android.is_dir():
         for file in _walk(android, (".kt", ".kts")):
@@ -2729,7 +2944,7 @@ def scan_android(root, build_logic=True):
                 continue
             adapt = re.search(r"/persona/core/([a-z0-9_]+)/adapt/", rel)
             findings.extend(kotlin_outside_findings(rel, data.decode("utf-8", errors="replace"), place, visitors,
-                                                    functions, adapt.group(1) if adapt else None))
+                                                    functions, adapt.group(1) if adapt else None, types))
     if build_logic:
         logic = root / "android" / "build-logic" / "convention" / "src" / "main" / "kotlin"
         files = {}

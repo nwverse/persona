@@ -18,4 +18,5 @@ internal class RowReader : ItemVisitor {
 
 internal fun drop(item: Item, until: Instant, now: Now) {
     val _ = item.snoozed(until, now)
+    val _ = runCatching { item.snoozed(until, now) }
 }

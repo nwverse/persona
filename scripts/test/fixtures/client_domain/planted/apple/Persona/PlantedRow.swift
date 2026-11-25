@@ -10,3 +10,16 @@ struct PlantedRow {
         }
     }
 }
+
+/// The app's own parse, which is not the domain's: the kit declares a parse too, but what Draft's returns is the app's
+/// to drop.
+enum Draft {
+    static func parse(_ raw: String) -> Bool { !raw.isEmpty }
+}
+
+struct DraftCheck {
+    func check(_ raw: String) {
+        _ = Draft.parse(raw)
+        Draft.parse(raw)
+    }
+}

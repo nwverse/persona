@@ -46,8 +46,10 @@ APP_LOG = FIXTURES / "app-build.log"
 EXPECTED = FIXTURES / "expected.txt"
 ARCHITECTURE = ROOT / "docs" / "server" / "architecture.md"
 # The planted code that breaks nothing: every rule's compliant twin.
+_FEATURE = "android/feature/planted/src/main/kotlin/persona/feature/planted/"
 COMPLIANT = ("apple/Packages/PersonaDomainKit/", "apple/Packages/PersonaPlanted/", "apple/Persona/PlantedRow.swift",
-             "android/core/domainkit/", "android/core/planted/", "android/feature/planted/PlantedUse.kt")
+             "android/core/domainkit/", "android/core/planted/", _FEATURE + "PlantedUse.kt",
+             _FEATURE + "PlantedTime.kt")
 
 
 def build_logs(value):
@@ -221,6 +223,14 @@ class RuleTests(unittest.TestCase):
             "the core settings without runtime reflection metadata": (
                 "apple/Packages/PersonaPlanted/Package.swift",
                 '"-Xfrontend", "-reflection-metadata-for-debugger-only",'),
+            "another type's parse dropped beside the domain (Kotlin)": (
+                _FEATURE + "PlantedUse.kt", "    val _ = runCatching { Uri.parse(raw) }\n"),
+            "another type's parse dropped beside the domain (Swift)": (
+                "apple/Persona/PlantedRow.swift", "        _ = Draft.parse(raw)\n"),
+            "another type's parse in the build log beside the domain (Swift)": (
+                "apple/Persona/PlantedRow.swift", "        Draft.parse(raw)\n"),
+            "a parse of a type named like the kit's, in a file that imports no domain module": (
+                _FEATURE + "PlantedTime.kt", "    val _ = runCatching { return Instant.parse(text) }\n"),
         }
         for case, (path, snippet) in twins.items():
             self.assertTrue(path.startswith(COMPLIANT), case)
@@ -450,6 +460,132 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(["swift-accessor 11 Entry.label hands state out, returning entry.label"],
                          [f"{f.rule} {f.line} {f.what}" for f in found])
         self.assertEqual({"Flag"}, rules.swift_closed_sets([swift]))
+
+    def test_id_and_wire_by_shape(self):
+        """`id` and `wire` are read like any other name: only an instance's `id` of its own identity type, and the
+        marked instance `wire`, are the boundary's; a Boolean field handed out under either name is a getter."""
+        kotlin = (
+            "package persona.core.planted.domain\n"
+            "public class Done private constructor(private val done: Boolean) {\n"
+            "    public fun id(): Boolean = done\n"  # 3
+            "    public fun wire(): Boolean = done\n"  # 4
+            "}\n"
+            "public class Tag private constructor(private val tag: TagId) {\n"
+            "    public fun id(): TagId = tag\n"  # the identity
+            "    public companion object { public fun id(of: Tag): TagId = of.tag }\n"  # 8
+            "}\n")
+        found = rules.kotlin_source_findings("Done.kt", kotlin, "domain", "planted", {"Done", "Tag", "TagId"})
+        self.assertEqual(["kotlin-accessor 3 Done.id() hands state out, returning done",
+                          "kotlin-accessor 4 Done.wire() hands state out, returning done",
+                          "kotlin-accessor 8 Tag.id() hands state out, returning of.tag"],
+                         [f"{f.rule} {f.line} {f.what}" for f in found])
+        swift = (
+            "public struct Done {\n"
+            "    private let done: Bool\n"
+            "    public var id: Bool { done }\n"  # 3
+            "    public var wire: Bool { done }\n"  # 4
+            "}\n"
+            "public struct Tag {\n"
+            "    private let tag: TagID\n"
+            "    public var id: TagID { tag }\n"  # the identity: swift-accessor's in the graph
+            "    public static func id(of tag: Tag) -> TagID { tag.tag }\n"  # 9
+            "}\n"
+            "public func wire(_ tag: Tag) -> TagID { tag.tag }\n")  # 11
+        target = rules.SwiftTarget("apple/Packages/PersonaPlanted", "PersonaPlantedDomain", "domain", "", "", 0, [], "")
+        self.assertEqual(["swift-accessor 3 Done.id hands state out, returning done",
+                          "swift-accessor 4 Done.wire hands state out, returning done",
+                          "swift-accessor 9 Tag.id hands state out, returning tag.tag",
+                          "swift-accessor 11 wire hands state out, returning tag.tag",
+                          "swift-boundary 11 wire is a static or free wire, not an instance's `var wire`"],
+                         [f"{f.rule} {f.line} {f.what}"
+                          for f in rules.swift_source_findings("Done.swift", swift, target)])
+
+    def test_dropped_results_by_receiver_and_import(self):
+        """What the dropped-result rules read: a file that uses the domain, and in it each domain call whose result the
+        expression drops, unless another type makes it; the build log likewise, and only for the repository's files."""
+        functions, declared = {"parse", "snoozed", "fold"}, {"Item", "ItemId", "ItemID", "Instant"}
+        kotlin = (
+            "package persona.feature.x\n"
+            "import persona.core.planted.domain.Item\n"
+            "fun f(item: Item, raw: String) {\n"
+            "    val _ = item.snoozed(u, n)\n"  # 4: dropped
+            "    val _ = runCatching { item.snoozed(u, n) }\n"  # 5: dropped inside the lambda
+            "    val _ = runCatching { store.save(item.snoozed(u, n)) }\n"  # an argument: used
+            "    val _ = item.snoozed(u, n).fold({ 0 }, { 1 })\n"  # 7: fold's dropped; snoozed's is read by it
+            "    val _ = runCatching { Uri.parse(raw) }\n"  # Uri's, not the domain's
+            "    val _ = ItemId.parse(raw)\n"  # 9: the domain's type
+            "    val _ = runCatching {\n"  # 10: over lines, the second statement dropped
+            "        val next = item.snoozed(u, n)\n"
+            "        item.snoozed(u, n)\n"
+            "    }\n"
+            "    val _ = item\n"  # 14: a chain broken over lines
+            "        .snoozed(u, n)\n"
+            "    val _ = store.copy(key = k).snoozed(u, n)\n"  # 16: a named argument assigns nothing
+            "}\n")
+        found = rules.kotlin_outside_findings("F.kt", kotlin, "other", set(), functions, None, declared)
+        self.assertEqual(["4 snoozed", "5 snoozed", "7 fold", "9 parse", "10 snoozed", "14 snoozed", "16 snoozed"],
+                         [f"{f.line} {f.what.rsplit(' ', 1)[1]}" for f in found])
+        self.assertEqual({"kotlin-app-discard"}, {f.rule for f in found})
+        unused = kotlin.replace("import persona.core.planted.domain.Item\n", "import java.time.Instant\n")
+        self.assertEqual([], rules.kotlin_outside_findings("F.kt", unused, "other", set(), functions, None, declared))
+        swift = (
+            "import PersonaPlantedDomain\n"
+            "struct Row {\n"
+            "    func f(_ item: Item, _ items: [Item]) {\n"
+            "        _ = item.snoozed(until: u, at: n)\n"  # 4: dropped
+            "        _ = Draft.parse(raw)\n"  # Draft's, not the domain's
+            "        _ = ItemID.parse(raw)\n"  # 6: the domain's type
+            "        _ = items.map { $0.snoozed(until: u, at: n) }\n"  # 7: dropped inside the closure
+            "        _ = store.save(item.snoozed(until: u, at: n))\n"  # an argument: used
+            "    }\n"
+            "}\n")
+        found = rules.swift_outside_findings("Row.swift", swift, "other", set(), functions, True, declared)
+        self.assertEqual(["4 snoozed", "6 parse", "7 snoozed"], [f"{f.line} {f.what.rsplit(' ', 1)[1]}" for f in found])
+        unused = swift.replace("import PersonaPlantedDomain\n", "import Foundation\n")
+        self.assertEqual([], rules.swift_outside_findings("Row.swift", unused, "other", set(), functions, True,
+                                                          declared))
+        log = ("/x/apple/Persona/Row.swift:4:14: warning: result of call to 'snoozed(until:at:)' is unused\n"
+               "/x/apple/Persona/Row.swift:5:15: warning: result of call to 'parse(_:)' is unused\n"
+               "/x/apple/Persona/Plain.swift:1:8: warning: result of call to 'parse(_:)' is unused\n"
+               "/x/DerivedData/SourcePackages/checkouts/y/Sources/Y.swift:2:3: warning: result of call to "
+               "'snoozed(until:at:)' is unused\n"
+               "warning: result of call to 'snoozed(until:at:)' is unused\n")
+        self.assertEqual(["apple/Persona/Plain.swift", "apple/Persona/Row.swift"],
+                         rules.swift_build_log_paths(log, functions))
+        self.assertEqual([], rules.swift_build_log_paths(log, {"reload"}))
+        sources = {"apple/Persona/Row.swift": swift, "apple/Persona/Plain.swift": "parser.parse(raw)\n"}
+        found = rules.swift_build_log_findings("app.log", log, functions, declared, sources)
+        self.assertEqual(["app.log:0 snoozed", "apple/Persona/Row.swift:4 snoozed"],
+                         [f"{f.path}:{f.line} {f.what.split(' ')[4]}" for f in found])
+
+    def test_the_planted_domain_leaves_the_real_app_alone(self):
+        """The day a kit or a domain module lands, code that does not use it keeps passing: given the planted kit's and
+        context's functions and types, nothing under android/ or apple/ drops a domain result."""
+        kotlin = [p.read_text(encoding="utf-8")
+                  for module in ("domainkit", "planted/domain")
+                  for p in sorted((PLANTED / "android/core" / module / "src/main").rglob("*.kt"))
+                  if "/adapt/" not in p.as_posix()]
+        swift = [p.read_text(encoding="utf-8")
+                 for sources in ("PersonaDomainKit/Sources/PersonaDomainKit",
+                                 "PersonaPlanted/Sources/PersonaPlantedDomain")
+                 for p in sorted((PLANTED / "apple/Packages" / sources).rglob("*.swift"))]
+        k_functions, k_declared = rules.kotlin_public_functions(kotlin), rules.kotlin_declared(kotlin)
+        s_functions, s_declared = rules.swift_public_functions(swift), rules.swift_declared(swift)
+        self.assertTrue({"parse", "fold", "snoozed"} <= k_functions and {"parse", "snoozed"} <= s_functions)
+        found = []
+        for path in rules._walk(ROOT / "android", (".kt",)):
+            data = path.read_bytes()
+            if b"val _" in data:
+                rel = rules._rel(ROOT, path)
+                place, _ = rules._android_place(rel, [])
+                found += rules.kotlin_outside_findings(rel, data.decode("utf-8", errors="replace"), place, set(),
+                                                       k_functions, None, k_declared)
+        for path in rules._walk(ROOT / "apple", (".swift",)):
+            data = path.read_bytes()
+            if b"_ =" in data or b"_=" in data:
+                found += rules.swift_outside_findings(rules._rel(ROOT, path), data.decode("utf-8", errors="replace"),
+                                                      "other", set(), s_functions, True, s_declared)
+        self.assertEqual([], [f.message() for f in found if f.rule.endswith("-app-discard")])
 
     def test_planted_graphs_match_the_planted_sources(self):
         """A planted Swift edit without --planted-graphs leaves graphs that point at other lines."""

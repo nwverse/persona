@@ -10,6 +10,8 @@ missed swift-discovery apple/Packages/PersonaInbox/Sources/InboxAdapt:0 is named
 missed swift-discovery apple/Persona/HiddenRow.swift:1 imports PersonaHiddenDomain, which no package declares
 missed swift-discovery apple/Persona/HiddenRow.swift:2 imports NotesDomain, which no package declares
 planted kotlin-accessor android/core/broken/domain/src/main/kotlin/persona/core/broken/domain/Broken.kt:101 wakesAt() hands state out, returning entry.wakes
+planted kotlin-accessor android/core/broken/domain/src/main/kotlin/persona/core/broken/domain/Broken.kt:123 Label.wire() hands state out, returning label.wakes
+planted kotlin-accessor android/core/broken/domain/src/main/kotlin/persona/core/broken/domain/Broken.kt:125 Label.id() hands state out, returning label.wakes
 planted kotlin-accessor android/core/broken/domain/src/main/kotlin/persona/core/broken/domain/Broken.kt:20 Broken.count is state visible outside the module; a public val is a computed Boolean
 planted kotlin-accessor android/core/broken/domain/src/main/kotlin/persona/core/broken/domain/Broken.kt:22 Broken.doneAt() hands out Instant
 planted kotlin-accessor android/core/broken/domain/src/main/kotlin/persona/core/broken/domain/Broken.kt:35 Broken.leak() hands out Long
@@ -17,11 +19,14 @@ planted kotlin-accessor android/core/broken/domain/src/main/kotlin/persona/core/
 planted kotlin-accessor android/core/broken/domain/src/main/kotlin/persona/core/broken/domain/Broken.kt:39 Broken.wakes() hands out Instant
 planted kotlin-accessor android/core/broken/domain/src/main/kotlin/persona/core/broken/domain/Broken.kt:41 Broken.get() hands out Instant
 planted kotlin-accessor android/core/broken/domain/src/main/kotlin/persona/core/broken/domain/Broken.kt:91 Entry.wakesOf() hands state out, returning entry.wakes
+planted kotlin-alias android/core/broken/domain/src/main/kotlin/persona/core/broken/domain/Broken.kt:119 Raw is a type alias of String
 planted kotlin-app-discard android/feature/planted/src/main/kotlin/persona/feature/planted/BrokenUse.kt:20 drops the result of snoozed
+planted kotlin-app-discard android/feature/planted/src/main/kotlin/persona/feature/planted/BrokenUse.kt:21 drops the result of snoozed
 planted kotlin-banned-call android/core/broken/domain/src/main/kotlin/persona/core/broken/domain/Broken.kt:27 calls UUID.randomUUID (makes an id)
 planted kotlin-banned-call android/core/broken/domain/src/main/kotlin/persona/core/broken/domain/Broken.kt:27 calls println() (prints)
 planted kotlin-banned-call android/core/broken/domain/src/main/kotlin/persona/core/broken/domain/Broken.kt:28 uses System (reads the platform)
 planted kotlin-banned-call android/core/broken/domain/src/main/kotlin/persona/core/broken/domain/Broken.kt:50 calls .shuffled() (draws a random order)
+planted kotlin-boundary android/core/broken/domain/src/main/kotlin/persona/core/broken/domain/Broken.kt:123 Label.wire() is a companion or top-level wire(), not a member's
 planted kotlin-boundary android/core/broken/domain/src/main/kotlin/persona/core/broken/domain/Broken.kt:55 Broken.raw() is marked @DomainBoundary
 planted kotlin-build-flags android/core/broken/domain/build.gradle.kts:0 does not add -Xreturn-value-checker=full
 planted kotlin-build-flags android/core/broken/domain/build.gradle.kts:0 does not call explicitApi()
@@ -80,16 +85,20 @@ planted kotlin-visitor-name android/core/broken/domain/src/main/kotlin/persona/c
 planted swift-accessor apple/Packages/PersonaBroken/Sources/PersonaBrokenDomain/Broken.swift:10 Broken.count hands out Int
 planted swift-accessor apple/Packages/PersonaBroken/Sources/PersonaBrokenDomain/Broken.swift:11 Broken.doneAt hands out Date
 planted swift-accessor apple/Packages/PersonaBroken/Sources/PersonaBrokenDomain/Broken.swift:12 Broken.description hands out String
+planted swift-accessor apple/Packages/PersonaBroken/Sources/PersonaBrokenDomain/Broken.swift:125 Label.wire hands state out, returning label.wakes
+planted swift-accessor apple/Packages/PersonaBroken/Sources/PersonaBrokenDomain/Broken.swift:127 Label.~ hands state out, returning label.wakes
 planted swift-accessor apple/Packages/PersonaBroken/Sources/PersonaBrokenDomain/Broken.swift:46 Probe.id hands out Instant
 planted swift-accessor apple/Packages/PersonaBroken/Sources/PersonaBrokenDomain/Broken.swift:48 Probe.wakes(at:) hands out Instant
 planted swift-accessor apple/Packages/PersonaBroken/Sources/PersonaBrokenDomain/Broken.swift:50 Probe.subscript(_:) hands out Instant
 planted swift-accessor apple/Packages/PersonaBroken/Sources/PersonaBrokenDomain/Broken.swift:9 Broken.title hands out String
 planted swift-accessor apple/Packages/PersonaBroken/Sources/PersonaBrokenDomain/Broken.swift:90 Entry.wakes hands state out, returning entry.wakes
 planted swift-accessor apple/Packages/PersonaBroken/Sources/PersonaBrokenDomain/Broken.swift:99 wakesAt hands state out, returning entry.wakes
+planted swift-alias apple/Packages/PersonaBroken/Sources/PersonaBrokenDomain/Broken.swift:117 Label.Raw is a type alias of String
 planted swift-app-discard apple/Persona/BrokenRow.swift:7 drops the result of snoozed
 planted swift-app-discard apple/Persona/BrokenRow.swift:7 drops the result of snoozed (build warning)
 planted swift-banned-call apple/Packages/PersonaBroken/Sources/PersonaBrokenDomain/Broken.swift:25 uses print (prints)
 planted swift-banned-call apple/Packages/PersonaBroken/Sources/PersonaBrokenDomain/Broken.swift:56 uses shuffled (draws a random number or order)
+planted swift-boundary apple/Packages/PersonaBroken/Sources/PersonaBrokenDomain/Broken.swift:125 Label.wire is a static or free wire, not an instance's `var wire`
 planted swift-boundary apple/Packages/PersonaBroken/Sources/PersonaBrokenDomain/Broken.swift:58 Probe.raw is marked @_spi(Boundary)
 planted swift-callback apple/Packages/PersonaBroken/Sources/PersonaBrokenDomain/Broken.swift:54 Probe.whenDue(_:) takes a function
 planted swift-conformance apple/Packages/PersonaBroken/Sources/PersonaBrokenDomain/Broken.swift:8 names Codable

@@ -114,3 +114,14 @@ public class Phase private constructor(private val phase: Case) {
         public fun draft(): Phase = Phase(Case.OPEN)
     }
 }
+
+/** A primitive under another name beside another field, and a companion wire() and id() that hand a field out. */
+internal typealias Raw = String
+
+public class Label private constructor(private val raw: Raw, private val wakes: Instant) {
+    public companion object {
+        public fun wire(label: Label): Instant = label.wakes
+
+        public fun id(label: Label): Instant = label.wakes
+    }
+}
