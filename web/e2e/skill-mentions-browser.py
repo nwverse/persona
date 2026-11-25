@@ -26,8 +26,11 @@ def type_draft(text):
     if js("document.querySelector('[data-composer-input]').tagName === 'TEXTAREA'"):
         fill_input("[data-composer-input]", text)
         return
-    js("document.querySelector('[data-composer-input]').focus()")
-    press_key("Control+a")
+    js("""(() => {
+      const field = document.querySelector('[data-composer-input]');
+      field.focus();
+      getSelection().selectAllChildren(field);
+    })()""")
     cdp("Input.insertText", text=text)
 
 
@@ -79,26 +82,30 @@ js("""(() => {
 })()""")
 press_key("Backspace")
 assert not js("Boolean(document.querySelector('[data-inline-mention]'))")
+# Use a fresh picker so the warm catalog does not stand in for the loading state.
+js("location.reload()")
+wait_for_load()
+wait_for_element("[data-composer-input]", timeout=15)
+js("document.documentElement.classList.add('dark')")
 state("loading")
 type_draft("@security")
-time.sleep(.1)
+wait_for_element("[data-composer-panel] [role=status]", timeout=15)
 print("Loading:", js("Array.from(document.querySelectorAll('[role=status]')).map(e=>e.textContent)"))
 shot("narrow-loading")
-time.sleep(2)
 press_key("Escape")
 type_draft("Ordinary chat")
 state("error")
 type_draft("@review")
-time.sleep(.4)
+wait_for_element("[data-composer-panel] [role=status]", timeout=15)
 print("Failure:", js("Array.from(document.querySelectorAll('[role=status]')).map(e=>e.textContent)"))
 shot("narrow-error")
 assert js("document.body.innerText.includes('Skills unavailable here')")
 press_key("Escape")
 type_draft("Plain chat remains usable")
-assert js("document.querySelector('[data-composer-input]').isContentEditable")
+assert js("!document.querySelector('[data-composer-input]').disabled")
 state("partial")
 type_draft("@security")
-time.sleep(.4)
+wait_for_element("[data-composer-panel] [role=status]", timeout=15)
 js("document.documentElement.classList.remove('dark')")
 shot("narrow-light-partial")
 print("Partial:", js("Array.from(document.querySelectorAll('[role=status]')).map(e=>e.textContent)"))

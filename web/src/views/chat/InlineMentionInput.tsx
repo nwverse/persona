@@ -129,6 +129,7 @@ export function InlineMentionInput({ inputRef, label, placeholder, value, onChan
   const selected = useRef<InlineSelection>([0, 0]);
   const tokens = useRef<ContextRef[]>([]);
   const [portals, setPortals] = useState<{ ref: ContextRef; node: HTMLSpanElement }[]>([]);
+  const [inComposition, setInComposition] = useState(false);
 
   const selection = () => {
     const el = root.current;
@@ -284,7 +285,7 @@ export function InlineMentionInput({ inputRef, label, placeholder, value, onChan
       tabIndex={disabled ? -1 : 0}
       contentEditable={editable}
       data-composer-input={composerInput ? "" : undefined}
-      data-empty={value.length === 0 ? "" : undefined}
+      data-empty={value.length === 0 && !inComposition ? "" : undefined}
       data-placeholder={placeholder}
       title={title}
       className={`${className ?? ""} whitespace-pre-wrap data-[empty]:before:pointer-events-none data-[empty]:before:absolute data-[empty]:before:text-ink-3 data-[empty]:before:content-[attr(data-placeholder)]`}
@@ -294,17 +295,20 @@ export function InlineMentionInput({ inputRef, label, placeholder, value, onChan
         selected.current = readSelection(event.currentTarget, tokens.current) ?? selected.current;
         if (composingNow.current) {
           composingNow.current = false;
-          finishComposition();
+          setInComposition(false);
+          queueMicrotask(finishComposition);
         }
         onBlur?.(event);
       }}
       onClick={notifySelection}
       onCompositionStart={(event) => {
         composingNow.current = true;
+        setInComposition(true);
         onCompositionStart?.(event);
       }}
       onCompositionEnd={(event) => {
         composingNow.current = false;
+        setInComposition(false);
         composedAt.current = performance.now();
         onCompositionEnd?.(event);
         queueMicrotask(finishComposition);
