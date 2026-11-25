@@ -128,10 +128,12 @@ vi.mock("./SentSettings", () => ({
   SentSettings: () => <div data-mock-sent-settings />,
 }));
 
+const extViewMock = vi.hoisted(() => ({ onWide: undefined as ((wide: boolean) => void) | undefined }));
 vi.mock("./ExtensionView", () => ({
-  ExtensionUI: ({ extension, ui, state: uiState }: { extension: string; ui: string; state?: string }) => (
-    <div data-mock-extension-ui data-extension={extension} data-ui={ui} data-state={uiState ?? ""} />
-  ),
+  ExtensionUI: ({ extension, ui, state: uiState, onWide }: { extension: string; ui: string; state?: string; onWide?: (wide: boolean) => void }) => {
+    extViewMock.onWide = onWide;
+    return <div data-mock-extension-ui data-extension={extension} data-ui={ui} data-state={uiState ?? ""} />;
+  },
   askAssistant: vi.fn(),
   LauncherExtensionSections: () => null,
 }));
@@ -1175,5 +1177,28 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     const pushExtUI = host.querySelector<HTMLElement>('[data-mock-extension-ui][data-extension="-subscriptions"]')!;
     expect(pushExtUI).not.toBeNull();
     expect(pushExtUI.dataset.state).toBe(pushState);
+  });
+
+  it("widens the Settings container to 1680px when an extension plugin_page requests wide mode and restores 1120px on exit", async () => {
+    state.integrationsV2 = true;
+    state.features = ["channels", "extension_manager", "connectors", "lark"];
+    stubFullHubFetch();
+    extViewMock.onWide = undefined;
+    history.replaceState(null, "", "/settings?tab=integrations&integration=demo-ext%2Fui%2Ftopology");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+
+    const extUI = host.querySelector<HTMLElement>('[data-mock-extension-ui][data-extension="demo-ext"][data-ui="topology"]')!;
+    expect(extUI).not.toBeNull();
+    const container = () => host.querySelector<HTMLElement>('[role="region"] > div')!;
+    expect(container().className).toContain("max-w-[1120px]");
+
+    await act(async () => extViewMock.onWide?.(true));
+    expect(container().className).toContain("max-w-[1680px]");
+
+    await act(async () => extViewMock.onWide?.(false));
+    expect(container().className).toContain("max-w-[1120px]");
   });
 });

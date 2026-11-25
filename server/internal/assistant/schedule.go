@@ -1768,6 +1768,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.pagesLoop(ctx)                    // the taps on pages and the pages' upkeep (pages_actions.go)
 	go s.acceptLoop(ctx)                   // "Please verify" cards that did not go out, and reminders each morning (acceptance.go)
 	go s.admissionQueueLoop(ctx)           // plan tasks the admission gate parked: timed retries until they start or time out (task_queue.go)
+	go s.placementFallbackLoop(ctx)        // plan tasks waiting for automatic machine placement (placement_queue.go)
 	// The leaders' tasks that got stuck (leader_reports.go).
 	go s.leaderReportsLoop(ctx)
 	go s.healthLoop(ctx)         // each machine's launchers (launcher_health.go)

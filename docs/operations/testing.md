@@ -727,7 +727,8 @@ DOCKER=<docker client> python3 scripts/ci/module-e2e.py --modules voice,health,r
   composer and the Agents page in Chrome, no page or console error); per module, the hello flag, the manager's
   `modules: loaded …` line, its server-side parts (extensions, connectors, routes; table `SERVER`) and its web entry
   (table `WEB`: a selector or text on a page, what clicking it opens, an address of its own that answers like a removed
-  page while off) in light and dark, and its chunks: none may be requested once the app has the hello. A chunk an off
+  page while off; an entry that is data the user already has carries an `off` block instead of "absent while off",
+  below) in light and dark, and its chunks: none may be requested once the app has the hello. A chunk an off
   module's page fetches during a reload, before the hello is applied, is a `WARN` (#14431); `--strict-before-hello`
   makes it a failure.
 - **What the user already has stays** (#13430, `docs/architecture/core-and-modules.md` "A module that is off keeps
@@ -738,8 +739,12 @@ DOCKER=<docker client> python3 scripts/ci/module-e2e.py --modules voice,health,r
   own routes; while off, the opened recording's detail equals the `on` phase's, the one in flight says
   `paused: "module_off"`, and every file under `recordings/` is byte for byte what it was when the phase began.
   `scripts/ci/core-only-smoke.py` checks the same on a core-only hub and with `--switched-off recording`. The web row
-  still expects the web app to hide a recording's entry while the module is off: that is the web app's behaviour
-  today, and its change is a client follow-up.
+  asserts the same rule in the browser (the `off` block of the `recording` entry in `WEB`, #15530): while the module
+  is off the recording uploaded during the `on` phase and the seeded meeting with minutes are still listed under
+  Knowledge › Meetings, each opens in the default panel's read-only detail and shows its transcript (the seeded one
+  its minutes too), none of the module's controls is on that page (rename, make or regenerate minutes, hand to an Agent, the private
+  mark, the questions asked in the meeting), and none of the module's chunks is requested, the detail opened inside
+  the app included. `on` and `back-on` are as for every entry: present, opens, its chunk loads.
 - **Output**: a `PASS` / `WARN` / `FAIL` line per phase, module and check, the evidence JSON (`--evidence`, default
   `<shots>/evidence.json`: commit, the settings row, the manager line, the hello's module flags, what the browser got and
   requested), and screenshots `<phase>-<scheme>-<name>.png` in `--shots` (this machine's name is masked; never commit

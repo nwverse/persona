@@ -11,7 +11,7 @@ import { useFullText } from "./FullText";
 import { keepLineBreaks } from "./Messages";
 import { useReveal } from "./search-reveal";
 import { AttachedPhotos } from "./AttachedPhotos";
-import { FileCards } from "./FileCards";
+import { LazyFileCards } from "./LazyFileCards";
 import { Thumb } from "./Steps";
 import { ContextGroup } from "./ContextGroup";
 
@@ -62,7 +62,7 @@ function RelayedSourceMessage({ msg, mid, sid }: SourceProps) {
         {contexts.length > 0 && <ContextGroup contexts={contexts} />}
         {msg.images.length > 0 && <div className="flex flex-wrap gap-1.5">{msg.images.map((image) => <Thumb key={image.id} item={image} mid={mid} sid={sid} />)}</div>}
         {msg.photos && <AttachedPhotos paths={msg.photos} mid={mid} sid={sid} />}
-        {msg.files && <FileCards files={msg.files} mid={mid} />}
+        {msg.files && <LazyFileCards files={msg.files} mid={mid} />}
         {!msg.injected && full.more}
       </>}
     </div>
