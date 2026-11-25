@@ -1008,3 +1008,8 @@ Cache keepalive revoked every role this way and never mounted a proxy, while its
 inventory with `Assistant: true`. Judge a raw row with `fleetMachine.isAssistant` (its directory), and build test
 inventories the way a node sends them. The same feature also needed Claude Code's `ENABLE_PROMPT_CACHING_1H`: without
 it the CLI declares only five-minute markers on an API key or a gateway, whatever TTL the gateway applies later.
+
+## Tool discovery can invalidate an entire warm conversation (#13719)
+
+Adding an always-loaded tool to the top-level list can invalidate a warm Claude conversation prefix. Test
+the full ordered list before and after discovery and reconnection, including a different upstream order.

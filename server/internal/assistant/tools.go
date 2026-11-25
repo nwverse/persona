@@ -272,8 +272,14 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 	case "inbox_move":
 		return s.toolInboxMove(ctx, args)
 	case "inbox_post":
+		if s.isPageRoutineConversation(ctx, machine, self) {
+			return "", errors.New("inbox_post is not available to a dashboard routine; update the dashboard with page patch instead")
+		}
 		return s.toolInboxPost(ctx, machine, self, args) // inbox_post.go
 	case "notify_user":
+		if s.isPageRoutineConversation(ctx, machine, self) {
+			return "", errors.New("notify_user is not available to a dashboard routine; update the dashboard with page patch and Persona handles alerts")
+		}
 		var a struct {
 			Title      string `json:"title"`
 			Body       string `json:"body"`
@@ -365,6 +371,15 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		space, _ := s.knownSpace(ctx, self)
 		if !s.taskInSpace(ctx, a.ID, space) { // another space's task is as good as none (health.go)
 			return "", fmt.Errorf("no task %q", a.ID)
+		}
+		if task, ok := s.pageRoutineTask(ctx, a.ID); ok && task.PageID != "" {
+			if st, hasStore := s.pageStore(); hasStore {
+				if caller, err := s.pageCallerOf(ctx, machine, self, false); err != nil {
+					return "", err
+				} else if _, err := s.writablePage(ctx, st, caller, task.PageID); err != nil {
+					return "", err
+				}
+			}
 		}
 		ok, err := s.deleteTaskFrom(ctx, a.ID, self) // this conversation may ask for it again (scheduleOwn)
 		if err != nil {
