@@ -3,22 +3,23 @@
 // hub's commands, auto-update, the personad on each computer, and the history. Follows the hub's `hub_update` pushes.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, errorText } from "../../lib/api";
-import { ago, bytes, duration } from "../../lib/format";
-import { formatNumber, t } from "../../i18n";
-import { hubUpdate, setHubUpdateSettings, startHubUpdate, type HubDevelopmentProgress, type HubUpdateBackup, type HubUpdateRecord, type HubUpdateStatus } from "../../lib/hub-update";
+import { ago } from "../../lib/format";
+import { t } from "../../i18n";
+import { hubUpdate, setHubUpdateSettings, startHubUpdate, type HubUpdateBackup, type HubUpdateRecord, type HubUpdateStatus } from "../../lib/hub-update";
 import {
   applyHubUpdateBackup, channelTitle, checkHubUpdate, dockerSteps, hubUpdateBackups, hubUpdateHistory, latestWarning,
-  recordTitle, recordTone, sourceBehindWarning, updateFinished, updateStateTitle, updateView, updateWorking,
+  recordTitle, recordTone, sourceBehindWarning, updateFinished, updateView, updateWorking,
 } from "../../lib/hub-update-settings";
 import { machineDeployment } from "../../lib/machine-deploy";
 import { managerOf, multiManager, useRoster } from "../../lib/managers";
 import { navigate } from "../../lib/router";
 import { isResumed } from "../../lib/reconnect";
 import { onHubEvent, useStore } from "../../lib/store";
-import { Button, copyText, cx, Dialog, IconButton, Loading, Spinner, toast } from "../../ui/atoms";
+import { Button, copyText, cx, Dialog, IconButton, Loading, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Group, Pill, Row, Switch, SettingsHint, settingsInputClass } from "./SettingsParts";
 import { ExtensionDownloadMirrors } from "./ExtensionDownloadMirrors";
+import { HubUpdatePipeline, observeHubUpdate } from "./HubUpdatePipeline";
 
 const twoDigits = (value: number) => String(value).padStart(2, "0");
 
@@ -39,7 +40,8 @@ export function HubSettings() {
 }
 
 function HubUpdates() {
-  const [status, setStatus] = useState<HubUpdateStatus | null>(null);
+  const [snapshot, setSnapshot] = useState<{ status: HubUpdateStatus; pipeline: ReturnType<typeof observeHubUpdate> } | null>(null);
+  const status = snapshot?.status ?? null;
   const [history, setHistory] = useState<HubUpdateRecord[]>([]);
   const [unsupported, setUnsupported] = useState(false);
   const [error, setError] = useState("");
@@ -60,7 +62,8 @@ function HubUpdates() {
     revision.current++;
     const finished = updateFinished(last.current, s.state);
     last.current = s.state;
-    setStatus(s);
+    const now = Date.now();
+    setSnapshot(prev => ({ status: s, pipeline: observeHubUpdate(prev?.pipeline, s, now) }));
     if (finished) hubUpdateHistory().then(setHistory, () => {});
   }, []);
 
@@ -209,8 +212,9 @@ function HubUpdates() {
   const showChannel = !status.development || runningChannel !== source;
   const showUpdateVersion = source === "web-dev" && status.can_update;
   const warning = latestWarning(status);
-  const activeBackup = working ? status.latest?.backup_id : undefined;
-  const selectedID = activeBackup || selectedVersion;
+  const run = snapshot?.pipeline;
+  const activeBackup = run?.backupId;
+  const selectedID = run && !run.restoringBackup ? "" : activeBackup || selectedVersion;
   const selectedBackup = source === "web-dev" ? backups.find(v => v.id === selectedID) : undefined;
   const showReleaseHeading = view.kind === "newer" && !showUpdateVersion;
   const latestDetails = (!selectedBackup || activeBackup) && (view.kind === "newer" || showUpdateVersion) ? status.latest : undefined;
@@ -312,20 +316,16 @@ function HubUpdates() {
             )}
           </div>
         )}
-        {!selectedBackup && view.kind === "newer" && status.latest && (
-          <>
-            {view.working ? (
-              <Progress s={status} onNow={() => setConfirmNow(true)} />
-            ) : (
-              <div className="flex justify-end px-4 py-2.5">
-                <Button tone="accent" busy={starting} disabled={starting} onClick={() => void update(false)}>
-                  {t("settings-hubsettings.update_hub")}
-                </Button>
-              </div>
-            )}
-          </>
+        {!selectedBackup && view.kind === "newer" && !working && (
+          <div className="flex justify-end px-4 py-2.5">
+            <Button tone="accent" busy={starting} disabled={starting} onClick={() => void update(false)}>
+              {t("settings-hubsettings.update_hub")}
+            </Button>
+          </div>
         )}
-        {(view.kind === "working" || (selectedBackup && working) || (streaming && view.kind === "cannot")) && <Progress s={status} onNow={() => setConfirmNow(true)} />}
+        {run && view.kind !== "docker" && (
+          <HubUpdatePipeline s={status} run={run} onNow={() => setConfirmNow(true)} />
+        )}
         {!selectedBackup && view.kind === "current" && (status.source !== "web-dev" || status.last_check) && (behind ? (
           <p className="flex items-start gap-1.5 px-4 py-3 text-meta leading-snug break-words text-orange">
             <Icon name="info" size={13} className="mt-0.5 shrink-0" />
@@ -456,72 +456,6 @@ function DevelopmentBackup({ s, onSaved }: { s: HubUpdateStatus; onSaved: (s: Hu
         <Button busy={saving} disabled={saving} onClick={() => void save()}>{t("settings-hubsettings.save_backup")}</Button>
       </div>
     </Group>
-  );
-}
-
-/** The update under way, and while it waits for idle what it waits for, with "Update now". */
-function Progress({ s, onNow }: { s: HubUpdateStatus; onNow: () => void }) {
-  const progress = s.development_progress;
-  if (progress?.phase === s.state) {
-    const key = `settings-hubsettings.progress_step_${progress.step}`;
-    const step = t(key);
-    if (step !== key) return <DevelopmentProgress title={updateStateTitle(s)} step={step} p={progress} />;
-  }
-  return (
-    <>
-      <div className="flex items-center gap-2 px-4 py-3 text-[13px] text-ink">
-        <Spinner />
-        <span className="truncate">{updateStateTitle(s)}</span>
-        {s.progress && s.state === "downloading" && <span className="shrink-0 font-mono text-[11.5px] text-ink-3">{s.progress}</span>}
-      </div>
-      {s.state === "waiting_idle" && s.busy.length > 0 && (
-        <>
-          {s.busy.map((b) => (
-            <div key={`${b.machine_id}/${b.session_id ?? b.title}`} className="flex items-center gap-3 px-4 py-2">
-              <span className="size-1.5 shrink-0 rounded-full bg-accent" />
-              <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink">{b.title}</span>
-              <span className="shrink-0 text-[11.5px] text-ink-3">{b.machine}</span>
-            </div>
-          ))}
-          <div className="flex justify-end px-4 py-2.5">
-            <Button tone="quiet" onClick={onNow} className="text-red enabled:hover:text-red">{t("settings-hubsettings.update_now_ellipsis")}</Button>
-          </div>
-        </>
-      )}
-    </>
-  );
-}
-
-function DevelopmentProgress({ title, step, p }: { title: string; step: string; p: HubDevelopmentProgress }) {
-  const stepNumber = `${formatNumber(p.step_index)}/${formatNumber(p.step_total)}`;
-  const size = p.bytes_done === undefined ? undefined :
-    p.bytes_total === undefined ? bytes(p.bytes_done) : `${bytes(p.bytes_done)} / ${bytes(p.bytes_total)}`;
-  const speed = p.bytes_per_second === undefined ? undefined : t("settings-hubsettings.progress_speed", {
-    speed: formatNumber(p.bytes_per_second / (1024 * 1024), { maximumFractionDigits: 2 }),
-  });
-  const countKey = p.step === "archive_files" ? "settings-hubsettings.progress_files" :
-    p.step === "database_dump" ? "settings-hubsettings.progress_databases" : "settings-hubsettings.progress_items";
-  const items = p.item_done === undefined || p.item_total === undefined ? undefined :
-    t(countKey, { done: formatNumber(p.item_done), total: formatNumber(p.item_total) });
-  const elapsed = t("settings-hubsettings.progress_elapsed", { time: duration(p.elapsed_seconds * 1000) });
-  return (
-    <div className="flex flex-col gap-1.5 px-4 py-3">
-      <div className="flex items-center gap-2 text-meta text-ink">
-        {p.percent === undefined && <Spinner />}
-        <span>{title}</span>
-      </div>
-      <div className="flex items-baseline gap-2 text-label text-ink-2 tabular-nums">
-        <span role="status" className="min-w-0 flex-1">{stepNumber} · {step}</span>
-        {p.percent !== undefined && <span className="shrink-0">{formatNumber(p.percent / 100, { style: "percent" })}</span>}
-      </div>
-      {p.percent !== undefined && (
-        <div role="progressbar" aria-label={step} aria-valuenow={p.percent} aria-valuemin={0} aria-valuemax={100}
-          className="h-1 overflow-hidden rounded-full bg-inset">
-          <div className="h-full rounded-full bg-accent" style={{ width: `${p.percent}%` }} />
-        </div>
-      )}
-      <p className="text-label text-ink-3 tabular-nums">{[p.item_label, size, speed, items, elapsed].filter(Boolean).join(" · ")}</p>
-    </div>
   );
 }
 

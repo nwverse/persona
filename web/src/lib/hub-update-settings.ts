@@ -10,7 +10,7 @@ export const applyHubUpdateBackup = (id: string) => api<HubUpdateStatus>(`/hub/u
 
 /** An update is under way (the progress row, no buttons). */
 export function updateWorking(s: HubUpdateStatus): boolean {
-  return ["building", "applying_backup", "backing_up", "downloading", "waiting_idle", "restarting", "confirming"].includes(s.state);
+  return ["building", "applying_backup", "backing_up", "downloading", "waiting_idle", "installing", "restarting", "confirming"].includes(s.state);
 }
 
 /** A state that ends an update: the history has a new line. */

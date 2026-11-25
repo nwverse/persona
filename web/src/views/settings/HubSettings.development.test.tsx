@@ -24,6 +24,11 @@ const localTime = new Intl.DateTimeFormat("sv-SE", { dateStyle: "short", timeSty
 vi.mock("../../lib/hub-update", async (original) => ({
   ...await original<typeof import("../../lib/hub-update")>(),
   hubUpdate: async () => { updateReads++; return readUpdate ? readUpdate() : status; },
+  startHubUpdate: async (now: boolean) => {
+    saved.push({ now });
+    status = { ...status, state: "restarting", busy: [] };
+    return status;
+  },
   setHubUpdateSettings: async (input: { source?: "release" | "beta" | "web-dev"; development_backup_directory?: string }) => {
     saved.push(input);
     status = { ...status, ...input, auto: false };
@@ -93,16 +98,35 @@ async function mount(state = "available", overrides: Partial<HubUpdateStatus> = 
   await act(async () => root!.render(<HubSettings />));
 }
 
+function pipelineNodes(list: "Update stages" | "Phase steps") {
+  return [...host.querySelectorAll<HTMLLIElement>(`ol[aria-label="${list}"] > li`)]
+    .map(el => [el.dataset.stage ?? el.dataset.step, el.dataset.state]);
+}
+
+async function pushUpdate(next: Partial<HubUpdateStatus>) {
+  status = { ...status, ...next };
+  await act(async () => events.get("hub_update")!({ update: status }));
+}
+
 it("polls active development phases and replaces the step and metrics", async () => {
   vi.useFakeTimers();
   await mount("building", { development_progress: {
     phase: "building", step: "npm_install", step_index: 2, step_total: 6, elapsed_seconds: 10,
   } });
-  expect(host.textContent).toContain("2/6 · Install Web dependencies");
+  expect(pipelineNodes("Update stages")).toEqual([
+    ["building", "active"], ["backing_up", "pending"], ["waiting_idle", "pending"], ["restarting", "pending"],
+  ]);
+  expect(pipelineNodes("Phase steps")).toEqual([
+    ["fetch", "done"], ["npm_install", "active"], ["web_build", "pending"], ["runtime_packages", "pending"],
+    ["go_build", "pending"], ["manifest", "pending"],
+  ]);
+  expect(host.querySelector('[data-step="npm_install"] [role="status"]')?.textContent).toContain("Install Web dependencies");
+  expect(host.querySelector('section[aria-label="Update pipeline"] header')?.textContent).toContain("b".repeat(12));
+  expect(host.textContent).toContain("Elapsed 10 sec");
   expect(host.querySelector('[role="progressbar"]')).toBeNull();
 
   status = { ...status, state: "backing_up", development_progress: {
-    phase: "backing_up", step: "archive_files", step_index: 3, step_total: 5, elapsed_seconds: 24,
+    phase: "backing_up", step: "archive_files", step_index: 3, step_total: 5, elapsed_seconds: 1,
     bytes_done: 182 * 1024 ** 2, bytes_total: 460 * 1024 ** 2, bytes_per_second: 21.5 * 1024 ** 2, percent: 39,
     item_done: 20, item_total: 45,
   } };
@@ -111,23 +135,102 @@ it("polls active development phases and replaces the step and metrics", async ()
   expect(host.textContent).toContain("182 MB / 460 MB");
   expect(host.textContent).toContain("21.5 MB/s");
   expect(host.textContent).toContain("Files 20/45");
-  expect(host.textContent).toContain("Elapsed 24 sec");
+  expect(host.textContent).toContain("Elapsed 11 sec");
+  expect(pipelineNodes("Update stages")).toEqual([
+    ["building", "done"], ["backing_up", "active"], ["waiting_idle", "done"], ["restarting", "pending"],
+  ]);
+  expect(pipelineNodes("Phase steps")).toEqual([
+    ["quiesce", "done"], ["database_dump", "done"], ["archive_files", "active"], ["archive_programs", "pending"], ["verify_snapshot", "pending"],
+  ]);
 
-  status = { ...status, state: "applying_backup", development_progress: {
-    phase: "applying_backup", step: "prepare_artifacts", step_index: 2, step_total: 2, elapsed_seconds: 32,
-    item_done: 0, item_total: 2, percent: 0,
-  } };
+  status = { ...status, state: "confirming", development_progress: undefined };
   await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
-  expect(host.textContent).toContain("Stage programs and computer packages");
-  expect(host.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("0");
-
-  status = { ...status, state: "downloading", progress: "hub 75%" };
-  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
-  expect(host.textContent).toContain("hub 75%");
-  expect(host.textContent).not.toContain("Stage programs and computer packages");
+  expect(pipelineNodes("Phase steps")).toEqual([]);
+  expect(pipelineNodes("Update stages")).toEqual([
+    ["building", "done"], ["backing_up", "done"], ["waiting_idle", "done"], ["restarting", "active"],
+  ]);
+  expect(host.textContent).toContain("Confirming");
   const reads = updateReads;
   await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
   expect(updateReads).toBe(reads);
+});
+
+it.each([
+  { step: "database_dump", stepIndex: 2, stepTotal: 6, builtinQuiesce: undefined },
+  { step: "resume_writers", stepIndex: 5, stepTotal: 5, builtinQuiesce: true },
+  { step: "database_dump", stepIndex: 2, stepTotal: 5, builtinQuiesce: false },
+])("shows external quiesce's resume step with $step at $stepIndex/$stepTotal ($builtinQuiesce)", async ({ step, stepIndex, stepTotal, builtinQuiesce }) => {
+  await mount("backing_up", { development: { configured: true, branch: "main", builtin_quiesce: builtinQuiesce },
+    development_progress: { phase: "backing_up", step, step_index: stepIndex, step_total: stepTotal,
+      elapsed_seconds: 24, item_done: 1, item_total: 2 } });
+  expect(pipelineNodes("Phase steps").map(([name]) => name)).toEqual([
+    "quiesce", "database_dump", "archive_files", "archive_programs", "resume_writers", "verify_snapshot",
+  ]);
+  expect(host.querySelector('ol[aria-label="Phase steps"] [aria-current="step"]')?.getAttribute("data-step")).toBe(step);
+  expect(host.textContent).toContain("Phase elapsed 24 sec");
+  if (step === "database_dump") expect(host.textContent).toContain("Databases 1/2");
+});
+
+it("uses the named node before the index and keeps telemetry for an unknown step", async () => {
+  const p = { phase: "building", step: "go_build", step_index: 1, step_total: 6, elapsed_seconds: 5,
+    item_label: "personad (linux-amd64)", percent: 75, item_done: 3, item_total: 4 } as const;
+  await mount("building", { development_progress: p });
+  expect(host.querySelector('ol[aria-label="Phase steps"] [aria-current="step"]')?.getAttribute("data-step")).toBe("go_build");
+  expect(host.textContent).toContain("personad (linux-amd64)");
+  expect(host.textContent).toContain("Items 3/4");
+
+  await pushUpdate({ development_progress: { ...p, step: "sign_artifacts", step_index: 3, step_total: 7, percent: 0 } });
+  expect(pipelineNodes("Phase steps")).toEqual([
+    ["fetch", "done"], ["npm_install", "done"], ["sign_artifacts", "active"], ["web_build", "pending"],
+    ["runtime_packages", "pending"], ["go_build", "pending"], ["manifest", "pending"],
+  ]);
+  const bar = host.querySelector('[role="progressbar"]');
+  expect(bar?.getAttribute("aria-label")).toMatch(/sign artifacts/i);
+  expect(bar?.getAttribute("aria-valuenow")).toBe("0");
+});
+
+it("keeps the backup target and stages through preparation, idle wait and reconnect", async () => {
+  await mount("applying_backup", { development_progress: { phase: "applying_backup", step: "prepare_artifacts",
+    step_index: 2, step_total: 2, elapsed_seconds: 6, item_done: 0, item_total: 2, percent: 0 } });
+  expect(pipelineNodes("Update stages")).toEqual([
+    ["backing_up", "pending"], ["applying_backup", "active"], ["waiting_idle", "pending"], ["restarting", "pending"],
+  ]);
+  expect(pipelineNodes("Phase steps")).toEqual([["verify_snapshot", "done"], ["prepare_artifacts", "active"]]);
+  expect(host.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("0");
+
+  await pushUpdate({ state: "waiting_idle", busy: [{ title: "Writing a summary", machine: "Desk computer", machine_id: "desk" }] });
+  expect(pipelineNodes("Update stages")).toEqual([
+    ["backing_up", "pending"], ["applying_backup", "done"], ["waiting_idle", "active"], ["restarting", "pending"],
+  ]);
+  expect(pipelineNodes("Phase steps")).toEqual([]);
+  const pipeline = host.querySelector('section[aria-label="Update pipeline"]')!;
+  expect(pipeline.textContent).toContain("Writing a summary");
+  expect(pipeline.textContent).toContain("Desk computer");
+  const now = [...pipeline.querySelectorAll("button")].find(b => b.textContent === "Update now…")!;
+  await act(async () => now.click());
+  expect(saved).toEqual([]);
+  const dialog = document.querySelector('[role="dialog"]')!;
+  await act(async () => [...dialog.querySelectorAll("button")].find(b => b.textContent === "Update now")!.click());
+  expect(saved).toEqual([{ now: true }]);
+  await pushUpdate({ state: "confirming", latest: undefined });
+  expect(pipelineNodes("Update stages")).toEqual([
+    ["backing_up", "done"], ["applying_backup", "done"], ["waiting_idle", "done"], ["restarting", "active"],
+  ]);
+  expect(pipeline.querySelector("header")?.textContent).toContain("b".repeat(12));
+});
+
+it.each(["release", "beta"] as const)("shows download progress and the restart stages for %s", async source => {
+  await mount("downloading", { source, progress: "hub 75%", latest: { version: "v2.0", build: 2, newer: true, bad: false } });
+  expect(pipelineNodes("Update stages")).toEqual([["downloading", "active"], ["waiting_idle", "pending"], ["restarting", "pending"]]);
+  expect(host.textContent).toContain("hub 75%");
+  expect(host.querySelector('section[aria-label="Update pipeline"] header')?.textContent).toContain("v2.0");
+  for (const state of ["installing", "restarting", "confirming"]) {
+    await pushUpdate({ state });
+    expect(pipelineNodes("Update stages")).toEqual([["downloading", "done"], ["waiting_idle", "done"], ["restarting", "active"]]);
+    expect(host.textContent).not.toContain("hub 75%");
+  }
+  await pushUpdate({ state: "updated", latest: undefined });
+  expect(host.querySelector('section[aria-label="Update pipeline"]')).toBeNull();
 });
 
 it("ignores a delayed poll after a newer state push", async () => {
