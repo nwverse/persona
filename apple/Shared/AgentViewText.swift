@@ -33,15 +33,18 @@ nonisolated extension AgentView {
         if case .background(let r) = reason { return r.waiting == true }
         return false
     }
-    /// Idle and still there (seen, or its host does not say): folded away in busy spaces. One that is not running is not
-    /// live, an error or a finished turn not quiet.
+    /// Nothing new for the owner to look at: idle and still there (seen, or its host does not say), or a finished turn
+    /// already seen (one that asks the owner or just finished, which lists keep out of their idle folds unless it is
+    /// muted). Folded away in busy spaces. One that is not running is not live; an error, work and an unseen result are
+    /// never quiet.
     var isQuiet: Bool {
         switch phase {
         case .idle:
             if case .notRunning = reason { return false }
             return true
+        case .done: return isJustFinished || asksSeen
         case .unknown: return true
-        case .needsYou, .working, .done, .error: return false
+        case .needsYou, .working, .error: return false
         }
     }
     /// It needs the owner and its row counts in the Agents list's Needs you (fleetcount's decision).

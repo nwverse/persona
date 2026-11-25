@@ -45,10 +45,10 @@ nonisolated enum AgentViewFallback {
     }
 
     /// The row a session's own fields give when no list decided one: a session that needs the user is its own row,
-    /// counted unless it is a quiet task's, directory-hidden or one of the assistant's.
-    static func ownRow(_ s: Session) -> Row {
+    /// counted unless it is muted, a quiet task's, directory-hidden or one of the assistant's.
+    static func ownRow(_ s: Session, muted: Bool = false) -> Row {
         guard s.state == .needsYou else { return .noRow }
-        let counted = !s.assistant && !s.quiet && s.hiddenByDirectory != true
+        let counted = !muted && !s.assistant && !s.quiet && s.hiddenByDirectory != true
         return s.pendingInteractions > 0 ? .cards(n: s.pendingInteractions, held: false, counted: counted) : .dialog(counted: counted)
     }
 
@@ -151,6 +151,6 @@ nonisolated extension Session {
     /// Its view as a list that knows whether the owner muted it sorts it: the hub's, which counted the mute already, or
     /// the fallback's with `muted`.
     func agentView(muted: Bool) -> AgentView {
-        view ?? AgentViewFallback.view(self, row: AgentViewFallback.ownRow(self), muted: muted)
+        view ?? AgentViewFallback.view(self, row: AgentViewFallback.ownRow(self, muted: muted), muted: muted)
     }
 }

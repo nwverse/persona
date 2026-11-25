@@ -63,8 +63,11 @@ nonisolated struct AgentListOrder {
         let muted = isMuted(s)
         let view = s.agentView(muted: muted)
         guard view.isQuiet, let place = heldPlace(s) else { return view.rank }
-        let held = place == .unread ? AgentViewFallback.Rank.doneUnseen : AgentViewFallback.Rank.doneJustFinished
-        return muted ? AgentViewFallback.Rank.muted(held) : held
+        switch place {
+        case .unread: return muted ? AgentViewFallback.Rank.muted(AgentViewFallback.Rank.doneUnseen) : AgentViewFallback.Rank.doneUnseen
+        // A muted one is plain Seen everywhere: it keeps no Just finished place.
+        case .justFinished: return muted ? view.rank : AgentViewFallback.Rank.doneJustFinished
+        }
     }
 
     /// The By Status section `s` is listed in: its rank's phase, an index into `stateKeys`.
