@@ -276,6 +276,27 @@ it("refreshes both the index and transcript after history_changed instead of pag
   expect(scroller().hasAttribute("data-chat-context-window")).toBe(false);
 });
 
+it("keeps the current view on a failed target read without a compatibility refusal", async () => {
+  const { jump } = await showRail(() => Response.json({ code: "internal" }, { status: 500 }));
+  await jump();
+  expect(transcript.loadEarlier).not.toHaveBeenCalled();
+  expect(scroller().hasAttribute("data-chat-context-window")).toBe(false);
+  expect(scroller().textContent).toContain(live.text);
+  expect(document.body.textContent).toContain(t("chat-navrail.target_failed"));
+});
+
+it("discards a late target window when the reader scrolls the chat first", async () => {
+  let release!: (response: Response) => void;
+  const { jump } = await showRail(() => new Promise((resolve) => { release = resolve; }));
+  await jump();
+  act(() => scroller().dispatchEvent(new WheelEvent("wheel", { deltaY: -100 })));
+  await act(async () => release(Response.json(context)));
+  await advance(320);
+  expect(scroller().hasAttribute("data-chat-context-window")).toBe(false);
+  expect(scroller().textContent).toContain(live.text);
+  expect(hit()).toBeNull();
+});
+
 it("invalidates a detached window after a live transcript replacement", async () => {
   const { jump } = await showRail();
   await jump();
