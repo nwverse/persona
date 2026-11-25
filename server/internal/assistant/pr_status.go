@@ -704,6 +704,7 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		s.drainWorkspaceQueuesForPrereq(ctx, t.ID)
 		s.evaluateTodoAfterDependents(ctx, t.ID)
 	}
+	s.onPRStatusMergeTrain(ctx, t, status)
 	return nil
 }
 

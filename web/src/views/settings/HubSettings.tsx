@@ -4,11 +4,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, errorText } from "../../lib/api";
 import { ago } from "../../lib/format";
-import { t } from "../../i18n";
+import { formatDate, t } from "../../i18n";
 import { hubUpdate, setHubUpdateSettings, startHubUpdate, type HubUpdateBackup, type HubUpdateRecord, type HubUpdateStatus } from "../../lib/hub-update";
 import {
   applyHubUpdateBackup, channelTitle, checkHubUpdate, dockerSteps, hubUpdateBackups, hubUpdateHistory, latestWarning,
-  recordTitle, recordTone, sourceBehindWarning, updateFinished, updateView, updateWorking,
+  recordTitle, recordTone, updateFinished, updateView, updateWorking,
 } from "../../lib/hub-update-settings";
 import { machineDeployment } from "../../lib/machine-deploy";
 import { managerOf, multiManager, useRoster } from "../../lib/managers";
@@ -19,6 +19,7 @@ import { Button, copyText, cx, Dialog, IconButton, Loading, toast } from "../../
 import { Icon } from "../../ui/icons";
 import { Group, Pill, Row, Switch, SettingsHint, settingsInputClass } from "./SettingsParts";
 import { ExtensionDownloadMirrors } from "./ExtensionDownloadMirrors";
+import { RecoveryEntry } from "./RecoverySettings";
 import { HubUpdatePipeline, observeHubUpdate } from "./HubUpdatePipeline";
 
 const twoDigits = (value: number) => String(value).padStart(2, "0");
@@ -40,8 +41,8 @@ function datedCommit(commit?: string, date?: string): string {
   return commit ? `${updateDate(date)} · ${commit.slice(0, 12)}` : t("settings-hubsettings.unknown");
 }
 
-export function HubSettings() {
-  return <><HubUpdates /><ExtensionDownloadMirrors /></>;
+export function HubSettings({ onOpenRecovery }: { onOpenRecovery?: () => void }) {
+  return <><HubUpdates /><RecoveryEntry onOpen={onOpenRecovery} /><ExtensionDownloadMirrors /></>;
 }
 
 function HubUpdates() {
@@ -216,14 +217,16 @@ function HubUpdates() {
   const runningChannel = status.version.startsWith("web-dev-") ? "web-dev" : status.channel;
   const showChannel = !status.development || runningChannel !== source;
   const showUpdateVersion = source === "web-dev" && status.can_update;
-  const warning = latestWarning(status);
   const run = snapshot?.pipeline;
   const activeBackup = run?.backupId;
   const selectedID = run && !run.restoringBackup ? "" : activeBackup || selectedVersion;
   const selectedBackup = source === "web-dev" ? backups.find(v => v.id === selectedID) : undefined;
-  const showReleaseHeading = view.kind === "newer" && !showUpdateVersion;
-  const latestDetails = (!selectedBackup || activeBackup) && (view.kind === "newer" || showUpdateVersion) ? status.latest : undefined;
-  const behind = sourceBehindWarning(status);
+  const release = source !== "web-dev" && view.kind !== "docker" ? status.latest : undefined;
+  const released = release?.released;
+  const releaseTime = released && released !== "0001-01-01T00:00:00Z" ? formatDate(released, { dateStyle: "medium", timeStyle: "short" }) : "";
+  const candidate = (!selectedBackup || activeBackup) && (view.kind === "newer" || showUpdateVersion) ? status.latest : undefined;
+  const warning = candidate && latestWarning(status);
+  const sourceWarning = view.kind === "source_behind" ? view.warning : view.kind === "ahead" ? t("settings-hubsettings.ahead_of_source") : null;
 
   return (
     <>
@@ -297,15 +300,17 @@ function HubUpdates() {
         </>}
         {view.kind === "docker" && <DockerRows s={status} />}
         {view.kind === "cannot" && <p className="px-4 py-3 text-[12.5px] leading-relaxed text-ink-3">{view.why}</p>}
-        {latestDetails && (showReleaseHeading || latestDetails.notes || warning) && (
+        {(release || candidate?.notes || warning) && (
           <div className="space-y-1 px-4 py-3">
-            {showReleaseHeading && (
-              <div className="flex items-center gap-2">
-                <span className="truncate text-[13.5px] font-medium text-ink">{t("settings-hubsettings.new_version", { version: latestDetails.version })}</span>
-                {latestDetails.released && <span className="shrink-0 text-submeta text-ink-3">{t("settings-hubsettings.released", { time: ago(latestDetails.released) })}</span>}
+            {release && (
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                <span className="min-w-0 break-words text-meta font-medium text-ink">
+                  {t(view.kind === "newer" ? "settings-hubsettings.new_version" : "settings-hubsettings.latest_release", { version: release.version })}
+                </span>
+                {releaseTime && <time dateTime={released} className="text-submeta text-ink-3">{t("settings-hubsettings.released", { time: releaseTime })}</time>}
               </div>
             )}
-            {latestDetails.notes && <p className="text-label leading-relaxed break-words text-ink-2">{latestDetails.notes}</p>}
+            {candidate?.notes && <p className="text-label leading-relaxed break-words text-ink-2">{candidate.notes}</p>}
             {warning && (
               <p className="flex items-start gap-1.5 text-label leading-snug text-orange">
                 <Icon name="info" size={13} className="mt-px shrink-0" />
@@ -324,17 +329,21 @@ function HubUpdates() {
         {run && view.kind !== "docker" && (
           <HubUpdatePipeline s={status} run={run} onNow={() => setConfirmNow(true)} />
         )}
-        {!selectedBackup && view.kind === "current" && (status.source !== "web-dev" || status.last_check) && (behind ? (
-          <p className="flex items-start gap-1.5 px-4 py-3 text-meta leading-snug break-words text-orange">
-            <Icon name="info" size={13} className="mt-0.5 shrink-0" />
-            <span className="min-w-0">{behind}</span>
+        {sourceWarning && (
+          <p role="status" className="flex items-start gap-1.5 px-4 py-3 text-meta leading-snug break-words text-orange">
+            <Icon name="info" className="mt-0.5 shrink-0" />
+            <span className="min-w-0">{sourceWarning}</span>
           </p>
-        ) : !status.error && (
-          <div className="flex items-center gap-2 px-4 py-3 text-[13px] text-green">
+        )}
+        {view.kind === "unchecked" && source !== "web-dev" && !status.error && (
+          <SettingsHint>{t(checking || status.state === "checking" ? "settings-hubsettings.checking" : "settings-hubsettings.unchecked")}</SettingsHint>
+        )}
+        {!selectedBackup && view.kind === "current" && (source !== "web-dev" || status.last_check) && !status.error && (
+          <div role="status" className="flex items-center gap-2 px-4 py-3 text-meta text-green">
             <Icon name="check" size={14} stroke={2.4} />
             {t("settings-hubsettings.up_to_date")}
           </div>
-        ))}
+        )}
         {status.error && !working && <p className={cx("px-4 py-2.5 text-[12px] break-words", status.state === "rolled_back" ? "text-orange" : "text-red")}>{status.error}</p>}
       </Group>
 

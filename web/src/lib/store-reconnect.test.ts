@@ -563,3 +563,244 @@ describe("keeping a quiet connection (app_ping)", () => {
     expect(FakeSocket.all.length).toBeGreaterThan(sockets);
   });
 });
+
+describe("stale HTTP upgrade probe races (#15754)", () => {
+  const settle = async () => {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+  };
+
+  function deferResponse() {
+    let resolve!: (r: Response) => void;
+    const promise = new Promise<Response>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  it("ignores a stale 5xx health probe settling after WS hello reconnect", async () => {
+    const health = deferResponse();
+    fetcher.mockImplementation((url: string) => {
+      if (String(url).endsWith("/api/v1/health")) return health.promise;
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+
+    connect();
+    last().drop(1006); // failed upgrade triggers probeEdge -> /api/v1/health
+    vi.advanceTimersByTime(600);
+    const recovered = last();
+    recovered.open();
+    recovered.push({ type: "hello", server_version: "v1", event_stream: "s1", event_seq: 1, resumed: true });
+    expect(getState().conn).toBe("online");
+    expect(getState().link.lastError).toBeUndefined();
+
+    // Late 503 from the earlier failed attempt must not poison state.link.lastError while online.
+    health.resolve(
+      new Response(JSON.stringify({ error: "stale gateway timeout" }), {
+        status: 503,
+        statusText: "Service Unavailable",
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await settle();
+    expect(getState().link.lastError).toBeUndefined();
+  });
+
+  it("ignores a stale probeCredential failure settling after WS hello reconnect", async () => {
+    const machines = deferResponse();
+    fetcher.mockImplementation((url: string) => {
+      if (String(url).endsWith("/api/v1/health")) return Promise.resolve(new Response("{}", { status: 200 }));
+      if (String(url).endsWith("/api/v1/machines")) return machines.promise;
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+
+    connect();
+    last().drop(1006); // /health returns 200 -> starts probeCredential GET /machines
+    await settle();
+    expect(fetched(fetcher)).toContain("/api/v1/machines");
+
+    vi.advanceTimersByTime(600);
+    const recovered = last();
+    recovered.open();
+    recovered.push({ type: "hello", server_version: "v1", event_stream: "s1", event_seq: 1, resumed: true });
+    expect(getState().conn).toBe("online");
+    expect(getState().link.lastError).toBeUndefined();
+
+    // Late 503 ApiError from the earlier probeCredential must not poison state.link.lastError.
+    machines.resolve(
+      new Response(JSON.stringify({ error: "stale credential probe failure" }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await settle();
+    expect(getState().link.lastError).toBeUndefined();
+  });
+
+  it("ignores a stale 5xx health probe settling after disconnect() and reset()", async () => {
+    const health = deferResponse();
+    fetcher.mockImplementation((url: string) => {
+      if (String(url).endsWith("/api/v1/health")) return health.promise;
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+
+    connect();
+    last().drop(1006);
+    disconnect();
+    reset();
+
+    health.resolve(
+      new Response(JSON.stringify({ error: "old hub error" }), {
+        status: 502,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await settle();
+    expect(getState().link.lastError).toBeUndefined();
+  });
+
+  it("ignores a stale probe settling after the credential token changes", async () => {
+    const health = deferResponse();
+    fetcher.mockImplementation((url: string) => {
+      if (String(url).endsWith("/api/v1/health")) return health.promise;
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+
+    connect();
+    last().drop(1006);
+    vi.stubGlobal("localStorage", { getItem: () => "new-hub-token", setItem: () => {}, removeItem: () => {} });
+
+    health.resolve(
+      new Response(JSON.stringify({ error: "old token error" }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await settle();
+    expect(getState().link.lastError).toBeUndefined();
+  });
+
+  it("allows a new disconnect episode to probe even while a superseded probe from before hello is still hanging", async () => {
+    const health1 = deferResponse();
+    const health2 = deferResponse();
+    let healthCalls = 0;
+    fetcher.mockImplementation((url: string) => {
+      if (String(url).endsWith("/api/v1/health")) {
+        healthCalls++;
+        return healthCalls === 1 ? health1.promise : health2.promise;
+      }
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+
+    // Episode 1 fails -> starts health1 (still hanging).
+    connect();
+    const firstSock = last();
+    firstSock.drop(1006);
+    expect(healthCalls).toBe(1);
+
+    // Reconnect succeeds with hello -> supersedes health1.
+    vi.advanceTimersByTime(600);
+    const live = last();
+    expect(live).not.toBe(firstSock);
+    live.open();
+    live.push({ type: "hello", server_version: "v1", event_stream: "s1", event_seq: 1, resumed: true });
+    expect(getState().conn).toBe("online");
+
+    // Episode 2: live socket drops, then the reconnect attempt fails upgrade while health1 is STILL unresolved.
+    live.drop(1006);
+    vi.advanceTimersByTime(600);
+    const retrySock = last();
+    expect(retrySock).not.toBe(live);
+    retrySock.drop(1006);
+    expect(healthCalls).toBe(2);
+
+    // Episode 2 probe reports fresh error.
+    health2.resolve(
+      new Response(JSON.stringify({ error: "fresh outage error" }), {
+        status: 502,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await settle();
+    expect(getState().link.lastError).toBe("fresh outage error");
+
+    // Stale health1 finally resolves with an old error — must not overwrite Episode 2's fresh error.
+    health1.resolve(
+      new Response(JSON.stringify({ error: "ancient outage error" }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await settle();
+    expect(getState().link.lastError).toBe("fresh outage error");
+  });
+
+  it("does not launch probeCredential when a stale 200 health settles after hello", async () => {
+    const health = deferResponse();
+    fetcher.mockImplementation((url: string) => {
+      if (String(url).endsWith("/api/v1/health")) return health.promise;
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+
+    connect();
+    const firstSock = last();
+    firstSock.drop(1006);
+    vi.advanceTimersByTime(600);
+    const live = last();
+    expect(live).not.toBe(firstSock);
+    live.open();
+    live.push({ type: "hello", server_version: "v1", event_stream: "s1", event_seq: 1, resumed: true });
+    fetcher.mockClear();
+
+    health.resolve(new Response("{}", { status: 200 }));
+    await settle();
+    expect(fetched(fetcher)).not.toContain("/api/v1/machines");
+  });
+
+  it("ignores a stale 200 probeCredential settling during a later outage so fresh lastError stays intact", async () => {
+    const machines1 = deferResponse();
+    let healthCalls = 0;
+    let machineCalls = 0;
+    fetcher.mockImplementation((url: string) => {
+      if (String(url).endsWith("/api/v1/health")) {
+        healthCalls++;
+        if (healthCalls === 1) return Promise.resolve(new Response("{}", { status: 200 }));
+        return Promise.resolve(new Response(JSON.stringify({ error: "episode 2 error" }), { status: 502, headers: { "Content-Type": "application/json" } }));
+      }
+      if (String(url).endsWith("/api/v1/machines")) {
+        machineCalls++;
+        if (machineCalls === 1) return machines1.promise;
+        return Promise.resolve(new Response("{}", { status: 200 }));
+      }
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+
+    // Episode 1: /health -> 200, starts probeCredential GET /machines (machines1).
+    connect();
+    const firstSock = last();
+    firstSock.drop(1006);
+    await settle();
+    expect(machineCalls).toBe(1);
+
+    // Reconnect succeeds (hello resumed -> no refresh GET /machines), then drops again into Episode 2.
+    vi.advanceTimersByTime(600);
+    const live = last();
+    expect(live).not.toBe(firstSock);
+    live.open();
+    live.push({ type: "hello", server_version: "v1", event_stream: "s1", event_seq: 1, resumed: true });
+
+    live.drop(1006);
+    vi.advanceTimersByTime(600);
+    last().drop(1006); // Episode 2 /health returns 502 -> sets lastError = "episode 2 error"
+    await settle();
+    expect(getState().link.lastError).toBe("episode 2 error");
+
+    // Stale Episode 1 probeCredential resolves 200 OK — must NOT clear Episode 2's fresh lastError.
+    machines1.resolve(new Response(JSON.stringify({ machines: [] }), { status: 200 }));
+    await settle();
+    expect(getState().link.lastError).toBe("episode 2 error");
+
+    // disconnect() clears stale lastError so a later connect() starts clean.
+    disconnect();
+    expect(getState().link.lastError).toBeUndefined();
+  });
+});
