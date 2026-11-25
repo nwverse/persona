@@ -46,6 +46,7 @@ func inboxRetryEvent(todo, key string) superviseSignal {
 func inboxRetryService(t *testing.T, st Store) (*Service, *fakeHub, Todo) {
 	t.Helper()
 	s, f := newQuietServiceOn(t, st)
+	f.inbox = newFakeInbox()
 	turnInboxSignalsOn(t, s)
 	s.superviseTimes.gather = time.Hour
 	todo := startedTask(t, s, f)
@@ -62,7 +63,7 @@ func inboxRetryTurn(s *Service, f *fakeHub, turn, prompt, answer string, rev int
 	page = append(page, end)
 	f.setItems(page...)
 	f.setSessions("box", turnRow(proto.StatusWorking, rev, ""))
-	s.taskWorking(ctx, "box", "s1")
+	s.taskWorking(ctx, "box", "s1", startRow{})
 	f.setSessions("box", turnRow(proto.StatusDone, rev+1, answer))
 	s.taskTurnSettled(ctx, "box", "s1")
 }
@@ -317,7 +318,7 @@ func TestInboxNoOutputModelErrorStillRetries(t *testing.T) {
 	page[0].Text = prompt
 	f.setItems(page...)
 	f.setSessions("box", turnRow(proto.StatusWorking, 10, ""))
-	s.taskWorking(context.Background(), "box", "s1")
+	s.taskWorking(context.Background(), "box", "s1", startRow{})
 	row := turnRow(proto.StatusDone, 11, "")
 	row.TurnError = "API Error: upstream returned no output"
 	f.setSessions("box", row)
@@ -347,7 +348,7 @@ func TestInboxNoOutputRetryRespectsAnOwnerWait(t *testing.T) {
 	page[0].Text = prompt
 	f.setItems(page...)
 	f.setSessions("box", turnRow(proto.StatusWorking, 10, ""))
-	s.taskWorking(context.Background(), "box", "s1")
+	s.taskWorking(context.Background(), "box", "s1", startRow{})
 	if _, _, err := s.updateSupervision(context.Background(), todo.ID, func(v *Supervision) bool {
 		v.State = reviewNeedsUser
 		return true

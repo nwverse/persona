@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,6 +20,7 @@ const superviseDedupWindow = 30 * time.Minute
 type superviseFingerprint struct {
 	Hash      string    `json:"hash"`
 	At        time.Time `json:"at"`
+	Key       string    `json:"key,omitempty"` // the stretch reserved by this fingerprint; empty before #5732
 	Permanent bool      `json:"permanent,omitempty"`
 	// Todo bounds inactivity, daily-summary and unhandled-event fingerprints by the task's lifetime.
 	// Other non-permanent kinds retain the short semantic-deduplication window.
@@ -25,8 +28,8 @@ type superviseFingerprint struct {
 }
 
 func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, string) {
-	if g.Kind == sigTodoReady {
-		// One durable wake per dependent to-do and canonical after-prerequisite set, independent of restarts or sweeps.
+	if g.Kind == sigTodoReady || g.Kind == sigParentCloseout {
+		// One durable wake per to-do and canonical prerequisite/children set, independent of restarts or sweeps.
 		key, _ := json.Marshal([]string{g.Todo, g.Kind})
 		sum := sha256.Sum256([]byte(g.Key))
 		return string(key), hex.EncodeToString(sum[:])
@@ -36,8 +39,8 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 		day, _, _ := strings.Cut(g.Key, "|")
 		return string(key), day // replacement parks and wording cannot produce a second summary that day
 	}
-	if g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPREvent {
-		// Keep every task/PR/head independently, including a head that returns after another one.
+	if g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPREvent || g.Kind == sigPRMerged || g.Kind == sigNeedsUserExternalInfo {
+		// Keep every task/PR/head and needs_user external-info signal independently across sweeps and restarts.
 		key, _ := json.Marshal([]string{g.Todo, g.Kind, g.Key})
 		sum := sha256.Sum256(key)
 		return string(key), hex.EncodeToString(sum[:])
@@ -60,7 +63,10 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 	if g.Kind == sigAllStopped {
 		parts = []string{g.Todo, g.Kind} // one latest group key per task and destination, not per member
 	}
-	if g.To != "" { // a card's rung (ask_route.go): each conversation hears of it; the others' keys stay as they were
+	if g.Kind == sigReview && g.Recipient != "" {
+		// A transferred review is new to the receiving supervisor. Keep the original owner's receipt intact.
+		parts = append(parts, g.Recipient)
+	} else if g.To != "" { // a card's rung (ask_route.go): each conversation hears of it; the others' keys stay as they were
 		parts = append(parts, g.To)
 	}
 	key, _ := json.Marshal(parts)
@@ -75,7 +81,7 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 	if len(e.Asks) > 0 { // the cards it lists are what is new about it
 		fields = append(fields, e.Asks)
 	}
-	if keyIsNews(g.Kind) {
+	if keyIsNews(g.Kind) || (g.Kind == sigOrphaned && strings.HasPrefix(g.Key, nodeRecoveryKeyPrefix)) {
 		fields = append(fields, g.Key)
 	}
 	if g.Kind == sigAllStopped {
@@ -93,7 +99,7 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 // words stay the same.
 func keyIsNews(kind string) bool {
 	switch kind {
-	case sigParkedDue, sigParkDecided, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigFailed, sigStarted, sigAllStopped, sigDecisionReply, sigHandoffResult, sigEstimateDue, sigOverdue, sigTimedOut, sigTodoReady,
+	case sigParkedDue, sigParkDecided, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigDeliveryHold, sigFailed, sigStarted, sigAllStopped, sigDecisionReply, sigHandoffResult, sigEstimateDue, sigOverdue, sigTimedOut, sigCardlessWait, sigReviewNudge, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo, sigRecovered,
 		sigCheck: // a check's run, or the owner's answer to its decision: an Agent that only runs tools says the same all along
 		return true
 	}
@@ -151,12 +157,31 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 	}
 	var out []prompts.SuperviseEntry
 	var kept []superviseSignal
-	var pending [][2]string
+	// Read the outbox once for the whole batch. Only real delivery or queue admission acknowledges a stretch. An exact
+	// outbox member under the fingerprint's Key may have crashed after reservation. A different Key retries only while
+	// that fingerprint's stretch is still one of its unacknowledged predecessors; a real predecessor ACK removes it.
+	r := &s.relays
+	r.mu.Lock()
+	if !s.relayLocked(ctx) {
+		r.mu.Unlock()
+		return nil, signals, nil, errors.New("load supervision outbox")
+	}
+	pending := maps.Clone(r.st.SupervisePending)
+	r.mu.Unlock()
+	var resumingIDs [][2]string
 	resuming := delivery == leaderResumeDelivery
 	for i, entry := range entries {
 		key, hash := digestFingerprint(entry, signals[i])
+		current, undelivered := pending[signals[i].id()]
 		if seen, ok := next[key]; ok && seen.Hash == hash && (seen.Permanent || seen.Todo != "" || now.Sub(seen.At) < superviseDedupWindow) {
-			continue
+			if seen.Permanent && seen.Key == "" {
+				continue // a delivered PR head is told once for good; a reserved Key still owes a delivery
+			}
+			retry := undelivered && current.Key == signals[i].Key &&
+				(seen.Key == signals[i].Key || slices.Contains(current.PendingPredecessors, seen.Key))
+			if !retry {
+				continue
+			}
 		}
 		id := [2]string{key, hash}
 		if _, ok := b.resuming[id]; ok && delivery != digestDelivery {
@@ -167,14 +192,14 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 				b.resuming = make(map[[2]string]struct{})
 			}
 			b.resuming[id] = struct{}{}
-			pending = append(pending, id)
+			resumingIDs = append(resumingIDs, id)
 		}
-		fingerprint := superviseFingerprint{Hash: hash, At: now.UTC(), Permanent: signals[i].Kind == sigPRConflict ||
-			signals[i].Kind == sigDraftPR || signals[i].Kind == sigParkedSummary || signals[i].Kind == sigPREvent}
-		if signals[i].Kind == sigAllStopped || signals[i].Kind == sigParkedSummary || signals[i].Kind == sigPREvent || keptUntilChange(signals[i]) {
+		fingerprint := superviseFingerprint{Hash: hash, At: now.UTC(), Key: signals[i].Key, Permanent: signals[i].Kind == sigPRConflict ||
+			signals[i].Kind == sigDraftPR || signals[i].Kind == sigParkedSummary || signals[i].Kind == sigPREvent || signals[i].Kind == sigPRMerged || signals[i].Kind == sigNeedsUserExternalInfo}
+		if signals[i].Kind == sigAllStopped || signals[i].Kind == sigParkedSummary || signals[i].Kind == sigPREvent || signals[i].Kind == sigPRMerged || signals[i].Kind == sigNeedsUserExternalInfo || signals[i].Kind == sigRecovered || keptUntilChange(signals[i]) {
 			fingerprint.Todo = signals[i].Todo
 		}
-		if g := signals[i]; g.Kind == sigTodoReady || g.externalPRReview() || g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
+		if g := signals[i]; g.Kind == sigTodoReady || g.Kind == sigParentCloseout || g.externalPRReview() || g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
 			fingerprint.Todo = g.Todo
 		}
 		next[key] = fingerprint
@@ -182,7 +207,7 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 	}
 	if resuming {
 		return out, kept, func() {
-			for _, id := range pending {
+			for _, id := range resumingIDs {
 				delete(b.resuming, id)
 			}
 		}, nil
@@ -208,40 +233,100 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 	}, nil
 }
 
-// forgetSupervision takes the signals' fingerprints out of the deduplication history: their message was queued for a
-// conversation that is gone and was never read, so they are told again. dedupMu is held.
-func (s *Service) forgetSupervision(ctx context.Context, signals []superviseSignal, web string) {
+// ackSupervisionDedupLocked confirms current plan/transfer assignments and stable per-source events.
+// An empty Key distinguishes a confirmed delivery or durable queue admission from a crash after reservation. Re-emitting the same event after restart must not turn a
+// delivered fingerprint into a reservation retry. Use the fingerprints actually rendered: digestEntry mutates
+// start-remedy observation times and must never be called again after delivery. dedupMu is held by sendDigest.
+func (s *Service) ackSupervisionDedupLocked(ctx context.Context, signals []superviseSignal, rendered ...map[[2]string]string) {
+	b := &s.supervise
+	history := b.dedup
+	st := s.store()
+	if st != nil {
+		if _, err := st.Setting(ctx, superviseDedupKey, &history); err != nil {
+			s.logf("supervise: could not read deduplication history for delivery acknowledgment: %v", err)
+			return
+		}
+	}
+	next := maps.Clone(history)
+	changed := false
+	for _, g := range signals {
+		stable := g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPRMerged || g.Kind == sigNeedsUserExternalInfo ||
+			g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
+		if !stable {
+			// Unmarked legacy deliveries retain their established acknowledgment path.
+			t, ok := s.todoNow(g.Todo)
+			if !ok || !t.Supervision.assigned() {
+				continue
+			}
+		}
+		key := ""
+		if len(rendered) > 0 {
+			key = rendered[0][[2]string{g.id(), g.Key}]
+		}
+		if key == "" {
+			if !stable {
+				continue
+			}
+			key, _ = digestFingerprint(prompts.SuperviseEntry{}, g)
+		}
+		if seen, ok := next[key]; ok && seen.Key != "" && seen.Key == g.Key {
+			seen.Key = ""
+			next[key] = seen
+			changed = true
+		}
+	}
+	if !changed {
+		return
+	}
+	if st != nil {
+		if err := st.PutSetting(ctx, superviseDedupKey, next); err != nil {
+			// The message already went out. Keep the in-memory ACK even when its durable copy fails; a later restart may
+			// retry the head, which is safer than rolling back an actual delivery and losing the obligation instead.
+			s.logf("supervise: could not persist delivery acknowledgment: %v", err)
+		}
+	}
+	b.dedup = next
+}
+
+// forgetSupervision releases only fingerprints still reserved by these exact signal keys. A newer signal can inherit
+// the same semantic fingerprint while an older message waits, and that newer reservation must survive. dedupMu is held.
+func (s *Service) forgetSupervision(ctx context.Context, signals []superviseSignal, web string) error {
 	b := &s.supervise
 	history := b.dedup
 	st := s.store()
 	if st != nil {
 		if _, err := st.Setting(ctx, superviseDedupKey, &history); err != nil {
 			s.logf("supervise: could not read the deduplication history: %v", err)
-			return
+			return err
 		}
 	}
 	next := maps.Clone(history)
 	for _, g := range signals {
 		if g.Kind == sigAllStopped {
 			key, _ := digestFingerprint(prompts.SuperviseEntry{}, g)
-			delete(next, key) // a lost queue releases its key even while the participants cannot be read
+			if seen, ok := next[key]; ok && seen.Key == g.Key {
+				delete(next, key)
+			}
 			continue
 		}
 		if e, ok := s.digestEntry(ctx, g, web); ok {
 			key, _ := digestFingerprint(e, g)
-			delete(next, key)
+			if seen, ok := next[key]; ok && seen.Key == g.Key {
+				delete(next, key)
+			}
 		}
 	}
 	if len(next) == len(history) {
-		return
+		return nil
 	}
 	if st != nil {
 		if err := st.PutSetting(ctx, superviseDedupKey, next); err != nil {
 			s.logf("supervise: could not release deduplication entries: %v", err)
-			return
+			return err
 		}
 	}
 	b.dedup = next
+	return nil
 }
 
 // Task-bound fingerprints are bounded by open tasks, not elapsed time. Load once
@@ -295,6 +380,15 @@ func (s *Service) pruneAllStoppedDedup(ctx context.Context) {
 // clearTodoReadyDedup removes the task-bound sigTodoReady deduplication entry for todoID when that to-do is reopened,
 // so a subsequent readiness transition after reopen is not suppressed by the earlier wake.
 func (s *Service) clearTodoReadyDedup(ctx context.Context, todoID string) {
+	s.clearTaskBoundSignalDedup(ctx, todoID, sigTodoReady)
+}
+
+// clearParentCloseoutDedup removes the task-bound sigParentCloseout deduplication entry for todoID when reopened.
+func (s *Service) clearParentCloseoutDedup(ctx context.Context, todoID string) {
+	s.clearTaskBoundSignalDedup(ctx, todoID, sigParentCloseout)
+}
+
+func (s *Service) clearTaskBoundSignalDedup(ctx context.Context, todoID, kind string) {
 	b := &s.supervise
 	b.dedupMu.Lock()
 	defer b.dedupMu.Unlock()
@@ -302,7 +396,7 @@ func (s *Service) clearTodoReadyDedup(ctx context.Context, todoID string) {
 	if st := s.store(); st != nil {
 		loaded := map[string]superviseFingerprint{}
 		if _, err := st.Setting(ctx, superviseDedupKey, &loaded); err != nil {
-			s.logf("supervise: cannot load deduplication history for todo_ready reset (%s): %v", todoID, err)
+			s.logf("supervise: cannot load deduplication history for %s reset (%s): %v", kind, todoID, err)
 			return
 		}
 		history = loaded
@@ -310,7 +404,7 @@ func (s *Service) clearTodoReadyDedup(ctx context.Context, todoID string) {
 	if len(history) == 0 {
 		return
 	}
-	key, _ := digestFingerprint(prompts.SuperviseEntry{}, superviseSignal{Todo: todoID, Kind: sigTodoReady})
+	key, _ := digestFingerprint(prompts.SuperviseEntry{}, superviseSignal{Todo: todoID, Kind: kind})
 	if _, ok := history[key]; !ok {
 		return
 	}
@@ -318,7 +412,7 @@ func (s *Service) clearTodoReadyDedup(ctx context.Context, todoID string) {
 	delete(next, key)
 	if st := s.store(); st != nil {
 		if err := st.PutSetting(ctx, superviseDedupKey, next); err != nil {
-			s.logf("supervise: cannot clear todo_ready deduplication entry for %s: %v", todoID, err)
+			s.logf("supervise: cannot clear %s deduplication entry for %s: %v", kind, todoID, err)
 			return
 		}
 	}
@@ -326,8 +420,12 @@ func (s *Service) clearTodoReadyDedup(ctx context.Context, todoID string) {
 }
 
 func (s *Service) restoreDigest(signals []superviseSignal, at, prev time.Time) {
+	if !s.autoSupervisionOn(context.Background()) {
+		return // withdrawn, not retried: they would otherwise come back once the switch is on again
+	}
 	b := &s.supervise
 	b.mu.Lock()
+	b.init()
 	defer b.mu.Unlock()
 	if b.last.Equal(at) {
 		b.last = prev
@@ -342,5 +440,12 @@ func (s *Service) restoreDigest(signals []superviseSignal, at, prev time.Time) {
 			b.pending[g.id()] = joinInbox(g, cur) // the newer item, with the messages of both
 		}
 	}
+	s.updateSupervisePending(func(pending map[string]superviseSignal) {
+		for _, g := range signals {
+			if cur, ok := b.pending[g.id()]; ok {
+				pending[g.id()] = cur
+			}
+		}
+	})
 	s.retryDigestLocked(s.superviseTimings().urgent)
 }

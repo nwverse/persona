@@ -19,10 +19,12 @@ import (
 
 // fakeChannel is a channel plugin's program as the hub's pipeline reaches it: what was sent, typing on and off.
 type fakeChannel struct {
-	mu      sync.Mutex
-	sent    []channel.SendParams
-	typing  []bool
-	refused bool // cannot_send: nowhere to send to yet
+	mu          sync.Mutex
+	sent        []channel.SendParams
+	typing      []bool
+	refused     bool   // cannot_send: nowhere to send to yet
+	refuseMsg   string // optional custom cannot_send explanation
+	sendAttempt int
 }
 
 func (f *fakeChannel) call(_ context.Context, id, method string, params, out any) error {
@@ -30,7 +32,11 @@ func (f *fakeChannel) call(_ context.Context, id, method string, params, out any
 	defer f.mu.Unlock()
 	switch method {
 	case channel.MSend:
+		f.sendAttempt++
 		if f.refused {
+			if f.refuseMsg != "" {
+				return &rpc.Error{Code: channel.CodeCannotSend, Message: f.refuseMsg}
+			}
 			return channel.ErrCannotSend
 		}
 		p := params.(channel.SendParams)
@@ -204,7 +210,7 @@ func TestChannelMessageGoesToTheAssistantAndTheAnswerComesBack(t *testing.T) {
 	}
 }
 
-// Nowhere to send to yet (cannot_send): the assistant is told so, by its code, at once.
+// Nowhere to send to yet (cannot_send): the assistant is told so, by its code, at once, preserving the explanation.
 func TestChannelCannotSendSaysSo(t *testing.T) {
 	w := newChannelWorld(t)
 	w.ch.refused = true
@@ -212,6 +218,74 @@ func TestChannelCannotSendSaysSo(t *testing.T) {
 	var re *rpc.Error
 	if !errors.As(err, &re) || re.Code != assistantwire.CodeCannotSend {
 		t.Fatalf("cannot send: %v", err)
+	}
+	w.ch.sendAttempt = 0
+	w.ch.refuseMsg = "This channel only replies to incoming messages."
+	_, err = w.channels(t, assistantwire.ChannelsSend, map[string]any{"channel": "examplechat", "ref": "x2", "text": "hi"})
+	if !errors.As(err, &re) || re.Code != assistantwire.CodeCannotSend || re.Message != w.ch.refuseMsg {
+		t.Fatalf("cannot send with message: %v", err)
+	}
+	if w.ch.sendAttempt != 1 {
+		t.Fatalf("cannot_send retried %d times, want 1 attempt", w.ch.sendAttempt)
+	}
+}
+
+// A channel declaring capabilities.reply_only exposes it in channels.list.
+func TestChannelListExposesReplyOnlyCapability(t *testing.T) {
+	w := newBotWorld(t)
+	item := channel.Item{
+		ID:           "replybot",
+		Name:         "Reply Bot",
+		Kind:         channel.KindIM,
+		Capabilities: channel.Capabilities{Format: channel.FormatPlain, ReplyOnly: true},
+	}
+	raw, _ := json.Marshal([]channel.Item{item})
+	m := &extension.Manifest{
+		ManifestVersion:  extension.ManifestVersion,
+		ID:               "reply-bot",
+		Name:             "Reply Bot",
+		Version:          "1.0.0",
+		Engines:          extension.Engines{ExtensionProtocol: extension.Protocol},
+		ActivationEvents: []string{extension.OnStartup},
+		Runtime:          &extension.Runtime{Command: extension.Command{Path: "reply-bot"}},
+		Contributes:      map[string]json.RawMessage{"channel": raw},
+	}
+	reg := extension.NewRegistry(t.TempDir(), nil, nil, 0)
+	if err := reg.AddBuiltin(m, "/opt/reply-bot", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	w.h.extensions = newExtensions(t.TempDir(), nil, w.h.logf)
+	w.h.extensions.reg = reg
+	w.h.channels.call = (&fakeChannel{}).call
+	w.h.channels.statuses = map[string]*channel.StatusParams{
+		"replybot": {State: channel.StateConnected, Account: &channel.Account{Name: "owner"}},
+	}
+	out, ok, err := w.h.AppCall(context.Background(), assistantwire.AppCall{
+		AppID:  assistantwire.AppChannels,
+		Method: assistantwire.ChannelsList,
+		Params: json.RawMessage(`{}`),
+	})
+	if !ok || err != nil {
+		t.Fatalf("channels.list: ok=%v err=%v", ok, err)
+	}
+	var res struct {
+		Channels []channel.View `json:"channels"`
+	}
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatal(err)
+	}
+	var found *channel.View
+	for i := range res.Channels {
+		if res.Channels[i].ID == "replybot" {
+			found = &res.Channels[i]
+			break
+		}
+	}
+	if found == nil || !found.Capabilities.ReplyOnly || found.State != channel.StateConnected {
+		t.Fatalf("replybot view = %+v", found)
 	}
 }
 
@@ -340,5 +414,31 @@ func TestChannelsInTheUsersLanguage(t *testing.T) {
 	}
 	if feishu["name"] != "Lark bot" || !strings.HasPrefix(app["description"].(string), "Persona's own apps") {
 		t.Fatalf("feishu %v, app %v", feishu, app)
+	}
+}
+
+func TestChannelReceivePreservesGroupTopicRoutingFields(t *testing.T) {
+	w := newChannelWorld(t)
+	p, _ := json.Marshal(channel.ReceiveParams{
+		Contribution: "examplechat",
+		Message: channel.Message{
+			ID:       "m_topic",
+			Text:     "group topic message",
+			ChatID:   "oc_group_1",
+			ChatKind: channel.ChatKindTopic,
+			TopicID:  "omt_99",
+			Thread:   "oc_group_1:omt_99",
+		},
+	})
+	if _, err := w.h.extensionChannelCall("example-chat", channel.MReceive, p); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 5*time.Second, "message with routing fields handed to assistant", func() bool { return len(w.received()) == 1 })
+	var got channel.Message
+	if err := json.Unmarshal(w.received()[0].Message, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "m_topic" || got.ChatID != "oc_group_1" || got.ChatKind != channel.ChatKindTopic || got.TopicID != "omt_99" || got.Thread != "oc_group_1:omt_99" {
+		t.Fatalf("forwarded message = %+v", got)
 	}
 }

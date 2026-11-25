@@ -104,7 +104,7 @@ func install(e *env, args []string) error {
 	var addrs []string
 	var flags routeFlags
 	nodeBinAny := false // --node-bin: either program, asked which (nodeInstall)
-	pairing, passive, withNode := false, false, true
+	pairing, passive, withNode, withTray := false, false, true, true
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; {
 		case a == "--pair": // the link, or - or nothing for stdin
@@ -117,6 +117,8 @@ func install(e *env, args []string) error {
 			pairing, pairLink = true, strings.TrimPrefix(a, "--pair=")
 		case a == "--no-node":
 			withNode = false
+		case a == "--no-tray":
+			withTray = false
 		default:
 			if v, next, ok := optionalValue(args, i, "--listen"); ok {
 				passive, listen, i = true, v, next
@@ -170,8 +172,11 @@ func install(e *env, args []string) error {
 	if flags.any() && (passive || len(addrs) > 0) {
 		return link.NewTextError("link-cli.install_listen_ssh", nil)
 	}
-	if flags.proxy.set && (passive || len(addrs) > 0) {
+	if flags.proxy.any() && (passive || len(addrs) > 0) {
 		return link.NewTextError("link-cli.listen_proxy", nil)
+	}
+	if err := flags.check(); err != nil {
+		return err
 	}
 	switch e.goos {
 	case "linux", "darwin", "windows":
@@ -181,27 +186,33 @@ func install(e *env, args []string) error {
 	if e.goos == "windows" && nodeBinAny && personad != "" && e.programOf(personad) != programPersonad {
 		return link.NewTextError("link-cli.windows_personad_required", nil, i18n.Args{"path": personad})
 	}
-	if err := flags.proxy.save(e); err != nil {
-		return err
-	}
 	if pairing {
 		c, err := pairWithSSH(e, pairLink, machine, flags)
 		if err != nil {
 			return err
 		}
 		fmt.Fprintln(e.stdout, terminalText("link-cli.install_pair_success", i18n.Args{"machine": c.Machine, "path": e.configPath()}))
-	} else if flags.any() {
-		if strings.TrimSpace(flags.server) == "" {
-			return link.NewTextError("link-cli.ssh_flags_require_server", nil)
-		}
-		always := flags.always
-		if !flags.alwaysSet {
-			if c, err := link.Read(e.configPath()); err == nil {
-				always = link.AllLoopback(c.Endpoints)
+	} else {
+		var ssh *link.SSH
+		if flags.any() {
+			if strings.TrimSpace(flags.server) == "" {
+				return link.NewTextError("link-cli.ssh_flags_require_server", nil)
 			}
+			always := flags.always
+			if !flags.alwaysSet {
+				if c, err := link.Read(e.configPath()); err == nil {
+					always = link.AllLoopback(c.Endpoints)
+				}
+			}
+			ssh = &link.SSH{Server: flags.server, Target: flags.target, Always: always}
 		}
-		if _, err := link.SetSSH(e.configPath(), &link.SSH{Server: flags.server, Target: flags.target, Always: always}); err != nil {
+		if err := flags.saveProxy(e, ssh); err != nil {
 			return err
+		}
+		if ssh != nil {
+			if _, err := link.SetSSH(e.configPath(), ssh); err != nil {
+				return err
+			}
 		}
 	}
 	var invite *link.PairInvite
@@ -220,7 +231,7 @@ func install(e *env, args []string) error {
 		}
 	}
 	if e.goos == "windows" {
-		return installTask(e, withNode, personad, invite) // winservice.go
+		return installTask(e, withNode, withTray, personad, invite) // winservice.go
 	}
 	if e.goos == "darwin" {
 		return installMac(e, withNode, personad, nodeBinAny, invite) // service_mac.go

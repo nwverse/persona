@@ -66,7 +66,7 @@ var relayBusyCodes = []string{"busy", "adapter_busy", "compacting", "runtime_awa
 // (relayAdapterSetupCodes).
 var relaySetupCodes = append([]string{proto.CodeClaudeMissing, proto.CodeLauncherMissing, assistantwire.CodeNoDevice,
 	proto.CodeNodeOutdated, proto.CodeLauncherOutOfScope, proto.CodeLauncherOwnService, assistantwire.CodeLauncherOtherKind,
-	"assistant_launcher_profile_switch"}, relayAdapterSetupCodes...)
+	"assistant_launcher_profile_switch", "assistant_model_unresolved"}, relayAdapterSetupCodes...)
 
 // relayAdapterSetupCodes are an external launcher's refusals (node/external_assistant.go externalStderrCode) that its
 // connection's setup ends: the owner enables, signs in, reconfigures, updates or restores the connection, or picks
@@ -150,6 +150,13 @@ func relayErrCode(err error) (code string, coded bool) {
 		return re.Code, true
 	}
 	return "", false
+}
+
+// roleChangeBusy is the node's specific refusal to replace a still-working process after its task-follow-up role
+// changed. Other busy codes (compaction, an adapter, a hand-over) keep their ordinary retry behavior.
+func roleChangeBusy(err error) bool {
+	code, _ := relayErrCode(err)
+	return code == assistantwire.CodeConversationBusy
 }
 
 // refusedForGood: the relay send failed with err, and the conversation will never take the message.
@@ -267,7 +274,7 @@ func (s *Service) reportRelayRefused(ctx context.Context, machine, to, tool, cod
 	if supervisionRefusalCode(code) {
 		args = s.supervisionLauncherArgs(ctx, machine, lang)
 	}
-	s.push(ctx, Notification{DeviceID: machine, SessionID: to,
+	s.push(withCard(ctx, cardRelayRefusal), Notification{DeviceID: machine, SessionID: to,
 		Title: i18n.T(lang, "assistant-conversations.relay_delivery_failed"), Body: i18n.T(lang, relayRefusedBody(tool, code), args)})
 }
 

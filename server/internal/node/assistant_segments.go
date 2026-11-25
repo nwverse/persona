@@ -16,6 +16,8 @@ type segmentStarts struct {
 	seen map[string]bool
 }
 
+type segmentTitleKey struct{}
+
 // A positive persisted receipt can reconcile a lost manager reply. Absence is
 // deliberately unknown after a node restart: it never authorizes a second start.
 func (n *Node) segmentReceipt(operation string) (string, bool) {
@@ -150,9 +152,15 @@ func (n *Node) assistantSegment(ctx context.Context, method string, raw json.Raw
 	}
 	n.segmentStarts.seen[operation] = true
 	n.segmentStarts.mu.Unlock()
-	// The preparation API accepts no input and no caller-supplied policy. Policy is
-	// supplied by the manager with the first actual input after epoch activation.
-	for _, key := range []string{"text", "prompt", "images", "supervision_instructions", "session_id", "new_session_id", "client_msg_id"} {
+	// The preparation API accepts no input. The manager's role policy (supervision_instructions) is kept: the first
+	// input after epoch activation carries the same policy, so the prepared process needs no restart, which for a
+	// Codex thread with no turn yet would start another thread under a new id.
+	title, _ := p["title"].(string)
+	if title = strings.TrimSpace(title); title == "" {
+		title = "Persona"
+	}
+	ctx = context.WithValue(ctx, segmentTitleKey{}, title)
+	for _, key := range []string{"title", "text", "prompt", "images", "session_id", "new_session_id", "client_msg_id"} {
 		delete(p, key)
 	}
 	delete(p, "operation_id")

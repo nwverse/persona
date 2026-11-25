@@ -11,9 +11,10 @@ import { ApiError, credentialOwner, errorText, getToken, onCredentialChange } fr
 import { extIdOf } from "../../lib/extension-api";
 import { openLink } from "../../lib/links";
 import {
-  actUI, fieldValues, isUnsupported, numberProblem, outcome, pushPage, refreshDelay, renderUI, submitValues, uiPlaces, UI_VERSION,
+  actUI, fieldValues, httpOnlyUI, isUnsupported, numberProblem, outcome, pushPage, refreshDelay, renderUI, submitValues, uiPlaces, UI_VERSION,
   type UIAction, type UIContext, type UIFilter, type UIItem, type UIMore, type UIPage, type UIPlace, type UIPush, type UISearch, type UITabs, type UIView,
 } from "../../lib/extension-ui";
+import { takeOverlayEntry, withoutOverlayState } from "../../lib/back-close";
 import { navigate } from "../../lib/router";
 import { isResumed } from "../../lib/reconnect";
 import { appSocketReady, onAppSocket, onHubEvent } from "../../lib/store";
@@ -32,11 +33,12 @@ import { defaultKnown, defaultManager, otherManager, useKnownDefault, useLinkMan
 import { keepView, NATIVE_UI_VERSION, readKeptView } from "../../lib/extension-view-cache";
 import type { UIRowControl } from "../../lib/extension-ui-v6";
 import { currentLanguage, t } from "../../i18n";
+import { HEALTH_INTAKE_UI, STRENGTH_EVENT } from "../../lib/health-intake-ui";
 import { SUBSCRIPTIONS_UI } from "../../lib/subscriptions-ui";
 import { ExtensionOwnerScope } from "../../lib/extension-owner";
 
 const inputClass =
-  "h-8 w-full rounded-control bg-field px-2.5 text-[12.5px] text-ink shadow-inset-field outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
+  "h-8 w-full rounded-control bg-field px-2.5 text-meta text-ink shadow-inset-field outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
 
 /**
  * Draws again while the view is on screen (docs/extensions/extensions.md "Refresh"): `delay` ms after it was last drawn, never while the
@@ -101,6 +103,10 @@ function useInvalidate(extension: string, ui: string, draw: () => void, skipHell
     });
     // the subscription pages (#2041): a subscription saved, run or deleted anywhere draws them again
     const offSubscription = extension === SUBSCRIPTIONS_UI ? onHubEvent("subscription", () => now()) : () => {};
+    // the health pages (#13176): a record logged or undone anywhere, or a goal saved, draws them again; so does any
+    // change to strength training (#14713: its message carries nothing, the pages and the home card read again)
+    const offIntake = extension === HEALTH_INTAKE_UI ? onHubEvent("health_intake", () => now()) : () => {};
+    const offStrength = extension === HEALTH_INTAKE_UI ? onHubEvent(STRENGTH_EVENT, () => now()) : () => {};
     // a reconnect the hub could not resume: an invalidate missed meanwhile is not replayed (#4954)
     const offHello = onHubEvent("hello", (msg) => !isResumed(msg) && !skipHelloRef.current?.() && now());
     const shown = () => {
@@ -110,6 +116,8 @@ function useInvalidate(extension: string, ui: string, draw: () => void, skipHell
     return () => {
       off();
       offSubscription();
+      offIntake();
+      offStrength();
       offHello();
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", shown);
@@ -176,8 +184,10 @@ export function ExtensionUI({ remember, ...props }: Parameters<typeof LegacyExte
   if (ready) negotiated.current = true;
   // System/embedded slots remain full fitted snapshots. Old hubs keep the exact existing component.
   // Another manager's extension draws over HTTP, which names its manager on each request (docs/assistant/managers.md "Clients").
-  // The subscription pages (#2041) are the manager's, drawn over HTTP only.
-  const baseHttp = legacyNegotiation || !supported || props.embedded || props.compact || otherManager(props.manager) || props.extension === SUBSCRIPTIONS_UI;
+  // The manager's own pages (an id starting with "-": the subscription pages #2041, Dashboards #15017) are drawn over HTTP
+  // only, so they have nothing to wait for the hello for either.
+  const managerPage = httpOnlyUI(props.extension);
+  const baseHttp = legacyNegotiation || !supported || props.embedded || props.compact || otherManager(props.manager) || managerPage;
   // The page's last view, until it is drawn again: one drawn with a UI version it may be drawn with now (before the hello
   // either; over the socket also HTTP's, which a page the socket cannot draw falls back to) by the default's extension
   // (before the roster, the last one drawn).
@@ -196,13 +206,13 @@ export function ExtensionUI({ remember, ...props }: Parameters<typeof LegacyExte
   const httpLocked = useRef("");
   const lockedHttp = httpLocked.current === mountKey;
   const http = lockedHttp || baseHttp || knownHttp;
-  const waitingHello = !lockedHttp && !knownHttp && !props.embedded && !props.compact && typeof localStorage !== "undefined" && !!getToken() && !ready && !negotiated.current;
+  const waitingHello = !lockedHttp && !knownHttp && !managerPage && !props.embedded && !props.compact && typeof localStorage !== "undefined" && !!getToken() && !ready && !negotiated.current;
   useEffect(() => {
     if (!waitingHello || legacyNegotiation) return;
     const timer = setTimeout(() => setLegacyNegotiation(true), HELLO_NEGOTIATION_MS);
     return () => clearTimeout(timer);
   }, [waitingHello, legacyNegotiation]);
-  const placeholder = kept ? <KeptView view={kept.view} native={kept.key.version === NATIVE_UI_VERSION} compact={props.compact} bare={props.bare} title={props.title} onWide={props.onWide} /> : undefined;
+  const placeholder = kept ? <KeptView view={kept.view} native={kept.key.version === NATIVE_UI_VERSION} compact={props.compact} bare={props.bare} title={props.title} onWide={props.onWide} onTitle={props.onTitle} /> : undefined;
   const onView = useCallback((view: UIView, version: number, manager = defaultId || (defaultKnown() ? defaultManager() : "")) => {
     if (!page || !manager) return;
     const [extension, ui, state, language] = JSON.parse(page) as string[];
@@ -234,9 +244,10 @@ export function ExtensionUI({ remember, ...props }: Parameters<typeof LegacyExte
  *  "Updating" in the page's top margin, so nothing moves when the drawing replaces it. `native`: drawn over the socket,
  *  which titles the page itself. `compact`: a card's (#11091), its sections laid out as the drawing's own in the card's
  *  column (`contents`), "Updating" for screen readers only: the card's heading marks it (OverviewCard, by `data-kept-view`). */
-function KeptView({ view, native, compact, bare, title, onWide }: { view: UIView; native: boolean; compact?: boolean; bare?: boolean; title?: string; onWide?: (wide: boolean) => void }) {
+function KeptView({ view, native, compact, bare, title, onWide, onTitle }: { view: UIView; native: boolean; compact?: boolean; bare?: boolean; title?: string; onWide?: (wide: boolean) => void; onTitle?: (title: string | undefined) => void }) {
   const wide = wideView(view);
   useEffect(() => onWide?.(wide), [wide, onWide]);
+  useEffect(() => onTitle?.(view.title), [view.title, onTitle]);
   const values = useMemo(() => fieldValues(view), [view]);
   const first = view.sections[0]?.items[0];
   const titled = view.title || title;
@@ -295,7 +306,7 @@ function KeptView({ view, native, compact, bare, title, onWide }: { view: UIView
           <>
             {!bare && heading && (
               <div className="flex items-center gap-2 px-1">
-                <h2 className="min-w-0 flex-1 truncate text-[15px] font-semibold text-ink">{heading}</h2>
+                <h2 className="min-w-0 flex-1 truncate text-card-title font-semibold text-ink">{heading}</h2>
               </div>
             )}
             {view.tabs && <Tabs tabs={view.tabs} value={view.tabs.value} busy="" onChoose={NOOP} />}
@@ -311,7 +322,7 @@ function KeptView({ view, native, compact, bare, title, onWide }: { view: UIView
 }
 export function LegacyExtensionUI({
   extension, ui, context, embedded, compact, bare, title, onUnsupported, onMissing, onFailed, revision, onOpenSource, pages, history: withHistory, state: firstState, onWide, onDepth, navigation, active = true, manager,
-  placeholder, onView,
+  placeholder, onView, onTitle, openPage, onClose,
 }: {
   extension: string; ui: string; context?: UIContext; embedded?: boolean; compact?: boolean; bare?: boolean; title?: string;
   /** Whose extension it is (another manager's inbox item or computer, docs/assistant/managers.md "Clients"); none: the default's. */
@@ -329,6 +340,13 @@ export function LegacyExtensionUI({
   placeholder?: ReactNode;
   /** The first page drew a view not typed into, asked with UI `version` (by `manager`'s extension; none: the default's). */
   onView?: (view: UIView, version: number, manager?: string) => void;
+  /** The first page's title as its view (or the kept one) says it, each time it is drawn: the page around it titles its
+   *  header with it (a Dashboards page, whose place is not listed unless pinned, #15017). */
+  onTitle?: (title: string | undefined) => void;
+  /** A push the page around opens itself, as a page of its own; true when it did (Dashboards' index opening a page, #15017). */
+  openPage?: (page: UIPush) => boolean;
+  /** The first page asked to be taken off (a pop with nothing under it): the page around it closes. Without it, ignored. */
+  onClose?: () => void;
 }) {
   const [stack, setStack] = useState<UIPage[]>(() => [{ ui, ...(firstState ? { state: firstState } : {}) }]);
   const linkManager = useLinkManager();
@@ -417,6 +435,10 @@ export function LegacyExtensionUI({
   useEffect(() => {
     if (view) onWide?.(wide);
   }, [wide, view, onWide]);
+  const viewTitle = view && depth === 1 ? view.title : null;
+  useEffect(() => {
+    if (viewTitle !== null) onTitle?.(viewTitle);
+  }, [viewTitle, onTitle]);
   // the first page as the extension drew it, unless its fields hold what was typed and not sent (a redraw keeps them)
   const valuesNow = useRef(values);
   valuesNow.current = values;
@@ -456,18 +478,28 @@ export function LegacyExtensionUI({
   }, [historied]);
 
   const push = (p: UIPush) => {
+    if (openPage?.(p)) return;
     if (navigation) { navigation.push(p); return; }
     if (mode === "open") {
       navigate(pageHref(extension, p.ui || top.ui, p.state));
       return;
     }
     const next = pushPage(stack, p, top.ui);
-    if (historied && next.length > stack.length) history.pushState({ ...(history.state ?? {}), extPage: next.length }, "", location.href);
+    if (historied && next.length > stack.length) {
+      // Pushing onto this stack from inside an open overlay (e.g. a Full screen map/graph stop) replaces the
+      // overlay's entry without its markers so closing the overlay does not immediately history.back() off the new page.
+      const nextState = { ...(withoutOverlayState(history.state) ?? {}), extPage: next.length };
+      if (takeOverlayEntry()) history.replaceState(nextState, "", location.href);
+      else history.pushState(nextState, "", location.href);
+    }
     setStack(next);
   };
   const pop = () => {
     if (navigation) { navigation.pop(); return; }
-    if (stack.length <= 1) return;
+    if (stack.length <= 1) {
+      onClose?.();
+      return;
+    }
     if (historied) history.back(); // the popstate above takes the page off
     else setStack((s) => s.slice(0, -1));
   };
@@ -498,6 +530,7 @@ export function LegacyExtensionUI({
       if (r.items && latest) setView((v) => (v ? patchView(v, r.items) : v));
       if (r.toast) toast(r.toast, "ok");
       if (r.url) openLink(r.url, undefined, linkManager);
+      if (r.track) navigate(r.track);
       if (r.source) onOpenSource?.();
       // an extension's own settings (persona://settings/extensions/<id>) open in the app
       if (r.settings) navigate(r.settings);
@@ -655,7 +688,7 @@ export function LegacyExtensionUI({
   if (unsupported) {
     if (embedded || compact) return null;
     const nothing = (
-      <p className="rounded-card bg-surface px-4 py-6 text-center text-[12.5px] text-ink-3 shadow-card">{t("settings-extensionview.nothing_here")}</p>
+      <p className="rounded-card bg-surface px-4 py-6 text-center text-meta text-ink-3 shadow-card">{t("settings-extensionview.nothing_here")}</p>
     );
     // a pushed page that has nothing still goes back to the page below
     return back ? <div className="flex flex-col gap-6">{back}{nothing}</div> : nothing;
@@ -671,7 +704,7 @@ export function LegacyExtensionUI({
       {back}
       {!light && (!bare || depth > 1) && heading && (
         <div className="flex items-center gap-2 px-1">
-          <h2 className="min-w-0 flex-1 truncate text-[15px] font-semibold text-ink">{heading}</h2>
+          <h2 className="min-w-0 flex-1 truncate text-card-title font-semibold text-ink">{heading}</h2>
           {loading && view && <Spinner />}
         </div>
       )}
@@ -711,7 +744,7 @@ export function LegacyExtensionUI({
       ))}
       {error && compact && (
         <div className="flex items-center gap-2 px-4 py-2.5">
-          <p className="min-w-0 flex-1 truncate text-[12px] text-red" title={error}>
+          <p className="min-w-0 flex-1 truncate text-label text-red" title={error}>
             {view ? t("settings-extensionview.update_failed_inline", { error }) : t("settings-extensionview.draw_failed_inline", { error })}
           </p>
           <Button tone="quiet" icon="retry" busy={loading} onClick={() => load()}>
@@ -724,8 +757,8 @@ export function LegacyExtensionUI({
           <span className="flex size-9 items-center justify-center rounded-[10px] bg-red-tint text-red">
             <Icon name="extension" size={16} />
           </span>
-          <p className="text-[13px] font-medium text-ink">{view ? t("settings-extensionview.update_failed") : t("settings-extensionview.draw_failed")}</p>
-          <p className="max-w-[420px] text-[12px] leading-relaxed break-words text-ink-3 select-text">{error}</p>
+          <p className="text-meta font-medium text-ink">{view ? t("settings-extensionview.update_failed") : t("settings-extensionview.draw_failed")}</p>
+          <p className="max-w-[420px] text-label leading-relaxed break-words text-ink-3 select-text">{error}</p>
           <Button tone="secondary" icon="retry" busy={loading} onClick={() => load()}>
             {t("settings-extensionview.retry")}
           </Button>
@@ -784,7 +817,7 @@ export function LegacyExtensionUI({
             </>
           }
         >
-          <p className="text-[13px] leading-relaxed whitespace-pre-line break-words text-ink-2">{confirming.action.confirm}</p>
+          <p className="text-meta leading-relaxed whitespace-pre-line break-words text-ink-2">{confirming.action.confirm}</p>
         </Dialog>
       )}
     </div>
@@ -850,12 +883,12 @@ function Tabs({ tabs, value, busy, onChoose }: { tabs: UITabs; value: string; bu
             disabled={!!busy && !on}
             onClick={() => onChoose(it.value)}
             className={cx(
-              "relative flex h-9 shrink-0 items-center gap-1.5 px-3 text-[13px] whitespace-nowrap transition-colors",
+              "relative flex h-9 shrink-0 items-center gap-1.5 px-3 text-meta whitespace-nowrap transition-colors",
               on ? "font-semibold text-ink" : "text-ink-3 enabled:hover:text-ink",
             )}
           >
             {it.title || it.value}
-            {it.badge && <span className="rounded-full bg-field px-1.5 text-[11px] leading-[18px] font-medium text-ink-2 tabular-nums">{it.badge}</span>}
+            {it.badge && <span className="rounded-full bg-field px-1.5 text-[length:var(--extension-meta-size)] leading-[18px] font-medium text-ink-2 tabular-nums">{it.badge}</span>}
             {busy === tabs.action.id && on && <Spinner size={10} />}
             {on && <span className="absolute inset-x-2 -bottom-px h-[2px] rounded-full bg-accent" />}
           </button>
@@ -897,7 +930,7 @@ function LauncherSection({ place, launcher, machine }: { place: UIPlace; launche
   if (gone) return null;
   return (
     <div data-extension-section={`${place.extension}/${place.id}`}>
-      <div className="mb-1 flex items-center gap-1.5 text-[11.5px] font-medium text-ink-3">
+      <div className="mb-1 flex items-center gap-1.5 text-submeta font-medium text-ink-3">
         <Icon name="extension" size={11} className="shrink-0" />
         {place.title}
       </div>

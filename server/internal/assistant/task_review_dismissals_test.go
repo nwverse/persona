@@ -321,23 +321,23 @@ func TestTaskReviewDismissalFailuresAndValidation(t *testing.T) {
 		t.Fatal("failed read marked loaded")
 	}
 	st.failKey(taskReviewDismissalsKey, nil)
-	st.failPut = errors.New("write failed")
+	st.setFailPut(errors.New("write failed"))
 	if w := e.do("POST", "/api/v1/todos/task/decision-dismiss", body); w.Code != 503 {
 		t.Fatalf("failed write dismissed: %d", w.Code)
 	}
 	if len(e.s.reviewDismissals.byTodo) != 0 {
 		t.Fatal("failed write not rolled back")
 	}
-	st.failPut = nil
+	st.setFailPut(nil)
 	d := dismissReview(t, e, at)
-	st.failPut = errors.New("undo failed")
+	st.setFailPut(errors.New("undo failed"))
 	if w := e.do("POST", "/api/v1/todos/task/decision-undo-dismiss", dismissalBody(at, d.DismissalID)); w.Code != 503 {
 		t.Fatalf("failed undo: %d", w.Code)
 	}
 	if e.s.reviewDismissals.byTodo["task"].Undone {
 		t.Fatal("failed undo not rolled back")
 	}
-	st.failPut = nil
+	st.setFailPut(nil)
 	for _, mutate := range []func(*Todo){func(t *Todo) { t.Supervision.State = reviewPending }, func(t *Todo) { t.DoneAt = &at }} {
 		mutate(e.s.todos.todos["task"])
 		if w := e.do("POST", "/api/v1/todos/task/decision-dismiss", body); w.Code != 409 {
@@ -375,7 +375,7 @@ func TestTaskReviewDismissalSameEverywhere(t *testing.T) {
 		}
 		return triageTodo(list[0], noSessions, time.Now(), time.Time{}, time.UTC, false), health
 	}
-	if tr, health := read(); tr.Rule != ruleOwnerDecides || health != "等你决定" {
+	if tr, health := read(); tr.Rule != ruleOwnerDecides || health != "等你处理" {
 		t.Fatalf("before: %+v %q", tr, health)
 	}
 	dismissReview(t, e, at)

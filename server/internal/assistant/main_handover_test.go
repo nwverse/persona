@@ -50,6 +50,9 @@ func TestNewMainConversationTakesOverOpenTasks(t *testing.T) {
 	s, f, todo, led, side, closed := handoverFixture(t)
 	ctx := context.Background()
 	before := *todo.Supervision
+	// The former main can already have been told this very review.
+	s.sendDigest(ctx)
+	waitFor(t, "the review told to the former main", func() bool { return reviewsTold(f, "conv1", todo.ID) == 1 })
 	if old, _, err := s.newMain(ctx, false, "conv1"); err != nil || old != "conv1" {
 		t.Fatalf("new main: %q %v", old, err)
 	}
@@ -58,8 +61,14 @@ func TestNewMainConversationTakesOverOpenTasks(t *testing.T) {
 		t.Fatalf("started: %+v %v", sess, err)
 	}
 	next := sess.SessionID
+	// The review may go into the relay queue before the node lists the newly started session.
+	s.sendDigest(ctx)
+	f.mu.Lock()
 	f.known[next] = true
-	f.setSessions("server", proto.Session{SessionID: next, MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	f.mu.Unlock()
+	listed := []proto.Session{{SessionID: next, MachineID: "server", Assistant: true, Status: proto.StatusIdle}}
+	f.setSessions("server", listed...)
+	s.SessionsChanged(ctx, DeviceSessions{MachineID: "server", Sessions: listed})
 
 	got := todoNow(s, todo.ID)
 	if got.Origin != next || got.Supervision == nil || got.Supervision.Supervisor != next {
@@ -73,8 +82,12 @@ func TestNewMainConversationTakesOverOpenTasks(t *testing.T) {
 		t.Fatalf("no card in the new conversation: %s", feedKinds(s, next))
 	}
 	waitFor(t, "the review told to the new main conversation", func() bool {
-		return strings.Contains(strings.Join(f.noticesTo(next), "\n"), todo.ID)
+		return reviewsTold(f, next, todo.ID) == 1
 	})
+
+	if _, valid := s.digestEntry(ctx, superviseSignal{Todo: todo.ID, Kind: sigReview, Recipient: "conv1"}, s.webBase(ctx)); valid {
+		t.Fatal("the former review recipient still admitted a delivery after the handover")
+	}
 
 	if l := todoNow(s, led.ID); l.Origin != next || l.Supervision.Supervisor != "lead1" {
 		t.Fatalf("the leader's task: origin %q, supervisor %q", l.Origin, l.Supervision.Supervisor)
@@ -178,9 +191,9 @@ func TestSettingsMainSwitchHandsOverTasks(t *testing.T) {
 	}
 }
 
-// The background supervisor follows the current main conversation's tasks without owning their ledger. A main
-// switch must move that ledger too, so digests still reach the background conversation and it can review the task.
-func TestMainTaskHandoverKeepsBackgroundSupervision(t *testing.T) {
+// A main switch moves the task ledger to the new main conversation. New digests go there, while an existing background
+// supervisor may still finish work already delegated to it (#5732).
+func TestMainTaskHandoverKeepsMainSupervision(t *testing.T) {
 	s, f, todo, led, _, _ := handoverFixture(t)
 	ctx := context.Background()
 	s.noBackground = false
@@ -204,15 +217,17 @@ func TestMainTaskHandoverKeepsBackgroundSupervision(t *testing.T) {
 	if wake := taskCardWake(s, "conv2", todo.ID); wake != wakeActive {
 		t.Fatalf("the transferred task's card wake = %q", wake)
 	}
-	if to := s.digestTo(s.settings(ctx), superviseSignal{Todo: todo.ID, Kind: sigReview}); to != "bg1" {
+	if to := s.digestTo(ctx, s.settings(ctx), superviseSignal{Todo: todo.ID, Kind: sigReview}); to != "conv2" {
 		t.Fatalf("review routed to %q", to)
 	}
-	if to := s.digestTo(s.settings(ctx), superviseSignal{Todo: led.ID, Kind: sigReview}); to != "lead1" {
+	if to := s.digestTo(ctx, s.settings(ctx), superviseSignal{Todo: led.ID, Kind: sigReview}); to != "lead1" {
 		t.Fatalf("the leader's review routed to %q", to)
 	}
-	waitFor(t, "the transferred task's review sent to the background supervisor", func() bool {
-		return strings.Contains(strings.Join(f.noticesTo("bg1"), "\n"), todo.ID)
+	waitFor(t, "the transferred task's review sent to the new main conversation", func() bool {
+		return strings.Contains(strings.Join(f.noticesTo("conv2"), "\n"), todo.ID)
 	})
+	// Closeout is a legacy exception only after an old notice actually reached the background conversation.
+	tellLegacyBackground(t, s, f, todo.ID, "bg1")
 	agent := proto.Session{SessionID: "s1", MachineID: "box"}
 	if _, elsewhere, err := s.supervisedElsewhere(ctx, "bg1", Device{ID: "box"}, agent); err != nil || elsewhere {
 		t.Fatalf("the background supervisor lost its agent: elsewhere %v, %v", elsewhere, err)

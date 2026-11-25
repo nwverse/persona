@@ -81,7 +81,7 @@ func TestAgentTransferPreservesRunningWorkAndRoutesSupervision(t *testing.T) {
 		if got, exists := s.briefOfTodo(task.ID); !exists || !reflect.DeepEqual(got, brief) {
 			t.Fatalf("transfer rewrote its brief: %+v", got)
 		}
-		if to := s.digestTo(s.settings(ctx), superviseSignal{Todo: task.ID, Kind: sigStalled}); to != destination {
+		if to := s.digestTo(ctx, s.settings(ctx), superviseSignal{Todo: task.ID, Kind: sigStalled}); to != destination {
 			t.Fatalf("supervision goes to %s, want %s", to, destination)
 		}
 		if taskCardWake(s, destination, task.ID) != wakeActive {
@@ -127,7 +127,7 @@ func TestAgentTransferLeadHandsOffOwnTask(t *testing.T) {
 		if got, exists := s.briefOfTodo(task.ID); !exists || !reflect.DeepEqual(got, brief) {
 			t.Fatalf("transfer rewrote its brief: %+v", got)
 		}
-		if to := s.digestTo(s.settings(ctx), superviseSignal{Todo: task.ID, Kind: sigStalled}); to != destination {
+		if to := s.digestTo(ctx, s.settings(ctx), superviseSignal{Todo: task.ID, Kind: sigStalled}); to != destination {
 			t.Fatalf("supervision goes to %s, want %s", to, destination)
 		}
 		if taskCardWake(s, destination, task.ID) != wakeActive {

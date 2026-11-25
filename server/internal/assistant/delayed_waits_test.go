@@ -275,7 +275,7 @@ func (st *compareGateStore) CompareSetting(ctx context.Context, key string, revi
 
 func TestScheduledRetryRechecksCancellationAfterClaim(t *testing.T) {
 	st := withDelayedWaitCAS(&memStore{})
-	first, n, w := newDelayedRetryFixture(t, st)
+	_, n, w := newDelayedRetryFixture(t, st)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	gate := &compareGateStore{Store: st}
@@ -286,14 +286,14 @@ func TestScheduledRetryRechecksCancellationAfterClaim(t *testing.T) {
 		}
 		return nil
 	}
-	first.store = func() Store { return gate }
+	s := newServiceOn(t, n, gate)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		first.runScheduledLimitRetry(context.Background(), w, true)
+		s.runScheduledLimitRetry(context.Background(), w, true)
 	}()
 	<-started
-	setTasks(first, Task{ID: "p", Repeat: repeatInterval, EveryMinutes: 30, Enabled: false})
+	setTasks(s, Task{ID: "p", Repeat: repeatInterval, EveryMinutes: 30, Enabled: false})
 	close(release)
 	<-done
 	if got := n.sent(); got != 0 {
@@ -525,7 +525,7 @@ func newReceiptWaitFixtureOn(t *testing.T, st Store, at time.Time) (*Service, *f
 	t.Helper()
 	first, f := newTaskServiceOn(t, st)
 	startedTask(t, first, f)
-	first.taskWorking(context.Background(), "box", "s1")
+	first.taskWorking(context.Background(), "box", "s1", startRow{})
 	f.judge = `{"verdict":"done","reason":"Delivery verified"}`
 	f.setItems(proto.Item{ID: "answer-1", Kind: proto.KindText, Role: "assistant", Text: "Delivery verified", TS: time.Now()})
 	f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1", Agent: "codex", Status: proto.StatusDone,

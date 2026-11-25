@@ -65,7 +65,7 @@ func TestTaskTurnEndWithoutOutputIsInterrupted(t *testing.T) {
 			f.setItems(c.items...)
 			f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: cmp.Or(c.agent, "claude"),
 				Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now()})
-			s.taskWorking(ctx, "box", "s1")
+			s.taskWorking(ctx, "box", "s1", startRow{})
 			f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: cmp.Or(c.agent, "claude"),
 				Status: proto.StatusDone, State: cmp.Or(c.endState, proto.StateUnread), TurnError: c.turnError, LastText: c.lastText, UpdatedAt: time.Now()})
 			s.taskTurnEnded(ctx, "box", "s1")
@@ -525,13 +525,28 @@ func TestQuietTurnTranscriptMovesDuringTheRead(t *testing.T) {
 	done.Status, done.Rev, done.UpdatedAt = proto.StatusDone, 2, time.Now()
 	moved := done
 	moved.Rev, moved.UpdatedAt = 3, done.UpdatedAt.Add(time.Second)
-	ft.f.hookReads(receiptHooks{after: func(n int) {
-		if n == 1 {
-			ft.d.setSessions("box", []proto.Session{moved}) // written to while the first read was on its way
+	var changed atomic.Bool
+	ft.f.hookReads(receiptHooks{afterCall: func(call DeviceCall) {
+		// Naming the agent also reads its transcript. Move the stopped row only as the receipt's
+		// single-turn request for this agent returns.
+		var request struct {
+			SessionID string `json:"session_id"`
+			Turns     int    `json:"turns"`
+			Lazy      bool   `json:"lazy_images"`
+		}
+		if call.Device != "box" || json.Unmarshal(call.Params, &request) != nil ||
+			request.SessionID != "s1" || request.Turns != 1 || request.Lazy {
+			return
+		}
+		if current, ok := ft.d.Session("box", "s1"); ok && current.Rev == done.Rev && changed.CompareAndSwap(false, true) {
+			ft.d.setSessions("box", []proto.Session{moved})
 		}
 	}})
 	ft.sessions("box", done)
 	rb := receiptOf(t, s, "conv1", onlyTodo(s).ID, 1)
+	if !changed.Load() {
+		t.Fatal("the settled turn's transcript was never moved during its read")
+	}
 	if rb.Cause != causeNoOutput {
 		t.Fatalf("receipt %+v", rb)
 	}

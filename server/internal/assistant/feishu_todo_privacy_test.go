@@ -11,6 +11,7 @@ import (
 
 // Exercise the scheduled reminder entry and inspect the whole outgoing payload, including card metadata.
 func TestFeishuTodoReminderCardPrivacyAtReminderEntry(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, health := range []bool{false, true} {
 		name := "ordinary"
 		if health {
@@ -44,7 +45,7 @@ func TestFeishuTodoReminderCardPrivacyAtReminderEntry(t *testing.T) {
 				if err := json.Unmarshal([]byte(card), &decoded); err != nil {
 					t.Fatal(err)
 				}
-				target := s.botTargetFor("", "om_1")
+				target := s.larkModule().Route("", "om_1")
 				if target.SessionID != "m1" || target.MachineID != "server" {
 					t.Fatalf("reply target = %+v", target)
 				}
@@ -52,7 +53,7 @@ func TestFeishuTodoReminderCardPrivacyAtReminderEntry(t *testing.T) {
 					t.Fatalf("phone pushes = %d", len(f.pushed()))
 				}
 				if health {
-					title, body := healthNotice(s.botLang(context.Background()))
+					title, body := spaceNotice(s.botLang(context.Background()))
 					for _, want := range []string{title, body} {
 						if !strings.Contains(card, want) {
 							t.Errorf("generic health notice lacks %q", want)

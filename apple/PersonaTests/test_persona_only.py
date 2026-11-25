@@ -135,9 +135,14 @@ class PersonaOnlyTests(unittest.TestCase):
         shared = {item["path"] for item in targets["PersonaWatchWidgets"]["sources"] if item["path"].startswith("Shared/")}
         watch_pet = {"Shared/WatchPetSnapshot.swift", "Shared/Recording/AllDaySnapshot.swift", "Shared/Design/WatchFaceTokens.swift"}
         self.assertTrue(watch_pet.issubset(shared))
+        # The water and protein complications (#13275) are the watch face's too: visionOS has no complications.
+        watch_intake = {"Shared/WatchIntake.swift", "Shared/WatchIntakeConfiguration.swift", "Shared/WatchIntakeComplicationView.swift",
+                        "Shared/StatusPalette.swift", "Shared/Design/Palette.swift", "Shared/Design/HealthIntakePalette.swift"}
+        self.assertTrue(watch_intake.issubset(shared))
         vision_sources = {item["path"] for item in widget["sources"]}
         self.assertTrue(watch_pet.isdisjoint(vision_sources))
-        self.assertEqual(vision_sources, (shared - watch_pet) | {"PersonaVisionWidgets"})
+        self.assertTrue(watch_intake.isdisjoint(vision_sources))
+        self.assertEqual(vision_sources, (shared - watch_pet - watch_intake) | {"PersonaVisionWidgets"})
         for target in (app, widget):
             self.assertEqual(target["entitlements"]["properties"]["com.apple.security.application-groups"], ["$(PERSONA_APP_GROUP)"])
             self.assertEqual(target["info"]["properties"]["PersonaAppGroup"], "$(PERSONA_APP_GROUP)")
@@ -165,12 +170,18 @@ class PersonaOnlyTests(unittest.TestCase):
         self.assertNotIn(".systemSmall", widget_source_for_platform("watchOS"))
 
     def test_vision_widget_sync_and_invalidation_are_enabled(self):
+        # visionOS syncs and invalidates extension widgets as iOS and watchOS do. Shared/ builds for all three and
+        # Persona/ for iOS and visionOS, so this code takes no platform branch at all (#13399): none may leave visionOS out.
         sync = source("Shared/ExtensionSurfaceSync.swift")
-        self.assertEqual(sync.count("#if os(iOS) || os(watchOS) || os(visionOS)"), 4)
+        self.assertNotRegex(sync, r"#(?:if|elseif)[^\n]*\bos\(")
+        self.assertEqual(sync.count("WidgetCenter.shared.reloadTimelines(ofKind: ExtensionSystemWidget.kind)"), 2)
+        self.assertIn("ExtensionWidgetReconciliation.configurations()", sync)
         app = source("Persona/App/PersonaApp.swift")
-        self.assertRegex(app, r'#if os\(iOS\) \|\| os\(visionOS\)\s+if let widget = info\["extension_widget"\]')
+        self.assertIn('if let widget = info["extension_widget"]', app)
+        self.assertNotRegex(app, r'#if os\(iOS\)\s+if let widget = info\["extension_widget"\]')
         model = source("Persona/App/AppModel.swift")
-        self.assertRegex(model, r"#if os\(iOS\) \|\| os\(visionOS\)\s+ExtensionWidgetReconciliation.invalidate")
+        self.assertIn("ExtensionWidgetReconciliation.invalidate(", model)
+        self.assertNotRegex(model, r"#if os\(iOS\)\s+ExtensionWidgetReconciliation.invalidate")
         vision = widget_source_for_platform("visionOS")
         self.assertIn('Open Persona to sync extension capabilities.', vision)
         self.assertNotIn('Open Persona on iPhone to sync extension capabilities.', vision)
@@ -196,9 +207,11 @@ class PersonaOnlyTests(unittest.TestCase):
         for interim in ["persona.control.ask", "persona.control.agents"]:
             self.assertEqual(controls.count(f'configuration(kind: "{interim}")'), 1)
         self.assertEqual(controls.count('Self.configuration(kind: "persona.control.dictate")'), 1)
+        self.assertEqual(controls.count('Self.configuration(kind: "persona.control.call")'), 1)
         bundle = source("PersonaWidgets/PersonaWidgetsBundle.swift")
-        for widget in ["AskPersonaControl", "PersonaAgentsControl", "DictatePersonaControl", "CompatibleAssistantControl",
-                       "CompatibleAgentsControl", "FleetLiveActivity", "CompatibleFleetLiveActivity"]:
+        for widget in ["AskPersonaControl", "PersonaAgentsControl", "DictatePersonaControl", "CallPersonaControl",
+                       "CompatibleAssistantControl", "CompatibleAgentsControl", "FleetLiveActivity",
+                       "CompatibleFleetLiveActivity"]:
             self.assertEqual(len(re.findall(rf"\b{widget}\(\)", bundle)), 1)
 
     def test_duplicate_key_guards_reject_silent_overwrites(self):
@@ -293,7 +306,8 @@ class PersonaOnlyTests(unittest.TestCase):
 
     def test_plists_have_unique_keys_and_exact_compatible_url_schemes(self):
         registered = set()
-        expected = {"Persona/Resources/Info.plist", "Vision/Resources/Info.plist", "PersonaWatch/Info.plist"}
+        expected = {"Persona/Resources/Info.plist", "Vision/Resources/Info.plist", "PersonaWatch/Info.plist",
+                    "PersonaLink/App/Info.plist"}  # Persona Link opens pairing links (persona://link?…)
         for path in apple_files():
             if path.suffix not in {".plist", ".entitlements"}:
                 continue
@@ -413,7 +427,8 @@ class PersonaOnlyTests(unittest.TestCase):
             self.assertEqual(len(names), len(set(names)), [name for name, n in collections.Counter(names).items() if n > 1])
         self.assertIn('static let avatar = "person.crop.artframe"', icons)
         self.assertIn('static let persona = "sparkle"', icons)
-        self.assertIn("symbol: Theme.Icon.avatar", source("Persona/Views/Settings/AppearanceSettingsView.swift"))
+        # Settings' Avatar row (its catalog entry, which Settings draws), not a brand or persona symbol.
+        self.assertIn("symbol: Theme.Icon.avatar", source("Persona/Views/Settings/SettingsNavigation.swift"))
         launch = source("PersonaUITests/UITestStyle.swift")
         self.assertEqual(len(re.findall(r"\bfunc launchPersona\(", launch)), 1)
         self.assertNotRegex(launch, r"func launchPersona\([^)]*\)\s*\{\s*launchPersona\(")
@@ -469,14 +484,29 @@ class PersonaOnlyTests(unittest.TestCase):
             self.assertIn("HubNaming.filePattern", source(path))
 
     def test_link_package_and_clients_share_compatible_names_without_duplicates(self):
-        # The retired menu bar's data-directory and pairing code is archived with its UI (#6770). The independent
-        # launchd service and fixed Electron command bridge keep the connector in the shared PERSONA_HOME.
+        # The menu bar App (apple/PersonaLink/App) reads the connector's state from the same data directory the launchd
+        # service gives it (PERSONA_HOME), else the canonical one, else the previous name's when that is the one there.
         package = source("PersonaLink/Package.swift")
         self.assertIn('name: "PersonaScreen"', package)
         self.assertIn('path: "Sources/PersonaScreen"', package)
         self.assertNotIn('path: "Sources/PersonaLink"', package)
         service = APPLE.parent / "server/cmd/persona-link/service_mac.go"
         self.assertIn('<key>PERSONA_HOME</key>', service.read_text())
+        paths = source("PersonaLink/App/Sources/PersonaLink/LinkStatePaths.swift")
+        self.assertIn('environment["PERSONA_HOME"] ?? environment[previousHomeKey] ?? ""', paths)
+        self.assertIn('LegacyNames.product.uppercased() + "_HOME"', paths)
+        self.assertIn('home.appendingPathComponent(".persona", isDirectory: true)', paths)
+        self.assertIn('home.appendingPathComponent("." + LegacyNames.product, isDirectory: true)', paths)
+        self.assertIn("lstat(previous.path, &old)", paths)
+        self.assertIn("a.st_dev == b.st_dev, a.st_ino == b.st_ino", paths)
+        self.assertNotIn("moveItem(", paths)
+        self.assertNotIn("removeItem(", paths)
+        model = source("PersonaLink/App/Sources/PersonaLink/LinkModel.swift")
+        self.assertEqual(model.count('environment["PERSONA_HOME"] = stateURL.path'), 1)
+        self.assertIn('LegacyNames.product.uppercased() + "_HOME"', model)
+        self.assertNotIn('"--parent"', model, "launchd runs the connector; the App never hosts it")
+        self.assertIn('static let schemes: Set<String> = ["persona", LegacyNames.product]',
+                      source("PersonaLink/App/Sources/PersonaLink/PairLink.swift"))
         route = source("Shared/HubPageLink.swift")
         self.assertIn('case "persona", LegacyNames.conversationPath:', route)
         for path in ["Shared/APIClient.swift", "Shared/ExtensionSystemLink.swift"]:
@@ -486,6 +516,9 @@ class PersonaOnlyTests(unittest.TestCase):
         self.assertIn('case "persona", LegacyNames.urlScheme:', source("Persona/Views/Chat/AssistantHTMLCard.swift"))
         self.assertFalse((APPLE / "PersonaLink/Sources/PersonaLink").exists())
         self.assertFalse((APPLE / "PersonaLink/Tests/PersonaLinkTests").exists())
+        compatibility = APPLE / "PersonaLink/App/Sources/PersonaLink/NativeCompatibility.swift"
+        self.assertTrue(compatibility.is_symlink())
+        self.assertEqual(compatibility.resolve(), (APPLE / "Shared/NativeStateMigration.swift").resolve())
         for path in (path for path in apple_files() if path.suffix == ".swift"):
             with self.subTest(path=path.relative_to(APPLE)):
                 text = path.read_text(encoding="utf-8")

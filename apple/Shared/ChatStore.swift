@@ -9,6 +9,7 @@ nonisolated struct ToolCall: Identifiable, Hashable, Sendable {
     var images: [ImagePayload] = []
     var results: [Item] = []
     var agentStatus: String?
+    var toolViews: [ExtensionView] = []
 
     var id: String { use.id }
     var name: String { use.toolName ?? "tool" }
@@ -1237,6 +1238,7 @@ final class ChatStore {
                 var call = ToolCall(use: it, result: deliveries.last, results: agent ? deliveries : [],
                                     agentStatus: deliveries.last(where: { $0.task?.kind == "agent" }).map { $0.task?.status ?? "" })
                 call.images = it.toolUseID.flatMap { images[$0] } ?? []
+                call.toolViews = deliveries.flatMap { $0.toolViews ?? [] }
                 run.append(.call(call))
             case .thinking:
                 pendingThoughts.append(it)
@@ -1547,8 +1549,10 @@ nonisolated enum ChatCache {
     /// keep the notice under the call's id.
     /// v21: pages retain silent finish receipts, and narration stays distinguishable from a final reply.
     /// v22: replies retain the model that wrote each assistant item; older copies could not mark model changes.
+    /// v23: Codex image generation completions are Read items; older copies keep their notices without the image strip.
+    /// v24: tool_result and fold items carry out-of-band tool_views (interactive maps, etc.); older copies omit them.
     /// Bump it whenever the item structure or the text the hub gives an item changes.
-    static let folder = "chats-v22"
+    static let folder = "chats-v24"
 
     /// Once per launch, before the first copy is read or written (a static let runs once, on whichever thread asks first).
     private static let dropOlder: Void = {
@@ -1680,6 +1684,8 @@ nonisolated struct PendingMessage: Identifiable, Hashable, Codable, Sendable {
     var state: State = .sending
     /// Why the last send failed, kept with the message so a caller waiting through outbox retries can show the reason.
     var failure: String?
+    /// The hub's structured refusal (`shell_waiting`), kept so only messages that start definitely refused can be resent.
+    var failureCode: String?
     var inboxHandOff: InboxHandOff?
     /// When it was written, in whole seconds (it survives the outbox's JSON as it is); nil in outboxes saved before this
     /// was kept.
@@ -1702,7 +1708,7 @@ nonisolated struct PendingMessage: Identifiable, Hashable, Codable, Sendable {
     /// The latest effort choice seen while this message waited. Kept across app and node restarts.
     var requiredEffort: String?
 
-    private enum CodingKeys: String, CodingKey { case id, text, images, state, failure, inboxHandOff, createdAt, mayHaveArrived, refused, via, queuedMode, requiredEffort }
+    private enum CodingKeys: String, CodingKey { case id, text, images, state, failure, failureCode, inboxHandOff, createdAt, mayHaveArrived, refused, via, queuedMode, requiredEffort }
 
     /// Only on this phone as far as it knows: failed, or waiting for the network. Deleting it (its long press, its mark's
     /// menu) drops the bubble and its outbox entry and sends nothing (#4626). One being sent may be arriving and a sent

@@ -19,10 +19,14 @@ No generator terminology appears in the product UI.
   corrected through the mapping, not a post-generation edit. Arbitrary styled `Text` children are not relied on.
 - Both the Build title and missing-value text are `stringKey` mappings. A plain string parameter would display
   `settings.not.provided` literally, so the absent branch deliberately uses a separate typed fallback component.
-- The generated Kotlin and test adapter live only in `:feature:settings`'s test source set. The production
-  `AboutSettingsPage`, original Version generated file and original generator lock are untouched. There is no
-  variant, flag, route, runtime, preference or default choice. Removing this directory, its three Kotlin test
-  files and `scripts/app/refract_about_build.py` plus its CI registration restores the original tree with no migration.
+- The generated Kotlin and test adapter live only in `:feature:settings`'s test source set. #13076 adds one
+  optional `buildRow` slot to the production `AboutSettingsPage`; its null default preserves the handwritten row and
+  the production route passes no slot. The original Version generated file and generator lock are untouched. There
+  is no variant, flag, route, runtime, preference or default choice. To remove the consumer while retaining the
+  inactive host, delete this directory, `AboutBuildSnapshot.kt`, `AboutBuildRefractTest.kt`,
+  `AboutBuildSemanticsTest.kt`, `AboutBuildHostTest.kt`, the generated Kotlin, and
+  `scripts/app/refract_about_build.py` with its tests and CI registration. To restore the pre-#13076 tree, also
+  remove `buildRow` and its conditional from `AboutSettingsPage`. No migration is involved in either rollback.
 
 ## Exact generator ownership
 
@@ -69,6 +73,25 @@ input and must not imply a native missing-package-metadata state. `AboutBuildSem
 package metadata and generated/native text, descriptions, click/custom actions and `Tokens.MinTouch.android` touch
 bounds in en/zh-Hans/ja for present and absent optional inputs. It does not alter the generated source or repeat the
 pixel matrix.
+
+#13076 connects the generated component to the existing native `AboutSettingsPage` through its optional `buildRow`
+parameter. It defaults to null, preserving the existing handwritten `JRow` and remembered PackageInfo lookup; the
+production route never passes it. `AboutBuildHostTest` supplies `buildNumber` from the real PackageInfo →
+`AboutBuildSnapshot` adapter directly to the generated slot. Its handwritten comparison value differs from that
+real snapshot, and the test checks handwritten default → generated → handwritten default under the same remembered
+PackageInfo snapshot. It retains one Build row, the native Version and the full-value Commit copy action. This is
+component-hosting/rollback evidence, not dynamic package-metadata refresh, production selection or a copied page.
+The checker pins this default and strips Kotlin comments and string contents before rejecting code references to
+`AboutBuildRow` / `AboutBuildSnapshot` under production source sets, including `src/main`, `src/debug` and
+`src/release`; `src/test` and `src/androidTest` remain allowed. Mentions in comments and string literals remain
+allowed; references inside string interpolation remain code and are rejected. Fixtures cover real production
+references, allowed test-source references and prose. The two rollback choices above distinguish retaining the
+inactive host from restoring the pre-#13076 host; no persisted state or migration is involved.
+
+#13061 adds isolated temporary-file rollback checks for the Build generation entrypoint. Nondeterministic successive
+outputs restore the original reviewed bytes and return nonzero. If restoration itself fails, the original generator
+diagnostic remains first and the restoration error is explicitly secondary; no successful rollback is claimed.
+These tests do not regenerate or edit the reviewed Kotlin.
 
 These are Native JVM Compose comparisons, not a physical device,
 TalkBack, accessibility-service or performance result. This local generation, Kotlin compilation and JVM comparison

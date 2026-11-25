@@ -82,6 +82,8 @@ nonisolated enum ExtensionSceneSnapshotCache {
     private(set) var prepared: ExtensionScenePreparedGeometry?
     private(set) var camera: ExtensionSceneCameraState
     private(set) var touched = false
+    /// Shown full screen on a viewport taller than it is wide: the untouched camera opens steeper (#14335).
+    private(set) var tallView = false
     private(set) var geometryVersion = 0
     private(set) var lightVersion = 0
 
@@ -93,6 +95,10 @@ nonisolated enum ExtensionSceneSnapshotCache {
     @ObservationIgnored private var restored: Bool
     @ObservationIgnored private var revision = 0
     @ObservationIgnored private var saveTask: Task<Void, Never>?
+    /// The scene's walls, for the cutaway (#13036), and the rebuild for a new set of lowered walls under way.
+    @ObservationIgnored private var walls: [ExtensionSceneCutaway.Wall] = []
+    @ObservationIgnored private var cutawayTask: Task<Void, Never>?
+    @ObservationIgnored private var cutawayPending: [Int]?
     @ObservationIgnored private var wheelSaveTask: Task<Void, Never>?
 
     init(scene: ExtensionSceneComponent, namespace: String = "", restored: ExtensionSceneSavedState? = nil,
@@ -120,18 +126,19 @@ nonisolated enum ExtensionSceneSnapshotCache {
         return key + "-" + digest.prefix(16).map { String(format: "%02x", $0) }.joined()
     }
 
-    private static var pictureCache: [(shapes: [ExtensionSceneShape], prepared: ExtensionScenePreparedGeometry)] = []
+    private static var pictureCache: [(shapes: [ExtensionSceneShape], yaw: Double, prepared: ExtensionScenePreparedGeometry)] = []
 
     /// Synchronous preparation for SwiftUI's `ImageRenderer` (`extensionPicture == true`), which never runs `.task`.
     /// Caches the last 8 shape lists so `MessageShareCard.render`'s two-pass `size()` + `render()` builds meshes once.
     static func picture(_ scene: ExtensionSceneComponent) -> ExtensionSceneModel {
         let model = ExtensionSceneModel(scene: scene, keeps: false)
-        if let hit = pictureCache.last(where: { $0.shapes == scene.shapes }) {
+        let yaw = model.camera.yaw
+        if let hit = pictureCache.last(where: { $0.shapes == scene.shapes && $0.yaw == yaw }) {
             model.prepared = hit.prepared
         } else {
-            let built = ExtensionSceneGeometryBuilder.build(scene.shapes)
+            let built = ExtensionSceneGeometryBuilder.build(scene.shapes, cutawayYaw: yaw)
             if pictureCache.count >= 8 { pictureCache.removeFirst() }
-            pictureCache.append((scene.shapes, built))
+            pictureCache.append((scene.shapes, yaw, built))
             model.prepared = built
         }
         model.geometryVersion = 1
@@ -152,13 +159,17 @@ nonisolated enum ExtensionSceneSnapshotCache {
         let shapesChanged = prepared == nil || scene.shapes != next.shapes
         var nextPrepared = prepared
         if shapesChanged {
-            nextPrepared = await Self.prepareShapes(next.shapes)
+            let yaw = touched ? camera.yaw : ExtensionSceneCameraState.resolved(next.camera).yaw
+            nextPrepared = await Self.prepareShapes(next.shapes, cutawayYaw: yaw)
         }
         guard currentRevision == revision else { return }
 
         let lightsChanged = shapesChanged || Self.activeLights(scene.pins) != Self.activeLights(next.pins)
         scene = next
         if let nextPrepared, shapesChanged {
+            cutawayTask?.cancel()
+            cutawayPending = nil
+            walls = ExtensionSceneCutaway.walls(next.shapes)
             prepared = nextPrepared
             geometryVersion += 1
         }
@@ -166,13 +177,33 @@ nonisolated enum ExtensionSceneSnapshotCache {
             lightVersion += 1
         }
         if !touched {
-            let resolved = ExtensionSceneCameraState.resolved(next.camera)
+            let resolved = defaultCamera
             if camera != resolved { camera = resolved }
         }
+        refreshCutaway()
     }
 
-    @concurrent nonisolated private static func prepareShapes(_ shapes: [ExtensionSceneShape]) async -> ExtensionScenePreparedGeometry {
-        ExtensionSceneGeometryBuilder.build(shapes)
+    @concurrent nonisolated private static func prepareShapes(_ shapes: [ExtensionSceneShape], cutawayYaw: Double) async -> ExtensionScenePreparedGeometry {
+        ExtensionSceneGeometryBuilder.build(shapes, cutawayYaw: cutawayYaw)
+    }
+
+    /// The walls to draw low for the camera as it is now (#13036): a dot product per wall. When they are not the ones the
+    /// geometry was built with, it is built again off the main actor; a build overtaken by another turn is dropped.
+    private func refreshCutaway() {
+        guard let prepared, !walls.isEmpty else { return }
+        let lowered = ExtensionSceneCutaway.lowered(walls, bounds: prepared.bounds, yaw: camera.yaw)
+        guard lowered != (cutawayPending ?? prepared.lowered) else { return }
+        cutawayTask?.cancel()
+        cutawayPending = lowered
+        let shapes = scene.shapes
+        let yaw = camera.yaw
+        cutawayTask = Task { [weak self] in
+            let built = await Self.prepareShapes(shapes, cutawayYaw: yaw)
+            guard !Task.isCancelled, let self, self.scene.shapes == shapes, self.cutawayPending == built.lowered else { return }
+            self.cutawayPending = nil
+            self.prepared = built
+            self.geometryVersion += 1
+        }
     }
 
     private struct ActiveLightKey: Equatable {
@@ -197,11 +228,27 @@ nonisolated enum ExtensionSceneSnapshotCache {
         }
     }
 
+    /// The camera the scene opens at here: the scene's own, steeper in a tall full-screen view.
+    var defaultCamera: ExtensionSceneCameraState {
+        var camera = ExtensionSceneCameraState.resolved(scene.camera)
+        if tallView { camera.pitch = max(camera.pitch, Theme.Scene.tallViewPitch) }
+        return camera.clamped()
+    }
+
+    /// The full-screen view says whether it is taller than it is wide (and false when it closes); an untouched camera
+    /// follows the default for the view. Never persisted: the card keeps the scene's own pitch.
+    func setTallView(_ tall: Bool) {
+        guard tall != tallView else { return }
+        tallView = tall
+        if !touched { camera = defaultCamera }
+    }
+
     func updateCamera(_ next: ExtensionSceneCameraState, persist: Bool = false) {
         let clamped = next.clamped()
         guard clamped != camera || !touched else { return }
         camera = clamped
         touched = true
+        refreshCutaway()
         if persist { self.persist() }
     }
 
@@ -219,12 +266,12 @@ nonisolated enum ExtensionSceneSnapshotCache {
         )
     }
 
-    /// Restores the scene's default camera and marks it untouched (persisting `touched: false` so reopening uses the default).
+    /// Restores the default camera (`defaultCamera`) and marks it untouched (persisting `touched: false` so reopening uses the default).
     func reset() {
         wheelSaveTask?.cancel()
-        let defaults = ExtensionSceneCameraState.resolved(scene.camera)
-        camera = defaults
+        camera = defaultCamera
         touched = false
+        refreshCutaway()
         writeCurrent()
     }
 
@@ -246,7 +293,7 @@ nonisolated enum ExtensionSceneSnapshotCache {
             camera = saved.camera.clamped()
             touched = true
         } else {
-            camera = ExtensionSceneCameraState.resolved(scene.camera)
+            camera = defaultCamera
             touched = false
         }
     }

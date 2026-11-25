@@ -64,7 +64,10 @@ data class Hello(
     @SerialName("message_send_state") val messageSendState: Int? = null,
     /** The pictures a message may carry; older hubs use the same documented defaults, not a four-picture cap. */
     @SerialName("image_limits") val imageLimits: ImageLimitsTable? = null,
-) : ServerEvent
+) : ServerEvent {
+    fun imageLimitsFor(agent: String? = null): ImageLimits =
+        (imageLimits ?: ImageLimitsTable.Standard).forAgent(agent)
+}
 
 @KeepGeneratedSerializer
 @Serializable(with = HubMeshSerializer::class)
@@ -262,6 +265,10 @@ data class KnowledgeSelectionEvent(val manager: String? = null) : ServerEvent
 @Serializable
 data class SavedPromptsEvent(val manager: String? = null) : ServerEvent
 
+/** One assistant's starred messages changed. An absent manager names the hub's default assistant. */
+@Serializable
+data class StarredMessagesEvent(val manager: String? = null) : ServerEvent
+
 /**
  * An extension's install, upgrade or uninstall moved on (docs/protocol/protocol.md "Extension install, upgrade and uninstall progress"): only to a client
  * that says `extension_operations`, and not replayed after a reconnect (the page lists them again).
@@ -284,6 +291,13 @@ data class ExtensionAuthEvent(val extension: String, val auth: persona.core.cont
  * payload: the clients read `GET /api/v1/assistant/directions/tree` again (the default manager's alone).
  */
 data object DirectionsEvent : ServerEvent
+
+/**
+ * The assistant's Dashboards places changed (#15017, `assistant_pages`, payload `{}`): a page was kept, pinned,
+ * unpinned, renamed, removed or restored, or the switch in Settings › Assistant was turned. Only from a hub that
+ * says `assistant_pages`; the clients read the extension places list (`GET /api/v1/extensions/-/ui`) again.
+ */
+data object AssistantPagesEvent : ServerEvent
 
 /**
  * Whose an extension push is (`extension_ui`, `extension_operation`, `extension_auth`): the hub puts a top-level
@@ -375,7 +389,9 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
             "todos" -> input.json.decodeFromJsonElement<TodosEvent>(obj)
             "assistant_feed" -> input.json.decodeFromJsonElement<AssistantFeedEvent>(obj)
             "assistant_saved_prompts" -> input.json.decodeFromJsonElement<SavedPromptsEvent>(obj)
+            "assistant_starred" -> input.json.decodeFromJsonElement<StarredMessagesEvent>(obj)
             "directions" -> DirectionsEvent
+            "assistant_pages" -> AssistantPagesEvent
             "task_plan" -> input.json.decodeFromJsonElement<TaskPlanEvent>(obj)
             "assistant_view" -> input.json.decodeFromJsonElement<AssistantViewEvent>(obj)
             "assistant_view_action" -> input.json.decodeFromJsonElement<AssistantViewActionEvent>(obj)
@@ -435,7 +451,9 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
             is TodosEvent -> "todos" to output.json.encodeToJsonElement(value)
             is AssistantFeedEvent -> "assistant_feed" to output.json.encodeToJsonElement(value)
             is SavedPromptsEvent -> "assistant_saved_prompts" to output.json.encodeToJsonElement(value)
+            is StarredMessagesEvent -> "assistant_starred" to output.json.encodeToJsonElement(value)
             DirectionsEvent -> "directions" to JsonObject(emptyMap())
+            AssistantPagesEvent -> "assistant_pages" to JsonObject(emptyMap())
             is TaskPlanEvent -> "task_plan" to output.json.encodeToJsonElement(value)
             is AssistantViewEvent -> "assistant_view" to output.json.encodeToJsonElement(value)
             is AssistantViewActionEvent -> "assistant_view_action" to output.json.encodeToJsonElement(value)
@@ -452,7 +470,18 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
     }
 }
 
-object HelloSerializer : WireSerializer<Hello>(Hello.generatedSerializer())
+object HelloSerializer : WireSerializer<Hello>(Hello.generatedSerializer()) {
+    override fun deserialize(decoder: Decoder): Hello {
+        val input = decoder as? JsonDecoder ?: throw SerializationException("Wire models require JSON")
+        val obj = input.decodeJsonElement() as? JsonObject ?: throw SerializationException("Expected hello object")
+        val limits = parseImageLimitsTable(obj["image_limits"])
+        val withoutLimits = JsonObject(obj.filterKeys { it != "image_limits" })
+        return input.json.decodeFromJsonElement(
+            object : WireSerializer<Hello>(Hello.generatedSerializer()) {},
+            withoutLimits,
+        ).copy(imageLimits = limits)
+    }
+}
 object HubMeshSerializer : WireSerializer<HubMesh>(HubMesh.generatedSerializer())
 object MeshHubSerializer : WireSerializer<MeshHub>(MeshHub.generatedSerializer())
 object ItemsEventSerializer : WireSerializer<ItemsEvent>(ItemsEvent.generatedSerializer())

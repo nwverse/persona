@@ -17,7 +17,8 @@ APPLE = ROOT / 'apple'
 SWITCH = 'PERSONA_LEAN_DEV_BUILD'
 # What the iPhone app depends on in every build, in project.yml's order, and what only the whole build adds.
 ALWAYS = ['LiveCommunicationKit.framework', 'PersonaWire', 'PersonaWidgets', 'PersonaNotify', 'MarkdownUI', 'BeautifulUI',
-          'PersonaSSH', 'PersonaKit', 'PersonaCore', 'MarqueeGlow', 'PersonaScreenKit', 'PersonaInputKit']
+          'PersonaSSH', 'PersonaKit', 'PersonaCore', 'MarqueeGlow', 'PersonaScreenKit', 'PersonaInputKit',
+          'PersonaModuleAPI']
 WHOLE_ONLY = ['PersonaWatch', 'PersonaShare']
 # Scripts that run `xcodegen generate` on a spec other than apple/project.yml, which the switch does not touch.
 OTHER_PROJECTS = {
@@ -126,7 +127,7 @@ class LeanDevBuildCallersTests(unittest.TestCase):
                           text, re.MULTILINE | re.DOTALL).group()
         # Execute the real lane branch, replacing only its build runner with argument capture.
         runner = 'ci_run() { shift 2; printf "%s\\n" "$@"; }\n'
-        for lane in ('all', 'ios', 'ios18', 'packages', 'ios-build'):
+        for lane in ('all', 'ios', 'ios18', 'packages', 'ios-build', 'ios-core-only'):
             with self.subTest(lane=lane):
                 result = subprocess.run(['bash', '-eu', '-c', runner + block],
                                         env=dict(os.environ, LANE=lane, SOURCE='/fixture'),

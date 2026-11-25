@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -27,6 +28,7 @@ var FleetRoutes = []string{
 	"POST /api/v1/interactions/{id}/resolve",
 	"POST /api/v1/interactions/{id}/clarify",
 	"POST /api/v1/interactions/{id}/reanswer",
+	"POST /api/v1/interactions/{id}/seen",
 	"GET /api/v1/interactions/history",
 	"POST /api/v1/sessions/{mid}/{sid}/seen",
 }
@@ -48,7 +50,14 @@ func (s *Service) fleetHandler(next http.Handler) http.Handler {
 		if a, ok := assistantwire.HandoffApproverOf(r.Context()); ok {
 			approver = &a
 		}
-		if err := s.resolveApproved(r.Context(), id, res, approver); err != nil {
+		// An answer through this route is a device's, the user's own on one of theirs (an extension's when the hub says
+		// so): the history keeps it as such (interactions.ended_by), so it is told from a card that expired or was
+		// withdrawn, or that someone answered for the user.
+		by := db.EndedByDevice
+		if r.Header.Get(RoleHeader) == roleExtension {
+			by = db.EndedByExtension
+		}
+		if err := s.resolveApproved(db.WithEndedBy(r.Context(), by), id, res, approver); err != nil {
 			switch {
 			case errors.Is(err, errHandoffElsewhere):
 				apierr.WriteCode(w, http.StatusForbidden, proto.CodeSecretHandoffElsewhere, err)
@@ -87,7 +96,11 @@ func (s *Service) fleetHandler(next http.Handler) http.Handler {
 		}
 		apierr.WriteJSON(w, map[string]any{"ok": true, "pending": true})
 	})
-	mux.HandleFunc("POST /api/v1/interactions/{id}/reanswer", s.serveReanswer)    // "Change answer" (fleet_delegate.go)
+	mux.HandleFunc("POST /api/v1/interactions/{id}/reanswer", s.serveReanswer) // "Change answer" (fleet_delegate.go)
+	mux.HandleFunc("POST /api/v1/interactions/{id}/seen", func(w http.ResponseWriter, r *http.Request) {
+		s.markInteractionSeen(r.Context(), r.PathValue("id"))
+		apierr.WriteJSON(w, map[string]any{"ok": true})
+	})
 	mux.HandleFunc("GET /api/v1/interactions/history", s.serveInteractionHistory) // interaction_history.go
 	mux.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/seen", func(w http.ResponseWriter, r *http.Request) {
 		m, ok := s.fleetMachine(r.PathValue("mid"))
@@ -106,8 +119,9 @@ func (s *Service) fleetHandler(next http.Handler) http.Handler {
 // again) it is the same outcome as the first time: 200 with already and the answer as the history keeps it, so the
 // app shows the card as answered rather than an error — the first answer's event may not have reached it. Otherwise
 // (expired, withdrawn, handed back, or unknown) 410, with how it ended when the history knows. An extension's token
-// (ext) is not given the answer: it may be a health card's or hold what was typed into a card's fields, which the
-// history does not show it either (docs/extensions/extensions.md "Never shown to extensions").
+// (ext) is not given the answer: it may be a card of a space hidden from extensions or hold what was typed into a
+// card's fields, which the history does not show it either (docs/extensions/extensions.md "Never shown to
+// extensions").
 func (s *Service) writeEnded(ctx context.Context, w http.ResponseWriter, id string, r proto.Resolution, err error, ext bool) {
 	var status string
 	var kept *proto.Resolution
@@ -215,7 +229,9 @@ func (s *Service) localFleetDeviceCall(ctx context.Context, p DeviceCall) (json.
 		}
 		sess, ok := s.nodeSession(m.ID, a.SessionID)
 		if ok {
-			sess.Assistant = m.isAssistant(sess)
+			if !sess.LogicalPlaceholder {
+				sess.Assistant = m.isAssistant(sess)
+			}
 			if sess.Assistant && sess.Space == "" {
 				sess.Space = identity.SpaceOf(sess.Cwd)
 			}

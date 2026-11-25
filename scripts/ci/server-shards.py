@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 import argparse
+import concurrent.futures
 import collections
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import threading
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/test"))
-import go_partitions  # noqa: E402  (internal/node's and internal/assistant's partitions, shared with the release build)
+import go_partitions  # noqa: E402  (the partitioned packages' split, shared with the release build)
 SHARDS = ("node", "managers", "other")
+# scripts/ci/affected.sh: the packages a change affects (--packages-file), not a fixed shard.
+AFFECTED = "affected"
 
 
 def shard_for(package):
-    for name in ("node", "hub", "voice", "assistant"):
+    # modules/voice: the voice module (#13431), in the managers shard as internal/voice was.
+    for name in ("node", "hub", "voice", "modules/voice", "assistant"):
         suffix = "/internal/" + name
         if package.endswith(suffix) or suffix + "/" in package:
             return "node" if name == "node" else "managers"
@@ -27,14 +32,31 @@ def select_packages(packages, shard):
     return [package for package in packages if shard_for(package) == shard]
 
 
+def server_test_env(database_file):
+    """The server_test_env.py wrapper shared by partition listing and partition go test runs so both use the exact
+    same cleaned environment and GOFLAGS (including -trimpath) and share GOCACHE (#14633)."""
+    return [sys.executable, str(ROOT / "scripts/test/server_test_env.py"), "--database-file", database_file, "--"]
+
+
+def list_patterns(package, database_file):
+    """List one partitioned package's tests through server_test_env.py so GOCACHE is warmed with the matching build
+    action ID before the shard fans out its partition workers."""
+    return go_partitions.list_patterns(ROOT / "server", package, prefix=server_test_env(database_file))
+
+
+def go_test(shard, database_file):
+    """The go test command line a shard's processes start with, before their packages."""
+    workers = {"node": 1, "managers": 3, "other": 4, AFFECTED: 3}[shard]
+    return [sys.executable, str(ROOT / "scripts/test/server_test_env.py"), "--database-file", database_file,
+            "--", "go", "test", "-json", "-p", str(workers), "-count=1", "-timeout=10m"]
+
+
 def commands(packages, shard, database_file, partitions=None):
     """The go test processes a shard runs at once: one for its other packages, and one more per partition of each
-    partitioned package it has (go_partitions: internal/node in the node shard, internal/assistant in the managers
-    shard; the same split as the release build). partitions maps such a package to its -run patterns. Each process
+    partitioned package it has (go_partitions: internal/node in the node shard, internal/assistant and internal/hub in the
+    managers shard, internal/devices and internal/extmgr in the other shard; the same split as the release build). partitions maps such a package to its -run patterns. Each process
     keeps -p and -timeout."""
-    workers = {"node": 1, "managers": 3, "other": 2}[shard]
-    prefix = [sys.executable, str(ROOT / "scripts/test/server_test_env.py"), "--database-file", database_file,
-              "--", "go", "test", "-json", "-p", str(workers), "-count=1", "-timeout=10m"]
+    prefix = go_test(shard, database_file)
     rest, parts = go_partitions.split(packages)
     if not parts:
         return [prefix + packages]
@@ -124,24 +146,72 @@ class Results:
         return lines
 
 
+def guard_lists(check_fast=ROOT / "scripts/test/check-fast.sh"):
+    """check-fast's repo-wide guards (#12842): the packages that run whole and (packages, -run pattern) for the guard
+    tests of the others. One list for both, read from check-fast.sh, which scripts/test/test_check_fast_guards.py
+    keeps in step with the tests. Only read: nothing here runs check-fast or takes a heavy-build slot, so there is no
+    PERSONA_HEAVY_SLOTS=0 to set."""
+    text = check_fast.read_text()
+
+    def array(name):
+        body = re.search(name + r"=\(([^)]*)\)", text).group(1)
+        return [word for word in body.split() if word.startswith("./")]
+    pattern = "".join(re.findall(r"'([^']*)'", re.search(r"GO_GUARD_TESTS=((?:'[^']*'\\?\n?)+)", text).group(1)))
+    return array("GO_GUARD_PKGS"), array("GO_GUARD_TEST_PKGS"), pattern
+
+
+def affected_commands(packages, database_file, partitions, guards):
+    """affected.sh's go test processes: the affected packages as commands() runs a shard, then the guard packages
+    that are not among them, whole, and the guard tests of the guard test packages that are not."""
+    runs = commands(packages, AFFECTED, database_file, partitions) if packages else []
+    if guards:
+        whole, tested, pattern = guard_lists()
+        prefix = go_test(AFFECTED, database_file)
+        listed = set(packages)
+        module = "github.com/nwverse/persona/server/"
+        whole = [p for p in whole if module + p[2:] not in listed]
+        tested = [p for p in tested if module + p[2:] not in listed]
+        runs += [prefix + whole] if whole else []
+        runs += [prefix + ["-run", pattern] + tested] if tested else []
+    return runs
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("shard", choices=SHARDS)
+    parser.add_argument("shard", choices=SHARDS + (AFFECTED,))
     parser.add_argument("--database-file", required=True)
+    parser.add_argument("--packages-file", help="affected: the import paths to test, one per line")
+    parser.add_argument("--guards", action="store_true", help="affected: also run check-fast's repo-wide guards")
     args = parser.parse_args()
-    listed = subprocess.check_output(["go", "list", "./..."], cwd=ROOT / "server", text=True, timeout=120)
-    packages = select_packages(listed.splitlines(), args.shard)
-    if not packages:
+    if args.shard == AFFECTED:
+        if not args.packages_file:
+            parser.error("affected needs --packages-file")
+        packages = [line.strip() for line in Path(args.packages_file).read_text().splitlines() if line.strip()]
+        if not packages and not args.guards:
+            print("Server affected: no Go package to test", flush=True)
+            return 0
+    else:
+        listed = subprocess.check_output(["go", "list", "./..."], cwd=ROOT / "server", text=True, timeout=120)
+        packages = select_packages(listed.splitlines(), args.shard)
+    if not packages and args.shard != AFFECTED:
         parser.error(f"No packages in server shard {args.shard}")
     try:
-        partitions = {package: go_partitions.list_patterns(ROOT / "server", package)
-                      for package in go_partitions.split(packages)[1]}
+        # Listing compiles each partitioned package's tests; after a change most of them compile from scratch, so they
+        # are listed at once rather than one after another (an affected run reaching five of them: 161 s in turn, 113 s
+        # at once, on a busy CI machine).
+        listed = go_partitions.split(packages)[1]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(len(listed), 1)) as pool:
+            patterns = list(pool.map(lambda package: list_patterns(package, args.database_file), listed))
+        partitions = dict(zip(listed, patterns))
     except subprocess.CalledProcessError as error:
         # Listing a partitioned package's tests compiles it; a compile error ends the shard here, before any test.
         print(f"Server shard {args.shard}: could not list the tests of a partitioned package "
               f"(go test -list exit {error.returncode}); its build errors are printed above.", flush=True)
         return error.returncode or 1
-    runs = commands(packages, args.shard, args.database_file, partitions)
+    if args.shard == AFFECTED:
+        runs = affected_commands(packages, args.database_file, partitions, args.guards)
+    else:
+        runs = commands(packages, args.shard, args.database_file, partitions)
     results, lock = Results(), threading.Lock()
 
     def follow(index, process):

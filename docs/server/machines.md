@@ -181,6 +181,26 @@ Each process prints one line every 10 seconds, much cheaper than starting `vm_st
 
 Windows starts no processes: also `CGO_ENABLED=0`, but these Win32 calls work in pure Go (`golang.org/x/sys/windows`; `GetSystemTimes` and `GlobalMemoryStatusEx` directly through kernel32).
 
+### What load counts
+
+Load is the kernel's 1-minute load average: the number of threads running or waiting for a CPU, averaged over a minute. Linux also counts
+threads in uninterruptible sleep (usually waiting for the disk); macOS counts only runnable threads. It is not a percentage and is not divided
+by the cores, so it is read **per core** (load ÷ core count): at 1 per core every core has a thread, above 1 some threads wait.
+
+- **One figure everywhere** (#12519): the apps and the web show load per core with one decimal and the same words in each language,
+  "1.4 per core" (`MetricFormat.loadPerCore` and `MetricFormat.perCore`; web `perCoreText`, `perCoreLabel`). The card's line
+  under CPU says "Load 1.4 per core" (the raw value only while the core count is unknown); the machine page's Load tile keeps the raw value
+  ("25.4") with the per-core figure under it, and its chart keeps the raw value with a dashed line at the core count. The alert, the Live
+  Activity and the widgets go by the same per-core figure ("Alerts" below; `docs/apple/live-activity.md`, "Usage (tokens / TPM / load)").
+- **Said on the screen**: one sentence under the Machines cards, under a machine's charts (iOS and web) and in the web's load alert sheet
+  (`MachineCard.loadDefinition`, web `lib-machine-alerts.load_definition`): "Load is the number of threads running or waiting for a CPU,
+  averaged over a minute (Linux also counts threads waiting for the disk). It isn't a percentage: above 1 per core, some threads are waiting.
+  On a Mac, work at background priority may run on only some of the cores, so threads can wait while CPU stays low."
+- **Why load can be high while CPU is not**: CPU is the whole machine's busy share over the last 10 seconds, load counts waiting threads. On
+  a Mac a process tree started under a launchd job with `ProcessType=Background` runs at background priority and can be kept to one cluster
+  of cores, so its threads queue there while the other cores idle and the CPU average stays moderate (the node's own check for its plist is
+  `launchd-process-type`, "Doctor: what this computer can do").
+
 ### Which network interfaces count
 
 Count only traffic actually leaving the machine. Virtual interfaces are either local (lo, containers) or counted again on underlying physical interfaces (tunnels, proxies, bridges):
@@ -219,7 +239,7 @@ The nodes sample on the same wall-clock tick, so one writer stores a tick's samp
 It writes once every machine that sent in the last 30 seconds has sent this tick's, at most 2 seconds after the first (a single machine's sample is written at once); one machine's bad sample does not cost the others theirs.
 Samples wait in a queue of 1024; when Postgres is that far behind, a sample is dropped with a log line. A stopping manager still writes what it has, for at most 2 seconds.
 
-The main assistant's read-only `machines_list` tool combines the trusted machine list with the manager's last system information and sample, working agent count, recent failing launchers and node version status. It reports the list's completeness and excluded count; machines that belong to another manager or are not trusted are not exposed. Connection, session and launcher records have separate availability: an empty failure list means no recent failure is recorded, not that every launcher was checked. Values whose source is missing, ambiguous, offline, stale or has a future timestamp are null with a reason. Samples over 30 seconds old retain their age but are not current; a sample from before the current connection is not current either. System information is the last reported information and may persist while offline; memory and disk availability follow the collection definitions above, and disk is an aggregate rather than necessarily the work directory's filesystem. Node builds that differ cannot be ordered by their identifiers, so a different build alone is not called outdated. The tool returns facts without ranking machines.
+The main assistant's read-only `machines_list` tool combines the trusted machine list with the manager's last system information and sample, working agent count, recent failing launchers and node version status. It reports the list's completeness and excluded count; machines that belong to another manager or are not trusted are not exposed. Connection, session and launcher records have separate availability: an empty failure list means no recent failure is recorded, not that every launcher was checked. Values whose source is missing, ambiguous, offline, stale or has a future timestamp are null with a reason. Samples over 30 seconds old retain their age but are not current; a sample from before the current connection is not current either. System information is the last reported information and may persist while offline; memory and disk availability follow the collection definitions above, and disk is an aggregate rather than necessarily the work directory's filesystem. Node builds that differ cannot be ordered by their identifiers, so a different build alone is not called outdated. A machine whose link is up but whose node has sent no sample for 3 minutes (counted from the later of the last sample and the current connection) is `unresponsive`, not `online`, with a `state_reason` giving `no_recent_report` and the age of the last report; `agents_list` names such machines in an "unresponsive machines" line. The tool returns facts without ranking machines.
 
 The assistant-only `machine_redeploy` tool accepts a machine ID or an exact, unambiguous display name. Name selection requires a complete machine inventory; an ID remains valid when the list is incomplete. It invokes the same explicit `Machine.startDeploy` operation as `POST /api/v1/machines/{mid}/deploy`, waits for that job's outcome and returns success or the failure reason. The app's route remains asynchronous. Canceling the tool's wait does not cancel the deployment or change its card phases, persisted outcome or notifications; an unconfirmed wait is not reported as a failed deployment. A call cannot target the machine running its own conversation, because the update waits for that conversation to become idle; use a conversation on another machine instead.
 Every minute `metricsLoop`:
@@ -339,23 +359,23 @@ removing the **Machine Monitoring** name and entry point.
 
 - **Entry points** (all open `MachinesView`): **Machines** in the new shell drawer; **Settings › Machines**; **Machines** at the bottom of the Agents list's top-left menu (`MachineListRoute`, opens in the right column on iPad);
   Mac sidebar **Machines** (⌘5). Top-right ⓘ on Projects / machine projects opens machine detail (`MachineDetailRoute`).
-- **Machines page** (`MachinesView`): top line "N/M online · K under heavy load · J Agents need you". Under it **Today's Tokens** (`TodayTokensCard`, #4973): the total, every token per minute now,
+- **Machines page** (`MachinesView`): top line "N/M online · K with high readings · J Agents need you" (K counts machines with any alert, CPU, memory, disk or load, so it never says "load"; #12519). Under it **Today's Tokens** (`TodayTokensCard`, #4973): the total, every token per minute now,
   the cache hit rate, and each computer's share as a bar in shades of the text ink (not the kinds' colors). One card per machine (`MachineCard`): OS icon, name, OS · cores · memory (one line),
   online / offline (last online time and SSH error when offline); alert tags ("Alerts" below); Agent counts **Needs you / Working / Idle** (Idle = Unread + Seen + Unknown,
-  live sessions only, excluding assistant chats, matching Agents list); current CPU / memory / network values and past-hour sparklines, and **Tokens** (per minute now, today's total, the past hour) when its node reports usage; **Redeploy** when personad and hub aren't from the same deployment.
-  iPad / Mac cards form multiple columns according to width. Tap to open machine detail.
+  live sessions only, excluding assistant chats, matching Agents list); current CPU / memory / network values and past-hour sparklines, with load per core under CPU ("Load 1.4 per core", "What load counts" above), and **Tokens** (per minute now, today's total, the past hour) when its node reports usage; **Redeploy** when personad and hub aren't from the same deployment.
+  iPad / Mac cards form multiple columns according to width. Tap to open machine detail. Under the cards, the footnote says how often the numbers update and what load counts.
   Web deployment entry depends on `can_deploy`: old Link nodes prompt a one-time local upgrade; supported nodes show waiting for idle / transfer / restart / version confirmation; details in [node-update.md](../operations/node-update.md).
 - **Ordering** (`MachineConcern`): attention-needed first: offline → severe alerts → caution alerts → Agents needing you → version mismatch; within each category and for remaining machines, hub config order.
   Reorder only when something shown on the card changes, with animation.
 - **Machine detail** (`MachineDetailView`): everything on one page, common actions first. Same card at top (without metrics or the name, the title has it); when offline, next comes **Hub connects through SSH …** and **Reconnect**.
-  Then **Agents**: Needs you first, Working next, first 5 shown, **Show all N** for the rest; tap to open chat. Next **Engine** (which engine's sessions this machine shows; tap to choose, `EngineSelectionView`). Then **Token Usage** (`MachineUsageSection`, see "Token usage charts" below). Then **Monitoring**: current CPU / memory / network / load / disk / swap,
-  1 hour / 6 hours / 24 hours selector, four charts for CPU, memory, network (download + upload), load (dashed core-count line); Linux also has per-core bars.
+  Then **Agents**: Needs you first, Working next, first 5 shown, **Show all N** for the rest; tap to open chat. Next **Engine** (which engine's sessions this machine shows; tap to choose, `EngineSelectionView`). Then **Token Usage** (`MachineUsageSection`, see "Token usage charts" below). Then **Monitoring**: current CPU / memory / network / load (the raw value, load per core under it) / disk / swap,
+  1 hour / 6 hours / 24 hours selector, four charts for CPU, memory, network (download + upload), load (dashed core-count line) with what load counts under them; Linux also has per-core bars.
   Hold and drag any chart to inspect a time; all four share the selected timestamp, showing its value and time in the header. Then **What This Computer Can Do** (two rows when everything works:
   the summary and **Show All Checks**; the features show when something needs attention or after **Show All Checks**), the computer and browser sections, **System** (OS, kernel, architecture, model, processor,
   cores, memory, hostname, boot time and uptime, herdr / Claude Code / node versions), **Launchers**, and, when online, connection method and **Reconnect** last.
 - **Updates**: machine online state and Agents update live through hub pushes; numbers poll only while page is visible and App foreground: Machines every 10 seconds, detail's 1-hour range every 10 seconds, other ranges every minute;
   stops in background (`task(id: scenePhase)`). Pull to refresh (Mac ⌘R, `macRefreshes`) also reloads the machine list.
-- **Alerts** (`MetricAlert`): CPU ≥ 75% caution, ≥ 90% severe; memory ≥ 80% / 90%; disk ≥ 80% / 90%; load ≥ 1 / 2 times core count. Cards get a status-colored border,
+- **Alerts** (`MetricAlert`): CPU ≥ 75% caution, ≥ 90% severe; memory ≥ 80% / 90%; disk ≥ 80% / 90%; load per core ≥ 1 / 2 (the load average over the core count, "What load counts" above). Cards get a status-colored border,
   and tags use icon (status color) + text (body color), not color alone.
 - With old hubs lacking these endpoints (404), machine cards omit metrics (Agent counts remain), and detail monitoring says **Deploy newer hub and node versions to see this**; old nodes sending no samples show **—**.
 
@@ -474,6 +494,18 @@ Tests: `node/machdiag` (stat and ps fixtures, grouping and the top-N union, the 
 in-use matching, the cleanup's guard rails on temporary home directories, the tool probe with fake commands), `node/diagnose_rpc_test.go` (dispatch),
 `devices/diagnosis_test.go` (pass-through, capability, offline, bad input, roles, node errors), `hub/diagnosis_routes_test.go` (answer-only devices and extension tokens).
 
+## Disk usage map (#14576)
+
+The diagnosis answers a fixed question; the **disk usage map** lets the user walk a computer's disk and act on it. The
+manager routes `GET /api/v1/machines/{mid}/storage/usage` and `POST …/storage/trash`, `…/trash/undo`, `…/trash/purge`
+(`devices/usagemap.go`, `full` devices only) call the node's `machine.storage.usage`, `.trash`, `.untrash` and `.purge`
+(`node/machine_storage_usage.go` over `node/diskmap/`, capability `machine_storage_usage`). The node sizes folders in
+the background, keeps them for 15 minutes, and holds every path a request names to its own protection rules (credentials,
+Agents' and Persona's data, app-managed folders and the like are never trashed); `machine.storage.check` answers those
+rules alone, for the extension manager to ask before an offload. An extension can offer to move items elsewhere through
+the generic `disk_offload` extension point. The whole contract (the tree, the rules, the routes, the extension point
+and what the apps draw) is [machine-usage-map.md](machine-usage-map.md).
+
 ## Renaming a computer
 
 A computer's name is its hub.json `name`; its id never changes. It can be renamed from the admin page, the web app's machine details (and, once PR 2 lands, the iOS / Mac / Android ones), the computer's
@@ -503,6 +535,37 @@ the accepted answer with pushed/read machine snapshots. Settled attempts expire 
 automatically, while a new explicit confirmation may follow the hub's unchanged eligibility. `MachineLinkSwitchView` is the
 advanced-detail card; its expected-disconnect guard also suppresses the ordinary offline explanation and Reconnect while the switch
 runs (#10671).
+
+## Opt-in machine-ops skill and read-only ops CLI / MCP (#13053)
+
+**Audience:** power users and coding Agents troubleshooting a machine's local health. Everyday Assistant conversations remain untouched unless the user explicitly opts in: neither the default Assistant system prompt nor the default `personad mcp` tool list changes (`TestPromptSizeRatchet` and `TestGoldenMCPTools` stay unchanged).
+
+| Part | Code |
+| --- | --- |
+| Read-only local facade over the five diagnostic domains | `server/internal/node/machine_ops.go` |
+| Read-only ops CLI and on-demand stdio MCP server (`personad ops` / `persona-node ops`) | `server/internal/machineops/` (`ops.go`, `cli.go`, `mcp.go`) |
+| Opt-in built-in skill (`persona-machine-ops`) and managed installer | `server/internal/assistantskills/builtin/persona-machine-ops/` (`SKILL.md`, `ops.sh`, `references/*.md`), `server/internal/assistantskills/embed.go` |
+
+### Read-only domains covered (#12349–#12353)
+
+Both `personad ops <subcommand>` (also available on `persona-node ops`) and the on-demand stdio MCP server `personad ops mcp` expose strictly the same eight read-only operations:
+
+| Domain | CLI subcommand | MCP tool (`personad ops mcp`) | Underlying collector |
+| --- | --- | --- | --- |
+| Storage mounts (#12349) | `ops storage` | `machine_ops_storage` | `server/internal/node/machine_storage.go` (`statfs` only) |
+| Storage hotspots (#12349) | `ops hotspots [--timeout-ms N] [--max-depth N]` | `machine_ops_storage_hotspots` | `server/internal/node/machine_storage.go` (allowlisted categories, bounded walk) |
+| Toolchain profile (#12350) | `ops toolchain [--refresh]` | `machine_ops_toolchain` | `server/internal/node/machine_toolchain.go` (redacted env, 60 s cache) |
+| Network and proxy (#12351) | `ops network` | `machine_ops_network` | `server/internal/node/machine_network.go` (fixed targets, redacted proxy credentials) |
+| Listening ports (#12352) | `ops ports [--protocol tcp\|udp]` | `machine_ops_ports` | `server/internal/node/machine_procs.go` (redacted command lines) |
+| Running processes (#12352) | `ops processes [--sort cpu\|memory\|uptime] [--query TEXT] [--orphan-only] [--limit N]` | `machine_ops_processes` | `server/internal/node/machine_procs.go` (orphan heuristics, protection flags) |
+| Services and containers (#12353) | `ops services` | `machine_ops_services` | `server/internal/node/machine_services.go` (user systemd/launchd + Docker) |
+| Bounded service logs (#12353) | `ops service-logs --kind systemd\|launchd\|docker --id <id> [--lines N]` | `machine_ops_service_logs` | `server/internal/node/machine_services.go` (validated ID, `[1, 500]` lines, 64 KiB cap) |
+
+### Opt-in and safety boundaries
+
+- **Opt-in skill installation:** `persona-machine-ops` is off by default (`Selection{MachineOps: false}`, omitted from `ForAgents`). Install or inspect it explicitly with `personad ops skill install [--dir <skills-dir>]`, `personad ops skill status`, and `personad ops skill uninstall`. By default it installs into `~/.persona/skills/persona-machine-ops` (visible in Settings › Skills) and tracks a managed digest so user-authored or locally edited skills are never overwritten or removed.
+- **Zero default prompt overhead:** `personad ops mcp` is a standalone stdio MCP server (`serverInfo.name = "persona-machine-ops"`) started only on demand by sessions that explicitly attach it. Default `personad mcp` and `CLAUDE.md` / `AGENTS.md` add zero tools and zero prompt bytes.
+- **Read-only boundary:** Mutating machine operations (`machine.storage.cleanup`, `machine.process.kill`, `machine.service_action`) and human-only Web UI file management (`#12354` / `#12403`) are never exposed on `node.MachineOps`, `personad ops`, or `personad ops mcp`.
 
 ## API
 

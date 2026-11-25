@@ -83,6 +83,11 @@ func Check(t testing.TB, manifest []byte, run Run, config ...json.RawMessage) wi
 	h := newHub(run)
 	h.manifest = &m // what it declares is granted here
 	go h.serve(ctx)
+	defer func() {
+		for _, p := range h.takeProblems() {
+			t.Errorf("%s", p)
+		}
+	}()
 
 	if err := h.call(ctx, wire.MethodPing, struct{}{}, nil); code(err) != wire.ErrorCodeNotInitialized {
 		t.Fatalf("ping before initialize: want %s, got %v", wire.ErrorCodeNotInitialized, err)
@@ -229,6 +234,13 @@ func Check(t testing.TB, manifest []byte, run Run, config ...json.RawMessage) wi
 		case <-time.After(5 * time.Second):
 			t.Fatal("still running 5 seconds after the hub closed its stdin")
 		}
+		select {
+		case <-h.closed:
+		case <-time.After(time.Second):
+		}
+	}
+	for _, p := range h.takeProblems() {
+		t.Errorf("%s", p)
 	}
 	return res
 }
@@ -288,10 +300,10 @@ func CheckView(raw json.RawMessage, compact bool) error {
 	n, card, scenes := 0, 0, 0
 	for si, s := range v.Sections {
 		for ii, c := range s.Items {
-			// a grid's or a carousel's tiles, a graph's nodes and a scene's pins are components of the page each
-			n += max(1, len(c.Tiles)+len(c.Nodes)+len(c.Pins))
-			if c.Type == wire.ComponentGraph || c.Type == wire.ComponentScene {
-				card++ // a card draws a graph or a scene as one still preview
+			// a grid's or a carousel's tiles, a graph's nodes, a scene's pins and a map's markers are components of the page each
+			n += max(1, len(c.Tiles)+len(c.Nodes)+len(c.Pins)+len(c.Markers))
+			if c.Type == wire.ComponentGraph || c.Type == wire.ComponentScene || c.Type == wire.ComponentMap {
+				card++ // a card draws a graph, scene or map as one still preview
 			} else {
 				card += max(1, len(c.Tiles))
 			}
@@ -311,6 +323,11 @@ func CheckView(raw json.RawMessage, compact bool) error {
 					return fmt.Errorf("%s: a view has at most one scene", at)
 				}
 				if err := wire.CheckScene(&c); err != nil {
+					return fmt.Errorf("%s: %w", at, err)
+				}
+			}
+			if c.Type == wire.ComponentMap {
+				if err := wire.CheckMap(&c); err != nil {
 					return fmt.Errorf("%s: %w", at, err)
 				}
 			}

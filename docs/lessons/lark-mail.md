@@ -153,6 +153,9 @@ card, recall and answer/finish state under the lifecycle locks after target reso
 stored runs awaiting watcher restoration, and runs awaiting final-answer delivery cannot authorize a stop. Keep
 successful-press deduplication with the live progress state and leave failed delivery retryable. Typed `/stop` remains
 a conversation-level request; assistant-side locking cannot provide a node-side atomic turn-generation precondition.
+A test that posts progress directly must first wait for the run's real watcher, use that watcher's live object, and hold
+its progress mutex. A run returned by `channelRuns` is only a snapshot: it cannot satisfy the ownership check. A missing
+watcher after the initial `devices.list` is a different lifecycle state, not permission to weaken the Stop guard (#13310).
 
 ## Paged refresh of all chats (#530 review)
 

@@ -9,7 +9,7 @@ import { errorText } from "../../lib/api";
 import {
   bindChannel, bindTitle, useChannels, canBind, capabilityText, channelDetail, channelSections, channelStateText, channelSubtitle,
   channelTone, forgetChannels, isBound, isPolled, listChannels, targetText, testChannel, unbindChannel, updateChannel,
-  type Channel, type ChannelDetail, type ChannelPrompt, type ChannelTarget, type ChannelTone,
+  type Channel, type ChannelDetail, type ChannelPrompt, type ChannelTarget, type ChannelTargetOverride, type ChannelTone,
 } from "../../lib/channels";
 import { canSendStep, fieldInput } from "../../lib/connectors";
 import { otherManager, ownedSub, pinManager, useChosenManager } from "../../lib/manager-choice";
@@ -20,11 +20,22 @@ import { Button, copyText, cx, Dialog, EASE, IconButton, Loading, Spinner, toast
 import { ChannelMark } from "../../ui/ChannelMark";
 import { Icon } from "../../ui/icons";
 import { QRStep, useStepPolling } from "./LoginSteps";
-import { Group, Pill, Row, Switch } from "./SettingsParts";
+import { Group, Pill, Row, SettingsHint, Switch } from "./SettingsParts";
 import { byTime } from "../../lib/times";
 
 const DOT: Record<ChannelTone, string> = { green: "bg-green", red: "bg-red", idle: "bg-line-strong" };
 const fieldClass = "h-8 w-full rounded-control bg-field px-2.5 text-[12.5px] text-ink shadow-inset-field outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
+
+function targetOverrideText(override: ChannelTargetOverride): string {
+  switch (override.mode) {
+    case "topics":
+      return t("settings-channels.target_override_topics");
+    case "threads":
+      return t("settings-channels.target_override_threads");
+    default:
+      return t("settings-channels.target_override_generic");
+  }
+}
 
 /** `compact`: under the name in the narrow column beside an open channel, in the size the other lists use there. */
 function StateLabel({ c, compact }: { c: Channel; compact?: boolean }) {
@@ -180,6 +191,8 @@ export function ChannelPage({ id, manager: named, onBack, onSettings, headerBack
   const [busy, setBusy] = useState("");
   const [picking, setPicking] = useState(false);
   const [unbinding, setUnbinding] = useState(false);
+  const [testFeedback, setTestFeedback] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  useEffect(() => setTestFeedback(null), [id]);
   // Every read and change of the detail takes the next number; only the newest one's answer is shown, since each is the
   // hub's whole detail and an older one would put back what a later request already changed.
   const seq = useRef(0);
@@ -244,6 +257,22 @@ export function ChannelPage({ id, manager: named, onBack, onSettings, headerBack
     );
   }
   const editable = !d.read_only && d.source !== "market";
+  const replyOnly = !!d.capabilities.reply_only;
+  const runTest = () =>
+    void exclusive("test", async () => {
+      setTestFeedback(null);
+      try {
+        const res = await testChannel(id);
+        const text = replyOnly || res?.reply_only
+          ? (res?.note || t("settings-channels.connection_ok", { name: d.name }))
+          : (res?.note || t("settings-channels.test_sent", { name: d.name }));
+        setTestFeedback({ tone: "ok", text });
+        toast(text, "ok");
+      } catch (e) {
+        setTestFeedback({ tone: "error", text: errorText(e) });
+        throw e;
+      }
+    });
   return (
     <>
       {head}
@@ -289,6 +318,25 @@ export function ChannelPage({ id, manager: named, onBack, onSettings, headerBack
           <Row label={t("settings-channels.target_row")} onClick={() => !busy && setPicking(true)}>
             <span className="max-w-[220px] truncate">{targetText(d.target)}</span>
           </Row>
+          {d.target_override && (
+            <SettingsHint>
+              {targetOverrideText(d.target_override)}
+              {d.settings_url && (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    onClick={() => onSettings(d.settings_url!)}
+                    className="font-medium whitespace-nowrap text-accent-ink hover:underline"
+                  >
+                    {d.source === "plugin"
+                      ? t("settings-channels.target_override_extension_settings")
+                      : t("settings-channels.target_override_settings")}
+                  </button>
+                </>
+              )}
+            </SettingsHint>
+          )}
         </Group>
       )}
 
@@ -325,24 +373,26 @@ export function ChannelPage({ id, manager: named, onBack, onSettings, headerBack
         {d.surfaces && d.surfaces.length > 0 && <Row label={t("settings-channels.surfaces")}>{d.surfaces.join(t("settings-channels.list_separator"))}</Row>}
       </Group>
 
-      {editable && d.state === "connected" && d.capabilities.push && (
-        <Group footer={t("settings-channels.test_footer")}>
+      {editable && d.state === "connected" && (d.capabilities.push || replyOnly) && (
+        <Group footer={replyOnly ? t("settings-channels.check_connection_footer") : t("settings-channels.test_footer")}>
           <div className="px-4 py-2.5">
             <Button
               tone="secondary"
-              icon="send"
+              icon={replyOnly ? "check" : "send"}
               busy={busy === "test"}
               disabled={!!busy && busy !== "test"}
-              onClick={() =>
-                void exclusive(
-                  "test",
-                  async () => void (await testChannel(id)),
-                  () => toast(t("settings-channels.test_sent", { name: d.name }), "ok"),
-                )
-              }
+              onClick={runTest}
             >
-              {t("settings-channels.send_test")}
+              {replyOnly ? t("settings-channels.check_connection") : t("settings-channels.send_test")}
             </Button>
+            {testFeedback && (
+              <p
+                role={testFeedback.tone === "error" ? "alert" : "status"}
+                className={cx("mt-2 text-submeta break-words", testFeedback.tone === "error" ? "text-red" : "text-ink-2")}
+              >
+                {testFeedback.text}
+              </p>
+            )}
           </div>
         </Group>
       )}
@@ -384,7 +434,7 @@ export function ChannelPage({ id, manager: named, onBack, onSettings, headerBack
 }
 
 /** "Send messages to": the main conversation, a new one, or one of the assistant's conversations. */
-function TargetPicker({ open, current, onClose, onPick }: { open: boolean; current?: ChannelTarget; onClose: () => void; onPick: (t: ChannelTarget) => void }) {
+export function TargetPicker({ open, current, onClose, onPick }: { open: boolean; current?: ChannelTarget; onClose: () => void; onPick: (t: ChannelTarget) => void }) {
   const sessions = useStore((s) => s.sessions);
   const conversations = useMemo(
     () =>

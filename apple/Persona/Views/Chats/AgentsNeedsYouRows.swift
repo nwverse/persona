@@ -6,6 +6,10 @@ import SwiftUI
 /// while the hub says it needs the user and no card was read (a prompt only its terminal shows); its cards sit under its
 /// name, oldest first. A card that belongs to no session (`personad ask` outside herdr) is a row of its own. Rows go
 /// oldest first: by their oldest card or, with none, by when the session started waiting.
+/// A card its task's supervisor holds (`Interaction.supervisorHeld`) is the supervisor's, not the user's: it is in no
+/// row, and a session whose pending cards here are all held (one at least) is no row either, though its state says
+/// needs_you (the terminal dialog behind a held screen card is what makes it so); with one card that is not held it is a
+/// row with that card alone (D11 of docs/plans/plan-derived-counts.md, confirmed 2026-11-23).
 nonisolated extension AgentsNeedsYou {
     struct Row: Identifiable, Equatable {
         /// The session that waits; a sessionless card's own key.
@@ -30,14 +34,21 @@ nonisolated extension AgentsNeedsYou {
         var rows: [Row] = []
         var at: [SessionKey: Int] = [:]
         let waitingKeys = Set(waiting.map(\.key))
+        // The sessions a card its task's supervisor holds sits under: no row of their own unless a card not held is.
+        var held: Set<SessionKey> = []
         for ix in cards {
+            // A folded child's card counts under its parent (same-machine or cross-machine), once, and only when that
+            // parent is a row here. Orphan subagent cards stay visible in Needs You under their own key.
+            let home = ix.requestHomeKey
+            let key = home != ix.sessionKey && waitingKeys.contains(home) ? home : ix.sessionKey
+            if ix.supervisorHeld {
+                if !ix.isSessionless { held.insert(key) }
+                continue
+            }
             if ix.isSessionless {
                 rows.append(Row(key: ix.sessionKey, cards: [ix], since: ix.createdAt))
                 continue
             }
-            // A folded child's card counts under its parent, once, and only when that parent is a row here.
-            let home = SessionKey(group: ix.group, machineID: ix.machineID, sessionID: ix.requestHome)
-            let key = home != ix.sessionKey && waitingKeys.contains(home) ? home : ix.sessionKey
             if let i = at[key] {
                 rows[i].cards.append(ix)
             } else {
@@ -45,7 +56,7 @@ nonisolated extension AgentsNeedsYou {
                 rows.append(Row(key: key, cards: [ix], since: ix.createdAt))
             }
         }
-        for s in waiting where at[s.key] == nil {
+        for s in waiting where at[s.key] == nil && !held.contains(s.key) {
             at[s.key] = rows.count
             rows.append(Row(key: s.key, cards: [], since: s.stateSince ?? s.updatedAt))
         }
@@ -80,6 +91,7 @@ struct NeedsYouWaitingCard: View {
     var machine: String?
     /// The list's cell is the card: no chrome of its own (as `InteractionPreviewCard`'s `inCell`).
     var inCell = true
+    var preferHerdrTabName = false
     var open: () -> Void
 
     var body: some View {
@@ -90,17 +102,15 @@ struct NeedsYouWaitingCard: View {
                     .scaledFrame(width: Theme.Size.icon) // the cards' icon column
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(Self.title(session)).font(Theme.Font.heading).lineLimit(1)
-                    Text(NeedsYouWaitingCard.place(session, machine: machine))
+                    Text(NeedsYouWaitingCard.place(session, machine: machine, preferHerdrTabName: preferHerdrTabName))
                         .font(Theme.Font.label)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 Spacer()
-                #if !os(macOS)
                 if !Self.onComputer(session) {
                     ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                 }
-                #endif
             }
             if let line = Self.line(session) {
                 Text(line)
@@ -138,21 +148,14 @@ struct NeedsYouWaitingCard: View {
     }
 
     /// The session's name and its computer, as a card's place line reads.
-    static func place(_ session: Session?, machine: String?) -> String {
-        [session?.displayTitle, machine].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    static func place(_ session: Session?, machine: String?, preferHerdrTabName: Bool = false) -> String {
+        [session?.displayTitle(preferTab: preferHerdrTabName), machine].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     /// The Mac: under the title, after the icon's column, as the cards' lines sit (`InteractionPreviewCard`).
     private struct UnderTitle: ViewModifier {
         func body(content: Content) -> some View {
-            #if os(macOS)
-            HStack(spacing: Theme.Space.s) {
-                Spacer(minLength: 0).scaledFrame(width: Theme.Size.icon)
-                content
-            }
-            #else
             content
-            #endif
         }
     }
 
@@ -169,6 +172,7 @@ struct CompactWaitingRow: View {
     var session: Session?
     var machine: String?
     var since: Date?
+    var preferHerdrTabName = false
 
     var body: some View {
         HStack(spacing: CompactList.gap) {
@@ -178,7 +182,7 @@ struct CompactWaitingRow: View {
                 .scaledFrame(width: CompactList.mark)
             HStack(alignment: .firstTextBaseline, spacing: CompactList.gap) {
                 Text(NeedsYouWaitingCard.title(session)).font(CompactList.titleUnread).lineLimit(1).fixedSize()
-                Text(NeedsYouWaitingCard.place(session, machine: machine))
+                Text(NeedsYouWaitingCard.place(session, machine: machine, preferHerdrTabName: preferHerdrTabName))
                     .font(CompactList.meta).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: Theme.Space.xs)

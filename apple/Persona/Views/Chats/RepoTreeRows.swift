@@ -172,19 +172,8 @@ struct WorkspaceSidebarCard<AgentContent: View, Actions: View>: View {
         WorkspaceSidebarControl(open: { selectAgent(session.key) }) {
             agent(session)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                #if os(macOS)
-                .background {
-                    if selectedWorkspace == nil && selectedSession == session.key {
-                        RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.Fill.macSelected)
-                    }
-                }
-                #endif
                 .contentShape(.rect)
         } actions: { actions(workspace, session) }
-        .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Radius.control), outset: 0)
-        #if os(macOS)
-        .macOptionClick { MacShellState.shared.chatWindow = session.key }
-        #endif
         .accessibilityIdentifier(agentIdentifier)
         .id(session.id)
         .onAppear { appeared(session) }
@@ -291,6 +280,7 @@ struct WorkspaceAgentRow: View {
     var session: Session
     var time: AgentTime?
     var muted: Bool
+    var preferHerdrTabName = false
     var body: some View {
         HStack(spacing: Theme.Space.xs) {
             title
@@ -310,9 +300,12 @@ struct WorkspaceAgentRow: View {
             ThemedIcon(Theme.Icon.success).font(Theme.WorkspaceSidebar.meta).foregroundStyle(Theme.WorkspaceSidebar.success)
         } else { StatusDot(state: session.state, size: Theme.Size.dotS) }
         AgentMark(session, side: Theme.Size.markXS)
-        Text(session.displayTitle).font(session.state == .unread ? Theme.Font.labelStrong : Theme.WorkspaceSidebar.agent)
+        Text(session.displayTitle(preferTab: preferHerdrTabName)).font(session.state == .unread ? Theme.Font.labelStrong : Theme.WorkspaceSidebar.agent)
             .foregroundStyle(session.state == .unread ? Theme.WorkspaceSidebar.foreground : Theme.WorkspaceSidebar.muted)
             .lineLimit(1).layoutPriority(1)
+        if let detail = session.displayTitleDetail(preferTab: preferHerdrTabName) {
+            Text(detail).font(Theme.WorkspaceSidebar.meta).foregroundStyle(Theme.WorkspaceSidebar.muted).lineLimit(1)
+        }
     }
 
     @ViewBuilder private var metadata: some View {
@@ -442,16 +435,19 @@ struct ChildSpacesRow: View {
 }
 
 /// The ⋯ of a repository whose agents are in more than one space (By Repository): what applies to all of them. Equal while
-/// its unread agents are: the menu held open is not rebuilt by every push.
+/// its agents and its unread ones are: the menu held open is not rebuilt by every push.
 struct RepoMenuItems: View, Equatable {
     @Environment(AppModel.self) private var model
     nonisolated let unread: [SessionKey]
+    /// Every agent of the repository: Mark All as Seen marks the unread ones and lets the ones read during the visit and
+    /// held in place go with them (#12514).
+    nonisolated let all: [SessionKey]
 
-    nonisolated static func == (a: Self, b: Self) -> Bool { a.unread == b.unread }
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.unread == b.unread && a.all == b.all }
 
     var body: some View {
         if !unread.isEmpty {
-            Button { model.markSeen(unread) } label: { Label(StateName.markAllSeen(unread.count), systemImage: Theme.Icon.success) }
+            Button { model.markSeen(all) } label: { Label(StateName.markAllSeen(unread.count), systemImage: Theme.Icon.success) }
         }
     }
 }

@@ -76,6 +76,8 @@ type briefFacts struct {
 	// Asks are the asks of the tasks to verify (by task id): their verdict line and a decision's recommended option, the
 	// same as their cards say (conclusion.go).
 	Asks map[string]acceptAsk
+	// Deliveries are the effective delivery states (currentDelivery) of the tasks to verify (by task id).
+	Deliveries map[string]*TodoDelivery
 	// Leaders: one line per current leader (direction_progress.go briefLeaders), for the model only.
 	Leaders []prompts.BriefLeader
 	// Directions: main and every leader, with deterministic stopped-work rows; DisabledRoutines are the daily reports
@@ -94,14 +96,17 @@ type briefFacts struct {
 	// Setup: the recommended-setup block (setup_suggest.go), on the first briefing of a week only; nil on any other
 	// run. It may name nothing.
 	Setup *setupBlock
+	// Captures: the quick-capture lines (capture_brief.go): how many wait to be sorted, those filed in the window, and
+	// sensitive ones only counted; none when there is nothing to say.
+	Captures []string
 }
 
 // briefFactsAt works out the facts for a run that starts at now. self is the routine that is running: its own earlier
 // failed attempt (this run is its retry) is not news.
 func (s *Service) briefFactsAt(ctx context.Context, now time.Time, self string) *briefFacts {
 	l, web, loc := s.botLang(ctx), s.webBase(ctx), s.location(ctx)
-	f := &briefFacts{At: now, l: l, web: web, loc: loc, WaitingUnknown: !s.fleetReady(), Changed: map[string]string{}, Asks: map[string]acceptAsk{}}
-	if feat, ready := s.feishuFeatures(ctx); ready && feat.Pushes {
+	f := &briefFacts{At: now, l: l, web: web, loc: loc, WaitingUnknown: !s.fleetReady(), Changed: map[string]string{}, Asks: map[string]acceptAsk{}, Deliveries: map[string]*TodoDelivery{}}
+	if feat, ready := s.chat().Features(ctx); ready && feat.Pushes {
 		f.Card = true
 	}
 	waiting := map[string]bool{}
@@ -115,6 +120,9 @@ func (s *Service) briefFactsAt(ctx context.Context, now time.Time, self string) 
 			waiting[r.id] = true
 			if a, ok := s.askCopy(r.id); ok {
 				f.Changed[r.id], f.Asks[r.id] = a.Changed, a
+			}
+			if t, ok := s.todoNow(r.id); ok {
+				f.Deliveries[r.id] = currentDelivery(t)
 			}
 		}
 	}
@@ -149,6 +157,7 @@ func (s *Service) briefFactsAt(ctx context.Context, now time.Time, self string) 
 	if self == "evening" { // the day's recap was written for it, 30 minutes before (kb_day.go)
 		f.Day = s.briefDay(ctx, now, loc)
 	}
+	f.Captures = s.captureBriefLines(ctx, l, since)
 	return f
 }
 
@@ -449,7 +458,10 @@ const briefGrace = 60
 // briefGrace when the morning routine has facts on, is due that day and its card can go out (the Lark bot is on with its
 // pushes), else none; never past the end of the day.
 func (s *Service) briefingGrace(ctx context.Context, local time.Time, start int) int {
-	if f, ready := s.feishuFeatures(ctx); !ready || !f.Pushes {
+	if !s.briefingOn() { // no briefing lists them: the reminders go one by one
+		return 0
+	}
+	if f, ready := s.chat().Features(ctx); !ready || !f.Pushes {
 		return 0
 	}
 	sc, err := s.lockedSchedule(ctx)
@@ -494,6 +506,7 @@ func (f *briefFacts) modelText() string {
 	b.InboxWaiting, b.InboxDue = f.InboxWaiting, f.InboxDue
 	b.Briefs, b.BriefsDone, b.Day = f.Briefs, f.BriefsDone, f.Day
 	b.Setup = f.Setup.lines()
+	b.Captures = f.Captures
 	for _, p := range f.Progress {
 		b.Progress = append(b.Progress, prompts.BriefProgress{Title: clip(oneLine(p.Title), 60), Stage: p.Stage})
 	}

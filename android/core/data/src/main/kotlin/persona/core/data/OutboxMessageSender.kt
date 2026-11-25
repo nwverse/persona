@@ -175,7 +175,10 @@ class OutboxMessageSender(
                 for (id in unresolved) if (id !in deadlines) {
                     deadlines[id] = scope.launch {
                         delay(reviewTimeoutMillis)
-                        store.transition(id, reviewable, OutboxState.NeedsConfirmation)
+                        // An Unknown row can belong to a composer retry that is still in flight. Use the same
+                        // ownership guard as automatic sending: a deadline must not turn that active operation
+                        // into NeedsConfirmation and force the composer to fail its durable start.
+                        transitionAutomatic(id, reviewable, OutboxState.NeedsConfirmation)
                         wake.trySend(Unit)
                     }
                 }
@@ -268,6 +271,20 @@ class OutboxMessageSender(
             return true
         }
         return change(clientMessageId, setOf(OutboxState.Refused, OutboxState.NeedsConfirmation), OutboxState.Queued)
+    }
+
+    override suspend fun retryRefused(session: SessionKey, code: String): Int = lifecycle.withLock {
+        check(job.isActive) { "Pairing scope is closed" }
+        val candidates = store.entries.first().filter { it.session == session && it.state == OutboxState.Refused && it.error == code }
+        var changed = 0
+        for (candidate in candidates) {
+            // The conditional transition rechecks after the snapshot: a newly uncertain or delivered message never goes again.
+            val current = store.entries.first().firstOrNull { it.clientMessageId == candidate.clientMessageId }
+            if (current?.session == session && current.state == OutboxState.Refused && current.error == code &&
+                store.transition(candidate.clientMessageId, setOf(OutboxState.Refused), OutboxState.Queued)) changed++
+        }
+        if (changed > 0) wake.trySend(Unit)
+        changed
     }
 
     override suspend fun confirm(clientMessageId: String, delivered: Boolean): Boolean = change(
@@ -397,7 +414,9 @@ class OutboxMessageSender(
         val moved = store.transition(id, from, OutboxState.Sending, error = null, opId = opId)
         if (!moved) {
             val current = store.entries.first().firstOrNull { it.clientMessageId == id }
-            check(current?.state == OutboxState.Sending && current.operationId == opId) { "Message state changed" }
+            check(current?.state == OutboxState.Sending && current.operationId == opId) {
+                "Message state changed: state=${current?.state} operation=${current?.operationId} requested=$opId"
+            }
         }
         receiptState.begin(request(entry).copy(opId = opId), entry.mainTarget)
     }
@@ -584,13 +603,13 @@ class OutboxMessageSender(
                             reviewable + OutboxState.NeedsConfirmation else reviewable
                         settle(entry, from, evidence.result)
                     }
-                    null -> store.transition(entry.clientMessageId, setOf(OutboxState.Verifying), OutboxState.Unknown)
+                    null -> settle(entry, setOf(OutboxState.Verifying), MessageTransportResult.NoReceipt)
                 }
             }
         }
         // Timeout or an interrupted lookup must remain visible and eligible for manual review.
-        store.entries.first().filter { it.state == OutboxState.Verifying }.forEach {
-            store.transition(it.clientMessageId, setOf(OutboxState.Verifying), OutboxState.Unknown)
+        store.entries.first().filter { it.state == OutboxState.Verifying }.forEach { entry ->
+            if (!composerActive(entry.clientMessageId)) settle(entry, setOf(OutboxState.Verifying), MessageTransportResult.NoReceipt)
         }
     }
 
@@ -648,19 +667,18 @@ class OutboxMessageSender(
         }
     }
 
-    /** Only the transition to Unknown owns rollback if a composer claims while its suspended write commits. */
+    /** If a composer claims during a suspended write, keep its operation authoritative. */
     private suspend fun transitionAutomatic(id: String, from: Set<OutboxState>, to: OutboxState): Boolean = lifecycle.withLock {
         if (composerActive(id)) return@withLock false
         if (!store.transition(id, from, to)) return@withLock false
         if (!composerActive(id)) return@withLock true
-        if (to == OutboxState.Unknown) {
-            // The manual claim is already visible but its durable start is queued behind this lock. Undo only this
-            // write for a still-active Sending row, retaining its operation id. A composer that already acquired
-            // lifecycle may have sent or shown the message; that newer result must not regress to Sending.
-            val current = store.entries.first().firstOrNull { it.clientMessageId == id }
-            if (current?.state == OutboxState.Sending || current?.state == OutboxState.Unknown) {
-                store.transition(id, setOf(current.state), OutboxState.Sending, current.error, current.operationId)
-            }
+        // The manual claim is already visible but its durable start is queued behind this lock. An automatic
+        // Unknown settlement and the same attempt's immediate Unknown→Sending retry both belong to the old
+        // operation. Restore only an unsettled Sending row with its current operation, never a Sent/Shown result.
+        // In particular, a manual claim during the second write must not let the old operation replace its opId.
+        val current = store.entries.first().firstOrNull { it.clientMessageId == id }
+        if (current?.state == OutboxState.Sending || current?.state == OutboxState.Unknown) {
+            store.transition(id, setOf(current.state), OutboxState.Sending, current.error, current.operationId)
         }
         false
     }
@@ -671,36 +689,46 @@ class OutboxMessageSender(
      * as on iOS. Without an answer the id stays: the hub sends a repeated id once.
      */
     private suspend fun settle(entry: OutboxEntry, from: Set<OutboxState>, result: MessageTransportResult): OutboxState {
+        val settled = lifecycle.withLock { settleLocked(entry, from, result) }
+        if (settled.publish) publishAuthoritative(entry)
+        return settled.state
+    }
+
+    private data class Settlement(val state: OutboxState, val publish: Boolean)
+
+    /** Under [lifecycle]: the operation check and its durable write cannot interleave with a composer or transcript. */
+    private suspend fun settleLocked(entry: OutboxEntry, from: Set<OutboxState>, result: MessageTransportResult): Settlement {
         val id = entry.clientMessageId
         // A late Accepted receipt is new evidence even after manual confirmation or an earlier settlement. Do not move
         // Shown back to Sent (or manufacture a same-state transition): publish that evidence once for this sender.
         if (result == MessageTransportResult.Accepted && entry.state in settled) {
-            publishAuthoritative(entry)
             unstall(id)
-            return entry.state
+            return Settlement(entry.state, publish = true)
         }
         val state = classify(result)
         val error = (result as? MessageTransportResult.HubError)?.let { it.code ?: it.error }
-        val current = store.entries.first().firstOrNull { it.clientMessageId == id } ?: return state
+        val current = store.entries.first().firstOrNull { it.clientMessageId == id } ?: return Settlement(state, publish = false)
         // The operation that started this attempt may have been superseded by the composer's fresh retry id.
         // Its late result must not write into the new attempt or change the visible message back to Sending.
-        if (current.operationId != entry.operationId) return current.state
+        if (current.operationId != entry.operationId) return Settlement(current.state, publish = false)
+        if (current.state in settled) {
+            // An older transport result, including a timeout or a generic failure, cannot erase a message the hub
+            // already showed. Only fresh authoritative evidence may settle it further; it never regresses to Unknown.
+            if (result != MessageTransportResult.Accepted) return Settlement(current.state, publish = false)
+        }
         if (state == OutboxState.Sending) {
             // A composer completion is newer than an automatic attempt that was already in flight. Do not let
             // that older attempt put an already settled visible message back into Sending.
-            if (current.state in settled) return current.state
+            if (current.state in settled) return Settlement(current.state, publish = false)
         }
         val moved = if ((result as? MessageTransportResult.HubError)?.delivered == "none") {
             store.transition(id, from, state, error, newOperationId())
         } else store.transition(id, from, state, error)
-        if (result == MessageTransportResult.Accepted) {
-            val settledNow = moved || store.entries.first().any {
-                it.clientMessageId == id && it.state in settled
-            }
-            if (settledNow) publishAuthoritative(entry)
-        }
+        val publish = result == MessageTransportResult.Accepted && (moved || store.entries.first().any {
+            it.clientMessageId == id && it.state in settled
+        })
         if (moved && state == OutboxState.WaitingForNetwork) stall(id, error) else unstall(id)
-        return state
+        return Settlement(state, publish)
     }
 
     private suspend fun publishAuthoritative(entry: OutboxEntry) {

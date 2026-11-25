@@ -49,7 +49,7 @@ func newBoundPRTask(t *testing.T, st Store, agentSession proto.Session) (*Servic
 
 func TestPREventsRouteToAgentSetting(t *testing.T) {
 	st := &memStore{}
-	s, _ := newQuietServiceOn(t, st)
+	s, f := newQuietServiceOn(t, st)
 	ctx := context.Background()
 
 	// Default is false in GET /api/v1/assistant, helper, and persona_settings.
@@ -80,19 +80,32 @@ func TestPREventsRouteToAgentSetting(t *testing.T) {
 	// Approval card required via persona_settings; deny keeps false, allow flips to true.
 	word := map[bool]string{true: i18n.T(i18n.Default, "assistant-settings_tool.on"), false: i18n.T(i18n.Default, "assistant-settings_tool.off")}
 	wantCard := i18n.T(i18n.Default, "assistant-settings_tool.change_pr_events_route_to_agent", i18n.Args{"before": word[false], "after": word[true]})
+	// The service tells the hub right after it puts a card up (the card itself, or a snapshot with it), so each thing it
+	// tells is when to look again.
+	published := make(chan struct{}, 1)
+	f.mu.Lock()
+	f.onTell = func() {
+		select {
+		case published <- struct{}{}:
+		default:
+		}
+	}
+	f.mu.Unlock()
 	answer := func(allow bool) {
 		var q proto.Interaction
-		ok := false
-		for range 100 {
+		deadline := time.After(5 * time.Second)
+		for {
 			if qs := s.pendingQuestions(); len(qs) > 0 {
-				q, ok = qs[0], true
+				q = qs[0]
 				break
 			}
-			time.Sleep(5 * time.Millisecond)
-		}
-		if !ok {
-			t.Error("no approval card raised")
-			return
+			select {
+			case <-published:
+				continue
+			case <-deadline:
+				t.Error("no approval card raised")
+				return
+			}
 		}
 		if q.Summary != wantCard {
 			t.Errorf("card summary = %q, want %q", q.Summary, wantCard)

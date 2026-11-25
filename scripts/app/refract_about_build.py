@@ -31,6 +31,7 @@ PILOT = ROOT / "android/refract/about-build"
 SOURCE = PILOT / "AboutBuildRow.swift"
 MAPPING = PILOT / "refract.json"
 GENERATED = ROOT / "android/feature/settings/src/test/kotlin/persona/feature/settings/generated/AboutBuildRow.kt"
+HOST = ROOT / "android/feature/settings/src/main/kotlin/persona/feature/settings/DeviceSettingsPages.kt"
 EXPECTED = {
     "source": "https://github.com/nwverse/refract",
     "commit": "811db385e4a38a4d5df720c795197368efe3602c",
@@ -55,8 +56,32 @@ source_lock.PILOT = PILOT
 source_lock.EXPECTED = EXPECTED
 
 
+def validate_host(source: str) -> None:
+    signature = re.search(
+        r"internal fun AboutSettingsPage\((?P<parameters>.*?)\n\) \{", source, flags=re.DOTALL)
+    if signature is None or not re.search(
+            r"buildRow:\s*\(@Composable \(\) -> Unit\)\? = null", signature.group("parameters")):
+        source_lock.fail("About Build host must keep an optional no-argument slot with a handwritten default")
+    body = source[signature.end():]
+    if not re.search(
+            r"JGroupItem\(GroupPosition\.of\(1, count\)\)\s*\{\s*"
+            r"if \(buildRow == null\) \{\s*"
+            r"JRow\(stringResource\(R\.string\.settings_about_build\), trailing = \{ "
+            r'Text\("\$\{info\.longVersionCode\}"', body):
+        source_lock.fail("About Build host must preserve its handwritten PackageInfo default")
+    if not re.search(r"\}\s*else\s*\{\s*buildRow\(\)\s*\}\s*\}", body):
+        source_lock.fail("About Build host must select only the supplied Build component")
+
+
+def validate_production_exclusion(android: Path) -> None:
+    source_lock.validate_production_exclusion(
+        android, ("AboutBuildSnapshot", "AboutBuildRow"),
+        "Ordinary production source must exclude this test-only consumer")
+
+
 def validate_consumer_lock() -> dict:
     lock = source_lock.validate_lock()
+    validate_host(HOST.read_text(encoding="utf-8"))
     text = GENERATED.read_text(encoding="utf-8")
     if any(fragment not in text for fragment in REQUIRED):
         source_lock.fail("Generated Build row no longer has the reviewed optional/native/token/localization boundary")
@@ -67,9 +92,7 @@ def validate_consumer_lock() -> dict:
         source_lock.fail("Generated Build row must not own framework metadata or an unlocalized fallback")
     if not (PILOT / "harmony-resource-validation-only/string.json").is_file():
         source_lock.fail("Missing second-backend schema-validation resource fixture")
-    for production in (ROOT / "android").glob("**/src/main/**/*.kt"):
-        if any(fragment in production.read_text(encoding="utf-8") for fragment in ("AboutBuildSnapshot", "generated.AboutBuildRow")):
-            source_lock.fail(f"Ordinary production source must exclude this test-only consumer: {production.relative_to(ROOT)}")
+    validate_production_exclusion(ROOT / "android")
     return lock
 
 
@@ -81,6 +104,13 @@ def run(cli: Path, mode: str, android_out: Path, harmony_out: Path) -> None:
     subprocess.run([str(cli), mode, "--input", str(SOURCE), "--mapping", str(MAPPING),
                     "--android-out", str(android_out), "--harmony-out", str(harmony_out)],
                    cwd=ROOT, capture_output=True, text=True, timeout=90, check=True, errors="replace")
+
+
+def remove_new_output(generated: Path) -> None:
+    """Remove a failed run's new output, or preserve an explicit cleanup failure."""
+    generated.unlink(missing_ok=True)
+    if generated.exists():
+        source_lock.fail("New unreviewed Kotlin still exists after removal")
 
 
 def main() -> int:
@@ -120,12 +150,20 @@ def main() -> int:
             source_lock.tarfile.TarError, urllib.error.URLError) as error:
         if isinstance(error, subprocess.CalledProcessError):
             source_lock.report_process_failure(error)
-        if args.mode == "generate" and before is not None:
-            GENERATED.write_bytes(before)
-            if GENERATED.read_bytes() != before:
-                print("Refract About Build: FAILED to restore reviewed Kotlin", file=sys.stderr)
-                return 1
         print(f"Refract About Build: FAILED: {error}", file=sys.stderr)
+        if args.mode == "generate":
+            try:
+                if before is not None:
+                    source_lock.restore_reviewed_output(before, GENERATED)
+                else:
+                    remove_new_output(GENERATED)
+            except (ValueError, OSError) as restore_error:
+                print(f"Refract About Build: secondary restoration failure: {restore_error}", file=sys.stderr)
+                return 1
+            if before is not None:
+                print("Refract About Build: original reviewed Kotlin restored after generation failure", file=sys.stderr)
+            else:
+                print("Refract About Build: new unreviewed Kotlin removed after generation failure", file=sys.stderr)
         return 1
     return 0
 

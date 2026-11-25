@@ -1,10 +1,33 @@
 package prompts
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
+
+type AssistantSelectedFile struct{ Name, Path string }
+
+func RenderAssistantSelectedFiles(files []AssistantSelectedFile, language string) string {
+	quoted := make([]AssistantSelectedFile, len(files))
+	for i, file := range files {
+		quoted[i] = AssistantSelectedFile{Name: quoteSelectedFileValue(file.Name), Path: quoteSelectedFileValue(file.Path)}
+	}
+	return render("assistant/selected_files", struct {
+		Files    []AssistantSelectedFile
+		Language string
+	}{Files: quoted, Language: language})
+}
+
+func quoteSelectedFileValue(value string) string {
+	var encoded strings.Builder
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(value) // Encoding a string into a strings.Builder cannot fail.
+	// A literal '<' could open or close a prompt tag. Keep it JSON-escaped inside the value.
+	return strings.ReplaceAll(strings.TrimSuffix(encoded.String(), "\n"), "<", `\u003c`)
+}
 
 type AssistantSelectedSkill struct {
 	Name, Path, Ref string
@@ -89,8 +112,12 @@ type AssistantHealthClaudeMD struct {
 	StateDir string
 	// HealthDir is the health space's directory name in StateDir: "" is the built-in manager's "health", another's
 	// "health-<id>" (identity.HealthDirName).
-	HealthDir string
-	Language  string
+	HealthDir      string
+	Language       string
+	Water          bool // The owner's added intake items; false when the Health module is absent or unavailable.
+	Strength       bool
+	Protein        bool
+	ItemsAvailable bool // The module can add items, including when neither intake item is added yet.
 }
 
 func RenderAssistantHealthClaudeMD(d AssistantHealthClaudeMD) string {
@@ -235,6 +262,10 @@ type SnapshotTask struct {
 	// Workflows: that agent's background workflow runs still running (#2935): its turn ended to wait for them.
 	Workflows []SnapshotWorkflow
 	Link      string // the todo's page in the hub's web app ("" when the hub has no public_url)
+	// Cancellation and brief lineage keep the history visible in the same snapshot as the state (#5732).
+	CancelledReason                string
+	Continues, ContinuesLink       string
+	SupersededBy, SupersededByLink string
 	// Health: how a task the main conversation supervises stands (normal, stuck N minutes, waiting for an answer, to accept, rework round N, your call,
 	// accepted; #3124), "" for any other; DoneWhen how many criteria it has.
 	Health   string
@@ -297,10 +328,13 @@ type SnapshotProfile struct {
 	Unreadable, Gone bool
 }
 
-// SnapshotTier is one tier of the profile in use: what an Agent started on it runs on ("" model or effort: the
-// launcher's), and when to use it.
+// SnapshotTier is one tier of the profile in use: what an Agent started on it runs on first ("" model or effort: the
+// launcher's), how many other candidates follow it (the hub picks among them at dispatch), the older names it answers
+// to, and when to use it.
 type SnapshotTier struct {
 	Name, Launcher, Model, Effort, Speed, PermissionMode, Description string
+	More                                                              int
+	Aliases                                                           []string
 }
 
 // Snapshot is the live context a starting assistant gets in its system prompt.
@@ -436,10 +470,10 @@ func RenderSnapshotWorkflow(w SnapshotWorkflow) string {
 type AssistantContext struct {
 	ScheduledWorkPlan bool // Inline instructions for a granted scheduled round when the manager uses persona-work.
 	Main              bool
-	Leader            bool // a leader conversation (#3133): it supervises the tasks it hands out
+	Leader            bool // a direction lead supervises its planned tasks and explicitly assigned Agents
 	Owner             string
 	Snapshot          string
-	// Directions: for the main conversation, the current leaders it hands work to (task_plan supervisor, #3609);
+	// Directions: for the main conversation, the current leaders used as direction labels;
 	// LeaderName: for a leader, its direction's name.
 	Directions []ContextDirection
 	LeaderName string
@@ -447,23 +481,23 @@ type AssistantContext struct {
 	// filed under (#10086). Here rather than in its system prompt: a summary rewrite changes it, and a changed system
 	// prompt would restart the leader.
 	LeaderStatus string
-	// Background: this is the background supervisor (#4927), which follows up the tasks no leader supervises.
-	// BackgroundStarted: for the main conversation, once: the background supervisor's id, the first message after it
-	// began to follow up the main conversation's tasks.
+	// Background: the legacy background supervisor, which finishes only tasks assigned before universal main supervision.
+	// BackgroundStarted: for the main conversation, once: that legacy supervisor's id, when it began following old tasks.
 	Background        bool
 	BackgroundStarted string
 }
-
-// SupervisorStart is the message the background supervisor's conversation starts with (assistant/supervisor_start):
-// what it is for, before its first supervision message.
-type SupervisorStart struct{ Owner string }
-
-func RenderSupervisorStart(d SupervisorStart) string { return render("assistant/supervisor_start", d) }
 
 // ContextDirection is one current leader as the main conversation is told of it: its conversation id and name.
 type ContextDirection struct{ ID, Name string }
 
 func RenderAssistantContext(c AssistantContext) string { return render("assistant/context", c) }
+
+// SupervisorStart is the message an explicitly started background supervisor's conversation starts with
+// (assistant/supervisor_start): what it is for, before its first supervision message. Automatic replacement of a
+// legacy background supervisor stays disabled under universal main supervision (#5732).
+type SupervisorStart struct{ Owner string }
+
+func RenderSupervisorStart(d SupervisorStart) string { return render("assistant/supervisor_start", d) }
 
 // TaskRun is the message a scheduled task's run starts with (assistant/task_run).
 type TaskRun struct {
@@ -523,6 +557,9 @@ type BriefFacts struct {
 	Day *BriefDay
 	// Setup: the lines of the weekly recommended-setup block (#5085), ready to read; none leaves the section out.
 	Setup []string
+	// Captures: the quick-capture lines (#13502), ready to read; a sensitive capture is only counted. None leaves the
+	// section out.
+	Captures []string
 }
 
 // BriefDay is today's all-day recording in the evening routine's facts (#4741), the day's parts merged by time; the
@@ -852,8 +889,8 @@ func RenderAskLater(a AskLater) string { return render("assistant/ask_later", a)
 type Supervise struct {
 	Level   string
 	Entries []SuperviseEntry
-	// Leader: it goes to a leader conversation, for the tasks it handed out (#3133); Escalated: an entry is a leader's
-	// needs_user, told the main conversation.
+	// Leader: it goes to a leader conversation, for a manual Agent explicitly assigned to it (#5732); Escalated: an
+	// entry is a leader's needs_user, told the main conversation.
 	Leader, Escalated bool
 	// Background: with Leader, it goes to the background supervisor (#4927): the leader's message, for tasks other
 	// conversations handed out, whose cards go from it to the user.
@@ -861,7 +898,7 @@ type Supervise struct {
 	// BackgroundEscalated: with Escalated, one of those entries is the background supervisor's needs_user (#4927): no
 	// leader is named for it.
 	BackgroundEscalated bool
-	// Side: it goes to an ordinary side conversation, for the tasks that conversation handed out itself.
+	// Side: a legacy route to an ordinary side conversation for tasks it supervised before universal main supervision.
 	Side bool
 	// LeaderStuck: an entry is a leader's task past its inactivity threshold (sigLeaderStuck), told the main conversation (#3609).
 	LeaderStuck bool
@@ -875,8 +912,8 @@ type Supervise struct {
 	// they wait here before going up a rung.
 	Asked      bool
 	AskMinutes int
-	// PushGrading: the owner's push grading switch is on: a card is never handed to the user on a timeout, and ask_escalate
-	// pushes only what is the owner's alone (why_owner).
+	// PushGrading: the owner's push grading switch is on: ask_escalate pushes only what is the owner's alone (why_owner).
+	// No card is handed to the user on a timeout either way.
 	PushGrading bool
 	// Decisions: an entry is about a decision the owner cannot answer as it is (recheck, undecidable,
 	// owner_cannot_answer; #3804).
@@ -901,6 +938,7 @@ type SuperviseEntry struct {
 	Ask             string              // needs_you: what it asks
 	Recommend       string              // escalated: the option the leader recommends
 	LeaderGone      bool                // decide: its task leader agent cannot be reached, so the supervisor takes the task over
+	SupervisorGone  bool                // decide: its assigned Assistant supervisor cannot receive the relay, so main takes over
 	Background      bool                // escalated: by the background supervisor, not a leader conversation (#4927)
 	DoneWhen        []string            // what done means
 	Round           int                 // reworks so far
@@ -914,6 +952,9 @@ type SuperviseEntry struct {
 	Orphan          string              // orphaned: why nobody works on it (error, closed, offline)
 	Review          *SuperviseReviewed  // review: what the independent reviewer found (#2173), nil when none ran
 	// report: what its agent reported (progress, question, blocked, done), its words, evidence and step.
+	// Reported: on the entry of a turn's end (review, idle, unjudged, interrupted), the kind of the report its agent
+	// made before it stopped, told in that one entry (assistant.joinTurnReports); Said, Evidence and Step are the report's.
+	Reported    string
 	Report      string
 	Said        string
 	Evidence    []string
@@ -922,7 +963,8 @@ type SuperviseEntry struct {
 	// #10511). The manager copied them here when the agent's turn ended; they are kept out of Last's clip.
 	Files []TaskFile
 	// failed with its tab kept (#2570): until when (local "15:04"), the question its shell waits on, the tab's last
-	// lines, and how many retries are left; KeptUntil "" when the start failed for good.
+	// lines, and how many retries are left; KeptUntil "" when the start failed for good. Screen is also set for an
+	// agent_start_stalled start that failed for good (its screen when it stopped, start_remedy.go remedyEntry).
 	KeptUntil, Question, Screen string
 	RetriesLeft                 int
 	// RetryWith: failed because of its launcher on that computer, the other launchers there task_retry may start it
@@ -945,6 +987,8 @@ type SuperviseEntry struct {
 	// (assistant, leader, routine, hub) and StartedWhy the reason given.
 	Asked, AskedAt, Started, StartedWhy string
 	Dropped                             []string
+	// AskedCut: Asked is only the start of the owner's message; the rest is on the task (todo_get, its Link).
+	AskedCut bool
 	// inbox: the Inbox item the new messages came in, the newest when several did.
 	Inbox *SuperviseInbox
 	// LastReview: the task's last review, shown only in a Fresh message (#7315): a round that does not see the earlier
@@ -952,6 +996,10 @@ type SuperviseEntry struct {
 	LastReview *SuperviseLastReview
 	// TodoReady: an open, unstarted dependent to-do whose after prerequisites are all satisfied (#12606).
 	TodoReady *SuperviseTodoReady
+	// ExternalInfo: new external information received while a needs_user ask is still pending (#13112).
+	ExternalInfo *NeedsUserExternalInfo
+	// ParentCloseout: localized closeout guidance when all part_of children of an open parent to-do are done (#13100).
+	ParentCloseout string
 }
 
 // SuperviseTodoReady describes an open, unstarted to-do ready to advance once all of its after prerequisites are met.
@@ -1141,6 +1189,8 @@ type RuntimeInstructions struct {
 	Dir       string
 	Index     string // MEMORY.md, trimmed
 	Truncated bool   // Index is the start of a longer one
+	// MemoryTools tells remote runtimes (caps.remote_agent) to read and write shared memory via memory_read / memory_write.
+	MemoryTools bool
 	// Gates are the skills' gated commands this machine runs as tools (a plugin's assistant.gate with a tool).
 	Gates []RuntimeGate
 }
@@ -1319,9 +1369,6 @@ func RenderWorkspaceMention(w WorkspaceMention) string {
 	return render("assistant/workspace_mention", w)
 }
 
-// RenderWorkoutReport describes one consented workout, never a medical diagnosis.
-func RenderWorkoutReport(data string) string { return render("assistant/workout_report", data) }
-
 // SuperviseCloseout is an agent's own closeout as a supervision message shows it: its claim, to be checked.
 type SuperviseCloseout struct {
 	Status, Waiting   string
@@ -1380,11 +1427,13 @@ func RenderTodoDirection(d DirectionNotes) string {
 
 // SegmentHandoff continues the same logical conversation on a new engine.
 type SegmentHandoff struct {
-	Language string
-	Summary  string
-	Recent   []HandoffTurn
-	Text     string
-	Partial  bool
+	Language     string
+	FromLauncher string
+	FromModel    string
+	Summary      string
+	Recent       []HandoffTurn
+	Text         string
+	Partial      bool
 }
 
 func RenderSegmentHandoff(h SegmentHandoff) string { return render("assistant/segment_handoff", h) }

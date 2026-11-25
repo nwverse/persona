@@ -64,7 +64,7 @@ class PartitionTests(unittest.TestCase):
                                 module + "/internal/node", module + "/internal/node/sub", "./internal/assistant"])
         self.assertEqual(rest, [module + "/cmd/personad", module + "/internal/node/sub"])
         self.assertEqual(parts, ["./internal/assistant", "./internal/node"])
-        self.assertEqual(gp.split(["./internal/hub"]), (["./internal/hub"], []))
+        self.assertEqual(gp.split(["./internal/kb"]), (["./internal/kb"], []))
 
     def test_each_package_is_split_into_its_own_number_of_partitions(self):
         listing = "\n".join("Test%03d" % i for i in range(10)) + "\nok  \texample\t0.1s\n"
@@ -73,6 +73,18 @@ class PartitionTests(unittest.TestCase):
                 self.assertEqual(len(gp.list_patterns("/server", package)), partitions)
             self.assertEqual(listed.call_args.args[0], ["go", "test", "-list", ".*", package])
             self.assertEqual(listed.call_args.kwargs["cwd"], "/server")
+
+    def test_list_patterns_forwards_wrapper_prefix_and_build_flags(self):
+        listing = "TestA\nTestB\nok  \texample\t0.1s\n"
+        prefix = ["python3", "server_test_env.py", "--database-file", "/tmp/db.json", "--"]
+        flags = ["-tags", "persona_core_only", "-race", "-trimpath"]
+        env = {"GOFLAGS": "-trimpath"}
+        with mock.patch.object(gp.subprocess, "check_output", return_value=listing) as listed:
+            patterns = gp.list_patterns("/server", "./internal/assistant", env=env, prefix=prefix, flags=flags)
+        self.assertEqual(patterns, ["^(TestA)$", "^(TestB)$"])
+        self.assertEqual(listed.call_args.args[0], [*prefix, "go", "test", *flags, "-list", ".*", "./internal/assistant"])
+        self.assertEqual(listed.call_args.kwargs["cwd"], "/server")
+        self.assertIs(listed.call_args.kwargs["env"], env)
 
     def test_a_package_that_splits_itself_is_partitioned_and_still_has_its_own_split(self):
         # go_test_partitioned.py leaves these to their own TestMain under a <dir>/... argument: a package that lost its

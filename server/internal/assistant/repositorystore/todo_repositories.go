@@ -46,6 +46,37 @@ func (d *Store) TodoRepositories(ctx context.Context, id string) (repository.Tas
 	return decodeTodoRepositories(id, revision, raw)
 }
 
+// ListTodoRepositories loads saved repository associations for the named to-dos in one query.
+func (d *Store) ListTodoRepositories(ctx context.Context, ids []string) (map[string][]repository.TaskRepository, error) {
+	out := make(map[string][]repository.TaskRepository, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	err := d.Transaction(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT todo_id, repositories FROM todo_repository_sets WHERE todo_id = ANY($1)`, ids)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var todoID string
+			var raw []byte
+			if err := rows.Scan(&todoID, &raw); err != nil {
+				return err
+			}
+			set, err := decodeTodoRepositories(todoID, 0, raw)
+			if err != nil {
+				return err
+			}
+			if len(set.Repositories) > 0 {
+				out[todoID] = set.Repositories
+			}
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
 // ReadTodoRepositoriesTx locks the Todo, including an empty association set. Preparation
 // consumers can read this value and persist their own selected snapshot in the same
 // transaction. It never seals business associations or changes legacy execution paths.
@@ -190,25 +221,39 @@ func (d *Store) SetTodoRepositoryLinkRole(ctx context.Context, id, canonicalURL,
 	if perr != "" {
 		return repository.TaskSet{}, perr
 	}
+	// NormalizeLink stores the default delivery role as an empty string.
+	storedRole := ""
+	if normalized == repository.LinkRoleReference {
+		storedRole = normalized
+	}
+	return d.updateTodoRepositoryLink(ctx, id, canonicalURL, func(link *repository.TaskLink) {
+		link.Role = storedRole
+	})
+}
+
+// SetTodoPRLinkTitle updates only an existing PR link. A poll must never recreate a removed link.
+func (d *Store) SetTodoPRLinkTitle(ctx context.Context, id, canonicalURL, title string) error {
+	_, err := d.updateTodoRepositoryLink(ctx, id, canonicalURL, func(link *repository.TaskLink) {
+		if link.Kind == "pull_request" && title != "" {
+			link.Title = title
+		}
+	})
+	return err
+}
+
+func (d *Store) updateTodoRepositoryLink(ctx context.Context, id, canonicalURL string, update func(*repository.TaskLink)) (repository.TaskSet, error) {
 	var out repository.TaskSet
 	err := d.Transaction(ctx, func(tx pgx.Tx) error {
 		cur, err := ReadTodoRepositoriesTx(ctx, tx, id, nil)
 		if err != nil {
 			return err
 		}
-		// Stored delivery links keep the empty value (see NormalizeLink); compare and write that representation so
-		// re-applying delivery to an already-delivery link is a no-op instead of bumping the revision every gate pass.
-		storedRole := ""
-		if normalized == repository.LinkRoleReference {
-			storedRole = normalized
-		}
 		changed := false
-		for ri := range cur.Repositories {
-			for li := range cur.Repositories[ri].Links {
-				if cur.Repositories[ri].Links[li].CanonicalURL == canonicalURL &&
-					cur.Repositories[ri].Links[li].Role != storedRole {
-					cur.Repositories[ri].Links[li].Role = storedRole
-					changed = true
+		for _, row := range cur.Repositories {
+			for i, link := range row.Links {
+				if link.CanonicalURL == canonicalURL {
+					update(&row.Links[i])
+					changed = changed || row.Links[i] != link
 				}
 			}
 		}

@@ -1,4 +1,3 @@
-#if os(iOS) || os(visionOS) || os(watchOS)
 import AVFoundation
 import Observation
 #if os(iOS) || os(visionOS)
@@ -163,7 +162,7 @@ final class RecordingCapture {
                 catch { self.microphoneChangeFailed() }
             }
         })
-        observers.append(center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { @Sendable [weak self] _ in
+        observers.append(AudioSessionBroker.shared.observeMediaServicesReset(queue: .main) { @Sendable [weak self] in
             MainActor.assumeIsolated {
                 // Paused too (during a call): the engine it would resume is gone with the reset.
                 guard let self, self.state == .recording || self.state == .paused else { return }
@@ -296,7 +295,7 @@ final class RecordingCapture {
     /// Name of the input the current route records from, shown while recording.
     var inputName: String? {
         guard state == .recording || state == .paused else { return nil }
-        return AVAudioSession.sharedInstance().currentRoute.inputs.first?.portName
+        return AudioSessionBroker.shared.currentRoute.inputs.first?.portName
     }
     #endif
 
@@ -306,10 +305,7 @@ final class RecordingCapture {
     }
 
     private static func permission() async -> Bool {
-        if #available(iOS 17.0, watchOS 10.0, *) { return await AVAudioApplication.requestRecordPermission() }
-        return await withCheckedContinuation { continuation in
-            AVAudioSession.sharedInstance().requestRecordPermission { @Sendable allowed in continuation.resume(returning: allowed) }
-        }
+        await AudioSessionBroker.shared.requestRecordPermission()
     }
 
     /// `title` / `meeting`: what the recording is called and, for a meeting recording, its meeting (docs/apple/recording.md).
@@ -700,6 +696,7 @@ final class RecordingCapture {
             #endif
             session.deactivate()
         }
+        session.releaseLease()
         if let owner = activeMicOwner {
             activeMicOwner = nil
             RecordingMicrophone.shared.release(owner)
@@ -1593,26 +1590,59 @@ struct RecordingSession {
     var availableInputs: () -> [AVAudioSessionPortDescription]
     var setPreferredInput: (AVAudioSessionPortDescription?) throws -> Void
     #endif
+    /// Releases the recording's broker lease without touching `AVAudioSession` (used when stopping under a live call).
+    var releaseLease: () -> Void = {}
 
-    /// The app's shared session.
+    private final class LeaseBox {
+        var lease: AudioSessionBroker.Lease?
+        func acquire() {
+            if lease == nil {
+                lease = AudioSessionBroker.shared.acquire(id: "recording.capture", module: "recording", kind: .meetingRecording)
+            }
+        }
+        func release() {
+            lease?.release()
+            lease = nil
+        }
+    }
+
+    /// The app's shared session, routed through `AudioSessionBroker.shared`.
     static var app: RecordingSession {
+        let box = LeaseBox()
         #if os(iOS) || os(visionOS)
-        RecordingSession(setCategory: { try AVAudioSession.sharedInstance().setCategory($0, mode: $1, options: $2) },
-                         activate: { try AVAudioSession.sharedInstance().setActive(true) },
-                         deactivate: { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) },
-                         availableInputs: { AVAudioSession.sharedInstance().availableInputs ?? [] },
-                         setPreferredInput: { try AVAudioSession.sharedInstance().setPreferredInput($0) })
+        return RecordingSession(
+            setCategory: { try AudioSessionBroker.shared.setCategory($0, mode: $1, options: $2) },
+            activate: {
+                try AudioSessionBroker.shared.setActive(true)
+                box.acquire()
+            },
+            deactivate: {
+                try? AudioSessionBroker.shared.setActive(false, options: .notifyOthersOnDeactivation)
+                box.release()
+            },
+            availableInputs: { AudioSessionBroker.shared.availableInputs },
+            setPreferredInput: { try AudioSessionBroker.shared.setPreferredInput($0) },
+            releaseLease: { box.release() }
+        )
         #else
-        RecordingSession(setCategory: { try AVAudioSession.sharedInstance().setCategory($0, mode: $1, options: $2) },
-                         activate: { try AVAudioSession.sharedInstance().setActive(true) },
-                         deactivate: { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) })
+        return RecordingSession(
+            setCategory: { try AudioSessionBroker.shared.setCategory($0, mode: $1, options: $2) },
+            activate: {
+                try AudioSessionBroker.shared.setActive(true)
+                box.acquire()
+            },
+            deactivate: {
+                try? AudioSessionBroker.shared.setActive(false, options: .notifyOthersOnDeactivation)
+                box.release()
+            },
+            releaseLease: { box.release() }
+        )
         #endif
     }
 }
-#endif
 
 /// Why an all-day recording stopped recording without the user (`RecordingCapture.onDayHalted`), for what the watch
-/// tells them. Outside the platform check above: the watch's alert policy, in `Shared/`, compiles for the Mac too.
+/// tells them. Outside the platform check above: the watch's alert policy, in `Shared/`, compiles for the watch too.
 nonisolated enum RecordingDayHalt: String, Sendable {
     /// A call, Siri or another app took the microphone.
     case interrupted
