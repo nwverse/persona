@@ -41,6 +41,30 @@ func (e *Engine) PhotosMarkdown(rawID string) string {
 	return string(raw)
 }
 
+// PhotosRead are recording rawID's listed photos, oldest first, each cited as its current minutes say, and
+// PartPhotos' revision; also on a read-only knowledge base. ErrRecordingDeleted after a delete, ErrNotFound with no
+// upload of it. The writers package has its own Engine.Photos over a store shim, so this Core method stays distinct.
+func (e *Engine) PhotosRead(rawID string) ([]Photo, int64, error) {
+	// Under recMu, as the minutes are stored: their writer moves the revision before the minutes it is for, and a list
+	// read between the two would take the new revision with the old cited.
+	e.Store.recMu.Lock()
+	defer e.Store.recMu.Unlock()
+	r, err := e.Store.photosRecording(rawID)
+	if err != nil {
+		return nil, 0, err
+	}
+	b, err := e.Store.readPhotos(r.ID)
+	if err != nil {
+		return nil, 0, err
+	}
+	cited := e.Store.citedPhotos(r.ID)
+	out := make([]Photo, 0, len(b.Photos))
+	for _, p := range b.Photos {
+		out = append(out, p.Photo(cited))
+	}
+	return out, b.Rev, nil
+}
+
 // PhotoImage is photo n of recording rawID: its mime type and bytes. ErrRecordingDeleted, ErrNotFound, then
 // ErrPhotoNotFound when it is not listed (also one the owner deleted, or a trim removed).
 func (e *Engine) PhotoImage(rawID string, n int) (string, []byte, error) {

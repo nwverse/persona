@@ -120,7 +120,7 @@ func (s *Service) quietTaskTurn(ctx context.Context, machine, session string) bo
 	if s.meetingTurnNow(machine, session) { // a meeting's batch started it: a side exchange, mirrored nowhere (meeting_turns.go)
 		return true
 	}
-	if s.supervising(session) { // a supervision message started its turn (supervise_digest.go): as the hub's finished push leaves it out
+	if end, ok := ctx.Value(supervisionEndKey{}).(supervisionEnd); ok && !end.hold.At.IsZero() {
 		sess, ok := s.session(ctx, machine, session)
 		return ok && assistantwire.SupervisedFinish(sess, true)
 	}

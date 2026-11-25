@@ -674,7 +674,7 @@ A runtime that advertises `caps.models` also handles `launchers.models` for live
 
 `capabilities.queue_edit` and `capabilities.queue_send_now` advertise queue controls on runtime sessions. Runtime subagents do not support them. If a field is absent, clients keep their previous queue-control rules. A Claude Code session outside Persona's terminals reports both, false unless it runs in a tmux pane: its queue is on its own screen (`docs/integrations/claude-integration.md`, "Queue controls (#12789)").
 
-`capabilities.stop_cause` (#8214) is node-owned stopped-session recovery provenance: `user`, `idle`, `task_completed`, `restart`, `resume_failed`, `compact_failed`, `usage_limit`, `transient_error`, or `exit` (#10355: the Agent was told to quit, `/exit` or `/quit` sent through Persona; like `user` it never authorizes an assistant resume). `restart` is recorded for an Agent seen running (`ran_at`, which the hub keeps in the node-model metadata beside `stop_cause` and only moves forward) within 10 minutes before the node started and cut off since; `resume_failed` for the assistant's resume refused with nothing run (`delivered: none`, no kept tab; any other failed start stays unknown); `compact_failed` for an Agent that quit while it was compacted before a message (#11441). `usage_limit` and `transient_error` (#12095) are recorded for an exited terminal Agent whose latest turn has the recognized gateway quota-reset or temporary-capacity 429 error, only with a live observation after the error and the original Persona terminal still retained; unobserved history and a closed/replaced terminal do not authorize recovery. An explicit stop cause always wins, and an error older than a consumed start cannot grant recovery again. These causes, like `idle` and `task_completed`, permit the assistant's resume. Since #11528 an absent or empty value (unknown: no cause recorded) permits the assistant's deliberate resume too (`agent_send` with `resume`, a rework; not an event routed on its own, and not an archived Agent); only `user`, `exit` and unrecognized values never do. The node holds off the assistant's resume for 5 minutes after an uncertain start of the same session. It does not enable plain messages or change the owner's Resume. The node's `state.put` / `state.load` record carries `stop_cause` and monotonic `stop_cause_at` through existing node-model metadata, without a database migration; a new live observation or explicit start invalidates old stopped eligibility. Older managers may drop these optional fields, which leaves recovery refused. User closure reads the cause and revision back before stopping or closing. Resuming a previously eligible stop first saves and verifies unknown provenance, before any start; an uncertain attempt must not retain the previous stop's eligibility. A failed/unsupported save returns `stop_not_saved` with nothing started, stopped or closed. Stored newer user provenance wins over delayed older metadata writes.
+`capabilities.stop_cause` (#8214) is node-owned stopped-session recovery provenance: `user`, `idle`, `task_completed`, `restart`, `resume_failed`, `compact_failed`, `usage_limit`, `transient_error`, `timeout` (#15598: supervision timeout stopped a stalled terminal Agent; not a user stop, so the assistant may deliberately resume it with `agent_send` `resume: true`, while automatic PR/Inbox event routing leaves the decision to the supervisor), or `exit` (#10355: the Agent was told to quit, `/exit` or `/quit` sent through Persona; like `user` it never authorizes an assistant resume). `restart` is recorded for an Agent seen running (`ran_at`, which the hub keeps in the node-model metadata beside `stop_cause` and only moves forward) within 10 minutes before the node started and cut off since; `resume_failed` for the assistant's resume refused with nothing run (`delivered: none`, no kept tab; any other failed start stays unknown); `compact_failed` for an Agent that quit while it was compacted before a message (#11441). `usage_limit` and `transient_error` (#12095) are recorded for an exited terminal Agent whose latest turn has the recognized gateway quota-reset or temporary-capacity 429 error, only with a live observation after the error and the original Persona terminal still retained; unobserved history and a closed/replaced terminal do not authorize recovery. An explicit stop cause always wins, and an error older than a consumed start cannot grant recovery again. These causes, like `idle` and `task_completed`, permit the assistant's resume. Since #11528 an absent or empty value (unknown: no cause recorded) permits the assistant's deliberate resume too (`agent_send` with `resume`, a rework; not an event routed on its own, and not an archived Agent); only `user`, `exit` and unrecognized values never do. The node holds off the assistant's resume for 5 minutes after an uncertain start of the same session. It does not enable plain messages or change the owner's Resume. The node's `state.put` / `state.load` record carries `stop_cause` and monotonic `stop_cause_at` through existing node-model metadata, without a database migration; a new live observation or explicit start invalidates old stopped eligibility. Older managers may drop these optional fields, which leaves recovery refused. User closure reads the cause and revision back before stopping or closing. Resuming a previously eligible stop first saves and verifies unknown provenance, before any start; an uncertain attempt must not retain the previous stop's eligibility. A failed/unsupported save returns `stop_not_saved` with nothing started, stopped or closed. Stored newer user provenance wins over delayed older metadata writes.
 On iOS and Android, as on the web, `capabilities.model` true offers the model picker on a session without a terminal, listing its launcher's models (`GET /machines/{mid}/launchers/{name}/models`) and sending a pick through `POST …/modes {model}` (iOS never types `/model` for it, and offers no fixed Claude aliases before the list is read); `capabilities.rewind` true offers Rewind on such a session, whose item ids are its own (`<seq>#<n>`), with "code and conversation" only where `capabilities.rewind_code` is true.
 Session also has the optional field `pane_index` (#2320): this pane's positional index within its tab (from 0, top-left is 0). The herdr node computes it from the split tree in the snapshot's `layouts` (`splits`; by rect on older herdr without it). It is omitted when the host gives no layout, on old nodes, or when the pane isn't in the layout; `0` is still sent, and only absence means unknown. A change in it alone also pushes `sessions.changed`. Clients group the Agents of one tab (`slot_id`) in this order, with 0 as the initiator; old clients ignore it (`docs/protocol/agent-states.md` "Several panes in one tab").
 Session also has the optional field `space` (#2691): which assistant space an assistant chat belongs to. Chats in the health space are `"health"`; the assistant's own chats omit it. The hub fills it from the session's `cwd` (the health directory `~/.persona/health`), which for an assistant chat is the directory it started in, not where a `cd` in it went (#2368, see `cwd` below); it has nothing to do with herdr's `space_id` / `space_name`. Old clients ignore it (`docs/assistant/health.md`).
@@ -2041,6 +2041,13 @@ Clients report their errors and crashes only while `features` has `error_reports
 - **What clients put in**: no user content (message text, mail, documents, prompts, notification bodies, file names the user chose), no device ids, account, hub address or machine names; breadcrumbs carry short code-chosen text (a screen's name, a route pattern). The manager scrubs again whatever slips through.
 - **Keeping and retrying**: a client keeps reports locally until it gets a 2xx (a crash is written before the process dies and sent at the next start with `previous_launch`), at most 50 for at most 7 days, and makes each report's `id` once so a retry is recognized.
 
+## Counts view (#15512)
+
+The counts people see (badges, tab numbers, switcher counts) are to come from one view per manager, `CountsView` in
+`schema/wire/counts.schema.json`, which the hub relays as it is. The view, its count ids, how an id may change and the
+clients' fallbacks are in [counts.md](counts.md). Nothing sends it yet: its WebSocket message, feature and roster field
+get their rows here when the manager and the hub start sending it.
+
 ## REST (App → hub)
 
 | Method | Path | Notes |
@@ -2589,6 +2596,130 @@ invalid enabled policy fails closed for the four dispatch tools; unrelated tools
 contains no storage error, target, tool name, arguments, policy or credential.
 
 Layer / preview and push-layer integration are follow-up work, not part of this contract.
+
+## External source bindings
+
+Owners can opt into connecting external updates to directions and to-dos. These routes use full credentials and the
+selected assistant manager, via `X-Persona-Manager` or `manager`, with the usual default manager fallback.
+Unconfigured sources have forwarding off and ask the owner about new work. The API is available independently of
+Labs. Inbox routing uses these bindings and policies. The editor is tracked in #15518.
+
+### Reference paths
+
+An `ExternalRef` is a JSON object containing `provider`, an optional `channel`, and optional `container` and `item`
+nodes of the form `{"kind":"…","id":"…"}`. The channel names the provider's account or connection. An omitted
+channel selects the provider's default channel. The lookup path starts at the specified node and removes the item
+and then the container to reach the channel. Each request stays within that channel.
+
+| Provider | Channel | Container | Item |
+| --- | --- | --- | --- |
+| `lark` (also accepts `feishu`) | Optional account or connection | `chat` with the chat's ID | `thread` with the topic's ID |
+| `github` | Omit for public GitHub. For a self-hosted instance use its HTTP or HTTPS origin | `repository` with `owner/repo` | `issue` or `pull_request` with the positive decimal number as a string |
+| `mail` (also accepts `email`) | Required account ID | Optional `mailbox` or `label` with its ID | `thread` with the thread ID. An account-wide thread can omit the container |
+| Subscriptions and future providers | Optional account or connection | A provider-defined kind and ID, such as `source` with a feed ID | A provider-defined kind and ID, such as `item` with a feed entry ID |
+
+Provider and kind names are lowercased. They start with a letter or digit, may also contain dots, dashes and
+underscores, and have a 64-byte limit. Other IDs are trimmed UTF-8 text of up to 512 bytes and retain case, except
+that GitHub uses the repository association's canonical instance and repository path and strips a trailing `.git`.
+A GitHub issue and a pull request with the same number have separate identities. Opaque IDs can include slashes,
+as the JSON key boundaries keep them distinct. All providers except mail require a container for an item.
+Omit an unused node entirely. Empty and null nodes are invalid.
+
+For a GitHub pull request, a reference is
+`{"provider":"github","container":{"kind":"repository","id":"example/web"},"item":{"kind":"pull_request","id":"17"}}`.
+The `external_ref` query parameter is this JSON object percent-encoded as one query value.
+
+### Bindings and policies API
+
+Every node can bind to any number of directions and to-dos. Each explicit binding has an opaque `id`,
+`external_ref`, `target_kind` of `direction` or `todo`, `target_id`, and a sparse `policy`. The target must
+exist on the selected manager. Use the IDs from its direction and to-do APIs.
+
+| Method | Route | Contract |
+| --- | --- | --- |
+| GET | `/api/v1/assistant/external-source-bindings` | Returns `{"bindings":[…]}` with explicit bindings. Optional `target_kind`, `target_id`, `provider` and exact `external_ref` filters combine. |
+| POST | `/api/v1/assistant/external-source-bindings` | Creates a binding from `{external_ref,target_kind,target_id,policy?}` and returns it with status 201. |
+| PUT | `/api/v1/assistant/external-source-bindings/{id}` | Replaces the binding using the same body and returns it with the same ID. |
+| DELETE | `/api/v1/assistant/external-source-bindings/{id}` | Deletes the explicit binding and returns 204. |
+| GET | `/api/v1/assistant/external-source-bindings/lookup` | Takes `external_ref` and returns `{path,matches}`. Matches include all ancestors in most-specific-first order. |
+| GET | `/api/v1/assistant/external-source-bindings/summary` | Returns the read-only `{"bindings":[…]}` data-flow list with explicit and projected connections. Filter by `provider` and optionally by its `channel`. An empty `channel` selects that provider's default channel. |
+| GET | `/api/v1/assistant/external-source-policies` | Takes `external_ref` and returns `{external_ref,policy}` with saved overrides for that exact node. An unset node returns an empty policy. |
+| PUT | `/api/v1/assistant/external-source-policies` | Takes `external_ref` and replaces that node's policy with the JSON body. Send `{}` to restore inheritance. Returns the saved scope and policy. |
+| GET | `/api/v1/assistant/external-source-policies/effective` | Takes `external_ref` and optional `binding_id` and returns `{external_ref,policy,provenance}`. The binding must be on that reference path. |
+
+Each policy field inherits independently. A channel policy supplies the first override, followed by the container
+and then the item. A selected binding overrides the node at its own level. A more specific node can supersede it.
+Omitting a field in a replacement clears its previous override. An explicit empty `pre_filter` clears the
+inherited filter.
+
+| Policy field | Values |
+| --- | --- |
+| `mode` | `off` (default), `realtime`, `digest` or `on_demand` |
+| `digest_interval_minutes` | Optional integer from 1 to 525,600 minutes. Set it with `digest` or on its own to override an inherited interval. It appears in the effective result only when the effective mode is `digest` and an interval was supplied. |
+| `action_role` | `owner` or `fyi` (default) |
+| `new_item_policy` | `ask_owner` (default) or `auto_todo` |
+| `pre_filter` | Optional `keywords`, `mentions` and `senders` lists with at most 32 entries each. Entries are trimmed, deduplicated and ordered, with a 256-byte UTF-8 limit per entry. Keywords are lowercased. The default is an empty filter. |
+
+Each resolved field has a matching provenance entry with a `source` of `default`, `channel`, `container`,
+`item` or `binding`. A configured source also includes its canonical `external_ref`. A binding source additionally
+includes `binding_id`.
+
+Lookup and summary entries have `external_ref`, `target_kind`, `target_id`, and `source`. An explicit entry has
+`source: "explicit"` and its `binding_id`. A saved GitHub repository link gives a separate read-only
+`source: "repository_link"` entry with `repository_role` of `delivery` or `reference`. Omitted roles on old links
+mean `delivery`. Projected links match only their exact GitHub item and coexist with explicit matches for that item.
+The lookup lists explicit entries first at the same node and returns empty arrays when there are no matches.
+
+A duplicate explicit reference and target pair returns 409 `external_binding_exists`. Missing or unrelated
+bindings and missing targets return 404 with `external_binding_not_found` or `external_target_not_found`.
+Invalid references, targets, policies and malformed JSON return 400. An unavailable store returns 503
+`external_sources_unavailable`.
+
+### Inbox routing
+
+New Inbox items and updates carry `external_path`, their normalized source reference followed by its parents.
+The manager derives the path from source metadata. Lark and Feishu name the chat and the topic when reported.
+The primary Lark account uses the default channel and other built-in accounts use their account ID. GitHub uses the
+notification's repository and issue or pull request. CI updates can include the PR associated with the failing run.
+Mail uses the account, reported IMAP mailbox and existing thread key. IMAP presents labels as named mailboxes.
+Subscription rows use provider `subscription`, a `source` container with the subscription ID, and an `item` with
+the source thread key. A connector's native row keeps the provider's identity when it is collected through a second
+entry point. Other push connectors use their source ID as the provider and container. Connectors provide source
+identity and content through Inbox and have no access to the work bindings.
+
+Routing starts when a saved policy on the path or one of its bindings explicitly sets a mode. Projection of an
+existing repository link alone leaves the source unconfigured. Only new source updates are admitted. Use `off`
+or `on_demand` to keep automatic routing off for an opted-in scope. Owners can still use the ordinary Inbox actions
+on those items. Restoring inheritance removes an override. The existing Inbox defaults apply when a source has
+no explicit routing mode.
+
+The first scope with an available, eligible target wins, from item to container to channel. For that scope, the
+manager resolves the policy for each target, including its binding override. A projected reference stays read-only
+even if the same to-do has an explicit owner binding. Each populated pre-filter dimension must match at least one
+entry. Keywords match title or preview text without regard to case. Senders match the reported name or sender ID.
+Mentions match whole `@name` tokens and the reported `me` or `all` flags when available.
+
+A single eligible target goes directly to its activity or existing owner. A GitHub issue or pull request with one
+open delivery to-do eligible as an owner goes to that to-do, with read-only copies for its FYI targets. Neither
+decision needs a model. Multiple eligible targets at the same scope can use the configured Inbox triage model, with
+just each candidate's ID, kind, title, short scope and state, plus the updates' summaries. An assignment can name
+one action owner and any eligible FYI recipients. An unrelated update stays out of work routing. When there is
+new work, the default is an Inbox confirmation. Automatic creation requires an explicit `auto_todo` policy and
+one eligible owning direction for the new work. The new to-do is created in that direction and can be picked up
+through the usual work flow.
+
+`realtime` handles the update as soon as the Inbox commits it. `digest` groups due summaries for triage by scope
+and candidate list, at the close of each `digest_interval_minutes` window. Windows have fixed boundaries and
+default to 60 minutes when the policy omits the interval. A mixed set can resolve in realtime, and an individual
+digest recipient still waits for its configured window.
+
+Postgres records a receipt for each canonical source object and stable provider event ID, using the cursor when
+the provider has no event ID. A mail Message-ID is scoped to the account and thread across mailboxes. IMAP UID
+fallbacks include the mailbox and its generation. A replay through a different Inbox row or an overlapping binding
+uses the same receipt. A new update for an already owned object goes to its active task, Agent or supervisor while
+that owner is authorized. When the owner is still active but its policy no longer allows delivery, the update waits
+for the owner of Persona to decide. FYI copies are activity entries and do not wake an Agent. An uncertain live
+delivery stays tied to its original recipient and is recorded in the work activity for the owner to check.
 
 ## Organization runtime snapshot (#11774)
 

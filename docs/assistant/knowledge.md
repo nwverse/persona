@@ -99,10 +99,11 @@ recording's minutes, recap, title, photos, audio and hub transcript are the modu
 (`server/internal/modules/recording/writers`); the knowledge base keeps the readers, delete, retention with the trim
 and the recovery.
 
-A stored photo's image is read through the same route with or without the module, `GET /api/v1/recordings/{id}/photos/{n}`:
-the knowledge base's own read-only route (`assistant/kb_recording_media.go`, full credentials only), answering as the
-module's did before it moved. Photo upload, list and delete are the module's. No route serves stored audio, with the
-module or without: the chunks of a recording in flight are the module's input and stay on disk untouched.
+Stored photos are read through the same routes with or without the module: `GET /api/v1/recordings/{id}/photos` lists
+them and `GET …/photos/{n}` serves an image. These are the knowledge base's own read-only routes
+(`assistant/kb_recording_media.go`, full credentials only), answering as the module's did before they moved. Photo
+upload and delete are the module's. No route serves stored audio, with the module or without: the chunks of a
+recording in flight are the module's input and stay on disk untouched.
 
 A recording that was in flight when the module went (an upload not complete, minutes or a recap `pending`, a hub
 transcription `live` or `finishing`) is shown as stored, with `paused: "module_off"` on its list entry and its detail.

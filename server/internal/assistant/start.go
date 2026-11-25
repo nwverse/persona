@@ -1326,6 +1326,9 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 		}
 	}
 	if err == nil && said && owner {
+		if err := s.releasePushes(ctx, p.SessionID); err != nil {
+			return nil, err
+		}
 		s.endHeldChannelRuns(p.MachineID, p.SessionID)
 		s.ownerInterjects(p.SessionID, params)
 	}

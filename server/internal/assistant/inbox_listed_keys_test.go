@@ -21,6 +21,8 @@ var listedDrops = map[string]string{
 	// The item's bookkeeping, persisted, not listed (inbox.go: InboxItem).
 	"context":                 "the conversation as text, for triage and Hand to AI; GET /api/v1/inbox/{id} returns it",
 	"last":                    "bookkeeping: the newest message position or mail uid",
+	"external_asked":          "bookkeeping: the source receipt that owns the to-do confirmation",
+	"external_route_of":       "bookkeeping: the source version reserved for scoped routing",
 	"triaged_at":              "bookkeeping: Last when it was triaged",
 	"body_of":                 "bookkeeping: Last when a mail's full text was read",
 	"judged_at":               "bookkeeping: Last when model 2 looked at it",
