@@ -513,6 +513,7 @@ func New(o Options) *Service {
 	s.inboxRoutes()
 	s.modelConfigRoutes()
 	s.modelProfileRoutes()
+	s.machineResourceRoutes()
 	s.launcherRoutes()
 	s.machineLauncherRoutes()
 	s.workSessionStartRoutes()

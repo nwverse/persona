@@ -40,6 +40,14 @@ type machineFacts struct {
 	NodeOutdated         machineFact  `json:"node_outdated"`
 }
 
+// machineResourceSnapshot is one machine's full assistant facts and the numeric-only subset an extension may read.
+type machineResourceSnapshot struct {
+	fact                   machineFacts
+	online                 bool
+	extensionWorkingAgents *int
+	memoryTotalBytes       *int64
+}
+
 // connectionReason follows the same categories as the machine page; unknown errors are not guessed.
 func connectionReason(err string) string {
 	t := strings.ToLower(err)
@@ -83,21 +91,35 @@ func (s *Service) silentNode(d Device, sample *proto.MetricSample, now time.Time
 }
 
 func (s *Service) toolMachinesList(ctx context.Context) (string, error) {
+	rows, complete, excluded, err := s.machineResourceSnapshots(ctx, time.Now())
+	if err != nil {
+		return "", err
+	}
+	facts := make([]machineFacts, 0, len(rows))
+	for _, row := range rows {
+		facts = append(facts, row.fact)
+	}
+	out, err := json.Marshal(map[string]any{"machines": facts, "complete": complete, "excluded_count": excluded})
+	return string(out), err
+}
+
+func (s *Service) machineResourceSnapshots(ctx context.Context, now time.Time) ([]machineResourceSnapshot, bool, int, error) {
 	var listed struct {
 		Devices  []Device `json:"devices"`
 		Complete bool     `json:"complete"`
 		Others   []string `json:"others"`
 	}
 	if err := s.call(ctx, DeviceAll, DeviceDevicesList, map[string]any{}, &listed); err != nil {
-		return "", fmt.Errorf("machine list unavailable: %w", err)
+		return nil, false, 0, fmt.Errorf("machine list unavailable: %w", err)
 	}
 	if s.devs == nil {
-		return "", fmt.Errorf("machine resource manager unavailable")
+		return nil, false, 0, fmt.Errorf("machine resource manager unavailable")
 	}
-	now := time.Now()
-	rows := make([]machineFacts, 0, len(listed.Devices))
+	rows := make([]machineResourceSnapshot, 0, len(listed.Devices))
 	for _, d := range listed.Devices {
 		m, sample, outdated := s.devs.MachineResources(d.ID)
+		var extensionWorkingAgents *int
+		var memoryTotalBytes *int64
 		row := machineFacts{ID: d.ID, Name: d.Name, State: "pending", StateReason: unknown("connection_pending"),
 			OS: unknown("system_not_reported"), Cores: unknown("system_not_reported"),
 			CPUBusyPercent: unknown("sample_not_reported"), Load: unknown("sample_not_reported"),
@@ -166,6 +188,8 @@ func (s *Service) toolMachinesList(ctx context.Context) (string, error) {
 						row.Load = known(*sample.Load)
 					}
 					if sample.MemTotal > 0 && sample.MemUsed > 0 && sample.MemUsed <= sample.MemTotal {
+						total := sample.MemTotal
+						memoryTotalBytes = &total
 						row.MemoryAvailableBytes = known(sample.MemTotal - sample.MemUsed)
 					} else {
 						row.MemoryAvailableBytes = unknown("memory_measurement_missing_or_ambiguous")
@@ -200,13 +224,9 @@ func (s *Service) toolMachinesList(ctx context.Context) (string, error) {
 			if err != nil {
 				row.WorkingAgents = unknown("sessions_unavailable")
 			} else {
-				count := 0
-				for _, c := range list {
-					if !c.HiddenByDirectory() && !c.Assistant && !c.Archived && c.State == proto.StateWorking {
-						count++
-					}
-				}
+				count, extensionCount := machineWorkingAgentCounts(list)
 				row.WorkingAgents = known(count)
+				extensionWorkingAgents = &extensionCount
 			}
 		}
 		recs := s.healthRecords(ctx, "", d.ID)
@@ -222,8 +242,7 @@ func (s *Service) toolMachinesList(ctx context.Context) (string, error) {
 			}
 			row.FailingLaunchers = known(failed)
 		}
-		rows = append(rows, row)
+		rows = append(rows, machineResourceSnapshot{fact: row, online: d.Online, extensionWorkingAgents: extensionWorkingAgents, memoryTotalBytes: memoryTotalBytes})
 	}
-	out, err := json.Marshal(map[string]any{"machines": rows, "complete": listed.Complete, "excluded_count": len(listed.Others)})
-	return string(out), err
+	return rows, listed.Complete, len(listed.Others), nil
 }
