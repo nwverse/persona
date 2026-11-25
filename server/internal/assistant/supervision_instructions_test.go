@@ -16,15 +16,7 @@ import (
 )
 
 func TestGoldenSupervisionInstructions(t *testing.T) {
-	text := prompts.RenderSupervisionInstructions()
-	golden(t, "supervision_instructions", text)
-	raw, err := os.ReadFile("../prompts/assistant/supervision_instructions.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), "{{") || strings.TrimSuffix(string(raw), "\n") != text {
-		t.Fatal("supervision policy is not the exact static template bytes")
-	}
+	golden(t, "supervision_instructions", prompts.RenderSupervisionInstructions())
 }
 
 // A bullet must start on its own line. A dropped newline ("...rule.- `next`: ...") renders two rules as one bullet,
@@ -61,22 +53,21 @@ func TestSupervisionInstructionsDispatchIsolation(t *testing.T) {
 	s.todos.mu.Lock()
 	s.todos.todos[todo.ID].Supervision.Supervisor = "side"
 	s.todos.mu.Unlock()
-	policy := prompts.RenderSupervisionInstructions()
 	for _, tc := range []struct {
 		machine, id string
-		want        bool
+		role        prompts.SupervisionRole
 	}{
-		{"server", "conv1", true}, {"server", "lead1", true},
-		{"server", "background", true}, {"server", "side", true},
-		{"server", "ordinary", false}, {"server", "worker", false},
-		{"server", "health", false}, {"server", "gone", false},
-		{"box", "lead1", false}, {"box", "background", false},
-		{"box", "side", false}, {"box", "conv1", false},
+		{"server", "conv1", prompts.SupervisionRoleMain}, {"server", "lead1", prompts.SupervisionRoleLeader},
+		{"server", "background", prompts.SupervisionRoleBackground}, {"server", "side", prompts.SupervisionRoleSide},
+		{"server", "ordinary", ""}, {"server", "worker", ""},
+		{"server", "health", ""}, {"server", "gone", ""},
+		{"box", "lead1", ""}, {"box", "background", ""},
+		{"box", "side", ""}, {"box", "conv1", ""},
 	} {
 		t.Run(tc.machine+"/"+tc.id, func(t *testing.T) {
 			want := ""
-			if tc.want {
-				want = policy
+			if tc.role != "" {
+				want = mustSupervisionRole(t, tc.role)
 			}
 			for _, method := range []string{DeviceAssistantSend, DeviceSessionSend} {
 				p := map[string]any{"session_id": tc.id, "text": "New task facts", "supervision_instructions": "caller policy"}
@@ -106,6 +97,7 @@ func TestSupervisionInstructionsDispatchIsolation(t *testing.T) {
 			}
 		})
 	}
+	policy := mustSupervisionRole(t, prompts.SupervisionRoleMain)
 	setSettings(t, s, func(v *Settings) { v.MainSupervisesOwnTasks = &yes })
 	if mustSupervisionInstructions(t, s, ctx, "server", "conv1") != policy {
 		t.Fatal("self-supervising main lacks policy")
@@ -113,7 +105,16 @@ func TestSupervisionInstructionsDispatchIsolation(t *testing.T) {
 	if mustSupervisionInstructions(t, s, ctx, "box", "conv1") != "" {
 		t.Fatal("main identity leaked to another machine")
 	}
+	s.todos.mu.Lock()
+	s.todos.todos[todo.ID].Supervision.Supervisor = "lead1"
+	s.todos.mu.Unlock()
 	setSettings(t, s, func(v *Settings) { v.Leaders = nil })
+	if got := mustSupervisionInstructions(t, s, ctx, "server", "lead1"); got != mustSupervisionRole(t, prompts.SupervisionRoleSide) {
+		t.Fatal("former leader with remaining tasks did not become a side supervisor")
+	}
+	s.todos.mu.Lock()
+	s.todos.todos[todo.ID].Supervision.Supervisor = "side"
+	s.todos.mu.Unlock()
 	if mustSupervisionInstructions(t, s, ctx, "server", "lead1") != "" {
 		t.Fatal("former direction without tasks retained policy")
 	}
@@ -131,7 +132,7 @@ func TestSupervisionInstructionsFirstStartAndWarm(t *testing.T) {
 	ctx := context.Background()
 	yes := true
 	setSettings(t, s, func(v *Settings) { v.MainSupervisesOwnTasks = &yes })
-	policy := prompts.RenderSupervisionInstructions()
+	policy := mustSupervisionRole(t, prompts.SupervisionRoleMain)
 	for _, tc := range []struct {
 		name, purpose string
 		main, want    bool
@@ -164,8 +165,8 @@ func TestSupervisionInstructionsFirstStartAndWarm(t *testing.T) {
 	}
 	s.noBackground = false
 	setSettings(t, s, func(v *Settings) { v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "bg1", "server" })
-	if got := mustSupervisionInstructions(t, s, ctx, "server", "bg1"); got != policy {
-		t.Fatal("the existing legacy background supervisor lacks exact static policy")
+	if got := mustSupervisionInstructions(t, s, ctx, "server", "bg1"); got != mustSupervisionRole(t, prompts.SupervisionRoleBackground) {
+		t.Fatal("the existing legacy background supervisor lacks its role policy")
 	}
 	setSettings(t, s, func(v *Settings) { v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "", "" })
 	s.warm("")
@@ -187,6 +188,35 @@ func TestSupervisionInstructionsFirstStartAndWarm(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no warm dispatch")
+	}
+}
+
+func TestSupervisionBackgroundStartUsesBackgroundPolicy(t *testing.T) {
+	s, f := newQuietService(t)
+	s.noBackground = false
+	_, err := s.startBackground(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.sends) == 0 {
+		t.Fatal("background first start was not dispatched")
+	}
+	send := f.sends[len(f.sends)-1]
+	if send["session_id"] != "" && send["session_id"] != nil {
+		t.Fatalf("first start unexpectedly resumed %v", send["session_id"])
+	}
+	if got, want := send["supervision_instructions"], mustSupervisionRole(t, prompts.SupervisionRoleBackground); got != want {
+		t.Fatalf("background first start received %d bytes, want its %d-byte role policy", len(got.(string)), len(want))
+	}
+}
+
+func TestSupervisionStartupRejectsUnknownRole(t *testing.T) {
+	s, _ := newQuietService(t)
+	ctx := context.WithValue(context.Background(), supervisionStartup{}, prompts.SupervisionRole("worker"))
+	if err := s.putSupervisionInstructions(ctx, "server", "", map[string]any{}); err == nil {
+		t.Fatal("unknown startup role silently received a policy")
 	}
 }
 
@@ -275,6 +305,15 @@ func TestSupervisionEventsContainFactsNotPolicy(t *testing.T) {
 		}
 	}
 	// #5732 has no background startup prompt: an existing legacy conversation only finishes its old work.
+}
+
+func mustSupervisionRole(t *testing.T, role prompts.SupervisionRole) string {
+	t.Helper()
+	text, err := prompts.RenderSupervisionInstructionsForRole(role)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return text
 }
 
 func mustSupervisionInstructions(t *testing.T, s *Service, ctx context.Context, machine, id string) string {

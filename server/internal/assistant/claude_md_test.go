@@ -2,11 +2,13 @@ package assistant
 
 import (
 	"context"
-	"github.com/nwverse/persona/server/internal/compat"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -43,6 +45,9 @@ func TestGoldenAssistantClaudeMD(t *testing.T) {
 	f.hello.Owner = "示例用户"
 	f.hello.OwnerNotes = "  我在示例公司做后端。\n常用 skills：demo-skill。  "
 	f.hello.KB = &KBSettings{ExtraDirs: []string{"/home/me/notes", "/home/me/facts"}} // manager.json's kb section
+	f.answerApp(assistantwire.AppPhone, assistantwire.PhoneTools, func(json.RawMessage) (any, error) {
+		return map[string]any{"tools": []map[string]string{{"name": "phone_calendar_events"}, {"name": "phone_reminders_create"}}}, nil
+	})
 	s := newTestService(t, f)
 	s.kb.dir = "<hub>/data"
 	golden(t, "assistant_claude_md.full", s.claudeMD(ctx, "server", false))
@@ -68,24 +73,20 @@ func TestGoldenAssistantViewRepair(t *testing.T) {
 	golden(t, "assistant_view_repair", prompts.RenderAssistantViewRepair(prompts.AssistantViewRepair{Errors: []string{"persona-view block 0: fallback: include a plain text summary"}}))
 }
 
-func TestAssistantRichViewPromptExamplesAreValid(t *testing.T) {
+func TestAssistantRichViewPromptKeepsCoreGuidance(t *testing.T) {
 	text := prompts.RenderAssistantClaudeMD(prompts.AssistantClaudeMD{})
-	blocks := wire.AssistantViewBlocks(text)
-	if len(blocks) != 1 { // one card that chooses, opens a detail page and submits a form (#15017 merged the two)
-		t.Fatalf("prompt has %d examples, want 1", len(blocks))
+	if blocks := wire.AssistantViewBlocks(text); len(blocks) != 0 {
+		t.Fatalf("shared prompt still carries %d full view examples; want them in the on-demand skill", len(blocks))
 	}
-	for _, block := range blocks {
-		if _, err := block.Parse(); err != nil {
-			t.Fatalf("prompt teaches an invalid view: %v", err)
-		}
-	}
-	for _, want := range []string{"view_show", "view_update", "view_get", "submit=true", "ask_user", "fallback", "自动运行"} {
+	for _, want := range []string{"persona-views", "persona-view", "view_show", "view_update", "view_get", "ask_user", "fallback", "HTML", "密码"} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("missing rich view guidance: %s", want)
+			t.Fatalf("missing core rich view guidance: %s", want)
 		}
 	}
-	if strings.Contains(text, "助手的卡片点不了") {
-		t.Fatal("interactive guidance still teaches read-only cards")
+	for _, moved := range []string{"getBoundingClientRect", "stat_grid 把多项放进 stats 数组", `"title":"选择方案"`} {
+		if strings.Contains(text, moved) {
+			t.Fatalf("detailed view procedure remains inline: %s", moved)
+		}
 	}
 }
 

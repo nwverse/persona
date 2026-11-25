@@ -2,7 +2,7 @@ package assistant
 
 import (
 	"context"
-	"slices"
+	"fmt"
 
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -56,7 +56,9 @@ func (s *Service) supervisionInstructions(ctx context.Context, machine, id strin
 	if known && runtimeSessionLacksSupervisionPolicy(c) {
 		return "", nil
 	}
-	if !main && !(id == cfg.BackgroundSupervisor && cfg.BackgroundSupervisorMachineID == machine) && !s.isBackgroundCallerOn(ctx, machine, id) && !slices.Contains(cfg.Leaders, id) {
+	background := (id == cfg.BackgroundSupervisor && cfg.BackgroundSupervisorMachineID == machine) || s.isBackgroundCallerOn(ctx, machine, id)
+	leader := s.isLeader(ctx, id)
+	if !main && !background && !leader {
 		// Side chats genuinely supervise their own open tasks (#4669). Sharing the
 		// directory, a scheduled purpose, or the ability to plan is not a role.
 		if known && (!c.Assistant || c.Space != "") {
@@ -85,9 +87,22 @@ func (s *Service) supervisionInstructions(ctx context.Context, machine, id strin
 	} else if guest {
 		return "", nil
 	}
-	// A leader's own direction notes follow its policy (direction_notes.go): changing them restarts only this one, on
-	// a send that finds it idle.
-	return s.leaderPolicy(ctx, id, prompts.RenderSupervisionInstructions(), leadIdle(c, known)), nil
+	role := prompts.SupervisionRoleSide
+	switch {
+	case main:
+		role = prompts.SupervisionRoleMain
+	case background:
+		role = prompts.SupervisionRoleBackground
+	case leader:
+		role = prompts.SupervisionRoleLeader
+	}
+	policy, err := prompts.RenderSupervisionInstructionsForRole(role)
+	if err != nil {
+		return "", err
+	}
+	// A leader's own direction notes follow its role policy (direction_notes.go): changing them restarts only this one,
+	// on a send that finds it idle. Former leaders keep their remaining tasks as side supervisors, without leader rules.
+	return s.leaderPolicy(ctx, id, policy, leadIdle(c, known)), nil
 }
 
 func (s *Service) putSupervisionInstructions(ctx context.Context, machine, id string, p map[string]any) error {
@@ -97,8 +112,17 @@ func (s *Service) putSupervisionInstructions(ctx context.Context, machine, id st
 	if err != nil {
 		return err
 	}
-	if id == "" && ctx.Value(supervisionStartup{}) == true && p["guest"] == nil {
-		text = prompts.RenderSupervisionInstructions()
+	if id == "" && p["guest"] == nil {
+		if startup := ctx.Value(supervisionStartup{}); startup != nil {
+			role, ok := startup.(prompts.SupervisionRole)
+			if !ok {
+				return fmt.Errorf("invalid supervision startup role %T", startup)
+			}
+			text, err = prompts.RenderSupervisionInstructionsForRole(role)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	p["supervision_instructions"] = text
 	return nil

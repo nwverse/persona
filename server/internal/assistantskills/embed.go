@@ -35,6 +35,7 @@ var Redistributable = map[string]string{
 	workGuideName:       "Persona’s own Assistant work management guide",
 	MachineOpsSkillName: "Persona's opt-in read-only machine diagnostics guide (docs/server/machines.md)",
 	"persona-office":    "Persona's own (personad office's skill, docs/assistant/office.md)",
+	"persona-views":     "Persona's own rich-view construction guide (docs/assistant/assistant-views.md)",
 }
 
 // ForAgents are the built-in skills the agents Persona starts get too, as the plugin WritePlugin makes (the

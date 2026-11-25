@@ -22,6 +22,7 @@ function fakeClient(t, mode, options = {}) {
     ...options,
   })
   const pids = () => (existsSync(pidFile) ? readFileSync(pidFile, 'utf8').split('\n').filter(Boolean).map(Number) : [])
+  const cwds = () => (existsSync(`${pidFile}.cwds`) ? readFileSync(`${pidFile}.cwds`, 'utf8').split('\n').filter(Boolean) : [])
   t.after(() => {
     const left = new Set([...pids(), client.proc?.pid].filter(Boolean))
     client.stop()
@@ -32,7 +33,7 @@ function fakeClient(t, mode, options = {}) {
     }
     rmSync(dir, { recursive: true, force: true })
   })
-  return { client, logs, pids }
+  return { client, logs, pids, cwds }
 }
 
 function alive(pid) {
@@ -65,6 +66,13 @@ function watchUnhandled(t) {
 }
 
 describe('agy acp process lifecycle', () => {
+  it('starts agy in the empty temporary launch directory', TIMEOUT, async (t) => {
+    const { client, cwds } = fakeClient(t, 'ok')
+    await client.ensureStarted()
+    const { directory } = client.nativeLogs.get(client.proc)
+    assert.deepEqual(cwds(), [directory])
+  })
+
   it('a missing agy fails the start instead of crashing the process', TIMEOUT, async (t) => {
     const crashes = watchUnhandled(t)
     const client = new AgyAcpClient({ bin: '/nonexistent/agy', log: () => {} })

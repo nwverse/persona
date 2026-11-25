@@ -66,6 +66,10 @@ type AssistantClaudeMD struct {
 	// BackgroundSupervisor: the background supervisor follows up the tasks no leader supervises (#4927), so the main
 	// conversation is told it no longer reviews them itself. False keeps the text as it was.
 	BackgroundSupervisor bool
+	// PhoneTools reports at least one real device phone_* tool, excluding the always-available write-queue tools.
+	PhoneTools bool
+	// PhoneCalendar keeps calendar-specific guidance conditional on that device tool being available.
+	PhoneCalendar bool
 	// UrgentCall: the owner turned urgent calls on (docs/assistant/urgent-call.md): when to call and the "what counts
 	// as urgent" rules. nil adds nothing.
 	UrgentCall *UrgentCall
@@ -103,9 +107,6 @@ func UrgentRuleBuiltinIn(id, language string) string {
 }
 
 func RenderAssistantClaudeMD(d AssistantClaudeMD) string { return render("assistant/claude_md", d) }
-
-// RenderSupervisionInstructions is identical for every authorized supervisor and event.
-func RenderSupervisionInstructions() string { return render("assistant/supervision_instructions", nil) }
 
 // AssistantHealthClaudeMD is the health space's CLAUDE.md (docs/assistant/health.md).
 type AssistantHealthClaudeMD struct {
