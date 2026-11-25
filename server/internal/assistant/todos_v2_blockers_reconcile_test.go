@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/assistant/todo/blockers"
 	"github.com/nwverse/persona/server/internal/db"
 )
 
@@ -158,40 +157,40 @@ func TestTodosV2BlockersBypassWhenFlagOff(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// AddTodoBlocker must bypass with zero DB writes when todos_v2=false.
-	row, err := s.AddTodoBlocker(ctx, db.TodoBlockerRow{
+	// addTodoBlocker must bypass with zero DB writes when todos_v2=false.
+	row, err := s.addTodoBlocker(ctx, db.TodoBlockerRow{
 		ID:        "blk_off_1",
 		TodoID:    task.ID,
-		Kind:      string(blockers.KindExternalPR),
+		Kind:      todoBlockerKindExternalPR,
 		TargetRef: "https://github.com/example/repo/pull/50",
 	})
 	if err != nil || row != nil {
-		t.Fatalf("todos_v2=false AddTodoBlocker = (%+v, %v), want (nil, nil)", row, err)
+		t.Fatalf("todos_v2=false addTodoBlocker = (%+v, %v), want (nil, nil)", row, err)
 	}
 	if active, _ := st.ListActiveTodoBlockers(ctx); len(active) != 0 {
 		t.Fatalf("todos_v2=false wrote blockers to store: %+v", active)
 	}
 
-	// Even if a blocker already exists in storage, ReconcileTodoBlockers and SharedActiveTodoBlockers must bypass.
+	// Even if a blocker already exists in storage, reconcilePersistedTodoBlockers and sharedActiveTodoBlockerGroups must bypass.
 	_, _ = st.UpsertTodoBlocker(ctx, db.TodoBlockerRow{
 		ID:        "blk_preexisting",
 		TodoID:    task.ID,
-		Kind:      string(blockers.KindExternalPR),
+		Kind:      todoBlockerKindExternalPR,
 		TargetRef: "https://github.com/example/repo/pull/50",
 	})
 	woke := false
 	s.setTodoBlockerUnblockedHook(func(_ context.Context, _ string) { woke = true })
 
-	summary, err := s.ReconcileTodoBlockers(ctx, "")
+	summary, err := s.reconcilePersistedTodoBlockers(ctx, "")
 	if err != nil {
-		t.Fatalf("ReconcileTodoBlockers off: %v", err)
+		t.Fatalf("reconcilePersistedTodoBlockers off: %v", err)
 	}
 	if summary.Evaluated != 0 || len(summary.ResolvedIDs) != 0 || len(summary.UnblockedTodoIDs) != 0 || woke {
 		t.Fatalf("todos_v2=false reconciled unexpectedly: summary=%+v woke=%v", summary, woke)
 	}
-	shared, err := s.SharedActiveTodoBlockers(ctx)
+	shared, err := s.sharedActiveTodoBlockerGroups(ctx)
 	if err != nil || len(shared) != 0 {
-		t.Fatalf("todos_v2=false SharedActiveTodoBlockers = (%+v, %v), want empty", shared, err)
+		t.Fatalf("todos_v2=false sharedActiveTodoBlockerGroups = (%+v, %v), want empty", shared, err)
 	}
 }
 
@@ -215,26 +214,26 @@ func TestTodosV2BlockersExternalPRAutoWakeAndSharedAggregation(t *testing.T) {
 	}
 
 	prURL := "https://github.com/example/repo/pull/777"
-	if _, err := s.AddTodoBlocker(ctx, db.TodoBlockerRow{
+	if _, err := s.addTodoBlocker(ctx, db.TodoBlockerRow{
 		ID:        "blk_a_pr",
 		TodoID:    todoA.ID,
-		Kind:      string(blockers.KindExternalPR),
+		Kind:      todoBlockerKindExternalPR,
 		TargetRef: prURL,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AddTodoBlocker(ctx, db.TodoBlockerRow{
+	if _, err := s.addTodoBlocker(ctx, db.TodoBlockerRow{
 		ID:        "blk_b_pr",
 		TodoID:    todoB.ID,
-		Kind:      string(blockers.KindExternalPR),
+		Kind:      todoBlockerKindExternalPR,
 		TargetRef: prURL,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AddTodoBlocker(ctx, db.TodoBlockerRow{
+	if _, err := s.addTodoBlocker(ctx, db.TodoBlockerRow{
 		ID:        "blk_b_dep",
 		TodoID:    todoB.ID,
-		Kind:      string(blockers.KindTodoDone),
+		Kind:      todoBlockerKindTodoDone,
 		TargetRef: prereq.ID,
 	}); err != nil {
 		t.Fatal(err)
@@ -243,13 +242,13 @@ func TestTodosV2BlockersExternalPRAutoWakeAndSharedAggregation(t *testing.T) {
 	var mu sync.Mutex
 	prState := "open"
 	var wokeIDs []string
-	s.setTodoBlockerPRFetcher(func(_ context.Context, targetRef string) (blockers.PRFact, bool) {
+	s.setTodoBlockerPRFetcher(func(_ context.Context, targetRef string) (todoBlockerPRFact, bool) {
 		mu.Lock()
 		defer mu.Unlock()
 		if strings.TrimRight(targetRef, "/") == prURL {
-			return blockers.PRFact{URL: prURL, State: prState, Merged: prState == "merged"}, true
+			return todoBlockerPRFact{URL: prURL, State: prState, Merged: prState == "merged"}, true
 		}
-		return blockers.PRFact{}, false
+		return todoBlockerPRFact{}, false
 	})
 	s.setTodoBlockerUnblockedHook(func(_ context.Context, todoID string) {
 		mu.Lock()
@@ -258,7 +257,7 @@ func TestTodosV2BlockersExternalPRAutoWakeAndSharedAggregation(t *testing.T) {
 	})
 
 	// While PR is open, nothing resolves and both todos aggregate under prURL.
-	sum1, err := s.ReconcileTodoBlockers(ctx, "")
+	sum1, err := s.reconcilePersistedTodoBlockers(ctx, "")
 	if err != nil {
 		t.Fatalf("reconcile open: %v", err)
 	}
@@ -275,7 +274,7 @@ func TestTodosV2BlockersExternalPRAutoWakeAndSharedAggregation(t *testing.T) {
 	prState = "merged"
 	mu.Unlock()
 
-	sum2, err := s.ReconcileTodoBlockers(ctx, prURL)
+	sum2, err := s.reconcilePersistedTodoBlockers(ctx, prURL)
 	if err != nil {
 		t.Fatalf("reconcile merged PR: %v", err)
 	}
@@ -297,7 +296,7 @@ func TestTodosV2BlockersExternalPRAutoWakeAndSharedAggregation(t *testing.T) {
 	s.todos.mu.Lock()
 	s.todos.todos[prereq.ID].DoneAt = &doneNow
 	s.todos.mu.Unlock()
-	sum3, err := s.ReconcileTodoBlockers(ctx, "")
+	sum3, err := s.reconcilePersistedTodoBlockers(ctx, "")
 	if err != nil {
 		t.Fatalf("reconcile prereq done: %v", err)
 	}
@@ -324,16 +323,16 @@ func TestTodosV2BlockersSurviveServiceRestartWithAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := s1.AddTodoBlocker(ctx, db.TodoBlockerRow{
+	if _, err := s1.addTodoBlocker(ctx, db.TodoBlockerRow{
 		ID:            "blk_mt_1",
 		TodoID:        waitTask.ID,
-		Kind:          string(blockers.KindMergeTrain),
+		Kind:          todoBlockerKindMergeTrain,
 		TargetRef:     headTask.ID,
 		ConditionJSON: `{"max_attempts":2}`,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	inc1, err := s1.IncrementTodoBlockerAttempts(ctx, "blk_mt_1")
+	inc1, err := s1.incrementTodoBlockerAttempts(ctx, "blk_mt_1")
 	if err != nil || inc1 == nil || inc1.Attempts != 1 {
 		t.Fatalf("first increment = (%+v, %v), want attempts=1", inc1, err)
 	}
@@ -345,7 +344,7 @@ func TestTodosV2BlockersSurviveServiceRestartWithAttempts(t *testing.T) {
 	}
 
 	// Before reaching threshold, blocker remains active and unescalated.
-	sumBefore, err := s2.ReconcileTodoBlockers(ctx, "")
+	sumBefore, err := s2.reconcilePersistedTodoBlockers(ctx, "")
 	if err != nil {
 		t.Fatalf("reconcile after restart (attempt 1): %v", err)
 	}
@@ -354,11 +353,11 @@ func TestTodosV2BlockersSurviveServiceRestartWithAttempts(t *testing.T) {
 	}
 
 	// Second attempt trips the circuit breaker (attempts == 2) without losing prior count.
-	inc2, err := s2.IncrementTodoBlockerAttempts(ctx, "blk_mt_1")
+	inc2, err := s2.incrementTodoBlockerAttempts(ctx, "blk_mt_1")
 	if err != nil || inc2 == nil || inc2.Attempts != 2 {
 		t.Fatalf("second increment after restart = (%+v, %v), want attempts=2", inc2, err)
 	}
-	sumEsc, err := s2.ReconcileTodoBlockers(ctx, "")
+	sumEsc, err := s2.reconcilePersistedTodoBlockers(ctx, "")
 	if err != nil {
 		t.Fatalf("reconcile after restart (attempt 2): %v", err)
 	}
